@@ -100,6 +100,7 @@ type Model struct {
 	mdRenderer       *glamour.TermRenderer
 	streamBuffer     *bytes.Buffer
 	streamStartPos   int
+	streamPrefixWritten bool
 
 	// Status bar state
 	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
@@ -205,7 +206,7 @@ type costUpdateMsg struct {
 // NewModel creates a new TUI model.
 func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ti := textinput.New()
-	ti.Prompt = "> "
+	ti.Prompt = "❯ "
 	ti.Placeholder = "Type a message..."
 	ti.Focus()
 
@@ -496,6 +497,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case streamMsg:
+		if !m.streamPrefixWritten {
+			m.output.WriteString(bulletStyle.Render("● "))
+			m.streamPrefixWritten = true
+		}
 		if m.streamBuffer != nil {
 			m.streamBuffer.WriteString(string(msg))
 		}
@@ -507,6 +512,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.spinner.Stop()
 		m.cancelFunc = nil
+		m.streamPrefixWritten = false
 		// Render accumulated stream buffer as markdown
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 			rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
@@ -514,6 +520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				rendered = m.streamBuffer.String()
 			}
 			m.output.Truncate(m.streamStartPos)
+			m.output.WriteString(bulletStyle.Render("● "))
 			m.output.WriteString(rendered)
 			m.streamBuffer = nil
 		}
@@ -574,10 +581,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolStatusMsg:
 		ts := ToolStatusMsg(msg)
 		if ts.Running {
+			// Flush current stream buffer (render markdown) before tool output
+			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
+				rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
+				if err != nil {
+					rendered = m.streamBuffer.String()
+				}
+				m.output.Truncate(m.streamStartPos)
+				m.output.WriteString(bulletStyle.Render("● "))
+				m.output.WriteString(rendered)
+				m.streamBuffer.Reset()
+				m.streamStartPos = m.output.Len()
+			}
 			m.spinner.Start(ts.ToolName)
+			// Write tree-style header
+			m.output.WriteString(FormatToolStart(ts.ToolName, ts.Args))
 		} else {
 			m.spinner.Stop()
-			m.output.WriteString(FormatToolStatus(ts))
+			m.output.WriteString(FormatToolResult(ts))
+			// Reset stream prefix so next text block gets ●
+			m.streamPrefixWritten = false
+			// Reset stream buffer position for next text chunk
+			m.streamStartPos = m.output.Len()
 		}
 		return m, nil
 
@@ -943,14 +968,16 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		m.output.WriteString("\n\n")
 	}
 
+	m.output.WriteString(m.styles.user.Render("❯ "))
 	m.output.WriteString(text)
-	m.output.WriteString("\n\n")
+	m.output.WriteString("\n")
 
 	// Save original user message to session
 	m.appendUserMessage(text)
 
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamStartPos = m.output.Len()
+	m.streamPrefixWritten = false
 	m.loading = true
 	// Reset status bar state
 	m.statusActivity = "Thinking..."
@@ -1190,6 +1217,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 						m.program.Send(toolStatusMsg{
 							ToolName: event.Tool.Name,
 							Running:  true,
+							Args:     truncateString(string(event.Tool.Arguments), 100),
 						})
 					case provider.StreamEventError:
 						m.program.Send(errMsg{err: event.Error})
@@ -1215,6 +1243,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 						m.program.Send(toolStatusMsg{
 							ToolName: event.Tool.Name,
 							Running:  true,
+							Args:     truncateString(string(event.Tool.Arguments), 100),
 						})
 					case provider.StreamEventError:
 						m.program.Send(errMsg{err: event.Error})
