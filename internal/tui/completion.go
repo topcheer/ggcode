@@ -168,6 +168,85 @@ func CompleteMention(prefix string, workDir string) []string {
 	return completions
 }
 
+// SlashCommands is the list of all available slash commands.
+var SlashCommands = []string{
+	"/help", "/cost", "/sessions", "/resume", "/export", "/model", "/provider",
+	"/clear", "/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
+	"/image", "/fullscreen", "/mode", "/exit", "/quit", "/agents", "/agent",
+	"/compact", "/todo", "/bug", "/config", "/status",
+}
+
+// SlashCommandDescriptions provides short descriptions for slash commands.
+var SlashCommandDescriptions = map[string]string{
+	"/help":       "Show help message",
+	"/cost":       "Show session cost stats",
+	"/sessions":   "List saved sessions",
+	"/resume":     "Resume a previous session",
+	"/export":     "Export session to markdown",
+	"/model":      "Switch model",
+	"/provider":   "Switch provider",
+	"/clear":      "Clear conversation",
+	"/mcp":        "Show MCP servers",
+	"/memory":     "Manage memory",
+	"/undo":       "Undo last file edit",
+	"/checkpoints":"List checkpoints",
+	"/allow":      "Always allow a tool",
+	"/plugins":    "List loaded plugins",
+	"/image":      "Attach an image",
+	"/fullscreen": "Toggle fullscreen",
+	"/mode":       "Set permission mode",
+	"/exit":       "Exit ggcode",
+	"/quit":       "Exit ggcode",
+	"/agents":     "List sub-agents",
+	"/agent":      "Sub-agent details",
+	"/compact":    "Compress conversation history",
+	"/todo":       "View/manage todo list",
+	"/bug":        "Report a bug",
+	"/config":     "View/modify configuration",
+	"/status":     "Show current status",
+}
+
+// CompleteSlashCommand returns matching slash commands for a given prefix.
+func CompleteSlashCommand(prefix string) []string {
+	var matches []string
+	for _, cmd := range SlashCommands {
+		if strings.HasPrefix(cmd, prefix) {
+			matches = append(matches, cmd)
+		}
+	}
+	return matches
+}
+
+// DetectSlashCommand returns true if the cursor is at a slash command position.
+// It returns the command fragment after "/" for completion.
+func DetectSlashCommand(ti textinput.Model) (active bool, prefix string) {
+	value := ti.Value()
+	cursor := ti.Position()
+
+	if cursor < 1 {
+		return false, ""
+	}
+
+	// Must start with "/" at position 0 (or after a space at position 0)
+	// Find the start of the current word
+	wordStart := cursor
+	for wordStart > 0 && value[wordStart-1] != ' ' && value[wordStart-1] != '\t' {
+		wordStart--
+	}
+
+	if wordStart >= len(value) || value[wordStart] != '/' {
+		return false, ""
+	}
+
+	// Ensure "/" is at the start of input or after whitespace
+	if wordStart > 0 && value[wordStart-1] != ' ' && value[wordStart-1] != '\t' {
+		return false, ""
+	}
+
+	prefix = value[wordStart+1 : cursor]
+	return true, prefix
+}
+
 // DetectMention returns true if the cursor is immediately after a "@" with a path fragment.
 // It returns the path fragment after "@" for completion.
 func DetectMention(ti textinput.Model) (active bool, prefix string) {
