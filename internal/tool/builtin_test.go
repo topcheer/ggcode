@@ -6,7 +6,7 @@ import (
 
 func TestBuiltinTools_Registration(t *testing.T) {
 	registry := NewRegistry()
-	if err := RegisterBuiltinTools(registry); err != nil {
+	if err := RegisterBuiltinTools(registry, nil); err != nil {
 		t.Fatalf("RegisterBuiltinTools failed: %v", err)
 	}
 

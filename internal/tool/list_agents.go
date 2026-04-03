@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ListAgentsTool implements the list_agents tool.
@@ -57,8 +58,5 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return util.Truncate(s, maxLen)
 }

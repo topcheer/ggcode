@@ -27,24 +27,6 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 		return 1
 	}
 
-	// Setup tools
-	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry); err != nil {
-		fmt.Fprintf(os.Stderr, "registering tools: %v\n", err)
-		return 1
-	}
-
-	// Load plugins
-	pluginMgr := plugin.NewManager()
-	pluginMgr.LoadAll(cfg.Plugins)
-	for _, mcpCfg := range cfg.MCPServers {
-		p := plugin.NewMCPPlugin(mcpCfg)
-		if err := p.RegisterTools(context.Background(), registry); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: MCP server %s failed: %v\n", mcpCfg.Name, err)
-		}
-	}
-	pluginMgr.RegisterTools(registry)
-
 	// Setup permission: auto mode for pipe (no interactive prompts)
 	allowedDirs := cfg.ExpandAllowedDirs(".")
 	rules := make(map[string]permission.Decision)
@@ -64,6 +46,24 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 			policy.SetOverride(t, permission.Allow)
 		}
 	}
+
+	// Setup tools (after policy so sandbox checks can be wired)
+	registry := tool.NewRegistry()
+	if err := tool.RegisterBuiltinTools(registry, policy); err != nil {
+		fmt.Fprintf(os.Stderr, "registering tools: %v\n", err)
+		return 1
+	}
+
+	// Load plugins
+	pluginMgr := plugin.NewManager()
+	pluginMgr.LoadAll(cfg.Plugins)
+	for _, mcpCfg := range cfg.MCPServers {
+		p := plugin.NewMCPPlugin(mcpCfg)
+		if err := p.RegisterTools(context.Background(), registry); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: MCP server %s failed: %v\n", mcpCfg.Name, err)
+		}
+	}
+	pluginMgr.RegisterTools(registry)
 
 	// Load project memory (GGCODE.md)
 	workingDir, _ := os.Getwd()

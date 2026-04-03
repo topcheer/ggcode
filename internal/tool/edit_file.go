@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
 )
 
 // EditFile implements the edit_file tool for find-and-replace editing.
-type EditFile struct{}
+type EditFile struct {
+	SandboxCheck AllowedPathChecker
+}
 
 func (t EditFile) Name() string { return "edit_file" }
 
@@ -46,6 +49,10 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if t.SandboxCheck != nil && !t.SandboxCheck(args.FilePath) {
+		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
 	data, err := os.ReadFile(args.FilePath)

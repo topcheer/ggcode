@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
@@ -36,7 +37,7 @@ type Agent struct {
 	workingDir     string
 	checkpoints    *checkpoint.Manager
 	diffConfirm    DiffConfirmFunc
-	mu             sync.Mutex
+	mu             sync.RWMutex
 }
 
 // NewAgent creates a new agent with optional permission policy.
@@ -58,6 +59,8 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 
 // SetPermissionPolicy sets the permission policy for tool checks.
 func (a *Agent) SetPermissionPolicy(policy permission.PermissionPolicy) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.policy = policy
 }
 
@@ -71,11 +74,15 @@ func (a *Agent) SetUsageHandler(fn func(usage provider.TokenUsage)) {
 // SetApprovalHandler sets a callback for interactive approval (Ask → Deny by default).
 // If nil, Ask decisions are treated as Deny.
 func (a *Agent) SetApprovalHandler(fn func(toolName string, input string) permission.Decision) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.onApproval = fn
 }
 
 // PermissionPolicy returns the current policy.
 func (a *Agent) PermissionPolicy() permission.PermissionPolicy {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return a.policy
 }
 
@@ -239,8 +246,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 // executeToolWithPermission checks permission before executing a tool.
 func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	debug.Log("agent", "permission check: tool=%s", tc.Name)
-	if a.policy != nil {
-		decision, err := a.policy.Check(tc.Name, tc.Arguments)
+	a.mu.RLock()
+	policy := a.policy
+	onApproval := a.onApproval
+	a.mu.RUnlock()
+	if policy != nil {
+		decision, err := policy.Check(tc.Name, tc.Arguments)
 		debug.Log("agent", "permission decision: tool=%s decision=%s err=%v", tc.Name, decision, err)
 		if err != nil {
 			return tool.Result{Content: fmt.Sprintf("permission check error: %v", err), IsError: true}
@@ -253,15 +264,14 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				IsError: true,
 			}
 		case permission.Ask:
-			if a.onApproval != nil {
-				resp := a.onApproval(tc.Name, string(tc.Arguments))
+			if onApproval != nil {
+				resp := onApproval(tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
 					return tool.Result{
 						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
 						IsError: true,
 					}
 				}
-				// Allow or user approved
 			} else {
 				// No approval handler → deny by default
 				return tool.Result{
@@ -270,7 +280,6 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				}
 			}
 		}
-		// Allow: proceed
 	}
 
 	return a.executeTool(ctx, tc)
@@ -317,15 +326,19 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return tool.Result{Content: fmt.Sprintf("unknown tool: %s", tc.Name), IsError: true}
 	}
 
+	a.mu.RLock()
+	hookCfg := a.hookConfig
+	workDir := a.workingDir
+	a.mu.RUnlock()
 	env := hooks.HookEnv{
 		ToolName:   tc.Name,
-		WorkingDir: a.workingDir,
+		WorkingDir: workDir,
 		FilePath:   hooks.ExtractFilePath(tc.Name, string(tc.Arguments)),
 		RawInput:   string(tc.Arguments),
 	}
 
 	// Pre-tool-use hooks
-	preResult := hooks.RunPreHooks(a.hookConfig.PreToolUse, env)
+	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, env)
 	if !preResult.Allowed {
 		return tool.Result{Content: preResult.Output, IsError: true}
 	}
@@ -342,7 +355,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 
 	// Post-tool-use hooks
-	postResult := hooks.RunPostHooks(a.hookConfig.PostToolUse, env)
+	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, env)
 	if postResult.Output != "" {
 		result.Content += "\n" + postResult.Output
 	}
@@ -372,7 +385,10 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	}
 
 	// Pre-tool-use hooks
-	preResult := hooks.RunPreHooks(a.hookConfig.PreToolUse, env)
+	a.mu.RLock()
+	hookCfg2 := a.hookConfig
+	a.mu.RUnlock()
+	preResult := hooks.RunPreHooks(hookCfg2.PreToolUse, env)
 	if !preResult.Allowed {
 		return tool.Result{Content: preResult.Output, IsError: true}
 	}
@@ -389,7 +405,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	}
 
 	// Post-tool-use hooks
-	postResult := hooks.RunPostHooks(a.hookConfig.PostToolUse, env)
+	postResult := hooks.RunPostHooks(hookCfg2.PostToolUse, env)
 	if postResult.Output != "" {
 		result.Content += "\n" + postResult.Output
 	}
@@ -472,8 +488,5 @@ func isJSON(data json.RawMessage) bool {
 }
 
 func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return util.Truncate(s, maxLen)
 }

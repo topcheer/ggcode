@@ -8,10 +8,13 @@ import (
 	"os"
 	"sort"
 	"strings"
+
 )
 
 // ListDir implements the list_directory tool.
-type ListDir struct{}
+type ListDir struct {
+	SandboxCheck AllowedPathChecker
+}
 
 func (t ListDir) Name() string { return "list_directory" }
 
@@ -38,6 +41,10 @@ func (t ListDir) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
+		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
 	if args.Path == "" {

@@ -2,6 +2,8 @@ package session
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -530,7 +532,11 @@ func NewSession(provider, model string) *Session {
 }
 
 func generateID() string {
-	return fmt.Sprintf("%s", time.Now().Format("20060102-150405"))
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%s-%d", time.Now().Format("20060102-150405"), time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), hex.EncodeToString(b))
 }
 
 // Dir returns the store's directory path.
