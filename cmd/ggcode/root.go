@@ -160,8 +160,28 @@ policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 	autoContent, autoFiles, _ := autoMem.LoadAll()
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
 
-	// Build enhanced system prompt
-	systemPrompt := cfg.SystemPrompt
+	// Detect git status
+	gitStatus := detectGitStatus(workingDir)
+
+	// Collect tool names
+	tools := registry.List()
+	toolNames := make([]string, len(tools))
+	for i, t := range tools {
+		toolNames[i] = t.Name()
+	}
+
+	// Collect custom command names
+	cmdLoader2 := commands.NewLoader(workingDir)
+	customCmds := cmdLoader2.Load()
+	customCmdNames := make([]string, len(customCmds))
+	i := 0
+	for name := range customCmds {
+		customCmdNames[i] = name
+		i++
+	}
+
+	// Build enhanced system prompt with runtime context
+	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, toolNames, gitStatus, customCmdNames)
 	if projectMem != "" {
 		systemPrompt += "\n\n## Project Memory (GGCODE.md)\n" + projectMem
 	}
@@ -203,10 +223,6 @@ policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 		mcpInfos = append(mcpInfos, info)
 	}
 
-	// Load custom slash commands
-	cmdLoader := commands.NewLoader(workingDir)
-	customCmds := cmdLoader.Load()
-
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
 	repl.SetCostManager(costMgr, cfg.Provider, cfg.Model)
@@ -227,4 +243,12 @@ policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 
 func init() {
 	debug.Init()
+}
+
+// detectGitStatus returns a short git status string or "".
+func detectGitStatus(workingDir string) string {
+	if _, err := os.Stat(workingDir + "/.git"); err != nil {
+		return "not a git repository"
+	}
+	return "in a git repository"
 }
