@@ -9,7 +9,9 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// Result is the output of a tool execution.
+// Result is the output returned to the LLM.
+// IsError: true means the tool execution had a user-visible error (shown to LLM).
+// The Go error return is for system-level failures only (panic recovery, etc).
 type Result struct {
 	Content string `json:"content"`
 	IsError bool   `json:"is_error"`
