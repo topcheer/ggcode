@@ -225,7 +225,11 @@ func (p *OpenAIProvider) CountTokens(ctx context.Context, messages []Message) (i
 
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
 	result := make([]openai.ChatCompletionMessage, 0, len(messages))
-	for _, m := range messages {
+	for idx, m := range messages {
+		debug.Log("openai", "convertMessages[%d]: role=%s content_blocks=%d", idx, m.Role, len(m.Content))
+		for ci, cb := range m.Content {
+			debug.Log("openai", "  content[%d]: type=%s tool_id=%q", ci, cb.Type, cb.ToolID)
+		}
 		switch m.Role {
 		case "system":
 			// Collect text blocks for system messages
@@ -240,6 +244,33 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				Content: text,
 			})
 		case "user":
+			// Check for tool_result blocks (agent stores tool results as role="user")
+			hasToolResult := false
+			debug.Log("openai", "convert user msg: content_blocks=%d", len(m.Content))
+			for i, b := range m.Content {
+				out := b.Output
+if len(out) > 100 {
+					out = out[:100] + "..."
+				}
+				debug.Log("openai", "  block[%d]: type=%s tool_id=%s output=%s", i, b.Type, b.ToolID, out)
+				if b.Type == "tool_result" {
+					hasToolResult = true
+					break
+				}
+			}
+			if hasToolResult {
+				// Convert tool_result blocks to OpenAI tool messages
+				for _, b := range m.Content {
+					if b.Type == "tool_result" {
+						result = append(result, openai.ChatCompletionMessage{
+							Role:       openai.ChatMessageRoleTool,
+							Content:    b.Output,
+							ToolCallID: b.ToolID,
+						})
+					}
+				}
+				break
+			}
 			// Check if any content block is an image
 			hasImage := false
 			for _, b := range m.Content {
@@ -279,10 +310,14 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 						text += b.Text
 					}
 				}
-				result = append(result, openai.ChatCompletionMessage{
-					Role:    openai.ChatMessageRoleUser,
-					Content: text,
-				})
+				if text == "" {
+					debug.Log("openai", "WARNING: skipping empty user message (idx=%d, content_blocks=%d)", idx, len(m.Content))
+				} else {
+					result = append(result, openai.ChatCompletionMessage{
+						Role:    openai.ChatMessageRoleUser,
+						Content: text,
+					})
+				}
 			}
 		case "assistant":
 			msg := openai.ChatCompletionMessage{

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -47,7 +48,7 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 		}
 		if err := registry.Register(t); err != nil {
 			// Log but continue — name collision is non-fatal
-			fmt.Printf("mcp: warning: %v\n", err)
+			debug.Log("mcp", "warning: %v", err)
 		}
 	}
 	return nil
