@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -92,6 +93,19 @@ type Model struct {
 	diffCursor  int
 	pendingImage       *imageAttachedMsg
 
+	// Markdown rendering
+	mdRenderer       *glamour.TermRenderer
+	streamBuffer     *bytes.Buffer
+	streamStartPos   int
+
+	// Status bar state
+	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
+	statusToolName  string // current executing tool name
+	statusToolArg   string // current tool argument summary (truncated)
+	statusTokens    int64  // current session cumulative tokens (in + out)
+	statusCost      float64 // current session cumulative cost
+	statusToolCount int    // tool calls executed this iteration
+
 	// Slash command autocomplete
 	autoCompleteItems    []string
 	autoCompleteIndex    int
@@ -118,6 +132,7 @@ type styles struct {
 	warn            lipgloss.Style
 	approvalCursor  lipgloss.Style
 	approvalDim     lipgloss.Style
+	statusBar       lipgloss.Style
 	markdown        lipgloss.Style
 }
 
@@ -164,6 +179,20 @@ type errMsg struct{ err error }
 // toolStatusMsg wraps a tool status update.
 type toolStatusMsg ToolStatusMsg
 
+// statusMsg updates the status bar display.
+type statusMsg struct {
+	Activity  string // current activity description
+	ToolName  string
+	ToolArg   string
+	ToolCount int
+}
+
+// statusCostMsg updates cost/token info in the status bar.
+type statusCostMsg struct {
+	Tokens int64
+	Cost   float64
+}
+
 // costUpdateMsg carries token usage info from the agent goroutine.
 type costUpdateMsg struct {
 	InputTokens  int
@@ -198,16 +227,24 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 			Background(lipgloss.Color("236")),
 		approvalDim: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("15")),
+	statusBar: lipgloss.NewStyle().
+		Foreground(lipgloss.Color("6")),
 	}
 
+	mdRenderer, _ := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(80),
+	)
+
 	return Model{
-		input:   ti,
-		output:  &bytes.Buffer{},
-		styles:  s,
-		agent:   a,
-		policy:  policy,
-		spinner: NewToolSpinner(),
-		history: make([]string, 0, 100),
+		input:      ti,
+		output:     &bytes.Buffer{},
+		styles:     s,
+		agent:      a,
+		policy:     policy,
+		spinner:    NewToolSpinner(),
+		history:    make([]string, 0, 100),
+		mdRenderer: mdRenderer,
 	}
 }
 
@@ -303,6 +340,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if wrap := m.width - 4; wrap > 20 {
+			if r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(wrap)); err == nil {
+				m.mdRenderer = r
+			}
+		}
 		return m, nil
 
 	case tea.MouseMsg:
@@ -424,6 +466,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case streamMsg:
+		if m.streamBuffer != nil {
+			m.streamBuffer.WriteString(string(msg))
+		}
 		m.output.WriteString(string(msg))
 		return m, nil
 
@@ -431,6 +476,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.spinner.Stop()
 		m.cancelFunc = nil
+		// Render accumulated stream buffer as markdown
+		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
+			rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
+			if err != nil {
+				rendered = m.streamBuffer.String()
+			}
+			m.output.Truncate(m.streamStartPos)
+			m.output.WriteString(rendered)
+			m.streamBuffer = nil
+		}
 		if m.lastCost != "" {
 			m.output.WriteString(m.styles.prompt.Render(m.lastCost + "\n"))
 		}
@@ -500,6 +555,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingImage = &msg
 		m.output.WriteString(m.styles.assistant.Render("Image attached: " + msg.placeholder + "\n"))
 		m.output.WriteString(m.styles.prompt.Render("Send a message to include the image, or /image to attach another.\n\n"))
+		return m, nil
+
+	case statusMsg:
+		m.statusActivity = msg.Activity
+		m.statusToolName = msg.ToolName
+		m.statusToolArg = msg.ToolArg
+		if msg.ToolCount > 0 {
+			m.statusToolCount = msg.ToolCount
+		}
+		return m, nil
+
+	case statusCostMsg:
+		m.statusTokens = msg.Tokens
+		m.statusCost = msg.Cost
 		return m, nil
 	}
 
@@ -785,6 +854,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	// Save original user message to session
 	m.appendUserMessage(text)
 
+	m.streamBuffer = &bytes.Buffer{}
+	m.streamStartPos = m.output.Len()
 	m.loading = true
 	return m.startAgent(expandedMsg)
 }
