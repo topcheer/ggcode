@@ -3,7 +3,9 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -94,6 +96,19 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	streamer, err := p.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
+		log.Printf("[openai] ChatStream error for model %s: %v", p.model, err)
+		if len(tools) > 0 {
+			toolJSON, _ := json.Marshal(req.Tools)
+			t := string(toolJSON)
+			if len(t) > 500 {
+				t = t[:500] + "..."
+			}
+			log.Printf("[openai] Request had %d tools, first tool JSON: %s", len(req.Tools), t)
+		}
+		var apiErr *openai.APIError
+		if errors.As(err, &apiErr) {
+			log.Printf("[openai] API error: status=%d code=%s message=%s", apiErr.HTTPStatusCode, apiErr.Code, apiErr.Message)
+		}
 		return nil, fmt.Errorf("openai stream: %w", err)
 	}
 
