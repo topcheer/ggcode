@@ -1,0 +1,119 @@
+package tui
+
+import (
+	"context"
+
+	"github.com/topcheer/ggcode/internal/session"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/provider"
+)
+
+func (m *Model) appendUserMessage(text string) {
+	if m.session == nil || m.sessionStore == nil {
+		return
+	}
+	msg := provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: text}},
+	}
+	// Auto-generate title from first user message
+	if m.session.Title == "" || m.session.Title == "New session" {
+		if len(text) > 60 {
+			m.session.Title = text[:57] + "..."
+		} else {
+			m.session.Title = text
+		}
+	}
+	if store, ok := m.sessionStore.(*session.JSONLStore); ok {
+		_ = store.AppendMessage(m.session, msg)
+	} else {
+		m.session.Messages = append(m.session.Messages, msg)
+		_ = m.sessionStore.Save(m.session)
+	}
+}
+
+func (m *Model) startAgent(text string) tea.Cmd {
+	debug.Log("tui", "startAgent called: text=%s", truncateStr(text, 200))
+	// Capture and clear pending image
+	img := m.pendingImage
+	m.pendingImage = nil
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancelFunc = cancel
+
+		go func() {
+			defer func() {
+				if m.program != nil {
+					m.program.Send(doneMsg{})
+				}
+				cancel()
+			}()
+
+			if img != nil {
+				content := []provider.ContentBlock{
+					provider.TextBlock(text),
+					provider.ImageBlock(img.img.MIME, image.EncodeBase64(img.img)),
+				}
+				_ = m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+					if m.program == nil {
+						return
+					}
+					switch event.Type {
+					case provider.StreamEventText:
+						m.program.Send(streamMsg(event.Text))
+						m.program.Send(statusMsg{
+							Activity: "Writing...",
+						})
+					case provider.StreamEventToolCallDone:
+						m.program.Send(statusMsg{
+							Activity:  "Thinking...",
+							ToolName:  event.Tool.Name,
+							ToolCount: m.statusToolCount + 1,
+						})
+						m.program.Send(toolStatusMsg{
+							ToolName: event.Tool.Name,
+							Running:  true,
+							Args:     truncateString(string(event.Tool.Arguments), 100),
+						})
+					case provider.StreamEventError:
+						m.program.Send(errMsg{err: event.Error})
+					}
+				})
+			} else {
+				_ = m.agent.RunStream(ctx, text, func(event provider.StreamEvent) {
+					if m.program == nil {
+						return
+					}
+					switch event.Type {
+					case provider.StreamEventText:
+						m.program.Send(streamMsg(event.Text))
+						m.program.Send(statusMsg{
+							Activity: "Writing...",
+						})
+					case provider.StreamEventToolCallDone:
+						m.program.Send(statusMsg{
+							Activity:  "Thinking...",
+							ToolName:  event.Tool.Name,
+							ToolCount: m.statusToolCount + 1,
+						})
+						m.program.Send(toolStatusMsg{
+							ToolName: event.Tool.Name,
+							Running:  true,
+							Args:     truncateString(string(event.Tool.Arguments), 100),
+						})
+					case provider.StreamEventError:
+						m.program.Send(errMsg{err: event.Error})
+					}
+				})
+			}
+		}()
+
+		return nil
+	}
+}
+
