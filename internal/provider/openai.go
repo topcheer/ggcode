@@ -206,16 +206,50 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				Content: text,
 			})
 		case "user":
-			var text string
+			// Check if any content block is an image
+			hasImage := false
 			for _, b := range m.Content {
-				if b.Type == "text" {
-					text += b.Text
+				if b.Type == "image" {
+					hasImage = true
+					break
 				}
 			}
-			result = append(result, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleUser,
-				Content: text,
-			})
+			if hasImage {
+				// Multi-part content with images
+				var parts []openai.ChatMessagePart
+				for _, b := range m.Content {
+					switch b.Type {
+					case "text":
+						parts = append(parts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeText,
+							Text: b.Text,
+						})
+					case "image":
+						parts = append(parts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{
+								URL:    fmt.Sprintf("data:%s;base64,%s", b.ImageMIME, b.ImageData),
+								Detail: openai.ImageURLDetailAuto,
+							},
+						})
+					}
+				}
+				result = append(result, openai.ChatCompletionMessage{
+					Role:         openai.ChatMessageRoleUser,
+					MultiContent: parts,
+				})
+			} else {
+				var text string
+				for _, b := range m.Content {
+					if b.Type == "text" {
+						text += b.Text
+					}
+				}
+				result = append(result, openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleUser,
+					Content: text,
+				})
+			}
 		case "assistant":
 			msg := openai.ChatCompletionMessage{
 				Role:    openai.ChatMessageRoleAssistant,

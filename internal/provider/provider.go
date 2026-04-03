@@ -11,15 +11,22 @@ type Message struct {
 	Content    []ContentBlock `json:"content"`
 }
 
-// ContentBlock is a union type: either text or a tool call/result.
+// ContentBlock is a union type: text, image, tool call, or tool result.
 type ContentBlock struct {
-	Type     string          `json:"type"` // "text", "tool_use", "tool_result"
+	Type     string          `json:"type"` // "text", "image", "tool_use", "tool_result"
 	Text     string          `json:"text,omitempty"`
+	ImageMIME  string          `json:"image_mime,omitempty"`  // MIME type for image blocks
+	ImageData  string          `json:"image_data,omitempty"`  // base64-encoded image data
 	ToolName string          `json:"tool_name,omitempty"`
 	ToolID   string          `json:"tool_id,omitempty"`
 	Input    json.RawMessage `json:"input,omitempty"`
 	Output   string          `json:"output,omitempty"`
 	IsError  bool            `json:"is_error,omitempty"`
+}
+
+// ImageBlock creates an image content block with base64-encoded data.
+func ImageBlock(mime, base64Data string) ContentBlock {
+	return ContentBlock{Type: "image", ImageMIME: mime, ImageData: base64Data}
 }
 
 // TextBlock creates a text content block.

@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
@@ -94,6 +95,29 @@ func (r *REPL) SetProjectMemoryFiles(files []string) {
 
 func (r *REPL) SetAutoMemoryFiles(files []string) {
 	r.model.SetAutoMemoryFiles(files)
+}
+
+// SetCheckpointManager wires the checkpoint manager into the agent and REPL.
+func (r *REPL) SetCheckpointManager(m *checkpoint.Manager) {
+	r.agent.SetCheckpointManager(m)
+	r.agent.SetDiffConfirm(func(filePath, diffText string) bool {
+		return r.requestDiffConfirm(filePath, diffText)
+	})
+}
+
+// requestDiffConfirm sends a diff confirmation request to the TUI and waits for response.
+func (r *REPL) requestDiffConfirm(filePath, diffText string) bool {
+	if r.program == nil {
+		// Non-interactive (pipe) mode: auto-approve
+		return true
+	}
+	resp := make(chan bool, 1)
+	r.program.Send(DiffConfirmMsg{
+		FilePath: filePath,
+		DiffText: diffText,
+		Response: resp,
+	})
+	return <-resp
 }
 
 // Run starts the REPL event loop.

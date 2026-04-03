@@ -16,6 +16,8 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/diff"
+	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -66,6 +68,9 @@ type Model struct {
 	autoMemFiles  []string
 	pluginMgr   *plugin.Manager
 	mode        permission.PermissionMode
+	pendingDiffConfirm *DiffConfirmMsg
+	fullscreen  bool
+	pendingImage *imageAttachedMsg
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -84,6 +89,13 @@ type styles struct {
 	title     lipgloss.Style
 	approval  lipgloss.Style
 	markdown  lipgloss.Style
+}
+
+// DiffConfirmMsg is sent to TUI when agent wants user to confirm a file edit diff.
+type DiffConfirmMsg struct {
+	FilePath string
+	DiffText string
+	Response chan bool
 }
 
 // streamMsg wraps a string from the agent goroutine.
@@ -225,6 +237,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Handle diff confirmation mode
+		if m.pendingDiffConfirm != nil {
+			switch msg.String() {
+			case "y", "Y":
+				return m, m.handleDiffConfirm(true)
+			case "n", "N":
+				return m, m.handleDiffConfirm(false)
+			case "ctrl+c":
+				return m, m.handleDiffConfirm(false)
+			}
+			return m, nil
+		}
+
 		if m.loading {
 			if msg.String() == "ctrl+c" {
 				if m.cancelFunc != nil {
@@ -300,6 +325,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.output.WriteString(m.styles.prompt.Render("  [y] Allow once  [n] Deny  [a] Always allow\n"))
 		return m, nil
 
+	case DiffConfirmMsg:
+		m.pendingDiffConfirm = &msg
+		m.output.WriteString(m.styles.approval.Render(
+			fmt.Sprintf("\n\u270f File edit: %s\n", msg.FilePath),
+		))
+		m.output.WriteString(FormatDiff(msg.DiffText))
+		m.output.WriteString(m.styles.prompt.Render("  [y] Accept  [n] Reject\n"))
+		return m, nil
+
 	case toolStatusMsg:
 		ts := ToolStatusMsg(msg)
 		if ts.Running {
@@ -308,6 +342,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Stop()
 			m.output.WriteString(FormatToolStatus(ts))
 		}
+		return m, nil
+
+	case imageAttachedMsg:
+		m.pendingImage = &msg
+		m.output.WriteString(m.styles.assistant.Render("Image attached: " + msg.placeholder + "\n"))
+		m.output.WriteString(m.styles.prompt.Render("Send a message to include the image, or /image to attach another.\n\n"))
 		return m, nil
 	}
 
@@ -329,6 +369,21 @@ func (m Model) View() string {
 	sb.WriteString(title)
 	sb.WriteString("\n")
 
+	sb.WriteString(m.renderOutput())
+
+	sb.WriteString(input)
+
+	if !m.loading && m.pendingApproval == nil && m.pendingDiffConfirm == nil {
+		modeStr := fmt.Sprintf("[mode: %s]", m.mode)
+		sb.WriteString(m.styles.prompt.Render("\n  " + modeStr + " /help /sessions /resume /export /model /provider /mode /clear /exit | Shift+Tab toggle mode | Ctrl+C interrupt | Ctrl+D quit"))
+	}
+
+	return sb.String()
+}
+
+// renderOutput renders the conversation output (used by both normal and fullscreen modes).
+func (m Model) renderOutput() string {
+	var sb strings.Builder
 	output := m.output.String()
 	if output != "" {
 		output = strings.TrimRight(output, "\n")
@@ -341,14 +396,6 @@ func (m Model) View() string {
 		}
 		sb.WriteString("\n\n")
 	}
-
-	sb.WriteString(input)
-
-	if !m.loading && m.pendingApproval == nil {
-		modeStr := fmt.Sprintf("[mode: %s]", m.mode)
-		sb.WriteString(m.styles.prompt.Render("\n  " + modeStr + " /help /sessions /resume /export /model /provider /mode /clear /exit | Shift+Tab toggle mode | Ctrl+C interrupt | Ctrl+D quit"))
-	}
-
 	return sb.String()
 }
 
@@ -431,12 +478,20 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return nil
 		case "/plugins":
 			return m.handlePluginsCommand()
+		case "/image":
+			return m.handleImageCommand(parts)
+		case "/fullscreen":
+			return m.handleFullscreenCommand()
 		case "/mcp":
 			return m.handleMCPCommand()
 		case "/mode":
 			return m.handleModeCommand(parts)
 		case "/memory":
 			return m.handleMemoryCommand(parts)
+		case "/undo":
+			return m.handleUndoCommand()
+		case "/checkpoints":
+			return m.handleCheckpointsCommand()
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
@@ -604,6 +659,22 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 	return nil
 }
 
+// handleDiffConfirm sends the user's diff decision back via the channel.
+func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
+	pd := m.pendingDiffConfirm
+	m.pendingDiffConfirm = nil
+	if pd == nil || pd.Response == nil {
+		return nil
+	}
+	go func() {
+		pd.Response <- approved
+	}()
+	if !approved {
+		m.output.WriteString(m.styles.error.Render("  Rejected.\n"))
+	}
+	return nil
+}
+
 // handleHistoryUp navigates up in command history.
 func (m Model) handleHistoryUp() (tea.Model, tea.Cmd) {
 	if m.historyIdx > 0 {
@@ -653,6 +724,10 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 
 // startAgent returns a tea.Cmd that runs the agent in a goroutine.
 func (m *Model) startAgent(text string) tea.Cmd {
+	// Capture and clear pending image
+	img := m.pendingImage
+	m.pendingImage = nil
+
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancelFunc = cancel
@@ -665,25 +740,90 @@ func (m *Model) startAgent(text string) tea.Cmd {
 				cancel()
 			}()
 
-			_ = m.agent.RunStream(ctx, text, func(event provider.StreamEvent) {
-				if m.program == nil {
-					return
+			if img != nil {
+				content := []provider.ContentBlock{
+					provider.TextBlock(text),
+					provider.ImageBlock(img.img.MIME, image.EncodeBase64(img.img)),
 				}
-				switch event.Type {
-				case provider.StreamEventText:
-					m.program.Send(streamMsg(event.Text))
-				case provider.StreamEventToolCallDone:
-					m.program.Send(toolStatusMsg{
-						ToolName: event.Tool.Name,
-						Running:  true,
+				_ = m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+						if m.program == nil {
+							return
+						}
+						switch event.Type {
+						case provider.StreamEventText:
+							m.program.Send(streamMsg(event.Text))
+						case provider.StreamEventToolCallDone:
+							m.program.Send(toolStatusMsg{
+								ToolName: event.Tool.Name,
+								Running:  true,
+							})
+						case provider.StreamEventError:
+							m.program.Send(errMsg{err: event.Error})
+						}
 					})
-				case provider.StreamEventError:
-					m.program.Send(errMsg{err: event.Error})
-				}
-			})
+			} else {
+				_ = m.agent.RunStream(ctx, text, func(event provider.StreamEvent) {
+					if m.program == nil {
+						return
+					}
+					switch event.Type {
+					case provider.StreamEventText:
+						m.program.Send(streamMsg(event.Text))
+					case provider.StreamEventToolCallDone:
+						m.program.Send(toolStatusMsg{
+							ToolName: event.Tool.Name,
+							Running:  true,
+						})
+					case provider.StreamEventError:
+						m.program.Send(errMsg{err: event.Error})
+					}
+				})
+			}
 		}()
 
 		return nil
+	}
+}
+
+// handleUndoCommand rolls back the most recent checkpoint.
+func (m *Model) handleUndoCommand() tea.Cmd {
+	return func() tea.Msg {
+		cpMgr := m.agent.CheckpointManager()
+		if cpMgr == nil {
+			return streamMsg("Checkpointing not enabled.\n\n")
+		}
+		cp, err := cpMgr.Undo()
+		if err != nil {
+			return streamMsg(fmt.Sprintf("Undo failed: %v\n\n", err))
+		}
+		// Show diff (new -> old)
+		diffText := diff.UnifiedDiff(cp.NewContent, cp.OldContent, 3)
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("Undid %s on %s (checkpoint %s)\n", cp.ToolCall, cp.FilePath, cp.ID))
+		b.WriteString(FormatDiff(diffText))
+		b.WriteString("\n")
+		return streamMsg(b.String())
+	}
+}
+
+// handleCheckpointsCommand lists all checkpoints.
+func (m *Model) handleCheckpointsCommand() tea.Cmd {
+	return func() tea.Msg {
+		cpMgr := m.agent.CheckpointManager()
+		if cpMgr == nil {
+			return streamMsg("Checkpointing not enabled.\n\n")
+		}
+		ps := cpMgr.List()
+		if len(ps) == 0 {
+			return streamMsg("No checkpoints.\n\n")
+		}
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("Checkpoints (%d):\n\n", len(ps)))
+		for i, cp := range ps {
+			b.WriteString(fmt.Sprintf("  %d. %s  %s  %s  %s\n", i+1, cp.ID, cp.FilePath, cp.ToolCall, cp.Timestamp.Format("15:04:05")))
+		}
+		b.WriteString("\nUse /undo to revert the most recent.\n\n")
+		return streamMsg(b.String())
 	}
 }
 
@@ -771,9 +911,13 @@ func helpText() string {
   /memory            Show loaded memory files
   /memory list       List auto memory entries
   /memory clear      Clear all auto memories
+  /undo              Undo the last file edit (checkpoint rollback)
+  /checkpoints       List all file edit checkpoints
 
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
+  /image <path>       Attach an image file
+  /fullscreen         Toggle fullscreen mode
   /exit, /quit       Exit ggcode
 
 Keyboard shortcuts:
@@ -878,4 +1022,44 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// handleImageCommand handles the /image slash command to attach an image file.
+func (m *Model) handleImageCommand(parts []string) tea.Cmd {
+	if len(parts) < 2 {
+		m.output.WriteString(m.styles.error.Render("Usage: /image <path/to/file.png>\n"))
+		m.output.WriteString(m.styles.prompt.Render("Supported formats: PNG, JPEG, GIF, WebP (max 20MB)\n\n"))
+		return nil
+	}
+	path := parts[1]
+	return func() tea.Msg {
+		img, err := image.ReadFile(path)
+		if err != nil {
+			return errMsg{err: fmt.Errorf("reading image: %w", err)}
+		}
+		placeholder := image.Placeholder(path, img)
+		return imageAttachedMsg{
+			placeholder: placeholder,
+			img:        img,
+			filename:   path,
+		}
+	}
+}
+
+// imageAttachedMsg is sent when an image is successfully loaded.
+type imageAttachedMsg struct {
+	placeholder string
+	img        image.Image
+	filename   string
+}
+
+// handleFullscreenCommand toggles fullscreen mode.
+func (m *Model) handleFullscreenCommand() tea.Cmd {
+	m.fullscreen = !m.fullscreen
+	state := "off"
+	if m.fullscreen {
+		state = "on"
+	}
+	m.output.WriteString(fmt.Sprintf("Fullscreen: %s\n\n", state))
+	return nil
 }

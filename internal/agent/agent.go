@@ -4,14 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
+	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
 )
+
+// Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
+// DiffConfirmFunc is called before a file write to request user confirmation.
+// It receives the file path and unified diff string, and returns true if approved.
+type DiffConfirmFunc func(filePath, diffText string) bool
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
@@ -23,7 +31,9 @@ type Agent struct {
 	onApproval     func(toolName string, input string) permission.Decision
 	onUsage        func(usage provider.TokenUsage)
 	hookConfig     hooks.HookConfig
-	workingDir     string // called after each API call with usage stats
+	workingDir     string
+	checkpoints    *checkpoint.Manager
+	diffConfirm    DiffConfirmFunc
 	mu             sync.Mutex
 }
 
@@ -103,9 +113,14 @@ func (a *Agent) ContextManager() ctxpkg.ContextManager {
 
 // RunStream runs the agent loop with streaming, sending events to the callback.
 func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error {
+	return a.RunStreamWithContent(ctx, []provider.ContentBlock{{Type: "text", Text: userMsg}}, onEvent)
+}
+
+// RunStreamWithContent runs the agent loop with streaming, accepting content blocks (supports images).
+func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error {
 	a.contextManager.Add(provider.Message{
 		Role:    "user",
-		Content: []provider.ContentBlock{{Type: "text", Text: userMsg}},
+		Content: content,
 	})
 
 	// Auto-summarize if usage ratio >= 80%.
@@ -246,6 +261,27 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	return a.executeTool(ctx, tc)
 }
 
+// SetCheckpointManager sets the checkpoint manager for undo support.
+func (a *Agent) SetCheckpointManager(m *checkpoint.Manager) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.checkpoints = m
+}
+
+// CheckpointManager returns the checkpoint manager.
+func (a *Agent) CheckpointManager() *checkpoint.Manager {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.checkpoints
+}
+
+// SetDiffConfirm sets the diff confirmation callback.
+func (a *Agent) SetDiffConfirm(fn DiffConfirmFunc) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.diffConfirm = fn
+}
+
 // SetHookConfig sets the hooks configuration.
 func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
 	a.mu.Lock()
@@ -279,6 +315,11 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return tool.Result{Content: preResult.Output, IsError: true}
 	}
 
+	// For file-editing tools: read old content, compute new, show diff, save checkpoint
+	if tc.Name == "edit_file" || tc.Name == "write_file" {
+		return a.executeFileTool(ctx, t, tc, env)
+	}
+
 	// Execute the actual tool
 	result, err := t.Execute(ctx, tc.Arguments)
 	if err != nil {
@@ -292,6 +333,116 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 
 	return result
+}
+
+// executeFileTool handles edit_file and write_file with diff preview and checkpointing.
+func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.ToolCallDelta, env hooks.HookEnv) tool.Result {
+	a.mu.Lock()
+	cpMgr := a.checkpoints
+	diffFn := a.diffConfirm
+	a.mu.Unlock()
+
+	// Determine file path and compute old/new content
+	filePath, oldContent, newContent, err := a.computeFileChange(tc)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("file change error: %v", err), IsError: true}
+	}
+
+	// Show diff and ask for confirmation if diffConfirm is set
+	if diffFn != nil && diff.HasChanges(oldContent, newContent) {
+		diffText := diff.UnifiedDiff(oldContent, newContent, 3)
+		if !diffFn(filePath, diffText) {
+			return tool.Result{Content: fmt.Sprintf("File write to %s cancelled by user.", filePath), IsError: true}
+		}
+	}
+
+	// Pre-tool-use hooks
+	preResult := hooks.RunPreHooks(a.hookConfig.PreToolUse, env)
+	if !preResult.Allowed {
+		return tool.Result{Content: preResult.Output, IsError: true}
+	}
+
+	// Execute the actual tool
+	result, err := t.Execute(ctx, tc.Arguments)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
+	}
+
+	// Save checkpoint
+	if cpMgr != nil && !result.IsError {
+		cpMgr.Save(filePath, oldContent, newContent, tc.Name)
+	}
+
+	// Post-tool-use hooks
+	postResult := hooks.RunPostHooks(a.hookConfig.PostToolUse, env)
+	if postResult.Output != "" {
+		result.Content += "\n" + postResult.Output
+	}
+
+	return result
+}
+
+// computeFileChange reads the old content and computes the new content for a file tool call.
+func (a *Agent) computeFileChange(tc provider.ToolCallDelta) (filePath, oldContent, newContent string, err error) {
+	switch tc.Name {
+	case "edit_file":
+		var args struct {
+			FilePath string `json:"file_path"`
+			OldText  string `json:"old_text"`
+			NewText  string `json:"new_text"`
+		}
+		if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+			return "", "", "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		filePath = args.FilePath
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			// File may not exist yet — that's OK for write_file, but edit_file needs it
+			return "", "", "", fmt.Errorf("cannot read file: %w", err)
+		}
+		oldContent = string(data)
+		newContent = replaceFirst(oldContent, args.OldText, args.NewText)
+		return filePath, oldContent, newContent, nil
+
+	case "write_file":
+		var args struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+			return "", "", "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		filePath = args.Path
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			oldContent = ""
+		} else {
+			oldContent = string(data)
+		}
+		newContent = args.Content
+		return filePath, oldContent, newContent, nil
+
+	default:
+		return "", "", "", fmt.Errorf("not a file tool: %s", tc.Name)
+	}
+}
+
+// replaceFirst replaces the first occurrence of old in s with new.
+func replaceFirst(s, old, new string) string {
+	idx := indexOf(s, old)
+	if idx < 0 {
+		return s
+	}
+	return s[:idx] + new + s[idx+len(old):]
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 // Clear resets the conversation (keeps system prompt).

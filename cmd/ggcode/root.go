@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
@@ -174,6 +175,7 @@ policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
+	ag.SetCheckpointManager(checkpoint.NewManager(50))
 
 	// Setup session store
 	store, err := session.NewDefaultStore()
