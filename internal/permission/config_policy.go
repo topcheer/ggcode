@@ -2,6 +2,8 @@ package permission
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -51,6 +53,22 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 
 	// Mode-specific handling
 	switch p.mode {
+	case BypassMode:
+		// Bypass mode: allow everything except extremely dangerous operations
+		if toolName == "run_command" {
+			cmd, _ := extractCommand(input)
+			if cmd != "" && p.detector.IsExtremelyDangerous(cmd) {
+				return Ask, nil
+			}
+		}
+		// Check sandbox for file tools (still protect workspace boundary)
+		if isFileTool(toolName) {
+			path, _ := extractFilePath(input)
+			if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
+				return Ask, nil
+			}
+		}
+		return Allow, nil
 	case PlanMode:
 		// Plan mode: read-only tools allowed, everything else denied
 		if IsReadOnlyTool(toolName) {
@@ -141,6 +159,33 @@ func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 		return d
 	}
 	return Ask
+}
+
+// isSensitivePath returns true for paths that are system-critical or user-config.
+func isSensitivePath(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	sensitiveFiles := []string{
+		".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
+		".ssh/config", ".ssh/authorized_keys", ".ssh/id_rsa", ".ssh/id_ed25519",
+		".gitconfig", ".gnupg",
+	}
+	for _, f := range sensitiveFiles {
+		if strings.HasSuffix(path, f) || path == f {
+			return true
+		}
+	}
+	// Writing directly to $HOME root (e.g., ~/.somefile where somefile is not a known app)
+	if strings.HasPrefix(path, home+"/") && !strings.Contains(strings.TrimPrefix(path, home+"/"), "/") {
+		// Single file directly in home dir - could be sensitive
+		base := strings.TrimPrefix(path, home+"/")
+		if strings.HasPrefix(base, ".") && len(base) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func isFileTool(name string) bool {
