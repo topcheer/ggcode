@@ -48,8 +48,11 @@ func TestPermissionModeNext(t *testing.T) {
 	if PlanMode.Next() != AutoMode {
 		t.Error("plan.Next() should be auto")
 	}
-	if AutoMode.Next() != SupervisedMode {
-		t.Error("auto.Next() should be supervised")
+	if AutoMode.Next() != BypassMode {
+		t.Error("auto.Next() should be bypass")
+	}
+	if BypassMode.Next() != SupervisedMode {
+		t.Error("bypass.Next() should be supervised")
 	}
 }
 

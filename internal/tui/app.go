@@ -82,6 +82,14 @@ type Model struct {
 	mode               permission.PermissionMode
 	pendingDiffConfirm *DiffConfirmMsg
 	fullscreen         bool
+
+	// Approval selection list
+	approvalOptions []approvalOption
+	approvalCursor  int
+
+	// Diff confirm selection list
+	diffOptions []approvalOption
+	diffCursor  int
 	pendingImage       *imageAttachedMsg
 
 	// Slash command autocomplete
@@ -100,14 +108,17 @@ type MCPInfo struct {
 }
 
 type styles struct {
-	user      lipgloss.Style
-	assistant lipgloss.Style
-	tool      lipgloss.Style
-	error     lipgloss.Style
-	prompt    lipgloss.Style
-	title     lipgloss.Style
-	approval  lipgloss.Style
-	markdown  lipgloss.Style
+	user            lipgloss.Style
+	assistant       lipgloss.Style
+	tool            lipgloss.Style
+	error           lipgloss.Style
+	prompt          lipgloss.Style
+	title           lipgloss.Style
+	approval        lipgloss.Style
+	warn            lipgloss.Style
+	approvalCursor  lipgloss.Style
+	approvalDim     lipgloss.Style
+	markdown        lipgloss.Style
 }
 
 // DiffConfirmMsg is sent to TUI when agent wants user to confirm a file edit diff.
@@ -115,6 +126,30 @@ type DiffConfirmMsg struct {
 	FilePath string
 	DiffText string
 	Response chan bool
+}
+
+// approvalOption represents a selectable option in the approval list.
+type approvalOption struct {
+	label    string
+	shortcut string
+	decision permission.Decision
+}
+
+// defaultApprovalOptions returns the standard approval options.
+func defaultApprovalOptions() []approvalOption {
+	return []approvalOption{
+		{label: "Allow", shortcut: "y", decision: permission.Allow},
+		{label: "Allow Always", shortcut: "a", decision: permission.Allow},
+		{label: "Deny", shortcut: "n", decision: permission.Deny},
+	}
+}
+
+// diffConfirmOptions returns the options for diff confirmation.
+func diffConfirmOptions() []approvalOption {
+	return []approvalOption{
+		{label: "Accept", shortcut: "y", decision: permission.Allow},
+		{label: "Reject", shortcut: "n", decision: permission.Deny},
+	}
 }
 
 // streamMsg wraps a string from the agent goroutine.
@@ -155,6 +190,14 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		approval: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("11")).
 			Bold(true),
+		warn: lipgloss.NewStyle().
+		Foreground(lipgloss.Color("9")).
+		Bold(true),
+		approvalCursor: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("226")).
+			Background(lipgloss.Color("236")),
+		approvalDim: lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")),
 	}
 
 	return Model{
@@ -267,29 +310,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Handle approval mode
+		// Handle approval mode (selection list)
 		if m.pendingApproval != nil {
 			switch msg.String() {
+			case "up", "k":
+				m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
+				return m, nil
+			case "down", "j":
+				m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
+				return m, nil
+			case "enter", "right":
+				opt := m.approvalOptions[m.approvalCursor]
+				if opt.shortcut == "a" {
+					return m, m.handleApprovalAllowAlways()
+				}
+				return m, m.handleApproval(opt.decision)
 			case "y", "Y":
 				return m, m.handleApproval(permission.Allow)
 			case "n", "N":
 				return m, m.handleApproval(permission.Deny)
 			case "a", "A":
 				return m, m.handleApprovalAllowAlways()
-			case "ctrl+c":
+			case "esc", "ctrl+c":
 				return m, m.handleApproval(permission.Deny)
 			}
 			return m, nil
 		}
 
-		// Handle diff confirmation mode
+		// Handle diff confirmation mode (selection list)
 		if m.pendingDiffConfirm != nil {
 			switch msg.String() {
+			case "up", "k":
+				m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
+				return m, nil
+			case "down", "j":
+				m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
+				return m, nil
+			case "enter", "right":
+				opt := m.diffOptions[m.diffCursor]
+				return m, m.handleDiffConfirm(opt.decision == permission.Allow)
 			case "y", "Y":
 				return m, m.handleDiffConfirm(true)
 			case "n", "N":
 				return m, m.handleDiffConfirm(false)
-			case "ctrl+c":
+			case "esc", "ctrl+c":
 				return m, m.handleDiffConfirm(false)
 			}
 			return m, nil
@@ -392,20 +456,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ApprovalMsg:
 		// Agent is requesting approval
 		m.pendingApproval = &msg
-		m.output.WriteString(m.styles.approval.Render(
-			fmt.Sprintf("\n\u26a0 Permission required: %s\n", msg.ToolName),
+		m.approvalOptions = defaultApprovalOptions()
+		m.approvalCursor = 0
+		isWarn := m.mode == permission.BypassMode
+		titleStyle := m.styles.approval
+		if isWarn {
+			titleStyle = m.styles.warn
+		}
+		m.output.WriteString(titleStyle.Render(
+			fmt.Sprintf("\n⚠ Permission required: %s\n", msg.ToolName),
 		))
 		m.output.WriteString(fmt.Sprintf("  Input: %s\n", truncateString(msg.Input, 200)))
-		m.output.WriteString(m.styles.prompt.Render("  [y] Allow once  [n] Deny  [a] Always allow\n"))
+		m.output.WriteString(m.renderApprovalOptions(m.approvalOptions, m.approvalCursor))
 		return m, nil
 
 	case DiffConfirmMsg:
 		m.pendingDiffConfirm = &msg
+		m.diffOptions = diffConfirmOptions()
+		m.diffCursor = 0
 		m.output.WriteString(m.styles.approval.Render(
 			fmt.Sprintf("\n\u270f File edit: %s\n", msg.FilePath),
 		))
 		m.output.WriteString(FormatDiff(msg.DiffText))
-		m.output.WriteString(m.styles.prompt.Render("  [y] Accept  [n] Reject\n"))
+		m.output.WriteString(m.renderApprovalOptions(m.diffOptions, m.diffCursor))
 		return m, nil
 
 	case toolStatusMsg:
@@ -898,7 +971,7 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 		}
 		m.output.WriteString(fmt.Sprintf("Mode set to: %s\n\n", newMode))
 	} else {
-		m.output.WriteString(fmt.Sprintf("Current mode: %s\nUsage: /mode <supervised|plan|auto>\n\n", m.mode))
+		m.output.WriteString(fmt.Sprintf("Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass>\n\n", m.mode))
 	}
 	return nil
 }
@@ -1076,6 +1149,31 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 		m.output.WriteString(m.styles.prompt.Render("\nUsage: /memory [list|clear]\n\n"))
 	}
 	return nil
+}
+
+// renderApprovalOptions renders a selection list for approval/diff confirm.
+func (m Model) renderApprovalOptions(options []approvalOption, cursor int) string {
+	var sb strings.Builder
+	maxLabel := 0
+	for _, opt := range options {
+		label := fmt.Sprintf("%s (%s)", opt.label, opt.shortcut)
+		if len(label) > maxLabel {
+			maxLabel = len(label)
+		}
+	}
+	sb.WriteString("\n")
+	for i, opt := range options {
+		label := fmt.Sprintf("%s (%s)", opt.label, opt.shortcut)
+		if i == cursor {
+			sb.WriteString(m.styles.approvalCursor.Render(fmt.Sprintf("  \u276f %-*s", maxLabel, label)))
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString(m.styles.approvalDim.Render(fmt.Sprintf("    %-*s", maxLabel, label)))
+			sb.WriteString("\n")
+		}
+	}
+	sb.WriteString(m.styles.prompt.Render("  \u2191/\u2193 navigate, Enter confirm, shortcut keys still work\n"))
+	return sb.String()
 }
 
 // renderAutoComplete renders the autocomplete dropdown.
@@ -1333,7 +1431,7 @@ func helpText() string {
   /plugins           List loaded plugins and their tools
   /image <path>       Attach an image file
   /fullscreen         Toggle fullscreen mode
-  /mode <mode>       Set permission mode (supervised|plan|auto)
+  /mode <mode>       Set permission mode (supervised|plan|auto|bypass)
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
   /agent cancel <id> Cancel a sub-agent
