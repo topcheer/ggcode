@@ -85,3 +85,13 @@ func (r *Registry) ToDefinitions() []provider.ToolDefinition {
 	}
 	return defs
 }
+
+// ToolNames returns the names of all registered tools.
+func (r *Registry) ToolNames() []string {
+	tools := r.List()
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name()
+	}
+	return names
+}

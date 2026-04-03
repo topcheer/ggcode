@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -53,6 +55,48 @@ type PluginCommandConfig struct {
 	Args        []string `yaml:"args"`
 }
 
+// DefaultSystemPrompt is the built-in system prompt used when no custom system_prompt is set.
+const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a terminal.
+
+## Identity
+- You help users with coding tasks by reading, writing, editing files, and running commands
+- You are precise, concise, and proactive
+- You prefer small, focused changes over large rewrites
+- You always verify your changes work
+
+## Tool Usage Guidelines
+### File Operations
+- Read before edit — always understand existing code before modifying
+- Use edit_file for targeted changes, write_file only for new files
+- After editing, verify the change is correct
+
+### Shell Commands
+- Use run_command for builds, tests, git operations
+- Prefer specific commands over generic ones
+- Chain related commands with &&
+
+### Search
+- Use glob to find files, search_files for content
+- Be specific with patterns to reduce noise
+
+### Git
+- Small, focused commits with clear messages
+- Check status and diff before committing
+
+## Behavior
+- Ask for clarification when requirements are ambiguous
+- Break complex tasks into steps
+- Report progress during long operations
+- When you find bugs, fix them with minimal changes
+- Test your changes when possible
+- Use @mentions to reference files for context
+
+## Memory
+- Use save_memory to persist useful patterns and decisions
+- Check GGCODE.md for project context and conventions
+- Learn from user preferences across sessions
+`
+
 // Config is the top-level configuration.
 type Config struct {
 	Provider      string                    `yaml:"provider"`
@@ -79,6 +123,7 @@ type SubAgentConfig struct {
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
+		SystemPrompt:  DefaultSystemPrompt,
 		Provider:      "anthropic",
 		Model:         "claude-sonnet-4-20250514",
 		AllowedDirs:   []string{"."},
@@ -149,6 +194,30 @@ func (c *Config) GetProviderConfig() *ProviderConfig {
 		return &pc
 	}
 	return &ProviderConfig{}
+}
+
+// BuildSystemPrompt enhances the base system prompt with runtime context.
+func BuildSystemPrompt(basePrompt, workingDir string, toolNames []string, gitStatus string, customCmds []string) string {
+	if basePrompt == "" {
+		basePrompt = DefaultSystemPrompt
+	}
+
+	var sb strings.Builder
+	sb.WriteString(basePrompt)
+
+	sb.WriteString("\n\n## Environment\n")
+	sb.WriteString(fmt.Sprintf("- Working directory: %s\n", workingDir))
+	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
+	sb.WriteString(fmt.Sprintf("- Available tools: %s\n", strings.Join(toolNames, ", ")))
+
+	if gitStatus != "" {
+		sb.WriteString(fmt.Sprintf("- Git: %s\n", gitStatus))
+	}
+
+	if len(customCmds) > 0 {
+		sb.WriteString(fmt.Sprintf("- Custom slash commands: %s\n", strings.Join(customCmds, ", ")))}
+
+	return sb.String()
 }
 
 // ExpandAllowedDirs resolves allowed_dirs entries relative to baseDir.
