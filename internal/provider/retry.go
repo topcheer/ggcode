@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"time"
@@ -33,6 +34,11 @@ func isRetryable(err error) bool {
 // retryWithBackoff retries fn up to maxRetries times with exponential backoff (1s, 2s, 4s).
 // Only retries if the error is retryable (429 or 5xx).
 func retryWithBackoff(fn func() error, maxRetries int) error {
+	return retryWithBackoffCtx(context.Background(), fn, maxRetries)
+}
+
+// retryWithBackoffCtx is like retryWithBackoff but respects context cancellation.
+func retryWithBackoffCtx(ctx context.Context, fn func() error, maxRetries int) error {
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		err := fn()
@@ -43,7 +49,11 @@ func retryWithBackoff(fn func() error, maxRetries int) error {
 		if !isRetryable(err) || i == maxRetries-1 {
 			return err
 		}
-		time.Sleep(time.Duration(1<<uint(i)) * time.Second)
+		select {
+		case <-time.After(time.Duration(1<<uint(i)) * time.Second):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return lastErr
 }

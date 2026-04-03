@@ -21,7 +21,7 @@ func TestClientInitializeProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) == "" {
+	if len(data) == 0 {
 		t.Error("empty marshaled request")
 	}
 

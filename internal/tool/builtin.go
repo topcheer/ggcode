@@ -4,7 +4,7 @@ import "github.com/topcheer/ggcode/internal/permission"
 
 // RegisterBuiltinTools registers all built-in tools.
 // If policy is nil, no sandbox path checking is enforced (permissive mode).
-func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy) error {
+func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string) error {
 	var sandbox AllowedPathChecker
 	if policy != nil {
 		sandbox = func(path string) bool {
@@ -23,7 +23,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		Glob{SandboxCheck: sandbox},
 
 		// Execution
-		RunCommand{},
+		RunCommand{WorkingDir: workingDir},
 
 		// Git
 		GitStatus{},

@@ -65,6 +65,8 @@ func (m *Manager) TokenCount() int {
 }
 
 func (m *Manager) MaxTokens() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.maxTokens
 }
 

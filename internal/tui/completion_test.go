@@ -78,6 +78,35 @@ func TestCompleteMention(t *testing.T) {
 	// Directory is empty so 0 completions is valid
 }
 
+func TestParseMentions_PathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "safe.txt"), []byte("safe content"), 0644)
+
+	tests := []struct {
+		name  string
+		input string
+		wantN int
+	}{
+		{"dotdot", "@../../etc/passwd", 0},
+		{"absolute path", "@/etc/passwd", 0},
+		{"dotdot variant", "@../secret", 0},
+		{"nested dotdot", "@internal/../../etc/passwd", 0},
+		{"safe file", "@safe.txt", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, mentions, err := ParseMentions(tt.input, dir)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(mentions) != tt.wantN {
+				t.Errorf("got %d mentions, want %d", len(mentions), tt.wantN)
+			}
+		})
+	}
+}
+
 func TestDetectMention(t *testing.T) {
 	ti := textinput.New()
 	ti.SetValue("fix @internal/")
