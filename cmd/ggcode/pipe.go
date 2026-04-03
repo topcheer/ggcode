@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -89,11 +90,8 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 		return 1
 	}
 
-	// Compose the full prompt
-	fullPrompt := prompt
-	if stdinData != "" {
-		fullPrompt = stdinData + "\n\n" + prompt
-	}
+	// Compose the full prompt (may include image from stdin)
+	fullPrompt, imageBlocks := buildPipePrompt(prompt, stdinData)
 
 	// Output destination
 	var w io.Writer = os.Stdout
@@ -112,18 +110,31 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 	defer cancel()
 
 	var hasError bool
-	err = ag.RunStream(ctx, fullPrompt, func(event provider.StreamEvent) {
-		switch event.Type {
-		case provider.StreamEventText:
-			fmt.Fprint(w, event.Text)
-		case provider.StreamEventError:
-			fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
-			hasError = true
-		}
-	})
+	var agentErr error
+	if imageBlocks != nil {
+		agentErr = ag.RunStreamWithContent(ctx, imageBlocks, func(event provider.StreamEvent) {
+			switch event.Type {
+			case provider.StreamEventText:
+				fmt.Fprint(w, event.Text)
+			case provider.StreamEventError:
+				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
+				hasError = true
+			}
+		})
+	} else {
+		agentErr = ag.RunStream(ctx, fullPrompt, func(event provider.StreamEvent) {
+			switch event.Type {
+			case provider.StreamEventText:
+				fmt.Fprint(w, event.Text)
+			case provider.StreamEventError:
+				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
+				hasError = true
+			}
+		})
+	}
 
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	if agentErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", agentErr)
 		return 1
 	}
 	if hasError {
@@ -133,14 +144,39 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 }
 
 // readStdin reads all data from stdin if it's a pipe, otherwise returns "".
-func readStdin() (string, error) {
+func readStdin() ([]byte, error) {
 	stat, _ := os.Stdin.Stat()
 	if (stat.Mode() & os.ModeCharDevice) != 0 {
-		return "", nil
+		return nil, nil
 	}
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(data), nil
+	return data, nil
+}
+
+// buildPipePrompt builds the prompt with optional image from stdin.
+func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.ContentBlock) {
+	if stdinData == nil {
+		return prompt, nil
+	}
+
+	// Check if stdin is an image
+	mime := image.DetectMIME(stdinData)
+	if mime != "" {
+		img, err := image.Decode(stdinData)
+		if err == nil {
+			placeholder := image.Placeholder("stdin", img)
+			fmt.Fprintf(os.Stderr, "Detected image from stdin: %s\n", placeholder)
+			blocks := []provider.ContentBlock{
+				provider.TextBlock(prompt),
+				provider.ImageBlock(img.MIME, image.EncodeBase64(img)),
+			}
+			return "", blocks
+		}
+	}
+
+	// Plain text
+	return string(stdinData) + "\n\n" + prompt, nil
 }

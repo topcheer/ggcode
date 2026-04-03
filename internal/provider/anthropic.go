@@ -154,6 +154,8 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			switch b.Type {
 			case "text":
 				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
+			case "image":
+					blocks = append(blocks, anthropic.NewImageBlockBase64(b.ImageMIME, b.ImageData))
 			case "tool_use":
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, b.Input, b.ToolName))
 			case "tool_result":

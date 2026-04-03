@@ -161,6 +161,14 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 			switch b.Type {
 			case "text":
 				parts = append(parts, &genai.Part{Text: b.Text})
+			case "image":
+				// Gemini uses InlineData for inline images
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{
+						MIMEType: b.ImageMIME,
+						Data:     []byte(b.ImageData),
+					},
+				})
 			case "tool_use":
 				var args map[string]any
 				if b.Input != nil {
