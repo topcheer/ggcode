@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -106,7 +107,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		}
 	}
 
-	streamer, err := p.client.CreateChatCompletionStream(ctx, req)
+	var streamer *openai.ChatCompletionStream
+	err := retryWithBackoff(func() error {
+		var sErr error
+		streamer, sErr = p.client.CreateChatCompletionStream(ctx, req)
+		return sErr
+	}, 3)
 	if err != nil {
 		debug.Log("openai", "ChatStream ERROR model=%s: %v", p.model, err)
 		var apiErr *openai.APIError
@@ -250,7 +256,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			for i, b := range m.Content {
 				out := b.Output
 if len(out) > 100 {
-					out = out[:100] + "..."
+					out = util.Truncate(out, 100)
 				}
 				debug.Log("openai", "  block[%d]: type=%s tool_id=%s output=%s", i, b.Type, b.ToolID, out)
 				if b.Type == "tool_result" {

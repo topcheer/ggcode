@@ -118,7 +118,9 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	oldMsgs := make([]provider.Message, oldEnd-nonRecentStart)
 	copy(oldMsgs, m.messages[nonRecentStart:oldEnd])
 
-	recentMsgs := make([]provider.Message, len(m.messages)-oldEnd)
+	origLen := len(m.messages)
+
+	recentMsgs := make([]provider.Message, origLen-oldEnd)
 	copy(recentMsgs, m.messages[oldEnd:])
 	m.mu.Unlock()
 
@@ -175,7 +177,14 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	newMsgs := make([]provider.Message, 0, len(recentMsgs)+2)
+	// Collect any messages that arrived during summarization (TOCTOU fix)
+	var extraMsgs []provider.Message
+	if len(m.messages) > origLen {
+		extraMsgs = make([]provider.Message, len(m.messages)-origLen)
+		copy(extraMsgs, m.messages[origLen:])
+	}
+
+	newMsgs := make([]provider.Message, 0, len(recentMsgs)+len(extraMsgs)+2)
 	if sysIdx >= 0 {
 		newMsgs = append(newMsgs, m.messages[0])
 	}
@@ -187,6 +196,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 		}},
 	})
 	newMsgs = append(newMsgs, recentMsgs...)
+	newMsgs = append(newMsgs, extraMsgs...)
 
 	m.messages = newMsgs
 	m.recalcTokens()
@@ -210,9 +220,9 @@ func (m *Manager) recalcTokens() {
 }
 
 func estimateTokens(msg provider.Message) int {
-	var chars int
+	var text string
 	for _, b := range msg.Content {
-		chars += len(b.Text) + len(b.ToolName) + len(b.Output) + len(b.Input)
+		text += b.Text + b.ToolName + b.Output + string(b.Input)
 	}
-	return (chars / charsPerToken) + 1
+	return EstimateTokens(text)
 }
