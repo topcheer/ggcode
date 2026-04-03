@@ -20,6 +20,13 @@ func RegisterBuiltinTools(registry *Registry) error {
 		GitStatus{},
 		GitDiff{},
 		GitLog{},
+
+		// Web
+		WebFetch{},
+		WebSearch{},
+
+		// Productivity
+		NewTodoWrite(""),
 	}
 	for _, t := range tools {
 		if err := registry.Register(t); err != nil {
