@@ -52,6 +52,11 @@ func (s *ToolSpinner) IsActive() bool {
 	return s.active
 }
 
+// CurrentFrame returns the current spinner frame index.
+func (s *ToolSpinner) CurrentFrame() int {
+	return s.frame
+}
+
 // String returns the spinner string with tool name.
 func (s *ToolSpinner) String() string {
 	if !s.active {
