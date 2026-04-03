@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"bytes"
 	"strings"
 	"time"
 
@@ -41,7 +42,7 @@ type approvalResponseMsg struct {
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
 	input              textinput.Model
-	output             *strings.Builder
+	output             *bytes.Buffer
 	loading            bool
 	quitting           bool
 	width              int
@@ -142,7 +143,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 
 	return Model{
 		input:   ti,
-		output:  &strings.Builder{},
+		output:  &bytes.Buffer{},
 		styles:  s,
 		agent:   a,
 		policy:  policy,
