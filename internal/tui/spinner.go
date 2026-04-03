@@ -91,37 +91,54 @@ type ToolStatusMsg struct {
 	ToolName string
 	Running  bool // true = start, false = done
 	Result   string
+	Args     string // tool arguments summary
 	IsError  bool
 }
 
-// FormatToolStatus formats a tool completion message.
+// bulletStyle renders the ● prefix for assistant/tool lines.
+var bulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+
+// FormatToolStart formats the header line when a tool begins executing.
+func FormatToolStart(toolName string, args string) string {
+	var sb strings.Builder
+	sb.WriteString(bulletStyle.Render("● "))
+	sb.WriteString(toolName)
+	if args != "" {
+		sb.WriteString("\n  │ ")
+		sb.WriteString(args)
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// FormatToolResult formats the closing line when a tool finishes.
+func FormatToolResult(msg ToolStatusMsg) string {
+	var sb strings.Builder
+	if msg.IsError {
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("  └ error: "))
+	} else {
+		sb.WriteString("  └ ")
+	}
+	result := strings.TrimSpace(msg.Result)
+	if result == "" {
+		result = "done"
+	}
+	// Truncate long results
+	if len(result) > 200 {
+		result = result[:200] + "..."
+	}
+	// Collapse multi-line results to single line
+	result = strings.ReplaceAll(result, "\n", " ")
+	result = strings.Join(strings.Fields(result), " ")
+	sb.WriteString(result)
+	sb.WriteString("\n\n")
+	return sb.String()
+}
+
+// FormatToolStatus formats a tool completion message (legacy compat).
 func FormatToolStatus(msg ToolStatusMsg) string {
 	if msg.Running {
 		return ""
 	}
-
-	style := lipgloss.NewStyle()
-	prefix := "[done]"
-	if msg.IsError {
-		style = style.Foreground(lipgloss.Color("9"))
-		prefix = "[error]"
-	} else {
-		style = style.Foreground(lipgloss.Color("2"))
-	}
-
-	var sb strings.Builder
-	sb.WriteString(style.Render(fmt.Sprintf(" %s %s", prefix, msg.ToolName)))
-	if msg.Result != "" {
-		// Truncate long results
-		result := strings.TrimSpace(msg.Result)
-		if len(result) > 200 {
-			result = result[:200] + "..."
-		}
-		sb.WriteString("\n")
-		// Indent result
-		for _, line := range strings.Split(result, "\n") {
-			sb.WriteString("   " + line + "\n")
-		}
-	}
-	return sb.String()
+	return FormatToolResult(msg)
 }
