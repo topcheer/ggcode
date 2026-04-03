@@ -448,9 +448,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateAutoComplete checks if the current input should trigger autocomplete.
 func (m *Model) updateAutoComplete() {
-	value := m.input.Value()
-	cursor := m.input.Position()
-
 	// Check for slash command
 	if active, prefix := DetectSlashCommand(m.input); active {
 		matches := CompleteSlashCommand("/" + prefix)
@@ -1178,7 +1175,7 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
 		// Clear todos
-		todopath := filepath.Join(os.UserHomeDir(), ".ggcode", "todos.json")
+		todopath := func() string { d, _ := os.UserHomeDir(); return filepath.Join(d, ".ggcode", "todos.json") }()
 		if err := os.WriteFile(todopath, []byte("[]\n"), 0644); err != nil {
 			return func() tea.Msg {
 				return streamMsg(fmt.Sprintf("Error clearing todos: %v\n\n", err))
@@ -1188,7 +1185,7 @@ func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		todopath := filepath.Join(os.UserHomeDir(), ".ggcode", "todos.json")
+		todopath := func() string { d, _ := os.UserHomeDir(); return filepath.Join(d, ".ggcode", "todos.json") }()
 		data, err := os.ReadFile(todopath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -1279,8 +1276,8 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 	if m.config != nil {
 		b.WriteString(fmt.Sprintf("  Provider:    %s\n", m.config.Provider))
 		b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
-		if m.config.MaxTokens > 0 {
-			b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", m.config.MaxTokens))
+		if pc, ok := m.config.Providers[m.config.Provider]; ok && pc.MaxTokens > 0 {
+			b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", pc.MaxTokens))
 		}
 		if len(m.config.Providers) > 0 {
 			b.WriteString(fmt.Sprintf("  Providers:    %v\n", m.providerNames()))
