@@ -48,8 +48,9 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 	}
 
 	// Setup tools (after policy so sandbox checks can be wired)
+	workingDir, _ := os.Getwd()
 	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		fmt.Fprintf(os.Stderr, "registering tools: %v\n", err)
 		return 1
 	}
@@ -66,7 +67,6 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 	pluginMgr.RegisterTools(registry)
 
 	// Load project memory (GGCODE.md)
-	workingDir, _ := os.Getwd()
 	projectMem, _, _ := memory.LoadProjectMemory(workingDir)
 
 	// Load auto memory

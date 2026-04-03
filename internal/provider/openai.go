@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
@@ -145,7 +146,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			resp, err := streamer.Recv()
 			if err != nil {
 				// Stream ended
-				if err.Error() == "EOF" || err == context.Canceled || err == context.DeadlineExceeded {
+				if errors.Is(err, io.EOF) || err == context.Canceled || err == context.DeadlineExceeded {
 					debug.Log("openai", "Stream ended normally: %v", err)
 					break
 				}
