@@ -1,0 +1,19 @@
+# ggcode configuration
+# See docs/ARCHITECTURE.md for full reference
+
+provider: anthropic
+model: claude-sonnet-4-20250514
+
+system_prompt: |
+  You are ggcode, an AI coding assistant. You help users with coding tasks by
+  reading, writing, and editing files. Be concise and helpful.
+
+providers:
+  anthropic:
+    api_key: ${ANTHROPIC_API_KEY}
+    max_tokens: 8192
+
+allowed_dirs:
+  - .
+
+max_iterations: 50

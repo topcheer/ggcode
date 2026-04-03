@@ -1,0 +1,79 @@
+# ggcode.example.yaml
+# Full configuration example for ggcode
+# Copy to ggcode.yaml or ~/.config/ggcode/ggcode.yaml and customize
+
+# Active LLM provider: anthropic, openai, or gemini
+provider: anthropic
+
+# Model name (provider-specific)
+model: claude-sonnet-4-20250514
+
+# System prompt injected at the start of every conversation
+# system_prompt: "You are a helpful coding assistant."
+
+# Provider-specific settings
+providers:
+  anthropic:
+    api_key: ${ANTHROPIC_API_KEY}
+    # base_url: https://api.anthropic.com  # default, override for proxies
+    max_tokens: 8192
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    base_url: https://api.openai.com/v1  # override for local models or proxies
+    max_tokens: 8192
+  gemini:
+    api_key: ${GEMINI_API_KEY}
+    max_tokens: 8192
+
+# Directories the agent is allowed to access (relative to config file or absolute)
+allowed_dirs:
+  - .
+
+# Maximum agentic loop iterations per user turn
+max_iterations: 50
+
+# Per-tool permission rules: ask (prompt user), allow (auto-approve), deny (block)
+tool_permissions:
+  read_file: allow
+  write_file: ask
+  edit_file: ask
+  list_directory: allow
+  search_files: allow
+  glob: allow
+  run_command: ask
+  git_status: allow
+  git_diff: allow
+  git_log: allow
+
+# MCP servers for extended tool sets
+mcp_servers:
+  - name: filesystem
+    command: npx
+    args:
+      - -y
+      - "@anthropic/mcp-filesystem"
+      - /path/to/allowed/dir
+    env:
+      NODE_ENV: production
+
+  - name: github
+    command: npx
+    args:
+      - -y
+      - "@anthropic/mcp-github"
+    env:
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+
+# External tool plugins
+plugins:
+  - name: my-tools
+    type: command
+    commands:
+      - name: deploy
+        description: Deploy the application to staging
+        execute: ./scripts/deploy.sh
+        args: ["--env", "staging"]
+      - name: lint_check
+        description: Run custom linter
+        execute: npm
+        args: ["run", "lint"]
