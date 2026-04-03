@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -164,9 +165,29 @@ func (r *REPL) Run() error {
 	}
 
 	r.program = tea.NewProgram(r.model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// Wire the agent's approval handler into the TUI via channel bridge.
+	r.agent.SetApprovalHandler(func(toolName string, input string) permission.Decision {
+		if r.program == nil {
+			return permission.Deny
+		}
+		resp := make(chan permission.Decision, 1)
+		r.program.Send(ApprovalMsg{
+			ToolName: toolName,
+			Input:    input,
+			Response: resp,
+		})
+		return <-resp
+	})
+
 	// NewProgram copies the model, so SetProgram on r.model is useless.
-	// Send the reference into the event loop so the internal model copy gets it.
-	r.program.Send(setProgramMsg{Program: r.program})
+	// We can't Send before Run (deadlock). Instead, run in a goroutine and
+	// send the reference once the event loop is up.
+	go func() {
+		// Give the event loop a moment to start, then inject the program ref.
+		time.Sleep(10 * time.Millisecond)
+		r.program.Send(setProgramMsg{Program: r.program})
+	}()
 
 	_, err := r.program.Run()
 	if err == nil && r.store != nil && r.model.session != nil {

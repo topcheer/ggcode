@@ -1,16 +1,17 @@
 # ggcode configuration
 # See docs/ARCHITECTURE.md for full reference
 
-provider: anthropic
-model: claude-sonnet-4-20250514
+provider: openai
+model: glm-5-turbo
 
 system_prompt: |
   You are ggcode, an AI coding assistant. You help users with coding tasks by
   reading, writing, and editing files. Be concise and helpful.
 
 providers:
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    base_url: https://open.bigmodel.cn/api/coding/paas/v4
     max_tokens: 8192
 
 allowed_dirs:
