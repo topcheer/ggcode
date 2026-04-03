@@ -39,45 +39,45 @@ type approvalResponseMsg struct {
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
-	input       textinput.Model
-	output      strings.Builder
-	loading     bool
-	quitting    bool
-	width       int
-	height      int
-	styles      styles
-	agent       *agent.Agent
-	program     *tea.Program
-	cancelFunc  func()
-	policy      permission.PermissionPolicy
-	spinner     *ToolSpinner
-	history     []string
-	historyIdx  int
-	pendingApproval *ApprovalMsg
-	session      *session.Session
-	sessionStore session.Store
-	costMgr     *cost.Manager
-	costProvider string
-	costModel    string
-	lastCost    string
-	mcpServers  []MCPInfo
-	config      *config.Config
-	customCmds  map[string]*commands.Command
-	autoMem     *memory.AutoMemory
-	projMemFiles  []string
-	autoMemFiles  []string
-	pluginMgr   *plugin.Manager
-	mode        permission.PermissionMode
+	input              textinput.Model
+	output             *strings.Builder
+	loading            bool
+	quitting           bool
+	width              int
+	height             int
+	styles             styles
+	agent              *agent.Agent
+	program            *tea.Program
+	cancelFunc         func()
+	policy             permission.PermissionPolicy
+	spinner            *ToolSpinner
+	history            []string
+	historyIdx         int
+	pendingApproval    *ApprovalMsg
+	session            *session.Session
+	sessionStore       session.Store
+	costMgr            *cost.Manager
+	costProvider       string
+	costModel          string
+	lastCost           string
+	mcpServers         []MCPInfo
+	config             *config.Config
+	customCmds         map[string]*commands.Command
+	autoMem            *memory.AutoMemory
+	projMemFiles       []string
+	autoMemFiles       []string
+	pluginMgr          *plugin.Manager
+	mode               permission.PermissionMode
 	pendingDiffConfirm *DiffConfirmMsg
-	fullscreen  bool
-	pendingImage *imageAttachedMsg
+	fullscreen         bool
+	pendingImage       *imageAttachedMsg
 }
 
 // MCPInfo holds display info about a connected MCP server.
 type MCPInfo struct {
-	Name       string
-	ToolNames  []string
-	Connected  bool
+	Name      string
+	ToolNames []string
+	Connected bool
 }
 
 type styles struct {
@@ -140,6 +140,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 
 	return Model{
 		input:   ti,
+		output:  &strings.Builder{},
 		styles:  s,
 		agent:   a,
 		policy:  policy,
@@ -750,21 +751,21 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					provider.ImageBlock(img.img.MIME, image.EncodeBase64(img.img)),
 				}
 				_ = m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
-						if m.program == nil {
-							return
-						}
-						switch event.Type {
-						case provider.StreamEventText:
-							m.program.Send(streamMsg(event.Text))
-						case provider.StreamEventToolCallDone:
-							m.program.Send(toolStatusMsg{
-								ToolName: event.Tool.Name,
-								Running:  true,
-							})
-						case provider.StreamEventError:
-							m.program.Send(errMsg{err: event.Error})
-						}
-					})
+					if m.program == nil {
+						return
+					}
+					switch event.Type {
+					case provider.StreamEventText:
+						m.program.Send(streamMsg(event.Text))
+					case provider.StreamEventToolCallDone:
+						m.program.Send(toolStatusMsg{
+							ToolName: event.Tool.Name,
+							Running:  true,
+						})
+					case provider.StreamEventError:
+						m.program.Send(errMsg{err: event.Error})
+					}
+				})
 			} else {
 				_ = m.agent.RunStream(ctx, text, func(event provider.StreamEvent) {
 					if m.program == nil {
@@ -1044,8 +1045,8 @@ func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 		placeholder := image.Placeholder(path, img)
 		return imageAttachedMsg{
 			placeholder: placeholder,
-			img:        img,
-			filename:   path,
+			img:         img,
+			filename:    path,
 		}
 	}
 }
@@ -1053,8 +1054,8 @@ func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 // imageAttachedMsg is sent when an image is successfully loaded.
 type imageAttachedMsg struct {
 	placeholder string
-	img        image.Image
-	filename   string
+	img         image.Image
+	filename    string
 }
 
 // handleFullscreenCommand toggles fullscreen mode.
