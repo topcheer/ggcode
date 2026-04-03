@@ -225,6 +225,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 		}
 
+		debug.Log("agent", "Adding tool results to contextManager: blocks=%d", len(toolResults))
 		a.contextManager.Add(provider.Message{
 			Role:    "user", // Anthropic uses user role for tool results
 			Content: toolResults,
