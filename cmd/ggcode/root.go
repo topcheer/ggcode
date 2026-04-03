@@ -20,6 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
+	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 func NewRootCmd() *cobra.Command {
@@ -166,6 +167,9 @@ policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 		systemPrompt += "\n\n## Auto Memory\n" + autoContent
 	}
 
+	// Setup sub-agent manager
+	subMgr := subagent.NewManager(cfg.SubAgents)
+
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
@@ -212,6 +216,7 @@ policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 	repl.SetAutoMemory(autoMem)
 	repl.SetProjectMemoryFiles(projectFiles)
 	repl.SetAutoMemoryFiles(autoFiles)
+	repl.SetSubAgentManager(subMgr, prov, registry)
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
 	}

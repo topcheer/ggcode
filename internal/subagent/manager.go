@@ -1,0 +1,208 @@
+package subagent
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/config"
+)
+
+// Status represents the lifecycle state of a sub-agent.
+type Status string
+
+const (
+	StatusPending   Status = "pending"
+	StatusRunning   Status = "running"
+	StatusCompleted Status = "completed"
+	StatusFailed    Status = "failed"
+	StatusCancelled Status = "cancelled"
+)
+
+// SubAgent represents a spawned child agent.
+type SubAgent struct {
+	ID        string
+	Task      string
+	Tools     []string
+	Status    Status
+	Result    string
+	Error     error
+	CreatedAt time.Time
+	StartedAt time.Time
+	EndedAt   time.Time
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+}
+
+func (s *SubAgent) setStatus(st Status) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Status = st
+}
+
+// Manager manages spawning, tracking, and collecting results from sub-agents.
+type Manager struct {
+	agents       map[string]*SubAgent
+	mu           sync.Mutex
+	sem          chan struct{} // concurrency limiter
+	timeout      time.Duration
+	showOutput   bool
+	onComplete   func(*SubAgent)
+}
+
+// NewManager creates a Manager with the given config.
+func NewManager(cfg config.SubAgentConfig) *Manager {
+	max := cfg.MaxConcurrent
+	if max <= 0 {
+		max = 5
+	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	return &Manager{
+		agents:     make(map[string]*SubAgent),
+		sem:        make(chan struct{}, max),
+		timeout:    timeout,
+		showOutput: cfg.ShowOutput,
+	}
+}
+
+// Spawn creates a new sub-agent with the given task and returns its ID.
+func (m *Manager) Spawn(task string, tools []string, ctx context.Context) string {
+	id := fmt.Sprintf("sa-%d", time.Now().UnixNano())
+
+	sa := &SubAgent{
+		ID:        id,
+		Task:      task,
+		Tools:     tools,
+		Status:    StatusPending,
+		CreatedAt: time.Now(),
+	}
+
+	m.mu.Lock()
+	m.agents[id] = sa
+	m.mu.Unlock()
+
+	return id
+}
+
+// Get retrieves a sub-agent by ID.
+func (m *Manager) Get(id string) (*SubAgent, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sa, ok := m.agents[id]
+	return sa, ok
+}
+
+// List returns all sub-agents.
+func (m *Manager) List() []*SubAgent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*SubAgent, 0, len(m.agents))
+	for _, sa := range m.agents {
+		out = append(out, sa)
+	}
+	return out
+}
+
+// RunningCount returns the number of currently running agents.
+func (m *Manager) RunningCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for _, sa := range m.agents {
+		if sa.Status == StatusRunning {
+			count++
+		}
+	}
+	return count
+}
+
+// Cancel cancels a running sub-agent.
+func (m *Manager) Cancel(id string) bool {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	sa.mu.Lock()
+	defer sa.mu.Unlock()
+	if sa.Status != StatusRunning {
+		return false
+	}
+	if sa.cancel != nil {
+		sa.cancel()
+	}
+	sa.Status = StatusCancelled
+	sa.EndedAt = time.Now()
+	return true
+}
+
+// SetCancel stores the cancel function for a sub-agent.
+func (m *Manager) SetCancel(id string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if ok {
+		sa.mu.Lock()
+		sa.cancel = cancel
+		sa.mu.Unlock()
+	}
+}
+
+// Complete marks a sub-agent as completed or failed.
+func (m *Manager) Complete(id string, result string, err error) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.mu.Lock()
+	if err != nil {
+		sa.Status = StatusFailed
+		sa.Error = err
+	} else {
+		sa.Status = StatusCompleted
+	}
+	sa.Result = result
+	sa.EndedAt = time.Now()
+	sa.mu.Unlock()
+
+	if m.onComplete != nil {
+		m.onComplete(sa)
+	}
+}
+
+// SetOnComplete sets a callback invoked when any sub-agent completes.
+func (m *Manager) SetOnComplete(fn func(*SubAgent)) {
+	m.onComplete = fn
+}
+
+// AcquireSemaphore blocks until a slot is available for a new sub-agent to run.
+func (m *Manager) AcquireSemaphore(ctx context.Context) error {
+	select {
+	case m.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ReleaseSemaphore releases a slot.
+func (m *Manager) ReleaseSemaphore() {
+	<-m.sem
+}
+
+// Timeout returns the configured timeout.
+func (m *Manager) Timeout() time.Duration {
+	return m.timeout
+}
+
+// ShowOutput returns whether to show sub-agent output.
+func (m *Manager) ShowOutput() bool {
+	return m.showOutput
+}

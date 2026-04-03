@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/hooks"
 	"gopkg.in/yaml.v3"
@@ -63,6 +64,14 @@ type Config struct {
 	MCPServers []MCPServerConfig     `yaml:"mcp_servers"`
 	Hooks      hooks.HookConfig      `yaml:"hooks"`
 	DefaultMode string                    `yaml:"default_mode"`
+	SubAgents   SubAgentConfig           `yaml:"subagents"`
+}
+
+// SubAgentConfig holds sub-agent configuration.
+type SubAgentConfig struct {
+	MaxConcurrent int           `yaml:"max_concurrent"`
+	Timeout       time.Duration `yaml:"timeout"`
+	ShowOutput    bool          `yaml:"show_output"`
 }
 
 // DefaultConfig returns a config with sensible defaults.

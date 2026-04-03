@@ -23,6 +23,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 // ApprovalMsg is sent to TUI when agent requests permission.
@@ -67,6 +68,7 @@ type Model struct {
 	projMemFiles       []string
 	autoMemFiles       []string
 	pluginMgr          *plugin.Manager
+	subAgentMgr        *subagent.Manager
 	mode               permission.PermissionMode
 	pendingDiffConfirm *DiffConfirmMsg
 	fullscreen         bool
@@ -197,6 +199,10 @@ func (m *Model) SetAutoMemoryFiles(files []string) {
 
 func (m *Model) SetConfig(cfg *config.Config) {
 	m.config = cfg
+}
+
+func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
+	m.subAgentMgr = mgr
 }
 
 func (m *Model) providerNames() string {
@@ -380,7 +386,14 @@ func (m Model) View() string {
 
 	if !m.loading && m.pendingApproval == nil && m.pendingDiffConfirm == nil {
 		modeStr := fmt.Sprintf("[mode: %s]", m.mode)
-		sb.WriteString(m.styles.prompt.Render("\n  " + modeStr + " /help /sessions /resume /export /model /provider /mode /clear /exit | Shift+Tab toggle mode | Ctrl+C interrupt | Ctrl+D quit"))
+		agentStr := ""
+		if m.subAgentMgr != nil {
+			n := m.subAgentMgr.RunningCount()
+			if n > 0 {
+				agentStr = fmt.Sprintf(" [agents: %d running]", n)
+			}
+		}
+		sb.WriteString(m.styles.prompt.Render("\n  " + modeStr + agentStr + " /help /sessions /resume /export /model /provider /mode /clear /exit | Shift+Tab toggle mode | Ctrl+C interrupt | Ctrl+D quit"))
 	}
 
 	return sb.String()
@@ -497,6 +510,10 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleUndoCommand()
 		case "/checkpoints":
 			return m.handleCheckpointsCommand()
+		case "/agents":
+			return m.handleAgentsCommand(parts)
+		case "/agent":
+			return m.handleAgentDetailCommand(parts)
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
@@ -1067,4 +1084,68 @@ func (m *Model) handleFullscreenCommand() tea.Cmd {
 	}
 	m.output.WriteString(fmt.Sprintf("Fullscreen: %s\n\n", state))
 	return nil
+}
+
+// handleAgentsCommand lists all sub-agents.
+func (m *Model) handleAgentsCommand(parts []string) tea.Cmd {
+	if m.subAgentMgr == nil {
+		m.output.WriteString(m.styles.error.Render("Sub-agent manager not configured.\n\n"))
+		return nil
+	}
+	agents := m.subAgentMgr.List()
+	if len(agents) == 0 {
+		m.output.WriteString("No sub-agents spawned yet.\nUsage: LLM can use spawn_agent tool to create sub-agents.\n\n")
+		return nil
+	}
+	m.output.WriteString(fmt.Sprintf("%d sub-agent(s):\n", len(agents)))
+	for _, sa := range agents {
+		duration := ""
+		if !sa.EndedAt.IsZero() && !sa.StartedAt.IsZero() {
+			duration = fmt.Sprintf(" (%v)", sa.EndedAt.Sub(sa.StartedAt).Round(1e9))
+		}
+		m.output.WriteString(fmt.Sprintf("  %s [%s]%s - %s\n", sa.ID, sa.Status, duration, truncateStr(sa.Task, 60)))
+	}
+	m.output.WriteString("\nUse /agent <id> for details, /agent cancel <id> to cancel.\n\n")
+	return nil
+}
+
+// handleAgentDetailCommand shows details for a specific sub-agent or cancels it.
+func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
+	if m.subAgentMgr == nil {
+		m.output.WriteString(m.styles.error.Render("Sub-agent manager not configured.\n\n"))
+		return nil
+	}
+	if len(parts) < 2 {
+		m.output.WriteString("Usage: /agent <id> or /agent cancel <id>\n\n")
+		return nil
+	}
+	if parts[1] == "cancel" && len(parts) >= 3 {
+		if m.subAgentMgr.Cancel(parts[2]) {
+			m.output.WriteString(fmt.Sprintf("Cancelled sub-agent %s\n\n", parts[2]))
+		} else {
+			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Could not cancel %s (not found or not running)\n\n", parts[2])))
+		}
+		return nil
+	}
+	sa, ok := m.subAgentMgr.Get(parts[1])
+	if !ok {
+		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Sub-agent %s not found\n\n", parts[1])))
+		return nil
+	}
+	m.output.WriteString(fmt.Sprintf("Agent: %s\nStatus: %s\nTask: %s\n", sa.ID, sa.Status, sa.Task))
+	if sa.Result != "" {
+		m.output.WriteString(fmt.Sprintf("Result: %s\n", sa.Result))
+	}
+	if sa.Error != nil {
+		m.output.WriteString(fmt.Sprintf("Error: %v\n", sa.Error))
+	}
+	m.output.WriteString("\n")
+	return nil
+}
+
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

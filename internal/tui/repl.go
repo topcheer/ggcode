@@ -15,6 +15,8 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // REPL connects the agent to the TUI model.
@@ -105,6 +107,36 @@ func (r *REPL) SetCheckpointManager(m *checkpoint.Manager) {
 	})
 }
 
+// SetSubAgentManager wires the sub-agent manager and registers sub-agent tools.
+func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider, tools *tool.Registry) {
+	r.model.SetSubAgentManager(mgr)
+
+	factory := func(prov provider.Provider, t interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
+		return agent.NewAgent(prov, t.(*tool.Registry), systemPrompt, maxTurns)
+	}
+
+	tools.Register(tool.SpawnAgentTool{
+		Manager:      mgr,
+		Provider:     prov,
+		Tools:        tools,
+		AgentFactory: factory,
+	})
+	tools.Register(tool.WaitAgentTool{Manager: mgr})
+	tools.Register(tool.ListAgentsTool{Manager: mgr})
+
+	// Notify TUI on completion
+	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
+		if r.program != nil {
+			label := fmt.Sprintf("completed")
+			if sa.Error != nil {
+				label = "failed"
+			}
+			msg := fmt.Sprintf("[sub-agent %s %s]%s\n", sa.ID, label, truncResult(sa))
+			r.program.Send(streamMsg(msg))
+		}
+	})
+}
+
 // requestDiffConfirm sends a diff confirmation request to the TUI and waits for response.
 func (r *REPL) requestDiffConfirm(filePath, diffText string) bool {
 	if r.program == nil {
@@ -169,4 +201,11 @@ func (r *REPL) loadSession(id string) {
 		title = "untitled"
 	}
 	r.model.output.WriteString(fmt.Sprintf("Resumed session: %s \u2014 %s (%d messages)\n\n", ses.ID, title, len(ses.Messages)))
+}
+
+func truncResult(sa *subagent.SubAgent) string {
+	if len(sa.Result) <= 120 {
+		return ": " + sa.Result
+	}
+	return ": " + sa.Result[:120] + "..."
 }
