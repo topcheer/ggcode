@@ -919,7 +919,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.output.WriteString(m.styles.user.Render(fmt.Sprintf("Custom command /%s:\n", cmdName)))
 					m.output.WriteString(expanded)
 					m.output.WriteString("\n\n")
-					m.output.WriteString(m.styles.assistant.Render("Assistant: "))
 					m.loading = true
 					// Reset status bar state
 					m.statusActivity = "Thinking..."
@@ -944,10 +943,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		m.output.WriteString("\n\n")
 	}
 
-	m.output.WriteString(m.styles.user.Render("You: "))
 	m.output.WriteString(text)
 	m.output.WriteString("\n\n")
-	m.output.WriteString(m.styles.assistant.Render("Assistant: "))
 
 	// Save original user message to session
 	m.appendUserMessage(text)
