@@ -5,6 +5,9 @@ import (
 	"sync"
 )
 
+// DefaultMode is the default permission mode if not specified.
+var DefaultMode = SupervisedMode
+
 // ToolRule defines the permission level for a tool.
 type ToolRule struct {
 	Decision Decision `yaml:"decision"`
@@ -15,12 +18,18 @@ type ConfigPolicy struct {
 	rules    map[string]Decision
 	sandbox  *PathSandbox
 	detector *DangerousDetector
+	mode     PermissionMode
 	mu       sync.RWMutex
 }
 
 // NewConfigPolicy creates a policy from tool rules and allowed directories.
 // Default decision is Ask for any tool not explicitly listed.
 func NewConfigPolicy(rules map[string]Decision, allowedDirs []string) *ConfigPolicy {
+	return NewConfigPolicyWithMode(rules, allowedDirs, DefaultMode)
+}
+
+// NewConfigPolicyWithMode creates a policy with an explicit permission mode.
+func NewConfigPolicyWithMode(rules map[string]Decision, allowedDirs []string, mode PermissionMode) *ConfigPolicy {
 	if rules == nil {
 		rules = make(map[string]Decision)
 	}
@@ -28,6 +37,7 @@ func NewConfigPolicy(rules map[string]Decision, allowedDirs []string) *ConfigPol
 		rules:    rules,
 		sandbox:  NewPathSandbox(allowedDirs),
 		detector: NewDangerousDetector(),
+		mode:     mode,
 	}
 }
 
@@ -36,16 +46,47 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	// Check runtime overrides first
-	if d, ok := p.rules[toolName]; ok {
-		// For file tools, also check sandbox
+	// Mode-specific handling
+	switch p.mode {
+	case PlanMode:
+		// Plan mode: read-only tools allowed, everything else denied
+		if IsReadOnlyTool(toolName) {
+			// Still check sandbox for read tools
+			if isFileTool(toolName) {
+				path, _ := extractFilePath(input)
+				if path != "" && !p.sandbox.Allowed(path) {
+					return Deny, nil
+				}
+			}
+			return Allow, nil
+		}
+		return Deny, nil
+	case AutoMode:
+		// Auto mode: allow safe ops, deny dangerous ones, no prompts
+		if toolName == "run_command" {
+			cmd, _ := extractCommand(input)
+			if cmd != "" && p.detector.IsDangerous(cmd) {
+				return Deny, nil
+			}
+		}
+		// Check sandbox for file tools
 		if isFileTool(toolName) {
 			path, _ := extractFilePath(input)
 			if path != "" && !p.sandbox.Allowed(path) {
 				return Deny, nil
 			}
 		}
-		// For run_command, check dangerous
+		return Allow, nil
+	}
+
+	// Supervised mode (default): check overrides, then ask
+	if d, ok := p.rules[toolName]; ok {
+		if isFileTool(toolName) {
+			path, _ := extractFilePath(input)
+			if path != "" && !p.sandbox.Allowed(path) {
+				return Deny, nil
+			}
+		}
 		if toolName == "run_command" {
 			cmd, _ := extractCommand(input)
 			if cmd != "" && p.detector.IsDangerous(cmd) {
@@ -55,7 +96,6 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return d, nil
 	}
 
-	// Default: ask for all tools
 	return Ask, nil
 }
 
@@ -74,6 +114,20 @@ func (p *ConfigPolicy) SetOverride(toolName string, decision Decision) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rules[toolName] = decision
+}
+
+// Mode returns the current permission mode.
+func (p *ConfigPolicy) Mode() PermissionMode {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.mode
+}
+
+// SetMode changes the permission mode at runtime.
+func (p *ConfigPolicy) SetMode(mode PermissionMode) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mode = mode
 }
 
 // GetDecision returns the current decision for a tool (for TUI display).

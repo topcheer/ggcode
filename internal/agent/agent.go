@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
+	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -20,7 +21,9 @@ type Agent struct {
 	maxIter        int
 	policy         permission.PermissionPolicy
 	onApproval     func(toolName string, input string) permission.Decision
-	onUsage        func(usage provider.TokenUsage) // called after each API call with usage stats
+	onUsage        func(usage provider.TokenUsage)
+	hookConfig     hooks.HookConfig
+	workingDir     string // called after each API call with usage stats
 	mu             sync.Mutex
 }
 
@@ -243,15 +246,49 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	return a.executeTool(ctx, tc)
 }
 
+// SetHookConfig sets the hooks configuration.
+func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.hookConfig = cfg
+}
+
+// SetWorkingDir sets the working directory for hooks.
+func (a *Agent) SetWorkingDir(dir string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.workingDir = dir
+}
+
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	t, ok := a.tools.Get(tc.Name)
 	if !ok {
 		return tool.Result{Content: fmt.Sprintf("unknown tool: %s", tc.Name), IsError: true}
 	}
 
+	env := hooks.HookEnv{
+		ToolName:   tc.Name,
+		WorkingDir: a.workingDir,
+		FilePath:   hooks.ExtractFilePath(tc.Name, string(tc.Arguments)),
+		RawInput:   string(tc.Arguments),
+	}
+
+	// Pre-tool-use hooks
+	preResult := hooks.RunPreHooks(a.hookConfig.PreToolUse, env)
+	if !preResult.Allowed {
+		return tool.Result{Content: preResult.Output, IsError: true}
+	}
+
+	// Execute the actual tool
 	result, err := t.Execute(ctx, tc.Arguments)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
+	}
+
+	// Post-tool-use hooks
+	postResult := hooks.RunPostHooks(a.hookConfig.PostToolUse, env)
+	if postResult.Output != "" {
+		result.Content += "\n" + postResult.Output
 	}
 
 	return result

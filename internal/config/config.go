@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/topcheer/ggcode/internal/hooks"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,6 +61,8 @@ type Config struct {
 	ToolPerms     map[string]ToolPermission `yaml:"tool_permissions"`
 	Plugins    []PluginConfigEntry  `yaml:"plugins"`
 	MCPServers []MCPServerConfig     `yaml:"mcp_servers"`
+	Hooks      hooks.HookConfig      `yaml:"hooks"`
+	DefaultMode string                    `yaml:"default_mode"`
 }
 
 // DefaultConfig returns a config with sensible defaults.
