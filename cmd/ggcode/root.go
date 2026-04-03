@@ -108,28 +108,6 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 		return err
 	}
 
-	// Setup tools
-	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry); err != nil {
-		return err
-	}
-
-	// Load plugins
-	pluginMgr := plugin.NewManager()
-	pluginMgr.LoadAll(cfg.Plugins)
-
-	// Connect MCP servers and register their tools
-	var mcpPlugins []*plugin.MCPPlugin
-	for _, mcpCfg := range cfg.MCPServers {
-		p := plugin.NewMCPPlugin(mcpCfg)
-		if err := p.RegisterTools(context.Background(), registry); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: MCP server %s failed: %v\n", mcpCfg.Name, err)
-			continue
-		}
-		mcpPlugins = append(mcpPlugins, p)
-	}
-	pluginMgr.RegisterTools(registry)
-
 	// Setup permission policy
 	allowedDirs := cfg.ExpandAllowedDirs(".")
 
@@ -149,7 +127,29 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	if bypass {
 		mode = permission.BypassMode
 	}
-policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
+	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
+
+	// Setup tools (after policy so sandbox checks can be wired)
+	registry := tool.NewRegistry()
+	if err := tool.RegisterBuiltinTools(registry, policy); err != nil {
+		return err
+	}
+
+	// Load plugins
+	pluginMgr := plugin.NewManager()
+	pluginMgr.LoadAll(cfg.Plugins)
+
+	// Connect MCP servers and register their tools
+	var mcpPlugins []*plugin.MCPPlugin
+	for _, mcpCfg := range cfg.MCPServers {
+		p := plugin.NewMCPPlugin(mcpCfg)
+		if err := p.RegisterTools(context.Background(), registry); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: MCP server %s failed: %v\n", mcpCfg.Name, err)
+			continue
+		}
+		mcpPlugins = append(mcpPlugins, p)
+	}
+	pluginMgr.RegisterTools(registry)
 
 	// Setup cost tracker
 	pricing := cost.DefaultPricingTable()

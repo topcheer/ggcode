@@ -9,10 +9,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
 )
 
 // SearchFiles implements the search_files tool (grep-like content search).
-type SearchFiles struct{}
+type SearchFiles struct {
+	SandboxCheck AllowedPathChecker
+}
 
 func (t SearchFiles) Name() string { return "search_files" }
 
@@ -54,6 +57,10 @@ func (t SearchFiles) Execute(ctx context.Context, input json.RawMessage) (Result
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if t.SandboxCheck != nil && !t.SandboxCheck(args.Directory) {
+		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
 	if args.Directory == "" {

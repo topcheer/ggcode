@@ -29,6 +29,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // logoMsg is sent on startup to display the ASCII art logo.
@@ -48,6 +49,8 @@ type ApprovalMsg struct {
 type approvalResponseMsg struct {
 	decision permission.Decision
 }
+
+const maxOutputLines = 50000
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
@@ -505,6 +508,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamBuffer.WriteString(string(msg))
 		}
 		m.output.WriteString(string(msg))
+		m.trimOutput()
 		m.viewport.GotoBottom()
 		return m, nil
 
@@ -1846,12 +1850,32 @@ func (m *Model) handleCostCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-// truncateString truncates a string to maxLen.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// trimOutput prevents the output buffer from growing beyond maxOutputLines.
+func (m *Model) trimOutput() {
+	data := m.output.Bytes()
+	lines := bytes.Count(data, []byte("\n"))
+	if lines > maxOutputLines {
+		target := lines * 20 / 100
+		cut := 0
+		count := 0
+		for i, b := range data {
+			if b == '\n' {
+				count++
+				if count == target {
+					cut = i + 1
+					break
+				}
+			}
+		}
+		if cut > 0 {
+			m.output.Next(cut)
+		}
 	}
-	return s[:maxLen] + "..."
+}
+
+// truncateString is an alias for util.Truncate (kept for backward compat).
+func truncateString(s string, maxLen int) string {
+	return util.Truncate(s, maxLen)
 }
 
 // handleImageCommand handles the /image slash command to attach an image file.
@@ -1952,8 +1976,5 @@ func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 }
 
 func truncateStr(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
+	return util.Truncate(s, max)
 }

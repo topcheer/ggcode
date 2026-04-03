@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // DefaultMode is the default permission mode if not specified.
@@ -228,8 +229,5 @@ func extractCommand(input json.RawMessage) (string, bool) {
 
 
 func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return util.Truncate(s, maxLen)
 }
