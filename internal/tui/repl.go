@@ -131,7 +131,7 @@ func (r *REPL) Run() error {
 		}
 	}
 
-	r.program = tea.NewProgram(r.model, tea.WithAltScreen())
+	r.program = tea.NewProgram(r.model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	r.model.SetProgram(r.program)
 
 	_, err := r.program.Run()
