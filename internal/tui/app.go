@@ -13,8 +13,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -58,7 +60,12 @@ type Model struct {
 	lastCost    string
 	mcpServers  []MCPInfo
 	config      *config.Config
+	customCmds  map[string]*commands.Command
+	autoMem     *memory.AutoMemory
+	projMemFiles  []string
+	autoMemFiles  []string
 	pluginMgr   *plugin.Manager
+	mode        permission.PermissionMode
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -159,6 +166,22 @@ func (m *Model) SetPluginManager(mgr *plugin.Manager) {
 	m.pluginMgr = mgr
 }
 
+func (m *Model) SetCustomCommands(cmds map[string]*commands.Command) {
+	m.customCmds = cmds
+}
+
+func (m *Model) SetAutoMemory(am *memory.AutoMemory) {
+	m.autoMem = am
+}
+
+func (m *Model) SetProjectMemoryFiles(files []string) {
+	m.projMemFiles = files
+}
+
+func (m *Model) SetAutoMemoryFiles(files []string) {
+	m.autoMemFiles = files
+}
+
 func (m *Model) SetConfig(cfg *config.Config) {
 	m.config = cfg
 }
@@ -219,6 +242,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "ctrl+d":
 			m.quitting = true
 			return m, tea.Quit
+		case "shift+tab":
+			return m.handleModeSwitch()
 		case "up":
 			return m.handleHistoryUp()
 		case "down":
@@ -320,7 +345,8 @@ func (m Model) View() string {
 	sb.WriteString(input)
 
 	if !m.loading && m.pendingApproval == nil {
-		sb.WriteString(m.styles.prompt.Render("\n  /help /sessions /resume /export /model /provider /clear /exit | \u2191\u2193 history | Ctrl+C interrupt | Ctrl+D quit"))
+		modeStr := fmt.Sprintf("[mode: %s]", m.mode)
+		sb.WriteString(m.styles.prompt.Render("\n  " + modeStr + " /help /sessions /resume /export /model /provider /mode /clear /exit | Shift+Tab toggle mode | Ctrl+C interrupt | Ctrl+D quit"))
 	}
 
 	return sb.String()
@@ -407,7 +433,26 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handlePluginsCommand()
 		case "/mcp":
 			return m.handleMCPCommand()
+		case "/mode":
+			return m.handleModeCommand(parts)
+		case "/memory":
+			return m.handleMemoryCommand(parts)
 		default:
+			// Check custom commands
+			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
+				if custom, ok := m.customCmds[cmdName]; ok {
+					vars := map[string]string{
+						"DIR": workingDirFromModel(m),
+					}
+					expanded := custom.Expand(vars)
+					m.output.WriteString(m.styles.user.Render(fmt.Sprintf("Custom command /%s:\n", cmdName)))
+					m.output.WriteString(expanded)
+					m.output.WriteString("\n\n")
+					m.output.WriteString(m.styles.assistant.Render("Assistant: "))
+					m.loading = true
+					return m.startAgent(expanded)
+				}
+			}
 			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Unknown command: %s\n", text)))
 			m.output.WriteString(m.styles.prompt.Render("Type /help for available commands\n\n"))
 			return nil
@@ -415,16 +460,24 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	}
 
 	// Regular message → start agent
+	// Expand @mentions
+	workDir, _ := os.Getwd()
+	expandedMsg, expandErr := ExpandMentions(text, workDir)
+	if expandErr != nil {
+		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Mention expansion error: %v", expandErr)))
+		m.output.WriteString("\n\n")
+	}
+
 	m.output.WriteString(m.styles.user.Render("You: "))
 	m.output.WriteString(text)
 	m.output.WriteString("\n\n")
 	m.output.WriteString(m.styles.assistant.Render("Assistant: "))
 
-	// Save user message to session
+	// Save original user message to session
 	m.appendUserMessage(text)
 
 	m.loading = true
-	return m.startAgent(text)
+	return m.startAgent(expandedMsg)
 }
 
 // appendUserMessage saves a user message to the current session.
@@ -572,6 +625,32 @@ func (m Model) handleHistoryDown() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleModeSwitch cycles through permission modes (Shift+Tab).
+func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
+	m.mode = m.mode.Next()
+	// Update policy mode
+	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
+		cp.SetMode(m.mode)
+	}
+	m.output.WriteString(fmt.Sprintf("Mode: %s\n", m.mode))
+	return m, nil
+}
+
+// handleModeCommand handles the /mode slash command.
+func (m *Model) handleModeCommand(parts []string) tea.Cmd {
+	if len(parts) > 1 {
+		newMode := permission.ParsePermissionMode(parts[1])
+		m.mode = newMode
+		if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
+			cp.SetMode(newMode)
+		}
+		m.output.WriteString(fmt.Sprintf("Mode set to: %s\n\n", newMode))
+	} else {
+		m.output.WriteString(fmt.Sprintf("Current mode: %s\nUsage: /mode <supervised|plan|auto>\n\n", m.mode))
+	}
+	return nil
+}
+
 // startAgent returns a tea.Cmd that runs the agent in a goroutine.
 func (m *Model) startAgent(text string) tea.Cmd {
 	return func() tea.Msg {
@@ -609,6 +688,74 @@ func (m *Model) startAgent(text string) tea.Cmd {
 }
 
 // helpText returns the help message.
+func workingDirFromModel(m *Model) string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
+}
+
+func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
+	sub := ""
+	if len(parts) > 1 {
+		sub = strings.ToLower(parts[1])
+	}
+	switch sub {
+	case "list":
+		if m.autoMem == nil {
+			m.output.WriteString(m.styles.prompt.Render("Auto memory not initialized.\n\n"))
+			return nil
+		}
+		keys, err := m.autoMem.List()
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error listing memories: %v\n\n", err)))
+			return nil
+		}
+		if len(keys) == 0 {
+			m.output.WriteString(m.styles.prompt.Render("No auto memories saved.\n\n"))
+			return nil
+		}
+		m.output.WriteString(m.styles.title.Render("Auto Memories:\n"))
+		for _, k := range keys {
+			m.output.WriteString(fmt.Sprintf("  - %s\n", k))
+		}
+		m.output.WriteString("\n")
+	case "clear":
+		if m.autoMem == nil {
+			m.output.WriteString(m.styles.prompt.Render("Auto memory not initialized.\n\n"))
+			return nil
+		}
+		if err := m.autoMem.Clear(); err != nil {
+			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error clearing memories: %v\n\n", err)))
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render("All auto memories cleared.\n\n"))
+	default:
+		m.output.WriteString(m.styles.title.Render("Memory:\n"))
+		if len(m.projMemFiles) > 0 {
+			m.output.WriteString(m.styles.assistant.Render("Project Memory (GGCODE.md):\n"))
+			for _, f := range m.projMemFiles {
+				m.output.WriteString(fmt.Sprintf("  %s\n", f))
+			}
+			m.output.WriteString("\n")
+		} else {
+			m.output.WriteString(m.styles.prompt.Render("  No GGCODE.md files loaded.\n"))
+		}
+		if len(m.autoMemFiles) > 0 {
+			m.output.WriteString(m.styles.assistant.Render("Auto Memory:\n"))
+			for _, f := range m.autoMemFiles {
+				m.output.WriteString(fmt.Sprintf("  %s\n", f))
+			}
+			m.output.WriteString("\n")
+		} else {
+			m.output.WriteString(m.styles.prompt.Render("  No auto memories loaded.\n"))
+		}
+		m.output.WriteString(m.styles.prompt.Render("\nUsage: /memory [list|clear]\n\n"))
+	}
+	return nil
+}
+
 func helpText() string {
 	return `Available commands:
   /help              Show this help message
@@ -621,6 +768,10 @@ func helpText() string {
   /provider <name>    Switch provider
   /clear             Clear conversation history
   /mcp               Show connected MCP servers and tools
+  /memory            Show loaded memory files
+  /memory list       List auto memory entries
+  /memory clear      Clear all auto memories
+
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
   /exit, /quit       Exit ggcode

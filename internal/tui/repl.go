@@ -6,8 +6,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -76,6 +78,22 @@ func (r *REPL) SetConfig(cfg *config.Config) {
 
 func (r *REPL) SetPluginManager(mgr *plugin.Manager) {
 	r.model.SetPluginManager(mgr)
+}
+
+func (r *REPL) SetCustomCommands(cmds map[string]*commands.Command) {
+	r.model.SetCustomCommands(cmds)
+}
+
+func (r *REPL) SetAutoMemory(am *memory.AutoMemory) {
+	r.model.SetAutoMemory(am)
+}
+
+func (r *REPL) SetProjectMemoryFiles(files []string) {
+	r.model.SetProjectMemoryFiles(files)
+}
+
+func (r *REPL) SetAutoMemoryFiles(files []string) {
+	r.model.SetAutoMemoryFiles(files)
 }
 
 // Run starts the REPL event loop.
