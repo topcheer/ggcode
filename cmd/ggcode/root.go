@@ -28,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 	var resumeID string
 	var pipePrompt string
 	var allowedTools []string
+	var bypassFlag bool
 	var outputPath string
 
 	cmd := &cobra.Command{
@@ -56,7 +57,7 @@ func NewRootCmd() *cobra.Command {
 				return nil
 			}
 
-			return run(cfg, resumeID)
+			return run(cfg, resumeID, bypassFlag)
 		},
 	}
 
@@ -64,6 +65,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
+	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 
 	// Shell completion commands
@@ -94,7 +96,7 @@ func NewRootCmd() *cobra.Command {
 	return cmd
 }
 
-func run(cfg *config.Config, resumeID string) error {
+func run(cfg *config.Config, resumeID string, bypass bool) error {
 	// Setup provider
 	pc := cfg.GetProviderConfig()
 	if pc.APIKey == "" {
@@ -144,6 +146,9 @@ func run(cfg *config.Config, resumeID string) error {
 		}
 	}
 	mode := permission.ParsePermissionMode(cfg.DefaultMode)
+	if bypass {
+		mode = permission.BypassMode
+	}
 policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 
 	// Setup cost tracker

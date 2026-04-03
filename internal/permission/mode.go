@@ -14,6 +14,8 @@ const (
 	PlanMode
 	// AutoMode allows safe operations, denies dangerous ones automatically (no prompts).
 	AutoMode
+	// BypassMode allows all safe operations automatically, only prompts for extremely dangerous ones.
+	BypassMode
 )
 
 func (m PermissionMode) String() string {
@@ -24,6 +26,8 @@ func (m PermissionMode) String() string {
 		return "plan"
 	case AutoMode:
 		return "auto"
+	case BypassMode:
+		return "bypass"
 	default:
 		return "supervised"
 	}
@@ -36,18 +40,22 @@ func ParsePermissionMode(s string) PermissionMode {
 		return PlanMode
 	case "auto":
 		return AutoMode
+	case "bypass":
+		return BypassMode
 	default:
 		return SupervisedMode
 	}
 }
 
-// Next returns the next mode in the cycle: supervised → plan → auto → supervised.
+// Next returns the next mode in the cycle: supervised → plan → auto → bypass → supervised.
 func (m PermissionMode) Next() PermissionMode {
 	switch m {
 	case SupervisedMode:
 		return PlanMode
 	case PlanMode:
 		return AutoMode
+	case AutoMode:
+		return BypassMode
 	default:
 		return SupervisedMode
 	}

@@ -125,6 +125,13 @@ func (d *DangerousDetector) Check(command string) DangerousCheck {
 	return worst
 }
 
+// IsExtremelyDangerous returns true if the command matches critical-level patterns.
+// Used by BypassMode to decide which operations still need confirmation.
+func (d *DangerousDetector) IsExtremelyDangerous(command string) bool {
+	check := d.Check(command)
+	return check.Level >= DangerCritical
+}
+
 // Suggestion returns a human-readable suggestion for the danger check.
 func (c DangerousCheck) Suggestion() string {
 	if c.Level == DangerNone {
