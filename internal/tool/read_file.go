@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -53,7 +54,35 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("error reading file: %v", err)}, nil
 	}
 
-	return Result{Content: string(data)}, nil
+	content := string(data)
+	content = truncateFileContent(content)
+
+	return Result{Content: content}, nil
+}
+
+const (
+	maxFileLines    = 500
+	maxFileChars    = 50000
+)
+
+func truncateFileContent(content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > maxFileLines {
+		truncated := strings.Join(lines[:maxFileLines], "\n")
+		return truncated + "\n\n[File truncated: showing first 500 of " + fmt.Sprintf("%d", len(lines)) + " lines. Use line_range or glob to read specific sections.]"
+	}
+	if len(content) > maxFileChars {
+		// UTF-8 safe truncation: find the last valid rune boundary before maxFileChars
+		truncated := content[:maxFileChars]
+		for i := maxFileChars - 1; i >= 0; i-- {
+			if truncated[i]&0xC0 != 0x80 {
+				truncated = content[:i+1]
+				break
+			}
+		}
+		return truncated + "\n\n[File truncated: showing first " + fmt.Sprintf("%d", maxFileChars) + " of " + fmt.Sprintf("%d", len(content)) + " characters. Use line_range or glob to read specific sections.]"
+	}
+	return content
 }
 
 // --- provider.ToolDefinition helper ---
