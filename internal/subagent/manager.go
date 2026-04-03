@@ -45,10 +45,11 @@ func (s *SubAgent) setStatus(st Status) {
 type Manager struct {
 	agents       map[string]*SubAgent
 	mu           sync.Mutex
-	sem          chan struct{} // concurrency limiter
+	sem          chan struct{}
 	timeout      time.Duration
 	showOutput   bool
 	onComplete   func(*SubAgent)
+	nextID       int
 }
 
 // NewManager creates a Manager with the given config.
@@ -71,7 +72,10 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 
 // Spawn creates a new sub-agent with the given task and returns its ID.
 func (m *Manager) Spawn(task string, tools []string, ctx context.Context) string {
-	id := fmt.Sprintf("sa-%d", time.Now().UnixNano())
+	m.mu.Lock()
+	m.nextID++
+	id := fmt.Sprintf("sa-%d", m.nextID)
+	m.mu.Unlock()
 
 	sa := &SubAgent{
 		ID:        id,
