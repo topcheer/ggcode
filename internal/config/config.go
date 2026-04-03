@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
+
 	"github.com/topcheer/ggcode/internal/hooks"
 	"gopkg.in/yaml.v3"
 )
@@ -127,6 +129,15 @@ func Load(path string) (*Config, error) {
 
 	if err := yaml.Unmarshal(expandedData, cfg); err != nil {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
+	}
+
+	debug.Log("config", "Load: provider=%s model=%s max_iterations=%d", cfg.Provider, cfg.Model, cfg.MaxIterations)
+	for name, pc := range cfg.Providers {
+		key := pc.APIKey
+		if len(key) > 10 {
+			key = key[:10] + "..."
+		}
+		debug.Log("config", "  provider %s: base_url=%s api_key=%s max_tokens=%d", name, pc.BaseURL, key, pc.MaxTokens)
 	}
 
 	return cfg, nil

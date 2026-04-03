@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -155,6 +156,7 @@ func (r *REPL) requestDiffConfirm(filePath, diffText string) bool {
 
 // Run starts the REPL event loop.
 func (r *REPL) Run() error {
+	debug.Log("repl", "Run() START resumeID=%q", r.resumeID)
 	// Initialize session
 	if r.store != nil {
 		if r.resumeID != "" {
@@ -165,6 +167,7 @@ func (r *REPL) Run() error {
 	}
 
 	r.program = tea.NewProgram(r.model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	debug.Log("repl", "program created")
 
 	// Wire the agent's approval handler into the TUI via channel bridge.
 	r.agent.SetApprovalHandler(func(toolName string, input string) permission.Decision {
@@ -183,6 +186,7 @@ func (r *REPL) Run() error {
 	// NewProgram copies the model, so SetProgram on r.model is useless.
 	// We can't Send before Run (deadlock). Instead, run in a goroutine and
 	// send the reference once the event loop is up.
+	debug.Log("repl", "scheduling setProgramMsg")
 	go func() {
 		// Give the event loop a moment to start, then inject the program ref.
 		time.Sleep(10 * time.Millisecond)
@@ -190,6 +194,7 @@ func (r *REPL) Run() error {
 	}()
 
 	_, err := r.program.Run()
+	debug.Log("repl", "program.Run() returned err=%v", err)
 	if err == nil && r.store != nil && r.model.session != nil {
 		// Save session on clean exit
 		r.model.session.Messages = r.agent.Messages()

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -40,7 +41,9 @@ func NewRootCmd() *cobra.Command {
 				cfgFile = config.ConfigPath()
 			}
 
-			cfg, err := config.Load(cfgFile)
+				debug.Init()
+
+		cfg, err := config.Load(cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
