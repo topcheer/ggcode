@@ -157,6 +157,12 @@ func (m Model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+// setProgramMsg is sent via program.Send so the model copy inside Bubble Tea's
+// event loop gets the real *tea.Program reference (NewProgram copies the model).
+type setProgramMsg struct {
+	Program *tea.Program
+}
+
 // SetProgram sets the tea.Program reference for async sends.
 func (m *Model) SetProgram(p *tea.Program) {
 	m.program = p
@@ -354,6 +360,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Stop()
 			m.output.WriteString(FormatToolStatus(ts))
 		}
+		return m, nil
+
+	case setProgramMsg:
+		m.program = msg.Program
 		return m, nil
 
 	case imageAttachedMsg:

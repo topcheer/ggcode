@@ -164,7 +164,9 @@ func (r *REPL) Run() error {
 	}
 
 	r.program = tea.NewProgram(r.model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	r.model.SetProgram(r.program)
+	// NewProgram copies the model, so SetProgram on r.model is useless.
+	// Send the reference into the event loop so the internal model copy gets it.
+	r.program.Send(setProgramMsg{Program: r.program})
 
 	_, err := r.program.Run()
 	if err == nil && r.store != nil && r.model.session != nil {
