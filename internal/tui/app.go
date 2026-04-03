@@ -358,6 +358,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		// Option/Alt+mouse: release mouse to terminal for native text selection
+		if msg.Alt {
+			return m, nil
+		}
 		switch msg.Type {
 		case tea.MouseWheelUp:
 			m.viewport.ScrollUp(3)
@@ -1668,7 +1672,11 @@ Keyboard shortcuts:
   \u2191/\u2193                Browse command history (or autocomplete)
   Shift+Tab         Toggle permission mode
   Ctrl+C             Interrupt current generation
-  Ctrl+D             Exit`
+  Ctrl+D             Exit
+
+Mouse:
+  Option+drag / Shift+drag  Select text to copy (bypasses app mouse capture)
+  Mouse wheel              Scroll conversation output`
 }
 
 // handleCostCommand displays cost statistics.
