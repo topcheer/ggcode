@@ -351,6 +351,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			viewportHeight = 3
 		}
 		m.viewport.SetSize(msg.Width, viewportHeight)
+		m.input.Width = msg.Width
 		// Set content to update viewport's internal total line count
 		m.viewport.SetContent(m.renderOutput())
 		if wrap := m.width - 4; wrap > 20 {
@@ -746,6 +747,10 @@ func (m Model) View() string {
 	}
 	for i := start; i < end; i++ {
 		sb.WriteString(lines[i])
+		sb.WriteString("\n")
+	}
+	// Pad remaining lines with newlines to keep input at bottom
+	for i := end; i < start+visibleLines; i++ {
 		sb.WriteString("\n")
 	}
 
