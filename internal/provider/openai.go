@@ -1,11 +1,13 @@
 package provider
 
 import (
+
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+
+	"github.com/topcheer/ggcode/internal/debug"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -94,20 +96,31 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		req.Tools = p.convertTools(tools)
 	}
 
+	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
+	if msgJSON, err := json.Marshal(chatMsgs); err == nil {
+		debug.Log("openai", "Messages: %s", string(msgJSON))
+	}
+	if len(req.Tools) > 0 {
+		if toolJSON, err := json.Marshal(req.Tools); err == nil {
+			debug.Log("openai", "Tools: %s", string(toolJSON))
+		}
+	}
+
 	streamer, err := p.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
-		log.Printf("[openai] ChatStream error for model %s: %v", p.model, err)
-		if len(tools) > 0 {
-			toolJSON, _ := json.Marshal(req.Tools)
-			t := string(toolJSON)
-			if len(t) > 500 {
-				t = t[:500] + "..."
-			}
-			log.Printf("[openai] Request had %d tools, first tool JSON: %s", len(req.Tools), t)
-		}
+		debug.Log("openai", "ChatStream ERROR model=%s: %v", p.model, err)
 		var apiErr *openai.APIError
 		if errors.As(err, &apiErr) {
-			log.Printf("[openai] API error: status=%d code=%s message=%s", apiErr.HTTPStatusCode, apiErr.Code, apiErr.Message)
+			debug.Log("openai", "API error: status=%d code=%s message=%s", apiErr.HTTPStatusCode, apiErr.Code, apiErr.Message)
+		}
+		if len(req.Tools) > 0 {
+			if toolJSON, err := json.Marshal(req.Tools); err == nil {
+				t := string(toolJSON)
+				if len(t) > 500 {
+					t = t[:500] + "..."
+				}
+				debug.Log("openai", "Request had %d tools, first tool JSON: %s", len(req.Tools), t)
+			}
 		}
 		return nil, fmt.Errorf("openai stream: %w", err)
 	}
@@ -117,6 +130,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	go func() {
 		defer close(ch)
 		defer streamer.Close()
+		debug.Log("openai", "Stream goroutine started")
 
 		toolCalls := make(map[int]*ToolCallDelta)
 		var usage *TokenUsage
@@ -126,8 +140,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			if err != nil {
 				// Stream ended
 				if err.Error() == "EOF" || err == context.Canceled || err == context.DeadlineExceeded {
+					debug.Log("openai", "Stream ended normally: %v", err)
 					break
 				}
+				debug.Log("openai", "Stream ERROR: %v", err)
 				ch <- StreamEvent{Type: StreamEventError, Error: err}
 				return
 			}
@@ -150,6 +166,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 			// Text content
 			if delta.Content != "" {
+				debug.Log("openai", "chunk text=%q", delta.Content)
 				ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
 			}
 
@@ -178,7 +195,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			// Check for finish reason to emit completed tool calls
 			finishReason := string(choice.FinishReason)
 			if finishReason != "" {
+				debug.Log("openai", "finish_reason=%s tool_calls=%d", finishReason, len(toolCalls))
 				for idx, tc := range toolCalls {
+					debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
 					delete(toolCalls, idx)
 				}
