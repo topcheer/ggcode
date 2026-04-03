@@ -36,6 +36,7 @@ type Manager struct {
 	messages  []provider.Message
 	tokens    int
 	maxTokens int
+	provider  provider.Provider
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -43,11 +44,18 @@ func NewManager(maxTokens int) *Manager {
 	return &Manager{maxTokens: maxTokens}
 }
 
+// SetProvider sets the provider for provider-aware token counting.
+func (m *Manager) SetProvider(p provider.Provider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.provider = p
+}
+
 func (m *Manager) Add(msg provider.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, msg)
-	m.tokens += estimateTokens(msg)
+	m.tokens += m.countTokens(msg)
 }
 
 func (m *Manager) Messages() []provider.Message {
@@ -82,7 +90,7 @@ func (m *Manager) Clear() {
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
 		sys := m.messages[0]
 		m.messages = []provider.Message{sys}
-		m.tokens = estimateTokens(sys)
+		m.tokens = m.countTokens(sys)
 	} else {
 		m.messages = nil
 		m.tokens = 0
@@ -217,8 +225,19 @@ func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider)
 func (m *Manager) recalcTokens() {
 	m.tokens = 0
 	for _, msg := range m.messages {
-		m.tokens += estimateTokens(msg)
+		m.tokens += m.countTokens(msg)
 	}
+}
+
+// countTokens uses the provider's token counting API when available,
+// falling back to heuristic estimation.
+func (m *Manager) countTokens(msg provider.Message) int {
+	if m.provider != nil {
+		if n, err := m.provider.CountTokens(context.Background(), []provider.Message{msg}); err == nil && n > 0 {
+			return n
+		}
+	}
+	return estimateTokens(msg)
 }
 
 func estimateTokens(msg provider.Message) int {

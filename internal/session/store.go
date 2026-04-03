@@ -312,28 +312,15 @@ func (s *JSONLStore) List() ([]*Session, error) {
 		return nil, err
 	}
 
-	// Also scan directory for any sessions not in index
-	existing := make(map[string]bool, len(idx))
-	for _, e := range idx {
-		existing[e.ID] = true
-	}
-
-	entries, err := os.ReadDir(s.dir)
+	changed, err := s.repairIndex(idx)
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".jsonl")
-		if !existing[id] {
-			// Not in index — load from disk to rebuild entry
-			ses, loadErr := s.Load(id)
-			if loadErr == nil {
-				idx = append(idx, sessionToIndexEntry(ses))
-				existing[id] = true
-			}
+	if changed {
+		// Reload repaired index
+		idx, err = s.loadIndex()
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -354,6 +341,62 @@ func (s *JSONLStore) List() ([]*Session, error) {
 		})
 	}
 	return result, nil
+}
+
+// repairIndex scans the sessions directory and reconciles with the index.
+// Returns true if the index was modified (written back).
+func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return false, err
+	}
+
+	// Build set of IDs present on disk
+	diskIDs := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".jsonl")
+		diskIDs[id] = true
+	}
+
+	changed := false
+	newIdx := make([]indexEntry, 0, len(idx))
+
+	for _, e := range idx {
+		if !diskIDs[e.ID] {
+			// Index entry has no file — remove
+			changed = true
+			continue
+		}
+		newIdx = append(newIdx, e)
+	}
+
+	// Add entries for files missing from index
+	for id := range diskIDs {
+		found := false
+		for _, e := range newIdx {
+			if e.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ses, loadErr := s.Load(id)
+			if loadErr == nil {
+				newIdx = append(newIdx, sessionToIndexEntry(ses))
+				changed = true
+			}
+		}
+	}
+
+	if changed {
+		if err := s.saveIndex(newIdx); err != nil {
+			return false, err
+		}
+	}
+	return changed, nil
 }
 
 // Delete removes a session file and its index entry.
