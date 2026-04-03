@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -227,6 +226,5 @@ policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 }
 
 func init() {
-	log.SetFlags(0)
-	log.SetOutput(log.Writer())
+	debug.Init()
 }

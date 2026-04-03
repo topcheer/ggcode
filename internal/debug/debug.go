@@ -1,7 +1,6 @@
 package debug
 
 import (
-	"io"
 	"log"
 	"os"
 	"sync"
@@ -21,7 +20,7 @@ func Init() {
 			return
 		}
 		logFile = f
-		logger = log.New(io.MultiWriter(os.Stderr, f), "", log.Lmicroseconds)
+		logger = log.New(f, "", log.Lmicroseconds)
 	})
 }
 
