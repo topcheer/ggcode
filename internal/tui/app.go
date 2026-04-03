@@ -344,12 +344,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// viewport occupies everything except title(2 lines) + input(2 lines) + status(1 line)
+		// viewport height calculation — total content lines minus visible area
+		// We track total content lines via renderOutput
 		viewportHeight := msg.Height - 5
 		if viewportHeight < 3 {
 			viewportHeight = 3
 		}
 		m.viewport.SetSize(msg.Width, viewportHeight)
+		// Set content to update viewport's internal total line count
+		m.viewport.SetContent(m.renderOutput())
 		if wrap := m.width - 4; wrap > 20 {
 			if r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(wrap)); err == nil {
 				m.mdRenderer = r
@@ -696,11 +699,55 @@ func (m Model) View() string {
 	// Set content into viewport
 	m.viewport.SetContent(m.renderOutput())
 
+	// Pre-calculate status bar
+	statusBar := m.renderStatusBar()
+
 	var sb strings.Builder
 	sb.WriteString(title)
 	sb.WriteString("\n")
 
-	sb.WriteString(m.viewport.View())
+	// Render viewport content — only use viewport for scroll offset, not padding
+	content := m.renderOutput()
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+	if totalLines == 0 {
+		totalLines = 1
+	}
+	// Calculate viewport height dynamically
+	headerLines := 1 // title
+	footerLines := 2 // input + help
+	if statusBar != "" {
+		footerLines += 2 // status bar lines
+	}
+	if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+		footerLines += len(m.autoCompleteItems) + 1
+	}
+	visibleLines := m.height - headerLines - footerLines
+	if visibleLines < 1 {
+		visibleLines = 1
+	}
+	// Apply scroll offset
+	offset := m.viewport.YOffset()
+	maxOffset := totalLines - visibleLines
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	// Render visible lines only
+	start := offset
+	end := offset + visibleLines
+	if end > totalLines {
+		end = totalLines
+	}
+	for i := start; i < end; i++ {
+		sb.WriteString(lines[i])
+		sb.WriteString("\n")
+	}
 
 	// Render autocomplete overlay above input
 	if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
@@ -708,7 +755,6 @@ func (m Model) View() string {
 	}
 
 	// Render status bar during loading
-	statusBar := m.renderStatusBar()
 	if statusBar != "" {
 		sb.WriteString("\n")
 		sb.WriteString(statusBar)
