@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 
@@ -157,23 +158,48 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 
 func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
 	var msgParams []anthropic.MessageParam
+	// Collect system messages to embed into first user message (zai Anthropic rejects 'system' role)
+	var systemTexts []string
 	for _, m := range messages {
+		if m.Role == "system" {
+			for _, b := range m.Content {
+				if b.Type == "text" {
+					systemTexts = append(systemTexts, b.Text)
+				}
+			}
+			continue
+		}
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
 			case "text":
 				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
 			case "image":
-					blocks = append(blocks, anthropic.NewImageBlockBase64(b.ImageMIME, b.ImageData))
+				blocks = append(blocks, anthropic.NewImageBlockBase64(b.ImageMIME, b.ImageData))
 			case "tool_use":
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, b.Input, b.ToolName))
 			case "tool_result":
 				blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolID, b.Output, b.IsError))
 			}
 		}
-		msgParams = append(msgParams, anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks})
+		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}
+		// Prepend system text into first user message
+		if m.Role == "user" && len(systemTexts) > 0 {
+			var sb strings.Builder
+			for i, st := range systemTexts {
+				if i > 0 {
+					sb.WriteByte('\n')
+				}
+				sb.WriteString(st)
+			}
+			systemTexts = nil
+			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+1)
+			newBlocks = append(newBlocks, anthropic.NewTextBlock("[System]\n"+sb.String()+"\n[End System]"))
+			newBlocks = append(newBlocks, blocks...)
+			param.Content = newBlocks
+		}
+		msgParams = append(msgParams, param)
 	}
-
 	params := anthropic.MessageNewParams{
 		Model:     p.model,
 		MaxTokens: int64(p.maxTokens),

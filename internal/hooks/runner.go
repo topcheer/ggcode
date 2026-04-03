@@ -49,6 +49,7 @@ func RunPostHooks(hooks []Hook, env HookEnv) HookResult {
 
 // runHook executes a shell command and returns the result.
 // Exit code 2 means block the tool execution.
+// Sensitive data (RAW_INPUT) is passed via environment variable to avoid leaking to process list.
 func runHook(command string, env HookEnv) HookResult {
 	cmd := os.Expand(command, func(key string) string {
 		switch key {
@@ -67,6 +68,8 @@ func runHook(command string, env HookEnv) HookResult {
 
 	c := exec.Command("sh", "-c", cmd)
 	c.Dir = env.WorkingDir
+	// Pass RAW_INPUT via environment variable instead of embedding in command string
+	c.Env = append(os.Environ(), "GGCODE_RAW_INPUT="+env.RawInput)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
