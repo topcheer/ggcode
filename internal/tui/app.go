@@ -221,6 +221,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case tea.MouseMsg:
+		// Mouse events handled by FullscreenModel in fullscreen mode
+		return m, nil
+
 	case tea.KeyMsg:
 		// Handle approval mode
 		if m.pendingApproval != nil {
