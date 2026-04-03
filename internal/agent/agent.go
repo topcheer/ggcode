@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/debug"
+
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/diff"
@@ -118,6 +120,8 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 
 // RunStreamWithContent runs the agent loop with streaming, accepting content blocks (supports images).
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error {
+	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
+
 	a.contextManager.Add(provider.Message{
 		Role:    "user",
 		Content: content,
@@ -139,9 +143,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	for i := 0; i < a.maxIter; i++ {
 		msgs := a.contextManager.Messages()
+		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
 
 		streamCh, err := a.provider.ChatStream(ctx, msgs, toolDefs)
 		if err != nil {
+			debug.Log("agent", "ChatStream error: %v", err)
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("stream error: %w", err)})
 			return err
 		}
@@ -180,12 +186,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		// No tool calls → done
 		if len(toolCalls) == 0 {
+			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			a.contextManager.Add(provider.Message{
 				Role:    "assistant",
 				Content: assistantContent,
 			})
 			return nil
 		}
+
+		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
 
 		// Add assistant message with tool_use blocks
 		for _, tc := range toolCalls {
@@ -205,7 +214,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Text: fmt.Sprintf("[executing: %s]\n", tc.Name),
 			})
 
+			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
+			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s", tc.Name, result.IsError, truncateStr(result.Content, 200))
 			toolResults = append(toolResults, provider.ToolResultBlock(tc.ID, result.Content, result.IsError))
 
 			onEvent(provider.StreamEvent{
@@ -220,13 +231,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		})
 	}
 
+	debug.Log("agent", "RunStreamWithContent END: max iterations (%d) reached", a.maxIter)
 	return fmt.Errorf("max iterations (%d) reached", a.maxIter)
 }
 
 // executeToolWithPermission checks permission before executing a tool.
 func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	debug.Log("agent", "permission check: tool=%s", tc.Name)
 	if a.policy != nil {
 		decision, err := a.policy.Check(tc.Name, tc.Arguments)
+		debug.Log("agent", "permission decision: tool=%s decision=%s err=%v", tc.Name, decision, err)
 		if err != nil {
 			return tool.Result{Content: fmt.Sprintf("permission check error: %v", err), IsError: true}
 		}
@@ -454,4 +468,11 @@ func (a *Agent) Clear() {
 func isJSON(data json.RawMessage) bool {
 	var v interface{}
 	return json.Unmarshal(data, &v) == nil
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

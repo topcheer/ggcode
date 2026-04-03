@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/topcheer/ggcode/internal/debug"
+
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
@@ -64,6 +66,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 }
 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	debug.Log("anthropic", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	params := p.buildParams(messages, tools)
 
 	stream := p.client.Messages.NewStreaming(ctx, params)
@@ -72,6 +75,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 	go func() {
 		defer close(ch)
+		debug.Log("anthropic", "Stream goroutine started")
 		toolCalls := make(map[int]*ToolCallDelta)
 		var inputTokens, outputTokens int
 
@@ -85,12 +89,14 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					idx := int(event.Index)
 					tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
 					toolCalls[idx] = tc
+					debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
 				}
 
 			case "content_block_delta":
 				delta := event.Delta
 				switch delta.Type {
 				case "text_delta":
+					debug.Log("anthropic", "chunk text=%q", delta.Text)
 					ch <- StreamEvent{Type: StreamEventText, Text: delta.Text}
 				case "input_json_delta":
 					tc, ok := toolCalls[int(event.Index)]
@@ -104,6 +110,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			case "content_block_stop":
 				idx := int(event.Index)
 				if tc, ok := toolCalls[idx]; ok {
+					debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 					ch <- StreamEvent{
 						Type: StreamEventToolCallDone,
 						Tool: *tc,
@@ -120,9 +127,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 		}
 
 		if err := stream.Err(); err != nil {
+			debug.Log("anthropic", "Stream ERROR: %v", err)
 			ch <- StreamEvent{Type: StreamEventError, Error: err}
 			return
 		}
+		debug.Log("anthropic", "Stream completed input_tokens=%d output_tokens=%d", inputTokens, outputTokens)
 
 		ch <- StreamEvent{
 			Type: StreamEventDone,

@@ -3,6 +3,8 @@ package permission
 import (
 	"encoding/json"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // DefaultMode is the default permission mode if not specified.
@@ -43,6 +45,7 @@ func NewConfigPolicyWithMode(rules map[string]Decision, allowedDirs []string, mo
 
 // Check returns the permission decision for a tool call.
 func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, error) {
+	debug.Log("permission", "Check: tool=%s input=%s", toolName, truncateStr(string(input), 200))
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -176,4 +179,12 @@ func extractCommand(input json.RawMessage) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

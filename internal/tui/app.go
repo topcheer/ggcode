@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/diff"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -275,6 +276,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.loading = false
 				m.spinner.Stop()
+				debug.Log("tui", "loading set to false (interrupted)")
 				m.output.WriteString("\n[interrupted]\n\n")
 				return m, nil
 			}
@@ -300,6 +302,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Add to history
 			m.history = append(m.history, text)
 			m.historyIdx = len(m.history)
+			debug.Log("tui", "handleCommand: %s", text)
 			return m, m.handleCommand(text)
 		}
 
@@ -363,6 +366,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case setProgramMsg:
+		debug.Log("tui", "setProgramMsg received, program was nil=%v", m.program == nil)
 		m.program = msg.Program
 		return m, nil
 
@@ -757,6 +761,7 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 
 // startAgent returns a tea.Cmd that runs the agent in a goroutine.
 func (m *Model) startAgent(text string) tea.Cmd {
+	debug.Log("tui", "startAgent called: text=%s", truncateStr(text, 200))
 	// Capture and clear pending image
 	img := m.pendingImage
 	m.pendingImage = nil
