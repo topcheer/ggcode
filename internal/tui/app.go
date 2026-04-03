@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"bytes"
+	"runtime"
 	"strings"
 	"time"
 
@@ -27,6 +29,12 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
+
+// logoMsg is sent on startup to display the ASCII art logo.
+type logoMsg struct {
+	Provider string
+	Model    string
+}
 
 // ApprovalMsg is sent to TUI when agent requests permission.
 type ApprovalMsg struct {
@@ -75,6 +83,13 @@ type Model struct {
 	pendingDiffConfirm *DiffConfirmMsg
 	fullscreen         bool
 	pendingImage       *imageAttachedMsg
+
+	// Slash command autocomplete
+	autoCompleteItems    []string
+	autoCompleteIndex    int
+	autoCompleteActive   bool
+	autoCompleteKind     string // "slash" or "mention"
+	autoCompleteWorkDir  string // working directory for mention completion
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -209,6 +224,17 @@ func (m *Model) SetConfig(cfg *config.Config) {
 	m.config = cfg
 }
 
+func asciiLogo() string {
+	return `
+  ██████╗ ██╗      █████╗ ██╗   ██╗██████╗ ███████╗
+ ██╔════╝ ██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝
+ ██║  ███╗██║     ███████║██║   ██║██║  ██║███████╗
+ ██║   ██║██║     ██╔══██╗██║   ██║██║  ██║╚════██║
+ ╚██████╔███████╗██║  ██║╚██████╔╝██████╔╝███████║
+  ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
+`
+}
+
 func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
 	m.subAgentMgr = mgr
 }
@@ -231,6 +257,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case logoMsg:
+		m.output.WriteString(asciiLogo())
+		info := fmt.Sprintf("  Provider: %s  |  Model: %s\n", msg.Provider, msg.Model)
+		m.output.WriteString(m.styles.title.Render(info))
+		m.output.WriteString("\n")
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -290,10 +323,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			return m.handleModeSwitch()
 		case "up":
+			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+				m.autoCompleteIndex = (m.autoCompleteIndex - 1 + len(m.autoCompleteItems)) % len(m.autoCompleteItems)
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				return m, cmd
+			}
 			return m.handleHistoryUp()
 		case "down":
+			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+				m.autoCompleteIndex = (m.autoCompleteIndex + 1) % len(m.autoCompleteItems)
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				return m, cmd
+			}
 			return m.handleHistoryDown()
+		case "tab":
+			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+				m.applyAutoComplete()
+				return m, nil
+			}
+		case "esc":
+			if m.autoCompleteActive {
+				m.autoCompleteActive = false
+				m.autoCompleteItems = nil
+				return m, nil
+			}
 		case "enter":
+			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+				m.applyAutoComplete()
+				return m, nil
+			}
 			text := strings.TrimSpace(m.input.Value())
 			m.input.SetValue("")
 			if text == "" {
@@ -379,7 +439,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+
+	// Update autocomplete state based on current input
+	m.updateAutoComplete()
+
 	return m, cmd
+}
+
+// updateAutoComplete checks if the current input should trigger autocomplete.
+func (m *Model) updateAutoComplete() {
+	value := m.input.Value()
+	cursor := m.input.Position()
+
+	// Check for slash command
+	if active, prefix := DetectSlashCommand(m.input); active {
+		matches := CompleteSlashCommand("/" + prefix)
+		if len(matches) > 0 {
+			m.autoCompleteActive = true
+			m.autoCompleteKind = "slash"
+			m.autoCompleteItems = matches
+			// Reset index if the filtered list changed
+			if m.autoCompleteIndex >= len(matches) {
+				m.autoCompleteIndex = 0
+			}
+			return
+		}
+	}
+
+	// Check for @mention
+	if active, prefix := DetectMention(m.input); active {
+		workDir, _ := os.Getwd()
+		matches := CompleteMention(prefix, workDir)
+		if len(matches) > 0 {
+			m.autoCompleteActive = true
+			m.autoCompleteKind = "mention"
+			m.autoCompleteWorkDir = workDir
+			m.autoCompleteItems = matches
+			if m.autoCompleteIndex >= len(matches) {
+				m.autoCompleteIndex = 0
+			}
+			return
+		}
+	}
+
+	// No autocomplete active
+	m.autoCompleteActive = false
+	m.autoCompleteItems = nil
+}
+
+// applyAutoComplete replaces the current prefix with the selected completion.
+func (m *Model) applyAutoComplete() {
+	if m.autoCompleteIndex >= len(m.autoCompleteItems) {
+		return
+	}
+	selected := m.autoCompleteItems[m.autoCompleteIndex]
+
+	value := m.input.Value()
+	cursor := m.input.Position()
+
+	var replacement string
+	if m.autoCompleteKind == "slash" {
+		// Replace from the "/" to cursor with the selected command
+		wordStart := cursor
+		for wordStart > 0 && value[wordStart-1] != ' ' && value[wordStart-1] != '\t' {
+			wordStart--
+		}
+		replacement = selected + " "
+		value = value[:wordStart] + replacement + value[cursor:]
+	} else if m.autoCompleteKind == "mention" {
+		// Replace from the "@" to cursor with the selected path
+		atPos := cursor - 1
+		for atPos >= 0 && value[atPos] != '@' {
+			atPos--
+		}
+		replacement = "@" + selected + " "
+		value = value[:atPos] + replacement + value[cursor:]
+	}
+
+	m.input.SetValue(value)
+	m.autoCompleteActive = false
+	m.autoCompleteItems = nil
 }
 
 // View renders the UI.
@@ -396,6 +535,11 @@ func (m Model) View() string {
 	sb.WriteString("\n")
 
 	sb.WriteString(m.renderOutput())
+
+	// Render autocomplete overlay above input
+	if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+		sb.WriteString(m.renderAutoComplete())
+	}
 
 	sb.WriteString(input)
 
@@ -529,6 +673,16 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleAgentsCommand(parts)
 		case "/agent":
 			return m.handleAgentDetailCommand(parts)
+		case "/compact":
+			return m.handleCompactCommand()
+		case "/todo":
+			return m.handleTodoCommand(parts)
+		case "/bug":
+			return m.handleBugCommand()
+		case "/config":
+			return m.handleConfigCommand(parts)
+		case "/status":
+			return m.handleStatusCommand()
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
@@ -934,6 +1088,239 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 	return nil
 }
 
+// renderAutoComplete renders the autocomplete dropdown.
+func (m Model) renderAutoComplete() string {
+	if len(m.autoCompleteItems) == 0 {
+		return ""
+	}
+
+	// Limit visible items
+	maxVisible := 8
+	start := 0
+	if len(m.autoCompleteItems) > maxVisible {
+		start = m.autoCompleteIndex
+		// Keep selection visible
+		if start >= len(m.autoCompleteItems)-maxVisible/2 {
+			start = len(m.autoCompleteItems) - maxVisible
+		}
+		if start < 0 {
+			start = 0
+		}
+	}
+	end := start + maxVisible
+	if end > len(m.autoCompleteItems) {
+		end = len(m.autoCompleteItems)
+	}
+
+	items := m.autoCompleteItems[start:end]
+
+	// Find max width for alignment
+	maxWidth := 0
+	for _, item := range items {
+		if len(item) > maxWidth {
+			maxWidth = len(item)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("\n  Commands:\n"))
+
+	for i, item := range items {
+		realIdx := start + i
+		selected := realIdx == m.autoCompleteIndex
+
+		if selected {
+			sb.WriteString(lipgloss.NewStyle().
+				Foreground(lipgloss.Color("226")).
+				Background(lipgloss.Color("236")).
+				Render(fmt.Sprintf("  \u25b6 %-*s", maxWidth, item)))
+			sb.WriteString(" ")
+			if desc, ok := SlashCommandDescriptions[item]; ok {
+				sb.WriteString(lipgloss.NewStyle().
+					Foreground(lipgloss.Color("8")).
+					Background(lipgloss.Color("236")).
+					Render(desc))
+			}
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString(lipgloss.NewStyle().
+				Foreground(lipgloss.Color("15")).
+				Render(fmt.Sprintf("    %-*s", maxWidth, item)))
+			sb.WriteString(" ")
+			if desc, ok := SlashCommandDescriptions[item]; ok {
+				sb.WriteString(lipgloss.NewStyle().
+					Foreground(lipgloss.Color("8")).
+					Render(desc))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  Tab/Enter to select, Esc to cancel\n"))
+	return sb.String()
+}
+
+// handleCompactCommand compresses the conversation history.
+func (m *Model) handleCompactCommand() tea.Cmd {
+	return func() tea.Msg {
+		cm := m.agent.ContextManager()
+		if cm == nil {
+			return streamMsg("Context manager not available.\n\n")
+		}
+		if err := cm.Summarize(context.Background(), m.agent.Provider()); err != nil {
+			return streamMsg(fmt.Sprintf("Compact failed: %v\n\n", err))
+		}
+		return streamMsg("Conversation history compacted.\n\n")
+	}
+}
+
+// handleTodoCommand views/manages the todo list.
+func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
+	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
+		// Clear todos
+		todopath := filepath.Join(os.UserHomeDir(), ".ggcode", "todos.json")
+		if err := os.WriteFile(todopath, []byte("[]\n"), 0644); err != nil {
+			return func() tea.Msg {
+				return streamMsg(fmt.Sprintf("Error clearing todos: %v\n\n", err))
+			}
+		}
+		m.output.WriteString(m.styles.assistant.Render("Todo list cleared.\n\n"))
+		return nil
+	}
+	return func() tea.Msg {
+		todopath := filepath.Join(os.UserHomeDir(), ".ggcode", "todos.json")
+		data, err := os.ReadFile(todopath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return streamMsg("No todo list found. Use the todo_write tool to create one.\n\n")
+			}
+			return streamMsg(fmt.Sprintf("Error reading todos: %v\n\n", err))
+		}
+		// Pretty print JSON
+		var raw interface{}
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return streamMsg(fmt.Sprintf("Error parsing todos: %v\n\n", err))
+		}
+		pretty, _ := json.MarshalIndent(raw, "", "  ")
+		return streamMsg(fmt.Sprintf("Todo list:\n%s\n\n", string(pretty)))
+	}
+}
+
+// handleBugCommand generates diagnostic info for bug reporting.
+func (m *Model) handleBugCommand() tea.Cmd {
+	return func() tea.Msg {
+		var b strings.Builder
+		b.WriteString("=== Bug Report Diagnostics ===\n\n")
+
+		// Version info
+		b.WriteString("Version: ggcode (dev)\n")
+		b.WriteString(fmt.Sprintf("OS: %s %s\n", runtime.GOOS, runtime.GOARCH))
+		b.WriteString(fmt.Sprintf("Go: %s\n", runtime.Version()))
+
+		// Config info
+		if m.config != nil {
+			b.WriteString(fmt.Sprintf("Provider: %s\n", m.config.Provider))
+			b.WriteString(fmt.Sprintf("Model: %s\n", m.config.Model))
+		}
+
+		// Session info
+		if m.session != nil {
+			b.WriteString(fmt.Sprintf("Session: %s (%d messages)\n", m.session.ID, len(m.session.Messages)))
+		}
+
+		// MCP info
+		if len(m.mcpServers) > 0 {
+			b.WriteString(fmt.Sprintf("MCP servers: %d\n", len(m.mcpServers)))
+		}
+
+		// Recent errors from output
+		output := m.output.String()
+		if idx := strings.LastIndex(output, "Error:"); idx >= 0 {
+			end := idx + 500
+			if end > len(output) {
+				end = len(output)
+			}
+			b.WriteString(fmt.Sprintf("Last error: %s\n", output[idx:end]))
+		}
+
+		b.WriteString("\nPlease include this information when reporting a bug.\n\n")
+		return streamMsg(b.String())
+	}
+}
+
+// handleConfigCommand shows or modifies configuration.
+func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
+	if len(parts) > 1 && strings.ToLower(parts[1]) == "set" {
+		if len(parts) < 4 {
+			m.output.WriteString(m.styles.error.Render("Usage: /config set <key> <value>\n\n"))
+			return nil
+		}
+		key := parts[2]
+		value := parts[3]
+		if m.config == nil {
+			m.output.WriteString(m.styles.error.Render("Config not loaded.\n\n"))
+			return nil
+		}
+		switch key {
+		case "model":
+			m.config.Model = value
+			m.output.WriteString(fmt.Sprintf("Config: model = %s\n\n", value))
+		case "provider":
+			m.config.Provider = value
+			m.output.WriteString(fmt.Sprintf("Config: provider = %s\n\n", value))
+		default:
+			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Unknown config key: %s\nSupported: model, provider\n\n", key)))
+		}
+		return nil
+	}
+	// Show current config
+	var b strings.Builder
+	b.WriteString(m.styles.title.Render("Current Configuration:\n"))
+	if m.config != nil {
+		b.WriteString(fmt.Sprintf("  Provider:    %s\n", m.config.Provider))
+		b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
+		if m.config.MaxTokens > 0 {
+			b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", m.config.MaxTokens))
+		}
+		if len(m.config.Providers) > 0 {
+			b.WriteString(fmt.Sprintf("  Providers:    %v\n", m.providerNames()))
+		}
+		b.WriteString(fmt.Sprintf("  MCP Servers: %d\n", len(m.config.MCPServers)))
+	}
+	b.WriteString(m.styles.prompt.Render("\nUsage: /config set <key> <value>\n\n"))
+	m.output.WriteString(b.String())
+	return nil
+}
+
+// handleStatusCommand shows current status.
+func (m *Model) handleStatusCommand() tea.Cmd {
+	var b strings.Builder
+	b.WriteString(m.styles.title.Render("Status:\n"))
+	b.WriteString(fmt.Sprintf("  Provider:    %s\n", m.config.Provider))
+	b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
+	b.WriteString(fmt.Sprintf("  Mode:        %s\n", m.mode))
+	b.WriteString(fmt.Sprintf("  Fullscreen:  %v\n", m.fullscreen))
+
+	if m.session != nil {
+		b.WriteString(fmt.Sprintf("  Session:     %s\n", m.session.ID))
+		b.WriteString(fmt.Sprintf("  Messages:    %d\n", len(m.session.Messages)))
+	}
+
+	if m.lastCost != "" {
+		b.WriteString(fmt.Sprintf("  %s\n", m.lastCost))
+	}
+
+	if m.subAgentMgr != nil {
+		n := m.subAgentMgr.RunningCount()
+		b.WriteString(fmt.Sprintf("  Agents:      %d running\n", n))
+	}
+
+	b.WriteString(fmt.Sprintf("  MCP Servers: %d connected\n", len(m.mcpServers)))
+	b.WriteString("\n")
+	m.output.WriteString(b.String())
+	return nil
+}
+
 func helpText() string {
 	return `Available commands:
   /help              Show this help message
@@ -956,10 +1343,25 @@ func helpText() string {
   /plugins           List loaded plugins and their tools
   /image <path>       Attach an image file
   /fullscreen         Toggle fullscreen mode
+  /mode <mode>       Set permission mode (supervised|plan|auto)
+  /agents            List sub-agents
+  /agent <id>        Show sub-agent details
+  /agent cancel <id> Cancel a sub-agent
+
+  /compact           Compress conversation history
+  /todo              View todo list
+  /todo clear        Clear todo list
+  /bug               Report a bug with diagnostics
+  /config            Show current configuration
+  /config set <k> <v> Set a config value
+  /status            Show current status
   /exit, /quit       Exit ggcode
 
 Keyboard shortcuts:
-  \u2191/\u2193                Browse command history
+  Tab               Autocomplete slash commands
+  Esc               Cancel autocomplete
+  \u2191/\u2193                Browse command history (or autocomplete)
+  Shift+Tab         Toggle permission mode
   Ctrl+C             Interrupt current generation
   Ctrl+D             Exit`
 }

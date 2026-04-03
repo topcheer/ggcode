@@ -187,10 +187,19 @@ func (r *REPL) Run() error {
 	// We can't Send before Run (deadlock). Instead, run in a goroutine and
 	// send the reference once the event loop is up.
 	debug.Log("repl", "scheduling setProgramMsg")
+	// Send the startup logo with provider/model info.
+	providerName := r.model.costProvider
+	if providerName == "" && r.model.config != nil {
+		providerName = r.model.config.Provider
+	}
+	modelName := r.model.costModel
+	if modelName == "" && r.model.config != nil {
+		modelName = r.model.config.Model
+	}
 	go func() {
-		// Give the event loop a moment to start, then inject the program ref.
 		time.Sleep(10 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
+		r.program.Send(logoMsg{Provider: providerName, Model: modelName})
 	}()
 
 	_, err := r.program.Run()
