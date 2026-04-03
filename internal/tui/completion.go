@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 const (
@@ -61,6 +63,13 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 		fullPath := filepath.Join(workDir, token)
 		absPath, err := filepath.Abs(fullPath)
 		if err != nil {
+			continue
+		}
+
+		// Prevent path traversal: resolved path must stay within workDir
+		rel, err := filepath.Rel(workDir, absPath)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			debug.Log("completion", "@mention path traversal blocked: %s -> %s", token, absPath)
 			continue
 		}
 

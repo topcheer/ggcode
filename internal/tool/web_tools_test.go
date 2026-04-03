@@ -93,6 +93,32 @@ func TestWebFetch_Truncation(t *testing.T) {
 	}
 }
 
+func TestWebFetch_PrivateIPBlocked(t *testing.T) {
+	wf := WebFetch{AllowPrivate: false}
+
+	privateURLs := []string{
+		"http://127.0.0.1:8080",
+		"http://192.168.1.1",
+		"http://10.0.0.1",
+		"http://172.16.0.1",
+		"http://169.254.169.254",
+		"http://[::1]",
+	}
+
+	for _, url := range privateURLs {
+		t.Run(url, func(t *testing.T) {
+			input := json.RawMessage(fmt.Sprintf(`{"url": %q}`, url))
+			result, err := wf.Execute(context.Background(), input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !result.IsError {
+				t.Errorf("expected error for private URL %s, got: %s", url, result.Content)
+			}
+		})
+	}
+}
+
 func TestStripHTML(t *testing.T) {
 	tests := []struct {
 		input, want string

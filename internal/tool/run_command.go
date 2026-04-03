@@ -15,7 +15,11 @@ const (
 )
 
 // RunCommand implements the run_command tool for executing shell commands.
-type RunCommand struct{}
+type RunCommand struct {
+	// WorkingDir is the fixed working directory set by the agent.
+	// LLM-provided working_dir is ignored to prevent sandbox escape.
+	WorkingDir string
+}
 
 func (t RunCommand) Name() string { return "run_command" }
 
@@ -62,8 +66,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	defer cancel()
 
 	cmd := exec.CommandContext(timeoutCtx, "sh", "-c", args.Command)
-	if args.WorkingDir != "" {
-		cmd.Dir = args.WorkingDir
+	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir
+	if t.WorkingDir != "" {
+		cmd.Dir = t.WorkingDir
 	}
 
 	var stdout, stderr bytes.Buffer

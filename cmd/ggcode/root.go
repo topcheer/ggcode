@@ -130,8 +130,9 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 
 	// Setup tools (after policy so sandbox checks can be wired)
+	workingDir, _ := os.Getwd()
 	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		return err
 	}
 
@@ -157,7 +158,6 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	costMgr := cost.NewManager(pricing, "")
 
 	// Load project memory (GGCODE.md)
-	workingDir, _ := os.Getwd()
 	projectMem, projectFiles, _ := memory.LoadProjectMemory(workingDir)
 
 	// Load auto memory
