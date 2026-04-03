@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
 )
 
 // WriteFile implements the write_file tool.
-type WriteFile struct{}
+type WriteFile struct {
+	SandboxCheck AllowedPathChecker
+}
 
 func (t WriteFile) Name() string { return "write_file" }
 
@@ -40,6 +43,10 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
+		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
 	if err := os.WriteFile(args.Path, []byte(args.Content), 0644); err != nil {

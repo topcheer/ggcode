@@ -19,7 +19,7 @@ func TestWebFetch_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	wf := WebFetch{}
+	wf := WebFetch{AllowPrivate: true}
 	input := json.RawMessage(fmt.Sprintf(`{"url": "%s"}`, ts.URL))
 	result, err := wf.Execute(context.Background(), input)
 	if err != nil {
@@ -34,7 +34,7 @@ func TestWebFetch_Success(t *testing.T) {
 }
 
 func TestWebFetch_InvalidURL(t *testing.T) {
-	wf := WebFetch{}
+	wf := WebFetch{AllowPrivate: true}
 	result, err := wf.Execute(context.Background(), json.RawMessage(`{"url": "not a url"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -50,7 +50,7 @@ func TestWebFetch_HTTPError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	wf := WebFetch{}
+	wf := WebFetch{AllowPrivate: true}
 	input := json.RawMessage(fmt.Sprintf(`{"url": "%s"}`, ts.URL))
 	result, err := wf.Execute(context.Background(), input)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestWebFetch_HTTPError(t *testing.T) {
 }
 
 func TestWebFetch_MissingURL(t *testing.T) {
-	wf := WebFetch{}
+	wf := WebFetch{AllowPrivate: true}
 	result, err := wf.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -79,7 +79,7 @@ func TestWebFetch_Truncation(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	wf := WebFetch{}
+	wf := WebFetch{AllowPrivate: true}
 	input := json.RawMessage(fmt.Sprintf(`{"url": "%s"}`, ts.URL))
 	result, err := wf.Execute(context.Background(), input)
 	if err != nil {

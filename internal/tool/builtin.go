@@ -1,17 +1,26 @@
 package tool
 
+import "github.com/topcheer/ggcode/internal/permission"
+
 // RegisterBuiltinTools registers all built-in tools.
-func RegisterBuiltinTools(registry *Registry) error {
+// If policy is nil, no sandbox path checking is enforced (permissive mode).
+func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy) error {
+	var sandbox AllowedPathChecker
+	if policy != nil {
+		sandbox = func(path string) bool {
+			return policy.AllowedPath(path)
+		}
+	}
 	tools := []Tool{
 		// File operations
-		ReadFile{},
-		WriteFile{},
-		ListDir{},
-		EditFile{},
+		ReadFile{SandboxCheck: sandbox},
+		WriteFile{SandboxCheck: sandbox},
+		ListDir{SandboxCheck: sandbox},
+		EditFile{SandboxCheck: sandbox},
 
 		// Search
-		SearchFiles{},
-		Glob{},
+		SearchFiles{SandboxCheck: sandbox},
+		Glob{SandboxCheck: sandbox},
 
 		// Execution
 		RunCommand{},

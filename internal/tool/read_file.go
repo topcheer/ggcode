@@ -9,8 +9,13 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+// AllowedPathChecker is a function that checks if a path is allowed by sandbox policy.
+type AllowedPathChecker func(path string) bool
+
 // ReadFile implements the read_file tool.
-type ReadFile struct{}
+type ReadFile struct {
+	SandboxCheck AllowedPathChecker
+}
 
 func (t ReadFile) Name() string { return "read_file" }
 
@@ -37,6 +42,10 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
+		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
 	data, err := os.ReadFile(args.Path)

@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
 )
 
 // Glob implements the glob tool for file path matching.
-type Glob struct{}
+type Glob struct {
+	SandboxCheck AllowedPathChecker
+}
 
 func (t Glob) Name() string { return "glob" }
 
@@ -42,6 +45,10 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	if t.SandboxCheck != nil && !t.SandboxCheck(args.Directory) {
+		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
 	if args.Directory == "" {
