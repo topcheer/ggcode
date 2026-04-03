@@ -10,6 +10,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -64,12 +65,31 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 		}
 	}
 
+	// Load project memory (GGCODE.md)
+	workingDir, _ := os.Getwd()
+	projectMem, _, _ := memory.LoadProjectMemory(workingDir)
+
+	// Load auto memory
+	autoMem := memory.NewAutoMemory()
+	autoContent, _, _ := autoMem.LoadAll()
+	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
+
+	// Build enhanced system prompt
+	gitStatus := detectGitStatus(workingDir)
+	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, registryToolNames(registry), gitStatus, nil)
+	if projectMem != "" {
+		systemPrompt += "\n\n## Project Memory (GGCODE.md)\n" + projectMem
+	}
+	if autoContent != "" {
+		systemPrompt += "\n\n## Auto Memory\n" + autoContent
+	}
+
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
 		maxIter = 50
 	}
-	ag := agent.NewAgent(prov, registry, cfg.SystemPrompt, maxIter)
+	ag := agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	ag.SetPermissionPolicy(policy)
 
 	// Setup cost tracking
@@ -154,6 +174,16 @@ func readStdin() ([]byte, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+// registryToolNames extracts tool names from the registry.
+func registryToolNames(r *tool.Registry) []string {
+	tools := r.List()
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name()
+	}
+	return names
 }
 
 // buildPipePrompt builds the prompt with optional image from stdin.

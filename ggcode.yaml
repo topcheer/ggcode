@@ -5,8 +5,6 @@ provider: openai
 model: glm-5-turbo
 
 system_prompt: |
-  You are ggcode, an AI coding assistant. You help users with coding tasks by
-  reading, writing, and editing files. Be concise and helpful.
 
 providers:
   openai:
