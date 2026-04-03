@@ -93,6 +93,9 @@ type Model struct {
 	diffCursor  int
 	pendingImage       *imageAttachedMsg
 
+	// Viewport for scrollable output
+	viewport ViewportModel
+
 	// Markdown rendering
 	mdRenderer       *glamour.TermRenderer
 	streamBuffer     *bytes.Buffer
@@ -245,6 +248,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		spinner:    NewToolSpinner(),
 		history:    make([]string, 0, 100),
 		mdRenderer: mdRenderer,
+		viewport:   NewViewportModel(80, 20),
 	}
 }
 
@@ -340,6 +344,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// viewport occupies everything except title(2 lines) + input(2 lines) + status(1 line)
+		viewportHeight := msg.Height - 5
+		if viewportHeight < 3 {
+			viewportHeight = 3
+		}
+		m.viewport.SetSize(msg.Width, viewportHeight)
 		if wrap := m.width - 4; wrap > 20 {
 			if r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(wrap)); err == nil {
 				m.mdRenderer = r
@@ -348,8 +358,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// Mouse events handled by FullscreenModel in fullscreen mode
-		return m, nil
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			m.viewport.ScrollUp(3)
+			return m, nil
+		case tea.MouseWheelDown:
+			m.viewport.ScrollDown(3)
+			return m, nil
+		}
 
 	case tea.KeyMsg:
 		// Handle approval mode (selection list)
@@ -421,6 +437,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "shift+tab":
 			return m.handleModeSwitch()
+		case "pgup":
+			m.viewport.ScrollUp(m.viewport.VisibleLineCount() / 2)
+			return m, nil
+		case "pgdown":
+			m.viewport.ScrollDown(m.viewport.VisibleLineCount() / 2)
+			return m, nil
 		case "up":
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 				m.autoCompleteIndex = (m.autoCompleteIndex - 1 + len(m.autoCompleteItems)) % len(m.autoCompleteItems)
@@ -470,6 +492,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamBuffer.WriteString(string(msg))
 		}
 		m.output.WriteString(string(msg))
+		m.viewport.GotoBottom()
 		return m, nil
 
 	case doneMsg:
@@ -490,6 +513,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.output.WriteString(m.styles.prompt.Render(m.lastCost + "\n"))
 		}
 		m.output.WriteString("\n")
+		m.viewport.GotoBottom()
 		return m, nil
 
 	case costUpdateMsg:
@@ -497,6 +521,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.costMgr != nil {
 			if sc, ok := m.costMgr.SessionCost("current"); ok {
 				m.lastCost += fmt.Sprintf(" | session cost: %s", cost.FormatCost(sc.TotalCostUSD))
+				// Also update status bar cost/tokens
+				m.statusTokens = sc.InputTokens + sc.OutputTokens
+				m.statusCost = sc.TotalCostUSD
 			}
 		}
 		return m, nil
@@ -662,15 +689,26 @@ func (m Model) View() string {
 	title := m.styles.title.Render("ggcode \u2014 AI Coding Assistant")
 	input := m.input.View()
 
+	// Set content into viewport
+	m.viewport.SetContent(m.renderOutput())
+
 	var sb strings.Builder
 	sb.WriteString(title)
 	sb.WriteString("\n")
 
-	sb.WriteString(m.renderOutput())
+	sb.WriteString(m.viewport.View())
 
 	// Render autocomplete overlay above input
 	if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 		sb.WriteString(m.renderAutoComplete())
+	}
+
+	// Render status bar during loading
+	statusBar := m.renderStatusBar()
+	if statusBar != "" {
+		sb.WriteString("\n")
+		sb.WriteString(statusBar)
+		sb.WriteString("\n")
 	}
 
 	sb.WriteString(input)
@@ -684,7 +722,7 @@ func (m Model) View() string {
 				agentStr = fmt.Sprintf(" [agents: %d running]", n)
 			}
 		}
-		sb.WriteString(m.styles.prompt.Render("\n  " + modeStr + agentStr + " /help /sessions /resume /export /model /provider /mode /clear /exit | Shift+Tab toggle mode | Ctrl+C interrupt | Ctrl+D quit"))
+		sb.WriteString(m.styles.prompt.Render("\n  " + modeStr + agentStr + " /help /sessions /resume /export /model /provider /mode /clear /exit | Shift+Tab toggle mode | Ctrl+C interrupt | Ctrl+D quit | PgUp/PgDn scroll"))
 	}
 
 	return sb.String()
@@ -828,6 +866,11 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.output.WriteString("\n\n")
 					m.output.WriteString(m.styles.assistant.Render("Assistant: "))
 					m.loading = true
+					// Reset status bar state
+					m.statusActivity = "Thinking..."
+					m.statusToolName = ""
+					m.statusToolArg = ""
+					m.statusToolCount = 0
 					return m.startAgent(expanded)
 				}
 			}
@@ -857,6 +900,11 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamStartPos = m.output.Len()
 	m.loading = true
+	// Reset status bar state
+	m.statusActivity = "Thinking..."
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
 	return m.startAgent(expandedMsg)
 }
 
@@ -1078,7 +1126,15 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					switch event.Type {
 					case provider.StreamEventText:
 						m.program.Send(streamMsg(event.Text))
+						m.program.Send(statusMsg{
+							Activity: "Writing...",
+						})
 					case provider.StreamEventToolCallDone:
+						m.program.Send(statusMsg{
+							Activity:  "Thinking...",
+							ToolName:  event.Tool.Name,
+							ToolCount: m.statusToolCount + 1,
+						})
 						m.program.Send(toolStatusMsg{
 							ToolName: event.Tool.Name,
 							Running:  true,
@@ -1095,7 +1151,15 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					switch event.Type {
 					case provider.StreamEventText:
 						m.program.Send(streamMsg(event.Text))
+						m.program.Send(statusMsg{
+							Activity: "Writing...",
+						})
 					case provider.StreamEventToolCallDone:
+						m.program.Send(statusMsg{
+							Activity:  "Thinking...",
+							ToolName:  event.Tool.Name,
+							ToolCount: m.statusToolCount + 1,
+						})
 						m.program.Send(toolStatusMsg{
 							ToolName: event.Tool.Name,
 							Running:  true,
@@ -1316,6 +1380,88 @@ func (m Model) renderAutoComplete() string {
 	}
 
 	sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  Tab/Enter to select, Esc to cancel\n"))
+	return sb.String()
+}
+
+// renderStatusBar renders the status bar above input during loading.
+func (m Model) renderStatusBar() string {
+	if !m.loading {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	// Main status line
+	activity := m.statusActivity
+	if activity == "" {
+		activity = "Thinking..."
+	}
+
+	spinnerChar := ""
+	if m.spinner.IsActive() {
+		frame := m.spinner.CurrentFrame()
+		spinnerChar = string(spinnerChars[frame%len(spinnerChars)])
+	} else {
+		spinnerChar = "⏳"
+	}
+
+	// Format tokens with commas
+	tokens := fmt.Sprintf("%d", m.statusTokens)
+	if len(tokens) > 3 {
+		for i := len(tokens) - 3; i > 0; i -= 3 {
+			tokens = tokens[:i] + "," + tokens[i:]
+		}
+	}
+
+	// Format cost
+	cost := fmt.Sprintf("%.4f", m.statusCost)
+	if cost == "0.0000" {
+		cost = "0.00"
+	}
+
+	line1 := fmt.Sprintf(" %s %s │ 📊 %s tokens │ 💰 $%s",
+		spinnerChar, activity, tokens, cost)
+	sb.WriteString(m.styles.statusBar.Render(line1))
+
+	// Tool info line
+	if m.statusToolCount > 0 || m.statusToolName != "" {
+		sb.WriteString("\n ")
+		if m.statusToolCount > 0 {
+			sb.WriteString(fmt.Sprintf("🔧 %d tools used", m.statusToolCount))
+			if m.statusToolName != "" {
+				sb.WriteString(" │ ")
+			}
+		}
+		if m.statusToolName != "" {
+			sb.WriteString(fmt.Sprintf("%s", m.statusToolName))
+			if m.statusToolArg != "" {
+				arg := m.statusToolArg
+				if len(arg) > 50 {
+					arg = arg[:50] + "..."
+				}
+				sb.WriteString(fmt.Sprintf(": %s", arg))
+			}
+		}
+	}
+
+	// Subagent info line
+	if m.subAgentMgr != nil && m.subAgentMgr.RunningCount() > 0 {
+		agents := m.subAgentMgr.List()
+		sb.WriteString("\n 🤖 ")
+		first := true
+		for _, a := range agents {
+			if !first {
+				sb.WriteString(" │ ")
+			}
+			first = false
+			icon := "✅"
+			if a.Status == subagent.StatusRunning {
+				icon = "⏳"
+			}
+			sb.WriteString(fmt.Sprintf("%s %s (%d tools)", icon, a.ID, a.ToolCallCount))
+		}
+	}
+
 	return sb.String()
 }
 
