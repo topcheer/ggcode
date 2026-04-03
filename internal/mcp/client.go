@@ -20,6 +20,7 @@ type Client struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  io.Reader
+	reader  *bufio.Reader // reused stdout reader
 	mu      sync.Mutex
 	nextID  atomic.Int64
 	closed  bool
@@ -49,6 +50,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 	c.stdin = stdin
 	c.stdout = stdout
+	c.reader = bufio.NewReader(stdout)
 
 	// Capture stderr for debugging
 	c.cmd.Stderr = nil // let it go to parent's stderr
@@ -196,7 +198,7 @@ func (c *Client) writeMessage(msg interface{}) error {
 }
 
 func (c *Client) readResponse(ctx context.Context) (*Response, error) {
-	reader := bufio.NewReader(c.stdout)
+	reader := c.reader
 
 	// Read Content-Length header
 	for {
