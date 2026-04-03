@@ -22,17 +22,24 @@ const (
 
 // SubAgent represents a spawned child agent.
 type SubAgent struct {
-	ID        string
-	Task      string
-	Tools     []string
-	Status    Status
-	Result    string
-	Error     error
+	ID            string
+	Task          string
+	Tools         []string
+	ToolCallCount int
+	Status        Status
+	Result        string
+	Error         error
 	CreatedAt time.Time
 	StartedAt time.Time
 	EndedAt   time.Time
 	cancel    context.CancelFunc
 	mu        sync.Mutex
+}
+
+func (s *SubAgent) IncrementToolCalls() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ToolCallCount++
 }
 
 func (s *SubAgent) setStatus(st Status) {

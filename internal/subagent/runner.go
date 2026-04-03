@@ -82,6 +82,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			output.WriteString(event.Text)
 		case provider.StreamEventToolCallDone:
 			output.WriteString(fmt.Sprintf("[tool: %s]\n", event.Tool.Name))
+			// Increment tool call count for this subagent
+			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.IncrementToolCalls()
+			}
 		case provider.StreamEventError:
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))
 		}
