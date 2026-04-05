@@ -25,14 +25,14 @@ type AgentRunner interface {
 
 // RunnerConfig holds everything needed to run a sub-agent.
 type RunnerConfig struct {
-	Provider       provider.Provider
-	AllTools       []ToolInfo
-	Task           string
-	AllowedTools   []string
-	Manager        *Manager
-	SubAgentID     string
-	AgentFactory   AgentFactory
-	BuildToolSet   func(allowedTools []string, allTools []ToolInfo) interface{} // returns opaque tool set for agent
+	Provider     provider.Provider
+	AllTools     []ToolInfo
+	Task         string
+	AllowedTools []string
+	Manager      *Manager
+	SubAgentID   string
+	AgentFactory AgentFactory
+	BuildToolSet func(allowedTools []string, allTools []ToolInfo) interface{} // returns opaque tool set for agent
 }
 
 // Run starts the sub-agent in a goroutine, running a complete agentic loop.

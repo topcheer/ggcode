@@ -85,10 +85,10 @@ func formatUnifiedDiff(oldLines, newLines []string, script []op, contextLines in
 	// First pass: mark which lines are in change groups
 	oldLine, newLine := 1, 1
 	type lineEntry struct {
-		kind   byte
-		text   string
-		oldNum int
-		newNum int
+		kind    byte
+		text    string
+		oldNum  int
+		newNum  int
 		inGroup bool
 	}
 	var entries []lineEntry

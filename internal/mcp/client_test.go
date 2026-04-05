@@ -72,8 +72,8 @@ func TestAdapterToolNames(t *testing.T) {
 
 func TestMCPToolParameters(t *testing.T) {
 	mt := &mcpTool{
-		name:     "mcp__fs__read",
-		schema:   json.RawMessage(`{"type":"object","properties":{"p":{"type":"string"}}}`),
+		name:   "mcp__fs__read",
+		schema: json.RawMessage(`{"type":"object","properties":{"p":{"type":"string"}}}`),
 	}
 	params := mt.Parameters()
 	var m map[string]interface{}

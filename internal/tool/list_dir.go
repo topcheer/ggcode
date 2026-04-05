@@ -8,7 +8,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-
 )
 
 // ListDir implements the list_directory tool.
