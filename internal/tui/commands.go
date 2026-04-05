@@ -12,7 +12,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"bytes"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/image"
@@ -128,36 +127,43 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return nil
 		case "/model":
 			if len(parts) > 1 {
-				m.config.Model = parts[1]
-				m.costModel = parts[1]
-				// Recreate provider with new model
-				if prov, err := provider.NewProvider(m.config); err == nil {
-					m.agent.SetProvider(prov)
-					m.output.WriteString(m.t("command.model_switched", parts[1], m.config.Provider))
+				if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, parts[1]); err == nil {
+					if err := m.reloadActiveProvider(); err == nil {
+						m.output.WriteString(m.t("command.model_switched", parts[1], m.config.Vendor))
+					} else {
+						m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+					}
 				} else {
 					m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
 				}
 			} else {
-				m.output.WriteString(m.t("command.model_current", m.config.Model, m.config.Provider))
+				resolved, err := m.config.ResolveActiveEndpoint()
+				if err != nil {
+					m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+				} else {
+					m.output.WriteString(m.t("command.model_current", resolved.Model, resolved.VendorName))
+				}
 			}
 			return nil
 		case "/provider":
 			if len(parts) > 1 {
-				newProvider := parts[1]
-				if _, ok := m.config.Providers[newProvider]; !ok {
-					m.output.WriteString(m.styles.error.Render(m.t("command.provider_unknown", newProvider, m.providerNames())))
+				newVendor := parts[1]
+				endpoints := m.config.EndpointNames(newVendor)
+				if len(endpoints) == 0 {
+					m.output.WriteString(m.styles.error.Render(m.t("command.provider_unknown", newVendor, m.vendorNames())))
 					return nil
 				}
-				m.config.Provider = newProvider
-				m.costProvider = newProvider
-				if prov, err := provider.NewProvider(m.config); err == nil {
-					m.agent.SetProvider(prov)
-					m.output.WriteString(m.t("command.provider_switched", newProvider, m.config.Model))
+				if err := m.config.SetActiveSelection(newVendor, endpoints[0], ""); err == nil {
+					if err := m.reloadActiveProvider(); err == nil {
+						m.output.WriteString(m.t("command.provider_switched", newVendor, m.config.Model))
+					} else {
+						m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+					}
 				} else {
 					m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
 				}
 			} else {
-				m.output.WriteString(m.t("command.provider_current", m.config.Provider, m.config.Model, m.providerNames()))
+				m.openProviderPanel()
 			}
 			return nil
 		case "/allow":
@@ -170,8 +176,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 				m.output.WriteString(m.t("command.usage.allow"))
 			}
 			return nil
-		case "/cost":
-			return m.handleCostCommand(parts)
 		case "/sessions":
 			return m.listSessions()
 		case "/resume":
@@ -235,6 +239,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.statusToolName = ""
 					m.statusToolArg = ""
 					m.statusToolCount = 0
+					m.resetActivityGroups()
 					return m.startAgent(expanded)
 				}
 			}
@@ -269,6 +274,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
+	m.resetActivityGroups()
 	return m.startAgent(expandedMsg)
 }
 
@@ -278,13 +284,11 @@ func (m *Model) resetConversationView() {
 	m.streamStartPos = 0
 	m.streamPrefixWritten = false
 	m.loading = false
-	m.lastCost = ""
 	m.statusActivity = ""
 	m.statusToolName = ""
 	m.statusToolArg = ""
-	m.statusTokens = 0
-	m.statusCost = 0
 	m.statusToolCount = 0
+	m.resetActivityGroups()
 	m.autoCompleteActive = false
 	m.autoCompleteItems = nil
 	m.autoCompleteIndex = 0
@@ -359,8 +363,7 @@ func (m *Model) exportSession(id string) tea.Cmd {
 		if err := os.WriteFile(filename, []byte(md), 0644); err != nil {
 			return streamMsg(m.t("session.write_failed", err))
 		}
-		absPath, _ := filepath.Abs(filename)
-		return streamMsg(m.t("session.exported", id, absPath))
+		return streamMsg(m.t("session.exported", id, filename))
 	}
 }
 
@@ -381,7 +384,13 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 	m.pendingApproval = nil
 	if pa != nil && m.policy != nil {
 		m.policy.SetOverride(pa.ToolName, permission.Allow)
-		m.output.WriteString(fmt.Sprintf("\u2713 %s is now always allowed\n\n", pa.ToolName))
+		present := describeTool(m.currentLanguage(), pa.ToolName, pa.Input)
+		toolLine := formatToolInline(present.DisplayName, present.Detail)
+		if m.currentLanguage() == LangZhCN {
+			m.output.WriteString(fmt.Sprintf("\u2713 已总是允许：%s\n\n", toolLine))
+		} else {
+			m.output.WriteString(fmt.Sprintf("\u2713 Always allow: %s\n\n", toolLine))
+		}
 	}
 	if pa != nil && pa.Response != nil {
 		go func() {
@@ -476,7 +485,7 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 		// Show diff (new -> old)
 		diffText := diff.UnifiedDiff(cp.NewContent, cp.OldContent, 3)
 		var b strings.Builder
-		b.WriteString(m.t("checkpoint.undid", cp.ToolCall, cp.FilePath, cp.ID))
+		b.WriteString(m.t("checkpoint.undid", cp.ToolCall, displayToolFileTarget(cp.FilePath), cp.ID))
 		b.WriteString(FormatDiff(diffText))
 		b.WriteString("\n")
 		return streamMsg(b.String())
@@ -496,7 +505,7 @@ func (m *Model) handleCheckpointsCommand() tea.Cmd {
 		var b strings.Builder
 		b.WriteString(m.t("checkpoint.list.title", len(ps)))
 		for i, cp := range ps {
-			b.WriteString(m.t("checkpoint.list.item", i+1, cp.ID, cp.FilePath, cp.ToolCall, cp.Timestamp.Format("15:04:05")))
+			b.WriteString(m.t("checkpoint.list.item", i+1, cp.ID, displayToolFileTarget(cp.FilePath), cp.ToolCall, cp.Timestamp.Format("15:04:05")))
 		}
 		b.WriteString(m.t("checkpoint.list.hint"))
 		return streamMsg(b.String())
@@ -627,7 +636,7 @@ func (m *Model) handleBugCommand() tea.Cmd {
 
 		// Config info
 		if m.config != nil {
-			b.WriteString(m.t("bug.provider", m.config.Provider))
+			b.WriteString(m.t("bug.provider", m.config.Vendor))
 			b.WriteString(m.t("bug.model", m.config.Model))
 		}
 
@@ -670,10 +679,39 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 		}
 		switch key {
 		case "model":
-			m.config.Model = value
+			if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, value); err != nil {
+				m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+				return nil
+			}
+			if err := m.reloadActiveProvider(); err != nil {
+				m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+				return nil
+			}
 			m.output.WriteString(m.t("config.model_set", value))
-		case "provider":
-			m.config.Provider = value
+		case "vendor":
+			endpoints := m.config.EndpointNames(value)
+			if len(endpoints) == 0 {
+				m.output.WriteString(m.styles.error.Render(m.t("command.provider_unknown", value, m.vendorNames())))
+				return nil
+			}
+			if err := m.config.SetActiveSelection(value, endpoints[0], ""); err != nil {
+				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				return nil
+			}
+			if err := m.reloadActiveProvider(); err != nil {
+				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				return nil
+			}
+			m.output.WriteString(m.t("config.provider_set", value))
+		case "endpoint":
+			if err := m.config.SetActiveSelection(m.config.Vendor, value, ""); err != nil {
+				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				return nil
+			}
+			if err := m.reloadActiveProvider(); err != nil {
+				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				return nil
+			}
 			m.output.WriteString(m.t("config.provider_set", value))
 		case "language":
 			m.setLanguage(value)
@@ -687,14 +725,15 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render(m.t("config.title")))
 	if m.config != nil {
-		b.WriteString(fmt.Sprintf("  Provider:    %s\n", m.config.Provider))
+		b.WriteString(fmt.Sprintf("  Vendor:      %s\n", m.config.Vendor))
+		b.WriteString(fmt.Sprintf("  Endpoint:    %s\n", m.config.Endpoint))
 		b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
 		b.WriteString(fmt.Sprintf("  Language:    %s\n", m.languageLabel()))
-		if pc, ok := m.config.Providers[m.config.Provider]; ok && pc.MaxTokens > 0 {
-			b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", pc.MaxTokens))
+		if resolved, err := m.config.ResolveActiveEndpoint(); err == nil && resolved.MaxTokens > 0 {
+			b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", resolved.MaxTokens))
 		}
-		if len(m.config.Providers) > 0 {
-			b.WriteString(fmt.Sprintf("  Providers:    %v\n", m.providerNames()))
+		if len(m.config.Vendors) > 0 {
+			b.WriteString(fmt.Sprintf("  Vendors:     %v\n", m.vendorNames()))
 		}
 		b.WriteString(fmt.Sprintf("  MCP Servers: %d\n", len(m.config.MCPServers)))
 	}
@@ -706,7 +745,8 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 func (m *Model) handleStatusCommand() tea.Cmd {
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render(m.t("status.title")))
-	b.WriteString(fmt.Sprintf("  Provider:    %s\n", m.config.Provider))
+	b.WriteString(fmt.Sprintf("  Vendor:      %s\n", m.config.Vendor))
+	b.WriteString(fmt.Sprintf("  Endpoint:    %s\n", m.config.Endpoint))
 	b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
 	b.WriteString(fmt.Sprintf("  Language:    %s\n", m.languageLabel()))
 	b.WriteString(fmt.Sprintf("  Mode:        %s\n", m.mode))
@@ -715,10 +755,6 @@ func (m *Model) handleStatusCommand() tea.Cmd {
 	if m.session != nil {
 		b.WriteString(fmt.Sprintf("  Session:     %s\n", m.session.ID))
 		b.WriteString(fmt.Sprintf("  Messages:    %d\n", len(m.session.Messages)))
-	}
-
-	if m.lastCost != "" {
-		b.WriteString(fmt.Sprintf("  %s\n", m.lastCost))
 	}
 
 	if m.subAgentMgr != nil {
@@ -730,6 +766,50 @@ func (m *Model) handleStatusCommand() tea.Cmd {
 	b.WriteString("\n")
 	m.output.WriteString(b.String())
 	return nil
+}
+
+func (m *Model) reloadActiveProvider() error {
+	if err := m.config.Save(); err != nil {
+		return err
+	}
+	if err := m.tryActivateCurrentSelection(); err != nil {
+		return err
+	}
+	m.syncSessionSelection()
+	return nil
+}
+
+func (m *Model) tryActivateCurrentSelection() error {
+	if m.config == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	resolved, err := m.config.ResolveActiveEndpoint()
+	if err != nil {
+		return err
+	}
+	if resolved.APIKey == "" {
+		return fmt.Errorf("no api key configured for vendor %q endpoint %q", resolved.VendorID, resolved.EndpointID)
+	}
+	prov, err := provider.NewProvider(resolved)
+	if err != nil {
+		return err
+	}
+	if m.agent != nil {
+		m.agent.SetProvider(prov)
+	}
+	return nil
+}
+
+func (m *Model) syncSessionSelection() {
+	if m.session == nil || m.config == nil {
+		return
+	}
+	m.session.Vendor = m.config.Vendor
+	m.session.Endpoint = m.config.Endpoint
+	m.session.Model = m.config.Model
+	if m.sessionStore != nil {
+		_ = m.sessionStore.Save(m.session)
+	}
 }
 
 func (m *Model) handlePluginsCommand() tea.Cmd {
@@ -780,43 +860,6 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 		}
 	}
 	m.output.WriteString("\n")
-	return nil
-}
-
-func (m *Model) handleCostCommand(parts []string) tea.Cmd {
-	if m.costMgr == nil {
-		m.output.WriteString(m.styles.error.Render(m.t("cost.unavailable")))
-		return nil
-	}
-
-	showAll := len(parts) > 1 && strings.ToLower(parts[1]) == "all"
-
-	if showAll {
-		all := m.costMgr.AllCosts()
-		if len(all) == 0 {
-			m.output.WriteString(m.t("cost.none"))
-			return nil
-		}
-		m.output.WriteString(m.styles.title.Render(m.t("cost.summary")))
-		for _, sc := range all {
-			m.output.WriteString(cost.FormatSessionCost(sc, time.Time{}) + "\n")
-		}
-		total := m.costMgr.TotalCost()
-		m.output.WriteString(m.t("cost.total", cost.FormatCost(total)))
-		return nil
-	}
-
-	// Current session
-	if sc, ok := m.currentSessionCost(); ok {
-		m.output.WriteString(m.styles.title.Render(m.t("cost.current")))
-		m.output.WriteString(fmt.Sprintf("  Provider: %s\n", sc.Provider))
-		m.output.WriteString(fmt.Sprintf("  Model:    %s\n", sc.Model))
-		m.output.WriteString(fmt.Sprintf("  Input:    %s tokens\n", cost.FormatTokens(sc.InputTokens)))
-		m.output.WriteString(fmt.Sprintf("  Output:   %s tokens\n", cost.FormatTokens(sc.OutputTokens)))
-		m.output.WriteString(fmt.Sprintf("  Cost:     %s USD\n\n", cost.FormatCost(sc.TotalCostUSD)))
-	} else {
-		m.output.WriteString(m.t("cost.current_none"))
-	}
 	return nil
 }
 

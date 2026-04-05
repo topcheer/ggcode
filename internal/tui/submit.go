@@ -71,23 +71,62 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							Activity: m.t("status.writing"),
 						})
 					case provider.StreamEventToolCallDone:
+						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
+						if isSubAgentLifecycleTool(event.Tool.Name) {
+							m.program.Send(toolStatusMsg{
+								ToolName: event.Tool.Name,
+								Activity: m.t("status.thinking"),
+								Running:  true,
+								RawArgs:  string(event.Tool.Arguments),
+								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+							})
+							break
+						}
 						m.program.Send(statusMsg{
-							Activity:  m.t("status.thinking"),
-							ToolName:  event.Tool.Name,
+							Activity:  present.Activity,
+							ToolName:  present.DisplayName,
+							ToolArg:   present.Detail,
 							ToolCount: m.statusToolCount + 1,
 						})
 						m.program.Send(toolStatusMsg{
-							ToolName: event.Tool.Name,
-							Running:  true,
-							Args:     truncateString(string(event.Tool.Arguments), 100),
+							ToolName:    event.Tool.Name,
+							DisplayName: present.DisplayName,
+							Detail:      present.Detail,
+							Activity:    present.Activity,
+							Running:     true,
+							RawArgs:     string(event.Tool.Arguments),
+							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 						})
 					case provider.StreamEventToolResult:
+						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
+						if isSubAgentLifecycleTool(event.Tool.Name) {
+							m.program.Send(toolStatusMsg{
+								ToolName: event.Tool.Name,
+								Activity: m.t("status.thinking"),
+								Running:  false,
+								Result:   event.Result,
+								RawArgs:  string(event.Tool.Arguments),
+								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+								IsError:  event.IsError,
+							})
+							m.program.Send(subAgentUpdateMsg{})
+							break
+						}
+						m.program.Send(statusMsg{
+							Activity: m.t("status.thinking"),
+							ToolName: present.DisplayName,
+							ToolArg:  present.Detail,
+						})
 						m.program.Send(toolStatusMsg{
-							ToolName: event.Tool.Name,
-							Running:  false,
-							Result:   event.Result,
-							Args:     truncateString(string(event.Tool.Arguments), 100),
-							IsError:  event.IsError,
+							ToolName:    event.Tool.Name,
+							DisplayName: present.DisplayName,
+							Detail:      present.Detail,
+							Activity:    present.Activity,
+							Running:     false,
+							Result:      event.Result,
+							RawArgs:     string(event.Tool.Arguments),
+							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+							IsError:     event.IsError,
 						})
 					case provider.StreamEventError:
 						if !errors.Is(event.Error, context.Canceled) {
@@ -107,23 +146,62 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							Activity: m.t("status.writing"),
 						})
 					case provider.StreamEventToolCallDone:
+						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
+						if isSubAgentLifecycleTool(event.Tool.Name) {
+							m.program.Send(toolStatusMsg{
+								ToolName: event.Tool.Name,
+								Activity: m.t("status.thinking"),
+								Running:  true,
+								RawArgs:  string(event.Tool.Arguments),
+								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+							})
+							break
+						}
 						m.program.Send(statusMsg{
-							Activity:  m.t("status.thinking"),
-							ToolName:  event.Tool.Name,
+							Activity:  present.Activity,
+							ToolName:  present.DisplayName,
+							ToolArg:   present.Detail,
 							ToolCount: m.statusToolCount + 1,
 						})
 						m.program.Send(toolStatusMsg{
-							ToolName: event.Tool.Name,
-							Running:  true,
-							Args:     truncateString(string(event.Tool.Arguments), 100),
+							ToolName:    event.Tool.Name,
+							DisplayName: present.DisplayName,
+							Detail:      present.Detail,
+							Activity:    present.Activity,
+							Running:     true,
+							RawArgs:     string(event.Tool.Arguments),
+							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 						})
 					case provider.StreamEventToolResult:
+						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
+						if isSubAgentLifecycleTool(event.Tool.Name) {
+							m.program.Send(toolStatusMsg{
+								ToolName: event.Tool.Name,
+								Activity: m.t("status.thinking"),
+								Running:  false,
+								Result:   event.Result,
+								RawArgs:  string(event.Tool.Arguments),
+								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+								IsError:  event.IsError,
+							})
+							m.program.Send(subAgentUpdateMsg{})
+							break
+						}
+						m.program.Send(statusMsg{
+							Activity: m.t("status.thinking"),
+							ToolName: present.DisplayName,
+							ToolArg:  present.Detail,
+						})
 						m.program.Send(toolStatusMsg{
-							ToolName: event.Tool.Name,
-							Running:  false,
-							Result:   event.Result,
-							Args:     truncateString(string(event.Tool.Arguments), 100),
-							IsError:  event.IsError,
+							ToolName:    event.Tool.Name,
+							DisplayName: present.DisplayName,
+							Detail:      present.Detail,
+							Activity:    present.Activity,
+							Running:     false,
+							Result:      event.Result,
+							RawArgs:     string(event.Tool.Arguments),
+							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+							IsError:     event.IsError,
 						})
 					case provider.StreamEventError:
 						if !errors.Is(event.Error, context.Canceled) {

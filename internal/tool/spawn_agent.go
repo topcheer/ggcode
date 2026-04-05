@@ -59,11 +59,12 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: "task is required"}, nil
 	}
 
+	displayTask := args.Task
 	if args.Context != "" {
 		args.Task = args.Context + "\n\n" + args.Task
 	}
 
-	id := t.Manager.Spawn(args.Task, args.Tools, ctx)
+	id := t.Manager.Spawn(args.Task, displayTask, args.Tools, ctx)
 
 	// Build tool info list for sub-agent
 	var allToolInfo []subagent.ToolInfo

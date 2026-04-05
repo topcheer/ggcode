@@ -21,7 +21,8 @@ type Session struct {
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
 	Title     string             `json:"title"`
-	Provider  string             `json:"provider"`
+	Vendor    string             `json:"vendor"`
+	Endpoint  string             `json:"endpoint"`
 	Model     string             `json:"model"`
 	Messages  []provider.Message `json:"messages,omitempty"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
@@ -56,7 +57,8 @@ type indexEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	MsgCount  int       `json:"msg_count"`
-	Provider  string    `json:"provider,omitempty"`
+	Vendor    string    `json:"vendor,omitempty"`
+	Endpoint  string    `json:"endpoint,omitempty"`
 	Model     string    `json:"model,omitempty"`
 }
 
@@ -165,7 +167,8 @@ func sessionToIndexEntry(s *Session) indexEntry {
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.UpdatedAt,
 		MsgCount:  len(s.Messages),
-		Provider:  s.Provider,
+		Vendor:    s.Vendor,
+		Endpoint:  s.Endpoint,
 		Model:     s.Model,
 	}
 }
@@ -177,7 +180,8 @@ type jsonlRecord struct {
 	Type      string            `json:"type"` // "meta" or "message"
 	SessionID string            `json:"session_id,omitempty"`
 	Title     string            `json:"title,omitempty"`
-	Provider  string            `json:"provider,omitempty"`
+	Vendor    string            `json:"vendor,omitempty"`
+	Endpoint  string            `json:"endpoint,omitempty"`
 	Model     string            `json:"model,omitempty"`
 	CreatedAt time.Time         `json:"created_at,omitempty"`
 	UpdatedAt time.Time         `json:"updated_at,omitempty"`
@@ -206,7 +210,8 @@ func (s *JSONLStore) Save(ses *Session) error {
 		Type:      "meta",
 		SessionID: ses.ID,
 		Title:     ses.Title,
-		Provider:  ses.Provider,
+		Vendor:    ses.Vendor,
+		Endpoint:  ses.Endpoint,
 		Model:     ses.Model,
 		CreatedAt: ses.CreatedAt,
 		UpdatedAt: ses.UpdatedAt,
@@ -279,7 +284,8 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 		switch rec.Type {
 		case "meta":
 			ses.Title = rec.Title
-			ses.Provider = rec.Provider
+			ses.Vendor = rec.Vendor
+			ses.Endpoint = rec.Endpoint
 			ses.Model = rec.Model
 			ses.CreatedAt = rec.CreatedAt
 			ses.UpdatedAt = rec.UpdatedAt
@@ -336,7 +342,8 @@ func (s *JSONLStore) List() ([]*Session, error) {
 			Title:     e.Title,
 			CreatedAt: e.CreatedAt,
 			UpdatedAt: e.UpdatedAt,
-			Provider:  e.Provider,
+			Vendor:    e.Vendor,
+			Endpoint:  e.Endpoint,
 			Model:     e.Model,
 		})
 	}
@@ -424,8 +431,11 @@ func ExportSessionMarkdown(ses *Session) string {
 	sb.WriteString(fmt.Sprintf("**Session:** %s\n", ses.ID))
 	sb.WriteString(fmt.Sprintf("**Created:** %s\n", ses.CreatedAt.Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("**Updated:** %s\n", ses.UpdatedAt.Format(time.RFC3339)))
-	if ses.Provider != "" {
-		sb.WriteString(fmt.Sprintf("**Provider:** %s", ses.Provider))
+	if ses.Vendor != "" {
+		sb.WriteString(fmt.Sprintf("**Vendor:** %s", ses.Vendor))
+		if ses.Endpoint != "" {
+			sb.WriteString(fmt.Sprintf(" / %s", ses.Endpoint))
+		}
 		if ses.Model != "" {
 			sb.WriteString(fmt.Sprintf(" / %s", ses.Model))
 		}
@@ -548,7 +558,8 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		Type:      "meta",
 		SessionID: ses.ID,
 		Title:     ses.Title,
-		Provider:  ses.Provider,
+		Vendor:    ses.Vendor,
+		Endpoint:  ses.Endpoint,
 		Model:     ses.Model,
 		CreatedAt: ses.CreatedAt,
 		UpdatedAt: ses.UpdatedAt,
@@ -562,13 +573,14 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 }
 
 // NewSession creates a new Session with a generated ID.
-func NewSession(provider, model string) *Session {
+func NewSession(vendor, endpoint, model string) *Session {
 	now := time.Now()
 	return &Session{
 		ID:        generateID(),
 		CreatedAt: now,
 		UpdatedAt: now,
-		Provider:  provider,
+		Vendor:    vendor,
+		Endpoint:  endpoint,
 		Model:     model,
 		Title:     "New session",
 	}

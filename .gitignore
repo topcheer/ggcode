@@ -1,2 +1,7 @@
 /ggcode
 .ggcode/
+python/dist/
+python/build/
+python/*.egg-info/
+python/**/__pycache__/
+npm/*.tgz

@@ -8,14 +8,16 @@ import (
 type PermissionMode int
 
 const (
-	// SupervisedMode asks for user confirmation on all tool calls (default).
+	// SupervisedMode respects explicit per-tool rules and asks for anything unspecified.
 	SupervisedMode PermissionMode = iota
-	// PlanMode allows read-only tools, denies write/execute tools automatically.
+	// PlanMode allows a strict read-only subset and denies writes/commands automatically.
 	PlanMode
-	// AutoMode allows safe operations, denies dangerous ones automatically (no prompts).
+	// AutoMode allows safe operations and denies dangerous ones automatically.
 	AutoMode
-	// BypassMode allows all safe operations automatically, only prompts for extremely dangerous ones.
+	// BypassMode allows almost everything automatically and only asks on critical cases.
 	BypassMode
+	// AutopilotMode uses bypass permissions and keeps going when the model asks the user to decide.
+	AutopilotMode
 )
 
 func (m PermissionMode) String() string {
@@ -28,6 +30,8 @@ func (m PermissionMode) String() string {
 		return "auto"
 	case BypassMode:
 		return "bypass"
+	case AutopilotMode:
+		return "autopilot"
 	default:
 		return "supervised"
 	}
@@ -42,12 +46,14 @@ func ParsePermissionMode(s string) PermissionMode {
 		return AutoMode
 	case "bypass":
 		return BypassMode
+	case "autopilot":
+		return AutopilotMode
 	default:
 		return SupervisedMode
 	}
 }
 
-// Next returns the next mode in the cycle: supervised → plan → auto → bypass → supervised.
+// Next returns the next mode in the cycle: supervised → plan → auto → bypass → autopilot → supervised.
 func (m PermissionMode) Next() PermissionMode {
 	switch m {
 	case SupervisedMode:
@@ -56,6 +62,8 @@ func (m PermissionMode) Next() PermissionMode {
 		return AutoMode
 	case AutoMode:
 		return BypassMode
+	case BypassMode:
+		return AutopilotMode
 	default:
 		return SupervisedMode
 	}

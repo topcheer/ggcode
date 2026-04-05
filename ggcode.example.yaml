@@ -1,32 +1,58 @@
 # ggcode.example.yaml
 # Full configuration example for ggcode
-# Copy to ggcode.yaml or ~/.config/ggcode/ggcode.yaml and customize
+# Copy to ~/.ggcode/ggcode.yaml, or pass it explicitly with --config ./ggcode.yaml
 
-# Active LLM provider: anthropic, openai, or gemini
-provider: anthropic
-
-# Model name (provider-specific)
-model: claude-sonnet-4-20250514
+# Active vendor / endpoint / model
+vendor: zai
+endpoint: cn-coding-openai
+model: glm-5-turbo
 
 # TUI language: en or zh-CN
 language: en
 
+# Runtime mode: supervised, plan, auto, bypass, or autopilot
+default_mode: supervised
+
 # System prompt injected at the start of every conversation
 # system_prompt: "You are a helpful coding assistant."
 
-# Provider-specific settings
-providers:
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
-    # base_url: https://api.anthropic.com  # default, override for proxies
-    max_tokens: 8192
-  openai:
-    api_key: ${OPENAI_API_KEY}
-    base_url: https://api.openai.com/v1  # override for local models or proxies
-    max_tokens: 8192
-  gemini:
-    api_key: ${GEMINI_API_KEY}
-    max_tokens: 8192
+# Vendor-specific settings
+vendors:
+  zai:
+    display_name: Z.ai
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn-coding-openai:
+        display_name: 国内 Coding Plan
+        protocol: openai
+        base_url: https://open.bigmodel.cn/api/coding/paas/v4
+        default_model: glm-5-turbo
+        selected_model: glm-5-turbo
+        max_tokens: 8192
+        models: [glm-5-turbo, glm-5-plus]
+        tags: [coding, cn]
+      cn-coding-anthropic:
+        display_name: 国内 Coding Plan (Anthropic)
+        protocol: anthropic
+        base_url: https://open.bigmodel.cn/api/anthropic
+        max_tokens: 8192
+        tags: [coding, cn, anthropic]
+      global-coding-openai:
+        display_name: 国外 Coding Plan
+        protocol: openai
+        base_url: https://your-global-coding-endpoint.example.com/v1
+        default_model: glm-5-turbo
+        max_tokens: 8192
+        models: [glm-5-turbo, glm-5-plus]
+        tags: [coding, global]
+      global-api-openai:
+        display_name: 国外普通 API
+        protocol: openai
+        base_url: https://your-global-api-endpoint.example.com/v1
+        default_model: glm-4.5-air
+        max_tokens: 8192
+        models: [glm-4.5-air, glm-4.5]
+        tags: [api, global]
 
 # Directories the agent is allowed to access (relative to config file or absolute)
 allowed_dirs:

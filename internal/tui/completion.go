@@ -179,7 +179,7 @@ func CompleteMention(prefix string, workDir string) []string {
 
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
-	"/help", "/?", "/cost", "/sessions", "/resume", "/export", "/model", "/provider",
+	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider",
 	"/clear", "/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/fullscreen", "/mode", "/exit", "/quit", "/agents", "/agent",
 	"/compact", "/todo", "/bug", "/config", "/status", "/lang",
@@ -189,12 +189,11 @@ var SlashCommands = []string{
 var SlashCommandDescriptions = map[string]string{
 	"/help":        "Show help message",
 	"/?":           "Show help message",
-	"/cost":        "Show session cost stats",
 	"/sessions":    "List saved sessions",
 	"/resume":      "Resume a previous session",
 	"/export":      "Export session to markdown",
 	"/model":       "Switch model",
-	"/provider":    "Switch provider",
+	"/provider":    "Open provider manager",
 	"/clear":       "Clear conversation",
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
@@ -204,7 +203,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/plugins":     "List loaded plugins",
 	"/image":       "Attach an image",
 	"/fullscreen":  "Toggle fullscreen",
-	"/mode":        "Set permission mode",
+	"/mode":        "Set agent mode",
 	"/exit":        "Exit ggcode",
 	"/quit":        "Exit ggcode",
 	"/agents":      "List sub-agents",

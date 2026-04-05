@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -42,6 +43,10 @@ type Agent struct {
 
 type providerAwareContextManager interface {
 	SetProvider(provider.Provider)
+}
+
+type modeAwarePolicy interface {
+	Mode() permission.PermissionMode
 }
 
 // NewAgent creates a new agent with optional permission policy.
@@ -147,16 +152,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Content: content,
 	})
 
-	// Auto-summarize if usage ratio >= 80%.
-	if a.contextManager.UsageRatio() >= 0.8 {
-		if err := a.contextManager.Summarize(ctx, a.provider); err != nil {
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("auto-summarize failed: %w", err)})
-		} else {
-			onEvent(provider.StreamEvent{
-				Type: provider.StreamEventText,
-				Text: "[context auto-summarized to fit within window]\n",
-			})
-		}
+	if summarized, err := a.contextManager.CheckAndSummarize(ctx, a.provider); err != nil {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("auto-summarize failed: %w", err)})
+	} else if summarized {
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: "[context auto-compacted to fit within window]\n",
+		})
 	}
 
 	toolDefs := a.tools.ToDefinitions()
@@ -208,8 +210,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			fn(usage)
 		}
 
-		// No tool calls → done
+		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
+			if a.shouldAutopilotContinue(textBuf) {
+				debug.Log("agent", "Iteration %d: autopilot continuing after assistant asked for input", i+1)
+				a.contextManager.Add(resp.Message)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: autopilotContinueInstruction(textBuf),
+					}},
+				})
+				continue
+			}
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			a.contextManager.Add(resp.Message)
 			return nil
@@ -244,6 +258,48 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 	debug.Log("agent", "RunStreamWithContent END: max iterations (%d) reached", a.maxIter)
 	return fmt.Errorf("max iterations (%d) reached", a.maxIter)
+}
+
+func (a *Agent) currentMode() permission.PermissionMode {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if policy, ok := a.policy.(modeAwarePolicy); ok {
+		return policy.Mode()
+	}
+	return permission.SupervisedMode
+}
+
+func (a *Agent) shouldAutopilotContinue(text string) bool {
+	if a.currentMode() != permission.AutopilotMode {
+		return false
+	}
+	return looksLikeUserDecisionPrompt(text)
+}
+
+func autopilotContinueInstruction(lastAssistantText string) string {
+	return "Autopilot is enabled. Do not wait for user confirmation. Choose the most reasonable assumption, state it briefly if helpful, and continue working until there is nothing meaningful left to do.\n\nPrevious assistant message:\n" + lastAssistantText
+}
+
+func looksLikeUserDecisionPrompt(text string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(text))
+	if trimmed == "" {
+		return false
+	}
+	if strings.Contains(trimmed, "?") || strings.Contains(trimmed, "？") {
+		return true
+	}
+	markers := []string{
+		"would you like", "should i", "which option", "which direction", "please provide",
+		"please confirm", "can you confirm", "let me know", "tell me which", "what would you like",
+		"what do you want", "how would you like", "do you want", "choose", "pick one",
+		"请确认", "请提供", "请选择", "你希望", "是否", "要不要", "告诉我", "需要你", "先确认",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // executeToolWithPermission checks permission before executing a tool.

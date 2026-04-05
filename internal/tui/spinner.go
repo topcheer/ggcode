@@ -21,7 +21,7 @@ type spinnerMsg struct{ time.Time }
 // ToolSpinner manages spinner state for active tool execution.
 type ToolSpinner struct {
 	active    bool
-	toolName  string
+	label     string
 	frame     int
 	style     lipgloss.Style
 	startTime time.Time
@@ -35,9 +35,9 @@ func NewToolSpinner() *ToolSpinner {
 }
 
 // Start begins the spinner for a tool.
-func (s *ToolSpinner) Start(toolName string) tea.Cmd {
+func (s *ToolSpinner) Start(label string) tea.Cmd {
 	s.active = true
-	s.toolName = toolName
+	s.label = label
 	s.frame = 0
 	s.startTime = time.Now()
 	return s.tick()
@@ -46,7 +46,7 @@ func (s *ToolSpinner) Start(toolName string) tea.Cmd {
 // Stop ends the spinner.
 func (s *ToolSpinner) Stop() {
 	s.active = false
-	s.toolName = ""
+	s.label = ""
 }
 
 // IsActive returns whether the spinner is running.
@@ -73,7 +73,7 @@ func (s *ToolSpinner) String() string {
 		return ""
 	}
 	char := string(spinnerChars[s.frame%len(spinnerChars)])
-	return s.style.Render(fmt.Sprintf(" %s %s (%s)", char, s.toolName, s.Elapsed()))
+	return s.style.Render(fmt.Sprintf(" %s %s (%s)", char, s.label, s.Elapsed()))
 }
 
 // tick returns a tea.Cmd that sends the next spinner frame.
@@ -97,25 +97,29 @@ func (s *ToolSpinner) Update(msg tea.Msg) tea.Cmd {
 
 // ToolStatusMsg is sent when a tool starts or finishes execution.
 type ToolStatusMsg struct {
-	ToolName string
-	Running  bool // true = start, false = done
-	Result   string
-	Args     string // tool arguments summary
-	IsError  bool
-	Elapsed  time.Duration
+	ToolName    string
+	DisplayName string
+	Detail      string
+	Activity    string
+	Running     bool // true = start, false = done
+	Result      string
+	RawArgs     string
+	Args        string // raw tool arguments summary, used as a fallback only
+	IsError     bool
+	Elapsed     time.Duration
 }
 
 // bulletStyle renders the ● prefix for assistant/tool lines.
 var bulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 
 // FormatToolStart formats the header line when a tool begins executing.
-func FormatToolStart(toolName string, args string) string {
+func FormatToolStart(msg ToolStatusMsg) string {
 	var sb strings.Builder
 	sb.WriteString(bulletStyle.Render("● "))
-	sb.WriteString(toolName)
-	if args != "" {
+	sb.WriteString(formatToolInline(toolDisplayName(msg), toolDetail(msg)))
+	if msg.Args != "" && toolDetail(msg) == "" {
 		sb.WriteString("\n  │ ")
-		sb.WriteString(args)
+		sb.WriteString(msg.Args)
 	}
 	sb.WriteString("\n")
 	return sb.String()
@@ -155,7 +159,7 @@ func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
 		if exit := firstMatch(result, `exit status \d+`); exit != "" {
 			return exit
 		}
-		return msg.ToolName
+		return toolDisplayName(msg)
 	}
 
 	switch msg.ToolName {
@@ -182,10 +186,24 @@ func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
 		return compactSingleLine(result)
 	default:
 		if result == "" {
-			return msg.ToolName
+			return toolDisplayName(msg)
 		}
 		return summarizeTextPayload(lang, result, tr(lang, "tool.result"))
 	}
+}
+
+func toolDisplayName(msg ToolStatusMsg) string {
+	if msg.DisplayName != "" {
+		return msg.DisplayName
+	}
+	return prettifyToolName(msg.ToolName)
+}
+
+func toolDetail(msg ToolStatusMsg) string {
+	if msg.Detail != "" {
+		return msg.Detail
+	}
+	return msg.Args
 }
 
 func summarizeTextPayload(lang Language, result, noun string) string {
@@ -214,6 +232,19 @@ func pluralize(lang Language, n int, noun string) string {
 	}
 	if n == 1 {
 		return "1 " + noun
+	}
+	switch {
+	case strings.HasSuffix(noun, "y") && len(noun) > 1:
+		prev := noun[len(noun)-2]
+		if !strings.ContainsRune("aeiou", rune(prev)) {
+			return fmt.Sprintf("%d %sies", n, noun[:len(noun)-1])
+		}
+	case strings.HasSuffix(noun, "s"),
+		strings.HasSuffix(noun, "x"),
+		strings.HasSuffix(noun, "z"),
+		strings.HasSuffix(noun, "ch"),
+		strings.HasSuffix(noun, "sh"):
+		return fmt.Sprintf("%d %ses", n, noun)
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }

@@ -15,7 +15,7 @@ func TestManagerSpawnAndGet(t *testing.T) {
 		Timeout:       30 * time.Second,
 	})
 
-	id := mgr.Spawn("test task", nil, context.Background())
+	id := mgr.Spawn("test task", "friendly test task", nil, context.Background())
 	if id == "" {
 		t.Fatal("expected non-empty ID")
 	}
@@ -27,6 +27,9 @@ func TestManagerSpawnAndGet(t *testing.T) {
 	if sa.Task != "test task" {
 		t.Errorf("expected task 'test task', got %q", sa.Task)
 	}
+	if sa.DisplayTask != "friendly test task" {
+		t.Errorf("expected display task 'friendly test task', got %q", sa.DisplayTask)
+	}
 	if sa.Status != StatusPending {
 		t.Errorf("expected status pending, got %s", sa.Status)
 	}
@@ -35,8 +38,8 @@ func TestManagerSpawnAndGet(t *testing.T) {
 func TestManagerList(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 
-	mgr.Spawn("task1", nil, context.Background())
-	mgr.Spawn("task2", nil, context.Background())
+	mgr.Spawn("task1", "task1", nil, context.Background())
+	mgr.Spawn("task2", "task2", nil, context.Background())
 
 	agents := mgr.List()
 	if len(agents) != 2 {
@@ -47,10 +50,10 @@ func TestManagerList(t *testing.T) {
 func TestManagerRunningCount(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 
-	id := mgr.Spawn("task1", nil, context.Background())
+	id := mgr.Spawn("task1", "task1", nil, context.Background())
 	mgr.Complete(id, "done", nil)
 
-	id2 := mgr.Spawn("task2", nil, context.Background())
+	id2 := mgr.Spawn("task2", "task2", nil, context.Background())
 	// Manually set to running
 	mgr.SetCancel(id2, func() {})
 
@@ -63,7 +66,7 @@ func TestManagerCancel(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	id := mgr.Spawn("task", nil, ctx)
+	id := mgr.Spawn("task", "task", nil, ctx)
 
 	// Set the cancel func and mark as running manually
 	mgr.SetCancel(id, cancel)
@@ -91,7 +94,7 @@ func TestManagerConcurrentSpawn(t *testing.T) {
 	// Spawn all agents first
 	ids := make([]string, 10)
 	for i := 0; i < 10; i++ {
-		ids[i] = mgr.Spawn("task", nil, context.Background())
+		ids[i] = mgr.Spawn("task", "task", nil, context.Background())
 	}
 	if len(mgr.List()) != 10 {
 		t.Fatalf("expected 10 agents after spawn, got %d", len(mgr.List()))

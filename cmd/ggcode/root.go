@@ -12,7 +12,6 @@ import (
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -98,13 +97,15 @@ func NewRootCmd() *cobra.Command {
 }
 
 func run(cfg *config.Config, resumeID string, bypass bool) error {
-	// Setup provider
-	pc := cfg.GetProviderConfig()
-	if pc.APIKey == "" {
-		return fmt.Errorf("no API key for provider %q. Set the api_key in config", cfg.Provider)
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return err
+	}
+	if resolved.APIKey == "" {
+		return fmt.Errorf("no API key for vendor %q endpoint %q. Set the api_key in config or /provider", resolved.VendorID, resolved.EndpointID)
 	}
 
-	prov, err := provider.NewProvider(cfg)
+	prov, err := provider.NewProvider(resolved)
 	if err != nil {
 		return err
 	}
@@ -144,11 +145,6 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 		return err
 	}
 
-	// Setup cost tracker
-	pricing := cost.DefaultPricingTable()
-	// Allow config to override pricing (future: load from config file)
-	costMgr := cost.NewManager(pricing, "")
-
 	autoMem := memory.NewAutoMemory()
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
 
@@ -177,6 +173,9 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 
 	// Build enhanced system prompt with runtime context
 	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, toolNames, gitStatus, customCmdNames)
+	if mode == permission.AutopilotMode {
+		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left."
+	}
 	if projectMem != "" {
 		systemPrompt += "\n\n## Project Memory (GGCODE.md)\n" + projectMem
 	}
@@ -220,7 +219,6 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
-	repl.SetCostManager(costMgr, cfg.Provider, cfg.Model)
 	repl.SetConfig(cfg)
 	repl.SetSessionStore(store)
 	repl.SetMCPServers(mcpInfos)

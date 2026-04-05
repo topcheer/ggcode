@@ -69,8 +69,6 @@ func localizeSlashDescription(lang Language, cmd string) string {
 	switch cmd {
 	case "/help", "/?":
 		return tr(lang, "slash.help")
-	case "/cost":
-		return tr(lang, "slash.cost")
 	case "/sessions":
 		return tr(lang, "slash.sessions")
 	case "/resume":
@@ -164,14 +162,18 @@ func enCatalog(key string) string {
 		return "Files:"
 	case "panel.agent_status":
 		return "Agent status"
+	case "panel.mode_policy":
+		return "Mode policy"
 	case "panel.approval_required":
 		return "Approval required"
 	case "panel.bypass_approval":
 		return "Bypass mode approval"
 	case "panel.review_file_change":
 		return "Review file change"
-	case "label.provider":
-		return "provider"
+	case "label.vendor":
+		return "vendor"
+	case "label.endpoint":
+		return "endpoint"
 	case "label.model":
 		return "model"
 	case "label.mode":
@@ -182,6 +184,12 @@ func enCatalog(key string) string {
 		return "agents"
 	case "label.activity":
 		return "activity"
+	case "label.approval_policy":
+		return "approval"
+	case "label.tool_policy":
+		return "tools"
+	case "label.agent_policy":
+		return "agent"
 	case "label.tool":
 		return "tool"
 	case "label.input":
@@ -200,6 +208,24 @@ func enCatalog(key string) string {
 		return "@ attaches files/folders • Tab/Shift+Tab cycle • Enter apply"
 	case "hint.mode":
 		return "mode"
+	case "mode.approval.ask":
+		return "ask as needed"
+	case "mode.approval.none":
+		return "no approval stops"
+	case "mode.approval.critical":
+		return "critical only"
+	case "mode.tools.rules":
+		return "follow tool rules"
+	case "mode.tools.readonly":
+		return "read-only only"
+	case "mode.tools.safe":
+		return "safe ops only"
+	case "mode.tools.open":
+		return "almost all tools"
+	case "mode.agent.waits":
+		return "waits for you"
+	case "mode.agent.autocontinue":
+		return "keeps going"
 	case "hint.enter_send":
 		return "Enter send"
 	case "hint.help":
@@ -226,8 +252,6 @@ func enCatalog(key string) string {
 		return "Writing..."
 	case "status.cancelling":
 		return "Cancelling..."
-	case "status.tokens":
-		return "tokens"
 	case "status.tools_used":
 		return "%d tools used"
 	case "tool.done":
@@ -271,7 +295,7 @@ func enCatalog(key string) string {
 	case "lang.switch":
 		return "Language switched to: %s\n\n"
 	case "mode.current":
-		return "Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass>\n\n"
+		return "Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Ask when a tool has no explicit rule\n  plan        Read-only exploration; deny writes and commands\n  auto        Allow safe operations, deny dangerous ones\n  bypass      Allow almost everything; only stop on critical actions\n  autopilot   bypass + keep going when the model asks back\n\n"
 	case "input.placeholder":
 		return "Type a message..."
 	case "command.unknown":
@@ -285,19 +309,19 @@ func enCatalog(key string) string {
 	case "command.usage.export":
 		return "Usage: /export <session-id>\n\n"
 	case "command.model_switched":
-		return "Switched model to: %s (provider: %s)\n\n"
+		return "Switched model to: %s (vendor: %s)\n\n"
 	case "command.model_failed":
 		return "Failed to switch model: %v\n\n"
 	case "command.model_current":
-		return "Current model: %s (provider: %s)\nUsage: /model <model-name>\n\n"
+		return "Current model: %s (vendor: %s)\nUsage: /model <model-name>\n\n"
 	case "command.provider_unknown":
-		return "Unknown provider: %s (available: %v)\n\n"
+		return "Unknown vendor: %s (available: %v)\n\n"
 	case "command.provider_switched":
-		return "Switched provider to: %s (model: %s)\n\n"
+		return "Switched vendor to: %s (model: %s)\n\n"
 	case "command.provider_failed":
-		return "Failed to switch provider: %v\n\n"
+		return "Failed to update provider selection: %v\n\n"
 	case "command.provider_current":
-		return "Current provider: %s (model: %s)\nAvailable: %s\nUsage: /provider <name>\n\n"
+		return "Current vendor: %s (model: %s)\nAvailable vendors: %s\nUsage: /provider [vendor]\n\n"
 	case "command.allow_set":
 		return "✓ %s is now always allowed\n\n"
 	case "command.custom":
@@ -397,7 +421,7 @@ func enCatalog(key string) string {
 	case "bug.go":
 		return "Go: %s\n"
 	case "bug.provider":
-		return "Provider: %s\n"
+		return "Vendor: %s\n"
 	case "bug.model":
 		return "Model: %s\n"
 	case "bug.session":
@@ -434,18 +458,6 @@ func enCatalog(key string) string {
 		return "No MCP servers configured.\n\n"
 	case "mcp.title":
 		return "MCP Servers:\n"
-	case "cost.unavailable":
-		return "Cost tracking not enabled.\n\n"
-	case "cost.none":
-		return "No cost data yet.\n\n"
-	case "cost.summary":
-		return "Cost Summary (all sessions)\n"
-	case "cost.total":
-		return "\n  Total: %s\n\n"
-	case "cost.current":
-		return "Current Session Cost\n"
-	case "cost.current_none":
-		return "No cost data for current session yet.\n\n"
 	case "image.usage":
 		return "Usage: /image <path/to/file.png>\n"
 	case "image.formats":
@@ -482,8 +494,6 @@ func enCatalog(key string) string {
 		return "Error: %v\n"
 	case "slash.help":
 		return "Show help message"
-	case "slash.cost":
-		return "Show session cost stats"
 	case "slash.sessions":
 		return "List saved sessions"
 	case "slash.resume":
@@ -493,7 +503,7 @@ func enCatalog(key string) string {
 	case "slash.model":
 		return "Switch model"
 	case "slash.provider":
-		return "Switch provider"
+		return "Open provider manager"
 	case "slash.clear":
 		return "Clear conversation"
 	case "slash.mcp":
@@ -535,13 +545,11 @@ func enCatalog(key string) string {
 	case "help.text":
 		return `Available commands:
   /help, /?          Show this help message
-  /cost              Show current session cost stats
-  /cost all          Show all session cost summary
   /sessions          List all saved sessions
   /resume <id>       Resume a previous session
   /export <id>       Export session to markdown file
   /model <name>      Switch model
-  /provider <name>   Switch provider
+  /provider [vendor] Open provider manager
   /lang <code>       Switch interface language
   /clear             Clear conversation history
   /mcp               Show connected MCP servers and tools
@@ -555,7 +563,7 @@ func enCatalog(key string) string {
   /plugins           List loaded plugins and their tools
   /image <path>      Attach an image file
   /fullscreen        Toggle fullscreen mode
-  /mode <mode>       Set permission mode (supervised|plan|auto|bypass)
+  /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
   /agent cancel <id> Cancel a sub-agent
@@ -613,14 +621,18 @@ func zhCatalog(key string) string {
 		return "文件："
 	case "panel.agent_status":
 		return "Agent 状态"
+	case "panel.mode_policy":
+		return "模式说明"
 	case "panel.approval_required":
 		return "需要确认"
 	case "panel.bypass_approval":
 		return "Bypass 模式确认"
 	case "panel.review_file_change":
 		return "审阅文件修改"
-	case "label.provider":
-		return "提供商"
+	case "label.vendor":
+		return "供应商"
+	case "label.endpoint":
+		return "接入点"
 	case "label.model":
 		return "模型"
 	case "label.mode":
@@ -631,6 +643,12 @@ func zhCatalog(key string) string {
 		return "子 Agent"
 	case "label.activity":
 		return "活动"
+	case "label.approval_policy":
+		return "审批"
+	case "label.tool_policy":
+		return "工具"
+	case "label.agent_policy":
+		return "行为"
 	case "label.tool":
 		return "工具"
 	case "label.input":
@@ -649,6 +667,24 @@ func zhCatalog(key string) string {
 		return "@ 可附加文件/目录 • Tab/Shift+Tab 切换 • Enter 应用"
 	case "hint.mode":
 		return "模式"
+	case "mode.approval.ask":
+		return "按需询问"
+	case "mode.approval.none":
+		return "不会停下来审批"
+	case "mode.approval.critical":
+		return "仅关键操作"
+	case "mode.tools.rules":
+		return "遵循工具规则"
+	case "mode.tools.readonly":
+		return "仅只读"
+	case "mode.tools.safe":
+		return "仅安全操作"
+	case "mode.tools.open":
+		return "几乎全部工具"
+	case "mode.agent.waits":
+		return "等待你决策"
+	case "mode.agent.autocontinue":
+		return "自动继续推进"
 	case "hint.enter_send":
 		return "Enter 发送"
 	case "hint.help":
@@ -675,8 +711,6 @@ func zhCatalog(key string) string {
 		return "输出中..."
 	case "status.cancelling":
 		return "取消中..."
-	case "status.tokens":
-		return "tokens"
 	case "status.tools_used":
 		return "已调用 %d 个工具"
 	case "tool.done":
@@ -720,7 +754,7 @@ func zhCatalog(key string) string {
 	case "lang.switch":
 		return "已切换语言为：%s\n\n"
 	case "mode.current":
-		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass>\n\n"
+		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass|autopilot>\n  supervised  未显式配置的工具会询问\n  plan        严格只读探索；拒绝写入和命令\n  auto        自动允许安全操作，拒绝危险操作\n  bypass      基本全放行，只在关键操作时停下\n  autopilot   等同 bypass，并在模型反问时自动继续\n\n"
 	case "input.placeholder":
 		return "输入消息..."
 	case "command.unknown":
@@ -734,19 +768,19 @@ func zhCatalog(key string) string {
 	case "command.usage.export":
 		return "用法：/export <session-id>\n\n"
 	case "command.model_switched":
-		return "已切换模型为：%s（提供商：%s）\n\n"
+		return "已切换模型为：%s（供应商：%s）\n\n"
 	case "command.model_failed":
 		return "切换模型失败：%v\n\n"
 	case "command.model_current":
-		return "当前模型：%s（提供商：%s）\n用法：/model <model-name>\n\n"
+		return "当前模型：%s（供应商：%s）\n用法：/model <model-name>\n\n"
 	case "command.provider_unknown":
-		return "未知提供商：%s（可用：%v）\n\n"
+		return "未知供应商：%s（可用：%v）\n\n"
 	case "command.provider_switched":
-		return "已切换提供商为：%s（模型：%s）\n\n"
+		return "已切换供应商为：%s（模型：%s）\n\n"
 	case "command.provider_failed":
-		return "切换提供商失败：%v\n\n"
+		return "更新供应商选择失败：%v\n\n"
 	case "command.provider_current":
-		return "当前提供商：%s（模型：%s）\n可用：%s\n用法：/provider <name>\n\n"
+		return "当前供应商：%s（模型：%s）\n可用供应商：%s\n用法：/provider [vendor]\n\n"
 	case "command.allow_set":
 		return "✓ %s 已设为永久允许\n\n"
 	case "command.custom":
@@ -846,7 +880,7 @@ func zhCatalog(key string) string {
 	case "bug.go":
 		return "Go：%s\n"
 	case "bug.provider":
-		return "提供商：%s\n"
+		return "供应商：%s\n"
 	case "bug.model":
 		return "模型：%s\n"
 	case "bug.session":
@@ -883,18 +917,6 @@ func zhCatalog(key string) string {
 		return "没有配置 MCP 服务器。\n\n"
 	case "mcp.title":
 		return "MCP 服务器：\n"
-	case "cost.unavailable":
-		return "未启用成本统计。\n\n"
-	case "cost.none":
-		return "还没有成本数据。\n\n"
-	case "cost.summary":
-		return "成本汇总（全部会话）\n"
-	case "cost.total":
-		return "\n  总计：%s\n\n"
-	case "cost.current":
-		return "当前会话成本\n"
-	case "cost.current_none":
-		return "当前会话还没有成本数据。\n\n"
 	case "image.usage":
 		return "用法：/image <path/to/file.png>\n"
 	case "image.formats":
@@ -931,8 +953,6 @@ func zhCatalog(key string) string {
 		return "错误：%v\n"
 	case "slash.help":
 		return "显示帮助"
-	case "slash.cost":
-		return "显示会话成本"
 	case "slash.sessions":
 		return "列出已保存会话"
 	case "slash.resume":
@@ -942,7 +962,7 @@ func zhCatalog(key string) string {
 	case "slash.model":
 		return "切换模型"
 	case "slash.provider":
-		return "切换提供商"
+		return "打开供应商管理界面"
 	case "slash.clear":
 		return "清空对话"
 	case "slash.mcp":
@@ -984,13 +1004,11 @@ func zhCatalog(key string) string {
 	case "help.text":
 		return `可用命令：
   /help, /?          显示帮助
-  /cost              显示当前会话成本
-  /cost all          显示全部会话成本汇总
   /sessions          列出已保存会话
   /resume <id>       恢复历史会话
   /export <id>       导出会话为 Markdown 文件
   /model <name>      切换模型
-  /provider <name>   切换提供商
+  /provider [vendor] 打开供应商管理界面
   /lang <code>       切换界面语言
   /clear             清空对话历史
   /mcp               显示已连接的 MCP 服务器和工具
@@ -1004,7 +1022,7 @@ func zhCatalog(key string) string {
   /plugins           列出已加载插件及其工具
   /image <path>      附加图片文件
   /fullscreen        切换全屏模式
-  /mode <mode>       设置权限模式（supervised|plan|auto|bypass）
+  /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
   /agents            列出子 Agent
   /agent <id>        查看子 Agent 详情
   /agent cancel <id> 取消子 Agent

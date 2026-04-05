@@ -18,7 +18,6 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -31,7 +30,8 @@ import (
 
 // logoMsg is sent on startup to display the ASCII art logo.
 type logoMsg struct {
-	Provider string
+	Vendor   string
+	Endpoint string
 	Model    string
 }
 
@@ -45,6 +45,10 @@ type ApprovalMsg struct {
 // approvalResponseMsg is the user's response to an approval request.
 type approvalResponseMsg struct {
 	decision permission.Decision
+}
+
+type policyModeGetter interface {
+	Mode() permission.PermissionMode
 }
 
 const maxOutputLines = 50000
@@ -68,14 +72,11 @@ type Model struct {
 	pendingApproval    *ApprovalMsg
 	session            *session.Session
 	sessionStore       session.Store
-	costMgr            *cost.Manager
-	costProvider       string
-	costModel          string
-	lastCost           string
 	mcpServers         []MCPInfo
 	config             *config.Config
 	language           Language
-	startupProvider    string
+	startupVendor      string
+	startupEndpoint    string
 	startupModel       string
 	customCmds         map[string]*commands.Command
 	autoMem            *memory.AutoMemory
@@ -86,6 +87,7 @@ type Model struct {
 	mode               permission.PermissionMode
 	pendingDiffConfirm *DiffConfirmMsg
 	fullscreen         bool
+	providerPanel      *providerPanelState
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -106,12 +108,13 @@ type Model struct {
 	streamPrefixWritten bool
 
 	// Status bar state
-	statusActivity  string  // "Thinking...", "Writing...", "Executing: tool_name"
-	statusToolName  string  // current executing tool name
-	statusToolArg   string  // current tool argument summary (truncated)
-	statusTokens    int64   // current session cumulative tokens (in + out)
-	statusCost      float64 // current session cumulative cost
-	statusToolCount int     // tool calls executed this iteration
+	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
+	statusToolName  string // current executing tool name
+	statusToolArg   string // current tool argument summary (truncated)
+	statusToolCount int    // tool calls executed this iteration
+	activityGroups  []toolActivityGroup
+	todoSnapshot    map[string]todoStateItem
+	activeTodo      *todoStateItem
 
 	// Slash command autocomplete
 	autoCompleteItems   []string
@@ -124,6 +127,20 @@ type Model struct {
 	pendingSubmissions  []string
 	runCanceled         bool
 	runFailed           bool
+}
+
+type toolActivityGroup struct {
+	Title       string
+	Categories  []string
+	Items       []toolActivityItem
+	Active      bool
+	TodoID      string
+	TodoContent string
+}
+
+type toolActivityItem struct {
+	Summary string
+	Running bool
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -196,6 +213,8 @@ type doneMsg struct{}
 // errMsg signals an error.
 type errMsg struct{ err error }
 
+type subAgentUpdateMsg struct{}
+
 var ansiKeyFragmentPattern = regexp.MustCompile(`^(?:\[[0-9;?<>=]*[A-Za-z~]|\[<\d+(?:;\d+){0,2}[A-Za-zmM])$`)
 
 // toolStatusMsg wraps a tool status update.
@@ -207,18 +226,6 @@ type statusMsg struct {
 	ToolName  string
 	ToolArg   string
 	ToolCount int
-}
-
-// statusCostMsg updates cost/token info in the status bar.
-type statusCostMsg struct {
-	Tokens int64
-	Cost   float64
-}
-
-// costUpdateMsg carries token usage info from the agent goroutine.
-type costUpdateMsg struct {
-	InputTokens  int
-	OutputTokens int
 }
 
 // setProgramMsg is sent via program.Send so the model copy inside Bubble Tea's
@@ -321,7 +328,15 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		history:    make([]string, 0, 100),
 		mdRenderer: mdRenderer,
 		viewport:   NewViewportModel(80, 20),
+		mode:       policyMode(policy),
 	}
+}
+
+func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
+	if getter, ok := policy.(policyModeGetter); ok {
+		return getter.Mode()
+	}
+	return permission.SupervisedMode
 }
 
 func (m Model) Init() tea.Cmd {
@@ -339,20 +354,6 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 
 func (m *Model) Session() *session.Session {
 	return m.session
-}
-
-func (m *Model) currentSessionID() string {
-	if m.session != nil && m.session.ID != "" {
-		return m.session.ID
-	}
-	return "current"
-}
-
-func (m *Model) currentSessionCost() (cost.SessionCost, bool) {
-	if m.costMgr == nil {
-		return cost.SessionCost{}, false
-	}
-	return m.costMgr.SessionCost(m.currentSessionID())
 }
 
 func (m *Model) SetMCPServers(servers []MCPInfo) {
@@ -394,12 +395,11 @@ func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
 	m.subAgentMgr = mgr
 }
 
-func (m *Model) providerNames() string {
-	names := make([]string, 0, len(m.config.Providers))
-	for name := range m.config.Providers {
-		names = append(names, name)
+func (m *Model) vendorNames() string {
+	if m.config == nil {
+		return ""
 	}
-	return strings.Join(names, ", ")
+	return strings.Join(m.config.VendorNames(), ", ")
 }
 
 func truncateString(s string, maxLen int) string {
@@ -449,7 +449,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case logoMsg:
-		m.startupProvider = msg.Provider
+		m.startupVendor = msg.Vendor
+		m.startupEndpoint = msg.Endpoint
 		m.startupModel = msg.Model
 		return m, nil
 
@@ -478,6 +479,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() != "ctrl+c" {
 			m.resetExitConfirm()
+		}
+
+		// Handle approval mode (selection list)
+		if m.providerPanel != nil {
+			return m.handleProviderPanelKey(msg)
 		}
 
 		// Handle approval mode (selection list)
@@ -642,7 +648,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case streamMsg:
+		m.closeToolActivityGroup()
+		m.flushGroupedActivitiesToOutput()
 		if !m.streamPrefixWritten {
+			m.streamStartPos = m.output.Len()
 			m.output.WriteString(bulletStyle.Render("● "))
 			m.streamPrefixWritten = true
 		}
@@ -658,6 +667,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doneMsg:
 		m.loading = false
 		m.spinner.Stop()
+		m.closeToolActivityGroup()
+		m.flushGroupedActivitiesToOutput()
 		m.cancelFunc = nil
 		m.streamPrefixWritten = false
 		wasCanceled := m.runCanceled
@@ -674,29 +685,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				rendered = m.streamBuffer.String()
 			}
+			rendered = trimLeadingRenderedSpacing(rendered)
 			m.output.Truncate(m.streamStartPos)
 			m.output.WriteString(bulletStyle.Render("● "))
 			m.output.WriteString(rendered)
 			m.streamBuffer = nil
-		}
-		if m.lastCost != "" {
-			m.output.WriteString(m.styles.prompt.Render(m.lastCost + "\n"))
 		}
 		m.output.WriteString("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
-		}
-		return m, nil
-
-	case costUpdateMsg:
-		m.lastCost = fmt.Sprintf("tokens: %d in / %d out", msg.InputTokens, msg.OutputTokens)
-		m.statusTokens += int64(msg.InputTokens + msg.OutputTokens)
-		if sc, ok := m.currentSessionCost(); ok {
-			m.lastCost += fmt.Sprintf(" | session cost: %s", cost.FormatCost(sc.TotalCostUSD))
-			m.statusTokens = sc.InputTokens + sc.OutputTokens
-			m.statusCost = sc.TotalCostUSD
 		}
 		return m, nil
 
@@ -707,6 +706,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runFailed = true
 		m.loading = false
 		m.spinner.Stop()
+		m.closeToolActivityGroup()
+		m.flushGroupedActivitiesToOutput()
 		m.cancelFunc = nil
 		if len(m.pendingSubmissions) > 0 {
 			m.restorePendingInput()
@@ -717,6 +718,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ApprovalMsg:
+		if m.mode == permission.AutopilotMode {
+			m.pendingApproval = &msg
+			return m, m.handleApproval(permission.Allow)
+		}
 		// Agent is requesting approval
 		m.pendingApproval = &msg
 		m.approvalOptions = defaultApprovalOptions()
@@ -724,33 +729,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case DiffConfirmMsg:
+		if m.mode == permission.AutopilotMode {
+			m.pendingDiffConfirm = &msg
+			return m, m.handleDiffConfirm(true)
+		}
 		m.pendingDiffConfirm = &msg
 		m.diffOptions = diffConfirmOptions()
 		m.diffCursor = 0
 		return m, nil
 
+	case subAgentUpdateMsg:
+		m.syncConversationViewport()
+		if m.viewport.AutoFollow() {
+			m.viewport.GotoBottom()
+		}
+		return m, nil
+
 	case toolStatusMsg:
 		ts := ToolStatusMsg(msg)
 		if ts.Running {
+			m.startToolActivity(ts)
 			// Flush current stream buffer (render markdown) before tool output
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
 				if err != nil {
 					rendered = m.streamBuffer.String()
 				}
+				rendered = trimLeadingRenderedSpacing(rendered)
 				m.output.Truncate(m.streamStartPos)
 				m.output.WriteString(bulletStyle.Render("● "))
 				m.output.WriteString(rendered)
 				m.streamBuffer.Reset()
 				m.streamStartPos = m.output.Len()
 			}
-			m.spinner.Start(ts.ToolName)
-			// Write tree-style header
-			m.output.WriteString(FormatToolStart(ts.ToolName, ts.Args))
+			m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 		} else {
+			m.finishToolActivity(ts)
 			ts.Elapsed = m.spinner.Elapsed()
 			m.spinner.Stop()
-			m.output.WriteString(FormatToolResult(m.currentLanguage(), ts))
 			// Reset stream prefix so next text block gets ●
 			m.streamPrefixWritten = false
 			// Reset stream buffer position for next text chunk
@@ -786,10 +802,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case statusCostMsg:
-		m.statusTokens = msg.Tokens
-		m.statusCost = msg.Cost
-		return m, nil
 	}
 
 	var cmd tea.Cmd

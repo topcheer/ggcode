@@ -17,7 +17,7 @@ func TestSaveLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ses := NewSession("anthropic", "claude-3")
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = "Test Session"
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
@@ -45,12 +45,12 @@ func TestList(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	ses1 := NewSession("anthropic", "claude-3")
+	ses1 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses1.Title = "First"
 	store.Save(ses1)
 	// Ensure different second to get unique ID
 	time.Sleep(1100 * time.Millisecond)
-	ses2 := NewSession("anthropic", "claude-3")
+	ses2 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses2.Title = "Second"
 	store.Save(ses2)
 
@@ -68,7 +68,7 @@ func TestAppendMessage(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	ses := NewSession("anthropic", "claude-3")
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	store.Save(ses)
 
 	msg := provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Follow up"}}}
@@ -87,7 +87,7 @@ func TestExportMarkdown(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	ses := NewSession("anthropic", "claude-3")
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = "Test"
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
@@ -108,7 +108,7 @@ func TestDelete(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	ses := NewSession("anthropic", "claude-3")
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	store.Save(ses)
 
 	if err := store.Delete(ses.ID); err != nil {
@@ -124,7 +124,7 @@ func TestCleanupOlderThan(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	store, _ := NewJSONLStore(dir)
-	ses := NewSession("anthropic", "claude-3")
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	store.Save(ses)
 
 	removed, err := store.CleanupOlderThan(time.Now().Add(24 * time.Hour))
