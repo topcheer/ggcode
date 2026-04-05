@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -64,9 +65,43 @@ func TestFormatToolStatus_Error(t *testing.T) {
 	}
 }
 
+func TestFormatToolStatus_HidesReadFileBody(t *testing.T) {
+	msg := ToolStatusMsg{
+		ToolName: "read_file",
+		Running:  false,
+		Result:   "package main\n\nfunc main() {}\n",
+	}
+	result := FormatToolStatus(msg)
+	if strings.Contains(result, "package main") {
+		t.Error("expected read_file body to be hidden from TUI output")
+	}
+	if !strings.Contains(result, "lines of content") {
+		t.Error("expected read_file summary in TUI output")
+	}
+}
+
+func TestFormatToolStatus_RunCommandErrorShowsOnlyExitStatus(t *testing.T) {
+	msg := ToolStatusMsg{
+		ToolName: "run_command",
+		Running:  false,
+		Result:   "STDERR:\nboom\nCommand failed: exit status 2",
+		IsError:  true,
+	}
+	result := FormatToolStatus(msg)
+	if strings.Contains(result, "boom") {
+		t.Error("expected stderr body to be hidden from TUI output")
+	}
+	if !strings.Contains(result, "exit status 2") {
+		t.Error("expected exit status summary in TUI output")
+	}
+}
+
 func TestHelpText(t *testing.T) {
-	h := helpText()
+	h := newTestModel().helpText()
 	if h == "" {
 		t.Error("expected non-empty help text")
+	}
+	if !strings.Contains(h, "/help, /?") {
+		t.Error("expected /? alias in help text")
 	}
 }

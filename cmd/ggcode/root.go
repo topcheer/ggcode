@@ -4,23 +4,24 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/spf13/cobra"
 
 	"github.com/topcheer/ggcode/internal/agent"
-	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
-	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 func NewRootCmd() *cobra.Command {
@@ -32,18 +33,18 @@ func NewRootCmd() *cobra.Command {
 	var outputPath string
 
 	cmd := &cobra.Command{
-		Use:   "ggcode",
-		Short: "AI coding assistant",
-		Long:  "ggcode is a terminal-based AI coding agent powered by LLMs.",
+		Use:          "ggcode",
+		Short:        "AI coding assistant",
+		Long:         "ggcode is a terminal-based AI coding agent powered by LLMs.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cfgFile == "" {
 				cfgFile = config.ConfigPath()
 			}
 
-				debug.Init()
+			debug.Init()
 
-		cfg, err := config.Load(cfgFile)
+			cfg, err := config.Load(cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
@@ -70,10 +71,10 @@ func NewRootCmd() *cobra.Command {
 
 	// Shell completion commands
 	completionCmd := &cobra.Command{
-		Use:   "completion [shell]",
-		Short: "Generate shell completion script",
-		Long:  `Generate shell completion script for bash, zsh, fish, or powershell.`,
-		Args:  cobra.ExactArgs(1),
+		Use:       "completion [shell]",
+		Short:     "Generate shell completion script",
+		Long:      `Generate shell completion script for bash, zsh, fish, or powershell.`,
+		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch args[0] {
@@ -139,31 +140,22 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	// Load plugins
 	pluginMgr := plugin.NewManager()
 	pluginMgr.LoadAll(cfg.Plugins)
-
-	// Connect MCP servers and register their tools
-	var mcpPlugins []*plugin.MCPPlugin
-	for _, mcpCfg := range cfg.MCPServers {
-		p := plugin.NewMCPPlugin(mcpCfg)
-		if err := p.RegisterTools(context.Background(), registry); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: MCP server %s failed: %v\n", mcpCfg.Name, err)
-			continue
-		}
-		mcpPlugins = append(mcpPlugins, p)
+	if err := pluginMgr.RegisterTools(registry); err != nil {
+		return err
 	}
-	pluginMgr.RegisterTools(registry)
 
 	// Setup cost tracker
 	pricing := cost.DefaultPricingTable()
 	// Allow config to override pricing (future: load from config file)
 	costMgr := cost.NewManager(pricing, "")
 
-	// Load project memory (GGCODE.md)
-	projectMem, projectFiles, _ := memory.LoadProjectMemory(workingDir)
-
-	// Load auto memory
 	autoMem := memory.NewAutoMemory()
-	autoContent, autoFiles, _ := autoMem.LoadAll()
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
+
+	projectMem, projectFiles, autoContent, autoFiles, customCmds, mcpPlugins, mcpWarnings := loadStartupAssets(workingDir, autoMem, cfg, registry)
+	for _, warning := range mcpWarnings {
+		fmt.Fprintln(os.Stderr, warning)
+	}
 
 	// Detect git status
 	gitStatus := detectGitStatus(workingDir)
@@ -176,8 +168,6 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	}
 
 	// Collect custom command names
-	cmdLoader2 := commands.NewLoader(workingDir)
-	customCmds := cmdLoader2.Load()
 	customCmdNames := make([]string, len(customCmds))
 	i := 0
 	for name := range customCmds {
@@ -256,4 +246,93 @@ func detectGitStatus(workingDir string) string {
 		return "not a git repository"
 	}
 	return "in a git repository"
+}
+
+func loadStartupAssets(
+	workingDir string,
+	autoMem *memory.AutoMemory,
+	cfg *config.Config,
+	registry *tool.Registry,
+) (string, []string, string, []string, map[string]*commands.Command, []*plugin.MCPPlugin, []string) {
+	var (
+		projectMem   string
+		projectFiles []string
+		autoContent  string
+		autoFiles    []string
+		customCmds   map[string]*commands.Command
+		mcpPlugins   []*plugin.MCPPlugin
+		mcpWarnings  []string
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	go func() {
+		defer wg.Done()
+		projectMem, projectFiles, _ = memory.LoadProjectMemory(workingDir)
+	}()
+
+	go func() {
+		defer wg.Done()
+		autoContent, autoFiles, _ = autoMem.LoadAll()
+	}()
+
+	go func() {
+		defer wg.Done()
+		customCmds = commands.NewLoader(workingDir).Load()
+	}()
+
+	go func() {
+		defer wg.Done()
+		mcpPlugins, mcpWarnings = connectMCPServers(context.Background(), cfg.MCPServers, registry)
+	}()
+
+	wg.Wait()
+
+	if customCmds == nil {
+		customCmds = map[string]*commands.Command{}
+	}
+
+	return projectMem, projectFiles, autoContent, autoFiles, customCmds, mcpPlugins, mcpWarnings
+}
+
+func connectMCPServers(
+	ctx context.Context,
+	servers []config.MCPServerConfig,
+	registry *tool.Registry,
+) ([]*plugin.MCPPlugin, []string) {
+	if len(servers) == 0 {
+		return nil, nil
+	}
+
+	plugins := make([]*plugin.MCPPlugin, len(servers))
+	warnings := make([]string, len(servers))
+
+	var wg sync.WaitGroup
+	for i, mcpCfg := range servers {
+		wg.Add(1)
+		go func(i int, mcpCfg config.MCPServerConfig) {
+			defer wg.Done()
+			p := plugin.NewMCPPlugin(mcpCfg)
+			if err := p.RegisterTools(ctx, registry); err != nil {
+				warnings[i] = fmt.Sprintf("warning: MCP server %s failed: %v", mcpCfg.Name, err)
+				return
+			}
+			plugins[i] = p
+		}(i, mcpCfg)
+	}
+	wg.Wait()
+
+	connected := make([]*plugin.MCPPlugin, 0, len(plugins))
+	nonEmptyWarnings := make([]string, 0, len(warnings))
+	for i := range plugins {
+		if plugins[i] != nil {
+			connected = append(connected, plugins[i])
+		}
+		if warnings[i] != "" {
+			nonEmptyWarnings = append(nonEmptyWarnings, warnings[i])
+		}
+	}
+
+	return connected, nonEmptyWarnings
 }

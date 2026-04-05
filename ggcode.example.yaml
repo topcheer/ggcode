@@ -8,6 +8,9 @@ provider: anthropic
 # Model name (provider-specific)
 model: claude-sonnet-4-20250514
 
+# TUI language: en or zh-CN
+language: en
+
 # System prompt injected at the start of every conversation
 # system_prompt: "You are a helpful coding assistant."
 
