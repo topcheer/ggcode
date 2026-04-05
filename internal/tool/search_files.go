@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
 )
 
 // SearchFiles implements the search_files tool (grep-like content search).

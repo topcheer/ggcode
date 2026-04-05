@@ -15,8 +15,10 @@ import (
 // WebSearch implements the web_search tool — searches using DuckDuckGo HTML.
 type WebSearch struct{}
 
-func (t WebSearch) Name() string        { return "web_search" }
-func (t WebSearch) Description() string  { return "Search the web using DuckDuckGo. Returns a list of results with title, URL, and snippet." }
+func (t WebSearch) Name() string { return "web_search" }
+func (t WebSearch) Description() string {
+	return "Search the web using DuckDuckGo. Returns a list of results with title, URL, and snippet."
+}
 
 func (t WebSearch) Parameters() json.RawMessage {
 	return json.RawMessage(`{

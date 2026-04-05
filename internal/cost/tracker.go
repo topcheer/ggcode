@@ -2,13 +2,13 @@ package cost
 
 // SessionCost tracks cumulative token usage and estimated cost for a session.
 type SessionCost struct {
-	Provider        string  `json:"provider"`
-	Model           string  `json:"model"`
-	InputTokens     int64   `json:"input_tokens"`
-	OutputTokens    int64   `json:"output_tokens"`
-	CacheReadTokens int64   `json:"cache_read_tokens"`
-	CacheWriteTokens int64  `json:"cache_write_tokens"`
-	TotalCostUSD    float64 `json:"total_cost_usd"`
+	Provider         string  `json:"provider"`
+	Model            string  `json:"model"`
+	InputTokens      int64   `json:"input_tokens"`
+	OutputTokens     int64   `json:"output_tokens"`
+	CacheReadTokens  int64   `json:"cache_read_tokens"`
+	CacheWriteTokens int64   `json:"cache_write_tokens"`
+	TotalCostUSD     float64 `json:"total_cost_usd"`
 }
 
 // Tracker accumulates token usage and computes cost.
@@ -20,7 +20,7 @@ type Tracker struct {
 // NewTracker creates a cost tracker for the given provider/model.
 func NewTracker(provider, model string, pricing PricingTable) *Tracker {
 	return &Tracker{
-		cost: SessionCost{Provider: provider, Model: model},
+		cost:    SessionCost{Provider: provider, Model: model},
 		pricing: pricing,
 	}
 }
@@ -46,7 +46,7 @@ func (t *Tracker) recalculate() {
 	}
 	t.cost.TotalCostUSD =
 		float64(t.cost.InputTokens)*rate.InputPerM/1e6 +
-		float64(t.cost.OutputTokens)*rate.OutputPerM/1e6 +
-		float64(t.cost.CacheReadTokens)*rate.CacheReadPerM/1e6 +
-		float64(t.cost.CacheWriteTokens)*rate.CacheWritePerM/1e6
+			float64(t.cost.OutputTokens)*rate.OutputPerM/1e6 +
+			float64(t.cost.CacheReadTokens)*rate.CacheReadPerM/1e6 +
+			float64(t.cost.CacheWriteTokens)*rate.CacheWritePerM/1e6
 }

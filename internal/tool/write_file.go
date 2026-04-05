@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-
 )
 
 // WriteFile implements the write_file tool.

@@ -17,8 +17,8 @@ type mockPlugin struct {
 	tools []tool.Tool
 }
 
-func (m *mockPlugin) Name() string                   { return m.name }
-func (m *mockPlugin) Tools() []tool.Tool              { return m.tools }
+func (m *mockPlugin) Name() string                          { return m.name }
+func (m *mockPlugin) Tools() []tool.Tool                    { return m.tools }
 func (m *mockPlugin) Init(cfg map[string]interface{}) error { return nil }
 
 type mockTool struct{}

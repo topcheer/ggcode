@@ -7,30 +7,28 @@ on:
 
 jobs:
   test:
-    name: Test (Go ${{ matrix.go-version }})
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        go-version: ["1.23", "1.24", "1.25"]
+    env:
+      GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
       - run: go mod download
-      - run: go build ./cmd/ggcode
+      - run: go build -o /tmp/ggcode ./cmd/ggcode
       - run: go vet ./...
       - run: go test -tags=!integration ./...
 
   lint:
-    name: Lint
+    name: Format
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.64
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"

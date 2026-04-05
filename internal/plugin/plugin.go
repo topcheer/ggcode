@@ -113,6 +113,6 @@ type commandPlugin struct {
 	tools []tool.Tool
 }
 
-func (p *commandPlugin) Name() string                   { return p.name }
-func (p *commandPlugin) Tools() []tool.Tool              { return p.tools }
+func (p *commandPlugin) Name() string                             { return p.name }
+func (p *commandPlugin) Tools() []tool.Tool                       { return p.tools }
 func (p *commandPlugin) Init(config map[string]interface{}) error { return nil }

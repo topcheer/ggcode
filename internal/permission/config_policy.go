@@ -227,7 +227,6 @@ func extractCommand(input json.RawMessage) (string, bool) {
 	return "", false
 }
 
-
 func truncateStr(s string, maxLen int) string {
 	return util.Truncate(s, maxLen)
 }

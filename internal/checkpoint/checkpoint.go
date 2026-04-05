@@ -21,9 +21,9 @@ type Checkpoint struct {
 
 // Manager manages file checkpoints for undo support.
 type Manager struct {
-	checkpoints   []Checkpoint
+	checkpoints    []Checkpoint
 	maxCheckpoints int
-	mu            sync.Mutex
+	mu             sync.Mutex
 }
 
 // NewManager creates a new checkpoint manager with the given max limit.

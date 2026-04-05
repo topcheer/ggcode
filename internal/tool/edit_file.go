@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
 )
 
 // EditFile implements the edit_file tool for find-and-replace editing.

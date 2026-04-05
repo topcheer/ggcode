@@ -32,8 +32,10 @@ func NewTodoWrite(dir string) *TodoWrite {
 	return &TodoWrite{dir: dir}
 }
 
-func (t *TodoWrite) Name() string        { return "todo_write" }
-func (t *TodoWrite) Description() string  { return "Create, update, or complete todo items. Persists to ~/.ggcode/todos.json." }
+func (t *TodoWrite) Name() string { return "todo_write" }
+func (t *TodoWrite) Description() string {
+	return "Create, update, or complete todo items. Persists to ~/.ggcode/todos.json."
+}
 
 func (t *TodoWrite) Parameters() json.RawMessage {
 	return json.RawMessage(`{
