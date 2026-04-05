@@ -4,13 +4,12 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	
 )
 
 // FullscreenModel wraps the main Model with alt-screen and viewport support.
 type FullscreenModel struct {
-	inner     Model       // the original TUI model
-	viewport  ViewportModel
+	inner      Model // the original TUI model
+	viewport   ViewportModel
 	fullscreen bool
 }
 
@@ -74,6 +73,7 @@ func (f FullscreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return f, nil
 			}
 		}
+		return f, nil
 
 	case tea.KeyMsg:
 		if !f.inner.loading && f.inner.pendingApproval == nil {
@@ -132,7 +132,7 @@ func (f FullscreenModel) View() string {
 	// Mode hint
 	if !f.inner.loading && f.inner.pendingApproval == nil {
 		modeStr := f.inner.styles.prompt.Render(
-			"[" + f.inner.mode.String() + "] Ctrl+L: exit fullscreen | /fullscreen toggle | ? help",
+			"[" + f.inner.mode.String() + "] Ctrl+L | /fullscreen | /?",
 		)
 		sb.WriteString(" " + modeStr)
 	}
@@ -145,6 +145,7 @@ func (f FullscreenModel) renderStatusBar() string {
 	s := f.inner.styles.prompt
 
 	var parts []string
+	parts = append(parts, "mode "+f.inner.renderModeBadge())
 	if f.inner.lastCost != "" {
 		parts = append(parts, f.inner.lastCost)
 	}

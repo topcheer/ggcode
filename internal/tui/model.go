@@ -2,8 +2,13 @@ package tui
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,9 +16,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/agent"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -23,7 +28,6 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/util"
 )
-
 
 // logoMsg is sent on startup to display the ASCII art logo.
 type logoMsg struct {
@@ -70,6 +74,9 @@ type Model struct {
 	lastCost           string
 	mcpServers         []MCPInfo
 	config             *config.Config
+	language           Language
+	startupProvider    string
+	startupModel       string
 	customCmds         map[string]*commands.Command
 	autoMem            *memory.AutoMemory
 	projMemFiles       []string
@@ -85,33 +92,38 @@ type Model struct {
 	approvalCursor  int
 
 	// Diff confirm selection list
-	diffOptions []approvalOption
-	diffCursor  int
-	pendingImage       *imageAttachedMsg
+	diffOptions  []approvalOption
+	diffCursor   int
+	pendingImage *imageAttachedMsg
 
 	// Viewport for scrollable output
 	viewport ViewportModel
 
 	// Markdown rendering
-	mdRenderer       *glamour.TermRenderer
-	streamBuffer     *bytes.Buffer
-	streamStartPos   int
+	mdRenderer          *glamour.TermRenderer
+	streamBuffer        *bytes.Buffer
+	streamStartPos      int
 	streamPrefixWritten bool
 
 	// Status bar state
-	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
-	statusToolName  string // current executing tool name
-	statusToolArg   string // current tool argument summary (truncated)
-	statusTokens    int64  // current session cumulative tokens (in + out)
+	statusActivity  string  // "Thinking...", "Writing...", "Executing: tool_name"
+	statusToolName  string  // current executing tool name
+	statusToolArg   string  // current tool argument summary (truncated)
+	statusTokens    int64   // current session cumulative tokens (in + out)
 	statusCost      float64 // current session cumulative cost
-	statusToolCount int    // tool calls executed this iteration
+	statusToolCount int     // tool calls executed this iteration
 
 	// Slash command autocomplete
-	autoCompleteItems    []string
-	autoCompleteIndex    int
-	autoCompleteActive   bool
-	autoCompleteKind     string // "slash" or "mention"
-	autoCompleteWorkDir  string // working directory for mention completion
+	autoCompleteItems   []string
+	autoCompleteIndex   int
+	autoCompleteActive  bool
+	autoCompleteKind    string // "slash" or "mention"
+	autoCompleteWorkDir string // working directory for mention completion
+	lastResizeAt        time.Time
+	exitConfirmPending  bool
+	pendingSubmissions  []string
+	runCanceled         bool
+	runFailed           bool
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -122,18 +134,18 @@ type MCPInfo struct {
 }
 
 type styles struct {
-	user            lipgloss.Style
-	assistant       lipgloss.Style
-	tool            lipgloss.Style
-	error           lipgloss.Style
-	prompt          lipgloss.Style
-	title           lipgloss.Style
-	approval        lipgloss.Style
-	warn            lipgloss.Style
-	approvalCursor  lipgloss.Style
-	approvalDim     lipgloss.Style
-	statusBar       lipgloss.Style
-	markdown        lipgloss.Style
+	user           lipgloss.Style
+	assistant      lipgloss.Style
+	tool           lipgloss.Style
+	error          lipgloss.Style
+	prompt         lipgloss.Style
+	title          lipgloss.Style
+	approval       lipgloss.Style
+	warn           lipgloss.Style
+	approvalCursor lipgloss.Style
+	approvalDim    lipgloss.Style
+	statusBar      lipgloss.Style
+	markdown       lipgloss.Style
 }
 
 // DiffConfirmMsg is sent to TUI when agent wants user to confirm a file edit diff.
@@ -152,18 +164,26 @@ type approvalOption struct {
 
 // defaultApprovalOptions returns the standard approval options.
 func defaultApprovalOptions() []approvalOption {
+	return defaultApprovalOptionsFor(LangEnglish)
+}
+
+func defaultApprovalOptionsFor(lang Language) []approvalOption {
 	return []approvalOption{
-		{label: "Allow", shortcut: "y", decision: permission.Allow},
-		{label: "Allow Always", shortcut: "a", decision: permission.Allow},
-		{label: "Deny", shortcut: "n", decision: permission.Deny},
+		{label: tr(lang, "approval.allow"), shortcut: "y", decision: permission.Allow},
+		{label: tr(lang, "approval.allow_always"), shortcut: "a", decision: permission.Allow},
+		{label: tr(lang, "approval.deny"), shortcut: "n", decision: permission.Deny},
 	}
 }
 
 // diffConfirmOptions returns the options for diff confirmation.
 func diffConfirmOptions() []approvalOption {
+	return diffConfirmOptionsFor(LangEnglish)
+}
+
+func diffConfirmOptionsFor(lang Language) []approvalOption {
 	return []approvalOption{
-		{label: "Accept", shortcut: "y", decision: permission.Allow},
-		{label: "Reject", shortcut: "n", decision: permission.Deny},
+		{label: tr(lang, "approval.accept"), shortcut: "y", decision: permission.Allow},
+		{label: tr(lang, "approval.reject"), shortcut: "n", decision: permission.Deny},
 	}
 }
 
@@ -175,6 +195,8 @@ type doneMsg struct{}
 
 // errMsg signals an error.
 type errMsg struct{ err error }
+
+var ansiKeyFragmentPattern = regexp.MustCompile(`^(?:\[[0-9;?<>=]*[A-Za-z~]|\[<\d+(?:;\d+){0,2}[A-Za-zmM])$`)
 
 // toolStatusMsg wraps a tool status update.
 type toolStatusMsg ToolStatusMsg
@@ -205,12 +227,58 @@ type setProgramMsg struct {
 	Program *tea.Program
 }
 
+func (m *Model) resetExitConfirm() {
+	m.exitConfirmPending = false
+}
+
+func (m *Model) promptExitConfirm() {
+	m.input.SetValue("")
+	m.exitConfirmPending = true
+	m.output.WriteString(m.styles.prompt.Render(m.t("exit.confirm")))
+	m.syncConversationViewport()
+	if m.viewport.AutoFollow() {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m *Model) queuePendingSubmission(text string) {
+	m.pendingSubmissions = append(m.pendingSubmissions, text)
+	m.output.WriteString(m.styles.prompt.Render(m.t("queued.output", len(m.pendingSubmissions))))
+	m.syncConversationViewport()
+	if m.viewport.AutoFollow() {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m *Model) consumePendingSubmission() string {
+	joined := strings.TrimSpace(strings.Join(m.pendingSubmissions, "\n\n"))
+	m.pendingSubmissions = nil
+	return joined
+}
+
+func (m *Model) restorePendingInput() {
+	pending := strings.TrimSpace(strings.Join(m.pendingSubmissions, "\n\n"))
+	draft := strings.TrimSpace(m.input.Value())
+	switch {
+	case pending == "":
+		return
+	case draft == "":
+		m.input.SetValue(pending)
+	case draft == pending:
+		m.input.SetValue(draft)
+	default:
+		m.input.SetValue(pending + "\n\n" + draft)
+	}
+	m.input.CursorEnd()
+	m.pendingSubmissions = nil
+}
 
 func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ti := textinput.New()
 	ti.Prompt = "❯ "
-	ti.Placeholder = "Type a message..."
+	ti.Placeholder = tr(LangEnglish, "input.placeholder")
 	ti.Focus()
+	ti.Width = 74
 
 	s := styles{
 		user:      lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true),
@@ -226,15 +294,15 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 			Foreground(lipgloss.Color("11")).
 			Bold(true),
 		warn: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("9")).
-		Bold(true),
+			Foreground(lipgloss.Color("9")).
+			Bold(true),
 		approvalCursor: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("226")).
 			Background(lipgloss.Color("236")),
 		approvalDim: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("15")),
-	statusBar: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("6")),
+			Foreground(lipgloss.Color("15")),
+		statusBar: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")),
 	}
 
 	mdRenderer, _ := glamour.NewTermRenderer(
@@ -247,6 +315,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		output:     &bytes.Buffer{},
 		styles:     s,
 		agent:      a,
+		language:   LangEnglish,
 		policy:     policy,
 		spinner:    NewToolSpinner(),
 		history:    make([]string, 0, 100),
@@ -270,6 +339,20 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 
 func (m *Model) Session() *session.Session {
 	return m.session
+}
+
+func (m *Model) currentSessionID() string {
+	if m.session != nil && m.session.ID != "" {
+		return m.session.ID
+	}
+	return "current"
+}
+
+func (m *Model) currentSessionCost() (cost.SessionCost, bool) {
+	if m.costMgr == nil {
+		return cost.SessionCost{}, false
+	}
+	return m.costMgr.SessionCost(m.currentSessionID())
 }
 
 func (m *Model) SetMCPServers(servers []MCPInfo) {
@@ -298,10 +381,13 @@ func (m *Model) SetAutoMemoryFiles(files []string) {
 
 func (m *Model) SetConfig(cfg *config.Config) {
 	m.config = cfg
+	if cfg != nil {
+		m.setLanguage(cfg.Language)
+	}
 }
 
 func asciiLogo() string {
-	return "   _      \n __| | ___ \n/ _` |/ _ \\ \n| (_| | (_) | \n \\__,_|\\___/ \n"
+	return "   ____ ____ ____ ___  ____  ______\n  / ___/ ___/ ___/ _ \\/ __ \\/ ____/\n / (_ / (_ / /__/ // / /_/ / /__  \n \\___/\\___/\\___/____/\\____/\\___/  \n"
 }
 
 func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
@@ -363,10 +449,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case logoMsg:
-		m.output.WriteString(asciiLogo())
-		info := fmt.Sprintf("  Provider: %s  |  Model: %s\n", msg.Provider, msg.Model)
-		m.output.WriteString(m.styles.title.Render(info))
-		m.output.WriteString("\n")
+		m.startupProvider = msg.Provider
+		m.startupModel = msg.Model
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -381,14 +465,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.Type {
 		case tea.MouseWheelUp:
+			m.syncConversationViewport()
 			m.viewport.ScrollUp(3)
 			return m, nil
 		case tea.MouseWheelDown:
+			m.syncConversationViewport()
 			m.viewport.ScrollDown(3)
 			return m, nil
 		}
+		return m, nil
 
 	case tea.KeyMsg:
+		if msg.String() != "ctrl+c" {
+			m.resetExitConfirm()
+		}
+
 		// Handle approval mode (selection list)
 		if m.pendingApproval != nil {
 			switch msg.String() {
@@ -397,6 +488,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "down", "j":
 				m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
+				return m, nil
+			case "tab":
+				m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
+				return m, nil
+			case "shift+tab":
+				m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
 				return m, nil
 			case "enter", "right":
 				opt := m.approvalOptions[m.approvalCursor]
@@ -425,6 +522,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "j":
 				m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
 				return m, nil
+			case "tab":
+				m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
+				return m, nil
+			case "shift+tab":
+				m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
+				return m, nil
 			case "enter", "right":
 				opt := m.diffOptions[m.diffCursor]
 				return m, m.handleDiffConfirm(opt.decision == permission.Allow)
@@ -438,30 +541,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.loading {
-			if msg.String() == "ctrl+c" {
-				if m.cancelFunc != nil {
-					m.cancelFunc()
-				}
-				m.loading = false
-				m.spinner.Stop()
-				debug.Log("tui", "loading set to false (interrupted)")
-				m.output.WriteString("\n[interrupted]\n\n")
-				return m, nil
+		if m.loading && msg.String() == "ctrl+c" {
+			m.resetExitConfirm()
+			m.runCanceled = true
+			if m.cancelFunc != nil {
+				m.cancelFunc()
+			}
+			m.spinner.Stop()
+			m.statusActivity = m.t("status.cancelling")
+			if len(m.pendingSubmissions) > 0 {
+				m.restorePendingInput()
+			}
+			debug.Log("tui", "cancelling active loop")
+			m.output.WriteString("\n" + m.t("interrupted"))
+			m.syncConversationViewport()
+			if m.viewport.AutoFollow() {
+				m.viewport.GotoBottom()
 			}
 			return m, nil
 		}
 
 		switch msg.String() {
-		case "ctrl+c", "ctrl+d":
+		case "ctrl+c":
+			if m.autoCompleteActive {
+				m.autoCompleteActive = false
+				m.autoCompleteItems = nil
+				m.resetExitConfirm()
+				return m, nil
+			}
+			if m.exitConfirmPending {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			m.promptExitConfirm()
+			return m, nil
+		case "ctrl+d":
 			m.quitting = true
 			return m, tea.Quit
 		case "shift+tab":
+			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+				m.autoCompleteIndex = (m.autoCompleteIndex - 1 + len(m.autoCompleteItems)) % len(m.autoCompleteItems)
+				return m, nil
+			}
 			return m.handleModeSwitch()
 		case "pgup":
+			m.syncConversationViewport()
 			m.viewport.ScrollUp(m.viewport.VisibleLineCount() / 2)
 			return m, nil
 		case "pgdown":
+			m.syncConversationViewport()
 			m.viewport.ScrollDown(m.viewport.VisibleLineCount() / 2)
 			return m, nil
 		case "up":
@@ -482,7 +610,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleHistoryDown()
 		case "tab":
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
-				m.applyAutoComplete()
+				if len(m.autoCompleteItems) == 1 {
+					return m, m.applyAutoComplete()
+				}
+				m.autoCompleteIndex = (m.autoCompleteIndex + 1) % len(m.autoCompleteItems)
 				return m, nil
 			}
 		case "esc":
@@ -493,19 +624,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
-				m.applyAutoComplete()
-				return m, nil
+				return m, m.applyAutoComplete()
 			}
+			m.resetExitConfirm()
 			text := strings.TrimSpace(m.input.Value())
 			m.input.SetValue("")
 			if text == "" {
 				return m, nil
 			}
-			// Add to history
-			m.history = append(m.history, text)
-			m.historyIdx = len(m.history)
-			debug.Log("tui", "handleCommand: %s", text)
-			return m, m.handleCommand(text)
+			if m.loading {
+				m.history = append(m.history, text)
+				m.historyIdx = len(m.history)
+				m.queuePendingSubmission(text)
+				return m, nil
+			}
+			return m, m.submitText(text, true)
 		}
 
 	case streamMsg:
@@ -518,6 +651,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.output.WriteString(string(msg))
 		m.trimOutput()
+		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil
 
@@ -526,6 +660,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.Stop()
 		m.cancelFunc = nil
 		m.streamPrefixWritten = false
+		wasCanceled := m.runCanceled
+		wasFailed := m.runFailed
+		m.runCanceled = false
+		m.runFailed = false
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
 		// Render accumulated stream buffer as markdown
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 			rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
@@ -541,26 +683,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.output.WriteString(m.styles.prompt.Render(m.lastCost + "\n"))
 		}
 		m.output.WriteString("\n")
+		m.syncConversationViewport()
 		m.viewport.GotoBottom()
+		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
+			return m, m.submitText(m.consumePendingSubmission(), false)
+		}
 		return m, nil
 
 	case costUpdateMsg:
 		m.lastCost = fmt.Sprintf("tokens: %d in / %d out", msg.InputTokens, msg.OutputTokens)
-		if m.costMgr != nil {
-			if sc, ok := m.costMgr.SessionCost("current"); ok {
-				m.lastCost += fmt.Sprintf(" | session cost: %s", cost.FormatCost(sc.TotalCostUSD))
-				// Also update status bar cost/tokens
-				m.statusTokens = sc.InputTokens + sc.OutputTokens
-				m.statusCost = sc.TotalCostUSD
-			}
+		m.statusTokens += int64(msg.InputTokens + msg.OutputTokens)
+		if sc, ok := m.currentSessionCost(); ok {
+			m.lastCost += fmt.Sprintf(" | session cost: %s", cost.FormatCost(sc.TotalCostUSD))
+			m.statusTokens = sc.InputTokens + sc.OutputTokens
+			m.statusCost = sc.TotalCostUSD
 		}
 		return m, nil
 
 	case errMsg:
+		if errors.Is(msg.err, context.Canceled) {
+			return m, nil
+		}
+		m.runFailed = true
 		m.loading = false
 		m.spinner.Stop()
 		m.cancelFunc = nil
+		if len(m.pendingSubmissions) > 0 {
+			m.restorePendingInput()
+		}
 		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error: %v\n\n", msg.err)))
+		m.syncConversationViewport()
+		m.viewport.GotoBottom()
 		return m, nil
 
 	case ApprovalMsg:
@@ -568,27 +721,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingApproval = &msg
 		m.approvalOptions = defaultApprovalOptions()
 		m.approvalCursor = 0
-		isWarn := m.mode == permission.BypassMode
-		titleStyle := m.styles.approval
-		if isWarn {
-			titleStyle = m.styles.warn
-		}
-		m.output.WriteString(titleStyle.Render(
-			fmt.Sprintf("\n⚠ Permission required: %s\n", msg.ToolName),
-		))
-		m.output.WriteString(fmt.Sprintf("  Input: %s\n", truncateString(msg.Input, 200)))
-		m.output.WriteString(m.renderApprovalOptions(m.approvalOptions, m.approvalCursor))
 		return m, nil
 
 	case DiffConfirmMsg:
 		m.pendingDiffConfirm = &msg
 		m.diffOptions = diffConfirmOptions()
 		m.diffCursor = 0
-		m.output.WriteString(m.styles.approval.Render(
-			fmt.Sprintf("\n\u270f File edit: %s\n", msg.FilePath),
-		))
-		m.output.WriteString(FormatDiff(msg.DiffText))
-		m.output.WriteString(m.renderApprovalOptions(m.diffOptions, m.diffCursor))
 		return m, nil
 
 	case toolStatusMsg:
@@ -610,12 +748,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Write tree-style header
 			m.output.WriteString(FormatToolStart(ts.ToolName, ts.Args))
 		} else {
+			ts.Elapsed = m.spinner.Elapsed()
 			m.spinner.Stop()
-			m.output.WriteString(FormatToolResult(ts))
+			m.output.WriteString(FormatToolResult(m.currentLanguage(), ts))
 			// Reset stream prefix so next text block gets ●
 			m.streamPrefixWritten = false
 			// Reset stream buffer position for next text chunk
 			m.streamStartPos = m.output.Len()
+		}
+		m.syncConversationViewport()
+		if m.viewport.AutoFollow() {
+			m.viewport.GotoBottom()
 		}
 		return m, nil
 
@@ -628,6 +771,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingImage = &msg
 		m.output.WriteString(m.styles.assistant.Render("Image attached: " + msg.placeholder + "\n"))
 		m.output.WriteString(m.styles.prompt.Render("Send a message to include the image, or /image to attach another.\n\n"))
+		m.syncConversationViewport()
+		if m.viewport.AutoFollow() {
+			m.viewport.GotoBottom()
+		}
 		return m, nil
 
 	case statusMsg:
@@ -646,10 +793,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	if shouldIgnoreInputUpdate(msg, m.lastResizeAt) {
+		return m, nil
+	}
 	m.input, cmd = m.input.Update(msg)
 
 	// Update autocomplete state based on current input
 	m.updateAutoComplete()
 
 	return m, cmd
+}
+
+func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt time.Time) bool {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok || keyMsg.Type != tea.KeyRunes || keyMsg.Paste || len(keyMsg.Runes) == 0 {
+		return false
+	}
+
+	raw := string(keyMsg.Runes)
+	if strings.ContainsRune(raw, '\x1b') {
+		return true
+	}
+	for _, r := range keyMsg.Runes {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	if lastResizeAt.IsZero() || time.Since(lastResizeAt) > 250*time.Millisecond || len(keyMsg.Runes) < 2 {
+		return false
+	}
+	return ansiKeyFragmentPattern.MatchString(raw)
 }

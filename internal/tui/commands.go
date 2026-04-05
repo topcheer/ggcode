@@ -11,13 +11,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/topcheer/ggcode/internal/cost"
 	"bytes"
+	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/image"
-	"runtime"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"runtime"
 )
 
 func (m *Model) updateAutoComplete() {
@@ -57,9 +58,9 @@ func (m *Model) updateAutoComplete() {
 	m.autoCompleteItems = nil
 }
 
-func (m *Model) applyAutoComplete() {
+func (m *Model) applyAutoComplete() tea.Cmd {
 	if m.autoCompleteIndex >= len(m.autoCompleteItems) {
-		return
+		return nil
 	}
 	selected := m.autoCompleteItems[m.autoCompleteIndex]
 
@@ -68,14 +69,22 @@ func (m *Model) applyAutoComplete() {
 
 	var replacement string
 	if m.autoCompleteKind == "slash" {
-		// Replace from the "/" to cursor with the selected command
-		wordStart := cursor
-		for wordStart > 0 && value[wordStart-1] != ' ' && value[wordStart-1] != '\t' {
-			wordStart--
+		if m.loading {
+			m.input.SetValue(selected)
+			m.autoCompleteActive = false
+			m.autoCompleteItems = nil
+			m.autoCompleteIndex = 0
+			return nil
 		}
-		replacement = selected + " "
-		value = value[:wordStart] + replacement + value[cursor:]
-	} else if m.autoCompleteKind == "mention" {
+		m.input.SetValue("")
+		m.autoCompleteActive = false
+		m.autoCompleteItems = nil
+		m.history = append(m.history, selected)
+		m.historyIdx = len(m.history)
+		return m.handleCommand(selected)
+	}
+
+	if m.autoCompleteKind == "mention" {
 		// Replace from the "@" to cursor with the selected path
 		atPos := cursor - 1
 		for atPos >= 0 && value[atPos] != '@' {
@@ -88,6 +97,17 @@ func (m *Model) applyAutoComplete() {
 	m.input.SetValue(value)
 	m.autoCompleteActive = false
 	m.autoCompleteItems = nil
+	m.autoCompleteIndex = 0
+	return nil
+}
+
+func (m *Model) submitText(text string, addToHistory bool) tea.Cmd {
+	if addToHistory {
+		m.history = append(m.history, text)
+		m.historyIdx = len(m.history)
+	}
+	debug.Log("tui", "handleCommand: %s", text)
+	return m.handleCommand(text)
 }
 
 func (m *Model) handleCommand(text string) tea.Cmd {
@@ -100,10 +120,10 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			m.quitting = true
 			return tea.Quit
 		case "/clear":
-			m.output.Reset()
+			m.resetConversationView()
 			return nil
-		case "/help":
-			m.output.WriteString(m.styles.assistant.Render(helpText()))
+		case "/help", "/?":
+			m.output.WriteString(m.styles.assistant.Render(m.helpText()))
 			m.output.WriteString("\n\n")
 			return nil
 		case "/model":
@@ -113,41 +133,41 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 				// Recreate provider with new model
 				if prov, err := provider.NewProvider(m.config); err == nil {
 					m.agent.SetProvider(prov)
-					m.output.WriteString(fmt.Sprintf("Switched model to: %s (provider: %s)\n\n", parts[1], m.config.Provider))
+					m.output.WriteString(m.t("command.model_switched", parts[1], m.config.Provider))
 				} else {
-					m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Failed to switch model: %v\n\n", err)))
+					m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
 				}
 			} else {
-				m.output.WriteString(fmt.Sprintf("Current model: %s (provider: %s)\nUsage: /model <model-name>\n\n", m.config.Model, m.config.Provider))
+				m.output.WriteString(m.t("command.model_current", m.config.Model, m.config.Provider))
 			}
 			return nil
 		case "/provider":
 			if len(parts) > 1 {
 				newProvider := parts[1]
 				if _, ok := m.config.Providers[newProvider]; !ok {
-					m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Unknown provider: %s (available: %v)\n\n", newProvider, m.providerNames())))
+					m.output.WriteString(m.styles.error.Render(m.t("command.provider_unknown", newProvider, m.providerNames())))
 					return nil
 				}
 				m.config.Provider = newProvider
 				m.costProvider = newProvider
 				if prov, err := provider.NewProvider(m.config); err == nil {
 					m.agent.SetProvider(prov)
-					m.output.WriteString(fmt.Sprintf("Switched provider to: %s (model: %s)\n\n", newProvider, m.config.Model))
+					m.output.WriteString(m.t("command.provider_switched", newProvider, m.config.Model))
 				} else {
-					m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Failed to switch provider: %v\n\n", err)))
+					m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
 				}
 			} else {
-				m.output.WriteString(fmt.Sprintf("Current provider: %s (model: %s)\nAvailable: %s\nUsage: /provider <name>\n\n", m.config.Provider, m.config.Model, m.providerNames()))
+				m.output.WriteString(m.t("command.provider_current", m.config.Provider, m.config.Model, m.providerNames()))
 			}
 			return nil
 		case "/allow":
 			if len(parts) > 1 {
 				if m.policy != nil {
 					m.policy.SetOverride(parts[1], permission.Allow)
-					m.output.WriteString(fmt.Sprintf("\u2713 %s is now always allowed\n\n", parts[1]))
+					m.output.WriteString(m.t("command.allow_set", parts[1]))
 				}
 			} else {
-				m.output.WriteString("Usage: /allow <tool-name>\n\n")
+				m.output.WriteString(m.t("command.usage.allow"))
 			}
 			return nil
 		case "/cost":
@@ -158,13 +178,13 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			if len(parts) > 1 {
 				return m.resumeSession(parts[1])
 			}
-			m.output.WriteString("Usage: /resume <session-id>\n\n")
+			m.output.WriteString(m.t("command.usage.resume"))
 			return nil
 		case "/export":
 			if len(parts) > 1 {
 				return m.exportSession(parts[1])
 			}
-			m.output.WriteString("Usage: /export <session-id>\n\n")
+			m.output.WriteString(m.t("command.usage.export"))
 			return nil
 		case "/plugins":
 			return m.handlePluginsCommand()
@@ -176,6 +196,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleMCPCommand()
 		case "/mode":
 			return m.handleModeCommand(parts)
+		case "/lang":
+			return m.handleLangCommand(parts)
 		case "/memory":
 			return m.handleMemoryCommand(parts)
 		case "/undo":
@@ -204,20 +226,20 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 						"DIR": workingDirFromModel(m),
 					}
 					expanded := custom.Expand(vars)
-					m.output.WriteString(m.styles.user.Render(fmt.Sprintf("Custom command /%s:\n", cmdName)))
+					m.output.WriteString(m.styles.user.Render(m.t("command.custom", cmdName)))
 					m.output.WriteString(expanded)
 					m.output.WriteString("\n\n")
 					m.loading = true
 					// Reset status bar state
-					m.statusActivity = "Thinking..."
+					m.statusActivity = m.t("status.thinking")
 					m.statusToolName = ""
 					m.statusToolArg = ""
 					m.statusToolCount = 0
 					return m.startAgent(expanded)
 				}
 			}
-			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Unknown command: %s\n", text)))
-			m.output.WriteString(m.styles.prompt.Render("Type /help for available commands\n\n"))
+			m.output.WriteString(m.styles.error.Render(m.t("command.unknown", text)))
+			m.output.WriteString(m.styles.prompt.Render(m.t("command.help_hint")))
 			return nil
 		}
 	}
@@ -227,7 +249,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	workDir, _ := os.Getwd()
 	expandedMsg, expandErr := ExpandMentions(text, workDir)
 	if expandErr != nil {
-		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Mention expansion error: %v", expandErr)))
+		m.output.WriteString(m.styles.error.Render(m.t("command.mention_error", expandErr)))
 		m.output.WriteString("\n\n")
 	}
 
@@ -243,36 +265,61 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.streamPrefixWritten = false
 	m.loading = true
 	// Reset status bar state
-	m.statusActivity = "Thinking..."
+	m.statusActivity = m.t("status.thinking")
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 	return m.startAgent(expandedMsg)
 }
 
+func (m *Model) resetConversationView() {
+	m.output.Reset()
+	m.streamBuffer = nil
+	m.streamStartPos = 0
+	m.streamPrefixWritten = false
+	m.loading = false
+	m.lastCost = ""
+	m.statusActivity = ""
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusTokens = 0
+	m.statusCost = 0
+	m.statusToolCount = 0
+	m.autoCompleteActive = false
+	m.autoCompleteItems = nil
+	m.autoCompleteIndex = 0
+	m.exitConfirmPending = false
+	m.pendingSubmissions = nil
+	m.runCanceled = false
+	m.runFailed = false
+	m.spinner.Stop()
+	m.viewport.SetContent("")
+	m.viewport.GotoBottom()
+}
+
 func (m *Model) listSessions() tea.Cmd {
 	return func() tea.Msg {
 		if m.sessionStore == nil {
-			return streamMsg("Session store not configured.\n\n")
+			return streamMsg(m.t("session.store_missing"))
 		}
 		sessions, err := m.sessionStore.List()
 		if err != nil {
-			return streamMsg(fmt.Sprintf("Error listing sessions: %v\n\n", err))
+			return streamMsg(m.t("session.list_failed", err))
 		}
 		if len(sessions) == 0 {
-			return streamMsg("No sessions found.\n\n")
+			return streamMsg(m.t("session.none"))
 		}
 		var b strings.Builder
-		b.WriteString("Sessions:\n\n")
+		b.WriteString(m.t("session.list.title"))
 		for i, s := range sessions {
 			title := s.Title
 			if title == "" {
-				title = "untitled"
+				title = m.t("session.untitled")
 			}
 			updated := s.UpdatedAt.Format(time.RFC3339)
-			b.WriteString(fmt.Sprintf("  %d. %s  %s  (%s)\n", i+1, s.ID, title, updated))
+			b.WriteString(m.t("session.list.item", i+1, s.ID, title, updated))
 		}
-		b.WriteString("\nUse /resume <id> to continue a session\n\n")
+		b.WriteString(m.t("session.list.hint"))
 		return streamMsg(b.String())
 	}
 }
@@ -280,11 +327,11 @@ func (m *Model) listSessions() tea.Cmd {
 func (m *Model) resumeSession(id string) tea.Cmd {
 	return func() tea.Msg {
 		if m.sessionStore == nil {
-			return streamMsg("Session store not configured.\n\n")
+			return streamMsg(m.t("session.store_missing"))
 		}
 		ses, err := m.sessionStore.Load(id)
 		if err != nil {
-			return streamMsg(fmt.Sprintf("Failed to resume session %s: %v\n\n", id, err))
+			return streamMsg(m.t("session.resume_failed", id, err))
 		}
 		// Restore messages into agent
 		for _, msg := range ses.Messages {
@@ -293,27 +340,27 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 		m.session = ses
 		title := ses.Title
 		if title == "" {
-			title = "untitled"
+			title = m.t("session.untitled")
 		}
-		return streamMsg(fmt.Sprintf("Resumed session: %s \u2014 %s (%d messages)\n\n", ses.ID, title, len(ses.Messages)))
+		return streamMsg(m.t("session.resume", ses.ID, title, len(ses.Messages)))
 	}
 }
 
 func (m *Model) exportSession(id string) tea.Cmd {
 	return func() tea.Msg {
 		if m.sessionStore == nil {
-			return streamMsg("Session store not configured.\n\n")
+			return streamMsg(m.t("session.store_missing"))
 		}
 		md, err := m.sessionStore.ExportMarkdown(id)
 		if err != nil {
-			return streamMsg(fmt.Sprintf("Error exporting session: %v\n\n", err))
+			return streamMsg(m.t("session.export_failed", err))
 		}
 		filename := fmt.Sprintf("session-%s.md", id)
 		if err := os.WriteFile(filename, []byte(md), 0644); err != nil {
-			return streamMsg(fmt.Sprintf("Error writing file: %v\n\n", err))
+			return streamMsg(m.t("session.write_failed", err))
 		}
 		absPath, _ := filepath.Abs(filename)
-		return streamMsg(fmt.Sprintf("Exported session %s to %s\n\n", id, absPath))
+		return streamMsg(m.t("session.exported", id, absPath))
 	}
 }
 
@@ -354,7 +401,7 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 		pd.Response <- approved
 	}()
 	if !approved {
-		m.output.WriteString(m.styles.error.Render("  Rejected.\n"))
+		m.output.WriteString(m.styles.error.Render(m.t("approval.rejected")))
 	}
 	return nil
 }
@@ -384,7 +431,6 @@ func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(m.mode)
 	}
-	m.output.WriteString(fmt.Sprintf("Mode: %s\n", m.mode))
 	return m, nil
 }
 
@@ -395,10 +441,25 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 		if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 			cp.SetMode(newMode)
 		}
-		m.output.WriteString(fmt.Sprintf("Mode set to: %s\n\n", newMode))
 	} else {
-		m.output.WriteString(fmt.Sprintf("Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass>\n\n", m.mode))
+		m.output.WriteString(m.t("mode.current", m.mode))
 	}
+	return nil
+}
+
+func (m *Model) handleLangCommand(parts []string) tea.Cmd {
+	if len(parts) == 1 {
+		m.output.WriteString(m.t("lang.current", m.languageLabel(), supportedLanguageUsage(m.currentLanguage())))
+		return nil
+	}
+	raw := strings.TrimSpace(parts[1])
+	lang := normalizeLanguage(raw)
+	if lang == LangEnglish && !strings.EqualFold(raw, "en") && !strings.EqualFold(raw, "english") {
+		m.output.WriteString(m.styles.error.Render(m.t("lang.invalid", raw, supportedLanguageUsage(m.currentLanguage()))))
+		return nil
+	}
+	m.setLanguage(string(lang))
+	m.output.WriteString(m.t("lang.switch", m.languageLabel()))
 	return nil
 }
 
@@ -406,16 +467,16 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 	return func() tea.Msg {
 		cpMgr := m.agent.CheckpointManager()
 		if cpMgr == nil {
-			return streamMsg("Checkpointing not enabled.\n\n")
+			return streamMsg(m.t("checkpoint.disabled"))
 		}
 		cp, err := cpMgr.Undo()
 		if err != nil {
-			return streamMsg(fmt.Sprintf("Undo failed: %v\n\n", err))
+			return streamMsg(m.t("checkpoint.undo_failed", err))
 		}
 		// Show diff (new -> old)
 		diffText := diff.UnifiedDiff(cp.NewContent, cp.OldContent, 3)
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("Undid %s on %s (checkpoint %s)\n", cp.ToolCall, cp.FilePath, cp.ID))
+		b.WriteString(m.t("checkpoint.undid", cp.ToolCall, cp.FilePath, cp.ID))
 		b.WriteString(FormatDiff(diffText))
 		b.WriteString("\n")
 		return streamMsg(b.String())
@@ -426,18 +487,18 @@ func (m *Model) handleCheckpointsCommand() tea.Cmd {
 	return func() tea.Msg {
 		cpMgr := m.agent.CheckpointManager()
 		if cpMgr == nil {
-			return streamMsg("Checkpointing not enabled.\n\n")
+			return streamMsg(m.t("checkpoint.disabled"))
 		}
 		ps := cpMgr.List()
 		if len(ps) == 0 {
-			return streamMsg("No checkpoints.\n\n")
+			return streamMsg(m.t("checkpoint.none"))
 		}
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("Checkpoints (%d):\n\n", len(ps)))
+		b.WriteString(m.t("checkpoint.list.title", len(ps)))
 		for i, cp := range ps {
-			b.WriteString(fmt.Sprintf("  %d. %s  %s  %s  %s\n", i+1, cp.ID, cp.FilePath, cp.ToolCall, cp.Timestamp.Format("15:04:05")))
+			b.WriteString(m.t("checkpoint.list.item", i+1, cp.ID, cp.FilePath, cp.ToolCall, cp.Timestamp.Format("15:04:05")))
 		}
-		b.WriteString("\nUse /undo to revert the most recent.\n\n")
+		b.WriteString(m.t("checkpoint.list.hint"))
 		return streamMsg(b.String())
 	}
 }
@@ -458,54 +519,54 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 	switch sub {
 	case "list":
 		if m.autoMem == nil {
-			m.output.WriteString(m.styles.prompt.Render("Auto memory not initialized.\n\n"))
+			m.output.WriteString(m.styles.prompt.Render(m.t("memory.auto_unavailable")))
 			return nil
 		}
 		keys, err := m.autoMem.List()
 		if err != nil {
-			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error listing memories: %v\n\n", err)))
+			m.output.WriteString(m.styles.error.Render(m.t("memory.list_failed", err)))
 			return nil
 		}
 		if len(keys) == 0 {
-			m.output.WriteString(m.styles.prompt.Render("No auto memories saved.\n\n"))
+			m.output.WriteString(m.styles.prompt.Render(m.t("memory.none")))
 			return nil
 		}
-		m.output.WriteString(m.styles.title.Render("Auto Memories:\n"))
+		m.output.WriteString(m.styles.title.Render(m.t("memory.auto_title")))
 		for _, k := range keys {
 			m.output.WriteString(fmt.Sprintf("  - %s\n", k))
 		}
 		m.output.WriteString("\n")
 	case "clear":
 		if m.autoMem == nil {
-			m.output.WriteString(m.styles.prompt.Render("Auto memory not initialized.\n\n"))
+			m.output.WriteString(m.styles.prompt.Render(m.t("memory.auto_unavailable")))
 			return nil
 		}
 		if err := m.autoMem.Clear(); err != nil {
-			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error clearing memories: %v\n\n", err)))
+			m.output.WriteString(m.styles.error.Render(m.t("memory.clear_failed", err)))
 			return nil
 		}
-		m.output.WriteString(m.styles.assistant.Render("All auto memories cleared.\n\n"))
+		m.output.WriteString(m.styles.assistant.Render(m.t("memory.cleared")))
 	default:
-		m.output.WriteString(m.styles.title.Render("Memory:\n"))
+		m.output.WriteString(m.styles.title.Render(m.t("memory.title")))
 		if len(m.projMemFiles) > 0 {
-			m.output.WriteString(m.styles.assistant.Render("Project Memory (GGCODE.md):\n"))
+			m.output.WriteString(m.styles.assistant.Render(m.t("memory.project")))
 			for _, f := range m.projMemFiles {
 				m.output.WriteString(fmt.Sprintf("  %s\n", f))
 			}
 			m.output.WriteString("\n")
 		} else {
-			m.output.WriteString(m.styles.prompt.Render("  No GGCODE.md files loaded.\n"))
+			m.output.WriteString(m.styles.prompt.Render(m.t("memory.project_none")))
 		}
 		if len(m.autoMemFiles) > 0 {
-			m.output.WriteString(m.styles.assistant.Render("Auto Memory:\n"))
+			m.output.WriteString(m.styles.assistant.Render(m.t("memory.auto")))
 			for _, f := range m.autoMemFiles {
 				m.output.WriteString(fmt.Sprintf("  %s\n", f))
 			}
 			m.output.WriteString("\n")
 		} else {
-			m.output.WriteString(m.styles.prompt.Render("  No auto memories loaded.\n"))
+			m.output.WriteString(m.styles.prompt.Render(m.t("memory.auto_none")))
 		}
-		m.output.WriteString(m.styles.prompt.Render("\nUsage: /memory [list|clear]\n\n"))
+		m.output.WriteString(m.styles.prompt.Render(m.t("memory.usage")))
 	}
 	return nil
 }
@@ -514,12 +575,12 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	return func() tea.Msg {
 		cm := m.agent.ContextManager()
 		if cm == nil {
-			return streamMsg("Context manager not available.\n\n")
+			return streamMsg(m.t("compact.unavailable"))
 		}
 		if err := cm.Summarize(context.Background(), m.agent.Provider()); err != nil {
-			return streamMsg(fmt.Sprintf("Compact failed: %v\n\n", err))
+			return streamMsg(m.t("compact.failed", err))
 		}
-		return streamMsg("Conversation history compacted.\n\n")
+		return streamMsg(m.t("compact.done"))
 	}
 }
 
@@ -529,10 +590,10 @@ func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 		todopath := func() string { d, _ := os.UserHomeDir(); return filepath.Join(d, ".ggcode", "todos.json") }()
 		if err := os.WriteFile(todopath, []byte("[]\n"), 0644); err != nil {
 			return func() tea.Msg {
-				return streamMsg(fmt.Sprintf("Error clearing todos: %v\n\n", err))
+				return streamMsg(m.t("todo.clear_failed", err))
 			}
 		}
-		m.output.WriteString(m.styles.assistant.Render("Todo list cleared.\n\n"))
+		m.output.WriteString(m.styles.assistant.Render(m.t("todo.cleared")))
 		return nil
 	}
 	return func() tea.Msg {
@@ -540,44 +601,44 @@ func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 		data, err := os.ReadFile(todopath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return streamMsg("No todo list found. Use the todo_write tool to create one.\n\n")
+				return streamMsg(m.t("todo.none"))
 			}
-			return streamMsg(fmt.Sprintf("Error reading todos: %v\n\n", err))
+			return streamMsg(m.t("todo.read_failed", err))
 		}
 		// Pretty print JSON
 		var raw interface{}
 		if err := json.Unmarshal(data, &raw); err != nil {
-			return streamMsg(fmt.Sprintf("Error parsing todos: %v\n\n", err))
+			return streamMsg(m.t("todo.parse_failed", err))
 		}
 		pretty, _ := json.MarshalIndent(raw, "", "  ")
-		return streamMsg(fmt.Sprintf("Todo list:\n%s\n\n", string(pretty)))
+		return streamMsg(m.t("todo.title", string(pretty)))
 	}
 }
 
 func (m *Model) handleBugCommand() tea.Cmd {
 	return func() tea.Msg {
 		var b strings.Builder
-		b.WriteString("=== Bug Report Diagnostics ===\n\n")
+		b.WriteString(m.t("bug.title"))
 
 		// Version info
-		b.WriteString("Version: ggcode (dev)\n")
-		b.WriteString(fmt.Sprintf("OS: %s %s\n", runtime.GOOS, runtime.GOARCH))
-		b.WriteString(fmt.Sprintf("Go: %s\n", runtime.Version()))
+		b.WriteString(m.t("bug.version"))
+		b.WriteString(m.t("bug.os", runtime.GOOS, runtime.GOARCH))
+		b.WriteString(m.t("bug.go", runtime.Version()))
 
 		// Config info
 		if m.config != nil {
-			b.WriteString(fmt.Sprintf("Provider: %s\n", m.config.Provider))
-			b.WriteString(fmt.Sprintf("Model: %s\n", m.config.Model))
+			b.WriteString(m.t("bug.provider", m.config.Provider))
+			b.WriteString(m.t("bug.model", m.config.Model))
 		}
 
 		// Session info
 		if m.session != nil {
-			b.WriteString(fmt.Sprintf("Session: %s (%d messages)\n", m.session.ID, len(m.session.Messages)))
+			b.WriteString(m.t("bug.session", m.session.ID, len(m.session.Messages)))
 		}
 
 		// MCP info
 		if len(m.mcpServers) > 0 {
-			b.WriteString(fmt.Sprintf("MCP servers: %d\n", len(m.mcpServers)))
+			b.WriteString(m.t("bug.mcp", len(m.mcpServers)))
 		}
 
 		// Recent errors from output
@@ -587,10 +648,10 @@ func (m *Model) handleBugCommand() tea.Cmd {
 			if end > len(output) {
 				end = len(output)
 			}
-			b.WriteString(fmt.Sprintf("Last error: %s\n", output[idx:end]))
+			b.WriteString(m.t("bug.last_error", output[idx:end]))
 		}
 
-		b.WriteString("\nPlease include this information when reporting a bug.\n\n")
+		b.WriteString(m.t("bug.hint"))
 		return streamMsg(b.String())
 	}
 }
@@ -598,33 +659,37 @@ func (m *Model) handleBugCommand() tea.Cmd {
 func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "set" {
 		if len(parts) < 4 {
-			m.output.WriteString(m.styles.error.Render("Usage: /config set <key> <value>\n\n"))
+			m.output.WriteString(m.styles.error.Render(m.t("config.usage")))
 			return nil
 		}
 		key := parts[2]
 		value := parts[3]
 		if m.config == nil {
-			m.output.WriteString(m.styles.error.Render("Config not loaded.\n\n"))
+			m.output.WriteString(m.styles.error.Render(m.t("config.not_loaded")))
 			return nil
 		}
 		switch key {
 		case "model":
 			m.config.Model = value
-			m.output.WriteString(fmt.Sprintf("Config: model = %s\n\n", value))
+			m.output.WriteString(m.t("config.model_set", value))
 		case "provider":
 			m.config.Provider = value
-			m.output.WriteString(fmt.Sprintf("Config: provider = %s\n\n", value))
+			m.output.WriteString(m.t("config.provider_set", value))
+		case "language":
+			m.setLanguage(value)
+			m.output.WriteString(m.t("config.language_set", m.languageLabel()))
 		default:
-			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Unknown config key: %s\nSupported: model, provider\n\n", key)))
+			m.output.WriteString(m.styles.error.Render(m.t("config.unknown_key", key)))
 		}
 		return nil
 	}
 	// Show current config
 	var b strings.Builder
-	b.WriteString(m.styles.title.Render("Current Configuration:\n"))
+	b.WriteString(m.styles.title.Render(m.t("config.title")))
 	if m.config != nil {
 		b.WriteString(fmt.Sprintf("  Provider:    %s\n", m.config.Provider))
 		b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
+		b.WriteString(fmt.Sprintf("  Language:    %s\n", m.languageLabel()))
 		if pc, ok := m.config.Providers[m.config.Provider]; ok && pc.MaxTokens > 0 {
 			b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", pc.MaxTokens))
 		}
@@ -633,16 +698,17 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 		}
 		b.WriteString(fmt.Sprintf("  MCP Servers: %d\n", len(m.config.MCPServers)))
 	}
-	b.WriteString(m.styles.prompt.Render("\nUsage: /config set <key> <value>\n\n"))
+	b.WriteString(m.styles.prompt.Render(m.t("config.usage")))
 	m.output.WriteString(b.String())
 	return nil
 }
 
 func (m *Model) handleStatusCommand() tea.Cmd {
 	var b strings.Builder
-	b.WriteString(m.styles.title.Render("Status:\n"))
+	b.WriteString(m.styles.title.Render(m.t("status.title")))
 	b.WriteString(fmt.Sprintf("  Provider:    %s\n", m.config.Provider))
 	b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
+	b.WriteString(fmt.Sprintf("  Language:    %s\n", m.languageLabel()))
 	b.WriteString(fmt.Sprintf("  Mode:        %s\n", m.mode))
 	b.WriteString(fmt.Sprintf("  Fullscreen:  %v\n", m.fullscreen))
 
@@ -668,15 +734,15 @@ func (m *Model) handleStatusCommand() tea.Cmd {
 
 func (m *Model) handlePluginsCommand() tea.Cmd {
 	if m.pluginMgr == nil {
-		m.output.WriteString(m.styles.prompt.Render("Plugin manager not available.\n\n"))
+		m.output.WriteString(m.styles.prompt.Render(m.t("plugins.unavailable")))
 		return nil
 	}
 	results := m.pluginMgr.Results()
 	if len(results) == 0 {
-		m.output.WriteString(m.styles.prompt.Render("No plugins loaded.\n\n"))
+		m.output.WriteString(m.styles.prompt.Render(m.t("plugins.none")))
 		return nil
 	}
-	m.output.WriteString(m.styles.title.Render("Plugins:\n"))
+	m.output.WriteString(m.styles.title.Render(m.t("plugins.title")))
 	for _, r := range results {
 		status := "\u2713"
 		style := m.styles.assistant
@@ -699,10 +765,10 @@ func (m *Model) handlePluginsCommand() tea.Cmd {
 
 func (m *Model) handleMCPCommand() tea.Cmd {
 	if len(m.mcpServers) == 0 {
-		m.output.WriteString(m.styles.prompt.Render("No MCP servers configured.\n\n"))
+		m.output.WriteString(m.styles.prompt.Render(m.t("mcp.none")))
 		return nil
 	}
-	m.output.WriteString(m.styles.title.Render("MCP Servers:\n"))
+	m.output.WriteString(m.styles.title.Render(m.t("mcp.title")))
 	for _, srv := range m.mcpServers {
 		status := "\u2713"
 		if !srv.Connected {
@@ -719,7 +785,7 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 
 func (m *Model) handleCostCommand(parts []string) tea.Cmd {
 	if m.costMgr == nil {
-		m.output.WriteString(m.styles.error.Render("Cost tracking not enabled.\n\n"))
+		m.output.WriteString(m.styles.error.Render(m.t("cost.unavailable")))
 		return nil
 	}
 
@@ -728,36 +794,36 @@ func (m *Model) handleCostCommand(parts []string) tea.Cmd {
 	if showAll {
 		all := m.costMgr.AllCosts()
 		if len(all) == 0 {
-			m.output.WriteString("No cost data yet.\n\n")
+			m.output.WriteString(m.t("cost.none"))
 			return nil
 		}
-		m.output.WriteString(m.styles.title.Render("Cost Summary (all sessions)\n"))
+		m.output.WriteString(m.styles.title.Render(m.t("cost.summary")))
 		for _, sc := range all {
 			m.output.WriteString(cost.FormatSessionCost(sc, time.Time{}) + "\n")
 		}
 		total := m.costMgr.TotalCost()
-		m.output.WriteString(fmt.Sprintf("\n  Total: %s\n\n", cost.FormatCost(total)))
+		m.output.WriteString(m.t("cost.total", cost.FormatCost(total)))
 		return nil
 	}
 
 	// Current session
-	if sc, ok := m.costMgr.SessionCost("current"); ok {
-		m.output.WriteString(m.styles.title.Render("Current Session Cost\n"))
+	if sc, ok := m.currentSessionCost(); ok {
+		m.output.WriteString(m.styles.title.Render(m.t("cost.current")))
 		m.output.WriteString(fmt.Sprintf("  Provider: %s\n", sc.Provider))
 		m.output.WriteString(fmt.Sprintf("  Model:    %s\n", sc.Model))
 		m.output.WriteString(fmt.Sprintf("  Input:    %s tokens\n", cost.FormatTokens(sc.InputTokens)))
 		m.output.WriteString(fmt.Sprintf("  Output:   %s tokens\n", cost.FormatTokens(sc.OutputTokens)))
 		m.output.WriteString(fmt.Sprintf("  Cost:     %s USD\n\n", cost.FormatCost(sc.TotalCostUSD)))
 	} else {
-		m.output.WriteString("No cost data for current session yet.\n\n")
+		m.output.WriteString(m.t("cost.current_none"))
 	}
 	return nil
 }
 
 func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 	if len(parts) < 2 {
-		m.output.WriteString(m.styles.error.Render("Usage: /image <path/to/file.png>\n"))
-		m.output.WriteString(m.styles.prompt.Render("Supported formats: PNG, JPEG, GIF, WebP (max 20MB)\n\n"))
+		m.output.WriteString(m.styles.error.Render(m.t("image.usage")))
+		m.output.WriteString(m.styles.prompt.Render(m.t("image.formats")))
 		return nil
 	}
 	path := parts[1]
@@ -779,64 +845,65 @@ func (m *Model) handleFullscreenCommand() tea.Cmd {
 	m.fullscreen = !m.fullscreen
 	state := "off"
 	if m.fullscreen {
-		state = "on"
+		state = m.t("fullscreen.on")
+	} else {
+		state = m.t("fullscreen.off")
 	}
-	m.output.WriteString(fmt.Sprintf("Fullscreen: %s\n\n", state))
+	m.output.WriteString(m.t("fullscreen.state", state))
 	return nil
 }
 
 func (m *Model) handleAgentsCommand(parts []string) tea.Cmd {
 	if m.subAgentMgr == nil {
-		m.output.WriteString(m.styles.error.Render("Sub-agent manager not configured.\n\n"))
+		m.output.WriteString(m.styles.error.Render(m.t("agents.unavailable")))
 		return nil
 	}
 	agents := m.subAgentMgr.List()
 	if len(agents) == 0 {
-		m.output.WriteString("No sub-agents spawned yet.\nUsage: LLM can use spawn_agent tool to create sub-agents.\n\n")
+		m.output.WriteString(m.t("agents.none"))
 		return nil
 	}
-	m.output.WriteString(fmt.Sprintf("%d sub-agent(s):\n", len(agents)))
+	m.output.WriteString(m.t("agents.title", len(agents)))
 	for _, sa := range agents {
 		duration := ""
 		if !sa.EndedAt.IsZero() && !sa.StartedAt.IsZero() {
 			duration = fmt.Sprintf(" (%v)", sa.EndedAt.Sub(sa.StartedAt).Round(1e9))
 		}
-		m.output.WriteString(fmt.Sprintf("  %s [%s]%s - %s\n", sa.ID, sa.Status, duration, truncateStr(sa.Task, 60)))
+		m.output.WriteString(m.t("agents.item", sa.ID, sa.Status, duration, truncateStr(sa.Task, 60)))
 	}
-	m.output.WriteString("\nUse /agent <id> for details, /agent cancel <id> to cancel.\n\n")
+	m.output.WriteString(m.t("agents.hint"))
 	return nil
 }
 
 func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 	if m.subAgentMgr == nil {
-		m.output.WriteString(m.styles.error.Render("Sub-agent manager not configured.\n\n"))
+		m.output.WriteString(m.styles.error.Render(m.t("agents.unavailable")))
 		return nil
 	}
 	if len(parts) < 2 {
-		m.output.WriteString("Usage: /agent <id> or /agent cancel <id>\n\n")
+		m.output.WriteString(m.t("agent.usage"))
 		return nil
 	}
 	if parts[1] == "cancel" && len(parts) >= 3 {
 		if m.subAgentMgr.Cancel(parts[2]) {
-			m.output.WriteString(fmt.Sprintf("Cancelled sub-agent %s\n\n", parts[2]))
+			m.output.WriteString(m.t("agent.cancelled", parts[2]))
 		} else {
-			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Could not cancel %s (not found or not running)\n\n", parts[2])))
+			m.output.WriteString(m.styles.error.Render(m.t("agent.cancel_failed", parts[2])))
 		}
 		return nil
 	}
 	sa, ok := m.subAgentMgr.Get(parts[1])
 	if !ok {
-		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Sub-agent %s not found\n\n", parts[1])))
+		m.output.WriteString(m.styles.error.Render(m.t("agent.not_found", parts[1])))
 		return nil
 	}
-	m.output.WriteString(fmt.Sprintf("Agent: %s\nStatus: %s\nTask: %s\n", sa.ID, sa.Status, sa.Task))
+	m.output.WriteString(m.t("agent.title", sa.ID, sa.Status, sa.Task))
 	if sa.Result != "" {
-		m.output.WriteString(fmt.Sprintf("Result: %s\n", sa.Result))
+		m.output.WriteString(m.t("agent.result", sa.Result))
 	}
 	if sa.Error != nil {
-		m.output.WriteString(fmt.Sprintf("Error: %v\n", sa.Error))
+		m.output.WriteString(m.t("agent.error", sa.Error))
 	}
 	m.output.WriteString("\n")
 	return nil
 }
-

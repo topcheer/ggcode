@@ -43,7 +43,7 @@ type PluginConfigEntry struct {
 	Name     string                 `yaml:"name"`
 	Path     string                 `yaml:"path"`
 	Type     string                 `yaml:"type"`
-	Commands []PluginCommandConfig   `yaml:"commands"`
+	Commands []PluginCommandConfig  `yaml:"commands"`
 	Extra    map[string]interface{} `yaml:",inline"`
 }
 
@@ -101,16 +101,17 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 type Config struct {
 	Provider      string                    `yaml:"provider"`
 	Model         string                    `yaml:"model"`
+	Language      string                    `yaml:"language"`
 	SystemPrompt  string                    `yaml:"system_prompt"`
 	Providers     map[string]ProviderConfig `yaml:"providers"`
 	AllowedDirs   []string                  `yaml:"allowed_dirs"`
 	MaxIterations int                       `yaml:"max_iterations"`
 	ToolPerms     map[string]ToolPermission `yaml:"tool_permissions"`
-	Plugins    []PluginConfigEntry  `yaml:"plugins"`
-	MCPServers []MCPServerConfig     `yaml:"mcp_servers"`
-	Hooks      hooks.HookConfig      `yaml:"hooks"`
-	DefaultMode string                    `yaml:"default_mode"`
-	SubAgents   SubAgentConfig           `yaml:"subagents"`
+	Plugins       []PluginConfigEntry       `yaml:"plugins"`
+	MCPServers    []MCPServerConfig         `yaml:"mcp_servers"`
+	Hooks         hooks.HookConfig          `yaml:"hooks"`
+	DefaultMode   string                    `yaml:"default_mode"`
+	SubAgents     SubAgentConfig            `yaml:"subagents"`
 }
 
 // SubAgentConfig holds sub-agent configuration.
@@ -122,10 +123,11 @@ type SubAgentConfig struct {
 
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		SystemPrompt:  DefaultSystemPrompt,
 		Provider:      "anthropic",
 		Model:         "claude-sonnet-4-20250514",
+		Language:      "en",
 		AllowedDirs:   []string{"."},
 		MaxIterations: 50,
 		Providers: map[string]ProviderConfig{
@@ -143,6 +145,8 @@ func DefaultConfig() *Config {
 			},
 		},
 	}
+	cfg.expandEnv()
+	return cfg
 }
 
 // Load reads config from the given path. If the file doesn't exist, returns defaults.
@@ -152,6 +156,9 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if err := cfg.Validate(); err != nil {
+				return nil, err
+			}
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
@@ -175,17 +182,94 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(expandedData, cfg); err != nil {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
 	}
+	cfg.expandEnv()
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validating config %s: %w", path, err)
+	}
 
 	debug.Log("config", "Load: provider=%s model=%s max_iterations=%d", cfg.Provider, cfg.Model, cfg.MaxIterations)
 	for name, pc := range cfg.Providers {
-		key := pc.APIKey
-		if len(key) > 10 {
-			key = key[:10] + "..."
-		}
-		debug.Log("config", "  provider %s: base_url=%s api_key=%s max_tokens=%d", name, pc.BaseURL, key, pc.MaxTokens)
+		hasKey := pc.APIKey != ""
+		debug.Log("config", "  provider %s: base_url=%s api_key_set=%t max_tokens=%d", name, pc.BaseURL, hasKey, pc.MaxTokens)
 	}
 
 	return cfg, nil
+}
+
+func (c *Config) expandEnv() {
+	c.Provider = ExpandEnv(c.Provider)
+	c.Model = ExpandEnv(c.Model)
+	c.SystemPrompt = ExpandEnv(c.SystemPrompt)
+	c.DefaultMode = ExpandEnv(c.DefaultMode)
+	for i, dir := range c.AllowedDirs {
+		c.AllowedDirs[i] = ExpandEnv(dir)
+	}
+	for name, pc := range c.Providers {
+		pc.APIKey = ExpandEnv(pc.APIKey)
+		pc.BaseURL = ExpandEnv(pc.BaseURL)
+		c.Providers[name] = pc
+	}
+	for i, plugin := range c.Plugins {
+		plugin.Name = ExpandEnv(plugin.Name)
+		plugin.Path = ExpandEnv(plugin.Path)
+		plugin.Type = ExpandEnv(plugin.Type)
+		for j, cmd := range plugin.Commands {
+			cmd.Name = ExpandEnv(cmd.Name)
+			cmd.Description = ExpandEnv(cmd.Description)
+			cmd.Execute = ExpandEnv(cmd.Execute)
+			for k, arg := range cmd.Args {
+				cmd.Args[k] = ExpandEnv(arg)
+			}
+			plugin.Commands[j] = cmd
+		}
+		c.Plugins[i] = plugin
+	}
+	for i, mcp := range c.MCPServers {
+		mcp.Name = ExpandEnv(mcp.Name)
+		mcp.Command = ExpandEnv(mcp.Command)
+		for j, arg := range mcp.Args {
+			mcp.Args[j] = ExpandEnv(arg)
+		}
+		for key, val := range mcp.Env {
+			mcp.Env[key] = ExpandEnv(val)
+		}
+		c.MCPServers[i] = mcp
+	}
+}
+
+// Validate checks for invalid core configuration values that should fail fast.
+func (c *Config) Validate() error {
+	if strings.TrimSpace(c.Provider) == "" {
+		return fmt.Errorf("provider must not be empty")
+	}
+	if strings.TrimSpace(c.Model) == "" {
+		return fmt.Errorf("model must not be empty")
+	}
+	if _, ok := c.Providers[c.Provider]; !ok {
+		return fmt.Errorf("provider %q is not configured", c.Provider)
+	}
+	if c.MaxIterations <= 0 {
+		return fmt.Errorf("max_iterations must be greater than 0")
+	}
+	if c.DefaultMode != "" {
+		switch strings.ToLower(c.DefaultMode) {
+		case "supervised", "plan", "auto", "bypass":
+		default:
+			return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass", c.DefaultMode)
+		}
+	}
+	if c.SubAgents.MaxConcurrent < 0 {
+		return fmt.Errorf("subagents.max_concurrent must not be negative")
+	}
+	if c.SubAgents.Timeout < 0 {
+		return fmt.Errorf("subagents.timeout must not be negative")
+	}
+	for _, dir := range c.AllowedDirs {
+		if strings.TrimSpace(dir) == "" {
+			return fmt.Errorf("allowed_dirs must not contain empty entries")
+		}
+	}
+	return nil
 }
 
 // GetProviderConfig returns the config for the active provider.
@@ -215,7 +299,8 @@ func BuildSystemPrompt(basePrompt, workingDir string, toolNames []string, gitSta
 	}
 
 	if len(customCmds) > 0 {
-		sb.WriteString(fmt.Sprintf("- Custom slash commands: %s\n", strings.Join(customCmds, ", ")))}
+		sb.WriteString(fmt.Sprintf("- Custom slash commands: %s\n", strings.Join(customCmds, ", ")))
+	}
 
 	return sb.String()
 }

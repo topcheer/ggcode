@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +118,31 @@ func TestWebFetch_PrivateIPBlocked(t *testing.T) {
 				t.Errorf("expected error for private URL %s, got: %s", url, result.Content)
 			}
 		})
+	}
+}
+
+func TestResolvePublicDialAddress_EmptyLookup(t *testing.T) {
+	_, err := resolvePublicDialAddress(context.Background(), "example.com", "443", func(context.Context, string) ([]net.IPAddr, error) {
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "no IP addresses found") {
+		t.Fatalf("expected no-IP error, got %v", err)
+	}
+}
+
+func TestResolvePublicDialAddress_PrivateIPBlocked(t *testing.T) {
+	_, err := resolvePublicDialAddress(context.Background(), "example.com", "443", func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "private/internal IP") {
+		t.Fatalf("expected private IP error, got %v", err)
+	}
+}
+
+func TestParsePrivateNetworks_InvalidCIDR(t *testing.T) {
+	_, err := parsePrivateNetworks([]string{"not-a-cidr"})
+	if err == nil {
+		t.Fatal("expected parse error")
 	}
 }
 

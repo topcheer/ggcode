@@ -73,6 +73,17 @@ func TestLoad_NonExistent(t *testing.T) {
 	}
 }
 
+func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	cfg, err := Load("/nonexistent/path/ggcode.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Providers["anthropic"].APIKey; got != "test-key" {
+		t.Fatalf("expected expanded API key, got %q", got)
+	}
+}
+
 func TestLoad_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
@@ -103,6 +114,62 @@ allowed_dirs:
 	}
 	if len(cfg.AllowedDirs) != 1 || cfg.AllowedDirs[0] != "/tmp" {
 		t.Errorf("expected [/tmp], got %v", cfg.AllowedDirs)
+	}
+}
+
+func TestLoad_InvalidProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+provider: unknown
+model: test
+providers:
+  anthropic:
+    api_key: key
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid provider")
+	}
+}
+
+func TestLoad_InvalidMaxIterations(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+provider: anthropic
+model: test
+max_iterations: 0
+providers:
+  anthropic:
+    api_key: key
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for max_iterations")
+	}
+}
+
+func TestLoad_InvalidDefaultMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+provider: anthropic
+model: test
+default_mode: turbo
+providers:
+  anthropic:
+    api_key: key
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for default_mode")
 	}
 }
 

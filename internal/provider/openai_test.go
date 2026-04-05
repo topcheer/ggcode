@@ -49,6 +49,18 @@ func TestOpenAIConvertMessages_Empty(t *testing.T) {
 	}
 }
 
+func TestEstimateTokensFromChars(t *testing.T) {
+	if got := estimateTokensFromChars(0); got != 0 {
+		t.Fatalf("expected 0, got %d", got)
+	}
+	if got := estimateTokensFromChars(3); got != 1 {
+		t.Fatalf("expected minimum 1 token for non-empty output, got %d", got)
+	}
+	if got := estimateTokensFromChars(40); got != 10 {
+		t.Fatalf("expected 10, got %d", got)
+	}
+}
+
 func TestAnthropicBuildParams_Basic(t *testing.T) {
 	p := &AnthropicProvider{model: "claude-3", maxTokens: 1024}
 	msgs := []Message{

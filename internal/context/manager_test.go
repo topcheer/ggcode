@@ -2,15 +2,17 @@ package context
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
 type mockProvider struct{}
 
-func (m *mockProvider) Name() string                                { return "mock" }
+func (m *mockProvider) Name() string { return "mock" }
 func (m *mockProvider) Chat(ctx context.Context, msgs []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
 	return &provider.ChatResponse{
 		Message: provider.Message{
@@ -27,7 +29,25 @@ func (m *mockProvider) ChatStream(ctx context.Context, msgs []provider.Message, 
 	close(ch)
 	return ch, nil
 }
-func (m *mockProvider) CountTokens(ctx context.Context, msgs []provider.Message) (int, error) { return 200, nil }
+func (m *mockProvider) CountTokens(ctx context.Context, msgs []provider.Message) (int, error) {
+	return 200, nil
+}
+
+type blockingCountProvider struct{}
+
+func (b *blockingCountProvider) Name() string { return "blocking" }
+func (b *blockingCountProvider) Chat(ctx context.Context, msgs []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	return nil, errors.New("not implemented")
+}
+func (b *blockingCountProvider) ChatStream(ctx context.Context, msgs []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent)
+	close(ch)
+	return ch, nil
+}
+func (b *blockingCountProvider) CountTokens(ctx context.Context, msgs []provider.Message) (int, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
 
 func TestContextManager_Basic(t *testing.T) {
 	cm := NewManager(1000)
@@ -133,5 +153,28 @@ func TestContextManager_Summarize_TooFewMessages(t *testing.T) {
 	// Message count should remain the same
 	if len(cm.Messages()) != 2 {
 		t.Errorf("Expected 2 messages (no summarization), got %d", len(cm.Messages()))
+	}
+}
+
+func TestContextManager_UsesProviderTokenCount(t *testing.T) {
+	cm := NewManager(1000)
+	cm.SetProvider(&mockProvider{})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}})
+	if got := cm.TokenCount(); got != 200 {
+		t.Fatalf("expected provider token count 200, got %d", got)
+	}
+}
+
+func TestContextManager_CountTokensTimeoutFallsBack(t *testing.T) {
+	cm := NewManager(1000)
+	cm.SetProvider(&blockingCountProvider{})
+	start := time.Now()
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello world"}}})
+	elapsed := time.Since(start)
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("expected Add to return quickly after timeout, took %v", elapsed)
+	}
+	if cm.TokenCount() == 0 {
+		t.Fatal("expected fallback heuristic token count")
 	}
 }

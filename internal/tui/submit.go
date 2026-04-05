@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 
 	"github.com/topcheer/ggcode/internal/session"
 
@@ -67,11 +68,11 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					case provider.StreamEventText:
 						m.program.Send(streamMsg(event.Text))
 						m.program.Send(statusMsg{
-							Activity: "Writing...",
+							Activity: m.t("status.writing"),
 						})
 					case provider.StreamEventToolCallDone:
 						m.program.Send(statusMsg{
-							Activity:  "Thinking...",
+							Activity:  m.t("status.thinking"),
 							ToolName:  event.Tool.Name,
 							ToolCount: m.statusToolCount + 1,
 						})
@@ -80,8 +81,18 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							Running:  true,
 							Args:     truncateString(string(event.Tool.Arguments), 100),
 						})
+					case provider.StreamEventToolResult:
+						m.program.Send(toolStatusMsg{
+							ToolName: event.Tool.Name,
+							Running:  false,
+							Result:   event.Result,
+							Args:     truncateString(string(event.Tool.Arguments), 100),
+							IsError:  event.IsError,
+						})
 					case provider.StreamEventError:
-						m.program.Send(errMsg{err: event.Error})
+						if !errors.Is(event.Error, context.Canceled) {
+							m.program.Send(errMsg{err: event.Error})
+						}
 					}
 				})
 			} else {
@@ -93,11 +104,11 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					case provider.StreamEventText:
 						m.program.Send(streamMsg(event.Text))
 						m.program.Send(statusMsg{
-							Activity: "Writing...",
+							Activity: m.t("status.writing"),
 						})
 					case provider.StreamEventToolCallDone:
 						m.program.Send(statusMsg{
-							Activity:  "Thinking...",
+							Activity:  m.t("status.thinking"),
 							ToolName:  event.Tool.Name,
 							ToolCount: m.statusToolCount + 1,
 						})
@@ -106,8 +117,18 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							Running:  true,
 							Args:     truncateString(string(event.Tool.Arguments), 100),
 						})
+					case provider.StreamEventToolResult:
+						m.program.Send(toolStatusMsg{
+							ToolName: event.Tool.Name,
+							Running:  false,
+							Result:   event.Result,
+							Args:     truncateString(string(event.Tool.Arguments), 100),
+							IsError:  event.IsError,
+						})
 					case provider.StreamEventError:
-						m.program.Send(errMsg{err: event.Error})
+						if !errors.Is(event.Error, context.Canceled) {
+							m.program.Send(errMsg{err: event.Error})
+						}
 					}
 				})
 			}
@@ -116,4 +137,3 @@ func (m *Model) startAgent(text string) tea.Cmd {
 		return nil
 	}
 }
-
