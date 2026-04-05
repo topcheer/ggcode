@@ -61,8 +61,8 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 }
 
 const (
-	maxFileLines    = 500
-	maxFileChars    = 50000
+	maxFileLines = 500
+	maxFileChars = 50000
 )
 
 func truncateFileContent(content string) string {

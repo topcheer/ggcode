@@ -37,9 +37,9 @@ func createTestJPEG(t *testing.T) []byte {
 
 func TestDetectMIME(t *testing.T) {
 	tests := []struct {
-		name    string
-		data    []byte
-		want    string
+		name string
+		data []byte
+		want string
 	}{
 		{"png", createTestPNG(t, 10, 10), MIMEPNG},
 		{"empty", []byte{}, ""},
@@ -150,7 +150,7 @@ func TestIsImageFile(t *testing.T) {
 		{"pic.webp", true},
 		{"doc.txt", false},
 		{"archive.zip", false},
-		{"PNG", false},  // case sensitive extension
+		{"PNG", false},     // case sensitive extension
 		{"test.PNG", true}, // lowercase check
 	}
 

@@ -29,11 +29,11 @@ type SubAgent struct {
 	Status        Status
 	Result        string
 	Error         error
-	CreatedAt time.Time
-	StartedAt time.Time
-	EndedAt   time.Time
-	cancel    context.CancelFunc
-	mu        sync.Mutex
+	CreatedAt     time.Time
+	StartedAt     time.Time
+	EndedAt       time.Time
+	cancel        context.CancelFunc
+	mu            sync.Mutex
 }
 
 func (s *SubAgent) IncrementToolCalls() {
@@ -50,13 +50,13 @@ func (s *SubAgent) setStatus(st Status) {
 
 // Manager manages spawning, tracking, and collecting results from sub-agents.
 type Manager struct {
-	agents       map[string]*SubAgent
-	mu           sync.Mutex
-	sem          chan struct{}
-	timeout      time.Duration
-	showOutput   bool
-	onComplete   func(*SubAgent)
-	nextID       int
+	agents     map[string]*SubAgent
+	mu         sync.Mutex
+	sem        chan struct{}
+	timeout    time.Duration
+	showOutput bool
+	onComplete func(*SubAgent)
+	nextID     int
 }
 
 // NewManager creates a Manager with the given config.

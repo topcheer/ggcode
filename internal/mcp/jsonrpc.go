@@ -12,10 +12,10 @@ type ID struct {
 	value interface{}
 }
 
-func NewStringID(s string) ID  { return ID{value: s} }
-func NewIntID(n int64) ID      { return ID{value: n} }
+func NewStringID(s string) ID { return ID{value: s} }
+func NewIntID(n int64) ID     { return ID{value: n} }
 
-func (id ID) MarshalJSON() ([]byte, error) { return json.Marshal(id.value) }
+func (id ID) MarshalJSON() ([]byte, error)     { return json.Marshal(id.value) }
 func (id *ID) UnmarshalJSON(data []byte) error { return json.Unmarshal(data, &id.value) }
 
 // Request is a JSON-RPC request.

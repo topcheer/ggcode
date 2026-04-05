@@ -174,15 +174,15 @@ func sessionToIndexEntry(s *Session) indexEntry {
 
 // jsonlRecord is written one-per-line in the session file.
 type jsonlRecord struct {
-	Type      string          `json:"type"` // "meta" or "message"
-	SessionID string          `json:"session_id,omitempty"`
-	Title     string          `json:"title,omitempty"`
-	Provider  string          `json:"provider,omitempty"`
-	Model     string          `json:"model,omitempty"`
-	CreatedAt time.Time       `json:"created_at,omitempty"`
-	UpdatedAt time.Time       `json:"updated_at,omitempty"`
+	Type      string            `json:"type"` // "meta" or "message"
+	SessionID string            `json:"session_id,omitempty"`
+	Title     string            `json:"title,omitempty"`
+	Provider  string            `json:"provider,omitempty"`
+	Model     string            `json:"model,omitempty"`
+	CreatedAt time.Time         `json:"created_at,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at,omitempty"`
 	Message   *provider.Message `json:"message,omitempty"`
-	CostJSON  json.RawMessage  `json:"cost,omitempty"`
+	CostJSON  json.RawMessage   `json:"cost,omitempty"`
 }
 
 func (s *JSONLStore) sessionPath(id string) string {
@@ -586,5 +586,3 @@ func generateID() string {
 func (s *JSONLStore) Dir() string {
 	return s.dir
 }
-
-

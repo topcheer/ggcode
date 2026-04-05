@@ -18,8 +18,10 @@ func NewSaveMemoryTool(am *memory.AutoMemory) *SaveMemoryTool {
 	return &SaveMemoryTool{autoMem: am}
 }
 
-func (t *SaveMemoryTool) Name() string        { return "save_memory" }
-func (t *SaveMemoryTool) Description() string  { return "Save a useful pattern or experience to persistent memory for future sessions." }
+func (t *SaveMemoryTool) Name() string { return "save_memory" }
+func (t *SaveMemoryTool) Description() string {
+	return "Save a useful pattern or experience to persistent memory for future sessions."
+}
 
 func (t *SaveMemoryTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
