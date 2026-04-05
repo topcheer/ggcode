@@ -10,10 +10,10 @@ import (
 
 // ViewportModel wraps a viewport with auto-follow behavior.
 type ViewportModel struct {
-	vp        viewport.Model
+	vp         viewport.Model
 	autoFollow bool
-	width     int
-	height    int
+	width      int
+	height     int
 }
 
 // NewViewportModel creates a new viewport model.
@@ -21,10 +21,10 @@ func NewViewportModel(width, height int) ViewportModel {
 	vp := viewport.New(width, height)
 	vp.SetContent("")
 	return ViewportModel{
-		vp:        vp,
+		vp:         vp,
 		autoFollow: true,
-		width:     width,
-		height:    height,
+		width:      width,
+		height:     height,
 	}
 }
 
@@ -132,7 +132,7 @@ func scrollBar(offset, visible, total, width int) string {
 		return strings.Repeat("█", width)
 	}
 	barLen := float64(visible) / float64(total) * float64(width)
-	pos := float64(offset) / float64(total-visible) * float64(width) - barLen
+	pos := float64(offset)/float64(total-visible)*float64(width) - barLen
 	if pos < 0 {
 		pos = 0
 	}

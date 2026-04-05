@@ -8,9 +8,9 @@ import (
 )
 
 var (
-	diffAddStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))  // green
-	diffRemoveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))   // red
-	diffHeaderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))   // cyan
+	diffAddStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+	diffRemoveStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
+	diffHeaderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))  // cyan
 	diffContextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))  // gray
 )
 

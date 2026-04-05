@@ -40,6 +40,10 @@ type Agent struct {
 	mu             sync.RWMutex
 }
 
+type providerAwareContextManager interface {
+	SetProvider(provider.Provider)
+}
+
 // NewAgent creates a new agent with optional permission policy.
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
 	a := &Agent{
@@ -48,6 +52,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		maxIter:        maxIter,
 		contextManager: ctxpkg.NewManager(128000),
 	}
+	a.syncContextManagerProviderLocked()
 	if systemPrompt != "" {
 		a.contextManager.Add(provider.Message{
 			Role:    "system",
@@ -91,6 +96,7 @@ func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.contextManager = cm
+	a.syncContextManagerProviderLocked()
 }
 
 // AddMessage appends a message to the conversation context.
@@ -108,6 +114,7 @@ func (a *Agent) SetProvider(p provider.Provider) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.provider = p
+	a.syncContextManagerProviderLocked()
 }
 
 func (a *Agent) Provider() provider.Provider {
@@ -120,12 +127,18 @@ func (a *Agent) ContextManager() ctxpkg.ContextManager {
 	return a.contextManager
 }
 
+func (a *Agent) syncContextManagerProviderLocked() {
+	if cm, ok := a.contextManager.(providerAwareContextManager); ok {
+		cm.SetProvider(a.provider)
+	}
+}
+
 // RunStream runs the agent loop with streaming, sending events to the callback.
 func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error {
 	return a.RunStreamWithContent(ctx, []provider.ContentBlock{{Type: "text", Text: userMsg}}, onEvent)
 }
 
-// RunStreamWithContent runs the agent loop with streaming, accepting content blocks (supports images).
+// RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
 
@@ -140,9 +153,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("auto-summarize failed: %w", err)})
 		} else {
 			onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: "[context auto-summarized to fit within window]\n",
-		})
+				Type: provider.StreamEventText,
+				Text: "[context auto-summarized to fit within window]\n",
+			})
 		}
 	}
 
@@ -152,83 +165,73 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		msgs := a.contextManager.Messages()
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
 
-		streamCh, err := a.provider.ChatStream(ctx, msgs, toolDefs)
+		resp, err := a.provider.Chat(ctx, msgs, toolDefs)
 		if err != nil {
-			debug.Log("agent", "ChatStream error: %v", err)
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("stream error: %w", err)})
+			debug.Log("agent", "Chat error: %v", err)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("chat error: %w", err)})
 			return err
 		}
 
-		// Consume stream events
-		var assistantContent []provider.ContentBlock
 		var toolCalls []provider.ToolCallDelta
+		var textBuf string
 
-		for event := range streamCh {
-			switch event.Type {
-			case provider.StreamEventText:
-				assistantContent = append(assistantContent, provider.ContentBlock{Type: "text", Text: event.Text})
-				onEvent(event)
-			case provider.StreamEventToolCallDone:
-				toolCalls = append(toolCalls, event.Tool)
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventText,
-					Text: fmt.Sprintf("\n[tool call: %s]\n", event.Tool.Name),
-				})
-			case provider.StreamEventError:
-				onEvent(event)
-				return event.Error
-			case provider.StreamEventDone:
-				onEvent(event)
-				// Record token usage if handler is set
-				if event.Usage != nil {
-					a.mu.Lock()
-					fn := a.onUsage
-					a.mu.Unlock()
-					if fn != nil {
-						fn(*event.Usage)
-					}
+		for _, block := range resp.Message.Content {
+			switch block.Type {
+			case "text":
+				textBuf += block.Text
+			case "tool_use":
+				if textBuf != "" {
+					onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: textBuf})
+					textBuf = ""
 				}
+				tc := provider.ToolCallDelta{
+					ID:        block.ToolID,
+					Index:     len(toolCalls),
+					Name:      block.ToolName,
+					Arguments: block.Input,
+				}
+				toolCalls = append(toolCalls, tc)
+				onEvent(provider.StreamEvent{Type: provider.StreamEventToolCallDone, Tool: tc})
 			}
+		}
+		if textBuf != "" {
+			onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: textBuf})
+		}
+
+		usage := resp.Usage
+		onEvent(provider.StreamEvent{Type: provider.StreamEventDone, Usage: &usage})
+
+		a.mu.Lock()
+		fn := a.onUsage
+		a.mu.Unlock()
+		if fn != nil {
+			fn(usage)
 		}
 
 		// No tool calls → done
 		if len(toolCalls) == 0 {
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "assistant",
-				Content: assistantContent,
-			})
+			a.contextManager.Add(resp.Message)
 			return nil
 		}
 
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
 
-		// Add assistant message with tool_use blocks
-		for _, tc := range toolCalls {
-			assistantContent = append(assistantContent, provider.ToolUseBlock(tc.ID, tc.Name, tc.Arguments))
-		}
-
-		a.contextManager.Add(provider.Message{
-			Role:    "assistant",
-			Content: assistantContent,
-		})
+		a.contextManager.Add(resp.Message)
 
 		// Execute tool calls and build tool_result message
 		var toolResults []provider.ContentBlock
 		for _, tc := range toolCalls {
-			onEvent(provider.StreamEvent{
-				Type: provider.StreamEventText,
-				Text: fmt.Sprintf("[executing: %s]\n", tc.Name),
-			})
-
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s", tc.Name, result.IsError, truncateStr(result.Content, 200))
 			toolResults = append(toolResults, provider.ToolResultBlock(tc.ID, result.Content, result.IsError))
 
 			onEvent(provider.StreamEvent{
-				Type: provider.StreamEventText,
-				Text: result.Content + "\n",
+				Type:    provider.StreamEventToolResult,
+				Tool:    tc,
+				Result:  result.Content,
+				IsError: result.IsError,
 			})
 		}
 

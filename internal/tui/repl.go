@@ -64,7 +64,8 @@ func (r *REPL) SetCostManager(mgr *cost.Manager, providerName, modelName string)
 		if r.program == nil {
 			return
 		}
-		tracker := mgr.GetOrCreateTracker("current", providerName, modelName)
+		sessionID := r.model.currentSessionID()
+		tracker := mgr.GetOrCreateTracker(sessionID, providerName, modelName)
 		tracker.Record(cost.TokenUsage{
 			InputTokens:  usage.InputTokens,
 			OutputTokens: usage.OutputTokens,
@@ -217,7 +218,10 @@ func (r *REPL) createSession() {
 	ses := session.NewSession("", "")
 	if err := r.store.Save(ses); err == nil {
 		r.model.SetSession(ses, r.store)
-		r.model.output.WriteString(fmt.Sprintf("New session: %s\n\n", ses.ID))
+		if r.model.costMgr != nil {
+			r.model.costMgr.GetOrCreateTracker(ses.ID, r.model.costProvider, r.model.costModel)
+		}
+		r.model.output.WriteString(r.model.t("session.new", ses.ID))
 	}
 }
 
@@ -225,7 +229,8 @@ func (r *REPL) createSession() {
 func (r *REPL) loadSession(id string) {
 	ses, err := r.store.Load(id)
 	if err != nil {
-		r.model.output.WriteString(fmt.Sprintf("Failed to resume session %s: %v\nStarting new session instead.\n\n", id, err))
+		r.model.output.WriteString(r.model.t("session.resume_failed", id, err))
+		r.model.output.WriteString(r.model.t("session.resume_fallback"))
 		r.createSession()
 		return
 	}
@@ -233,11 +238,14 @@ func (r *REPL) loadSession(id string) {
 		r.agent.AddMessage(msg)
 	}
 	r.model.SetSession(ses, r.store)
+	if r.model.costMgr != nil {
+		r.model.costMgr.GetOrCreateTracker(ses.ID, r.model.costProvider, r.model.costModel)
+	}
 	title := ses.Title
 	if title == "" {
-		title = "untitled"
+		title = r.model.t("session.untitled")
 	}
-	r.model.output.WriteString(fmt.Sprintf("Resumed session: %s \u2014 %s (%d messages)\n\n", ses.ID, title, len(ses.Messages)))
+	r.model.output.WriteString(r.model.t("session.resume", ses.ID, title, len(ses.Messages)))
 }
 
 func truncResult(sa *subagent.SubAgent) string {

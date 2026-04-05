@@ -10,11 +10,18 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
 // maxResponseBodyBytes limits HTTP response body reads to prevent memory exhaustion.
 const maxResponseBodyBytes = 10 * 1024 * 1024 // 10 MB
+
+var (
+	privateNetworksOnce sync.Once
+	privateNetworks     []*net.IPNet
+	privateNetworksErr  error
+)
 
 // WebFetch implements the web_fetch tool — fetches a URL and returns text content.
 type WebFetch struct {
@@ -22,8 +29,10 @@ type WebFetch struct {
 	AllowPrivate bool
 }
 
-func (t WebFetch) Name() string       { return "web_fetch" }
-func (t WebFetch) Description() string { return "Fetch a URL and return its text content. Strips HTML tags and truncates to 50000 characters." }
+func (t WebFetch) Name() string { return "web_fetch" }
+func (t WebFetch) Description() string {
+	return "Fetch a URL and return its text content. Strips HTML tags and truncates to 50000 characters."
+}
 
 func (t WebFetch) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -74,16 +83,11 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 			if err != nil {
 				return nil, fmt.Errorf("invalid address: %w", err)
 			}
-			ips, err := net.DefaultResolver.LookupIPAddr(dialCtx, host)
+			dialAddr, err := resolvePublicDialAddress(dialCtx, host, port, net.DefaultResolver.LookupIPAddr)
 			if err != nil {
 				return nil, err
 			}
-			for _, ip := range ips {
-				if isPrivateIP(ip.IP) {
-					return nil, fmt.Errorf("access to private/internal IP %s is not allowed", ip.IP)
-				}
-			}
-			return origDial(dialCtx, network, net.JoinHostPort(ips[0].IP.String(), port))
+			return origDial(dialCtx, network, dialAddr)
 		}
 		client.Transport = transport
 	}
@@ -140,32 +144,61 @@ func isPrivateHost(host string) bool {
 
 // isPrivateIP returns true if the IP is in a private, loopback, or link-local range.
 func isPrivateIP(ip net.IP) bool {
-	privateRanges := []struct {
-		network *net.IPNet
-	}{
-		{mustParseCIDR("127.0.0.0/8")},
-		{mustParseCIDR("::1/128")},
-		{mustParseCIDR("10.0.0.0/8")},
-		{mustParseCIDR("172.16.0.0/12")},
-		{mustParseCIDR("192.168.0.0/16")},
-		{mustParseCIDR("169.254.0.0/16")},
-		{mustParseCIDR("fe80::/10")},
-		{mustParseCIDR("::ffff:127.0.0.0/104")},
+	networks, err := getPrivateNetworks()
+	if err != nil {
+		// Fail closed if the internal network list cannot be initialized.
+		return true
 	}
-	for _, r := range privateRanges {
-		if r.network.Contains(ip) {
+	for _, network := range networks {
+		if network.Contains(ip) {
 			return true
 		}
 	}
 	return false
 }
 
-func mustParseCIDR(s string) *net.IPNet {
-	_, network, err := net.ParseCIDR(s)
+func resolvePublicDialAddress(ctx context.Context, host, port string, lookup func(context.Context, string) ([]net.IPAddr, error)) (string, error) {
+	ips, err := lookup(ctx, host)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
-	return network
+	if len(ips) == 0 {
+		return "", fmt.Errorf("no IP addresses found for host %q", host)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip.IP) {
+			return "", fmt.Errorf("access to private/internal IP %s is not allowed", ip.IP)
+		}
+	}
+	return net.JoinHostPort(ips[0].IP.String(), port), nil
+}
+
+func getPrivateNetworks() ([]*net.IPNet, error) {
+	privateNetworksOnce.Do(func() {
+		privateNetworks, privateNetworksErr = parsePrivateNetworks([]string{
+			"127.0.0.0/8",
+			"::1/128",
+			"10.0.0.0/8",
+			"172.16.0.0/12",
+			"192.168.0.0/16",
+			"169.254.0.0/16",
+			"fe80::/10",
+			"::ffff:127.0.0.0/104",
+		})
+	})
+	return privateNetworks, privateNetworksErr
+}
+
+func parsePrivateNetworks(cidrs []string) ([]*net.IPNet, error) {
+	networks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("parse private CIDR %q: %w", cidr, err)
+		}
+		networks = append(networks, network)
+	}
+	return networks, nil
 }
 
 // StripHTML removes HTML tags and decodes common entities.

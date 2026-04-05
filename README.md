@@ -14,6 +14,7 @@ refactor, debug, write new features — all from your terminal.
 - **Cost Tracking** — Real-time token usage and cost estimation
 - **Permission System** — Fine-grained control over which tools and commands are allowed
 - **Rich TUI** — Bubble Tea terminal UI with markdown rendering and syntax highlighting
+- **Bilingual TUI** — English by default, switch to Simplified Chinese with `/lang zh-CN`
 - **Environment Variable Expansion** — API keys via `${ENV_VAR}` in config, no plaintext secrets
 
 ## Built-in Tools
@@ -82,12 +83,13 @@ ggcode
 
 ## Configuration
 
-Create a `ggcode.yaml` in the current directory or `~/.config/ggcode/ggcode.yaml`:
+Create a `ggcode.yaml` in the current directory or `~/.ggcode/ggcode.yaml`:
 
 ```yaml
 # Provider: anthropic, openai, or gemini
 provider: anthropic
 model: claude-sonnet-4-20250514
+language: en
 
 providers:
   anthropic:
@@ -118,6 +120,15 @@ tool_permissions:
 
 See [ggcode.example.yaml](ggcode.example.yaml) for the full example.
 
+## TUI Language and Controls
+
+- Default UI language is English.
+- Switch the current session to Simplified Chinese with `/lang zh-CN`.
+- Switch back with `/lang en`.
+- Persist the preferred UI language with `language: en` or `language: zh-CN` in config.
+- `Ctrl+C` cancels the active run. When idle, the first `Ctrl+C` clears the input and arms exit confirmation; press `Ctrl+C` again to quit.
+- While a run is active, you can keep typing and submit more prompts. They queue and are sent automatically after the current loop finishes.
+
 ## Slash Commands
 
 | Command | Description |
@@ -125,6 +136,7 @@ See [ggcode.example.yaml](ggcode.example.yaml) for the full example.
 | `/help` | Show help message |
 | `/model <name>` | Switch model |
 | `/provider <name>` | Switch provider |
+| `/lang <code>` | Switch interface language (`en` or `zh-CN`) |
 | `/cost` | Show session cost stats |
 | `/cost all` | Show all session costs |
 | `/sessions` | List saved sessions |
@@ -139,7 +151,7 @@ See [ggcode.example.yaml](ggcode.example.yaml) for the full example.
 ### Keyboard Shortcuts
 
 - **↑/↓** — Browse command history
-- **Ctrl+C** — Interrupt current generation
+- **Ctrl+C** — Cancel active work, otherwise clear input then press again to exit
 - **Ctrl+D** — Exit
 
 ## MCP Server Configuration

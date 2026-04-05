@@ -1,7 +1,6 @@
 package provider
 
 import (
-
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,6 +52,9 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	req := openai.ChatCompletionRequest{
 		Model:    p.model,
 		Messages: chatMsgs,
+		StreamOptions: &openai.StreamOptions{
+			IncludeUsage: true,
+		},
 	}
 	if p.maxTokens > 0 {
 		req.MaxCompletionTokens = p.maxTokens
@@ -141,6 +143,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 		toolCalls := make(map[int]*ToolCallDelta)
 		var usage *TokenUsage
+		var outputChars int
 
 		for {
 			resp, err := streamer.Recv()
@@ -174,6 +177,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			// Text content
 			if delta.Content != "" {
 				debug.Log("openai", "chunk text=%q", delta.Content)
+				outputChars += len(delta.Content)
 				ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
 			}
 
@@ -205,6 +209,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				debug.Log("openai", "finish_reason=%s tool_calls=%d", finishReason, len(toolCalls))
 				for idx, tc := range toolCalls {
 					debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
+					outputChars += len(tc.Name) + len(tc.Arguments)
 					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
 					delete(toolCalls, idx)
 				}
@@ -212,7 +217,14 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		}
 
 		if usage == nil {
-			usage = &TokenUsage{}
+			inputTokens, err := p.CountTokens(ctx, messages)
+			if err != nil {
+				inputTokens = 0
+			}
+			usage = &TokenUsage{
+				InputTokens:  inputTokens,
+				OutputTokens: estimateTokensFromChars(outputChars),
+			}
 		}
 		ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
 	}()
@@ -228,6 +240,17 @@ func (p *OpenAIProvider) CountTokens(ctx context.Context, messages []Message) (i
 		}
 	}
 	return total / 4, nil
+}
+
+func estimateTokensFromChars(chars int) int {
+	if chars <= 0 {
+		return 0
+	}
+	estimate := chars / 4
+	if estimate < 1 {
+		return 1
+	}
+	return estimate
 }
 
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
@@ -256,7 +279,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			debug.Log("openai", "convert user msg: content_blocks=%d", len(m.Content))
 			for i, b := range m.Content {
 				out := b.Output
-if len(out) > 100 {
+				if len(out) > 100 {
 					out = util.Truncate(out, 100)
 				}
 				debug.Log("openai", "  block[%d]: type=%s tool_id=%s output=%s", i, b.Type, b.ToolID, out)

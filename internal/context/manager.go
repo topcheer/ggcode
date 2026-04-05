@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -28,6 +29,7 @@ const (
 	summarizeThreshold = 0.8
 	recentMessages     = 6
 	charsPerToken      = 4
+	tokenCountTimeout  = 100 * time.Millisecond
 )
 
 // Manager implements ContextManager.
@@ -233,7 +235,9 @@ func (m *Manager) recalcTokens() {
 // falling back to heuristic estimation.
 func (m *Manager) countTokens(msg provider.Message) int {
 	if m.provider != nil {
-		if n, err := m.provider.CountTokens(context.Background(), []provider.Message{msg}); err == nil && n > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), tokenCountTimeout)
+		defer cancel()
+		if n, err := m.provider.CountTokens(ctx, []provider.Message{msg}); err == nil && n > 0 {
 			return n
 		}
 	}

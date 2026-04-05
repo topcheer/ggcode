@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,14 +59,21 @@ func (s *ToolSpinner) CurrentFrame() int {
 	return s.frame
 }
 
+// Elapsed returns how long the current tool has been running.
+func (s *ToolSpinner) Elapsed() time.Duration {
+	if s.startTime.IsZero() {
+		return 0
+	}
+	return time.Since(s.startTime).Round(time.Millisecond)
+}
+
 // String returns the spinner string with tool name.
 func (s *ToolSpinner) String() string {
 	if !s.active {
 		return ""
 	}
 	char := string(spinnerChars[s.frame%len(spinnerChars)])
-	elapsed := time.Since(s.startTime).Round(time.Millisecond)
-	return s.style.Render(fmt.Sprintf(" %s %s (%s)", char, s.toolName, elapsed))
+	return s.style.Render(fmt.Sprintf(" %s %s (%s)", char, s.toolName, s.Elapsed()))
 }
 
 // tick returns a tea.Cmd that sends the next spinner frame.
@@ -93,6 +102,7 @@ type ToolStatusMsg struct {
 	Result   string
 	Args     string // tool arguments summary
 	IsError  bool
+	Elapsed  time.Duration
 }
 
 // bulletStyle renders the ● prefix for assistant/tool lines.
@@ -112,25 +122,21 @@ func FormatToolStart(toolName string, args string) string {
 }
 
 // FormatToolResult formats the closing line when a tool finishes.
-func FormatToolResult(msg ToolStatusMsg) string {
+func FormatToolResult(lang Language, msg ToolStatusMsg) string {
 	var sb strings.Builder
 	if msg.IsError {
-		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("  └ error: "))
+		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("  └ " + tr(lang, "tool.failed")))
 	} else {
-		sb.WriteString("  └ ")
+		sb.WriteString("  └ " + tr(lang, "tool.done"))
 	}
-	result := strings.TrimSpace(msg.Result)
-	if result == "" {
-		result = "done"
+	if msg.Elapsed > 0 {
+		sb.WriteString(fmt.Sprintf(" (%s)", msg.Elapsed))
 	}
-	// Truncate long results
-	if len(result) > 200 {
-		result = result[:200] + "..."
+	summary := summarizeToolResult(lang, msg)
+	if summary != "" {
+		sb.WriteString(": ")
+		sb.WriteString(summary)
 	}
-	// Collapse multi-line results to single line
-	result = strings.ReplaceAll(result, "\n", " ")
-	result = strings.Join(strings.Fields(result), " ")
-	sb.WriteString(result)
 	sb.WriteString("\n\n")
 	return sb.String()
 }
@@ -140,5 +146,107 @@ func FormatToolStatus(msg ToolStatusMsg) string {
 	if msg.Running {
 		return ""
 	}
-	return FormatToolResult(msg)
+	return FormatToolResult(LangEnglish, msg)
+}
+
+func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
+	result := strings.TrimSpace(msg.Result)
+	if msg.IsError {
+		if exit := firstMatch(result, `exit status \d+`); exit != "" {
+			return exit
+		}
+		return msg.ToolName
+	}
+
+	switch msg.ToolName {
+	case "run_command":
+		if result == "" || result == "Command completed with no output." {
+			return tr(lang, "tool.no_output")
+		}
+		return summarizeTextPayload(lang, result, tr(lang, "tool.output"))
+	case "read_file", "web_fetch", "web_search", "git_diff", "git_status", "git_log":
+		return summarizeTextPayload(lang, result, tr(lang, "tool.content"))
+	case "glob":
+		if result == "No files matched the pattern." {
+			return pluralize(lang, 0, tr(lang, "tool.match"))
+		}
+		return pluralize(lang, len(nonEmptyLines(result)), tr(lang, "tool.match"))
+	case "list_directory":
+		return pluralize(lang, len(nonEmptyLines(result)), tr(lang, "tool.entry"))
+	case "search_files":
+		if match := regexp.MustCompile(`(?:Showing \d+ of |\bFound )(\d+) matches`).FindStringSubmatch(result); len(match) == 2 {
+			return pluralize(lang, parseInt(match[1]), tr(lang, "tool.match"))
+		}
+		return summarizeTextPayload(lang, result, tr(lang, "tool.matches"))
+	case "write_file", "edit_file":
+		return compactSingleLine(result)
+	default:
+		if result == "" {
+			return msg.ToolName
+		}
+		return summarizeTextPayload(lang, result, tr(lang, "tool.result"))
+	}
+}
+
+func summarizeTextPayload(lang Language, result, noun string) string {
+	lines := nonEmptyLines(result)
+	if len(lines) == 0 {
+		if lang == LangZhCN {
+			return "无" + noun
+		}
+		return "no " + noun
+	}
+	if len(lines) == 1 {
+		if lang == LangZhCN {
+			return "1 行" + noun
+		}
+		return "1 line of " + noun
+	}
+	if lang == LangZhCN {
+		return fmt.Sprintf("%d 行%s", len(lines), noun)
+	}
+	return fmt.Sprintf("%d lines of %s", len(lines), noun)
+}
+
+func pluralize(lang Language, n int, noun string) string {
+	if lang == LangZhCN {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func nonEmptyLines(s string) []string {
+	raw := strings.Split(strings.TrimSpace(s), "\n")
+	lines := make([]string, 0, len(raw))
+	for _, line := range raw {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func compactSingleLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 120 {
+		return s[:120] + "..."
+	}
+	return s
+}
+
+func firstMatch(s, pattern string) string {
+	re := regexp.MustCompile(pattern)
+	return re.FindString(s)
+}
+
+func parseInt(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }

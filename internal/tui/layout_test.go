@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func newTestModel() Model {
@@ -19,31 +23,30 @@ func newTestModel() Model {
 func TestResizeUpdatesViewport(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
-	if m.viewport.height != 35 { // 40 - 5
-		t.Errorf("expected viewport height 35, got %d", m.viewport.height)
+	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
+		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
 	}
-	if m.viewport.width != 120 {
-		t.Errorf("expected viewport width 120, got %d", m.viewport.width)
+	if m.viewport.width != m.conversationInnerWidth() {
+		t.Errorf("expected synced viewport width %d, got %d", m.conversationInnerWidth(), m.viewport.width)
 	}
-	if m.input.Width != 120 {
-		t.Errorf("expected input width 120, got %d", m.input.Width)
+	if m.input.Width != m.mainColumnWidth()-6 {
+		t.Errorf("expected input width %d, got %d", m.mainColumnWidth()-6, m.input.Width)
 	}
 }
 
 func TestResizeSmallWindow(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(40, 5)
-	// viewportHeight = 5 - 5 = 0, but minimum is 3
-	if m.viewport.height != 3 {
-		t.Errorf("expected viewport height 3 (min), got %d", m.viewport.height)
+	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
+		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
 	}
 }
 
 func TestResizeTinyWindow(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(10, 2)
-	if m.viewport.height != 3 {
-		t.Errorf("expected viewport height 3 (min), got %d", m.viewport.height)
+	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
+		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
 	}
 }
 
@@ -133,6 +136,128 @@ func TestViewContainsInputPlaceholder(t *testing.T) {
 	}
 }
 
+func TestLangCommandSwitchesToChinese(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.handleLangCommand([]string{"/lang", "zh-CN"})
+	if cmd != nil {
+		t.Fatal("expected /lang to update synchronously")
+	}
+	if m.currentLanguage() != LangZhCN {
+		t.Fatalf("expected zh-CN, got %s", m.currentLanguage())
+	}
+	if m.input.Placeholder != "输入消息..." {
+		t.Fatalf("expected localized placeholder, got %q", m.input.Placeholder)
+	}
+	if !strings.Contains(m.output.String(), "已切换语言为") {
+		t.Fatal("expected language switch output")
+	}
+}
+
+func TestChineseViewRendersLocalizedPanels(t *testing.T) {
+	m := newTestModel()
+	m.setLanguage("zh-CN")
+	m.handleResize(100, 28)
+
+	view := m.View()
+	if !strings.Contains(view, "对话") {
+		t.Error("expected localized conversation panel")
+	}
+	if !strings.Contains(view, "输入") {
+		t.Error("expected localized composer panel")
+	}
+	if !strings.Contains(view, "输入消息") {
+		t.Error("expected localized placeholder")
+	}
+}
+
+func TestViewContainsPanels(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 28)
+	view := m.View()
+	if !strings.Contains(view, "Conversation") {
+		t.Error("expected conversation panel title in view")
+	}
+	if !strings.Contains(view, "Composer") {
+		t.Error("expected composer panel title in view")
+	}
+	if !strings.Contains(view, "ggcode") {
+		t.Error("expected branded header in view")
+	}
+}
+
+func TestWideLayoutUsesRightSidebar(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+
+	if !m.sidebarEnabled() {
+		t.Fatal("expected sidebar layout to be enabled")
+	}
+	if m.mainColumnWidth() >= m.viewWidth() {
+		t.Fatal("expected sidebar to reduce main column width")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "provider") || !strings.Contains(view, "session") {
+		t.Error("expected sidebar metadata in wide layout")
+	}
+	if !strings.Contains(view, "____ ____ ____") {
+		t.Error("expected ascii logo in right sidebar")
+	}
+}
+
+func TestNarrowLayoutFallsBackToTopHeader(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(90, 28)
+
+	if m.sidebarEnabled() {
+		t.Fatal("expected narrow layout to disable sidebar")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "terminal-native AI coding") {
+		t.Error("expected classic header in narrow layout")
+	}
+}
+
+func TestStreamingViewFollowsLatestOutput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 28)
+	m.loading = true
+
+	for i := 0; i < 80; i++ {
+		next, _ := m.Update(streamMsg(fmt.Sprintf("line %03d\n", i)))
+		m = next.(Model)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "line 079") {
+		t.Error("expected latest streamed output to remain visible")
+	}
+}
+
+func TestMouseEventsDoNotReachInput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 28)
+	m.input.SetValue("hello")
+	m.input.CursorEnd()
+
+	next, cmd := m.Update(tea.MouseMsg{
+		X:      5,
+		Y:      5,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Error("expected mouse click to be handled without command")
+	}
+	if m.input.Value() != "hello" {
+		t.Errorf("expected mouse event not to alter input, got %q", m.input.Value())
+	}
+}
+
 // --- Status bar rendering ---
 
 func TestStatusBarWithCostInfo(t *testing.T) {
@@ -172,6 +297,23 @@ func TestStatusBarEmptyWhenNotLoading(t *testing.T) {
 	}
 }
 
+func TestModeBadgesUseDifferentRendering(t *testing.T) {
+	m := newTestModel()
+
+	m.mode = permission.SupervisedMode
+	supervised := m.renderModeBadge()
+	m.mode = permission.PlanMode
+	plan := m.renderModeBadge()
+	m.mode = permission.AutoMode
+	auto := m.renderModeBadge()
+	m.mode = permission.BypassMode
+	bypass := m.renderModeBadge()
+
+	if supervised == plan || plan == auto || auto == bypass {
+		t.Error("expected different modes to render with different badges")
+	}
+}
+
 // --- AutoComplete rendering ---
 
 func TestAutoCompleteSlashCommands(t *testing.T) {
@@ -187,6 +329,9 @@ func TestAutoCompleteSlashCommands(t *testing.T) {
 	if !strings.Contains(result, "/exit") {
 		t.Error("expected /exit in autocomplete")
 	}
+	if !strings.Contains(result, "Commands:") {
+		t.Error("expected commands header in autocomplete")
+	}
 }
 
 func TestAutoCompleteEmpty(t *testing.T) {
@@ -195,6 +340,110 @@ func TestAutoCompleteEmpty(t *testing.T) {
 	result := m.renderAutoComplete()
 	if result != "" {
 		t.Errorf("expected empty autocomplete when inactive, got: %q", result)
+	}
+}
+
+func TestAutoCompleteMentionHeader(t *testing.T) {
+	m := newTestModel()
+	m.autoCompleteActive = true
+	m.autoCompleteKind = "mention"
+	m.autoCompleteItems = []string{"internal/", "README.md"}
+	result := m.renderAutoComplete()
+	if !strings.Contains(result, "Files:") {
+		t.Error("expected files header for mention autocomplete")
+	}
+	if !strings.Contains(result, "📁 internal/") {
+		t.Error("expected directory icon in mention autocomplete")
+	}
+}
+
+func TestSlashAutocompleteEnterExecutesCommand(t *testing.T) {
+	m := newTestModel()
+	m.autoCompleteActive = true
+	m.autoCompleteKind = "slash"
+	m.autoCompleteItems = []string{"/help", "/exit"}
+	m.autoCompleteIndex = 0
+	m.input.SetValue("/he")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Error("expected slash autocomplete execution to complete synchronously")
+	}
+	if m.input.Value() != "" {
+		t.Error("expected input to be cleared after executing slash command")
+	}
+	if m.autoCompleteActive {
+		t.Error("expected autocomplete to close after executing slash command")
+	}
+	if len(m.history) != 1 || m.history[0] != "/help" {
+		t.Error("expected selected slash command to be added to history")
+	}
+	if !strings.Contains(m.output.String(), "Available commands:") {
+		t.Error("expected selected slash command to execute immediately")
+	}
+}
+
+func TestMentionAutocompleteEnterOnlyCompletesInput(t *testing.T) {
+	m := newTestModel()
+	m.autoCompleteActive = true
+	m.autoCompleteKind = "mention"
+	m.autoCompleteItems = []string{"README.md"}
+	m.autoCompleteIndex = 0
+	m.input.SetValue("@REA")
+	m.input.CursorEnd()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Error("expected mention autocomplete to only update input")
+	}
+	if m.input.Value() != "@README.md " {
+		t.Errorf("expected mention completion in input, got %q", m.input.Value())
+	}
+	if m.output.Len() != 0 {
+		t.Error("expected mention autocomplete not to execute a command")
+	}
+}
+
+func TestModeSwitchDoesNotWriteToOutput(t *testing.T) {
+	m := newTestModel()
+
+	next, cmd := m.handleModeSwitch()
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Error("expected no command from mode switch")
+	}
+	if m.output.Len() != 0 {
+		t.Errorf("expected mode switch not to write output, got %q", m.output.String())
+	}
+}
+
+func TestModeCommandSetDoesNotWriteToOutput(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.handleModeCommand([]string{"/mode", "auto"})
+	if cmd != nil {
+		t.Error("expected no command from /mode set")
+	}
+	if m.output.Len() != 0 {
+		t.Errorf("expected /mode set not to write output, got %q", m.output.String())
+	}
+}
+
+func TestApprovalRenderedInContextPanel(t *testing.T) {
+	m := newTestModel()
+	m.pendingApproval = &ApprovalMsg{ToolName: "bash", Input: "ls"}
+	m.approvalOptions = defaultApprovalOptions()
+	result := m.renderContextPanel()
+	if !strings.Contains(result, "Approval required") {
+		t.Error("expected approval panel title")
+	}
+	if !strings.Contains(result, "tool   bash") {
+		t.Error("expected tool name in approval panel")
 	}
 }
 
@@ -216,12 +465,40 @@ func TestUpdateWindowSizeMsg(t *testing.T) {
 	}
 }
 
-func TestUpdateKeyMsgQuit(t *testing.T) {
+func TestUpdateKeyMsgCtrlCRequestsExitConfirmation(t *testing.T) {
 	m := newTestModel()
+	m.input.SetValue("draft text")
 	msg := tea.KeyMsg{Type: tea.KeyCtrlC}
-	_, cmd := m.Update(msg)
+	model, cmd := m.Update(msg)
+	m2 := model.(Model)
+	if cmd != nil {
+		t.Error("expected no quit command on first Ctrl-C")
+	}
+	if m2.quitting {
+		t.Error("expected app to stay open on first Ctrl-C")
+	}
+	if m2.input.Value() != "" {
+		t.Errorf("expected input to be cleared, got %q", m2.input.Value())
+	}
+	if !m2.exitConfirmPending {
+		t.Error("expected exit confirmation to be armed")
+	}
+	if !strings.Contains(m2.output.String(), "Press Ctrl-C again to exit.") {
+		t.Error("expected exit confirmation prompt in output")
+	}
+}
+
+func TestUpdateKeyMsgCtrlCQuitsOnSecondPress(t *testing.T) {
+	m := newTestModel()
+	m.exitConfirmPending = true
+	msg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	model, cmd := m.Update(msg)
+	m2 := model.(Model)
 	if cmd == nil {
-		t.Error("expected tea.Quit cmd")
+		t.Error("expected quit command on second Ctrl-C")
+	}
+	if !m2.quitting {
+		t.Error("expected app to quit on second Ctrl-C")
 	}
 }
 
@@ -239,13 +516,180 @@ func TestUpdateKeyMsgEnterEmpty(t *testing.T) {
 	}
 }
 
+func TestResizeANSISequenceDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 30)
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[16;40R")})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored ANSI fragment")
+	}
+	if m2.input.Value() != "" {
+		t.Errorf("expected ANSI fragment to be ignored, got %q", m2.input.Value())
+	}
+}
+
+func TestCtrlCCancelsAutocomplete(t *testing.T) {
+	m := newTestModel()
+	m.autoCompleteActive = true
+	m.autoCompleteKind = "slash"
+	m.autoCompleteItems = []string{"/help"}
+	m.input.SetValue("/he")
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd when cancelling autocomplete")
+	}
+	if m2.autoCompleteActive {
+		t.Error("expected autocomplete to be cancelled")
+	}
+	if m2.exitConfirmPending {
+		t.Error("expected Ctrl-C on autocomplete not to arm exit confirmation")
+	}
+}
+
+func TestCtrlCLoadingCancelsCurrentActivity(t *testing.T) {
+	m := newTestModel()
+	cancelled := false
+	m.loading = true
+	m.cancelFunc = func() { cancelled = true }
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd when interrupting active work")
+	}
+	if !cancelled {
+		t.Error("expected cancel func to be called")
+	}
+	if !m2.loading {
+		t.Error("expected model to stay busy until doneMsg arrives")
+	}
+	if m2.exitConfirmPending {
+		t.Error("expected interrupt not to arm exit confirmation")
+	}
+	if !m2.runCanceled {
+		t.Error("expected current run to be marked as canceled")
+	}
+	if !strings.Contains(m2.output.String(), "[interrupted]") {
+		t.Error("expected interrupted marker in output")
+	}
+}
+
+func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m = model.(Model)
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m = model.(Model)
+
+	if m.input.Value() != "hi" {
+		t.Fatalf("expected input to remain editable while loading, got %q", m.input.Value())
+	}
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(Model)
+
+	if cmd != nil {
+		t.Error("expected queued submission not to start a new agent immediately")
+	}
+	if len(m.pendingSubmissions) != 1 || m.pendingSubmissions[0] != "hi" {
+		t.Fatalf("expected one queued submission, got %#v", m.pendingSubmissions)
+	}
+	if m.input.Value() != "" {
+		t.Errorf("expected input to clear after queuing, got %q", m.input.Value())
+	}
+	if !strings.Contains(m.output.String(), "[queued 1 pending]") {
+		t.Error("expected queued hint in output")
+	}
+}
+
+func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.pendingSubmissions = []string{"first question", "second question"}
+	m.streamBuffer = &bytes.Buffer{}
+
+	model, cmd := m.Update(doneMsg{})
+	m = model.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected doneMsg to schedule next merged submission")
+	}
+	if !m.loading {
+		t.Error("expected next merged submission to start immediately")
+	}
+	if len(m.pendingSubmissions) != 0 {
+		t.Errorf("expected pending submissions to be consumed, got %#v", m.pendingSubmissions)
+	}
+	if !strings.Contains(m.output.String(), "first question\n\nsecond question") {
+		t.Error("expected merged queued text to be submitted as one user message")
+	}
+}
+
+func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
+	m := newTestModel()
+	cancelled := false
+	m.loading = true
+	m.cancelFunc = func() { cancelled = true }
+	m.pendingSubmissions = []string{"first question", "second question"}
+	m.input.SetValue("draft")
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = model.(Model)
+
+	if cmd != nil {
+		t.Error("expected no command when cancelling active run")
+	}
+	if !cancelled {
+		t.Error("expected cancel func to run")
+	}
+	if got := m.input.Value(); got != "first question  second question  draft" {
+		t.Fatalf("unexpected restored input: %q", got)
+	}
+	if len(m.pendingSubmissions) != 0 {
+		t.Errorf("expected pending submissions to be cleared after restore, got %#v", m.pendingSubmissions)
+	}
+}
+
+func TestExitConfirmationClearsOnOtherKey(t *testing.T) {
+	m := newTestModel()
+	m.exitConfirmPending = true
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m2 := model.(Model)
+
+	if m2.exitConfirmPending {
+		t.Error("expected exit confirmation to clear on other input")
+	}
+}
+
+func TestResizeStillAllowsNormalRuneInput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 30)
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m2 := model.(Model)
+
+	if m2.input.Value() != "a" {
+		t.Errorf("expected normal input after resize, got %q", m2.input.Value())
+	}
+}
+
 // --- renderOutput ---
 
 func TestRenderOutputEmpty(t *testing.T) {
 	m := newTestModel()
 	result := m.renderOutput()
-	if result != "" {
-		t.Errorf("expected empty output, got: %q", result)
+	if !strings.Contains(result, "Ask for a refactor") {
+		t.Errorf("expected starter guidance, got: %q", result)
 	}
 }
 
@@ -255,5 +699,70 @@ func TestRenderOutputWithContent(t *testing.T) {
 	result := m.renderOutput()
 	if !strings.Contains(result, "Hello world") {
 		t.Error("expected content in renderOutput")
+	}
+}
+
+func TestResetConversationViewClearsTransientState(t *testing.T) {
+	m := newTestModel()
+	m.output.WriteString("Hello")
+	m.loading = true
+	m.streamBuffer = &bytes.Buffer{}
+	m.streamBuffer.WriteString("partial")
+	m.autoCompleteActive = true
+	m.autoCompleteItems = []string{"/help"}
+	m.statusActivity = "Thinking..."
+	m.statusToolName = "read_file"
+	m.statusTokens = 123
+	m.statusCost = 1.2
+	m.statusToolCount = 2
+	m.spinner.Start("read_file")
+
+	m.resetConversationView()
+
+	if m.output.Len() != 0 {
+		t.Error("expected output to be cleared")
+	}
+	if m.loading {
+		t.Error("expected loading to be reset")
+	}
+	if m.autoCompleteActive || len(m.autoCompleteItems) != 0 {
+		t.Error("expected autocomplete state to be cleared")
+	}
+	if m.statusActivity != "" || m.statusToolName != "" || m.statusTokens != 0 || m.statusCost != 0 || m.statusToolCount != 0 {
+		t.Error("expected status state to be reset")
+	}
+	if m.spinner.IsActive() {
+		t.Error("expected spinner to stop")
+	}
+}
+
+func TestCostUpdateUsesRealSessionTracker(t *testing.T) {
+	m := newTestModel()
+	m.costMgr = cost.NewManager(cost.DefaultPricingTable(), "")
+	m.SetSession(&session.Session{ID: "sess-1"}, nil)
+
+	tracker := m.costMgr.GetOrCreateTracker("sess-1", "anthropic", "claude-sonnet-4-20250514")
+	tracker.Record(cost.TokenUsage{InputTokens: 120, OutputTokens: 80})
+
+	next, _ := m.Update(costUpdateMsg{InputTokens: 120, OutputTokens: 80})
+	m = next.(Model)
+
+	if m.statusTokens != 200 {
+		t.Errorf("expected status tokens 200, got %d", m.statusTokens)
+	}
+	if !strings.Contains(m.lastCost, "tokens: 120 in / 80 out") {
+		t.Errorf("expected latest usage summary, got %q", m.lastCost)
+	}
+}
+
+func TestCostUpdateFallsBackToIncrementalTokens(t *testing.T) {
+	m := newTestModel()
+	m.costMgr = cost.NewManager(cost.DefaultPricingTable(), "")
+
+	next, _ := m.Update(costUpdateMsg{InputTokens: 25, OutputTokens: 15})
+	m = next.(Model)
+
+	if m.statusTokens != 40 {
+		t.Errorf("expected fallback token count 40, got %d", m.statusTokens)
 	}
 }
