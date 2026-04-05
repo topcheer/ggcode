@@ -24,9 +24,13 @@ const (
 type SubAgent struct {
 	ID            string
 	Task          string
+	DisplayTask   string
 	Tools         []string
 	ToolCallCount int
 	Status        Status
+	CurrentPhase  string
+	CurrentTool   string
+	CurrentArgs   string
 	Result        string
 	Error         error
 	CreatedAt     time.Time
@@ -46,6 +50,14 @@ func (s *SubAgent) setStatus(st Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Status = st
+}
+
+func (s *SubAgent) setActivity(phase, toolName, args string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CurrentPhase = phase
+	s.CurrentTool = toolName
+	s.CurrentArgs = args
 }
 
 // Manager manages spawning, tracking, and collecting results from sub-agents.
@@ -78,18 +90,20 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 }
 
 // Spawn creates a new sub-agent with the given task and returns its ID.
-func (m *Manager) Spawn(task string, tools []string, ctx context.Context) string {
+func (m *Manager) Spawn(task, displayTask string, tools []string, ctx context.Context) string {
 	m.mu.Lock()
 	m.nextID++
 	id := fmt.Sprintf("sa-%d", m.nextID)
 	m.mu.Unlock()
 
 	sa := &SubAgent{
-		ID:        id,
-		Task:      task,
-		Tools:     tools,
-		Status:    StatusPending,
-		CreatedAt: time.Now(),
+		ID:           id,
+		Task:         task,
+		DisplayTask:  displayTask,
+		Tools:        tools,
+		Status:       StatusPending,
+		CurrentPhase: "pending",
+		CreatedAt:    time.Now(),
 	}
 
 	m.mu.Lock()
@@ -175,9 +189,15 @@ func (m *Manager) Complete(id string, result string, err error) {
 	sa.mu.Lock()
 	if err != nil {
 		sa.Status = StatusFailed
+		sa.CurrentPhase = "failed"
+		sa.CurrentTool = ""
+		sa.CurrentArgs = ""
 		sa.Error = err
 	} else {
 		sa.Status = StatusCompleted
+		sa.CurrentPhase = "completed"
+		sa.CurrentTool = ""
+		sa.CurrentArgs = ""
 	}
 	sa.Result = result
 	sa.EndedAt = time.Now()

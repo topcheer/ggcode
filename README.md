@@ -5,13 +5,12 @@ refactor, debug, write new features — all from your terminal.
 
 ## Features
 
-- **Multi-Provider Support** — Anthropic, OpenAI GPT, Google Gemini
-- **Custom Base URLs** — Use any OpenAI-compatible endpoint (local models, proxies)
+- **Multi-Vendor Endpoint Support** — Configure real vendors, plans, regions, and models
+- **Protocol Adapters** — OpenAI-compatible, Anthropic-compatible, and Gemini backends
 - **Agentic Tool Loop** — The agent reads, writes, edits, searches, and runs commands autonomously
 - **MCP Client** — Connect to Model Context Protocol servers for extended tool sets
 - **Plugin System** — Load external tool plugins dynamically
 - **Session Management** — Save, resume, and export conversations
-- **Cost Tracking** — Real-time token usage and cost estimation
 - **Permission System** — Fine-grained control over which tools and commands are allowed
 - **Rich TUI** — Bubble Tea terminal UI with markdown rendering and syntax highlighting
 - **Bilingual TUI** — English by default, switch to Simplified Chinese with `/lang zh-CN`
@@ -34,13 +33,35 @@ refactor, debug, write new features — all from your terminal.
 
 ## Installation
 
-### Go Install
+### Go installer
 
 ```bash
-go install github.com/topcheer/ggcode/cmd/ggcode@latest
+go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest
+ggcode-installer
 ```
 
-### Clone & Build
+The installer downloads the matching `ggcode` binary from GitHub Releases and places it
+into `GOBIN`, the first `GOPATH/bin`, or `~/go/bin`.
+
+### npm
+
+```bash
+npm install -g @topcheer/ggcode
+```
+
+The npm package is a thin wrapper that downloads the platform binary from GitHub Releases
+during install or on first run.
+
+### pip
+
+```bash
+pip install ggcode
+```
+
+The Python package installs a small launcher that downloads the matching GitHub Release
+binary on first run.
+
+### Clone & build from source
 
 ```bash
 git clone https://github.com/topcheer/ggcode.git
@@ -55,7 +76,8 @@ go build -o ggcode ./cmd/ggcode
 make build    # Build binary to bin/ggcode
 make test     # Run all tests
 make lint     # Run go vet
-make install  # go install
+make install  # install ggcode from source into your Go bin dir
+make install-installer  # install the Go release installer
 make clean    # Remove build artifacts
 ```
 
@@ -64,7 +86,7 @@ make clean    # Remove build artifacts
 1. Set your API key:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export ZAI_API_KEY="your-zai-key"
 ```
 
 2. Run ggcode:
@@ -83,25 +105,33 @@ ggcode
 
 ## Configuration
 
-Create a `ggcode.yaml` in the current directory or `~/.ggcode/ggcode.yaml`:
+Create `~/.ggcode/ggcode.yaml` (the default path), or keep a project-local file and pass it with `--config ./ggcode.yaml`:
 
 ```yaml
-# Provider: anthropic, openai, or gemini
-provider: anthropic
-model: claude-sonnet-4-20250514
+vendor: zai
+endpoint: cn-coding-openai
+model: glm-5-turbo
 language: en
+default_mode: supervised
 
-providers:
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
-    max_tokens: 8192
-  openai:
-    api_key: ${OPENAI_API_KEY}
-    base_url: https://api.openai.com/v1  # optional custom endpoint
-    max_tokens: 8192
-  gemini:
-    api_key: ${GEMINI_API_KEY}
-    max_tokens: 8192
+vendors:
+  zai:
+    display_name: Z.ai
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn-coding-openai:
+        display_name: CN Coding Plan
+        protocol: openai
+        base_url: https://open.bigmodel.cn/api/coding/paas/v4
+        default_model: glm-5-turbo
+        selected_model: glm-5-turbo
+        max_tokens: 8192
+        models: [glm-5-turbo, glm-5-plus]
+      cn-coding-anthropic:
+        display_name: CN Coding Plan (Anthropic)
+        protocol: anthropic
+        base_url: https://open.bigmodel.cn/api/anthropic
+        max_tokens: 8192
 
 # Restrict file access to these directories
 allowed_dirs:
@@ -135,10 +165,9 @@ See [ggcode.example.yaml](ggcode.example.yaml) for the full example.
 |---------|-------------|
 | `/help` | Show help message |
 | `/model <name>` | Switch model |
-| `/provider <name>` | Switch provider |
+| `/provider [vendor]` | Open the provider manager and switch vendor/endpoint/model |
+| `/mode <mode>` | Switch runtime mode (`supervised`, `plan`, `auto`, `bypass`, `autopilot`) |
 | `/lang <code>` | Switch interface language (`en` or `zh-CN`) |
-| `/cost` | Show session cost stats |
-| `/cost all` | Show all session costs |
 | `/sessions` | List saved sessions |
 | `/resume <id>` | Resume a previous session |
 | `/export <id>` | Export session to markdown |
@@ -147,6 +176,17 @@ See [ggcode.example.yaml](ggcode.example.yaml) for the full example.
 | `/plugins` | List loaded plugins |
 | `/allow <tool>` | Always allow a tool |
 | `/exit`, `/quit` | Exit ggcode |
+
+## Release-backed installers
+
+All end-user installers use GitHub Releases as the binary source of truth.
+
+- **Go installer**: source-installed wrapper that downloads the release binary into your Go bin dir
+- **npm package**: thin JavaScript wrapper in [`npm/`](npm/)
+- **pip package**: thin Python wrapper in [`python/`](python/)
+
+Each installer resolves the current OS/arch, downloads the matching release archive, verifies
+it against `checksums.txt`, extracts `ggcode`, and reuses the cached binary on later runs.
 
 ### Keyboard Shortcuts
 

@@ -74,12 +74,12 @@ func TestLoad_NonExistent(t *testing.T) {
 }
 
 func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("ZAI_API_KEY", "test-key")
 	cfg, err := Load("/nonexistent/path/ggcode.yaml")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got := cfg.Providers["anthropic"].APIKey; got != "test-key" {
+	if got := cfg.Vendors["zai"].APIKey; got != "test-key" {
 		t.Fatalf("expected expanded API key, got %q", got)
 	}
 }
@@ -117,7 +117,7 @@ allowed_dirs:
 	}
 }
 
-func TestLoad_InvalidProvider(t *testing.T) {
+func TestLoad_LegacyProviderRejected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
@@ -131,7 +131,7 @@ providers:
 
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected validation error for invalid provider")
+		t.Fatal("expected validation error for legacy provider config")
 	}
 }
 
@@ -139,12 +139,17 @@ func TestLoad_InvalidMaxIterations(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
-provider: anthropic
+vendor: zai
+endpoint: cn-coding-openai
 model: test
 max_iterations: 0
-providers:
-  anthropic:
+vendors:
+  zai:
     api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
 `
 	os.WriteFile(path, []byte(content), 0644)
 
@@ -158,12 +163,17 @@ func TestLoad_InvalidDefaultMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
-provider: anthropic
+vendor: zai
+endpoint: cn-coding-openai
 model: test
 default_mode: turbo
-providers:
-  anthropic:
+vendors:
+  zai:
     api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
 `
 	os.WriteFile(path, []byte(content), 0644)
 
@@ -180,6 +190,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.SystemPrompt == "" {
 		t.Error("DefaultConfig() has empty system prompt")
+	}
+	if cfg.Vendor == "" || cfg.Endpoint == "" || cfg.Model == "" {
+		t.Fatal("DefaultConfig() should set vendor, endpoint, and model")
 	}
 }
 

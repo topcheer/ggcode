@@ -54,7 +54,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 
 	// Mode-specific handling
 	switch p.mode {
-	case BypassMode:
+	case BypassMode, AutopilotMode:
 		// Bypass mode: allow everything except extremely dangerous operations
 		if toolName == "run_command" {
 			cmd, _ := extractCommand(input)

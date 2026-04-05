@@ -8,7 +8,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -20,8 +19,18 @@ import (
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
 func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPath string) int {
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolving endpoint: %v\n", err)
+		return 1
+	}
+	if resolved.APIKey == "" {
+		fmt.Fprintf(os.Stderr, "missing api key for vendor %s endpoint %s\n", resolved.VendorID, resolved.EndpointID)
+		return 1
+	}
+
 	// Setup provider
-	prov, err := provider.NewProvider(cfg)
+	prov, err := provider.NewProvider(resolved)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "creating provider: %v\n", err)
 		return 1
@@ -91,17 +100,6 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 	}
 	ag := agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	ag.SetPermissionPolicy(policy)
-
-	// Setup cost tracking
-	pricing := cost.DefaultPricingTable()
-	costMgr := cost.NewManager(pricing, "")
-	ag.SetUsageHandler(func(usage provider.TokenUsage) {
-		tracker := costMgr.GetOrCreateTracker("pipe", cfg.Provider, cfg.Model)
-		tracker.Record(cost.TokenUsage{
-			InputTokens:  usage.InputTokens,
-			OutputTokens: usage.OutputTokens,
-		})
-	})
 
 	// Read stdin if available
 	stdinData, err := readStdin()

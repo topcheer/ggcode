@@ -1,0 +1,23 @@
+{
+  "name": "@topcheer/ggcode",
+  "version": "0.0.0-dev",
+  "description": "Thin npm wrapper that installs the ggcode GitHub Release binary",
+  "license": "MIT",
+  "bin": {
+    "ggcode": "./bin/ggcode.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.js"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "coding",
+    "ggcode"
+  ]
+}

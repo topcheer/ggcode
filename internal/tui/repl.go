@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -52,29 +50,6 @@ func (r *REPL) SetMCPServers(servers []MCPInfo) {
 // SetResumeID sets the session ID to resume.
 func (r *REPL) SetResumeID(id string) {
 	r.resumeID = id
-}
-
-// SetCostManager wires up cost tracking for the REPL.
-func (r *REPL) SetCostManager(mgr *cost.Manager, providerName, modelName string) {
-	r.model.costMgr = mgr
-	r.model.costProvider = providerName
-	r.model.costModel = modelName
-
-	r.agent.SetUsageHandler(func(usage provider.TokenUsage) {
-		if r.program == nil {
-			return
-		}
-		sessionID := r.model.currentSessionID()
-		tracker := mgr.GetOrCreateTracker(sessionID, providerName, modelName)
-		tracker.Record(cost.TokenUsage{
-			InputTokens:  usage.InputTokens,
-			OutputTokens: usage.OutputTokens,
-		})
-		r.program.Send(costUpdateMsg{
-			InputTokens:  usage.InputTokens,
-			OutputTokens: usage.OutputTokens,
-		})
-	})
 }
 
 // SetConfig passes the config to the model for /model and /provider commands.
@@ -130,12 +105,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	// Notify TUI on completion
 	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
 		if r.program != nil {
-			label := fmt.Sprintf("completed")
-			if sa.Error != nil {
-				label = "failed"
-			}
-			msg := fmt.Sprintf("[sub-agent %s %s]%s\n", sa.ID, label, truncResult(sa))
-			r.program.Send(streamMsg(msg))
+			r.program.Send(subAgentUpdateMsg{})
 		}
 	})
 }
@@ -188,19 +158,21 @@ func (r *REPL) Run() error {
 	// We can't Send before Run (deadlock). Instead, run in a goroutine and
 	// send the reference once the event loop is up.
 	debug.Log("repl", "scheduling setProgramMsg")
-	// Send the startup logo with provider/model info.
-	providerName := r.model.costProvider
-	if providerName == "" && r.model.config != nil {
-		providerName = r.model.config.Provider
+	// Send the startup logo with vendor/endpoint/model info.
+	vendorName := ""
+	endpointName := ""
+	if r.model.config != nil {
+		vendorName = r.model.config.Vendor
+		endpointName = r.model.config.Endpoint
 	}
-	modelName := r.model.costModel
-	if modelName == "" && r.model.config != nil {
+	modelName := ""
+	if r.model.config != nil {
 		modelName = r.model.config.Model
 	}
 	go func() {
 		time.Sleep(10 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
-		r.program.Send(logoMsg{Provider: providerName, Model: modelName})
+		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
 	}()
 
 	_, err := r.program.Run()
@@ -215,12 +187,17 @@ func (r *REPL) Run() error {
 
 // createSession creates a fresh session and wires it into the model.
 func (r *REPL) createSession() {
-	ses := session.NewSession("", "")
+	vendor := ""
+	endpoint := ""
+	model := ""
+	if r.model.config != nil {
+		vendor = r.model.config.Vendor
+		endpoint = r.model.config.Endpoint
+		model = r.model.config.Model
+	}
+	ses := session.NewSession(vendor, endpoint, model)
 	if err := r.store.Save(ses); err == nil {
 		r.model.SetSession(ses, r.store)
-		if r.model.costMgr != nil {
-			r.model.costMgr.GetOrCreateTracker(ses.ID, r.model.costProvider, r.model.costModel)
-		}
 		r.model.output.WriteString(r.model.t("session.new", ses.ID))
 	}
 }
@@ -238,19 +215,9 @@ func (r *REPL) loadSession(id string) {
 		r.agent.AddMessage(msg)
 	}
 	r.model.SetSession(ses, r.store)
-	if r.model.costMgr != nil {
-		r.model.costMgr.GetOrCreateTracker(ses.ID, r.model.costProvider, r.model.costModel)
-	}
 	title := ses.Title
 	if title == "" {
 		title = r.model.t("session.untitled")
 	}
 	r.model.output.WriteString(r.model.t("session.resume", ses.ID, title, len(ses.Messages)))
-}
-
-func truncResult(sa *subagent.SubAgent) string {
-	if len(sa.Result) <= 120 {
-		return ": " + sa.Result
-	}
-	return ": " + sa.Result[:120] + "..."
 }

@@ -44,7 +44,11 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		if !sa.EndedAt.IsZero() && !sa.StartedAt.IsZero() {
 			duration = fmt.Sprintf(" (%v)", sa.EndedAt.Sub(sa.StartedAt).Round(1e9))
 		}
-		sb.WriteString(fmt.Sprintf("  %s [%s]%s\n    Task: %s\n", sa.ID, sa.Status, duration, truncate(sa.Task, 80)))
+		task := sa.DisplayTask
+		if task == "" {
+			task = sa.Task
+		}
+		sb.WriteString(fmt.Sprintf("  %s [%s]%s\n    Task: %s\n", sa.ID, sa.Status, duration, truncate(task, 80)))
 		if sa.Status == subagent.StatusCompleted {
 			sb.WriteString(fmt.Sprintf("    Result: %s\n", truncate(sa.Result, 120)))
 		}

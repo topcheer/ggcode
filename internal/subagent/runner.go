@@ -54,6 +54,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	sa, _ := cfg.Manager.Get(cfg.SubAgentID)
 	if sa != nil {
 		sa.setStatus(StatusRunning)
+		sa.setActivity("thinking", "", "")
 		sa.StartedAt = time.Now()
 	}
 
@@ -80,14 +81,20 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		switch event.Type {
 		case provider.StreamEventText:
 			output.WriteString(event.Text)
+			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.setActivity("writing", "", "")
+			}
 		case provider.StreamEventToolCallDone:
-			output.WriteString(fmt.Sprintf("[tool: %s]\n", event.Tool.Name))
 			// Increment tool call count for this subagent
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
+				sa.setActivity("tool", event.Tool.Name, string(event.Tool.Arguments))
 			}
 		case provider.StreamEventError:
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))
+			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.setActivity("failed", "", "")
+			}
 		}
 	})
 

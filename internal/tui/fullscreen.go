@@ -146,9 +146,6 @@ func (f FullscreenModel) renderStatusBar() string {
 
 	var parts []string
 	parts = append(parts, "mode "+f.inner.renderModeBadge())
-	if f.inner.lastCost != "" {
-		parts = append(parts, f.inner.lastCost)
-	}
 	if f.inner.session != nil {
 		parts = append(parts, f.inner.session.ID)
 	}

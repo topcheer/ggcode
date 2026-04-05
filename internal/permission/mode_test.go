@@ -13,6 +13,8 @@ func TestPermissionModeString(t *testing.T) {
 		{SupervisedMode, "supervised"},
 		{PlanMode, "plan"},
 		{AutoMode, "auto"},
+		{BypassMode, "bypass"},
+		{AutopilotMode, "autopilot"},
 		{PermissionMode(99), "supervised"},
 	}
 	for _, tt := range tests {
@@ -31,6 +33,8 @@ func TestParsePermissionMode(t *testing.T) {
 		{"Plan", PlanMode},
 		{"PLAN", PlanMode},
 		{"auto", AutoMode},
+		{"bypass", BypassMode},
+		{"autopilot", AutopilotMode},
 		{"supervised", SupervisedMode},
 		{"unknown", SupervisedMode},
 	}
@@ -51,8 +55,11 @@ func TestPermissionModeNext(t *testing.T) {
 	if AutoMode.Next() != BypassMode {
 		t.Error("auto.Next() should be bypass")
 	}
-	if BypassMode.Next() != SupervisedMode {
-		t.Error("bypass.Next() should be supervised")
+	if BypassMode.Next() != AutopilotMode {
+		t.Error("bypass.Next() should be autopilot")
+	}
+	if AutopilotMode.Next() != SupervisedMode {
+		t.Error("autopilot.Next() should be supervised")
 	}
 }
 
@@ -111,6 +118,23 @@ func TestAutoModeDeniesDangerous(t *testing.T) {
 	d, err = policy.Check("run_command", dangerousInput)
 	if err != nil || d != Deny {
 		t.Errorf("AutoMode: dangerous command should be Deny, got %v err=%v", d, err)
+	}
+}
+
+func TestAutopilotModeMatchesBypassPermissions(t *testing.T) {
+	policy := NewConfigPolicyWithMode(nil, []string{"."}, AutopilotMode)
+
+	safeInput := json.RawMessage(`{"command":"ls -la"}`)
+	dangerousInput := json.RawMessage(`{"command":"sudo rm -rf /"}`)
+
+	d, err := policy.Check("run_command", safeInput)
+	if err != nil || d != Allow {
+		t.Errorf("AutopilotMode: safe command should be Allow, got %v err=%v", d, err)
+	}
+
+	d, err = policy.Check("run_command", dangerousInput)
+	if err != nil || d != Ask {
+		t.Errorf("AutopilotMode: extremely dangerous command should be Ask, got %v err=%v", d, err)
 	}
 }
 

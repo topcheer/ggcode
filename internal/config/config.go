@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,11 +15,39 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ProviderConfig holds provider-specific settings.
-type ProviderConfig struct {
-	APIKey    string `yaml:"api_key"`
-	BaseURL   string `yaml:"base_url"`
-	MaxTokens int    `yaml:"max_tokens"`
+// EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
+type EndpointConfig struct {
+	DisplayName   string   `yaml:"display_name"`
+	Protocol      string   `yaml:"protocol"`
+	BaseURL       string   `yaml:"base_url"`
+	APIKey        string   `yaml:"api_key,omitempty"`
+	MaxTokens     int      `yaml:"max_tokens"`
+	DefaultModel  string   `yaml:"default_model,omitempty"`
+	SelectedModel string   `yaml:"selected_model,omitempty"`
+	Models        []string `yaml:"models,omitempty"`
+	Tags          []string `yaml:"tags,omitempty"`
+}
+
+// VendorConfig holds a real supplier plus its available endpoints.
+type VendorConfig struct {
+	DisplayName string                    `yaml:"display_name"`
+	APIKey      string                    `yaml:"api_key,omitempty"`
+	Endpoints   map[string]EndpointConfig `yaml:"endpoints"`
+}
+
+// ResolvedEndpoint is the runtime selection after config inheritance is applied.
+type ResolvedEndpoint struct {
+	VendorID     string
+	VendorName   string
+	EndpointID   string
+	EndpointName string
+	Protocol     string
+	BaseURL      string
+	APIKey       string
+	Model        string
+	MaxTokens    int
+	Models       []string
+	Tags         []string
 }
 
 // ToolPermission defines per-tool permission level in config.
@@ -99,11 +128,12 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 // Config is the top-level configuration.
 type Config struct {
-	Provider      string                    `yaml:"provider"`
+	Vendor        string                    `yaml:"vendor"`
+	Endpoint      string                    `yaml:"endpoint"`
 	Model         string                    `yaml:"model"`
 	Language      string                    `yaml:"language"`
 	SystemPrompt  string                    `yaml:"system_prompt"`
-	Providers     map[string]ProviderConfig `yaml:"providers"`
+	Vendors       map[string]VendorConfig   `yaml:"vendors"`
 	AllowedDirs   []string                  `yaml:"allowed_dirs"`
 	MaxIterations int                       `yaml:"max_iterations"`
 	ToolPerms     map[string]ToolPermission `yaml:"tool_permissions"`
@@ -112,6 +142,7 @@ type Config struct {
 	Hooks         hooks.HookConfig          `yaml:"hooks"`
 	DefaultMode   string                    `yaml:"default_mode"`
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
+	FilePath      string                    `yaml:"-"`
 }
 
 // SubAgentConfig holds sub-agent configuration.
@@ -125,37 +156,82 @@ type SubAgentConfig struct {
 func DefaultConfig() *Config {
 	cfg := &Config{
 		SystemPrompt:  DefaultSystemPrompt,
-		Provider:      "anthropic",
-		Model:         "claude-sonnet-4-20250514",
+		Vendor:        "zai",
+		Endpoint:      "cn-coding-openai",
+		Model:         "glm-5-turbo",
 		Language:      "en",
 		AllowedDirs:   []string{"."},
 		MaxIterations: 50,
-		Providers: map[string]ProviderConfig{
-			"anthropic": {
-				APIKey:    "${ANTHROPIC_API_KEY}",
-				MaxTokens: 8192,
-			},
-			"openai": {
-				APIKey:    "${OPENAI_API_KEY}",
-				MaxTokens: 8192,
-			},
-			"gemini": {
-				APIKey:    "${GEMINI_API_KEY}",
-				MaxTokens: 8192,
+		Vendors: map[string]VendorConfig{
+			"zai": {
+				DisplayName: "Z.ai",
+				APIKey:      "${ZAI_API_KEY}",
+				Endpoints: map[string]EndpointConfig{
+					"cn-coding-openai": {
+						DisplayName:   "CN Coding Plan",
+						Protocol:      "openai",
+						BaseURL:       "https://open.bigmodel.cn/api/coding/paas/v4",
+						MaxTokens:     8192,
+						DefaultModel:  "glm-5-turbo",
+						SelectedModel: "glm-5-turbo",
+						Models:        []string{"glm-5-turbo", "glm-5-plus"},
+						Tags:          []string{"coding", "cn"},
+					},
+					"cn-coding-anthropic": {
+						DisplayName: "CN Coding Plan (Anthropic)",
+						Protocol:    "anthropic",
+						BaseURL:     "https://open.bigmodel.cn/api/anthropic",
+						MaxTokens:   8192,
+						Tags:        []string{"coding", "cn", "anthropic"},
+					},
+					"global-coding-openai": {
+						DisplayName:  "Global Coding Plan",
+						Protocol:     "openai",
+						MaxTokens:    8192,
+						DefaultModel: "glm-5-turbo",
+						Models:       []string{"glm-5-turbo", "glm-5-plus"},
+						Tags:         []string{"coding", "global"},
+					},
+					"global-coding-anthropic": {
+						DisplayName: "Global Coding Plan (Anthropic)",
+						Protocol:    "anthropic",
+						MaxTokens:   8192,
+						Tags:        []string{"coding", "global", "anthropic"},
+					},
+					"cn-api-openai": {
+						DisplayName:  "CN Standard API",
+						Protocol:     "openai",
+						MaxTokens:    8192,
+						DefaultModel: "glm-4.5-air",
+						Models:       []string{"glm-4.5-air", "glm-4.5"},
+						Tags:         []string{"api", "cn"},
+					},
+					"global-api-openai": {
+						DisplayName:  "Global Standard API",
+						Protocol:     "openai",
+						MaxTokens:    8192,
+						DefaultModel: "glm-4.5-air",
+						Models:       []string{"glm-4.5-air", "glm-4.5"},
+						Tags:         []string{"api", "global"},
+					},
+				},
 			},
 		},
 	}
 	cfg.expandEnv()
+	cfg.normalizeActiveModel()
 	return cfg
 }
 
 // Load reads config from the given path. If the file doesn't exist, returns defaults.
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
+	cfg.FilePath = path
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cfg.normalizeActiveModel()
 			if err := cfg.Validate(); err != nil {
 				return nil, err
 			}
@@ -168,6 +244,9 @@ func Load(path string) (*Config, error) {
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	if hasLegacyProviderKeys(raw) {
+		return nil, fmt.Errorf("legacy provider/providers config is no longer supported; use vendor/endpoint/vendors instead")
 	}
 
 	// Expand env vars
@@ -183,31 +262,47 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
 	}
 	cfg.expandEnv()
+	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config %s: %w", path, err)
 	}
 
-	debug.Log("config", "Load: provider=%s model=%s max_iterations=%d", cfg.Provider, cfg.Model, cfg.MaxIterations)
-	for name, pc := range cfg.Providers {
-		hasKey := pc.APIKey != ""
-		debug.Log("config", "  provider %s: base_url=%s api_key_set=%t max_tokens=%d", name, pc.BaseURL, hasKey, pc.MaxTokens)
+	debug.Log("config", "Load: vendor=%s endpoint=%s model=%s max_iterations=%d", cfg.Vendor, cfg.Endpoint, cfg.Model, cfg.MaxIterations)
+	for vendorName, vc := range cfg.Vendors {
+		debug.Log("config", "  vendor %s: api_key_set=%t endpoints=%d", vendorName, vc.APIKey != "", len(vc.Endpoints))
 	}
 
 	return cfg, nil
 }
 
 func (c *Config) expandEnv() {
-	c.Provider = ExpandEnv(c.Provider)
+	c.Vendor = ExpandEnv(c.Vendor)
+	c.Endpoint = ExpandEnv(c.Endpoint)
 	c.Model = ExpandEnv(c.Model)
 	c.SystemPrompt = ExpandEnv(c.SystemPrompt)
 	c.DefaultMode = ExpandEnv(c.DefaultMode)
 	for i, dir := range c.AllowedDirs {
 		c.AllowedDirs[i] = ExpandEnv(dir)
 	}
-	for name, pc := range c.Providers {
-		pc.APIKey = ExpandEnv(pc.APIKey)
-		pc.BaseURL = ExpandEnv(pc.BaseURL)
-		c.Providers[name] = pc
+	for vendorName, vc := range c.Vendors {
+		vc.DisplayName = ExpandEnv(vc.DisplayName)
+		vc.APIKey = ExpandEnv(vc.APIKey)
+		for endpointName, ep := range vc.Endpoints {
+			ep.DisplayName = ExpandEnv(ep.DisplayName)
+			ep.Protocol = ExpandEnv(ep.Protocol)
+			ep.BaseURL = ExpandEnv(ep.BaseURL)
+			ep.APIKey = ExpandEnv(ep.APIKey)
+			ep.DefaultModel = ExpandEnv(ep.DefaultModel)
+			ep.SelectedModel = ExpandEnv(ep.SelectedModel)
+			for i, model := range ep.Models {
+				ep.Models[i] = ExpandEnv(model)
+			}
+			for i, tag := range ep.Tags {
+				ep.Tags[i] = ExpandEnv(tag)
+			}
+			vc.Endpoints[endpointName] = ep
+		}
+		c.Vendors[vendorName] = vc
 	}
 	for i, plugin := range c.Plugins {
 		plugin.Name = ExpandEnv(plugin.Name)
@@ -239,23 +334,34 @@ func (c *Config) expandEnv() {
 
 // Validate checks for invalid core configuration values that should fail fast.
 func (c *Config) Validate() error {
-	if strings.TrimSpace(c.Provider) == "" {
-		return fmt.Errorf("provider must not be empty")
+	if strings.TrimSpace(c.Vendor) == "" {
+		return fmt.Errorf("vendor must not be empty")
 	}
-	if strings.TrimSpace(c.Model) == "" {
+	if strings.TrimSpace(c.Endpoint) == "" {
+		return fmt.Errorf("endpoint must not be empty")
+	}
+	vc, ok := c.Vendors[c.Vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q is not configured", c.Vendor)
+	}
+	ep, ok := vc.Endpoints[c.Endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q is not configured for vendor %q", c.Endpoint, c.Vendor)
+	}
+	if strings.TrimSpace(ep.Protocol) == "" {
+		return fmt.Errorf("endpoint %q for vendor %q must declare a protocol", c.Endpoint, c.Vendor)
+	}
+	if strings.TrimSpace(c.Model) == "" && strings.TrimSpace(ep.SelectedModel) == "" && strings.TrimSpace(ep.DefaultModel) == "" {
 		return fmt.Errorf("model must not be empty")
-	}
-	if _, ok := c.Providers[c.Provider]; !ok {
-		return fmt.Errorf("provider %q is not configured", c.Provider)
 	}
 	if c.MaxIterations <= 0 {
 		return fmt.Errorf("max_iterations must be greater than 0")
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {
-		case "supervised", "plan", "auto", "bypass":
+		case "supervised", "plan", "auto", "bypass", "autopilot":
 		default:
-			return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass", c.DefaultMode)
+			return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", c.DefaultMode)
 		}
 	}
 	if c.SubAgents.MaxConcurrent < 0 {
@@ -272,12 +378,205 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// GetProviderConfig returns the config for the active provider.
-func (c *Config) GetProviderConfig() *ProviderConfig {
-	if pc, ok := c.Providers[c.Provider]; ok {
-		return &pc
+func (c *Config) normalizeActiveModel() {
+	if c == nil || strings.TrimSpace(c.Model) != "" {
+		return
 	}
-	return &ProviderConfig{}
+	if vc, ok := c.Vendors[c.Vendor]; ok {
+		if ep, ok := vc.Endpoints[c.Endpoint]; ok {
+			if ep.SelectedModel != "" {
+				c.Model = ep.SelectedModel
+			} else {
+				c.Model = ep.DefaultModel
+			}
+		}
+	}
+}
+
+func hasLegacyProviderKeys(raw map[string]interface{}) bool {
+	if raw == nil {
+		return false
+	}
+	_, hasProvider := raw["provider"]
+	_, hasProviders := raw["providers"]
+	return hasProvider || hasProviders
+}
+
+// ResolveActiveEndpoint resolves the selected vendor + endpoint into runtime settings.
+func (c *Config) ResolveActiveEndpoint() (*ResolvedEndpoint, error) {
+	if c == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[c.Vendor]
+	if !ok {
+		return nil, fmt.Errorf("vendor %q is not configured", c.Vendor)
+	}
+	ep, ok := vc.Endpoints[c.Endpoint]
+	if !ok {
+		return nil, fmt.Errorf("endpoint %q is not configured for vendor %q", c.Endpoint, c.Vendor)
+	}
+	model := strings.TrimSpace(c.Model)
+	if model == "" {
+		model = strings.TrimSpace(ep.SelectedModel)
+	}
+	if model == "" {
+		model = strings.TrimSpace(ep.DefaultModel)
+	}
+	if model == "" {
+		return nil, fmt.Errorf("endpoint %q for vendor %q has no active model", c.Endpoint, c.Vendor)
+	}
+	apiKey := strings.TrimSpace(ep.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(vc.APIKey)
+	}
+	if strings.TrimSpace(ep.BaseURL) == "" {
+		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", c.Endpoint, c.Vendor)
+	}
+	maxTokens := ep.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = 8192
+	}
+	return &ResolvedEndpoint{
+		VendorID:     c.Vendor,
+		VendorName:   firstNonEmpty(vc.DisplayName, c.Vendor),
+		EndpointID:   c.Endpoint,
+		EndpointName: firstNonEmpty(ep.DisplayName, c.Endpoint),
+		Protocol:     ep.Protocol,
+		BaseURL:      ep.BaseURL,
+		APIKey:       apiKey,
+		Model:        model,
+		MaxTokens:    maxTokens,
+		Models:       append([]string(nil), ep.Models...),
+		Tags:         append([]string(nil), ep.Tags...),
+	}, nil
+}
+
+// VendorNames returns configured vendors in a stable order.
+func (c *Config) VendorNames() []string {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(c.Vendors))
+	for name := range c.Vendors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// EndpointNames returns configured endpoints for the given vendor in a stable order.
+func (c *Config) EndpointNames(vendor string) []string {
+	if c == nil {
+		return nil
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(vc.Endpoints))
+	for name := range vc.Endpoints {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ActiveEndpointConfig returns a copy of the active endpoint config.
+func (c *Config) ActiveEndpointConfig() *EndpointConfig {
+	if c == nil {
+		return nil
+	}
+	vc, ok := c.Vendors[c.Vendor]
+	if !ok {
+		return nil
+	}
+	ep, ok := vc.Endpoints[c.Endpoint]
+	if !ok {
+		return nil
+	}
+	return &ep
+}
+
+// SetActiveSelection updates the current vendor, endpoint, and model.
+func (c *Config) SetActiveSelection(vendor, endpoint, model string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q is not configured", vendor)
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+	}
+	if model == "" {
+		model = firstNonEmpty(ep.SelectedModel, ep.DefaultModel)
+	}
+	if model == "" {
+		return fmt.Errorf("endpoint %q for vendor %q has no model configured", endpoint, vendor)
+	}
+	ep.SelectedModel = model
+	vc.Endpoints[endpoint] = ep
+	c.Vendors[vendor] = vc
+	c.Vendor = vendor
+	c.Endpoint = endpoint
+	c.Model = model
+	return nil
+}
+
+// SetEndpointAPIKey updates the active endpoint or vendor-level API key.
+func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped bool) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q is not configured", vendor)
+	}
+	if vendorScoped {
+		vc.APIKey = strings.TrimSpace(apiKey)
+		c.Vendors[vendor] = vc
+		return nil
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+	}
+	ep.APIKey = strings.TrimSpace(apiKey)
+	vc.Endpoints[endpoint] = ep
+	c.Vendors[vendor] = vc
+	return nil
+}
+
+// Save persists the config to its configured file path.
+func (c *Config) Save() error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(c.FilePath) == "" {
+		return fmt.Errorf("config file path is empty")
+	}
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	return os.WriteFile(c.FilePath, data, 0644)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // BuildSystemPrompt enhances the base system prompt with runtime context.

@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -275,5 +277,48 @@ func TestRunStreamEmitsToolProgressFromChatResponse(t *testing.T) {
 	}
 	if events[4].Type != provider.StreamEventDone || events[4].Usage == nil || events[4].Usage.OutputTokens != 2 {
 		t.Fatalf("unexpected final done event: %#v", events[4])
+	}
+}
+
+func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Should I inspect the tests first or jump straight into the implementation?")},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and found the issue.")},
+				},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	var events []provider.StreamEvent
+	if err := a.RunStream(context.Background(), "debug this", func(event provider.StreamEvent) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.chatCalls != 2 {
+		t.Fatalf("expected autopilot to continue into a second chat call, got %d", mp.chatCalls)
+	}
+	if got := a.Messages(); len(got) < 4 {
+		t.Fatalf("expected autopilot to append a synthetic user continuation, got %d messages", len(got))
+	}
+	lastUser := a.Messages()[2]
+	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "Autopilot is enabled") {
+		t.Fatalf("expected synthetic autopilot continuation message, got %#v", lastUser)
+	}
+	if len(events) < 3 || events[len(events)-2].Type != provider.StreamEventText || events[len(events)-2].Text != "I inspected the tests first and found the issue." {
+		t.Fatalf("expected final assistant text after autopilot continuation, got %#v", events)
 	}
 }

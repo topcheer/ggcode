@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 func (m Model) View() string {
@@ -108,8 +107,18 @@ func (m Model) renderOutput() string {
 		sb.WriteString("\n\n")
 		return sb.String()
 	}
+	output = m.decorateStreamingBullet(output)
 	output = strings.TrimRight(output, "\n")
-	sb.WriteString(output)
+	if output != "" {
+		sb.WriteString(output)
+	}
+	liveActivities := m.renderLiveActivities()
+	if liveActivities != "" {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(liveActivities)
+	}
 	if m.loading && m.spinner.IsActive() {
 		sb.WriteString("\n")
 		sb.WriteString(m.spinner.String())
@@ -118,6 +127,23 @@ func (m Model) renderOutput() string {
 	}
 	sb.WriteString("\n\n")
 	return sb.String()
+}
+
+func (m Model) decorateStreamingBullet(output string) string {
+	if !m.loading || !m.streamPrefixWritten || m.streamStartPos < 0 || m.streamStartPos >= len(output) {
+		return output
+	}
+	staticPrefix := bulletStyle.Render("● ")
+	if !strings.HasPrefix(output[m.streamStartPos:], staticPrefix) {
+		return output
+	}
+	animatedPrefix := bulletStyle.Render(streamingBulletFrame(m.spinner.CurrentFrame()) + " ")
+	return output[:m.streamStartPos] + animatedPrefix + output[m.streamStartPos+len(staticPrefix):]
+}
+
+func streamingBulletFrame(frame int) string {
+	frames := []string{"●", "◉", "○", "◉"}
+	return frames[frame%len(frames)]
 }
 
 func (m Model) renderHeader() string {
@@ -130,15 +156,12 @@ func (m Model) renderHeader() string {
 				lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("header.terminal_native")),
 		)
 
-	provider, model := m.currentProviderModel()
+	vendor, endpoint, model := m.currentSelection()
 	sessionLine := m.t("label.session") + " " + m.t("session.ephemeral")
 	if m.session != nil && m.session.ID != "" {
 		sessionLine = fmt.Sprintf("%s %s", m.t("label.session"), truncateString(m.session.ID, 18))
 	}
 	agentLine := fmt.Sprintf("%s  %s", m.t("label.agents"), m.t("agents.idle"))
-	if m.subAgentMgr != nil && m.subAgentMgr.RunningCount() > 0 {
-		agentLine = fmt.Sprintf("%s  %s", m.t("label.agents"), m.t("agents.running", m.subAgentMgr.RunningCount()))
-	}
 
 	metaCard := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -148,7 +171,8 @@ func (m Model) renderHeader() string {
 			m.styles.title.Render("ggcode"),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("workspace.tagline")),
 			"",
-			fmt.Sprintf("%s %s", m.t("label.provider"), provider),
+			fmt.Sprintf("%s   %s", m.t("label.vendor"), vendor),
+			fmt.Sprintf("%s %s", m.t("label.endpoint"), endpoint),
 			fmt.Sprintf("%s   %s", m.t("label.model"), model),
 			m.t("label.mode") + "    " + m.renderModeBadge(),
 			agentLine,
@@ -162,19 +186,13 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderSidebar() string {
-	provider, model := m.currentProviderModel()
+	vendor, endpoint, model := m.currentSelection()
 	sessionLine := m.t("session.ephemeral")
 	if m.session != nil && m.session.ID != "" {
 		sessionLine = truncateString(m.session.ID, 18)
 	}
 	agentLine := m.t("agents.idle")
-	if m.subAgentMgr != nil && m.subAgentMgr.RunningCount() > 0 {
-		agentLine = m.t("agents.running", m.subAgentMgr.RunningCount())
-	}
-	activity := m.statusActivity
-	if activity == "" {
-		activity = m.t("activity.idle")
-	}
+	activity := m.sidebarActivity()
 	if len(m.pendingSubmissions) > 0 {
 		activity = fmt.Sprintf("%s • %s", activity, m.t("queued.count", len(m.pendingSubmissions)))
 	}
@@ -184,12 +202,15 @@ func (m Model) renderSidebar() string {
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("workspace.tagline")),
 		"",
 		m.styles.title.Render("ggcode"),
-		fmt.Sprintf("%-9s %s", m.t("label.provider"), provider),
+		fmt.Sprintf("%-9s %s", m.t("label.vendor"), vendor),
+		fmt.Sprintf("%-9s %s", m.t("label.endpoint"), truncateString(endpoint, m.sidebarWidth()-12)),
 		fmt.Sprintf("%-9s %s", m.t("label.model"), truncateString(model, m.sidebarWidth()-12)),
 		fmt.Sprintf("%-9s %s", m.t("label.mode"), m.renderModeBadge()),
 		fmt.Sprintf("%-9s %s", m.t("label.session"), sessionLine),
 		fmt.Sprintf("%-9s %s", m.t("label.agents"), agentLine),
 		fmt.Sprintf("%-9s %s", m.t("label.activity"), truncateString(activity, m.sidebarWidth()-12)),
+		"",
+		m.renderSidebarModeSection(),
 	}, "\n")
 
 	return lipgloss.NewStyle().
@@ -198,6 +219,60 @@ func (m Model) renderSidebar() string {
 		Padding(0, 1).
 		Width(m.sidebarWidth()).
 		Render(body)
+}
+
+func (m Model) renderSidebarModeSection() string {
+	width := max(12, m.sidebarWidth()-4)
+	rows := []string{
+		m.styles.title.Render(m.t("panel.mode_policy")),
+		formatSidebarDetailRow(m.t("label.approval_policy"), m.t(sidebarModeApprovalKey(m.mode)), width),
+		formatSidebarDetailRow(m.t("label.tool_policy"), m.t(sidebarModeToolsKey(m.mode)), width),
+		formatSidebarDetailRow(m.t("label.agent_policy"), m.t(sidebarModeAgentKey(m.mode)), width),
+	}
+	return strings.Join(rows, "\n")
+}
+
+func formatSidebarDetailRow(label, value string, width int) string {
+	return truncateString(fmt.Sprintf("%-8s %s", label, value), width)
+}
+
+func sidebarModeApprovalKey(mode permission.PermissionMode) string {
+	switch mode {
+	case permission.PlanMode:
+		return "mode.approval.none"
+	case permission.AutoMode:
+		return "mode.approval.none"
+	case permission.BypassMode:
+		return "mode.approval.critical"
+	case permission.AutopilotMode:
+		return "mode.approval.none"
+	default:
+		return "mode.approval.ask"
+	}
+}
+
+func sidebarModeToolsKey(mode permission.PermissionMode) string {
+	switch mode {
+	case permission.PlanMode:
+		return "mode.tools.readonly"
+	case permission.AutoMode:
+		return "mode.tools.safe"
+	case permission.BypassMode:
+		return "mode.tools.open"
+	case permission.AutopilotMode:
+		return "mode.tools.open"
+	default:
+		return "mode.tools.rules"
+	}
+}
+
+func sidebarModeAgentKey(mode permission.PermissionMode) string {
+	switch mode {
+	case permission.AutopilotMode:
+		return "mode.agent.autocontinue"
+	default:
+		return "mode.agent.waits"
+	}
 }
 
 func (m Model) renderConversationPanel(panelHeight int) string {
@@ -316,7 +391,11 @@ func (m Model) renderStatusBar() string {
 
 	activity := m.statusActivity
 	if activity == "" {
-		activity = m.t("status.thinking")
+		if m.activeTodo != nil {
+			activity = localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content)
+		} else {
+			activity = m.t("status.thinking")
+		}
 	}
 
 	spinnerChar := "⏳"
@@ -325,26 +404,21 @@ func (m Model) renderStatusBar() string {
 		spinnerChar = string(spinnerChars[frame%len(spinnerChars)])
 	}
 
-	tokens := fmt.Sprintf("%d", m.statusTokens)
-	if len(tokens) > 3 {
-		for i := len(tokens) - 3; i > 0; i -= 3 {
-			tokens = tokens[:i] + "," + tokens[i:]
-		}
-	}
-
-	cost := fmt.Sprintf("%.4f", m.statusCost)
-	if cost == "0.0000" {
-		cost = "0.00"
-	}
-
-	line1 := fmt.Sprintf(" %s %s │ 📊 %s %s │ 💰 $%s", spinnerChar, activity, tokens, m.t("status.tokens"), cost)
+	line1 := fmt.Sprintf(" %s %s", spinnerChar, activity)
 	if len(m.pendingSubmissions) > 0 {
 		line1 += fmt.Sprintf(" │ 📨 %s", m.t("queued.count", len(m.pendingSubmissions)))
 	}
 	sb.WriteString(m.styles.statusBar.Render(line1))
 
-	if m.statusToolCount > 0 || m.statusToolName != "" {
+	if m.activeTodo != nil || m.statusToolCount > 0 || m.statusToolName != "" {
 		sb.WriteString("\n ")
+		if m.activeTodo != nil {
+			sb.WriteString("🎯 ")
+			sb.WriteString(truncateString(compactSingleLine(m.activeTodo.Content), 56))
+			if m.statusToolCount > 0 || m.statusToolName != "" {
+				sb.WriteString(" │ ")
+			}
+		}
 		if m.statusToolCount > 0 {
 			sb.WriteString(fmt.Sprintf("🔧 %s", m.t("status.tools_used", m.statusToolCount)))
 			if m.statusToolName != "" {
@@ -363,40 +437,37 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
-	if m.subAgentMgr != nil && m.subAgentMgr.RunningCount() > 0 {
-		agents := m.subAgentMgr.List()
-		sb.WriteString("\n 🤖 ")
-		first := true
-		for _, a := range agents {
-			if !first {
-				sb.WriteString(" │ ")
-			}
-			first = false
-			icon := "✅"
-			if a.Status == subagent.StatusRunning {
-				icon = "⏳"
-			}
-			sb.WriteString(fmt.Sprintf("%s %s (%d tools)", icon, a.ID, a.ToolCallCount))
-		}
-	}
-
 	return m.renderContextBox(m.t("panel.agent_status"), sb.String(), lipgloss.Color("6"))
+}
+
+func (m Model) sidebarActivity() string {
+	if m.activeTodo != nil {
+		return truncateString(localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content), m.sidebarWidth()-12)
+	}
+	if m.statusActivity != "" {
+		return m.statusActivity
+	}
+	return m.t("activity.idle")
 }
 
 func (m Model) renderContextPanel() string {
 	switch {
+	case m.providerPanel != nil:
+		return m.renderProviderPanel()
 	case m.pendingApproval != nil:
 		title := m.t("panel.approval_required")
 		accent := lipgloss.Color("11")
-		if m.mode == permission.BypassMode {
+		if m.mode == permission.BypassMode || m.mode == permission.AutopilotMode {
 			title = m.t("panel.bypass_approval")
 			accent = lipgloss.Color("9")
 		}
+		present := describeTool(m.currentLanguage(), m.pendingApproval.ToolName, m.pendingApproval.Input)
+		toolLine := formatToolInline(present.DisplayName, present.Detail)
 		body := fmt.Sprintf(" %s   %s\n %s  %s\n\n%s\n%s",
 			m.t("label.tool"),
-			m.pendingApproval.ToolName,
+			toolLine,
 			m.t("label.input"),
-			truncateString(strings.ReplaceAll(m.pendingApproval.Input, "\n", " "), 220),
+			truncateString(compactToolArgsPreview(strings.ReplaceAll(m.pendingApproval.Input, "\n", " ")), 220),
 			m.renderApprovalOptions(m.approvalOptions, m.approvalCursor),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n/a shortcuts"),
 		)
@@ -404,7 +475,7 @@ func (m Model) renderContextPanel() string {
 	case m.pendingDiffConfirm != nil:
 		body := fmt.Sprintf(" %s   %s\n\n%s\n\n%s\n%s",
 			m.t("label.file"),
-			m.pendingDiffConfirm.FilePath,
+			displayToolFileTarget(m.pendingDiffConfirm.FilePath),
 			truncateLines(strings.TrimSpace(FormatDiff(m.pendingDiffConfirm.DiffText)), 12),
 			m.renderApprovalOptions(m.diffOptions, m.diffCursor),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
@@ -419,7 +490,7 @@ func (m Model) renderContextPanel() string {
 
 func (m Model) renderComposerPanel() string {
 	title := " " + m.t("panel.composer")
-	if m.pendingApproval != nil || m.pendingDiffConfirm != nil {
+	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.providerPanel != nil {
 		title = " " + m.t("panel.composer_locked")
 	}
 
@@ -464,24 +535,36 @@ func (m Model) renderContextBox(title, body string, accent lipgloss.Color) strin
 		Render(lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body)
 }
 
-func (m Model) currentProviderModel() (string, string) {
-	provider := m.startupProvider
+func (m Model) currentSelection() (string, string, string) {
+	vendor := m.startupVendor
+	endpoint := m.startupEndpoint
 	model := m.startupModel
 	if m.config != nil {
-		if m.config.Provider != "" {
-			provider = m.config.Provider
+		if m.config.Vendor != "" {
+			vendor = m.config.Vendor
+		}
+		if m.config.Endpoint != "" {
+			endpoint = m.config.Endpoint
 		}
 		if m.config.Model != "" {
 			model = m.config.Model
 		}
+		if resolved, err := m.config.ResolveActiveEndpoint(); err == nil {
+			vendor = resolved.VendorName
+			endpoint = resolved.EndpointName
+			model = resolved.Model
+		}
 	}
-	if provider == "" {
-		provider = "unknown"
+	if vendor == "" {
+		vendor = "unknown"
+	}
+	if endpoint == "" {
+		endpoint = "unknown"
 	}
 	if model == "" {
 		model = "unknown"
 	}
-	return provider, model
+	return vendor, endpoint, model
 }
 
 func (m Model) viewWidth() int {
@@ -508,6 +591,8 @@ func (m Model) modeColor() lipgloss.Color {
 		return lipgloss.Color("42")
 	case permission.BypassMode:
 		return lipgloss.Color("196")
+	case permission.AutopilotMode:
+		return lipgloss.Color("129")
 	default:
 		return lipgloss.Color("8")
 	}
@@ -515,7 +600,7 @@ func (m Model) modeColor() lipgloss.Color {
 
 func (m Model) renderModeBadge() string {
 	fg := lipgloss.Color("0")
-	if m.mode == permission.PlanMode || m.mode == permission.BypassMode {
+	if m.mode == permission.PlanMode || m.mode == permission.BypassMode || m.mode == permission.AutopilotMode {
 		fg = lipgloss.Color("15")
 	}
 	return lipgloss.NewStyle().

@@ -2,15 +2,17 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/topcheer/ggcode/internal/cost"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 func newTestModel() Model {
@@ -198,11 +200,44 @@ func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	}
 
 	view := m.View()
-	if !strings.Contains(view, "provider") || !strings.Contains(view, "session") {
+	if !strings.Contains(view, "vendor") || !strings.Contains(view, "session") {
 		t.Error("expected sidebar metadata in wide layout")
 	}
 	if !strings.Contains(view, "____ ____ ____") {
 		t.Error("expected ascii logo in right sidebar")
+	}
+	if !strings.Contains(view, "Mode policy") || !strings.Contains(view, "approval") {
+		t.Error("expected mode policy section in sidebar")
+	}
+}
+
+func TestSidebarModePolicyLocalizesInChinese(t *testing.T) {
+	m := newTestModel()
+	m.setLanguage("zh-CN")
+	m.handleResize(128, 28)
+
+	view := m.View()
+	if !strings.Contains(view, "模式说明") || !strings.Contains(view, "审批") || !strings.Contains(view, "行为") {
+		t.Error("expected localized mode policy section in sidebar")
+	}
+}
+
+func TestProviderPanelRendersInContextPanel(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+
+	result := m.renderContextPanel()
+
+	if !strings.Contains(result, "/provider") {
+		t.Fatal("expected provider panel title")
+	}
+	if !strings.Contains(result, "Vendors") {
+		t.Fatal("expected vendor list in provider panel")
+	}
+	if !strings.Contains(result, "Endpoints") {
+		t.Fatal("expected endpoint list in provider panel")
 	}
 }
 
@@ -264,26 +299,223 @@ func TestStatusBarWithCostInfo(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.statusActivity = "Thinking..."
-	m.statusTokens = 1500
-	m.statusCost = 0.0042
 	bar := m.renderStatusBar()
 	if !strings.Contains(bar, "Thinking...") {
 		t.Error("expected activity in status bar")
+	}
+	if strings.Contains(bar, "tokens") || strings.Contains(bar, "$") {
+		t.Error("expected token and cost info to be hidden from status bar")
 	}
 }
 
 func TestStatusBarWithToolInfo(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
-	m.statusActivity = "Executing"
-	m.statusToolName = "read_file"
+	m.statusActivity = "Reading README.md"
+	m.statusToolName = "Read"
+	m.statusToolArg = "README.md"
 	m.statusToolCount = 3
 	bar := m.renderStatusBar()
-	if !strings.Contains(bar, "read_file") {
-		t.Error("expected tool name in status bar")
+	if strings.Contains(bar, "read_file") {
+		t.Error("expected raw tool name to be hidden in status bar")
+	}
+	if !strings.Contains(bar, "Read") || !strings.Contains(bar, "README.md") {
+		t.Error("expected friendly tool label in status bar")
 	}
 	if !strings.Contains(bar, "3") {
 		t.Error("expected tool count in status bar")
+	}
+}
+
+func TestRenderOutputShowsGroupedToolActivity(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+	m.startToolActivity(ToolStatusMsg{ToolName: "search_files", DisplayName: "Search", Detail: "ContextManager", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "search_files", DisplayName: "Search", Detail: "ContextManager", Running: false, Result: "Found 4 matches"})
+	m.closeToolActivityGroup()
+
+	output := m.renderOutput()
+
+	if !strings.Contains(output, "Exploring project context") {
+		t.Fatal("expected grouped title in main content")
+	}
+	if !strings.Contains(output, "Read README.md — 2 lines of content") {
+		t.Fatal("expected single-line read summary in grouped activity")
+	}
+	if !strings.Contains(output, "Search ContextManager — 4 matches") {
+		t.Fatal("expected single-line search summary in grouped activity")
+	}
+}
+
+func TestTodoWriteOrganizesFollowingActivityUnderActiveTodo(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	raw := `{"todos":[{"id":"todo-1","content":"Polish TUI activity flow","status":"in_progress"},{"id":"todo-2","content":"Refresh docs","status":"pending"}]}`
+
+	m.startToolActivity(ToolStatusMsg{ToolName: "todo_write", DisplayName: "Update todos", Running: true, RawArgs: raw})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "todo_write", DisplayName: "Update todos", Running: false, RawArgs: raw})
+	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "internal/tui/view.go", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "internal/tui/view.go", Running: false, Result: "line1\nline2"})
+
+	output := m.renderOutput()
+
+	if !strings.Contains(output, "🎯 Todo: Polish TUI activity flow") {
+		t.Fatalf("expected active todo heading in grouped activity, got %q", output)
+	}
+	if !strings.Contains(output, "📦 Advancing tasks") {
+		t.Fatalf("expected todo update group, got %q", output)
+	}
+	if !strings.Contains(output, "Started Polish TUI activity flow") {
+		t.Fatalf("expected todo diff summary, got %q", output)
+	}
+	if !strings.Contains(output, "📦 Exploring project context") {
+		t.Fatalf("expected following tool work to render as its own group, got %q", output)
+	}
+}
+
+func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	for i := 1; i <= 7; i++ {
+		name := fmt.Sprintf("step-%d.md", i)
+		m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: name, Running: true})
+		m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: name, Running: false, Result: "line1\nline2"})
+	}
+	m.closeToolActivityGroup()
+
+	output := m.renderOutput()
+
+	if !strings.Contains(output, "… 2 earlier completed steps") {
+		t.Fatal("expected folded count for hidden group items")
+	}
+	if strings.Contains(output, "step-1.md") || strings.Contains(output, "step-2.md") {
+		t.Fatal("expected older group items to be hidden")
+	}
+	for i := 3; i <= 7; i++ {
+		if !strings.Contains(output, fmt.Sprintf("step-%d.md", i)) {
+			t.Fatalf("expected latest item step-%d.md to remain visible", i)
+		}
+	}
+}
+
+func TestRenderOutputShowsSubAgentAsIndependentState(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	id := m.subAgentMgr.Spawn("context\n\nInvestigate parser behavior", "Investigate parser behavior", nil, context.Background())
+	sa, ok := m.subAgentMgr.Get(id)
+	if !ok {
+		t.Fatal("expected spawned subagent")
+	}
+	sa.Status = subagent.StatusRunning
+	sa.CurrentPhase = "tool"
+	sa.CurrentTool = "read_file"
+	sa.CurrentArgs = `{"path":"docs/spec.md"}`
+	sa.ToolCallCount = 2
+
+	output := m.renderOutput()
+
+	if !strings.Contains(output, "🤖") || !strings.Contains(output, "Investigate parser behavior") {
+		t.Fatalf("expected independent subagent state block, got %q", output)
+	}
+	if !strings.Contains(output, "Reading docs/spec.md") {
+		t.Fatalf("expected friendly subagent activity summary, got %q", output)
+	}
+	if strings.Contains(output, "spawn_agent") || strings.Contains(output, "wait_agent") || strings.Contains(output, id) {
+		t.Fatalf("expected subagent lifecycle internals to stay hidden, got %q", output)
+	}
+}
+
+func TestStatusBarStaysCompactWithoutGroupedActivities(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+	m.closeToolActivityGroup()
+
+	bar := m.renderStatusBar()
+
+	if strings.Contains(bar, "Exploring project context") || strings.Contains(bar, "Read README.md") {
+		t.Fatal("expected grouped activities to stay out of the agent status panel")
+	}
+}
+
+func TestStatusBarShowsActiveTodo(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeTodo = &todoStateItem{ID: "todo-1", Content: "Polish TUI activity flow", Status: "in_progress"}
+
+	bar := m.renderStatusBar()
+
+	if !strings.Contains(bar, "Working on Polish TUI activity flow") {
+		t.Fatalf("expected active todo in status bar, got %q", bar)
+	}
+	if !strings.Contains(bar, "🎯") {
+		t.Fatalf("expected todo marker in status bar, got %q", bar)
+	}
+}
+
+func TestRenderOutputDoesNotDuplicateLegacyToolLog(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+
+	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+
+	output := m.renderOutput()
+
+	if strings.Count(output, "Read README.md") != 1 {
+		t.Fatalf("expected grouped activity to render once, got %q", output)
+	}
+	if strings.Contains(output, "└") || strings.Contains(output, "● Read README.md") {
+		t.Fatal("expected legacy tool log chrome to be removed")
+	}
+}
+
+func TestDoneMsgPersistsGroupedActivitiesInOutput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+
+	next, _ := m.Update(doneMsg{})
+	m = next.(Model)
+
+	output := m.renderOutput()
+	if !strings.Contains(output, "Exploring project context") || !strings.Contains(output, "Read README.md — 2 lines of content") {
+		t.Fatalf("expected grouped activities to persist in main output after completion, got %q", output)
+	}
+}
+
+func TestTrimLeadingRenderedSpacing(t *testing.T) {
+	trimmed := trimLeadingRenderedSpacing("\n\n  Hello\n")
+	if trimmed != "Hello\n" {
+		t.Fatalf("expected leading rendered spacing to be trimmed, got %q", trimmed)
+	}
+}
+
+func TestRenderOutputDecoratesStreamingBullet(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.streamPrefixWritten = true
+	m.streamStartPos = 0
+	m.output.WriteString(bulletStyle.Render("● ") + "streaming")
+	m.spinner.Start("Writing response")
+	m.spinner.frame = 2
+
+	output := m.renderOutput()
+
+	if !strings.Contains(output, "○ ") {
+		t.Fatalf("expected breathing bullet frame in output, got %q", output)
 	}
 }
 
@@ -308,8 +540,10 @@ func TestModeBadgesUseDifferentRendering(t *testing.T) {
 	auto := m.renderModeBadge()
 	m.mode = permission.BypassMode
 	bypass := m.renderModeBadge()
+	m.mode = permission.AutopilotMode
+	autopilot := m.renderModeBadge()
 
-	if supervised == plan || plan == auto || auto == bypass {
+	if supervised == plan || plan == auto || auto == bypass || bypass == autopilot {
 		t.Error("expected different modes to render with different badges")
 	}
 }
@@ -434,16 +668,95 @@ func TestModeCommandSetDoesNotWriteToOutput(t *testing.T) {
 	}
 }
 
+func TestAutopilotApprovalAutoContinues(t *testing.T) {
+	m := newTestModel()
+	m.mode = permission.AutopilotMode
+	msg := ApprovalMsg{ToolName: "bash", Input: `{"command":"sudo rm -rf /"}`, Response: make(chan permission.Decision, 1)}
+
+	next, cmd := m.Update(msg)
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("expected autopilot approval to resolve synchronously")
+	}
+	select {
+	case decision := <-msg.Response:
+		if decision != permission.Allow {
+			t.Fatalf("expected autopilot to allow approval, got %v", decision)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected autopilot to resolve approval immediately")
+	}
+	if m.pendingApproval != nil {
+		t.Fatal("expected pending approval to be cleared")
+	}
+}
+
+func TestAutopilotDiffConfirmAutoContinues(t *testing.T) {
+	m := newTestModel()
+	m.mode = permission.AutopilotMode
+	msg := DiffConfirmMsg{FilePath: "main.go", DiffText: "@@ -1 +1 @@\n-a\n+b", Response: make(chan bool, 1)}
+
+	next, cmd := m.Update(msg)
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("expected autopilot diff confirm to resolve synchronously")
+	}
+	select {
+	case approved := <-msg.Response:
+		if !approved {
+			t.Fatal("expected autopilot to approve diff confirm")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected autopilot to resolve diff confirm immediately")
+	}
+	if m.pendingDiffConfirm != nil {
+		t.Fatal("expected pending diff confirm to be cleared")
+	}
+}
+
 func TestApprovalRenderedInContextPanel(t *testing.T) {
 	m := newTestModel()
-	m.pendingApproval = &ApprovalMsg{ToolName: "bash", Input: "ls"}
+	m.pendingApproval = &ApprovalMsg{ToolName: "bash", Input: `{"command":"ls -la docs"}`}
 	m.approvalOptions = defaultApprovalOptions()
 	result := m.renderContextPanel()
 	if !strings.Contains(result, "Approval required") {
 		t.Error("expected approval panel title")
 	}
-	if !strings.Contains(result, "tool   bash") {
-		t.Error("expected tool name in approval panel")
+	if strings.Contains(result, "tool   bash") {
+		t.Error("expected friendly tool name in approval panel")
+	}
+	if !strings.Contains(result, "Run ls -la docs") {
+		t.Error("expected friendly tool label in approval panel")
+	}
+}
+
+func TestApprovalInputPreviewUsesBasename(t *testing.T) {
+	m := newTestModel()
+	m.pendingApproval = &ApprovalMsg{ToolName: "read_file", Input: `{"path":"/tmp/project/docs/spec.md"}`}
+	m.approvalOptions = defaultApprovalOptions()
+
+	result := m.renderContextPanel()
+
+	if strings.Contains(result, "/tmp/project/docs/spec.md") {
+		t.Error("expected approval preview to hide full path")
+	}
+	if !strings.Contains(result, `"path":"spec.md"`) {
+		t.Error("expected approval preview to show basename only")
+	}
+}
+
+func TestDiffConfirmUsesBasename(t *testing.T) {
+	m := newTestModel()
+	m.pendingDiffConfirm = &DiffConfirmMsg{FilePath: "/tmp/project/internal/context/manager.go", DiffText: "@@ -1 +1 @@\n-a\n+b"}
+	m.diffOptions = diffConfirmOptions()
+
+	result := m.renderContextPanel()
+
+	if strings.Contains(result, "/tmp/project/internal/context/manager.go") {
+		t.Error("expected diff confirm panel to hide full path")
+	}
+	if !strings.Contains(result, "manager.go") {
+		t.Error("expected diff confirm panel to show basename")
 	}
 }
 
@@ -712,9 +1025,8 @@ func TestResetConversationViewClearsTransientState(t *testing.T) {
 	m.autoCompleteItems = []string{"/help"}
 	m.statusActivity = "Thinking..."
 	m.statusToolName = "read_file"
-	m.statusTokens = 123
-	m.statusCost = 1.2
 	m.statusToolCount = 2
+	m.activityGroups = []toolActivityGroup{{Title: "Exploring project context", Active: true, Items: []toolActivityItem{{Summary: "Read README.md"}}}}
 	m.spinner.Start("read_file")
 
 	m.resetConversationView()
@@ -728,41 +1040,13 @@ func TestResetConversationViewClearsTransientState(t *testing.T) {
 	if m.autoCompleteActive || len(m.autoCompleteItems) != 0 {
 		t.Error("expected autocomplete state to be cleared")
 	}
-	if m.statusActivity != "" || m.statusToolName != "" || m.statusTokens != 0 || m.statusCost != 0 || m.statusToolCount != 0 {
+	if m.statusActivity != "" || m.statusToolName != "" || m.statusToolCount != 0 {
 		t.Error("expected status state to be reset")
+	}
+	if len(m.activityGroups) != 0 {
+		t.Error("expected grouped activity state to be reset")
 	}
 	if m.spinner.IsActive() {
 		t.Error("expected spinner to stop")
-	}
-}
-
-func TestCostUpdateUsesRealSessionTracker(t *testing.T) {
-	m := newTestModel()
-	m.costMgr = cost.NewManager(cost.DefaultPricingTable(), "")
-	m.SetSession(&session.Session{ID: "sess-1"}, nil)
-
-	tracker := m.costMgr.GetOrCreateTracker("sess-1", "anthropic", "claude-sonnet-4-20250514")
-	tracker.Record(cost.TokenUsage{InputTokens: 120, OutputTokens: 80})
-
-	next, _ := m.Update(costUpdateMsg{InputTokens: 120, OutputTokens: 80})
-	m = next.(Model)
-
-	if m.statusTokens != 200 {
-		t.Errorf("expected status tokens 200, got %d", m.statusTokens)
-	}
-	if !strings.Contains(m.lastCost, "tokens: 120 in / 80 out") {
-		t.Errorf("expected latest usage summary, got %q", m.lastCost)
-	}
-}
-
-func TestCostUpdateFallsBackToIncrementalTokens(t *testing.T) {
-	m := newTestModel()
-	m.costMgr = cost.NewManager(cost.DefaultPricingTable(), "")
-
-	next, _ := m.Update(costUpdateMsg{InputTokens: 25, OutputTokens: 15})
-	m = next.(Model)
-
-	if m.statusTokens != 40 {
-		t.Errorf("expected fallback token count 40, got %d", m.statusTokens)
 	}
 }
