@@ -2,42 +2,101 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // Client connects to an MCP server via stdio transport.
 type Client struct {
-	name    string
-	command string
-	args    []string
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.Reader
-	reader  *bufio.Reader // reused stdout reader
-	mu      sync.Mutex
-	nextID  atomic.Int64
-	closed  bool
+	name       string
+	transport  string
+	command    string
+	args       []string
+	env        map[string]string
+	url        string
+	headers    map[string]string
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     io.Reader
+	reader     *bufio.Reader // reused stdout reader
+	httpClient *http.Client
+	wsConn     *websocket.Conn
+	sessionID  string
+	mu         sync.Mutex
+	stderrMu   sync.RWMutex
+	stderrBuf  strings.Builder
+	abortOnce  sync.Once
+	nextID     atomic.Int64
+	closed     bool
 }
 
 // NewClient creates a new MCP client for the given server config.
 func NewClient(name, command string, args []string) *Client {
 	return &Client{
-		name:    name,
-		command: command,
-		args:    args,
+		name:      name,
+		transport: "stdio",
+		command:   command,
+		args:      args,
+	}
+}
+
+func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
+	transport := strings.ToLower(strings.TrimSpace(cfg.Type))
+	if transport == "" {
+		transport = "stdio"
+	}
+	return &Client{
+		name:      cfg.Name,
+		transport: transport,
+		command:   cfg.Command,
+		args:      append([]string(nil), cfg.Args...),
+		env:       cloneStringMap(cfg.Env),
+		url:       cfg.URL,
+		headers:   cloneStringMap(cfg.Headers),
 	}
 }
 
 // Start launches the MCP server process.
 func (c *Client) Start(ctx context.Context) error {
+	switch c.transport {
+	case "http":
+		c.httpClient = &http.Client{}
+		return nil
+	case "ws", "websocket":
+		headers := http.Header{}
+		for key, value := range c.headers {
+			headers.Set(key, value)
+		}
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.url, headers)
+		if err != nil {
+			return fmt.Errorf("mcp[%s]: websocket dial: %w", c.name, err)
+		}
+		c.wsConn = conn
+		return nil
+	case "", "stdio":
+	default:
+		return fmt.Errorf("mcp[%s]: unsupported transport %q", c.name, c.transport)
+	}
+
 	c.cmd = exec.CommandContext(ctx, c.command, c.args...)
+	if len(c.env) > 0 {
+		c.cmd.Env = append(os.Environ(), flattenEnvMap(c.env)...)
+	}
 
 	stdin, err := c.cmd.StdinPipe()
 	if err != nil {
@@ -47,13 +106,15 @@ func (c *Client) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("mcp[%s]: stdout pipe: %w", c.name, err)
 	}
+	stderr, err := c.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("mcp[%s]: stderr pipe: %w", c.name, err)
+	}
 
 	c.stdin = stdin
 	c.stdout = stdout
 	c.reader = bufio.NewReader(stdout)
-
-	// Capture stderr for debugging
-	c.cmd.Stderr = nil // let it go to parent's stderr
+	go c.captureStderr(stderr)
 
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("mcp[%s]: starting server: %w", c.name, err)
@@ -95,6 +156,49 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 	return result.Tools, nil
 }
 
+func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
+	params := struct {
+		Cursor string `json:"cursor,omitempty"`
+	}{}
+	var result ListPromptsResult
+	if err := c.sendRequest(ctx, "prompts/list", params, &result); err != nil {
+		return nil, fmt.Errorf("mcp[%s]: prompts/list: %w", c.name, err)
+	}
+	return result.Prompts, nil
+}
+
+func (c *Client) ListResources(ctx context.Context) ([]ResourceDefinition, error) {
+	params := struct {
+		Cursor string `json:"cursor,omitempty"`
+	}{}
+	var result ListResourcesResult
+	if err := c.sendRequest(ctx, "resources/list", params, &result); err != nil {
+		return nil, fmt.Errorf("mcp[%s]: resources/list: %w", c.name, err)
+	}
+	return result.Resources, nil
+}
+
+func (c *Client) GetPrompt(ctx context.Context, name string, args map[string]interface{}) (*GetPromptResult, error) {
+	params := GetPromptParams{
+		Name:      name,
+		Arguments: args,
+	}
+	var result GetPromptResult
+	if err := c.sendRequest(ctx, "prompts/get", params, &result); err != nil {
+		return nil, fmt.Errorf("mcp[%s]: prompts/get: %w", c.name, err)
+	}
+	return &result, nil
+}
+
+func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceResult, error) {
+	params := ReadResourceParams{URI: uri}
+	var result ReadResourceResult
+	if err := c.sendRequest(ctx, "resources/read", params, &result); err != nil {
+		return nil, fmt.Errorf("mcp[%s]: resources/read: %w", c.name, err)
+	}
+	return &result, nil
+}
+
 // CallTool invokes a tool on the MCP server.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
 	params := CallToolParams{
@@ -111,19 +215,36 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 // Close terminates the server process.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
-	if c.stdin != nil {
-		c.stdin.Close()
-	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		c.cmd.Process.Kill()
-		c.cmd.Wait()
+	cmd := c.cmd
+	transport := c.transport
+	c.sessionID = ""
+	c.httpClient = nil
+	c.mu.Unlock()
+
+	c.Abort()
+	if (transport == "stdio" || transport == "") && cmd != nil {
+		_ = cmd.Wait()
 	}
 	return nil
+}
+
+func (c *Client) Abort() {
+	c.abortOnce.Do(func() {
+		if c.wsConn != nil {
+			_ = c.wsConn.Close()
+		}
+		if c.stdin != nil {
+			_ = c.stdin.Close()
+		}
+		if c.cmd != nil && c.cmd.Process != nil {
+			_ = c.cmd.Process.Kill()
+		}
+	})
 }
 
 // Name returns the MCP server name.
@@ -155,12 +276,7 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 		ID:      c.nextRequestID(),
 	}
 
-	if err := c.writeMessage(req); err != nil {
-		return err
-	}
-
-	// Read response
-	resp, err := c.readResponse(ctx)
+	resp, err := c.send(req, ctx)
 	if err != nil {
 		return err
 	}
@@ -181,12 +297,68 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 func (c *Client) sendNotification(notif Notification) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.writeMessage(notif)
+	if c.closed {
+		return fmt.Errorf("mcp[%s]: connection closed", c.name)
+	}
+	_, err := c.send(notif, context.Background())
+	return err
+}
+
+func (c *Client) send(msg interface{}, ctx context.Context) (*Response, error) {
+	switch c.transport {
+	case "http":
+		return c.sendHTTP(ctx, msg)
+	case "ws", "websocket":
+		return c.sendWS(ctx, msg)
+	case "", "stdio":
+		if err := c.writeMessage(msg); err != nil {
+			return nil, err
+		}
+		switch msg.(type) {
+		case Notification:
+			return &Response{JSONRPC: "2.0"}, nil
+		default:
+			return c.readResponseWithCancel(ctx)
+		}
+	default:
+		return nil, fmt.Errorf("mcp[%s]: unsupported transport %q", c.name, c.transport)
+	}
+}
+
+func (c *Client) readResponseWithCancel(ctx context.Context) (*Response, error) {
+	type result struct {
+		resp *Response
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := c.readResponse(ctx)
+		done <- result{resp: resp, err: err}
+	}()
+	select {
+	case res := <-done:
+		if err := ctx.Err(); err != nil {
+			return nil, c.withStderr(err)
+		}
+		return res.resp, res.err
+	case <-ctx.Done():
+		c.Abort()
+		res := <-done
+		if err := ctx.Err(); err != nil {
+			return nil, c.withStderr(err)
+		}
+		return res.resp, res.err
+	}
 }
 
 func (c *Client) writeMessage(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
+		return err
+	}
+	if c.transport == "" || c.transport == "stdio" {
+		data = append(data, '\n')
+		_, err = c.stdin.Write(data)
 		return err
 	}
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
@@ -197,61 +369,359 @@ func (c *Client) writeMessage(msg interface{}) error {
 	return err
 }
 
-func (c *Client) readResponse(ctx context.Context) (*Response, error) {
-	reader := c.reader
+func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, error) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("mcp[%s]: create request: %w", c.name, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	for key, value := range c.headers {
+		req.Header.Set(key, value)
+	}
+	if c.sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", c.sessionID)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("mcp[%s]: http request: %w", c.name, err)
+	}
+	defer resp.Body.Close()
+	if sessionID := strings.TrimSpace(resp.Header.Get("Mcp-Session-Id")); sessionID != "" {
+		c.sessionID = sessionID
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("mcp[%s]: read http body: %w", c.name, err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("mcp[%s]: http status %d: %s", c.name, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	switch msg.(type) {
+	case Notification:
+		return &Response{JSONRPC: "2.0"}, nil
+	}
+	return parseHTTPResponse(body, resp.Header.Get("Content-Type"))
+}
 
-	// Read Content-Length header
+func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = c.wsConn.SetWriteDeadline(deadline)
+		_ = c.wsConn.SetReadDeadline(deadline)
+	}
+	if err := c.wsConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return nil, fmt.Errorf("mcp[%s]: websocket write: %w", c.name, err)
+	}
+	switch msg.(type) {
+	case Notification:
+		return &Response{JSONRPC: "2.0"}, nil
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		_, payload, err := c.wsConn.ReadMessage()
+		if err != nil {
+			return nil, fmt.Errorf("mcp[%s]: websocket read: %w", c.name, err)
+		}
+		parsed, err := ParseMessage(payload)
+		if err != nil {
+			return nil, err
+		}
+		if resp, ok := parsed.(*Response); ok {
+			return resp, nil
+		}
+	}
+}
+
+func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
+	payload := body
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		eventData := extractSSEData(body)
+		if len(eventData) == 0 {
+			return nil, fmt.Errorf("parsing SSE response: no data event found")
+		}
+		payload = eventData
+	}
+	msg, err := ParseMessage(payload)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := msg.(*Response)
+	if !ok {
+		return nil, fmt.Errorf("expected response, got %T", msg)
+	}
+	return resp, nil
+}
+
+func extractSSEData(body []byte) []byte {
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	var dataLines []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.TrimSpace(line) == "" && len(dataLines) > 0:
+			return []byte(strings.Join(dataLines, "\n"))
+		}
+	}
+	if len(dataLines) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(dataLines, "\n"))
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func flattenEnvMap(values map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	flat := make([]string, 0, len(values))
+	for key, value := range values {
+		flat = append(flat, key+"="+value)
+	}
+	return flat
+}
+
+func (c *Client) readResponse(ctx context.Context) (*Response, error) {
+	for {
+		msg, err := c.readMessage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		switch typed := msg.(type) {
+		case *Response:
+			return typed, nil
+		case *Notification:
+			continue
+		case *Request:
+			if err := c.handleServerRequest(typed); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, c.withStderr(fmt.Errorf("unexpected MCP message type %T", msg))
+		}
+	}
+}
+
+func (c *Client) readMessage(ctx context.Context) (interface{}, error) {
+	reader := c.reader
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, c.withStderr(ctx.Err())
+		default:
+		}
+
+		peek, err := reader.Peek(1)
+		if err != nil {
+			return nil, c.withStderr(fmt.Errorf("reading message: %w", err))
+		}
+		switch peek[0] {
+		case '\r', '\n', ' ', '\t':
+			if _, err := reader.ReadByte(); err != nil {
+				return nil, c.withStderr(fmt.Errorf("discarding whitespace: %w", err))
+			}
+			continue
+		case '{':
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return nil, c.withStderr(fmt.Errorf("reading message line: %w", err))
+			}
+			msg, err := ParseMessage(bytes.TrimSpace(line))
+			if err != nil {
+				return nil, c.withStderr(err)
+			}
+			return msg, nil
+		default:
+			return c.readHeaderFramedMessage(ctx)
+		}
+	}
+}
+
+func (c *Client) readHeaderFramedMessage(ctx context.Context) (interface{}, error) {
+	reader := c.reader
+	contentLength := -1
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, c.withStderr(ctx.Err())
 		default:
 		}
 
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return nil, fmt.Errorf("reading header: %w", err)
+			return nil, c.withStderr(fmt.Errorf("reading header: %w", err))
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
+			if contentLength >= 0 {
+				break
+			}
 			continue
 		}
-		if strings.HasPrefix(line, "Content-Length:") {
-			lengthStr := strings.TrimPrefix(line, "Content-Length:")
-			lengthStr = strings.TrimSpace(lengthStr)
-			var contentLength int
-			if _, err := fmt.Sscanf(lengthStr, "%d", &contentLength); err != nil {
-				return nil, fmt.Errorf("parsing Content-Length: %w", err)
-			}
-
-			// Read the empty line after headers
-			for {
-				sep, err := reader.ReadString('\n')
-				if err != nil {
-					return nil, fmt.Errorf("reading header separator: %w", err)
-				}
-				if strings.TrimSpace(sep) == "" {
-					break
-				}
-			}
-
-			// Read body
-			body := make([]byte, contentLength)
-			if _, err := io.ReadFull(reader, body); err != nil {
-				return nil, fmt.Errorf("reading body: %w", err)
-			}
-
-			msg, err := ParseMessage(body)
-			if err != nil {
-				return nil, err
-			}
-			resp, ok := msg.(*Response)
-			if !ok {
-				return nil, fmt.Errorf("expected response, got %T", msg)
-			}
-			return resp, nil
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(parts[0]), "Content-Length") {
+			continue
+		}
+		if _, err := fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &contentLength); err != nil {
+			return nil, c.withStderr(fmt.Errorf("parsing Content-Length: %w", err))
 		}
 	}
+
+	body := make([]byte, contentLength)
+	if _, err := io.ReadFull(reader, body); err != nil {
+		return nil, c.withStderr(fmt.Errorf("reading body: %w", err))
+	}
+
+	msg, err := ParseMessage(body)
+	if err != nil {
+		return nil, c.withStderr(err)
+	}
+	return msg, nil
+}
+
+func (c *Client) handleServerRequest(req *Request) error {
+	if req == nil || req.ID == nil {
+		return nil
+	}
+	switch req.Method {
+	case "roots/list":
+		rootURI, err := currentRootURI()
+		if err != nil {
+			return c.writeErrorResponse(req.ID, -32603, err.Error())
+		}
+		return c.writeResultResponse(req.ID, map[string]any{
+			"roots": []map[string]string{{"uri": rootURI}},
+		})
+	case "ping":
+		return c.writeResultResponse(req.ID, map[string]any{})
+	default:
+		return c.writeErrorResponse(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
+	}
+}
+
+func (c *Client) writeResultResponse(id *ID, result interface{}) error {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return c.withStderr(err)
+	}
+	return c.writeMessage(Response{
+		JSONRPC: "2.0",
+		ID:      marshalRequestID(id),
+		Result:  data,
+	})
+}
+
+func (c *Client) writeErrorResponse(id *ID, code int, message string) error {
+	return c.writeMessage(Response{
+		JSONRPC: "2.0",
+		ID:      marshalRequestID(id),
+		Error: &Error{
+			Code:    code,
+			Message: message,
+		},
+	})
+}
+
+func marshalRequestID(id *ID) json.RawMessage {
+	if id == nil {
+		return nil
+	}
+	data, err := json.Marshal(id)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func currentRootURI() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", err
+	}
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}).String(), nil
+}
+
+func (c *Client) captureStderr(r io.Reader) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			c.appendStderr(buf[:n])
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (c *Client) appendStderr(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	const maxStderrBytes = 64 * 1024
+	c.stderrMu.Lock()
+	defer c.stderrMu.Unlock()
+	remaining := maxStderrBytes - c.stderrBuf.Len()
+	if remaining <= 0 {
+		return
+	}
+	if len(data) > remaining {
+		data = data[:remaining]
+	}
+	c.stderrBuf.Write(data)
+}
+
+func (c *Client) stderrSummary() string {
+	c.stderrMu.RLock()
+	defer c.stderrMu.RUnlock()
+	text := strings.TrimSpace(c.stderrBuf.String())
+	if text == "" {
+		return ""
+	}
+	const maxSummary = 512
+	if len(text) > maxSummary {
+		text = text[len(text)-maxSummary:]
+	}
+	return strings.TrimSpace(text)
+}
+
+func (c *Client) withStderr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if stderr := c.stderrSummary(); stderr != "" && !strings.Contains(err.Error(), stderr) {
+		return fmt.Errorf("%w: server stderr: %s", err, stderr)
+	}
+	return err
 }
 
 // --- MCP Protocol Types ---
@@ -291,6 +761,63 @@ type ListToolsParams struct {
 
 type ListToolsResult struct {
 	Tools []ToolDefinition `json:"tools"`
+}
+
+type ListPromptsResult struct {
+	Prompts []PromptDefinition `json:"prompts"`
+}
+
+type PromptDefinition struct {
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Arguments   []PromptArgument `json:"arguments,omitempty"`
+}
+
+type PromptArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+type GetPromptParams struct {
+	Name      string                 `json:"name"`
+	Arguments map[string]interface{} `json:"arguments,omitempty"`
+}
+
+type GetPromptResult struct {
+	Description string          `json:"description,omitempty"`
+	Messages    []PromptMessage `json:"messages"`
+}
+
+type PromptMessage struct {
+	Role    string          `json:"role,omitempty"`
+	Content json.RawMessage `json:"content"`
+}
+
+type ListResourcesResult struct {
+	Resources []ResourceDefinition `json:"resources"`
+}
+
+type ResourceDefinition struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+}
+
+type ReadResourceParams struct {
+	URI string `json:"uri"`
+}
+
+type ReadResourceResult struct {
+	Contents []ResourceContent `json:"contents"`
+}
+
+type ResourceContent struct {
+	URI      string `json:"uri,omitempty"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
 }
 
 type ToolDefinition struct {

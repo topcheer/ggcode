@@ -73,10 +73,11 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("AgentFactory not configured"))
 		return
 	}
-	subAgent := cfg.AgentFactory(cfg.Provider, toolSet, systemPrompt, 10)
+	subAgent := cfg.AgentFactory(cfg.Provider, toolSet, systemPrompt, 0)
 
 	// Run the agentic loop, capturing output
 	var output strings.Builder
+	lastToolName := ""
 	err := subAgent.RunStream(subCtx, cfg.Task, func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
@@ -84,17 +85,27 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("writing", "", "")
 			}
+			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventToolCallDone:
 			// Increment tool call count for this subagent
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
 				sa.setActivity("tool", event.Tool.Name, string(event.Tool.Arguments))
 			}
+			lastToolName = event.Tool.Name
+			cfg.Manager.Notify(cfg.SubAgentID)
+		case provider.StreamEventToolResult:
+			if summary := subagentToolProgressSummary(lastToolName, event.Result); summary != "" {
+				cfg.Manager.UpdateProgress(cfg.SubAgentID, summary)
+			} else {
+				cfg.Manager.Notify(cfg.SubAgentID)
+			}
 		case provider.StreamEventError:
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("failed", "", "")
 			}
+			cfg.Manager.Notify(cfg.SubAgentID)
 		}
 	})
 
@@ -143,4 +154,33 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 			return "", ctx.Err()
 		}
 	}
+}
+
+func subagentToolProgressSummary(toolName, result string) string {
+	switch toolName {
+	case "start_command", "read_command_output", "wait_command", "stop_command", "list_commands":
+		return compactProgressSummary(result)
+	default:
+		return ""
+	}
+}
+
+func compactProgressSummary(result string) string {
+	lines := strings.Split(result, "\n")
+	parts := make([]string, 0, 3)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Job ID: "):
+			parts = append(parts, line)
+		case strings.HasPrefix(line, "Status: "):
+			parts = append(parts, line)
+		case strings.HasPrefix(line, "Total lines: "):
+			parts = append(parts, line)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " • ")
 }

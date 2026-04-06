@@ -71,6 +71,9 @@ func TestLoad_NonExistent(t *testing.T) {
 	if cfg.SystemPrompt != DefaultSystemPrompt {
 		t.Errorf("expected default system prompt, got %q", cfg.SystemPrompt)
 	}
+	if !cfg.FirstRun {
+		t.Fatal("expected missing config to be marked as first run")
+	}
 }
 
 func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
@@ -81,6 +84,140 @@ func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
 	}
 	if got := cfg.Vendors["zai"].APIKey; got != "test-key" {
 		t.Fatalf("expected expanded API key, got %q", got)
+	}
+}
+
+func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://router.requesty.ai/")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
+
+	settingsDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	settings := `{"env":{"ANTHROPIC_MODEL":"anthropic/claude-sonnet-4-5"}}`
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load("/nonexistent/path/ggcode.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Vendor != "requesty" {
+		t.Fatalf("expected bootstrapped vendor requesty, got %q", cfg.Vendor)
+	}
+	if cfg.Endpoint != "env-anthropic" {
+		t.Fatalf("expected bootstrapped endpoint env-anthropic, got %q", cfg.Endpoint)
+	}
+	if cfg.Model != "anthropic/claude-sonnet-4-5" {
+		t.Fatalf("expected model from Claude settings, got %q", cfg.Model)
+	}
+
+	vendor := cfg.Vendors["requesty"]
+	if vendor.DisplayName != "Requesty" {
+		t.Fatalf("expected display name Requesty, got %q", vendor.DisplayName)
+	}
+	ep := vendor.Endpoints["env-anthropic"]
+	if ep.Protocol != "anthropic" {
+		t.Fatalf("expected anthropic protocol, got %q", ep.Protocol)
+	}
+	if ep.BaseURL != "https://router.requesty.ai" {
+		t.Fatalf("expected normalized base url, got %q", ep.BaseURL)
+	}
+	if ep.APIKey != "auth-token" {
+		t.Fatalf("expected auth token to be used, got %q", ep.APIKey)
+	}
+}
+
+func TestLoad_NonExistentBootstrapsAnthropicVendorPrefersAuthToken(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
+	t.Setenv("ANTHROPIC_API_KEY", "api-key")
+
+	cfg, err := Load("/nonexistent/path/ggcode.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Vendor != "anthropic" {
+		t.Fatalf("expected existing anthropic vendor to be reused, got %q", cfg.Vendor)
+	}
+	if got := cfg.Vendors["anthropic"].Endpoints["api"].APIKey; got != "auth-token" {
+		t.Fatalf("expected auth token to override api key, got %q", got)
+	}
+}
+
+func TestLoad_NonExistentBootstrapsAnthropicVendorDefaultsModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://api.example.ai")
+	t.Setenv("ANTHROPIC_API_KEY", "api-key")
+
+	cfg, err := Load("/nonexistent/path/ggcode.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Model != defaultBootstrapAnthropicModel {
+		t.Fatalf("expected default bootstrap model %q, got %q", defaultBootstrapAnthropicModel, cfg.Model)
+	}
+	if got := cfg.Vendors["example"].Endpoints["env-anthropic"].DefaultModel; got != defaultBootstrapAnthropicModel {
+		t.Fatalf("expected endpoint default model %q, got %q", defaultBootstrapAnthropicModel, got)
+	}
+}
+
+func TestLoad_ExistingLanguageOnlyFileStillBootstrapsAnthropicVendor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://router.requesty.ai")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
+
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	if err := os.WriteFile(path, []byte("language: zh-CN\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.FirstRun {
+		t.Fatal("expected existing config file not to be marked as first run")
+	}
+	if cfg.Language != "zh-CN" {
+		t.Fatalf("expected persisted language zh-CN, got %q", cfg.Language)
+	}
+	if cfg.Vendor != "requesty" {
+		t.Fatalf("expected requesty bootstrap vendor, got %q", cfg.Vendor)
+	}
+}
+
+func TestSaveLanguagePreferenceCreatesMinimalConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg := DefaultConfig()
+	cfg.FilePath = path
+	cfg.FirstRun = true
+
+	if err := cfg.SaveLanguagePreference("zh-CN"); err != nil {
+		t.Fatalf("SaveLanguagePreference() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := string(data); got != "language: zh-CN\n" {
+		t.Fatalf("expected minimal language config, got %q", got)
+	}
+	if cfg.Language != "zh-CN" {
+		t.Fatalf("expected config language to update, got %q", cfg.Language)
+	}
+	if cfg.FirstRun {
+		t.Fatal("expected SaveLanguagePreference to clear first-run flag")
 	}
 }
 
@@ -142,7 +279,7 @@ func TestLoad_InvalidMaxIterations(t *testing.T) {
 vendor: zai
 endpoint: cn-coding-openai
 model: test
-max_iterations: 0
+max_iterations: -1
 vendors:
   zai:
     api_key: key
@@ -156,6 +293,35 @@ vendors:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected validation error for max_iterations")
+	}
+}
+
+func TestLoad_ZeroMaxIterationsMeansUnlimited(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: test
+max_iterations: 0
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MaxIterations != 0 {
+		t.Fatalf("expected max_iterations 0 to be preserved, got %d", cfg.MaxIterations)
 	}
 }
 
@@ -193,6 +359,231 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Vendor == "" || cfg.Endpoint == "" || cfg.Model == "" {
 		t.Fatal("DefaultConfig() should set vendor, endpoint, and model")
+	}
+}
+
+func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
+	cfg := DefaultConfig()
+
+	wantVendors := map[string]string{
+		"zai":        "Z.ai",
+		"anthropic":  "Anthropic",
+		"openai":     "OpenAI",
+		"google":     "Google Gemini",
+		"openrouter": "OpenRouter",
+		"groq":       "Groq",
+		"mistral":    "Mistral",
+		"deepseek":   "DeepSeek",
+		"moonshot":   "Moonshot AI",
+		"kimi":       "Kimi Coding Plan",
+		"minimax":    "MiniMax Token Plan",
+		"ark":        "Volcengine Ark Coding Plan",
+		"together":   "Together AI",
+		"perplexity": "Perplexity",
+	}
+
+	for id, displayName := range wantVendors {
+		vendor, ok := cfg.Vendors[id]
+		if !ok {
+			t.Fatalf("expected default vendor %q to be present", id)
+		}
+		if vendor.DisplayName != displayName {
+			t.Fatalf("expected vendor %q display name %q, got %q", id, displayName, vendor.DisplayName)
+		}
+		if len(vendor.Endpoints) == 0 {
+			t.Fatalf("expected vendor %q to have at least one endpoint", id)
+		}
+	}
+
+	if got := cfg.Vendors["google"].Endpoints["api"].Protocol; got != "gemini" {
+		t.Fatalf("expected google vendor to use gemini protocol, got %q", got)
+	}
+	if got := cfg.Vendors["anthropic"].Endpoints["api"].Protocol; got != "anthropic" {
+		t.Fatalf("expected anthropic vendor to use anthropic protocol, got %q", got)
+	}
+	if got := cfg.Vendors["openrouter"].Endpoints["api"].Protocol; got != "openai" {
+		t.Fatalf("expected openrouter vendor to use openai-compatible protocol, got %q", got)
+	}
+}
+
+func TestResolveActiveEndpointUsesExplicitContextWindow(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "gpt-4o-mini"
+	cfg.Vendors["openai"].Endpoints["api"] = EndpointConfig{
+		DisplayName:   "OpenAI API",
+		Protocol:      "openai",
+		BaseURL:       "https://api.openai.com/v1",
+		DefaultModel:  "gpt-4o-mini",
+		SelectedModel: "gpt-4o-mini",
+		ContextWindow: 64000,
+		MaxTokens:     4096,
+	}
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.ContextWindow != 64000 {
+		t.Fatalf("expected explicit context window 64000, got %d", resolved.ContextWindow)
+	}
+}
+
+func TestResolveActiveEndpointInfersContextWindowFromModel(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "perplexity"
+	cfg.Endpoint = "api"
+	cfg.Model = "llama-3.1-sonar-small-128k-online"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.ContextWindow != 128000 {
+		t.Fatalf("expected inferred context window 128000, got %d", resolved.ContextWindow)
+	}
+}
+
+func TestResolveActiveEndpointInfersGLMCapabilities(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "cn-coding-openai"
+	cfg.Model = "glm-5.1"
+	cfg.Vendors["zai"].Endpoints["cn-coding-openai"] = EndpointConfig{
+		DisplayName:   "CN Coding Plan",
+		Protocol:      "openai",
+		BaseURL:       "https://open.bigmodel.cn/api/coding/paas/v4",
+		DefaultModel:  "glm-5-turbo",
+		SelectedModel: "glm-5-turbo",
+		Models:        []string{"glm-5.1"},
+	}
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.ContextWindow != 200000 {
+		t.Fatalf("expected GLM context window 200000, got %d", resolved.ContextWindow)
+	}
+	if resolved.MaxTokens != 128000 {
+		t.Fatalf("expected GLM max output 128000, got %d", resolved.MaxTokens)
+	}
+}
+
+func TestDefaultConfigUsesGLMCapabilitiesForZaiCatalog(t *testing.T) {
+	cfg := DefaultConfig()
+	ep := cfg.Vendors["zai"].Endpoints["cn-coding-openai"]
+	if ep.ContextWindow != 200000 {
+		t.Fatalf("expected default ZAI coding context 200000, got %d", ep.ContextWindow)
+	}
+	if ep.MaxTokens != 128000 {
+		t.Fatalf("expected default ZAI coding max output 128000, got %d", ep.MaxTokens)
+	}
+	if cfg.Vendors["zai"].Endpoints["cn-coding-anthropic"].DefaultModel != "glm-5-turbo" {
+		t.Fatalf("expected anthropic endpoint default model glm-5-turbo")
+	}
+}
+
+func TestDefaultConfigIncludesKimiCodingPlanCapabilities(t *testing.T) {
+	cfg := DefaultConfig()
+	ep := cfg.Vendors["kimi"].Endpoints["coding-openai"]
+	if ep.DefaultModel != "kimi-for-coding" {
+		t.Fatalf("expected kimi default model kimi-for-coding, got %q", ep.DefaultModel)
+	}
+	if ep.ContextWindow != 262144 {
+		t.Fatalf("expected kimi context window 262144, got %d", ep.ContextWindow)
+	}
+	if ep.MaxTokens != 32768 {
+		t.Fatalf("expected kimi max output 32768, got %d", ep.MaxTokens)
+	}
+}
+
+func TestDefaultConfigIncludesMiniMaxTokenPlanCapabilities(t *testing.T) {
+	cfg := DefaultConfig()
+	ep := cfg.Vendors["minimax"].Endpoints["token-plan-openai"]
+	if ep.DefaultModel != "MiniMax-M2.7" {
+		t.Fatalf("expected minimax default model MiniMax-M2.7, got %q", ep.DefaultModel)
+	}
+	if ep.ContextWindow != 204800 {
+		t.Fatalf("expected minimax context window 204800, got %d", ep.ContextWindow)
+	}
+	if ep.MaxTokens != 2048 {
+		t.Fatalf("expected minimax max output 2048, got %d", ep.MaxTokens)
+	}
+	global := cfg.Vendors["minimax"].Endpoints["global-openai"]
+	if global.BaseURL != "https://api.minimax.io/v1" {
+		t.Fatalf("expected minimax global openai base url, got %q", global.BaseURL)
+	}
+	if global.DefaultModel != "MiniMax-M2.7" {
+		t.Fatalf("expected minimax global default model MiniMax-M2.7, got %q", global.DefaultModel)
+	}
+	if global.ContextWindow != 204800 {
+		t.Fatalf("expected minimax global context window 204800, got %d", global.ContextWindow)
+	}
+	if global.MaxTokens != 2048 {
+		t.Fatalf("expected minimax global max output 2048, got %d", global.MaxTokens)
+	}
+}
+
+func TestDefaultConfigIncludesArkCodingPlanCapabilities(t *testing.T) {
+	cfg := DefaultConfig()
+	openai := cfg.Vendors["ark"].Endpoints["coding-openai"]
+	if openai.BaseURL != "https://ark.cn-beijing.volces.com/api/coding/v3" {
+		t.Fatalf("expected ark openai base url, got %q", openai.BaseURL)
+	}
+	if openai.DefaultModel != "ark-code-latest" {
+		t.Fatalf("expected ark default model ark-code-latest, got %q", openai.DefaultModel)
+	}
+	if openai.ContextWindow != 200000 {
+		t.Fatalf("expected ark context window 200000, got %d", openai.ContextWindow)
+	}
+	if openai.MaxTokens != 8192 {
+		t.Fatalf("expected ark default max output 8192, got %d", openai.MaxTokens)
+	}
+	anthropic := cfg.Vendors["ark"].Endpoints["coding-anthropic"]
+	if anthropic.BaseURL != "https://ark.cn-beijing.volces.com/api/coding" {
+		t.Fatalf("expected ark anthropic base url, got %q", anthropic.BaseURL)
+	}
+	if anthropic.ContextWindow != 200000 {
+		t.Fatalf("expected ark anthropic context window 200000, got %d", anthropic.ContextWindow)
+	}
+}
+
+func TestUpsertMCPServerReplacesByName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MCPServers = []MCPServerConfig{{
+		Name:    "12306-mcp",
+		Type:    "stdio",
+		Command: "old",
+	}}
+
+	replaced := cfg.UpsertMCPServer(MCPServerConfig{
+		Name:    "12306-mcp",
+		Type:    "stdio",
+		Command: "npx",
+		Args:    []string{"-y", "12306-mcp", "stdio"},
+	})
+	if !replaced {
+		t.Fatal("expected existing MCP server to be replaced")
+	}
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Command != "npx" {
+		t.Fatalf("unexpected MCP server list after replace: %+v", cfg.MCPServers)
+	}
+}
+
+func TestRemoveMCPServerRemovesByName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MCPServers = []MCPServerConfig{
+		{Name: "one", Type: "stdio", Command: "a"},
+		{Name: "two", Type: "stdio", Command: "b"},
+	}
+
+	if !cfg.RemoveMCPServer("one") {
+		t.Fatal("expected RemoveMCPServer to remove existing server")
+	}
+	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "two" {
+		t.Fatalf("unexpected MCP servers after remove: %+v", cfg.MCPServers)
 	}
 }
 

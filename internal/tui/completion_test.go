@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/topcheer/ggcode/internal/commands"
 )
 
 func TestParseMentions(t *testing.T) {
@@ -125,6 +126,23 @@ func TestDetectMention(t *testing.T) {
 	active, _ = DetectMention(ti)
 	if active {
 		t.Error("expected no mention detection")
+	}
+}
+
+func TestCompleteSlashCommandIncludesUserInvocableSkills(t *testing.T) {
+	matches := CompleteSlashCommand("/de", map[string]*commands.Command{
+		"deploy": {
+			Name:          "deploy",
+			UserInvocable: true,
+		},
+		"debug": {
+			Name:          "debug",
+			UserInvocable: false,
+		},
+	})
+
+	if len(matches) != 1 || matches[0] != "/deploy" {
+		t.Fatalf("matches = %v, want [/deploy]", matches)
 	}
 }
 

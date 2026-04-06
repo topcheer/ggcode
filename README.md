@@ -1,35 +1,17 @@
 # ggcode
 
-A terminal-based AI coding agent powered by LLMs. Ask questions about your codebase,
-refactor, debug, write new features — all from your terminal.
+**ggcode** is an AI coding agent for the terminal. It can understand a codebase, edit files, run commands, manage checkpoints, connect to MCP tools, and keep working inside a polished TUI instead of bouncing between scripts and browser tabs.
 
-## Features
+If you want a terminal-native coding workflow that feels like a product, not a demo, this is what ggcode is for.
 
-- **Multi-Vendor Endpoint Support** — Configure real vendors, plans, regions, and models
-- **Protocol Adapters** — OpenAI-compatible, Anthropic-compatible, and Gemini backends
-- **Agentic Tool Loop** — The agent reads, writes, edits, searches, and runs commands autonomously
-- **MCP Client** — Connect to Model Context Protocol servers for extended tool sets
-- **Plugin System** — Load external tool plugins dynamically
-- **Session Management** — Save, resume, and export conversations
-- **Permission System** — Fine-grained control over which tools and commands are allowed
-- **Rich TUI** — Bubble Tea terminal UI with markdown rendering and syntax highlighting
-- **Bilingual TUI** — English by default, switch to Simplified Chinese with `/lang zh-CN`
-- **Environment Variable Expansion** — API keys via `${ENV_VAR}` in config, no plaintext secrets
+## Why people use ggcode
 
-## Built-in Tools
-
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents |
-| `write_file` | Create or overwrite files |
-| `edit_file` | Apply targeted text edits |
-| `list_directory` | List directory contents |
-| `search_files` | Search file contents with patterns |
-| `glob` | Find files by glob pattern |
-| `run_command` | Execute shell commands |
-| `git_status` | Show git working tree status |
-| `git_diff` | Show git diffs |
-| `git_log` | Show git commit history |
+- **Stay in the terminal** — chat, inspect code, edit files, review diffs, and manage sessions in one place
+- **Work with real coding plans and endpoints** — OpenAI-compatible, Anthropic-compatible, Gemini, and multiple coding-oriented vendor presets
+- **Keep control when it matters** — supervised, plan, auto, bypass, and autopilot modes let you choose how much the agent can do
+- **Recover quickly** — undo file changes with checkpoints instead of manually repairing bad edits
+- **Scale up when needed** — use MCP tools, plugins, skills, memory, background commands, and sub-agents
+- **Fit daily usage** — bilingual UI, resumable sessions, queueing while the agent is busy, and shell-friendly install flows
 
 ## Installation
 
@@ -40,17 +22,13 @@ go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest
 ggcode-installer
 ```
 
-The installer downloads the matching `ggcode` binary from GitHub Releases and places it
-into `GOBIN`, the first `GOPATH/bin`, or `~/go/bin`.
+The installer downloads the matching GitHub Release binary into `GOBIN`, the first `GOPATH/bin`, or `~/go/bin`.
 
 ### npm
 
 ```bash
-npm install -g @topcheer/ggcode
+npm install -g @ggcode-cli/ggcode
 ```
-
-The npm package is a thin wrapper that downloads the platform binary from GitHub Releases
-during install or on first run.
 
 ### pip
 
@@ -58,10 +36,7 @@ during install or on first run.
 pip install ggcode
 ```
 
-The Python package installs a small launcher that downloads the matching GitHub Release
-binary on first run.
-
-### Clone & build from source
+### Build from source
 
 ```bash
 git clone https://github.com/topcheer/ggcode.git
@@ -70,42 +45,146 @@ go build -o ggcode ./cmd/ggcode
 ./ggcode
 ```
 
-### Makefile
+### Platform notes
+
+- **macOS / Linux** command execution uses `sh`
+- **Windows** command execution prefers **Git Bash** and falls back to **PowerShell**
+- Shell completions are available for **bash**, **zsh**, **fish**, and **PowerShell**
+
+## Quick start
+
+### 1. Set up a model endpoint
+
+The simplest path is still setting a normal vendor API key:
 
 ```bash
-make build    # Build binary to bin/ggcode
-make test     # Run all tests
-make lint     # Run go vet
-make install  # install ggcode from source into your Go bin dir
-make install-installer  # install the Go release installer
-make clean    # Remove build artifacts
+export ZAI_API_KEY="your-key"
+# or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / ...
 ```
 
-## Quick Start
-
-1. Set your API key:
+If you use an **Anthropic-compatible endpoint**, ggcode can also bootstrap it on first launch from:
 
 ```bash
-export ZAI_API_KEY="your-zai-key"
+export ANTHROPIC_BASE_URL="https://your-endpoint"
+export ANTHROPIC_AUTH_TOKEN="your-token"
 ```
 
-2. Run ggcode:
+### 2. Start ggcode
 
 ```bash
 ggcode
 ```
 
-3. Start chatting:
+On first launch, ggcode asks you to choose your preferred UI language.
 
+### 3. Start with a real task
+
+Examples:
+
+```text
+Explain how this project is structured
+Refactor the auth middleware to use JWT
+Add tests for the session store
+Find why startup feels slow in the TUI
 ```
-> Explain the structure of this project
-> Refactor the auth middleware to use JWT
-> Write unit tests for the user service
+
+### 4. Use the built-in workflow features
+
+- **`Ctrl+C`** cancels the active run
+- If the agent is busy, you can keep typing — new prompts are **queued**
+- **`/undo`** reverts the last file edit
+- **`/provider`** switches vendor / endpoint / model
+- **`/mode`** changes how much autonomy the agent gets
+- **`/mcp`** shows connected MCP servers and their tools
+
+## What ggcode can do
+
+From the product point of view, ggcode is more than “chat with a model”:
+
+- **Code understanding** — read files, search the repo, inspect git status and diffs
+- **Code changes** — create files, edit targeted regions, and checkpoint edits for undo
+- **Command execution** — run foreground commands or long-running background jobs
+- **Parallel help** — spawn sub-agents and inspect their progress
+- **Memory and context** — load project memory files like `GGCODE.md`, `AGENTS.md`, `CLAUDE.md`, and `COPILOT.md`
+- **Extensibility** — connect MCP servers, custom plugins, and skills
+- **Session continuity** — save, resume, export, and compact conversations
+
+## Modes: how much freedom the agent gets
+
+| Mode | Best for | What it means |
+| --- | --- | --- |
+| `supervised` | Most users | Ask when a tool is not explicitly allowed or denied |
+| `plan` | Safe exploration | Read-only style investigation; blocks writes and command execution |
+| `auto` | Faster routine work | Automatically proceed on safer actions, stay cautious on risky ones |
+| `bypass` | High-trust workflows | Allow almost everything, only stopping on critical operations |
+| `autopilot` | Power users | Like bypass, but also keeps going when the model would normally stop to ask |
+
+## Slash commands you will actually use
+
+### Core workflow
+
+| Command | What it does |
+| --- | --- |
+| `/help` or `/?` | Show the in-app help |
+| `/provider [vendor]` | Open the provider manager and switch vendor / endpoint / model |
+| `/model <name>` | Switch model directly |
+| `/mode <mode>` | Change permission mode |
+| `/status` | Show current status |
+| `/config` | View or update configuration |
+| `/lang <en|zh-CN>` | Change interface language |
+
+### Session and recovery
+
+| Command | What it does |
+| --- | --- |
+| `/sessions` | List saved sessions |
+| `/resume <id>` | Resume a previous session |
+| `/export <id>` | Export a session to Markdown |
+| `/clear` | Clear the current conversation |
+| `/compact` | Compress conversation history |
+| `/undo` | Revert the last file edit |
+| `/checkpoints` | List available edit checkpoints |
+
+### Extended capabilities
+
+| Command | What it does |
+| --- | --- |
+| `/mcp` | Inspect MCP servers and MCP tools |
+| `/plugins` | List loaded plugins |
+| `/skills` | Browse available skills |
+| `/memory` | Inspect stored memory |
+| `/agents` | List active sub-agents |
+| `/agent <id>` | Inspect a sub-agent |
+| `/todo` | View or manage todo state |
+| `/image` | Attach an image |
+| `/bug` | Report a bug |
+| `/init` | Generate `GGCODE.md` for the current project |
+| `/fullscreen` | Toggle fullscreen mode |
+| `/exit`, `/quit` | Exit ggcode |
+
+## Non-interactive and scripted usage
+
+ggcode also supports a simple pipe-mode workflow when you do not want to open the TUI:
+
+```bash
+ggcode \
+  --prompt "Summarize the changes in this repository" \
+  --allowedTools read_file \
+  --output summary.md
 ```
+
+Useful flags:
+
+- `--prompt` / `-p` — run a non-interactive prompt
+- `--allowedTools` — restrict which tools are allowed in pipe mode
+- `--output` — write the answer to a file instead of stdout
+- `--bypass` — start in bypass mode
+- `--resume <id>` — resume a previous session immediately
+- `--config <path>` — use a specific config file
 
 ## Configuration
 
-Create `~/.ggcode/ggcode.yaml` (the default path), or keep a project-local file and pass it with `--config ./ggcode.yaml`:
+Most users only need a small config file:
 
 ```yaml
 vendor: zai
@@ -114,33 +193,9 @@ model: glm-5-turbo
 language: en
 default_mode: supervised
 
-vendors:
-  zai:
-    display_name: Z.ai
-    api_key: ${ZAI_API_KEY}
-    endpoints:
-      cn-coding-openai:
-        display_name: CN Coding Plan
-        protocol: openai
-        base_url: https://open.bigmodel.cn/api/coding/paas/v4
-        default_model: glm-5-turbo
-        selected_model: glm-5-turbo
-        max_tokens: 8192
-        models: [glm-5-turbo, glm-5-plus]
-      cn-coding-anthropic:
-        display_name: CN Coding Plan (Anthropic)
-        protocol: anthropic
-        base_url: https://open.bigmodel.cn/api/anthropic
-        max_tokens: 8192
-
-# Restrict file access to these directories
 allowed_dirs:
   - .
 
-# Max agentic loop iterations per turn
-max_iterations: 50
-
-# Tool-level permissions: ask, allow, deny
 tool_permissions:
   read_file: allow
   search_files: allow
@@ -148,55 +203,17 @@ tool_permissions:
   write_file: ask
 ```
 
-See [ggcode.example.yaml](ggcode.example.yaml) for the full example.
+ggcode ships with built-in presets for mainstream vendors and several coding-oriented endpoints, so you usually start by choosing a vendor or setting API keys rather than writing the full provider catalog yourself.
 
-## TUI Language and Controls
+For the complete reference, examples, vendor catalog, hooks, MCP servers, plugins, and sub-agent settings, see:
 
-- Default UI language is English.
-- Switch the current session to Simplified Chinese with `/lang zh-CN`.
-- Switch back with `/lang en`.
-- Persist the preferred UI language with `language: en` or `language: zh-CN` in config.
-- `Ctrl+C` cancels the active run. When idle, the first `Ctrl+C` clears the input and arms exit confirmation; press `Ctrl+C` again to quit.
-- While a run is active, you can keep typing and submit more prompts. They queue and are sent automatically after the current loop finishes.
+- [`ggcode.example.yaml`](ggcode.example.yaml)
 
-## Slash Commands
+## MCP, plugins, hooks, and memory
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show help message |
-| `/model <name>` | Switch model |
-| `/provider [vendor]` | Open the provider manager and switch vendor/endpoint/model |
-| `/mode <mode>` | Switch runtime mode (`supervised`, `plan`, `auto`, `bypass`, `autopilot`) |
-| `/lang <code>` | Switch interface language (`en` or `zh-CN`) |
-| `/sessions` | List saved sessions |
-| `/resume <id>` | Resume a previous session |
-| `/export <id>` | Export session to markdown |
-| `/clear` | Clear conversation history |
-| `/mcp` | Show MCP servers and tools |
-| `/plugins` | List loaded plugins |
-| `/allow <tool>` | Always allow a tool |
-| `/exit`, `/quit` | Exit ggcode |
+### MCP servers
 
-## Release-backed installers
-
-All end-user installers use GitHub Releases as the binary source of truth.
-
-- **Go installer**: source-installed wrapper that downloads the release binary into your Go bin dir
-- **npm package**: thin JavaScript wrapper in [`npm/`](npm/)
-- **pip package**: thin Python wrapper in [`python/`](python/)
-
-Each installer resolves the current OS/arch, downloads the matching release archive, verifies
-it against `checksums.txt`, extracts `ggcode`, and reuses the cached binary on later runs.
-
-### Keyboard Shortcuts
-
-- **↑/↓** — Browse command history
-- **Ctrl+C** — Cancel active work, otherwise clear input then press again to exit
-- **Ctrl+D** — Exit
-
-## MCP Server Configuration
-
-Connect to MCP servers for extended tool sets:
+Use MCP when you want ggcode to access external tool ecosystems.
 
 ```yaml
 mcp_servers:
@@ -206,35 +223,28 @@ mcp_servers:
       - -y
       - "@anthropic/mcp-filesystem"
       - /path/to/allowed/dir
-    env:
-      NODE_ENV: production
 ```
 
-The agent will automatically discover and use tools exposed by connected MCP servers.
+ggcode discovers MCP tools automatically and makes them available in the agent loop.
 
-## Plugin System
+### Plugins and skills
 
-Load external tool plugins from config:
+- **Plugins** add custom tools from config
+- **Skills** add higher-level capabilities and workflows
+- **`/skills`** is the easiest place to see what is currently available
 
-```yaml
-plugins:
-  - name: my-tools
-    type: command
-    commands:
-      - name: deploy
-        description: Deploy the application
-        execute: ./scripts/deploy.sh
-      - name: lint_check
-        description: Run custom linter
-        execute: npm
-        args: [run, lint]
-```
+### Project memory
 
-Use `/plugins` in the REPL to see loaded plugins and their tools.
+ggcode can load project guidance from files such as:
 
-## Shell Completions
+- `GGCODE.md`
+- `AGENTS.md`
+- `CLAUDE.md`
+- `COPILOT.md`
 
-ggcode uses Cobra and supports bash, zsh, fish, and PowerShell completions:
+Use these files to tell ggcode how your project works, what conventions to follow, and what to avoid.
+
+## Shell completions
 
 ```bash
 # Bash
@@ -250,9 +260,11 @@ ggcode completion fish > ~/.config/fish/completions/ggcode.fish
 ggcode completion powershell | Out-String | Invoke-Expression
 ```
 
-## Screenshots
+## More documentation
 
-<!-- TODO: Add screenshots/GIF here -->
+- **Want to use the product?** Start here in the README
+- **Want the full config surface?** See [`ggcode.example.yaml`](ggcode.example.yaml)
+- **Want implementation details?** See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
 ## License
 

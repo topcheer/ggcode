@@ -15,6 +15,8 @@ const (
 	spinnerChars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 )
 
+var spinnerRunes = []rune(spinnerChars)
+
 // spinnerMsg is sent by tea.Tick to animate the spinner.
 type spinnerMsg struct{ time.Time }
 
@@ -72,8 +74,12 @@ func (s *ToolSpinner) String() string {
 	if !s.active {
 		return ""
 	}
-	char := string(spinnerChars[s.frame%len(spinnerChars)])
+	char := spinnerFrameGlyph(s.frame)
 	return s.style.Render(fmt.Sprintf(" %s %s (%s)", char, s.label, s.Elapsed()))
+}
+
+func spinnerFrameGlyph(frame int) string {
+	return string(spinnerRunes[frame%len(spinnerRunes)])
 }
 
 // tick returns a tea.Cmd that sends the next spinner frame.
@@ -202,6 +208,9 @@ func toolDisplayName(msg ToolStatusMsg) string {
 func toolDetail(msg ToolStatusMsg) string {
 	if msg.Detail != "" {
 		return msg.Detail
+	}
+	if isTrivialToolDetail(msg.Args) {
+		return ""
 	}
 	return msg.Args
 }

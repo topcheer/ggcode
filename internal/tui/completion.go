@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
@@ -181,8 +183,8 @@ func CompleteMention(prefix string, workDir string) []string {
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider",
 	"/clear", "/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
-	"/image", "/fullscreen", "/mode", "/exit", "/quit", "/agents", "/agent",
-	"/compact", "/todo", "/bug", "/config", "/status", "/lang",
+	"/image", "/fullscreen", "/mode", "/init", "/exit", "/quit", "/agents", "/agent",
+	"/compact", "/todo", "/bug", "/config", "/status", "/lang", "/skills",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -204,6 +206,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/image":       "Attach an image",
 	"/fullscreen":  "Toggle fullscreen",
 	"/mode":        "Set agent mode",
+	"/init":        "Create GGCODE.md",
 	"/exit":        "Exit ggcode",
 	"/quit":        "Exit ggcode",
 	"/agents":      "List sub-agents",
@@ -214,16 +217,28 @@ var SlashCommandDescriptions = map[string]string{
 	"/config":      "View/modify configuration",
 	"/status":      "Show current status",
 	"/lang":        "Switch interface language",
+	"/skills":      "Browse available skills",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.
-func CompleteSlashCommand(prefix string) []string {
+func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command) []string {
 	var matches []string
 	for _, cmd := range SlashCommands {
 		if strings.HasPrefix(cmd, prefix) {
 			matches = append(matches, cmd)
 		}
 	}
+	for _, cmd := range customCmds {
+		if cmd == nil || !cmd.UserInvocable {
+			continue
+		}
+		name := cmd.SlashName()
+		if strings.HasPrefix(name, prefix) {
+			matches = append(matches, name)
+		}
+	}
+	slices.Sort(matches)
+	matches = slices.Compact(matches)
 	return matches
 }
 

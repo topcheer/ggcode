@@ -1,0 +1,98 @@
+//go:build unix
+
+package tool
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+func configureCommandCancellation(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		pid := cmd.Process.Pid
+		err := signalCommandTree(pid, syscall.SIGTERM)
+		time.AfterFunc(350*time.Millisecond, func() {
+			_ = signalCommandTree(pid, syscall.SIGKILL)
+		})
+		return err
+	}
+	cmd.WaitDelay = 750 * time.Millisecond
+}
+
+func signalCommandTree(rootPID int, sig syscall.Signal) error {
+	if rootPID <= 0 {
+		return nil
+	}
+
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil || errors.Is(err, os.ErrProcessDone) || err == syscall.ESRCH {
+			return
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	descendants := descendantPIDs(rootPID)
+	pgid, err := syscall.Getpgid(rootPID)
+	if err == nil {
+		recordErr(syscall.Kill(-pgid, sig))
+	} else if err != syscall.ESRCH && !errors.Is(err, os.ErrProcessDone) {
+		recordErr(err)
+	}
+
+	for _, pid := range descendants {
+		recordErr(syscall.Kill(pid, sig))
+	}
+	recordErr(syscall.Kill(rootPID, sig))
+
+	return firstErr
+}
+
+func descendantPIDs(rootPID int) []int {
+	out, err := exec.Command("ps", "-eo", "pid=,ppid=").Output()
+	if err != nil {
+		return nil
+	}
+
+	children := make(map[int][]int)
+	lines := bytes.Split(out, []byte{'\n'})
+	for _, line := range lines {
+		fields := strings.Fields(string(line))
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(fields[0])
+		ppid, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil || pid <= 0 || ppid <= 0 {
+			continue
+		}
+		children[ppid] = append(children[ppid], pid)
+	}
+
+	var outPIDs []int
+	queue := append([]int(nil), children[rootPID]...)
+	seen := make(map[int]struct{}, len(queue))
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		outPIDs = append(outPIDs, pid)
+		queue = append(queue, children[pid]...)
+	}
+	return outPIDs
+}

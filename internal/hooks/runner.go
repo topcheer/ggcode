@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // RunPreHooks runs all matching pre-tool-use hooks.
@@ -66,7 +68,13 @@ func runHook(command string, env HookEnv) HookResult {
 		}
 	})
 
-	c := exec.Command("sh", "-c", cmd)
+	c, _, err := util.NewShellCommand(cmd)
+	if err != nil {
+		return HookResult{
+			Allowed: true,
+			Err:     fmt.Errorf("resolve hook shell: %w", err),
+		}
+	}
 	c.Dir = env.WorkingDir
 	// Pass RAW_INPUT via environment variable instead of embedding in command string
 	c.Env = append(os.Environ(), "GGCODE_RAW_INPUT="+env.RawInput)
@@ -74,7 +82,7 @@ func runHook(command string, env HookEnv) HookResult {
 	c.Stdout = &stdout
 	c.Stderr = &stderr
 
-	err := c.Run()
+	err = c.Run()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if exitErr.ExitCode() == 2 {

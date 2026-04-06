@@ -3,6 +3,8 @@ package tui
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -79,30 +81,38 @@ type Model struct {
 	startupEndpoint    string
 	startupModel       string
 	customCmds         map[string]*commands.Command
+	commandMgr         *commands.Manager
 	autoMem            *memory.AutoMemory
 	projMemFiles       []string
 	autoMemFiles       []string
 	pluginMgr          *plugin.Manager
 	subAgentMgr        *subagent.Manager
+	mcpManager         mcpManager
 	mode               permission.PermissionMode
 	pendingDiffConfirm *DiffConfirmMsg
 	fullscreen         bool
 	providerPanel      *providerPanelState
+	mcpPanel           *mcpPanelState
+	skillsPanel        *skillsPanelState
 
 	// Approval selection list
 	approvalOptions []approvalOption
 	approvalCursor  int
 
 	// Diff confirm selection list
-	diffOptions  []approvalOption
-	diffCursor   int
-	pendingImage *imageAttachedMsg
+	diffOptions            []approvalOption
+	diffCursor             int
+	pendingImage           *imageAttachedMsg
+	langOptions            []languageOption
+	langCursor             int
+	languagePromptRequired bool
 
 	// Viewport for scrollable output
 	viewport ViewportModel
 
 	// Markdown rendering
 	mdRenderer          *glamour.TermRenderer
+	markdownWrapWidth   int
 	streamBuffer        *bytes.Buffer
 	streamStartPos      int
 	streamPrefixWritten bool
@@ -115,18 +125,23 @@ type Model struct {
 	activityGroups  []toolActivityGroup
 	todoSnapshot    map[string]todoStateItem
 	activeTodo      *todoStateItem
+	activeMCPTools  map[string]ToolStatusMsg
 
 	// Slash command autocomplete
-	autoCompleteItems   []string
-	autoCompleteIndex   int
-	autoCompleteActive  bool
-	autoCompleteKind    string // "slash" or "mention"
-	autoCompleteWorkDir string // working directory for mention completion
-	lastResizeAt        time.Time
-	exitConfirmPending  bool
-	pendingSubmissions  []string
-	runCanceled         bool
-	runFailed           bool
+	autoCompleteItems    []string
+	autoCompleteIndex    int
+	autoCompleteActive   bool
+	autoCompleteKind     string // "slash" or "mention"
+	autoCompleteWorkDir  string // working directory for mention completion
+	startedAt            time.Time
+	startupBannerVisible bool
+	lastResizeAt         time.Time
+	sidebarVisible       bool
+	exitConfirmPending   bool
+	pendingSubmissions   []string
+	runCanceled          bool
+	runFailed            bool
+	clipboardLoader      func() (imageAttachedMsg, error)
 }
 
 type toolActivityGroup struct {
@@ -145,9 +160,21 @@ type toolActivityItem struct {
 
 // MCPInfo holds display info about a connected MCP server.
 type MCPInfo struct {
-	Name      string
-	ToolNames []string
-	Connected bool
+	Name          string
+	ToolNames     []string
+	PromptNames   []string
+	ResourceNames []string
+	Connected     bool
+	Pending       bool
+	Error         string
+	Transport     string
+	Migrated      bool
+}
+
+type mcpManager interface {
+	Retry(name string) bool
+	Install(ctx context.Context, server config.MCPServerConfig) error
+	Uninstall(name string) bool
 }
 
 type styles struct {
@@ -177,6 +204,12 @@ type approvalOption struct {
 	label    string
 	shortcut string
 	decision permission.Decision
+}
+
+type languageOption struct {
+	label    string
+	shortcut string
+	lang     Language
 }
 
 // defaultApprovalOptions returns the standard approval options.
@@ -213,9 +246,20 @@ type doneMsg struct{}
 // errMsg signals an error.
 type errMsg struct{ err error }
 
+type startupReadyMsg struct{}
+
 type subAgentUpdateMsg struct{}
 
+type skillsChangedMsg struct{}
+
 var ansiKeyFragmentPattern = regexp.MustCompile(`^(?:\[[0-9;?<>=]*[A-Za-z~]|\[<\d+(?:;\d+){0,2}[A-Za-zmM])$`)
+var terminalResponseFragmentPattern = regexp.MustCompile(`^(?:\]?(?:10|11);rgb:[0-9a-fA-F]{4}/[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\\?|[() \]]*\d{1,2};rgb:[0-9a-fA-F]{4}/[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\\?)$`)
+var ansiChunkPattern = regexp.MustCompile(`\[[0-9;?<>=]*[A-Za-z~]|\[<\d+(?:;\d+){0,2}[A-Za-zmM]`)
+var ansiMouseChunkPattern = regexp.MustCompile(`\[<\d+(?:;\d+){0,2}[A-Za-zmM]`)
+var terminalResponseChunkPattern = regexp.MustCompile(`(?:\\?\]?|[() \]]*)?\d{1,2};rgb:[0-9a-fA-F]{4}/[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\\?`)
+var terminalOrphanFragmentPattern = regexp.MustCompile(`^[\[\]()\\]+$`)
+var bareMouseFragmentPattern = regexp.MustCompile(`^(?:<\d+(?:;\d+){2}[mM])+$`)
+var bareMouseChunkPattern = regexp.MustCompile(`<\d+(?:;\d+){2}[mM]`)
 
 // toolStatusMsg wraps a tool status update.
 type toolStatusMsg ToolStatusMsg
@@ -234,6 +278,10 @@ type setProgramMsg struct {
 	Program *tea.Program
 }
 
+type mcpServersMsg struct {
+	Servers []plugin.MCPServerInfo
+}
+
 func (m *Model) resetExitConfirm() {
 	m.exitConfirmPending = false
 }
@@ -241,6 +289,7 @@ func (m *Model) resetExitConfirm() {
 func (m *Model) promptExitConfirm() {
 	m.input.SetValue("")
 	m.exitConfirmPending = true
+	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.styles.prompt.Render(m.t("exit.confirm")))
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
@@ -250,7 +299,29 @@ func (m *Model) promptExitConfirm() {
 
 func (m *Model) queuePendingSubmission(text string) {
 	m.pendingSubmissions = append(m.pendingSubmissions, text)
+	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.styles.prompt.Render(m.t("queued.output", len(m.pendingSubmissions))))
+	m.syncConversationViewport()
+	if m.viewport.AutoFollow() {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m *Model) cancelActiveRun() {
+	if m.runCanceled {
+		return
+	}
+	m.runCanceled = true
+	if m.cancelFunc != nil {
+		m.cancelFunc()
+	}
+	m.spinner.Stop()
+	m.statusActivity = m.t("status.cancelling")
+	if len(m.pendingSubmissions) > 0 {
+		m.restorePendingInput()
+	}
+	debug.Log("tui", "cancelling active loop")
+	m.output.WriteString("\n" + m.t("interrupted"))
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
 		m.viewport.GotoBottom()
@@ -278,6 +349,42 @@ func (m *Model) restorePendingInput() {
 	}
 	m.input.CursorEnd()
 	m.pendingSubmissions = nil
+}
+
+func stripImagePlaceholder(value, placeholder string) string {
+	trimmed := strings.TrimSpace(value)
+	placeholder = strings.TrimSpace(placeholder)
+	if trimmed == "" || placeholder == "" {
+		return trimmed
+	}
+	if trimmed == placeholder {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, placeholder) {
+		return strings.TrimSpace(strings.TrimPrefix(trimmed, placeholder))
+	}
+	return trimmed
+}
+
+func (m *Model) stripPendingImagePlaceholder(value string) string {
+	if m.pendingImage == nil {
+		return strings.TrimSpace(value)
+	}
+	return stripImagePlaceholder(value, m.pendingImage.placeholder)
+}
+
+func (m *Model) setComposerImagePlaceholder(msg imageAttachedMsg) {
+	draft := m.input.Value()
+	if m.pendingImage != nil {
+		draft = stripImagePlaceholder(draft, m.pendingImage.placeholder)
+	}
+	draft = strings.TrimSpace(draft)
+	if draft == "" {
+		m.input.SetValue(msg.placeholder + " ")
+	} else {
+		m.input.SetValue(msg.placeholder + " " + draft)
+	}
+	m.input.CursorEnd()
 }
 
 func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
@@ -318,18 +425,48 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	)
 
 	return Model{
-		input:      ti,
-		output:     &bytes.Buffer{},
-		styles:     s,
-		agent:      a,
-		language:   LangEnglish,
-		policy:     policy,
-		spinner:    NewToolSpinner(),
-		history:    make([]string, 0, 100),
-		mdRenderer: mdRenderer,
-		viewport:   NewViewportModel(80, 20),
-		mode:       policyMode(policy),
+		input:                ti,
+		output:               &bytes.Buffer{},
+		styles:               s,
+		agent:                a,
+		language:             LangEnglish,
+		policy:               policy,
+		spinner:              NewToolSpinner(),
+		history:              make([]string, 0, 100),
+		mdRenderer:           mdRenderer,
+		markdownWrapWidth:    80,
+		viewport:             NewViewportModel(80, 20),
+		mode:                 policyMode(policy),
+		startedAt:            time.Now(),
+		startupBannerVisible: true,
+		sidebarVisible:       true,
+		activeMCPTools:       make(map[string]ToolStatusMsg),
+		clipboardLoader:      loadClipboardImage,
 	}
+}
+
+func loadClipboardImage() (imageAttachedMsg, error) {
+	img, err := image.ReadClipboard()
+	if err != nil {
+		return imageAttachedMsg{}, err
+	}
+	filename, err := newClipboardImageFilename()
+	if err != nil {
+		return imageAttachedMsg{}, err
+	}
+	return imageAttachedMsg{
+		placeholder: image.Placeholder(filename, img),
+		img:         img,
+		filename:    filename,
+	}, nil
+}
+
+func newClipboardImageFilename() (string, error) {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("generating clipboard image filename: %w", err)
+	}
+	return "ggcode-image-" + hex.EncodeToString(suffix[:]) + ".png", nil
 }
 
 func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
@@ -340,7 +477,11 @@ func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
 }
 
 func (m Model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(
+		textinput.Blink,
+		tea.WindowSize(),
+		tea.Tick(3*time.Second, func(time.Time) tea.Msg { return startupReadyMsg{} }),
+	)
 }
 
 func (m *Model) SetProgram(p *tea.Program) {
@@ -360,12 +501,30 @@ func (m *Model) SetMCPServers(servers []MCPInfo) {
 	m.mcpServers = servers
 }
 
+func (m *Model) SetMCPManager(mgr mcpManager) {
+	m.mcpManager = mgr
+}
+
 func (m *Model) SetPluginManager(mgr *plugin.Manager) {
 	m.pluginMgr = mgr
 }
 
 func (m *Model) SetCustomCommands(cmds map[string]*commands.Command) {
 	m.customCmds = cmds
+}
+
+func (m *Model) SetCommandsManager(mgr *commands.Manager) {
+	m.commandMgr = mgr
+	if mgr != nil {
+		m.customCmds = mgr.UserSlashCommands()
+	}
+}
+
+func (m *Model) refreshCommands() {
+	if m.commandMgr == nil {
+		return
+	}
+	m.customCmds = m.commandMgr.UserSlashCommands()
 }
 
 func (m *Model) SetAutoMemory(am *memory.AutoMemory) {
@@ -384,6 +543,9 @@ func (m *Model) SetConfig(cfg *config.Config) {
 	m.config = cfg
 	if cfg != nil {
 		m.setLanguage(cfg.Language)
+		if cfg.FirstRun {
+			m.openLanguageSelector(true)
+		}
 	}
 }
 
@@ -441,10 +603,9 @@ type imageAttachedMsg struct {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle spinner ticks first
+	var spinnerCmd tea.Cmd
 	if m.spinner.IsActive() {
-		if cmd := m.spinner.Update(msg); cmd != nil {
-			_ = cmd
-		}
+		spinnerCmd = m.spinner.Update(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -477,13 +638,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.startupBannerVisible && !shouldIgnoreInputUpdate(msg, m.lastResizeAt, m.startedAt) {
+			m.startupBannerVisible = false
+		}
 		if msg.String() != "ctrl+c" {
 			m.resetExitConfirm()
+		}
+		if msg.String() == "ctrl+r" {
+			m.sidebarVisible = !m.sidebarVisible
+			return m, nil
+		}
+
+		if msg.String() == "ctrl+c" && !m.loading && (m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0) {
+			if m.exitConfirmPending {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			m.promptExitConfirm()
+			return m, nil
 		}
 
 		// Handle approval mode (selection list)
 		if m.providerPanel != nil {
 			return m.handleProviderPanelKey(msg)
+		}
+
+		if m.mcpPanel != nil {
+			return m.handleMCPPanelKey(msg)
+		}
+
+		if m.skillsPanel != nil {
+			return m.handleSkillsPanelKey(msg)
+		}
+
+		if len(m.langOptions) > 0 {
+			switch msg.String() {
+			case "up", "k":
+				m.langCursor = (m.langCursor - 1 + len(m.langOptions)) % len(m.langOptions)
+				return m, nil
+			case "down", "j", "tab":
+				m.langCursor = (m.langCursor + 1) % len(m.langOptions)
+				return m, nil
+			case "shift+tab":
+				m.langCursor = (m.langCursor - 1 + len(m.langOptions)) % len(m.langOptions)
+				return m, nil
+			case "enter", "right":
+				return m, m.applyLanguageSelection(m.langOptions[m.langCursor].lang)
+			case "e", "E":
+				return m, m.applyLanguageSelection(LangEnglish)
+			case "z", "Z":
+				return m, m.applyLanguageSelection(LangZhCN)
+			case "esc":
+				if m.languagePromptRequired {
+					return m, nil
+				}
+				m.langOptions = nil
+				return m, nil
+			}
+			return m, nil
 		}
 
 		// Handle approval mode (selection list)
@@ -547,23 +759,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.loading && msg.String() == "ctrl+c" {
+		if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") {
 			m.resetExitConfirm()
-			m.runCanceled = true
-			if m.cancelFunc != nil {
-				m.cancelFunc()
-			}
-			m.spinner.Stop()
-			m.statusActivity = m.t("status.cancelling")
-			if len(m.pendingSubmissions) > 0 {
-				m.restorePendingInput()
-			}
-			debug.Log("tui", "cancelling active loop")
-			m.output.WriteString("\n" + m.t("interrupted"))
-			m.syncConversationViewport()
-			if m.viewport.AutoFollow() {
-				m.viewport.GotoBottom()
-			}
+			m.cancelActiveRun()
 			return m, nil
 		}
 
@@ -580,6 +778,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			m.promptExitConfirm()
+			return m, nil
+		case "ctrl+v":
+			if !m.loading {
+				return m, m.handleClipboardPaste()
+			}
 			return m, nil
 		case "ctrl+d":
 			m.quitting = true
@@ -651,6 +854,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeToolActivityGroup()
 		m.flushGroupedActivitiesToOutput()
 		if !m.streamPrefixWritten {
+			m.ensureOutputHasBlankLine()
 			m.streamStartPos = m.output.Len()
 			m.output.WriteString(bulletStyle.Render("● "))
 			m.streamPrefixWritten = true
@@ -717,6 +921,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 
+	case startupReadyMsg:
+		m.startupBannerVisible = false
+		return m, nil
+
 	case ApprovalMsg:
 		if m.mode == permission.AutopilotMode {
 			m.pendingApproval = &msg
@@ -745,8 +953,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case skillsChangedMsg:
+		m.refreshCommands()
+		return m, nil
+
 	case toolStatusMsg:
 		ts := ToolStatusMsg(msg)
+		m.updateActiveMCPTools(ts)
 		if ts.Running {
 			m.startToolActivity(ts)
 			// Flush current stream buffer (render markdown) before tool output
@@ -762,7 +975,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.streamBuffer.Reset()
 				m.streamStartPos = m.output.Len()
 			}
-			m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
+			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
+			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
 			m.finishToolActivity(ts)
 			ts.Elapsed = m.spinner.Elapsed()
@@ -776,6 +990,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.viewport.AutoFollow() {
 			m.viewport.GotoBottom()
 		}
+		return m, spinnerCmd
+
+	case mcpServersMsg:
+		m.mcpServers = toMCPInfos(msg.Servers)
+		return m, nil
+
+	case mcpInstallResultMsg:
+		if m.mcpPanel != nil {
+			if msg.err != nil {
+				m.mcpPanel.message = fmt.Sprintf("Install failed: %v", msg.err)
+			} else if msg.replaced {
+				m.mcpPanel.message = fmt.Sprintf("Updated MCP server %s.", msg.name)
+			} else {
+				m.mcpPanel.message = fmt.Sprintf("Installed MCP server %s.", msg.name)
+			}
+		}
+		return m, nil
+
+	case mcpUninstallResultMsg:
+		if m.mcpPanel != nil {
+			if msg.err != nil {
+				m.mcpPanel.message = fmt.Sprintf("Uninstall failed: %v", msg.err)
+			} else {
+				m.mcpPanel.message = fmt.Sprintf("Uninstalled MCP server %s.", msg.name)
+				if m.mcpPanel.selected >= len(m.mcpServers) && len(m.mcpServers) > 0 {
+					m.mcpPanel.selected = len(m.mcpServers) - 1
+				}
+			}
+		}
 		return m, nil
 
 	case setProgramMsg:
@@ -784,13 +1027,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case imageAttachedMsg:
+		m.setComposerImagePlaceholder(msg)
 		m.pendingImage = &msg
-		m.output.WriteString(m.styles.assistant.Render("Image attached: " + msg.placeholder + "\n"))
-		m.output.WriteString(m.styles.prompt.Render("Send a message to include the image, or /image to attach another.\n\n"))
-		m.syncConversationViewport()
-		if m.viewport.AutoFollow() {
-			m.viewport.GotoBottom()
-		}
 		return m, nil
 
 	case statusMsg:
@@ -805,18 +1043,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if shouldIgnoreInputUpdate(msg, m.lastResizeAt) {
+	if shouldIgnoreInputUpdate(msg, m.lastResizeAt, m.startedAt) {
 		return m, nil
 	}
 	m.input, cmd = m.input.Update(msg)
+	m.sanitizeTerminalResponseInput()
 
 	// Update autocomplete state based on current input
 	m.updateAutoComplete()
 
-	return m, cmd
+	return m, combineCmds(spinnerCmd, cmd)
 }
 
-func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt time.Time) bool {
+func combineCmds(cmds ...tea.Cmd) tea.Cmd {
+	filtered := make([]tea.Cmd, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd != nil {
+			filtered = append(filtered, cmd)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	if len(filtered) == 1 {
+		return filtered[0]
+	}
+	return tea.Batch(filtered...)
+}
+
+func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt, startedAt time.Time) bool {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok || keyMsg.Type != tea.KeyRunes || keyMsg.Paste || len(keyMsg.Runes) == 0 {
 		return false
@@ -831,8 +1086,54 @@ func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt time.Time) bool {
 			return true
 		}
 	}
-	if lastResizeAt.IsZero() || time.Since(lastResizeAt) > 250*time.Millisecond || len(keyMsg.Runes) < 2 {
+	if bareMouseFragmentPattern.MatchString(raw) {
+		return true
+	}
+	if looksLikeExactTerminalNoise(raw) {
+		return true
+	}
+	if !terminalResponseSuppressionActive(lastResizeAt, startedAt) {
 		return false
 	}
-	return ansiKeyFragmentPattern.MatchString(raw)
+	return ansiKeyFragmentPattern.MatchString(raw) || terminalResponseFragmentPattern.MatchString(raw) || terminalOrphanFragmentPattern.MatchString(raw)
+}
+
+func (m *Model) sanitizeTerminalResponseInput() {
+	value := m.input.Value()
+	if value == "" {
+		return
+	}
+	cleaned := stripExactTerminalNoise(value)
+	if terminalResponseSuppressionActive(m.lastResizeAt, m.startedAt) {
+		cleaned = ansiChunkPattern.ReplaceAllString(cleaned, "")
+	}
+	if terminalOrphanFragmentPattern.MatchString(strings.TrimSpace(cleaned)) {
+		cleaned = ""
+	}
+	if cleaned == value {
+		return
+	}
+	m.input.SetValue(cleaned)
+	m.input.CursorEnd()
+}
+
+func terminalResponseSuppressionActive(lastResizeAt, startedAt time.Time) bool {
+	if !lastResizeAt.IsZero() && time.Since(lastResizeAt) <= 1500*time.Millisecond {
+		return true
+	}
+	return !startedAt.IsZero() && time.Since(startedAt) <= 3*time.Second
+}
+
+func looksLikeExactTerminalNoise(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	return strings.TrimSpace(stripExactTerminalNoise(value)) == ""
+}
+
+func stripExactTerminalNoise(value string) string {
+	cleaned := terminalResponseChunkPattern.ReplaceAllString(value, "")
+	cleaned = ansiMouseChunkPattern.ReplaceAllString(cleaned, "")
+	cleaned = bareMouseChunkPattern.ReplaceAllString(cleaned, "")
+	return cleaned
 }

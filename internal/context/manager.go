@@ -42,6 +42,17 @@ const (
 	tokenCountTimeout   = 100 * time.Millisecond
 )
 
+func AutoCompactThresholdRatio() float64 {
+	return summarizeThreshold
+}
+
+func AutoCompactThresholdTokens(maxTokens int) int {
+	if maxTokens <= 0 {
+		return 0
+	}
+	return int(float64(maxTokens) * summarizeThreshold)
+}
+
 // Manager implements ContextManager.
 type Manager struct {
 	mu        sync.Mutex

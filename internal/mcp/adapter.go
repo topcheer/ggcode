@@ -11,22 +11,23 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
+type toolCaller interface {
+	CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error)
+}
+
 // Adapter wraps MCP tools into ggcode's Tool interface.
-// It uses callToolStandalone mode: each tool call spawns a fresh server process.
 type Adapter struct {
 	serverName string
-	command    string
-	args       []string
+	caller     toolCaller
 	tools      []ToolDefinition
 	mu         sync.Mutex
 }
 
 // NewAdapter creates an MCP adapter from server config and tool definitions.
-func NewAdapter(serverName, command string, args []string, tools []ToolDefinition) *Adapter {
+func NewAdapter(serverName string, caller toolCaller, tools []ToolDefinition) *Adapter {
 	return &Adapter{
 		serverName: serverName,
-		command:    command,
-		args:       args,
+		caller:     caller,
 		tools:      tools,
 	}
 }
@@ -38,13 +39,11 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 	for _, td := range a.tools {
 		name := fmt.Sprintf("mcp__%s__%s", a.serverName, td.Name)
 		t := &mcpTool{
-			name:       name,
-			serverName: a.serverName,
-			command:    a.command,
-			args:       a.args,
-			toolName:   td.Name,
-			desc:       td.Description,
-			schema:     td.InputSchema,
+			name:     name,
+			caller:   a.caller,
+			toolName: td.Name,
+			desc:     td.Description,
+			schema:   td.InputSchema,
 		}
 		if err := registry.Register(t); err != nil {
 			// Log but continue — name collision is non-fatal
@@ -73,13 +72,11 @@ func (a *Adapter) ToolCount() int { return len(a.tools) }
 
 // mcpTool implements tool.Tool for a single MCP tool.
 type mcpTool struct {
-	name       string
-	serverName string
-	command    string
-	args       []string
-	toolName   string
-	desc       string
-	schema     json.RawMessage
+	name     string
+	caller   toolCaller
+	toolName string
+	desc     string
+	schema   json.RawMessage
 }
 
 func (t *mcpTool) Name() string        { return t.name }
@@ -92,27 +89,16 @@ func (t *mcpTool) Parameters() json.RawMessage {
 }
 
 func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
-	// callToolStandalone: spawn fresh process for each call
-	client := NewClient(t.serverName, t.command, t.args)
-	if err := client.Start(ctx); err != nil {
-		return tool.Result{IsError: true}, err
-	}
-	defer client.Close()
-
-	// Initialize
-	if _, err := client.Initialize(ctx); err != nil {
-		return tool.Result{IsError: true}, err
-	}
-
-	// Parse arguments
 	var args map[string]interface{}
 	if input != nil && string(input) != "" {
 		if err := json.Unmarshal(input, &args); err != nil {
 			return tool.Result{IsError: true}, fmt.Errorf("parsing tool arguments: %w", err)
 		}
 	}
-
-	result, err := client.CallTool(ctx, t.toolName, args)
+	if t.caller == nil {
+		return tool.Result{IsError: true}, fmt.Errorf("mcp tool %s is not connected", t.toolName)
+	}
+	result, err := t.caller.CallTool(ctx, t.toolName, args)
 	if err != nil {
 		return tool.Result{IsError: true}, err
 	}

@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -22,6 +24,45 @@ func (t mockTool) Description() string         { return "mock tool" }
 func (t mockTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (t mockTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
 	return t.result, nil
+}
+
+type blockingTool struct {
+	name     string
+	started  chan struct{}
+	executed *int
+}
+
+func (t blockingTool) Name() string                { return t.name }
+func (t blockingTool) Description() string         { return "blocking tool" }
+func (t blockingTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t blockingTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	if t.executed != nil {
+		*t.executed = *t.executed + 1
+	}
+	if t.started != nil {
+		select {
+		case <-t.started:
+		default:
+			close(t.started)
+		}
+	}
+	<-ctx.Done()
+	return tool.Result{Content: ctx.Err().Error(), IsError: true}, nil
+}
+
+type countingTool struct {
+	name     string
+	executed *int
+}
+
+func (t countingTool) Name() string                { return t.name }
+func (t countingTool) Description() string         { return "counting tool" }
+func (t countingTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t countingTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	if t.executed != nil {
+		*t.executed = *t.executed + 1
+	}
+	return tool.Result{Content: "ok"}, nil
 }
 
 // mockProvider is a simple mock for testing agent basics.
@@ -143,6 +184,52 @@ func TestAgent_ContextManager(t *testing.T) {
 	}
 	if cm.MaxTokens() != 128000 {
 		t.Errorf("expected default MaxTokens 128000, got %d", cm.MaxTokens())
+	}
+}
+
+func TestRunStreamWithContent_EmitsCompactionProgressMessages(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{{Type: "text", Text: "Summary text."}},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{{Type: "text", Text: "Final answer."}},
+				},
+			},
+		},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "System prompt", 1)
+	a.ContextManager().SetMaxTokens(80)
+	a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("a", 120)}}})
+	a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("b", 120)}}})
+	a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("c", 120)}}})
+	a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("d", 120)}}})
+
+	var texts []string
+	err := a.RunStreamWithContent(context.Background(), []provider.ContentBlock{{Type: "text", Text: "new request that should compact"}}, func(event provider.StreamEvent) {
+		if event.Type == provider.StreamEventText {
+			texts = append(texts, event.Text)
+		}
+	})
+	if err != nil {
+		t.Fatalf("RunStreamWithContent() error = %v", err)
+	}
+
+	joined := strings.Join(texts, "\n")
+	if !strings.Contains(joined, "[compacting conversation to stay within context window]") {
+		t.Fatalf("expected compaction progress message, got %q", joined)
+	}
+	if !strings.Contains(joined, "[conversation compacted]") {
+		t.Fatalf("expected compaction completion message, got %q", joined)
+	}
+	if !strings.Contains(joined, "Final answer.") {
+		t.Fatalf("expected assistant response after compaction, got %q", joined)
 	}
 }
 
@@ -280,6 +367,66 @@ func TestRunStreamEmitsToolProgressFromChatResponse(t *testing.T) {
 	}
 }
 
+func TestRunStreamCancellationStopsRemainingToolCalls(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role: "assistant",
+				Content: []provider.ContentBlock{
+					provider.ToolUseBlock("call_1", "block", []byte(`{}`)),
+					provider.ToolUseBlock("call_2", "count", []byte(`{}`)),
+				},
+			},
+			Usage: provider.TokenUsage{InputTokens: 5, OutputTokens: 2},
+		},
+	}
+
+	registry := tool.NewRegistry()
+	var blockCount, countCount int
+	started := make(chan struct{})
+	if err := registry.Register(blockingTool{name: "block", started: started, executed: &blockCount}); err != nil {
+		t.Fatalf("register blocking tool: %v", err)
+	}
+	if err := registry.Register(countingTool{name: "count", executed: &countCount}); err != nil {
+		t.Fatalf("register counting tool: %v", err)
+	}
+
+	a := NewAgent(mp, registry, "", 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- a.RunStream(ctx, "hi", func(event provider.StreamEvent) {})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected blocking tool to start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected canceled run to stop promptly")
+	}
+
+	if blockCount != 1 {
+		t.Fatalf("expected blocking tool to execute once, got %d", blockCount)
+	}
+	if countCount != 0 {
+		t.Fatalf("expected later tool calls to be skipped after cancellation, got %d", countCount)
+	}
+	if mp.chatCalls != 1 {
+		t.Fatalf("expected cancellation to stop before another chat call, got %d", mp.chatCalls)
+	}
+}
+
 func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
@@ -295,6 +442,12 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 					Content: []provider.ContentBlock{provider.TextBlock("I inspected the tests first and found the issue.")},
 				},
 			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Completed the implementation after inspecting the tests first.")},
+				},
+			},
 		},
 	}
 
@@ -308,8 +461,8 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	if mp.chatCalls != 2 {
-		t.Fatalf("expected autopilot to continue into a second chat call, got %d", mp.chatCalls)
+	if mp.chatCalls != 3 {
+		t.Fatalf("expected autopilot to continue until an explicit completion turn, got %d", mp.chatCalls)
 	}
 	if got := a.Messages(); len(got) < 4 {
 		t.Fatalf("expected autopilot to append a synthetic user continuation, got %d messages", len(got))
@@ -318,7 +471,153 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "Autopilot is enabled") {
 		t.Fatalf("expected synthetic autopilot continuation message, got %#v", lastUser)
 	}
-	if len(events) < 3 || events[len(events)-2].Type != provider.StreamEventText || events[len(events)-2].Text != "I inspected the tests first and found the issue." {
-		t.Fatalf("expected final assistant text after autopilot continuation, got %#v", events)
+	if len(events) < 5 || events[len(events)-2].Type != provider.StreamEventText || events[len(events)-2].Text != "Completed the implementation after inspecting the tests first." {
+		t.Fatalf("expected explicit completion text after autopilot continuation, got %#v", events)
+	}
+}
+
+func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("I fixed the obvious lint issue and identified two more hotspots to optimize next.")},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Completed the optimization pass and updated the related code paths.")},
+				},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "optimize the project", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.chatCalls != 2 {
+		t.Fatalf("expected autopilot to continue after partial progress update, got %d chat calls", mp.chatCalls)
+	}
+	lastUser := a.Messages()[2]
+	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "partial progress") {
+		t.Fatalf("expected stronger synthetic continuation message, got %#v", lastUser)
+	}
+}
+
+func TestRunStreamAutopilotStopsOnExplicitCompletion(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Completed the requested optimization pass and updated the relevant files.")},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("unexpected extra turn")},
+				},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "optimize the project", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.chatCalls != 1 {
+		t.Fatalf("expected autopilot to stop on explicit completion, got %d chat calls", mp.chatCalls)
+	}
+}
+
+func TestRunStreamAutopilotStopsOnChineseHandoffClosure(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("这是一个 ggcode 项目的开发截图，使用 Warp 终端 + AI 编码助手（GPT-5.4），正在实现图片中的相关功能。如果你有关于这个功能或其他方面的具体任务需要我帮忙，随时告诉我！")},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "看看图里是什么", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.chatCalls != 1 {
+		t.Fatalf("expected autopilot to stop on Chinese handoff closure, got %d chat calls", mp.chatCalls)
+	}
+}
+
+func TestRunStreamWithZeroMaxIterationsDoesNotCapAutopilot(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("I fixed one part and still need to update the remaining UI pieces.")},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Completed the requested UI updates.")},
+				},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 0)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "refactor the UI", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+	if mp.chatCalls != 2 {
+		t.Fatalf("expected zero max iterations to allow continued autopilot turns, got %d", mp.chatCalls)
+	}
+}
+
+func TestRunStreamEmitsErrorWhenMaxIterationsReached(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role: "assistant",
+				Content: []provider.ContentBlock{
+					provider.ToolUseBlock("tool-1", "mock", json.RawMessage(`{}`)),
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	if err := registry.Register(mockTool{name: "mock", result: tool.Result{Content: "ok"}}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	a := NewAgent(mp, registry, "", 1)
+	var gotErr error
+	err := a.RunStream(context.Background(), "keep going", func(event provider.StreamEvent) {
+		if event.Type == provider.StreamEventError {
+			gotErr = event.Error
+		}
+	})
+	if err == nil {
+		t.Fatal("expected max iterations error")
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "max iterations") {
+		t.Fatalf("expected stream error event for max iterations, got %v", gotErr)
 	}
 }

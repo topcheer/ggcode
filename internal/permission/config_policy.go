@@ -56,7 +56,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	switch p.mode {
 	case BypassMode, AutopilotMode:
 		// Bypass mode: allow everything except extremely dangerous operations
-		if toolName == "run_command" {
+		if isCommandTool(toolName) {
 			cmd, _ := extractCommand(input)
 			if cmd != "" && p.detector.IsExtremelyDangerous(cmd) {
 				return Ask, nil
@@ -85,7 +85,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Deny, nil
 	case AutoMode:
 		// Auto mode: allow safe ops, deny dangerous ones, no prompts
-		if toolName == "run_command" {
+		if isCommandTool(toolName) {
 			cmd, _ := extractCommand(input)
 			if cmd != "" && p.detector.IsDangerous(cmd) {
 				return Deny, nil
@@ -109,7 +109,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				return Deny, nil
 			}
 		}
-		if toolName == "run_command" {
+		if isCommandTool(toolName) {
 			cmd, _ := extractCommand(input)
 			if cmd != "" && p.detector.IsDangerous(cmd) {
 				return Deny, nil
@@ -192,6 +192,14 @@ func isSensitivePath(path string) bool {
 func isFileTool(name string) bool {
 	switch name {
 	case "read_file", "write_file", "edit_file", "list_directory":
+		return true
+	}
+	return false
+}
+
+func isCommandTool(name string) bool {
+	switch name {
+	case "run_command", "start_command":
 		return true
 	}
 	return false

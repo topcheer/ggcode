@@ -7,12 +7,15 @@ import (
 	"os"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -63,31 +66,52 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 		fmt.Fprintf(os.Stderr, "registering tools: %v\n", err)
 		return 1
 	}
+	mergedMCPServers, _ := mcp.MergeStartupServers(workingDir, cfg.MCPServers)
+	mcpMgr := plugin.NewMCPManager(mergedMCPServers, registry)
+	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
+	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
+	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
 
 	// Load plugins
 	pluginMgr := plugin.NewManager()
 	pluginMgr.LoadAll(cfg.Plugins)
-	for _, mcpCfg := range cfg.MCPServers {
-		p := plugin.NewMCPPlugin(mcpCfg)
-		if err := p.RegisterTools(context.Background(), registry); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: MCP server %s failed: %v\n", mcpCfg.Name, err)
-		}
+	for _, warning := range mcpMgr.ConnectAll(context.Background()) {
+		fmt.Fprintln(os.Stderr, warning)
 	}
 	pluginMgr.RegisterTools(registry)
 
-	// Load project memory (GGCODE.md)
+	// Load project memory documents.
 	projectMem, _, _ := memory.LoadProjectMemory(workingDir)
 
 	// Load auto memory
 	autoMem := memory.NewAutoMemory()
 	autoContent, _, _ := autoMem.LoadAll()
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
+	commandMgr := commands.NewManager(workingDir)
+	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
+		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+	}
+	_ = registry.Register(tool.SkillTool{
+		Skills:       commandMgr,
+		Runtime:      mcpMgr,
+		Provider:     prov,
+		Tools:        registry,
+		AgentFactory: skillAgentFactory,
+	})
 
 	// Build enhanced system prompt
 	gitStatus := detectGitStatus(workingDir)
-	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, registryToolNames(registry), gitStatus, nil)
+	userSlashCmds := commandMgr.UserSlashCommands()
+	customCmdNames := make([]string, 0, len(userSlashCmds))
+	for name := range userSlashCmds {
+		customCmdNames = append(customCmdNames, name)
+	}
+	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, registryToolNames(registry), gitStatus, customCmdNames)
+	if skillsPrompt := buildSkillsSystemPrompt(append(commandMgr.List(), buildMCPSkillCommands(mcpMgr.SnapshotMCP())...)); skillsPrompt != "" {
+		systemPrompt += "\n\n## Skills\n" + skillsPrompt
+	}
 	if projectMem != "" {
-		systemPrompt += "\n\n## Project Memory (GGCODE.md)\n" + projectMem
+		systemPrompt += "\n\n## Project Memory\n" + projectMem
 	}
 	if autoContent != "" {
 		systemPrompt += "\n\n## Auto Memory\n" + autoContent
@@ -95,10 +119,10 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 
 	// Setup agent
 	maxIter := cfg.MaxIterations
-	if maxIter == 0 {
-		maxIter = 50
-	}
 	ag := agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	if resolved.ContextWindow > 0 {
+		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
+	}
 	ag.SetPermissionPolicy(policy)
 
 	// Read stdin if available

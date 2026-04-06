@@ -5,9 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -24,7 +25,7 @@ type RunCommand struct {
 func (t RunCommand) Name() string { return "run_command" }
 
 func (t RunCommand) Description() string {
-	return "Execute a shell command and return stdout/stderr. Has a 30-second timeout by default."
+	return "Execute a shell command and return stdout/stderr. Has a 30-minute timeout by default."
 }
 
 func (t RunCommand) Parameters() json.RawMessage {
@@ -41,7 +42,7 @@ func (t RunCommand) Parameters() json.RawMessage {
 			},
 			"timeout": {
 				"type": "integer",
-				"description": "Timeout in seconds (default: 30)"
+				"description": "Timeout in seconds (default: 1800)"
 			}
 		},
 		"required": ["command"]
@@ -59,13 +60,17 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	if args.Timeout <= 0 {
-		args.Timeout = 30
+		args.Timeout = int(defaultCommandTimeout / time.Second)
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(timeoutCtx, "sh", "-c", args.Command)
+	cmd, _, err := util.NewShellCommandContext(timeoutCtx, args.Command)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", err)}, nil
+	}
+	configureCommandCancellation(cmd)
 	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir
 	if t.WorkingDir != "" {
 		cmd.Dir = t.WorkingDir
@@ -75,7 +80,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 
 	output := stdout.String()
 	errOutput := stderr.String()

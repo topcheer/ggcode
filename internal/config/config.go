@@ -21,6 +21,7 @@ type EndpointConfig struct {
 	Protocol      string   `yaml:"protocol"`
 	BaseURL       string   `yaml:"base_url"`
 	APIKey        string   `yaml:"api_key,omitempty"`
+	ContextWindow int      `yaml:"context_window,omitempty"`
 	MaxTokens     int      `yaml:"max_tokens"`
 	DefaultModel  string   `yaml:"default_model,omitempty"`
 	SelectedModel string   `yaml:"selected_model,omitempty"`
@@ -37,17 +38,18 @@ type VendorConfig struct {
 
 // ResolvedEndpoint is the runtime selection after config inheritance is applied.
 type ResolvedEndpoint struct {
-	VendorID     string
-	VendorName   string
-	EndpointID   string
-	EndpointName string
-	Protocol     string
-	BaseURL      string
-	APIKey       string
-	Model        string
-	MaxTokens    int
-	Models       []string
-	Tags         []string
+	VendorID      string
+	VendorName    string
+	EndpointID    string
+	EndpointName  string
+	Protocol      string
+	BaseURL       string
+	APIKey        string
+	Model         string
+	ContextWindow int
+	MaxTokens     int
+	Models        []string
+	Tags          []string
 }
 
 // ToolPermission defines per-tool permission level in config.
@@ -61,10 +63,16 @@ const (
 
 // MCPServerConfig defines an MCP server to connect to.
 type MCPServerConfig struct {
-	Name    string            `yaml:"name"`
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env,omitempty"`
+	Name       string            `yaml:"name"`
+	Type       string            `yaml:"type,omitempty"`
+	Command    string            `yaml:"command,omitempty"`
+	Args       []string          `yaml:"args,omitempty"`
+	Env        map[string]string `yaml:"env,omitempty"`
+	URL        string            `yaml:"url,omitempty"`
+	Headers    map[string]string `yaml:"headers,omitempty"`
+	Source     string            `yaml:"-"`
+	OriginPath string            `yaml:"-"`
+	Migrated   bool              `yaml:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
@@ -122,7 +130,7 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 ## Memory
 - Use save_memory to persist useful patterns and decisions
-- Check GGCODE.md for project context and conventions
+- Check project memory files like GGCODE.md, AGENTS.md, and CLAUDE.md for project context and conventions
 - Learn from user preferences across sessions
 `
 
@@ -143,6 +151,7 @@ type Config struct {
 	DefaultMode   string                    `yaml:"default_mode"`
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
 	FilePath      string                    `yaml:"-"`
+	FirstRun      bool                      `yaml:"-"`
 }
 
 // SubAgentConfig holds sub-agent configuration.
@@ -150,6 +159,31 @@ type SubAgentConfig struct {
 	MaxConcurrent int           `yaml:"max_concurrent"`
 	Timeout       time.Duration `yaml:"timeout"`
 	ShowOutput    bool          `yaml:"show_output"`
+}
+
+func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, models []string, tags ...string) EndpointConfig {
+	ep := EndpointConfig{
+		DisplayName:   displayName,
+		Protocol:      protocol,
+		BaseURL:       baseURL,
+		ContextWindow: inferContextWindow(defaultModel, protocol),
+		MaxTokens:     inferMaxOutputTokens(defaultModel, protocol),
+		DefaultModel:  defaultModel,
+		Models:        append([]string(nil), models...),
+		Tags:          append([]string(nil), tags...),
+	}
+	if defaultModel != "" {
+		ep.SelectedModel = defaultModel
+	}
+	return ep
+}
+
+func defaultVendor(displayName, apiKey string, endpoints map[string]EndpointConfig) VendorConfig {
+	return VendorConfig{
+		DisplayName: displayName,
+		APIKey:      apiKey,
+		Endpoints:   endpoints,
+	}
 }
 
 // DefaultConfig returns a config with sensible defaults.
@@ -161,61 +195,231 @@ func DefaultConfig() *Config {
 		Model:         "glm-5-turbo",
 		Language:      "en",
 		AllowedDirs:   []string{"."},
-		MaxIterations: 50,
+		MaxIterations: 0,
 		Vendors: map[string]VendorConfig{
-			"zai": {
-				DisplayName: "Z.ai",
-				APIKey:      "${ZAI_API_KEY}",
-				Endpoints: map[string]EndpointConfig{
-					"cn-coding-openai": {
-						DisplayName:   "CN Coding Plan",
-						Protocol:      "openai",
-						BaseURL:       "https://open.bigmodel.cn/api/coding/paas/v4",
-						MaxTokens:     8192,
-						DefaultModel:  "glm-5-turbo",
-						SelectedModel: "glm-5-turbo",
-						Models:        []string{"glm-5-turbo", "glm-5-plus"},
-						Tags:          []string{"coding", "cn"},
+			"zai": defaultVendor("Z.ai", "${ZAI_API_KEY}", map[string]EndpointConfig{
+				"cn-coding-openai": defaultEndpoint(
+					"CN Coding Plan",
+					"openai",
+					"https://open.bigmodel.cn/api/coding/paas/v4",
+					"glm-5-turbo",
+					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
+					"coding", "cn",
+				),
+				"cn-coding-anthropic": defaultEndpoint(
+					"CN Coding Plan (Anthropic)",
+					"anthropic",
+					"https://open.bigmodel.cn/api/anthropic",
+					"glm-5-turbo",
+					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
+					"coding", "cn", "anthropic",
+				),
+				"global-coding-openai": defaultEndpoint(
+					"Global Coding Plan",
+					"openai",
+					"https://your-global-coding-endpoint.example.com/v1",
+					"glm-5-turbo",
+					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
+					"coding", "global",
+				),
+				"global-coding-anthropic": defaultEndpoint(
+					"Global Coding Plan (Anthropic)",
+					"anthropic",
+					"https://your-global-anthropic-endpoint.example.com",
+					"glm-5-turbo",
+					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
+					"coding", "global", "anthropic",
+				),
+				"cn-api-openai": defaultEndpoint(
+					"CN Standard API",
+					"openai",
+					"https://open.bigmodel.cn/api/paas/v4",
+					"glm-4.5-air",
+					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
+					"api", "cn",
+				),
+				"global-api-openai": defaultEndpoint(
+					"Global Standard API",
+					"openai",
+					"https://your-global-api-endpoint.example.com/v1",
+					"glm-4.5-air",
+					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
+					"api", "global",
+				),
+			}),
+			"anthropic": defaultVendor("Anthropic", "${ANTHROPIC_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Anthropic API",
+					"anthropic",
+					"https://api.anthropic.com",
+					"claude-3-5-sonnet-latest",
+					[]string{"claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"},
+					"official", "anthropic",
+				),
+			}),
+			"openai": defaultVendor("OpenAI", "${OPENAI_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"OpenAI API",
+					"openai",
+					"https://api.openai.com/v1",
+					"gpt-4o-mini",
+					[]string{"gpt-4o-mini", "gpt-4o"},
+					"official", "openai",
+				),
+			}),
+			"google": defaultVendor("Google Gemini", "${GEMINI_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Gemini API",
+					"gemini",
+					"https://generativelanguage.googleapis.com",
+					"gemini-1.5-flash",
+					[]string{"gemini-1.5-flash", "gemini-1.5-pro"},
+					"official", "gemini",
+				),
+			}),
+			"openrouter": defaultVendor("OpenRouter", "${OPENROUTER_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"OpenRouter API",
+					"openai",
+					"https://openrouter.ai/api/v1",
+					"openai/gpt-4o-mini",
+					[]string{"openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "google/gemini-flash-1.5"},
+					"router", "openai-compatible",
+				),
+			}),
+			"groq": defaultVendor("Groq", "${GROQ_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Groq API",
+					"openai",
+					"https://api.groq.com/openai/v1",
+					"llama-3.1-8b-instant",
+					[]string{"llama-3.1-8b-instant", "llama-3.1-70b-versatile"},
+					"official", "openai-compatible", "fast",
+				),
+			}),
+			"mistral": defaultVendor("Mistral", "${MISTRAL_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Mistral API",
+					"openai",
+					"https://api.mistral.ai/v1",
+					"mistral-small-latest",
+					[]string{"mistral-small-latest", "mistral-large-latest"},
+					"official", "openai-compatible",
+				),
+			}),
+			"deepseek": defaultVendor("DeepSeek", "${DEEPSEEK_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"DeepSeek API",
+					"openai",
+					"https://api.deepseek.com/v1",
+					"deepseek-chat",
+					[]string{"deepseek-chat", "deepseek-reasoner"},
+					"official", "openai-compatible", "reasoning",
+				),
+			}),
+			"moonshot": defaultVendor("Moonshot AI", "${MOONSHOT_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Moonshot API",
+					"openai",
+					"https://api.moonshot.cn/v1",
+					"moonshot-v1-8k",
+					[]string{"moonshot-v1-8k", "moonshot-v1-32k"},
+					"official", "openai-compatible", "cn",
+				),
+			}),
+			"kimi": defaultVendor("Kimi Coding Plan", "${KIMI_API_KEY}", map[string]EndpointConfig{
+				"coding-openai": defaultEndpoint(
+					"Kimi Coding Plan",
+					"openai",
+					"https://api.kimi.com/coding/v1",
+					"kimi-for-coding",
+					[]string{"kimi-for-coding"},
+					"official", "coding", "openai-compatible",
+				),
+				"coding-anthropic": defaultEndpoint(
+					"Kimi Coding Plan (Anthropic)",
+					"anthropic",
+					"https://api.kimi.com/coding/",
+					"kimi-for-coding",
+					[]string{"kimi-for-coding"},
+					"official", "coding", "anthropic",
+				),
+			}),
+			"minimax": defaultVendor("MiniMax Token Plan", "${MINIMAX_API_KEY}", map[string]EndpointConfig{
+				"token-plan-openai": defaultEndpoint(
+					"MiniMax Token Plan",
+					"openai",
+					"https://api.minimaxi.com/v1",
+					"MiniMax-M2.7",
+					[]string{"MiniMax-M2.7"},
+					"official", "coding", "openai-compatible",
+				),
+				"token-plan-anthropic": defaultEndpoint(
+					"MiniMax Token Plan (Anthropic)",
+					"anthropic",
+					"https://api.minimaxi.com/anthropic",
+					"MiniMax-M2.7",
+					[]string{"MiniMax-M2.7"},
+					"official", "coding", "anthropic",
+				),
+				"global-openai": defaultEndpoint(
+					"MiniMax Global",
+					"openai",
+					"https://api.minimax.io/v1",
+					"MiniMax-M2.7",
+					[]string{"MiniMax-M2.7"},
+					"official", "coding", "openai-compatible", "global",
+				),
+				"global-anthropic": defaultEndpoint(
+					"MiniMax Global (Anthropic)",
+					"anthropic",
+					"https://api.minimax.io/anthropic",
+					"MiniMax-M2.7",
+					[]string{"MiniMax-M2.7"},
+					"official", "coding", "anthropic", "global",
+				),
+			}),
+			"ark": defaultVendor("Volcengine Ark Coding Plan", "${ARK_API_KEY}", map[string]EndpointConfig{
+				"coding-openai": defaultEndpoint(
+					"Ark Coding Plan",
+					"openai",
+					"https://ark.cn-beijing.volces.com/api/coding/v3",
+					"ark-code-latest",
+					[]string{"ark-code-latest"},
+					"official", "coding", "cn", "openai-compatible",
+				),
+				"coding-anthropic": defaultEndpoint(
+					"Ark Coding Plan (Anthropic)",
+					"anthropic",
+					"https://ark.cn-beijing.volces.com/api/coding",
+					"ark-code-latest",
+					[]string{"ark-code-latest"},
+					"official", "coding", "cn", "anthropic",
+				),
+			}),
+			"together": defaultVendor("Together AI", "${TOGETHER_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Together API",
+					"openai",
+					"https://api.together.xyz/v1",
+					"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+					[]string{
+						"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+						"meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
 					},
-					"cn-coding-anthropic": {
-						DisplayName: "CN Coding Plan (Anthropic)",
-						Protocol:    "anthropic",
-						BaseURL:     "https://open.bigmodel.cn/api/anthropic",
-						MaxTokens:   8192,
-						Tags:        []string{"coding", "cn", "anthropic"},
-					},
-					"global-coding-openai": {
-						DisplayName:  "Global Coding Plan",
-						Protocol:     "openai",
-						MaxTokens:    8192,
-						DefaultModel: "glm-5-turbo",
-						Models:       []string{"glm-5-turbo", "glm-5-plus"},
-						Tags:         []string{"coding", "global"},
-					},
-					"global-coding-anthropic": {
-						DisplayName: "Global Coding Plan (Anthropic)",
-						Protocol:    "anthropic",
-						MaxTokens:   8192,
-						Tags:        []string{"coding", "global", "anthropic"},
-					},
-					"cn-api-openai": {
-						DisplayName:  "CN Standard API",
-						Protocol:     "openai",
-						MaxTokens:    8192,
-						DefaultModel: "glm-4.5-air",
-						Models:       []string{"glm-4.5-air", "glm-4.5"},
-						Tags:         []string{"api", "cn"},
-					},
-					"global-api-openai": {
-						DisplayName:  "Global Standard API",
-						Protocol:     "openai",
-						MaxTokens:    8192,
-						DefaultModel: "glm-4.5-air",
-						Models:       []string{"glm-4.5-air", "glm-4.5"},
-						Tags:         []string{"api", "global"},
-					},
-				},
-			},
+					"official", "openai-compatible", "open-models",
+				),
+			}),
+			"perplexity": defaultVendor("Perplexity", "${PERPLEXITY_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Perplexity API",
+					"openai",
+					"https://api.perplexity.ai",
+					"llama-3.1-sonar-small-128k-online",
+					[]string{"llama-3.1-sonar-small-128k-online", "llama-3.1-sonar-large-128k-online"},
+					"official", "openai-compatible", "search",
+				),
+			}),
 		},
 	}
 	cfg.expandEnv()
@@ -231,6 +435,8 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cfg.FirstRun = true
+			applyFirstLaunchAnthropicBootstrap(cfg)
 			cfg.normalizeActiveModel()
 			if err := cfg.Validate(); err != nil {
 				return nil, err
@@ -247,6 +453,9 @@ func Load(path string) (*Config, error) {
 	}
 	if hasLegacyProviderKeys(raw) {
 		return nil, fmt.Errorf("legacy provider/providers config is no longer supported; use vendor/endpoint/vendors instead")
+	}
+	if shouldApplyFirstLaunchAnthropicBootstrap(raw) {
+		applyFirstLaunchAnthropicBootstrap(cfg)
 	}
 
 	// Expand env vars
@@ -321,12 +530,17 @@ func (c *Config) expandEnv() {
 	}
 	for i, mcp := range c.MCPServers {
 		mcp.Name = ExpandEnv(mcp.Name)
+		mcp.Type = ExpandEnv(mcp.Type)
 		mcp.Command = ExpandEnv(mcp.Command)
 		for j, arg := range mcp.Args {
 			mcp.Args[j] = ExpandEnv(arg)
 		}
 		for key, val := range mcp.Env {
 			mcp.Env[key] = ExpandEnv(val)
+		}
+		mcp.URL = ExpandEnv(mcp.URL)
+		for key, val := range mcp.Headers {
+			mcp.Headers[key] = ExpandEnv(val)
 		}
 		c.MCPServers[i] = mcp
 	}
@@ -354,8 +568,8 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Model) == "" && strings.TrimSpace(ep.SelectedModel) == "" && strings.TrimSpace(ep.DefaultModel) == "" {
 		return fmt.Errorf("model must not be empty")
 	}
-	if c.MaxIterations <= 0 {
-		return fmt.Errorf("max_iterations must be greater than 0")
+	if c.MaxIterations < 0 {
+		return fmt.Errorf("max_iterations must not be negative")
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {
@@ -373,6 +587,27 @@ func (c *Config) Validate() error {
 	for _, dir := range c.AllowedDirs {
 		if strings.TrimSpace(dir) == "" {
 			return fmt.Errorf("allowed_dirs must not contain empty entries")
+		}
+	}
+	for _, mcp := range c.MCPServers {
+		transport := strings.ToLower(strings.TrimSpace(mcp.Type))
+		if transport == "" {
+			transport = "stdio"
+		}
+		if strings.TrimSpace(mcp.Name) == "" {
+			return fmt.Errorf("mcp server name must not be empty")
+		}
+		switch transport {
+		case "stdio":
+			if strings.TrimSpace(mcp.Command) == "" {
+				return fmt.Errorf("mcp server %q must declare command for stdio transport", mcp.Name)
+			}
+		case "http", "ws", "websocket":
+			if strings.TrimSpace(mcp.URL) == "" {
+				return fmt.Errorf("mcp server %q must declare url for %s transport", mcp.Name, transport)
+			}
+		default:
+			return fmt.Errorf("mcp server %q has unsupported transport %q", mcp.Name, transport)
 		}
 	}
 	return nil
@@ -400,6 +635,18 @@ func hasLegacyProviderKeys(raw map[string]interface{}) bool {
 	_, hasProvider := raw["provider"]
 	_, hasProviders := raw["providers"]
 	return hasProvider || hasProviders
+}
+
+func shouldApplyFirstLaunchAnthropicBootstrap(raw map[string]interface{}) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	for _, key := range []string{"vendor", "endpoint", "model", "vendors"} {
+		if _, ok := raw[key]; ok {
+			return false
+		}
+	}
+	return true
 }
 
 // ResolveActiveEndpoint resolves the selected vendor + endpoint into runtime settings.
@@ -434,20 +681,25 @@ func (c *Config) ResolveActiveEndpoint() (*ResolvedEndpoint, error) {
 	}
 	maxTokens := ep.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = 8192
+		maxTokens = inferMaxOutputTokens(model, ep.Protocol)
+	}
+	contextWindow := ep.ContextWindow
+	if contextWindow == 0 {
+		contextWindow = inferContextWindow(model, ep.Protocol)
 	}
 	return &ResolvedEndpoint{
-		VendorID:     c.Vendor,
-		VendorName:   firstNonEmpty(vc.DisplayName, c.Vendor),
-		EndpointID:   c.Endpoint,
-		EndpointName: firstNonEmpty(ep.DisplayName, c.Endpoint),
-		Protocol:     ep.Protocol,
-		BaseURL:      ep.BaseURL,
-		APIKey:       apiKey,
-		Model:        model,
-		MaxTokens:    maxTokens,
-		Models:       append([]string(nil), ep.Models...),
-		Tags:         append([]string(nil), ep.Tags...),
+		VendorID:      c.Vendor,
+		VendorName:    firstNonEmpty(vc.DisplayName, c.Vendor),
+		EndpointID:    c.Endpoint,
+		EndpointName:  firstNonEmpty(ep.DisplayName, c.Endpoint),
+		Protocol:      ep.Protocol,
+		BaseURL:       ep.BaseURL,
+		APIKey:        apiKey,
+		Model:         model,
+		ContextWindow: contextWindow,
+		MaxTokens:     maxTokens,
+		Models:        append([]string(nil), ep.Models...),
+		Tags:          append([]string(nil), ep.Tags...),
 	}, nil
 }
 
@@ -549,6 +801,35 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	return nil
 }
 
+func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
+	if c == nil {
+		return false
+	}
+	for i, existing := range c.MCPServers {
+		if existing.Name != server.Name {
+			continue
+		}
+		c.MCPServers[i] = server
+		return true
+	}
+	c.MCPServers = append(c.MCPServers, server)
+	return false
+}
+
+func (c *Config) RemoveMCPServer(name string) bool {
+	if c == nil {
+		return false
+	}
+	for i, server := range c.MCPServers {
+		if server.Name != name {
+			continue
+		}
+		c.MCPServers = append(c.MCPServers[:i], c.MCPServers[i+1:]...)
+		return true
+	}
+	return false
+}
+
 // Save persists the config to its configured file path.
 func (c *Config) Save() error {
 	if c == nil {
@@ -568,6 +849,46 @@ func (c *Config) Save() error {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 	return os.WriteFile(c.FilePath, data, 0644)
+}
+
+func (c *Config) SaveLanguagePreference(lang string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(c.FilePath) == "" {
+		return fmt.Errorf("config file path is empty")
+	}
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return fmt.Errorf("language must not be empty")
+	}
+
+	raw := map[string]interface{}{}
+	data, err := os.ReadFile(c.FilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+		}
+	} else if len(data) > 0 {
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
+		}
+	}
+	raw["language"] = lang
+
+	updated, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+		return err
+	}
+	c.Language = lang
+	c.FirstRun = false
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {

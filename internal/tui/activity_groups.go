@@ -94,30 +94,51 @@ func (m *Model) flushGroupedActivitiesToOutput() {
 }
 
 func (m Model) renderGroupedActivities() string {
-	var rows []string
-	lastTodoID := ""
+	type renderedSection struct {
+		Title string
+		Items []toolActivityItem
+	}
+	type renderedBlock struct {
+		TodoID   string
+		Sections []renderedSection
+	}
+
+	var blocks []renderedBlock
 	for _, group := range m.activityGroups {
 		if group.Title == "" || len(group.Items) == 0 {
 			continue
 		}
-		if group.TodoContent != "" && group.TodoID != lastTodoID {
-			rows = append(rows, fmt.Sprintf(" 🎯 %s", localizeTodoHeading(m.currentLanguage(), group.TodoContent)))
-			lastTodoID = group.TodoID
+		if len(blocks) == 0 || blocks[len(blocks)-1].TodoID != group.TodoID {
+			blocks = append(blocks, renderedBlock{TodoID: group.TodoID})
 		}
-		rows = append(rows, fmt.Sprintf(" 📦 %s", group.Title))
-		items, hiddenCount := visibleGroupItems(group.Items)
-		if hiddenCount > 0 {
-			rows = append(rows, fmt.Sprintf("    %s", localizeHiddenStepsSummary(m.currentLanguage(), hiddenCount)))
+		block := &blocks[len(blocks)-1]
+		if len(block.Sections) > 0 && block.Sections[len(block.Sections)-1].Title == group.Title {
+			block.Sections[len(block.Sections)-1].Items = append(block.Sections[len(block.Sections)-1].Items, group.Items...)
+			continue
 		}
-		for _, item := range items {
-			prefix := "•"
-			if item.Running {
-				prefix = "◦"
+		block.Sections = append(block.Sections, renderedSection{Title: group.Title, Items: group.Items})
+	}
+
+	var renderedBlocks []string
+	for _, block := range blocks {
+		var sections []string
+		for _, section := range block.Sections {
+			rows := []string{fmt.Sprintf(" 📦 %s", section.Title)}
+			items, hiddenCount := visibleGroupItems(section.Items)
+			if hiddenCount > 0 {
+				rows = append(rows, fmt.Sprintf("    %s", localizeHiddenStepsSummary(m.currentLanguage(), hiddenCount)))
 			}
-			rows = append(rows, fmt.Sprintf("    %s %s", prefix, truncateString(item.Summary, m.conversationInnerWidth()-10)))
+			for _, item := range items {
+				rows = append(rows, m.renderToolActivityItem(item)...)
+			}
+			sections = append(sections, strings.Join(rows, "\n"))
+		}
+		if len(sections) > 0 {
+			renderedBlocks = append(renderedBlocks, strings.Join(sections, "\n\n"))
 		}
 	}
-	return strings.Join(rows, "\n")
+
+	return strings.Join(renderedBlocks, "\n\n")
 }
 
 func (m Model) renderLiveActivities() string {
@@ -128,7 +149,7 @@ func (m Model) renderLiveActivities() string {
 	if agents := m.renderSubAgentActivities(); agents != "" {
 		parts = append(parts, agents)
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n\n")
 }
 
 func (m Model) renderSubAgentActivities() string {
@@ -136,15 +157,21 @@ func (m Model) renderSubAgentActivities() string {
 		return ""
 	}
 	agents := m.subAgentMgr.List()
-	if len(agents) == 0 {
+	liveAgents := make([]*subagent.SubAgent, 0, len(agents))
+	for _, sa := range agents {
+		if isLiveSubAgentStatus(sa.Status) {
+			liveAgents = append(liveAgents, sa)
+		}
+	}
+	if len(liveAgents) == 0 {
 		return ""
 	}
-	sort.SliceStable(agents, func(i, j int) bool {
-		return agents[i].CreatedAt.Before(agents[j].CreatedAt)
+	sort.SliceStable(liveAgents, func(i, j int) bool {
+		return liveAgents[i].CreatedAt.Before(liveAgents[j].CreatedAt)
 	})
 
 	var rows []string
-	for _, sa := range agents {
+	for _, sa := range liveAgents {
 		task := truncateString(compactSingleLine(firstNonEmpty(sa.DisplayTask, sa.Task)), 54)
 		if task == "" {
 			task = sa.ID
@@ -165,7 +192,19 @@ func (m Model) renderSubAgentActivities() string {
 	return strings.Join(rows, "\n")
 }
 
+func isLiveSubAgentStatus(status subagent.Status) bool {
+	switch status {
+	case subagent.StatusPending, subagent.StatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
 func (m Model) subAgentActivitySummary(sa *subagent.SubAgent) string {
+	if summary := strings.TrimSpace(sa.ProgressSummary); summary != "" {
+		return summary
+	}
 	if sa.CurrentTool != "" {
 		present := describeTool(m.currentLanguage(), sa.CurrentTool, sa.CurrentArgs)
 		return firstNonEmpty(present.Activity, formatToolInline(present.DisplayName, present.Detail))
@@ -196,11 +235,39 @@ func (m Model) subAgentActivitySummary(sa *subagent.SubAgent) string {
 }
 
 func formatToolItemSummary(lang Language, msg ToolStatusMsg) string {
+	if summary, ok := formatCommandToolItemSummary(lang, msg); ok {
+		return summary
+	}
 	summary := summarizeToolResult(lang, msg)
+	if isTrivialToolDetail(summary) || strings.EqualFold(summary, toolDisplayName(msg)) {
+		summary = ""
+	}
 	if summary == "" {
 		return formatToolInline(toolDisplayName(msg), toolDetail(msg))
 	}
 	return fmt.Sprintf("%s — %s", formatToolInline(toolDisplayName(msg), toolDetail(msg)), summary)
+}
+
+func formatCommandToolItemSummary(lang Language, msg ToolStatusMsg) (string, bool) {
+	if !isCommandTool(msg.ToolName) {
+		return "", false
+	}
+	preview := buildCommandPreview(rawCommandArg(parseToolArgs(msg.RawArgs)))
+	if len(preview.Lines) == 0 {
+		return "", false
+	}
+
+	title := formatToolInline(toolDisplayName(msg), toolDetail(msg))
+	lines := make([]string, 0, 2+len(preview.Lines))
+	lines = append(lines, title)
+	lines = append(lines, preview.Lines...)
+	if preview.HiddenLineCount > 0 {
+		lines = append(lines, localizeMoreLinesSummary(lang, preview.HiddenLineCount))
+	}
+	if summary := summarizeToolResult(lang, msg); summary != "" {
+		lines = append(lines, summary)
+	}
+	return strings.Join(lines, "\n"), true
 }
 
 func classifyToolGroup(toolName string) string {
@@ -211,7 +278,7 @@ func classifyToolGroup(toolName string) string {
 		return "edit"
 	case "todo_write":
 		return "todo"
-	case "run_command", "bash", "powershell":
+	case "run_command", "bash", "powershell", "start_command", "read_command_output", "wait_command", "stop_command", "list_commands":
 		return "run"
 	case "web_fetch", "web_search":
 		return "research"
@@ -303,6 +370,15 @@ func containsString(values []string, target string) bool {
 	return false
 }
 
+func isCommandTool(toolName string) bool {
+	switch toolName {
+	case "run_command", "bash", "powershell", "start_command":
+		return true
+	default:
+		return false
+	}
+}
+
 func visibleGroupItems(items []toolActivityItem) ([]toolActivityItem, int) {
 	if len(items) <= maxVisibleGroupItems {
 		return items, 0
@@ -319,6 +395,41 @@ func localizeHiddenStepsSummary(lang Language, hidden int) string {
 		return "… 1 earlier completed step"
 	}
 	return fmt.Sprintf("… %d earlier completed steps", hidden)
+}
+
+func localizeMoreLinesSummary(lang Language, hidden int) string {
+	if lang == LangZhCN {
+		return fmt.Sprintf("… 还有 %d 行脚本", hidden)
+	}
+	if hidden == 1 {
+		return "… 1 more script line"
+	}
+	return fmt.Sprintf("… %d more script lines", hidden)
+}
+
+func (m Model) renderToolActivityItem(item toolActivityItem) []string {
+	prefix := "•"
+	if item.Running {
+		prefix = "◦"
+	}
+	lines := strings.Split(item.Summary, "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+
+	firstWidth := m.conversationInnerWidth() - 10
+	bodyWidth := m.conversationInnerWidth() - 8
+	if firstWidth < 8 {
+		firstWidth = 8
+	}
+	if bodyWidth < 8 {
+		bodyWidth = 8
+	}
+	rows := []string{fmt.Sprintf("    %s %s", prefix, truncateString(lines[0], firstWidth))}
+	for _, line := range lines[1:] {
+		rows = append(rows, fmt.Sprintf("      %s", truncateString(line, bodyWidth)))
+	}
+	return rows
 }
 
 func trimLeadingRenderedSpacing(rendered string) string {

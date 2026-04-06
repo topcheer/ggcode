@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"context"
+	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -21,11 +24,13 @@ import (
 
 // REPL connects the agent to the TUI model.
 type REPL struct {
-	model    Model
-	agent    *agent.Agent
-	program  *tea.Program
-	store    session.Store
-	resumeID string
+	model      Model
+	agent      *agent.Agent
+	program    *tea.Program
+	store      session.Store
+	resumeID   string
+	mcpMgr     *plugin.MCPManager
+	commandMgr *commands.Manager
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -47,6 +52,11 @@ func (r *REPL) SetMCPServers(servers []MCPInfo) {
 	r.model.SetMCPServers(servers)
 }
 
+func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
+	r.mcpMgr = mgr
+	r.model.SetMCPManager(mgr)
+}
+
 // SetResumeID sets the session ID to resume.
 func (r *REPL) SetResumeID(id string) {
 	r.resumeID = id
@@ -61,8 +71,9 @@ func (r *REPL) SetPluginManager(mgr *plugin.Manager) {
 	r.model.SetPluginManager(mgr)
 }
 
-func (r *REPL) SetCustomCommands(cmds map[string]*commands.Command) {
-	r.model.SetCustomCommands(cmds)
+func (r *REPL) SetCommandsManager(mgr *commands.Manager) {
+	r.commandMgr = mgr
+	r.model.SetCommandsManager(mgr)
 }
 
 func (r *REPL) SetAutoMemory(am *memory.AutoMemory) {
@@ -102,7 +113,12 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	tools.Register(tool.WaitAgentTool{Manager: mgr})
 	tools.Register(tool.ListAgentsTool{Manager: mgr})
 
-	// Notify TUI on completion
+	// Notify TUI on live updates and completion.
+	mgr.SetOnUpdate(func(sa *subagent.SubAgent) {
+		if r.program != nil {
+			r.program.Send(subAgentUpdateMsg{})
+		}
+	})
 	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
 		if r.program != nil {
 			r.program.Send(subAgentUpdateMsg{})
@@ -136,9 +152,36 @@ func (r *REPL) Run() error {
 			r.createSession()
 		}
 	}
+	r.primeInitialWindowSize(term.GetSize)
 
 	r.program = tea.NewProgram(r.model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	debug.Log("repl", "program created")
+	if r.mcpMgr != nil {
+		r.mcpMgr.SetOnUpdate(func(servers []plugin.MCPServerInfo) {
+			if r.program != nil {
+				r.program.Send(mcpServersMsg{Servers: servers})
+			}
+		})
+		defer r.mcpMgr.Close()
+	}
+	if r.commandMgr != nil {
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if r.commandMgr.Reload() && r.program != nil {
+						r.program.Send(skillsChangedMsg{})
+					}
+				case <-stop:
+					return
+				}
+			}
+		}()
+	}
 
 	// Wire the agent's approval handler into the TUI via channel bridge.
 	r.agent.SetApprovalHandler(func(toolName string, input string) permission.Decision {
@@ -173,6 +216,9 @@ func (r *REPL) Run() error {
 		time.Sleep(10 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
+		if r.mcpMgr != nil {
+			r.mcpMgr.StartBackground(context.Background())
+		}
 	}()
 
 	_, err := r.program.Run()
@@ -183,6 +229,15 @@ func (r *REPL) Run() error {
 		_ = r.store.Save(r.model.session)
 	}
 	return err
+}
+
+func (r *REPL) primeInitialWindowSize(getSize func(fd uintptr) (int, int, error)) {
+	width, height, err := getSize(os.Stdout.Fd())
+	if err != nil || width <= 0 || height <= 0 {
+		return
+	}
+	r.model.handleResize(width, height)
+	r.model.rebuildMarkdownRenderer()
 }
 
 // createSession creates a fresh session and wires it into the model.
