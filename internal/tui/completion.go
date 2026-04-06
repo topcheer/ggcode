@@ -194,7 +194,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/sessions":    "List saved sessions",
 	"/resume":      "Resume a previous session",
 	"/export":      "Export session to markdown",
-	"/model":       "Switch model",
+	"/model":       "Open model panel",
 	"/provider":    "Open provider manager",
 	"/clear":       "Clear conversation",
 	"/mcp":         "Show MCP servers",

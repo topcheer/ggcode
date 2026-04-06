@@ -651,18 +651,26 @@ func shouldApplyFirstLaunchAnthropicBootstrap(raw map[string]interface{}) bool {
 
 // ResolveActiveEndpoint resolves the selected vendor + endpoint into runtime settings.
 func (c *Config) ResolveActiveEndpoint() (*ResolvedEndpoint, error) {
+	return c.ResolveEndpoint(c.Vendor, c.Endpoint)
+}
+
+// ResolveEndpoint resolves the given vendor + endpoint into runtime settings.
+func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, error) {
 	if c == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
-	vc, ok := c.Vendors[c.Vendor]
+	vc, ok := c.Vendors[vendor]
 	if !ok {
-		return nil, fmt.Errorf("vendor %q is not configured", c.Vendor)
+		return nil, fmt.Errorf("vendor %q is not configured", vendor)
 	}
-	ep, ok := vc.Endpoints[c.Endpoint]
+	ep, ok := vc.Endpoints[endpoint]
 	if !ok {
-		return nil, fmt.Errorf("endpoint %q is not configured for vendor %q", c.Endpoint, c.Vendor)
+		return nil, fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
 	}
-	model := strings.TrimSpace(c.Model)
+	model := ""
+	if c.Vendor == vendor && c.Endpoint == endpoint {
+		model = strings.TrimSpace(c.Model)
+	}
 	if model == "" {
 		model = strings.TrimSpace(ep.SelectedModel)
 	}
@@ -670,14 +678,14 @@ func (c *Config) ResolveActiveEndpoint() (*ResolvedEndpoint, error) {
 		model = strings.TrimSpace(ep.DefaultModel)
 	}
 	if model == "" {
-		return nil, fmt.Errorf("endpoint %q for vendor %q has no active model", c.Endpoint, c.Vendor)
+		return nil, fmt.Errorf("endpoint %q for vendor %q has no active model", endpoint, vendor)
 	}
 	apiKey := strings.TrimSpace(ep.APIKey)
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(vc.APIKey)
 	}
 	if strings.TrimSpace(ep.BaseURL) == "" {
-		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", c.Endpoint, c.Vendor)
+		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", endpoint, vendor)
 	}
 	maxTokens := ep.MaxTokens
 	if maxTokens == 0 {
@@ -688,10 +696,10 @@ func (c *Config) ResolveActiveEndpoint() (*ResolvedEndpoint, error) {
 		contextWindow = inferContextWindow(model, ep.Protocol)
 	}
 	return &ResolvedEndpoint{
-		VendorID:      c.Vendor,
-		VendorName:    firstNonEmpty(vc.DisplayName, c.Vendor),
-		EndpointID:    c.Endpoint,
-		EndpointName:  firstNonEmpty(ep.DisplayName, c.Endpoint),
+		VendorID:      vendor,
+		VendorName:    firstNonEmpty(vc.DisplayName, vendor),
+		EndpointID:    endpoint,
+		EndpointName:  firstNonEmpty(ep.DisplayName, endpoint),
 		Protocol:      ep.Protocol,
 		BaseURL:       ep.BaseURL,
 		APIKey:        apiKey,
@@ -801,6 +809,28 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	return nil
 }
 
+// SetEndpointModels replaces the known models for a configured endpoint while preserving active selections.
+func (c *Config) SetEndpointModels(vendor, endpoint string, models []string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q is not configured", vendor)
+	}
+	ep, ok := vc.Endpoints[endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+	}
+	ep.Models = uniqueNonEmptyStrings(append(models, ep.SelectedModel, ep.DefaultModel)...)
+	vc.Endpoints[endpoint] = ep
+	c.Vendors[vendor] = vc
+	if c.Vendor == vendor && c.Endpoint == endpoint {
+		c.normalizeActiveModel()
+	}
+	return nil
+}
+
 func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 	if c == nil {
 		return false
@@ -898,6 +928,23 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func uniqueNonEmptyStrings(values ...string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // BuildSystemPrompt enhances the base system prompt with runtime context.

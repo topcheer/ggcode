@@ -91,6 +91,7 @@ type Model struct {
 	mode               permission.PermissionMode
 	pendingDiffConfirm *DiffConfirmMsg
 	fullscreen         bool
+	modelPanel         *modelPanelState
 	providerPanel      *providerPanelState
 	mcpPanel           *mcpPanelState
 	skillsPanel        *skillsPanelState
@@ -317,6 +318,10 @@ func (m *Model) cancelActiveRun() {
 	}
 	m.spinner.Stop()
 	m.statusActivity = m.t("status.cancelling")
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
+	m.resetActivityGroups()
 	if len(m.pendingSubmissions) > 0 {
 		m.restorePendingInput()
 	}
@@ -649,7 +654,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if msg.String() == "ctrl+c" && !m.loading && (m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0) {
+		if msg.String() == "ctrl+c" && !m.loading && (m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0) {
 			if m.exitConfirmPending {
 				m.quitting = true
 				return m, tea.Quit
@@ -659,6 +664,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Handle approval mode (selection list)
+		if m.modelPanel != nil {
+			return m.handleModelPanelKey(msg)
+		}
+
 		if m.providerPanel != nil {
 			return m.handleProviderPanelKey(msg)
 		}
@@ -851,6 +860,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case streamMsg:
+		if m.runCanceled {
+			return m, nil
+		}
 		m.closeToolActivityGroup()
 		m.flushGroupedActivitiesToOutput()
 		if !m.streamPrefixWritten {
@@ -958,6 +970,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolStatusMsg:
+		if m.runCanceled || !m.loading {
+			return m, nil
+		}
 		ts := ToolStatusMsg(msg)
 		m.updateActiveMCPTools(ts)
 		if ts.Running {
@@ -1008,6 +1023,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case providerModelsRefreshResultMsg:
+		if m.providerPanel != nil && m.providerPanel.refreshVendor == msg.vendor {
+			m.providerPanel.refreshing = false
+			m.providerPanel.refreshVendor = ""
+			currentEndpoint := m.providerPanel.selectedEndpoint()
+			currentModel := m.providerPanel.selectedModel()
+			m.providerPanel.selectEndpoint(currentEndpoint, currentModel, m.configView())
+			switch {
+			case msg.saveErr != nil:
+				m.providerPanel.message = m.t("panel.provider.refresh.save_failed", msg.saveErr.Error())
+			case msg.updated > 0 && msg.discoverErr != nil:
+				m.providerPanel.message = m.t("panel.provider.refresh.partial", msg.updated, msg.discovered, msg.discoverErr)
+			case msg.updated > 0:
+				m.providerPanel.message = m.t("panel.provider.refresh.success", msg.updated, msg.discovered)
+			case msg.discoverErr != nil:
+				m.providerPanel.message = m.t("panel.provider.refresh.failed", msg.discoverErr.Error())
+			default:
+				m.providerPanel.message = m.t("panel.provider.refresh.none")
+			}
+		}
+		return m, nil
+
+	case modelPanelRefreshResultMsg:
+		if m.modelPanel != nil {
+			m.modelPanel.refreshing = false
+			m.modelPanel.remote = msg.remote
+			m.modelPanel.models = uniqueStrings(msg.models)
+			if len(m.modelPanel.models) == 0 && m.config != nil && strings.TrimSpace(m.config.Model) != "" {
+				m.modelPanel.models = []string{m.config.Model}
+			}
+			if current := m.config.Model; strings.TrimSpace(current) != "" {
+				m.modelPanel.selected = indexOf(m.modelPanel.models, current)
+			}
+			if m.modelPanel.selected < 0 {
+				m.modelPanel.selected = 0
+			}
+			switch {
+			case msg.saveErr != nil:
+				m.modelPanel.message = m.t("panel.model.refresh.save_failed", msg.saveErr.Error())
+			case msg.discoverErr != nil:
+				m.modelPanel.message = m.t("panel.model.refresh.builtin_reason", msg.discoverErr.Error())
+			case msg.remote:
+				m.modelPanel.message = m.t("panel.model.refresh.remote_loaded", len(m.modelPanel.models))
+			default:
+				m.modelPanel.message = m.t("panel.model.refresh.builtin_loaded")
+			}
+		}
+		return m, nil
+
 	case mcpUninstallResultMsg:
 		if m.mcpPanel != nil {
 			if msg.err != nil {
@@ -1032,6 +1096,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case statusMsg:
+		if m.runCanceled || !m.loading {
+			return m, nil
+		}
 		m.statusActivity = msg.Activity
 		m.statusToolName = msg.ToolName
 		m.statusToolArg = msg.ToolArg

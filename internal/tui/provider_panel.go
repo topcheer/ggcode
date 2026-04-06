@@ -1,12 +1,17 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 type providerPanelState struct {
@@ -17,9 +22,21 @@ type providerPanelState struct {
 	endpointIndex int
 	models        []string
 	modelIndex    int
+	modelFilter   textinput.Model
 	editingField  string
 	editInput     textinput.Model
 	message       string
+	refreshing    bool
+	refreshVendor string
+}
+
+type providerModelsRefreshResultMsg struct {
+	vendor      string
+	updated     int
+	discovered  int
+	skipped     int
+	saveErr     error
+	discoverErr error
 }
 
 const (
@@ -31,7 +48,8 @@ const (
 func newProviderPanelFromConfig(cfg *ConfigView) *providerPanelState {
 	vendorIDs := cfg.VendorNames()
 	panel := &providerPanelState{
-		vendorIDs: vendorIDs,
+		vendorIDs:   vendorIDs,
+		modelFilter: newModelFilterInput(LangEnglish),
 	}
 	panel.selectVendor(cfg.Vendor)
 	panel.selectEndpoint(cfg.Endpoint, cfg.Model, cfg)
@@ -69,6 +87,8 @@ func (p *providerPanelState) selectEndpoint(endpoint, model string, cfg *ConfigV
 		p.endpointIndex = 0
 	}
 	p.models = cfg.ModelsForEndpoint(p.selectedVendor(), p.selectedEndpoint())
+	p.modelFilter.SetValue("")
+	p.modelFilter.Blur()
 	p.modelIndex = indexOf(p.models, model)
 	if p.modelIndex < 0 {
 		p.modelIndex = 0
@@ -81,6 +101,8 @@ func (p *providerPanelState) syncLists(cfg *ConfigView) {
 		p.endpointIndex = 0
 	}
 	p.models = cfg.ModelsForEndpoint(p.selectedVendor(), p.selectedEndpoint())
+	p.modelFilter.SetValue("")
+	p.modelFilter.Blur()
 	if p.modelIndex >= len(p.models) {
 		p.modelIndex = 0
 	}
@@ -195,7 +217,9 @@ func (m *Model) openProviderPanel() {
 	if m.config == nil {
 		return
 	}
+	m.modelPanel = nil
 	m.providerPanel = newProviderPanelFromConfig(m.configView())
+	m.providerPanel.modelFilter = newModelFilterInput(m.currentLanguage())
 }
 
 func (m *Model) closeProviderPanel() {
@@ -211,45 +235,53 @@ func (m *Model) renderProviderPanel() string {
 	vc := m.config.Vendors[panel.selectedVendor()]
 	ep := vc.Endpoints[panel.selectedEndpoint()]
 	apiKeyState := "missing"
-	if strings.TrimSpace(firstNonEmptyValue(ep.APIKey, vc.APIKey)) != "" {
-		apiKeyState = "configured"
+	if providerHasUsableAPIKey(firstNonEmptyValue(ep.APIKey, vc.APIKey)) {
+		apiKeyState = m.t("panel.provider.api_key.configured")
+	} else {
+		apiKeyState = m.t("panel.provider.api_key.missing")
 	}
 	baseURLState := ep.BaseURL
 	if baseURLState == "" {
-		baseURLState = "(not set)"
+		baseURLState = m.t("panel.provider.base_url.not_set")
 	}
 	model := panel.selectedModel()
 	if model == "" {
-		model = "(set with m)"
+		model = m.t("panel.provider.model.set_with_m")
 	}
+	window := buildModelListWindow(panel.models, panel.modelIndex, panel.modelFilter)
 
 	body := []string{
-		lipgloss.NewStyle().Bold(true).Render(" Vendors"),
+		lipgloss.NewStyle().Bold(true).Render(" " + m.t("panel.provider.vendors")),
 		m.renderProviderList(panel.vendorIDs, panel.vendorIndex, panel.focus == providerPanelFocusVendor),
 		"",
-		lipgloss.NewStyle().Bold(true).Render(" Endpoints"),
+		lipgloss.NewStyle().Bold(true).Render(" " + m.t("panel.provider.endpoints")),
 		m.renderProviderList(panel.endpointIDs, panel.endpointIndex, panel.focus == providerPanelFocusEndpoint),
 		"",
-		lipgloss.NewStyle().Bold(true).Render(" Models"),
-		m.renderProviderList(panel.models, panel.modelIndex, panel.focus == providerPanelFocusModel),
-		"",
-		fmt.Sprintf(" Active draft: %s / %s / %s", panel.selectedVendor(), panel.selectedEndpoint(), model),
-		fmt.Sprintf(" Protocol: %s", firstNonEmptyValue(ep.Protocol, "(unknown)")),
-		fmt.Sprintf(" API key: %s", apiKeyState),
-		fmt.Sprintf(" Base URL: %s", baseURLState),
-		fmt.Sprintf(" Tags: %s", strings.Join(ep.Tags, ", ")),
+		lipgloss.NewStyle().Bold(true).Render(" " + m.t("panel.provider.models")),
 	}
+	if window.filterEnabled {
+		body = append(body, panel.modelFilter.View())
+	}
+	body = append(body,
+		renderModelListWindow(m.renderProviderList, window, panel.focus == providerPanelFocusModel, m.currentLanguage()),
+		"",
+		fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
+		fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), firstNonEmptyValue(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
+		fmt.Sprintf(" %s: %s", m.t("panel.provider.api_key"), apiKeyState),
+		fmt.Sprintf(" %s: %s", m.t("panel.provider.base_url"), baseURLState),
+		fmt.Sprintf(" %s: %s", m.t("panel.provider.tags"), strings.Join(ep.Tags, ", ")),
+	)
 	if panel.editingField != "" {
 		body = append(body,
 			"",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" Edit "+panel.editingField),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" " + m.t("panel.provider.edit") + " " + providerEditFieldLabel(m.currentLanguage(), panel.editingField)),
 			panel.editInput.View(),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Enter save • Esc cancel"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" " + m.t("panel.provider.hint.edit")),
 		)
 	} else {
 		body = append(body,
 			"",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/Shift+Tab change focus • j/k move • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • Esc close"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" " + m.t("panel.provider.hint.main")),
 		)
 	}
 	if panel.message != "" {
@@ -261,7 +293,7 @@ func (m *Model) renderProviderPanel() string {
 
 func (m *Model) renderProviderList(items []string, selected int, focused bool) string {
 	if len(items) == 0 {
-		return "  (none)"
+		return "  " + m.t("panel.model_list.none")
 	}
 	rows := make([]string, 0, len(items))
 	for i, item := range items {
@@ -326,7 +358,9 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				return *m, nil
 			}
 			panel.editingField = ""
-			panel.message = "Saved."
+			panel.message = m.t("panel.provider.saved")
+			panel.refreshing = false
+			panel.refreshVendor = ""
 			return *m, nil
 		default:
 			var cmd tea.Cmd
@@ -334,16 +368,34 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return *m, cmd
 		}
 	}
+	if panel.focus == providerPanelFocusModel && panel.modelFilter.Focused() && modelFilterConsumesKey(msg.String()) {
+		var cmd tea.Cmd
+		panel.modelFilter, cmd = panel.modelFilter.Update(msg)
+		syncModelSelection(&panel.modelIndex, panel.models, panel.modelFilter)
+		return *m, cmd
+	}
 
 	cfgView := m.configView()
 	switch msg.String() {
 	case "esc":
+		if panel.modelFilter.Focused() {
+			panel.modelFilter.Blur()
+			return *m, nil
+		}
 		m.closeProviderPanel()
 		return *m, nil
+	case "/":
+		if panel.focus == providerPanelFocusModel && shouldEnableModelFilter(panel.models) {
+			panel.modelFilter.Focus()
+			return *m, nil
+		}
+		return *m, nil
 	case "tab", "right":
+		panel.modelFilter.Blur()
 		panel.focus = (panel.focus + 1) % 3
 		return *m, nil
 	case "shift+tab", "left":
+		panel.modelFilter.Blur()
 		panel.focus = (panel.focus + 2) % 3
 		return *m, nil
 	case "up", "k":
@@ -354,6 +406,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				panel.endpointIndex = 0
 				panel.modelIndex = 0
 				panel.syncLists(cfgView)
+				return *m, m.refreshProviderModelsForVendor(panel.selectedVendor())
 			}
 		case providerPanelFocusEndpoint:
 			if len(panel.endpointIDs) > 0 {
@@ -363,7 +416,10 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		case providerPanelFocusModel:
 			if len(panel.models) > 0 {
-				panel.modelIndex = (panel.modelIndex - 1 + len(panel.models)) % len(panel.models)
+				if panel.modelFilter.Focused() && msg.String() == "k" {
+					break
+				}
+				moveFilteredModelSelection(&panel.modelIndex, panel.models, panel.modelFilter, -1)
 			}
 		}
 		return *m, nil
@@ -375,6 +431,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				panel.endpointIndex = 0
 				panel.modelIndex = 0
 				panel.syncLists(cfgView)
+				return *m, m.refreshProviderModelsForVendor(panel.selectedVendor())
 			}
 		case providerPanelFocusEndpoint:
 			if len(panel.endpointIDs) > 0 {
@@ -384,7 +441,10 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		case providerPanelFocusModel:
 			if len(panel.models) > 0 {
-				panel.modelIndex = (panel.modelIndex + 1) % len(panel.models)
+				if panel.modelFilter.Focused() && msg.String() == "j" {
+					break
+				}
+				moveFilteredModelSelection(&panel.modelIndex, panel.models, panel.modelFilter, 1)
 			}
 		}
 		return *m, nil
@@ -419,8 +479,116 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			panel.message = "Saved config, but current runtime is still inactive: " + err.Error()
 			return *m, nil
 		}
-		panel.message = "Saved and activated."
+		panel.message = m.t("panel.provider.saved_activated")
 		return *m, nil
 	}
 	return *m, nil
+}
+
+func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
+	if m.config == nil {
+		return nil
+	}
+	vc, ok := m.config.Vendors[vendor]
+	if !ok {
+		return nil
+	}
+
+	refreshable := false
+	for endpointID, endpoint := range vc.Endpoints {
+		if !providerHasUsableAPIKey(firstNonEmptyValue(endpoint.APIKey, vc.APIKey)) {
+			continue
+		}
+		if strings.TrimSpace(endpoint.BaseURL) == "" {
+			continue
+		}
+		if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" {
+			continue
+		}
+		if _, err := m.config.ResolveEndpoint(vendor, endpointID); err == nil {
+			refreshable = true
+			break
+		}
+	}
+	if !refreshable {
+		return nil
+	}
+
+	if m.providerPanel != nil {
+		m.providerPanel.refreshing = true
+		m.providerPanel.refreshVendor = vendor
+		m.providerPanel.message = m.t("panel.provider.refreshing_vendor", vendor)
+	}
+
+	return func() tea.Msg {
+		result := providerModelsRefreshResultMsg{vendor: vendor}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		for endpointID, endpoint := range vc.Endpoints {
+			if !providerHasUsableAPIKey(firstNonEmptyValue(endpoint.APIKey, vc.APIKey)) || strings.TrimSpace(endpoint.BaseURL) == "" {
+				result.skipped++
+				continue
+			}
+			if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" {
+				result.skipped++
+				continue
+			}
+
+			resolved, err := m.config.ResolveEndpoint(vendor, endpointID)
+			if err != nil {
+				result.skipped++
+				if result.discoverErr == nil {
+					result.discoverErr = err
+				}
+				continue
+			}
+
+			models, err := provider.DiscoverModels(ctx, resolved)
+			if err != nil {
+				if result.discoverErr == nil {
+					result.discoverErr = fmt.Errorf("%s: %w", endpointID, err)
+				}
+				continue
+			}
+			if err := m.config.SetEndpointModels(vendor, endpointID, models); err != nil {
+				if result.discoverErr == nil {
+					result.discoverErr = err
+				}
+				continue
+			}
+			result.updated++
+			result.discovered += len(models)
+		}
+
+		if result.updated > 0 {
+			if err := m.config.Save(); err != nil {
+				result.saveErr = err
+			}
+		}
+		return result
+	}
+}
+
+func providerHasUsableAPIKey(value string) bool {
+	value = strings.TrimSpace(config.ExpandEnv(value))
+	if value == "" {
+		return false
+	}
+	return !(strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}"))
+}
+
+func providerEditFieldLabel(lang Language, field string) string {
+	switch field {
+	case "vendor api key":
+		return tr(lang, "panel.provider.edit.vendor_api_key")
+	case "endpoint api key":
+		return tr(lang, "panel.provider.edit.endpoint_api_key")
+	case "endpoint base url":
+		return tr(lang, "panel.provider.edit.endpoint_base_url")
+	case "custom model":
+		return tr(lang, "panel.provider.edit.custom_model")
+	default:
+		return field
+	}
 }

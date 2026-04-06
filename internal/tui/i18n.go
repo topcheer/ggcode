@@ -38,6 +38,24 @@ func (m *Model) setLanguage(lang string) {
 		m.config.Language = string(m.language)
 	}
 	m.input.Placeholder = m.t("input.placeholder")
+	if m.providerPanel != nil {
+		current := m.providerPanel.modelFilter.Value()
+		focused := m.providerPanel.modelFilter.Focused()
+		m.providerPanel.modelFilter = newModelFilterInput(m.currentLanguage())
+		m.providerPanel.modelFilter.SetValue(current)
+		if focused {
+			m.providerPanel.modelFilter.Focus()
+		}
+	}
+	if m.modelPanel != nil {
+		current := m.modelPanel.filter.Value()
+		focused := m.modelPanel.filter.Focused()
+		m.modelPanel.filter = newModelFilterInput(m.currentLanguage())
+		m.modelPanel.filter.SetValue(current)
+		if focused {
+			m.modelPanel.filter.Focus()
+		}
+	}
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	if len(m.langOptions) > 0 {
@@ -358,6 +376,106 @@ func enCatalog(key string) string {
 		return "Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Ask when a tool has no explicit rule\n  plan        Read-only exploration; deny writes and commands\n  auto        Allow safe operations, deny dangerous ones\n  bypass      Allow almost everything; only stop on critical actions\n  autopilot   bypass + keep going when the model asks back\n\n"
 	case "input.placeholder":
 		return "Type a message..."
+	case "panel.model_filter.prompt":
+		return "Filter> "
+	case "panel.model_filter.placeholder":
+		return "type to filter models"
+	case "panel.model_list.none":
+		return "(none)"
+	case "panel.model_list.no_matches":
+		return "(no matches)"
+	case "panel.model_list.showing":
+		return "showing %d/%d models"
+	case "panel.model_list.hidden_above":
+		return "%d above"
+	case "panel.model_list.hidden_more":
+		return "%d more"
+	case "panel.provider.vendors":
+		return "Vendors"
+	case "panel.provider.endpoints":
+		return "Endpoints"
+	case "panel.provider.models":
+		return "Models"
+	case "panel.provider.active_draft":
+		return "Active draft"
+	case "panel.provider.protocol":
+		return "Protocol"
+	case "panel.provider.protocol.unknown":
+		return "(unknown)"
+	case "panel.provider.api_key":
+		return "API key"
+	case "panel.provider.api_key.missing":
+		return "missing"
+	case "panel.provider.api_key.configured":
+		return "configured"
+	case "panel.provider.base_url":
+		return "Base URL"
+	case "panel.provider.base_url.not_set":
+		return "(not set)"
+	case "panel.provider.tags":
+		return "Tags"
+	case "panel.provider.model.set_with_m":
+		return "(set with m)"
+	case "panel.provider.edit":
+		return "Edit"
+	case "panel.provider.edit.vendor_api_key":
+		return "vendor api key"
+	case "panel.provider.edit.endpoint_api_key":
+		return "endpoint api key"
+	case "panel.provider.edit.endpoint_base_url":
+		return "endpoint base url"
+	case "panel.provider.edit.custom_model":
+		return "custom model"
+	case "panel.provider.hint.edit":
+		return "Enter save • Esc cancel"
+	case "panel.provider.hint.main":
+		return "Tab/Shift+Tab change focus • j/k move • / focus filter • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • Esc close"
+	case "panel.provider.saved":
+		return "Saved."
+	case "panel.provider.saved_activated":
+		return "Saved and activated."
+	case "panel.provider.refreshing_vendor":
+		return "Refreshing models for %s..."
+	case "panel.provider.refresh.save_failed":
+		return "Refreshed models, but saving config failed: %s"
+	case "panel.provider.refresh.partial":
+		return "Refreshed %d endpoint(s), discovered %d model(s). Some endpoints failed: %v"
+	case "panel.provider.refresh.success":
+		return "Refreshed %d endpoint(s), discovered %d model(s)."
+	case "panel.provider.refresh.failed":
+		return "Model refresh failed: %s"
+	case "panel.provider.refresh.none":
+		return "No refreshable endpoints for this vendor."
+	case "panel.model.models":
+		return "Models"
+	case "panel.model.vendor":
+		return "Vendor"
+	case "panel.model.endpoint":
+		return "Endpoint"
+	case "panel.model.protocol":
+		return "Protocol"
+	case "panel.model.source":
+		return "Source"
+	case "panel.model.source.builtin":
+		return "built-in"
+	case "panel.model.source.remote":
+		return "remote"
+	case "panel.model.refreshing":
+		return "Refreshing latest models..."
+	case "panel.model.hint.main":
+		return "j/k move • Enter or s apply • r refresh • / focus filter • Esc close • /model <name> direct switch"
+	case "panel.model.saved_runtime_inactive":
+		return "Saved config, but current runtime is still inactive: %s"
+	case "panel.model.switched":
+		return "Switched model to %s."
+	case "panel.model.refresh.save_failed":
+		return "Refreshed models, but saving config failed: %s"
+	case "panel.model.refresh.builtin_reason":
+		return "Using built-in models: %s"
+	case "panel.model.refresh.remote_loaded":
+		return "Loaded %d remote model(s)."
+	case "panel.model.refresh.builtin_loaded":
+		return "Loaded built-in models."
 	case "command.unknown":
 		return "Unknown command: %s\n"
 	case "command.help_hint":
@@ -379,7 +497,7 @@ func enCatalog(key string) string {
 	case "command.model_failed":
 		return "Failed to switch model: %v\n\n"
 	case "command.model_current":
-		return "Current model: %s (vendor: %s)\nUsage: /model <model-name>\n\n"
+		return "Current model: %s (vendor: %s)\nUse /model to open the model panel or /model <model-name> to switch directly.\n\n"
 	case "command.provider_unknown":
 		return "Unknown vendor: %s (available: %v)\n\n"
 	case "command.provider_switched":
@@ -628,7 +746,7 @@ func enCatalog(key string) string {
   /sessions          List all saved sessions
   /resume <id>       Resume a previous session
   /export <id>       Export session to markdown file
-  /model <name>      Switch model
+  /model [name]      Open model panel or switch directly
   /provider [vendor] Open provider manager
   /lang [code]       Choose or switch interface language
   /skills            Browse available skills
@@ -877,6 +995,106 @@ func zhCatalog(key string) string {
 		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass|autopilot>\n  supervised  未显式配置的工具会询问\n  plan        严格只读探索；拒绝写入和命令\n  auto        自动允许安全操作，拒绝危险操作\n  bypass      基本全放行，只在关键操作时停下\n  autopilot   等同 bypass，并在模型反问时自动继续\n\n"
 	case "input.placeholder":
 		return "输入消息..."
+	case "panel.model_filter.prompt":
+		return "筛选> "
+	case "panel.model_filter.placeholder":
+		return "输入以筛选模型"
+	case "panel.model_list.none":
+		return "(空)"
+	case "panel.model_list.no_matches":
+		return "(无匹配)"
+	case "panel.model_list.showing":
+		return "显示 %d/%d 个模型"
+	case "panel.model_list.hidden_above":
+		return "上方还有 %d 个"
+	case "panel.model_list.hidden_more":
+		return "还有 %d 个"
+	case "panel.provider.vendors":
+		return "供应商"
+	case "panel.provider.endpoints":
+		return "端点"
+	case "panel.provider.models":
+		return "模型"
+	case "panel.provider.active_draft":
+		return "当前草稿"
+	case "panel.provider.protocol":
+		return "协议"
+	case "panel.provider.protocol.unknown":
+		return "(未知)"
+	case "panel.provider.api_key":
+		return "API Key"
+	case "panel.provider.api_key.missing":
+		return "未配置"
+	case "panel.provider.api_key.configured":
+		return "已配置"
+	case "panel.provider.base_url":
+		return "Base URL"
+	case "panel.provider.base_url.not_set":
+		return "(未设置)"
+	case "panel.provider.tags":
+		return "标签"
+	case "panel.provider.model.set_with_m":
+		return "(按 m 设置)"
+	case "panel.provider.edit":
+		return "编辑"
+	case "panel.provider.edit.vendor_api_key":
+		return "供应商 API Key"
+	case "panel.provider.edit.endpoint_api_key":
+		return "端点 API Key"
+	case "panel.provider.edit.endpoint_base_url":
+		return "端点 Base URL"
+	case "panel.provider.edit.custom_model":
+		return "自定义模型"
+	case "panel.provider.hint.edit":
+		return "Enter 保存 • Esc 取消"
+	case "panel.provider.hint.main":
+		return "Tab/Shift+Tab 切换焦点 • j/k 移动 • / 聚焦筛选 • Enter 或 s 应用 • a 供应商 key • u 端点 key • b Base URL • m 自定义模型 • Esc 关闭"
+	case "panel.provider.saved":
+		return "已保存。"
+	case "panel.provider.saved_activated":
+		return "已保存并激活。"
+	case "panel.provider.refreshing_vendor":
+		return "正在刷新 %s 的模型..."
+	case "panel.provider.refresh.save_failed":
+		return "模型已刷新，但保存配置失败：%s"
+	case "panel.provider.refresh.partial":
+		return "已刷新 %d 个端点，发现 %d 个模型。部分端点失败：%v"
+	case "panel.provider.refresh.success":
+		return "已刷新 %d 个端点，发现 %d 个模型。"
+	case "panel.provider.refresh.failed":
+		return "模型刷新失败：%s"
+	case "panel.provider.refresh.none":
+		return "这个供应商没有可刷新的端点。"
+	case "panel.model.models":
+		return "模型"
+	case "panel.model.vendor":
+		return "供应商"
+	case "panel.model.endpoint":
+		return "端点"
+	case "panel.model.protocol":
+		return "协议"
+	case "panel.model.source":
+		return "来源"
+	case "panel.model.source.builtin":
+		return "内置"
+	case "panel.model.source.remote":
+		return "远端"
+	case "panel.model.refreshing":
+		return "正在刷新最新模型..."
+	case "panel.model.hint.main":
+		return "j/k 移动 • Enter 或 s 应用 • r 刷新 • / 聚焦筛选 • Esc 关闭 • /model <name> 直接切换"
+	case "panel.model.saved_runtime_inactive":
+		return "配置已保存，但当前运行时仍未激活：%s"
+	case "panel.model.switched":
+		return "已切换模型为 %s。"
+	case "panel.model.refresh.save_failed":
+		return "模型已刷新，但保存配置失败：%s"
+	case "panel.model.refresh.builtin_reason":
+		return "使用内置模型：%s"
+	case "panel.model.refresh.remote_loaded":
+		return "已加载 %d 个远端模型。"
+	case "panel.model.refresh.builtin_loaded":
+		return "已加载内置模型。"
 	case "command.unknown":
 		return "未知命令：%s\n"
 	case "command.help_hint":
@@ -898,7 +1116,7 @@ func zhCatalog(key string) string {
 	case "command.model_failed":
 		return "切换模型失败：%v\n\n"
 	case "command.model_current":
-		return "当前模型：%s（供应商：%s）\n用法：/model <model-name>\n\n"
+		return "当前模型：%s（供应商：%s）\n使用 /model 打开模型面板，或用 /model <model-name> 直接切换。\n\n"
 	case "command.provider_unknown":
 		return "未知供应商：%s（可用：%v）\n\n"
 	case "command.provider_switched":
@@ -1147,7 +1365,7 @@ func zhCatalog(key string) string {
   /sessions          列出已保存会话
   /resume <id>       恢复历史会话
   /export <id>       导出会话为 Markdown 文件
-  /model <name>      切换模型
+  /model [name]      打开模型面板或直接切换
   /provider [vendor] 打开供应商管理界面
   /lang [code]       选择或切换界面语言
   /skills            浏览可用 skills

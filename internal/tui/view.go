@@ -742,6 +742,8 @@ func (m Model) sidebarActivity() string {
 
 func (m Model) renderContextPanel() string {
 	switch {
+	case m.modelPanel != nil:
+		return m.renderModelPanel()
 	case m.mcpPanel != nil:
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:
@@ -802,7 +804,7 @@ func (m Model) renderContextPanel() string {
 func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
 	title := " " + m.t("panel.composer")
-	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0 {
+	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0 {
 		title = " " + m.t("panel.composer_locked")
 	}
 

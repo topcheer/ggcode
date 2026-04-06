@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,6 +306,19 @@ func TestProviderCommandOpensProviderPanel(t *testing.T) {
 	}
 }
 
+func TestModelCommandOpensModelPanel(t *testing.T) {
+	m := newTestModel()
+	m.SetConfig(config.DefaultConfig())
+
+	cmd := m.handleCommand("/model")
+	if cmd == nil {
+		t.Fatal("expected /model to open panel and refresh models")
+	}
+	if m.modelPanel == nil {
+		t.Fatal("expected model panel to be open")
+	}
+}
+
 type fakeMCPManager struct {
 	retried     []string
 	installed   []config.MCPServerConfig
@@ -482,6 +497,145 @@ func TestProviderPanelCtrlCUsesGlobalExitFlow(t *testing.T) {
 	}
 	if m2.providerPanel == nil {
 		t.Fatal("expected provider panel to remain open until explicit quit or esc")
+	}
+}
+
+func TestModelPanelCtrlCUsesGlobalExitFlow(t *testing.T) {
+	m := newTestModel()
+	m.SetConfig(config.DefaultConfig())
+	m.modelPanel = &modelPanelState{models: []string{"gpt-4o-mini"}}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatal("expected first ctrl-c to arm exit confirmation")
+	}
+	m2 := next.(Model)
+	if !m2.exitConfirmPending {
+		t.Fatal("expected ctrl-c in model panel to arm exit confirmation")
+	}
+	if m2.modelPanel == nil {
+		t.Fatal("expected model panel to remain open until explicit quit or esc")
+	}
+}
+
+func TestModelPanelRefreshFallsBackToBuiltInModels(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg.Vendors = map[string]config.VendorConfig{
+		"google": {
+			DisplayName: "Google Gemini",
+			APIKey:      "test-key",
+			Endpoints: map[string]config.EndpointConfig{
+				"api": {
+					DisplayName:   "Gemini API",
+					Protocol:      "gemini",
+					BaseURL:       "https://127.0.0.1.invalid",
+					DefaultModel:  "gemini-1.5-flash",
+					SelectedModel: "gemini-1.5-flash",
+					Models:        []string{"gemini-1.5-flash", "gemini-1.5-pro"},
+				},
+			},
+		},
+	}
+	cfg.Vendor = "google"
+	cfg.Endpoint = "api"
+	cfg.Model = "gemini-1.5-flash"
+
+	m := newTestModel()
+	m.SetConfig(cfg)
+	cmd := m.openModelPanel()
+	if cmd == nil {
+		t.Fatal("expected openModelPanel to return refresh command")
+	}
+
+	next, cmd2 := m.Update(cmd())
+	if cmd2 != nil {
+		t.Fatal("expected model refresh result to update synchronously")
+	}
+	m2 := next.(Model)
+	if m2.modelPanel == nil {
+		t.Fatal("expected model panel to remain open")
+	}
+	if len(m2.modelPanel.models) != 2 || m2.modelPanel.models[0] != "gemini-1.5-flash" {
+		t.Fatalf("expected built-in models fallback, got %#v", m2.modelPanel.models)
+	}
+	if !strings.Contains(m2.modelPanel.message, "Using built-in models") && !strings.Contains(m2.modelPanel.message, "built-in") {
+		t.Fatalf("expected built-in fallback message, got %q", m2.modelPanel.message)
+	}
+}
+
+func TestProviderPanelVendorSwitchRefreshesModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/models" {
+			t.Fatalf("expected /v1/models, got %s", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("expected bearer auth, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"latest-model"},{"id":"fallback-model"}]}`))
+	}))
+	defer server.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg.Vendors = map[string]config.VendorConfig{
+		"alpha": {
+			DisplayName: "Alpha",
+			Endpoints: map[string]config.EndpointConfig{
+				"api": {
+					DisplayName:   "Alpha API",
+					Protocol:      "openai",
+					BaseURL:       server.URL + "/v1",
+					DefaultModel:  "alpha-default",
+					SelectedModel: "alpha-default",
+					Models:        []string{"alpha-default"},
+				},
+			},
+		},
+		"beta": {
+			DisplayName: "Beta",
+			APIKey:      "test-key",
+			Endpoints: map[string]config.EndpointConfig{
+				"api": {
+					DisplayName:   "Beta API",
+					Protocol:      "openai",
+					BaseURL:       server.URL + "/v1",
+					DefaultModel:  "beta-default",
+					SelectedModel: "beta-default",
+					Models:        []string{"beta-default"},
+				},
+			},
+		},
+	}
+	cfg.Vendor = "alpha"
+	cfg.Endpoint = "api"
+	cfg.Model = "alpha-default"
+
+	m := newTestModel()
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if cmd == nil {
+		t.Fatal("expected vendor switch to trigger async model refresh")
+	}
+	m = next.(Model)
+	if m.providerPanel == nil || !m.providerPanel.refreshing {
+		t.Fatal("expected provider panel refresh state")
+	}
+
+	msg := cmd()
+	next, cmd = m.Update(msg)
+	if cmd != nil {
+		t.Fatal("expected refresh result to update synchronously")
+	}
+	m2 := next.(Model)
+	if got := m2.config.Vendors["beta"].Endpoints["api"].Models; len(got) < 2 || got[0] != "latest-model" {
+		t.Fatalf("expected refreshed models to be stored, got %#v", got)
+	}
+	if m2.providerPanel == nil || !strings.Contains(m2.providerPanel.message, "Refreshed 1 endpoint") {
+		t.Fatalf("expected provider refresh success message, got %+v", m2.providerPanel)
 	}
 }
 
