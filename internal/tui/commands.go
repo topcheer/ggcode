@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/version"
 	"runtime"
 )
 
@@ -258,6 +259,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleConfigCommand(parts)
 		case "/status":
 			return m.handleStatusCommand()
+		case "/update":
+			return m.handleUpdateCommand()
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
@@ -765,7 +768,7 @@ func (m *Model) handleBugCommand() tea.Cmd {
 		b.WriteString(m.t("bug.title"))
 
 		// Version info
-		b.WriteString(m.t("bug.version"))
+		b.WriteString(m.t("bug.version", version.Display()))
 		b.WriteString(m.t("bug.os", runtime.GOOS, runtime.GOARCH))
 		b.WriteString(m.t("bug.go", runtime.Version()))
 
@@ -884,6 +887,7 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 func (m *Model) handleStatusCommand() tea.Cmd {
 	var b strings.Builder
 	b.WriteString(m.styles.title.Render(m.t("status.title")))
+	b.WriteString(fmt.Sprintf("  Version:     %s\n", version.Display()))
 	b.WriteString(fmt.Sprintf("  Vendor:      %s\n", m.config.Vendor))
 	b.WriteString(fmt.Sprintf("  Endpoint:    %s\n", m.config.Endpoint))
 	b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
@@ -908,6 +912,7 @@ func (m *Model) handleStatusCommand() tea.Cmd {
 		}
 	}
 	b.WriteString(fmt.Sprintf("  MCP Servers: %d connected (%d total)\n", connected, len(m.mcpServers)))
+	b.WriteString(fmt.Sprintf("  Update:      %s\n", m.updateStatusSummary()))
 	b.WriteString("\n")
 	m.output.WriteString(b.String())
 	return nil

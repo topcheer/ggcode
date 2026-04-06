@@ -139,7 +139,9 @@ def ensure_installed() -> Path:
 
 def main() -> int:
     binary = ensure_installed()
-    result = subprocess.run([str(binary), *sys.argv[1:]])
+    env = dict(os.environ)
+    env["GGCODE_WRAPPER_KIND"] = "python"
+    result = subprocess.run([str(binary), *sys.argv[1:]], env=env)
     return result.returncode
 
 

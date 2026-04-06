@@ -319,6 +319,31 @@ func TestModelCommandOpensModelPanel(t *testing.T) {
 	}
 }
 
+func TestUpdateCommandWithoutServiceShowsUnavailable(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.handleCommand("/update")
+	if cmd != nil {
+		t.Fatal("expected /update without service to respond inline")
+	}
+	if !strings.Contains(m.output.String(), "Update is unavailable") {
+		t.Fatalf("expected unavailable message, got %q", m.output.String())
+	}
+}
+
+func TestSidebarShowsUpdateHintWhenAvailable(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(140, 40)
+	m.updateInfo = updateCheckResultMsg{}.Result
+	m.updateInfo.HasUpdate = true
+	m.updateInfo.LatestVersion = "v1.2.3"
+
+	sidebar := m.renderSidebar(30)
+	if !strings.Contains(sidebar, "Run /update") {
+		t.Fatalf("expected update hint in sidebar, got %q", sidebar)
+	}
+}
+
 type fakeMCPManager struct {
 	retried     []string
 	installed   []config.MCPServerConfig

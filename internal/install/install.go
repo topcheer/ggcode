@@ -45,15 +45,50 @@ type Result struct {
 	ArchiveURL string
 }
 
+type BinaryResult struct {
+	Version    string
+	Target     Target
+	BinaryData []byte
+	ArchiveURL string
+}
+
 func Install(ctx context.Context, opts Options) (Result, error) {
+	binary, err := DownloadBinary(ctx, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	installDir, err := ResolveInstallDir(opts.Dir)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		return Result{}, fmt.Errorf("create install dir: %w", err)
+	}
+
+	binaryPath := filepath.Join(installDir, binary.Target.BinaryName)
+	if err := WriteExecutable(binaryPath, binary.BinaryData); err != nil {
+		return Result{}, err
+	}
+
+	return Result{
+		Path:       binaryPath,
+		Version:    binary.Version,
+		ArchiveURL: binary.ArchiveURL,
+	}, nil
+}
+
+func DownloadBinary(ctx context.Context, opts Options) (BinaryResult, error) {
 	goos := firstNonEmpty(opts.PlatformGOOS, runtime.GOOS)
 	goarch := firstNonEmpty(opts.PlatformGOARCH, runtime.GOARCH)
 	target, err := DetectTarget(goos, goarch)
 	if err != nil {
-		return Result{}, err
+		return BinaryResult{}, err
 	}
 
-	version := NormalizeVersion(opts.Version)
+	version, err := ResolveReleaseVersion(ctx, opts.HTTPClient, opts.Version)
+	if err != nil {
+		return BinaryResult{}, err
+	}
 	client := opts.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -64,37 +99,25 @@ func Install(ctx context.Context, opts Options) (Result, error) {
 
 	archiveData, err := download(ctx, client, archiveURL)
 	if err != nil {
-		return Result{}, fmt.Errorf("download archive: %w", err)
+		return BinaryResult{}, fmt.Errorf("download archive: %w", err)
 	}
 	checksumData, err := download(ctx, client, checksumURL)
 	if err != nil {
-		return Result{}, fmt.Errorf("download checksums: %w", err)
+		return BinaryResult{}, fmt.Errorf("download checksums: %w", err)
 	}
 	if err := verifyArchive(target.ArchiveName, archiveData, checksumData); err != nil {
-		return Result{}, err
+		return BinaryResult{}, err
 	}
 
 	binaryData, err := extractBinary(target, archiveData)
 	if err != nil {
-		return Result{}, err
+		return BinaryResult{}, err
 	}
 
-	installDir, err := ResolveInstallDir(opts.Dir)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := os.MkdirAll(installDir, 0o755); err != nil {
-		return Result{}, fmt.Errorf("create install dir: %w", err)
-	}
-
-	binaryPath := filepath.Join(installDir, target.BinaryName)
-	if err := writeExecutable(binaryPath, binaryData); err != nil {
-		return Result{}, err
-	}
-
-	return Result{
-		Path:       binaryPath,
+	return BinaryResult{
+		Target:     target,
 		Version:    version,
+		BinaryData: binaryData,
 		ArchiveURL: archiveURL,
 	}, nil
 }
@@ -159,6 +182,35 @@ func ReleaseBaseURL(version string) string {
 		return fmt.Sprintf("https://github.com/%s/%s/releases/latest/download", owner, repo)
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/releases/download/%s", owner, repo, NormalizeVersion(version))
+}
+
+func ResolveReleaseVersion(ctx context.Context, client *http.Client, version string) (string, error) {
+	version = NormalizeVersion(version)
+	if version != "latest" {
+		return version, nil
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://github.com/%s/%s/releases/latest", owner, repo), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("resolve latest release returned %s", resp.Status)
+	}
+	finalURL := resp.Request.URL.Path
+	const marker = "/releases/tag/"
+	idx := strings.Index(finalURL, marker)
+	if idx < 0 {
+		return "", fmt.Errorf("could not resolve latest release from %s", resp.Request.URL.String())
+	}
+	return strings.TrimSpace(finalURL[idx+len(marker):]), nil
 }
 
 func ResolveInstallDir(explicit string) (string, error) {
@@ -274,7 +326,7 @@ func extractTarGzBinary(name string, archiveData []byte) ([]byte, error) {
 	return nil, fmt.Errorf("binary %s not found in archive", name)
 }
 
-func writeExecutable(path string, data []byte) error {
+func WriteExecutable(path string, data []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o755); err != nil {
 		return fmt.Errorf("write binary: %w", err)
@@ -282,6 +334,10 @@ func writeExecutable(path string, data []byte) error {
 	if err := os.Chmod(tmp, 0o755); err != nil && runtime.GOOS != "windows" {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("chmod binary: %w", err)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("remove old binary: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)

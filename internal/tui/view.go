@@ -237,6 +237,7 @@ func (m Model) renderSidebar(totalHeight int) string {
 		m.renderSidebarContextSection(),
 		"",
 		m.renderSidebarModeSection(),
+		m.renderSidebarUpdateSection(),
 		"",
 		m.renderSidebarMCPSection(),
 	}, "\n")
