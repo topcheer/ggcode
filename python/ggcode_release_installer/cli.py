@@ -29,15 +29,15 @@ def normalize_version() -> str:
 
 
 def resolve_target() -> tuple[str, str]:
-    platform = sys.platform
-    if platform.startswith("linux"):
+    system = sys.platform
+    if system.startswith("linux"):
         goos = "linux"
-    elif platform == "darwin":
+    elif system == "darwin":
         goos = "darwin"
-    elif platform in ("win32", "cygwin"):
+    elif system in ("win32", "cygwin"):
         goos = "windows"
     else:
-        raise RuntimeError(f"Unsupported platform: {platform}")
+        raise RuntimeError(f"Unsupported platform: {system}")
 
     machine = platform.machine().lower() or os.environ.get("PROCESSOR_ARCHITECTURE", "").lower()
     if machine in ("x86_64", "amd64"):
