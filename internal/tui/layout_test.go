@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -470,6 +471,54 @@ func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	}
 	if !strings.Contains(view, "Mode policy") || !strings.Contains(view, "approval") {
 		t.Error("expected mode policy section in sidebar")
+	}
+}
+
+func TestWideLayoutSidebarMatchesColumnHeight(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 40)
+
+	header := ""
+	if m.topHeaderEnabled() {
+		header = m.renderHeader()
+	}
+	startupBanner := m.renderStartupBanner()
+	actionPanel := m.renderContextPanel()
+	statusBar := m.renderStatusBar()
+	composer := m.renderComposerPanel()
+
+	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
+	if actionPanel != "" {
+		availableHeight -= lipgloss.Height(actionPanel)
+	}
+	if statusBar != "" {
+		availableHeight -= lipgloss.Height(statusBar)
+	}
+	if availableHeight < 8 {
+		availableHeight = 8
+	}
+
+	sections := []string{}
+	if header != "" {
+		sections = append(sections, header)
+	}
+	if startupBanner != "" {
+		sections = append(sections, startupBanner)
+	}
+	sections = append(sections, m.renderConversationPanel(availableHeight))
+	if actionPanel != "" {
+		sections = append(sections, actionPanel)
+	}
+	if statusBar != "" {
+		sections = append(sections, statusBar)
+	}
+	sections = append(sections, composer)
+
+	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	sidebar := m.renderSidebar(lipgloss.Height(left))
+
+	if lipgloss.Height(sidebar) != lipgloss.Height(left) {
+		t.Fatalf("expected sidebar height %d to match left column height %d", lipgloss.Height(sidebar), lipgloss.Height(left))
 	}
 }
 

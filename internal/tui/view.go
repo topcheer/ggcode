@@ -40,7 +40,10 @@ func (m Model) View() string {
 
 	conversation := m.renderConversationPanel(availableHeight)
 
-	sections := []string{header}
+	sections := make([]string, 0, 6)
+	if header != "" {
+		sections = append(sections, header)
+	}
 	if startupBanner != "" {
 		sections = append(sections, startupBanner)
 	}
@@ -56,7 +59,7 @@ func (m Model) View() string {
 	if !m.sidebarEnabled() {
 		return left
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", m.renderSidebar())
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", m.renderSidebar(lipgloss.Height(left)))
 }
 
 func (m Model) conversationInnerWidth() int {
@@ -203,7 +206,7 @@ func (m Model) renderStartupBanner() string {
 	return m.renderContextBox(m.t("panel.startup"), m.t("startup.banner"), lipgloss.Color("11"))
 }
 
-func (m Model) renderSidebar() string {
+func (m Model) renderSidebar(totalHeight int) string {
 	vendor, endpoint, model := m.currentSelection()
 	sessionLine := m.t("session.ephemeral")
 	if m.session != nil && m.session.ID != "" {
@@ -237,11 +240,13 @@ func (m Model) renderSidebar() string {
 		"",
 		m.renderSidebarMCPSection(),
 	}, "\n")
+	innerHeight := max(lipgloss.Height(body), totalHeight-2)
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1).
+		Height(innerHeight).
 		Width(m.sidebarWidth()).
 		Render(body)
 }

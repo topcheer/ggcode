@@ -16,7 +16,7 @@
     "provenance": true
   },
   "bin": {
-    "ggcode": "./bin/ggcode.js"
+    "ggcode": "bin/ggcode.js"
   },
   "files": [
     "bin",
