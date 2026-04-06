@@ -157,6 +157,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.config")
 	case "/status":
 		return tr(lang, "slash.status")
+	case "/update":
+		return tr(lang, "slash.update")
 	default:
 		return cmd
 	}
@@ -599,7 +601,7 @@ func enCatalog(key string) string {
 	case "bug.title":
 		return "=== Bug Report Diagnostics ===\n\n"
 	case "bug.version":
-		return "Version: ggcode (dev)\n"
+		return "Version: %s\n"
 	case "bug.os":
 		return "OS: %s %s\n"
 	case "bug.go":
@@ -632,6 +634,32 @@ func enCatalog(key string) string {
 		return "Current Configuration:\n"
 	case "status.title":
 		return "Status:\n"
+	case "panel.update":
+		return "Update"
+	case "label.version":
+		return "Version"
+	case "label.latest":
+		return "Latest"
+	case "update.sidebar_hint":
+		return "New release available. Run /update."
+	case "update.up_to_date":
+		return "You are up to date."
+	case "update.available":
+		return "update available: %s"
+	case "update.current":
+		return "current: %s (latest: %s)"
+	case "update.unknown":
+		return "not checked yet"
+	case "update.check_failed":
+		return "check failed: %s"
+	case "update.unavailable":
+		return "Update is unavailable in this session.\n\n"
+	case "update.preparing":
+		return "Preparing update"
+	case "update.failed":
+		return "Update failed: %v\n\n"
+	case "update.restart_failed":
+		return "Update prepared, but restart failed: %v\n\n"
 	case "plugins.unavailable":
 		return "Plugin manager not available.\n\n"
 	case "plugins.none":
@@ -740,6 +768,8 @@ func enCatalog(key string) string {
 		return "View/modify configuration"
 	case "slash.status":
 		return "Show current status"
+	case "slash.update":
+		return "Update ggcode"
 	case "help.text":
 		return `Available commands:
   /help, /?          Show this help message
@@ -775,6 +805,7 @@ func enCatalog(key string) string {
   /config            Show current configuration
   /config set <k> <v> Set a config value
   /status            Show current status
+  /update            Update ggcode to the latest release
   /exit, /quit       Exit ggcode
 
 Keyboard shortcuts:
@@ -1218,7 +1249,7 @@ func zhCatalog(key string) string {
 	case "bug.title":
 		return "=== Bug 报告诊断信息 ===\n\n"
 	case "bug.version":
-		return "版本：ggcode（dev）\n"
+		return "版本：%s\n"
 	case "bug.os":
 		return "系统：%s %s\n"
 	case "bug.go":
@@ -1251,6 +1282,32 @@ func zhCatalog(key string) string {
 		return "当前配置：\n"
 	case "status.title":
 		return "状态：\n"
+	case "panel.update":
+		return "更新"
+	case "label.version":
+		return "版本"
+	case "label.latest":
+		return "最新"
+	case "update.sidebar_hint":
+		return "发现新版本，可使用 /update 升级。"
+	case "update.up_to_date":
+		return "当前已是最新版本。"
+	case "update.available":
+		return "可升级到：%s"
+	case "update.current":
+		return "当前：%s（最新：%s）"
+	case "update.unknown":
+		return "尚未检查"
+	case "update.check_failed":
+		return "检查失败：%s"
+	case "update.unavailable":
+		return "当前会话无法升级。\n\n"
+	case "update.preparing":
+		return "正在准备升级"
+	case "update.failed":
+		return "升级失败：%v\n\n"
+	case "update.restart_failed":
+		return "升级已准备完成，但重启失败：%v\n\n"
 	case "plugins.unavailable":
 		return "插件管理器不可用。\n\n"
 	case "plugins.none":
@@ -1359,6 +1416,8 @@ func zhCatalog(key string) string {
 		return "查看/修改配置"
 	case "slash.status":
 		return "显示当前状态"
+	case "slash.update":
+		return "升级 ggcode"
 	case "help.text":
 		return `可用命令：
   /help, /?          显示帮助
@@ -1394,6 +1453,7 @@ func zhCatalog(key string) string {
   /config            显示当前配置
   /config set <k> <v> 设置配置项
   /status            显示当前状态
+  /update            升级到最新正式版本
   /exit, /quit       退出 ggcode
 
 键盘快捷键：

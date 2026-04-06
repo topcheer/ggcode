@@ -24,6 +24,8 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
+	"github.com/topcheer/ggcode/internal/update"
+	"github.com/topcheer/ggcode/internal/version"
 )
 
 func NewRootCmd() *cobra.Command {
@@ -33,6 +35,7 @@ func NewRootCmd() *cobra.Command {
 	var allowedTools []string
 	var bypassFlag bool
 	var outputPath string
+	var helperManifest string
 
 	cmd := &cobra.Command{
 		Use:              "ggcode",
@@ -64,7 +67,7 @@ func NewRootCmd() *cobra.Command {
 				return nil
 			}
 
-			return run(cfg, resumeID, bypassFlag)
+			return run(cfg, cfgFile, resumeID, bypassFlag)
 		},
 	}
 
@@ -74,6 +77,20 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
+
+	helperCmd := &cobra.Command{
+		Use:    "update-helper",
+		Short:  "Internal update helper",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(helperManifest) == "" {
+				return fmt.Errorf("missing --manifest")
+			}
+			return update.RunHelper(helperManifest)
+		},
+	}
+	helperCmd.Flags().StringVar(&helperManifest, "manifest", "", "update manifest path")
+	cmd.AddCommand(helperCmd)
 
 	// Shell completion commands
 	completionCmd := &cobra.Command{
@@ -248,7 +265,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func run(cfg *config.Config, resumeID string, bypass bool) error {
+func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	resolved, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
 		return err
@@ -373,6 +390,9 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
+	if execPath, err := os.Executable(); err == nil {
+		repl.SetUpdateService(update.NewService(version.Display(), execPath, cfgFile, workingDir))
+	}
 	repl.SetConfig(cfg)
 	repl.SetSessionStore(store)
 	repl.SetMCPServers(mcpInfos)

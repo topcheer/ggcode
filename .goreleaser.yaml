@@ -5,6 +5,12 @@ builds:
     binary: ggcode
     env:
       - CGO_ENABLED=0
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/topcheer/ggcode/internal/version.Version={{ .Version }}
+        -X github.com/topcheer/ggcode/internal/version.Commit={{ .Commit }}
+        -X github.com/topcheer/ggcode/internal/version.Date={{ .Date }}
     goos:
       - linux
       - darwin

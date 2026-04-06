@@ -27,6 +27,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -143,6 +144,9 @@ type Model struct {
 	runCanceled          bool
 	runFailed            bool
 	clipboardLoader      func() (imageAttachedMsg, error)
+	updateSvc            *update.Service
+	updateInfo           update.CheckResult
+	updateError          string
 }
 
 type toolActivityGroup struct {
@@ -282,6 +286,18 @@ type setProgramMsg struct {
 type mcpServersMsg struct {
 	Servers []plugin.MCPServerInfo
 }
+
+type updateCheckResultMsg struct {
+	Result update.CheckResult
+	Err    error
+}
+
+type updatePrepareResultMsg struct {
+	Prepared update.PreparedUpdate
+	Err      error
+}
+
+type updateCheckTickMsg struct{}
 
 func (m *Model) resetExitConfirm() {
 	m.exitConfirmPending = false
@@ -482,11 +498,16 @@ func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		textinput.Blink,
 		tea.WindowSize(),
 		tea.Tick(3*time.Second, func(time.Time) tea.Msg { return startupReadyMsg{} }),
-	)
+	}
+	if m.updateSvc != nil {
+		cmds = append(cmds, m.checkForUpdateCmd())
+		cmds = append(cmds, m.scheduleUpdateCheckCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) SetProgram(p *tea.Program) {
@@ -512,6 +533,10 @@ func (m *Model) SetMCPManager(mgr mcpManager) {
 
 func (m *Model) SetPluginManager(mgr *plugin.Manager) {
 	m.pluginMgr = mgr
+}
+
+func (m *Model) SetUpdateService(svc *update.Service) {
+	m.updateSvc = svc
 }
 
 func (m *Model) SetCustomCommands(cmds map[string]*commands.Command) {
@@ -968,6 +993,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case skillsChangedMsg:
 		m.refreshCommands()
 		return m, nil
+
+	case updateCheckResultMsg:
+		m.applyUpdateCheckResult(msg)
+		return m, nil
+
+	case updateCheckTickMsg:
+		return m, tea.Batch(m.checkForUpdateCmd(), m.scheduleUpdateCheckCmd())
+
+	case updatePrepareResultMsg:
+		return m.handlePreparedUpdate(msg)
 
 	case toolStatusMsg:
 		if m.runCanceled || !m.loading {

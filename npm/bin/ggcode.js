@@ -5,7 +5,10 @@ const { ensureInstalled } = require("../lib/install");
 
 async function main() {
   const binary = await ensureInstalled(process.env.GGCODE_INSTALL_VERSION, true);
-  const result = spawnSync(binary, process.argv.slice(2), { stdio: "inherit" });
+  const result = spawnSync(binary, process.argv.slice(2), {
+    stdio: "inherit",
+    env: { ...process.env, GGCODE_WRAPPER_KIND: "npm" },
+  });
   if (result.error) {
     throw result.error;
   }

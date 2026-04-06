@@ -20,6 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/update"
 )
 
 // REPL connects the agent to the TUI model.
@@ -69,6 +70,10 @@ func (r *REPL) SetConfig(cfg *config.Config) {
 
 func (r *REPL) SetPluginManager(mgr *plugin.Manager) {
 	r.model.SetPluginManager(mgr)
+}
+
+func (r *REPL) SetUpdateService(svc *update.Service) {
+	r.model.SetUpdateService(svc)
 }
 
 func (r *REPL) SetCommandsManager(mgr *commands.Manager) {
