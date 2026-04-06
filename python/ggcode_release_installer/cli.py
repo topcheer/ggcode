@@ -9,19 +9,18 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
-
-from . import __version__
 
 OWNER = "topcheer"
 REPO = "ggcode"
 
 
 def normalize_version() -> str:
-    selected = os.environ.get("GGCODE_INSTALL_VERSION", __version__).strip()
-    if not selected or selected == "latest" or selected.startswith("0.0.0"):
+    selected = os.environ.get("GGCODE_INSTALL_VERSION", "").strip()
+    if not selected or selected == "latest":
         return "latest"
     if selected.startswith("v"):
         return selected
@@ -67,6 +66,20 @@ def download(url: str) -> bytes:
         return response.read()
 
 
+def resolve_release_version(version: str) -> str:
+    if version != "latest":
+        return version
+
+    with urllib.request.urlopen(f"https://github.com/{OWNER}/{REPO}/releases/latest") as response:
+        final_url = response.geturl()
+
+    parsed = urllib.parse.urlparse(final_url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 4 or parts[-2] != "tag":
+        raise RuntimeError(f"Could not resolve latest ggcode release from {final_url}")
+    return urllib.parse.unquote(parts[-1])
+
+
 def parse_checksums(body: str) -> dict[str, str]:
     checksums: dict[str, str] = {}
     for raw_line in body.splitlines():
@@ -77,7 +90,7 @@ def parse_checksums(body: str) -> dict[str, str]:
 
 
 def ensure_installed() -> Path:
-    version = normalize_version()
+    version = resolve_release_version(normalize_version())
     goos, arch = resolve_target()
     archive_ext = ".zip" if goos == "windows" else ".tar.gz"
     archive_name = f"ggcode_{goos}_{arch}{archive_ext}"

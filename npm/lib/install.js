@@ -10,9 +10,8 @@ const REPO = "ggcode";
 const BINARY = process.platform === "win32" ? "ggcode.exe" : "ggcode";
 
 function normalizeVersion(version) {
-  const envVersion = process.env.GGCODE_INSTALL_VERSION;
-  const selected = (envVersion || version || "").trim();
-  if (!selected || selected === "latest" || selected.startsWith("0.0.0-")) {
+  const selected = (version || "").trim();
+  if (!selected || selected === "latest") {
     return "latest";
   }
   return selected.startsWith("v") ? selected : `v${selected}`;
@@ -66,8 +65,9 @@ function binaryPath(version, target) {
   return path.join(installRoot(version, target), target.binaryName);
 }
 
-async function ensureInstalled(version, packageVersion, quiet) {
-  const resolvedVersion = normalizeVersion(version || packageVersion);
+async function ensureInstalled(version, quiet) {
+  const requestedVersion = normalizeVersion(version);
+  const resolvedVersion = await resolveReleaseVersion(requestedVersion);
   const target = resolveTarget();
   const dest = binaryPath(resolvedVersion, target);
   if (fs.existsSync(dest)) {
@@ -104,6 +104,19 @@ async function ensureInstalled(version, packageVersion, quiet) {
     fs.chmodSync(dest, 0o755);
   }
   return dest;
+}
+
+async function resolveReleaseVersion(version) {
+  if (version !== "latest") {
+    return version;
+  }
+
+  const latestURL = await resolveFinalURL(`https://github.com/${OWNER}/${REPO}/releases/latest`);
+  const match = latestURL.match(/\/releases\/tag\/([^/?#]+)/);
+  if (!match) {
+    throw new Error(`Could not resolve latest ggcode release from ${latestURL}`);
+  }
+  return decodeURIComponent(match[1]);
 }
 
 function verifyChecksum(assetName, archive, checksumsText) {
@@ -179,8 +192,32 @@ function downloadBuffer(url) {
   });
 }
 
+function resolveFinalURL(url) {
+  return new Promise((resolve, reject) => {
+    const get = (target) => {
+      https
+        .get(target, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            res.resume();
+            get(new URL(res.headers.location, target).toString());
+            return;
+          }
+          if (res.statusCode !== 200) {
+            reject(new Error(`${target} returned ${res.statusCode}`));
+            return;
+          }
+          res.resume();
+          resolve(target);
+        })
+        .on("error", reject);
+    };
+    get(url);
+  });
+}
+
 module.exports = {
   ensureInstalled,
   normalizeVersion,
+  resolveReleaseVersion,
   resolveTarget,
 };

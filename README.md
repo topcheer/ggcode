@@ -30,11 +30,17 @@ The installer downloads the matching GitHub Release binary into `GOBIN`, the fir
 npm install -g @ggcode-cli/ggcode
 ```
 
+The npm wrapper downloads the latest ggcode GitHub Release by default. Set `GGCODE_INSTALL_VERSION`
+if you need to pin a specific release.
+
 ### pip
 
 ```bash
 pip install ggcode
 ```
+
+The Python wrapper also downloads the latest ggcode GitHub Release by default and respects
+`GGCODE_INSTALL_VERSION` for explicit pinning.
 
 ### Build from source
 
