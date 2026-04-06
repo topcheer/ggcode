@@ -49,4 +49,4 @@ jobs:
       - name: Publish npm package
         if: steps.release.outputs.publish == 'true'
         working-directory: npm
-        run: npm publish --provenance --access public
+        run: npm publish --access public
