@@ -1,4 +1,5 @@
 /ggcode
+/bin/ggcode
 .ggcode/
 python/dist/
 python/build/
