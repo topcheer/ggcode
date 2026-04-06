@@ -1797,6 +1797,71 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	}
 }
 
+func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = "Thinking..."
+	m.statusToolName = "npm run type-check"
+	m.statusToolArg = "type-check"
+	m.statusToolCount = 1
+	m.activityGroups = []toolActivityGroup{{Title: "Running checks", Active: true, Items: []toolActivityItem{{Summary: "Run npm run type-check", Running: true}}}}
+	m.spinner.Start("npm run type-check")
+
+	m.cancelActiveRun()
+
+	if m.statusActivity != m.t("status.cancelling") {
+		t.Fatalf("expected cancelling status, got %q", m.statusActivity)
+	}
+	if m.statusToolName != "" || m.statusToolArg != "" || m.statusToolCount != 0 {
+		t.Fatalf("expected tool status to clear, got %q / %q / %d", m.statusToolName, m.statusToolArg, m.statusToolCount)
+	}
+	if len(m.activityGroups) != 0 {
+		t.Fatalf("expected live activity groups to clear, got %#v", m.activityGroups)
+	}
+	if m.spinner.IsActive() {
+		t.Fatal("expected spinner to stop on cancel")
+	}
+}
+
+func TestCancelledRunIgnoresLateStatusAndToolUpdates(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.runCanceled = true
+	m.statusActivity = m.t("status.cancelling")
+
+	next, cmd := m.Update(statusMsg{Activity: "Thinking...", ToolName: "npm run type-check", ToolArg: "type-check", ToolCount: 3})
+	if cmd != nil {
+		t.Fatal("expected no cmd for ignored late status")
+	}
+	m = next.(Model)
+	if m.statusActivity != m.t("status.cancelling") || m.statusToolName != "" || m.statusToolCount != 0 {
+		t.Fatalf("expected cancelled status to remain clean, got %q / %q / %d", m.statusActivity, m.statusToolName, m.statusToolCount)
+	}
+
+	next, cmd = m.Update(toolStatusMsg{ToolName: "run_command", DisplayName: "Run", Detail: "npm run type-check", Activity: "Executing", Running: true})
+	if cmd != nil {
+		t.Fatal("expected no cmd for ignored late tool update")
+	}
+	m = next.(Model)
+	if len(m.activityGroups) != 0 {
+		t.Fatalf("expected no activity groups after ignored late tool update, got %#v", m.activityGroups)
+	}
+}
+
+func TestFinishedRunIgnoresLateStatusUpdates(t *testing.T) {
+	m := newTestModel()
+	m.loading = false
+
+	next, cmd := m.Update(statusMsg{Activity: "Thinking...", ToolName: "npm run type-check", ToolArg: "type-check", ToolCount: 2})
+	if cmd != nil {
+		t.Fatal("expected no cmd for ignored post-run status")
+	}
+	m = next.(Model)
+	if m.statusActivity != "" || m.statusToolName != "" || m.statusToolCount != 0 {
+		t.Fatalf("expected stale status update to be ignored, got %q / %q / %d", m.statusActivity, m.statusToolName, m.statusToolCount)
+	}
+}
+
 func TestExitConfirmationClearsOnOtherKey(t *testing.T) {
 	m := newTestModel()
 	m.exitConfirmPending = true

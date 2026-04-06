@@ -173,6 +173,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 				} else {
 					m.output.WriteString(m.t("command.model_current", resolved.Model, resolved.VendorName))
 				}
+				return m.openModelPanel()
 			}
 			return nil
 		case "/provider":
