@@ -274,14 +274,14 @@ func (m *Model) renderProviderPanel() string {
 	if panel.editingField != "" {
 		body = append(body,
 			"",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" " + m.t("panel.provider.edit") + " " + providerEditFieldLabel(m.currentLanguage(), panel.editingField)),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.edit")+" "+providerEditFieldLabel(m.currentLanguage(), panel.editingField)),
 			panel.editInput.View(),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" " + m.t("panel.provider.hint.edit")),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
 		)
 	} else {
 		body = append(body,
 			"",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" " + m.t("panel.provider.hint.main")),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.main")),
 		)
 	}
 	if panel.message != "" {
