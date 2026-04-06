@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ggcode — AI Coding CLI Tool</title>
+    <meta
+      name="description"
+      content="ggcode is an AI coding CLI that keeps code understanding, file editing, command execution, MCP integrations, and checkpoints inside one clean terminal workflow."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="site-shell">
+      <div class="ambient ambient-a"></div>
+      <div class="ambient ambient-b"></div>
+      <div class="grid-glow"></div>
+
+      <header class="topbar">
+        <a class="brand" href="#hero">
+          <span class="brand-mark">&gt;_</span>
+          <span class="brand-name">ggcode</span>
+        </a>
+        <nav class="topnav">
+          <a href="#features" data-i18n="nav.features">Features</a>
+          <a href="#workflow" data-i18n="nav.workflow">Workflow</a>
+          <a href="#install" data-i18n="nav.install">Install</a>
+          <a href="https://github.com/topcheer/ggcode" target="_blank" rel="noreferrer">GitHub</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" id="hero">
+          <div class="hero-copy">
+            <div class="eyebrow" data-i18n="hero.eyebrow">terminal-native · checkpoint-safe · mcp-ready</div>
+            <h1 data-i18n="hero.title">Bring the AI coding workflow back into your terminal.</h1>
+            <p class="hero-text" data-i18n="hero.text">
+              ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, and keeping long tasks moving inside one fresh, modern, geek-forward interface.
+            </p>
+
+            <div class="hero-actions">
+              <a class="button button-primary" href="#install" data-i18n="hero.ctaPrimary">Get started</a>
+              <a class="button button-secondary" href="https://github.com/topcheer/ggcode" target="_blank" rel="noreferrer" data-i18n="hero.ctaSecondary">View repository</a>
+            </div>
+
+            <div class="hero-install-strip">
+              <button class="command-chip" data-copy="go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest">
+                <span>Go</span>
+                <code>go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest</code>
+              </button>
+              <button class="command-chip" data-copy="npm install -g @ggcode-cli/ggcode">
+                <span>npm</span>
+                <code>npm install -g @ggcode-cli/ggcode</code>
+              </button>
+              <button class="command-chip" data-copy="pip install ggcode">
+                <span>pip</span>
+                <code>pip install ggcode</code>
+              </button>
+            </div>
+
+            <div class="hero-stats">
+              <div class="stat-card">
+                <strong>/undo + checkpoints</strong>
+                <span data-i18n="hero.stats.undo">Recover quickly when a change goes wrong</span>
+              </div>
+              <div class="stat-card">
+                <strong>background commands</strong>
+                <span data-i18n="hero.stats.background">Run long jobs in the background and keep visibility</span>
+              </div>
+              <div class="stat-card">
+                <strong>MCP / skills / plugins</strong>
+                <span data-i18n="hero.stats.extensible">Extend the CLI natively with more capabilities</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-visual">
+            <div class="hero-frame">
+              <div class="frame-badge" data-i18n="hero.badge">v1.0.6 · Ready</div>
+              <img
+                src="./assets/ggcode-banner.png"
+                alt="ggcode CLI banner"
+                data-i18n-attr="alt"
+                data-i18n-key="hero.bannerAlt"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="feature-band" id="features">
+          <div class="section-head">
+            <span class="eyebrow" data-i18n="features.eyebrow">what makes it memorable</span>
+            <h2 data-i18n="features.title">Not “AI with a shell attached”, but a complete product experience inside the terminal.</h2>
+          </div>
+
+          <div class="feature-grid">
+            <article class="feature-card feature-card-large">
+              <h3 data-i18n="features.terminalFirst.title">Terminal-first, without breaking your workflow apart</h3>
+              <p data-i18n="features.terminalFirst.text">
+                Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.
+              </p>
+            </article>
+
+            <article class="feature-card">
+              <h3 data-i18n="features.stable.title">Safer by design</h3>
+              <p data-i18n="features.stable.text">Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed.</p>
+            </article>
+
+            <article class="feature-card">
+              <h3 data-i18n="features.control.title">More controllable</h3>
+              <p data-i18n="features.control.text">Checkpoints plus /undo make file changes reversible, which matters in real projects, not just demos.</p>
+            </article>
+
+            <article class="feature-card">
+              <h3 data-i18n="features.extend.title">More extensible</h3>
+              <p data-i18n="features.extend.text">MCP, skills, plugins, and project memory can all plug into the same agent loop.</p>
+            </article>
+
+            <article class="feature-card">
+              <h3 data-i18n="features.longTasks.title">Better for long-running work</h3>
+              <p data-i18n="features.longTasks.text">Background commands, sub-agents, activity panels, and status signals keep builds, tests, and releases from blocking the whole session.</p>
+            </article>
+
+            <article class="feature-card">
+              <h3 data-i18n="features.crossPlatform.title">More cross-platform</h3>
+              <p data-i18n="features.crossPlatform.text">macOS and Linux use sh. Windows prefers Git Bash and falls back to PowerShell when needed.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="workflow" id="workflow">
+          <div class="section-head">
+            <span class="eyebrow" data-i18n="workflow.eyebrow">from prompt to patch</span>
+            <h2 data-i18n="workflow.title">More like a real engineering partner than a one-shot answer box.</h2>
+          </div>
+
+          <div class="workflow-layout">
+            <div class="terminal-panel">
+              <div class="terminal-top">
+                <span class="dot dot-red"></span>
+                <span class="dot dot-yellow"></span>
+                <span class="dot dot-green"></span>
+                <span class="terminal-title">ggcode session</span>
+              </div>
+              <div class="terminal-body">
+                <div class="terminal-line"><span class="prompt">&gt;</span> <span data-i18n="workflow.demo.ask1">Explain the auth flow and why startup feels slow</span></div>
+                <div class="terminal-line muted" data-i18n="workflow.demo.reply1">● reads config, traces provider setup, inspects startup banner logic</div>
+                <div class="terminal-line"><span class="prompt">&gt;</span> <span data-i18n="workflow.demo.ask2">Refactor it and keep Windows compatibility</span></div>
+                <div class="terminal-line muted" data-i18n="workflow.demo.reply2">● edits code, updates tests, keeps shell behavior aligned</div>
+                <div class="terminal-line"><span class="prompt">&gt;</span> /undo</div>
+                <div class="terminal-line muted" data-i18n="workflow.demo.reply3">● rolls back the last file edit from checkpoint</div>
+                <div class="terminal-line"><span class="prompt">&gt;</span> start_command "go test ./..."</div>
+                <div class="terminal-line muted" data-i18n="workflow.demo.reply4">● background job started · progress visible in-session</div>
+              </div>
+            </div>
+
+            <div class="workflow-steps">
+              <article>
+                <span>01</span>
+                <h3 data-i18n="workflow.step1.title">Understand the codebase first</h3>
+                <p data-i18n="workflow.step1.text">Start from project context, memory files, configuration, and git state instead of guessing.</p>
+              </article>
+              <article>
+                <span>02</span>
+                <h3 data-i18n="workflow.step2.title">Enter the agent loop</h3>
+                <p data-i18n="workflow.step2.text">Read files, search code, execute tools, and feed the results back into the model for iterative reasoning.</p>
+              </article>
+              <article>
+                <span>03</span>
+                <h3 data-i18n="workflow.step3.title">Keep product-level interaction intact</h3>
+                <p data-i18n="workflow.step3.text">Language selection, permission modes, queueing, sidebar state, status, and MCP views all matter when you use the tool every day.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="modes">
+          <div class="section-head">
+            <span class="eyebrow" data-i18n="modes.eyebrow">trust model</span>
+            <h2 data-i18n="modes.title">Choose the level of automation that matches the risk of the task.</h2>
+          </div>
+
+          <div class="mode-grid">
+            <article class="mode-card mode-supervised">
+              <h3>supervised</h3>
+              <p data-i18n="modes.supervised">Best for most daily work and safer around sensitive actions.</p>
+            </article>
+            <article class="mode-card mode-plan">
+              <h3>plan</h3>
+              <p data-i18n="modes.plan">Good for read-only exploration, architecture review, and higher-risk investigation.</p>
+            </article>
+            <article class="mode-card mode-auto">
+              <h3>auto</h3>
+              <p data-i18n="modes.auto">Ideal for frequent small tasks and a smoother default flow.</p>
+            </article>
+            <article class="mode-card mode-bypass">
+              <h3>bypass</h3>
+              <p data-i18n="modes.bypass">Fits the moments when you know what you want and want fewer pauses.</p>
+            </article>
+            <article class="mode-card mode-autopilot">
+              <h3>autopilot</h3>
+              <p data-i18n="modes.autopilot">Built for continuous progress and high-tempo delivery with minimal interruption.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="install" id="install">
+          <div class="section-head">
+            <span class="eyebrow" data-i18n="install.eyebrow">get running fast</span>
+            <h2 data-i18n="install.title">Pick the installation path you already use.</h2>
+          </div>
+
+          <div class="install-grid">
+            <article class="install-card">
+              <h3>Go installer</h3>
+              <p data-i18n="install.go.text">Closest to the native release flow and fetches the right binary for your platform.</p>
+              <pre><code>go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest
+ggcode-installer</code></pre>
+              <button
+                class="button button-inline"
+                data-copy="go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest && ggcode-installer"
+                data-copied-label=" copied"
+                data-i18n="install.copy"
+                data-copy-label-key="copy.state"
+              >
+                Copy command
+              </button>
+            </article>
+
+            <article class="install-card">
+              <h3>npm</h3>
+              <p data-i18n="install.npm.text">Fits teams already in the Node ecosystem and installs the release-backed binary.</p>
+              <pre><code>npm install -g @ggcode-cli/ggcode</code></pre>
+              <button
+                class="button button-inline"
+                data-copy="npm install -g @ggcode-cli/ggcode"
+                data-copied-label=" copied"
+                data-i18n="install.copy"
+                data-copy-label-key="copy.state"
+              >
+                Copy command
+              </button>
+            </article>
+
+            <article class="install-card">
+              <h3>pip</h3>
+              <p data-i18n="install.pip.text">Works well for Python environments or standardized distribution across team machines.</p>
+              <pre><code>pip install ggcode</code></pre>
+              <button
+                class="button button-inline"
+                data-copy="pip install ggcode"
+                data-copied-label=" copied"
+                data-i18n="install.copy"
+                data-copy-label-key="copy.state"
+              >
+                Copy command
+              </button>
+            </article>
+          </div>
+        </section>
+
+        <section class="cta">
+          <div class="cta-panel">
+            <span class="eyebrow" data-i18n="cta.eyebrow">ready</span>
+            <h2 data-i18n="cta.title">Turn your terminal from a command runner into an engineering accelerator.</h2>
+            <p data-i18n="cta.text">
+              If you like living in the terminal, care about workflow integrity, and still want delivery speed, ggcode is the AI tool that belongs in your shell.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="https://github.com/topcheer/ggcode" target="_blank" rel="noreferrer" data-i18n="cta.github">Open GitHub</a>
+              <a class="button button-secondary" href="../../README.md" data-i18n="cta.readme">Read the README</a>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>

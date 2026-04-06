@@ -28,14 +28,19 @@ vendors:
         base_url: https://open.bigmodel.cn/api/coding/paas/v4
         default_model: glm-5-turbo
         selected_model: glm-5-turbo
-        max_tokens: 8192
-        models: [glm-5-turbo, glm-5-plus]
+        context_window: 200000
+        max_tokens: 128000
+        models: [glm-5, glm-5-turbo, glm-5.1, glm-4.7, glm-4.7-flashx, glm-4.6, glm-4.5-air]
         tags: [coding, cn]
       cn-coding-anthropic:
         display_name: 国内 Coding Plan (Anthropic)
         protocol: anthropic
         base_url: https://open.bigmodel.cn/api/anthropic
-        max_tokens: 8192
+        default_model: glm-5-turbo
+        selected_model: glm-5-turbo
+        context_window: 200000
+        max_tokens: 128000
+        models: [glm-5, glm-5-turbo, glm-5.1, glm-4.7, glm-4.7-flashx, glm-4.6, glm-4.5-air]
         tags: [coding, cn, anthropic]
       global-coding-openai:
         display_name: 国外 Coding Plan
@@ -53,13 +58,239 @@ vendors:
         max_tokens: 8192
         models: [glm-4.5-air, glm-4.5]
         tags: [api, global]
+  anthropic:
+    display_name: Anthropic
+    api_key: ${ANTHROPIC_API_KEY}
+    endpoints:
+      api:
+        display_name: Anthropic API
+        protocol: anthropic
+        base_url: https://api.anthropic.com
+        default_model: claude-3-5-sonnet-latest
+        selected_model: claude-3-5-sonnet-latest
+        max_tokens: 8192
+        models: [claude-3-5-sonnet-latest, claude-3-5-haiku-latest]
+        tags: [official, anthropic]
+  openai:
+    display_name: OpenAI
+    api_key: ${OPENAI_API_KEY}
+    endpoints:
+      api:
+        display_name: OpenAI API
+        protocol: openai
+        base_url: https://api.openai.com/v1
+        default_model: gpt-4o-mini
+        selected_model: gpt-4o-mini
+        max_tokens: 8192
+        models: [gpt-4o-mini, gpt-4o]
+        tags: [official, openai]
+  google:
+    display_name: Google Gemini
+    api_key: ${GEMINI_API_KEY}
+    endpoints:
+      api:
+        display_name: Gemini API
+        protocol: gemini
+        base_url: https://generativelanguage.googleapis.com
+        default_model: gemini-1.5-flash
+        selected_model: gemini-1.5-flash
+        max_tokens: 8192
+        models: [gemini-1.5-flash, gemini-1.5-pro]
+        tags: [official, gemini]
+  openrouter:
+    display_name: OpenRouter
+    api_key: ${OPENROUTER_API_KEY}
+    endpoints:
+      api:
+        display_name: OpenRouter API
+        protocol: openai
+        base_url: https://openrouter.ai/api/v1
+        default_model: openai/gpt-4o-mini
+        selected_model: openai/gpt-4o-mini
+        max_tokens: 8192
+        models: [openai/gpt-4o-mini, anthropic/claude-3.5-sonnet, google/gemini-flash-1.5]
+        tags: [router, openai-compatible]
+  groq:
+    display_name: Groq
+    api_key: ${GROQ_API_KEY}
+    endpoints:
+      api:
+        display_name: Groq API
+        protocol: openai
+        base_url: https://api.groq.com/openai/v1
+        default_model: llama-3.1-8b-instant
+        selected_model: llama-3.1-8b-instant
+        max_tokens: 8192
+        models: [llama-3.1-8b-instant, llama-3.1-70b-versatile]
+        tags: [official, openai-compatible, fast]
+  mistral:
+    display_name: Mistral
+    api_key: ${MISTRAL_API_KEY}
+    endpoints:
+      api:
+        display_name: Mistral API
+        protocol: openai
+        base_url: https://api.mistral.ai/v1
+        default_model: mistral-small-latest
+        selected_model: mistral-small-latest
+        max_tokens: 8192
+        models: [mistral-small-latest, mistral-large-latest]
+        tags: [official, openai-compatible]
+  deepseek:
+    display_name: DeepSeek
+    api_key: ${DEEPSEEK_API_KEY}
+    endpoints:
+      api:
+        display_name: DeepSeek API
+        protocol: openai
+        base_url: https://api.deepseek.com/v1
+        default_model: deepseek-chat
+        selected_model: deepseek-chat
+        max_tokens: 8192
+        models: [deepseek-chat, deepseek-reasoner]
+        tags: [official, openai-compatible, reasoning]
+  moonshot:
+    display_name: Moonshot AI
+    api_key: ${MOONSHOT_API_KEY}
+    endpoints:
+      api:
+        display_name: Moonshot API
+        protocol: openai
+        base_url: https://api.moonshot.cn/v1
+        default_model: moonshot-v1-8k
+        selected_model: moonshot-v1-8k
+        max_tokens: 8192
+        models: [moonshot-v1-8k, moonshot-v1-32k]
+        tags: [official, openai-compatible, cn]
+  kimi:
+    display_name: Kimi Coding Plan
+    api_key: ${KIMI_API_KEY}
+    endpoints:
+      coding-openai:
+        display_name: Kimi Coding Plan
+        protocol: openai
+        base_url: https://api.kimi.com/coding/v1
+        default_model: kimi-for-coding
+        selected_model: kimi-for-coding
+        context_window: 262144
+        max_tokens: 32768
+        models: [kimi-for-coding]
+        tags: [official, coding, openai-compatible]
+      coding-anthropic:
+        display_name: Kimi Coding Plan (Anthropic)
+        protocol: anthropic
+        base_url: https://api.kimi.com/coding/
+        default_model: kimi-for-coding
+        selected_model: kimi-for-coding
+        context_window: 262144
+        max_tokens: 32768
+        models: [kimi-for-coding]
+        tags: [official, coding, anthropic]
+  minimax:
+    display_name: MiniMax Token Plan
+    api_key: ${MINIMAX_API_KEY}
+    endpoints:
+      token-plan-openai:
+        display_name: MiniMax Token Plan
+        protocol: openai
+        base_url: https://api.minimaxi.com/v1
+        default_model: MiniMax-M2.7
+        selected_model: MiniMax-M2.7
+        context_window: 204800
+        max_tokens: 2048
+        models: [MiniMax-M2.7]
+        tags: [official, coding, openai-compatible]
+      token-plan-anthropic:
+        display_name: MiniMax Token Plan (Anthropic)
+        protocol: anthropic
+        base_url: https://api.minimaxi.com/anthropic
+        default_model: MiniMax-M2.7
+        selected_model: MiniMax-M2.7
+        context_window: 204800
+        max_tokens: 2048
+        models: [MiniMax-M2.7]
+        tags: [official, coding, anthropic]
+      global-openai:
+        display_name: MiniMax Global
+        protocol: openai
+        base_url: https://api.minimax.io/v1
+        default_model: MiniMax-M2.7
+        selected_model: MiniMax-M2.7
+        context_window: 204800
+        max_tokens: 2048
+        models: [MiniMax-M2.7]
+        tags: [official, coding, openai-compatible, global]
+      global-anthropic:
+        display_name: MiniMax Global (Anthropic)
+        protocol: anthropic
+        base_url: https://api.minimax.io/anthropic
+        default_model: MiniMax-M2.7
+        selected_model: MiniMax-M2.7
+        context_window: 204800
+        max_tokens: 2048
+        models: [MiniMax-M2.7]
+        tags: [official, coding, anthropic, global]
+  ark:
+    display_name: Volcengine Ark Coding Plan
+    api_key: ${ARK_API_KEY}
+    endpoints:
+      coding-openai:
+        display_name: Ark Coding Plan
+        protocol: openai
+        base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+        default_model: ark-code-latest
+        selected_model: ark-code-latest
+        context_window: 200000
+        max_tokens: 8192
+        models: [ark-code-latest]
+        tags: [official, coding, cn, openai-compatible]
+      coding-anthropic:
+        display_name: Ark Coding Plan (Anthropic)
+        protocol: anthropic
+        base_url: https://ark.cn-beijing.volces.com/api/coding
+        default_model: ark-code-latest
+        selected_model: ark-code-latest
+        context_window: 200000
+        max_tokens: 8192
+        models: [ark-code-latest]
+        tags: [official, coding, cn, anthropic]
+  together:
+    display_name: Together AI
+    api_key: ${TOGETHER_API_KEY}
+    endpoints:
+      api:
+        display_name: Together API
+        protocol: openai
+        base_url: https://api.together.xyz/v1
+        default_model: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+        selected_model: meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+        max_tokens: 8192
+        models:
+          - meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+          - meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo
+        tags: [official, openai-compatible, open-models]
+  perplexity:
+    display_name: Perplexity
+    api_key: ${PERPLEXITY_API_KEY}
+    endpoints:
+      api:
+        display_name: Perplexity API
+        protocol: openai
+        base_url: https://api.perplexity.ai
+        default_model: llama-3.1-sonar-small-128k-online
+        selected_model: llama-3.1-sonar-small-128k-online
+        max_tokens: 8192
+        models:
+          - llama-3.1-sonar-small-128k-online
+          - llama-3.1-sonar-large-128k-online
+        tags: [official, openai-compatible, search]
 
 # Directories the agent is allowed to access (relative to config file or absolute)
 allowed_dirs:
   - .
 
-# Maximum agentic loop iterations per user turn
-max_iterations: 50
+# Maximum agentic loop iterations per user turn (0 = unlimited)
+max_iterations: 0
 
 # Per-tool permission rules: ask (prompt user), allow (auto-approve), deny (block)
 tool_permissions:

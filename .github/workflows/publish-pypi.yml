@@ -1,0 +1,61 @@
+name: Publish PyPI
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish Python wrapper
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          git fetch --force --tags
+          tag="$(git tag --points-at "${GITHUB_SHA}" | grep '^v' | head -n 1)"
+          test -n "${tag}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Set Python package version from tag
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          version = tag[1:] if tag.startswith("v") else tag
+
+          pyproject = Path("python/pyproject.toml")
+          pyproject.write_text(
+              pyproject.read_text().replace('version = "0.0.0.dev0"', f'version = "{version}"'),
+              encoding="utf-8",
+          )
+
+          init_file = Path("python/ggcode_release_installer/__init__.py")
+          init_file.write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+          PY
+      - name: Install build tooling
+        run: python3 -m pip install --upgrade build
+      - name: Build Python package
+        working-directory: python
+        run: python3 -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist

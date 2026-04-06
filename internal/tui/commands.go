@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,10 +12,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"bytes"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"runtime"
@@ -23,7 +24,8 @@ import (
 func (m *Model) updateAutoComplete() {
 	// Check for slash command
 	if active, prefix := DetectSlashCommand(m.input); active {
-		matches := CompleteSlashCommand("/" + prefix)
+		m.refreshCommands()
+		matches := CompleteSlashCommand("/"+prefix, m.customCmds)
 		if len(matches) > 0 {
 			m.autoCompleteActive = true
 			m.autoCompleteKind = "slash"
@@ -101,17 +103,45 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 }
 
 func (m *Model) submitText(text string, addToHistory bool) tea.Cmd {
+	text = m.stripPendingImagePlaceholder(text)
 	if addToHistory {
-		m.history = append(m.history, text)
-		m.historyIdx = len(m.history)
+		if text != "" {
+			m.history = append(m.history, text)
+			m.historyIdx = len(m.history)
+		}
 	}
 	debug.Log("tui", "handleCommand: %s", text)
 	return m.handleCommand(text)
 }
 
+func (m *Model) ensureOutputEndsWithNewline() {
+	if m.output == nil || m.output.Len() == 0 {
+		return
+	}
+	if strings.HasSuffix(m.output.String(), "\n") {
+		return
+	}
+	m.output.WriteString("\n")
+}
+
+func (m *Model) ensureOutputHasBlankLine() {
+	if m.output == nil || m.output.Len() == 0 {
+		return
+	}
+	switch {
+	case strings.HasSuffix(m.output.String(), "\n\n"):
+		return
+	case strings.HasSuffix(m.output.String(), "\n"):
+		m.output.WriteString("\n")
+	default:
+		m.output.WriteString("\n\n")
+	}
+}
+
 func (m *Model) handleCommand(text string) tea.Cmd {
 	// Slash commands
 	if strings.HasPrefix(text, "/") {
+		m.refreshCommands()
 		parts := strings.Fields(text)
 		cmd := strings.ToLower(parts[0])
 		switch cmd {
@@ -198,8 +228,13 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleFullscreenCommand()
 		case "/mcp":
 			return m.handleMCPCommand()
+		case "/skills":
+			m.openSkillsPanel()
+			return nil
 		case "/mode":
 			return m.handleModeCommand(parts)
+		case "/init":
+			return m.handleInitCommand()
 		case "/lang":
 			return m.handleLangCommand(parts)
 		case "/memory":
@@ -226,8 +261,16 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
 				if custom, ok := m.customCmds[cmdName]; ok {
+					if !custom.UserInvocable {
+						m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Skill %s can only be invoked by the agent.", custom.SlashName())))
+						return nil
+					}
+					if m.commandMgr != nil {
+						m.commandMgr.RecordUsage(cmdName)
+					}
 					vars := map[string]string{
-						"DIR": workingDirFromModel(m),
+						"DIR":  workingDirFromModel(m),
+						"ARGS": strings.TrimSpace(strings.TrimPrefix(text, parts[0])),
 					}
 					expanded := custom.Expand(vars)
 					m.output.WriteString(m.styles.user.Render(m.t("command.custom", cmdName)))
@@ -258,8 +301,13 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		m.output.WriteString("\n\n")
 	}
 
+	displayText := text
+	if m.pendingImage != nil {
+		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
+	}
+	m.ensureOutputEndsWithNewline()
 	m.output.WriteString(m.styles.user.Render("❯ "))
-	m.output.WriteString(text)
+	m.output.WriteString(displayText)
 	m.output.WriteString("\n")
 
 	// Save original user message to session
@@ -276,6 +324,62 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.statusToolCount = 0
 	m.resetActivityGroups()
 	return m.startAgent(expandedMsg)
+}
+
+func (m *Model) handleInitCommand() tea.Cmd {
+	workDir, _ := os.Getwd()
+	targetPath, _, err := memory.ResolveProjectMemoryInitTarget(workDir)
+	if err != nil {
+		m.output.WriteString(m.styles.error.Render(m.t("init.resolve_failed", err)))
+		return nil
+	}
+	existed := false
+	if _, err := os.Stat(targetPath); err == nil {
+		existed = true
+	}
+	content, err := memory.GenerateProjectMemory(filepath.Dir(targetPath))
+	if err != nil {
+		m.output.WriteString(m.styles.error.Render(m.t("init.generate_failed", err)))
+		return nil
+	}
+	prompt := buildInitPrompt(targetPath, existed, content)
+
+	m.output.WriteString(m.styles.user.Render("❯ /init"))
+	m.output.WriteString("\n")
+	m.appendUserMessage("/init")
+
+	m.streamBuffer = &bytes.Buffer{}
+	m.streamStartPos = m.output.Len()
+	m.streamPrefixWritten = false
+	m.loading = true
+	m.statusActivity = m.t("init.collecting")
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
+	m.resetActivityGroups()
+
+	return m.startAgent(prompt)
+}
+
+func buildInitPrompt(targetPath string, existed bool, bootstrap string) string {
+	action := "create"
+	if existed {
+		action = "update"
+	}
+	return fmt.Sprintf(`Analyze the current repository and %s the project memory file at %s.
+
+Before writing anything, inspect the repository with tools so the user can see an explicit knowledge-collection flow. Do not skip straight to writing the file. Read the relevant project files, confirm the architecture, tooling, validation commands, major directories, and durable conventions, then write the final GGCODE.md.
+
+Requirements:
+- The output file must be %s.
+- Collect repository knowledge first with tool calls; do not answer with only prose.
+- The file should contain current project facts and durable guidance, not an empty template.
+- Keep the document concise, practical, and easy for future agents to follow.
+- Overwrite the existing file if it already exists.
+
+Bootstrap snapshot collected locally to help you start, but you must verify and improve it with repo inspection before writing:
+
+%s`, action, targetPath, targetPath, bootstrap)
 }
 
 func (m *Model) resetConversationView() {
@@ -458,7 +562,7 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 
 func (m *Model) handleLangCommand(parts []string) tea.Cmd {
 	if len(parts) == 1 {
-		m.output.WriteString(m.t("lang.current", m.languageLabel(), supportedLanguageUsage(m.currentLanguage())))
+		m.openLanguageSelector(false)
 		return nil
 	}
 	raw := strings.TrimSpace(parts[1])
@@ -467,9 +571,39 @@ func (m *Model) handleLangCommand(parts []string) tea.Cmd {
 		m.output.WriteString(m.styles.error.Render(m.t("lang.invalid", raw, supportedLanguageUsage(m.currentLanguage()))))
 		return nil
 	}
-	m.setLanguage(string(lang))
-	m.output.WriteString(m.t("lang.switch", m.languageLabel()))
+	m.applyLanguageChange(lang)
 	return nil
+}
+
+func (m *Model) applyLanguageSelection(lang Language) tea.Cmd {
+	m.langOptions = nil
+	m.langCursor = 0
+	m.languagePromptRequired = false
+	m.applyLanguageChange(lang)
+	return nil
+}
+
+func (m *Model) openLanguageSelector(required bool) {
+	m.langOptions = languageOptionsFor(m.currentLanguage())
+	m.langCursor = 0
+	m.languagePromptRequired = required
+	for i, opt := range m.langOptions {
+		if opt.lang == m.currentLanguage() {
+			m.langCursor = i
+			break
+		}
+	}
+}
+
+func (m *Model) applyLanguageChange(lang Language) {
+	m.setLanguage(string(lang))
+	if m.config != nil {
+		if err := m.config.SaveLanguagePreference(string(m.currentLanguage())); err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error() + "\n"))
+			return
+		}
+	}
+	m.output.WriteString(m.t("lang.switch", m.languageLabel()))
 }
 
 func (m *Model) handleUndoCommand() tea.Cmd {
@@ -714,8 +848,7 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 			}
 			m.output.WriteString(m.t("config.provider_set", value))
 		case "language":
-			m.setLanguage(value)
-			m.output.WriteString(m.t("config.language_set", m.languageLabel()))
+			m.applyLanguageChange(normalizeLanguage(value))
 		default:
 			m.output.WriteString(m.styles.error.Render(m.t("config.unknown_key", key)))
 		}
@@ -729,8 +862,13 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 		b.WriteString(fmt.Sprintf("  Endpoint:    %s\n", m.config.Endpoint))
 		b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
 		b.WriteString(fmt.Sprintf("  Language:    %s\n", m.languageLabel()))
-		if resolved, err := m.config.ResolveActiveEndpoint(); err == nil && resolved.MaxTokens > 0 {
-			b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", resolved.MaxTokens))
+		if resolved, err := m.config.ResolveActiveEndpoint(); err == nil {
+			if resolved.ContextWindow > 0 {
+				b.WriteString(fmt.Sprintf("  Context:     %d\n", resolved.ContextWindow))
+			}
+			if resolved.MaxTokens > 0 {
+				b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", resolved.MaxTokens))
+			}
 		}
 		if len(m.config.Vendors) > 0 {
 			b.WriteString(fmt.Sprintf("  Vendors:     %v\n", m.vendorNames()))
@@ -762,7 +900,13 @@ func (m *Model) handleStatusCommand() tea.Cmd {
 		b.WriteString(fmt.Sprintf("  Agents:      %d running\n", n))
 	}
 
-	b.WriteString(fmt.Sprintf("  MCP Servers: %d connected\n", len(m.mcpServers)))
+	connected := 0
+	for _, srv := range m.mcpServers {
+		if srv.Connected {
+			connected++
+		}
+	}
+	b.WriteString(fmt.Sprintf("  MCP Servers: %d connected (%d total)\n", connected, len(m.mcpServers)))
 	b.WriteString("\n")
 	m.output.WriteString(b.String())
 	return nil
@@ -796,6 +940,9 @@ func (m *Model) tryActivateCurrentSelection() error {
 	}
 	if m.agent != nil {
 		m.agent.SetProvider(prov)
+		if resolved.ContextWindow > 0 {
+			m.agent.ContextManager().SetMaxTokens(resolved.ContextWindow)
+		}
 	}
 	return nil
 }
@@ -848,18 +995,7 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 		m.output.WriteString(m.styles.prompt.Render(m.t("mcp.none")))
 		return nil
 	}
-	m.output.WriteString(m.styles.title.Render(m.t("mcp.title")))
-	for _, srv := range m.mcpServers {
-		status := "\u2713"
-		if !srv.Connected {
-			status = "\u2717"
-		}
-		m.output.WriteString(fmt.Sprintf("  %s %s (%d tools)\n", status, srv.Name, len(srv.ToolNames)))
-		for _, tn := range srv.ToolNames {
-			m.output.WriteString(fmt.Sprintf("    - %s\n", tn))
-		}
-	}
-	m.output.WriteString("\n")
+	m.openMCPPanel()
 	return nil
 }
 
@@ -881,6 +1017,20 @@ func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 			img:         img,
 			filename:    path,
 		}
+	}
+}
+
+func (m *Model) handleClipboardPaste() tea.Cmd {
+	return func() tea.Msg {
+		loader := m.clipboardLoader
+		if loader == nil {
+			loader = loadClipboardImage
+		}
+		msg, err := loader()
+		if err != nil {
+			return errMsg{err: fmt.Errorf(m.t("image.clipboard_failed"), err)}
+		}
+		return msg
 	}
 }
 

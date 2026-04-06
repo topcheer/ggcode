@@ -152,18 +152,28 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Content: content,
 	})
 
+	if threshold := ctxpkg.AutoCompactThresholdTokens(a.contextManager.MaxTokens()); threshold > 0 && a.contextManager.TokenCount() >= threshold {
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: "[compacting conversation to stay within context window]\n",
+		})
+	}
+
 	if summarized, err := a.contextManager.CheckAndSummarize(ctx, a.provider); err != nil {
 		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("auto-summarize failed: %w", err)})
 	} else if summarized {
 		onEvent(provider.StreamEvent{
 			Type: provider.StreamEventText,
-			Text: "[context auto-compacted to fit within window]\n",
+			Text: "[conversation compacted]\n",
 		})
 	}
 
 	toolDefs := a.tools.ToDefinitions()
 
-	for i := 0; i < a.maxIter; i++ {
+	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		msgs := a.contextManager.Messages()
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
 
@@ -236,6 +246,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Execute tool calls and build tool_result message
 		var toolResults []provider.ContentBlock
 		for _, tc := range toolCalls {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s", tc.Name, result.IsError, truncateStr(result.Content, 200))
@@ -247,8 +260,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Result:  result.Content,
 				IsError: result.IsError,
 			})
+
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		debug.Log("agent", "Adding tool results to contextManager: blocks=%d", len(toolResults))
 		a.contextManager.Add(provider.Message{
 			Role:    "user", // Anthropic uses user role for tool results
@@ -256,8 +276,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		})
 	}
 
-	debug.Log("agent", "RunStreamWithContent END: max iterations (%d) reached", a.maxIter)
-	return fmt.Errorf("max iterations (%d) reached", a.maxIter)
+	if a.maxIter > 0 {
+		err := fmt.Errorf("max iterations (%d) reached", a.maxIter)
+		debug.Log("agent", "RunStreamWithContent END: %v", err)
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+		return err
+	}
+	return nil
 }
 
 func (a *Agent) currentMode() permission.PermissionMode {
@@ -273,11 +298,28 @@ func (a *Agent) shouldAutopilotContinue(text string) bool {
 	if a.currentMode() != permission.AutopilotMode {
 		return false
 	}
-	return looksLikeUserDecisionPrompt(text)
+	return shouldAutopilotKeepGoing(text)
 }
 
 func autopilotContinueInstruction(lastAssistantText string) string {
-	return "Autopilot is enabled. Do not wait for user confirmation. Choose the most reasonable assumption, state it briefly if helpful, and continue working until there is nothing meaningful left to do.\n\nPrevious assistant message:\n" + lastAssistantText
+	return "Autopilot is enabled. Do not wait for user confirmation. Choose the most reasonable assumption, state it briefly if helpful, and continue working until there is nothing meaningful left to do. If you only made partial progress, keep going instead of stopping for a progress update.\n\nPrevious assistant message:\n" + lastAssistantText
+}
+
+func shouldAutopilotKeepGoing(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+	if looksLikeCompletionOrHandoff(trimmed) {
+		return false
+	}
+	if looksLikeUserDecisionPrompt(trimmed) {
+		return true
+	}
+	if looksLikeMoreWorkRemaining(trimmed) {
+		return true
+	}
+	return true
 }
 
 func looksLikeUserDecisionPrompt(text string) bool {
@@ -302,8 +344,55 @@ func looksLikeUserDecisionPrompt(text string) bool {
 	return false
 }
 
+func looksLikeCompletionOrHandoff(text string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(text))
+	if trimmed == "" {
+		return false
+	}
+	markers := []string{
+		"all set", "wrapped up", "nothing else", "nothing meaningful left",
+		"no further action", "that's it", "here's what i changed", "summary of changes",
+		"completed the requested", "finished the requested", "completed the task", "finished the task",
+		"completed the implementation", "finished the implementation", "completed the optimization pass",
+		"finished the optimization pass",
+		"let me know if you'd like", "if you'd like, i can", "if you want, i can",
+		"feel free to ask", "feel free to tell me", "happy to help with anything else",
+		"全部完成", "已经全部完成", "任务已完成", "这个任务已经完成", "优化已完成", "实现已完成",
+		"没有更多可做", "没有进一步需要处理", "如需我继续", "如果你希望我继续", "我还可以继续",
+		"随时告诉我", "如果你还有其他", "如果你有其他", "还有其他任务需要我", "其他方面的具体任务需要我帮忙",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeMoreWorkRemaining(text string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(text))
+	if trimmed == "" {
+		return false
+	}
+	markers := []string{
+		"next step", "next i", "next i'll", "still need", "still needs", "need to", "needs more",
+		"follow up", "follow-up", "continue with", "continue by", "identified", "more to do",
+		"another step", "hotspot", "todo", "then i can", "then i'll", "remaining work",
+		"接下来", "下一步", "还需要", "仍需", "还有", "后续", "继续", "再处理", "剩余",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // executeToolWithPermission checks permission before executing a tool.
 func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	if err := ctx.Err(); err != nil {
+		return tool.Result{Content: err.Error(), IsError: true}
+	}
 	debug.Log("agent", "permission check: tool=%s", tc.Name)
 	a.mu.RLock()
 	policy := a.policy
@@ -380,6 +469,9 @@ func (a *Agent) SetWorkingDir(dir string) {
 }
 
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	if err := ctx.Err(); err != nil {
+		return tool.Result{Content: err.Error(), IsError: true}
+	}
 	t, ok := a.tools.Get(tc.Name)
 	if !ok {
 		return tool.Result{Content: fmt.Sprintf("unknown tool: %s", tc.Name), IsError: true}
@@ -408,6 +500,9 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 
 	// Execute the actual tool
+	if err := ctx.Err(); err != nil {
+		return tool.Result{Content: err.Error(), IsError: true}
+	}
 	result, err := t.Execute(ctx, tc.Arguments)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}

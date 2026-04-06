@@ -2,10 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/topcheer/ggcode/internal/commands"
+	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -15,14 +19,15 @@ func (m Model) View() string {
 	}
 
 	header := ""
-	if !m.sidebarEnabled() {
+	if m.topHeaderEnabled() {
 		header = m.renderHeader()
 	}
+	startupBanner := m.renderStartupBanner()
 	actionPanel := m.renderContextPanel()
 	statusBar := m.renderStatusBar()
 	composer := m.renderComposerPanel()
 
-	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
+	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
 	if actionPanel != "" {
 		availableHeight -= lipgloss.Height(actionPanel)
 	}
@@ -35,7 +40,11 @@ func (m Model) View() string {
 
 	conversation := m.renderConversationPanel(availableHeight)
 
-	sections := []string{header, conversation}
+	sections := []string{header}
+	if startupBanner != "" {
+		sections = append(sections, startupBanner)
+	}
+	sections = append(sections, conversation)
 	if actionPanel != "" {
 		sections = append(sections, actionPanel)
 	}
@@ -76,14 +85,15 @@ func (m Model) conversationViewport() ViewportModel {
 
 func (m Model) conversationPanelHeight() int {
 	header := ""
-	if !m.sidebarEnabled() {
+	if m.topHeaderEnabled() {
 		header = m.renderHeader()
 	}
+	startupBanner := m.renderStartupBanner()
 	actionPanel := m.renderContextPanel()
 	statusBar := m.renderStatusBar()
 	composer := m.renderComposerPanel()
 
-	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
+	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
 	if actionPanel != "" {
 		availableHeight -= lipgloss.Height(actionPanel)
 	}
@@ -147,14 +157,15 @@ func streamingBulletFrame(frame int) string {
 }
 
 func (m Model) renderHeader() string {
+	logoWidth := 44
+	if m.viewWidth() >= 120 {
+		logoWidth = 48
+	}
 	logoCard := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("12")).
-		Padding(0, 1).
-		Render(
-			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(asciiLogo()) +
-				lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("header.terminal_native")),
-		)
+		Padding(1, 1, 0, 1).
+		Render(renderHeaderLogo(logoWidth, m.t("header.terminal_native")))
 
 	vendor, endpoint, model := m.currentSelection()
 	sessionLine := m.t("label.session") + " " + m.t("session.ephemeral")
@@ -185,6 +196,13 @@ func (m Model) renderHeader() string {
 	return lipgloss.JoinVertical(lipgloss.Left, logoCard, metaCard)
 }
 
+func (m Model) renderStartupBanner() string {
+	if !m.startupBannerVisible {
+		return ""
+	}
+	return m.renderContextBox(m.t("panel.startup"), m.t("startup.banner"), lipgloss.Color("11"))
+}
+
 func (m Model) renderSidebar() string {
 	vendor, endpoint, model := m.currentSelection()
 	sessionLine := m.t("session.ephemeral")
@@ -198,19 +216,26 @@ func (m Model) renderSidebar() string {
 	}
 
 	body := strings.Join([]string{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(asciiLogo()),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("workspace.tagline")),
+		"",
+		renderSidebarLogo(m.sidebarWidth()-4, m.t("workspace.tagline")),
 		"",
 		m.styles.title.Render("ggcode"),
-		fmt.Sprintf("%-9s %s", m.t("label.vendor"), vendor),
-		fmt.Sprintf("%-9s %s", m.t("label.endpoint"), truncateString(endpoint, m.sidebarWidth()-12)),
-		fmt.Sprintf("%-9s %s", m.t("label.model"), truncateString(model, m.sidebarWidth()-12)),
-		fmt.Sprintf("%-9s %s", m.t("label.mode"), m.renderModeBadge()),
-		fmt.Sprintf("%-9s %s", m.t("label.session"), sessionLine),
-		fmt.Sprintf("%-9s %s", m.t("label.agents"), agentLine),
-		fmt.Sprintf("%-9s %s", m.t("label.activity"), truncateString(activity, m.sidebarWidth()-12)),
+		m.renderSidebarDetailRow(m.t("label.vendor"), vendor, m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.endpoint"), endpoint, m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.model"), model, m.sidebarWidth()-4),
+		m.renderSidebarBadgeRow(m.t("label.mode"), m.renderModeBadge()),
+		m.renderSidebarDetailRow(m.t("label.session"), sessionLine, m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.agents"), agentLine, m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.cwd"), m.sidebarWorkingDirectory(), m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.branch"), firstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.activity"), activity, m.sidebarWidth()-4),
+		"",
+		m.renderSidebarContextSection(),
 		"",
 		m.renderSidebarModeSection(),
+		"",
+		m.renderSidebarMCPSection(),
 	}, "\n")
 
 	return lipgloss.NewStyle().
@@ -224,16 +249,100 @@ func (m Model) renderSidebar() string {
 func (m Model) renderSidebarModeSection() string {
 	width := max(12, m.sidebarWidth()-4)
 	rows := []string{
-		m.styles.title.Render(m.t("panel.mode_policy")),
-		formatSidebarDetailRow(m.t("label.approval_policy"), m.t(sidebarModeApprovalKey(m.mode)), width),
-		formatSidebarDetailRow(m.t("label.tool_policy"), m.t(sidebarModeToolsKey(m.mode)), width),
-		formatSidebarDetailRow(m.t("label.agent_policy"), m.t(sidebarModeAgentKey(m.mode)), width),
+		m.renderSidebarSectionTitle(m.t("panel.mode_policy")),
+		m.renderSidebarDetailRow(m.t("label.approval_policy"), m.t(sidebarModeApprovalKey(m.mode)), width),
+		m.renderSidebarDetailRow(m.t("label.tool_policy"), m.t(sidebarModeToolsKey(m.mode)), width),
+		m.renderSidebarDetailRow(m.t("label.agent_policy"), m.t(sidebarModeAgentKey(m.mode)), width),
 	}
 	return strings.Join(rows, "\n")
 }
 
-func formatSidebarDetailRow(label, value string, width int) string {
-	return truncateString(fmt.Sprintf("%-8s %s", label, value), width)
+func (m Model) renderSidebarContextSection() string {
+	width := max(12, m.sidebarWidth()-4)
+	rows := []string{m.renderSidebarSectionTitle(m.t("panel.context"))}
+	stats, ok := m.sidebarContextStats()
+	if !ok {
+		rows = append(rows, truncateString(m.t("context.unavailable"), width))
+		return strings.Join(rows, "\n")
+	}
+
+	rows = append(rows,
+		m.renderSidebarDetailRow(m.t("label.window"), humanizeTokenCount(stats.maxTokens), width),
+		m.renderSidebarDetailRow(m.t("label.usage"), fmt.Sprintf("%d%%", stats.usagePercent), width),
+		m.renderSidebarDetailRow(m.t("label.compact"), fmt.Sprintf("%d%% %s", stats.remainingPercent, m.t("context.until_compact")), width),
+	)
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderSidebarMCPSection() string {
+	width := max(12, m.sidebarWidth()-4)
+	rows := []string{m.renderSidebarSectionTitle(m.t("panel.mcp"))}
+	if len(m.mcpServers) == 0 {
+		rows = append(rows, truncateString(m.t("mcp.none"), width))
+		return strings.Join(rows, "\n")
+	}
+	connected, pending, failed := 0, 0, 0
+	for _, srv := range m.mcpServers {
+		switch {
+		case srv.Connected:
+			connected++
+		case srv.Pending:
+			pending++
+		default:
+			failed++
+		}
+	}
+	rows = append(rows, truncateString(fmt.Sprintf("%d up • %d pending • %d failed", connected, pending, failed), width))
+	visibleServers := m.mcpServers
+	if len(visibleServers) > 5 {
+		visibleServers = visibleServers[:5]
+	}
+	for _, srv := range visibleServers {
+		icon := "✕"
+		switch {
+		case srv.Connected:
+			icon = "✓"
+		case srv.Pending:
+			icon = "…"
+		}
+		label := fmt.Sprintf("%s %s (%s)", icon, srv.Name, firstNonEmpty(srv.Transport, "stdio"))
+		rows = append(rows, truncateString(label, width))
+	}
+	if hidden := len(m.mcpServers) - len(visibleServers); hidden > 0 {
+		rows = append(rows, truncateString(m.t("mcp.more", hidden), width))
+	}
+	if active := m.activeMCPToolSummaries(); len(active) > 0 {
+		rows = append(rows, "", truncateString(m.t("mcp.active_tools"), width))
+		for _, item := range active {
+			rows = append(rows, truncateString("• "+item, width))
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderSidebarSectionTitle(title string) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("111")).
+		Italic(true).
+		Bold(true).
+		Render(title)
+}
+
+func (m Model) renderSidebarDetailRow(label, value string, width int) string {
+	const labelWidth = 9
+	key := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Render(fmt.Sprintf("%-*s", labelWidth, truncateString(label, labelWidth)))
+	valueWidth := max(1, width-labelWidth-1)
+	return key + " " + truncateString(value, valueWidth)
+}
+
+func (m Model) renderSidebarBadgeRow(label, badge string) string {
+	const labelWidth = 9
+	key := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Render(fmt.Sprintf("%-*s", labelWidth, truncateString(label, labelWidth)))
+	return key + " " + badge
 }
 
 func sidebarModeApprovalKey(mode permission.PermissionMode) string {
@@ -275,13 +384,172 @@ func sidebarModeAgentKey(mode permission.PermissionMode) string {
 	}
 }
 
+type sidebarContextStatLine struct {
+	maxTokens        int
+	usagePercent     int
+	remainingPercent int
+}
+
+func (m Model) sidebarContextStats() (sidebarContextStatLine, bool) {
+	if m.agent == nil {
+		return sidebarContextStatLine{}, false
+	}
+	cm := m.agent.ContextManager()
+	if cm == nil {
+		return sidebarContextStatLine{}, false
+	}
+	maxTokens := cm.MaxTokens()
+	tokenCount := cm.TokenCount()
+	threshold := ctxpkg.AutoCompactThresholdTokens(maxTokens)
+	if maxTokens <= 0 || threshold <= 0 {
+		return sidebarContextStatLine{}, false
+	}
+
+	usagePercent := int(float64(tokenCount) / float64(maxTokens) * 100)
+	if usagePercent < 0 {
+		usagePercent = 0
+	}
+	if usagePercent > 100 {
+		usagePercent = 100
+	}
+
+	remainingPercent := int(float64(threshold-tokenCount) / float64(threshold) * 100)
+	if remainingPercent < 0 {
+		remainingPercent = 0
+	}
+	if remainingPercent > 100 {
+		remainingPercent = 100
+	}
+
+	return sidebarContextStatLine{
+		maxTokens:        maxTokens,
+		usagePercent:     usagePercent,
+		remainingPercent: remainingPercent,
+	}, true
+}
+
+func humanizeTokenCount(n int) string {
+	if n >= 1000000 && n%1000000 == 0 {
+		return fmt.Sprintf("%dm", n/1000000)
+	}
+	if n >= 1000 && n%1000 == 0 {
+		return fmt.Sprintf("%dk", n/1000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func (m Model) sidebarWorkingDirectory() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "unknown"
+	}
+	return shortenSidebarPath(cwd)
+}
+
+func (m Model) sidebarGitBranch() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	branch, err := gitBranchForDir(cwd)
+	if err != nil {
+		return ""
+	}
+	return branch
+}
+
+func (m Model) loadedSkillCount() int {
+	if m.commandMgr == nil {
+		return 0
+	}
+	count := 0
+	for _, cmd := range m.commandMgr.Commands() {
+		if cmd == nil {
+			continue
+		}
+		switch cmd.LoadedFrom {
+		case commands.LoadedFromSkills, commands.LoadedFromBundled, commands.LoadedFromPlugin:
+			count++
+		}
+	}
+	return count
+}
+
+func shortenSidebarPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = filepath.ToSlash(filepath.Clean(value))
+	home, err := os.UserHomeDir()
+	if err == nil {
+		home = filepath.ToSlash(filepath.Clean(home))
+		if value == home {
+			return "~"
+		}
+		if strings.HasPrefix(value, home+"/") {
+			return "~/" + strings.TrimPrefix(value, home+"/")
+		}
+	}
+	return value
+}
+
+func gitBranchForDir(start string) (string, error) {
+	gitDir, err := resolveGitDir(start)
+	if err != nil {
+		return "", err
+	}
+	headBytes, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return "", err
+	}
+	head := strings.TrimSpace(string(headBytes))
+	const prefix = "ref: refs/heads/"
+	if strings.HasPrefix(head, prefix) {
+		return strings.TrimPrefix(head, prefix), nil
+	}
+	return "", nil
+}
+
+func resolveGitDir(start string) (string, error) {
+	dir := start
+	for {
+		gitPath := filepath.Join(dir, ".git")
+		info, err := os.Stat(gitPath)
+		if err == nil {
+			if info.IsDir() {
+				return gitPath, nil
+			}
+			data, readErr := os.ReadFile(gitPath)
+			if readErr != nil {
+				return "", readErr
+			}
+			line := strings.TrimSpace(string(data))
+			const prefix = "gitdir:"
+			if !strings.HasPrefix(strings.ToLower(line), prefix) {
+				return "", fmt.Errorf("unsupported .git file format")
+			}
+			target := strings.TrimSpace(line[len(prefix):])
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(dir, target)
+			}
+			return target, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", os.ErrNotExist
+		}
+		dir = parent
+	}
+}
+
 func (m Model) renderConversationPanel(panelHeight int) string {
 	vp := m.conversationViewport()
 	content := vp.View()
-	body := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.conversation")) + "\n" + content
+	body := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true).Render(" "+m.t("panel.conversation")) + "\n" + content
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(lipgloss.Color("208")).
 		Padding(0, 1).
 		Width(m.mainColumnWidth()).
 		Height(panelHeight).
@@ -289,6 +557,19 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 }
 
 func (m Model) renderApprovalOptions(options []approvalOption, cursor int) string {
+	var rows []string
+	for i, opt := range options {
+		label := fmt.Sprintf("%s (%s)", opt.label, opt.shortcut)
+		if i == cursor {
+			rows = append(rows, m.styles.approvalCursor.Render(" ❯ "+label))
+			continue
+		}
+		rows = append(rows, m.styles.approvalDim.Render("   "+label))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderLanguageOptions(options []languageOption, cursor int) string {
 	var rows []string
 	for i, opt := range options {
 		label := fmt.Sprintf("%s (%s)", opt.label, opt.shortcut)
@@ -359,6 +640,10 @@ func (m Model) renderAutoComplete() string {
 			}
 		} else if _, ok := SlashCommandDescriptions[item]; ok {
 			desc = localizeSlashDescription(m.currentLanguage(), item)
+		} else if cmdName := strings.TrimPrefix(item, "/"); cmdName != item {
+			if cmd, ok := m.customCmds[cmdName]; ok {
+				desc = cmd.Description
+			}
 		}
 
 		row := fmt.Sprintf(" %d. %-*s", realIdx+1, maxWidth, label)
@@ -401,7 +686,7 @@ func (m Model) renderStatusBar() string {
 	spinnerChar := "⏳"
 	if m.spinner.IsActive() {
 		frame := m.spinner.CurrentFrame()
-		spinnerChar = string(spinnerChars[frame%len(spinnerChars)])
+		spinnerChar = spinnerFrameGlyph(frame)
 	}
 
 	line1 := fmt.Sprintf(" %s %s", spinnerChar, activity)
@@ -452,6 +737,10 @@ func (m Model) sidebarActivity() string {
 
 func (m Model) renderContextPanel() string {
 	switch {
+	case m.mcpPanel != nil:
+		return m.renderMCPPanel()
+	case m.skillsPanel != nil:
+		return m.renderSkillsPanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
 	case m.pendingApproval != nil:
@@ -481,6 +770,23 @@ func (m Model) renderContextPanel() string {
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
 		)
 		return m.renderContextBox(m.t("panel.review_file_change"), body, lipgloss.Color("13"))
+	case len(m.langOptions) > 0:
+		title := languageSwitchLabel(m.currentLanguage())
+		bodyLine := m.t("lang.selection.current", m.languageLabel())
+		hint := m.t("lang.selection.hint")
+		accent := lipgloss.Color("10")
+		if m.languagePromptRequired {
+			title = m.t("lang.first_use.title")
+			bodyLine = m.t("lang.first_use.body")
+			hint = m.t("lang.first_use.hint")
+			accent = lipgloss.Color("11")
+		}
+		body := fmt.Sprintf("%s\n\n%s\n%s",
+			bodyLine,
+			m.renderLanguageOptions(m.langOptions, m.langCursor),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(hint),
+		)
+		return m.renderContextBox(title, body, accent)
 	case m.autoCompleteActive && len(m.autoCompleteItems) > 0:
 		return m.renderAutoComplete()
 	default:
@@ -489,14 +795,17 @@ func (m Model) renderContextPanel() string {
 }
 
 func (m Model) renderComposerPanel() string {
+	accent := m.modeColor()
 	title := " " + m.t("panel.composer")
-	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.providerPanel != nil {
+	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0 {
 		title = " " + m.t("panel.composer_locked")
 	}
 
 	hints := []string{
 		m.t("hint.mode") + " " + m.renderModeBadge(),
 		m.t("hint.enter_send"),
+		m.t("hint.ctrlv_image"),
+		m.t("hint.ctrlr_sidebar"),
 		m.t("hint.help"),
 		m.t("hint.add_context"),
 		m.t("hint.scroll"),
@@ -520,10 +829,10 @@ func (m Model) renderComposerPanel() string {
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("12")).
+		BorderForeground(accent).
 		Padding(0, 1).
 		Width(m.mainColumnWidth()).
-		Render(lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(title) + "\n" + body)
+		Render(lipgloss.NewStyle().Foreground(accent).Bold(true).Render(title) + "\n" + body)
 }
 
 func (m Model) renderContextBox(title, body string, accent lipgloss.Color) string {
@@ -619,6 +928,14 @@ func (m Model) sidebarWidth() int {
 }
 
 func (m Model) sidebarEnabled() bool {
+	return m.sidebarVisible && m.sidebarAvailableByWidth()
+}
+
+func (m Model) topHeaderEnabled() bool {
+	return m.sidebarVisible && !m.sidebarEnabled()
+}
+
+func (m Model) sidebarAvailableByWidth() bool {
 	required := 72 + m.sidebarWidth() + 1
 	return m.viewWidth() >= required
 }

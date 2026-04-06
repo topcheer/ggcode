@@ -40,6 +40,9 @@ func (m *Model) setLanguage(lang string) {
 	m.input.Placeholder = m.t("input.placeholder")
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
+	if len(m.langOptions) > 0 {
+		m.langOptions = languageOptionsFor(m.currentLanguage())
+	}
 }
 
 func (m Model) languageLabel() string {
@@ -63,6 +66,21 @@ func languageSwitchLabel(lang Language) string {
 		return "切换界面语言"
 	}
 	return "Switch interface language"
+}
+
+func languageOptionsFor(lang Language) []languageOption {
+	switch lang {
+	case LangZhCN:
+		return []languageOption{
+			{label: "简体中文", shortcut: "z", lang: LangZhCN},
+			{label: "English", shortcut: "e", lang: LangEnglish},
+		}
+	default:
+		return []languageOption{
+			{label: "English", shortcut: "e", lang: LangEnglish},
+			{label: "简体中文", shortcut: "z", lang: LangZhCN},
+		}
+	}
 }
 
 func localizeSlashDescription(lang Language, cmd string) string {
@@ -99,8 +117,12 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.fullscreen")
 	case "/mode":
 		return tr(lang, "slash.mode")
+	case "/init":
+		return tr(lang, "slash.init")
 	case "/lang":
 		return tr(lang, "slash.lang")
+	case "/skills":
+		return tr(lang, "slash.skills")
 	case "/exit", "/quit":
 		return tr(lang, "slash.exit")
 	case "/agents":
@@ -164,6 +186,12 @@ func enCatalog(key string) string {
 		return "Agent status"
 	case "panel.mode_policy":
 		return "Mode policy"
+	case "panel.context":
+		return "Context"
+	case "panel.mcp":
+		return "MCP"
+	case "panel.startup":
+		return "Initializing"
 	case "panel.approval_required":
 		return "Approval required"
 	case "panel.bypass_approval":
@@ -182,8 +210,20 @@ func enCatalog(key string) string {
 		return "session"
 	case "label.agents":
 		return "agents"
+	case "label.cwd":
+		return "cwd"
+	case "label.branch":
+		return "branch"
+	case "label.skills":
+		return "skills"
 	case "label.activity":
 		return "activity"
+	case "label.window":
+		return "window"
+	case "label.usage":
+		return "usage"
+	case "label.compact":
+		return "compact"
 	case "label.approval_policy":
 		return "approval"
 	case "label.tool_policy":
@@ -198,10 +238,16 @@ func enCatalog(key string) string {
 		return "file"
 	case "label.directory":
 		return "directory"
+	case "context.unavailable":
+		return "No context data yet"
+	case "context.until_compact":
+		return "left"
 	case "empty.ask":
 		return "Ask for a refactor, bug fix, explanation, or tests."
 	case "empty.tips":
 		return "Tips: use @path to include files, /? for help, and Shift+Tab to change mode."
+	case "startup.banner":
+		return "Preparing the terminal UI and filtering startup terminal noise. You can type right away; this banner disappears once startup settles."
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab cycle • Enter apply • Esc close"
 	case "hint.mention":
@@ -228,6 +274,10 @@ func enCatalog(key string) string {
 		return "keeps going"
 	case "hint.enter_send":
 		return "Enter send"
+	case "hint.ctrlv_image":
+		return "Ctrl+V paste image"
+	case "hint.ctrlr_sidebar":
+		return "Ctrl+R sidebar"
 	case "hint.help":
 		return "/? help"
 	case "hint.add_context":
@@ -289,11 +339,21 @@ func enCatalog(key string) string {
 	case "interrupted":
 		return "[interrupted]\n\n"
 	case "lang.current":
-		return "Current language: %s\nUsage: /lang <en|zh-CN>\n%s\n\n"
+		return "Current language: %s\nUse /lang to choose interactively, or /lang <en|zh-CN> to switch directly.\n%s\n\n"
 	case "lang.invalid":
 		return "Unsupported language: %s\n%s\n\n"
 	case "lang.switch":
 		return "Language switched to: %s\n\n"
+	case "lang.selection.current":
+		return " Current: %s"
+	case "lang.selection.hint":
+		return " Tab/j/k move • Enter confirm • e/z shortcuts • Esc cancel"
+	case "lang.first_use.title":
+		return "Choose your preferred language"
+	case "lang.first_use.body":
+		return " Select the language you want ggcode to use from now on."
+	case "lang.first_use.hint":
+		return " Tab/j/k move • Enter confirm • e/z shortcuts"
 	case "mode.current":
 		return "Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Ask when a tool has no explicit rule\n  plan        Read-only exploration; deny writes and commands\n  auto        Allow safe operations, deny dangerous ones\n  bypass      Allow almost everything; only stop on critical actions\n  autopilot   bypass + keep going when the model asks back\n\n"
 	case "input.placeholder":
@@ -308,6 +368,12 @@ func enCatalog(key string) string {
 		return "Usage: /resume <session-id>\n\n"
 	case "command.usage.export":
 		return "Usage: /export <session-id>\n\n"
+	case "init.resolve_failed":
+		return "Failed to resolve init target: %v\n\n"
+	case "init.generate_failed":
+		return "Failed to generate GGCODE.md content: %v\n\n"
+	case "init.collecting":
+		return "Collecting project knowledge..."
 	case "command.model_switched":
 		return "Switched model to: %s (vendor: %s)\n\n"
 	case "command.model_failed":
@@ -385,9 +451,9 @@ func enCatalog(key string) string {
 	case "memory.title":
 		return "Memory:\n"
 	case "memory.project":
-		return "Project Memory (GGCODE.md):\n"
+		return "Project Memory:\n"
 	case "memory.project_none":
-		return "  No GGCODE.md files loaded.\n"
+		return "  No project memory files loaded.\n"
 	case "memory.auto":
 		return "Auto Memory:\n"
 	case "memory.auto_none":
@@ -458,10 +524,20 @@ func enCatalog(key string) string {
 		return "No MCP servers configured.\n\n"
 	case "mcp.title":
 		return "MCP Servers:\n"
+	case "mcp.active_tools":
+		return "Active tools"
+	case "mcp.more":
+		return "… %d more • /mcp"
 	case "image.usage":
 		return "Usage: /image <path/to/file.png>\n"
 	case "image.formats":
 		return "Supported formats: PNG, JPEG, GIF, WebP (max 20MB)\n\n"
+	case "image.attached":
+		return "Image attached: %s\n"
+	case "image.attached_hint":
+		return "Send a message to include the image, or /image to attach another.\n\n"
+	case "image.clipboard_failed":
+		return "pasting image from clipboard failed: %v"
 	case "fullscreen.state":
 		return "Fullscreen: %s\n\n"
 	case "fullscreen.on":
@@ -524,8 +600,12 @@ func enCatalog(key string) string {
 		return "Toggle fullscreen"
 	case "slash.mode":
 		return "Set permission mode"
+	case "slash.init":
+		return "Generate project GGCODE.md"
 	case "slash.lang":
 		return "Switch interface language"
+	case "slash.skills":
+		return "Browse available skills"
 	case "slash.exit":
 		return "Exit ggcode"
 	case "slash.agents":
@@ -550,7 +630,8 @@ func enCatalog(key string) string {
   /export <id>       Export session to markdown file
   /model <name>      Switch model
   /provider [vendor] Open provider manager
-  /lang <code>       Switch interface language
+  /lang [code]       Choose or switch interface language
+  /skills            Browse available skills
   /clear             Clear conversation history
   /mcp               Show connected MCP servers and tools
   /memory            Show loaded memory files
@@ -564,6 +645,7 @@ func enCatalog(key string) string {
   /image <path>      Attach an image file
   /fullscreen        Toggle fullscreen mode
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
+  /init              Generate GGCODE.md from the current project
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
   /agent cancel <id> Cancel a sub-agent
@@ -623,6 +705,12 @@ func zhCatalog(key string) string {
 		return "Agent 状态"
 	case "panel.mode_policy":
 		return "模式说明"
+	case "panel.context":
+		return "上下文"
+	case "panel.mcp":
+		return "MCP"
+	case "panel.startup":
+		return "正在初始化"
 	case "panel.approval_required":
 		return "需要确认"
 	case "panel.bypass_approval":
@@ -641,8 +729,20 @@ func zhCatalog(key string) string {
 		return "会话"
 	case "label.agents":
 		return "子 Agent"
+	case "label.cwd":
+		return "目录"
+	case "label.branch":
+		return "分支"
+	case "label.skills":
+		return "技能"
 	case "label.activity":
 		return "活动"
+	case "label.window":
+		return "窗口"
+	case "label.usage":
+		return "占用"
+	case "label.compact":
+		return "压缩"
 	case "label.approval_policy":
 		return "审批"
 	case "label.tool_policy":
@@ -657,10 +757,16 @@ func zhCatalog(key string) string {
 		return "文件"
 	case "label.directory":
 		return "目录"
+	case "context.unavailable":
+		return "暂无上下文数据"
+	case "context.until_compact":
+		return "后触发"
 	case "empty.ask":
 		return "你可以让我做重构、修复 bug、解释代码或补测试。"
 	case "empty.tips":
 		return "提示：用 @path 引用文件，/? 查看帮助，Shift+Tab 切换模式。"
+	case "startup.banner":
+		return "正在准备终端界面并过滤启动期的终端噪声。你现在就可以输入；一旦界面进入可交互状态，这个提示会自动消失。"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 切换 • Enter 应用 • Esc 关闭"
 	case "hint.mention":
@@ -687,6 +793,10 @@ func zhCatalog(key string) string {
 		return "自动继续推进"
 	case "hint.enter_send":
 		return "Enter 发送"
+	case "hint.ctrlv_image":
+		return "Ctrl+V 粘贴图片"
+	case "hint.ctrlr_sidebar":
+		return "Ctrl+R 侧栏"
 	case "hint.help":
 		return "/? 帮助"
 	case "hint.add_context":
@@ -748,11 +858,21 @@ func zhCatalog(key string) string {
 	case "interrupted":
 		return "[已中断]\n\n"
 	case "lang.current":
-		return "当前语言：%s\n用法：/lang <en|zh-CN>\n%s\n\n"
+		return "当前语言：%s\n使用 /lang 打开选择列表，或用 /lang <en|zh-CN> 直接切换。\n%s\n\n"
 	case "lang.invalid":
 		return "不支持的语言：%s\n%s\n\n"
 	case "lang.switch":
 		return "已切换语言为：%s\n\n"
+	case "lang.selection.current":
+		return " 当前语言：%s"
+	case "lang.selection.hint":
+		return " Tab/j/k 移动 • Enter 确认 • e/z 快捷键 • Esc 取消"
+	case "lang.first_use.title":
+		return "选择你偏好的语言"
+	case "lang.first_use.body":
+		return " 请选择今后 ggcode 默认使用的界面语言。"
+	case "lang.first_use.hint":
+		return " Tab/j/k 移动 • Enter 确认 • e/z 快捷键"
 	case "mode.current":
 		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass|autopilot>\n  supervised  未显式配置的工具会询问\n  plan        严格只读探索；拒绝写入和命令\n  auto        自动允许安全操作，拒绝危险操作\n  bypass      基本全放行，只在关键操作时停下\n  autopilot   等同 bypass，并在模型反问时自动继续\n\n"
 	case "input.placeholder":
@@ -767,6 +887,12 @@ func zhCatalog(key string) string {
 		return "用法：/resume <session-id>\n\n"
 	case "command.usage.export":
 		return "用法：/export <session-id>\n\n"
+	case "init.resolve_failed":
+		return "解析初始化目标失败：%v\n\n"
+	case "init.generate_failed":
+		return "生成 GGCODE.md 内容失败：%v\n\n"
+	case "init.collecting":
+		return "正在收集项目知识..."
 	case "command.model_switched":
 		return "已切换模型为：%s（供应商：%s）\n\n"
 	case "command.model_failed":
@@ -844,9 +970,9 @@ func zhCatalog(key string) string {
 	case "memory.title":
 		return "记忆：\n"
 	case "memory.project":
-		return "项目记忆（GGCODE.md）：\n"
+		return "项目记忆：\n"
 	case "memory.project_none":
-		return "  未加载 GGCODE.md 文件。\n"
+		return "  未加载项目记忆文件。\n"
 	case "memory.auto":
 		return "自动记忆：\n"
 	case "memory.auto_none":
@@ -917,10 +1043,20 @@ func zhCatalog(key string) string {
 		return "没有配置 MCP 服务器。\n\n"
 	case "mcp.title":
 		return "MCP 服务器：\n"
+	case "mcp.active_tools":
+		return "活动工具"
+	case "mcp.more":
+		return "… 还有 %d 个，使用 /mcp 查看"
 	case "image.usage":
 		return "用法：/image <path/to/file.png>\n"
 	case "image.formats":
 		return "支持格式：PNG、JPEG、GIF、WebP（最大 20MB）\n\n"
+	case "image.attached":
+		return "已附加图片：%s\n"
+	case "image.attached_hint":
+		return "发送一条消息即可携带这张图片，或继续用 /image 再附加一张。\n\n"
+	case "image.clipboard_failed":
+		return "从剪贴板粘贴图片失败：%v"
 	case "fullscreen.state":
 		return "全屏：%s\n\n"
 	case "fullscreen.on":
@@ -983,8 +1119,12 @@ func zhCatalog(key string) string {
 		return "切换全屏"
 	case "slash.mode":
 		return "设置权限模式"
+	case "slash.init":
+		return "生成项目 GGCODE.md"
 	case "slash.lang":
 		return "切换界面语言"
+	case "slash.skills":
+		return "浏览可用 skills"
 	case "slash.exit":
 		return "退出 ggcode"
 	case "slash.agents":
@@ -1009,7 +1149,8 @@ func zhCatalog(key string) string {
   /export <id>       导出会话为 Markdown 文件
   /model <name>      切换模型
   /provider [vendor] 打开供应商管理界面
-  /lang <code>       切换界面语言
+  /lang [code]       选择或切换界面语言
+  /skills            浏览可用 skills
   /clear             清空对话历史
   /mcp               显示已连接的 MCP 服务器和工具
   /memory            显示已加载记忆
@@ -1023,6 +1164,7 @@ func zhCatalog(key string) string {
   /image <path>      附加图片文件
   /fullscreen        切换全屏模式
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
+  /init              基于当前项目生成 GGCODE.md
   /agents            列出子 Agent
   /agent <id>        查看子 Agent 详情
   /agent cancel <id> 取消子 Agent

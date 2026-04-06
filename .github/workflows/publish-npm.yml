@@ -1,0 +1,44 @@
+name: Publish npm
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish npm wrapper
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          git fetch --force --tags
+          tag="$(git tag --points-at "${GITHUB_SHA}" | grep '^v' | head -n 1)"
+          test -n "${tag}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Set npm package version from tag
+        working-directory: npm
+        run: npm pkg set version="${RELEASE_TAG#v}"
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+      - name: Verify npm package
+        working-directory: npm
+        run: npm pack --quiet
+      - name: Publish npm package
+        working-directory: npm
+        run: npm publish --provenance --access public

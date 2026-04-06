@@ -4,15 +4,22 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func newTestModel() Model {
@@ -49,6 +56,100 @@ func TestResizeTinyWindow(t *testing.T) {
 	m.handleResize(10, 2)
 	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
 		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
+	}
+}
+
+func TestRebuildMarkdownRendererSkipsUnchangedWrapWidth(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 24)
+	m.rebuildMarkdownRenderer()
+	before := uintptr(unsafe.Pointer(m.mdRenderer))
+
+	m.rebuildMarkdownRenderer()
+	afterFirst := uintptr(unsafe.Pointer(m.mdRenderer))
+	m.rebuildMarkdownRenderer()
+	afterSecond := uintptr(unsafe.Pointer(m.mdRenderer))
+
+	if afterFirst != before {
+		t.Fatalf("expected unchanged wrap width to avoid renderer rebuild")
+	}
+	if afterSecond != afterFirst {
+		t.Fatalf("expected repeated rebuild with unchanged width to be a no-op")
+	}
+}
+
+func TestRebuildMarkdownRendererUpdatesWhenWrapWidthChanges(t *testing.T) {
+	m := newTestModel()
+	before := uintptr(unsafe.Pointer(m.mdRenderer))
+
+	m.handleResize(120, 24)
+	m.rebuildMarkdownRenderer()
+	after := uintptr(unsafe.Pointer(m.mdRenderer))
+
+	if after == before {
+		t.Fatalf("expected renderer rebuild after wrap width change")
+	}
+	if m.markdownWrapWidth != m.mainColumnWidth()-4 {
+		t.Fatalf("expected markdown wrap width %d, got %d", m.mainColumnWidth()-4, m.markdownWrapWidth)
+	}
+}
+
+func TestSpinnerFrameGlyphUsesWholeRune(t *testing.T) {
+	if got := spinnerFrameGlyph(0); got != "⠋" {
+		t.Fatalf("expected first spinner glyph ⠋, got %q", got)
+	}
+	if got := spinnerFrameGlyph(9); got != "⠏" {
+		t.Fatalf("expected last spinner glyph ⠏, got %q", got)
+	}
+}
+
+func TestActiveStatusBarDoesNotShowBrokenSpinnerByte(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = "Running command"
+	m.spinner.Start("Run: cd")
+
+	rendered := m.renderStatusBar()
+
+	if strings.Contains(rendered, "â") {
+		t.Fatalf("expected status bar to avoid broken spinner byte, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "⠋") {
+		t.Fatalf("expected status bar to include spinner glyph, got %q", rendered)
+	}
+}
+
+func TestToolStartReturnsSpinnerTickCommand(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+
+	_, cmd := m.Update(toolStatusMsg(ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Run",
+		Detail:      "pod install",
+		Activity:    "Running pod install",
+		Running:     true,
+	}))
+
+	if cmd == nil {
+		t.Fatal("expected starting a running tool to schedule spinner ticks")
+	}
+}
+
+func TestSpinnerMsgSchedulesNextTick(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.spinner.Start("Run: pod install")
+	before := m.spinner.CurrentFrame()
+
+	model, cmd := m.Update(spinnerMsg{})
+	m2 := model.(Model)
+
+	if m2.spinner.CurrentFrame() == before {
+		t.Fatal("expected spinner frame to advance on spinner tick")
+	}
+	if cmd == nil {
+		t.Fatal("expected spinner tick to schedule the next frame")
 	}
 }
 
@@ -156,6 +257,167 @@ func TestLangCommandSwitchesToChinese(t *testing.T) {
 	}
 }
 
+func TestLangCommandWithoutArgsOpensSelector(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.handleLangCommand([]string{"/lang"})
+	if cmd != nil {
+		t.Fatal("expected /lang to open selector synchronously")
+	}
+	if len(m.langOptions) != 2 {
+		t.Fatalf("expected 2 language options, got %d", len(m.langOptions))
+	}
+	if m.langOptions[m.langCursor].lang != LangEnglish {
+		t.Fatalf("expected current language to be preselected, got %s", m.langOptions[m.langCursor].lang)
+	}
+	panel := m.renderContextPanel()
+	if !strings.Contains(panel, "Switch interface language") {
+		t.Fatal("expected language selector panel title")
+	}
+	if !strings.Contains(panel, "English (e)") || !strings.Contains(panel, "简体中文 (z)") {
+		t.Fatal("expected both language options to be rendered")
+	}
+}
+
+func TestLanguageSelectorEnterSwitchesLanguage(t *testing.T) {
+	m := newTestModel()
+	m.handleLangCommand([]string{"/lang"})
+	m.langCursor = 1
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected language selection to update synchronously")
+	}
+	m2 := next.(Model)
+	if m2.currentLanguage() != LangZhCN {
+		t.Fatalf("expected zh-CN after selector confirm, got %s", m2.currentLanguage())
+	}
+	if len(m2.langOptions) != 0 {
+		t.Fatal("expected language selector to close after confirmation")
+	}
+	if !strings.Contains(m2.output.String(), "已切换语言为") {
+		t.Fatal("expected language switch output after confirmation")
+	}
+}
+
+func TestLanguageSelectorEscClosesWithoutChangingLanguage(t *testing.T) {
+	m := newTestModel()
+	m.handleLangCommand([]string{"/lang"})
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatal("expected esc to close selector synchronously")
+	}
+	m2 := next.(Model)
+	if len(m2.langOptions) != 0 {
+		t.Fatal("expected language selector to close")
+	}
+	if m2.currentLanguage() != LangEnglish {
+		t.Fatalf("expected language to remain English, got %s", m2.currentLanguage())
+	}
+}
+
+func TestLanguageSelectorCtrlCTriggersExitConfirm(t *testing.T) {
+	m := newTestModel()
+	m.handleLangCommand([]string{"/lang"})
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatal("expected first ctrl-c to arm exit confirmation")
+	}
+	m2 := next.(Model)
+	if !m2.exitConfirmPending {
+		t.Fatal("expected ctrl-c in language selector to arm exit confirmation")
+	}
+	if len(m2.langOptions) == 0 {
+		t.Fatal("expected language selector to stay visible until explicit close or quit")
+	}
+}
+
+func TestSetConfigUsesPersistedLanguageWithoutOpeningSelector(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Language = "zh-CN"
+
+	m.SetConfig(cfg)
+
+	if m.currentLanguage() != LangZhCN {
+		t.Fatalf("expected persisted language zh-CN, got %s", m.currentLanguage())
+	}
+	if len(m.langOptions) != 0 {
+		t.Fatal("expected persisted language to apply without opening selector")
+	}
+}
+
+func TestSetConfigFirstRunOpensLanguageSelector(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FirstRun = true
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+
+	m.SetConfig(cfg)
+
+	if !m.languagePromptRequired {
+		t.Fatal("expected first-run language prompt to be required")
+	}
+	if len(m.langOptions) != 2 {
+		t.Fatalf("expected first-run language selector to open, got %d options", len(m.langOptions))
+	}
+	panel := m.renderContextPanel()
+	if !strings.Contains(panel, "Choose your preferred language") {
+		t.Fatal("expected first-run language onboarding title")
+	}
+}
+
+func TestFirstRunLanguageSelectorPersistsChoice(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg.FilePath = path
+	cfg.FirstRun = true
+	m.SetConfig(cfg)
+	m.langCursor = 1
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected first-run language selection to update synchronously")
+	}
+	m2 := next.(Model)
+	if m2.currentLanguage() != LangZhCN {
+		t.Fatalf("expected zh-CN after onboarding confirm, got %s", m2.currentLanguage())
+	}
+	if m2.languagePromptRequired {
+		t.Fatal("expected onboarding flag to clear after confirmation")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(data) != "language: zh-CN\n" {
+		t.Fatalf("expected persisted language file, got %q", string(data))
+	}
+}
+
+func TestFirstRunLanguageSelectorEscDoesNotClose(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FirstRun = true
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	m.SetConfig(cfg)
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatal("expected esc to be ignored during required first-run language prompt")
+	}
+	m2 := next.(Model)
+	if len(m2.langOptions) == 0 {
+		t.Fatal("expected first-run language selector to remain open")
+	}
+	if !m2.languagePromptRequired {
+		t.Fatal("expected first-run language prompt to remain required")
+	}
+}
+
 func TestChineseViewRendersLocalizedPanels(t *testing.T) {
 	m := newTestModel()
 	m.setLanguage("zh-CN")
@@ -203,11 +465,28 @@ func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	if !strings.Contains(view, "vendor") || !strings.Contains(view, "session") {
 		t.Error("expected sidebar metadata in wide layout")
 	}
-	if !strings.Contains(view, "____ ____ ____") {
-		t.Error("expected ascii logo in right sidebar")
+	if !strings.Contains(view, "ggcode") {
+		t.Error("expected branded logo content in right sidebar")
 	}
 	if !strings.Contains(view, "Mode policy") || !strings.Contains(view, "approval") {
 		t.Error("expected mode policy section in sidebar")
+	}
+}
+
+func TestRenderLogoUsesStyledWordmarkByDefault(t *testing.T) {
+	logo := renderLogo(16)
+	if logo == asciiLogo() {
+		t.Fatal("expected styled wordmark by default")
+	}
+	if !strings.Contains(logo, "GG") || !strings.Contains(logo, "CODE") {
+		t.Fatal("expected branded wordmark output")
+	}
+}
+
+func TestRenderLogoFallsBackToASCIIWhenForced(t *testing.T) {
+	t.Setenv("GGCODE_ASCII_LOGO", "1")
+	if got := renderLogo(16); got != asciiLogo() {
+		t.Fatal("expected ascii fallback when GGCODE_ASCII_LOGO is set")
 	}
 }
 
@@ -219,6 +498,148 @@ func TestSidebarModePolicyLocalizesInChinese(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "模式说明") || !strings.Contains(view, "审批") || !strings.Contains(view, "行为") {
 		t.Error("expected localized mode policy section in sidebar")
+	}
+}
+
+func TestSidebarRendersMCPSectionAndActiveTools(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	m.mcpServers = []MCPInfo{
+		{Name: "web-reader", Connected: true, Transport: "http", Migrated: true},
+		{Name: "zai-mcp-server", Pending: true, Transport: "stdio"},
+		{Name: "server-3", Connected: true, Transport: "stdio"},
+		{Name: "server-4", Connected: true, Transport: "stdio"},
+		{Name: "server-5", Connected: true, Transport: "stdio"},
+		{Name: "server-6", Connected: true, Transport: "stdio"},
+	}
+	m.activeMCPTools = map[string]ToolStatusMsg{
+		"mcp__web-reader__fetch": {
+			ToolName:    "mcp__web-reader__fetch",
+			DisplayName: "Fetch",
+			Detail:      "docs",
+			Running:     true,
+		},
+	}
+
+	view := m.View()
+
+	if !strings.Contains(view, "MCP") || !strings.Contains(view, "5 up • 1 pending • 0 failed") {
+		t.Fatal("expected MCP summary block in sidebar")
+	}
+	if !strings.Contains(view, "web-reader (http)") || !strings.Contains(view, "zai-mcp-server (stdio)") {
+		t.Fatal("expected MCP server rows in sidebar")
+	}
+	if strings.Contains(view, "server-6 (stdio)") {
+		t.Fatal("expected sidebar MCP list to cap at five servers")
+	}
+	if !strings.Contains(view, "/mcp") {
+		t.Fatal("expected sidebar MCP overflow hint")
+	}
+	if !strings.Contains(view, "Active tools") || !strings.Contains(view, "web-reader") {
+		t.Fatal("expected active MCP tool list in sidebar")
+	}
+}
+
+func TestSidebarRendersWorkingDirectoryAndGitBranch(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git", "refs", "heads"), 0o755); err != nil {
+		t.Fatalf("mkdir refs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".git", "HEAD"), []byte("ref: refs/heads/feature/sidebar\n"), 0o644); err != nil {
+		t.Fatalf("write HEAD: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	m := newTestModel()
+	m.handleResize(128, 28)
+
+	if got := m.sidebarWorkingDirectory(); !strings.HasSuffix(got, filepath.Base(repoDir)) {
+		t.Fatalf("expected sidebarWorkingDirectory to end with %q, got %q", filepath.Base(repoDir), got)
+	}
+	if got := m.sidebarGitBranch(); got != "feature/sidebar" {
+		t.Fatalf("expected sidebarGitBranch feature/sidebar, got %q", got)
+	}
+
+	view := m.View()
+
+	if !strings.Contains(view, "cwd") {
+		t.Fatalf("expected sidebar cwd row, got %q", view)
+	}
+	if !strings.Contains(view, "branch") || !strings.Contains(view, "feature/sidebar") {
+		t.Fatalf("expected sidebar branch row, got %q", view)
+	}
+}
+
+func TestLoadedSkillCountExcludesLegacyCommandsAndMCP(t *testing.T) {
+	m := newTestModel()
+	m.commandMgr = commands.NewManager(t.TempDir())
+	base := m.loadedSkillCount()
+	m.commandMgr.SetExtraProviders(func() []*commands.Command {
+		return []*commands.Command{
+			{Name: "extra-skill", LoadedFrom: commands.LoadedFromSkills},
+			{Name: "legacy-command", LoadedFrom: commands.LoadedFromCommands},
+			{Name: "mcp-prompt", LoadedFrom: commands.LoadedFromMCP},
+		}
+	})
+
+	if got := m.loadedSkillCount(); got != base+1 {
+		t.Fatalf("expected loaded skill count delta of 1, got base=%d current=%d", base, got)
+	}
+}
+
+func TestSidebarRendersContextSection(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	m.agent = agent.NewAgent(nil, tool.NewRegistry(), "", 1)
+	m.agent.ContextManager().SetMaxTokens(1000)
+	m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 400)}}})
+
+	view := m.View()
+
+	if !strings.Contains(view, "Context") || !strings.Contains(view, "compact") {
+		t.Fatalf("expected context section in sidebar, got %q", view)
+	}
+	if !strings.Contains(view, "1k") {
+		t.Fatalf("expected context window display, got %q", view)
+	}
+}
+
+func TestCtrlRTogglesSidebarVisibility(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	if !m.sidebarEnabled() {
+		t.Fatal("expected sidebar enabled by default on wide layout")
+	}
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if cmd != nil {
+		t.Fatal("expected ctrl+r toggle to be synchronous")
+	}
+	m = model.(Model)
+	if m.sidebarVisible {
+		t.Fatal("expected ctrl+r to hide sidebar")
+	}
+	if m.sidebarEnabled() {
+		t.Fatal("expected sidebar to be disabled after ctrl+r")
+	}
+	if strings.Contains(m.View(), "geek AI workspace") {
+		t.Fatal("expected ctrl+r sidebar hide to suppress the top header too")
+	}
+
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = model.(Model)
+	if !m.sidebarVisible || !m.sidebarEnabled() {
+		t.Fatal("expected second ctrl+r to show sidebar again")
 	}
 }
 
@@ -250,8 +671,8 @@ func TestNarrowLayoutFallsBackToTopHeader(t *testing.T) {
 	}
 
 	view := m.View()
-	if !strings.Contains(view, "terminal-native AI coding") {
-		t.Error("expected classic header in narrow layout")
+	if !strings.Contains(view, "ggcode") {
+		t.Error("expected branded header in narrow layout")
 	}
 }
 
@@ -363,8 +784,8 @@ func TestTodoWriteOrganizesFollowingActivityUnderActiveTodo(t *testing.T) {
 
 	output := m.renderOutput()
 
-	if !strings.Contains(output, "🎯 Todo: Polish TUI activity flow") {
-		t.Fatalf("expected active todo heading in grouped activity, got %q", output)
+	if strings.Contains(output, "Todo:") || strings.Contains(output, "🎯") {
+		t.Fatalf("expected main content to omit todo heading, got %q", output)
 	}
 	if !strings.Contains(output, "📦 Advancing tasks") {
 		t.Fatalf("expected todo update group, got %q", output)
@@ -374,6 +795,35 @@ func TestTodoWriteOrganizesFollowingActivityUnderActiveTodo(t *testing.T) {
 	}
 	if !strings.Contains(output, "📦 Exploring project context") {
 		t.Fatalf("expected following tool work to render as its own group, got %q", output)
+	}
+	if !strings.Contains(output, "\n\n 📦 Exploring project context") {
+		t.Fatalf("expected spacing between grouped sections, got %q", output)
+	}
+}
+
+func TestRenderGroupedActivitiesMergesSameTodoIntoSingleBlock(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	m.activeTodo = &todoStateItem{ID: "todo-1", Content: "Polish TUI activity flow", Status: "in_progress"}
+
+	m.startToolActivity(ToolStatusMsg{ToolName: "run_command", DisplayName: "Run", Detail: "build", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "run_command", DisplayName: "Run", Detail: "build", Running: false, Result: "ok"})
+	m.closeToolActivityGroup()
+	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+	m.closeToolActivityGroup()
+
+	output := m.renderGroupedActivities()
+
+	if strings.Contains(output, "Todo:") || strings.Contains(output, "🎯") {
+		t.Fatalf("expected grouped activities to omit todo heading, got %q", output)
+	}
+	if !strings.Contains(output, "📦 Running commands\n    • Run build") {
+		t.Fatalf("expected running commands section, got %q", output)
+	}
+	if !strings.Contains(output, "\n\n 📦 Exploring project context\n    • Read README.md") {
+		t.Fatalf("expected later same-todo work to stay in the same block with spacing, got %q", output)
 	}
 }
 
@@ -403,6 +853,43 @@ func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
 	}
 }
 
+func TestRenderGroupedActivitiesShowsCommandPreviewInsteadOfRawOutput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+
+	msg := ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Restart metro cleanly",
+		Running:     false,
+		RawArgs:     `{"command":"# Restart metro cleanly\ncd /tmp/app\nrm -rf .metro-cache\nnpm install\nnpm run start -- --reset-cache\nsleep 2\necho ready\n"}`,
+		Result:      "booting\nready\n",
+	}
+	m.startToolActivity(ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Restart metro cleanly",
+		Running:     true,
+		RawArgs:     msg.RawArgs,
+	})
+	m.finishToolActivity(msg)
+	m.closeToolActivityGroup()
+
+	output := m.renderGroupedActivities()
+
+	if !strings.Contains(output, "• Restart metro cleanly") {
+		t.Fatalf("expected command title to render as the item header, got %q", output)
+	}
+	if !strings.Contains(output, "cd /tmp/app") || !strings.Contains(output, "npm run start -- --reset-cache") {
+		t.Fatalf("expected command preview lines to render, got %q", output)
+	}
+	if strings.Contains(output, "booting") || strings.Contains(output, "ready") {
+		t.Fatalf("expected command stdout to stay hidden, got %q", output)
+	}
+	if !strings.Contains(output, "2 lines of output") {
+		t.Fatalf("expected output summary footer, got %q", output)
+	}
+}
+
 func TestRenderOutputShowsSubAgentAsIndependentState(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
@@ -429,6 +916,48 @@ func TestRenderOutputShowsSubAgentAsIndependentState(t *testing.T) {
 	}
 	if strings.Contains(output, "spawn_agent") || strings.Contains(output, "wait_agent") || strings.Contains(output, id) {
 		t.Fatalf("expected subagent lifecycle internals to stay hidden, got %q", output)
+	}
+}
+
+func TestRenderOutputShowsSubAgentProgressSummary(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	id := m.subAgentMgr.Spawn("context\n\nBuild release", "Build release", nil, context.Background())
+	sa, ok := m.subAgentMgr.Get(id)
+	if !ok {
+		t.Fatal("expected spawned subagent")
+	}
+	sa.Status = subagent.StatusRunning
+	sa.ProgressSummary = "Job ID: cmd-1 • Status: running • Total lines: 42"
+	sa.ToolCallCount = 3
+
+	output := m.renderOutput()
+
+	if !strings.Contains(output, "Job ID: cmd-1") || !strings.Contains(output, "Total lines: 42") {
+		t.Fatalf("expected subagent progress summary, got %q", output)
+	}
+}
+
+func TestRenderOutputHidesCompletedSubAgentState(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	id := m.subAgentMgr.Spawn("context\n\nInvestigate parser behavior", "Investigate parser behavior", nil, context.Background())
+	sa, ok := m.subAgentMgr.Get(id)
+	if !ok {
+		t.Fatal("expected spawned subagent")
+	}
+	sa.Status = subagent.StatusCompleted
+	sa.CurrentPhase = "completed"
+	sa.ToolCallCount = 2
+
+	output := m.renderOutput()
+
+	if strings.Contains(output, "🤖") || strings.Contains(output, "Investigate parser behavior") || strings.Contains(output, "Completed") {
+		t.Fatalf("expected completed subagent to be hidden from live content area, got %q", output)
 	}
 }
 
@@ -545,6 +1074,22 @@ func TestModeBadgesUseDifferentRendering(t *testing.T) {
 
 	if supervised == plan || plan == auto || auto == bypass || bypass == autopilot {
 		t.Error("expected different modes to render with different badges")
+	}
+}
+
+func TestComposerPanelUsesModeColors(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 28)
+
+	m.mode = permission.SupervisedMode
+	supervised := m.renderComposerPanel()
+	m.mode = permission.AutoMode
+	auto := m.renderComposerPanel()
+	m.mode = permission.BypassMode
+	bypass := m.renderComposerPanel()
+
+	if supervised == auto || auto == bypass || supervised == bypass {
+		t.Fatal("expected composer panel rendering to change with mode color")
 	}
 }
 
@@ -778,6 +1323,51 @@ func TestUpdateWindowSizeMsg(t *testing.T) {
 	}
 }
 
+func TestInitRequestsInitialWindowSize(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("expected init command")
+	}
+
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected init to return a batch command, got %T", msg)
+	}
+	if len(batch) != 3 {
+		t.Fatalf("expected blink, window size, and startup banner timer commands, got %d", len(batch))
+	}
+}
+
+func TestStartupBannerVisibleUntilReady(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 30)
+
+	view := m.View()
+	if !strings.Contains(view, "Initializing") {
+		t.Fatalf("expected startup banner in initial view, got %q", view)
+	}
+
+	model, _ := m.Update(startupReadyMsg{})
+	m = model.(Model)
+	if m.startupBannerVisible {
+		t.Fatal("expected startup banner to dismiss on startupReadyMsg")
+	}
+}
+
+func TestStartupBannerDismissesOnFirstRealKey(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 30)
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = model.(Model)
+	if m.startupBannerVisible {
+		t.Fatal("expected startup banner to dismiss on first real key input")
+	}
+}
+
 func TestUpdateKeyMsgCtrlCRequestsExitConfirmation(t *testing.T) {
 	m := newTestModel()
 	m.input.SetValue("draft text")
@@ -844,6 +1434,121 @@ func TestResizeANSISequenceDoesNotReachInput(t *testing.T) {
 	}
 }
 
+func TestResizeTerminalColorResponseDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 30)
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("11;rgb:0000/0000/0000\\")})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored terminal color response")
+	}
+	if m2.input.Value() != "" {
+		t.Errorf("expected terminal color response to be ignored, got %q", m2.input.Value())
+	}
+}
+
+func TestResizeMalformedTerminalColorResponseDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 30)
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(") 1;rgb:0000/0000/0000\\")})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored malformed terminal color response")
+	}
+	if m2.input.Value() != "" {
+		t.Errorf("expected malformed terminal color response to be ignored, got %q", m2.input.Value())
+	}
+}
+
+func TestResizeConcatenatedTerminalResponsesAreSanitizedFromInput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 30)
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`]11;rgb:0000/0000/0000\]11;rgb:0000/0000/0000\1;rgb:0000/0000/0000\`)})
+	m2 := model.(Model)
+
+	if m2.input.Value() != "" {
+		t.Fatalf("expected concatenated terminal responses to be stripped, got %q", m2.input.Value())
+	}
+}
+
+func TestBareMouseWheelSequenceDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`<64;50;42M<64;50;42M`)})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored bare mouse fragment")
+	}
+	if m2.input.Value() != "" {
+		t.Fatalf("expected bare mouse fragment to be stripped, got %q", m2.input.Value())
+	}
+}
+
+func TestStartupOrphanTerminalFragmentDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`)\]`)})
+	m2 := model.(Model)
+
+	if m2.input.Value() != "" {
+		t.Fatalf("expected startup orphan fragment to be stripped, got %q", m2.input.Value())
+	}
+}
+
+func TestResizeSanitizerPreservesNormalInput(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 30)
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	m2 := model.(Model)
+
+	if m2.input.Value() != "hi" {
+		t.Errorf("expected normal input after resize, got %q", m2.input.Value())
+	}
+}
+
+func TestIdleTerminalNoiseDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+	m.startedAt = time.Now().Add(-10 * time.Second)
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`11;rgb:0000/0000/0000[<0;34;126M`)})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored idle terminal noise")
+	}
+	if m2.input.Value() != "" {
+		t.Fatalf("expected idle terminal noise to be ignored, got %q", m2.input.Value())
+	}
+}
+
+func TestIdleTerminalNoiseDoesNotOverwriteExistingInput(t *testing.T) {
+	m := newTestModel()
+	m.startedAt = time.Now().Add(-10 * time.Second)
+	m.input.SetValue("hello")
+	m.input.CursorEnd()
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`11;rgb:0000/0000/0000[<0;34;126M`)})
+	m2 := model.(Model)
+
+	if m2.input.Value() != "hello" {
+		t.Fatalf("expected existing input to survive idle terminal noise, got %q", m2.input.Value())
+	}
+}
+
+func TestTerminalSuppressionWindowIncludesStartup(t *testing.T) {
+	m := newTestModel()
+	if !terminalResponseSuppressionActive(time.Time{}, m.startedAt) {
+		t.Fatal("expected startup window to suppress terminal response fragments")
+	}
+}
+
 func TestCtrlCCancelsAutocomplete(t *testing.T) {
 	m := newTestModel()
 	m.autoCompleteActive = true
@@ -891,6 +1596,54 @@ func TestCtrlCLoadingCancelsCurrentActivity(t *testing.T) {
 	}
 	if !strings.Contains(m2.output.String(), "[interrupted]") {
 		t.Error("expected interrupted marker in output")
+	}
+}
+
+func TestEscLoadingCancelsCurrentActivity(t *testing.T) {
+	m := newTestModel()
+	cancelled := false
+	m.loading = true
+	m.cancelFunc = func() { cancelled = true }
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd when interrupting active work with esc")
+	}
+	if !cancelled {
+		t.Error("expected cancel func to be called on esc")
+	}
+	if !m2.loading {
+		t.Error("expected model to stay busy until doneMsg arrives")
+	}
+	if !m2.runCanceled {
+		t.Error("expected current run to be marked as canceled by esc")
+	}
+	if !strings.Contains(m2.output.String(), "[interrupted]") {
+		t.Error("expected interrupted marker in output after esc")
+	}
+}
+
+func TestCtrlCWhileAlreadyCancellingDoesNotDuplicateInterruptOutput(t *testing.T) {
+	m := newTestModel()
+	cancelCount := 0
+	m.loading = true
+	m.runCanceled = true
+	m.cancelFunc = func() { cancelCount++ }
+	m.output.WriteString("[interrupted]\n\n")
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected no command when already cancelling active work")
+	}
+	if cancelCount != 0 {
+		t.Errorf("expected cancel func not to be called again, got %d", cancelCount)
+	}
+	if strings.Count(m2.output.String(), "[interrupted]") != 1 {
+		t.Fatalf("expected interrupted marker not to duplicate, got %q", m2.output.String())
 	}
 }
 
@@ -947,6 +1700,29 @@ func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
 	}
 }
 
+func TestNextUserMessageStartsOnFreshLineAfterPartialOutput(t *testing.T) {
+	m := newTestModel()
+	m.output.WriteString("partial tool output")
+
+	m.handleCommand("follow-up")
+
+	if !strings.Contains(m.output.String(), "partial tool output\n❯ follow-up\n") {
+		t.Fatalf("expected follow-up message to start on a fresh line, got %q", m.output.String())
+	}
+}
+
+func TestStreamReplyStartsAfterBlankLine(t *testing.T) {
+	m := newTestModel()
+	m.output.WriteString("previous block\n")
+
+	model, _ := m.Update(streamMsg("next reply"))
+	m = model.(Model)
+
+	if !strings.Contains(m.output.String(), "previous block\n\n● next reply") {
+		t.Fatalf("expected stream reply to start after a blank line, got %q", m.output.String())
+	}
+}
+
 func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	m := newTestModel()
 	cancelled := false
@@ -981,6 +1757,17 @@ func TestExitConfirmationClearsOnOtherKey(t *testing.T) {
 
 	if m2.exitConfirmPending {
 		t.Error("expected exit confirmation to clear on other input")
+	}
+}
+
+func TestExitConfirmStartsOnFreshLine(t *testing.T) {
+	m := newTestModel()
+	m.output.WriteString("partial line")
+
+	m.promptExitConfirm()
+
+	if !strings.Contains(m.output.String(), "partial line\n\nPress Ctrl-C again to exit.") {
+		t.Fatalf("expected exit confirm to start after a blank line, got %q", m.output.String())
 	}
 }
 

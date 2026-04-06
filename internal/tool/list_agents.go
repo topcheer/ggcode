@@ -49,6 +49,9 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			task = sa.Task
 		}
 		sb.WriteString(fmt.Sprintf("  %s [%s]%s\n    Task: %s\n", sa.ID, sa.Status, duration, truncate(task, 80)))
+		if summary := strings.TrimSpace(sa.ProgressSummary); summary != "" {
+			sb.WriteString(fmt.Sprintf("    Progress: %s\n", truncate(summary, 120)))
+		}
 		if sa.Status == subagent.StatusCompleted {
 			sb.WriteString(fmt.Sprintf("    Result: %s\n", truncate(sa.Result, 120)))
 		}

@@ -1,18 +1,21 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -32,10 +35,11 @@ func NewRootCmd() *cobra.Command {
 	var outputPath string
 
 	cmd := &cobra.Command{
-		Use:          "ggcode",
-		Short:        "AI coding assistant",
-		Long:         "ggcode is a terminal-based AI coding agent powered by LLMs.",
-		SilenceUsage: true,
+		Use:              "ggcode",
+		Short:            "AI coding assistant",
+		Long:             "ggcode is a terminal-based AI coding agent powered by LLMs.",
+		SilenceUsage:     true,
+		TraverseChildren: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cfgFile == "" {
 				cfgFile = config.ConfigPath()
@@ -46,6 +50,9 @@ func NewRootCmd() *cobra.Command {
 			cfg, err := config.Load(cfgFile)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
+			}
+			if _, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
+				return fmt.Errorf("persisting Claude MCP servers: %w", err)
 			}
 
 			// Pipe mode: non-interactive single execution
@@ -61,7 +68,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&cfgFile, "config", "", "config file path")
+	cmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
@@ -92,8 +99,153 @@ func NewRootCmd() *cobra.Command {
 		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(completionCmd)
+	cmd.AddCommand(newMCPCmd(&cfgFile))
+	configureHelpRendering(cmd)
 
 	return cmd
+}
+
+func configureHelpRendering(cmd *cobra.Command) {
+	cmd.InitDefaultHelpFlag()
+	cmd.SetHelpFunc(func(c *cobra.Command, _ []string) {
+		_ = writeCommandHelp(c.OutOrStdout(), c)
+	})
+	cmd.SetUsageFunc(func(c *cobra.Command) error {
+		return writeCommandUsage(c.OutOrStderr(), c)
+	})
+}
+
+func writeCommandHelp(w io.Writer, cmd *cobra.Command) error {
+	var b strings.Builder
+
+	desc := strings.TrimSpace(firstNonEmpty(cmd.Long, cmd.Short))
+	if desc != "" {
+		b.WriteString(desc)
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString("Usage:\n")
+	for _, line := range usageLines(cmd) {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	writeCommandList(&b, "Available Commands", visibleSubcommands(cmd))
+	writeFlagList(&b, "Flags", mergedFlags(cmd))
+
+	if len(visibleSubcommands(cmd)) > 0 {
+		b.WriteString("\nUse \"")
+		b.WriteString(cmd.CommandPath())
+		b.WriteString(" [command] --help\" for more information about a command.\n")
+	}
+
+	_, err := writeCLIText(w, b.String())
+	return err
+}
+
+func writeCommandUsage(w io.Writer, cmd *cobra.Command) error {
+	var b strings.Builder
+	b.WriteString("Usage:\n")
+	for _, line := range usageLines(cmd) {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	writeFlagList(&b, "Flags", mergedFlags(cmd))
+	_, err := writeCLIText(w, b.String())
+	return err
+}
+
+func usageLines(cmd *cobra.Command) []string {
+	lines := []string{cmd.UseLine()}
+	if cmd == cmd.Root() && len(visibleSubcommands(cmd)) > 0 {
+		lines = append(lines, cmd.CommandPath()+" [command]")
+	}
+	return lines
+}
+
+func visibleSubcommands(cmd *cobra.Command) []*cobra.Command {
+	var out []*cobra.Command
+	for _, sub := range cmd.Commands() {
+		if !sub.IsAvailableCommand() || sub.Hidden {
+			continue
+		}
+		out = append(out, sub)
+	}
+	return out
+}
+
+func mergedFlags(cmd *cobra.Command) []*pflag.Flag {
+	seen := map[string]struct{}{}
+	var out []*pflag.Flag
+	appendSet := func(fs *pflag.FlagSet) {
+		if fs == nil {
+			return
+		}
+		fs.VisitAll(func(flag *pflag.Flag) {
+			if _, ok := seen[flag.Name]; ok {
+				return
+			}
+			seen[flag.Name] = struct{}{}
+			out = append(out, flag)
+		})
+	}
+	appendSet(cmd.NonInheritedFlags())
+	appendSet(cmd.InheritedFlags())
+	return out
+}
+
+func writeCommandList(b *strings.Builder, title string, commands []*cobra.Command) {
+	if len(commands) == 0 {
+		return
+	}
+	b.WriteString("\n")
+	b.WriteString(title)
+	b.WriteString(":\n")
+	for _, sub := range commands {
+		b.WriteString("- ")
+		b.WriteString(sub.Name())
+		b.WriteString(": ")
+		b.WriteString(strings.TrimSpace(sub.Short))
+		b.WriteString("\n")
+	}
+}
+
+func writeFlagList(b *strings.Builder, title string, flags []*pflag.Flag) {
+	if len(flags) == 0 {
+		return
+	}
+	b.WriteString("\n")
+	b.WriteString(title)
+	b.WriteString(":\n")
+	for _, flag := range flags {
+		b.WriteString("- ")
+		b.WriteString(formatFlagLabel(flag))
+		b.WriteString(": ")
+		b.WriteString(strings.TrimSpace(flag.Usage))
+		b.WriteString("\n")
+	}
+}
+
+func formatFlagLabel(flag *pflag.Flag) string {
+	parts := make([]string, 0, 2)
+	if flag.Shorthand != "" {
+		parts = append(parts, "-"+flag.Shorthand)
+	}
+	parts = append(parts, "--"+flag.Name)
+	label := strings.Join(parts, ", ")
+	if valueType := strings.TrimSpace(flag.Value.Type()); valueType != "" && valueType != "bool" {
+		label += " " + valueType
+	}
+	return label
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func run(cfg *config.Config, resumeID string, bypass bool) error {
@@ -137,6 +289,11 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		return err
 	}
+	mergedMCPServers, _ := mcp.MergeStartupServers(workingDir, cfg.MCPServers)
+	mcpMgr := plugin.NewMCPManager(mergedMCPServers, registry)
+	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
+	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
+	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
 
 	// Load plugins
 	pluginMgr := plugin.NewManager()
@@ -148,11 +305,17 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	autoMem := memory.NewAutoMemory()
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
 
-	projectMem, projectFiles, autoContent, autoFiles, customCmds, mcpPlugins, mcpWarnings := loadStartupAssets(workingDir, autoMem, cfg, registry)
-	for _, warning := range mcpWarnings {
-		fmt.Fprintln(os.Stderr, warning)
+	projectMem, projectFiles, autoContent, autoFiles, commandMgr := loadStartupAssets(workingDir, autoMem)
+	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
+		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 	}
-
+	_ = registry.Register(tool.SkillTool{
+		Skills:       commandMgr,
+		Runtime:      mcpMgr,
+		Provider:     prov,
+		Tools:        registry,
+		AgentFactory: skillAgentFactory,
+	})
 	// Detect git status
 	gitStatus := detectGitStatus(workingDir)
 
@@ -163,21 +326,23 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 		toolNames[i] = t.Name()
 	}
 
-	// Collect custom command names
-	customCmdNames := make([]string, len(customCmds))
-	i := 0
-	for name := range customCmds {
-		customCmdNames[i] = name
-		i++
+	// Collect user-facing slash shortcuts separately from the full skill registry.
+	userSlashCmds := commandMgr.UserSlashCommands()
+	customCmdNames := make([]string, 0, len(userSlashCmds))
+	for name := range userSlashCmds {
+		customCmdNames = append(customCmdNames, name)
 	}
 
 	// Build enhanced system prompt with runtime context
 	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, toolNames, gitStatus, customCmdNames)
+	if skillsPrompt := buildSkillsSystemPrompt(append(commandMgr.List(), buildMCPSkillCommands(mcpMgr.SnapshotMCP())...)); skillsPrompt != "" {
+		systemPrompt += "\n\n## Skills\n" + skillsPrompt
+	}
 	if mode == permission.AutopilotMode {
 		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left."
 	}
 	if projectMem != "" {
-		systemPrompt += "\n\n## Project Memory (GGCODE.md)\n" + projectMem
+		systemPrompt += "\n\n## Project Memory\n" + projectMem
 	}
 	if autoContent != "" {
 		systemPrompt += "\n\n## Auto Memory\n" + autoContent
@@ -188,10 +353,10 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 
 	// Setup agent
 	maxIter := cfg.MaxIterations
-	if maxIter == 0 {
-		maxIter = 50
-	}
 	ag := agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	if resolved.ContextWindow > 0 {
+		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
+	}
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
@@ -204,26 +369,16 @@ func run(cfg *config.Config, resumeID string, bypass bool) error {
 	}
 
 	// Build MCP info for TUI
-	var mcpInfos []tui.MCPInfo
-	for _, mp := range mcpPlugins {
-		adapter := mp.Adapter()
-		info := tui.MCPInfo{
-			Name:      mp.Name(),
-			Connected: mp.IsConnected(),
-		}
-		if adapter != nil {
-			info.ToolNames = adapter.ToolNames()
-		}
-		mcpInfos = append(mcpInfos, info)
-	}
+	mcpInfos := toTuiMCPInfos(mcpMgr.Snapshot())
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
 	repl.SetConfig(cfg)
 	repl.SetSessionStore(store)
 	repl.SetMCPServers(mcpInfos)
+	repl.SetMCPManager(mcpMgr)
 	repl.SetPluginManager(pluginMgr)
-	repl.SetCustomCommands(customCmds)
+	repl.SetCommandsManager(commandMgr)
 	repl.SetAutoMemory(autoMem)
 	repl.SetProjectMemoryFiles(projectFiles)
 	repl.SetAutoMemoryFiles(autoFiles)
@@ -249,21 +404,17 @@ func detectGitStatus(workingDir string) string {
 func loadStartupAssets(
 	workingDir string,
 	autoMem *memory.AutoMemory,
-	cfg *config.Config,
-	registry *tool.Registry,
-) (string, []string, string, []string, map[string]*commands.Command, []*plugin.MCPPlugin, []string) {
+) (string, []string, string, []string, *commands.Manager) {
 	var (
 		projectMem   string
 		projectFiles []string
 		autoContent  string
 		autoFiles    []string
-		customCmds   map[string]*commands.Command
-		mcpPlugins   []*plugin.MCPPlugin
-		mcpWarnings  []string
+		commandMgr   *commands.Manager
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
@@ -277,60 +428,108 @@ func loadStartupAssets(
 
 	go func() {
 		defer wg.Done()
-		customCmds = commands.NewLoader(workingDir).Load()
-	}()
-
-	go func() {
-		defer wg.Done()
-		mcpPlugins, mcpWarnings = connectMCPServers(context.Background(), cfg.MCPServers, registry)
+		commandMgr = commands.NewManager(workingDir)
 	}()
 
 	wg.Wait()
 
-	if customCmds == nil {
-		customCmds = map[string]*commands.Command{}
+	if commandMgr == nil {
+		commandMgr = commands.NewManager(workingDir)
 	}
 
-	return projectMem, projectFiles, autoContent, autoFiles, customCmds, mcpPlugins, mcpWarnings
+	return projectMem, projectFiles, autoContent, autoFiles, commandMgr
 }
 
-func connectMCPServers(
-	ctx context.Context,
-	servers []config.MCPServerConfig,
-	registry *tool.Registry,
-) ([]*plugin.MCPPlugin, []string) {
-	if len(servers) == 0 {
-		return nil, nil
-	}
-
-	plugins := make([]*plugin.MCPPlugin, len(servers))
-	warnings := make([]string, len(servers))
-
-	var wg sync.WaitGroup
-	for i, mcpCfg := range servers {
-		wg.Add(1)
-		go func(i int, mcpCfg config.MCPServerConfig) {
-			defer wg.Done()
-			p := plugin.NewMCPPlugin(mcpCfg)
-			if err := p.RegisterTools(ctx, registry); err != nil {
-				warnings[i] = fmt.Sprintf("warning: MCP server %s failed: %v", mcpCfg.Name, err)
-				return
+func buildSkillsSystemPrompt(skills []*commands.Command) string {
+	var lines []string
+	lines = append(lines,
+		"Execute a skill within the main conversation.",
+		"",
+		"When a listed skill matches the user's request, this is a blocking requirement: invoke the skill tool before continuing.",
+		"Treat slash-style requests like /commit or /review-pr as skill invocations, not plain text.",
+		"Do not mention a skill without calling the skill tool.",
+		"Do not use the skill tool for built-in CLI commands like /help or /clear.",
+		"",
+		"Available skills:",
+	)
+	const maxChars = 8000
+	const maxDescChars = 250
+	total := 0
+	included := 0
+	for _, skill := range skills {
+		if skill == nil || skill.DisableModelInvocation {
+			continue
+		}
+		name := skill.SlashName()
+		if name == "" {
+			continue
+		}
+		desc := strings.TrimSpace(skill.Description)
+		if when := strings.TrimSpace(skill.WhenToUse); when != "" {
+			if desc != "" {
+				desc += " - "
 			}
-			plugins[i] = p
-		}(i, mcpCfg)
-	}
-	wg.Wait()
-
-	connected := make([]*plugin.MCPPlugin, 0, len(plugins))
-	nonEmptyWarnings := make([]string, 0, len(warnings))
-	for i := range plugins {
-		if plugins[i] != nil {
-			connected = append(connected, plugins[i])
+			desc += when
 		}
-		if warnings[i] != "" {
-			nonEmptyWarnings = append(nonEmptyWarnings, warnings[i])
+		if len(desc) > maxDescChars {
+			desc = desc[:maxDescChars-1] + "..."
+		}
+		line := fmt.Sprintf("- %s: %s", name, desc)
+		if total+len(line)+1 > maxChars {
+			break
+		}
+		lines = append(lines, line)
+		total += len(line) + 1
+		included++
+	}
+	if hidden := countModelVisibleSkills(skills) - included; hidden > 0 {
+		lines = append(lines, fmt.Sprintf("- ... and %d more skills available via the skill tool and /skills", hidden))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func countModelVisibleSkills(skills []*commands.Command) int {
+	count := 0
+	for _, skill := range skills {
+		if skill != nil && !skill.DisableModelInvocation && skill.SlashName() != "" {
+			count++
 		}
 	}
+	return count
+}
 
-	return connected, nonEmptyWarnings
+func buildMCPSkillCommands(snapshots []tool.MCPServerSnapshot) []*commands.Command {
+	out := make([]*commands.Command, 0)
+	for _, snap := range snapshots {
+		for _, promptName := range snap.PromptNames {
+			name := strings.TrimSpace(snap.Name + ":" + promptName)
+			if name == ":" || strings.TrimSpace(promptName) == "" || strings.TrimSpace(snap.Name) == "" {
+				continue
+			}
+			out = append(out, &commands.Command{
+				Name:        name,
+				Description: fmt.Sprintf("MCP prompt from %s", snap.Name),
+				WhenToUse:   fmt.Sprintf("Use when the %s MCP prompt %q matches the user's request.", snap.Name, promptName),
+			})
+		}
+	}
+	return out
+}
+
+func toTuiMCPInfos(infos []plugin.MCPServerInfo) []tui.MCPInfo {
+	out := make([]tui.MCPInfo, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, tui.MCPInfo{
+			Name:          info.Name,
+			ToolNames:     info.ToolNames,
+			PromptNames:   info.PromptNames,
+			ResourceNames: info.ResourceNames,
+			Connected:     info.Status == plugin.MCPStatusConnected,
+			Pending:       info.Status == plugin.MCPStatusPending,
+			Error:         info.Error,
+			Transport:     info.Transport,
+			Migrated:      info.Migrated,
+		})
+	}
+	return out
 }

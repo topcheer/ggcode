@@ -1,12 +1,18 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/image"
 )
 
 func TestRenderMarkdown(t *testing.T) {
@@ -100,6 +106,43 @@ func TestFormatToolStatus_RunCommandErrorShowsOnlyExitStatus(t *testing.T) {
 	}
 }
 
+func TestSkillsPanelPagination(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.skillsPanel = &skillsPanelState{page: 0}
+	m.width = 100
+	m.customCmds = map[string]*commands.Command{}
+	for i := 1; i <= 11; i++ {
+		name := fmt.Sprintf("skill-%02d", i)
+		m.customCmds[name] = &commands.Command{
+			Name:          name,
+			Description:   "Test skill",
+			UserInvocable: true,
+			Source:        commands.SourceUser,
+			LoadedFrom:    commands.LoadedFromSkills,
+		}
+	}
+
+	pageOne := m.renderSkillsPanel()
+	if !strings.Contains(pageOne, "page 1/2") {
+		t.Fatalf("expected first page footer, got %q", pageOne)
+	}
+	if !strings.Contains(pageOne, "skill-10") {
+		t.Fatalf("expected skill-10 on first page")
+	}
+	if strings.Contains(pageOne, "skill-11") {
+		t.Fatalf("did not expect skill-11 on first page")
+	}
+
+	m.skillsPanel.page = 1
+	pageTwo := m.renderSkillsPanel()
+	if !strings.Contains(pageTwo, "page 2/2") {
+		t.Fatalf("expected second page footer, got %q", pageTwo)
+	}
+	if !strings.Contains(pageTwo, "skill-11") {
+		t.Fatalf("expected skill-11 on second page")
+	}
+}
+
 func TestDescribeToolReadFile(t *testing.T) {
 	present := describeTool(LangEnglish, "read_file", `{"path":"docs/guide.md"}`)
 	if present.DisplayName != "Read" {
@@ -152,6 +195,61 @@ func TestDescribeToolSearchLocalized(t *testing.T) {
 	}
 }
 
+func TestDescribeToolRunCommandUsesLeadingCommentAsTitle(t *testing.T) {
+	present := describeTool(LangEnglish, "run_command", `{"command":"# Stage the fix\ngit add internal/tui/activity_groups.go\n"}`)
+	if present.DisplayName != "Stage the fix" {
+		t.Fatalf("expected command title from comment, got %q", present.DisplayName)
+	}
+	if present.Detail != "" {
+		t.Fatalf("expected command title to replace raw command detail, got %q", present.Detail)
+	}
+	if present.Activity != "Running Stage the fix" {
+		t.Fatalf("expected activity to use comment title, got %q", present.Activity)
+	}
+}
+
+func TestCompactToolArgsPreviewHidesEmptyObject(t *testing.T) {
+	if got := compactToolArgsPreview(`{}`); got != "" {
+		t.Fatalf("expected empty object args to be hidden, got %q", got)
+	}
+}
+
+func TestFormatToolItemSummaryHidesTrivialArgsAndSummary(t *testing.T) {
+	got := formatToolItemSummary(LangEnglish, ToolStatusMsg{
+		ToolName:    "write_file",
+		DisplayName: "Write",
+		Args:        `{}`,
+		Result:      "Write",
+	})
+	if got != "Write" {
+		t.Fatalf("expected trivial tool summary to collapse to display name, got %q", got)
+	}
+}
+
+func TestFormatToolItemSummaryRunCommandShowsScriptPreview(t *testing.T) {
+	got := formatToolItemSummary(LangEnglish, ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Restart metro",
+		RawArgs:     `{"command":"# Restart metro\ncd /tmp/app\nrm -rf .metro-cache\nnpm install\nnpm run start -- --reset-cache\nsleep 2\necho ready\n"}`,
+		Result:      "booting\nready\n",
+	})
+	if !strings.Contains(got, "Restart metro") {
+		t.Fatalf("expected title in command summary, got %q", got)
+	}
+	if strings.Contains(got, "# Restart metro") {
+		t.Fatalf("expected title comment to be removed from script preview, got %q", got)
+	}
+	if !strings.Contains(got, "cd /tmp/app") || !strings.Contains(got, "npm run start -- --reset-cache") {
+		t.Fatalf("expected script preview lines, got %q", got)
+	}
+	if !strings.Contains(got, "… 1 more script line") {
+		t.Fatalf("expected hidden script line summary, got %q", got)
+	}
+	if !strings.Contains(got, "2 lines of output") {
+		t.Fatalf("expected output line summary, got %q", got)
+	}
+}
+
 func TestDescribeToolListDirectoryUsesWorkspaceRelativePath(t *testing.T) {
 	present := describeTool(LangEnglish, "list_directory", `{"path":"internal/context"}`)
 	if present.Detail != "internal/context" {
@@ -188,6 +286,9 @@ func TestHelpText(t *testing.T) {
 	if strings.Contains(h, "/cost") {
 		t.Error("expected cost command to be removed from help text")
 	}
+	if !strings.Contains(h, "/init") {
+		t.Error("expected /init in help text")
+	}
 }
 
 func TestProviderCommandOpensProviderPanel(t *testing.T) {
@@ -200,5 +301,319 @@ func TestProviderCommandOpensProviderPanel(t *testing.T) {
 	}
 	if m.providerPanel == nil {
 		t.Fatal("expected provider panel to be open")
+	}
+}
+
+type fakeMCPManager struct {
+	retried     []string
+	installed   []config.MCPServerConfig
+	uninstalled []string
+}
+
+func (f *fakeMCPManager) Retry(name string) bool {
+	f.retried = append(f.retried, name)
+	return true
+}
+
+func (f *fakeMCPManager) Install(ctx context.Context, server config.MCPServerConfig) error {
+	f.installed = append(f.installed, server)
+	return nil
+}
+
+func (f *fakeMCPManager) Uninstall(name string) bool {
+	f.uninstalled = append(f.uninstalled, name)
+	return true
+}
+
+func TestMCPCommandOpensPanel(t *testing.T) {
+	m := newTestModel()
+	m.mcpServers = []MCPInfo{{
+		Name:          "web-reader",
+		Transport:     "http",
+		Connected:     true,
+		ToolNames:     []string{"fetch", "search"},
+		PromptNames:   []string{"summarize"},
+		ResourceNames: []string{"docs"},
+	}}
+
+	cmd := m.handleCommand("/mcp")
+	if cmd != nil {
+		t.Fatal("expected /mcp to open inline panel without async command")
+	}
+	if m.mcpPanel == nil {
+		t.Fatal("expected MCP panel to be open")
+	}
+	panel := m.renderContextPanel()
+	if !strings.Contains(panel, "web-reader") || !strings.Contains(panel, "fetch") || !strings.Contains(panel, "summarize") || !strings.Contains(panel, "docs") {
+		t.Fatal("expected MCP panel to show tools, prompts, and resources")
+	}
+	if strings.Contains(panel, "claude-user") {
+		t.Fatal("expected MCP panel to hide migration source details")
+	}
+}
+
+func TestMCPPanelReconnectKeyRetriesSelectedServer(t *testing.T) {
+	m := newTestModel()
+	manager := &fakeMCPManager{}
+	m.SetMCPManager(manager)
+	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http", Error: "connection timed out"}}
+	m.openMCPPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if cmd != nil {
+		t.Fatal("expected reconnect to run synchronously")
+	}
+	m2 := next.(Model)
+	if len(manager.retried) != 1 || manager.retried[0] != "web-reader" {
+		t.Fatalf("expected reconnect to target selected MCP server, got %v", manager.retried)
+	}
+	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Reconnecting web-reader") {
+		t.Fatal("expected reconnect status message in MCP panel")
+	}
+}
+
+func TestMCPPanelCtrlCUsesGlobalExitFlow(t *testing.T) {
+	m := newTestModel()
+	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http"}}
+	m.openMCPPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatal("expected first ctrl-c to arm exit confirmation")
+	}
+	m2 := next.(Model)
+	if !m2.exitConfirmPending {
+		t.Fatal("expected ctrl-c in MCP panel to arm exit confirmation")
+	}
+	if m2.mcpPanel == nil {
+		t.Fatal("expected MCP panel to remain open until explicit quit or esc")
+	}
+}
+
+func TestMCPPanelInstallPersistsConfigAndCallsManager(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	m.SetConfig(cfg)
+	manager := &fakeMCPManager{}
+	m.SetMCPManager(manager)
+	m.openMCPPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd != nil {
+		t.Fatal("expected install mode toggle to be synchronous")
+	}
+	m = next.(Model)
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("stdio npx -y 12306-mcp stdio")},
+	} {
+		next, cmd = m.Update(key)
+		if cmd != nil {
+			t.Fatal("expected typing in install mode to stay synchronous")
+		}
+		m = next.(Model)
+	}
+
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected install submission to return a command")
+	}
+	msg := cmd()
+	next, cmd = next.(Model).Update(msg)
+	if cmd != nil {
+		t.Fatal("expected install result to update synchronously")
+	}
+	m2 := next.(Model)
+	if len(manager.installed) != 1 || manager.installed[0].Name != "12306-mcp" {
+		t.Fatalf("expected MCP manager install call, got %+v", manager.installed)
+	}
+	if len(m2.config.MCPServers) != 1 || m2.config.MCPServers[0].Command != "npx" {
+		t.Fatalf("expected config MCP server to be persisted, got %+v", m2.config.MCPServers)
+	}
+	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Installed MCP server 12306-mcp") {
+		t.Fatalf("expected install success message, got %+v", m2.mcpPanel)
+	}
+}
+
+func TestMCPPanelUninstallRemovesConfigAndCallsManager(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg.MCPServers = []config.MCPServerConfig{{Name: "web-reader", Type: "http", URL: "https://example.com"}}
+	m.SetConfig(cfg)
+	manager := &fakeMCPManager{}
+	m.SetMCPManager(manager)
+	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http", Connected: true}}
+	m.openMCPPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd == nil {
+		t.Fatal("expected uninstall to return a command")
+	}
+	msg := cmd()
+	next, cmd = next.(Model).Update(msg)
+	if cmd != nil {
+		t.Fatal("expected uninstall result to update synchronously")
+	}
+	m2 := next.(Model)
+	if len(manager.uninstalled) != 1 || manager.uninstalled[0] != "web-reader" {
+		t.Fatalf("expected manager uninstall call, got %+v", manager.uninstalled)
+	}
+	if len(m2.config.MCPServers) != 0 {
+		t.Fatalf("expected config MCP servers to be removed, got %+v", m2.config.MCPServers)
+	}
+	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Uninstalled MCP server web-reader") {
+		t.Fatalf("expected uninstall success message, got %+v", m2.mcpPanel)
+	}
+}
+
+func TestProviderPanelCtrlCUsesGlobalExitFlow(t *testing.T) {
+	m := newTestModel()
+	m.SetConfig(config.DefaultConfig())
+	m.openProviderPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatal("expected first ctrl-c to arm exit confirmation")
+	}
+	m2 := next.(Model)
+	if !m2.exitConfirmPending {
+		t.Fatal("expected ctrl-c in provider panel to arm exit confirmation")
+	}
+	if m2.providerPanel == nil {
+		t.Fatal("expected provider panel to remain open until explicit quit or esc")
+	}
+}
+
+func TestCtrlVPastesClipboardImage(t *testing.T) {
+	m := newTestModel()
+	m.clipboardLoader = func() (imageAttachedMsg, error) {
+		img := image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 10, Height: 10}
+		return imageAttachedMsg{
+			placeholder: image.Placeholder("ggcode-image-deadbeef.png", img),
+			img:         img,
+			filename:    "ggcode-image-deadbeef.png",
+		}, nil
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd == nil {
+		t.Fatal("expected ctrl-v to schedule clipboard image loading")
+	}
+	msg := cmd()
+	if msg == nil {
+		t.Fatal("expected clipboard load command to return a message")
+	}
+
+	next, cmd = next.(Model).Update(msg)
+	if cmd != nil {
+		t.Fatal("expected image attachment update to be synchronous")
+	}
+	m2 := next.(Model)
+	if m2.pendingImage == nil {
+		t.Fatal("expected clipboard image to be attached")
+	}
+	if m2.pendingImage.filename != "ggcode-image-deadbeef.png" {
+		t.Fatalf("unexpected clipboard attachment filename: %q", m2.pendingImage.filename)
+	}
+	if got := m2.input.Value(); !strings.Contains(got, "ggcode-image-deadbeef.png") {
+		t.Fatalf("expected image placeholder in input, got %q", got)
+	}
+	if strings.Contains(m2.output.String(), "ggcode-image-deadbeef.png") {
+		t.Fatal("expected no attachment notice in output")
+	}
+}
+
+func TestSubmitTextStripsImagePlaceholderButKeepsImageDisplay(t *testing.T) {
+	m := newTestModel()
+	m.pendingImage = &imageAttachedMsg{
+		placeholder: "[Image: ggcode-image-deadbeef.png, 10x10, 4B]",
+		img:         image.Image{Data: []byte{0x89, 0x50, 0x4E, 0x47}, MIME: image.MIMEPNG, Width: 10, Height: 10},
+		filename:    "ggcode-image-deadbeef.png",
+	}
+
+	cmd := m.submitText("[Image: ggcode-image-deadbeef.png, 10x10, 4B] 帮我看看", true)
+	if cmd == nil {
+		t.Fatal("expected submitText to return a command")
+	}
+	if len(m.history) != 1 || m.history[0] != "帮我看看" {
+		t.Fatalf("expected history to contain text without placeholder, got %#v", m.history)
+	}
+	if !strings.Contains(m.output.String(), "[Image: ggcode-image-deadbeef.png, 10x10, 4B] 帮我看看") {
+		t.Fatal("expected conversation output to show image placeholder with text")
+	}
+}
+
+func TestInitCommandStartsRepoKnowledgeCollection(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	subDir := filepath.Join(repoDir, "internal", "tui")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.Chdir(subDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	m := newTestModel()
+	cmd := m.handleCommand("/init")
+	if cmd == nil {
+		t.Fatal("expected /init to start an async agent flow")
+	}
+	if !m.loading {
+		t.Fatal("expected /init to enter loading state")
+	}
+	if m.statusActivity != "Collecting project knowledge..." {
+		t.Fatalf("expected init collection activity, got %q", m.statusActivity)
+	}
+	if !strings.Contains(m.output.String(), "/init") {
+		t.Fatalf("expected init command to appear in output, got %q", m.output.String())
+	}
+}
+
+func TestInitCommandStartsEvenWhenOtherProjectMemoryExists(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "AGENTS.md"), []byte("existing"), 0644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	m := newTestModel()
+	cmd := m.handleCommand("/init")
+	if cmd == nil {
+		t.Fatal("expected /init to start an async agent flow")
+	}
+	if !m.loading {
+		t.Fatal("expected /init to stay in loading state")
+	}
+}
+
+func TestBuildInitPromptRequestsRepositoryInspection(t *testing.T) {
+	prompt := buildInitPrompt("/tmp/repo/GGCODE.md", true, "# GGCODE.md\n\nbootstrap")
+	if !strings.Contains(prompt, "inspect the repository with tools") {
+		t.Fatalf("expected repo inspection requirement, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "update the project memory file") {
+		t.Fatalf("expected update action, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "/tmp/repo/GGCODE.md") {
+		t.Fatalf("expected target path in prompt, got %q", prompt)
 	}
 }

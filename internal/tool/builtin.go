@@ -11,6 +11,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 			return policy.AllowedPath(path)
 		}
 	}
+	jobManager := NewCommandJobManager(workingDir)
 	tools := []Tool{
 		// File operations
 		ReadFile{SandboxCheck: sandbox},
@@ -24,6 +25,11 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Execution
 		RunCommand{WorkingDir: workingDir},
+		StartCommandTool{Manager: jobManager},
+		ReadCommandOutputTool{Manager: jobManager},
+		WaitCommandTool{Manager: jobManager},
+		StopCommandTool{Manager: jobManager},
+		ListCommandsTool{Manager: jobManager},
 
 		// Git
 		GitStatus{},

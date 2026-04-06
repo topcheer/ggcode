@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestRunCommand_Basic(t *testing.T) {
@@ -95,6 +96,31 @@ func TestRunCommand_OutputTruncation(t *testing.T) {
 	}
 	if len(result.Content) > 110000 {
 		t.Errorf("expected truncated output, got length %d", len(result.Content))
+	}
+}
+
+func TestRunCommand_ContextCancelStopsShellProcessGroup(t *testing.T) {
+	rc := RunCommand{WorkingDir: "/tmp"}
+	input := json.RawMessage(`{"command": "sleep 60 | cat"}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan Result, 1)
+	go func() {
+		result, _ := rc.Execute(ctx, input)
+		done <- result
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case result := <-done:
+		if !result.IsError {
+			t.Fatalf("expected canceled command to report an error result")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected canceled command to stop promptly")
 	}
 }
 

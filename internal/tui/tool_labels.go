@@ -16,6 +16,12 @@ type toolPresentation struct {
 	Activity    string
 }
 
+type commandPreview struct {
+	Title           string
+	Lines           []string
+	HiddenLineCount int
+}
+
 func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	args := parseToolArgs(rawArgs)
 	fileTarget := displayToolFileTarget(hooks.ExtractFilePath(toolName, rawArgs))
@@ -43,10 +49,18 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			argString(args, "path"),
 			argString(args, "directory"),
 		)))
-	case "run_command", "bash", "powershell":
+	case "run_command", "bash", "powershell", "start_command":
+		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
+			return present
+		}
 		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
 			argString(args, "command"),
 			argString(args, "cmd"),
+		)))
+	case "read_command_output", "wait_command", "stop_command", "list_commands":
+		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
+			argString(args, "job_id"),
+			"background command",
 		)))
 	case "web_fetch":
 		return toolPresentationFor(lang, "fetch", displayToolTarget(argString(args, "url")))
@@ -90,6 +104,18 @@ func toolPresentationFor(lang Language, action, target string) toolPresentation 
 		Detail:      target,
 		Activity:    localizedToolActivity(lang, action, target),
 	}
+}
+
+func commandToolPresentation(lang Language, rawCommand string) (toolPresentation, bool) {
+	preview := buildCommandPreview(rawCommand)
+	if preview.Title == "" {
+		return toolPresentation{}, false
+	}
+	title := displayToolTarget(preview.Title)
+	return toolPresentation{
+		DisplayName: title,
+		Activity:    localizedCommandActivity(lang, title),
+	}, true
 }
 
 func localizedToolLabel(lang Language, action string) string {
@@ -298,6 +324,13 @@ func localizedGenericActivity(lang Language, label string) string {
 	return "Running " + label
 }
 
+func localizedCommandActivity(lang Language, title string) string {
+	if lang == LangZhCN {
+		return "执行 " + title
+	}
+	return "Running " + title
+}
+
 func localizedGenericToolName(lang Language, name string) string {
 	if lang == LangZhCN {
 		return strings.ReplaceAll(name, "_", " ")
@@ -306,7 +339,7 @@ func localizedGenericToolName(lang Language, name string) string {
 }
 
 func formatToolInline(name, detail string) string {
-	if detail == "" {
+	if isTrivialToolDetail(detail) {
 		return name
 	}
 	return name + " " + detail
@@ -321,9 +354,16 @@ func parseToolArgs(raw string) map[string]any {
 }
 
 func compactToolArgsPreview(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if isTrivialToolDetail(trimmed) {
+		return ""
+	}
 	args := parseToolArgs(raw)
 	if args == nil {
 		return compactSingleLine(raw)
+	}
+	if len(args) == 0 {
+		return ""
 	}
 	for _, key := range []string{"file_path", "path", "directory", "file", "filename"} {
 		if value, ok := args[key].(string); ok {
@@ -335,6 +375,15 @@ func compactToolArgsPreview(raw string) string {
 		return compactSingleLine(raw)
 	}
 	return compactSingleLine(string(b))
+}
+
+func isTrivialToolDetail(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "", "{}", "[]", "null":
+		return true
+	default:
+		return false
+	}
 }
 
 func argString(args map[string]any, key string) string {
@@ -357,6 +406,28 @@ func argString(args map[string]any, key string) string {
 		}
 		return compactSingleLine(string(b))
 	}
+}
+
+func rawArgString(args map[string]any, key string) string {
+	if args == nil {
+		return ""
+	}
+	v, ok := args[key]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
+}
+
+func rawCommandArg(args map[string]any) string {
+	return firstNonEmpty(
+		rawArgString(args, "command"),
+		rawArgString(args, "cmd"),
+	)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -406,6 +477,69 @@ func displayToolFileTarget(value string) string {
 		base = value
 	}
 	return displayToolTarget(base)
+}
+
+func buildCommandPreview(rawCommand string) commandPreview {
+	lines := commandPreviewLines(rawCommand)
+	if len(lines) == 0 {
+		return commandPreview{}
+	}
+
+	titleIndex, title := leadingCommentTitle(lines)
+	previewLines := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if i == titleIndex {
+			continue
+		}
+		previewLines = append(previewLines, compactSingleLine(strings.TrimRight(line, " \t")))
+	}
+
+	hidden := 0
+	if len(previewLines) > maxVisibleGroupItems {
+		hidden = len(previewLines) - maxVisibleGroupItems
+		previewLines = previewLines[:maxVisibleGroupItems]
+	}
+
+	return commandPreview{
+		Title:           title,
+		Lines:           previewLines,
+		HiddenLineCount: hidden,
+	}
+}
+
+func commandPreviewLines(rawCommand string) []string {
+	rawCommand = strings.ReplaceAll(rawCommand, "\r\n", "\n")
+	rawCommand = strings.TrimSpace(rawCommand)
+	if rawCommand == "" {
+		return nil
+	}
+
+	lines := strings.Split(rawCommand, "\n")
+	start, end := 0, len(lines)
+	for start < end && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return lines[start:end]
+}
+
+func leadingCommentTitle(lines []string) (int, string) {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "#") {
+			return -1, ""
+		}
+		title := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
+		if title != "" {
+			return i, title
+		}
+	}
+	return -1, ""
 }
 
 func normalizeDisplayPath(value string) string {

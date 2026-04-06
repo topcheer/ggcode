@@ -1,5 +1,8 @@
 # ggcode — Architecture
 
+> This document is for maintainers, contributors, and anyone who wants the internal technical layout.
+> If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
+
 > Module: `github.com/topcheer/ggcode`
 > Last updated: 2026-04-03
 

@@ -57,8 +57,8 @@ func TestManagerRunningCount(t *testing.T) {
 	// Manually set to running
 	mgr.SetCancel(id2, func() {})
 
-	if mgr.RunningCount() != 0 {
-		t.Errorf("expected 0 running, got %d", mgr.RunningCount())
+	if mgr.RunningCount() != 1 {
+		t.Errorf("expected 1 running, got %d", mgr.RunningCount())
 	}
 }
 
@@ -113,7 +113,7 @@ func TestManagerConcurrentSpawn(t *testing.T) {
 
 func TestManagerDefaultConfig(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	if mgr.Timeout() != 5*time.Minute {
-		t.Errorf("expected default timeout 5m, got %v", mgr.Timeout())
+	if mgr.Timeout() != 30*time.Minute {
+		t.Errorf("expected default timeout 30m, got %v", mgr.Timeout())
 	}
 }

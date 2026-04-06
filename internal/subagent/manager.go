@@ -22,22 +22,23 @@ const (
 
 // SubAgent represents a spawned child agent.
 type SubAgent struct {
-	ID            string
-	Task          string
-	DisplayTask   string
-	Tools         []string
-	ToolCallCount int
-	Status        Status
-	CurrentPhase  string
-	CurrentTool   string
-	CurrentArgs   string
-	Result        string
-	Error         error
-	CreatedAt     time.Time
-	StartedAt     time.Time
-	EndedAt       time.Time
-	cancel        context.CancelFunc
-	mu            sync.Mutex
+	ID              string
+	Task            string
+	DisplayTask     string
+	Tools           []string
+	ToolCallCount   int
+	Status          Status
+	CurrentPhase    string
+	CurrentTool     string
+	CurrentArgs     string
+	ProgressSummary string
+	Result          string
+	Error           error
+	CreatedAt       time.Time
+	StartedAt       time.Time
+	EndedAt         time.Time
+	cancel          context.CancelFunc
+	mu              sync.Mutex
 }
 
 func (s *SubAgent) IncrementToolCalls() {
@@ -60,6 +61,12 @@ func (s *SubAgent) setActivity(phase, toolName, args string) {
 	s.CurrentArgs = args
 }
 
+func (s *SubAgent) setProgressSummary(summary string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ProgressSummary = summary
+}
+
 // Manager manages spawning, tracking, and collecting results from sub-agents.
 type Manager struct {
 	agents     map[string]*SubAgent
@@ -67,6 +74,7 @@ type Manager struct {
 	sem        chan struct{}
 	timeout    time.Duration
 	showOutput bool
+	onUpdate   func(*SubAgent)
 	onComplete func(*SubAgent)
 	nextID     int
 }
@@ -79,7 +87,7 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 5 * time.Minute
+		timeout = 30 * time.Minute
 	}
 	return &Manager{
 		agents:     make(map[string]*SubAgent),
@@ -174,7 +182,9 @@ func (m *Manager) SetCancel(id string, cancel context.CancelFunc) {
 	if ok {
 		sa.mu.Lock()
 		sa.cancel = cancel
+		sa.Status = StatusRunning
 		sa.mu.Unlock()
+		m.notifyUpdate(sa)
 	}
 }
 
@@ -208,9 +218,34 @@ func (m *Manager) Complete(id string, result string, err error) {
 	}
 }
 
+func (m *Manager) UpdateProgress(id, summary string) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.setProgressSummary(summary)
+	m.notifyUpdate(sa)
+}
+
+func (m *Manager) Notify(id string) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if ok {
+		m.notifyUpdate(sa)
+	}
+}
+
 // SetOnComplete sets a callback invoked when any sub-agent completes.
 func (m *Manager) SetOnComplete(fn func(*SubAgent)) {
 	m.onComplete = fn
+}
+
+// SetOnUpdate sets a callback invoked when any sub-agent activity changes.
+func (m *Manager) SetOnUpdate(fn func(*SubAgent)) {
+	m.onUpdate = fn
 }
 
 // AcquireSemaphore blocks until a slot is available for a new sub-agent to run.
@@ -236,4 +271,10 @@ func (m *Manager) Timeout() time.Duration {
 // ShowOutput returns whether to show sub-agent output.
 func (m *Manager) ShowOutput() bool {
 	return m.showOutput
+}
+
+func (m *Manager) notifyUpdate(sa *SubAgent) {
+	if m.onUpdate != nil {
+		m.onUpdate(sa)
+	}
 }

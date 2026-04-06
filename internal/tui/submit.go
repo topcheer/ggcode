@@ -56,11 +56,12 @@ func (m *Model) startAgent(text string) tea.Cmd {
 			}()
 
 			if img != nil {
+				streamErrSent := false
 				content := []provider.ContentBlock{
 					provider.TextBlock(text),
 					provider.ImageBlock(img.img.MIME, image.EncodeBase64(img.img)),
 				}
-				_ = m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+				err := m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 					if m.program == nil {
 						return
 					}
@@ -130,12 +131,17 @@ func (m *Model) startAgent(text string) tea.Cmd {
 						})
 					case provider.StreamEventError:
 						if !errors.Is(event.Error, context.Canceled) {
+							streamErrSent = true
 							m.program.Send(errMsg{err: event.Error})
 						}
 					}
 				})
+				if err != nil && !errors.Is(err, context.Canceled) && !streamErrSent && m.program != nil {
+					m.program.Send(errMsg{err: err})
+				}
 			} else {
-				_ = m.agent.RunStream(ctx, text, func(event provider.StreamEvent) {
+				streamErrSent := false
+				err := m.agent.RunStream(ctx, text, func(event provider.StreamEvent) {
 					if m.program == nil {
 						return
 					}
@@ -205,10 +211,14 @@ func (m *Model) startAgent(text string) tea.Cmd {
 						})
 					case provider.StreamEventError:
 						if !errors.Is(event.Error, context.Canceled) {
+							streamErrSent = true
 							m.program.Send(errMsg{err: event.Error})
 						}
 					}
 				})
+				if err != nil && !errors.Is(err, context.Canceled) && !streamErrSent && m.program != nil {
+					m.program.Send(errMsg{err: err})
+				}
 			}
 		}()
 
