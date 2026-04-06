@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/topcheer/ggcode.git"
+    "url": "https://github.com/topcheer/ggcode.git"
   },
   "homepage": "https://github.com/topcheer/ggcode",
   "bugs": {
