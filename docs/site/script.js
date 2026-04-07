@@ -188,6 +188,7 @@ const translations = {
 const copyTargets = document.querySelectorAll("[data-copy]");
 const textTargets = document.querySelectorAll("[data-i18n]");
 const attrTargets = document.querySelectorAll("[data-i18n-attr]");
+const multiAttrTargets = document.querySelectorAll("[data-i18n-attrs]");
 const metaDescription = document.querySelector('meta[name="description"]');
 
 function normalizeLanguage(input) {
@@ -245,6 +246,19 @@ function applyTranslations(language) {
     const key = node.getAttribute("data-i18n-key");
     if (!attr || !key) return;
     node.setAttribute(attr, translate(language, key));
+  });
+
+  multiAttrTargets.forEach((node) => {
+    const attrs = node.getAttribute("data-i18n-attrs");
+    const key = node.getAttribute("data-i18n-key");
+    if (!attrs || !key) return;
+
+    const value = translate(language, key);
+    attrs
+      .split(",")
+      .map((attr) => attr.trim())
+      .filter(Boolean)
+      .forEach((attr) => node.setAttribute(attr, value));
   });
 
   copyTargets.forEach((button) => {
