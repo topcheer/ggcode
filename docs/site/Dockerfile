@@ -1,12 +1,10 @@
-FROM alpine:3.21 AS site
-
-RUN apk add --no-cache git
-
-WORKDIR /app
-COPY . .
-RUN sh scripts/site/build.sh
-
 FROM caddy:2.10-alpine
 
-COPY docs/site/Caddyfile /etc/caddy/Caddyfile
-COPY --from=site /app/.site-build /srv
+WORKDIR /srv
+
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY . .
+
+RUN asset_version="${RAILWAY_GIT_COMMIT_SHA:-${SOURCE_COMMIT:-$(date +%s)}}" \
+  && asset_version="$(printf '%s' "$asset_version" | cut -c1-12)" \
+  && find /srv -type f -name '*.html' -exec sed -i "s/__SITE_ASSET_VERSION__/${asset_version}/g" {} +
