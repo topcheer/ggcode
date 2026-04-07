@@ -70,6 +70,8 @@ type mockProvider struct {
 	chatResp      *provider.ChatResponse
 	chatResponses []*provider.ChatResponse
 	chatErr       error
+	streamEvents  [][]provider.StreamEvent
+	streamErr     error
 	tokenCount    int
 	chatCalls     int
 	streamCalls   int
@@ -87,7 +89,27 @@ func (m *mockProvider) Chat(ctx context.Context, messages []provider.Message, to
 
 func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
 	m.streamCalls++
-	return nil, nil
+	if m.streamErr != nil {
+		return nil, m.streamErr
+	}
+	var events []provider.StreamEvent
+	switch {
+	case len(m.streamEvents) > 0:
+		events = m.streamEvents[0]
+		m.streamEvents = m.streamEvents[1:]
+	case len(m.chatResponses) > 0:
+		resp := m.chatResponses[0]
+		m.chatResponses = m.chatResponses[1:]
+		events = streamEventsFromResponse(resp)
+	case m.chatResp != nil:
+		events = streamEventsFromResponse(m.chatResp)
+	}
+	ch := make(chan provider.StreamEvent, len(events))
+	for _, event := range events {
+		ch <- event
+	}
+	close(ch)
+	return ch, nil
 }
 
 func (m *mockProvider) CountTokens(ctx context.Context, messages []provider.Message) (int, error) {
@@ -95,6 +117,31 @@ func (m *mockProvider) CountTokens(ctx context.Context, messages []provider.Mess
 }
 
 func (m *mockProvider) Name() string { return "mock" }
+
+func streamEventsFromResponse(resp *provider.ChatResponse) []provider.StreamEvent {
+	if resp == nil {
+		return nil
+	}
+	events := make([]provider.StreamEvent, 0, len(resp.Message.Content)+1)
+	for i, block := range resp.Message.Content {
+		switch block.Type {
+		case "text":
+			events = append(events, provider.StreamEvent{Type: provider.StreamEventText, Text: block.Text})
+		case "tool_use":
+			events = append(events, provider.StreamEvent{
+				Type: provider.StreamEventToolCallDone,
+				Tool: provider.ToolCallDelta{
+					ID:        block.ToolID,
+					Index:     i,
+					Name:      block.ToolName,
+					Arguments: block.Input,
+				},
+			})
+		}
+	}
+	events = append(events, provider.StreamEvent{Type: provider.StreamEventDone, Usage: &resp.Usage})
+	return events
+}
 
 func TestNewAgent(t *testing.T) {
 	mp := &mockProvider{
@@ -264,7 +311,7 @@ func TestContextManagerTokenEstimation(t *testing.T) {
 	}
 }
 
-func TestRunStreamUsesNonStreamingChat(t *testing.T) {
+func TestRunStreamUsesStreamingChat(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
 			Message: provider.Message{
@@ -290,11 +337,11 @@ func TestRunStreamUsesNonStreamingChat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunStream failed: %v", err)
 	}
-	if mp.chatCalls != 1 {
-		t.Fatalf("expected Chat to be called once, got %d", mp.chatCalls)
+	if mp.chatCalls != 0 {
+		t.Fatalf("expected Chat to be unused, got %d", mp.chatCalls)
 	}
-	if mp.streamCalls != 0 {
-		t.Fatalf("expected ChatStream to be unused, got %d calls", mp.streamCalls)
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected ChatStream to be called once, got %d calls", mp.streamCalls)
 	}
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(events))
@@ -344,8 +391,8 @@ func TestRunStreamEmitsToolProgressFromChatResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunStream failed: %v", err)
 	}
-	if mp.chatCalls != 2 {
-		t.Fatalf("expected 2 chat calls, got %d", mp.chatCalls)
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected 2 stream calls, got %d", mp.streamCalls)
 	}
 	if len(events) != 5 {
 		t.Fatalf("expected 5 events, got %d", len(events))
@@ -422,8 +469,8 @@ func TestRunStreamCancellationStopsRemainingToolCalls(t *testing.T) {
 	if countCount != 0 {
 		t.Fatalf("expected later tool calls to be skipped after cancellation, got %d", countCount)
 	}
-	if mp.chatCalls != 1 {
-		t.Fatalf("expected cancellation to stop before another chat call, got %d", mp.chatCalls)
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected cancellation to stop before another stream call, got %d", mp.streamCalls)
 	}
 }
 
@@ -461,8 +508,8 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	if mp.chatCalls != 3 {
-		t.Fatalf("expected autopilot to continue until an explicit completion turn, got %d", mp.chatCalls)
+	if mp.streamCalls != 3 {
+		t.Fatalf("expected autopilot to continue until an explicit completion turn, got %d", mp.streamCalls)
 	}
 	if got := a.Messages(); len(got) < 4 {
 		t.Fatalf("expected autopilot to append a synthetic user continuation, got %d messages", len(got))
@@ -501,8 +548,8 @@ func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	if mp.chatCalls != 2 {
-		t.Fatalf("expected autopilot to continue after partial progress update, got %d chat calls", mp.chatCalls)
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected autopilot to continue after partial progress update, got %d stream calls", mp.streamCalls)
 	}
 	lastUser := a.Messages()[2]
 	if lastUser.Role != "user" || len(lastUser.Content) == 0 || !strings.Contains(lastUser.Content[0].Text, "partial progress") {
@@ -535,8 +582,8 @@ func TestRunStreamAutopilotStopsOnExplicitCompletion(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	if mp.chatCalls != 1 {
-		t.Fatalf("expected autopilot to stop on explicit completion, got %d chat calls", mp.chatCalls)
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected autopilot to stop on explicit completion, got %d stream calls", mp.streamCalls)
 	}
 }
 
@@ -557,8 +604,8 @@ func TestRunStreamAutopilotStopsOnChineseHandoffClosure(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
-	if mp.chatCalls != 1 {
-		t.Fatalf("expected autopilot to stop on Chinese handoff closure, got %d chat calls", mp.chatCalls)
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected autopilot to stop on Chinese handoff closure, got %d stream calls", mp.streamCalls)
 	}
 }
 
@@ -586,8 +633,8 @@ func TestRunStreamWithZeroMaxIterationsDoesNotCapAutopilot(t *testing.T) {
 	if err := a.RunStream(context.Background(), "refactor the UI", func(event provider.StreamEvent) {}); err != nil {
 		t.Fatalf("RunStream failed: %v", err)
 	}
-	if mp.chatCalls != 2 {
-		t.Fatalf("expected zero max iterations to allow continued autopilot turns, got %d", mp.chatCalls)
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected zero max iterations to allow continued autopilot turns, got %d", mp.streamCalls)
 	}
 }
 
