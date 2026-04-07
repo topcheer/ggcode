@@ -474,6 +474,58 @@ func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	}
 }
 
+func TestWideLayoutLeavesRightMarginForSidebarBorder(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+
+	if !m.sidebarEnabled() {
+		t.Fatal("expected sidebar layout to be enabled")
+	}
+
+	total := m.mainColumnWidth() + 1 + m.sidebarWidth()
+	if total != m.viewWidth()-1 {
+		t.Fatalf("expected composed width %d, got %d", m.viewWidth()-1, total)
+	}
+
+	if margin := m.terminalRightMargin(); margin != 1 {
+		t.Fatalf("expected sidebar outer margin 1, got %d", margin)
+	}
+}
+
+func TestNarrowLayoutLeavesRightMarginForMainPanels(t *testing.T) {
+	m := newTestModel()
+	m.sidebarVisible = false
+	m.handleResize(128, 28)
+
+	if m.sidebarEnabled() {
+		t.Fatal("expected sidebar to be disabled")
+	}
+
+	if got := m.mainColumnWidth(); got != m.viewWidth()-1 {
+		t.Fatalf("expected main column width %d, got %d", m.viewWidth()-1, got)
+	}
+
+	view := m.View()
+	if got := lipgloss.Width(view); got > m.viewWidth()-1 {
+		t.Fatalf("expected rendered width <= %d, got %d", m.viewWidth()-1, got)
+	}
+}
+
+func TestPanelRenderWidthsStayWithinAssignedColumns(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+
+	if got := lipgloss.Width(m.renderConversationPanel(12)); got > m.mainColumnWidth() {
+		t.Fatalf("expected conversation width <= %d, got %d", m.mainColumnWidth(), got)
+	}
+	if got := lipgloss.Width(m.renderComposerPanel()); got > m.mainColumnWidth() {
+		t.Fatalf("expected composer width <= %d, got %d", m.mainColumnWidth(), got)
+	}
+	if got := lipgloss.Width(m.renderSidebar(20)); got > m.sidebarWidth() {
+		t.Fatalf("expected sidebar width <= %d, got %d", m.sidebarWidth(), got)
+	}
+}
+
 func TestWideLayoutSidebarMatchesColumnHeight(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 40)
