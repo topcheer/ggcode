@@ -41,6 +41,7 @@ jobs:
 
           publish_dir="${RUNNER_TEMP}/site-release"
           remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          asset_version="${GITHUB_SHA::12}"
 
           if git ls-remote --exit-code --heads "${remote_url}" "${TARGET_BRANCH}" >/dev/null 2>&1; then
             git clone --branch "${TARGET_BRANCH}" --single-branch "${remote_url}" "${publish_dir}"
@@ -53,6 +54,8 @@ jobs:
           find "${publish_dir}" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -R docs/site/. "${publish_dir}/"
           touch "${publish_dir}/.nojekyll"
+          find "${publish_dir}" -type f -name '*.html' -exec sed -i.bak "s/__SITE_ASSET_VERSION__/${asset_version}/g" {} +
+          find "${publish_dir}" -type f -name '*.bak' -delete
 
           cd "${publish_dir}"
           git add --all
