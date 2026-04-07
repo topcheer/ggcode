@@ -11,7 +11,7 @@ var (
 	logoGGStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
 	logoCODEStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	logoTaglineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Faint(true)
-	logoSubtitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	logoSubtitleStyle = lipgloss.NewStyle().Foreground(mutedTextColor)
 )
 
 func renderLogo(width int) string {

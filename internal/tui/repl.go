@@ -25,13 +25,14 @@ import (
 
 // REPL connects the agent to the TUI model.
 type REPL struct {
-	model      Model
-	agent      *agent.Agent
-	program    *tea.Program
-	store      session.Store
-	resumeID   string
-	mcpMgr     *plugin.MCPManager
-	commandMgr *commands.Manager
+	model               Model
+	agent               *agent.Agent
+	program             *tea.Program
+	store               session.Store
+	resumeID            string
+	mcpMgr              *plugin.MCPManager
+	commandMgr          *commands.Manager
+	projectMemoryLoader func() (string, []string, error)
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -87,6 +88,11 @@ func (r *REPL) SetAutoMemory(am *memory.AutoMemory) {
 
 func (r *REPL) SetProjectMemoryFiles(files []string) {
 	r.model.SetProjectMemoryFiles(files)
+}
+
+func (r *REPL) SetProjectMemoryLoader(loader func() (string, []string, error)) {
+	r.projectMemoryLoader = loader
+	r.model.SetProjectMemoryLoading(loader != nil)
 }
 
 func (r *REPL) SetAutoMemoryFiles(files []string) {
@@ -221,6 +227,14 @@ func (r *REPL) Run() error {
 		time.Sleep(10 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
+		if r.projectMemoryLoader != nil {
+			go func(loader func() (string, []string, error)) {
+				content, files, err := loader()
+				if r.program != nil {
+					r.program.Send(projectMemoryLoadedMsg{Content: content, Files: files, Err: err})
+				}
+			}(r.projectMemoryLoader)
+		}
 		if r.mcpMgr != nil {
 			r.mcpMgr.StartBackground(context.Background())
 		}
