@@ -14,7 +14,7 @@
       href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=__SITE_ASSET_VERSION__" />
   </head>
   <body>
     <div class="site-shell">
@@ -38,7 +38,7 @@
       <main>
         <section class="hero" id="hero">
           <div class="hero-copy">
-            <div class="eyebrow" data-i18n="hero.eyebrow">terminal-native · checkpoint-safe · mcp-ready</div>
+            <div class="eyebrow" data-i18n="hero.eyebrow">terminal-native · self-update-ready · mcp-ready</div>
             <h1 data-i18n="hero.title">Bring the AI coding workflow back into your terminal.</h1>
             <p class="hero-text" data-i18n="hero.text">
               ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, and keeping long tasks moving inside one fresh, modern, geek-forward interface.
@@ -66,8 +66,8 @@
 
             <div class="hero-stats">
               <div class="stat-card">
-                <strong>/undo + checkpoints</strong>
-                <span data-i18n="hero.stats.undo">Recover quickly when a change goes wrong</span>
+                <strong>/update + release binaries</strong>
+                <span data-i18n="hero.stats.update">Upgrade in-app or install native packages from releases</span>
               </div>
               <div class="stat-card">
                 <strong>background commands</strong>
@@ -82,9 +82,9 @@
 
           <div class="hero-visual">
             <div class="hero-frame">
-              <div class="frame-badge" data-i18n="hero.badge">v1.0.6 · Ready</div>
+              <div class="frame-badge" data-i18n="hero.badge">v1.0.18 · self-update ready</div>
               <img
-                src="./assets/ggcode-banner.png"
+                src="./assets/ggcode-banner.png?v=__SITE_ASSET_VERSION__"
                 alt="ggcode CLI banner"
                 data-i18n-attr="alt"
                 data-i18n-key="hero.bannerAlt"
@@ -109,7 +109,7 @@
 
             <article class="feature-card">
               <h3 data-i18n="features.stable.title">Safer by design</h3>
-              <p data-i18n="features.stable.text">Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed.</p>
+              <p data-i18n="features.stable.text">Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed without losing approval visibility.</p>
             </article>
 
             <article class="feature-card">
@@ -129,7 +129,7 @@
 
             <article class="feature-card">
               <h3 data-i18n="features.crossPlatform.title">More cross-platform</h3>
-              <p data-i18n="features.crossPlatform.text">macOS and Linux use sh. Windows prefers Git Bash and falls back to PowerShell when needed.</p>
+              <p data-i18n="features.crossPlatform.text">Go, npm, pip, native packages, and in-app /update keep installs and upgrades simple across macOS, Windows, and Linux.</p>
             </article>
           </div>
         </section>
@@ -213,54 +213,157 @@
         <section class="install" id="install">
           <div class="section-head">
             <span class="eyebrow" data-i18n="install.eyebrow">get running fast</span>
-            <h2 data-i18n="install.title">Pick the installation path you already use.</h2>
+            <h2 data-i18n="install.title">Pick the installation or update path you already use.</h2>
+            <p class="install-intro" data-i18n="install.intro">
+              Start with the path you already trust. Upgrade later without friction, or pull native packages when you need fleet-friendly distribution.
+            </p>
           </div>
 
           <div class="install-grid">
-            <article class="install-card">
-              <h3>Go installer</h3>
+            <article class="install-card install-card-primary">
+              <div class="install-card-head">
+                <h3>Go installer</h3>
+                <div class="install-actions">
+                  <button
+                    class="install-action"
+                    type="button"
+                    data-copy="go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest && ggcode-installer"
+                    data-copied-label=" copied"
+                    data-i18n-key="install.copy"
+                    data-i18n-attrs="aria-label,title"
+                    data-copy-label-key="copy.state"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 9.75A2.25 2.25 0 0 1 11.25 7.5h7.5A2.25 2.25 0 0 1 21 9.75v7.5a2.25 2.25 0 0 1-2.25 2.25h-7.5A2.25 2.25 0 0 1 9 17.25z" />
+                      <path d="M15 7.5V6.75A2.25 2.25 0 0 0 12.75 4.5h-7.5A2.25 2.25 0 0 0 3 6.75v7.5a2.25 2.25 0 0 0 2.25 2.25H6" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
               <p data-i18n="install.go.text">Closest to the native release flow and fetches the right binary for your platform.</p>
-              <pre><code>go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest
-ggcode-installer</code></pre>
-              <button
-                class="button button-inline"
-                data-copy="go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest && ggcode-installer"
-                data-copied-label=" copied"
-                data-i18n="install.copy"
-                data-copy-label-key="copy.state"
-              >
-                Copy command
-              </button>
+              <div class="command-block">
+                <code>
+                  <span class="command-line">go install github.com/topcheer/ggcode/cmd/ggcode-installer@latest</span>
+                  <span class="command-line">ggcode-installer</span>
+                </code>
+              </div>
             </article>
 
-            <article class="install-card">
-              <h3>npm</h3>
+            <article class="install-card install-card-primary">
+              <div class="install-card-head">
+                <h3>npm</h3>
+                <div class="install-actions">
+                  <button
+                    class="install-action"
+                    type="button"
+                    data-copy="npm install -g @ggcode-cli/ggcode"
+                    data-copied-label=" copied"
+                    data-i18n-key="install.copy"
+                    data-i18n-attrs="aria-label,title"
+                    data-copy-label-key="copy.state"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 9.75A2.25 2.25 0 0 1 11.25 7.5h7.5A2.25 2.25 0 0 1 21 9.75v7.5a2.25 2.25 0 0 1-2.25 2.25h-7.5A2.25 2.25 0 0 1 9 17.25z" />
+                      <path d="M15 7.5V6.75A2.25 2.25 0 0 0 12.75 4.5h-7.5A2.25 2.25 0 0 0 3 6.75v7.5a2.25 2.25 0 0 0 2.25 2.25H6" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
               <p data-i18n="install.npm.text">Fits teams already in the Node ecosystem and installs the release-backed binary.</p>
-              <pre><code>npm install -g @ggcode-cli/ggcode</code></pre>
-              <button
-                class="button button-inline"
-                data-copy="npm install -g @ggcode-cli/ggcode"
-                data-copied-label=" copied"
-                data-i18n="install.copy"
-                data-copy-label-key="copy.state"
-              >
-                Copy command
-              </button>
+              <div class="command-block">
+                <code>
+                  <span class="command-line">npm install -g @ggcode-cli/ggcode</span>
+                </code>
+              </div>
             </article>
 
-            <article class="install-card">
-              <h3>pip</h3>
+            <article class="install-card install-card-primary">
+              <div class="install-card-head">
+                <h3>pip</h3>
+                <div class="install-actions">
+                  <button
+                    class="install-action"
+                    type="button"
+                    data-copy="pip install ggcode"
+                    data-copied-label=" copied"
+                    data-i18n-key="install.copy"
+                    data-i18n-attrs="aria-label,title"
+                    data-copy-label-key="copy.state"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 9.75A2.25 2.25 0 0 1 11.25 7.5h7.5A2.25 2.25 0 0 1 21 9.75v7.5a2.25 2.25 0 0 1-2.25 2.25h-7.5A2.25 2.25 0 0 1 9 17.25z" />
+                      <path d="M15 7.5V6.75A2.25 2.25 0 0 0 12.75 4.5h-7.5A2.25 2.25 0 0 0 3 6.75v7.5a2.25 2.25 0 0 0 2.25 2.25H6" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
               <p data-i18n="install.pip.text">Works well for Python environments or standardized distribution across team machines.</p>
-              <pre><code>pip install ggcode</code></pre>
-              <button
-                class="button button-inline"
-                data-copy="pip install ggcode"
-                data-copied-label=" copied"
-                data-i18n="install.copy"
-                data-copy-label-key="copy.state"
-              >
-                Copy command
-              </button>
+              <div class="command-block">
+                <code>
+                  <span class="command-line">pip install ggcode</span>
+                </code>
+              </div>
+            </article>
+
+            <article class="install-card install-card-secondary">
+              <div class="install-card-head">
+                <h3 data-i18n="install.native.title">Native release packages</h3>
+                <div class="install-actions">
+                  <a
+                    class="install-action"
+                    href="https://github.com/topcheer/ggcode/releases"
+                    target="_blank"
+                    rel="noreferrer"
+                    data-i18n-key="install.native.cta"
+                    data-i18n-attrs="aria-label,title"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M13.5 4.5h6v6" />
+                      <path d="M10.5 13.5 19.5 4.5" />
+                      <path d="M19.5 13.5v3.75A2.25 2.25 0 0 1 17.25 19.5H6.75A2.25 2.25 0 0 1 4.5 17.25V6.75A2.25 2.25 0 0 1 6.75 4.5H10.5" />
+                    </svg>
+                  </a>
+                </div>
+              </div>
+              <p data-i18n="install.native.text">GitHub Releases now ship native installers and packages, including .pkg, .msi, .deb, .rpm, .apk, .ipk, and Arch packages.</p>
+              <div class="command-packages">
+                <span class="package-chip">.pkg</span>
+                <span class="package-chip">.msi</span>
+                <span class="package-chip">.deb</span>
+                <span class="package-chip">.rpm</span>
+                <span class="package-chip">.apk</span>
+                <span class="package-chip">.ipk</span>
+                <span class="package-chip">.pkg.tar.zst</span>
+              </div>
+            </article>
+
+            <article class="install-card install-card-secondary">
+              <div class="install-card-head">
+                <h3 data-i18n="install.update.title">In-app update</h3>
+                <div class="install-actions">
+                  <button
+                    class="install-action"
+                    type="button"
+                    data-copy="ggcode&#10;/update"
+                    data-copied-label=" copied"
+                    data-i18n-key="install.copy"
+                    data-i18n-attrs="aria-label,title"
+                    data-copy-label-key="copy.state"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 9.75A2.25 2.25 0 0 1 11.25 7.5h7.5A2.25 2.25 0 0 1 21 9.75v7.5a2.25 2.25 0 0 1-2.25 2.25h-7.5A2.25 2.25 0 0 1 9 17.25z" />
+                      <path d="M15 7.5V6.75A2.25 2.25 0 0 0 12.75 4.5h-7.5A2.25 2.25 0 0 0 3 6.75v7.5a2.25 2.25 0 0 0 2.25 2.25H6" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <p data-i18n="install.update.text">Already running ggcode? Use the built-in updater to fetch the latest release without reinstalling from scratch.</p>
+              <div class="command-block">
+                <code>
+                  <span class="command-line">ggcode</span>
+                  <span class="command-line">/update</span>
+                </code>
+              </div>
             </article>
           </div>
         </section>
@@ -281,6 +384,6 @@ ggcode-installer</code></pre>
       </main>
     </div>
 
-    <script src="./script.js"></script>
+    <script src="./script.js?v=__SITE_ASSET_VERSION__"></script>
   </body>
 </html>
