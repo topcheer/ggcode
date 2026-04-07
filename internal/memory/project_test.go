@@ -195,6 +195,31 @@ func TestLoadProjectMemory_Empty(t *testing.T) {
 	}
 }
 
+func TestLoadProjectMemory_DoesNotScanArbitraryWorkingDirSubtrees(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	workingDir := filepath.Join(homeDir, "plain")
+	nestedDir := filepath.Join(workingDir, "deep", "nested")
+	if err := os.MkdirAll(nestedDir, 0755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "AGENTS.md"), []byte("nested instructions"), 0644); err != nil {
+		t.Fatalf("write nested AGENTS.md: %v", err)
+	}
+	t.Setenv("HOME", homeDir)
+
+	content, files, err := LoadProjectMemory(workingDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != "" {
+		t.Fatalf("expected no project memory content for non-project working dir, got %q", content)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected no project memory files for non-project working dir, got %v", files)
+	}
+}
+
 func contains(s, sub string) bool {
 	return strings.Contains(s, sub)
 }

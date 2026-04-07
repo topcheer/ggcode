@@ -55,12 +55,14 @@ func LoadProjectMemory(workingDir string) (content string, files []string, err e
 		}
 	}
 
-	subFiles := scanSubdirs(absDir, seen)
-	for _, p := range subFiles {
-		data, err := readFileSafe(p)
-		if err == nil && data != "" {
-			content += data + "\n"
-			files = append(files, p)
+	if scanRoot, ok := projectMemoryScanRoot(absDir); ok {
+		subFiles := scanSubdirs(scanRoot, seen)
+		for _, p := range subFiles {
+			data, err := readFileSafe(p)
+			if err == nil && data != "" {
+				content += data + "\n"
+				files = append(files, p)
+			}
 		}
 	}
 
@@ -160,6 +162,14 @@ func findProjectMemoryRoot(dir string) string {
 		current = parent
 	}
 	return dir
+}
+
+func projectMemoryScanRoot(dir string) (string, bool) {
+	root := findProjectMemoryRoot(dir)
+	if hasProjectMemoryFiles(root) || hasGitRootMarker(root) {
+		return root, true
+	}
+	return "", false
 }
 
 func hasProjectMemoryFiles(dir string) bool {
