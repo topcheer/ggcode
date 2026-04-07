@@ -1,0 +1,66 @@
+name: Publish Site
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch that stores the published static site"
+        required: false
+        default: "site-release"
+  push:
+    branches:
+      - main
+    paths:
+      - docs/site/**
+      - .github/workflows/site-release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish-site:
+    name: Publish docs/site to branch
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch || 'site-release' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Publish static site branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          publish_dir="${RUNNER_TEMP}/site-release"
+          remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          if git ls-remote --exit-code --heads "${remote_url}" "${TARGET_BRANCH}" >/dev/null 2>&1; then
+            git clone --branch "${TARGET_BRANCH}" --single-branch "${remote_url}" "${publish_dir}"
+          else
+            mkdir -p "${publish_dir}"
+            git init -b "${TARGET_BRANCH}" "${publish_dir}"
+            git -C "${publish_dir}" remote add origin "${remote_url}"
+          fi
+
+          find "${publish_dir}" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R docs/site/. "${publish_dir}/"
+          touch "${publish_dir}/.nojekyll"
+
+          cd "${publish_dir}"
+          git add --all
+
+          if git diff --cached --quiet; then
+            echo "No site changes to publish."
+            exit 0
+          fi
+
+          git commit -m "docs: publish site from ${GITHUB_SHA}"
+          git push origin "${TARGET_BRANCH}" --force
