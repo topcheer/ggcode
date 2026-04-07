@@ -13,6 +13,11 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
+var (
+	chromeBorderColor = lipgloss.AdaptiveColor{Light: "240", Dark: "250"}
+	mutedTextColor    = lipgloss.AdaptiveColor{Light: "240", Dark: "248"}
+)
+
 func (m Model) View() string {
 	if m.quitting {
 		return ""
@@ -179,11 +184,11 @@ func (m Model) renderHeader() string {
 
 	metaCard := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
 		Render(strings.Join([]string{
 			m.styles.title.Render("ggcode"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("workspace.tagline")),
+			lipgloss.NewStyle().Foreground(mutedTextColor).Render(m.t("workspace.tagline")),
 			"",
 			fmt.Sprintf("%s   %s", m.t("label.vendor"), vendor),
 			fmt.Sprintf("%s %s", m.t("label.endpoint"), endpoint),
@@ -245,7 +250,7 @@ func (m Model) renderSidebar(totalHeight int) string {
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
 		Height(innerHeight).
 		Width(m.boxInnerWidth(m.sidebarWidth())).
@@ -849,7 +854,7 @@ func (m Model) renderContextBox(title, body string, accent lipgloss.Color) strin
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
 		Width(width).
 		Render(lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body)

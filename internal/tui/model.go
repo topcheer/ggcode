@@ -25,6 +25,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/update"
@@ -141,6 +142,7 @@ type Model struct {
 	sidebarVisible       bool
 	exitConfirmPending   bool
 	pendingSubmissions   []string
+	projectMemoryLoading bool
 	runCanceled          bool
 	runFailed            bool
 	clipboardLoader      func() (imageAttachedMsg, error)
@@ -252,6 +254,12 @@ type doneMsg struct{}
 type errMsg struct{ err error }
 
 type startupReadyMsg struct{}
+
+type projectMemoryLoadedMsg struct {
+	Content string
+	Files   []string
+	Err     error
+}
 
 type subAgentUpdateMsg struct{}
 
@@ -565,6 +573,10 @@ func (m *Model) SetProjectMemoryFiles(files []string) {
 	m.projMemFiles = files
 }
 
+func (m *Model) SetProjectMemoryLoading(loading bool) {
+	m.projectMemoryLoading = loading
+}
+
 func (m *Model) SetAutoMemoryFiles(files []string) {
 	m.autoMemFiles = files
 }
@@ -875,7 +887,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
-			if m.loading {
+			if m.loading || m.projectMemoryLoading {
 				m.history = append(m.history, text)
 				m.historyIdx = len(m.history)
 				m.queuePendingSubmission(text)
@@ -960,6 +972,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case startupReadyMsg:
 		m.startupBannerVisible = false
+		return m, nil
+
+	case projectMemoryLoadedMsg:
+		m.projectMemoryLoading = false
+		if msg.Err != nil {
+			debug.Log("tui", "project memory load failed: %v", msg.Err)
+			if len(m.pendingSubmissions) > 0 && !m.loading {
+				return m, m.submitText(m.consumePendingSubmission(), false)
+			}
+			return m, nil
+		}
+		m.projMemFiles = append([]string(nil), msg.Files...)
+		if m.agent != nil && strings.TrimSpace(msg.Content) != "" {
+			m.agent.AddMessage(provider.Message{
+				Role:    "system",
+				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + msg.Content}},
+			})
+		}
+		if len(m.pendingSubmissions) > 0 && !m.loading {
+			return m, m.submitText(m.consumePendingSubmission(), false)
+		}
 		return m, nil
 
 	case ApprovalMsg:

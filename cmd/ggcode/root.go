@@ -322,7 +322,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	autoMem := memory.NewAutoMemory()
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
 
-	projectMem, projectFiles, autoContent, autoFiles, commandMgr := loadStartupAssets(workingDir, autoMem)
+	autoContent, autoFiles, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem)
+	projectMemoryLoader := func() (string, []string, error) {
+		return memory.LoadProjectMemory(workingDir)
+	}
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 	}
@@ -357,9 +360,6 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	if mode == permission.AutopilotMode {
 		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left."
-	}
-	if projectMem != "" {
-		systemPrompt += "\n\n## Project Memory\n" + projectMem
 	}
 	if autoContent != "" {
 		systemPrompt += "\n\n## Auto Memory\n" + autoContent
@@ -400,8 +400,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetPluginManager(pluginMgr)
 	repl.SetCommandsManager(commandMgr)
 	repl.SetAutoMemory(autoMem)
-	repl.SetProjectMemoryFiles(projectFiles)
 	repl.SetAutoMemoryFiles(autoFiles)
+	repl.SetProjectMemoryLoader(projectMemoryLoader)
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
@@ -458,6 +458,38 @@ func loadStartupAssets(
 	}
 
 	return projectMem, projectFiles, autoContent, autoFiles, commandMgr
+}
+
+func loadInteractiveStartupAssets(
+	workingDir string,
+	autoMem *memory.AutoMemory,
+) (string, []string, *commands.Manager) {
+	var (
+		autoContent string
+		autoFiles   []string
+		commandMgr  *commands.Manager
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		autoContent, autoFiles, _ = autoMem.LoadAll()
+	}()
+
+	go func() {
+		defer wg.Done()
+		commandMgr = commands.NewManager(workingDir)
+	}()
+
+	wg.Wait()
+
+	if commandMgr == nil {
+		commandMgr = commands.NewManager(workingDir)
+	}
+
+	return autoContent, autoFiles, commandMgr
 }
 
 func buildSkillsSystemPrompt(skills []*commands.Command) string {

@@ -1778,6 +1778,58 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	}
 }
 
+func TestProjectMemoryLoadingQueuesSubmissionBeforeFirstRun(t *testing.T) {
+	m := newTestModel()
+	m.projectMemoryLoading = true
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m = model.(Model)
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m = model.(Model)
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected submission to queue while project memory is still loading")
+	}
+	if len(m.pendingSubmissions) != 1 || m.pendingSubmissions[0] != "hi" {
+		t.Fatalf("expected queued submission, got %#v", m.pendingSubmissions)
+	}
+	if m.projectMemoryLoading != true {
+		t.Fatal("expected project memory loading flag to remain set until async load completes")
+	}
+}
+
+func TestProjectMemoryLoadedConsumesQueuedSubmissionAndInjectsMemory(t *testing.T) {
+	ag := agent.NewAgent(nil, tool.NewRegistry(), "base", 1)
+	m := NewModel(ag, permission.NewConfigPolicy(nil, nil))
+	m.projectMemoryLoading = true
+	m.pendingSubmissions = []string{"hello"}
+
+	model, cmd := m.Update(projectMemoryLoadedMsg{
+		Content: "repo guidance",
+		Files:   []string{"/tmp/GGCODE.md"},
+	})
+	m = model.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected queued submission to start once project memory finishes loading")
+	}
+	if m.projectMemoryLoading {
+		t.Fatal("expected project memory loading flag to clear")
+	}
+	if len(m.projMemFiles) != 1 || m.projMemFiles[0] != "/tmp/GGCODE.md" {
+		t.Fatalf("unexpected project memory files: %#v", m.projMemFiles)
+	}
+	msgs := ag.Messages()
+	if len(msgs) < 2 {
+		t.Fatalf("expected base and injected project memory system messages, got %d", len(msgs))
+	}
+	if !strings.Contains(msgs[len(msgs)-1].Content[0].Text, "repo guidance") {
+		t.Fatalf("expected injected project memory message, got %#v", msgs[len(msgs)-1])
+	}
+}
+
 func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
