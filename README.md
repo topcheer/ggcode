@@ -42,6 +42,23 @@ pip install ggcode
 The Python wrapper also downloads the latest ggcode GitHub Release by default and respects
 `GGCODE_INSTALL_VERSION` for explicit pinning.
 
+### Native package files from GitHub Releases
+
+Each tagged release now also publishes native installer/package files across desktop and Linux:
+
+| Platform | Release asset | Install example |
+| --- | --- | --- |
+| macOS | `.pkg` | `sudo installer -pkg ./ggcode_<version>_darwin_universal.pkg -target /` |
+| Windows | `.msi` | `msiexec /i .\ggcode_<version>_windows_x64.msi` |
+| Debian / Ubuntu | `.deb` | `sudo dpkg -i ./ggcode_<version>_linux_<arch>.deb` |
+| Fedora / RHEL / openSUSE | `.rpm` | `sudo rpm -i ./ggcode-<version>-1.<arch>.rpm` |
+| Alpine | `.apk` | `sudo apk add --allow-untrusted ./ggcode-<version>-r1.<arch>.apk` |
+| OpenWrt / opkg | `.ipk` | `opkg install ./ggcode_<version>_<arch>.ipk` |
+| Arch Linux | `.pkg.tar.zst` | `sudo pacman -U ./ggcode-<version>-1-<arch>.pkg.tar.zst` |
+
+If you prefer not to install from a package manager, the existing release archives, Go installer,
+npm wrapper, and Python wrapper remain available.
+
 ### Build from source
 
 ```bash

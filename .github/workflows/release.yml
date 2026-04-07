@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: "Version label for manual packaging runs"
+        required: false
+        default: "v0.0.0"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -59,6 +65,97 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
-          args: release --clean
+          args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload snapshot artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist/
+
+  release-macos-pkg:
+    name: Build macOS pkg
+    runs-on: macos-latest
+    needs: release
+    permissions:
+      contents: write
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Build macOS installer package
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-macos-pkg.sh
+          ./scripts/release/build-macos-pkg.sh "${GGCODE_VERSION}" dist
+      - name: Upload macOS package to release
+        if: github.event_name != 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.pkg --clobber
+      - name: Upload macOS package artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist/*.pkg
+
+  release-windows-msi:
+    name: Build Windows msi
+    runs-on: windows-latest
+    needs: release
+    permissions:
+      contents: write
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          wix --version
+      - name: Capture build date
+        shell: pwsh
+        run: |
+          $date = git show -s --format=%cI $env:GITHUB_SHA
+          Add-Content -Path $env:GITHUB_ENV -Value "GGCODE_DATE=$date"
+      - name: Build Windows MSI packages
+        shell: pwsh
+        run: .\scripts\release\build-windows-msi.ps1 -Version $env:GGCODE_VERSION -OutputDir dist
+      - name: Upload Windows MSI packages to release
+        if: github.event_name != 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Get-ChildItem -Path dist -Filter *.msi | ForEach-Object {
+            gh release upload $env:GITHUB_REF_NAME $_.FullName --clobber
+          }
+      - name: Upload Windows MSI artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: dist/*.msi
