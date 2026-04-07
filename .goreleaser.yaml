@@ -1,7 +1,10 @@
 version: 2
 
+project_name: ggcode
+
 builds:
-  - main: ./cmd/ggcode
+  - id: ggcode
+    main: ./cmd/ggcode
     binary: ggcode
     env:
       - CGO_ENABLED=0
@@ -34,6 +37,34 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+nfpms:
+  - id: packages
+    ids:
+      - ggcode
+    package_name: ggcode
+    file_name_template: "{{ .ConventionalFileName }}"
+    homepage: https://github.com/topcheer/ggcode
+    vendor: topcheer
+    maintainer: topcheer
+    description: >-
+      AI coding agent for the terminal with a polished TUI, resumable sessions,
+      MCP integrations, built-in tools, and self-update support.
+    license: MIT
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm
+      - apk
+      - ipk
+      - archlinux
+    section: utils
+    priority: optional
+    contents:
+      - src: ./LICENSE
+        dst: /usr/share/doc/ggcode/LICENSE
+      - src: ./README.md
+        dst: /usr/share/doc/ggcode/README.md
 
 sboms:
   - artifacts: archive
