@@ -177,48 +177,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		msgs := a.contextManager.Messages()
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
 
-		resp, err := a.provider.Chat(ctx, msgs, toolDefs)
+		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
 		if err != nil {
-			debug.Log("agent", "Chat error: %v", err)
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("chat error: %w", err)})
 			return err
 		}
 
-		var toolCalls []provider.ToolCallDelta
-		var textBuf string
-
-		for _, block := range resp.Message.Content {
-			switch block.Type {
-			case "text":
-				textBuf += block.Text
-			case "tool_use":
-				if textBuf != "" {
-					onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: textBuf})
-					textBuf = ""
-				}
-				tc := provider.ToolCallDelta{
-					ID:        block.ToolID,
-					Index:     len(toolCalls),
-					Name:      block.ToolName,
-					Arguments: block.Input,
-				}
-				toolCalls = append(toolCalls, tc)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventToolCallDone, Tool: tc})
-			}
-		}
-		if textBuf != "" {
-			onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: textBuf})
-		}
-
-		usage := resp.Usage
-		onEvent(provider.StreamEvent{Type: provider.StreamEventDone, Usage: &usage})
-
-		a.mu.Lock()
-		fn := a.onUsage
-		a.mu.Unlock()
-		if fn != nil {
-			fn(usage)
-		}
+		a.emitUsage(resp.Usage)
 
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
@@ -283,6 +247,77 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return err
 	}
 	return nil
+}
+
+func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, error) {
+	stream, err := a.provider.ChatStream(ctx, msgs, toolDefs)
+	if err != nil {
+		debug.Log("agent", "ChatStream error: %v", err)
+		wrapped := fmt.Errorf("chat error: %w", err)
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: wrapped})
+		return nil, "", nil, wrapped
+	}
+
+	var (
+		textBuf          strings.Builder
+		assistantTextBuf strings.Builder
+		content          []provider.ContentBlock
+		toolCalls        []provider.ToolCallDelta
+		usage            provider.TokenUsage
+	)
+
+	flushText := func() {
+		if textBuf.Len() == 0 {
+			return
+		}
+		content = append(content, provider.TextBlock(textBuf.String()))
+		textBuf.Reset()
+	}
+
+	for event := range stream {
+		switch event.Type {
+		case provider.StreamEventText:
+			onEvent(event)
+			textBuf.WriteString(event.Text)
+			assistantTextBuf.WriteString(event.Text)
+		case provider.StreamEventToolCallChunk:
+			onEvent(event)
+		case provider.StreamEventToolCallDone:
+			flushText()
+			onEvent(event)
+			toolCalls = append(toolCalls, event.Tool)
+			content = append(content, provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments))
+		case provider.StreamEventDone:
+			if event.Usage != nil {
+				usage = *event.Usage
+			}
+			onEvent(event)
+		case provider.StreamEventError:
+			debug.Log("agent", "ChatStream event error: %v", event.Error)
+			wrapped := fmt.Errorf("chat error: %w", event.Error)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: wrapped})
+			return nil, assistantTextBuf.String(), nil, wrapped
+		}
+	}
+
+	flushText()
+
+	return &provider.ChatResponse{
+		Message: provider.Message{
+			Role:    "assistant",
+			Content: content,
+		},
+		Usage: usage,
+	}, assistantTextBuf.String(), toolCalls, nil
+}
+
+func (a *Agent) emitUsage(usage provider.TokenUsage) {
+	a.mu.Lock()
+	fn := a.onUsage
+	a.mu.Unlock()
+	if fn != nil {
+		fn(usage)
+	}
 }
 
 func (a *Agent) currentMode() permission.PermissionMode {
