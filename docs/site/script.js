@@ -75,6 +75,8 @@ const translations = {
       "Built for continuous progress and high-tempo delivery with minimal interruption.",
     "install.eyebrow": "get running fast",
     "install.title": "Pick the installation or update path you already use.",
+    "install.intro":
+      "Start with the path you already trust. Upgrade later without friction, or pull native packages when you need fleet-friendly distribution.",
     "install.go.text":
       "Closest to the native release flow and fetches the right binary for your platform.",
     "install.npm.text":
@@ -162,6 +164,8 @@ const translations = {
     "modes.autopilot": "适合连续推进和高节奏交付，强调“别打断我”。",
     "install.eyebrow": "get running fast",
     "install.title": "安装或升级方式，选你已经在用的那一种。",
+    "install.intro":
+      "先走你最熟悉的安装路径；后续要升级时尽量无感，需要团队分发时再直接拿原生安装包。",
     "install.go.text": "最接近原生发布流，安装后直接拿到对应平台二进制。",
     "install.npm.text": "适合已经在 Node 生态里的用户，通过 @ggcode-cli 作用域安装 Release 二进制。",
     "install.pip.text": "适合 Python 环境或团队机器统一分发。",

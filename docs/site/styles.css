@@ -397,10 +397,18 @@ pre code,
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+  min-width: 0;
 }
 
 .install-card p {
   margin: 0;
+}
+
+.install-intro {
+  max-width: 62ch;
+  margin: 1rem 0 0;
+  color: var(--muted);
+  line-height: 1.7;
 }
 
 .feature-card-large {
@@ -507,6 +515,7 @@ pre code,
 
 .install-card-primary {
   grid-column: span 4;
+  background: linear-gradient(180deg, rgba(10, 22, 29, 0.96), rgba(8, 18, 24, 0.88));
 }
 
 .install-card-secondary {
@@ -520,6 +529,9 @@ pre {
   padding: 1rem 1.05rem;
   border-radius: 18px;
   overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
   background: rgba(4, 10, 14, 0.92);
   border: 1px solid rgba(118, 244, 255, 0.1);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -532,10 +544,15 @@ pre code {
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.45;
+  max-width: 100%;
 }
 
 .install-card .button-inline {
   margin-top: auto;
+}
+
+pre::-webkit-scrollbar {
+  display: none;
 }
 
 .cta {
