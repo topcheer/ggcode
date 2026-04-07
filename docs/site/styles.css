@@ -524,7 +524,7 @@ pre code,
   border-color: rgba(197, 125, 255, 0.2);
 }
 
-pre {
+.command-block {
   margin: 0.35rem 0 0;
   padding: 1rem 1.05rem;
   border-radius: 18px;
@@ -537,22 +537,42 @@ pre {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-pre code {
+.command-block code {
   display: block;
   color: var(--text);
-  white-space: pre-wrap;
+  white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.45;
   max-width: 100%;
 }
 
-.install-card .button-inline {
-  margin-top: auto;
+.command-line {
+  display: block;
 }
 
-pre::-webkit-scrollbar {
-  display: none;
+.command-packages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.35rem;
+}
+
+.package-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.42rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(118, 244, 255, 0.12);
+  background: rgba(4, 10, 14, 0.82);
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.92rem;
+  line-height: 1;
+}
+
+.install-card .button-inline {
+  margin-top: auto;
 }
 
 .cta {
