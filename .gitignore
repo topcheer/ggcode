@@ -6,3 +6,4 @@ python/build/
 python/*.egg-info/
 python/**/__pycache__/
 npm/*.tgz
+/.site-build/
