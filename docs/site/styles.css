@@ -491,7 +491,18 @@ pre code,
 .mode-autopilot { border-color: rgba(197, 125, 255, 0.34); }
 
 .install-grid {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1.2rem;
+}
+
+.install-card-primary {
+  grid-column: span 4;
+}
+
+.install-card-secondary {
+  grid-column: span 6;
+  background: linear-gradient(135deg, rgba(118, 244, 255, 0.05), rgba(197, 125, 255, 0.08));
+  border-color: rgba(197, 125, 255, 0.2);
 }
 
 pre {
@@ -541,6 +552,11 @@ pre {
   .mode-grid,
   .hero-stats {
     grid-template-columns: 1fr;
+  }
+
+  .install-card-primary,
+  .install-card-secondary {
+    grid-column: span 1;
   }
 
   .feature-card-large {
