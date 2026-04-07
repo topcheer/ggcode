@@ -21,8 +21,11 @@ func main() {
 	flag.Parse()
 
 	result, err := install.Install(context.Background(), install.Options{
-		Version: version,
-		Dir:     dir,
+		Version:        version,
+		Dir:            dir,
+		BaseURL:        strings.TrimSpace(os.Getenv("GGCODE_INSTALL_BASE_URL")),
+		PlatformGOOS:   strings.TrimSpace(os.Getenv("GGCODE_INSTALL_GOOS")),
+		PlatformGOARCH: strings.TrimSpace(os.Getenv("GGCODE_INSTALL_GOARCH")),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ggcode installer failed: %v\n", err)

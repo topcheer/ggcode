@@ -37,6 +37,7 @@ type Options struct {
 	PlatformGOOS   string
 	PlatformGOARCH string
 	HTTPClient     *http.Client
+	BaseURL        string
 }
 
 type Result struct {
@@ -85,7 +86,7 @@ func DownloadBinary(ctx context.Context, opts Options) (BinaryResult, error) {
 		return BinaryResult{}, err
 	}
 
-	version, err := ResolveReleaseVersion(ctx, opts.HTTPClient, opts.Version)
+	version, err := resolveReleaseVersion(ctx, opts.HTTPClient, opts.BaseURL, opts.Version)
 	if err != nil {
 		return BinaryResult{}, err
 	}
@@ -94,8 +95,8 @@ func DownloadBinary(ctx context.Context, opts Options) (BinaryResult, error) {
 		client = http.DefaultClient
 	}
 
-	archiveURL := AssetURL(version, target)
-	checksumURL := ChecksumsURL(version)
+	archiveURL := assetURLForBase(opts.BaseURL, version, target)
+	checksumURL := checksumsURLForBase(opts.BaseURL, version)
 
 	archiveData, err := download(ctx, client, archiveURL)
 	if err != nil {
@@ -170,21 +171,42 @@ func NormalizeVersion(version string) string {
 }
 
 func AssetURL(version string, target Target) string {
-	return ReleaseBaseURL(version) + "/" + target.ArchiveName
+	return assetURLForBase("", version, target)
 }
 
 func ChecksumsURL(version string) string {
-	return ReleaseBaseURL(version) + "/checksums.txt"
+	return checksumsURLForBase("", version)
 }
 
 func ReleaseBaseURL(version string) string {
-	if NormalizeVersion(version) == "latest" {
-		return fmt.Sprintf("https://github.com/%s/%s/releases/latest/download", owner, repo)
-	}
-	return fmt.Sprintf("https://github.com/%s/%s/releases/download/%s", owner, repo, NormalizeVersion(version))
+	return releaseBaseURLForBase("", version)
 }
 
 func ResolveReleaseVersion(ctx context.Context, client *http.Client, version string) (string, error) {
+	return resolveReleaseVersion(ctx, client, "", version)
+}
+
+func releaseBaseURLForBase(baseURL, version string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	}
+	version = NormalizeVersion(version)
+	if version != "latest" {
+		return baseURL + "/releases/download/" + version
+	}
+	return baseURL + "/releases/latest/download"
+}
+
+func assetURLForBase(baseURL, version string, target Target) string {
+	return releaseBaseURLForBase(baseURL, version) + "/" + target.ArchiveName
+}
+
+func checksumsURLForBase(baseURL, version string) string {
+	return releaseBaseURLForBase(baseURL, version) + "/checksums.txt"
+}
+
+func resolveReleaseVersion(ctx context.Context, client *http.Client, baseURL, version string) (string, error) {
 	version = NormalizeVersion(version)
 	if version != "latest" {
 		return version, nil
@@ -192,7 +214,11 @@ func ResolveReleaseVersion(ctx context.Context, client *http.Client, version str
 	if client == nil {
 		client = http.DefaultClient
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://github.com/%s/%s/releases/latest", owner, repo), nil)
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/releases/latest", nil)
 	if err != nil {
 		return "", err
 	}
