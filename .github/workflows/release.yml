@@ -68,17 +68,104 @@ jobs:
           args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Upload snapshot artifacts
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload GoReleaser dist artifacts
         uses: actions/upload-artifact@v4
         with:
           name: goreleaser-dist
           path: dist/
 
+  release-smoke-linux:
+    name: Smoke Linux binary
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test linux archive
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/smoke-binary.sh
+          workdir="$(mktemp -d)"
+          tar -xzf dist/ggcode_linux_x86_64.tar.gz -C "${workdir}"
+          ./scripts/release/smoke-binary.sh "${workdir}/ggcode"
+
+  release-smoke-macos:
+    name: Smoke macOS binary
+    runs-on: macos-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test macOS archive
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/smoke-binary.sh
+          workdir="$(mktemp -d)"
+          arch="$(uname -m)"
+          case "${arch}" in
+            arm64) archive="dist/ggcode_darwin_arm64.tar.gz" ;;
+            *) archive="dist/ggcode_darwin_x86_64.tar.gz" ;;
+          esac
+          tar -xzf "${archive}" -C "${workdir}"
+          ./scripts/release/smoke-binary.sh "${workdir}/ggcode"
+
+  release-smoke-windows:
+    name: Smoke Windows binary
+    runs-on: windows-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test windows archive
+        shell: pwsh
+        run: |
+          $workDir = Join-Path $env:RUNNER_TEMP "ggcode-windows-smoke"
+          New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+          Expand-Archive -Path dist\ggcode_windows_x86_64.zip -DestinationPath $workDir -Force
+          .\scripts\release\smoke-binary.ps1 -BinaryPath (Join-Path $workDir "ggcode.exe")
+
+  release-smoke-installer:
+    name: Smoke installer flow
+    runs-on: ubuntu-latest
+    needs: release
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test installer against local release mirror
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/smoke-binary.sh ./scripts/release/smoke-installer.sh
+          ./scripts/release/smoke-installer.sh "${GGCODE_VERSION}" dist
+
   release-macos-pkg:
     name: Build macOS pkg
     runs-on: macos-latest
-    needs: release
+    needs:
+      - release
+      - release-smoke-linux
+      - release-smoke-macos
+      - release-smoke-windows
+      - release-smoke-installer
     permissions:
       contents: write
     env:
@@ -116,7 +203,12 @@ jobs:
   release-windows-msi:
     name: Build Windows msi
     runs-on: windows-latest
-    needs: release
+    needs:
+      - release
+      - release-smoke-linux
+      - release-smoke-macos
+      - release-smoke-windows
+      - release-smoke-installer
     permissions:
       contents: write
     env:
