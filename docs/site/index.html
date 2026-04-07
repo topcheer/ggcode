@@ -38,7 +38,7 @@
       <main>
         <section class="hero" id="hero">
           <div class="hero-copy">
-            <div class="eyebrow" data-i18n="hero.eyebrow">terminal-native · checkpoint-safe · mcp-ready</div>
+            <div class="eyebrow" data-i18n="hero.eyebrow">terminal-native · self-update-ready · mcp-ready</div>
             <h1 data-i18n="hero.title">Bring the AI coding workflow back into your terminal.</h1>
             <p class="hero-text" data-i18n="hero.text">
               ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, and keeping long tasks moving inside one fresh, modern, geek-forward interface.
@@ -66,8 +66,8 @@
 
             <div class="hero-stats">
               <div class="stat-card">
-                <strong>/undo + checkpoints</strong>
-                <span data-i18n="hero.stats.undo">Recover quickly when a change goes wrong</span>
+                <strong>/update + release binaries</strong>
+                <span data-i18n="hero.stats.update">Upgrade in-app or install native packages from releases</span>
               </div>
               <div class="stat-card">
                 <strong>background commands</strong>
@@ -82,7 +82,7 @@
 
           <div class="hero-visual">
             <div class="hero-frame">
-              <div class="frame-badge" data-i18n="hero.badge">v1.0.6 · Ready</div>
+              <div class="frame-badge" data-i18n="hero.badge">v1.0.18 · self-update ready</div>
               <img
                 src="./assets/ggcode-banner.png"
                 alt="ggcode CLI banner"
@@ -109,7 +109,7 @@
 
             <article class="feature-card">
               <h3 data-i18n="features.stable.title">Safer by design</h3>
-              <p data-i18n="features.stable.text">Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed.</p>
+              <p data-i18n="features.stable.text">Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed without losing approval visibility.</p>
             </article>
 
             <article class="feature-card">
@@ -129,7 +129,7 @@
 
             <article class="feature-card">
               <h3 data-i18n="features.crossPlatform.title">More cross-platform</h3>
-              <p data-i18n="features.crossPlatform.text">macOS and Linux use sh. Windows prefers Git Bash and falls back to PowerShell when needed.</p>
+              <p data-i18n="features.crossPlatform.text">Go, npm, pip, native packages, and in-app /update keep installs and upgrades simple across macOS, Windows, and Linux.</p>
             </article>
           </div>
         </section>
@@ -213,7 +213,7 @@
         <section class="install" id="install">
           <div class="section-head">
             <span class="eyebrow" data-i18n="install.eyebrow">get running fast</span>
-            <h2 data-i18n="install.title">Pick the installation path you already use.</h2>
+            <h2 data-i18n="install.title">Pick the installation or update path you already use.</h2>
           </div>
 
           <div class="install-grid">
@@ -255,6 +255,38 @@ ggcode-installer</code></pre>
               <button
                 class="button button-inline"
                 data-copy="pip install ggcode"
+                data-copied-label=" copied"
+                data-i18n="install.copy"
+                data-copy-label-key="copy.state"
+              >
+                Copy command
+              </button>
+            </article>
+
+            <article class="install-card">
+              <h3 data-i18n="install.native.title">Native release packages</h3>
+              <p data-i18n="install.native.text">GitHub Releases now ship native installers and packages, including .pkg, .msi, .deb, .rpm, .apk, .ipk, and Arch packages.</p>
+              <pre><code>.pkg  .msi  .deb  .rpm
+.apk  .ipk  .pkg.tar.zst</code></pre>
+              <a
+                class="button button-inline"
+                href="https://github.com/topcheer/ggcode/releases"
+                target="_blank"
+                rel="noreferrer"
+                data-i18n="install.native.cta"
+              >
+                Browse releases
+              </a>
+            </article>
+
+            <article class="install-card">
+              <h3 data-i18n="install.update.title">In-app update</h3>
+              <p data-i18n="install.update.text">Already running ggcode? Use the built-in updater to fetch the latest release without reinstalling from scratch.</p>
+              <pre><code>ggcode
+/update</code></pre>
+              <button
+                class="button button-inline"
+                data-copy="ggcode&#10;/update"
                 data-copied-label=" copied"
                 data-i18n="install.copy"
                 data-copy-label-key="copy.state"

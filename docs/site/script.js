@@ -6,16 +6,16 @@ const translations = {
     "nav.features": "Features",
     "nav.workflow": "Workflow",
     "nav.install": "Install",
-    "hero.eyebrow": "terminal-native · checkpoint-safe · mcp-ready",
+    "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
     "hero.title": "Bring the AI coding workflow back into your terminal.",
     "hero.text":
       "ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, and keeping long tasks moving inside one fresh, modern, geek-forward interface.",
     "hero.ctaPrimary": "Get started",
     "hero.ctaSecondary": "View repository",
-    "hero.stats.undo": "Recover quickly when a change goes wrong",
+    "hero.stats.update": "Upgrade in-app or install native packages from releases",
     "hero.stats.background": "Run long jobs in the background and keep visibility",
     "hero.stats.extensible": "Extend the CLI natively with more capabilities",
-    "hero.badge": "v1.0.6 · Ready",
+    "hero.badge": "v1.0.18 · self-update ready",
     "hero.bannerAlt": "ggcode CLI banner",
     "features.eyebrow": "what makes it memorable",
     "features.title":
@@ -26,7 +26,7 @@ const translations = {
       "Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.",
     "features.stable.title": "Safer by design",
     "features.stable.text":
-      "Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed.",
+      "Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed without losing approval visibility.",
     "features.control.title": "More controllable",
     "features.control.text":
       "Checkpoints plus /undo make file changes reversible, which matters in real projects, not just demos.",
@@ -38,7 +38,7 @@ const translations = {
       "Background commands, sub-agents, activity panels, and status signals keep builds, tests, and releases from blocking the whole session.",
     "features.crossPlatform.title": "More cross-platform",
     "features.crossPlatform.text":
-      "macOS and Linux use sh. Windows prefers Git Bash and falls back to PowerShell when needed.",
+      "Go, npm, pip, native packages, and in-app /update keep installs and upgrades simple across macOS, Windows, and Linux.",
     "workflow.eyebrow": "from prompt to patch",
     "workflow.title":
       "More like a real engineering partner than a one-shot answer box.",
@@ -74,13 +74,20 @@ const translations = {
     "modes.autopilot":
       "Built for continuous progress and high-tempo delivery with minimal interruption.",
     "install.eyebrow": "get running fast",
-    "install.title": "Pick the installation path you already use.",
+    "install.title": "Pick the installation or update path you already use.",
     "install.go.text":
       "Closest to the native release flow and fetches the right binary for your platform.",
     "install.npm.text":
       "Fits teams already in the Node ecosystem and installs the release-backed binary from the @ggcode-cli scope.",
     "install.pip.text":
       "Works well for Python environments or standardized distribution across team machines.",
+    "install.native.title": "Native release packages",
+    "install.native.text":
+      "GitHub Releases now ship native installers and packages, including .pkg, .msi, .deb, .rpm, .apk, .ipk, and Arch packages.",
+    "install.native.cta": "Browse releases",
+    "install.update.title": "In-app update",
+    "install.update.text":
+      "Already running ggcode? Use the built-in updater to fetch the latest release without reinstalling from scratch.",
     "install.copy": "Copy command",
     "copy.state": " copied",
     "cta.eyebrow": "ready",
@@ -98,16 +105,16 @@ const translations = {
     "nav.features": "能力",
     "nav.workflow": "工作流",
     "nav.install": "安装",
-    "hero.eyebrow": "terminal-native · checkpoint-safe · mcp-ready",
+    "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
     "hero.title": "把 AI 编码工作流，真正放回你的终端。",
     "hero.text":
       "ggcode 不是一个会聊天的命令行玩具，而是一套可持续使用的 AI Coding CLI：读代码、改文件、跑命令、接 MCP、看 checkpoint、切模式、排长任务，都在一个清新、现代、极客感十足的界面里完成。",
     "hero.ctaPrimary": "马上开始",
     "hero.ctaSecondary": "查看仓库",
-    "hero.stats.undo": "改错了也能快速撤回",
+    "hero.stats.update": "可在应用内升级，也能直接安装原生发布包",
     "hero.stats.background": "长任务可以后台跑、持续看进度",
     "hero.stats.extensible": "从 CLI 原生长出扩展能力",
-    "hero.badge": "v1.0.6 · Ready",
+    "hero.badge": "v1.0.18 · 可直接升级",
     "hero.bannerAlt": "ggcode CLI 横幅",
     "features.eyebrow": "what makes it memorable",
     "features.title": "不是“AI 接个壳”，而是一套终端里的完整产品体验。",
@@ -116,7 +123,7 @@ const translations = {
       "你可以在 TUI 里直接读文件、查 diff、看状态、管理 session、切 provider、选语言、排队提交新任务，而不是把“AI 辅助开发”拆成十几个碎片化动作。",
     "features.stable.title": "更稳",
     "features.stable.text":
-      "supervised、plan、auto、bypass、autopilot 五种模式，既能安全探索，也能高速推进。",
+      "supervised、plan、auto、bypass、autopilot 五种模式，既能安全探索，也能高速推进，同时保留清晰的审批可见性。",
     "features.control.title": "更可控",
     "features.control.text":
       "checkpoint + /undo 让文件改动具备回滚能力，适合真实项目而不是一次性 demo。",
@@ -128,7 +135,7 @@ const translations = {
       "后台命令、sub-agent、活动面板、状态提示，让编译、测试、发布不再卡住整次交互。",
     "features.crossPlatform.title": "更跨平台",
     "features.crossPlatform.text":
-      "macOS / Linux 走 sh，Windows 优先 Git Bash，找不到再退回 PowerShell。",
+      "Go、npm、pip、原生安装包和应用内 /update，让 macOS、Windows、Linux 上的安装与升级都更直接。",
     "workflow.eyebrow": "from prompt to patch",
     "workflow.title": "像一个真正的工程搭档，而不是一次性回答器。",
     "workflow.demo.ask1": "解释一下认证流程，以及为什么启动会变慢",
@@ -154,10 +161,15 @@ const translations = {
     "modes.bypass": "适合你已经知道自己在做什么，希望 agent 少停顿。",
     "modes.autopilot": "适合连续推进和高节奏交付，强调“别打断我”。",
     "install.eyebrow": "get running fast",
-    "install.title": "几种安装方式，选你已经在用的那一种。",
+    "install.title": "安装或升级方式，选你已经在用的那一种。",
     "install.go.text": "最接近原生发布流，安装后直接拿到对应平台二进制。",
     "install.npm.text": "适合已经在 Node 生态里的用户，通过 @ggcode-cli 作用域安装 Release 二进制。",
     "install.pip.text": "适合 Python 环境或团队机器统一分发。",
+    "install.native.title": "原生发布包",
+    "install.native.text": "GitHub Releases 现在会同时提供 .pkg、.msi、.deb、.rpm、.apk、.ipk 和 Arch 包。",
+    "install.native.cta": "查看 releases",
+    "install.update.title": "应用内升级",
+    "install.update.text": "如果你已经在用 ggcode，可以直接用内置 updater 拉取最新版本，不用重新安装。",
     "install.copy": "复制命令",
     "copy.state": " 已复制",
     "cta.eyebrow": "ready",
