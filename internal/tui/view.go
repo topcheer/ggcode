@@ -248,7 +248,7 @@ func (m Model) renderSidebar(totalHeight int) string {
 		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1).
 		Height(innerHeight).
-		Width(m.sidebarWidth()).
+		Width(m.boxInnerWidth(m.sidebarWidth())).
 		Render(body)
 }
 
@@ -553,11 +553,12 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 	vp := m.conversationViewport()
 	content := vp.View()
 	body := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true).Render(" "+m.t("panel.conversation")) + "\n" + content
+	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("208")).
 		Padding(0, 1).
-		Width(m.mainColumnWidth()).
+		Width(width).
 		Height(panelHeight).
 		Render(body)
 }
@@ -835,20 +836,22 @@ func (m Model) renderComposerPanel() string {
 
 	body := lipgloss.NewStyle().Bold(true).Render(m.input.View()) + "\n" +
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
+	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(accent).
 		Padding(0, 1).
-		Width(m.mainColumnWidth()).
+		Width(width).
 		Render(lipgloss.NewStyle().Foreground(accent).Bold(true).Render(title) + "\n" + body)
 }
 
 func (m Model) renderContextBox(title, body string, accent lipgloss.Color) string {
+	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
 		Padding(0, 1).
-		Width(m.mainColumnWidth()).
+		Width(width).
 		Render(lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body)
 }
 
@@ -935,6 +938,18 @@ func (m Model) sidebarWidth() int {
 	return 40
 }
 
+func (m Model) terminalRightMargin() int {
+	return 1
+}
+
+func (m Model) boxInnerWidth(totalWidth int) int {
+	innerWidth := totalWidth - 2
+	if innerWidth < 1 {
+		return 1
+	}
+	return innerWidth
+}
+
 func (m Model) sidebarEnabled() bool {
 	return m.sidebarVisible && m.sidebarAvailableByWidth()
 }
@@ -944,15 +959,19 @@ func (m Model) topHeaderEnabled() bool {
 }
 
 func (m Model) sidebarAvailableByWidth() bool {
-	required := 72 + m.sidebarWidth() + 1
+	required := 72 + m.sidebarWidth() + 1 + m.terminalRightMargin()
 	return m.viewWidth() >= required
 }
 
 func (m Model) mainColumnWidth() int {
 	if !m.sidebarEnabled() {
-		return m.viewWidth()
+		width := m.viewWidth() - m.terminalRightMargin()
+		if width < 1 {
+			width = 1
+		}
+		return width
 	}
-	width := m.viewWidth() - m.sidebarWidth() - 1
+	width := m.viewWidth() - m.sidebarWidth() - 1 - m.terminalRightMargin()
 	if width < 1 {
 		width = 1
 	}
