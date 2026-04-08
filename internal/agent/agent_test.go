@@ -249,13 +249,14 @@ func TestRunStreamWithContent_EmitsCompactionProgressMessages(t *testing.T) {
 					Content: []provider.ContentBlock{{Type: "text", Text: "Summary text again."}},
 				},
 			},
-			{
-				Message: provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{{Type: "text", Text: "Final answer."}},
-				},
-			},
 		},
+		streamEvents: [][]provider.StreamEvent{{
+			{
+				Type: provider.StreamEventText,
+				Text: "Final answer.",
+			},
+			{Type: provider.StreamEventDone},
+		}},
 	}
 	a := NewAgent(mp, tool.NewRegistry(), "System prompt", 1)
 	a.ContextManager().SetMaxTokens(80)

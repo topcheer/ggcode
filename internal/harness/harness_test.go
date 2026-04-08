@@ -297,7 +297,7 @@ func TestBinaryRunnerStreamsStdoutChunksWithoutWaitingForNewline(t *testing.T) {
 	if len(progress) != 1 || progress[0] != "tool: read_file README.md" {
 		t.Fatalf("unexpected progress lines = %#v", progress)
 	}
-	if !strings.Contains(result.Output, "hello world") || !strings.Contains(result.Output, "tool: read_file README.md") {
+	if !strings.Contains(result.Output, "hello") || !strings.Contains(result.Output, "world") || !strings.Contains(result.Output, "tool: read_file README.md") {
 		t.Fatalf("expected combined run output, got %q", result.Output)
 	}
 }

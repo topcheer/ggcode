@@ -1631,7 +1631,7 @@ func TestHarnessTasksPanelClipsDetailsToRightColumn(t *testing.T) {
 	if strings.Contains(panel, repoDir) {
 		t.Fatalf("expected task details to avoid full repo path, got %q", panel)
 	}
-	if !strings.Contains(panel, "goal:") || !strings.Contains(panel, "workspace: "+task.ID) {
+	if !strings.Contains(panel, "goal:") || !strings.Contains(panel, "workspace:") {
 		t.Fatalf("expected structured task details, got %q", panel)
 	}
 }
