@@ -289,6 +289,7 @@ func (r *REPL) loadSession(id string) {
 		r.agent.AddMessage(msg)
 	}
 	r.model.SetSession(ses, r.store)
+	r.model.rebuildConversationFromMessages(ses.Messages)
 	title := ses.Title
 	if title == "" {
 		title = r.model.t("session.untitled")

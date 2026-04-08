@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -97,6 +98,7 @@ type Model struct {
 	providerPanel      *providerPanelState
 	mcpPanel           *mcpPanelState
 	skillsPanel        *skillsPanelState
+	harnessPanel       *harnessPanelState
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -145,6 +147,12 @@ type Model struct {
 	projectMemoryLoading bool
 	runCanceled          bool
 	runFailed            bool
+	harnessRunProject    *harness.Project
+	harnessRunGoal       string
+	harnessRunTaskID     string
+	harnessRunLogPath    string
+	harnessRunLogOffset  int64
+	harnessRunLastDetail string
 	clipboardLoader      func() (imageAttachedMsg, error)
 	updateSvc            *update.Service
 	updateInfo           update.CheckResult
@@ -255,6 +263,22 @@ type errMsg struct{ err error }
 
 type startupReadyMsg struct{}
 
+type harnessRunResultMsg struct {
+	Summary *harness.RunSummary
+	Err     error
+}
+
+type harnessRunProgressMsg struct {
+	TaskID    string
+	Activity  string
+	Detail    string
+	LogPath   string
+	LogChunk  string
+	LogOffset int64
+}
+
+type harnessPanelAutoRefreshMsg struct{}
+
 type projectMemoryLoadedMsg struct {
 	Content string
 	Files   []string
@@ -316,6 +340,7 @@ func (m *Model) promptExitConfirm() {
 	m.exitConfirmPending = true
 	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.styles.prompt.Render(m.t("exit.confirm")))
+	m.output.WriteString("\n")
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
 		m.viewport.GotoBottom()
@@ -691,7 +716,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if msg.String() == "ctrl+c" && !m.loading && (m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0) {
+		if msg.String() == "ctrl+c" && !m.loading && (m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.harnessPanel != nil || len(m.langOptions) > 0) {
 			if m.exitConfirmPending {
 				m.quitting = true
 				return m, tea.Quit
@@ -715,6 +740,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.skillsPanel != nil {
 			return m.handleSkillsPanelKey(msg)
+		}
+
+		if m.harnessPanel != nil {
+			return m.handleHarnessPanelKey(msg)
 		}
 
 		if len(m.langOptions) > 0 {
@@ -888,6 +917,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.loading || m.projectMemoryLoading {
+				if shouldAllowBusyHarnessPanel(text) {
+					return m, m.submitText(text, true)
+				}
 				m.history = append(m.history, text)
 				m.historyIdx = len(m.history)
 				m.queuePendingSubmission(text)
@@ -900,21 +932,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.runCanceled {
 			return m, nil
 		}
-		m.closeToolActivityGroup()
-		m.flushGroupedActivitiesToOutput()
-		if !m.streamPrefixWritten {
-			m.ensureOutputHasBlankLine()
-			m.streamStartPos = m.output.Len()
-			m.output.WriteString(bulletStyle.Render("● "))
-			m.streamPrefixWritten = true
-		}
-		if m.streamBuffer != nil {
-			m.streamBuffer.WriteString(string(msg))
-		}
-		m.output.WriteString(string(msg))
-		m.trimOutput()
-		m.syncConversationViewport()
-		m.viewport.GotoBottom()
+		m.appendStreamChunk(string(msg))
 		return m, nil
 
 	case doneMsg:
@@ -969,6 +987,106 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil
+
+	case harnessRunResultMsg:
+		if path := strings.TrimSpace(m.harnessRunLogPath); path != "" {
+			chunk, nextOffset := readHarnessRunLogChunk(path, m.harnessRunLogOffset)
+			m.harnessRunLogOffset = nextOffset
+			m.appendStreamChunk(chunk)
+		} else if msg.Summary != nil && msg.Summary.Task != nil {
+			path := strings.TrimSpace(msg.Summary.Task.LogPath)
+			chunk, nextOffset := readHarnessRunLogChunk(path, m.harnessRunLogOffset)
+			m.harnessRunLogPath = path
+			m.harnessRunLogOffset = nextOffset
+			m.appendStreamChunk(chunk)
+		}
+		m.loading = false
+		m.spinner.Stop()
+		m.closeToolActivityGroup()
+		m.flushGroupedActivitiesToOutput()
+		m.cancelFunc = nil
+		wasCanceled := m.runCanceled
+		wasFailed := m.runFailed
+		m.runCanceled = false
+		m.runFailed = false
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		m.harnessRunProject = nil
+		m.harnessRunGoal = ""
+		m.harnessRunTaskID = ""
+		m.harnessRunLastDetail = ""
+		streamedHarnessOutput := m.harnessRunLogOffset > 0 || strings.TrimSpace(m.harnessRunLastDetail) != ""
+		m.harnessRunLogPath = ""
+		m.harnessRunLogOffset = 0
+		if errors.Is(msg.Err, context.Canceled) {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.runFailed = true
+			if len(m.pendingSubmissions) > 0 {
+				m.restorePendingInput()
+			}
+			m.output.WriteString(m.styles.error.Render(msg.Err.Error()))
+			m.output.WriteString("\n")
+			m.syncConversationViewport()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		rendered := harness.FormatRunSummary(msg.Summary)
+		if streamedHarnessOutput {
+			rendered = trimHarnessRunOutputSection(rendered)
+		}
+		m.renderStreamBuffer()
+		m.ensureOutputHasBlankLine()
+		if msg.Summary != nil && msg.Summary.Task != nil && msg.Summary.Task.Status == harness.TaskFailed {
+			m.output.WriteString(m.styles.error.Render(rendered))
+		} else {
+			m.output.WriteString(m.styles.assistant.Render(rendered))
+		}
+		m.output.WriteString("\n")
+		m.syncConversationViewport()
+		m.viewport.GotoBottom()
+		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
+			return m, m.submitText(m.consumePendingSubmission(), false)
+		}
+		return m, nil
+
+	case harnessRunProgressMsg:
+		if !m.loading || m.harnessRunProject == nil {
+			return m, nil
+		}
+		if msg.TaskID != "" {
+			m.harnessRunTaskID = msg.TaskID
+		}
+		if msg.LogPath != "" {
+			m.harnessRunLogPath = msg.LogPath
+		}
+		if msg.LogChunk != "" {
+			m.appendStreamChunk(msg.LogChunk)
+		}
+		if msg.LogOffset > 0 {
+			m.harnessRunLogOffset = msg.LogOffset
+		}
+		if detail := strings.TrimSpace(msg.Detail); detail != "" && detail != m.harnessRunLastDetail {
+			m.harnessRunLastDetail = detail
+			m.appendHarnessProgressDetail(detail)
+		}
+		if strings.TrimSpace(msg.Activity) != "" {
+			m.statusActivity = msg.Activity
+		}
+		return m, m.pollHarnessRunProgress()
+
+	case harnessPanelAutoRefreshMsg:
+		if !m.shouldAutoRefreshHarnessTask() {
+			return m, nil
+		}
+		m.refreshHarnessPanel()
+		if !m.shouldAutoRefreshHarnessTask() {
+			return m, nil
+		}
+		return m, m.pollHarnessPanelAutoRefresh()
 
 	case startupReadyMsg:
 		m.startupBannerVisible = false
@@ -1077,6 +1195,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mcpServersMsg:
 		m.mcpServers = toMCPInfos(msg.Servers)
+		m.refreshCommands()
 		return m, nil
 
 	case mcpInstallResultMsg:

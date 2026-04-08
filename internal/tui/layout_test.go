@@ -1987,6 +1987,9 @@ func TestExitConfirmStartsOnFreshLine(t *testing.T) {
 	if !strings.Contains(m.output.String(), "partial line\n\nPress Ctrl-C again to exit.") {
 		t.Fatalf("expected exit confirm to start after a blank line, got %q", m.output.String())
 	}
+	if !strings.Contains(m.output.String(), "Press Ctrl-C again to exit.\n") {
+		t.Fatalf("expected exit confirm body to be followed by newline, got %q", m.output.String())
+	}
 }
 
 func TestResizeStillAllowsNormalRuneInput(t *testing.T) {

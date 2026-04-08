@@ -755,6 +755,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:
 		return m.renderSkillsPanel()
+	case m.harnessPanel != nil:
+		return m.renderHarnessPanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
 	case m.pendingApproval != nil:
@@ -811,7 +813,7 @@ func (m Model) renderContextPanel() string {
 func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
 	title := " " + m.t("panel.composer")
-	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0 {
+	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.harnessPanel != nil || len(m.langOptions) > 0 {
 		title = " " + m.t("panel.composer_locked")
 	}
 

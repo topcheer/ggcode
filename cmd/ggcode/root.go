@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -45,7 +46,11 @@ func NewRootCmd() *cobra.Command {
 		TraverseChildren: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cfgFile == "" {
-				cfgFile = config.ConfigPath()
+				resolved, err := resolveConfigFilePath()
+				if err != nil {
+					return fmt.Errorf("resolving config path: %w", err)
+				}
+				cfgFile = resolved
 			}
 
 			debug.Init()
@@ -60,7 +65,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, pipePrompt, allowedTools, outputPath)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, outputPath, bypassFlag)
 				if code != 0 {
 					os.Exit(code)
 				}
@@ -72,7 +77,10 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
-	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
+	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID, or open a picker with bare --resume")
+	if flag := cmd.Flags().Lookup("resume"); flag != nil {
+		flag.NoOptDefVal = resumePickerFlagValue
+	}
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
@@ -116,10 +124,31 @@ func NewRootCmd() *cobra.Command {
 		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(completionCmd)
+	cmd.AddCommand(newHarnessCmd())
 	cmd.AddCommand(newMCPCmd(&cfgFile))
 	configureHelpRendering(cmd)
 
 	return cmd
+}
+
+func resolveConfigFilePath() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range []string{
+		filepath.Join(wd, "ggcode.yaml"),
+		filepath.Join(wd, ".ggcode", "ggcode.yaml"),
+	} {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return config.ConfigPath(), nil
 }
 
 func configureHelpRendering(cmd *cobra.Command) {
@@ -323,6 +352,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
 
 	autoContent, autoFiles, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem)
+	commandMgr.SetExtraProviders(func() []*commands.Command {
+		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
+	})
 	projectMemoryLoader := func() (string, []string, error) {
 		return memory.LoadProjectMemory(workingDir)
 	}
@@ -355,7 +387,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Build enhanced system prompt with runtime context
 	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, toolNames, gitStatus, customCmdNames)
-	if skillsPrompt := buildSkillsSystemPrompt(append(commandMgr.List(), buildMCPSkillCommands(mcpMgr.SnapshotMCP())...)); skillsPrompt != "" {
+	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
 		systemPrompt += "\n\n## Skills\n" + skillsPrompt
 	}
 	if mode == permission.AutopilotMode {
@@ -383,6 +415,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return fmt.Errorf("creating session store: %w", err)
+	}
+	if resumeID == resumePickerFlagValue {
+		selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
+		if err != nil {
+			return err
+		}
+		resumeID = selectedID
 	}
 
 	// Build MCP info for TUI
@@ -559,9 +598,12 @@ func buildMCPSkillCommands(snapshots []tool.MCPServerSnapshot) []*commands.Comma
 				continue
 			}
 			out = append(out, &commands.Command{
-				Name:        name,
-				Description: fmt.Sprintf("MCP prompt from %s", snap.Name),
-				WhenToUse:   fmt.Sprintf("Use when the %s MCP prompt %q matches the user's request.", snap.Name, promptName),
+				Name:          name,
+				Description:   fmt.Sprintf("MCP prompt from %s", snap.Name),
+				WhenToUse:     fmt.Sprintf("Use when the %s MCP prompt %q matches the user's request.", snap.Name, promptName),
+				Source:        commands.SourceMCP,
+				LoadedFrom:    commands.LoadedFromMCP,
+				UserInvocable: true,
 			})
 		}
 	}

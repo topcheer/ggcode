@@ -57,6 +57,11 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			argString(args, "command"),
 			argString(args, "cmd"),
 		)))
+	case "write_command_input":
+		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
+			argString(args, "job_id"),
+			"background command",
+		)))
 	case "read_command_output", "wait_command", "stop_command", "list_commands":
 		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
 			argString(args, "job_id"),

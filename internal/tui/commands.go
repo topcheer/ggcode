@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
+	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -21,6 +24,14 @@ import (
 	"github.com/topcheer/ggcode/internal/version"
 	"runtime"
 )
+
+var executeHarnessRun = func(ctx context.Context, project harness.Project, cfg *harness.Config, goal string) (*harness.RunSummary, error) {
+	return harness.RunTask(ctx, project, cfg, goal, harness.BinaryRunner{})
+}
+
+var executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string) (*harness.RunSummary, error) {
+	return harness.RerunTask(ctx, project, cfg, taskID, harness.BinaryRunner{})
+}
 
 func (m *Model) updateAutoComplete() {
 	// Check for slash command
@@ -72,6 +83,15 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 	var replacement string
 	if m.autoCompleteKind == "slash" {
 		if m.loading {
+			if shouldAllowBusyHarnessPanel(selected) {
+				m.input.SetValue("")
+				m.autoCompleteActive = false
+				m.autoCompleteItems = nil
+				m.autoCompleteIndex = 0
+				m.history = append(m.history, selected)
+				m.historyIdx = len(m.history)
+				return m.handleCommand(selected)
+			}
 			m.input.SetValue(selected)
 			m.autoCompleteActive = false
 			m.autoCompleteItems = nil
@@ -115,6 +135,17 @@ func (m *Model) submitText(text string, addToHistory bool) tea.Cmd {
 	return m.handleCommand(text)
 }
 
+func shouldAllowBusyHarnessPanel(text string) bool {
+	parts := strings.Fields(strings.TrimSpace(text))
+	if len(parts) == 0 {
+		return false
+	}
+	if parts[0] != "/harness" {
+		return false
+	}
+	return len(parts) == 1 || (len(parts) == 2 && strings.EqualFold(parts[1], "panel"))
+}
+
 func (m *Model) ensureOutputEndsWithNewline() {
 	if m.output == nil || m.output.Len() == 0 {
 		return
@@ -137,6 +168,62 @@ func (m *Model) ensureOutputHasBlankLine() {
 	default:
 		m.output.WriteString("\n\n")
 	}
+}
+
+func (m *Model) appendStreamChunk(chunk string) {
+	if chunk == "" {
+		return
+	}
+	m.closeToolActivityGroup()
+	m.flushGroupedActivitiesToOutput()
+	if !m.streamPrefixWritten {
+		m.ensureOutputHasBlankLine()
+		m.streamStartPos = m.output.Len()
+		m.output.WriteString(bulletStyle.Render("● "))
+		m.streamPrefixWritten = true
+	}
+	if m.streamBuffer != nil {
+		m.streamBuffer.WriteString(chunk)
+	}
+	m.output.WriteString(chunk)
+	m.trimOutput()
+	m.syncConversationViewport()
+	m.viewport.GotoBottom()
+}
+
+func (m *Model) appendHarnessProgressDetail(detail string) {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return
+	}
+	prefix := "→ "
+	chunk := prefix + detail
+	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 && !strings.HasSuffix(m.streamBuffer.String(), "\n") {
+		chunk = "\n" + chunk
+	}
+	m.appendStreamChunk(chunk + "\n")
+}
+
+func (m *Model) renderStreamBuffer() {
+	if m.streamBuffer == nil || m.streamBuffer.Len() == 0 {
+		return
+	}
+	rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
+	if err != nil {
+		rendered = m.streamBuffer.String()
+	}
+	rendered = trimLeadingRenderedSpacing(rendered)
+	m.output.Truncate(m.streamStartPos)
+	m.output.WriteString(bulletStyle.Render("● "))
+	m.output.WriteString(rendered)
+	m.streamBuffer.Reset()
+}
+
+func trimHarnessRunOutputSection(rendered string) string {
+	if idx := strings.Index(rendered, "\n\nOutput:\n"); idx >= 0 {
+		return rendered[:idx]
+	}
+	return rendered
 }
 
 func (m *Model) handleCommand(text string) tea.Cmd {
@@ -237,6 +324,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleModeCommand(parts)
 		case "/init":
 			return m.handleInitCommand()
+		case "/harness":
+			return m.handleHarnessCommand(parts)
 		case "/lang":
 			return m.handleLangCommand(parts)
 		case "/memory":
@@ -365,6 +454,815 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	return m.startAgent(prompt)
 }
 
+func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
+	if len(parts) < 2 {
+		m.openHarnessPanel()
+		return nil
+	}
+
+	workDir, _ := os.Getwd()
+	switch parts[1] {
+	case "panel":
+		m.openHarnessPanel()
+		return nil
+	case "init":
+		goal := strings.TrimSpace(strings.Join(parts[2:], " "))
+		result, err := harness.Init(workDir, harness.InitOptions{Goal: goal})
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(formatHarnessInitResult(result)))
+		m.output.WriteString("\n")
+		return nil
+	case "check":
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		report, err := harness.CheckProject(context.Background(), project, cfg, harness.CheckOptions{RunCommands: true})
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		rendered := harness.FormatCheckReport(report)
+		if report.Passed {
+			m.output.WriteString(m.styles.assistant.Render(rendered))
+		} else {
+			m.output.WriteString(m.styles.error.Render(rendered))
+		}
+		m.output.WriteString("\n")
+		return nil
+	case "doctor":
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		report, err := harness.Doctor(project, cfg)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(harness.FormatDoctorReport(report)))
+		m.output.WriteString("\n")
+		return nil
+	case "monitor":
+		project, _, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		report, err := harness.BuildMonitorReport(project, harness.MonitorOptions{})
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(harness.FormatMonitorReport(report)))
+		m.output.WriteString("\n")
+		return nil
+	case "gc":
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		report, err := harness.RunGC(project, cfg, time.Now().UTC())
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(harness.FormatGCReport(report)))
+		m.output.WriteString("\n")
+		return nil
+	case "contexts":
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		report, err := harness.BuildContextReport(project, cfg)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(harness.FormatContextReport(report)))
+		m.output.WriteString("\n")
+		return nil
+	case "inbox":
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(parts) == 2 {
+			inbox, err := harness.BuildOwnerInbox(project, cfg)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatOwnerInbox(inbox)))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(parts) < 4 {
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+			m.output.WriteString("\n")
+			return nil
+		}
+		switch parts[2] {
+		case "promote":
+			tasks, err := harness.PromoteApprovedTasksForOwner(context.Background(), project, cfg, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Promoted %d harness task(s) for owner %s.", len(tasks), parts[3])))
+			m.output.WriteString("\n")
+			return nil
+		case "retry":
+			summary, err := harness.RetryFailedTasksForOwner(context.Background(), project, cfg, parts[3], harness.BinaryRunner{})
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatQueueSummary(summary)))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+		m.output.WriteString("\n")
+		return nil
+	case "review":
+		project, _, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(parts) == 2 {
+			tasks, err := harness.ListReviewableTasks(project)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReviewList(tasks)))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(parts) < 4 {
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+			m.output.WriteString("\n")
+			return nil
+		}
+		note := strings.TrimSpace(strings.Join(parts[4:], " "))
+		switch parts[2] {
+		case "approve":
+			task, err := harness.ApproveTaskReview(project, parts[3], note)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Approved harness task %s.", task.ID)))
+			m.output.WriteString("\n")
+			return nil
+		case "reject":
+			task, err := harness.RejectTaskReview(project, parts[3], note)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Rejected harness task %s.", task.ID)))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+		m.output.WriteString("\n")
+		return nil
+	case "promote":
+		project, _, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(parts) == 2 {
+			tasks, err := harness.ListPromotableTasks(project)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatPromotionList(tasks)))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(parts) < 4 || parts[2] != "apply" {
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+			m.output.WriteString("\n")
+			return nil
+		}
+		note := strings.TrimSpace(strings.Join(parts[4:], " "))
+		if parts[3] == "all" {
+			tasks, err := harness.PromoteApprovedTasks(context.Background(), project, note)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Promoted %d harness task(s).", len(tasks))))
+			m.output.WriteString("\n")
+			return nil
+		}
+		task, err := harness.PromoteTask(context.Background(), project, parts[3], note)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Promoted harness task %s.", task.ID)))
+		m.output.WriteString("\n")
+		return nil
+	case "release":
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(parts) == 2 {
+			plan, err := harness.BuildReleasePlan(project, cfg)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleasePlan(plan)))
+			m.output.WriteString("\n")
+			return nil
+		}
+		switch parts[2] {
+		case "waves":
+			if len(parts) < 4 {
+				m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+				m.output.WriteString("\n")
+				return nil
+			}
+			waves, err := harness.BuildReleaseWavePlan(project, cfg, harness.ReleasePlanOptions{}, parts[3])
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWavePlan(waves)))
+			m.output.WriteString("\n")
+			return nil
+		case "apply":
+			if len(parts) >= 5 && parts[3] == "waves" {
+				waves, err := harness.BuildReleaseWavePlan(project, cfg, harness.ReleasePlanOptions{}, parts[4])
+				if err != nil {
+					m.output.WriteString(m.styles.error.Render(err.Error()))
+					m.output.WriteString("\n")
+					return nil
+				}
+				waves, err = harness.ApplyReleaseWavePlan(project, waves, "", "")
+				if err != nil {
+					m.output.WriteString(m.styles.error.Render(err.Error()))
+					m.output.WriteString("\n")
+					return nil
+				}
+				m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWavePlan(waves)))
+				m.output.WriteString("\n")
+				return nil
+			}
+			plan, err := harness.BuildReleasePlan(project, cfg)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			plan, err = harness.ApplyReleasePlan(project, plan, "")
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleasePlan(plan)))
+			m.output.WriteString("\n")
+			return nil
+		case "rollouts":
+			rollouts, err := harness.ListReleaseWaveRollouts(project)
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWaveRollouts(rollouts)))
+			m.output.WriteString("\n")
+			return nil
+		case "advance":
+			if len(parts) < 4 {
+				m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+				m.output.WriteString("\n")
+				return nil
+			}
+			rollout, err := harness.AdvanceReleaseWaveRollout(project, parts[3])
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
+			m.output.WriteString("\n")
+			return nil
+		case "pause":
+			if len(parts) < 4 {
+				m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+				m.output.WriteString("\n")
+				return nil
+			}
+			rollout, err := harness.PauseReleaseWaveRollout(project, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
+			m.output.WriteString("\n")
+			return nil
+		case "resume":
+			if len(parts) < 4 {
+				m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+				m.output.WriteString("\n")
+				return nil
+			}
+			rollout, err := harness.ResumeReleaseWaveRollout(project, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
+			m.output.WriteString("\n")
+			return nil
+		case "abort":
+			if len(parts) < 4 {
+				m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+				m.output.WriteString("\n")
+				return nil
+			}
+			rollout, err := harness.AbortReleaseWaveRollout(project, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
+			m.output.WriteString("\n")
+			return nil
+		case "approve", "reject":
+			if len(parts) < 4 {
+				m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+				m.output.WriteString("\n")
+				return nil
+			}
+			waveOrder := 0
+			noteStart := 4
+			if len(parts) > 4 {
+				if parsed, err := strconv.Atoi(parts[4]); err == nil {
+					waveOrder = parsed
+					noteStart = 5
+				}
+			}
+			note := strings.TrimSpace(strings.Join(parts[noteStart:], " "))
+			var (
+				rollout *harness.ReleaseWavePlan
+				err     error
+			)
+			if parts[2] == "approve" {
+				rollout, err = harness.ApproveReleaseWaveGate(project, parts[3], waveOrder, note)
+			} else {
+				rollout, err = harness.RejectReleaseWaveGate(project, parts[3], waveOrder, note)
+			}
+			if err != nil {
+				m.output.WriteString(m.styles.error.Render(err.Error()))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+		m.output.WriteString("\n")
+		return nil
+	case "queue":
+		if len(parts) < 3 {
+			m.output.WriteString(m.styles.error.Render(m.t("command.harness_queue_usage")))
+			m.output.WriteString("\n")
+			return nil
+		}
+		project, _, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		task, err := harness.EnqueueTask(project, strings.TrimSpace(strings.Join(parts[2:], " ")), "tui")
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Queued harness task %s.\n- goal: %s", task.ID, task.Goal)))
+		m.output.WriteString("\n")
+		return nil
+	case "tasks":
+		project, _, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		tasks, err := harness.ListTasks(project)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		if len(tasks) == 0 {
+			m.output.WriteString(m.styles.assistant.Render("No harness tasks recorded."))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(harness.FormatTaskList(tasks)))
+		m.output.WriteString("\n")
+		return nil
+	case "run-queued":
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		opts := harness.QueueRunOptions{}
+		for _, part := range parts[2:] {
+			switch strings.ToLower(part) {
+			case "all":
+				opts.All = true
+			case "retry":
+				opts.RetryFailed = true
+			case "resume":
+				opts.ResumeInterrupted = true
+			}
+		}
+		queueSummary, err := harness.RunQueuedTasks(context.Background(), project, cfg, nil, opts)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		m.output.WriteString(m.styles.assistant.Render(harness.FormatQueueSummary(queueSummary)))
+		m.output.WriteString("\n")
+		return nil
+	case "run":
+		if len(parts) < 3 {
+			m.output.WriteString(m.styles.error.Render(m.t("command.harness_run_usage")))
+			m.output.WriteString("\n")
+			return nil
+		}
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		return m.runTrackedHarnessGoal(strings.Join(parts, " "), strings.TrimSpace(strings.Join(parts[2:], " ")), project, cfg)
+	case "rerun":
+		if len(parts) != 3 {
+			m.output.WriteString(m.styles.error.Render(m.t("command.harness_rerun_usage")))
+			m.output.WriteString("\n")
+			return nil
+		}
+		project, cfg, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		task, err := harness.LoadTask(project, parts[2])
+		if err != nil {
+			m.output.WriteString(m.styles.error.Render(err.Error()))
+			m.output.WriteString("\n")
+			return nil
+		}
+		return m.runTrackedHarnessRerun(strings.Join(parts, " "), project, cfg, task)
+	default:
+		m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_usage")))
+		m.output.WriteString("\n")
+		return nil
+	}
+}
+
+func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.Project, cfg *harness.Config) tea.Cmd {
+	goal = strings.TrimSpace(goal)
+	if goal == "" {
+		m.output.WriteString(m.styles.error.Render(m.t("command.harness_run_usage")))
+		m.output.WriteString("\n")
+		return nil
+	}
+	m.output.WriteString(m.styles.user.Render("❯ "))
+	m.output.WriteString(strings.TrimSpace(commandText))
+	m.output.WriteString("\n")
+	m.appendUserMessage(strings.TrimSpace(commandText))
+	m.ensureOutputHasBlankLine()
+	m.output.WriteString(m.styles.assistant.Render("Starting tracked harness run...\nUse /harness monitor or the Tasks/Monitor views for live state."))
+	m.output.WriteString("\n")
+	m.syncConversationViewport()
+	m.viewport.GotoBottom()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.loading = true
+	m.runCanceled = false
+	m.runFailed = false
+	m.statusActivity = "Starting harness run..."
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
+	m.resetActivityGroups()
+	m.harnessRunProject = &project
+	m.harnessRunGoal = goal
+	m.harnessRunTaskID = ""
+	m.harnessRunLogPath = ""
+	m.harnessRunLogOffset = 0
+	m.harnessRunLastDetail = ""
+	m.streamBuffer = &bytes.Buffer{}
+	m.streamStartPos = m.output.Len()
+	m.streamPrefixWritten = false
+	startSpinner := m.spinner.Start("Running harness")
+	if m.program == nil {
+		return func() tea.Msg {
+			summary, err := executeHarnessRun(ctx, project, cfg, goal)
+			return harnessRunResultMsg{Summary: summary, Err: err}
+		}
+	}
+	go func() {
+		summary, err := executeHarnessRun(ctx, project, cfg, goal)
+		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
+	}()
+	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
+}
+
+func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Project, cfg *harness.Config, task *harness.Task) tea.Cmd {
+	if task == nil {
+		m.output.WriteString(m.styles.error.Render(m.t("command.harness_rerun_usage")))
+		m.output.WriteString("\n")
+		return nil
+	}
+	if task.Status != harness.TaskFailed {
+		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Harness task %s is %s; only failed tasks can be rerun.", task.ID, task.Status)))
+		m.output.WriteString("\n")
+		return nil
+	}
+	m.output.WriteString(m.styles.user.Render("❯ "))
+	m.output.WriteString(strings.TrimSpace(commandText))
+	m.output.WriteString("\n")
+	m.appendUserMessage(strings.TrimSpace(commandText))
+	m.ensureOutputHasBlankLine()
+	m.output.WriteString(m.styles.assistant.Render("Starting tracked harness rerun...\nUse /harness monitor or the Tasks/Monitor views for live state."))
+	m.output.WriteString("\n")
+	m.syncConversationViewport()
+	m.viewport.GotoBottom()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.loading = true
+	m.runCanceled = false
+	m.runFailed = false
+	m.statusActivity = "Starting harness rerun..."
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
+	m.resetActivityGroups()
+	m.harnessRunProject = &project
+	m.harnessRunGoal = task.Goal
+	m.harnessRunTaskID = task.ID
+	m.harnessRunLogPath = strings.TrimSpace(task.LogPath)
+	m.harnessRunLogOffset = 0
+	m.harnessRunLastDetail = ""
+	m.streamBuffer = &bytes.Buffer{}
+	m.streamStartPos = m.output.Len()
+	m.streamPrefixWritten = false
+	startSpinner := m.spinner.Start("Running harness")
+	if m.program == nil {
+		return func() tea.Msg {
+			summary, err := executeHarnessRerun(ctx, project, cfg, task.ID)
+			return harnessRunResultMsg{Summary: summary, Err: err}
+		}
+	}
+	go func() {
+		summary, err := executeHarnessRerun(ctx, project, cfg, task.ID)
+		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
+	}()
+	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
+}
+
+func (m *Model) pollHarnessRunProgress() tea.Cmd {
+	project := m.harnessRunProject
+	goal := m.harnessRunGoal
+	taskID := m.harnessRunTaskID
+	logPath := m.harnessRunLogPath
+	logOffset := m.harnessRunLogOffset
+	if !m.loading || project == nil {
+		return nil
+	}
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return readHarnessRunProgress(*project, goal, taskID, logPath, logOffset)
+	})
+}
+
+func readHarnessRunProgress(project harness.Project, goal, taskID, logPath string, logOffset int64) harnessRunProgressMsg {
+	msg := harnessRunProgressMsg{
+		TaskID:    strings.TrimSpace(taskID),
+		LogPath:   strings.TrimSpace(logPath),
+		LogOffset: logOffset,
+	}
+	goal = strings.TrimSpace(goal)
+	if msg.TaskID != "" {
+		task, err := harness.LoadTask(project, msg.TaskID)
+		if err == nil && task != nil {
+			msg = populateHarnessRunProgress(msg, task)
+			return msg
+		}
+	}
+	tasks, err := harness.ListTasks(project)
+	if err != nil {
+		return msg
+	}
+	for _, task := range tasks {
+		if task == nil || strings.TrimSpace(task.Goal) != goal {
+			continue
+		}
+		msg = populateHarnessRunProgress(msg, task)
+		return msg
+	}
+	msg.Activity = "Starting harness run..."
+	return msg
+}
+
+func populateHarnessRunProgress(msg harnessRunProgressMsg, task *harness.Task) harnessRunProgressMsg {
+	if task == nil {
+		return msg
+	}
+	msg.TaskID = task.ID
+	msg.Activity = formatHarnessRunActivity(task)
+	msg.Detail = formatHarnessRunDetail(task)
+	if path := strings.TrimSpace(task.LogPath); path != "" {
+		msg.LogPath = path
+	}
+	if msg.LogPath != "" {
+		msg.LogChunk, msg.LogOffset = readHarnessRunLogChunk(msg.LogPath, msg.LogOffset)
+	}
+	return msg
+}
+
+func readHarnessRunLogChunk(path string, offset int64) (string, int64) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", offset
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", offset
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", offset
+	}
+	if info.Size() < offset {
+		offset = 0
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return "", offset
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", offset
+	}
+	if len(data) == 0 {
+		return "", offset
+	}
+	return string(data), offset + int64(len(data))
+}
+
+func formatHarnessRunActivity(task *harness.Task) string {
+	if task == nil {
+		return "Starting harness run..."
+	}
+	parts := []string{"Harness " + string(task.Status)}
+	if task.ID != "" {
+		parts = append(parts, task.ID)
+	}
+	if status := strings.TrimSpace(task.WorkerStatus); status != "" {
+		parts = append(parts, status)
+	}
+	if phase := strings.TrimSpace(task.WorkerPhase); phase != "" {
+		parts = append(parts, phase)
+	}
+	if progress := strings.TrimSpace(task.WorkerProgress); progress != "" {
+		parts = append(parts, progress)
+	}
+	return strings.Join(parts, " • ")
+}
+
+func formatHarnessRunDetail(task *harness.Task) string {
+	if task == nil {
+		return ""
+	}
+	if progress := strings.TrimSpace(task.WorkerProgress); progress != "" {
+		return humanizeHarnessProgress(progress)
+	}
+	if phase := strings.TrimSpace(task.WorkerPhase); phase != "" {
+		return "phase: " + phase
+	}
+	if status := strings.TrimSpace(task.WorkerStatus); status != "" {
+		return "worker: " + status
+	}
+	return ""
+}
+
+func humanizeHarnessProgress(progress string) string {
+	progress = strings.TrimSpace(progress)
+	if progress == "" {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(progress, "tool: "):
+		return "running " + strings.TrimSpace(strings.TrimPrefix(progress, "tool: "))
+	case strings.HasPrefix(progress, "tool result: error"):
+		return strings.TrimSpace(strings.TrimPrefix(progress, "tool result: "))
+	case strings.HasPrefix(progress, "tool result: "):
+		return "result " + strings.TrimSpace(strings.TrimPrefix(progress, "tool result: "))
+	default:
+		return progress
+	}
+}
+
+func loadHarnessForTUI(workDir string) (harness.Project, *harness.Config, error) {
+	project, err := harness.Discover(workDir)
+	if err != nil {
+		return harness.Project{}, nil, err
+	}
+	cfg, err := harness.LoadConfig(project.ConfigPath)
+	if err != nil {
+		return harness.Project{}, nil, err
+	}
+	return project, cfg, nil
+}
+
+func formatHarnessInitResult(result *harness.InitResult) string {
+	if result == nil {
+		return "Harness init did not produce a result."
+	}
+	var b strings.Builder
+	b.WriteString("Harness initialized.\n")
+	if result.GitInitialized {
+		b.WriteString("- git: initialized repository\n")
+	}
+	for _, path := range result.CreatedPaths {
+		b.WriteString("- created: ")
+		b.WriteString(path)
+		b.WriteString("\n")
+	}
+	for _, path := range result.Overwritten {
+		b.WriteString("- overwritten: ")
+		b.WriteString(path)
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func buildInitPrompt(targetPath string, existed bool, bootstrap string) string {
 	action := "create"
 	if existed {
@@ -450,6 +1348,7 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 			m.agent.AddMessage(msg)
 		}
 		m.session = ses
+		m.rebuildConversationFromMessages(ses.Messages)
 		title := ses.Title
 		if title == "" {
 			title = m.t("session.untitled")

@@ -41,6 +41,24 @@ type SubAgent struct {
 	mu              sync.Mutex
 }
 
+type Snapshot struct {
+	ID              string
+	Task            string
+	DisplayTask     string
+	Tools           []string
+	ToolCallCount   int
+	Status          Status
+	CurrentPhase    string
+	CurrentTool     string
+	CurrentArgs     string
+	ProgressSummary string
+	Result          string
+	Error           string
+	CreatedAt       time.Time
+	StartedAt       time.Time
+	EndedAt         time.Time
+}
+
 func (s *SubAgent) IncrementToolCalls() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,6 +83,31 @@ func (s *SubAgent) setProgressSummary(summary string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ProgressSummary = summary
+}
+
+func (s *SubAgent) snapshot() Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap := Snapshot{
+		ID:              s.ID,
+		Task:            s.Task,
+		DisplayTask:     s.DisplayTask,
+		Tools:           append([]string(nil), s.Tools...),
+		ToolCallCount:   s.ToolCallCount,
+		Status:          s.Status,
+		CurrentPhase:    s.CurrentPhase,
+		CurrentTool:     s.CurrentTool,
+		CurrentArgs:     s.CurrentArgs,
+		ProgressSummary: s.ProgressSummary,
+		Result:          s.Result,
+		CreatedAt:       s.CreatedAt,
+		StartedAt:       s.StartedAt,
+		EndedAt:         s.EndedAt,
+	}
+	if s.Error != nil {
+		snap.Error = s.Error.Error()
+	}
+	return snap
 }
 
 // Manager manages spawning, tracking, and collecting results from sub-agents.
@@ -140,6 +183,16 @@ func (m *Manager) List() []*SubAgent {
 	return out
 }
 
+func (m *Manager) Snapshot(id string) (Snapshot, bool) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return Snapshot{}, false
+	}
+	return sa.snapshot(), true
+}
+
 // RunningCount returns the number of currently running agents.
 func (m *Manager) RunningCount() int {
 	m.mu.Lock()
@@ -183,6 +236,9 @@ func (m *Manager) SetCancel(id string, cancel context.CancelFunc) {
 		sa.mu.Lock()
 		sa.cancel = cancel
 		sa.Status = StatusRunning
+		if sa.StartedAt.IsZero() {
+			sa.StartedAt = time.Now()
+		}
 		sa.mu.Unlock()
 		m.notifyUpdate(sa)
 	}
@@ -226,6 +282,17 @@ func (m *Manager) UpdateProgress(id, summary string) {
 		return
 	}
 	sa.setProgressSummary(summary)
+	m.notifyUpdate(sa)
+}
+
+func (m *Manager) UpdateActivity(id, phase, toolName, args string) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.setActivity(phase, toolName, args)
 	m.notifyUpdate(sa)
 }
 

@@ -246,6 +246,12 @@ func TestRunStreamWithContent_EmitsCompactionProgressMessages(t *testing.T) {
 			{
 				Message: provider.Message{
 					Role:    "assistant",
+					Content: []provider.ContentBlock{{Type: "text", Text: "Summary text again."}},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
 					Content: []provider.ContentBlock{{Type: "text", Text: "Final answer."}},
 				},
 			},

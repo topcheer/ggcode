@@ -29,7 +29,7 @@ func TestRootHelpTextIncludesExpectedSections(t *testing.T) {
 	help := rootHelpText()
 	want := []string{
 		"Usage:\nggcode [flags]\nggcode [command]\n",
-		"Available Commands:\n- completion: Generate shell completion script\n- help: Help about any command\n",
+		"Available Commands:\n- completion: Generate shell completion script\n- harness: Manage harness-engineering workflows\n- help: Help about any command\n",
 		"Flags:\n",
 		"- --config string: config file path\n",
 	}

@@ -174,6 +174,11 @@ func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
 			return tr(lang, "tool.no_output")
 		}
 		return summarizeTextPayload(lang, result, tr(lang, "tool.output"))
+	case "start_command", "read_command_output", "wait_command", "stop_command", "write_command_input", "list_commands":
+		if summary := summarizeAsyncCommandResult(result); summary != "" {
+			return summary
+		}
+		return toolDisplayName(msg)
 	case "read_file", "web_fetch", "web_search", "git_diff", "git_status", "git_log":
 		return summarizeTextPayload(lang, result, tr(lang, "tool.content"))
 	case "glob":
@@ -196,6 +201,41 @@ func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
 		}
 		return summarizeTextPayload(lang, result, tr(lang, "tool.result"))
 	}
+}
+
+func summarizeAsyncCommandResult(result string) string {
+	lines := strings.Split(result, "\n")
+	status := ""
+	total := ""
+	last := ""
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Status: "):
+			status = strings.TrimPrefix(line, "Status: ")
+		case strings.HasPrefix(line, "Total lines: "):
+			total = strings.TrimPrefix(line, "Total lines: ")
+		case line == "" || strings.HasSuffix(line, ":"):
+		case strings.HasPrefix(line, "Job ID:"),
+			strings.HasPrefix(line, "Duration:"),
+			strings.HasPrefix(line, "Timeout:"),
+			strings.HasPrefix(line, "Buffered lines start at:"),
+			strings.HasPrefix(line, "Error:"):
+		default:
+			last = line
+		}
+	}
+	parts := make([]string, 0, 3)
+	if status != "" {
+		parts = append(parts, status)
+	}
+	if total != "" {
+		parts = append(parts, total+" lines")
+	}
+	if last != "" && last != "(no output yet)" {
+		parts = append(parts, last)
+	}
+	return strings.Join(parts, " • ")
 }
 
 func toolDisplayName(msg ToolStatusMsg) string {

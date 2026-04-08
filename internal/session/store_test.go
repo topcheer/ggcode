@@ -19,6 +19,7 @@ func TestSaveLoad(t *testing.T) {
 
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses.Title = "Test Session"
+	ses.Workspace = "/tmp/workspace-a"
 	ses.Messages = []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Hello"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Hi there!"}}},
@@ -35,6 +36,9 @@ func TestSaveLoad(t *testing.T) {
 	if loaded.Title != "Test Session" {
 		t.Fatalf("title mismatch: %s", loaded.Title)
 	}
+	if loaded.Workspace != "/tmp/workspace-a" {
+		t.Fatalf("workspace mismatch: %s", loaded.Workspace)
+	}
 	if len(loaded.Messages) != 2 {
 		t.Fatalf("message count: %d", len(loaded.Messages))
 	}
@@ -47,11 +51,13 @@ func TestList(t *testing.T) {
 	store, _ := NewJSONLStore(dir)
 	ses1 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses1.Title = "First"
+	ses1.Workspace = "/tmp/workspace-a"
 	store.Save(ses1)
 	// Ensure different second to get unique ID
 	time.Sleep(1100 * time.Millisecond)
 	ses2 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses2.Title = "Second"
+	ses2.Workspace = "/tmp/workspace-b"
 	store.Save(ses2)
 
 	list, err := store.List()
@@ -60,6 +66,9 @@ func TestList(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Fatalf("list count: %d", len(list))
+	}
+	if list[0].Workspace == "" || list[1].Workspace == "" {
+		t.Fatalf("expected workspace metadata in list: %+v", list)
 	}
 }
 

@@ -56,6 +56,9 @@ func (m *Model) setLanguage(lang string) {
 			m.modelPanel.filter.Focus()
 		}
 	}
+	if m.harnessPanel != nil {
+		m.harnessPanel.actionInput.Placeholder = harnessPanelInputPlaceholder(m.harnessPanel.selectedSection, m.currentLanguage())
+	}
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	if len(m.langOptions) > 0 {
@@ -137,6 +140,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.mode")
 	case "/init":
 		return tr(lang, "slash.init")
+	case "/harness":
+		return tr(lang, "slash.harness")
 	case "/lang":
 		return tr(lang, "slash.lang")
 	case "/skills":
@@ -748,6 +753,8 @@ func enCatalog(key string) string {
 		return "Set permission mode"
 	case "slash.init":
 		return "Generate project GGCODE.md"
+	case "slash.harness":
+		return "Run harness workflow commands"
 	case "slash.lang":
 		return "Switch interface language"
 	case "slash.skills":
@@ -794,6 +801,7 @@ func enCatalog(key string) string {
   /fullscreen        Toggle fullscreen mode
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
   /init              Generate GGCODE.md from the current project
+  /harness ...       Run harness control-plane commands
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
   /agent cancel <id> Cancel a sub-agent
@@ -821,6 +829,14 @@ Keyboard shortcuts:
 Mouse:
   Option+drag / Shift+drag  Select text to copy (bypasses app mouse capture)
   Mouse wheel               Scroll conversation output`
+	case "command.harness_usage":
+		return "Usage: /harness <init|check|queue|tasks|run|rerun|run-queued|monitor|contexts|inbox|review|promote|release|gc|doctor> ... (release supports rollouts|advance|pause|resume|abort|approve|reject)"
+	case "command.harness_queue_usage":
+		return "Usage: /harness queue <goal>"
+	case "command.harness_run_usage":
+		return "Usage: /harness run <goal>"
+	case "command.harness_rerun_usage":
+		return "Usage: /harness rerun <task-id>"
 	default:
 		return key
 	}
@@ -1396,6 +1412,8 @@ func zhCatalog(key string) string {
 		return "设置权限模式"
 	case "slash.init":
 		return "生成项目 GGCODE.md"
+	case "slash.harness":
+		return "运行 harness 工作流命令"
 	case "slash.lang":
 		return "切换界面语言"
 	case "slash.skills":
@@ -1442,6 +1460,7 @@ func zhCatalog(key string) string {
   /fullscreen        切换全屏模式
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
   /init              基于当前项目生成 GGCODE.md
+  /harness ...       运行 harness 控制面命令
   /agents            列出子 Agent
   /agent <id>        查看子 Agent 详情
   /agent cancel <id> 取消子 Agent
@@ -1469,6 +1488,14 @@ func zhCatalog(key string) string {
 鼠标：
   Option+拖拽 / Shift+拖拽  选择文本复制（绕过应用鼠标捕获）
   鼠标滚轮                 滚动对话输出`
+	case "command.harness_usage":
+		return "用法：/harness <init|check|queue|tasks|run|rerun|run-queued|monitor|contexts|inbox|review|promote|release|gc|doctor> ...（release 支持 rollouts|advance|pause|resume|abort|approve|reject）"
+	case "command.harness_queue_usage":
+		return "用法：/harness queue <goal>"
+	case "command.harness_run_usage":
+		return "用法：/harness run <goal>"
+	case "command.harness_rerun_usage":
+		return "用法：/harness rerun <task-id>"
 	default:
 		return key
 	}

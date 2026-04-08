@@ -40,6 +40,7 @@ ggcode [command]
 
 Available Commands:
 - completion: Generate shell completion script
+- harness: Manage harness-engineering workflows
 - help: Help about any command
 
 Flags:
@@ -49,7 +50,7 @@ Flags:
 - -h, --help: help for ggcode
 - --output string: output file path (default: stdout)
 - -p, --prompt string: pipe mode: non-interactive execution with a prompt
-- --resume string: resume a previous session by ID
+- --resume string: resume a previous session by ID, or open a picker with bare --resume
 
 Use "ggcode [command] --help" for more information about a command.
 `
