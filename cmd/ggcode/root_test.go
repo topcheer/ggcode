@@ -106,6 +106,94 @@ func TestResolveConfigFilePathFallsBackToUserConfig(t *testing.T) {
 	}
 }
 
+func TestConfirmPlaintextAPIKeysBeforeTUIContinue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	content := `
+vendors:
+  zai:
+    api_key: secret
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	var out bytes.Buffer
+	proceed, err := confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader("y\n"), &out, true)
+	if err != nil {
+		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() error = %v", err)
+	}
+	if !proceed {
+		t.Fatal("expected startup to continue after yes")
+	}
+	if !strings.Contains(out.String(), "plaintext API keys detected") {
+		t.Fatalf("expected warning output, got %q", out.String())
+	}
+}
+
+func TestConfirmPlaintextAPIKeysBeforeTUIIgnoreForever(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	content := `
+vendors:
+  zai:
+    api_key: secret
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	var out bytes.Buffer
+	proceed, err := confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader("i\n"), &out, true)
+	if err != nil {
+		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() error = %v", err)
+	}
+	if !proceed {
+		t.Fatal("expected ignore forever to continue startup")
+	}
+	var second bytes.Buffer
+	proceed, err = confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader("n\n"), &second, true)
+	if err != nil {
+		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() second call error = %v", err)
+	}
+	if !proceed {
+		t.Fatal("expected ignored config not to prompt again")
+	}
+	if second.Len() != 0 {
+		t.Fatalf("expected ignored config to skip prompt, got %q", second.String())
+	}
+}
+
+func TestConfirmPlaintextAPIKeysBeforeTUIRejectsNonInteractive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	content := `
+vendors:
+  zai:
+    api_key: secret
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	var out bytes.Buffer
+	proceed, err := confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader(""), &out, false)
+	if err == nil {
+		t.Fatal("expected non-interactive plaintext warning to error")
+	}
+	if proceed {
+		t.Fatal("expected non-interactive plaintext warning to block startup")
+	}
+}
+
 func TestResumeFlagWithoutValueUsesPickerMarker(t *testing.T) {
 	cmd := NewRootCmd()
 	cmd.SetArgs([]string{"--resume"})

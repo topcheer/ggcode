@@ -52,6 +52,16 @@ func NewRootCmd() *cobra.Command {
 				}
 				cfgFile = resolved
 			}
+			if pipePrompt == "" {
+				interactive := writerIsTerminal(os.Stdout) && writerIsTerminal(os.Stdin)
+				proceed, err := confirmPlaintextAPIKeysBeforeTUI(cfgFile, os.Stdin, os.Stdout, interactive)
+				if err != nil {
+					return err
+				}
+				if !proceed {
+					return nil
+				}
+			}
 
 			debug.Init()
 

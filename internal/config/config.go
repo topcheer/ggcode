@@ -431,12 +431,14 @@ func DefaultConfig() *Config {
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 	cfg.FilePath = path
+	lookup := runtimeEnvLookup(nil)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			cfg.FirstRun = true
 			applyFirstLaunchAnthropicBootstrap(cfg)
+			cfg.expandEnvWithLookup(lookup)
 			cfg.normalizeActiveModel()
 			if err := cfg.Validate(); err != nil {
 				return nil, err
@@ -459,7 +461,8 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Expand env vars
-	expanded := ExpandEnvRecursive(raw)
+	lookup = runtimeEnvLookup(raw)
+	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
 
 	// Re-marshal and unmarshal into struct
 	expandedData, err := yaml.Marshal(expanded)
@@ -471,7 +474,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
 	}
 	migrateLegacyMaxIterations(path, raw, cfg)
-	cfg.expandEnv()
+	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config %s: %w", path, err)
@@ -517,62 +520,66 @@ func isDefaultUserConfigPath(path string) bool {
 }
 
 func (c *Config) expandEnv() {
-	c.Vendor = ExpandEnv(c.Vendor)
-	c.Endpoint = ExpandEnv(c.Endpoint)
-	c.Model = ExpandEnv(c.Model)
-	c.SystemPrompt = ExpandEnv(c.SystemPrompt)
-	c.DefaultMode = ExpandEnv(c.DefaultMode)
+	c.expandEnvWithLookup(os.LookupEnv)
+}
+
+func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
+	c.Vendor = ExpandEnvWithLookup(c.Vendor, lookup)
+	c.Endpoint = ExpandEnvWithLookup(c.Endpoint, lookup)
+	c.Model = ExpandEnvWithLookup(c.Model, lookup)
+	c.SystemPrompt = ExpandEnvWithLookup(c.SystemPrompt, lookup)
+	c.DefaultMode = ExpandEnvWithLookup(c.DefaultMode, lookup)
 	for i, dir := range c.AllowedDirs {
-		c.AllowedDirs[i] = ExpandEnv(dir)
+		c.AllowedDirs[i] = ExpandEnvWithLookup(dir, lookup)
 	}
 	for vendorName, vc := range c.Vendors {
-		vc.DisplayName = ExpandEnv(vc.DisplayName)
-		vc.APIKey = ExpandEnv(vc.APIKey)
+		vc.DisplayName = ExpandEnvWithLookup(vc.DisplayName, lookup)
+		vc.APIKey = ExpandEnvWithLookup(vc.APIKey, lookup)
 		for endpointName, ep := range vc.Endpoints {
-			ep.DisplayName = ExpandEnv(ep.DisplayName)
-			ep.Protocol = ExpandEnv(ep.Protocol)
-			ep.BaseURL = ExpandEnv(ep.BaseURL)
-			ep.APIKey = ExpandEnv(ep.APIKey)
-			ep.DefaultModel = ExpandEnv(ep.DefaultModel)
-			ep.SelectedModel = ExpandEnv(ep.SelectedModel)
+			ep.DisplayName = ExpandEnvWithLookup(ep.DisplayName, lookup)
+			ep.Protocol = ExpandEnvWithLookup(ep.Protocol, lookup)
+			ep.BaseURL = ExpandEnvWithLookup(ep.BaseURL, lookup)
+			ep.APIKey = ExpandEnvWithLookup(ep.APIKey, lookup)
+			ep.DefaultModel = ExpandEnvWithLookup(ep.DefaultModel, lookup)
+			ep.SelectedModel = ExpandEnvWithLookup(ep.SelectedModel, lookup)
 			for i, model := range ep.Models {
-				ep.Models[i] = ExpandEnv(model)
+				ep.Models[i] = ExpandEnvWithLookup(model, lookup)
 			}
 			for i, tag := range ep.Tags {
-				ep.Tags[i] = ExpandEnv(tag)
+				ep.Tags[i] = ExpandEnvWithLookup(tag, lookup)
 			}
 			vc.Endpoints[endpointName] = ep
 		}
 		c.Vendors[vendorName] = vc
 	}
 	for i, plugin := range c.Plugins {
-		plugin.Name = ExpandEnv(plugin.Name)
-		plugin.Path = ExpandEnv(plugin.Path)
-		plugin.Type = ExpandEnv(plugin.Type)
+		plugin.Name = ExpandEnvWithLookup(plugin.Name, lookup)
+		plugin.Path = ExpandEnvWithLookup(plugin.Path, lookup)
+		plugin.Type = ExpandEnvWithLookup(plugin.Type, lookup)
 		for j, cmd := range plugin.Commands {
-			cmd.Name = ExpandEnv(cmd.Name)
-			cmd.Description = ExpandEnv(cmd.Description)
-			cmd.Execute = ExpandEnv(cmd.Execute)
+			cmd.Name = ExpandEnvWithLookup(cmd.Name, lookup)
+			cmd.Description = ExpandEnvWithLookup(cmd.Description, lookup)
+			cmd.Execute = ExpandEnvWithLookup(cmd.Execute, lookup)
 			for k, arg := range cmd.Args {
-				cmd.Args[k] = ExpandEnv(arg)
+				cmd.Args[k] = ExpandEnvWithLookup(arg, lookup)
 			}
 			plugin.Commands[j] = cmd
 		}
 		c.Plugins[i] = plugin
 	}
 	for i, mcp := range c.MCPServers {
-		mcp.Name = ExpandEnv(mcp.Name)
-		mcp.Type = ExpandEnv(mcp.Type)
-		mcp.Command = ExpandEnv(mcp.Command)
+		mcp.Name = ExpandEnvWithLookup(mcp.Name, lookup)
+		mcp.Type = ExpandEnvWithLookup(mcp.Type, lookup)
+		mcp.Command = ExpandEnvWithLookup(mcp.Command, lookup)
 		for j, arg := range mcp.Args {
-			mcp.Args[j] = ExpandEnv(arg)
+			mcp.Args[j] = ExpandEnvWithLookup(arg, lookup)
 		}
 		for key, val := range mcp.Env {
-			mcp.Env[key] = ExpandEnv(val)
+			mcp.Env[key] = ExpandEnvWithLookup(val, lookup)
 		}
-		mcp.URL = ExpandEnv(mcp.URL)
+		mcp.URL = ExpandEnvWithLookup(mcp.URL, lookup)
 		for key, val := range mcp.Headers {
-			mcp.Headers[key] = ExpandEnv(val)
+			mcp.Headers[key] = ExpandEnvWithLookup(val, lookup)
 		}
 		c.MCPServers[i] = mcp
 	}
