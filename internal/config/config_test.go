@@ -87,6 +87,103 @@ func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_ExpandsEnvFromShellFilesWhenProcessEnvMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: glm-5-turbo
+vendors:
+  zai:
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export ZAI_API_KEY='shell-value'\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.zshrc) error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Vendors["zai"].APIKey; got != "shell-value" {
+		t.Fatalf("expected shell fallback api key, got %q", got)
+	}
+}
+
+func TestDetectPlaintextAPIKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	content := `
+vendors:
+  zai:
+    api_key: real-zai
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+  openrouter:
+    api_key: ${OPENROUTER_API_KEY}
+    endpoints:
+      api:
+        protocol: openai
+        base_url: https://example.com
+  anthropic:
+    endpoints:
+      api:
+        protocol: anthropic
+        base_url: https://example.com
+        api_key: endpoint-secret
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	findings, err := DetectPlaintextAPIKeys(path)
+	if err != nil {
+		t.Fatalf("DetectPlaintextAPIKeys() error = %v", err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 plaintext findings, got %#v", findings)
+	}
+	if findings[0].Vendor != "anthropic" || findings[0].Endpoint != "api" || findings[0].EnvVar != "ANTHROPIC_API_API_KEY" {
+		t.Fatalf("unexpected endpoint finding %#v", findings[0])
+	}
+	if findings[1].Vendor != "zai" || findings[1].EnvVar != "ZAI_API_KEY" {
+		t.Fatalf("unexpected vendor finding %#v", findings[1])
+	}
+}
+
+func TestPlaintextAPIKeyWarningIgnoreState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	ignored, err := IsPlaintextAPIKeyWarningIgnored(path)
+	if err != nil {
+		t.Fatalf("IsPlaintextAPIKeyWarningIgnored() error = %v", err)
+	}
+	if ignored {
+		t.Fatal("expected no ignore state before persisting")
+	}
+	if err := IgnorePlaintextAPIKeyWarning(path); err != nil {
+		t.Fatalf("IgnorePlaintextAPIKeyWarning() error = %v", err)
+	}
+	ignored, err = IsPlaintextAPIKeyWarningIgnored(path)
+	if err != nil {
+		t.Fatalf("IsPlaintextAPIKeyWarningIgnored() error = %v", err)
+	}
+	if !ignored {
+		t.Fatal("expected config path to be ignored after persisting state")
+	}
+}
+
 func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
