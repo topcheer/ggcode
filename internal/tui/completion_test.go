@@ -146,6 +146,13 @@ func TestCompleteSlashCommandIncludesUserInvocableSkills(t *testing.T) {
 	}
 }
 
+func TestCompleteSlashCommandIncludesHarness(t *testing.T) {
+	matches := CompleteSlashCommand("/har", nil)
+	if len(matches) != 1 || matches[0] != "/harness" {
+		t.Fatalf("matches = %v, want [/harness]", matches)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"sort"
 	"strings"
@@ -43,6 +44,7 @@ type CommandJob struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	partial string
+	stdin   io.WriteCloser
 	mu      sync.Mutex
 }
 
@@ -107,8 +109,17 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, timeout t
 	writer := &commandJobWriter{job: job}
 	cmd.Stdout = writer
 	cmd.Stderr = writer
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		job.finish(CommandJobFailed, fmt.Sprintf("failed to open command stdin: %v", err))
+		snapshot := m.snapshot(job)
+		return &snapshot, nil
+	}
+	job.stdin = stdin
 
 	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		cancel()
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to start command: %v", err))
 		snapshot := m.snapshot(job)
@@ -175,6 +186,30 @@ func (m *CommandJobManager) Stop(id string) (CommandJobSnapshot, error) {
 		cancel()
 	}
 
+	return m.snapshot(job), nil
+}
+
+func (m *CommandJobManager) Write(id, input string, appendNewline bool) (CommandJobSnapshot, error) {
+	job, err := m.get(id)
+	if err != nil {
+		return CommandJobSnapshot{}, err
+	}
+	job.mu.Lock()
+	stdin := job.stdin
+	status := job.Status
+	job.mu.Unlock()
+	if status != CommandJobRunning {
+		return CommandJobSnapshot{}, fmt.Errorf("command job %q is not running", id)
+	}
+	if stdin == nil {
+		return CommandJobSnapshot{}, fmt.Errorf("command job %q does not accept input", id)
+	}
+	if appendNewline {
+		input += "\n"
+	}
+	if _, err := io.WriteString(stdin, input); err != nil {
+		return CommandJobSnapshot{}, fmt.Errorf("write command input: %w", err)
+	}
 	return m.snapshot(job), nil
 }
 
@@ -300,7 +335,12 @@ func (j *CommandJob) finish(status CommandJobStatus, errText string) {
 	j.EndedAt = time.Now()
 	done := j.done
 	j.cancel = nil
+	stdin := j.stdin
+	j.stdin = nil
 	j.mu.Unlock()
+	if stdin != nil {
+		_ = stdin.Close()
+	}
 	close(done)
 }
 

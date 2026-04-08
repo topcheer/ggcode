@@ -183,7 +183,7 @@ func CompleteMention(prefix string, workDir string) []string {
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider",
 	"/clear", "/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
-	"/image", "/fullscreen", "/mode", "/init", "/exit", "/quit", "/agents", "/agent",
+	"/image", "/fullscreen", "/mode", "/init", "/harness", "/exit", "/quit", "/agents", "/agent",
 	"/compact", "/todo", "/bug", "/config", "/status", "/update", "/lang", "/skills",
 }
 
@@ -207,6 +207,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/fullscreen":  "Toggle fullscreen",
 	"/mode":        "Set agent mode",
 	"/init":        "Create GGCODE.md",
+	"/harness":     "Run harness workflow commands",
 	"/exit":        "Exit ggcode",
 	"/quit":        "Exit ggcode",
 	"/agents":      "List sub-agents",

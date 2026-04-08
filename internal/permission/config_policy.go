@@ -199,7 +199,7 @@ func isFileTool(name string) bool {
 
 func isCommandTool(name string) bool {
 	switch name {
-	case "run_command", "start_command":
+	case "run_command", "start_command", "write_command_input":
 		return true
 	}
 	return false
@@ -227,6 +227,12 @@ func extractCommand(input json.RawMessage) (string, bool) {
 		return "", false
 	}
 	if v, ok := m["command"]; ok {
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil {
+			return s, true
+		}
+	}
+	if v, ok := m["input"]; ok {
 		var s string
 		if err := json.Unmarshal(v, &s); err == nil {
 			return s, true

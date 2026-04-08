@@ -29,6 +29,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
 		StopCommandTool{Manager: jobManager},
+		WriteCommandInputTool{Manager: jobManager},
 		ListCommandsTool{Manager: jobManager},
 
 		// Git

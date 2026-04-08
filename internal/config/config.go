@@ -470,6 +470,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(expandedData, cfg); err != nil {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
 	}
+	migrateLegacyMaxIterations(path, raw, cfg)
 	cfg.expandEnv()
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
@@ -482,6 +483,37 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func migrateLegacyMaxIterations(path string, raw map[string]interface{}, cfg *Config) {
+	if cfg == nil || !isDefaultUserConfigPath(path) {
+		return
+	}
+	value, ok := raw["max_iterations"]
+	if !ok {
+		return
+	}
+	switch v := value.(type) {
+	case int:
+		if v == 50 {
+			cfg.MaxIterations = 0
+		}
+	case int64:
+		if v == 50 {
+			cfg.MaxIterations = 0
+		}
+	case float64:
+		if v == 50 {
+			cfg.MaxIterations = 0
+		}
+	}
+}
+
+func isDefaultUserConfigPath(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	return filepath.Clean(path) == filepath.Clean(ConfigPath())
 }
 
 func (c *Config) expandEnv() {

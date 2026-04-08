@@ -325,6 +325,69 @@ vendors:
 	}
 }
 
+func TestLoad_DefaultUserConfigMigratesLegacyMaxIterations50ToUnlimited(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".ggcode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	path := filepath.Join(configDir, "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: test
+max_iterations: 50
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(ConfigPath())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MaxIterations != 0 {
+		t.Fatalf("expected legacy max_iterations 50 in default user config to migrate to 0, got %d", cfg.MaxIterations)
+	}
+}
+
+func TestLoad_ProjectConfigPreservesExplicitMaxIterations50(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: test
+max_iterations: 50
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MaxIterations != 50 {
+		t.Fatalf("expected explicit project max_iterations 50 to be preserved, got %d", cfg.MaxIterations)
+	}
+}
+
 func TestLoad_InvalidDefaultMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")

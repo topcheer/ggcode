@@ -21,6 +21,7 @@ type Session struct {
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
 	Title     string             `json:"title"`
+	Workspace string             `json:"workspace,omitempty"`
 	Vendor    string             `json:"vendor"`
 	Endpoint  string             `json:"endpoint"`
 	Model     string             `json:"model"`
@@ -57,6 +58,7 @@ type indexEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	MsgCount  int       `json:"msg_count"`
+	Workspace string    `json:"workspace,omitempty"`
 	Vendor    string    `json:"vendor,omitempty"`
 	Endpoint  string    `json:"endpoint,omitempty"`
 	Model     string    `json:"model,omitempty"`
@@ -166,6 +168,7 @@ func sessionToIndexEntry(s *Session) indexEntry {
 		Title:     s.Title,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.UpdatedAt,
+		Workspace: s.Workspace,
 		MsgCount:  len(s.Messages),
 		Vendor:    s.Vendor,
 		Endpoint:  s.Endpoint,
@@ -180,6 +183,7 @@ type jsonlRecord struct {
 	Type      string            `json:"type"` // "meta" or "message"
 	SessionID string            `json:"session_id,omitempty"`
 	Title     string            `json:"title,omitempty"`
+	Workspace string            `json:"workspace,omitempty"`
 	Vendor    string            `json:"vendor,omitempty"`
 	Endpoint  string            `json:"endpoint,omitempty"`
 	Model     string            `json:"model,omitempty"`
@@ -210,6 +214,7 @@ func (s *JSONLStore) Save(ses *Session) error {
 		Type:      "meta",
 		SessionID: ses.ID,
 		Title:     ses.Title,
+		Workspace: ses.Workspace,
 		Vendor:    ses.Vendor,
 		Endpoint:  ses.Endpoint,
 		Model:     ses.Model,
@@ -284,6 +289,7 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 		switch rec.Type {
 		case "meta":
 			ses.Title = rec.Title
+			ses.Workspace = rec.Workspace
 			ses.Vendor = rec.Vendor
 			ses.Endpoint = rec.Endpoint
 			ses.Model = rec.Model
@@ -342,6 +348,7 @@ func (s *JSONLStore) List() ([]*Session, error) {
 			Title:     e.Title,
 			CreatedAt: e.CreatedAt,
 			UpdatedAt: e.UpdatedAt,
+			Workspace: e.Workspace,
 			Vendor:    e.Vendor,
 			Endpoint:  e.Endpoint,
 			Model:     e.Model,
@@ -558,6 +565,7 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		Type:      "meta",
 		SessionID: ses.ID,
 		Title:     ses.Title,
+		Workspace: ses.Workspace,
 		Vendor:    ses.Vendor,
 		Endpoint:  ses.Endpoint,
 		Model:     ses.Model,
@@ -579,11 +587,34 @@ func NewSession(vendor, endpoint, model string) *Session {
 		ID:        generateID(),
 		CreatedAt: now,
 		UpdatedAt: now,
+		Workspace: CurrentWorkspacePath(),
 		Vendor:    vendor,
 		Endpoint:  endpoint,
 		Model:     model,
 		Title:     "New session",
 	}
+}
+
+func CurrentWorkspacePath() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return NormalizeWorkspacePath(wd)
+}
+
+func NormalizeWorkspacePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(trimmed); err == nil {
+		return filepath.Clean(resolved)
+	}
+	if abs, err := filepath.Abs(trimmed); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(trimmed)
 }
 
 func generateID() string {

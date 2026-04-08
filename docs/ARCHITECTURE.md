@@ -4,11 +4,13 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-04-03
+> Last updated: 2026-04-07
 
 ## Overview
 
 ggcode is a terminal-based AI coding agent written in Go. It provides an interactive REPL where users describe coding tasks in natural language; the agent iteratively plans, calls tools, and refines its work in an agentic loop.
+
+The core agent loop is now complemented by a lightweight **harness control plane**. Harness mode is intentionally implemented around the existing runtime rather than inside it: `ggcode harness ...` scaffolds repo guidance, generates nested subsystem `AGENTS.md` files, runs invariant checks, tracks orchestrated work items, queues multi-step work, supports dependency-gated backlogs, binds tasks to bounded contexts when useful, carries lightweight context ownership metadata, summarizes queue health per context, exposes owner-centric actionable inboxes and owner-filtered batch actions, creates isolated git worktrees when available, can explicitly retry failed backlog items or resume interrupted runs, uses pollable sub-agent-backed workers for queued execution, persists post-run delivery evidence, exposes review/approval, promotion, and owner/context-scoped release-batch loops on verified tasks, and can further split release-ready work into owner- or context-grouped rollout waves with persisted staged rollout state, explicit gate approval/rejection, and advance/pause/resume/abort controls without forking a second agent architecture.
 
 ### Core Principles
 
@@ -49,6 +51,14 @@ internal/
   hooks/                 # Pre/post execution hooks
     hook.go              # Hook struct
     runner.go            # HookRunner
+  harness/               # Harness control plane: scaffold, checks, queue/run tracking, review/promotion/release, worktrees, gc
+    config.go            # Harness config model and defaults
+    project.go           # Project discovery and scaffold creation
+    check.go             # Structural checks and validation commands
+    run.go               # Tracked harness runs / queued execution via the existing ggcode binary
+    release.go           # Release-batch planning and persisted release reports
+    worktree.go          # Git worktree lifecycle for isolated task workspaces
+    gc.go                # Archive/prune stale harness state
   image/                 # Image file handling for multimodal input
     image.go             # ReadFile, Placeholder
   mcp/                   # Model Context Protocol client
@@ -78,15 +88,17 @@ internal/
   session/               # Session persistence
     store.go             # Store: save/load sessions as JSONL
   subagent/              # Sub-agent spawning and management
-    manager.go           # Manager: spawn, list, cancel sub-agents
-    runner.go            # Runner: execute sub-agent tasks
+    manager.go           # Manager: spawn, list, cancel, and snapshot sub-agents
+    runner.go            # Runner: execute sub-agent tasks and wait/poll their state
   tool/                  # Built-in tools
     tool.go              # Tool interface
     builtin.go           # RegisterBuiltinTools
     read_file.go         # File reading
     write_file.go        # File writing
     edit_file.go         # File editing with checkpoint support
-    run_command.go       # Shell command execution
+    run_command.go       # Synchronous shell command execution
+    command_jobs.go      # Background command job manager and buffered output
+    command_job_tools.go # Async command start/read/wait/write/stop/list tools
     search_files.go      # Code search
     list_dir.go          # Directory listing
     glob.go              # Glob pattern matching
@@ -96,7 +108,7 @@ internal/
     save_memory.go       # Save memory entries
     todo_write.go        # Write todo lists
     spawn_agent.go       # Spawn sub-agents
-    list_agents.go / wait_agent.go  # Sub-agent tools
+    list_agents.go / wait_agent.go  # Sub-agent polling and wait tools
   tui/                   # Terminal UI (Bubble Tea)
     model.go             # Model struct, Init, Update, msg types
     view.go              # View rendering, status bar, autocomplete

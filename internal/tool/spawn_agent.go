@@ -20,7 +20,7 @@ type SpawnAgentTool struct {
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
 
 func (t SpawnAgentTool) Description() string {
-	return "Spawn a sub-agent to work on a task independently. Returns an agent_id. Use wait_agent to retrieve the result."
+	return "Spawn a sub-agent to work on a task independently. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result."
 }
 
 func (t SpawnAgentTool) Parameters() json.RawMessage {
@@ -108,5 +108,5 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		},
 	})
 
-	return Result{Content: fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent to retrieve the result.", id)}, nil
+	return Result{Content: fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)}, nil
 }

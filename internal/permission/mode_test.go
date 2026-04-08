@@ -65,7 +65,7 @@ func TestPermissionModeNext(t *testing.T) {
 
 func TestIsReadOnlyTool(t *testing.T) {
 	readOnly := []string{"read_file", "list_directory", "search_files", "grep"}
-	write := []string{"write_file", "edit_file", "run_command", "start_command", "bash"}
+	write := []string{"write_file", "edit_file", "run_command", "start_command", "write_command_input", "bash"}
 	for _, name := range readOnly {
 		if !IsReadOnlyTool(name) {
 			t.Errorf("IsReadOnlyTool(%q) should be true", name)
@@ -106,6 +106,10 @@ func TestPlanModeDeniesWrites(t *testing.T) {
 	if err != nil || d != Deny {
 		t.Errorf("PlanMode: start_command should be Deny, got %v err=%v", d, err)
 	}
+	d, err = policy.Check("write_command_input", json.RawMessage(`{"job_id":"cmd-1","input":"rm -rf /"}`))
+	if err != nil || d != Deny {
+		t.Errorf("PlanMode: write_command_input should be Deny, got %v err=%v", d, err)
+	}
 }
 
 func TestAutoModeDeniesDangerous(t *testing.T) {
@@ -122,6 +126,10 @@ func TestAutoModeDeniesDangerous(t *testing.T) {
 	if err != nil || d != Allow {
 		t.Errorf("AutoMode: safe start_command should be Allow, got %v err=%v", d, err)
 	}
+	d, err = policy.Check("write_command_input", json.RawMessage(`{"job_id":"cmd-1","input":"echo ok"}`))
+	if err != nil || d != Allow {
+		t.Errorf("AutoMode: safe write_command_input should be Allow, got %v err=%v", d, err)
+	}
 
 	d, err = policy.Check("run_command", dangerousInput)
 	if err != nil || d != Deny {
@@ -130,6 +138,10 @@ func TestAutoModeDeniesDangerous(t *testing.T) {
 	d, err = policy.Check("start_command", dangerousInput)
 	if err != nil || d != Deny {
 		t.Errorf("AutoMode: dangerous start_command should be Deny, got %v err=%v", d, err)
+	}
+	d, err = policy.Check("write_command_input", json.RawMessage(`{"job_id":"cmd-1","input":"rm -rf /"}`))
+	if err != nil || d != Deny {
+		t.Errorf("AutoMode: dangerous write_command_input should be Deny, got %v err=%v", d, err)
 	}
 }
 
@@ -151,6 +163,10 @@ func TestAutopilotModeMatchesBypassPermissions(t *testing.T) {
 	d, err = policy.Check("start_command", dangerousInput)
 	if err != nil || d != Ask {
 		t.Errorf("AutopilotMode: extremely dangerous start_command should be Ask, got %v err=%v", d, err)
+	}
+	d, err = policy.Check("write_command_input", json.RawMessage(`{"job_id":"cmd-1","input":"sudo rm -rf /"}`))
+	if err != nil || d != Ask {
+		t.Errorf("AutopilotMode: extremely dangerous write_command_input should be Ask, got %v err=%v", d, err)
 	}
 }
 

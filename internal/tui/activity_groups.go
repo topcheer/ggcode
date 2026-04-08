@@ -278,7 +278,7 @@ func classifyToolGroup(toolName string) string {
 		return "edit"
 	case "todo_write":
 		return "todo"
-	case "run_command", "bash", "powershell", "start_command", "read_command_output", "wait_command", "stop_command", "list_commands":
+	case "run_command", "bash", "powershell", "start_command", "write_command_input", "read_command_output", "wait_command", "stop_command", "list_commands":
 		return "run"
 	case "web_fetch", "web_search":
 		return "research"
@@ -372,7 +372,7 @@ func containsString(values []string, target string) bool {
 
 func isCommandTool(toolName string) bool {
 	switch toolName {
-	case "run_command", "bash", "powershell", "start_command":
+	case "run_command", "bash", "powershell", "start_command", "write_command_input":
 		return true
 	default:
 		return false

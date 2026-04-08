@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -21,7 +24,7 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPath string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, outputPath string, bypass bool) int {
 	resolved, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolving endpoint: %v\n", err)
@@ -39,8 +42,9 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 		return 1
 	}
 
-	// Setup permission: auto mode for pipe (no interactive prompts)
-	allowedDirs := cfg.ExpandAllowedDirs(".")
+	// Setup permission: non-interactive, but honor explicit bypass mode and
+	// resolve allowed_dirs relative to the config file when available.
+	allowedDirs := cfg.ExpandAllowedDirs(pipeAllowedDirsBase(cfgPath))
 	rules := make(map[string]permission.Decision)
 	for name, perm := range cfg.ToolPerms {
 		switch config.ToolPermission(perm) {
@@ -50,7 +54,8 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 			rules[name] = permission.Deny
 		}
 	}
-	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, permission.AutoMode)
+	mode := pipePermissionMode(bypass)
+	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 
 	// Apply allowedTools filter
 	if len(allowedTools) > 0 {
@@ -88,6 +93,9 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 	autoContent, _, _ := autoMem.LoadAll()
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
 	commandMgr := commands.NewManager(workingDir)
+	commandMgr.SetExtraProviders(func() []*commands.Command {
+		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
+	})
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 	}
@@ -107,7 +115,7 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 		customCmdNames = append(customCmdNames, name)
 	}
 	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, registryToolNames(registry), gitStatus, customCmdNames)
-	if skillsPrompt := buildSkillsSystemPrompt(append(commandMgr.List(), buildMCPSkillCommands(mcpMgr.SnapshotMCP())...)); skillsPrompt != "" {
+	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
 		systemPrompt += "\n\n## Skills\n" + skillsPrompt
 	}
 	if projectMem != "" {
@@ -158,6 +166,14 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 			switch event.Type {
 			case provider.StreamEventText:
 				fmt.Fprint(w, event.Text)
+			case provider.StreamEventToolCallDone:
+				if line := formatPipeProgressEvent(event); line != "" {
+					fmt.Fprintln(os.Stderr, line)
+				}
+			case provider.StreamEventToolResult:
+				if line := formatPipeProgressEvent(event); line != "" {
+					fmt.Fprintln(os.Stderr, line)
+				}
 			case provider.StreamEventError:
 				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
 				hasError = true
@@ -168,6 +184,14 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 			switch event.Type {
 			case provider.StreamEventText:
 				fmt.Fprint(w, event.Text)
+			case provider.StreamEventToolCallDone:
+				if line := formatPipeProgressEvent(event); line != "" {
+					fmt.Fprintln(os.Stderr, line)
+				}
+			case provider.StreamEventToolResult:
+				if line := formatPipeProgressEvent(event); line != "" {
+					fmt.Fprintln(os.Stderr, line)
+				}
 			case provider.StreamEventError:
 				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
 				hasError = true
@@ -183,6 +207,21 @@ func RunPipe(cfg *config.Config, prompt string, allowedTools []string, outputPat
 		return 1
 	}
 	return 0
+}
+
+func pipeAllowedDirsBase(cfgPath string) string {
+	trimmed := strings.TrimSpace(cfgPath)
+	if trimmed == "" {
+		return "."
+	}
+	return filepath.Dir(trimmed)
+}
+
+func pipePermissionMode(bypass bool) permission.PermissionMode {
+	if bypass {
+		return permission.BypassMode
+	}
+	return permission.AutoMode
 }
 
 // readStdin reads all data from stdin if it's a pipe, otherwise returns "".
@@ -231,4 +270,85 @@ func buildPipePrompt(prompt string, stdinData []byte) (string, []provider.Conten
 
 	// Plain text
 	return string(stdinData) + "\n\n" + prompt, nil
+}
+
+func formatPipeProgressEvent(event provider.StreamEvent) string {
+	switch event.Type {
+	case provider.StreamEventToolCallDone:
+		name := strings.TrimSpace(event.Tool.Name)
+		if name == "" {
+			return ""
+		}
+		detail := summarizePipeToolArguments(event.Tool.Arguments)
+		if detail == "" {
+			return fmt.Sprintf("tool: %s", name)
+		}
+		return fmt.Sprintf("tool: %s %s", name, detail)
+	case provider.StreamEventToolResult:
+		text := strings.TrimSpace(event.Result)
+		if text == "" {
+			if event.IsError {
+				return "tool result: error"
+			}
+			return ""
+		}
+		if idx := strings.IndexByte(text, '\n'); idx >= 0 {
+			text = text[:idx]
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return ""
+		}
+		if event.IsError {
+			return "tool result: error — " + truncatePipeProgress(text, 120)
+		}
+		return "tool result: " + truncatePipeProgress(text, 120)
+	default:
+		return ""
+	}
+}
+
+func summarizePipeToolArguments(raw json.RawMessage) string {
+	var args map[string]any
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return ""
+	}
+	for _, key := range []string{"path", "file_path", "directory", "url", "query", "pattern", "description", "job_id", "skill"} {
+		if value := strings.TrimSpace(pipeArgString(args[key])); value != "" {
+			return truncatePipeProgress(value, 100)
+		}
+	}
+	for _, key := range []string{"command", "cmd"} {
+		if value := strings.TrimSpace(pipeArgString(args[key])); value != "" {
+			lines := strings.Split(value, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				return truncatePipeProgress(line, 100)
+			}
+		}
+	}
+	return ""
+}
+
+func pipeArgString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	default:
+		return ""
+	}
+}
+
+func truncatePipeProgress(text string, maxLen int) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= maxLen {
+		return text
+	}
+	if maxLen < 4 {
+		return text[:maxLen]
+	}
+	return text[:maxLen-3] + "..."
 }
