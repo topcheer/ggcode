@@ -306,9 +306,9 @@ ggcode ships with built-in presets for mainstream vendors and several coding-ori
 
 For long-running or interactive shell work, the built-in async command tools let the agent start a background command, poll progress, send follow-up stdin input, and stop the job without blocking the whole session.
 
-Skills are documented and browsable through `/skills`, but they are not a user slash-command surface. They are part of the agent's reusable capability inventory and are invoked by the model through the `skill` tool when appropriate.
-
 Skills are documented and browsable through `/skills`, but they are not a user slash-command surface. They are primarily part of the agent's reusable capability inventory and are invoked by the model through the `skill` tool when appropriate.
+
+Bundled skills now cover several high-value operational workflows out of the box, including **debugging**, **verification**, **ggcode config edits**, and **browser automation guidance through MCP**.
 
 For the complete reference, examples, vendor catalog, hooks, MCP servers, plugins, and sub-agent settings, see:
 
@@ -332,11 +332,26 @@ mcp_servers:
 
 ggcode discovers MCP tools automatically and makes them available in the agent loop.
 
+If you want browser automation, connect a browser-oriented MCP server first. Once connected, its tools appear in `/mcp`, and any prompt-backed browser workflows also show up in `/skills`. ggcode does **not** pretend to have built-in browser control when no browser MCP server is configured.
+
+The built-in quick-start path is the Playwright preset from the `/mcp` panel (`b`), which installs:
+
+```yaml
+mcp_servers:
+  - name: playwright
+    type: stdio
+    command: npx
+    args:
+      - -y
+      - "@playwright/mcp"
+```
+
 ### Plugins and skills
 
 - **Plugins** add custom tools from config
 - **Skills** add higher-level capabilities and workflows
 - **`/skills`** is the easiest place to see what is currently available, including MCP prompt-backed skills once those servers are connected
+- Bundled skills include operational helpers such as `debug`, `verify`, `update-config`, and `browser-automation`
 
 ### Project memory
 

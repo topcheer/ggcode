@@ -135,6 +135,22 @@ func TestParseInstallArgsSupportsTransportFlagAndHeaders(t *testing.T) {
 	}
 }
 
+func TestParseInstallArgsSupportsBrowserAutomationPreset(t *testing.T) {
+	server, err := ParseInstallArgs([]string{"playwright", "stdio", "npx", "-y", "@playwright/mcp"})
+	if err != nil {
+		t.Fatalf("ParseInstallArgs error = %v", err)
+	}
+	if server.Name != "playwright" {
+		t.Fatalf("server.Name = %q, want playwright", server.Name)
+	}
+	if server.Type != "stdio" || server.Command != "npx" {
+		t.Fatalf("unexpected server = %+v", server)
+	}
+	if len(server.Args) != 2 || server.Args[0] != "-y" || server.Args[1] != "@playwright/mcp" {
+		t.Fatalf("server.Args = %v, want [-y @playwright/mcp]", server.Args)
+	}
+}
+
 func TestParseInstallArgsRejectsHeadersForStdio(t *testing.T) {
 	if _, err := ParseInstallArgs([]string{"demo", "stdio", "npx", "-y", "pkg", "--header", "Authorization: nope"}); err == nil {
 		t.Fatal("expected stdio header rejection")

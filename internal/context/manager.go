@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 // ContextManager manages conversation history, tracking tokens and auto-summarizing.
@@ -60,11 +60,22 @@ type Manager struct {
 	tokens    int
 	maxTokens int
 	provider  provider.Provider
+	todoPath  string
 }
 
 // NewManager creates a ContextManager with the given context window limit.
 func NewManager(maxTokens int) *Manager {
-	return &Manager{maxTokens: maxTokens}
+	return &Manager{maxTokens: maxTokens, todoPath: toolpkg.TodoFilePath("")}
+}
+
+func (m *Manager) SetTodoFilePath(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.TrimSpace(path) == "" {
+		m.todoPath = toolpkg.TodoFilePath("")
+		return
+	}
+	m.todoPath = path
 }
 
 // SetProvider sets the provider for provider-aware token counting.
@@ -143,7 +154,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 			return err
 		}
 
-		stateText := buildPostCompactState(plan.allMsgs)
+		stateText := m.buildPostCompactState(plan.allMsgs)
 
 		m.mu.Lock()
 
@@ -503,13 +514,13 @@ func isPromptTooLongError(err error) bool {
 	return false
 }
 
-func buildPostCompactState(msgs []provider.Message) string {
+func (m *Manager) buildPostCompactState(msgs []provider.Message) string {
 	var sections []string
 
 	if files := collectRecentFilePaths(msgs, 5); len(files) > 0 {
 		sections = append(sections, fmt.Sprintf("Recent files:\n- %s", strings.Join(files, "\n- ")))
 	}
-	if todoSummary := readTodoSummary(); todoSummary != "" {
+	if todoSummary := m.readTodoSummary(); todoSummary != "" {
 		sections = append(sections, todoSummary)
 	}
 
@@ -555,12 +566,11 @@ func collectRecentFilePaths(msgs []provider.Message, limit int) []string {
 	return paths
 }
 
-func readTodoSummary() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+func (m *Manager) readTodoSummary() string {
+	path := strings.TrimSpace(m.todoPath)
+	if path == "" {
+		path = toolpkg.TodoFilePath("")
 	}
-	path := filepath.Join(home, ".ggcode", "todos.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

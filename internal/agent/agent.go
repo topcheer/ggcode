@@ -45,6 +45,10 @@ type providerAwareContextManager interface {
 	SetProvider(provider.Provider)
 }
 
+type todoPathAwareContextManager interface {
+	SetTodoFilePath(path string)
+}
+
 type modeAwarePolicy interface {
 	Mode() permission.PermissionMode
 }
@@ -58,6 +62,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		contextManager: ctxpkg.NewManager(128000),
 	}
 	a.syncContextManagerProviderLocked()
+	a.syncContextManagerTodoPathLocked()
 	if systemPrompt != "" {
 		a.contextManager.Add(provider.Message{
 			Role:    "system",
@@ -102,6 +107,7 @@ func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
 	defer a.mu.Unlock()
 	a.contextManager = cm
 	a.syncContextManagerProviderLocked()
+	a.syncContextManagerTodoPathLocked()
 }
 
 // AddMessage appends a message to the conversation context.
@@ -390,11 +396,17 @@ func looksLikeCompletionOrHandoff(text string) bool {
 		"completed the requested", "finished the requested", "completed the task", "finished the task",
 		"completed the implementation", "finished the implementation", "completed the optimization pass",
 		"finished the optimization pass",
+		"waiting for your next request", "ready for next task", "ready for the next task",
+		"awaiting instructions", "no tasks pending", "no work to do", "standing by",
+		"idle — no tasks pending", "idle - no tasks pending", "idle — no pending tasks",
+		"idle - no pending tasks", "waiting for your next instruction",
 		"let me know if you'd like", "if you'd like, i can", "if you want, i can",
 		"feel free to ask", "feel free to tell me", "happy to help with anything else",
 		"全部完成", "已经全部完成", "任务已完成", "这个任务已经完成", "优化已完成", "实现已完成",
 		"没有更多可做", "没有进一步需要处理", "如需我继续", "如果你希望我继续", "我还可以继续",
 		"随时告诉我", "如果你还有其他", "如果你有其他", "还有其他任务需要我", "其他方面的具体任务需要我帮忙",
+		"等待你的下一条指令", "等待你的下一步指令", "等待下一条指令", "等待下一步指令",
+		"待命中", "没有待处理任务", "没有任务待处理", "没有工作可做",
 	}
 	for _, marker := range markers {
 		if strings.Contains(trimmed, marker) {
@@ -501,6 +513,13 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workingDir = dir
+	a.syncContextManagerTodoPathLocked()
+}
+
+func (a *Agent) syncContextManagerTodoPathLocked() {
+	if cm, ok := a.contextManager.(todoPathAwareContextManager); ok {
+		cm.SetTodoFilePath(tool.TodoFilePath(a.workingDir))
+	}
 }
 
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {

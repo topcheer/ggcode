@@ -105,9 +105,16 @@ func TestInspectorSessionsEnterSchedulesResumeCommand(t *testing.T) {
 }
 
 func TestInspectorTodosClearActionPersistsEmptyList(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	ggDir := filepath.Join(home, ".ggcode")
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	ggDir := filepath.Join(workspace, ".ggcode")
 	if err := os.MkdirAll(ggDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -119,12 +126,8 @@ func TestInspectorTodosClearActionPersistsEmptyList(t *testing.T) {
 	m.openInspectorPanel(inspectorPanelTodos)
 	_, _ = m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 
-	data, err := os.ReadFile(filepath.Join(ggDir, "todos.json"))
-	if err != nil {
-		t.Fatalf("read todos: %v", err)
-	}
-	if strings.TrimSpace(string(data)) != "[]" {
-		t.Fatalf("expected cleared todos file, got %q", string(data))
+	if _, err := os.Stat(filepath.Join(ggDir, "todos.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected todos file to be removed, err=%v", err)
 	}
 }
 
@@ -659,6 +662,40 @@ func TestMCPPanelInstallPersistsConfigAndCallsManager(t *testing.T) {
 	}
 	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Installed MCP server 12306-mcp") {
 		t.Fatalf("expected install success message, got %+v", m2.mcpPanel)
+	}
+}
+
+func TestMCPPanelBrowserPresetInstallsPlaywright(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	m.SetConfig(cfg)
+	manager := &fakeMCPManager{}
+	m.SetMCPManager(manager)
+	m.openMCPPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if cmd == nil {
+		t.Fatal("expected browser preset install to return a command")
+	}
+	msg := cmd()
+	next, cmd = next.(Model).Update(msg)
+	if cmd != nil {
+		t.Fatal("expected install result to update synchronously")
+	}
+	m2 := next.(Model)
+	if len(manager.installed) != 1 {
+		t.Fatalf("expected preset install call, got %+v", manager.installed)
+	}
+	got := manager.installed[0]
+	if got.Name != "playwright" || got.Command != "npx" || got.Type != "stdio" {
+		t.Fatalf("unexpected preset config: %+v", got)
+	}
+	if len(m2.config.MCPServers) != 1 || m2.config.MCPServers[0].Name != "playwright" {
+		t.Fatalf("expected playwright MCP server persisted, got %+v", m2.config.MCPServers)
+	}
+	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Installed MCP server playwright") {
+		t.Fatalf("expected preset success message, got %+v", m2.mcpPanel)
 	}
 }
 

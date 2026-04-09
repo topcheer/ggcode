@@ -44,7 +44,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		WebSearch{},
 
 		// Productivity
-		NewTodoWrite(""),
+		NewWorkspaceTodoWrite(workingDir),
 	}
 	for _, t := range tools {
 		if err := registry.Register(t); err != nil {

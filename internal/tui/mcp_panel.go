@@ -119,7 +119,8 @@ func (m Model) renderMCPPanel() string {
 	} else {
 		body = append(body,
 			" Press i to install a new MCP server.",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Enter or r reconnect • i install • x uninstall • Esc close"),
+			" Press b to install the built-in Playwright browser automation preset.",
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Enter or r reconnect • i install • b browser preset • x uninstall • Esc close"),
 		)
 	}
 	if panel.message != "" {
@@ -194,6 +195,9 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		panel.installMode = true
 		panel.installInput = ""
 		panel.message = ""
+	case "b", "B":
+		panel.message = "Installing browser automation MCP preset..."
+		return *m, m.installMCPServer(mcp.BrowserAutomationInstallSpec)
 	case "x", "X", "u", "U":
 		if len(m.mcpServers) == 0 {
 			break
