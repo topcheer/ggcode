@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -526,6 +527,23 @@ func TestPanelRenderWidthsStayWithinAssignedColumns(t *testing.T) {
 	}
 }
 
+func TestSidebarDetailRowClipsByDisplayWidth(t *testing.T) {
+	m := newTestModel()
+	row := m.renderSidebarDetailRow("目录", "~/ggai/chain-convenience-store-sales-management-system", 24)
+	for _, line := range strings.Split(row, "\n") {
+		if lipgloss.Width(line) > 24 {
+			t.Fatalf("expected sidebar row width <= 24, got %d for %q", lipgloss.Width(line), line)
+		}
+	}
+}
+
+func TestTruncateDisplayWidthHandlesWideRunes(t *testing.T) {
+	got := truncateDisplayWidth("国内 Coding Plan (Anthropic)", 12)
+	if lipgloss.Width(got) > 12 {
+		t.Fatalf("expected truncated width <= 12, got %d for %q", lipgloss.Width(got), got)
+	}
+}
+
 func TestWideLayoutSidebarMatchesColumnHeight(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 40)
@@ -741,6 +759,41 @@ func TestCtrlRTogglesSidebarVisibility(t *testing.T) {
 	m = model.(Model)
 	if !m.sidebarVisible || !m.sidebarEnabled() {
 		t.Fatal("expected second ctrl+r to show sidebar again")
+	}
+}
+
+func TestSetConfigAppliesPersistedSidebarVisibility(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	visible := false
+	cfg.UI.SidebarVisible = &visible
+
+	m.SetConfig(cfg)
+
+	if m.sidebarVisible {
+		t.Fatal("expected sidebar visibility to follow persisted config")
+	}
+}
+
+func TestCtrlRPersistsSidebarVisibility(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	m.SetConfig(cfg)
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = model.(Model)
+	if m.sidebarVisible {
+		t.Fatal("expected ctrl+r to hide sidebar")
+	}
+
+	loaded, err := config.Load(cfg.FilePath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.SidebarVisible() {
+		t.Fatal("expected persisted sidebar preference to be false after ctrl+r")
 	}
 }
 
@@ -1212,6 +1265,9 @@ func TestAutoCompleteSlashCommands(t *testing.T) {
 	if !strings.Contains(result, "Commands:") {
 		t.Error("expected commands header in autocomplete")
 	}
+	if strings.Contains(result, "1. /help") {
+		t.Error("did not expect numbered slash autocomplete entries")
+	}
 }
 
 func TestAutoCompleteEmpty(t *testing.T) {
@@ -1437,35 +1493,29 @@ func TestInitRequestsInitialWindowSize(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected init to return a batch command, got %T", msg)
 	}
-	if len(batch) != 3 {
-		t.Fatalf("expected blink, window size, and startup banner timer commands, got %d", len(batch))
+	if len(batch) != 2 {
+		t.Fatalf("expected blink and window size commands, got %d", len(batch))
 	}
 }
 
-func TestStartupBannerVisibleUntilReady(t *testing.T) {
+func TestStartupBannerHiddenByDefault(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 30)
 
 	view := m.View()
-	if !strings.Contains(view, "Initializing") {
-		t.Fatalf("expected startup banner in initial view, got %q", view)
+	if strings.Contains(view, "Initializing") {
+		t.Fatalf("expected startup banner to stay hidden by default, got %q", view)
 	}
+}
+
+func TestStartupBannerReadyMsgRemainsDismissed(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 30)
 
 	model, _ := m.Update(startupReadyMsg{})
 	m = model.(Model)
 	if m.startupBannerVisible {
-		t.Fatal("expected startup banner to dismiss on startupReadyMsg")
-	}
-}
-
-func TestStartupBannerDismissesOnFirstRealKey(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 30)
-
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	m = model.(Model)
-	if m.startupBannerVisible {
-		t.Fatal("expected startup banner to dismiss on first real key input")
+		t.Fatal("expected startup banner to remain dismissed")
 	}
 }
 
@@ -1643,10 +1693,14 @@ func TestIdleTerminalNoiseDoesNotOverwriteExistingInput(t *testing.T) {
 	}
 }
 
-func TestTerminalSuppressionWindowIncludesStartup(t *testing.T) {
+func TestTerminalSuppressionWindowOnlyAppliesAfterResize(t *testing.T) {
 	m := newTestModel()
-	if !terminalResponseSuppressionActive(time.Time{}, m.startedAt) {
-		t.Fatal("expected startup window to suppress terminal response fragments")
+	if terminalResponseSuppressionActive(time.Time{}) {
+		t.Fatal("expected startup not to suppress terminal response fragments")
+	}
+	m.handleResize(100, 30)
+	if !terminalResponseSuppressionActive(m.lastResizeAt) {
+		t.Fatal("expected resize window to suppress terminal response fragments")
 	}
 }
 
@@ -1686,8 +1740,8 @@ func TestCtrlCLoadingCancelsCurrentActivity(t *testing.T) {
 	if !cancelled {
 		t.Error("expected cancel func to be called")
 	}
-	if !m2.loading {
-		t.Error("expected model to stay busy until doneMsg arrives")
+	if m2.loading {
+		t.Error("expected normal run interrupt to release loading immediately")
 	}
 	if m2.exitConfirmPending {
 		t.Error("expected interrupt not to arm exit confirmation")
@@ -1715,8 +1769,8 @@ func TestEscLoadingCancelsCurrentActivity(t *testing.T) {
 	if !cancelled {
 		t.Error("expected cancel func to be called on esc")
 	}
-	if !m2.loading {
-		t.Error("expected model to stay busy until doneMsg arrives")
+	if m2.loading {
+		t.Error("expected normal run esc interrupt to release loading immediately")
 	}
 	if !m2.runCanceled {
 		t.Error("expected current run to be marked as canceled by esc")
@@ -1913,8 +1967,11 @@ func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 
 	m.cancelActiveRun()
 
-	if m.statusActivity != m.t("status.cancelling") {
-		t.Fatalf("expected cancelling status, got %q", m.statusActivity)
+	if m.loading {
+		t.Fatal("expected normal run cancel to release loading immediately")
+	}
+	if m.statusActivity != "" {
+		t.Fatalf("expected normal run status to clear immediately, got %q", m.statusActivity)
 	}
 	if m.statusToolName != "" || m.statusToolArg != "" || m.statusToolCount != 0 {
 		t.Fatalf("expected tool status to clear, got %q / %q / %d", m.statusToolName, m.statusToolArg, m.statusToolCount)
@@ -1924,6 +1981,23 @@ func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	}
 	if m.spinner.IsActive() {
 		t.Fatal("expected spinner to stop on cancel")
+	}
+}
+
+func TestCancelActiveHarnessRunKeepsCancellingStatus(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.harnessRunProject = &harness.Project{}
+	m.statusActivity = "Thinking..."
+	m.spinner.Start("running")
+
+	m.cancelActiveRun()
+
+	if !m.loading {
+		t.Fatal("expected harness run cancel to stay loading until tracked result arrives")
+	}
+	if m.statusActivity != m.t("status.cancelling") {
+		t.Fatalf("expected harness cancel status, got %q", m.statusActivity)
 	}
 }
 
@@ -1949,6 +2023,31 @@ func TestCancelledRunIgnoresLateStatusAndToolUpdates(t *testing.T) {
 	m = next.(Model)
 	if len(m.activityGroups) != 0 {
 		t.Fatalf("expected no activity groups after ignored late tool update, got %#v", m.activityGroups)
+	}
+}
+
+func TestAgentRunMessagesIgnoreStaleRunID(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 2
+	m.statusActivity = "Thinking..."
+
+	next, cmd := m.Update(agentStatusMsg{RunID: 1, statusMsg: statusMsg{Activity: "Writing...", ToolName: "old"}})
+	if cmd != nil {
+		t.Fatal("expected no cmd for stale agent status")
+	}
+	m = next.(Model)
+	if m.statusActivity != "Thinking..." {
+		t.Fatalf("expected stale status to be ignored, got %q", m.statusActivity)
+	}
+
+	next, cmd = m.Update(agentDoneMsg{RunID: 1})
+	if cmd != nil {
+		t.Fatal("expected no cmd for stale agent completion")
+	}
+	m = next.(Model)
+	if !m.loading {
+		t.Fatal("expected stale completion not to end active run")
 	}
 }
 

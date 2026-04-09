@@ -60,45 +60,47 @@ const maxOutputLines = 50000
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
-	input              textinput.Model
-	output             *bytes.Buffer
-	loading            bool
-	quitting           bool
-	width              int
-	height             int
-	styles             styles
-	agent              *agent.Agent
-	program            *tea.Program
-	cancelFunc         func()
-	policy             permission.PermissionPolicy
-	spinner            *ToolSpinner
-	history            []string
-	historyIdx         int
-	pendingApproval    *ApprovalMsg
-	session            *session.Session
-	sessionStore       session.Store
-	mcpServers         []MCPInfo
-	config             *config.Config
-	language           Language
-	startupVendor      string
-	startupEndpoint    string
-	startupModel       string
-	customCmds         map[string]*commands.Command
-	commandMgr         *commands.Manager
-	autoMem            *memory.AutoMemory
-	projMemFiles       []string
-	autoMemFiles       []string
-	pluginMgr          *plugin.Manager
-	subAgentMgr        *subagent.Manager
-	mcpManager         mcpManager
-	mode               permission.PermissionMode
-	pendingDiffConfirm *DiffConfirmMsg
-	fullscreen         bool
-	modelPanel         *modelPanelState
-	providerPanel      *providerPanelState
-	mcpPanel           *mcpPanelState
-	skillsPanel        *skillsPanelState
-	harnessPanel       *harnessPanelState
+	input                textinput.Model
+	output               *bytes.Buffer
+	loading              bool
+	quitting             bool
+	width                int
+	height               int
+	styles               styles
+	agent                *agent.Agent
+	program              *tea.Program
+	cancelFunc           func()
+	policy               permission.PermissionPolicy
+	spinner              *ToolSpinner
+	history              []string
+	historyIdx           int
+	pendingApproval      *ApprovalMsg
+	session              *session.Session
+	sessionStore         session.Store
+	mcpServers           []MCPInfo
+	config               *config.Config
+	language             Language
+	startupVendor        string
+	startupEndpoint      string
+	startupModel         string
+	customCmds           map[string]*commands.Command
+	commandMgr           *commands.Manager
+	autoMem              *memory.AutoMemory
+	projMemFiles         []string
+	autoMemFiles         []string
+	pluginMgr            *plugin.Manager
+	subAgentMgr          *subagent.Manager
+	mcpManager           mcpManager
+	mode                 permission.PermissionMode
+	pendingDiffConfirm   *DiffConfirmMsg
+	fullscreen           bool
+	modelPanel           *modelPanelState
+	providerPanel        *providerPanelState
+	mcpPanel             *mcpPanelState
+	skillsPanel          *skillsPanelState
+	inspectorPanel       *inspectorPanelState
+	harnessPanel         *harnessPanelState
+	harnessContextPrompt *harnessContextPromptState
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -121,6 +123,8 @@ type Model struct {
 	streamBuffer        *bytes.Buffer
 	streamStartPos      int
 	streamPrefixWritten bool
+	harnessRunRemainder string
+	harnessRunLiveTail  string
 
 	// Status bar state
 	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
@@ -147,6 +151,7 @@ type Model struct {
 	projectMemoryLoading bool
 	runCanceled          bool
 	runFailed            bool
+	activeAgentRunID     int
 	harnessRunProject    *harness.Project
 	harnessRunGoal       string
 	harnessRunTaskID     string
@@ -279,6 +284,16 @@ type harnessRunProgressMsg struct {
 
 type harnessPanelAutoRefreshMsg struct{}
 
+type harnessContextSuggestionsMsg struct {
+	Contexts []harness.ContextConfig
+	Err      error
+}
+
+type harnessInitResultMsg struct {
+	Result *harness.InitResult
+	Err    error
+}
+
 type projectMemoryLoadedMsg struct {
 	Content string
 	Files   []string
@@ -307,6 +322,30 @@ type statusMsg struct {
 	ToolName  string
 	ToolArg   string
 	ToolCount int
+}
+
+type agentStreamMsg struct {
+	RunID int
+	Text  string
+}
+
+type agentDoneMsg struct {
+	RunID int
+}
+
+type agentErrMsg struct {
+	RunID int
+	Err   error
+}
+
+type agentToolStatusMsg struct {
+	RunID int
+	ToolStatusMsg
+}
+
+type agentStatusMsg struct {
+	RunID int
+	statusMsg
 }
 
 // setProgramMsg is sent via program.Send so the model copy inside Bubble Tea's
@@ -366,7 +405,13 @@ func (m *Model) cancelActiveRun() {
 		m.cancelFunc()
 	}
 	m.spinner.Stop()
-	m.statusActivity = m.t("status.cancelling")
+	if m.harnessRunProject != nil {
+		m.statusActivity = m.t("status.cancelling")
+	} else {
+		m.loading = false
+		m.cancelFunc = nil
+		m.statusActivity = ""
+	}
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
@@ -492,7 +537,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		viewport:             NewViewportModel(80, 20),
 		mode:                 policyMode(policy),
 		startedAt:            time.Now(),
-		startupBannerVisible: true,
+		startupBannerVisible: false,
 		sidebarVisible:       true,
 		activeMCPTools:       make(map[string]ToolStatusMsg),
 		clipboardLoader:      loadClipboardImage,
@@ -534,7 +579,6 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textinput.Blink,
 		tea.WindowSize(),
-		tea.Tick(3*time.Second, func(time.Time) tea.Msg { return startupReadyMsg{} }),
 	}
 	if m.updateSvc != nil {
 		cmds = append(cmds, m.checkForUpdateCmd())
@@ -610,6 +654,7 @@ func (m *Model) SetConfig(cfg *config.Config) {
 	m.config = cfg
 	if cfg != nil {
 		m.setLanguage(cfg.Language)
+		m.sidebarVisible = cfg.SidebarVisible()
 		if cfg.FirstRun {
 			m.openLanguageSelector(true)
 		}
@@ -705,7 +750,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.startupBannerVisible && !shouldIgnoreInputUpdate(msg, m.lastResizeAt, m.startedAt) {
+		if m.startupBannerVisible && !shouldIgnoreInputUpdate(msg, m.lastResizeAt) {
 			m.startupBannerVisible = false
 		}
 		if msg.String() != "ctrl+c" {
@@ -713,10 +758,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "ctrl+r" {
 			m.sidebarVisible = !m.sidebarVisible
+			if m.config != nil {
+				_ = m.config.SaveSidebarPreference(m.sidebarVisible)
+			}
 			return m, nil
 		}
 
-		if msg.String() == "ctrl+c" && !m.loading && (m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.harnessPanel != nil || len(m.langOptions) > 0) {
+		if msg.String() == "ctrl+c" && !m.loading && (m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.inspectorPanel != nil || m.harnessPanel != nil || m.harnessContextPrompt != nil || len(m.langOptions) > 0) {
 			if m.exitConfirmPending {
 				m.quitting = true
 				return m, tea.Quit
@@ -740,6 +788,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.skillsPanel != nil {
 			return m.handleSkillsPanelKey(msg)
+		}
+
+		if m.inspectorPanel != nil {
+			return m.handleInspectorPanelKey(msg)
+		}
+
+		if m.harnessContextPrompt != nil {
+			return m.handleHarnessContextPromptKey(msg)
 		}
 
 		if m.harnessPanel != nil {
@@ -935,6 +991,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendStreamChunk(string(msg))
 		return m, nil
 
+	case agentStreamMsg:
+		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
+			return m, nil
+		}
+		m.appendStreamChunk(msg.Text)
+		return m, nil
+
 	case doneMsg:
 		m.loading = false
 		m.spinner.Stop()
@@ -951,6 +1014,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolArg = ""
 		m.statusToolCount = 0
 		// Render accumulated stream buffer as markdown
+		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
+			rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
+			if err != nil {
+				rendered = m.streamBuffer.String()
+			}
+			rendered = trimLeadingRenderedSpacing(rendered)
+			m.output.Truncate(m.streamStartPos)
+			m.output.WriteString(bulletStyle.Render("● "))
+			m.output.WriteString(rendered)
+			m.streamBuffer = nil
+		}
+		m.output.WriteString("\n")
+		m.syncConversationViewport()
+		m.viewport.GotoBottom()
+		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
+			return m, m.submitText(m.consumePendingSubmission(), false)
+		}
+		return m, nil
+
+	case agentDoneMsg:
+		if msg.RunID != m.activeAgentRunID {
+			return m, nil
+		}
+		m.loading = false
+		m.spinner.Stop()
+		m.closeToolActivityGroup()
+		m.flushGroupedActivitiesToOutput()
+		m.cancelFunc = nil
+		wasCanceled := m.runCanceled
+		wasFailed := m.runFailed
+		m.runCanceled = false
+		m.runFailed = false
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 			rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
 			if err != nil {
@@ -988,18 +1087,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 
+	case agentErrMsg:
+		if msg.RunID != m.activeAgentRunID {
+			return m, nil
+		}
+		if errors.Is(msg.Err, context.Canceled) {
+			return m, nil
+		}
+		m.runFailed = true
+		m.loading = false
+		m.spinner.Stop()
+		m.closeToolActivityGroup()
+		m.flushGroupedActivitiesToOutput()
+		m.cancelFunc = nil
+		if len(m.pendingSubmissions) > 0 {
+			m.restorePendingInput()
+		}
+		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error: %v\n\n", msg.Err)))
+		m.syncConversationViewport()
+		m.viewport.GotoBottom()
+		return m, nil
+
 	case harnessRunResultMsg:
 		if path := strings.TrimSpace(m.harnessRunLogPath); path != "" {
 			chunk, nextOffset := readHarnessRunLogChunk(path, m.harnessRunLogOffset)
 			m.harnessRunLogOffset = nextOffset
-			m.appendStreamChunk(chunk)
+			m.appendHarnessLogChunk(chunk)
 		} else if msg.Summary != nil && msg.Summary.Task != nil {
 			path := strings.TrimSpace(msg.Summary.Task.LogPath)
 			chunk, nextOffset := readHarnessRunLogChunk(path, m.harnessRunLogOffset)
 			m.harnessRunLogPath = path
 			m.harnessRunLogOffset = nextOffset
-			m.appendStreamChunk(chunk)
+			m.appendHarnessLogChunk(chunk)
 		}
+		m.flushHarnessLogRemainder()
 		m.loading = false
 		m.spinner.Stop()
 		m.closeToolActivityGroup()
@@ -1017,6 +1138,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.harnessRunGoal = ""
 		m.harnessRunTaskID = ""
 		m.harnessRunLastDetail = ""
+		m.harnessRunRemainder = ""
+		m.harnessRunLiveTail = ""
 		streamedHarnessOutput := m.harnessRunLogOffset > 0 || strings.TrimSpace(m.harnessRunLastDetail) != ""
 		m.harnessRunLogPath = ""
 		m.harnessRunLogOffset = 0
@@ -1053,6 +1176,66 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case harnessContextSuggestionsMsg:
+		state := m.harnessContextPrompt
+		if state == nil || state.mode != harnessContextPromptInit {
+			return m, nil
+		}
+		state.step = harnessContextPromptStepSelect
+		state.suggestions = harness.NormalizeContexts(msg.Contexts)
+		state.selected = map[int]bool{}
+		state.cursor = 0
+		state.input.Placeholder = "Optional custom contexts: payments, checkout=apps/checkout"
+		state.input.SetValue("")
+		state.inputFocus = len(state.suggestions) == 0
+		if state.inputFocus {
+			state.input.Focus()
+		} else {
+			state.input.Blur()
+		}
+		if msg.Err != nil {
+			state.message = msg.Err.Error()
+		} else if len(state.suggestions) == 0 {
+			state.message = "No suggestions found. Add custom contexts below."
+		} else {
+			state.message = ""
+		}
+		return m, nil
+
+	case harnessInitResultMsg:
+		state := m.harnessContextPrompt
+		if msg.Err != nil {
+			if state != nil {
+				state.message = msg.Err.Error()
+				if state.existingProject {
+					state.step = harnessContextPromptStepUpgrade
+				} else {
+					state.step = harnessContextPromptStepSelect
+				}
+			}
+			return m, nil
+		}
+		m.closeHarnessContextPrompt("")
+		m.refreshHarnessPanel()
+		if msg.Result != nil {
+			commandText := "/harness init"
+			if state != nil && strings.TrimSpace(state.commandText) != "" {
+				commandText = strings.TrimSpace(state.commandText)
+			}
+			m.output.WriteString(m.styles.user.Render("❯ "))
+			m.output.WriteString(commandText)
+			m.output.WriteString("\n")
+			m.appendUserMessage(commandText)
+			m.output.WriteString(m.styles.assistant.Render(formatHarnessInitResult(msg.Result)))
+			m.output.WriteString("\n")
+			m.syncConversationViewport()
+			m.viewport.GotoBottom()
+			if panel := m.harnessPanel; panel != nil {
+				panel.message = fmt.Sprintf("Initialized harness in %s", msg.Result.Project.RootDir)
+			}
+		}
+		return m, nil
+
 	case harnessRunProgressMsg:
 		if !m.loading || m.harnessRunProject == nil {
 			return m, nil
@@ -1064,14 +1247,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.harnessRunLogPath = msg.LogPath
 		}
 		if msg.LogChunk != "" {
-			m.appendStreamChunk(msg.LogChunk)
+			m.appendHarnessLogChunk(msg.LogChunk)
 		}
 		if msg.LogOffset > 0 {
 			m.harnessRunLogOffset = msg.LogOffset
 		}
 		if detail := strings.TrimSpace(msg.Detail); detail != "" && detail != m.harnessRunLastDetail {
 			m.harnessRunLastDetail = detail
-			m.appendHarnessProgressDetail(detail)
+			if !harnessLogChunkContainsDetail(m.harnessRunProject, msg.LogChunk, detail) {
+				m.appendHarnessProgressDetail(detail)
+			}
 		}
 		if strings.TrimSpace(msg.Activity) != "" {
 			m.statusActivity = msg.Activity
@@ -1193,6 +1378,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, spinnerCmd
 
+	case agentToolStatusMsg:
+		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
+			return m, nil
+		}
+		ts := msg.ToolStatusMsg
+		m.updateActiveMCPTools(ts)
+		if ts.Running {
+			m.startToolActivity(ts)
+			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
+				rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
+				if err != nil {
+					rendered = m.streamBuffer.String()
+				}
+				rendered = trimLeadingRenderedSpacing(rendered)
+				m.output.Truncate(m.streamStartPos)
+				m.output.WriteString(bulletStyle.Render("● "))
+				m.output.WriteString(rendered)
+				m.streamBuffer.Reset()
+				m.streamStartPos = m.output.Len()
+			}
+			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
+			spinnerCmd = combineCmds(spinnerCmd, startCmd)
+		} else {
+			m.finishToolActivity(ts)
+			ts.Elapsed = m.spinner.Elapsed()
+			m.spinner.Stop()
+			m.streamPrefixWritten = false
+			m.streamStartPos = m.output.Len()
+		}
+		m.syncConversationViewport()
+		if m.viewport.AutoFollow() {
+			m.viewport.GotoBottom()
+		}
+		return m, spinnerCmd
+
 	case mcpServersMsg:
 		m.mcpServers = toMCPInfos(msg.Servers)
 		m.refreshCommands()
@@ -1294,10 +1514,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case agentStatusMsg:
+		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
+			return m, nil
+		}
+		m.statusActivity = msg.Activity
+		m.statusToolName = msg.ToolName
+		m.statusToolArg = msg.ToolArg
+		if msg.ToolCount > 0 {
+			m.statusToolCount = msg.ToolCount
+		}
+		return m, nil
+
 	}
 
 	var cmd tea.Cmd
-	if shouldIgnoreInputUpdate(msg, m.lastResizeAt, m.startedAt) {
+	if shouldIgnoreInputUpdate(msg, m.lastResizeAt) {
 		return m, nil
 	}
 	m.input, cmd = m.input.Update(msg)
@@ -1325,7 +1557,7 @@ func combineCmds(cmds ...tea.Cmd) tea.Cmd {
 	return tea.Batch(filtered...)
 }
 
-func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt, startedAt time.Time) bool {
+func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt time.Time) bool {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok || keyMsg.Type != tea.KeyRunes || keyMsg.Paste || len(keyMsg.Runes) == 0 {
 		return false
@@ -1346,7 +1578,7 @@ func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt, startedAt time.Time) boo
 	if looksLikeExactTerminalNoise(raw) {
 		return true
 	}
-	if !terminalResponseSuppressionActive(lastResizeAt, startedAt) {
+	if !terminalResponseSuppressionActive(lastResizeAt) {
 		return false
 	}
 	return ansiKeyFragmentPattern.MatchString(raw) || terminalResponseFragmentPattern.MatchString(raw) || terminalOrphanFragmentPattern.MatchString(raw)
@@ -1358,7 +1590,7 @@ func (m *Model) sanitizeTerminalResponseInput() {
 		return
 	}
 	cleaned := stripExactTerminalNoise(value)
-	if terminalResponseSuppressionActive(m.lastResizeAt, m.startedAt) {
+	if terminalResponseSuppressionActive(m.lastResizeAt) {
 		cleaned = ansiChunkPattern.ReplaceAllString(cleaned, "")
 	}
 	if terminalOrphanFragmentPattern.MatchString(strings.TrimSpace(cleaned)) {
@@ -1371,11 +1603,11 @@ func (m *Model) sanitizeTerminalResponseInput() {
 	m.input.CursorEnd()
 }
 
-func terminalResponseSuppressionActive(lastResizeAt, startedAt time.Time) bool {
+func terminalResponseSuppressionActive(lastResizeAt time.Time) bool {
 	if !lastResizeAt.IsZero() && time.Since(lastResizeAt) <= 1500*time.Millisecond {
 		return true
 	}
-	return !startedAt.IsZero() && time.Since(startedAt) <= 3*time.Second
+	return false
 }
 
 func looksLikeExactTerminalNoise(value string) bool {

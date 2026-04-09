@@ -34,6 +34,7 @@ func NewRootCmd() *cobra.Command {
 	var resumeID string
 	var pipePrompt string
 	var allowedTools []string
+	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
 	var helperManifest string
@@ -75,7 +76,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, outputPath, bypassFlag)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, outputPath, bypassFlag, readOnlyAllowedDirs)
 				if code != 0 {
 					os.Exit(code)
 				}
@@ -93,6 +94,8 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
+	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
+	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 
@@ -134,7 +137,7 @@ func NewRootCmd() *cobra.Command {
 		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(completionCmd)
-	cmd.AddCommand(newHarnessCmd())
+	cmd.AddCommand(newHarnessCmd(&cfgFile))
 	cmd.AddCommand(newMCPCmd(&cfgFile))
 	configureHelpRendering(cmd)
 
@@ -547,7 +550,6 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 		"Execute a skill within the main conversation.",
 		"",
 		"When a listed skill matches the user's request, this is a blocking requirement: invoke the skill tool before continuing.",
-		"Treat slash-style requests like /commit or /review-pr as skill invocations, not plain text.",
 		"Do not mention a skill without calling the skill tool.",
 		"Do not use the skill tool for built-in CLI commands like /help or /clear.",
 		"",
@@ -561,7 +563,7 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 		if skill == nil || skill.DisableModelInvocation {
 			continue
 		}
-		name := skill.SlashName()
+		name := strings.TrimSpace(skill.Name)
 		if name == "" {
 			continue
 		}
@@ -592,7 +594,7 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 func countModelVisibleSkills(skills []*commands.Command) int {
 	count := 0
 	for _, skill := range skills {
-		if skill != nil && !skill.DisableModelInvocation && skill.SlashName() != "" {
+		if skill != nil && !skill.DisableModelInvocation && strings.TrimSpace(skill.Name) != "" {
 			count++
 		}
 	}

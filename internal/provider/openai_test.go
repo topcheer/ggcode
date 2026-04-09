@@ -1,7 +1,13 @@
 package provider
 
 import (
+	"context"
+	"net/http"
 	"testing"
+	"time"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/sashabaranov/go-openai"
 )
 
 func TestOpenAIConvertMessages_SystemText(t *testing.T) {
@@ -96,5 +102,71 @@ func TestConvertAnthropicResponse(t *testing.T) {
 	result := convertAnthropicResponse(nil)
 	if len(result) != 0 {
 		t.Errorf("expected empty, got %d blocks", len(result))
+	}
+}
+
+func TestIsRetryableRecognizesProviderErrors(t *testing.T) {
+	if !isRetryable(&openai.APIError{HTTPStatusCode: http.StatusTooManyRequests, Message: "rate limited"}) {
+		t.Fatal("expected openai 429 to be retryable")
+	}
+	if !isRetryable(&anthropic.Error{StatusCode: http.StatusBadGateway}) {
+		t.Fatal("expected anthropic 502 to be retryable")
+	}
+	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusBadRequest, Message: "bad request"}) {
+		t.Fatal("expected openai 400 not to be retryable")
+	}
+}
+
+func TestRetryAfterDelayFromAnthropicHeader(t *testing.T) {
+	err := &anthropic.Error{
+		StatusCode: http.StatusTooManyRequests,
+		Response: &http.Response{
+			Header: http.Header{
+				"Retry-After": []string{"3"},
+			},
+		},
+	}
+	delay, ok := retryAfterDelay(err)
+	if !ok {
+		t.Fatal("expected retry-after delay to be detected")
+	}
+	if delay != 3*time.Second {
+		t.Fatalf("expected 3s retry delay, got %v", delay)
+	}
+}
+
+func TestRetryWithBackoffCtxHonorsRetryAfter(t *testing.T) {
+	originalSleep := retrySleep
+	defer func() { retrySleep = originalSleep }()
+
+	var slept []time.Duration
+	retrySleep = func(ctx context.Context, delay time.Duration) error {
+		slept = append(slept, delay)
+		return nil
+	}
+
+	attempts := 0
+	err := retryWithBackoffCtx(context.Background(), func() error {
+		attempts++
+		if attempts < 3 {
+			return &anthropic.Error{
+				StatusCode: http.StatusTooManyRequests,
+				Response: &http.Response{
+					Header: http.Header{
+						"Retry-After": []string{"2"},
+					},
+				},
+			}
+		}
+		return nil
+	}, providerRetryAttempts)
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+	if len(slept) != 2 || slept[0] != 2*time.Second || slept[1] != 2*time.Second {
+		t.Fatalf("expected retry-after sleeps [2s 2s], got %+v", slept)
 	}
 }

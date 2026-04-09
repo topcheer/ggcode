@@ -26,6 +26,27 @@ func (r fakeRunner) Run(_ context.Context, req RunRequest) (*RunResult, error) {
 	return r.result, r.err
 }
 
+type streamingRunner struct {
+	result *RunResult
+	err    error
+	stdout []string
+	stderr []string
+}
+
+func (r streamingRunner) Run(_ context.Context, req RunRequest) (*RunResult, error) {
+	for _, chunk := range r.stdout {
+		if req.OnOutput != nil {
+			req.OnOutput(chunk)
+		}
+	}
+	for _, line := range r.stderr {
+		if req.OnProgress != nil {
+			req.OnProgress(line)
+		}
+	}
+	return r.result, r.err
+}
+
 type sequenceRunner struct {
 	results []*RunResult
 	errs    []error
@@ -167,6 +188,58 @@ func TestInitBootstrapsGitRepository(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
 		t.Fatalf("expected .git to exist: %v", err)
 	}
+	if strings.TrimSpace(result.ScaffoldCommit) == "" {
+		t.Fatalf("expected scaffold commit to be created")
+	}
+	if !hasHeadCommit(context.Background(), root) {
+		t.Fatalf("expected init to leave repository with a HEAD commit")
+	}
+}
+
+func TestInitCreatesIndependentHarnessScaffoldCommit(t *testing.T) {
+	root := t.TempDir()
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	cmd := exec.Command("git", "show", "--stat", "--format=%s", result.ScaffoldCommit)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git show scaffold commit: %v\n%s", err, string(out))
+	}
+	text := string(out)
+	if !strings.Contains(text, "chore: initialize harness scaffold") {
+		t.Fatalf("expected scaffold commit message, got:\n%s", text)
+	}
+	for _, rel := range []string{ConfigRelPath, "AGENTS.md", filepath.Join("docs", "runbooks", "harness.md")} {
+		if !strings.Contains(text, rel) {
+			t.Fatalf("expected scaffold commit to include %s, got:\n%s", rel, text)
+		}
+	}
+}
+
+func TestInitAllowsImmediateWorktreePreparationInEmptyRepo(t *testing.T) {
+	root := t.TempDir()
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := EnqueueTask(result.Project, "Prepare worktree right after init", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	workspace, err := PrepareWorkspace(context.Background(), result.Project, result.Config, task)
+	if err != nil {
+		t.Fatalf("PrepareWorkspace() error = %v", err)
+	}
+	defer func() {
+		task.WorkspacePath = workspace.Path
+		_ = cleanupWorkspace(result.Project, task)
+	}()
+	if workspace.Mode != "git-worktree" {
+		t.Fatalf("workspace.Mode = %q, want git-worktree", workspace.Mode)
+	}
 }
 
 func TestCheckProjectPassesForScaffold(t *testing.T) {
@@ -299,6 +372,48 @@ func TestBinaryRunnerStreamsStdoutChunksWithoutWaitingForNewline(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "hello") || !strings.Contains(result.Output, "world") || !strings.Contains(result.Output, "tool: read_file README.md") {
 		t.Fatalf("expected combined run output, got %q", result.Output)
+	}
+}
+
+func TestExecuteTaskPersistsWorkerStderrAndDetailedExitError(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init")
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	result.Config.Run.WorktreeMode = "off"
+	task, err := EnqueueTask(result.Project, "Investigate ERP failure", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	summary, err := ExecuteTask(context.Background(), result.Project, result.Config, task, streamingRunner{
+		stdout: []string{"partial stdout\n"},
+		stderr: []string{"tool: read_file README.md", "fatal: missing API key"},
+		result: &RunResult{
+			Output:   "partial stdout\nfatal: missing API key\n",
+			ExitCode: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask() error = %v", err)
+	}
+	if summary.Task.Status != TaskFailed {
+		t.Fatalf("Status = %q, want %q", summary.Task.Status, TaskFailed)
+	}
+	if !strings.Contains(summary.Task.Error, "fatal: missing API key") {
+		t.Fatalf("expected detailed exit error, got %q", summary.Task.Error)
+	}
+	logData, err := os.ReadFile(summary.Task.LogPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log) error = %v", err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "fatal: missing API key") {
+		t.Fatalf("expected stderr to be persisted in task log, got %q", logText)
+	}
+	if !strings.Contains(logText, "tool: read_file README.md") {
+		t.Fatalf("expected progress line in task log, got %q", logText)
 	}
 }
 
@@ -580,6 +695,12 @@ func TestExecuteTaskFailsWhenDeliveryVerificationFails(t *testing.T) {
 	}
 	if !strings.Contains(summary.Task.Error, "verification failed") {
 		t.Fatalf("unexpected task error: %q", summary.Task.Error)
+	}
+	if !strings.Contains(summary.Task.Error, "failing-validation") {
+		t.Fatalf("expected failing command summary in task error, got %q", summary.Task.Error)
+	}
+	if !strings.Contains(summary.Task.Error, summary.Task.VerificationReportPath) {
+		t.Fatalf("expected delivery report path in task error, got %q", summary.Task.Error)
 	}
 }
 
@@ -1095,6 +1216,45 @@ func TestPrepareWorkspaceLinksPythonVirtualEnvIntoGitWorktree(t *testing.T) {
 	}
 	if resolved != wantResolved {
 		t.Fatalf("resolved .venv = %q, want %q", resolved, wantResolved)
+	}
+}
+
+func TestExecuteTaskPassesHarnessReadOnlyDirsToWorker(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init")
+	git(t, root, "config", "user.name", "Harness Test")
+	git(t, root, "config", "user.email", "harness@example.com")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("seed"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	git(t, root, "add", "README.md")
+	git(t, root, "commit", "-m", "init")
+
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := EnqueueTask(result.Project, "Read harness config from worker", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	var seen []RunRequest
+	summary, err := ExecuteTask(context.Background(), result.Project, result.Config, task, fakeRunner{
+		result: &RunResult{Output: "ok"},
+		seen:   &seen,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask() error = %v", err)
+	}
+	if summary == nil || summary.Task == nil {
+		t.Fatalf("expected task summary, got %#v", summary)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("expected one worker request, got %d", len(seen))
+	}
+	want := filepath.Join(root, ".ggcode")
+	if got := seen[0].ReadOnlyAllowedDirs; len(got) != 1 || got[0] != want {
+		t.Fatalf("ReadOnlyAllowedDirs = %#v, want [%q]", got, want)
 	}
 }
 

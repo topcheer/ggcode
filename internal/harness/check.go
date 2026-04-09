@@ -98,8 +98,12 @@ func CheckProject(ctx context.Context, project Project, cfg *Config, opts CheckO
 		}
 	}
 	for _, contextCfg := range cfg.Contexts {
-		contextPath := filepath.Join(project.RootDir, contextCfg.Path)
-		info, err := os.Stat(contextPath)
+		contextPath := strings.TrimSpace(contextCfg.Path)
+		if contextPath == "" {
+			continue
+		}
+		absContextPath := filepath.Join(project.RootDir, contextPath)
+		info, err := os.Stat(absContextPath)
 		if err != nil || !info.IsDir() {
 			report.Passed = false
 			report.Issues = append(report.Issues, CheckIssue{
@@ -114,7 +118,7 @@ func CheckProject(ctx context.Context, project Project, cfg *Config, opts CheckO
 		if !contextCfg.RequireAgent {
 			continue
 		}
-		agentPath := filepath.Join(contextPath, "AGENTS.md")
+		agentPath := filepath.Join(absContextPath, "AGENTS.md")
 		if _, err := os.Stat(agentPath); err != nil {
 			report.Passed = false
 			report.Issues = append(report.Issues, CheckIssue{
@@ -165,7 +169,10 @@ func runConfiguredCommands(ctx context.Context, project Project, cfg *Config, op
 		if len(contextCfg.Commands) == 0 {
 			continue
 		}
-		contextDir := filepath.Join(commandDir, contextCfg.Path)
+		contextDir := commandDir
+		if strings.TrimSpace(contextCfg.Path) != "" {
+			contextDir = filepath.Join(commandDir, contextCfg.Path)
+		}
 		for _, check := range contextCfg.Commands {
 			result, err := runCheckCommand(ctx, contextDir, contextCfg.Name, check)
 			if err != nil {
@@ -252,5 +259,8 @@ func contextMatches(contextCfg ContextConfig, raw string) bool {
 	if raw == "" {
 		return true
 	}
-	return strings.EqualFold(contextCfg.Name, raw) || filepath.Clean(contextCfg.Path) == filepath.Clean(raw)
+	if strings.EqualFold(contextCfg.Name, raw) {
+		return true
+	}
+	return strings.TrimSpace(contextCfg.Path) != "" && filepath.Clean(contextCfg.Path) == filepath.Clean(raw)
 }

@@ -11,6 +11,9 @@ it in a wrapper-managed cache:
 If that directory is not already on `PATH`, the bootstrap updates your PATH configuration and asks
 you to reopen the terminal so future `ggcode` launches resolve directly to the native binary.
 
+This package is only the release-backed installer wrapper. For product features, harness workflow
+details, and the main CLI experience, use the repository README.
+
 ## Install
 
 ```bash

@@ -16,9 +16,11 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 )
 
-func newHarnessCmd() *cobra.Command {
+func newHarnessCmd(cfgFile *string) *cobra.Command {
 	var initGoal string
 	var initForce bool
+	var initElements []string
+	var initContextHints []string
 	var runAllQueued bool
 	var runRetryFailed bool
 	var runResumeInterrupted bool
@@ -56,9 +58,14 @@ func newHarnessCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("resolve working directory: %w", err)
 			}
+			contexts, _, err := chooseInitContexts(workDir, initGoal, valueOrEmpty(cfgFile), initElements, initContextHints, cmd.InOrStdin(), cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
 			result, err := harness.Init(workDir, harness.InitOptions{
-				Goal:  initGoal,
-				Force: initForce,
+				Goal:     initGoal,
+				Force:    initForce,
+				Contexts: contexts,
 			})
 			if err != nil {
 				return err
@@ -69,6 +76,8 @@ func newHarnessCmd() *cobra.Command {
 	}
 	initCmd.Flags().StringVar(&initGoal, "goal", "", "project goal to embed in the harness scaffold")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite existing harness scaffold files")
+	initCmd.Flags().StringArrayVar(&initElements, "element", nil, "optional project element to help context suggestion; can be repeated")
+	initCmd.Flags().StringArrayVar(&initContextHints, "context-hint", nil, "optional context direction to feed into final suggestion generation; can be repeated")
 
 	checkCmd := &cobra.Command{
 		Use:   "check",
@@ -101,7 +110,11 @@ func newHarnessCmd() *cobra.Command {
 			}
 			contextCfg, err := harness.ResolveContext(cfg, queueContext)
 			if err != nil {
-				return err
+				custom := harness.ParseContextSpecs(queueContext)
+				if len(custom) == 0 {
+					return err
+				}
+				contextCfg = &custom[0]
 			}
 			opts := harness.QueueOptions{DependsOn: queueDependsOn}
 			if contextCfg != nil {
@@ -159,7 +172,23 @@ func newHarnessCmd() *cobra.Command {
 			}
 			contextCfg, err := harness.ResolveContext(cfg, runContext)
 			if err != nil {
-				return err
+				custom := harness.ParseContextSpecs(runContext)
+				if len(custom) == 0 {
+					return err
+				}
+				contextCfg = &custom[0]
+			}
+			if contextCfg == nil && strings.TrimSpace(runContext) == "" {
+				contextCfg, persist, err := chooseRunContext(project.RootDir, strings.Join(args, " "), valueOrEmpty(cfgFile), cfg, cmd.InOrStdin(), cmd.OutOrStdout())
+				if err != nil {
+					return err
+				}
+				if persist && contextCfg != nil {
+					cfg.Contexts = harness.NormalizeContexts(append(cfg.Contexts, *contextCfg))
+					if err := harness.SaveConfig(project.ConfigPath, cfg); err != nil {
+						return fmt.Errorf("persist context: %w", err)
+					}
+				}
 			}
 			runOpts := harness.RunTaskOptions{}
 			if contextCfg != nil {
@@ -770,6 +799,9 @@ func formatInitResult(result *harness.InitResult) string {
 	if result.GitInitialized {
 		b.WriteString("- git: initialized repository\n")
 	}
+	if strings.TrimSpace(result.ScaffoldCommit) != "" {
+		b.WriteString(fmt.Sprintf("- git: created scaffold commit %s\n", shortCommit(result.ScaffoldCommit)))
+	}
 	b.WriteString(fmt.Sprintf("- root: %s\n", result.Project.RootDir))
 	b.WriteString(fmt.Sprintf("- config: %s\n", relOrAbs(result.Project.RootDir, result.Project.ConfigPath)))
 	for _, path := range result.CreatedPaths {
@@ -777,6 +809,16 @@ func formatInitResult(result *harness.InitResult) string {
 	}
 	for _, path := range result.Overwritten {
 		b.WriteString(fmt.Sprintf("- overwritten: %s\n", relOrAbs(result.Project.RootDir, path)))
+	}
+	if result.Config != nil && len(result.Config.Contexts) > 0 {
+		b.WriteString("- contexts:\n")
+		for _, contextCfg := range result.Config.Contexts {
+			label := harnessFirstNonEmpty(contextCfg.Path, contextCfg.Name)
+			if label == "" {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("  - %s\n", label))
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -795,4 +837,19 @@ func harnessFirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func shortCommit(commit string) string {
+	commit = strings.TrimSpace(commit)
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	return commit
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }

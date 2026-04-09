@@ -87,10 +87,12 @@ func (m Model) renderSkillsPanel() string {
 				body = append(body, fmt.Sprintf("    Use when: %s", when))
 			}
 			switch {
-			case skill.UserInvocable:
-				body = append(body, fmt.Sprintf("    Shortcut: %s", skill.SlashName()))
+			case skill.UserSlashVisible():
+				body = append(body, fmt.Sprintf("    Command: %s", skill.SlashName()))
+			case skill.DisableModelInvocation:
+				body = append(body, "    Direct-only")
 			default:
-				body = append(body, "    Agent-only")
+				body = append(body, "    Agent-available")
 			}
 		}
 		body = append(body, "")

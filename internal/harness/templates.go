@@ -67,14 +67,16 @@ func renderConfigTemplate(cfg *Config) string {
 		b.WriteString("contexts:\n")
 		for _, context := range cfg.Contexts {
 			b.WriteString(fmt.Sprintf("  - name: %q\n", context.Name))
-			b.WriteString(fmt.Sprintf("    path: %q\n", context.Path))
+			if strings.TrimSpace(context.Path) != "" {
+				b.WriteString(fmt.Sprintf("    path: %q\n", context.Path))
+			}
 			if context.Description != "" {
 				b.WriteString(fmt.Sprintf("    description: %q\n", context.Description))
 			}
 			if context.Owner != "" {
 				b.WriteString(fmt.Sprintf("    owner: %q\n", context.Owner))
 			}
-			if context.RequireAgent {
+			if context.RequireAgent && strings.TrimSpace(context.Path) != "" {
 				b.WriteString("    require_agent: true\n")
 			}
 			if len(context.Commands) > 0 {
@@ -135,12 +137,16 @@ func renderRunbookTemplate(cfg *Config) string {
 }
 
 func renderContextAgentsTemplate(cfg *Config, contextCfg ContextConfig) string {
+	pathLine := "- Path: not bound yet"
+	if strings.TrimSpace(contextCfg.Path) != "" {
+		pathLine = "- Path: " + contextCfg.Path
+	}
 	return fmt.Sprintf(`# AGENTS.md
 
 ## Context
 - Project: %s
 - Area: %s
-- Path: %s
+%s
 %s
 
 ## Scope
@@ -152,7 +158,7 @@ func renderContextAgentsTemplate(cfg *Config, contextCfg ContextConfig) string {
 - Read the root AGENTS.md and .ggcode/harness.yaml before changing this area.
 - Preserve clear boundaries for this subtree.
 - Add or update validation close to the code you change.
-`, cfg.Project.Name, contextCfg.Name, contextCfg.Path, renderContextOwnerLine(contextCfg), firstNonEmptyText(contextCfg.Description, "Bounded context owned by the harness"))
+`, cfg.Project.Name, contextCfg.Name, pathLine, renderContextOwnerLine(contextCfg), firstNonEmptyText(contextCfg.Description, "Bounded context owned by the harness"))
 }
 
 func firstNonEmptyText(values ...string) string {

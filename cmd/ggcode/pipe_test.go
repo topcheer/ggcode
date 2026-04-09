@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -52,16 +54,25 @@ func TestTruncatePipeProgress(t *testing.T) {
 	}
 }
 
-func TestPipeAllowedDirsBaseUsesConfigDir(t *testing.T) {
-	cfgPath := filepath.Join(string(filepath.Separator), "tmp", "repo", "ggcode.yaml")
-	if got := pipeAllowedDirsBase(cfgPath); got != filepath.Dir(cfgPath) {
-		t.Fatalf("pipeAllowedDirsBase() = %q, want %q", got, filepath.Dir(cfgPath))
+func TestPipeAllowedDirsAlwaysIncludesWorkingDir(t *testing.T) {
+	cfg := &config.Config{AllowedDirs: []string{"."}}
+	workingDir := filepath.Join(string(filepath.Separator), "tmp", "workspace")
+	cfgPath := filepath.Join(string(filepath.Separator), "Users", "me", ".ggcode", "ggcode.yaml")
+	got := pipeAllowedDirs(cfg, cfgPath, workingDir)
+	want := []string{workingDir, filepath.Dir(cfgPath)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pipeAllowedDirs() = %#v, want %#v", got, want)
 	}
 }
 
-func TestPipeAllowedDirsBaseFallsBackToDot(t *testing.T) {
-	if got := pipeAllowedDirsBase(""); got != "." {
-		t.Fatalf("pipeAllowedDirsBase() = %q, want %q", got, ".")
+func TestPipeAllowedDirsDedupesIdenticalBases(t *testing.T) {
+	cfg := &config.Config{AllowedDirs: []string{"."}}
+	workingDir := filepath.Join(string(filepath.Separator), "tmp", "repo")
+	cfgPath := filepath.Join(workingDir, "ggcode.yaml")
+	got := pipeAllowedDirs(cfg, cfgPath, workingDir)
+	want := []string{workingDir}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pipeAllowedDirs() = %#v, want %#v", got, want)
 	}
 }
 

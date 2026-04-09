@@ -32,7 +32,7 @@ type SkillTool struct {
 func (t SkillTool) Name() string { return "skill" }
 
 func (t SkillTool) Description() string {
-	return "Execute a reusable skill. If a matching skill exists for the user's task, invoke this tool before continuing. Slash-command style requests like /commit or /review-pr should also be handled through this tool."
+	return "Execute a reusable skill. If a matching skill exists for the user's task, invoke this tool before continuing."
 }
 
 func (t SkillTool) Parameters() json.RawMessage {

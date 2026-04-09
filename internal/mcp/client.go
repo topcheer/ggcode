@@ -94,6 +94,7 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 
 	c.cmd = exec.CommandContext(ctx, c.command, c.args...)
+	configureMCPCommandProcess(c.cmd)
 	if len(c.env) > 0 {
 		c.cmd.Env = append(os.Environ(), flattenEnvMap(c.env)...)
 	}

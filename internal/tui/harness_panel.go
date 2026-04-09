@@ -42,24 +42,6 @@ const (
 	harnessSectionRollouts
 )
 
-var harnessSectionTitles = []string{
-	"Init",
-	"Check",
-	"Doctor",
-	"Monitor",
-	"GC",
-	"Contexts",
-	"Tasks",
-	"Queue",
-	"Run",
-	"Run queued",
-	"Inbox",
-	"Review",
-	"Promote",
-	"Release",
-	"Rollouts",
-}
-
 type harnessPanelState struct {
 	focus           harnessPanelFocus
 	selectedSection int
@@ -84,6 +66,26 @@ type harnessPanelState struct {
 }
 
 const harnessPanelAutoRefreshInterval = time.Second
+
+func harnessSectionTitles(lang Language) []string {
+	return []string{
+		tr(lang, "harness.section.init"),
+		tr(lang, "harness.section.check"),
+		tr(lang, "harness.section.doctor"),
+		tr(lang, "harness.section.monitor"),
+		tr(lang, "harness.section.gc"),
+		tr(lang, "harness.section.contexts"),
+		tr(lang, "harness.section.tasks"),
+		tr(lang, "harness.section.queue"),
+		tr(lang, "harness.section.run"),
+		tr(lang, "harness.section.run_queued"),
+		tr(lang, "harness.section.inbox"),
+		tr(lang, "harness.section.review"),
+		tr(lang, "harness.section.promote"),
+		tr(lang, "harness.section.release"),
+		tr(lang, "harness.section.rollouts"),
+	}
+}
 
 func (m *Model) openHarnessPanel() {
 	m.modelPanel = nil
@@ -173,7 +175,7 @@ func (m *Model) refreshHarnessPanel() {
 		panel.loadErr = err.Error()
 		return
 	}
-	panel.selectedSection = clampHarnessIndex(panel.selectedSection, len(harnessSectionTitles))
+	panel.selectedSection = clampHarnessIndex(panel.selectedSection, len(harnessSectionTitles(m.currentLanguage())))
 	m.updateHarnessPanelInputState()
 	m.syncHarnessPanelSelection()
 }
@@ -205,15 +207,15 @@ func (m Model) renderHarnessPanel() string {
 	}
 	if panel.loadErr != "" {
 		body := strings.Join([]string{
-			lipgloss.NewStyle().Bold(true).Render("Harness unavailable"),
+			lipgloss.NewStyle().Bold(true).Render(m.t("harness.unavailable")),
 			"",
 			panel.loadErr,
 			"",
-			"Start here in an existing project:",
-			"  1. Press Enter or i to initialize harness",
-			"  2. Press r to refresh once init finishes",
+			m.t("harness.unavailable_intro"),
+			m.t("harness.unavailable_step_init"),
+			m.t("harness.unavailable_step_refresh"),
 			"",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("Enter/i init harness • r refresh • Esc close"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("harness.hints.unavailable")),
 			renderHarnessPanelMessage(panel.message),
 		}, "\n")
 		return m.renderContextBox("/harness", strings.TrimSpace(body), lipgloss.Color("12"))
@@ -341,10 +343,11 @@ func (m *Model) handleHarnessPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 func (m *Model) moveHarnessSection(delta int) {
 	panel := m.harnessPanel
-	if panel == nil || len(harnessSectionTitles) == 0 {
+	titles := harnessSectionTitles(m.currentLanguage())
+	if panel == nil || len(titles) == 0 {
 		return
 	}
-	panel.selectedSection = (panel.selectedSection + delta + len(harnessSectionTitles)) % len(harnessSectionTitles)
+	panel.selectedSection = (panel.selectedSection + delta + len(titles)) % len(titles)
 	panel.selectedItem = 0
 	m.updateHarnessPanelInputState()
 	m.syncHarnessPanelSelection()
@@ -389,19 +392,22 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 	if panel == nil {
 		return nil
 	}
+	if m.harnessPanelBlockedByActiveRun() {
+		panel.message = m.t("harness.message.read_only")
+		return nil
+	}
 	if panel.loadErr != "" {
 		return m.initHarnessFromPanel()
 	}
 	switch panel.selectedSection {
 	case harnessSectionInit:
-		panel.message = "Harness is already initialized."
-		return nil
+		return m.initHarnessFromPanel()
 	case harnessSectionCheck:
 		return m.runHarnessCheck()
 	case harnessSectionMonitor:
 		m.refreshHarnessPanel()
 		if panel := m.harnessPanel; panel != nil {
-			panel.message = "Harness monitor refreshed."
+			panel.message = m.t("harness.message.monitor_refreshed")
 		}
 		return m.pollHarnessPanelAutoRefresh()
 	case harnessSectionGC:
@@ -418,7 +424,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			return nil
 		}
 		if task.Status != harness.TaskFailed {
-			panel.message = fmt.Sprintf("Harness task %s is %s; only failed tasks can be rerun.", task.ID, task.Status)
+			panel.message = m.t("harness.message.rerun_failed_only", task.ID, task.Status)
 			return nil
 		}
 		command := "/harness rerun " + task.ID
@@ -437,7 +443,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			return nil
 		}
 		m.refreshHarnessPanel()
-		panel.message = fmt.Sprintf("Approved review for %s", updated.ID)
+		panel.message = m.t("harness.message.review_approved", updated.ID)
 	case harnessSectionPromote:
 		task := m.selectedHarnessPromoteTask()
 		if task == nil {
@@ -449,10 +455,10 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			return nil
 		}
 		m.refreshHarnessPanel()
-		panel.message = fmt.Sprintf("Promoted %s", updated.ID)
+		panel.message = m.t("harness.message.promoted", updated.ID)
 	case harnessSectionRelease:
 		if panel.release == nil || len(panel.release.Tasks) == 0 {
-			panel.message = "No harness tasks are ready for release."
+			panel.message = m.t("harness.message.no_release_tasks")
 			return nil
 		}
 		applied, err := harness.ApplyReleasePlan(*panel.project, panel.release, "")
@@ -461,11 +467,11 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			return nil
 		}
 		m.refreshHarnessPanel()
-		panel.message = fmt.Sprintf("Applied release batch %s", applied.BatchID)
+		panel.message = m.t("harness.message.release_applied", applied.BatchID)
 	case harnessSectionRollouts:
 		rollout := m.selectedHarnessRollout()
 		if rollout == nil {
-			panel.message = "No persisted rollouts found."
+			panel.message = m.t("harness.message.no_rollouts")
 			return nil
 		}
 		updated, err := harness.AdvanceReleaseWaveRollout(*panel.project, rollout.RolloutID)
@@ -474,7 +480,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			return nil
 		}
 		m.refreshHarnessPanel()
-		panel.message = fmt.Sprintf("Advanced rollout %s", updated.RolloutID)
+		panel.message = m.t("harness.message.rollout_advanced", updated.RolloutID)
 	}
 	return m.pollHarnessPanelAutoRefresh()
 }
@@ -482,6 +488,10 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 	panel := m.harnessPanel
 	if panel == nil || panel.project == nil {
+		return nil
+	}
+	if m.harnessPanelBlockedByActiveRun() {
+		panel.message = m.t("harness.message.read_only")
 		return nil
 	}
 	switch panel.selectedSection {
@@ -507,7 +517,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				return nil
 			}
 			m.refreshHarnessPanel()
-			panel.message = fmt.Sprintf("Promoted %d task(s) for %s", len(promoted), entry.Owner)
+			panel.message = m.t("harness.message.owner_promoted", len(promoted), entry.Owner)
 		case "f":
 			summary, err := harness.RetryFailedTasksForOwner(context.Background(), *panel.project, panel.cfg, entry.Owner, harness.BinaryRunner{})
 			if err != nil {
@@ -516,7 +526,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 			}
 			panel.lastQueueRun = summary
 			m.refreshHarnessPanel()
-			panel.message = fmt.Sprintf("Retried failed tasks for %s", entry.Owner)
+			panel.message = m.t("harness.message.owner_retried", entry.Owner)
 		}
 	case harnessSectionReview:
 		if action != "x" {
@@ -532,7 +542,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 			return nil
 		}
 		m.refreshHarnessPanel()
-		panel.message = fmt.Sprintf("Rejected review for %s", updated.ID)
+		panel.message = m.t("harness.message.review_rejected", updated.ID)
 	case harnessSectionRollouts:
 		rollout := m.selectedHarnessRollout()
 		if rollout == nil {
@@ -546,7 +556,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				return nil
 			}
 			m.refreshHarnessPanel()
-			panel.message = fmt.Sprintf("Approved next gate for %s", updated.RolloutID)
+			panel.message = m.t("harness.message.gate_approved", updated.RolloutID)
 		case "p":
 			for _, group := range rollout.Groups {
 				if group != nil && group.WaveStatus == harness.ReleaseWavePaused {
@@ -556,7 +566,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 						return nil
 					}
 					m.refreshHarnessPanel()
-					panel.message = fmt.Sprintf("Resumed rollout %s", updated.RolloutID)
+					panel.message = m.t("harness.message.rollout_resumed", updated.RolloutID)
 					return nil
 				}
 			}
@@ -566,7 +576,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				return nil
 			}
 			m.refreshHarnessPanel()
-			panel.message = fmt.Sprintf("Paused rollout %s", updated.RolloutID)
+			panel.message = m.t("harness.message.rollout_paused", updated.RolloutID)
 		case "x":
 			updated, err := harness.AbortReleaseWaveRollout(*panel.project, rollout.RolloutID, "")
 			if err != nil {
@@ -574,7 +584,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				return nil
 			}
 			m.refreshHarnessPanel()
-			panel.message = fmt.Sprintf("Aborted rollout %s", updated.RolloutID)
+			panel.message = m.t("harness.message.rollout_aborted", updated.RolloutID)
 		}
 	}
 	return nil
@@ -585,17 +595,7 @@ func (m *Model) initHarnessFromPanel() tea.Cmd {
 	if panel == nil {
 		return nil
 	}
-	workDir, _ := os.Getwd()
-	result, err := harness.Init(workDir, harness.InitOptions{})
-	if err != nil {
-		panel.message = err.Error()
-		return nil
-	}
-	m.refreshHarnessPanel()
-	if panel := m.harnessPanel; panel != nil {
-		panel.message = fmt.Sprintf("Initialized harness in %s", result.Project.RootDir)
-	}
-	return nil
+	return m.beginHarnessInitPrompt("/harness init", "", true)
 }
 
 func (m *Model) runHarnessCheck() tea.Cmd {
@@ -610,9 +610,9 @@ func (m *Model) runHarnessCheck() tea.Cmd {
 	}
 	panel.lastCheck = report
 	if report.Passed {
-		panel.message = "Harness check passed."
+		panel.message = m.t("harness.message.check_passed")
 	} else {
-		panel.message = "Harness check found issues."
+		panel.message = m.t("harness.message.check_failed")
 	}
 	return nil
 }
@@ -631,9 +631,25 @@ func (m *Model) runHarnessGC() tea.Cmd {
 	m.refreshHarnessPanel()
 	if panel := m.harnessPanel; panel != nil {
 		panel.lastGC = report
-		panel.message = "Harness gc complete."
+		panel.message = m.t("harness.message.gc_complete")
 	}
 	return nil
+}
+
+func (m *Model) harnessPanelBlockedByActiveRun() bool {
+	panel := m.harnessPanel
+	if panel == nil {
+		return false
+	}
+	if !m.loading && !m.projectMemoryLoading {
+		return false
+	}
+	switch panel.selectedSection {
+	case harnessSectionQueue:
+		return false
+	default:
+		return true
+	}
 }
 
 func (m *Model) queueHarnessDraft() tea.Cmd {
@@ -643,7 +659,7 @@ func (m *Model) queueHarnessDraft() tea.Cmd {
 	}
 	goal := strings.TrimSpace(panel.actionInput.Value())
 	if goal == "" {
-		panel.message = "Type a queue goal in the panel input first."
+		panel.message = m.t("harness.message.queue_goal_required")
 		return nil
 	}
 	task, err := harness.EnqueueTask(*panel.project, goal, "tui")
@@ -653,7 +669,7 @@ func (m *Model) queueHarnessDraft() tea.Cmd {
 	}
 	m.refreshHarnessPanel()
 	if panel := m.harnessPanel; panel != nil {
-		panel.message = fmt.Sprintf("Queued harness task %s", task.ID)
+		panel.message = m.t("harness.message.queued", task.ID)
 		panel.actionInput.SetValue("")
 	}
 	return nil
@@ -666,14 +682,13 @@ func (m *Model) runHarnessDraft() tea.Cmd {
 	}
 	goal := strings.TrimSpace(panel.actionInput.Value())
 	if goal == "" {
-		panel.message = "Type a run goal in the panel input first."
+		panel.message = m.t("harness.message.run_goal_required")
 		return nil
 	}
 	command := "/harness run " + goal
 	project := *panel.project
 	cfg := panel.cfg
-	m.closeHarnessPanel()
-	return m.runTrackedHarnessGoal(command, goal, project, cfg)
+	return m.beginHarnessRunPrompt(command, goal, project, cfg, true)
 }
 
 func (m *Model) runHarnessQueued(opts harness.QueueRunOptions) tea.Cmd {
@@ -690,7 +705,7 @@ func (m *Model) runHarnessQueued(opts harness.QueueRunOptions) tea.Cmd {
 	m.refreshHarnessPanel()
 	if panel := m.harnessPanel; panel != nil {
 		panel.lastQueueRun = summary
-		panel.message = queueRunMessage(summary, opts)
+		panel.message = queueRunMessage(m.currentLanguage(), summary, opts)
 	}
 	return nil
 }
@@ -707,8 +722,8 @@ func (m *Model) harnessPanelItems() []string {
 		}
 		items := make([]string, 0, len(panel.contexts.Summaries))
 		for _, summary := range panel.contexts.Summaries {
-			label := firstNonEmptyHarness(summary.Path, summary.Name, "unscoped")
-			items = append(items, truncateString(fmt.Sprintf("%s • %d tasks", label, summary.TaskCount), 52))
+			label := firstNonEmptyHarness(summary.Path, summary.Name, m.t("harness.unscoped"))
+			items = append(items, truncateString(fmt.Sprintf("%s • %d %s", label, summary.TaskCount, m.t("harness.tasks_count")), 52))
 		}
 		return items
 	case harnessSectionTasks:
@@ -726,7 +741,7 @@ func (m *Model) harnessPanelItems() []string {
 		}
 		items := make([]string, 0, len(panel.inbox.Entries))
 		for _, entry := range panel.inbox.Entries {
-			items = append(items, truncateString(fmt.Sprintf("%s • review %d • promote %d", entry.Owner, len(entry.ReviewReady), len(entry.PromotionReady)), 52))
+			items = append(items, truncateString(fmt.Sprintf("%s • %s %d • %s %d", entry.Owner, m.t("harness.review_ready_short"), len(entry.ReviewReady), m.t("harness.promote_ready_short"), len(entry.PromotionReady)), 52))
 		}
 		return items
 	case harnessSectionReview:
@@ -744,7 +759,7 @@ func (m *Model) harnessPanelItems() []string {
 	case harnessSectionRollouts:
 		items := make([]string, 0, len(panel.rollouts))
 		for _, rollout := range panel.rollouts {
-			items = append(items, truncateString(fmt.Sprintf("%s • %s", rollout.RolloutID, harnessRolloutLabel(rollout)), 52))
+			items = append(items, truncateString(fmt.Sprintf("%s • %s", rollout.RolloutID, harnessRolloutLabel(m.currentLanguage(), rollout)), 52))
 		}
 		return items
 	default:
@@ -753,8 +768,8 @@ func (m *Model) harnessPanelItems() []string {
 }
 
 func (m Model) harnessPanelLeftWidth(totalWidth int) int {
-	longest := len("Views")
-	for _, title := range harnessSectionTitles {
+	longest := len(m.t("harness.views"))
+	for _, title := range harnessSectionTitles(m.currentLanguage()) {
 		if len(title) > longest {
 			longest = len(title)
 		}
@@ -783,28 +798,28 @@ func (m *Model) harnessPanelPreview() string {
 		return ""
 	}
 	if panel.loadErr != "" {
-		return "Harness is not initialized in this project yet.\n\nPress Enter or i to run harness init in the current repository."
+		return m.t("harness.preview.not_initialized")
 	}
 	switch panel.selectedSection {
 	case harnessSectionInit:
-		return renderHarnessProjectSummary(panel.project, panel.cfg)
+		return renderHarnessProjectSummary(m.currentLanguage(), panel.project, panel.cfg)
 	case harnessSectionCheck:
 		if panel.lastCheck != nil {
 			return harness.FormatCheckReport(panel.lastCheck)
 		}
-		return "Run harness checks against the current project.\n\nEnter: run required file/content/context checks plus configured validation commands."
+		return m.t("harness.preview.check")
 	case harnessSectionDoctor:
-		return renderHarnessDoctorPreview(panel.doctor)
+		return renderHarnessDoctorPreview(m.currentLanguage(), panel.doctor)
 	case harnessSectionMonitor:
-		return renderHarnessMonitorPreview(panel.project, panel.monitor)
+		return renderHarnessMonitorPreview(m.currentLanguage(), panel.project, panel.monitor)
 	case harnessSectionGC:
 		if panel.lastGC != nil {
 			return harness.FormatGCReport(panel.lastGC)
 		}
-		return "Run harness garbage collection.\n\nEnter: archive stale tasks, abandon stale blocked/running work, prune old logs, and remove orphaned worktrees."
+		return m.t("harness.preview.gc")
 	case harnessSectionContexts:
 		if summary := m.selectedHarnessContextSummary(); summary != nil {
-			return renderHarnessContextSummary(summary)
+			return renderHarnessContextSummary(m.currentLanguage(), summary)
 		}
 		return harness.FormatContextReport(panel.contexts)
 	case harnessSectionTasks:
@@ -813,21 +828,21 @@ func (m *Model) harnessPanelPreview() string {
 			if panel.project != nil {
 				root = panel.project.RootDir
 			}
-			return renderHarnessTask(task, root)
+			return renderHarnessTask(m.currentLanguage(), task, root)
 		}
 		return harness.FormatTaskList(panel.tasks)
 	case harnessSectionQueue:
-		return renderHarnessDraftPreview("Queue", panel.actionInput.Value(), "Type the harness goal here, then press Enter to queue it.")
+		return renderHarnessDraftPreview(m.currentLanguage(), m.t("harness.section.queue"), panel.actionInput.Value(), m.t("harness.preview.queue_help"))
 	case harnessSectionRun:
-		return renderHarnessDraftPreview("Run", panel.actionInput.Value(), "Type the harness goal here, then press Enter to start the run.")
+		return renderHarnessDraftPreview(m.currentLanguage(), m.t("harness.section.run"), panel.actionInput.Value(), m.t("harness.preview.run_help"))
 	case harnessSectionRunQueued:
 		if panel.lastQueueRun != nil {
 			return harness.FormatQueueSummary(panel.lastQueueRun)
 		}
-		return renderHarnessRunQueuedPreview(panel.tasks)
+		return renderHarnessRunQueuedPreview(m.currentLanguage(), panel.tasks)
 	case harnessSectionInbox:
 		if entry := m.selectedHarnessInboxEntry(); entry != nil {
-			return renderHarnessInboxEntry(entry)
+			return renderHarnessInboxEntry(m.currentLanguage(), entry)
 		}
 		return harness.FormatOwnerInbox(panel.inbox)
 	case harnessSectionReview:
@@ -858,36 +873,36 @@ func (m *Model) harnessPanelHints() string {
 		return ""
 	}
 	if panel.loadErr != "" {
-		return "Enter/i init harness • r refresh • Esc close"
+		return m.t("harness.hints.unavailable")
 	}
-	hints := []string{"j/k move", "Tab switch", "r refresh", "Esc close"}
+	hints := []string{m.t("harness.hints.move"), m.t("harness.hints.tab"), m.t("harness.hints.refresh"), m.t("harness.hints.close")}
 	switch panel.selectedSection {
 	case harnessSectionCheck:
-		hints = append(hints, "Enter run checks")
+		hints = append(hints, m.t("harness.hints.check"))
 	case harnessSectionMonitor:
-		hints = append(hints, "Enter refresh snapshot")
+		hints = append(hints, m.t("harness.hints.monitor"))
 	case harnessSectionGC:
-		hints = append(hints, "Enter run gc")
+		hints = append(hints, m.t("harness.hints.gc"))
 	case harnessSectionQueue:
-		hints = append(hints, "type goal", "Enter queue", "Tab focus input")
+		hints = append(hints, m.t("harness.hints.type_goal"), m.t("harness.hints.queue"), m.t("harness.hints.focus_input"))
 	case harnessSectionRun:
-		hints = append(hints, "type goal", "Enter run", "Tab focus input")
+		hints = append(hints, m.t("harness.hints.type_goal"), m.t("harness.hints.run"), m.t("harness.hints.focus_input"))
 	case harnessSectionTasks:
 		if task := m.selectedHarnessTask(); task != nil && task.Status == harness.TaskFailed {
-			hints = append(hints, "Enter rerun failed")
+			hints = append(hints, m.t("harness.hints.rerun"))
 		}
 	case harnessSectionRunQueued:
-		hints = append(hints, "Enter next", "a all", "f retry-failed", "s resume")
+		hints = append(hints, m.t("harness.hints.next"), m.t("harness.hints.all"), m.t("harness.hints.retry_failed"), m.t("harness.hints.resume"))
 	case harnessSectionInbox:
-		hints = append(hints, "p promote owner", "f retry owner")
+		hints = append(hints, m.t("harness.hints.promote_owner"), m.t("harness.hints.retry_owner"))
 	case harnessSectionReview:
-		hints = append(hints, "Enter approve", "x reject")
+		hints = append(hints, m.t("harness.hints.approve"), m.t("harness.hints.reject"))
 	case harnessSectionPromote:
-		hints = append(hints, "Enter promote")
+		hints = append(hints, m.t("harness.hints.promote"))
 	case harnessSectionRelease:
-		hints = append(hints, "Enter apply batch")
+		hints = append(hints, m.t("harness.hints.apply_batch"))
 	case harnessSectionRollouts:
-		hints = append(hints, "Enter advance", "g approve gate", "p pause/resume", "x abort")
+		hints = append(hints, m.t("harness.hints.advance"), m.t("harness.hints.approve_gate"), m.t("harness.hints.pause_resume"), m.t("harness.hints.abort"))
 	}
 	return strings.Join(hints, " • ")
 }
@@ -940,221 +955,219 @@ func (m *Model) selectedHarnessRollout() *harness.ReleaseWavePlan {
 	return panel.rollouts[panel.selectedItem]
 }
 
-func renderHarnessContextSummary(summary *harness.ContextSummary) string {
+func renderHarnessContextSummary(lang Language, summary *harness.ContextSummary) string {
 	if summary == nil {
-		return "No harness context selected."
+		return tr(lang, "harness.preview.no_context")
 	}
-	label := firstNonEmptyHarness(summary.Path, summary.Name, "unscoped")
+	label := firstNonEmptyHarness(summary.Path, summary.Name, tr(lang, "harness.unscoped"))
 	var b strings.Builder
-	fmt.Fprintf(&b, "Context: %s\n", label)
+	fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.context_title"), label)
 	if summary.Name != "" && summary.Name != label {
-		fmt.Fprintf(&b, "name: %s\n", summary.Name)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.name"), summary.Name)
 	}
 	if summary.Description != "" {
-		fmt.Fprintf(&b, "description: %s\n", summary.Description)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.description"), summary.Description)
 	}
 	if summary.Owner != "" {
-		fmt.Fprintf(&b, "owner: %s\n", summary.Owner)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.owner"), summary.Owner)
 	}
-	fmt.Fprintf(&b, "commands: %d\n", summary.CommandCount)
-	fmt.Fprintf(&b, "tasks: total=%d queued=%d running=%d blocked=%d failed=%d review_ready=%d promotion_ready=%d release_ready=%d\n",
+	fmt.Fprintf(&b, "%s: %d\n", tr(lang, "harness.label.commands"), summary.CommandCount)
+	fmt.Fprintf(&b, "%s: total=%d queued=%d running=%d blocked=%d failed=%d review_ready=%d promotion_ready=%d release_ready=%d\n",
+		tr(lang, "harness.label.tasks"),
 		summary.TaskCount, summary.QueuedTasks, summary.RunningTasks, summary.BlockedTasks, summary.FailedTasks, summary.ReviewReady, summary.PromotionReady, summary.ReleaseReady)
-	fmt.Fprintf(&b, "rollouts: active=%d planned=%d paused=%d aborted=%d completed=%d\n",
+	fmt.Fprintf(&b, "%s: active=%d planned=%d paused=%d aborted=%d completed=%d\n", tr(lang, "harness.label.rollouts"),
 		summary.ActiveRollouts, summary.PlannedRollouts, summary.PausedRollouts, summary.AbortedRollouts, summary.CompletedRollouts)
-	fmt.Fprintf(&b, "gates: pending=%d approved=%d rejected=%d\n", summary.PendingGates, summary.ApprovedGates, summary.RejectedGates)
+	fmt.Fprintf(&b, "%s: pending=%d approved=%d rejected=%d\n", tr(lang, "harness.label.gates"), summary.PendingGates, summary.ApprovedGates, summary.RejectedGates)
 	if summary.LatestTask != nil {
-		fmt.Fprintf(&b, "latest: %s [%s] %s\n", summary.LatestTask.ID, summary.LatestTask.Status, summary.LatestTask.Goal)
+		fmt.Fprintf(&b, "%s: %s [%s] %s\n", tr(lang, "harness.label.latest"), summary.LatestTask.ID, summary.LatestTask.Status, summary.LatestTask.Goal)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func renderHarnessTask(task *harness.Task, root string) string {
+func renderHarnessTask(lang Language, task *harness.Task, root string) string {
 	if task == nil {
-		return "No harness task selected."
+		return tr(lang, "harness.preview.no_task")
 	}
 	var b strings.Builder
-	b.WriteString("Harness task\n")
-	fmt.Fprintf(&b, "id: %s\n", task.ID)
-	fmt.Fprintf(&b, "status: %s\n", task.Status)
+	b.WriteString(tr(lang, "harness.task_title") + "\n")
+	fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.id"), task.ID)
+	fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.status"), task.Status)
 	if task.Goal != "" {
-		b.WriteString("goal:\n")
+		b.WriteString(tr(lang, "harness.label.goal") + ":\n")
 		fmt.Fprintf(&b, "  %s\n", strings.TrimSpace(task.Goal))
 	}
 	if task.Attempt > 0 {
-		fmt.Fprintf(&b, "attempts: %d\n", task.Attempt)
+		fmt.Fprintf(&b, "%s: %d\n", tr(lang, "harness.label.attempts"), task.Attempt)
 	}
 	if len(task.DependsOn) > 0 {
-		fmt.Fprintf(&b, "depends_on: %s\n", strings.Join(task.DependsOn, ", "))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.depends_on"), strings.Join(task.DependsOn, ", "))
 	}
 	if task.ContextName != "" || task.ContextPath != "" {
 		label := firstNonEmptyHarness(task.ContextName, harnessPanelPathLabel(root, task.ContextPath))
-		fmt.Fprintf(&b, "context: %s\n", label)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.context"), label)
 	}
 	if task.WorkspacePath != "" {
-		fmt.Fprintf(&b, "workspace: %s\n", harnessPanelPathLabel(root, task.WorkspacePath))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.workspace"), harnessPanelPathLabel(root, task.WorkspacePath))
 	}
 	if task.BranchName != "" {
-		fmt.Fprintf(&b, "branch: %s\n", task.BranchName)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.branch"), task.BranchName)
 	}
 	if task.WorkerID != "" {
-		status := firstNonEmptyHarness(task.WorkerStatus, "unknown")
+		status := firstNonEmptyHarness(task.WorkerStatus, tr(lang, "harness.unknown"))
 		if strings.TrimSpace(task.WorkerPhase) != "" && task.WorkerPhase != status {
-			fmt.Fprintf(&b, "worker: %s [%s, %s]\n", task.WorkerID, status, task.WorkerPhase)
+			fmt.Fprintf(&b, "%s: %s [%s, %s]\n", tr(lang, "harness.label.worker"), task.WorkerID, status, task.WorkerPhase)
 		} else {
-			fmt.Fprintf(&b, "worker: %s [%s]\n", task.WorkerID, status)
+			fmt.Fprintf(&b, "%s: %s [%s]\n", tr(lang, "harness.label.worker"), task.WorkerID, status)
 		}
 	}
 	if task.WorkerProgress != "" {
-		fmt.Fprintf(&b, "progress: %s\n", compactSingleLine(task.WorkerProgress))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.progress"), compactSingleLine(task.WorkerProgress))
 	}
 	if task.VerificationStatus != "" {
-		fmt.Fprintf(&b, "verification: %s\n", task.VerificationStatus)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.verification"), task.VerificationStatus)
 	}
 	if len(task.ChangedFiles) > 0 {
-		fmt.Fprintf(&b, "changed_files: %d\n", len(task.ChangedFiles))
+		fmt.Fprintf(&b, "%s: %d\n", tr(lang, "harness.label.changed_files"), len(task.ChangedFiles))
 	}
 	if task.VerificationReportPath != "" {
-		fmt.Fprintf(&b, "delivery_report: %s\n", harnessPanelPathLabel(root, task.VerificationReportPath))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.delivery_report"), harnessPanelPathLabel(root, task.VerificationReportPath))
 	}
 	if task.LogPath != "" {
-		fmt.Fprintf(&b, "log: %s\n", harnessPanelPathLabel(root, task.LogPath))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.log"), harnessPanelPathLabel(root, task.LogPath))
 	}
 	if task.ReviewStatus != "" {
-		fmt.Fprintf(&b, "review: %s\n", task.ReviewStatus)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.review"), task.ReviewStatus)
 	}
 	if task.ReviewNotes != "" {
-		fmt.Fprintf(&b, "review_notes: %s\n", compactSingleLine(task.ReviewNotes))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.review_notes"), compactSingleLine(task.ReviewNotes))
 	}
 	if task.PromotionStatus != "" {
-		fmt.Fprintf(&b, "promotion: %s\n", task.PromotionStatus)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.promotion"), task.PromotionStatus)
 	}
 	if task.PromotionNotes != "" {
-		fmt.Fprintf(&b, "promotion_notes: %s\n", compactSingleLine(task.PromotionNotes))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.promotion_notes"), compactSingleLine(task.PromotionNotes))
 	}
 	if task.ReleaseBatchID != "" {
-		fmt.Fprintf(&b, "release_batch: %s\n", task.ReleaseBatchID)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.release_batch"), task.ReleaseBatchID)
 	}
 	if task.ReleaseNotes != "" {
-		fmt.Fprintf(&b, "release_notes: %s\n", compactSingleLine(task.ReleaseNotes))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.release_notes"), compactSingleLine(task.ReleaseNotes))
 	}
 	if task.Error != "" {
-		fmt.Fprintf(&b, "error: %s\n", compactSingleLine(task.Error))
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.error"), compactSingleLine(task.Error))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func renderHarnessProjectSummary(project *harness.Project, cfg *harness.Config) string {
+func renderHarnessProjectSummary(lang Language, project *harness.Project, cfg *harness.Config) string {
 	if project == nil {
-		return "Harness is not initialized in this project yet."
+		return tr(lang, "harness.preview.project_not_initialized")
 	}
 	var b strings.Builder
-	b.WriteString("Harness is initialized.\n")
-	fmt.Fprintf(&b, "\nrepo: %s\n", harnessPanelPathLabel(project.RootDir, project.RootDir))
-	fmt.Fprintf(&b, "config: %s\n", harnessPanelPathLabel(project.RootDir, project.ConfigPath))
+	b.WriteString(tr(lang, "harness.preview.project_initialized") + "\n")
+	fmt.Fprintf(&b, "\n%s: %s\n", tr(lang, "harness.label.repo"), harnessPanelPathLabel(project.RootDir, project.RootDir))
+	fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.config"), harnessPanelPathLabel(project.RootDir, project.ConfigPath))
 	if cfg != nil && strings.TrimSpace(cfg.Project.Name) != "" {
-		fmt.Fprintf(&b, "project: %s\n", cfg.Project.Name)
+		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.project"), cfg.Project.Name)
 	}
-	b.WriteString("\nUse /harness to browse and operate the control plane.")
+	b.WriteString("\n" + tr(lang, "harness.preview.project_help"))
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func renderHarnessDoctorPreview(report *harness.DoctorReport) string {
+func renderHarnessDoctorPreview(lang Language, report *harness.DoctorReport) string {
 	if report == nil {
-		return "No harness doctor report."
+		return tr(lang, "harness.preview.no_doctor")
 	}
 	var b strings.Builder
-	b.WriteString("Harness doctor\n")
-	fmt.Fprintf(&b, "- repo: %s\n", harnessPanelPathLabel(report.Project.RootDir, report.Project.RootDir))
-	fmt.Fprintf(&b, "- config: %s\n", harnessPanelPathLabel(report.Project.RootDir, report.Project.ConfigPath))
+	b.WriteString(tr(lang, "harness.doctor_title") + "\n")
+	fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.repo"), harnessPanelPathLabel(report.Project.RootDir, report.Project.RootDir))
+	fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.config"), harnessPanelPathLabel(report.Project.RootDir, report.Project.ConfigPath))
 	if report.Config != nil && strings.TrimSpace(report.Config.Project.Name) != "" {
-		fmt.Fprintf(&b, "- project: %s\n", report.Config.Project.Name)
+		fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.project"), report.Config.Project.Name)
 	}
 	if report.Structural != nil {
-		status := "ok"
+		status := tr(lang, "harness.status.ok")
 		if !report.Structural.Passed {
-			status = "needs attention"
+			status = tr(lang, "harness.status.needs_attention")
 		}
-		fmt.Fprintf(&b, "- structure: %s\n", status)
+		fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.structure"), status)
 	}
 	if report.Contexts > 0 {
-		fmt.Fprintf(&b, "- contexts: %d\n", report.Contexts)
+		fmt.Fprintf(&b, "- %s: %d\n", tr(lang, "harness.label.contexts"), report.Contexts)
 	}
-	fmt.Fprintf(&b, "- tasks: total=%d running=%d blocked=%d failed=%d\n", report.TotalTasks, report.RunningTasks, report.BlockedTasks, report.FailedTasks)
-	fmt.Fprintf(&b, "- workers: backed=%d drift=%d\n", report.WorkerTasks, report.WorkerDrift)
-	fmt.Fprintf(&b, "- workflow: review_ready=%d promotion_ready=%d release_ready=%d retryable=%d\n", report.ReviewReady, report.PromotionReady, report.ReleaseReady, report.Retryable)
-	fmt.Fprintf(&b, "- quality: verification_failed=%d stale_blocked=%d\n", report.VerificationFailed, report.StaleBlocked)
-	fmt.Fprintf(&b, "- worktrees: orphaned=%d\n", report.OrphanedWorktrees)
+	fmt.Fprintf(&b, "- %s: total=%d running=%d blocked=%d failed=%d\n", tr(lang, "harness.label.tasks"), report.TotalTasks, report.RunningTasks, report.BlockedTasks, report.FailedTasks)
+	fmt.Fprintf(&b, "- %s: backed=%d drift=%d\n", tr(lang, "harness.label.workers"), report.WorkerTasks, report.WorkerDrift)
+	fmt.Fprintf(&b, "- %s: review_ready=%d promotion_ready=%d release_ready=%d retryable=%d\n", tr(lang, "harness.label.workflow"), report.ReviewReady, report.PromotionReady, report.ReleaseReady, report.Retryable)
+	fmt.Fprintf(&b, "- %s: verification_failed=%d stale_blocked=%d\n", tr(lang, "harness.label.quality"), report.VerificationFailed, report.StaleBlocked)
+	fmt.Fprintf(&b, "- %s: orphaned=%d\n", tr(lang, "harness.label.worktrees"), report.OrphanedWorktrees)
 	if report.Rollouts > 0 {
-		fmt.Fprintf(&b, "- rollouts: total=%d active=%d planned=%d paused=%d aborted=%d completed=%d\n", report.Rollouts, report.ActiveRollouts, report.PlannedRollouts, report.PausedRollouts, report.AbortedRollouts, report.CompletedRollouts)
-		fmt.Fprintf(&b, "- gates: pending=%d approved=%d rejected=%d\n", report.PendingGates, report.ApprovedGates, report.RejectedGates)
+		fmt.Fprintf(&b, "- %s: total=%d active=%d planned=%d paused=%d aborted=%d completed=%d\n", tr(lang, "harness.label.rollouts"), report.Rollouts, report.ActiveRollouts, report.PlannedRollouts, report.PausedRollouts, report.AbortedRollouts, report.CompletedRollouts)
+		fmt.Fprintf(&b, "- %s: pending=%d approved=%d rejected=%d\n", tr(lang, "harness.label.gates"), report.PendingGates, report.ApprovedGates, report.RejectedGates)
 	}
 	if report.LastTask != nil {
-		fmt.Fprintf(&b, "\nLatest task\n- %s [%s]\n", report.LastTask.ID, report.LastTask.Status)
+		fmt.Fprintf(&b, "\n%s\n- %s [%s]\n", tr(lang, "harness.latest_task"), report.LastTask.ID, report.LastTask.Status)
 		if label := firstNonEmptyHarness(report.LastTask.ContextName, report.LastTask.ContextPath); label != "" {
-			fmt.Fprintf(&b, "- context: %s\n", label)
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.context"), label)
 		}
 		if report.LastTask.WorkerID != "" {
-			fmt.Fprintf(&b, "- worker: %s [%s]\n", report.LastTask.WorkerID, report.LastTask.WorkerStatus)
+			fmt.Fprintf(&b, "- %s: %s [%s]\n", tr(lang, "harness.label.worker"), report.LastTask.WorkerID, report.LastTask.WorkerStatus)
 		}
 		if report.LastTask.WorkerProgress != "" {
-			fmt.Fprintf(&b, "- progress: %s\n", compactSingleLine(report.LastTask.WorkerProgress))
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.progress"), compactSingleLine(report.LastTask.WorkerProgress))
 		}
 		if report.LastTask.VerificationStatus != "" {
-			fmt.Fprintf(&b, "- verification: %s\n", report.LastTask.VerificationStatus)
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.verification"), report.LastTask.VerificationStatus)
 		}
 		if report.LastTask.ReviewStatus != "" {
-			fmt.Fprintf(&b, "- review: %s\n", report.LastTask.ReviewStatus)
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.review"), report.LastTask.ReviewStatus)
 		}
 		if report.LastTask.PromotionStatus != "" {
-			fmt.Fprintf(&b, "- promotion: %s\n", report.LastTask.PromotionStatus)
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.promotion"), report.LastTask.PromotionStatus)
 		}
 		if report.LastTask.ReleaseBatchID != "" {
-			fmt.Fprintf(&b, "- release batch: %s\n", report.LastTask.ReleaseBatchID)
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.release_batch_human"), report.LastTask.ReleaseBatchID)
 		}
 		if report.LastTask.LogPath != "" {
-			fmt.Fprintf(&b, "- log: %s\n", harnessPanelPathLabel(report.Project.RootDir, report.LastTask.LogPath))
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.log"), harnessPanelPathLabel(report.Project.RootDir, report.LastTask.LogPath))
 		}
 		if report.LastTask.VerificationReportPath != "" {
-			fmt.Fprintf(&b, "- delivery report: %s\n", harnessPanelPathLabel(report.Project.RootDir, report.LastTask.VerificationReportPath))
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.delivery_report_human"), harnessPanelPathLabel(report.Project.RootDir, report.LastTask.VerificationReportPath))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func renderHarnessMonitorPreview(project *harness.Project, report *harness.MonitorReport) string {
+func renderHarnessMonitorPreview(lang Language, project *harness.Project, report *harness.MonitorReport) string {
 	if report == nil {
-		return "Harness monitor unavailable."
+		return tr(lang, "harness.preview.monitor_unavailable")
 	}
 	root := ""
 	if project != nil {
 		root = project.RootDir
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Harness monitor\n- snapshot: %s\n- events: %s\n",
-		harnessPanelPathLabel(root, report.SnapshotPath),
-		harnessPanelPathLabel(root, report.EventLogPath),
-	)
-	fmt.Fprintf(&b, "- tasks: total=%d queued=%d running=%d blocked=%d failed=%d\n",
+	fmt.Fprintf(&b, "%s\n- %s: %s\n- %s: %s\n", tr(lang, "harness.monitor_title"), tr(lang, "harness.label.snapshot"), harnessPanelPathLabel(root, report.SnapshotPath), tr(lang, "harness.label.events"), harnessPanelPathLabel(root, report.EventLogPath))
+	fmt.Fprintf(&b, "- %s: total=%d queued=%d running=%d blocked=%d failed=%d\n", tr(lang, "harness.label.tasks"),
 		report.TaskTotals.Total, report.TaskTotals.Queued, report.TaskTotals.Running, report.TaskTotals.Blocked, report.TaskTotals.Failed)
-	fmt.Fprintf(&b, "- workflow: review_pending=%d promotion_ready=%d released=%d active_workers=%d\n",
+	fmt.Fprintf(&b, "- %s: review_pending=%d promotion_ready=%d released=%d active_workers=%d\n", tr(lang, "harness.label.workflow"),
 		report.TaskTotals.ReviewPending, report.TaskTotals.PromotionReady, report.TaskTotals.Released, report.TaskTotals.ActiveWorkers)
-	fmt.Fprintf(&b, "- rollouts: batches=%d active=%d planned=%d paused=%d aborted=%d completed=%d\n",
+	fmt.Fprintf(&b, "- %s: batches=%d active=%d planned=%d paused=%d aborted=%d completed=%d\n", tr(lang, "harness.label.rollouts"),
 		report.RolloutTotals.Batches, report.RolloutTotals.Active, report.RolloutTotals.Planned, report.RolloutTotals.Paused, report.RolloutTotals.Aborted, report.RolloutTotals.Completed)
-	fmt.Fprintf(&b, "- gates: pending=%d approved=%d rejected=%d\n",
+	fmt.Fprintf(&b, "- %s: pending=%d approved=%d rejected=%d\n", tr(lang, "harness.label.gates"),
 		report.RolloutTotals.GatesPending, report.RolloutTotals.GatesApproved, report.RolloutTotals.GatesRejected)
 	if len(report.FocusTasks) > 0 {
 		task := report.FocusTasks[0]
-		fmt.Fprintf(&b, "\nFocus\n- %s [%s]\n", task.ID, firstNonEmptyHarness(task.Status, "unknown"))
+		fmt.Fprintf(&b, "\n%s\n- %s [%s]\n", tr(lang, "harness.focus"), task.ID, firstNonEmptyHarness(task.Status, tr(lang, "harness.unknown")))
 		if task.Goal != "" {
-			fmt.Fprintf(&b, "- goal: %s\n", compactSingleLine(task.Goal))
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.goal"), compactSingleLine(task.Goal))
 		}
 		if context := firstNonEmptyHarness(task.ContextPath, task.ContextName); context != "" {
-			fmt.Fprintf(&b, "- context: %s\n", context)
+			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.context"), context)
 		}
 	}
 	if len(report.RecentEvents) > 0 {
 		event := report.RecentEvents[0]
-		fmt.Fprintf(&b, "\nLatest event\n- %s %s\n", event.RecordedAt.Format("15:04:05"), event.Kind)
+		fmt.Fprintf(&b, "\n%s\n- %s %s\n", tr(lang, "harness.latest_event"), event.RecordedAt.Format("15:04:05"), event.Kind)
 		if summary := strings.TrimSpace(event.Summary); summary != "" {
 			fmt.Fprintf(&b, "- %s\n", compactSingleLine(summary))
 		}
@@ -1164,11 +1177,11 @@ func renderHarnessMonitorPreview(project *harness.Project, report *harness.Monit
 
 func (m Model) renderHarnessPanelNavLines(width, height int) []string {
 	panel := m.harnessPanel
-	lines := []string{"Views", ""}
+	lines := []string{m.t("harness.views"), ""}
 	if panel == nil {
 		return normalizeHarnessPanelLines(lines, height)
 	}
-	lines = append(lines, renderHarnessPlainList(harnessSectionTitles, panel.selectedSection, panel.focus == harnessPanelFocusSection, width, max(1, height-len(lines)))...)
+	lines = append(lines, renderHarnessPlainList(harnessSectionTitles(m.currentLanguage()), panel.selectedSection, panel.focus == harnessPanelFocusSection, width, max(1, height-len(lines)), m.currentLanguage())...)
 	return normalizeHarnessPanelLines(lines, height)
 }
 
@@ -1177,16 +1190,16 @@ func (m Model) renderHarnessPanelMainLines(width, height int) []string {
 	if panel == nil {
 		return normalizeHarnessPanelLines(nil, height)
 	}
-	lines := []string{harnessSectionTitles[panel.selectedSection], ""}
+	lines := []string{harnessSectionTitles(m.currentLanguage())[panel.selectedSection], ""}
 	items := m.harnessPanelItems()
 	if len(items) > 0 {
-		lines = append(lines, "Items")
-		lines = append(lines, renderHarnessPlainList(items, panel.selectedItem, panel.focus == harnessPanelFocusItem, width, 6)...)
+		lines = append(lines, m.t("harness.items"))
+		lines = append(lines, renderHarnessPlainList(items, panel.selectedItem, panel.focus == harnessPanelFocusItem, width, 6, m.currentLanguage())...)
 		lines = append(lines, "")
 	}
-	lines = append(lines, "Action")
+	lines = append(lines, m.t("harness.action"))
 	lines = append(lines, m.renderHarnessActionLines(width)...)
-	lines = append(lines, "", "Details")
+	lines = append(lines, "", m.t("harness.details"))
 
 	remaining := height - len(lines)
 	if remaining < 4 {
@@ -1204,11 +1217,11 @@ func (m Model) renderHarnessActionLines(width int) []string {
 	if harnessPanelNeedsInput(panel.selectedSection) {
 		return []string{
 			renderHarnessPanelInput(panel.actionInput, panel.focus == harnessPanelFocusInput, width),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(truncateString(harnessPanelPrimaryHint(panel.selectedSection), width)),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(truncateString(harnessPanelPrimaryHint(panel.selectedSection, m.currentLanguage()), width)),
 		}
 	}
 	return []string{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(truncateString(harnessPanelPrimaryHint(panel.selectedSection), width)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(truncateString(harnessPanelPrimaryHint(panel.selectedSection, m.currentLanguage()), width)),
 	}
 }
 
@@ -1227,9 +1240,9 @@ func (m Model) renderHarnessPanelFooterLines(width int) []string {
 	return lines
 }
 
-func renderHarnessPlainList(items []string, selected int, focused bool, width, maxLines int) []string {
+func renderHarnessPlainList(items []string, selected int, focused bool, width, maxLines int, lang Language) []string {
 	if len(items) == 0 || maxLines <= 0 {
-		return []string{"  (none)"}
+		return []string{"  " + tr(lang, "harness.none")}
 	}
 	start, end := harnessPanelListWindow(len(items), selected, maxLines)
 	lines := make([]string, 0, end-start)
@@ -1357,46 +1370,46 @@ func hardWrapHarnessPanelLine(line string, width int) []string {
 	return out
 }
 
-func harnessPanelPrimaryHint(section int) string {
+func harnessPanelPrimaryHint(section int, lang Language) string {
 	switch section {
 	case harnessSectionCheck:
-		return "Press Enter to run checks."
+		return tr(lang, "harness.hint.primary.check")
 	case harnessSectionMonitor:
-		return "Press Enter to refresh the monitor snapshot."
+		return tr(lang, "harness.hint.primary.monitor")
 	case harnessSectionGC:
-		return "Press Enter to run garbage collection."
+		return tr(lang, "harness.hint.primary.gc")
 	case harnessSectionQueue:
-		return "Type a goal, then press Enter to queue it."
+		return tr(lang, "harness.hint.primary.queue")
 	case harnessSectionRun:
-		return "Type a goal, then press Enter to start the run."
+		return tr(lang, "harness.hint.primary.run")
 	case harnessSectionTasks:
-		return "Press Enter to rerun the selected failed task."
+		return tr(lang, "harness.hint.primary.tasks")
 	case harnessSectionRunQueued:
-		return "Press Enter for next; a runs all; f retries failed; s resumes interrupted."
+		return tr(lang, "harness.hint.primary.run_queued")
 	case harnessSectionInbox:
-		return "Press p to promote this owner or f to retry this owner."
+		return tr(lang, "harness.hint.primary.inbox")
 	case harnessSectionReview:
-		return "Press Enter to approve or x to reject."
+		return tr(lang, "harness.hint.primary.review")
 	case harnessSectionPromote:
-		return "Press Enter to promote the selected task."
+		return tr(lang, "harness.hint.primary.promote")
 	case harnessSectionRelease:
-		return "Press Enter to apply the current release batch."
+		return tr(lang, "harness.hint.primary.release")
 	case harnessSectionRollouts:
-		return "Press Enter to advance; g approves gate; p pauses/resumes; x aborts."
+		return tr(lang, "harness.hint.primary.rollouts")
 	default:
-		return "No inline input needed for this section."
+		return tr(lang, "harness.hint.primary.none")
 	}
 }
 
-func renderHarnessDraftPreview(label, draft, help string) string {
+func renderHarnessDraftPreview(lang Language, label, draft, help string) string {
 	draft = strings.TrimSpace(draft)
 	if draft == "" {
-		draft = "(input box is empty)"
+		draft = tr(lang, "harness.input_empty")
 	}
-	return fmt.Sprintf("%s target:\n%s\n\n%s", label, draft, help)
+	return fmt.Sprintf("%s %s:\n%s\n\n%s", label, tr(lang, "harness.label.target"), draft, help)
 }
 
-func renderHarnessRunQueuedPreview(tasks []*harness.Task) string {
+func renderHarnessRunQueuedPreview(lang Language, tasks []*harness.Task) string {
 	var queued, running, blocked, failed int
 	for _, task := range tasks {
 		if task == nil {
@@ -1413,24 +1426,24 @@ func renderHarnessRunQueuedPreview(tasks []*harness.Task) string {
 			failed++
 		}
 	}
-	return fmt.Sprintf("Queue status:\nqueued=%d running=%d blocked=%d failed=%d\n\nEnter runs the next runnable task.\na runs all runnable tasks.\nf retries failed tasks.\ns resumes interrupted tasks.", queued, running, blocked, failed)
+	return tr(lang, "harness.preview.run_queued", queued, running, blocked, failed)
 }
 
-func renderHarnessInboxEntry(entry *harness.OwnerInboxEntry) string {
+func renderHarnessInboxEntry(lang Language, entry *harness.OwnerInboxEntry) string {
 	if entry == nil {
-		return "No harness owner selected."
+		return tr(lang, "harness.preview.no_owner")
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Owner: %s\n", entry.Owner)
-	fmt.Fprintf(&b, "review_ready: %d\n", len(entry.ReviewReady))
-	fmt.Fprintf(&b, "promotion_ready: %d\n", len(entry.PromotionReady))
-	fmt.Fprintf(&b, "retryable: %d\n", len(entry.Retryable))
-	fmt.Fprintf(&b, "rollouts: active=%d planned=%d paused=%d aborted=%d completed=%d\n",
+	fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.owner_title"), entry.Owner)
+	fmt.Fprintf(&b, "%s: %d\n", tr(lang, "harness.label.review_ready"), len(entry.ReviewReady))
+	fmt.Fprintf(&b, "%s: %d\n", tr(lang, "harness.label.promotion_ready"), len(entry.PromotionReady))
+	fmt.Fprintf(&b, "%s: %d\n", tr(lang, "harness.label.retryable"), len(entry.Retryable))
+	fmt.Fprintf(&b, "%s: active=%d planned=%d paused=%d aborted=%d completed=%d\n", tr(lang, "harness.label.rollouts"),
 		entry.ActiveRollouts, entry.PlannedRollouts, entry.PausedRollouts, entry.AbortedRollouts, entry.CompletedRollouts)
-	fmt.Fprintf(&b, "gates: pending=%d approved=%d rejected=%d\n", entry.PendingGates, entry.ApprovedGates, entry.RejectedGates)
-	appendHarnessTaskGroup(&b, "review", entry.ReviewReady)
-	appendHarnessTaskGroup(&b, "promotion", entry.PromotionReady)
-	appendHarnessTaskGroup(&b, "retry", entry.Retryable)
+	fmt.Fprintf(&b, "%s: pending=%d approved=%d rejected=%d\n", tr(lang, "harness.label.gates"), entry.PendingGates, entry.ApprovedGates, entry.RejectedGates)
+	appendHarnessTaskGroup(&b, tr(lang, "harness.group.review"), entry.ReviewReady)
+	appendHarnessTaskGroup(&b, tr(lang, "harness.group.promotion"), entry.PromotionReady)
+	appendHarnessTaskGroup(&b, tr(lang, "harness.group.retry"), entry.Retryable)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -1446,9 +1459,9 @@ func appendHarnessTaskGroup(b *strings.Builder, label string, tasks []*harness.T
 	}
 }
 
-func harnessRolloutLabel(rollout *harness.ReleaseWavePlan) string {
+func harnessRolloutLabel(lang Language, rollout *harness.ReleaseWavePlan) string {
 	if rollout == nil || len(rollout.Groups) == 0 {
-		return "no waves"
+		return tr(lang, "harness.no_waves")
 	}
 	counts := map[string]int{}
 	for _, group := range rollout.Groups {
@@ -1462,22 +1475,22 @@ func harnessRolloutLabel(rollout *harness.ReleaseWavePlan) string {
 			return fmt.Sprintf("%s x%d", status, counts[status])
 		}
 	}
-	return "mixed"
+	return tr(lang, "harness.mixed")
 }
 
-func queueRunMessage(summary *harness.RunQueueSummary, opts harness.QueueRunOptions) string {
+func queueRunMessage(lang Language, summary *harness.RunQueueSummary, opts harness.QueueRunOptions) string {
 	if summary == nil {
-		return "No queued harness tasks were executed."
+		return tr(lang, "harness.message.no_queued_executed")
 	}
 	switch {
 	case opts.RetryFailed:
-		return fmt.Sprintf("Retried %d failed queued task(s).", len(summary.Executed))
+		return tr(lang, "harness.message.queue_retried", len(summary.Executed))
 	case opts.ResumeInterrupted:
-		return fmt.Sprintf("Resumed %d interrupted queued task(s).", len(summary.Executed))
+		return tr(lang, "harness.message.queue_resumed", len(summary.Executed))
 	case opts.All:
-		return fmt.Sprintf("Ran %d queued task(s).", len(summary.Executed))
+		return tr(lang, "harness.message.queue_ran", len(summary.Executed))
 	default:
-		return fmt.Sprintf("Ran %d queued task(s).", len(summary.Executed))
+		return tr(lang, "harness.message.queue_ran", len(summary.Executed))
 	}
 }
 
@@ -1549,7 +1562,7 @@ func renderHarnessPanelInput(input textinput.Model, focused bool, width int) str
 	return control.View()
 }
 
-func renderHarnessActionInputBox(section int, input textinput.Model, focused bool, width int) string {
+func renderHarnessActionInputBox(section int, input textinput.Model, focused bool, width int, lang Language) string {
 	if harnessPanelNeedsInput(section) {
 		return lipgloss.NewStyle().
 			Width(width).
@@ -1560,7 +1573,7 @@ func renderHarnessActionInputBox(section int, input textinput.Model, focused boo
 		Width(width).
 		Height(3).
 		Foreground(lipgloss.Color("8")).
-		Render(clipHarnessPanelText("No inline input needed for this command.", width, 3))
+		Render(clipHarnessPanelText(tr(lang, "harness.hint.primary.none"), width, 3))
 }
 
 func renderHarnessPreviewBox(content string, width, height int) string {

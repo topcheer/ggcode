@@ -76,6 +76,11 @@ func executeTaskViaWorker(ctx context.Context, project Project, cfg *Config, tas
 	}
 	req.OnProgress = func(line string) {
 		line = strings.TrimRight(line, "\r\n")
+		if logFile != nil && line != "" {
+			logMu.Lock()
+			_, _ = logFile.WriteString(line + "\n")
+			logMu.Unlock()
+		}
 		if summary := summarizeWorkerOutputLine(line); summary != "" {
 			mgr.UpdateProgress(workerID, summary)
 		}
@@ -122,6 +127,9 @@ func summarizeWorkerResult(result *RunResult) string {
 		return "worker finished"
 	}
 	if result.ExitCode != 0 {
+		if detail := summarizeHarnessRunFailure(result.Output); detail != "" {
+			return truncateWorkerText(fmt.Sprintf("worker failed with exit code %d: %s", result.ExitCode, detail), 120)
+		}
 		return fmt.Sprintf("worker failed with exit code %d", result.ExitCode)
 	}
 	lines := strings.Split(strings.TrimSpace(result.Output), "\n")

@@ -131,6 +131,68 @@ func TestMCPPluginInfoIncludesPromptAndResourceNames(t *testing.T) {
 	}
 }
 
+func TestMCPPluginInfoDoesNotBlockWhileConnectIsInFlight(t *testing.T) {
+	initialized := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var req mcp.Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			close(initialized)
+			<-release
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusNoContent)
+		case "tools/list":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
+		case "prompts/list":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"prompts":[]}}`))
+		case "resources/list":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"resources":[]}}`))
+		default:
+			t.Fatalf("unexpected method %s", req.Method)
+		}
+	}))
+	defer server.Close()
+
+	p := NewMCPPlugin(config.MCPServerConfig{Name: "slow-http", Type: "http", URL: server.URL})
+	connectDone := make(chan error, 1)
+	go func() {
+		_, err := p.Connect(context.Background())
+		connectDone <- err
+	}()
+
+	select {
+	case <-initialized:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initialize request")
+	}
+
+	infoDone := make(chan MCPServerInfo, 1)
+	go func() {
+		infoDone <- p.Info()
+	}()
+
+	select {
+	case info := <-infoDone:
+		if info.Name != "slow-http" {
+			t.Fatalf("unexpected info: %+v", info)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected Info to return while connect is still in flight")
+	}
+
+	close(release)
+	if err := <-connectDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMCPManagerPromptAndResourceAccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()

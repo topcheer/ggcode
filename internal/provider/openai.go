@@ -63,7 +63,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		req.Tools = p.convertTools(tools)
 	}
 
-	resp, err := p.client.CreateChatCompletion(ctx, req)
+	var resp openai.ChatCompletionResponse
+	err := retryWithBackoffCtx(ctx, func() error {
+		var callErr error
+		resp, callErr = p.client.CreateChatCompletion(ctx, req)
+		return callErr
+	}, providerRetryAttempts)
 	if err != nil {
 		return nil, fmt.Errorf("openai chat: %w", err)
 	}
@@ -111,11 +116,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	}
 
 	var streamer *openai.ChatCompletionStream
-	err := retryWithBackoff(func() error {
+	err := retryWithBackoffCtx(ctx, func() error {
 		var sErr error
 		streamer, sErr = p.client.CreateChatCompletionStream(ctx, req)
 		return sErr
-	}, 3)
+	}, providerRetryAttempts)
 	if err != nil {
 		debug.Log("openai", "ChatStream ERROR model=%s: %v", p.model, err)
 		var apiErr *openai.APIError
