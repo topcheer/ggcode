@@ -20,6 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/version"
 	"runtime"
 )
@@ -1904,12 +1905,14 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
 		// Clear todos
-		todopath := func() string { d, _ := os.UserHomeDir(); return filepath.Join(d, ".ggcode", "todos.json") }()
-		if err := os.WriteFile(todopath, []byte("[]\n"), 0644); err != nil {
+		todoPath := toolpkg.TodoFilePath(workingDirFromModel(m))
+		if err := os.Remove(todoPath); err != nil && !os.IsNotExist(err) {
 			return func() tea.Msg {
 				return streamMsg(m.t("todo.clear_failed", err))
 			}
 		}
+		m.todoSnapshot = nil
+		m.activeTodo = nil
 		m.output.WriteString(m.styles.assistant.Render(m.t("todo.cleared")))
 		return nil
 	}

@@ -616,6 +616,80 @@ func TestRunStreamAutopilotStopsOnChineseHandoffClosure(t *testing.T) {
 	}
 }
 
+func TestRunStreamAutopilotStopsOnEnglishIdleClosure(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("All done. Waiting for your next request.")},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 0)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "fix the route issue", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected autopilot to stop on english idle closure, got %d stream calls", mp.streamCalls)
+	}
+}
+
+func TestRunStreamAutopilotStopsOnChineseIdleClosure(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("没有待处理任务，等待你的下一条指令。")},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 0)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "修复这个问题", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected autopilot to stop on chinese idle closure, got %d stream calls", mp.streamCalls)
+	}
+}
+
+func TestRunStreamAutoModeNeverUsesAutopilotContinuation(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("What would you like me to do next?")},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("unexpected extra turn")},
+				},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 0)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutoMode))
+
+	if err := a.RunStream(context.Background(), "hello", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected non-autopilot mode to stop after one turn, got %d stream calls", mp.streamCalls)
+	}
+}
+
 func TestRunStreamWithZeroMaxIterationsDoesNotCapAutopilot(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{

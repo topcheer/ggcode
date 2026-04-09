@@ -42,13 +42,12 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	// Capture and clear pending image
 	img := m.pendingImage
 	m.pendingImage = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.activeAgentRunID++
+	runID := m.activeAgentRunID
 
 	return func() tea.Msg {
-		ctx, cancel := context.WithCancel(context.Background())
-		m.cancelFunc = cancel
-		m.activeAgentRunID++
-		runID := m.activeAgentRunID
-
 		go func() {
 			defer func() {
 				if m.program != nil {

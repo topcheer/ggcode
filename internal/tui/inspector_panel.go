@@ -262,11 +262,13 @@ func (m *Model) handleInspectorMemoryClear() (Model, tea.Cmd) {
 }
 
 func (m *Model) handleInspectorTodoClear() (Model, tea.Cmd) {
-	path := todoFilePath()
-	if err := os.WriteFile(path, []byte("[]\n"), 0o644); err != nil {
+	path := todoFilePath(workingDirFromModel(m))
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		m.setInspectorMessage(inspectorText(m.currentLanguage(), "clear_failed", err))
 		return *m, nil
 	}
+	m.todoSnapshot = nil
+	m.activeTodo = nil
 	m.setInspectorMessage(inspectorText(m.currentLanguage(), "todo_cleared"))
 	return *m, nil
 }
@@ -479,7 +481,7 @@ func (m Model) inspectorMemoryItems() []inspectorPanelItem {
 }
 
 func (m Model) inspectorTodoItems() []inspectorPanelItem {
-	todos, err := readInspectorTodos()
+	todos, err := readInspectorTodos(workingDirFromModel(&m))
 	if err != nil {
 		return []inspectorPanelItem{{Title: inspectorText(m.currentLanguage(), "todos_error"), Detail: err.Error(), Disabled: true}}
 	}
@@ -717,13 +719,12 @@ func formatInspectorTime(ts time.Time) string {
 	return ts.Local().Format(time.DateTime)
 }
 
-func todoFilePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ggcode", "todos.json")
+func todoFilePath(workspace string) string {
+	return toolpkg.TodoFilePath(workspace)
 }
 
-func readInspectorTodos() ([]toolpkg.Todo, error) {
-	data, err := os.ReadFile(todoFilePath())
+func readInspectorTodos(workspace string) ([]toolpkg.Todo, error) {
+	data, err := os.ReadFile(todoFilePath(workspace))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}

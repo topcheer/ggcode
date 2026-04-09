@@ -258,6 +258,39 @@ func TestResumePickerPaginatesEachGroupSeparately(t *testing.T) {
 	}
 }
 
+func TestBuildSkillsSystemPromptPrioritizesBundledAndSummarizesMCP(t *testing.T) {
+	prompt := buildSkillsSystemPrompt([]*commands.Command{
+		{
+			Name:        "docs:summarize",
+			Description: "MCP prompt from docs",
+			Source:      commands.SourceMCP,
+			LoadedFrom:  commands.LoadedFromMCP,
+		},
+		{
+			Name:        "verify",
+			Description: "Verify work",
+			Source:      commands.SourceBundled,
+			LoadedFrom:  commands.LoadedFromBundled,
+		},
+		{
+			Name:        "update-config",
+			Description: "Update config",
+			Source:      commands.SourceBundled,
+			LoadedFrom:  commands.LoadedFromBundled,
+		},
+	})
+
+	if !strings.Contains(prompt, "- verify: Verify work") {
+		t.Fatalf("expected bundled skill in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "MCP prompt-backed skills are also available") {
+		t.Fatalf("expected MCP summary in prompt, got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "docs:summarize: MCP prompt from docs") {
+		t.Fatalf("expected MCP skill to be summarized rather than listed verbatim, got:\n%s", prompt)
+	}
+}
+
 func TestMCPInstallCommandPersistsServer(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/ggcode.yaml"

@@ -23,18 +23,33 @@ type TodoWrite struct {
 	dir string // directory containing todos.json
 }
 
+func TodoDir(workspace string) string {
+	if trimmed := strings.TrimSpace(workspace); trimmed != "" {
+		return filepath.Join(filepath.Clean(trimmed), ".ggcode")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".ggcode")
+}
+
+func TodoFilePath(workspace string) string {
+	return filepath.Join(TodoDir(workspace), "todos.json")
+}
+
 // NewTodoWrite creates a TodoWrite tool. dir defaults to ~/.ggcode.
 func NewTodoWrite(dir string) *TodoWrite {
 	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".ggcode")
+		dir = TodoDir("")
 	}
 	return &TodoWrite{dir: dir}
 }
 
+func NewWorkspaceTodoWrite(workspace string) *TodoWrite {
+	return NewTodoWrite(TodoDir(workspace))
+}
+
 func (t *TodoWrite) Name() string { return "todo_write" }
 func (t *TodoWrite) Description() string {
-	return "Create, update, or complete todo items. Persists to ~/.ggcode/todos.json."
+	return "Create, update, or complete todo items. Persists to the current workspace .ggcode/todos.json when available."
 }
 
 func (t *TodoWrite) Parameters() json.RawMessage {
@@ -81,15 +96,27 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 	defer t.mu.Unlock()
 
 	// Validate
+	ids := make(map[string]struct{}, len(args.Todos))
+	inProgress := 0
 	for _, td := range args.Todos {
 		if td.ID == "" {
 			return Result{IsError: true, Content: "each todo must have an id"}, nil
 		}
+		if _, exists := ids[td.ID]; exists {
+			return Result{IsError: true, Content: fmt.Sprintf("duplicate todo id %q", td.ID)}, nil
+		}
+		ids[td.ID] = struct{}{}
 		switch td.Status {
 		case "pending", "in_progress", "done":
+			if td.Status == "in_progress" {
+				inProgress++
+			}
 		default:
 			return Result{IsError: true, Content: fmt.Sprintf("invalid status %q for todo %q (must be pending, in_progress, or done)", td.Status, td.ID)}, nil
 		}
+	}
+	if inProgress > 1 {
+		return Result{IsError: true, Content: "only one todo may be in_progress at a time"}, nil
 	}
 
 	// Ensure directory exists
@@ -98,6 +125,12 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	path := filepath.Join(t.dir, "todos.json")
+	if len(args.Todos) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return Result{IsError: true, Content: fmt.Sprintf("clear failed: %v", err)}, nil
+		}
+		return Result{Content: "Todos cleared\n"}, nil
+	}
 	data, err := json.MarshalIndent(args.Todos, "", "  ")
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("marshal failed: %v", err)}, nil

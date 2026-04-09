@@ -32,7 +32,7 @@ type SkillTool struct {
 func (t SkillTool) Name() string { return "skill" }
 
 func (t SkillTool) Description() string {
-	return "Execute a reusable skill. If a matching skill exists for the user's task, invoke this tool before continuing."
+	return "Load a reusable skill workflow or prompt. Use this when a listed skill clearly matches the user's task, then continue the task using the returned guidance."
 }
 
 func (t SkillTool) Parameters() json.RawMessage {

@@ -2051,6 +2051,21 @@ func TestAgentRunMessagesIgnoreStaleRunID(t *testing.T) {
 	}
 }
 
+func TestStartAgentReservesRunIDBeforeAsyncCommandRuns(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.startAgent("hello")
+	if cmd == nil {
+		t.Fatal("expected startAgent to return a command")
+	}
+	if m.activeAgentRunID != 1 {
+		t.Fatalf("expected startAgent to reserve run id synchronously, got %d", m.activeAgentRunID)
+	}
+	if m.cancelFunc == nil {
+		t.Fatal("expected startAgent to install cancel func before async work starts")
+	}
+}
+
 func TestFinishedRunIgnoresLateStatusUpdates(t *testing.T) {
 	m := newTestModel()
 	m.loading = false

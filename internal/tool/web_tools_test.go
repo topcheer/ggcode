@@ -282,6 +282,21 @@ func TestTodoWrite_EmptyList(t *testing.T) {
 	}
 }
 
+func TestTodoWrite_ClearsFileOnEmptyUpdate(t *testing.T) {
+	dir := t.TempDir()
+	tw := NewTodoWrite(dir)
+
+	if _, err := tw.Execute(context.Background(), json.RawMessage(`{"todos":[{"id":"1","content":"Task 1","status":"pending"}]}`)); err != nil {
+		t.Fatalf("seed execute failed: %v", err)
+	}
+	if _, err := tw.Execute(context.Background(), json.RawMessage(`{"todos":[]}`)); err != nil {
+		t.Fatalf("clear execute failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "todos.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected todos.json to be removed, err=%v", err)
+	}
+}
+
 func TestTodoWrite_InvalidStatus(t *testing.T) {
 	dir := t.TempDir()
 	tw := NewTodoWrite(dir)
@@ -307,5 +322,33 @@ func TestTodoWrite_MissingID(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error for missing id")
+	}
+}
+
+func TestTodoWrite_RejectsDuplicateIDs(t *testing.T) {
+	dir := t.TempDir()
+	tw := NewTodoWrite(dir)
+
+	input := json.RawMessage(`{"todos":[{"id":"1","content":"Task 1","status":"pending"},{"id":"1","content":"Task 2","status":"done"}]}`)
+	result, err := tw.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected duplicate id error")
+	}
+}
+
+func TestTodoWrite_RejectsMultipleInProgress(t *testing.T) {
+	dir := t.TempDir()
+	tw := NewTodoWrite(dir)
+
+	input := json.RawMessage(`{"todos":[{"id":"1","content":"Task 1","status":"in_progress"},{"id":"2","content":"Task 2","status":"in_progress"}]}`)
+	result, err := tw.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected multiple in_progress error")
 	}
 }
