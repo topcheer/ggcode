@@ -48,7 +48,12 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 		config.Tools = p.convertTools(tools)
 	}
 
-	resp, err := p.client.Models.GenerateContent(ctx, p.model, contents, config)
+	var resp *genai.GenerateContentResponse
+	err := retryWithBackoffCtx(ctx, func() error {
+		var callErr error
+		resp, callErr = p.client.Models.GenerateContent(ctx, p.model, contents, config)
+		return callErr
+	}, providerRetryAttempts)
 	if err != nil {
 		return nil, fmt.Errorf("gemini chat: %w", err)
 	}
@@ -73,55 +78,70 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 		config.Tools = p.convertTools(tools)
 	}
 
-	iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
-
 	ch := make(chan StreamEvent, 64)
 
 	go func() {
 		defer close(ch)
 
 		var usage TokenUsage
+		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
+			emitted := false
+			retry := false
+			for resp, err := range iter {
+				if err != nil {
+					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
+						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+							return
+						}
+						retry = true
+						break
+					}
+					ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %w", err)}
+					return
+				}
 
-		for resp, err := range iter {
-			if err != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %w", err)}
-				return
+				// Extract usage metadata
+				if resp.UsageMetadata != nil {
+					usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
+					usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+				}
+
+				if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+					continue
+				}
+
+				for _, part := range resp.Candidates[0].Content.Parts {
+					if part.Text != "" {
+						emitted = true
+						ch <- StreamEvent{Type: StreamEventText, Text: part.Text}
+					}
+					if part.FunctionCall != nil {
+						emitted = true
+						args, _ := json.Marshal(part.FunctionCall.Args)
+						id := part.FunctionCall.ID
+						if id == "" {
+							id = part.FunctionCall.Name
+						}
+						ch <- StreamEvent{
+							Type: StreamEventToolCallDone,
+							Tool: ToolCallDelta{
+								Index:     0,
+								ID:        id,
+								Name:      part.FunctionCall.Name,
+								Arguments: args,
+							},
+						}
+					}
+				}
 			}
-
-			// Extract usage metadata
-			if resp.UsageMetadata != nil {
-				usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
-				usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
-			}
-
-			if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+			if retry {
 				continue
 			}
-
-			for _, part := range resp.Candidates[0].Content.Parts {
-				if part.Text != "" {
-					ch <- StreamEvent{Type: StreamEventText, Text: part.Text}
-				}
-				if part.FunctionCall != nil {
-					args, _ := json.Marshal(part.FunctionCall.Args)
-					id := part.FunctionCall.ID
-					if id == "" {
-						id = part.FunctionCall.Name
-					}
-					ch <- StreamEvent{
-						Type: StreamEventToolCallDone,
-						Tool: ToolCallDelta{
-							Index:     0,
-							ID:        id,
-							Name:      part.FunctionCall.Name,
-							Arguments: args,
-						},
-					}
-				}
-			}
+			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage}
+			return
 		}
-
-		ch <- StreamEvent{Type: StreamEventDone, Usage: &usage}
 	}()
 
 	return ch, nil

@@ -377,11 +377,17 @@ func releaseContextMatches(cfg *Config, task *Task, contextCfg *ContextConfig, r
 		return false
 	}
 	if contextCfg != nil {
-		return strings.EqualFold(strings.TrimSpace(task.ContextName), strings.TrimSpace(contextCfg.Name)) ||
+		if strings.EqualFold(strings.TrimSpace(task.ContextName), strings.TrimSpace(contextCfg.Name)) {
+			return true
+		}
+		return strings.TrimSpace(task.ContextPath) != "" &&
+			strings.TrimSpace(contextCfg.Path) != "" &&
 			filepath.Clean(task.ContextPath) == filepath.Clean(contextCfg.Path)
 	}
-	return strings.EqualFold(strings.TrimSpace(task.ContextName), raw) ||
-		filepath.Clean(task.ContextPath) == filepath.Clean(raw)
+	if strings.EqualFold(strings.TrimSpace(task.ContextName), raw) {
+		return true
+	}
+	return strings.TrimSpace(task.ContextPath) != "" && filepath.Clean(task.ContextPath) == filepath.Clean(raw)
 }
 
 func normalizedReleaseContextLabel(contextCfg *ContextConfig, raw string) string {

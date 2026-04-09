@@ -12,6 +12,9 @@ If that directory is not on `PATH`, the installer updates your shell/user PATH a
 reopen the terminal. The npm package keeps a separate `ggcode-bootstrap` helper command for manual
 repair, but normal usage should be the real `ggcode` binary.
 
+This package is just the release-backed installer layer. Product usage, harness workflows, and TUI
+behavior are documented in the main repository README.
+
 ## Install
 
 For normal CLI usage, install it globally:

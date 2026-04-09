@@ -3,7 +3,6 @@ package tui
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -25,8 +24,8 @@ import (
 	"runtime"
 )
 
-var executeHarnessRun = func(ctx context.Context, project harness.Project, cfg *harness.Config, goal string) (*harness.RunSummary, error) {
-	return harness.RunTask(ctx, project, cfg, goal, harness.BinaryRunner{})
+var executeHarnessRun = func(ctx context.Context, project harness.Project, cfg *harness.Config, goal string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
+	return harness.RunTaskWithOptions(ctx, project, cfg, goal, harness.BinaryRunner{}, opts)
 }
 
 var executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string) (*harness.RunSummary, error) {
@@ -182,13 +181,82 @@ func (m *Model) appendStreamChunk(chunk string) {
 		m.output.WriteString(bulletStyle.Render("● "))
 		m.streamPrefixWritten = true
 	}
+	tail := m.harnessRunLiveTail
+	if tail != "" {
+		m.output.Truncate(m.streamStartPos)
+		m.output.WriteString(bulletStyle.Render("● "))
+		if m.streamBuffer != nil {
+			m.output.WriteString(m.streamBuffer.String())
+		}
+	}
 	if m.streamBuffer != nil {
 		m.streamBuffer.WriteString(chunk)
 	}
 	m.output.WriteString(chunk)
+	if tail != "" {
+		m.output.WriteString(tail)
+	}
 	m.trimOutput()
 	m.syncConversationViewport()
 	m.viewport.GotoBottom()
+}
+
+func (m *Model) renderHarnessLiveTail(text string) {
+	text = strings.TrimSpace(text)
+	if text == m.harnessRunLiveTail {
+		return
+	}
+	if !m.streamPrefixWritten {
+		m.ensureOutputHasBlankLine()
+		m.streamStartPos = m.output.Len()
+		m.output.WriteString(bulletStyle.Render("● "))
+		m.streamPrefixWritten = true
+	}
+	m.output.Truncate(m.streamStartPos)
+	m.output.WriteString(bulletStyle.Render("● "))
+	if m.streamBuffer != nil {
+		m.output.WriteString(m.streamBuffer.String())
+	}
+	if text != "" {
+		m.output.WriteString(text)
+	}
+	m.harnessRunLiveTail = text
+	m.trimOutput()
+	m.syncConversationViewport()
+	m.viewport.GotoBottom()
+}
+
+func (m *Model) appendHarnessLogChunk(chunk string) {
+	if chunk == "" {
+		return
+	}
+	text := m.harnessRunRemainder + chunk
+	lastNewline := strings.LastIndex(text, "\n")
+	if lastNewline < 0 {
+		m.harnessRunRemainder = text
+		m.renderHarnessLiveTail(shortenHarnessPaths(m.harnessRunProject, text))
+		return
+	}
+	m.harnessRunRemainder = text[lastNewline+1:]
+	formatted := formatHarnessRunLogChunk(m.harnessRunProject, text[:lastNewline+1])
+	if formatted != "" {
+		m.appendStreamChunk(formatted)
+	}
+	m.renderHarnessLiveTail(shortenHarnessPaths(m.harnessRunProject, m.harnessRunRemainder))
+}
+
+func (m *Model) flushHarnessLogRemainder() {
+	if strings.TrimSpace(m.harnessRunRemainder) == "" {
+		m.harnessRunRemainder = ""
+		m.renderHarnessLiveTail("")
+		return
+	}
+	formatted := formatHarnessRunLogChunk(m.harnessRunProject, m.harnessRunRemainder+"\n")
+	m.harnessRunRemainder = ""
+	if formatted != "" {
+		m.appendStreamChunk(formatted)
+	}
+	m.renderHarnessLiveTail("")
 }
 
 func (m *Model) appendHarnessProgressDetail(detail string) {
@@ -196,12 +264,17 @@ func (m *Model) appendHarnessProgressDetail(detail string) {
 	if detail == "" {
 		return
 	}
-	prefix := "→ "
-	chunk := prefix + detail
-	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 && !strings.HasSuffix(m.streamBuffer.String(), "\n") {
+	if m.harnessRunProject != nil {
+		detail = normalizeHarnessDetail(*m.harnessRunProject, detail)
+	}
+	chunk := formatHarnessStructuredLine(detail)
+	if chunk == "" {
+		chunk = "→ " + detail + "\n"
+	}
+	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 && !strings.HasSuffix(m.streamBuffer.String(), "\n\n") {
 		chunk = "\n" + chunk
 	}
-	m.appendStreamChunk(chunk + "\n")
+	m.appendStreamChunk(chunk)
 }
 
 func (m *Model) renderStreamBuffer() {
@@ -217,6 +290,7 @@ func (m *Model) renderStreamBuffer() {
 	m.output.WriteString(bulletStyle.Render("● "))
 	m.output.WriteString(rendered)
 	m.streamBuffer.Reset()
+	m.harnessRunLiveTail = ""
 }
 
 func trimHarnessRunOutputSection(rendered string) string {
@@ -296,18 +370,19 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			}
 			return nil
 		case "/sessions":
-			return m.listSessions()
+			m.openInspectorPanel(inspectorPanelSessions)
+			return nil
 		case "/resume":
 			if len(parts) > 1 {
 				return m.resumeSession(parts[1])
 			}
-			m.output.WriteString(m.t("command.usage.resume"))
+			m.openInspectorPanel(inspectorPanelSessions)
 			return nil
 		case "/export":
 			if len(parts) > 1 {
 				return m.exportSession(parts[1])
 			}
-			m.output.WriteString(m.t("command.usage.export"))
+			m.openInspectorPanel(inspectorPanelSessions)
 			return nil
 		case "/plugins":
 			return m.handlePluginsCommand()
@@ -467,15 +542,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 		return nil
 	case "init":
 		goal := strings.TrimSpace(strings.Join(parts[2:], " "))
-		result, err := harness.Init(workDir, harness.InitOptions{Goal: goal})
-		if err != nil {
-			m.output.WriteString(m.styles.error.Render(err.Error()))
-			m.output.WriteString("\n")
-			return nil
-		}
-		m.output.WriteString(m.styles.assistant.Render(formatHarnessInitResult(result)))
-		m.output.WriteString("\n")
-		return nil
+		return m.beginHarnessInitPrompt(strings.Join(parts, " "), goal, false)
 	case "check":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
@@ -956,7 +1023,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 			m.output.WriteString("\n")
 			return nil
 		}
-		return m.runTrackedHarnessGoal(strings.Join(parts, " "), strings.TrimSpace(strings.Join(parts[2:], " ")), project, cfg)
+		return m.beginHarnessRunPrompt(strings.Join(parts, " "), strings.TrimSpace(strings.Join(parts[2:], " ")), project, cfg, false)
 	case "rerun":
 		if len(parts) != 3 {
 			m.output.WriteString(m.styles.error.Render(m.t("command.harness_rerun_usage")))
@@ -983,7 +1050,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 	}
 }
 
-func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.Project, cfg *harness.Config) tea.Cmd {
+func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.Project, cfg *harness.Config, opts harness.RunTaskOptions) tea.Cmd {
 	goal = strings.TrimSpace(goal)
 	if goal == "" {
 		m.output.WriteString(m.styles.error.Render(m.t("command.harness_run_usage")))
@@ -1016,18 +1083,20 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.harnessRunLogPath = ""
 	m.harnessRunLogOffset = 0
 	m.harnessRunLastDetail = ""
+	m.harnessRunRemainder = ""
+	m.harnessRunLiveTail = ""
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamStartPos = m.output.Len()
 	m.streamPrefixWritten = false
 	startSpinner := m.spinner.Start("Running harness")
 	if m.program == nil {
 		return func() tea.Msg {
-			summary, err := executeHarnessRun(ctx, project, cfg, goal)
+			summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
 			return harnessRunResultMsg{Summary: summary, Err: err}
 		}
 	}
 	go func() {
-		summary, err := executeHarnessRun(ctx, project, cfg, goal)
+		summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
 		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
 	}()
 	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
@@ -1070,6 +1139,8 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.harnessRunLogPath = strings.TrimSpace(task.LogPath)
 	m.harnessRunLogOffset = 0
 	m.harnessRunLastDetail = ""
+	m.harnessRunRemainder = ""
+	m.harnessRunLiveTail = ""
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamStartPos = m.output.Len()
 	m.streamPrefixWritten = false
@@ -1111,7 +1182,7 @@ func readHarnessRunProgress(project harness.Project, goal, taskID, logPath strin
 	if msg.TaskID != "" {
 		task, err := harness.LoadTask(project, msg.TaskID)
 		if err == nil && task != nil {
-			msg = populateHarnessRunProgress(msg, task)
+			msg = populateHarnessRunProgress(project, msg, task)
 			return msg
 		}
 	}
@@ -1123,20 +1194,20 @@ func readHarnessRunProgress(project harness.Project, goal, taskID, logPath strin
 		if task == nil || strings.TrimSpace(task.Goal) != goal {
 			continue
 		}
-		msg = populateHarnessRunProgress(msg, task)
+		msg = populateHarnessRunProgress(project, msg, task)
 		return msg
 	}
 	msg.Activity = "Starting harness run..."
 	return msg
 }
 
-func populateHarnessRunProgress(msg harnessRunProgressMsg, task *harness.Task) harnessRunProgressMsg {
+func populateHarnessRunProgress(project harness.Project, msg harnessRunProgressMsg, task *harness.Task) harnessRunProgressMsg {
 	if task == nil {
 		return msg
 	}
 	msg.TaskID = task.ID
-	msg.Activity = formatHarnessRunActivity(task)
-	msg.Detail = formatHarnessRunDetail(task)
+	msg.Activity = formatHarnessRunActivity(project, task)
+	msg.Detail = formatHarnessRunDetail(project, task)
 	if path := strings.TrimSpace(task.LogPath); path != "" {
 		msg.LogPath = path
 	}
@@ -1176,7 +1247,7 @@ func readHarnessRunLogChunk(path string, offset int64) (string, int64) {
 	return string(data), offset + int64(len(data))
 }
 
-func formatHarnessRunActivity(task *harness.Task) string {
+func formatHarnessRunActivity(project harness.Project, task *harness.Task) string {
 	if task == nil {
 		return "Starting harness run..."
 	}
@@ -1191,42 +1262,268 @@ func formatHarnessRunActivity(task *harness.Task) string {
 		parts = append(parts, phase)
 	}
 	if progress := strings.TrimSpace(task.WorkerProgress); progress != "" {
-		parts = append(parts, progress)
+		parts = append(parts, humanizeHarnessProgress(project, progress))
 	}
 	return strings.Join(parts, " • ")
 }
 
-func formatHarnessRunDetail(task *harness.Task) string {
+func formatHarnessRunDetail(project harness.Project, task *harness.Task) string {
 	if task == nil {
 		return ""
 	}
 	if progress := strings.TrimSpace(task.WorkerProgress); progress != "" {
-		return humanizeHarnessProgress(progress)
+		return humanizeHarnessProgress(project, progress)
 	}
 	if phase := strings.TrimSpace(task.WorkerPhase); phase != "" {
-		return "phase: " + phase
+		return "🪜 Phase · " + phase
 	}
 	if status := strings.TrimSpace(task.WorkerStatus); status != "" {
-		return "worker: " + status
+		return "🤖 Worker · " + status
 	}
 	return ""
 }
 
-func humanizeHarnessProgress(progress string) string {
+func humanizeHarnessProgress(project harness.Project, progress string) string {
 	progress = strings.TrimSpace(progress)
 	if progress == "" {
 		return ""
 	}
-	switch {
-	case strings.HasPrefix(progress, "tool: "):
-		return "running " + strings.TrimSpace(strings.TrimPrefix(progress, "tool: "))
-	case strings.HasPrefix(progress, "tool result: error"):
-		return strings.TrimSpace(strings.TrimPrefix(progress, "tool result: "))
-	case strings.HasPrefix(progress, "tool result: "):
-		return "result " + strings.TrimSpace(strings.TrimPrefix(progress, "tool result: "))
-	default:
-		return progress
+	if rendered, structured := formatHarnessLogLine(&project, progress); structured {
+		return strings.TrimSpace(rendered)
 	}
+	return normalizeHarnessDetail(project, progress)
+}
+
+func normalizeHarnessDetail(project harness.Project, detail string) string {
+	detail = strings.TrimSpace(detail)
+	switch {
+	case strings.HasPrefix(detail, "running "):
+		name, args := splitHarnessToolCall(strings.TrimSpace(strings.TrimPrefix(detail, "running ")))
+		label, icon := humanizeHarnessTool(name)
+		summary := summarizeHarnessToolArgs(&project, name, args)
+		if summary == "" {
+			return fmt.Sprintf("%s %s", icon, label)
+		}
+		return fmt.Sprintf("%s %s · %s", icon, label, summary)
+	case strings.HasPrefix(detail, "result "):
+		return formatHarnessToolResult(&project, strings.TrimSpace(strings.TrimPrefix(detail, "result ")))
+	default:
+		return shortenHarnessPaths(&project, detail)
+	}
+}
+
+func formatHarnessRunLogChunk(project *harness.Project, chunk string) string {
+	if chunk == "" {
+		return ""
+	}
+	lines := strings.SplitAfter(chunk, "\n")
+	var b strings.Builder
+	lastStructured := false
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		hasNewline := strings.HasSuffix(line, "\n")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		rendered, structured := formatHarnessLogLine(project, trimmed)
+		if rendered == "" {
+			continue
+		}
+		if structured {
+			if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n\n") {
+				b.WriteString("\n")
+			}
+			b.WriteString(rendered)
+			if !strings.HasSuffix(rendered, "\n\n") {
+				b.WriteString("\n\n")
+			}
+		} else {
+			if lastStructured && !strings.HasSuffix(b.String(), "\n") {
+				b.WriteString("\n")
+			}
+			b.WriteString(rendered)
+			if hasNewline {
+				b.WriteString("\n")
+			}
+		}
+		lastStructured = structured
+	}
+	return b.String()
+}
+
+func formatHarnessLogLine(project *harness.Project, line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", false
+	}
+	switch {
+	case strings.HasPrefix(line, "tool: "):
+		name, args := splitHarnessToolCall(strings.TrimSpace(strings.TrimPrefix(line, "tool: ")))
+		label, icon := humanizeHarnessTool(name)
+		summary := summarizeHarnessToolArgs(project, name, args)
+		if summary == "" {
+			return fmt.Sprintf("%s %s", icon, label), true
+		}
+		return fmt.Sprintf("%s %s · %s", icon, label, summary), true
+	case strings.HasPrefix(line, "tool result: "):
+		return formatHarnessToolResult(project, strings.TrimSpace(strings.TrimPrefix(line, "tool result: "))), true
+	case strings.HasPrefix(line, "phase: "):
+		return "🪜 Phase · " + shortenHarnessPaths(project, strings.TrimSpace(strings.TrimPrefix(line, "phase: "))), true
+	case strings.HasPrefix(line, "worker: "):
+		return "🤖 Worker · " + shortenHarnessPaths(project, strings.TrimSpace(strings.TrimPrefix(line, "worker: "))), true
+	default:
+		return shortenHarnessPaths(project, line), false
+	}
+}
+
+func formatHarnessStructuredLine(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return text + "\n\n"
+}
+
+func harnessLogChunkContainsDetail(project *harness.Project, chunk, detail string) bool {
+	chunk = strings.TrimSpace(chunk)
+	detail = strings.TrimSpace(detail)
+	if chunk == "" || detail == "" {
+		return false
+	}
+	if project != nil {
+		detail = normalizeHarnessDetail(*project, detail)
+	}
+	needle := strings.TrimSpace(formatHarnessStructuredLine(detail))
+	if needle == "" {
+		return false
+	}
+	return strings.Contains(formatHarnessRunLogChunk(project, chunk), needle)
+}
+
+func splitHarnessToolCall(text string) (string, string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", ""
+	}
+	name, rest, found := strings.Cut(text, " ")
+	if !found {
+		return name, ""
+	}
+	return name, strings.TrimSpace(rest)
+}
+
+func humanizeHarnessTool(name string) (string, string) {
+	switch name {
+	case "read_file", "view":
+		return "Read file", "📖"
+	case "write_file", "edit_file", "apply_patch":
+		return "Write file", "✍️"
+	case "list_directory", "glob":
+		return "Browse files", "📂"
+	case "grep", "rg":
+		return "Search code", "🔎"
+	case "bash", "run_command", "start_command", "wait_command", "read_command", "write_command_input", "stop_command":
+		return "Run command", "⚙️"
+	case "web_fetch":
+		return "Fetch web page", "🌐"
+	case "task", "read_agent", "list_agents":
+		return "Run sub-agent", "🤖"
+	case "todo_write", "todo_read", "sql":
+		return "Update task state", "🗂️"
+	default:
+		return titleizeHarnessText(strings.ReplaceAll(name, "_", " ")), "🧰"
+	}
+}
+
+func summarizeHarnessToolArgs(project *harness.Project, name, args string) string {
+	args = strings.TrimSpace(shortenHarnessPaths(project, args))
+	if args == "" {
+		return ""
+	}
+	switch name {
+	case "read_file", "write_file", "edit_file", "view":
+		fields := strings.Fields(args)
+		if len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	return truncateHarnessText(args, 96)
+}
+
+func formatHarnessToolResult(project *harness.Project, result string) string {
+	result = strings.TrimSpace(shortenHarnessPaths(project, result))
+	if result == "" {
+		return "✅ Result"
+	}
+	lower := strings.ToLower(result)
+	switch {
+	case strings.HasPrefix(lower, "error"):
+		return "❌ " + result
+	case strings.HasPrefix(result, "Successfully "):
+		return "✅ " + strings.TrimPrefix(result, "Successfully ")
+	default:
+		return "✅ Result · " + truncateHarnessText(result, 110)
+	}
+}
+
+func shortenHarnessPaths(project *harness.Project, text string) string {
+	root := ""
+	if project != nil {
+		root = strings.TrimSpace(project.RootDir)
+	}
+	if root == "" {
+		return text
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return text
+	}
+	for i, field := range fields {
+		fields[i] = shortenHarnessPathToken(root, field)
+	}
+	return strings.Join(fields, " ")
+}
+
+func shortenHarnessPathToken(root, token string) string {
+	trimmed := strings.Trim(token, `"'()[]{}<>,`)
+	idx := strings.Index(token, trimmed)
+	if trimmed == "" || idx < 0 || !filepath.IsAbs(trimmed) {
+		return token
+	}
+	prefix := token[:idx]
+	suffix := token[idx+len(trimmed):]
+	rel, err := filepath.Rel(root, trimmed)
+	if err != nil {
+		return token
+	}
+	if rel == "." {
+		trimmed = "."
+	} else if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		trimmed = rel
+	}
+	return prefix + trimmed + suffix
+}
+
+func truncateHarnessText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return strings.TrimSpace(text[:limit-1]) + "…"
+}
+
+func titleizeHarnessText(text string) string {
+	parts := strings.Fields(strings.TrimSpace(text))
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 func loadHarnessForTUI(workDir string) (harness.Project, *harness.Config, error) {
@@ -1250,6 +1547,11 @@ func formatHarnessInitResult(result *harness.InitResult) string {
 	if result.GitInitialized {
 		b.WriteString("- git: initialized repository\n")
 	}
+	if strings.TrimSpace(result.ScaffoldCommit) != "" {
+		b.WriteString("- git: created scaffold commit ")
+		b.WriteString(shortHarnessCommit(result.ScaffoldCommit))
+		b.WriteString("\n")
+	}
 	for _, path := range result.CreatedPaths {
 		b.WriteString("- created: ")
 		b.WriteString(path)
@@ -1260,7 +1562,27 @@ func formatHarnessInitResult(result *harness.InitResult) string {
 		b.WriteString(path)
 		b.WriteString("\n")
 	}
+	if result.Config != nil && len(result.Config.Contexts) > 0 {
+		b.WriteString("- contexts:\n")
+		for _, contextCfg := range result.Config.Contexts {
+			label := firstNonEmptyHarness(contextCfg.Path, contextCfg.Name)
+			if label == "" {
+				continue
+			}
+			b.WriteString("  - ")
+			b.WriteString(label)
+			b.WriteString("\n")
+		}
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func shortHarnessCommit(commit string) string {
+	commit = strings.TrimSpace(commit)
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	return commit
 }
 
 func buildInitPrompt(targetPath string, existed bool, bootstrap string) string {
@@ -1530,23 +1852,8 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 }
 
 func (m *Model) handleCheckpointsCommand() tea.Cmd {
-	return func() tea.Msg {
-		cpMgr := m.agent.CheckpointManager()
-		if cpMgr == nil {
-			return streamMsg(m.t("checkpoint.disabled"))
-		}
-		ps := cpMgr.List()
-		if len(ps) == 0 {
-			return streamMsg(m.t("checkpoint.none"))
-		}
-		var b strings.Builder
-		b.WriteString(m.t("checkpoint.list.title", len(ps)))
-		for i, cp := range ps {
-			b.WriteString(m.t("checkpoint.list.item", i+1, cp.ID, displayToolFileTarget(cp.FilePath), cp.ToolCall, cp.Timestamp.Format("15:04:05")))
-		}
-		b.WriteString(m.t("checkpoint.list.hint"))
-		return streamMsg(b.String())
-	}
+	m.openInspectorPanel(inspectorPanelCheckpoints)
+	return nil
 }
 
 func workingDirFromModel(m *Model) string {
@@ -1564,24 +1871,7 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 	}
 	switch sub {
 	case "list":
-		if m.autoMem == nil {
-			m.output.WriteString(m.styles.prompt.Render(m.t("memory.auto_unavailable")))
-			return nil
-		}
-		keys, err := m.autoMem.List()
-		if err != nil {
-			m.output.WriteString(m.styles.error.Render(m.t("memory.list_failed", err)))
-			return nil
-		}
-		if len(keys) == 0 {
-			m.output.WriteString(m.styles.prompt.Render(m.t("memory.none")))
-			return nil
-		}
-		m.output.WriteString(m.styles.title.Render(m.t("memory.auto_title")))
-		for _, k := range keys {
-			m.output.WriteString(fmt.Sprintf("  - %s\n", k))
-		}
-		m.output.WriteString("\n")
+		m.openInspectorPanel(inspectorPanelMemory)
 	case "clear":
 		if m.autoMem == nil {
 			m.output.WriteString(m.styles.prompt.Render(m.t("memory.auto_unavailable")))
@@ -1593,26 +1883,7 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 		}
 		m.output.WriteString(m.styles.assistant.Render(m.t("memory.cleared")))
 	default:
-		m.output.WriteString(m.styles.title.Render(m.t("memory.title")))
-		if len(m.projMemFiles) > 0 {
-			m.output.WriteString(m.styles.assistant.Render(m.t("memory.project")))
-			for _, f := range m.projMemFiles {
-				m.output.WriteString(fmt.Sprintf("  %s\n", f))
-			}
-			m.output.WriteString("\n")
-		} else {
-			m.output.WriteString(m.styles.prompt.Render(m.t("memory.project_none")))
-		}
-		if len(m.autoMemFiles) > 0 {
-			m.output.WriteString(m.styles.assistant.Render(m.t("memory.auto")))
-			for _, f := range m.autoMemFiles {
-				m.output.WriteString(fmt.Sprintf("  %s\n", f))
-			}
-			m.output.WriteString("\n")
-		} else {
-			m.output.WriteString(m.styles.prompt.Render(m.t("memory.auto_none")))
-		}
-		m.output.WriteString(m.styles.prompt.Render(m.t("memory.usage")))
+		m.openInspectorPanel(inspectorPanelMemory)
 	}
 	return nil
 }
@@ -1642,23 +1913,8 @@ func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 		m.output.WriteString(m.styles.assistant.Render(m.t("todo.cleared")))
 		return nil
 	}
-	return func() tea.Msg {
-		todopath := func() string { d, _ := os.UserHomeDir(); return filepath.Join(d, ".ggcode", "todos.json") }()
-		data, err := os.ReadFile(todopath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return streamMsg(m.t("todo.none"))
-			}
-			return streamMsg(m.t("todo.read_failed", err))
-		}
-		// Pretty print JSON
-		var raw interface{}
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return streamMsg(m.t("todo.parse_failed", err))
-		}
-		pretty, _ := json.MarshalIndent(raw, "", "  ")
-		return streamMsg(m.t("todo.title", string(pretty)))
-	}
+	m.openInspectorPanel(inspectorPanelTodos)
+	return nil
 }
 
 func (m *Model) handleBugCommand() tea.Cmd {
@@ -1757,63 +2013,12 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 		}
 		return nil
 	}
-	// Show current config
-	var b strings.Builder
-	b.WriteString(m.styles.title.Render(m.t("config.title")))
-	if m.config != nil {
-		b.WriteString(fmt.Sprintf("  Vendor:      %s\n", m.config.Vendor))
-		b.WriteString(fmt.Sprintf("  Endpoint:    %s\n", m.config.Endpoint))
-		b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
-		b.WriteString(fmt.Sprintf("  Language:    %s\n", m.languageLabel()))
-		if resolved, err := m.config.ResolveActiveEndpoint(); err == nil {
-			if resolved.ContextWindow > 0 {
-				b.WriteString(fmt.Sprintf("  Context:     %d\n", resolved.ContextWindow))
-			}
-			if resolved.MaxTokens > 0 {
-				b.WriteString(fmt.Sprintf("  MaxTokens:   %d\n", resolved.MaxTokens))
-			}
-		}
-		if len(m.config.Vendors) > 0 {
-			b.WriteString(fmt.Sprintf("  Vendors:     %v\n", m.vendorNames()))
-		}
-		b.WriteString(fmt.Sprintf("  MCP Servers: %d\n", len(m.config.MCPServers)))
-	}
-	b.WriteString(m.styles.prompt.Render(m.t("config.usage")))
-	m.output.WriteString(b.String())
+	m.openInspectorPanel(inspectorPanelConfig)
 	return nil
 }
 
 func (m *Model) handleStatusCommand() tea.Cmd {
-	var b strings.Builder
-	b.WriteString(m.styles.title.Render(m.t("status.title")))
-	b.WriteString(fmt.Sprintf("  Version:     %s\n", version.Display()))
-	b.WriteString(fmt.Sprintf("  Vendor:      %s\n", m.config.Vendor))
-	b.WriteString(fmt.Sprintf("  Endpoint:    %s\n", m.config.Endpoint))
-	b.WriteString(fmt.Sprintf("  Model:       %s\n", m.config.Model))
-	b.WriteString(fmt.Sprintf("  Language:    %s\n", m.languageLabel()))
-	b.WriteString(fmt.Sprintf("  Mode:        %s\n", m.mode))
-	b.WriteString(fmt.Sprintf("  Fullscreen:  %v\n", m.fullscreen))
-
-	if m.session != nil {
-		b.WriteString(fmt.Sprintf("  Session:     %s\n", m.session.ID))
-		b.WriteString(fmt.Sprintf("  Messages:    %d\n", len(m.session.Messages)))
-	}
-
-	if m.subAgentMgr != nil {
-		n := m.subAgentMgr.RunningCount()
-		b.WriteString(fmt.Sprintf("  Agents:      %d running\n", n))
-	}
-
-	connected := 0
-	for _, srv := range m.mcpServers {
-		if srv.Connected {
-			connected++
-		}
-	}
-	b.WriteString(fmt.Sprintf("  MCP Servers: %d connected (%d total)\n", connected, len(m.mcpServers)))
-	b.WriteString(fmt.Sprintf("  Update:      %s\n", m.updateStatusSummary()))
-	b.WriteString("\n")
-	m.output.WriteString(b.String())
+	m.openInspectorPanel(inspectorPanelStatus)
 	return nil
 }
 
@@ -1865,33 +2070,7 @@ func (m *Model) syncSessionSelection() {
 }
 
 func (m *Model) handlePluginsCommand() tea.Cmd {
-	if m.pluginMgr == nil {
-		m.output.WriteString(m.styles.prompt.Render(m.t("plugins.unavailable")))
-		return nil
-	}
-	results := m.pluginMgr.Results()
-	if len(results) == 0 {
-		m.output.WriteString(m.styles.prompt.Render(m.t("plugins.none")))
-		return nil
-	}
-	m.output.WriteString(m.styles.title.Render(m.t("plugins.title")))
-	for _, r := range results {
-		status := "\u2713"
-		style := m.styles.assistant
-		if !r.Success {
-			status = "\u2717"
-			style = m.styles.error
-		}
-		m.output.WriteString(style.Render(fmt.Sprintf("  %s %s", status, r.Name)))
-		if r.Error != nil {
-			m.output.WriteString(style.Render(fmt.Sprintf(" - %v", r.Error)))
-		}
-		m.output.WriteString("\n")
-		for _, tn := range r.Tools {
-			m.output.WriteString(fmt.Sprintf("    - %s\n", tn))
-		}
-	}
-	m.output.WriteString("\n")
+	m.openInspectorPanel(inspectorPanelPlugins)
 	return nil
 }
 
@@ -1952,24 +2131,7 @@ func (m *Model) handleFullscreenCommand() tea.Cmd {
 }
 
 func (m *Model) handleAgentsCommand(parts []string) tea.Cmd {
-	if m.subAgentMgr == nil {
-		m.output.WriteString(m.styles.error.Render(m.t("agents.unavailable")))
-		return nil
-	}
-	agents := m.subAgentMgr.List()
-	if len(agents) == 0 {
-		m.output.WriteString(m.t("agents.none"))
-		return nil
-	}
-	m.output.WriteString(m.t("agents.title", len(agents)))
-	for _, sa := range agents {
-		duration := ""
-		if !sa.EndedAt.IsZero() && !sa.StartedAt.IsZero() {
-			duration = fmt.Sprintf(" (%v)", sa.EndedAt.Sub(sa.StartedAt).Round(1e9))
-		}
-		m.output.WriteString(m.t("agents.item", sa.ID, sa.Status, duration, truncateStr(sa.Task, 60)))
-	}
-	m.output.WriteString(m.t("agents.hint"))
+	m.openInspectorPanel(inspectorPanelAgents)
 	return nil
 }
 
@@ -1979,7 +2141,7 @@ func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 		return nil
 	}
 	if len(parts) < 2 {
-		m.output.WriteString(m.t("agent.usage"))
+		m.openInspectorPanel(inspectorPanelAgents)
 		return nil
 	}
 	if parts[1] == "cancel" && len(parts) >= 3 {

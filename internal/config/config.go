@@ -140,6 +140,7 @@ type Config struct {
 	Endpoint      string                    `yaml:"endpoint"`
 	Model         string                    `yaml:"model"`
 	Language      string                    `yaml:"language"`
+	UI            UIConfig                  `yaml:"ui,omitempty"`
 	SystemPrompt  string                    `yaml:"system_prompt"`
 	Vendors       map[string]VendorConfig   `yaml:"vendors"`
 	AllowedDirs   []string                  `yaml:"allowed_dirs"`
@@ -152,6 +153,10 @@ type Config struct {
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
 	FilePath      string                    `yaml:"-"`
 	FirstRun      bool                      `yaml:"-"`
+}
+
+type UIConfig struct {
+	SidebarVisible *bool `yaml:"sidebar_visible,omitempty"`
 }
 
 // SubAgentConfig holds sub-agent configuration.
@@ -958,6 +963,58 @@ func (c *Config) SaveLanguagePreference(lang string) error {
 	c.Language = lang
 	c.FirstRun = false
 	return nil
+}
+
+func (c *Config) SidebarVisible() bool {
+	if c == nil || c.UI.SidebarVisible == nil {
+		return true
+	}
+	return *c.UI.SidebarVisible
+}
+
+func (c *Config) SaveSidebarPreference(visible bool) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(c.FilePath) == "" {
+		return fmt.Errorf("config file path is empty")
+	}
+
+	raw := map[string]interface{}{}
+	data, err := os.ReadFile(c.FilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+		}
+	} else if len(data) > 0 {
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
+		}
+	}
+	uiRaw, _ := raw["ui"].(map[string]interface{})
+	if uiRaw == nil {
+		uiRaw = map[string]interface{}{}
+	}
+	uiRaw["sidebar_visible"] = visible
+	raw["ui"] = uiRaw
+
+	updated, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+		return err
+	}
+	c.UI.SidebarVisible = boolPtr(visible)
+	c.FirstRun = false
+	return nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func firstNonEmpty(values ...string) string {

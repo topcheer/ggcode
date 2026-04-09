@@ -20,11 +20,12 @@ type ToolRule struct {
 
 // ConfigPolicy implements PermissionPolicy based on configuration rules.
 type ConfigPolicy struct {
-	rules    map[string]Decision
-	sandbox  *PathSandbox
-	detector *DangerousDetector
-	mode     PermissionMode
-	mu       sync.RWMutex
+	rules           map[string]Decision
+	sandbox         *PathSandbox
+	readOnlySandbox *PathSandbox
+	detector        *DangerousDetector
+	mode            PermissionMode
+	mu              sync.RWMutex
 }
 
 // NewConfigPolicy creates a policy from tool rules and allowed directories.
@@ -35,14 +36,21 @@ func NewConfigPolicy(rules map[string]Decision, allowedDirs []string) *ConfigPol
 
 // NewConfigPolicyWithMode creates a policy with an explicit permission mode.
 func NewConfigPolicyWithMode(rules map[string]Decision, allowedDirs []string, mode PermissionMode) *ConfigPolicy {
+	return NewConfigPolicyWithModeAndReadOnlyDirs(rules, allowedDirs, nil, mode)
+}
+
+// NewConfigPolicyWithModeAndReadOnlyDirs creates a policy with optional
+// read-only file access outside the main writable sandbox.
+func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDirs, readOnlyDirs []string, mode PermissionMode) *ConfigPolicy {
 	if rules == nil {
 		rules = make(map[string]Decision)
 	}
 	return &ConfigPolicy{
-		rules:    rules,
-		sandbox:  NewPathSandbox(allowedDirs),
-		detector: NewDangerousDetector(),
-		mode:     mode,
+		rules:           rules,
+		sandbox:         NewPathSandbox(allowedDirs),
+		readOnlySandbox: newOptionalPathSandbox(readOnlyDirs),
+		detector:        NewDangerousDetector(),
+		mode:            mode,
 	}
 }
 
@@ -128,7 +136,18 @@ func (p *ConfigPolicy) IsDangerous(command string) bool {
 
 // AllowedPath returns true if the path is within the sandbox.
 func (p *ConfigPolicy) AllowedPath(path string) bool {
-	return p.sandbox.Allowed(path)
+	if p.sandbox.Allowed(path) {
+		return true
+	}
+	return p.readOnlySandbox != nil && p.readOnlySandbox.Allowed(path)
+}
+
+// AllowedPathForTool returns true if the path is allowed for the specific tool.
+func (p *ConfigPolicy) AllowedPathForTool(toolName, path string) bool {
+	if p.sandbox.Allowed(path) {
+		return true
+	}
+	return isReadOnlyFileTool(toolName) && p.readOnlySandbox != nil && p.readOnlySandbox.Allowed(path)
 }
 
 // SetOverride allows runtime modification of per-tool policy.
@@ -191,7 +210,15 @@ func isSensitivePath(path string) bool {
 
 func isFileTool(name string) bool {
 	switch name {
-	case "read_file", "write_file", "edit_file", "list_directory":
+	case "read_file", "write_file", "edit_file", "list_directory", "search_files", "glob":
+		return true
+	}
+	return false
+}
+
+func isReadOnlyFileTool(name string) bool {
+	switch name {
+	case "read_file", "list_directory", "search_files", "glob":
 		return true
 	}
 	return false
@@ -243,4 +270,11 @@ func extractCommand(input json.RawMessage) (string, bool) {
 
 func truncateStr(s string, maxLen int) string {
 	return util.Truncate(s, maxLen)
+}
+
+func newOptionalPathSandbox(allowedDirs []string) *PathSandbox {
+	if len(allowedDirs) == 0 {
+		return nil
+	}
+	return NewPathSandbox(allowedDirs)
 }

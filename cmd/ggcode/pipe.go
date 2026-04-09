@@ -24,7 +24,7 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, outputPath string, bypass bool) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
 	resolved, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolving endpoint: %v\n", err)
@@ -42,9 +42,16 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, 
 		return 1
 	}
 
+	workingDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolving working directory: %v\n", err)
+		return 1
+	}
+
 	// Setup permission: non-interactive, but honor explicit bypass mode and
-	// resolve allowed_dirs relative to the config file when available.
-	allowedDirs := cfg.ExpandAllowedDirs(pipeAllowedDirsBase(cfgPath))
+	// always include the live workspace so worker subprocesses can fully operate
+	// inside their assigned directory even when the config lives elsewhere.
+	allowedDirs := pipeAllowedDirs(cfg, cfgPath, workingDir)
 	rules := make(map[string]permission.Decision)
 	for name, perm := range cfg.ToolPerms {
 		switch config.ToolPermission(perm) {
@@ -55,7 +62,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, 
 		}
 	}
 	mode := pipePermissionMode(bypass)
-	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
+	policy := permission.NewConfigPolicyWithModeAndReadOnlyDirs(rules, allowedDirs, readOnlyAllowedDirs, mode)
 
 	// Apply allowedTools filter
 	if len(allowedTools) > 0 {
@@ -65,7 +72,6 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, 
 	}
 
 	// Setup tools (after policy so sandbox checks can be wired)
-	workingDir, _ := os.Getwd()
 	registry := tool.NewRegistry()
 	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		fmt.Fprintf(os.Stderr, "registering tools: %v\n", err)
@@ -209,12 +215,17 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, 
 	return 0
 }
 
-func pipeAllowedDirsBase(cfgPath string) string {
+func pipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string) []string {
+	if cfg == nil {
+		return nil
+	}
+	merged := cfg.ExpandAllowedDirs(workingDir)
 	trimmed := strings.TrimSpace(cfgPath)
 	if trimmed == "" {
-		return "."
+		return dedupeStrings(merged)
 	}
-	return filepath.Dir(trimmed)
+	configRelative := cfg.ExpandAllowedDirs(filepath.Dir(trimmed))
+	return dedupeStrings(append(merged, configRelative...))
 }
 
 func pipePermissionMode(bypass bool) permission.PermissionMode {
@@ -222,6 +233,22 @@ func pipePermissionMode(bypass bool) permission.PermissionMode {
 		return permission.BypassMode
 	}
 	return permission.AutoMode
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // readStdin reads all data from stdin if it's a pipe, otherwise returns "".

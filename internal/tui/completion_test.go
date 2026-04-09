@@ -129,15 +129,17 @@ func TestDetectMention(t *testing.T) {
 	}
 }
 
-func TestCompleteSlashCommandIncludesUserInvocableSkills(t *testing.T) {
+func TestCompleteSlashCommandOnlyIncludesLegacyCommands(t *testing.T) {
 	matches := CompleteSlashCommand("/de", map[string]*commands.Command{
 		"deploy": {
 			Name:          "deploy",
 			UserInvocable: true,
+			LoadedFrom:    commands.LoadedFromCommands,
 		},
 		"debug": {
 			Name:          "debug",
-			UserInvocable: false,
+			UserInvocable: true,
+			LoadedFrom:    commands.LoadedFromSkills,
 		},
 	})
 

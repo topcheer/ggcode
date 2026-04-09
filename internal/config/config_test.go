@@ -318,6 +318,27 @@ func TestSaveLanguagePreferenceCreatesMinimalConfig(t *testing.T) {
 	}
 }
 
+func TestSaveSidebarPreferenceCreatesUIConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg := DefaultConfig()
+	cfg.FilePath = path
+
+	if err := cfg.SaveSidebarPreference(false); err != nil {
+		t.Fatalf("SaveSidebarPreference() error = %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.SidebarVisible() {
+		t.Fatal("expected persisted sidebar preference to be false")
+	}
+	if cfg.SidebarVisible() {
+		t.Fatal("expected in-memory sidebar preference to update")
+	}
+}
+
 func TestLoad_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")

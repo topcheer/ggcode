@@ -185,3 +185,19 @@ func TestConfigPolicy_IsDangerous(t *testing.T) {
 		t.Error("expected ls to not be dangerous")
 	}
 }
+
+func TestConfigPolicy_ReadOnlySandboxAppliesOnlyToReadTools(t *testing.T) {
+	p := NewConfigPolicyWithModeAndReadOnlyDirs(nil, []string{"/tmp/worktree"}, []string{"/tmp/project/.ggcode"}, AutoMode)
+	if !p.AllowedPathForTool("read_file", "/tmp/project/.ggcode/harness.yaml") {
+		t.Fatal("expected read_file to allow read-only sandbox path")
+	}
+	if !p.AllowedPathForTool("glob", "/tmp/project/.ggcode") {
+		t.Fatal("expected glob to allow read-only sandbox path")
+	}
+	if p.AllowedPathForTool("write_file", "/tmp/project/.ggcode/harness.yaml") {
+		t.Fatal("expected write_file to deny read-only sandbox path")
+	}
+	if p.AllowedPathForTool("edit_file", "/tmp/project/.ggcode/harness.yaml") {
+		t.Fatal("expected edit_file to deny read-only sandbox path")
+	}
+}

@@ -61,27 +61,38 @@ func (m *MCPPlugin) Name() string { return m.cfg.Name }
 
 // Connect initializes the MCP server, discovers tools, and returns an adapter.
 func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	if m.adapter != nil {
-		return m.adapter, nil
+		adapter := m.adapter
+		m.mu.RUnlock()
+		return adapter, nil
 	}
+	m.mu.RUnlock()
 
 	client := mcp.NewClientFromConfig(m.cfg)
 	if err := client.Start(ctx); err != nil {
+		m.mu.Lock()
 		m.status = MCPStatusFailed
 		m.lastError = normalizeMCPError(err)
+		m.mu.Unlock()
 		return nil, err
 	}
 	tools, prompts, resources, err := discoverCapabilities(ctx, client)
 	if err != nil {
 		client.Close()
+		m.mu.Lock()
 		m.status = MCPStatusFailed
 		m.lastError = normalizeMCPError(err)
+		m.mu.Unlock()
 		return nil, err
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.adapter != nil {
+		_ = client.Close()
+		return m.adapter, nil
+	}
 	m.client = client
 	m.adapter = mcp.NewAdapter(m.cfg.Name, client, tools)
 	m.connected = true

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 
 const detachedHelperEnv = "GGCODE_TEST_DETACHED_HELPER"
 const detachedChildEnv = "GGCODE_TEST_DETACHED_CHILD"
+const detachedIgnoreTermEnv = "GGCODE_TEST_DETACHED_IGNORE_TERM"
 
 func TestRunCommandDetachedHelper(t *testing.T) {
 	if os.Getenv(detachedHelperEnv) != "1" {
@@ -25,6 +27,9 @@ func TestRunCommandDetachedHelper(t *testing.T) {
 
 	pidFile := os.Args[len(os.Args)-1]
 	if os.Getenv(detachedChildEnv) == "1" {
+		if os.Getenv(detachedIgnoreTermEnv) == "1" {
+			signal.Ignore(syscall.SIGTERM)
+		}
 		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 			t.Fatalf("write child pid: %v", err)
 		}
@@ -44,6 +49,14 @@ func TestRunCommandDetachedHelper(t *testing.T) {
 }
 
 func TestRunCommand_ContextCancelStopsDetachedDescendants(t *testing.T) {
+	testRunCommandContextCancelStopsDetachedDescendants(t, false)
+}
+
+func TestRunCommand_ContextCancelKillsDetachedDescendantsIgnoringTerminate(t *testing.T) {
+	testRunCommandContextCancelStopsDetachedDescendants(t, true)
+}
+
+func testRunCommandContextCancelStopsDetachedDescendants(t *testing.T, ignoreTerm bool) {
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
@@ -51,7 +64,11 @@ func TestRunCommand_ContextCancelStopsDetachedDescendants(t *testing.T) {
 
 	rc := RunCommand{WorkingDir: t.TempDir()}
 	pidFile := rc.WorkingDir + "/detached.pid"
-	command := fmt.Sprintf("%s=1 %q -test.run=TestRunCommandDetachedHelper -- %q", detachedHelperEnv, exe, pidFile)
+	command := fmt.Sprintf("%s=1", detachedHelperEnv)
+	if ignoreTerm {
+		command += fmt.Sprintf(" %s=1", detachedIgnoreTermEnv)
+	}
+	command += fmt.Sprintf(" %q -test.run=TestRunCommandDetachedHelper -- %q", exe, pidFile)
 	input := json.RawMessage(fmt.Sprintf(`{"command": %q}`, command))
 
 	ctx, cancel := context.WithCancel(context.Background())

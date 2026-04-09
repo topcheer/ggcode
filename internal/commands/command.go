@@ -57,6 +57,10 @@ func (c *Command) SlashName() string {
 	return "/" + c.Name
 }
 
+func (c *Command) UserSlashVisible() bool {
+	return c != nil && c.UserInvocable && c.LoadedFrom == LoadedFromCommands && c.SlashName() != ""
+}
+
 func (c *Command) Title() string {
 	if c == nil {
 		return ""

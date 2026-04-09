@@ -178,12 +178,8 @@ func (m *CommandJobManager) Stop(id string) (CommandJobSnapshot, error) {
 		return CommandJobSnapshot{}, err
 	}
 
-	job.mu.Lock()
-	cancel := job.cancel
-	running := job.Status == CommandJobRunning
-	job.mu.Unlock()
-	if running && cancel != nil {
-		cancel()
+	if err := stopCommandJob(job); err != nil {
+		return CommandJobSnapshot{}, err
 	}
 
 	return m.snapshot(job), nil

@@ -34,6 +34,10 @@ type PermissionPolicy interface {
 	// AllowedPath returns true if the given file path is within the sandbox.
 	AllowedPath(path string) bool
 
+	// AllowedPathForTool returns true if the given path is within the sandbox
+	// for the specific file tool being executed.
+	AllowedPathForTool(toolName, path string) bool
+
 	// SetOverride allows runtime modification of per-tool policy (e.g., 'a' key in TUI).
 	SetOverride(toolName string, decision Decision)
 }

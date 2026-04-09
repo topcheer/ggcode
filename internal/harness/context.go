@@ -16,7 +16,11 @@ func ResolveContext(cfg *Config, raw string) (*ContextConfig, error) {
 	}
 	cleanRaw := filepath.Clean(raw)
 	for _, contextCfg := range cfg.Contexts {
-		if strings.EqualFold(contextCfg.Name, raw) || filepath.Clean(contextCfg.Path) == cleanRaw {
+		if strings.EqualFold(contextCfg.Name, raw) {
+			match := contextCfg
+			return &match, nil
+		}
+		if strings.TrimSpace(contextCfg.Path) != "" && filepath.Clean(contextCfg.Path) == cleanRaw {
 			match := contextCfg
 			return &match, nil
 		}

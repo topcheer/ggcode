@@ -20,7 +20,10 @@ type AnthropicProvider struct {
 
 // NewAnthropicProvider creates a new Anthropic provider.
 func NewAnthropicProvider(apiKey string, model string, maxTokens int) *AnthropicProvider {
-	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+	client := anthropic.NewClient(
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(providerRetryAttempts-1),
+	)
 	return &AnthropicProvider{
 		client:    client,
 		model:     model,
@@ -33,6 +36,7 @@ func NewAnthropicProviderWithBaseURL(apiKey string, model string, maxTokens int,
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
+		option.WithMaxRetries(providerRetryAttempts - 1),
 	}
 	client := anthropic.NewClient(opts...)
 	return &AnthropicProvider{

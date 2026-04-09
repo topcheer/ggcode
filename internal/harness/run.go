@@ -18,11 +18,12 @@ type Runner interface {
 }
 
 type RunRequest struct {
-	GGCodeConfigPath string
-	WorkingDir       string
-	Prompt           string
-	OnOutput         func(string)
-	OnProgress       func(string)
+	GGCodeConfigPath    string
+	ReadOnlyAllowedDirs []string
+	WorkingDir          string
+	Prompt              string
+	OnOutput            func(string)
+	OnProgress          func(string)
 }
 
 type RunResult struct {
@@ -67,6 +68,11 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 	args := []string{"--bypass", "--prompt", req.Prompt}
 	if trimmed := strings.TrimSpace(req.GGCodeConfigPath); trimmed != "" {
 		args = append([]string{"--config", trimmed}, args...)
+	}
+	for _, dir := range req.ReadOnlyAllowedDirs {
+		if trimmed := strings.TrimSpace(dir); trimmed != "" {
+			args = append([]string{"--readOnlyAllowedDir", trimmed}, args...)
+		}
 	}
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir = req.WorkingDir
@@ -249,9 +255,10 @@ func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, 
 
 	prompt := BuildRunPrompt(cfg, task)
 	req := RunRequest{
-		GGCodeConfigPath: findGGCodeConfig(project.RootDir),
-		WorkingDir:       workingDir,
-		Prompt:           prompt,
+		GGCodeConfigPath:    findGGCodeConfig(project.RootDir),
+		ReadOnlyAllowedDirs: harnessWorkerReadOnlyDirs(project),
+		WorkingDir:          workingDir,
+		Prompt:              prompt,
 	}
 	var (
 		result *RunResult
@@ -303,7 +310,7 @@ func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, 
 	if result.ExitCode == 0 {
 		if task.VerificationStatus == VerificationFailed {
 			task.Status = TaskFailed
-			task.Error = "harness verification failed; inspect the delivery report"
+			task.Error = summarizeVerificationFailure(deliveryReport, deliveryReportPath)
 		} else {
 			task.Status = TaskCompleted
 			task.ReviewStatus = ReviewPending
@@ -315,7 +322,7 @@ func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, 
 		}
 	} else {
 		task.Status = TaskFailed
-		task.Error = fmt.Sprintf("ggcode exited with code %d", result.ExitCode)
+		task.Error = summarizeRunExitError(result, task.LogPath)
 	}
 	if err := SaveTask(project, task); err != nil {
 		return nil, err
@@ -329,6 +336,84 @@ func shouldPersistHarnessResultLog(path string) bool {
 		return true
 	}
 	return info.Size() == 0
+}
+
+func summarizeRunExitError(result *RunResult, logPath string) string {
+	if result == nil {
+		return "ggcode exited with an unknown failure"
+	}
+	base := fmt.Sprintf("ggcode exited with code %d", result.ExitCode)
+	if detail := summarizeHarnessRunFailure(result.Output); detail != "" {
+		base += ": " + detail
+	}
+	if trimmed := strings.TrimSpace(logPath); trimmed != "" {
+		base += fmt.Sprintf(" (log: %s)", trimmed)
+	}
+	return base
+}
+
+func summarizeHarnessRunFailure(output string) string {
+	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "tool:") || strings.HasPrefix(line, "tool result:") {
+			continue
+		}
+		if strings.HasPrefix(line, "___BEGIN___COMMAND_DONE_MARKER___") {
+			continue
+		}
+		return truncateHarnessFailureText(line, 240)
+	}
+	return ""
+}
+
+func summarizeVerificationFailure(report *DeliveryReport, reportPath string) string {
+	base := "harness verification failed"
+	if report != nil && report.Check != nil {
+		for _, issue := range report.Check.Issues {
+			if msg := strings.TrimSpace(issue.Message); msg != "" {
+				base += ": " + truncateHarnessFailureText(msg, 180)
+				goto done
+			}
+		}
+		for _, command := range report.Check.Commands {
+			if command.Success {
+				continue
+			}
+			summary := strings.TrimSpace(firstNonEmptyHarnessFailure(command.Name, command.Command))
+			if summary != "" {
+				base += ": failed command " + truncateHarnessFailureText(summary, 180)
+				goto done
+			}
+		}
+	}
+done:
+	if trimmed := strings.TrimSpace(reportPath); trimmed != "" {
+		base += fmt.Sprintf(" (delivery report: %s)", trimmed)
+	}
+	return base
+}
+
+func firstNonEmptyHarnessFailure(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func truncateHarnessFailureText(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	if maxLen < 4 {
+		return text[:maxLen]
+	}
+	return text[:maxLen-3] + "..."
 }
 
 func RunQueuedTasks(ctx context.Context, project Project, cfg *Config, runner Runner, opts QueueRunOptions) (*RunQueueSummary, error) {
@@ -375,6 +460,18 @@ func findGGCodeConfig(root string) string {
 		}
 	}
 	return ""
+}
+
+func harnessWorkerReadOnlyDirs(project Project) []string {
+	dirs := make([]string, 0, 1)
+	if project.RootDir == "" {
+		return dirs
+	}
+	harnessDir := filepath.Join(project.RootDir, ".ggcode")
+	if info, err := os.Stat(harnessDir); err == nil && info.IsDir() {
+		dirs = append(dirs, harnessDir)
+	}
+	return dirs
 }
 
 func BuildRunPrompt(cfg *Config, task *Task) string {

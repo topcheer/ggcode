@@ -176,7 +176,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 | --- | --- |
 | `/mcp` | Inspect MCP servers and MCP tools |
 | `/plugins` | List loaded plugins |
-| `/skills` | Browse available skills |
+| `/skills` | Browse the skills the agent may invoke for you |
 | `/memory` | Inspect stored memory |
 | `/agents` | List active sub-agents |
 | `/agent <id>` | Inspect a sub-agent |
@@ -242,37 +242,35 @@ ggcode harness doctor
 ggcode harness gc
 ```
 
-`ggcode harness init` now bootstraps git automatically when the current directory is not yet a repository, and it also creates the harness monitor files up front, including `.ggcode/harness/events.jsonl` and `.ggcode/harness/snapshot.db`. Queued harness runs then default to **isolated worktrees** under `.ggcode/harness/worktrees/<task-id>`, so larger efforts can advance in separate task branches without mutating the repo root working tree.
+### Harness workflow: from scaffold to rollout
 
-For larger repos, `harness init` also detects obvious bounded contexts such as `cmd/` and `internal/*`, then creates nested `AGENTS.md` files inside those directories so each subsystem can carry local guidance instead of overloading a single root instruction file.
+Harness is the repo-scale control plane in ggcode. It is designed for work that is too large or too stateful for a single chat turn, but still wants to reuse the same agent, tools, and approval model.
 
-Queued tasks can also express prerequisites with `--depends-on`, which means larger backlogs can behave like a simple delivery DAG: downstream work stays `blocked` until its prerequisite task reaches `completed`.
+1. **Initialize the project surface**
+   - `ggcode harness init` bootstraps git automatically when the directory is still empty or non-git
+   - it creates `.ggcode/harness.yaml`, root guidance files, and the monitor state files `.ggcode/harness/events.jsonl` plus `.ggcode/harness/snapshot.db`
+   - in larger repos it also detects obvious bounded contexts such as `cmd/` and `internal/*`, then writes nested `AGENTS.md` files so local guidance can live near the code it governs
 
-Harness backlogs now also support bounded recovery: `run.max_attempts` in `.ggcode/harness.yaml` controls how many times failed tasks may be retried, `ggcode harness run --retry-failed` will re-attempt failed backlog items under that limit, and `ggcode harness run --resume-interrupted` will pick up tasks left in `running` state after an interrupted harness session.
+2. **Queue and execute tracked work**
+   - `ggcode harness queue` creates persistent backlog items instead of immediately starting a one-off run
+   - tasks can be scoped with `--context` and dependency-gated with `--depends-on`, so downstream work stays `blocked` until prerequisites complete
+   - queued execution is **worker-backed by default** and normally runs inside isolated worktrees under `.ggcode/harness/worktrees/<task-id>`, which keeps repo-root state cleaner during long efforts
+   - `run.max_attempts` in `.ggcode/harness.yaml`, `ggcode harness run --retry-failed`, and `ggcode harness run --resume-interrupted` cover bounded retries and interrupted-session recovery
 
-Queued harness execution is now **worker-backed by default** through the same sub-agent lifecycle used elsewhere in ggcode, so running tasks persist worker IDs, phases, and progress summaries while they execute instead of appearing as opaque blocking jobs.
+3. **Inspect and route operational state**
+   - `ggcode harness monitor` shows the live task/release/rollout snapshot and supports `--watch`
+   - `ggcode harness contexts` summarizes backlog state per bounded context, including verification failures and release readiness
+   - contexts can carry lightweight owner metadata, and `ggcode harness inbox` turns that into actionable owner-grouped buckets for review-ready, promotion-ready, and retryable work
+   - `ggcode harness doctor` and `ggcode harness gc` handle entropy signals such as stale blocked tasks, orphaned worktrees, and worker/task drift
 
-`harness doctor` and `harness gc` now also scan for common entropy signals in larger repos: stale blocked tasks, orphaned worktrees under `.ggcode/harness/worktrees`, and running tasks whose worker state no longer matches the task lifecycle.
+4. **Promote verified work toward release**
+   - completed tasks persist delivery evidence such as changed files and a delivery report, then enter the **review loop**
+   - `ggcode harness review` approves or rejects verified tasks; rejected items re-enter the retry path with notes
+   - approved work enters the **promotion loop** through `ggcode harness promote`, which can also merge git-worktree task branches back into the repo root when applied
+   - promoted work then enters the **release loop** through `ggcode harness release` and `ggcode harness release apply`, with optional `--owner`, `--context`, `--environment`, and `--group-by owner|context`
+   - grouped releases become staged rollout waves managed by `harness release rollouts`, `approve`, `reject`, `advance`, `pause`, `resume`, and `abort`
 
-Completed harness runs now also persist **delivery evidence**: changed-file lists plus a delivery report with post-run harness verification, so task state reflects what actually changed in the repo instead of only trusting subprocess exit codes.
-
-On top of that, harness now has a lightweight **review loop**: verified completed tasks become review-ready, `harness review` lists them, approvals mark them accepted, and rejections send them back into the retry path as failed tasks with review notes.
-
-Approved tasks can now move into a lightweight **promotion loop** too: `harness promote` shows approved work waiting to land, and `harness promote apply` marks it promoted while also merging the task branch back into the repo when the task ran in a git worktree.
-
-Promoted tasks can then be collected into a lightweight **release loop**: `harness release` builds the current batch plan from promoted-but-unreleased work, `--owner` / `--context` can scope that batch to one routed slice, `--environment` can tag that work for `staging` / `prod` style targets, `--group-by owner|context` can split it into rollout waves, `harness release apply` stamps those tasks with shared release batch IDs plus persisted release reports under the harness logs directory, and `harness release rollouts` / `harness release approve` / `harness release reject` / `harness release advance` / `harness release pause` / `harness release resume` / `harness release abort` let you gate, progress, or deliberately stop grouped waves through a staged rollout sequence.
-
-That staged rollout state is now also visible in the main operational views: `harness doctor`, `harness contexts`, and `harness inbox` all surface rollout activity, including paused and aborted waves, and they now also show rollout gate counts (`pending` / `approved` / `rejected`) instead of forcing you to jump into `harness release rollouts` for every status check.
-
-Harness tasks can now also bind explicitly to a **bounded context**. A context-bound task carries its context metadata into prompts, task state, and verification, and any `commands:` defined under that context in `.ggcode/harness.yaml` run only for that context instead of every task inheriting the whole-repo gate set.
-
-`harness contexts` adds a context-level view over the backlog, so you can see per-context task counts, verification failures, review/promotion/release readiness, and configured command counts without reading the raw task log one item at a time.
-
-Contexts can now also carry lightweight **owner metadata**, so prompts and context reports can tell the next agent who or what team conceptually owns that bounded context.
-
-`harness inbox` turns that owner metadata into an actionable view by grouping **review-ready**, **promotion-ready**, and **retryable** tasks per owner, with an `unowned` bucket for work that still needs routing.
-
-That inbox is no longer read-only: owner-specific batch actions can now promote all promotion-ready tasks for one owner or retry all retryable tasks for one owner without touching unrelated backlogs.
+Rollout and gate state is visible outside the release commands too: `harness doctor`, `harness contexts`, and `harness inbox` all surface rollout activity and gate counts (`pending`, `approved`, `rejected`) so operators can monitor progress without bouncing between narrow subcommands.
 
 Useful flags:
 
@@ -307,6 +305,10 @@ tool_permissions:
 ggcode ships with built-in presets for mainstream vendors and several coding-oriented endpoints, so you usually start by choosing a vendor or setting API keys rather than writing the full provider catalog yourself.
 
 For long-running or interactive shell work, the built-in async command tools let the agent start a background command, poll progress, send follow-up stdin input, and stop the job without blocking the whole session.
+
+Skills are documented and browsable through `/skills`, but they are not a user slash-command surface. They are part of the agent's reusable capability inventory and are invoked by the model through the `skill` tool when appropriate.
+
+Skills are documented and browsable through `/skills`, but they are not a user slash-command surface. They are primarily part of the agent's reusable capability inventory and are invoked by the model through the `skill` tool when appropriate.
 
 For the complete reference, examples, vendor catalog, hooks, MCP servers, plugins, and sub-agent settings, see:
 

@@ -231,7 +231,7 @@ func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command
 		}
 	}
 	for _, cmd := range customCmds {
-		if cmd == nil || !cmd.UserInvocable {
+		if !cmd.UserSlashVisible() {
 			continue
 		}
 		name := cmd.SlashName()

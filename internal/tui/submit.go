@@ -46,11 +46,13 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancelFunc = cancel
+		m.activeAgentRunID++
+		runID := m.activeAgentRunID
 
 		go func() {
 			defer func() {
 				if m.program != nil {
-					m.program.Send(doneMsg{})
+					m.program.Send(agentDoneMsg{RunID: runID})
 				}
 				cancel()
 			}()
@@ -67,29 +69,29 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					}
 					switch event.Type {
 					case provider.StreamEventText:
-						m.program.Send(streamMsg(event.Text))
-						m.program.Send(statusMsg{
+						m.program.Send(agentStreamMsg{RunID: runID, Text: event.Text})
+						m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 							Activity: m.t("status.writing"),
-						})
+						}})
 					case provider.StreamEventToolCallDone:
 						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 						if isSubAgentLifecycleTool(event.Tool.Name) {
-							m.program.Send(toolStatusMsg{
+							m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 								ToolName: event.Tool.Name,
 								Activity: m.t("status.thinking"),
 								Running:  true,
 								RawArgs:  string(event.Tool.Arguments),
 								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
-							})
+							}})
 							break
 						}
-						m.program.Send(statusMsg{
+						m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 							Activity:  present.Activity,
 							ToolName:  present.DisplayName,
 							ToolArg:   present.Detail,
 							ToolCount: m.statusToolCount + 1,
-						})
-						m.program.Send(toolStatusMsg{
+						}})
+						m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 							ToolName:    event.Tool.Name,
 							DisplayName: present.DisplayName,
 							Detail:      present.Detail,
@@ -97,11 +99,11 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							Running:     true,
 							RawArgs:     string(event.Tool.Arguments),
 							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
-						})
+						}})
 					case provider.StreamEventToolResult:
 						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 						if isSubAgentLifecycleTool(event.Tool.Name) {
-							m.program.Send(toolStatusMsg{
+							m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 								ToolName: event.Tool.Name,
 								Activity: m.t("status.thinking"),
 								Running:  false,
@@ -109,16 +111,16 @@ func (m *Model) startAgent(text string) tea.Cmd {
 								RawArgs:  string(event.Tool.Arguments),
 								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 								IsError:  event.IsError,
-							})
+							}})
 							m.program.Send(subAgentUpdateMsg{})
 							break
 						}
-						m.program.Send(statusMsg{
+						m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 							Activity: m.t("status.thinking"),
 							ToolName: present.DisplayName,
 							ToolArg:  present.Detail,
-						})
-						m.program.Send(toolStatusMsg{
+						}})
+						m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 							ToolName:    event.Tool.Name,
 							DisplayName: present.DisplayName,
 							Detail:      present.Detail,
@@ -128,16 +130,16 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							RawArgs:     string(event.Tool.Arguments),
 							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 							IsError:     event.IsError,
-						})
+						}})
 					case provider.StreamEventError:
 						if !errors.Is(event.Error, context.Canceled) {
 							streamErrSent = true
-							m.program.Send(errMsg{err: event.Error})
+							m.program.Send(agentErrMsg{RunID: runID, Err: event.Error})
 						}
 					}
 				})
 				if err != nil && !errors.Is(err, context.Canceled) && !streamErrSent && m.program != nil {
-					m.program.Send(errMsg{err: err})
+					m.program.Send(agentErrMsg{RunID: runID, Err: err})
 				}
 			} else {
 				streamErrSent := false
@@ -147,29 +149,29 @@ func (m *Model) startAgent(text string) tea.Cmd {
 					}
 					switch event.Type {
 					case provider.StreamEventText:
-						m.program.Send(streamMsg(event.Text))
-						m.program.Send(statusMsg{
+						m.program.Send(agentStreamMsg{RunID: runID, Text: event.Text})
+						m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 							Activity: m.t("status.writing"),
-						})
+						}})
 					case provider.StreamEventToolCallDone:
 						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 						if isSubAgentLifecycleTool(event.Tool.Name) {
-							m.program.Send(toolStatusMsg{
+							m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 								ToolName: event.Tool.Name,
 								Activity: m.t("status.thinking"),
 								Running:  true,
 								RawArgs:  string(event.Tool.Arguments),
 								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
-							})
+							}})
 							break
 						}
-						m.program.Send(statusMsg{
+						m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 							Activity:  present.Activity,
 							ToolName:  present.DisplayName,
 							ToolArg:   present.Detail,
 							ToolCount: m.statusToolCount + 1,
-						})
-						m.program.Send(toolStatusMsg{
+						}})
+						m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 							ToolName:    event.Tool.Name,
 							DisplayName: present.DisplayName,
 							Detail:      present.Detail,
@@ -177,11 +179,11 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							Running:     true,
 							RawArgs:     string(event.Tool.Arguments),
 							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
-						})
+						}})
 					case provider.StreamEventToolResult:
 						present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 						if isSubAgentLifecycleTool(event.Tool.Name) {
-							m.program.Send(toolStatusMsg{
+							m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 								ToolName: event.Tool.Name,
 								Activity: m.t("status.thinking"),
 								Running:  false,
@@ -189,16 +191,16 @@ func (m *Model) startAgent(text string) tea.Cmd {
 								RawArgs:  string(event.Tool.Arguments),
 								Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 								IsError:  event.IsError,
-							})
+							}})
 							m.program.Send(subAgentUpdateMsg{})
 							break
 						}
-						m.program.Send(statusMsg{
+						m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 							Activity: m.t("status.thinking"),
 							ToolName: present.DisplayName,
 							ToolArg:  present.Detail,
-						})
-						m.program.Send(toolStatusMsg{
+						}})
+						m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 							ToolName:    event.Tool.Name,
 							DisplayName: present.DisplayName,
 							Detail:      present.Detail,
@@ -208,16 +210,16 @@ func (m *Model) startAgent(text string) tea.Cmd {
 							RawArgs:     string(event.Tool.Arguments),
 							Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 							IsError:     event.IsError,
-						})
+						}})
 					case provider.StreamEventError:
 						if !errors.Is(event.Error, context.Canceled) {
 							streamErrSent = true
-							m.program.Send(errMsg{err: event.Error})
+							m.program.Send(agentErrMsg{RunID: runID, Err: event.Error})
 						}
 					}
 				})
 				if err != nil && !errors.Is(err, context.Canceled) && !streamErrSent && m.program != nil {
-					m.program.Send(errMsg{err: err})
+					m.program.Send(agentErrMsg{RunID: runID, Err: err})
 				}
 			}
 		}()

@@ -23,8 +23,9 @@ type Project struct {
 }
 
 type InitOptions struct {
-	Goal  string
-	Force bool
+	Goal     string
+	Force    bool
+	Contexts []ContextConfig
 }
 
 type InitResult struct {
@@ -33,6 +34,7 @@ type InitResult struct {
 	Overwritten    []string
 	Config         *Config
 	GitInitialized bool
+	ScaffoldCommit string
 }
 
 func Discover(startDir string) (Project, error) {
@@ -71,7 +73,11 @@ func Init(dir string, opts InitOptions) (*InitResult, error) {
 	project := projectFromRoot(root)
 	projectName := filepath.Base(root)
 	cfg := DefaultConfig(projectName, opts.Goal)
-	cfg.Contexts = detectContexts(root)
+	if len(opts.Contexts) > 0 {
+		cfg.Contexts = NormalizeContexts(opts.Contexts)
+	} else {
+		cfg.Contexts = detectContexts(root)
+	}
 
 	if err := os.MkdirAll(project.StateDir, 0755); err != nil {
 		return nil, fmt.Errorf("create state dir: %w", err)
@@ -111,7 +117,7 @@ func Init(dir string, opts InitOptions) (*InitResult, error) {
 	collectInitPath(result, runbookPath, created, overwritten)
 
 	for _, contextCfg := range cfg.Contexts {
-		if !contextCfg.RequireAgent {
+		if !contextCfg.RequireAgent || strings.TrimSpace(contextCfg.Path) == "" {
 			continue
 		}
 		agentPath := filepath.Join(project.RootDir, contextCfg.Path, "AGENTS.md")
@@ -120,6 +126,12 @@ func Init(dir string, opts InitOptions) (*InitResult, error) {
 			return nil, err
 		}
 		collectInitPath(result, agentPath, created, overwritten)
+	}
+
+	if commit, err := commitInitialHarnessScaffold(context.Background(), project.RootDir, result.CreatedPaths, result.Overwritten); err != nil {
+		return nil, err
+	} else {
+		result.ScaffoldCommit = commit
 	}
 
 	return result, nil
@@ -138,6 +150,29 @@ func ensureGitRepository(ctx context.Context, root string) (bool, error) {
 		return false, fmt.Errorf("initialize git repository: git init completed but %s is still not a git repository", root)
 	}
 	return true, nil
+}
+
+func commitInitialHarnessScaffold(ctx context.Context, root string, created, overwritten []string) (string, error) {
+	if hasHeadCommit(ctx, root) {
+		return "", nil
+	}
+	paths := dedupeExistingPaths(root, append(append([]string(nil), created...), overwritten...))
+	if len(paths) == 0 {
+		return "", nil
+	}
+	addCmd := exec.CommandContext(ctx, "git", append([]string{"add", "--"}, paths...)...)
+	addCmd.Dir = root
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("stage harness scaffold: %s", strings.TrimSpace(string(out)))
+	}
+	commitArgs := []string{"commit", "--quiet", "-m", "chore: initialize harness scaffold"}
+	commitArgs = append(commitAuthorConfig(ctx, root), commitArgs...)
+	commitCmd := exec.CommandContext(ctx, "git", commitArgs...)
+	commitCmd.Dir = root
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("commit harness scaffold: %s", strings.TrimSpace(string(out)))
+	}
+	return gitHeadCommit(ctx, root)
 }
 
 func projectFromRoot(root string) Project {
@@ -187,6 +222,58 @@ func collectInitPath(result *InitResult, path string, created bool, overwritten 
 	}
 }
 
+func hasHeadCommit(ctx context.Context, root string) bool {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = root
+	return cmd.Run() == nil
+}
+
+func gitHeadCommit(ctx context.Context, root string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve harness scaffold commit: %s", strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func commitAuthorConfig(ctx context.Context, root string) []string {
+	nameCmd := exec.CommandContext(ctx, "git", "config", "--get", "user.name")
+	nameCmd.Dir = root
+	emailCmd := exec.CommandContext(ctx, "git", "config", "--get", "user.email")
+	emailCmd.Dir = root
+	if nameCmd.Run() == nil && emailCmd.Run() == nil {
+		return nil
+	}
+	return []string{"-c", "user.name=ggcode harness", "-c", "user.email=harness@ggcode.local"}
+}
+
+func dedupeExistingPaths(root string, paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		rel = filepath.Clean(rel)
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		out = append(out, rel)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func detectContexts(root string) []ContextConfig {
 	candidates := []ContextConfig{
 		{Name: "application-entrypoints", Path: "cmd", Description: "Application entrypoints and binaries", RequireAgent: true},
@@ -229,5 +316,10 @@ func detectContexts(root string) []ContextConfig {
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].Path < filtered[j].Path
 	})
-	return filtered
+	return NormalizeContexts(filtered)
+}
+
+// DetectContexts returns heuristic context suggestions from the current repo tree.
+func DetectContexts(root string) []ContextConfig {
+	return detectContexts(root)
 }

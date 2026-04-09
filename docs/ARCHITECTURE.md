@@ -4,13 +4,13 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-04-07
+> Last updated: 2026-04-09
 
 ## Overview
 
 ggcode is a terminal-based AI coding agent written in Go. It provides an interactive REPL where users describe coding tasks in natural language; the agent iteratively plans, calls tools, and refines its work in an agentic loop.
 
-The core agent loop is now complemented by a lightweight **harness control plane**. Harness mode is intentionally implemented around the existing runtime rather than inside it: `ggcode harness ...` scaffolds repo guidance, generates nested subsystem `AGENTS.md` files, runs invariant checks, tracks orchestrated work items, queues multi-step work, supports dependency-gated backlogs, binds tasks to bounded contexts when useful, carries lightweight context ownership metadata, summarizes queue health per context, exposes owner-centric actionable inboxes and owner-filtered batch actions, creates isolated git worktrees when available, can explicitly retry failed backlog items or resume interrupted runs, uses pollable sub-agent-backed workers for queued execution, persists post-run delivery evidence, exposes review/approval, promotion, and owner/context-scoped release-batch loops on verified tasks, and can further split release-ready work into owner- or context-grouped rollout waves with persisted staged rollout state, explicit gate approval/rejection, and advance/pause/resume/abort controls without forking a second agent architecture.
+The core agent loop is now complemented by a lightweight **harness control plane**. Harness mode is intentionally implemented around the existing runtime rather than inside it: `ggcode harness ...` scaffolds repo guidance, generates nested subsystem `AGENTS.md` files, runs invariant checks, tracks orchestrated work items, queues multi-step work, supports dependency-gated backlogs, binds tasks to bounded contexts when useful, carries lightweight context ownership metadata, summarizes queue health per context, exposes owner-centric actionable inboxes and owner-filtered batch actions, creates isolated git worktrees when available, can explicitly retry failed backlog items or resume interrupted runs, uses pollable sub-agent-backed workers for queued execution, persists post-run delivery evidence, exposes review/approval, promotion, and owner/context-scoped release-batch loops on verified tasks, and can further split release-ready work into owner- or context-grouped rollout waves with persisted staged rollout state, explicit environment tags, gate approval/rejection, and advance/pause/resume/abort controls without forking a second agent architecture.
 
 ### Core Principles
 
@@ -30,9 +30,9 @@ internal/
     agent_test.go
   checkpoint/            # File edit checkpoints for undo
     checkpoint.go
-  commands/              # Custom slash commands (YAML-loaded)
-    command.go           # Command struct
-    loader.go            # Load commands from ggcode.yaml
+  commands/              # Markdown-backed skills and legacy custom slash commands
+    command.go           # Command/skill metadata and expansion helpers
+    loader.go            # Load skills and legacy commands from ~/.agents, ~/.ggcode, and project .ggcode
   config/                # Configuration loading and env expansion
     config.go            # Config struct, LoadFromFile
     env.go               # ${ENV_VAR} expansion
