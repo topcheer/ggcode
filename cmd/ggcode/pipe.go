@@ -24,7 +24,7 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
 	resolved, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolving endpoint: %v\n", err)
@@ -51,7 +51,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools []string, 
 	// Setup permission: non-interactive, but honor explicit bypass mode and
 	// always include the live workspace so worker subprocesses can fully operate
 	// inside their assigned directory even when the config lives elsewhere.
-	allowedDirs := pipeAllowedDirs(cfg, cfgPath, workingDir)
+	allowedDirs = effectivePipeAllowedDirs(cfg, cfgPath, workingDir, allowedDirs)
 	rules := make(map[string]permission.Decision)
 	for name, perm := range cfg.ToolPerms {
 		switch config.ToolPermission(perm) {
@@ -226,6 +226,13 @@ func pipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string) []string {
 	}
 	configRelative := cfg.ExpandAllowedDirs(filepath.Dir(trimmed))
 	return dedupeStrings(append(merged, configRelative...))
+}
+
+func effectivePipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string, allowedDirs []string) []string {
+	if len(allowedDirs) > 0 {
+		return dedupeStrings(allowedDirs)
+	}
+	return pipeAllowedDirs(cfg, cfgPath, workingDir)
 }
 
 func pipePermissionMode(bypass bool) permission.PermissionMode {

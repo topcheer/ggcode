@@ -1595,7 +1595,7 @@ func TestHarnessRerunCommandCreatesTrackedTask(t *testing.T) {
 	}
 	origRerun := executeHarnessRerun
 	defer func() { executeHarnessRerun = origRerun }()
-	executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string) (*harness.RunSummary, error) {
+	executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
 		reloaded, err := harness.LoadTask(project, taskID)
 		if err != nil {
 			return nil, err
@@ -2270,7 +2270,7 @@ func TestHarnessTasksPanelEnterRerunsFailedTask(t *testing.T) {
 	}
 	origRerun := executeHarnessRerun
 	defer func() { executeHarnessRerun = origRerun }()
-	executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string) (*harness.RunSummary, error) {
+	executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
 		reloaded, err := harness.LoadTask(project, taskID)
 		if err != nil {
 			return nil, err

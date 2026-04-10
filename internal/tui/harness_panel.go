@@ -696,6 +696,7 @@ func (m *Model) runHarnessQueued(opts harness.QueueRunOptions) tea.Cmd {
 	if panel == nil || panel.project == nil || panel.cfg == nil {
 		return nil
 	}
+	opts.ConfirmDirtyWorkspace = m.newHarnessCheckpointConfirmer()
 	summary, err := harness.RunQueuedTasks(context.Background(), *panel.project, panel.cfg, nil, opts)
 	if err != nil {
 		panel.message = err.Error()

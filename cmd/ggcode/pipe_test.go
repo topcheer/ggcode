@@ -84,3 +84,15 @@ func TestPipePermissionModeHonorsBypass(t *testing.T) {
 		t.Fatalf("pipePermissionMode(false) = %v, want %v", got, permission.AutoMode)
 	}
 }
+
+func TestEffectivePipeAllowedDirsPrefersExplicitOverride(t *testing.T) {
+	cfg := &config.Config{AllowedDirs: []string{"."}}
+	workingDir := filepath.Join(string(filepath.Separator), "tmp", "workspace")
+	cfgPath := filepath.Join(string(filepath.Separator), "Users", "me", ".ggcode", "ggcode.yaml")
+	override := []string{workingDir, filepath.Join(string(filepath.Separator), "tmp", "shared"), workingDir}
+	got := effectivePipeAllowedDirs(cfg, cfgPath, workingDir, override)
+	want := []string{workingDir, filepath.Join(string(filepath.Separator), "tmp", "shared")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("effectivePipeAllowedDirs() = %#v, want %#v", got, want)
+	}
+}

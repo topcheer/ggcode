@@ -60,47 +60,48 @@ const maxOutputLines = 50000
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
-	input                textinput.Model
-	output               *bytes.Buffer
-	loading              bool
-	quitting             bool
-	width                int
-	height               int
-	styles               styles
-	agent                *agent.Agent
-	program              *tea.Program
-	cancelFunc           func()
-	policy               permission.PermissionPolicy
-	spinner              *ToolSpinner
-	history              []string
-	historyIdx           int
-	pendingApproval      *ApprovalMsg
-	session              *session.Session
-	sessionStore         session.Store
-	mcpServers           []MCPInfo
-	config               *config.Config
-	language             Language
-	startupVendor        string
-	startupEndpoint      string
-	startupModel         string
-	customCmds           map[string]*commands.Command
-	commandMgr           *commands.Manager
-	autoMem              *memory.AutoMemory
-	projMemFiles         []string
-	autoMemFiles         []string
-	pluginMgr            *plugin.Manager
-	subAgentMgr          *subagent.Manager
-	mcpManager           mcpManager
-	mode                 permission.PermissionMode
-	pendingDiffConfirm   *DiffConfirmMsg
-	fullscreen           bool
-	modelPanel           *modelPanelState
-	providerPanel        *providerPanelState
-	mcpPanel             *mcpPanelState
-	skillsPanel          *skillsPanelState
-	inspectorPanel       *inspectorPanelState
-	harnessPanel         *harnessPanelState
-	harnessContextPrompt *harnessContextPromptState
+	input                           textinput.Model
+	output                          *bytes.Buffer
+	loading                         bool
+	quitting                        bool
+	width                           int
+	height                          int
+	styles                          styles
+	agent                           *agent.Agent
+	program                         *tea.Program
+	cancelFunc                      func()
+	policy                          permission.PermissionPolicy
+	spinner                         *ToolSpinner
+	history                         []string
+	historyIdx                      int
+	pendingApproval                 *ApprovalMsg
+	session                         *session.Session
+	sessionStore                    session.Store
+	mcpServers                      []MCPInfo
+	config                          *config.Config
+	language                        Language
+	startupVendor                   string
+	startupEndpoint                 string
+	startupModel                    string
+	customCmds                      map[string]*commands.Command
+	commandMgr                      *commands.Manager
+	autoMem                         *memory.AutoMemory
+	projMemFiles                    []string
+	autoMemFiles                    []string
+	pluginMgr                       *plugin.Manager
+	subAgentMgr                     *subagent.Manager
+	mcpManager                      mcpManager
+	mode                            permission.PermissionMode
+	pendingDiffConfirm              *DiffConfirmMsg
+	pendingHarnessCheckpointConfirm *HarnessCheckpointConfirmMsg
+	fullscreen                      bool
+	modelPanel                      *modelPanelState
+	providerPanel                   *providerPanelState
+	mcpPanel                        *mcpPanelState
+	skillsPanel                     *skillsPanelState
+	inspectorPanel                  *inspectorPanelState
+	harnessPanel                    *harnessPanelState
+	harnessContextPrompt            *harnessContextPromptState
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -217,6 +218,11 @@ type DiffConfirmMsg struct {
 	FilePath string
 	DiffText string
 	Response chan bool
+}
+
+type HarnessCheckpointConfirmMsg struct {
+	Checkpoint harness.DirtyWorkspaceCheckpoint
+	Response   chan bool
 }
 
 // approvalOption represents a selectable option in the approval list.
@@ -889,6 +895,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.pendingHarnessCheckpointConfirm != nil {
+			switch msg.String() {
+			case "up", "k":
+				m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
+				return m, nil
+			case "down", "j":
+				m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
+				return m, nil
+			case "tab":
+				m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
+				return m, nil
+			case "shift+tab":
+				m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
+				return m, nil
+			case "enter", "right":
+				opt := m.diffOptions[m.diffCursor]
+				return m, m.handleHarnessCheckpointConfirm(opt.decision == permission.Allow)
+			case "y", "Y":
+				return m, m.handleHarnessCheckpointConfirm(true)
+			case "n", "N":
+				return m, m.handleHarnessCheckpointConfirm(false)
+			case "esc", "ctrl+c":
+				return m, m.handleHarnessCheckpointConfirm(false)
+			}
+			return m, nil
+		}
 
 		if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") {
 			m.resetExitConfirm()
@@ -1315,6 +1347,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleDiffConfirm(true)
 		}
 		m.pendingDiffConfirm = &msg
+		m.diffOptions = diffConfirmOptions()
+		m.diffCursor = 0
+		return m, nil
+
+	case HarnessCheckpointConfirmMsg:
+		if m.mode == permission.AutopilotMode {
+			m.pendingHarnessCheckpointConfirm = &msg
+			return m, m.handleHarnessCheckpointConfirm(true)
+		}
+		m.pendingHarnessCheckpointConfirm = &msg
 		m.diffOptions = diffConfirmOptions()
 		m.diffCursor = 0
 		return m, nil

@@ -375,6 +375,43 @@ func TestBinaryRunnerStreamsStdoutChunksWithoutWaitingForNewline(t *testing.T) {
 	}
 }
 
+func TestBinaryRunnerPassesSandboxFlags(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script helper is unix-only")
+	}
+	root := t.TempDir()
+	script := filepath.Join(root, "runner.sh")
+	content := "#!/bin/sh\nprintf '%s\n' \"$@\"\n"
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+	result, err := (BinaryRunner{Executable: script}).Run(context.Background(), RunRequest{
+		GGCodeConfigPath:    filepath.Join(root, "ggcode.yaml"),
+		AllowedDirs:         []string{filepath.Join(root, "worktree")},
+		ReadOnlyAllowedDirs: []string{filepath.Join(root, ".ggcode")},
+		WorkingDir:          root,
+		Prompt:              "ignored",
+	})
+	if err != nil {
+		t.Fatalf("BinaryRunner.Run() error = %v", err)
+	}
+	for _, want := range []string{
+		"--config",
+		filepath.Join(root, "ggcode.yaml"),
+		"--allowedDir",
+		filepath.Join(root, "worktree"),
+		"--readOnlyAllowedDir",
+		filepath.Join(root, ".ggcode"),
+		"--bypass",
+		"--prompt",
+		"ignored",
+	} {
+		if !strings.Contains(result.Output, want) {
+			t.Fatalf("expected BinaryRunner args to contain %q, got %q", want, result.Output)
+		}
+	}
+}
+
 func TestExecuteTaskPersistsWorkerStderrAndDetailedExitError(t *testing.T) {
 	root := t.TempDir()
 	git(t, root, "init")
@@ -833,6 +870,103 @@ func TestPromoteTaskMergesApprovedWorktreeBranch(t *testing.T) {
 	}
 }
 
+func TestPromoteTaskSkipsWorkspaceTodoState(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init")
+	git(t, root, "config", "user.name", "Harness Test")
+	git(t, root, "config", "user.email", "harness@example.com")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("seed\n"), 0644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	git(t, root, "add", "README.md")
+	git(t, root, "commit", "-m", "init")
+
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	git(t, root, "add", ".")
+	git(t, root, "commit", "-m", "add harness scaffold")
+	task, err := EnqueueTask(result.Project, "Promote worktree without todos state", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	summary, err := ExecuteTask(context.Background(), result.Project, result.Config, task, fakeRunner{
+		result: &RunResult{Output: "done"},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(summary.Task.WorkspacePath, "feature.txt"), []byte("promoted change\n"), 0644); err != nil {
+		t.Fatalf("write feature.txt: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(summary.Task.WorkspacePath, ".ggcode"), 0755); err != nil {
+		t.Fatalf("mkdir .ggcode: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(summary.Task.WorkspacePath, ".ggcode", "todos.json"), []byte(`[]`), 0644); err != nil {
+		t.Fatalf("write todos.json: %v", err)
+	}
+	if _, err := ApproveTaskReview(result.Project, summary.Task.ID, "ship it"); err != nil {
+		t.Fatalf("ApproveTaskReview() error = %v", err)
+	}
+	if _, err := PromoteTask(context.Background(), result.Project, summary.Task.ID, "merged"); err != nil {
+		t.Fatalf("PromoteTask() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "feature.txt")); err != nil {
+		t.Fatalf("expected promoted feature.txt: %v", err)
+	}
+	cmd := exec.Command("git", "ls-files", "--error-unmatch", ".ggcode/todos.json")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("expected .ggcode/todos.json to stay out of git, got %s", strings.TrimSpace(string(out)))
+	}
+}
+
+func TestPromoteTaskFailsWhenRootHasOverlappingDirtyFile(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init")
+	git(t, root, "config", "user.name", "Harness Test")
+	git(t, root, "config", "user.email", "harness@example.com")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("seed\n"), 0644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	git(t, root, "add", "README.md")
+	git(t, root, "commit", "-m", "init")
+
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	git(t, root, "add", ".")
+	git(t, root, "commit", "-m", "add harness scaffold")
+	task, err := EnqueueTask(result.Project, "Promote worktree with overlapping Dockerfile", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	summary, err := ExecuteTask(context.Background(), result.Project, result.Config, task, fakeRunner{
+		result: &RunResult{Output: "done"},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(summary.Task.WorkspacePath, "Dockerfile"), []byte("FROM alpine\n"), 0644); err != nil {
+		t.Fatalf("write task Dockerfile: %v", err)
+	}
+	if _, err := ApproveTaskReview(result.Project, summary.Task.ID, "ship it"); err != nil {
+		t.Fatalf("ApproveTaskReview() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte("FROM busybox\n"), 0644); err != nil {
+		t.Fatalf("write root Dockerfile: %v", err)
+	}
+	_, err = PromoteTask(context.Background(), result.Project, summary.Task.ID, "merged")
+	if err == nil {
+		t.Fatal("expected PromoteTask() to refuse overlapping dirty root file")
+	}
+	if !strings.Contains(err.Error(), "sync them into the task worktree before promotion") || !strings.Contains(err.Error(), "Dockerfile") {
+		t.Fatalf("expected overlap guidance mentioning Dockerfile, got %v", err)
+	}
+}
+
 func TestPromoteApprovedTasksPromotesAllReadyTasks(t *testing.T) {
 	root := t.TempDir()
 	git(t, root, "init")
@@ -1074,6 +1208,7 @@ func TestExecuteTaskUsesGitWorktreeWhenAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
+	commitHarnessScaffold(t, root, result)
 	task, err := EnqueueTask(result.Project, "Implement ERP inventory aggregate", "cli")
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
@@ -1094,6 +1229,146 @@ func TestExecuteTaskUsesGitWorktreeWhenAvailable(t *testing.T) {
 	}
 	if len(seen) != 1 || seen[0].WorkingDir != summary.Task.WorkspacePath {
 		t.Fatalf("runner saw %+v, want working dir %q", seen, summary.Task.WorkspacePath)
+	}
+	if got := seen[0].AllowedDirs; len(got) != 1 || got[0] != summary.Task.WorkspacePath {
+		t.Fatalf("runner AllowedDirs = %#v, want [%q]", got, summary.Task.WorkspacePath)
+	}
+	if want := filepath.Join(result.Project.RootDir, ".ggcode"); len(seen[0].ReadOnlyAllowedDirs) != 1 || seen[0].ReadOnlyAllowedDirs[0] != want {
+		t.Fatalf("runner ReadOnlyAllowedDirs = %#v, want [%q]", seen[0].ReadOnlyAllowedDirs, want)
+	}
+}
+
+func TestExecuteTaskCheckpointsDirtyProjectFilesBeforeWorktree(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init")
+	git(t, root, "config", "user.name", "Harness Test")
+	git(t, root, "config", "user.email", "harness@example.com")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	git(t, root, "add", "README.md")
+	git(t, root, "commit", "-m", "init")
+
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	commitHarnessScaffold(t, root, result)
+	task, err := EnqueueTask(result.Project, "Implement ERP pricing logic", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte("FROM alpine\n"), 0o644); err != nil {
+		t.Fatalf("write Dockerfile: %v", err)
+	}
+	var seen []RunRequest
+	summary, err := ExecuteTask(context.Background(), result.Project, result.Config, task, fakeRunner{
+		result: &RunResult{Output: "ok"},
+		seen:   &seen,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask() error = %v", err)
+	}
+	if summary == nil || summary.Task == nil || summary.Task.WorkspaceMode != "git-worktree" {
+		t.Fatalf("expected worktree-backed summary, got %#v", summary)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("runner should start after checkpoint commit, got %+v", seen)
+	}
+	cmd := exec.Command("git", "log", "-1", "--pretty=%s")
+	cmd.Dir = root
+	out, logErr := cmd.CombinedOutput()
+	if logErr != nil {
+		t.Fatalf("git log: %v\n%s", logErr, out)
+	}
+	message := strings.TrimSpace(string(out))
+	if !strings.Contains(message, "checkpoint workspace before harness run") {
+		t.Fatalf("expected checkpoint commit message, got %q", message)
+	}
+	git(t, root, "ls-files", "--error-unmatch", "Dockerfile")
+}
+
+func TestExecuteTaskCancelsWhenDirtyWorkspaceCheckpointDeclined(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init")
+	git(t, root, "config", "user.name", "Harness Test")
+	git(t, root, "config", "user.email", "harness@example.com")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	git(t, root, "add", "README.md")
+	git(t, root, "commit", "-m", "init")
+
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	commitHarnessScaffold(t, root, result)
+	task, err := EnqueueTask(result.Project, "Implement ERP checkout logic", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte("FROM alpine\n"), 0o644); err != nil {
+		t.Fatalf("write Dockerfile: %v", err)
+	}
+	var seen []RunRequest
+	_, err = ExecuteTask(context.Background(), result.Project, result.Config, task, fakeRunner{
+		result: &RunResult{Output: "ok"},
+		seen:   &seen,
+	}, ExecuteTaskOptions{
+		ConfirmDirtyWorkspace: func(checkpoint DirtyWorkspaceCheckpoint) (bool, error) {
+			if !strings.Contains(checkpoint.Summary, "Dockerfile") {
+				t.Fatalf("expected checkpoint summary to mention Dockerfile, got %+v", checkpoint)
+			}
+			return false, nil
+		},
+	})
+	if err == nil {
+		t.Fatal("expected ExecuteTask() to stop when checkpoint is declined")
+	}
+	if !strings.Contains(err.Error(), "checkpoint was not approved") {
+		t.Fatalf("expected decline error, got %v", err)
+	}
+	if len(seen) != 0 {
+		t.Fatalf("runner should not start when checkpoint is declined, got %+v", seen)
+	}
+}
+
+func TestPrepareWorkspaceIgnoresHarnessRuntimeAndSharedRuntimeDirs(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init")
+	git(t, root, "config", "user.name", "Harness Test")
+	git(t, root, "config", "user.email", "harness@example.com")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	git(t, root, "add", "README.md")
+	git(t, root, "commit", "-m", "init")
+	if err := os.MkdirAll(filepath.Join(root, "node_modules"), 0o755); err != nil {
+		t.Fatalf("mkdir node_modules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "node_modules", "tool"), []byte("shim"), 0o644); err != nil {
+		t.Fatalf("write shared runtime file: %v", err)
+	}
+
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	commitHarnessScaffold(t, root, result)
+	if err := os.WriteFile(filepath.Join(root, ".ggcode", "todos.json"), []byte(`[]`), 0o644); err != nil {
+		t.Fatalf("write todos.json: %v", err)
+	}
+	task, err := EnqueueTask(result.Project, "Prepare clean worktree base", "cli")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	workspace, err := PrepareWorkspace(context.Background(), result.Project, result.Config, task)
+	if err != nil {
+		t.Fatalf("PrepareWorkspace() error = %v", err)
+	}
+	if workspace.Mode != "git-worktree" {
+		t.Fatalf("workspace.Mode = %q, want git-worktree", workspace.Mode)
 	}
 }
 
@@ -1121,6 +1396,7 @@ func TestPrepareWorkspaceLinksNodeModulesIntoGitWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
+	commitHarnessScaffold(t, root, result)
 	task, err := EnqueueTask(result.Project, "Validate worktree deps", "cli")
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
@@ -1184,6 +1460,7 @@ func TestPrepareWorkspaceLinksPythonVirtualEnvIntoGitWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
+	commitHarnessScaffold(t, root, result)
 	task, err := EnqueueTask(result.Project, "Validate python worktree deps", "cli")
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
@@ -1234,6 +1511,7 @@ func TestExecuteTaskPassesHarnessReadOnlyDirsToWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
+	commitHarnessScaffold(t, root, result)
 	task, err := EnqueueTask(result.Project, "Read harness config from worker", "cli")
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
@@ -3138,6 +3416,16 @@ func git(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
+}
+
+func commitHarnessScaffold(t *testing.T, dir string, result *InitResult) {
+	t.Helper()
+	if result == nil || len(result.CreatedPaths) == 0 {
+		t.Fatal("expected created harness scaffold paths")
+	}
+	args := append([]string{"add", "--"}, result.CreatedPaths...)
+	git(t, dir, args...)
+	git(t, dir, "commit", "-m", "add harness scaffold")
 }
 
 func writeTaskFixture(project Project, task *Task) error {
