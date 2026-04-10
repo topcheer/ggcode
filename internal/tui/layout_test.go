@@ -426,14 +426,14 @@ func TestChineseViewRendersLocalizedPanels(t *testing.T) {
 	m.handleResize(100, 28)
 
 	view := m.View()
-	if !strings.Contains(view, "对话") {
-		t.Error("expected localized conversation panel")
-	}
-	if !strings.Contains(view, "输入") {
-		t.Error("expected localized composer panel")
-	}
 	if !strings.Contains(view, "输入消息") {
 		t.Error("expected localized placeholder")
+	}
+	if strings.Contains(view, "对话") {
+		t.Error("expected localized conversation heading to be removed")
+	}
+	if strings.Contains(view, "输入\n") || strings.Contains(view, "输入\r\n") {
+		t.Error("expected localized composer heading to be removed")
 	}
 }
 
@@ -441,14 +441,14 @@ func TestViewContainsPanels(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(100, 28)
 	view := m.View()
-	if !strings.Contains(view, "Conversation") {
-		t.Error("expected conversation panel title in view")
-	}
-	if !strings.Contains(view, "Composer") {
-		t.Error("expected composer panel title in view")
-	}
 	if !strings.Contains(view, "ggcode") {
 		t.Error("expected branded header in view")
+	}
+	if strings.Contains(view, "Conversation") {
+		t.Error("expected conversation heading to be removed")
+	}
+	if strings.Contains(view, "Composer") {
+		t.Error("expected composer heading to be removed")
 	}
 }
 
@@ -1829,6 +1829,67 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	}
 	if !strings.Contains(m.output.String(), "[queued 1 pending]") {
 		t.Error("expected queued hint in output")
+	}
+}
+
+func TestDollarKeyEntersShellMode(t *testing.T) {
+	m := newTestModel()
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("$")})
+	m = model.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected shell-mode toggle to complete inline")
+	}
+	if !m.shellMode {
+		t.Fatal("expected shell mode to be enabled")
+	}
+	if m.input.Prompt != "$ " {
+		t.Fatalf("expected shell prompt, got %q", m.input.Prompt)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("expected trigger rune to be consumed, got %q", m.input.Value())
+	}
+}
+
+func TestShellModeEnterStartsLocalCommand(t *testing.T) {
+	m := newTestModel()
+	m.setShellMode(true)
+	m.input.SetValue("echo hi")
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = model.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected shell command to start asynchronously")
+	}
+	if !m.loading {
+		t.Fatal("expected shell command to enter loading state")
+	}
+	if !strings.Contains(m.output.String(), "$ echo hi") {
+		t.Fatalf("expected shell command to be echoed in output, got %q", m.output.String())
+	}
+}
+
+func TestShellModeEscExitsShellMode(t *testing.T) {
+	m := newTestModel()
+	m.setShellMode(true)
+	m.input.SetValue("echo hi")
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = model.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected shell-mode exit to complete inline")
+	}
+	if m.shellMode {
+		t.Fatal("expected shell mode to be disabled")
+	}
+	if m.input.Prompt != "❯ " {
+		t.Fatalf("expected normal prompt, got %q", m.input.Prompt)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("expected shell draft to clear on exit, got %q", m.input.Value())
 	}
 }
 

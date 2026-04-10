@@ -37,7 +37,7 @@ func (m *Model) setLanguage(lang string) {
 	if m.config != nil {
 		m.config.Language = string(m.language)
 	}
-	m.input.Placeholder = m.t("input.placeholder")
+	m.syncComposerMode()
 	if m.providerPanel != nil {
 		current := m.providerPanel.modelFilter.Value()
 		focused := m.providerPanel.modelFilter.Focused()
@@ -724,7 +724,7 @@ func enCatalog(key string) string {
 	case "mode.current":
 		return "Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Ask when a tool has no explicit rule\n  plan        Read-only exploration; deny writes and commands\n  auto        Allow safe operations, deny dangerous ones\n  bypass      Allow almost everything; only stop on critical actions\n  autopilot   bypass + keep going when the model asks back\n\n"
 	case "input.placeholder":
-		return "Type a message..."
+		return "Type a message... ($ / ! enters shell mode)"
 	case "panel.model_filter.prompt":
 		return "Filter> "
 	case "panel.model_filter.placeholder":
@@ -1162,11 +1162,12 @@ Keyboard shortcuts:
   Tab                Cycle autocomplete or approval choices
   Shift+Tab          Reverse cycle autocomplete, otherwise toggle permission mode
   Enter              Send message / apply current selection
-  Esc                Cancel autocomplete
+  Esc                Cancel autocomplete / exit idle shell mode
   ↑/↓                 Browse command history (or autocomplete)
   PgUp/PgDn          Scroll conversation output
   Ctrl+C             Cancel current activity, otherwise clear input then press again to exit
   Ctrl+D             Exit immediately
+  $ / !              Enter shell mode
 
 Mouse:
   Option+drag / Shift+drag  Select text to copy (bypasses app mouse capture)
@@ -1725,7 +1726,7 @@ func zhCatalog(key string) string {
 	case "mode.current":
 		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass|autopilot>\n  supervised  未显式配置的工具会询问\n  plan        严格只读探索；拒绝写入和命令\n  auto        自动允许安全操作，拒绝危险操作\n  bypass      基本全放行，只在关键操作时停下\n  autopilot   等同 bypass，并在模型反问时自动继续\n\n"
 	case "input.placeholder":
-		return "输入消息..."
+		return "输入消息...（$ / ! 进入 shell 模式）"
 	case "panel.model_filter.prompt":
 		return "筛选> "
 	case "panel.model_filter.placeholder":
@@ -2163,11 +2164,12 @@ func zhCatalog(key string) string {
   Tab                在补全或确认选项中切换
   Shift+Tab          反向切换补全，否则切换权限模式
   Enter              发送消息 / 应用当前选择
-  Esc                取消补全
+  Esc                取消补全 / 在空闲 shell 模式下退出命令模式
   ↑/↓                 浏览命令历史（或补全）
   PgUp/PgDn          滚动对话输出
   Ctrl+C             取消当前活动；空闲时先清空输入，再次按下退出
   Ctrl+D             立即退出
+  $ / !              进入 shell 模式
 
 鼠标：
   Option+拖拽 / Shift+拖拽  选择文本复制（绕过应用鼠标捕获）

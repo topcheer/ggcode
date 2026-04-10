@@ -302,6 +302,11 @@ func trimHarnessRunOutputSection(rendered string) string {
 }
 
 func (m *Model) handleCommand(text string) tea.Cmd {
+	if shellCommand, ok := parseShellCommand(text); ok {
+		m.setShellMode(true)
+		return m.submitShellCommand(shellCommand, true)
+	}
+
 	// Slash commands
 	if strings.HasPrefix(text, "/") {
 		m.refreshCommands()
@@ -483,6 +488,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.appendUserMessage(text)
 
 	m.streamBuffer = &bytes.Buffer{}
+	m.shellBuffer = nil
 	m.streamStartPos = m.output.Len()
 	m.streamPrefixWritten = false
 	m.loading = true

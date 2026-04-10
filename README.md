@@ -11,7 +11,7 @@ If you want a terminal-native coding workflow that feels like a product, not a d
 - **Keep control when it matters** — supervised, plan, auto, bypass, and autopilot modes let you choose how much the agent can do
 - **Recover quickly** — undo file changes with checkpoints instead of manually repairing bad edits
 - **Scale up when needed** — use MCP tools, plugins, skills, memory, background commands, and sub-agents
-- **Fit daily usage** — bilingual UI, resumable sessions, queueing while the agent is busy, and shell-friendly install flows
+- **Fit daily usage** — bilingual UI, resumable sessions, queueing while the agent is busy, local shell mode, and shell-friendly install flows
 
 ## Installation
 
@@ -115,6 +115,7 @@ Find why startup feels slow in the TUI
 
 - **`Ctrl+C`** cancels the active run
 - If the agent is busy, you can keep typing — new prompts are **queued**
+- Type **`$`** or **`!`** on an empty composer to enter **local shell mode**; press **`Esc`** to leave it when idle
 - **`/undo`** reverts the last file edit
 - **`/provider`** switches vendor / endpoint / model
 - **`/mode`** changes how much autonomy the agent gets

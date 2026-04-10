@@ -29,6 +29,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -62,6 +63,7 @@ const maxOutputLines = 50000
 type Model struct {
 	input                           textinput.Model
 	output                          *bytes.Buffer
+	shellMode                       bool
 	loading                         bool
 	quitting                        bool
 	width                           int
@@ -122,6 +124,7 @@ type Model struct {
 	mdRenderer          *glamour.TermRenderer
 	markdownWrapWidth   int
 	streamBuffer        *bytes.Buffer
+	shellBuffer         *bytes.Buffer
 	streamStartPos      int
 	streamPrefixWritten bool
 	harnessRunRemainder string
@@ -153,6 +156,7 @@ type Model struct {
 	runCanceled          bool
 	runFailed            bool
 	activeAgentRunID     int
+	activeShellRunID     int
 	harnessRunProject    *harness.Project
 	harnessRunGoal       string
 	harnessRunTaskID     string
@@ -929,6 +933,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
+		case "$", "!":
+			if !m.shellMode && !m.loading && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
+				m.setShellMode(true)
+				return m, nil
+			}
 		case "ctrl+c":
 			if m.autoCompleteActive {
 				m.autoCompleteActive = false
@@ -994,6 +1003,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.autoCompleteItems = nil
 				return m, nil
 			}
+			if m.shellMode && !m.loading {
+				m.setShellMode(false)
+				m.input.SetValue("")
+				return m, nil
+			}
 		case "enter":
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 				return m, m.applyAutoComplete()
@@ -1003,6 +1017,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			if text == "" {
 				return m, nil
+			}
+			if m.shellMode {
+				if m.loading || m.projectMemoryLoading {
+					m.history = append(m.history, "$ "+text)
+					m.historyIdx = len(m.history)
+					m.queuePendingSubmission(text)
+					return m, nil
+				}
+				return m, m.submitShellCommand(text, true)
 			}
 			if m.loading || m.projectMemoryLoading {
 				if shouldAllowBusyHarnessPanel(text) {
@@ -1028,6 +1051,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.appendStreamChunk(msg.Text)
+		return m, nil
+
+	case shellCommandStreamMsg:
+		if msg.RunID != m.activeShellRunID || m.runCanceled || !m.loading {
+			return m, nil
+		}
+		m.appendShellChunk(msg.Text)
 		return m, nil
 
 	case doneMsg:
@@ -1099,6 +1129,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
 		}
+		return m, nil
+
+	case shellCommandDoneMsg:
+		if msg.RunID != m.activeShellRunID {
+			return m, nil
+		}
+		hadShellOutput := m.shellBuffer != nil && m.shellBuffer.Len() > 0
+		m.loading = false
+		m.spinner.Stop()
+		m.cancelFunc = nil
+		wasCanceled := m.runCanceled
+		wasFailed := m.runFailed
+		m.runCanceled = false
+		m.runFailed = false
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		if msg.Status == toolpkg.CommandJobFailed || msg.Status == toolpkg.CommandJobTimedOut {
+			m.runFailed = true
+			if len(m.pendingSubmissions) > 0 {
+				m.restorePendingInput()
+			}
+			if text := strings.TrimSpace(msg.ErrText); text != "" {
+				m.ensureOutputEndsWithNewline()
+				m.output.WriteString(m.styles.error.Render(text))
+				m.output.WriteString("\n")
+			}
+		}
+		if !wasCanceled && (hadShellOutput || strings.TrimSpace(msg.ErrText) != "") {
+			m.ensureOutputHasBlankLine()
+		}
+		if msg.Status == toolpkg.CommandJobCompleted && len(m.pendingSubmissions) > 0 && !wasCanceled && !wasFailed {
+			return m, m.submitShellCommand(m.consumePendingSubmission(), false)
+		}
+		m.syncConversationViewport()
+		m.viewport.GotoBottom()
 		return m, nil
 
 	case errMsg:
@@ -1326,6 +1393,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		if len(m.pendingSubmissions) > 0 && !m.loading {
+			if m.shellMode {
+				return m, m.submitShellCommand(m.consumePendingSubmission(), false)
+			}
 			return m, m.submitText(m.consumePendingSubmission(), false)
 		}
 		return m, nil
