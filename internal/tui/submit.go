@@ -14,6 +14,8 @@ import (
 )
 
 func (m *Model) appendUserMessage(text string) {
+	m.sessionMutex().Lock()
+	defer m.sessionMutex().Unlock()
 	if m.session == nil || m.sessionStore == nil {
 		return
 	}
@@ -46,6 +48,11 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	m.cancelFunc = cancel
 	m.activeAgentRunID++
 	runID := m.activeAgentRunID
+	if m.agent != nil {
+		m.agent.SetInterruptionHandler(func() string {
+			return m.drainPendingInterrupt(runID)
+		})
+	}
 
 	return func() tea.Msg {
 		go func() {

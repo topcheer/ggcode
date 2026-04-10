@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
@@ -218,6 +219,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
 					delete(toolCalls, idx)
 				}
+				if finishErr := finishReasonError(finishReason); finishErr != nil {
+					ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
+					return
+				}
 			}
 		}
 
@@ -256,6 +261,25 @@ func estimateTokensFromChars(chars int) int {
 		return 1
 	}
 	return estimate
+}
+
+func finishReasonError(finishReason string) error {
+	switch strings.ToLower(strings.TrimSpace(finishReason)) {
+	case "", "stop", "tool_calls", "function_call":
+		return nil
+	case "model_context_window_exceeded", "context_window_exceeded":
+		return fmt.Errorf("prompt too long: model context window exceeded")
+	case "length":
+		return fmt.Errorf("openai stream ended with finish_reason=length")
+	case "sensitive":
+		return fmt.Errorf("openai stream ended with finish_reason=sensitive")
+	case "network_error":
+		return fmt.Errorf("openai stream ended with finish_reason=network_error")
+	case "content_filter":
+		return fmt.Errorf("openai stream ended with finish_reason=content_filter")
+	default:
+		return fmt.Errorf("openai stream ended with finish_reason=%s", finishReason)
+	}
 }
 
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {

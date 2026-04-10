@@ -168,11 +168,11 @@ func (m *Model) handleModelPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			panel.message = err.Error()
 			return *m, nil
 		}
-		m.syncSessionSelection()
 		if err := m.tryActivateCurrentSelection(); err != nil {
 			panel.message = m.t("panel.model.saved_runtime_inactive", err.Error())
 			return *m, nil
 		}
+		m.syncSessionSelection()
 		m.closeModelPanel()
 		return *m, nil
 	}

@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func TestBuildModelListWindowCapsVisibleRows(t *testing.T) {
@@ -126,6 +127,96 @@ func TestProviderPanelRendersChineseStrings(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected provider panel to contain %q, got %q", want, rendered)
 		}
+	}
+}
+
+func TestProviderPanelKeepsStableHeightAcrossStates(t *testing.T) {
+	m := newTestModel()
+	m.width = 160
+	m.height = 40
+	m.SetConfig(config.DefaultConfig())
+	m.openProviderPanel()
+
+	baseHeight := strings.Count(m.renderProviderPanel(), "\n")
+
+	m.providerPanel.message = "something changed"
+	if got := strings.Count(m.renderProviderPanel(), "\n"); got != baseHeight {
+		t.Fatalf("expected message state to keep stable height, got %d want %d", got, baseHeight)
+	}
+
+	m.providerPanel.message = ""
+	m.providerPanel.refreshing = true
+	m.providerPanel.refreshVendor = "anthropic"
+	if got := strings.Count(m.renderProviderPanel(), "\n"); got != baseHeight {
+		t.Fatalf("expected refreshing state to keep stable height, got %d want %d", got, baseHeight)
+	}
+
+	m.providerPanel.refreshing = false
+	m.providerPanel.startEditing("custom model", "gpt-5")
+	if got := strings.Count(m.renderProviderPanel(), "\n"); got != baseHeight {
+		t.Fatalf("expected editing state to keep stable height, got %d want %d", got, baseHeight)
+	}
+}
+
+func TestCurrentSelectionUsesActiveRuntimeSelection(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "coding-plan"
+	cfg.Model = "glm-5-turbo"
+	m.SetConfig(cfg)
+	m.setActiveRuntimeSelection("Google Gemini", "Gemini API", "gemini-3-flash")
+
+	vendor, endpoint, model := m.currentSelection()
+	if vendor != "Google Gemini" || endpoint != "Gemini API" || model != "gemini-3-flash" {
+		t.Fatalf("expected active runtime selection, got %q / %q / %q", vendor, endpoint, model)
+	}
+}
+
+func TestProviderPanelFailedActivationKeepsSessionOnActiveRuntime(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FilePath = t.TempDir() + "/ggcode.yaml"
+	cfg.Vendor = "google"
+	cfg.Endpoint = "api"
+	cfg.Model = "gemini-2.5-flash"
+	cfg.Vendors["zai"] = config.VendorConfig{
+		DisplayName: "Z.ai",
+		Endpoints: map[string]config.EndpointConfig{
+			"coding-plan": {
+				DisplayName:   "Domestic Coding Plan",
+				Protocol:      "openai",
+				BaseURL:       "https://api.z.ai/api/paas/v4",
+				DefaultModel:  "glm-5-turbo",
+				SelectedModel: "glm-5-turbo",
+				Models:        []string{"glm-5-turbo"},
+			},
+		},
+	}
+
+	m := newTestModel()
+	m.SetConfig(cfg)
+	m.session = &session.Session{Vendor: "google", Endpoint: "api", Model: "gemini-2.5-flash"}
+	m.setActiveRuntimeSelection("Google Gemini", "Gemini API", "gemini-2.5-flash")
+	m.openProviderPanel()
+	m.providerPanel.vendorIndex = indexOf(m.providerPanel.vendorIDs, "zai")
+	m.providerPanel.endpointIndex = 0
+	m.providerPanel.modelIndex = 0
+	m.providerPanel.syncLists(m.configView())
+
+	next, cmd := m.handleProviderPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("expected provider apply to complete inline, got %v", cmd)
+	}
+	m = next
+	if m.session.Vendor != "google" || m.session.Endpoint != "api" || m.session.Model != "gemini-2.5-flash" {
+		t.Fatalf("expected session to stay on active runtime after failed activation, got %#v", m.session)
+	}
+	vendor, endpoint, model := m.currentSelection()
+	if vendor != "Google Gemini" || endpoint != "Gemini API" || model != "gemini-2.5-flash" {
+		t.Fatalf("expected sidebar selection to stay on active runtime, got %q / %q / %q", vendor, endpoint, model)
+	}
+	if !strings.Contains(m.providerPanel.message, "runtime is still inactive") {
+		t.Fatalf("expected runtime inactive message, got %#v", m.providerPanel)
 	}
 }
 

@@ -24,8 +24,7 @@ func (m *Model) renderConversationMessage(msg provider.Message) {
 		if text == "" {
 			return
 		}
-		m.output.WriteString(m.styles.user.Render("❯ "))
-		m.output.WriteString(text)
+		m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
 		m.output.WriteString("\n")
 	default:
 		body := strings.TrimSpace(renderConversationMarkdown(msg.Content))

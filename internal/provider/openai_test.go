@@ -89,6 +89,43 @@ func TestEstimateTokensFromChars(t *testing.T) {
 	}
 }
 
+func TestFinishReasonError(t *testing.T) {
+	tests := []struct {
+		name         string
+		finishReason string
+		wantErr      string
+	}{
+		{name: "stop is normal", finishReason: "stop"},
+		{name: "tool calls is normal", finishReason: "tool_calls"},
+		{name: "function call is normal", finishReason: "function_call"},
+		{name: "context overflow", finishReason: "model_context_window_exceeded", wantErr: "prompt too long: model context window exceeded"},
+		{name: "context overflow alias", finishReason: "context_window_exceeded", wantErr: "prompt too long: model context window exceeded"},
+		{name: "length surfaces error", finishReason: "length", wantErr: "finish_reason=length"},
+		{name: "sensitive surfaces error", finishReason: "sensitive", wantErr: "finish_reason=sensitive"},
+		{name: "network error surfaces error", finishReason: "network_error", wantErr: "finish_reason=network_error"},
+		{name: "content filter surfaces error", finishReason: "content_filter", wantErr: "finish_reason=content_filter"},
+		{name: "unknown reason surfaces error", finishReason: "weird_reason", wantErr: "finish_reason=weird_reason"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := finishReasonError(tc.finishReason)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected nil error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %q", tc.wantErr, err.Error())
+			}
+		})
+	}
+}
+
 func TestAnthropicBuildParams_Basic(t *testing.T) {
 	p := &AnthropicProvider{model: "claude-3", maxTokens: 1024}
 	msgs := []Message{

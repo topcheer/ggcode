@@ -154,6 +154,12 @@ func (t *AskUserTool) SetHandler(handler AskUserHandler) {
 	t.handler = handler
 }
 
+func (t *AskUserTool) HasHandler() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.handler != nil
+}
+
 func (t *AskUserTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var req AskUserRequest
 	if err := json.Unmarshal(input, &req); err != nil {

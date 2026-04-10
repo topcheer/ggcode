@@ -143,6 +143,16 @@ func streamEventsFromResponse(resp *provider.ChatResponse) []provider.StreamEven
 	return events
 }
 
+func joinTextEvents(events []provider.StreamEvent) string {
+	var sb strings.Builder
+	for _, event := range events {
+		if event.Type == provider.StreamEventText {
+			sb.WriteString(event.Text)
+		}
+	}
+	return sb.String()
+}
+
 func TestNewAgent(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -421,6 +431,84 @@ func TestRunStreamEmitsToolProgressFromChatResponse(t *testing.T) {
 	}
 }
 
+func TestRunStreamInterruptReplansBeforeRemainingToolCalls(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					Content: []provider.ContentBlock{
+						provider.ToolUseBlock("call_1", "first", []byte(`{}`)),
+						provider.ToolUseBlock("call_2", "second", []byte(`{}`)),
+					},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("replanned")},
+				},
+			},
+		},
+	}
+	registry := tool.NewRegistry()
+	var firstCount, secondCount int
+	if err := registry.Register(countingTool{name: "first", executed: &firstCount}); err != nil {
+		t.Fatalf("register first tool: %v", err)
+	}
+	if err := registry.Register(countingTool{name: "second", executed: &secondCount}); err != nil {
+		t.Fatalf("register second tool: %v", err)
+	}
+
+	a := NewAgent(mp, registry, "", 3)
+	interruptCalls := 0
+	a.SetInterruptionHandler(func() string {
+		interruptCalls++
+		if interruptCalls == 2 {
+			return "skip the second tool and revise"
+		}
+		return ""
+	})
+
+	var events []provider.StreamEvent
+	if err := a.RunStream(context.Background(), "start", func(event provider.StreamEvent) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if firstCount != 1 {
+		t.Fatalf("expected first tool to run once, got %d", firstCount)
+	}
+	if secondCount != 0 {
+		t.Fatalf("expected interrupt to skip remaining tool calls, got %d", secondCount)
+	}
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected replanning to trigger a fresh model turn, got %d stream calls", mp.streamCalls)
+	}
+	if len(events) != 6 {
+		t.Fatalf("expected 6 events, got %d", len(events))
+	}
+	if events[0].Type != provider.StreamEventToolCallDone || events[0].Tool.Name != "first" {
+		t.Fatalf("unexpected first event: %#v", events[0])
+	}
+	if events[1].Type != provider.StreamEventToolCallDone || events[1].Tool.Name != "second" {
+		t.Fatalf("expected queued second tool call event, got %#v", events[1])
+	}
+	if events[2].Type != provider.StreamEventDone {
+		t.Fatalf("expected first turn done event, got %#v", events[2])
+	}
+	if events[3].Type != provider.StreamEventToolResult || events[3].Tool.Name != "first" {
+		t.Fatalf("expected first tool result event, got %#v", events[3])
+	}
+	if events[4].Type != provider.StreamEventText || events[4].Text != "replanned" {
+		t.Fatalf("expected replanned response, got %#v", events[4])
+	}
+	if events[5].Type != provider.StreamEventDone {
+		t.Fatalf("expected final done event, got %#v", events[5])
+	}
+}
+
 func TestRunStreamCancellationStopsRemainingToolCalls(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -530,6 +618,65 @@ func TestRunStreamAutopilotContinuesClarificationTurn(t *testing.T) {
 	}
 }
 
+func TestRunStreamInterruptOverridesAutopilotContinuation(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Should I keep going with option A or B?")},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Completed the implementation by switching to option B.")},
+				},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	interruptCalls := 0
+	a.SetInterruptionHandler(func() string {
+		interruptCalls++
+		if interruptCalls == 2 {
+			return "Use option B."
+		}
+		return ""
+	})
+
+	if err := a.RunStream(context.Background(), "start", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected interrupt to drive the second turn, got %d stream calls", mp.streamCalls)
+	}
+	msgs := a.Messages()
+	var sawInterrupt, sawAutopilotInstruction bool
+	for _, msg := range msgs {
+		for _, block := range msg.Content {
+			if block.Type != "text" {
+				continue
+			}
+			if strings.Contains(block.Text, "Use option B.") {
+				sawInterrupt = true
+			}
+			if strings.Contains(block.Text, "Autopilot is enabled. Do not wait for user confirmation.") {
+				sawAutopilotInstruction = true
+			}
+		}
+	}
+	if !sawInterrupt {
+		t.Fatal("expected interruption guidance to be recorded in context")
+	}
+	if sawAutopilotInstruction {
+		t.Fatal("expected interruption to take precedence over autopilot continuation prompt")
+	}
+}
+
 func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
@@ -594,6 +741,72 @@ func TestRunStreamAutopilotStopsOnExplicitCompletion(t *testing.T) {
 	}
 }
 
+func TestRunStreamAutopilotEscalatesExternalBlockerToAskUser(t *testing.T) {
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock(
+						"All changes are complete. Gateway restart needed to validate the fix. No remaining work. Awaiting gateway restart and test results. Blocked until user restarts the gateway.",
+					)},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					Content: []provider.ContentBlock{
+						provider.ToolUseBlock("tool-1", "ask_user", json.RawMessage(`{
+							"questions":[
+								{
+									"title":"Restart gateway",
+									"prompt":"Please restart the gateway and share the latest diagnostics output.",
+									"kind":"text"
+								}
+							]
+						}`)),
+					},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Asked the user to restart the gateway and share the latest diagnostics output.")},
+				},
+			},
+		},
+	}
+
+	registry := tool.NewRegistry()
+	askCalls := 0
+	askTool := tool.NewAskUserTool()
+	askTool.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+		askCalls++
+		return tool.AskUserResponse{
+			Status:        tool.AskUserStatusSubmitted,
+			QuestionCount: len(req.Questions),
+			AnsweredCount: 0,
+		}, nil
+	})
+	if err := registry.Register(askTool); err != nil {
+		t.Fatalf("register ask_user: %v", err)
+	}
+
+	a := NewAgent(mp, registry, "", 4)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "fix the gateway issue", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 3 {
+		t.Fatalf("expected autopilot to escalate blocker into ask_user flow, got %d stream calls", mp.streamCalls)
+	}
+	if askCalls != 1 {
+		t.Fatalf("expected ask_user to be invoked once, got %d", askCalls)
+	}
+}
+
 func TestRunStreamAutopilotStopsOnChineseHandoffClosure(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -616,6 +829,30 @@ func TestRunStreamAutopilotStopsOnChineseHandoffClosure(t *testing.T) {
 	}
 }
 
+func TestRunStreamAutopilotStopsOnChineseCompletionQuestion(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role: "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock(
+					"所有任务已完成，等待新指令。需要我继续做什么吗？",
+				)},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+
+	if err := a.RunStream(context.Background(), "继续看看", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 1 {
+		t.Fatalf("expected autopilot to stop on Chinese completion question, got %d stream calls", mp.streamCalls)
+	}
+}
+
 func TestRunStreamAutopilotStopsOnEnglishIdleClosure(t *testing.T) {
 	mp := &mockProvider{
 		chatResp: &provider.ChatResponse{
@@ -635,6 +872,128 @@ func TestRunStreamAutopilotStopsOnEnglishIdleClosure(t *testing.T) {
 
 	if mp.streamCalls != 1 {
 		t.Fatalf("expected autopilot to stop on english idle closure, got %d stream calls", mp.streamCalls)
+	}
+}
+
+func TestRunStreamReactiveCompactRetriesPromptTooLong(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("compressed summary")},
+			},
+		},
+		streamEvents: [][]provider.StreamEvent{
+			{
+				{
+					Type:  provider.StreamEventError,
+					Error: errors.New("prompt too long: model context window exceeded"),
+				},
+			},
+			streamEventsFromResponse(&provider.ChatResponse{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Recovered after compaction.")},
+				},
+			}),
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	a.ContextManager().SetMaxTokens(80)
+	for i := 0; i < 6; i++ {
+		a.ContextManager().Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))},
+		})
+		a.ContextManager().Add(provider.Message{
+			Role:    "assistant",
+			Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 8))},
+		})
+	}
+
+	var events []provider.StreamEvent
+	if err := a.RunStream(context.Background(), "latest request", func(event provider.StreamEvent) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected prompt-too-long recovery to retry once, got %d stream calls", mp.streamCalls)
+	}
+	joined := joinTextEvents(events)
+	if !strings.Contains(joined, "[compacting conversation to stay within context window]") {
+		t.Fatalf("expected reactive compaction status, got %q", joined)
+	}
+	if !strings.Contains(joined, "[conversation compacted]") {
+		t.Fatalf("expected reactive compact completion, got %q", joined)
+	}
+	if !strings.Contains(joined, "Recovered after compaction.") {
+		t.Fatalf("expected final response after reactive compact retry, got %q", joined)
+	}
+}
+
+func TestRunStreamAutopilotLoopGuardCompactsAndPauses(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("compressed summary")},
+			},
+		},
+		streamEvents: [][]provider.StreamEvent{
+			streamEventsFromResponse(&provider.ChatResponse{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("需要我继续做什么吗？")},
+				},
+			}),
+			streamEventsFromResponse(&provider.ChatResponse{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("请告诉我是否继续。")},
+				},
+			}),
+			{
+				{Type: provider.StreamEventDone},
+			},
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 5)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
+	a.ContextManager().SetMaxTokens(80)
+	for i := 0; i < 6; i++ {
+		a.ContextManager().Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))},
+		})
+		a.ContextManager().Add(provider.Message{
+			Role:    "assistant",
+			Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 8))},
+		})
+	}
+
+	var events []provider.StreamEvent
+	if err := a.RunStream(context.Background(), "你还好么？", func(event provider.StreamEvent) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected loop guard to stop before a third empty turn, got %d stream calls", mp.streamCalls)
+	}
+	joined := joinTextEvents(events)
+	if !strings.Contains(joined, "[autopilot loop guard triggered; compacting and pausing]") {
+		t.Fatalf("expected loop guard trigger message, got %q", joined)
+	}
+	if !strings.Contains(joined, "[conversation compacted]") {
+		t.Fatalf("expected forced compaction message, got %q", joined)
+	}
+	if !strings.Contains(joined, "[autopilot paused to prevent an idle loop]") {
+		t.Fatalf("expected idle-loop pause message, got %q", joined)
 	}
 }
 

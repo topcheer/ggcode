@@ -174,28 +174,68 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if chunk == "" {
 		return
 	}
+	if localized, ok := m.localizedStreamStatus(chunk); ok {
+		m.appendStreamStatusLine(localized)
+		return
+	}
 	m.closeToolActivityGroup()
 	m.flushGroupedActivitiesToOutput()
+	if m.streamBuffer == nil {
+		m.streamBuffer = &bytes.Buffer{}
+	}
 	if !m.streamPrefixWritten {
 		m.ensureOutputHasBlankLine()
 		m.streamStartPos = m.output.Len()
 		m.output.WriteString(bulletStyle.Render("● "))
 		m.streamPrefixWritten = true
 	}
-	tail := m.harnessRunLiveTail
-	if tail != "" {
-		m.output.Truncate(m.streamStartPos)
-		m.output.WriteString(bulletStyle.Render("● "))
-		if m.streamBuffer != nil {
-			m.output.WriteString(m.streamBuffer.String())
-		}
-	}
 	if m.streamBuffer != nil {
 		m.streamBuffer.WriteString(chunk)
 	}
-	m.output.WriteString(chunk)
-	if tail != "" {
-		m.output.WriteString(tail)
+	m.rewriteActiveStreamOutput()
+	m.trimOutput()
+	m.syncConversationViewport()
+	m.viewport.GotoBottom()
+}
+
+func (m *Model) localizedStreamStatus(chunk string) (string, bool) {
+	switch strings.TrimSpace(chunk) {
+	case "[compacting conversation to stay within context window]":
+		return m.t("status.compacting"), true
+	case "[conversation compacted]":
+		return m.t("status.compacted"), true
+	default:
+		return "", false
+	}
+}
+
+func (m *Model) appendStreamStatusLine(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	m.closeToolActivityGroup()
+	m.flushGroupedActivitiesToOutput()
+	if m.streamBuffer == nil {
+		m.streamBuffer = &bytes.Buffer{}
+	}
+	if m.streamBuffer.Len() > 0 {
+		m.renderStreamBuffer()
+		m.streamBuffer.Reset()
+	}
+	m.harnessRunLiveTail = ""
+	m.streamPrefixWritten = false
+	m.streamStartPos = -1
+	switch {
+	case m.output == nil || m.output.Len() == 0:
+	case strings.HasSuffix(m.output.String(), "\n\n"):
+		m.output.Truncate(m.output.Len() - 1)
+	default:
+		m.ensureOutputEndsWithNewline()
+	}
+	m.output.WriteString(bulletStyle.Render("● "))
+	m.output.WriteString(text)
+	if !strings.HasSuffix(text, "\n") {
+		m.output.WriteString("\n")
 	}
 	m.trimOutput()
 	m.syncConversationViewport()
@@ -213,15 +253,8 @@ func (m *Model) renderHarnessLiveTail(text string) {
 		m.output.WriteString(bulletStyle.Render("● "))
 		m.streamPrefixWritten = true
 	}
-	m.output.Truncate(m.streamStartPos)
-	m.output.WriteString(bulletStyle.Render("● "))
-	if m.streamBuffer != nil {
-		m.output.WriteString(m.streamBuffer.String())
-	}
-	if text != "" {
-		m.output.WriteString(text)
-	}
 	m.harnessRunLiveTail = text
+	m.rewriteActiveStreamOutput()
 	m.trimOutput()
 	m.syncConversationViewport()
 	m.viewport.GotoBottom()
@@ -278,18 +311,39 @@ func (m *Model) appendHarnessProgressDetail(detail string) {
 	m.appendStreamChunk(chunk)
 }
 
+func (m *Model) renderCurrentStreamMarkdown() string {
+	if m.streamBuffer == nil || m.streamBuffer.Len() == 0 {
+		return ""
+	}
+	rendered := m.streamBuffer.String()
+	if m.mdRenderer != nil {
+		if out, err := m.mdRenderer.Render(rendered); err == nil {
+			rendered = out
+		}
+	}
+	return trimLeadingRenderedSpacing(rendered)
+}
+
+func (m *Model) rewriteActiveStreamOutput() {
+	if !m.streamPrefixWritten || m.streamStartPos < 0 || m.streamStartPos > m.output.Len() {
+		return
+	}
+	m.output.Truncate(m.streamStartPos)
+	m.output.WriteString(bulletStyle.Render("● "))
+	rendered := m.renderCurrentStreamMarkdown()
+	if rendered != "" {
+		m.output.WriteString(rendered)
+	}
+	if m.harnessRunLiveTail != "" {
+		m.output.WriteString(m.harnessRunLiveTail)
+	}
+}
+
 func (m *Model) renderStreamBuffer() {
 	if m.streamBuffer == nil || m.streamBuffer.Len() == 0 {
 		return
 	}
-	rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
-	if err != nil {
-		rendered = m.streamBuffer.String()
-	}
-	rendered = trimLeadingRenderedSpacing(rendered)
-	m.output.Truncate(m.streamStartPos)
-	m.output.WriteString(bulletStyle.Render("● "))
-	m.output.WriteString(rendered)
+	m.rewriteActiveStreamOutput()
 	m.streamBuffer.Reset()
 	m.harnessRunLiveTail = ""
 }
@@ -480,8 +534,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
 	m.ensureOutputEndsWithNewline()
-	m.output.WriteString(m.styles.user.Render("❯ "))
-	m.output.WriteString(displayText)
+	m.output.WriteString(m.renderConversationUserEntry("❯ ", displayText))
 	m.output.WriteString("\n")
 
 	// Save original user message to session
@@ -1065,8 +1118,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 		m.output.WriteString("\n")
 		return nil
 	}
-	m.output.WriteString(m.styles.user.Render("❯ "))
-	m.output.WriteString(strings.TrimSpace(commandText))
+	m.output.WriteString(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
 	m.output.WriteString("\n")
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.ensureOutputHasBlankLine()
@@ -1122,8 +1174,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 		m.output.WriteString("\n")
 		return nil
 	}
-	m.output.WriteString(m.styles.user.Render("❯ "))
-	m.output.WriteString(strings.TrimSpace(commandText))
+	m.output.WriteString(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
 	m.output.WriteString("\n")
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.ensureOutputHasBlankLine()
@@ -1662,7 +1713,7 @@ func (m *Model) resetConversationView() {
 	m.autoCompleteItems = nil
 	m.autoCompleteIndex = 0
 	m.exitConfirmPending = false
-	m.pendingSubmissions = nil
+	m.clearPendingSubmissions()
 	m.runCanceled = false
 	m.runFailed = false
 	m.spinner.Stop()
@@ -2112,6 +2163,7 @@ func (m *Model) tryActivateCurrentSelection() error {
 			m.agent.ContextManager().SetMaxTokens(resolved.ContextWindow)
 		}
 	}
+	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	return nil
 }
 
