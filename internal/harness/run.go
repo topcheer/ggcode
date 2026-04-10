@@ -1,11 +1,8 @@
 package harness
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,22 +82,9 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 	}
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir = req.WorkingDir
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create stderr pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start harness subprocess: %w", err)
-	}
 	var (
 		mu      sync.Mutex
 		builder strings.Builder
-		wg      sync.WaitGroup
-		readErr error
 	)
 	appendOutput := func(chunk string) {
 		mu.Lock()
@@ -119,54 +103,14 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 			req.OnProgress(line)
 		}
 	}
-	consumeOutput := func(reader io.Reader) {
-		defer wg.Done()
-		buf := make([]byte, 4096)
-		for {
-			n, err := reader.Read(buf)
-			if n > 0 {
-				appendOutput(string(buf[:n]))
-			}
-			if err == nil {
-				continue
-			}
-			if err == io.EOF || benignSubprocessPipeError(err) {
-				return
-			}
-			mu.Lock()
-			if readErr == nil {
-				readErr = err
-			}
-			mu.Unlock()
-			return
-		}
+	cmd.Stdout = chunkWriter{write: appendOutput}
+	progressWriter := &lineWriter{writeLine: appendProgress}
+	cmd.Stderr = progressWriter
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start harness subprocess: %w", err)
 	}
-	consumeProgress := func(reader io.Reader) {
-		defer wg.Done()
-		scanner := bufio.NewScanner(reader)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			appendProgress(scanner.Text())
-		}
-		if err := scanner.Err(); err != nil {
-			if benignSubprocessPipeError(err) {
-				return
-			}
-			mu.Lock()
-			if readErr == nil {
-				readErr = err
-			}
-			mu.Unlock()
-		}
-	}
-	wg.Add(2)
-	go consumeOutput(stdout)
-	go consumeProgress(stderr)
-	err = cmd.Wait()
-	wg.Wait()
-	if readErr != nil {
-		return nil, fmt.Errorf("read harness subprocess output: %w", readErr)
-	}
+	err := cmd.Wait()
+	progressWriter.Flush()
 	result := &RunResult{
 		Output: strings.TrimSpace(builder.String()),
 	}
@@ -180,11 +124,51 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 	return nil, fmt.Errorf("run harness subprocess: %w", err)
 }
 
-func benignSubprocessPipeError(err error) bool {
-	if err == nil {
-		return false
+type chunkWriter struct {
+	write func(string)
+}
+
+func (w chunkWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 && w.write != nil {
+		w.write(string(p))
 	}
-	return errors.Is(err, os.ErrClosed) || strings.Contains(err.Error(), "file already closed")
+	return len(p), nil
+}
+
+type lineWriter struct {
+	mu        sync.Mutex
+	pending   strings.Builder
+	writeLine func(string)
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.pending.Write(p)
+	data := w.pending.String()
+	lines := strings.Split(data, "\n")
+	w.pending.Reset()
+	if len(lines) > 0 {
+		w.pending.WriteString(lines[len(lines)-1])
+		lines = lines[:len(lines)-1]
+	}
+	w.mu.Unlock()
+
+	for _, line := range lines {
+		if w.writeLine != nil {
+			w.writeLine(strings.TrimSuffix(line, "\r"))
+		}
+	}
+	return len(p), nil
+}
+
+func (w *lineWriter) Flush() {
+	w.mu.Lock()
+	line := strings.TrimSuffix(w.pending.String(), "\r")
+	w.pending.Reset()
+	w.mu.Unlock()
+	if line != "" && w.writeLine != nil {
+		w.writeLine(line)
+	}
 }
 
 func RunTask(ctx context.Context, project Project, cfg *Config, goal string, runner Runner) (*RunSummary, error) {
