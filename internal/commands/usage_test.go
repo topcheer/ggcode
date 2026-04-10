@@ -49,11 +49,19 @@ func TestManagerListRanksFrequentlyUsedSkillsFirst(t *testing.T) {
 	}
 }
 
-func TestManagerUserSlashCommandsOnlyIncludesUserInvocableSkills(t *testing.T) {
+func TestManagerUserSlashCommandsOnlyIncludesLegacyCommands(t *testing.T) {
 	mgr := &Manager{
 		commands: map[string]*Command{
-			"deploy": {Name: "deploy", UserInvocable: true},
-			"debug":  {Name: "debug", UserInvocable: false},
+			"deploy": {
+				Name:          "deploy",
+				UserInvocable: true,
+				LoadedFrom:    LoadedFromCommands,
+			},
+			"debug": {
+				Name:          "debug",
+				UserInvocable: true,
+				LoadedFrom:    LoadedFromSkills,
+			},
 		},
 	}
 

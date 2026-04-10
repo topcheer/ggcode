@@ -1,9 +1,18 @@
 # ggcode Python wrapper
 
-`ggcode` on PyPI is a thin Python wrapper for the `ggcode` terminal agent.
+`ggcode` on PyPI bootstraps the native `ggcode` terminal agent from GitHub Releases.
 
-It does not ship the platform binary inside the wheel. Instead, the wrapper downloads the latest
-matching `ggcode` GitHub Release on first run, caches it locally, and then launches it.
+When the bootstrap runs, it installs the real binary into a stable CLI location instead of keeping
+it in a wrapper-managed cache:
+
+- macOS / Linux: prefers `/usr/local/bin`, falls back to `~/.local/bin`
+- Windows: prefers `%USERPROFILE%\\AppData\\Local\\Programs\\ggcode\\bin`, falls back to `%USERPROFILE%\\.local\\bin`
+
+If that directory is not already on `PATH`, the bootstrap updates your PATH configuration and asks
+you to reopen the terminal so future `ggcode` launches resolve directly to the native binary.
+
+This package is only the release-backed installer wrapper. For product features, harness workflow
+details, and the main CLI experience, use the repository README.
 
 ## Install
 
@@ -17,12 +26,19 @@ Then run:
 ggcode
 ```
 
+If you ever need to rerun the bootstrap flow explicitly, you can also use:
+
+```bash
+ggcode-bootstrap
+```
+
 ## What it does
 
 - Detects your operating system and CPU architecture
 - Downloads the latest matching `ggcode` archive from GitHub Releases
 - Verifies the archive against `checksums.txt`
-- Extracts and caches the binary for future runs
+- Installs the real binary into a stable PATH location
+- Updates PATH so future `ggcode` launches bypass the Python wrapper
 
 ## Pin a specific ggcode release
 

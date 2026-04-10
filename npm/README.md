@@ -1,10 +1,19 @@
 # @ggcode-cli/ggcode
 
-`@ggcode-cli/ggcode` is a thin npm wrapper for the `ggcode` terminal agent.
+`@ggcode-cli/ggcode` installs the native `ggcode` binary from GitHub Releases.
 
-It does not bundle the native binary in the package. Instead, the wrapper downloads the latest
-`ggcode` GitHub Release for your platform on install or first run, caches it locally, and then
-launches it for you.
+During package installation it downloads the matching release archive, verifies it, and places the
+real `ggcode` executable in a stable CLI location:
+
+- macOS / Linux: prefers `/usr/local/bin`, falls back to `~/.local/bin`
+- Windows: prefers `%USERPROFILE%\\AppData\\Local\\Programs\\ggcode\\bin`, falls back to `%USERPROFILE%\\.local\\bin`
+
+If that directory is not on `PATH`, the installer updates your shell/user PATH and asks you to
+reopen the terminal. The npm package keeps a separate `ggcode-bootstrap` helper command for manual
+repair, but normal usage should be the real `ggcode` binary.
+
+This package is just the release-backed installer layer. Product usage, harness workflows, and TUI
+behavior are documented in the main repository README.
 
 ## Install
 
@@ -20,14 +29,19 @@ Then run:
 ggcode
 ```
 
-If you install it locally, use `npx ggcode` or `./node_modules/.bin/ggcode`.
+If the native install needs to be retried manually, run:
+
+```bash
+ggcode-bootstrap
+```
 
 ## What it does
 
 - Detects your platform and architecture
 - Downloads the latest matching `ggcode` binary from GitHub Releases
 - Verifies the downloaded archive with `checksums.txt`
-- Extracts and caches the binary for reuse
+- Installs the real binary into a stable PATH location
+- Updates `PATH` when needed so future `ggcode` launches bypass the wrapper
 
 ## Pin a specific ggcode release
 

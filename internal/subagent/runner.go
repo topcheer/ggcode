@@ -156,9 +156,42 @@ func Wait(ctx context.Context, mgr *Manager, id string) (string, error) {
 	}
 }
 
+func WaitForSnapshot(ctx context.Context, mgr *Manager, id string, wait time.Duration) (Snapshot, error) {
+	sa, ok := mgr.Get(id)
+	if !ok {
+		return Snapshot{}, fmt.Errorf("sub-agent %s not found", id)
+	}
+
+	if wait <= 0 {
+		return sa.snapshot(), nil
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		snap := sa.snapshot()
+		switch snap.Status {
+		case StatusCompleted, StatusFailed, StatusCancelled:
+			return snap, nil
+		}
+
+		select {
+		case <-ticker.C:
+			continue
+		case <-timer.C:
+			return sa.snapshot(), nil
+		case <-ctx.Done():
+			return Snapshot{}, ctx.Err()
+		}
+	}
+}
+
 func subagentToolProgressSummary(toolName, result string) string {
 	switch toolName {
-	case "start_command", "read_command_output", "wait_command", "stop_command", "list_commands":
+	case "start_command", "read_command_output", "wait_command", "stop_command", "write_command_input", "list_commands":
 		return compactProgressSummary(result)
 	default:
 		return ""

@@ -93,3 +93,43 @@ func TestCommandJobManagerWaitRespectsCancellation(t *testing.T) {
 		t.Fatalf("stop command job after cancelled wait: %v", err)
 	}
 }
+
+func TestCommandJobManagerWriteInput(t *testing.T) {
+	mgr := NewCommandJobManager(t.TempDir())
+
+	started, err := mgr.Start(context.Background(), "read line; printf 'echo:%s\\n' \"$line\"", 5*time.Second)
+	if err != nil {
+		t.Fatalf("start command job: %v", err)
+	}
+
+	if _, err := mgr.Write(started.ID, "hello async", true); err != nil {
+		t.Fatalf("write command input: %v", err)
+	}
+
+	snap, err := mgr.Wait(context.Background(), started.ID, 2*time.Second, 20, 0)
+	if err != nil {
+		t.Fatalf("wait command job: %v", err)
+	}
+	if snap.Status != CommandJobCompleted {
+		t.Fatalf("expected completed status, got %s", snap.Status)
+	}
+	if len(snap.Lines) != 1 || snap.Lines[0] != "echo:hello async" {
+		t.Fatalf("unexpected output lines: %#v", snap.Lines)
+	}
+}
+
+func TestCommandJobManagerWriteInputFailsForStoppedJob(t *testing.T) {
+	mgr := NewCommandJobManager(t.TempDir())
+
+	started, err := mgr.Start(context.Background(), "printf 'done\\n'", 5*time.Second)
+	if err != nil {
+		t.Fatalf("start command job: %v", err)
+	}
+
+	if _, err := mgr.Wait(context.Background(), started.ID, 2*time.Second, 20, 0); err != nil {
+		t.Fatalf("wait command job: %v", err)
+	}
+	if _, err := mgr.Write(started.ID, "late input", true); err == nil {
+		t.Fatal("expected write to completed command job to fail")
+	}
+}

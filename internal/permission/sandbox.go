@@ -22,17 +22,11 @@ func NewPathSandbox(allowedDirs []string) *PathSandbox {
 	// Normalize paths (resolve symlinks like /tmp -> /private/tmp on macOS)
 	normalized := make([]string, 0, len(allowedDirs))
 	for _, d := range allowedDirs {
-		abs, err := filepath.Abs(d)
-		if err != nil {
+		resolved := resolvePath(d)
+		if resolved == "" {
 			continue
 		}
-		abs = filepath.Clean(abs)
-		// Resolve symlinks for existing directories
-		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-			normalized = append(normalized, filepath.Clean(resolved))
-		} else {
-			normalized = append(normalized, abs)
-		}
+		normalized = append(normalized, resolved)
 	}
 	return &PathSandbox{allowedDirs: normalized}
 }

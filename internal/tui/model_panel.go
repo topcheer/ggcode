@@ -173,7 +173,7 @@ func (m *Model) handleModelPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			panel.message = m.t("panel.model.saved_runtime_inactive", err.Error())
 			return *m, nil
 		}
-		panel.message = m.t("panel.model.switched", model)
+		m.closeModelPanel()
 		return *m, nil
 	}
 	return *m, nil

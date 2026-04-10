@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -33,6 +35,8 @@ func NewRootCmd() *cobra.Command {
 	var resumeID string
 	var pipePrompt string
 	var allowedTools []string
+	var allowedDirs []string
+	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
 	var helperManifest string
@@ -45,7 +49,21 @@ func NewRootCmd() *cobra.Command {
 		TraverseChildren: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cfgFile == "" {
-				cfgFile = config.ConfigPath()
+				resolved, err := resolveConfigFilePath()
+				if err != nil {
+					return fmt.Errorf("resolving config path: %w", err)
+				}
+				cfgFile = resolved
+			}
+			if pipePrompt == "" {
+				interactive := writerIsTerminal(os.Stdout) && writerIsTerminal(os.Stdin)
+				proceed, err := confirmPlaintextAPIKeysBeforeTUI(cfgFile, os.Stdin, os.Stdout, interactive)
+				if err != nil {
+					return err
+				}
+				if !proceed {
+					return nil
+				}
 			}
 
 			debug.Init()
@@ -60,7 +78,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, pipePrompt, allowedTools, outputPath)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
 				if code != 0 {
 					os.Exit(code)
 				}
@@ -72,9 +90,16 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
-	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
+	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID, or open a picker with bare --resume")
+	if flag := cmd.Flags().Lookup("resume"); flag != nil {
+		flag.NoOptDefVal = resumePickerFlagValue
+	}
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
+	cmd.Flags().StringArrayVar(&allowedDirs, "allowedDir", nil, "override writable sandbox directory for pipe mode (can be repeated)")
+	_ = cmd.Flags().MarkHidden("allowedDir")
+	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
+	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 
@@ -116,10 +141,31 @@ func NewRootCmd() *cobra.Command {
 		DisableFlagsInUseLine: true,
 	}
 	cmd.AddCommand(completionCmd)
+	cmd.AddCommand(newHarnessCmd(&cfgFile))
 	cmd.AddCommand(newMCPCmd(&cfgFile))
 	configureHelpRendering(cmd)
 
 	return cmd
+}
+
+func resolveConfigFilePath() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for _, candidate := range []string{
+		filepath.Join(wd, "ggcode.yaml"),
+		filepath.Join(wd, ".ggcode", "ggcode.yaml"),
+	} {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return config.ConfigPath(), nil
 }
 
 func configureHelpRendering(cmd *cobra.Command) {
@@ -199,6 +245,9 @@ func mergedFlags(cmd *cobra.Command) []*pflag.Flag {
 			return
 		}
 		fs.VisitAll(func(flag *pflag.Flag) {
+			if flag.Hidden {
+				return
+			}
 			if _, ok := seen[flag.Name]; ok {
 				return
 			}
@@ -323,6 +372,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
 
 	autoContent, autoFiles, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem)
+	commandMgr.SetExtraProviders(func() []*commands.Command {
+		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
+	})
 	projectMemoryLoader := func() (string, []string, error) {
 		return memory.LoadProjectMemory(workingDir)
 	}
@@ -355,7 +407,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Build enhanced system prompt with runtime context
 	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, toolNames, gitStatus, customCmdNames)
-	if skillsPrompt := buildSkillsSystemPrompt(append(commandMgr.List(), buildMCPSkillCommands(mcpMgr.SnapshotMCP())...)); skillsPrompt != "" {
+	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
 		systemPrompt += "\n\n## Skills\n" + skillsPrompt
 	}
 	if mode == permission.AutopilotMode {
@@ -383,6 +435,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return fmt.Errorf("creating session store: %w", err)
+	}
+	if resumeID == resumePickerFlagValue {
+		selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
+		if err != nil {
+			return err
+		}
+		resumeID = selectedID
 	}
 
 	// Build MCP info for TUI
@@ -495,25 +554,33 @@ func loadInteractiveStartupAssets(
 func buildSkillsSystemPrompt(skills []*commands.Command) string {
 	var lines []string
 	lines = append(lines,
-		"Execute a skill within the main conversation.",
+		"Use the skill tool to load reusable workflows when they clearly match the user's task.",
 		"",
-		"When a listed skill matches the user's request, this is a blocking requirement: invoke the skill tool before continuing.",
-		"Treat slash-style requests like /commit or /review-pr as skill invocations, not plain text.",
+		"When a listed skill is a close match, invoke the skill tool before continuing.",
 		"Do not mention a skill without calling the skill tool.",
 		"Do not use the skill tool for built-in CLI commands like /help or /clear.",
 		"",
 		"Available skills:",
 	)
-	const maxChars = 8000
-	const maxDescChars = 250
+	const maxChars = 4000
+	const maxDescChars = 180
 	total := 0
 	included := 0
-	for _, skill := range skills {
-		if skill == nil || skill.DisableModelInvocation {
+	mcpSkillCount := 0
+	mcpServers := make(map[string]struct{})
+	for _, skill := range prioritizedSkillsForPrompt(skills) {
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
 			continue
 		}
-		name := skill.SlashName()
-		if name == "" {
+		if skill.LoadedFrom == commands.LoadedFromMCP || skill.Source == commands.SourceMCP {
+			mcpSkillCount++
+			if server, _, ok := strings.Cut(name, ":"); ok {
+				server = strings.TrimSpace(server)
+				if server != "" {
+					mcpServers[server] = struct{}{}
+				}
+			}
 			continue
 		}
 		desc := strings.TrimSpace(skill.Description)
@@ -534,16 +601,64 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 		total += len(line) + 1
 		included++
 	}
-	if hidden := countModelVisibleSkills(skills) - included; hidden > 0 {
+	if mcpSkillCount > 0 {
+		servers := sortedStringKeys(mcpServers)
+		summary := fmt.Sprintf("- MCP prompt-backed skills are also available from connected MCP servers (%d total", mcpSkillCount)
+		if len(servers) > 0 {
+			summary += "; servers: " + strings.Join(servers, ", ")
+		}
+		summary += ")."
+		if total+len(summary)+1 <= maxChars {
+			lines = append(lines, summary)
+			total += len(summary) + 1
+		}
+	}
+	if hidden := countModelVisibleSkills(skills) - included - mcpSkillCount; hidden > 0 {
 		lines = append(lines, fmt.Sprintf("- ... and %d more skills available via the skill tool and /skills", hidden))
 	}
 	return strings.Join(lines, "\n")
 }
 
+func prioritizedSkillsForPrompt(skills []*commands.Command) []*commands.Command {
+	out := make([]*commands.Command, 0, len(skills))
+	for _, skill := range skills {
+		if skill == nil || skill.DisableModelInvocation || strings.TrimSpace(skill.Name) == "" {
+			continue
+		}
+		out = append(out, skill)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		iBundled := out[i].LoadedFrom == commands.LoadedFromBundled || out[i].Source == commands.SourceBundled
+		jBundled := out[j].LoadedFrom == commands.LoadedFromBundled || out[j].Source == commands.SourceBundled
+		if iBundled != jBundled {
+			return iBundled
+		}
+		iMCP := out[i].LoadedFrom == commands.LoadedFromMCP || out[i].Source == commands.SourceMCP
+		jMCP := out[j].LoadedFrom == commands.LoadedFromMCP || out[j].Source == commands.SourceMCP
+		if iMCP != jMCP {
+			return !iMCP
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func sortedStringKeys(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func countModelVisibleSkills(skills []*commands.Command) int {
 	count := 0
 	for _, skill := range skills {
-		if skill != nil && !skill.DisableModelInvocation && skill.SlashName() != "" {
+		if skill != nil && !skill.DisableModelInvocation && strings.TrimSpace(skill.Name) != "" {
 			count++
 		}
 	}
@@ -559,9 +674,12 @@ func buildMCPSkillCommands(snapshots []tool.MCPServerSnapshot) []*commands.Comma
 				continue
 			}
 			out = append(out, &commands.Command{
-				Name:        name,
-				Description: fmt.Sprintf("MCP prompt from %s", snap.Name),
-				WhenToUse:   fmt.Sprintf("Use when the %s MCP prompt %q matches the user's request.", snap.Name, promptName),
+				Name:          name,
+				Description:   fmt.Sprintf("MCP prompt from %s", snap.Name),
+				WhenToUse:     fmt.Sprintf("Use when the %s MCP prompt %q matches the user's request.", snap.Name, promptName),
+				Source:        commands.SourceMCP,
+				LoadedFrom:    commands.LoadedFromMCP,
+				UserInvocable: true,
 			})
 		}
 	}

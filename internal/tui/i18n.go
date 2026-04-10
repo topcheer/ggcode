@@ -56,6 +56,9 @@ func (m *Model) setLanguage(lang string) {
 			m.modelPanel.filter.Focus()
 		}
 	}
+	if m.harnessPanel != nil {
+		m.harnessPanel.actionInput.Placeholder = harnessPanelInputPlaceholder(m.harnessPanel.selectedSection, m.currentLanguage())
+	}
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	if len(m.langOptions) > 0 {
@@ -137,6 +140,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.mode")
 	case "/init":
 		return tr(lang, "slash.init")
+	case "/harness":
+		return tr(lang, "slash.harness")
 	case "/lang":
 		return tr(lang, "slash.lang")
 	case "/skills":
@@ -268,6 +273,348 @@ func enCatalog(key string) string {
 		return "Tips: use @path to include files, /? for help, and Shift+Tab to change mode."
 	case "startup.banner":
 		return "Preparing the terminal UI and filtering startup terminal noise. You can type right away; this banner disappears once startup settles."
+	case "harness.views":
+		return "Views"
+	case "harness.items":
+		return "Items"
+	case "harness.action":
+		return "Action"
+	case "harness.details":
+		return "Details"
+	case "harness.none":
+		return "(none)"
+	case "harness.unknown":
+		return "unknown"
+	case "harness.unscoped":
+		return "unscoped"
+	case "harness.unavailable":
+		return "Harness unavailable"
+	case "harness.unavailable_intro":
+		return "Start here in an existing project:"
+	case "harness.unavailable_step_init":
+		return "  1. Press Enter or i to initialize harness"
+	case "harness.unavailable_step_refresh":
+		return "  2. Press r to refresh once init finishes"
+	case "harness.section.init":
+		return "Init"
+	case "harness.section.check":
+		return "Check"
+	case "harness.section.doctor":
+		return "Doctor"
+	case "harness.section.monitor":
+		return "Monitor"
+	case "harness.section.gc":
+		return "GC"
+	case "harness.section.contexts":
+		return "Contexts"
+	case "harness.section.tasks":
+		return "Tasks"
+	case "harness.section.queue":
+		return "Queue"
+	case "harness.section.run":
+		return "Run"
+	case "harness.section.run_queued":
+		return "Run queued"
+	case "harness.section.inbox":
+		return "Inbox"
+	case "harness.section.review":
+		return "Review"
+	case "harness.section.promote":
+		return "Promote"
+	case "harness.section.release":
+		return "Release"
+	case "harness.section.rollouts":
+		return "Rollouts"
+	case "harness.hints.unavailable":
+		return "Enter/i init harness • r refresh • Esc close"
+	case "harness.hints.move":
+		return "j/k move"
+	case "harness.hints.tab":
+		return "Tab switch"
+	case "harness.hints.refresh":
+		return "r refresh"
+	case "harness.hints.close":
+		return "Esc close"
+	case "harness.hints.check":
+		return "Enter run checks"
+	case "harness.hints.monitor":
+		return "Enter refresh snapshot"
+	case "harness.hints.gc":
+		return "Enter run gc"
+	case "harness.hints.type_goal":
+		return "type goal"
+	case "harness.hints.queue":
+		return "Enter queue"
+	case "harness.hints.run":
+		return "Enter run"
+	case "harness.hints.focus_input":
+		return "Tab focus input"
+	case "harness.hints.rerun":
+		return "Enter rerun failed"
+	case "harness.hints.next":
+		return "Enter next"
+	case "harness.hints.all":
+		return "a all"
+	case "harness.hints.retry_failed":
+		return "f retry-failed"
+	case "harness.hints.resume":
+		return "s resume"
+	case "harness.hints.promote_owner":
+		return "p promote owner"
+	case "harness.hints.retry_owner":
+		return "f retry owner"
+	case "harness.hints.approve":
+		return "Enter approve"
+	case "harness.hints.reject":
+		return "x reject"
+	case "harness.hints.promote":
+		return "Enter promote"
+	case "harness.hints.apply_batch":
+		return "Enter apply batch"
+	case "harness.hints.advance":
+		return "Enter advance"
+	case "harness.hints.approve_gate":
+		return "g approve gate"
+	case "harness.hints.pause_resume":
+		return "p pause/resume"
+	case "harness.hints.abort":
+		return "x abort"
+	case "harness.hint.primary.check":
+		return "Press Enter to run checks."
+	case "harness.hint.primary.monitor":
+		return "Press Enter to refresh the monitor snapshot."
+	case "harness.hint.primary.gc":
+		return "Press Enter to run garbage collection."
+	case "harness.hint.primary.queue":
+		return "Type a goal, then press Enter to queue it."
+	case "harness.hint.primary.run":
+		return "Type a goal, then press Enter to start the run."
+	case "harness.hint.primary.tasks":
+		return "Press Enter to rerun the selected failed task."
+	case "harness.hint.primary.run_queued":
+		return "Press Enter for next; a runs all; f retries failed; s resumes interrupted."
+	case "harness.hint.primary.inbox":
+		return "Press p to promote this owner or f to retry this owner."
+	case "harness.hint.primary.review":
+		return "Press Enter to approve or x to reject."
+	case "harness.hint.primary.promote":
+		return "Press Enter to promote the selected task."
+	case "harness.hint.primary.release":
+		return "Press Enter to apply the current release batch."
+	case "harness.hint.primary.rollouts":
+		return "Press Enter to advance; g approves gate; p pauses/resumes; x aborts."
+	case "harness.hint.primary.none":
+		return "No inline input needed for this section."
+	case "harness.message.read_only":
+		return "Harness panel is read-only while another run is active."
+	case "harness.message.monitor_refreshed":
+		return "Harness monitor refreshed."
+	case "harness.message.rerun_failed_only":
+		return "Harness task %s is %s; only failed tasks can be rerun."
+	case "harness.message.review_approved":
+		return "Approved review for %s"
+	case "harness.message.review_rejected":
+		return "Rejected review for %s"
+	case "harness.message.promoted":
+		return "Promoted %s"
+	case "harness.message.no_release_tasks":
+		return "No harness tasks are ready for release."
+	case "harness.message.release_applied":
+		return "Applied release batch %s"
+	case "harness.message.no_rollouts":
+		return "No persisted rollouts found."
+	case "harness.message.rollout_advanced":
+		return "Advanced rollout %s"
+	case "harness.message.owner_promoted":
+		return "Promoted %d task(s) for %s"
+	case "harness.message.owner_retried":
+		return "Retried failed tasks for %s"
+	case "harness.message.gate_approved":
+		return "Approved next gate for %s"
+	case "harness.message.rollout_resumed":
+		return "Resumed rollout %s"
+	case "harness.message.rollout_paused":
+		return "Paused rollout %s"
+	case "harness.message.rollout_aborted":
+		return "Aborted rollout %s"
+	case "harness.message.check_passed":
+		return "Harness check passed."
+	case "harness.message.check_failed":
+		return "Harness check found issues."
+	case "harness.message.gc_complete":
+		return "Harness gc complete."
+	case "harness.message.queue_goal_required":
+		return "Type a queue goal in the panel input first."
+	case "harness.message.queued":
+		return "Queued harness task %s"
+	case "harness.message.run_goal_required":
+		return "Type a run goal in the panel input first."
+	case "harness.message.no_queued_executed":
+		return "No queued harness tasks were executed."
+	case "harness.message.queue_retried":
+		return "Retried %d failed queued task(s)."
+	case "harness.message.queue_resumed":
+		return "Resumed %d interrupted queued task(s)."
+	case "harness.message.queue_ran":
+		return "Ran %d queued task(s)."
+	case "harness.preview.not_initialized":
+		return "Harness is not initialized in this project yet.\n\nPress Enter or i to run harness init in the current repository."
+	case "harness.preview.check":
+		return "Run harness checks against the current project.\n\nEnter: run required file/content/context checks plus configured validation commands."
+	case "harness.preview.gc":
+		return "Run harness garbage collection.\n\nEnter: archive stale tasks, abandon stale blocked/running work, prune old logs, and remove orphaned worktrees."
+	case "harness.preview.queue_help":
+		return "Type the harness goal here, then press Enter to queue it."
+	case "harness.preview.run_help":
+		return "Type the harness goal here, then press Enter to start the run."
+	case "harness.preview.run_queued":
+		return "Queue status:\nqueued=%d running=%d blocked=%d failed=%d\n\nEnter runs the next runnable task.\na runs all runnable tasks.\nf retries failed tasks.\ns resumes interrupted tasks."
+	case "harness.preview.no_owner":
+		return "No harness owner selected."
+	case "harness.preview.no_context":
+		return "No harness context selected."
+	case "harness.preview.no_task":
+		return "No harness task selected."
+	case "harness.preview.project_not_initialized":
+		return "Harness is not initialized in this project yet."
+	case "harness.preview.project_initialized":
+		return "Harness is initialized."
+	case "harness.preview.project_help":
+		return "Use /harness to browse and operate the control plane."
+	case "harness.preview.no_doctor":
+		return "No harness doctor report."
+	case "harness.preview.monitor_unavailable":
+		return "Harness monitor unavailable."
+	case "harness.label.context_title":
+		return "Context"
+	case "harness.label.owner_title":
+		return "Owner"
+	case "harness.label.id":
+		return "id"
+	case "harness.label.status":
+		return "status"
+	case "harness.label.goal":
+		return "goal"
+	case "harness.label.attempts":
+		return "attempts"
+	case "harness.label.depends_on":
+		return "depends_on"
+	case "harness.label.context":
+		return "context"
+	case "harness.label.workspace":
+		return "workspace"
+	case "harness.label.branch":
+		return "branch"
+	case "harness.label.worker":
+		return "worker"
+	case "harness.label.progress":
+		return "progress"
+	case "harness.label.verification":
+		return "verification"
+	case "harness.label.changed_files":
+		return "changed_files"
+	case "harness.label.delivery_report":
+		return "delivery_report"
+	case "harness.label.delivery_report_human":
+		return "delivery report"
+	case "harness.label.log":
+		return "log"
+	case "harness.label.review":
+		return "review"
+	case "harness.label.review_notes":
+		return "review_notes"
+	case "harness.label.promotion":
+		return "promotion"
+	case "harness.label.promotion_notes":
+		return "promotion_notes"
+	case "harness.label.release_batch":
+		return "release_batch"
+	case "harness.label.release_batch_human":
+		return "release batch"
+	case "harness.label.release_notes":
+		return "release_notes"
+	case "harness.label.error":
+		return "error"
+	case "harness.label.name":
+		return "name"
+	case "harness.label.description":
+		return "description"
+	case "harness.label.owner":
+		return "owner"
+	case "harness.label.commands":
+		return "commands"
+	case "harness.label.tasks":
+		return "tasks"
+	case "harness.label.rollouts":
+		return "rollouts"
+	case "harness.label.gates":
+		return "gates"
+	case "harness.label.latest":
+		return "latest"
+	case "harness.label.repo":
+		return "repo"
+	case "harness.label.config":
+		return "config"
+	case "harness.label.project":
+		return "project"
+	case "harness.label.structure":
+		return "structure"
+	case "harness.label.contexts":
+		return "contexts"
+	case "harness.label.workers":
+		return "workers"
+	case "harness.label.workflow":
+		return "workflow"
+	case "harness.label.quality":
+		return "quality"
+	case "harness.label.worktrees":
+		return "worktrees"
+	case "harness.label.snapshot":
+		return "snapshot"
+	case "harness.label.events":
+		return "events"
+	case "harness.label.target":
+		return "target"
+	case "harness.label.review_ready":
+		return "review_ready"
+	case "harness.label.promotion_ready":
+		return "promotion_ready"
+	case "harness.label.retryable":
+		return "retryable"
+	case "harness.task_title":
+		return "Harness task"
+	case "harness.doctor_title":
+		return "Harness doctor"
+	case "harness.monitor_title":
+		return "Harness monitor"
+	case "harness.latest_task":
+		return "Latest task"
+	case "harness.latest_event":
+		return "Latest event"
+	case "harness.focus":
+		return "Focus"
+	case "harness.status.ok":
+		return "ok"
+	case "harness.status.needs_attention":
+		return "needs attention"
+	case "harness.group.review":
+		return "review"
+	case "harness.group.promotion":
+		return "promotion"
+	case "harness.group.retry":
+		return "retry"
+	case "harness.review_ready_short":
+		return "review"
+	case "harness.promote_ready_short":
+		return "promote"
+	case "harness.tasks_count":
+		return "tasks"
+	case "harness.input_empty":
+		return "(input box is empty)"
+	case "harness.no_waves":
+		return "no waves"
+	case "harness.mixed":
+		return "mixed"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab cycle • Enter apply • Esc close"
 	case "hint.mention":
@@ -748,6 +1095,8 @@ func enCatalog(key string) string {
 		return "Set permission mode"
 	case "slash.init":
 		return "Generate project GGCODE.md"
+	case "slash.harness":
+		return "Run harness workflow commands"
 	case "slash.lang":
 		return "Switch interface language"
 	case "slash.skills":
@@ -794,6 +1143,7 @@ func enCatalog(key string) string {
   /fullscreen        Toggle fullscreen mode
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
   /init              Generate GGCODE.md from the current project
+  /harness ...       Run harness control-plane commands
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
   /agent cancel <id> Cancel a sub-agent
@@ -821,6 +1171,14 @@ Keyboard shortcuts:
 Mouse:
   Option+drag / Shift+drag  Select text to copy (bypasses app mouse capture)
   Mouse wheel               Scroll conversation output`
+	case "command.harness_usage":
+		return "Usage: /harness <init|check|queue|tasks|run|rerun|run-queued|monitor|contexts|inbox|review|promote|release|gc|doctor> ... (release supports rollouts|advance|pause|resume|abort|approve|reject)"
+	case "command.harness_queue_usage":
+		return "Usage: /harness queue <goal>"
+	case "command.harness_run_usage":
+		return "Usage: /harness run <goal>"
+	case "command.harness_rerun_usage":
+		return "Usage: /harness rerun <task-id>"
 	default:
 		return key
 	}
@@ -916,6 +1274,348 @@ func zhCatalog(key string) string {
 		return "提示：用 @path 引用文件，/? 查看帮助，Shift+Tab 切换模式。"
 	case "startup.banner":
 		return "正在准备终端界面并过滤启动期的终端噪声。你现在就可以输入；一旦界面进入可交互状态，这个提示会自动消失。"
+	case "harness.views":
+		return "视图"
+	case "harness.items":
+		return "条目"
+	case "harness.action":
+		return "操作"
+	case "harness.details":
+		return "详情"
+	case "harness.none":
+		return "（无）"
+	case "harness.unknown":
+		return "未知"
+	case "harness.unscoped":
+		return "未归属"
+	case "harness.unavailable":
+		return "Harness 不可用"
+	case "harness.unavailable_intro":
+		return "已有项目可从这里开始："
+	case "harness.unavailable_step_init":
+		return "  1. 按 Enter 或 i 初始化 harness"
+	case "harness.unavailable_step_refresh":
+		return "  2. 初始化完成后按 r 刷新"
+	case "harness.section.init":
+		return "初始化"
+	case "harness.section.check":
+		return "检查"
+	case "harness.section.doctor":
+		return "诊断"
+	case "harness.section.monitor":
+		return "监控"
+	case "harness.section.gc":
+		return "清理"
+	case "harness.section.contexts":
+		return "上下文"
+	case "harness.section.tasks":
+		return "任务"
+	case "harness.section.queue":
+		return "排队"
+	case "harness.section.run":
+		return "运行"
+	case "harness.section.run_queued":
+		return "运行队列"
+	case "harness.section.inbox":
+		return "收件箱"
+	case "harness.section.review":
+		return "评审"
+	case "harness.section.promote":
+		return "晋升"
+	case "harness.section.release":
+		return "发布"
+	case "harness.section.rollouts":
+		return "发布波次"
+	case "harness.hints.unavailable":
+		return "Enter/i 初始化 • r 刷新 • Esc 关闭"
+	case "harness.hints.move":
+		return "j/k 移动"
+	case "harness.hints.tab":
+		return "Tab 切换"
+	case "harness.hints.refresh":
+		return "r 刷新"
+	case "harness.hints.close":
+		return "Esc 关闭"
+	case "harness.hints.check":
+		return "Enter 运行检查"
+	case "harness.hints.monitor":
+		return "Enter 刷新快照"
+	case "harness.hints.gc":
+		return "Enter 执行清理"
+	case "harness.hints.type_goal":
+		return "输入目标"
+	case "harness.hints.queue":
+		return "Enter 排队"
+	case "harness.hints.run":
+		return "Enter 运行"
+	case "harness.hints.focus_input":
+		return "Tab 聚焦输入"
+	case "harness.hints.rerun":
+		return "Enter 重跑失败任务"
+	case "harness.hints.next":
+		return "Enter 跑下一个"
+	case "harness.hints.all":
+		return "a 全部"
+	case "harness.hints.retry_failed":
+		return "f 重试失败"
+	case "harness.hints.resume":
+		return "s 恢复"
+	case "harness.hints.promote_owner":
+		return "p 晋升该 owner"
+	case "harness.hints.retry_owner":
+		return "f 重试该 owner"
+	case "harness.hints.approve":
+		return "Enter 通过"
+	case "harness.hints.reject":
+		return "x 拒绝"
+	case "harness.hints.promote":
+		return "Enter 晋升"
+	case "harness.hints.apply_batch":
+		return "Enter 应用批次"
+	case "harness.hints.advance":
+		return "Enter 推进"
+	case "harness.hints.approve_gate":
+		return "g 批准 gate"
+	case "harness.hints.pause_resume":
+		return "p 暂停/恢复"
+	case "harness.hints.abort":
+		return "x 中止"
+	case "harness.hint.primary.check":
+		return "按 Enter 运行检查。"
+	case "harness.hint.primary.monitor":
+		return "按 Enter 刷新监控快照。"
+	case "harness.hint.primary.gc":
+		return "按 Enter 运行垃圾清理。"
+	case "harness.hint.primary.queue":
+		return "输入目标后按 Enter 加入队列。"
+	case "harness.hint.primary.run":
+		return "输入目标后按 Enter 开始运行。"
+	case "harness.hint.primary.tasks":
+		return "按 Enter 重跑所选失败任务。"
+	case "harness.hint.primary.run_queued":
+		return "Enter 跑下一个；a 全部运行；f 重试失败；s 恢复中断。"
+	case "harness.hint.primary.inbox":
+		return "按 p 晋升该 owner，或按 f 重试该 owner。"
+	case "harness.hint.primary.review":
+		return "按 Enter 通过，或按 x 拒绝。"
+	case "harness.hint.primary.promote":
+		return "按 Enter 晋升所选任务。"
+	case "harness.hint.primary.release":
+		return "按 Enter 应用当前发布批次。"
+	case "harness.hint.primary.rollouts":
+		return "按 Enter 推进；g 批准 gate；p 暂停/恢复；x 中止。"
+	case "harness.hint.primary.none":
+		return "这个分区不需要内联输入。"
+	case "harness.message.read_only":
+		return "当前有其他运行进行中，Harness 面板为只读。"
+	case "harness.message.monitor_refreshed":
+		return "Harness 监控已刷新。"
+	case "harness.message.rerun_failed_only":
+		return "Harness 任务 %s 当前是 %s；只有失败任务才能重跑。"
+	case "harness.message.review_approved":
+		return "已通过 %s 的评审"
+	case "harness.message.review_rejected":
+		return "已拒绝 %s 的评审"
+	case "harness.message.promoted":
+		return "已晋升 %s"
+	case "harness.message.no_release_tasks":
+		return "没有可发布的 harness 任务。"
+	case "harness.message.release_applied":
+		return "已应用发布批次 %s"
+	case "harness.message.no_rollouts":
+		return "没有持久化的 rollout。"
+	case "harness.message.rollout_advanced":
+		return "已推进 rollout %s"
+	case "harness.message.owner_promoted":
+		return "已为 %2$s 晋升 %1$d 个任务"
+	case "harness.message.owner_retried":
+		return "已为 %s 重试失败任务"
+	case "harness.message.gate_approved":
+		return "已批准 %s 的下一个 gate"
+	case "harness.message.rollout_resumed":
+		return "已恢复 rollout %s"
+	case "harness.message.rollout_paused":
+		return "已暂停 rollout %s"
+	case "harness.message.rollout_aborted":
+		return "已中止 rollout %s"
+	case "harness.message.check_passed":
+		return "Harness 检查已通过。"
+	case "harness.message.check_failed":
+		return "Harness 检查发现问题。"
+	case "harness.message.gc_complete":
+		return "Harness 清理完成。"
+	case "harness.message.queue_goal_required":
+		return "请先在面板输入框里填写排队目标。"
+	case "harness.message.queued":
+		return "已加入 harness 队列：%s"
+	case "harness.message.run_goal_required":
+		return "请先在面板输入框里填写运行目标。"
+	case "harness.message.no_queued_executed":
+		return "没有执行任何已排队的 harness 任务。"
+	case "harness.message.queue_retried":
+		return "已重试 %d 个失败的排队任务。"
+	case "harness.message.queue_resumed":
+		return "已恢复 %d 个中断的排队任务。"
+	case "harness.message.queue_ran":
+		return "已运行 %d 个排队任务。"
+	case "harness.preview.not_initialized":
+		return "当前项目还没有初始化 harness。\n\n按 Enter 或 i 可在当前仓库中运行 harness init。"
+	case "harness.preview.check":
+		return "对当前项目运行 harness 检查。\n\nEnter：执行所需的文件/内容/上下文检查，以及配置中的校验命令。"
+	case "harness.preview.gc":
+		return "运行 harness 垃圾清理。\n\nEnter：归档陈旧任务、放弃陈旧的 blocked/running 工作、清理旧日志，并移除孤儿 worktree。"
+	case "harness.preview.queue_help":
+		return "在这里输入 harness 目标，然后按 Enter 加入队列。"
+	case "harness.preview.run_help":
+		return "在这里输入 harness 目标，然后按 Enter 开始运行。"
+	case "harness.preview.run_queued":
+		return "队列状态：\nqueued=%d running=%d blocked=%d failed=%d\n\nEnter 运行下一个可执行任务。\na 运行全部可执行任务。\nf 重试失败任务。\ns 恢复中断任务。"
+	case "harness.preview.no_owner":
+		return "当前没有选中的 harness owner。"
+	case "harness.preview.no_context":
+		return "当前没有选中的 harness 上下文。"
+	case "harness.preview.no_task":
+		return "当前没有选中的 harness 任务。"
+	case "harness.preview.project_not_initialized":
+		return "当前项目还没有初始化 harness。"
+	case "harness.preview.project_initialized":
+		return "Harness 已初始化。"
+	case "harness.preview.project_help":
+		return "使用 /harness 浏览并操作控制平面。"
+	case "harness.preview.no_doctor":
+		return "没有 harness 诊断报告。"
+	case "harness.preview.monitor_unavailable":
+		return "Harness 监控不可用。"
+	case "harness.label.context_title":
+		return "上下文"
+	case "harness.label.owner_title":
+		return "Owner"
+	case "harness.label.id":
+		return "id"
+	case "harness.label.status":
+		return "状态"
+	case "harness.label.goal":
+		return "目标"
+	case "harness.label.attempts":
+		return "尝试次数"
+	case "harness.label.depends_on":
+		return "依赖"
+	case "harness.label.context":
+		return "上下文"
+	case "harness.label.workspace":
+		return "工作区"
+	case "harness.label.branch":
+		return "分支"
+	case "harness.label.worker":
+		return "worker"
+	case "harness.label.progress":
+		return "进度"
+	case "harness.label.verification":
+		return "验证"
+	case "harness.label.changed_files":
+		return "变更文件数"
+	case "harness.label.delivery_report":
+		return "交付报告"
+	case "harness.label.delivery_report_human":
+		return "交付报告"
+	case "harness.label.log":
+		return "日志"
+	case "harness.label.review":
+		return "评审"
+	case "harness.label.review_notes":
+		return "评审备注"
+	case "harness.label.promotion":
+		return "晋升"
+	case "harness.label.promotion_notes":
+		return "晋升备注"
+	case "harness.label.release_batch":
+		return "发布批次"
+	case "harness.label.release_batch_human":
+		return "发布批次"
+	case "harness.label.release_notes":
+		return "发布备注"
+	case "harness.label.error":
+		return "错误"
+	case "harness.label.name":
+		return "名称"
+	case "harness.label.description":
+		return "描述"
+	case "harness.label.owner":
+		return "Owner"
+	case "harness.label.commands":
+		return "命令数"
+	case "harness.label.tasks":
+		return "任务"
+	case "harness.label.rollouts":
+		return "rollout"
+	case "harness.label.gates":
+		return "gate"
+	case "harness.label.latest":
+		return "最近任务"
+	case "harness.label.repo":
+		return "仓库"
+	case "harness.label.config":
+		return "配置"
+	case "harness.label.project":
+		return "项目"
+	case "harness.label.structure":
+		return "结构"
+	case "harness.label.contexts":
+		return "上下文数"
+	case "harness.label.workers":
+		return "worker"
+	case "harness.label.workflow":
+		return "流程"
+	case "harness.label.quality":
+		return "质量"
+	case "harness.label.worktrees":
+		return "worktree"
+	case "harness.label.snapshot":
+		return "快照"
+	case "harness.label.events":
+		return "事件"
+	case "harness.label.target":
+		return "目标"
+	case "harness.label.review_ready":
+		return "待评审"
+	case "harness.label.promotion_ready":
+		return "待晋升"
+	case "harness.label.retryable":
+		return "可重试"
+	case "harness.task_title":
+		return "Harness 任务"
+	case "harness.doctor_title":
+		return "Harness 诊断"
+	case "harness.monitor_title":
+		return "Harness 监控"
+	case "harness.latest_task":
+		return "最近任务"
+	case "harness.latest_event":
+		return "最近事件"
+	case "harness.focus":
+		return "关注对象"
+	case "harness.status.ok":
+		return "正常"
+	case "harness.status.needs_attention":
+		return "需要关注"
+	case "harness.group.review":
+		return "评审"
+	case "harness.group.promotion":
+		return "晋升"
+	case "harness.group.retry":
+		return "重试"
+	case "harness.review_ready_short":
+		return "评审"
+	case "harness.promote_ready_short":
+		return "晋升"
+	case "harness.tasks_count":
+		return "任务"
+	case "harness.input_empty":
+		return "（输入框为空）"
+	case "harness.no_waves":
+		return "没有波次"
+	case "harness.mixed":
+		return "混合"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 切换 • Enter 应用 • Esc 关闭"
 	case "hint.mention":
@@ -1396,6 +2096,8 @@ func zhCatalog(key string) string {
 		return "设置权限模式"
 	case "slash.init":
 		return "生成项目 GGCODE.md"
+	case "slash.harness":
+		return "运行 harness 工作流命令"
 	case "slash.lang":
 		return "切换界面语言"
 	case "slash.skills":
@@ -1442,6 +2144,7 @@ func zhCatalog(key string) string {
   /fullscreen        切换全屏模式
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
   /init              基于当前项目生成 GGCODE.md
+  /harness ...       运行 harness 控制面命令
   /agents            列出子 Agent
   /agent <id>        查看子 Agent 详情
   /agent cancel <id> 取消子 Agent
@@ -1469,6 +2172,14 @@ func zhCatalog(key string) string {
 鼠标：
   Option+拖拽 / Shift+拖拽  选择文本复制（绕过应用鼠标捕获）
   鼠标滚轮                 滚动对话输出`
+	case "command.harness_usage":
+		return "用法：/harness <init|check|queue|tasks|run|rerun|run-queued|monitor|contexts|inbox|review|promote|release|gc|doctor> ...（release 支持 rollouts|advance|pause|resume|abort|approve|reject）"
+	case "command.harness_queue_usage":
+		return "用法：/harness queue <goal>"
+	case "command.harness_run_usage":
+		return "用法：/harness run <goal>"
+	case "command.harness_rerun_usage":
+		return "用法：/harness rerun <task-id>"
 	default:
 		return key
 	}

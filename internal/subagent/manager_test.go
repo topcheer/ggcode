@@ -117,3 +117,44 @@ func TestManagerDefaultConfig(t *testing.T) {
 		t.Errorf("expected default timeout 30m, got %v", mgr.Timeout())
 	}
 }
+
+func TestManagerSnapshot(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+	id := mgr.Spawn("task body", "display task", []string{"wait_command"}, context.Background())
+	sa, ok := mgr.Get(id)
+	if !ok {
+		t.Fatal("expected spawned sub-agent")
+	}
+	sa.setProgressSummary("Job ID: cmd-1 • Status: running • Total lines: 10")
+	sa.IncrementToolCalls()
+	snap, ok := mgr.Snapshot(id)
+	if !ok {
+		t.Fatal("expected snapshot")
+	}
+	if snap.ID != id || snap.DisplayTask != "display task" || snap.ToolCallCount != 1 {
+		t.Fatalf("unexpected snapshot: %+v", snap)
+	}
+	if snap.ProgressSummary == "" {
+		t.Fatal("expected progress summary in snapshot")
+	}
+}
+
+func TestWaitForSnapshotReturnsRunningStateAfterTimeout(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+	id := mgr.Spawn("task", "task", nil, context.Background())
+	mgr.SetCancel(id, func() {})
+	sa, _ := mgr.Get(id)
+	sa.setActivity("tool", "wait_command", `{"job_id":"cmd-1"}`)
+	sa.setProgressSummary("Job ID: cmd-1 • Status: running • Total lines: 12")
+
+	snap, err := WaitForSnapshot(context.Background(), mgr, id, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("WaitForSnapshot() error = %v", err)
+	}
+	if snap.Status != StatusRunning {
+		t.Fatalf("expected running snapshot, got %s", snap.Status)
+	}
+	if snap.ProgressSummary == "" {
+		t.Fatal("expected progress summary")
+	}
+}

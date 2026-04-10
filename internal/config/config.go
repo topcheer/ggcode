@@ -95,43 +95,31 @@ type PluginCommandConfig struct {
 // DefaultSystemPrompt is the built-in system prompt used when no custom system_prompt is set.
 const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a terminal.
 
-## Identity
-- You help users with coding tasks by reading, writing, editing files, and running commands
-- You are precise, concise, and proactive
-- You prefer small, focused changes over large rewrites
-- You always verify your changes work
+## Core behavior
+- Be precise, concise, and proactive.
+- Prefer small, reversible changes over broad rewrites.
+- Read before you edit, and inspect results before claiming success.
+- Ask the user only when the choice materially changes behavior and no safe default exists.
+- If something is uncertain or incomplete, say so plainly instead of guessing.
 
-## Tool Usage Guidelines
-### File Operations
-- Read before edit — always understand existing code before modifying
-- Use edit_file for targeted changes, write_file only for new files
-- After editing, verify the change is correct
+## Tool routing
+- For repository inspection, prefer built-in file and search tools first: ` + "`read_file`" + `, ` + "`list_directory`" + `, ` + "`search_files`" + `, and ` + "`glob`" + `. Do not reach for shell commands when a built-in tool is clearer.
+- Use ` + "`edit_file`" + ` for targeted edits and ` + "`write_file`" + ` for creating or replacing whole files.
+- Use ` + "`run_command`" + ` for one-shot execution such as builds, tests, git commands, and focused repro steps.
+- Use the async command tools (` + "`start_command`" + `, ` + "`read_command_output`" + `, ` + "`wait_command`" + `, ` + "`write_command_input`" + `, ` + "`stop_command`" + `, ` + "`list_commands`" + `) for long-running, streaming, or interactive commands.
+- Use ` + "`list_mcp_capabilities`" + ` before assuming MCP-backed browser, external service, or prompt/resource capabilities are available.
+- Use the ` + "`skill`" + ` tool when a listed skill clearly matches the task; apply the returned workflow and then continue the task.
 
-### Shell Commands
-- Use run_command for builds, tests, git operations
-- Prefer specific commands over generic ones
-- Chain related commands with &&
-
-### Search
-- Use glob to find files, search_files for content
-- Be specific with patterns to reduce noise
-
-### Git
-- Small, focused commits with clear messages
-- Check status and diff before committing
-
-## Behavior
-- Ask for clarification when requirements are ambiguous
-- Break complex tasks into steps
-- Report progress during long operations
-- When you find bugs, fix them with minimal changes
-- Test your changes when possible
-- Use @mentions to reference files for context
+## Working style
+- Prefer the smallest concrete check that proves the requested behavior.
+- Compare expected versus actual behavior when debugging; do not stack speculative fixes.
+- Keep user-facing summaries short and useful.
+- Use ` + "`@mentions`" + ` when referencing files for context.
 
 ## Memory
-- Use save_memory to persist useful patterns and decisions
-- Check project memory files like GGCODE.md, AGENTS.md, and CLAUDE.md for project context and conventions
-- Learn from user preferences across sessions
+- Use ` + "`save_memory`" + ` for durable patterns and decisions that will matter later.
+- Check project memory files such as ` + "`GGCODE.md`" + `, ` + "`AGENTS.md`" + `, ` + "`CLAUDE.md`" + `, and ` + "`COPILOT.md`" + ` for project-specific guidance.
+- Learn from stable user preferences across sessions.
 `
 
 // Config is the top-level configuration.
@@ -140,6 +128,7 @@ type Config struct {
 	Endpoint      string                    `yaml:"endpoint"`
 	Model         string                    `yaml:"model"`
 	Language      string                    `yaml:"language"`
+	UI            UIConfig                  `yaml:"ui,omitempty"`
 	SystemPrompt  string                    `yaml:"system_prompt"`
 	Vendors       map[string]VendorConfig   `yaml:"vendors"`
 	AllowedDirs   []string                  `yaml:"allowed_dirs"`
@@ -152,6 +141,10 @@ type Config struct {
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
 	FilePath      string                    `yaml:"-"`
 	FirstRun      bool                      `yaml:"-"`
+}
+
+type UIConfig struct {
+	SidebarVisible *bool `yaml:"sidebar_visible,omitempty"`
 }
 
 // SubAgentConfig holds sub-agent configuration.
@@ -431,12 +424,14 @@ func DefaultConfig() *Config {
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 	cfg.FilePath = path
+	lookup := runtimeEnvLookup(nil)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			cfg.FirstRun = true
 			applyFirstLaunchAnthropicBootstrap(cfg)
+			cfg.expandEnvWithLookup(lookup)
 			cfg.normalizeActiveModel()
 			if err := cfg.Validate(); err != nil {
 				return nil, err
@@ -459,7 +454,8 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Expand env vars
-	expanded := ExpandEnvRecursive(raw)
+	lookup = runtimeEnvLookup(raw)
+	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
 
 	// Re-marshal and unmarshal into struct
 	expandedData, err := yaml.Marshal(expanded)
@@ -470,7 +466,8 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(expandedData, cfg); err != nil {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
 	}
-	cfg.expandEnv()
+	migrateLegacyMaxIterations(path, raw, cfg)
+	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config %s: %w", path, err)
@@ -484,63 +481,98 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+func migrateLegacyMaxIterations(path string, raw map[string]interface{}, cfg *Config) {
+	if cfg == nil || !isDefaultUserConfigPath(path) {
+		return
+	}
+	value, ok := raw["max_iterations"]
+	if !ok {
+		return
+	}
+	switch v := value.(type) {
+	case int:
+		if v == 50 {
+			cfg.MaxIterations = 0
+		}
+	case int64:
+		if v == 50 {
+			cfg.MaxIterations = 0
+		}
+	case float64:
+		if v == 50 {
+			cfg.MaxIterations = 0
+		}
+	}
+}
+
+func isDefaultUserConfigPath(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	return filepath.Clean(path) == filepath.Clean(ConfigPath())
+}
+
 func (c *Config) expandEnv() {
-	c.Vendor = ExpandEnv(c.Vendor)
-	c.Endpoint = ExpandEnv(c.Endpoint)
-	c.Model = ExpandEnv(c.Model)
-	c.SystemPrompt = ExpandEnv(c.SystemPrompt)
-	c.DefaultMode = ExpandEnv(c.DefaultMode)
+	c.expandEnvWithLookup(os.LookupEnv)
+}
+
+func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
+	c.Vendor = ExpandEnvWithLookup(c.Vendor, lookup)
+	c.Endpoint = ExpandEnvWithLookup(c.Endpoint, lookup)
+	c.Model = ExpandEnvWithLookup(c.Model, lookup)
+	c.SystemPrompt = ExpandEnvWithLookup(c.SystemPrompt, lookup)
+	c.DefaultMode = ExpandEnvWithLookup(c.DefaultMode, lookup)
 	for i, dir := range c.AllowedDirs {
-		c.AllowedDirs[i] = ExpandEnv(dir)
+		c.AllowedDirs[i] = ExpandEnvWithLookup(dir, lookup)
 	}
 	for vendorName, vc := range c.Vendors {
-		vc.DisplayName = ExpandEnv(vc.DisplayName)
-		vc.APIKey = ExpandEnv(vc.APIKey)
+		vc.DisplayName = ExpandEnvWithLookup(vc.DisplayName, lookup)
+		vc.APIKey = ExpandEnvWithLookup(vc.APIKey, lookup)
 		for endpointName, ep := range vc.Endpoints {
-			ep.DisplayName = ExpandEnv(ep.DisplayName)
-			ep.Protocol = ExpandEnv(ep.Protocol)
-			ep.BaseURL = ExpandEnv(ep.BaseURL)
-			ep.APIKey = ExpandEnv(ep.APIKey)
-			ep.DefaultModel = ExpandEnv(ep.DefaultModel)
-			ep.SelectedModel = ExpandEnv(ep.SelectedModel)
+			ep.DisplayName = ExpandEnvWithLookup(ep.DisplayName, lookup)
+			ep.Protocol = ExpandEnvWithLookup(ep.Protocol, lookup)
+			ep.BaseURL = ExpandEnvWithLookup(ep.BaseURL, lookup)
+			ep.APIKey = ExpandEnvWithLookup(ep.APIKey, lookup)
+			ep.DefaultModel = ExpandEnvWithLookup(ep.DefaultModel, lookup)
+			ep.SelectedModel = ExpandEnvWithLookup(ep.SelectedModel, lookup)
 			for i, model := range ep.Models {
-				ep.Models[i] = ExpandEnv(model)
+				ep.Models[i] = ExpandEnvWithLookup(model, lookup)
 			}
 			for i, tag := range ep.Tags {
-				ep.Tags[i] = ExpandEnv(tag)
+				ep.Tags[i] = ExpandEnvWithLookup(tag, lookup)
 			}
 			vc.Endpoints[endpointName] = ep
 		}
 		c.Vendors[vendorName] = vc
 	}
 	for i, plugin := range c.Plugins {
-		plugin.Name = ExpandEnv(plugin.Name)
-		plugin.Path = ExpandEnv(plugin.Path)
-		plugin.Type = ExpandEnv(plugin.Type)
+		plugin.Name = ExpandEnvWithLookup(plugin.Name, lookup)
+		plugin.Path = ExpandEnvWithLookup(plugin.Path, lookup)
+		plugin.Type = ExpandEnvWithLookup(plugin.Type, lookup)
 		for j, cmd := range plugin.Commands {
-			cmd.Name = ExpandEnv(cmd.Name)
-			cmd.Description = ExpandEnv(cmd.Description)
-			cmd.Execute = ExpandEnv(cmd.Execute)
+			cmd.Name = ExpandEnvWithLookup(cmd.Name, lookup)
+			cmd.Description = ExpandEnvWithLookup(cmd.Description, lookup)
+			cmd.Execute = ExpandEnvWithLookup(cmd.Execute, lookup)
 			for k, arg := range cmd.Args {
-				cmd.Args[k] = ExpandEnv(arg)
+				cmd.Args[k] = ExpandEnvWithLookup(arg, lookup)
 			}
 			plugin.Commands[j] = cmd
 		}
 		c.Plugins[i] = plugin
 	}
 	for i, mcp := range c.MCPServers {
-		mcp.Name = ExpandEnv(mcp.Name)
-		mcp.Type = ExpandEnv(mcp.Type)
-		mcp.Command = ExpandEnv(mcp.Command)
+		mcp.Name = ExpandEnvWithLookup(mcp.Name, lookup)
+		mcp.Type = ExpandEnvWithLookup(mcp.Type, lookup)
+		mcp.Command = ExpandEnvWithLookup(mcp.Command, lookup)
 		for j, arg := range mcp.Args {
-			mcp.Args[j] = ExpandEnv(arg)
+			mcp.Args[j] = ExpandEnvWithLookup(arg, lookup)
 		}
 		for key, val := range mcp.Env {
-			mcp.Env[key] = ExpandEnv(val)
+			mcp.Env[key] = ExpandEnvWithLookup(val, lookup)
 		}
-		mcp.URL = ExpandEnv(mcp.URL)
+		mcp.URL = ExpandEnvWithLookup(mcp.URL, lookup)
 		for key, val := range mcp.Headers {
-			mcp.Headers[key] = ExpandEnv(val)
+			mcp.Headers[key] = ExpandEnvWithLookup(val, lookup)
 		}
 		c.MCPServers[i] = mcp
 	}
@@ -921,6 +953,58 @@ func (c *Config) SaveLanguagePreference(lang string) error {
 	return nil
 }
 
+func (c *Config) SidebarVisible() bool {
+	if c == nil || c.UI.SidebarVisible == nil {
+		return true
+	}
+	return *c.UI.SidebarVisible
+}
+
+func (c *Config) SaveSidebarPreference(visible bool) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(c.FilePath) == "" {
+		return fmt.Errorf("config file path is empty")
+	}
+
+	raw := map[string]interface{}{}
+	data, err := os.ReadFile(c.FilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+		}
+	} else if len(data) > 0 {
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
+		}
+	}
+	uiRaw, _ := raw["ui"].(map[string]interface{})
+	if uiRaw == nil {
+		uiRaw = map[string]interface{}{}
+	}
+	uiRaw["sidebar_visible"] = visible
+	raw["ui"] = uiRaw
+
+	updated, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+		return err
+	}
+	c.UI.SidebarVisible = boolPtr(visible)
+	c.FirstRun = false
+	return nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -952,6 +1036,10 @@ func BuildSystemPrompt(basePrompt, workingDir string, toolNames []string, gitSta
 	if basePrompt == "" {
 		basePrompt = DefaultSystemPrompt
 	}
+	toolNames = append([]string(nil), toolNames...)
+	sort.Strings(toolNames)
+	customCmds = append([]string(nil), customCmds...)
+	sort.Strings(customCmds)
 
 	var sb strings.Builder
 	sb.WriteString(basePrompt)

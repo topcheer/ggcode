@@ -2,20 +2,20 @@ const translations = {
   en: {
     "meta.title": "ggcode — AI Coding CLI Tool",
     "meta.description":
-      "ggcode is an AI coding CLI that keeps code understanding, file editing, command execution, MCP integrations, and checkpoints inside one clean terminal workflow.",
+      "ggcode is an AI coding CLI that keeps code understanding, file editing, command execution, harnessed task queues, MCP integrations, and checkpoints inside one clean terminal workflow.",
     "nav.features": "Features",
     "nav.workflow": "Workflow",
     "nav.install": "Install",
     "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
     "hero.title": "Bring the AI coding workflow back into your terminal.",
     "hero.text":
-      "ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, and keeping long tasks moving inside one fresh, modern, geek-forward interface.",
+      "ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, running harnessed task queues, and keeping long tasks moving inside one fresh, modern, geek-forward interface.",
     "hero.ctaPrimary": "Get started",
     "hero.ctaSecondary": "View repository",
     "hero.stats.update": "Upgrade in-app or install native packages from releases",
-    "hero.stats.background": "Run long jobs in the background and keep visibility",
+    "hero.stats.background": "Run long jobs, harness queues, and release flows with live visibility",
     "hero.stats.extensible": "Extend the CLI natively with more capabilities",
-    "hero.badge": "v1.0.18 · self-update ready",
+    "hero.badge": "v1.1.8 · self-update ready",
     "hero.bannerAlt": "ggcode CLI banner",
     "features.eyebrow": "what makes it memorable",
     "features.title":
@@ -29,13 +29,13 @@ const translations = {
       "Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed without losing approval visibility.",
     "features.control.title": "More controllable",
     "features.control.text":
-      "Checkpoints plus /undo make file changes reversible, which matters in real projects, not just demos.",
+      "Checkpoints, /undo, and dirty-workspace confirmation keep file changes reversible and harness runs grounded in an explicit baseline.",
     "features.extend.title": "More extensible",
     "features.extend.text":
       "MCP, skills, plugins, and project memory can all plug into the same agent loop.",
     "features.longTasks.title": "Better for long-running work",
     "features.longTasks.text":
-      "Background commands, sub-agents, activity panels, and status signals keep builds, tests, and releases from blocking the whole session.",
+      "Background commands, worker-backed harness runs, activity panels, and status signals keep builds, tests, and release batches from blocking the whole session.",
     "features.crossPlatform.title": "More cross-platform",
     "features.crossPlatform.text":
       "Go, npm, pip, native packages, and in-app /update keep installs and upgrades simple across macOS, Windows, and Linux.",
@@ -59,7 +59,7 @@ const translations = {
       "Read files, search code, execute tools, and feed the results back into the model for iterative reasoning.",
     "workflow.step3.title": "Keep product-level interaction intact",
     "workflow.step3.text":
-      "Language selection, permission modes, queueing, sidebar state, status, and MCP views all matter when you use the tool every day.",
+      "Language selection, permission modes, harness queues, review-promote-release loops, sidebar state, status, and MCP views all matter when you use the tool every day.",
     "modes.eyebrow": "trust model",
     "modes.title":
       "Choose the level of automation that matches the risk of the task.",
@@ -103,20 +103,20 @@ const translations = {
   zh: {
     "meta.title": "ggcode — AI Coding CLI Tool",
     "meta.description":
-      "ggcode 是一个终端里的 AI Coding CLI。理解代码库、编辑文件、运行命令、连接 MCP、管理 checkpoint，都在同一个清爽现代的终端工作流里完成。",
+      "ggcode 是一个终端里的 AI Coding CLI。理解代码库、编辑文件、运行命令、跑 harness 队列、连接 MCP、管理 checkpoint，都在同一个清爽现代的终端工作流里完成。",
     "nav.features": "能力",
     "nav.workflow": "工作流",
     "nav.install": "安装",
     "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
     "hero.title": "把 AI 编码工作流，真正放回你的终端。",
     "hero.text":
-      "ggcode 不是一个会聊天的命令行玩具，而是一套可持续使用的 AI Coding CLI：读代码、改文件、跑命令、接 MCP、看 checkpoint、切模式、排长任务，都在一个清新、现代、极客感十足的界面里完成。",
+      "ggcode 不是一个会聊天的命令行玩具，而是一套可持续使用的 AI Coding CLI：读代码、改文件、跑命令、接 MCP、看 checkpoint、切模式、跑 harness 队列、排长任务，都在一个清新、现代、极客感十足的界面里完成。",
     "hero.ctaPrimary": "马上开始",
     "hero.ctaSecondary": "查看仓库",
     "hero.stats.update": "可在应用内升级，也能直接安装原生发布包",
-    "hero.stats.background": "长任务可以后台跑、持续看进度",
+    "hero.stats.background": "长任务、harness 队列和发布流都能持续看进度",
     "hero.stats.extensible": "从 CLI 原生长出扩展能力",
-    "hero.badge": "v1.0.18 · 可直接升级",
+    "hero.badge": "v1.1.8 · 可直接升级",
     "hero.bannerAlt": "ggcode CLI 横幅",
     "features.eyebrow": "what makes it memorable",
     "features.title": "不是“AI 接个壳”，而是一套终端里的完整产品体验。",
@@ -128,13 +128,13 @@ const translations = {
       "supervised、plan、auto、bypass、autopilot 五种模式，既能安全探索，也能高速推进，同时保留清晰的审批可见性。",
     "features.control.title": "更可控",
     "features.control.text":
-      "checkpoint + /undo 让文件改动具备回滚能力，适合真实项目而不是一次性 demo。",
+      "checkpoint、/undo 和 dirty workspace 确认，让文件改动可回滚，也让 harness run 始终基于明确基线启动。",
     "features.extend.title": "更能扩",
     "features.extend.text":
       "MCP、skills、plugins、project memory 同时存在，能把你自己的工具链接进 agent loop。",
     "features.longTasks.title": "更适合长任务",
     "features.longTasks.text":
-      "后台命令、sub-agent、活动面板、状态提示，让编译、测试、发布不再卡住整次交互。",
+      "后台命令、worker-backed harness run、活动面板、状态提示，让编译、测试、release batch 不再卡住整次交互。",
     "features.crossPlatform.title": "更跨平台",
     "features.crossPlatform.text":
       "Go、npm、pip、原生安装包和应用内 /update，让 macOS、Windows、Linux 上的安装与升级都更直接。",
@@ -154,7 +154,7 @@ const translations = {
       "自动读文件、搜代码、执行工具，把结果继续喂给模型迭代推理。",
     "workflow.step3.title": "保留产品级交互",
     "workflow.step3.text":
-      "语言选择、权限模式、队列、sidebar、status、MCP 视图，都是持续使用时真正重要的细节。",
+      "语言选择、权限模式、harness 队列、review/promote/release 流、sidebar、status、MCP 视图，都是持续使用时真正重要的细节。",
     "modes.eyebrow": "trust model",
     "modes.title": "根据任务风险，切换你想要的自动化强度。",
     "modes.supervised": "适合大多数日常使用。遇到敏感动作时更稳。",

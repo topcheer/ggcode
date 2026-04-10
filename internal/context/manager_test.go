@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 type mockProvider struct {
@@ -400,9 +401,8 @@ func TestContextManager_Summarize_RetriesPromptTooLongByDroppingOldestGroup(t *t
 }
 
 func TestContextManager_Summarize_ReinjectsPostCompactState(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	ggcodeDir := filepath.Join(home, ".ggcode")
+	workspace := t.TempDir()
+	ggcodeDir := filepath.Join(workspace, ".ggcode")
 	if err := os.MkdirAll(ggcodeDir, 0755); err != nil {
 		t.Fatalf("mkdir .ggcode: %v", err)
 	}
@@ -419,6 +419,7 @@ func TestContextManager_Summarize_ReinjectsPostCompactState(t *testing.T) {
 	}
 
 	cm := NewManager(500)
+	cm.SetTodoFilePath(toolpkg.TodoFilePath(workspace))
 	ctx := context.Background()
 	prov := &mockProvider{}
 

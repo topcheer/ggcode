@@ -4,8 +4,12 @@ const { spawnSync } = require("child_process");
 const { ensureInstalled } = require("../lib/install");
 
 async function main() {
-  const binary = await ensureInstalled(process.env.GGCODE_INSTALL_VERSION, true);
-  const result = spawnSync(binary, process.argv.slice(2), {
+  const install = await ensureInstalled(process.env.GGCODE_INSTALL_VERSION, true);
+  if (install.needsRestart) {
+    console.error(`ggcode was installed to ${install.installDir}.`);
+    console.error("Reopen your terminal, then run `ggcode` directly.");
+  }
+  const result = spawnSync(install.binaryPath, process.argv.slice(2), {
     stdio: "inherit",
     env: { ...process.env, GGCODE_WRAPPER_KIND: "npm" },
   });
@@ -16,6 +20,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`ggcode npm wrapper failed: ${err.message}`);
+  console.error(`ggcode npm bootstrap failed: ${err.message}`);
   process.exit(1);
 });

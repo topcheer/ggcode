@@ -129,20 +129,29 @@ func TestDetectMention(t *testing.T) {
 	}
 }
 
-func TestCompleteSlashCommandIncludesUserInvocableSkills(t *testing.T) {
+func TestCompleteSlashCommandOnlyIncludesLegacyCommands(t *testing.T) {
 	matches := CompleteSlashCommand("/de", map[string]*commands.Command{
 		"deploy": {
 			Name:          "deploy",
 			UserInvocable: true,
+			LoadedFrom:    commands.LoadedFromCommands,
 		},
 		"debug": {
 			Name:          "debug",
-			UserInvocable: false,
+			UserInvocable: true,
+			LoadedFrom:    commands.LoadedFromSkills,
 		},
 	})
 
 	if len(matches) != 1 || matches[0] != "/deploy" {
 		t.Fatalf("matches = %v, want [/deploy]", matches)
+	}
+}
+
+func TestCompleteSlashCommandIncludesHarness(t *testing.T) {
+	matches := CompleteSlashCommand("/har", nil)
+	if len(matches) != 1 || matches[0] != "/harness" {
+		t.Fatalf("matches = %v, want [/harness]", matches)
 	}
 }
 

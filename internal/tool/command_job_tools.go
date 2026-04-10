@@ -198,6 +198,60 @@ func (t StopCommandTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	return Result{Content: formatCommandJobSnapshot(snap, false)}, nil
 }
 
+type WriteCommandInputTool struct {
+	Manager *CommandJobManager
+}
+
+func (t WriteCommandInputTool) Name() string { return "write_command_input" }
+
+func (t WriteCommandInputTool) Description() string {
+	return "Send stdin input to a running background command job. Use this for prompts, REPLs, or interactive commands."
+}
+
+func (t WriteCommandInputTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"job_id": {
+				"type": "string",
+				"description": "The command job ID returned by start_command"
+			},
+			"input": {
+				"type": "string",
+				"description": "Text to write to the command's stdin"
+			},
+			"append_newline": {
+				"type": "boolean",
+				"description": "Whether to append a trailing newline after the input (default: true)"
+			}
+		},
+		"required": ["job_id", "input"]
+	}`)
+}
+
+func (t WriteCommandInputTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	var args struct {
+		JobID         string `json:"job_id"`
+		Input         string `json:"input"`
+		AppendNewline *bool  `json:"append_newline"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	if t.Manager == nil {
+		return Result{IsError: true, Content: "command job manager is unavailable"}, nil
+	}
+	appendNewline := true
+	if args.AppendNewline != nil {
+		appendNewline = *args.AppendNewline
+	}
+	snap, err := t.Manager.Write(args.JobID, args.Input, appendNewline)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	return Result{Content: formatCommandJobSnapshot(snap, false)}, nil
+}
+
 type ListCommandsTool struct {
 	Manager *CommandJobManager
 }

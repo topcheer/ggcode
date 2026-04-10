@@ -1,20 +1,29 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/plugin"
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func TestRenderMarkdown(t *testing.T) {
@@ -22,6 +31,125 @@ func TestRenderMarkdown(t *testing.T) {
 	result := RenderMarkdown("# Hello\n\nWorld")
 	if result == "" {
 		t.Error("expected non-empty markdown output")
+	}
+}
+
+func TestSlashCommandsOpenInspectorPanels(t *testing.T) {
+	tests := []struct {
+		command string
+		kind    inspectorPanelKind
+	}{
+		{"/sessions", inspectorPanelSessions},
+		{"/resume", inspectorPanelSessions},
+		{"/export", inspectorPanelSessions},
+		{"/agents", inspectorPanelAgents},
+		{"/checkpoints", inspectorPanelCheckpoints},
+		{"/memory", inspectorPanelMemory},
+		{"/todo", inspectorPanelTodos},
+		{"/plugins", inspectorPanelPlugins},
+		{"/config", inspectorPanelConfig},
+		{"/status", inspectorPanelStatus},
+	}
+
+	for _, tt := range tests {
+		m := newTestModel()
+		if tt.kind == inspectorPanelSessions {
+			store, err := session.NewJSONLStore(t.TempDir())
+			if err != nil {
+				t.Fatalf("new session store: %v", err)
+			}
+			m.sessionStore = store
+		}
+		if tt.kind == inspectorPanelPlugins {
+			m.pluginMgr = plugin.NewManager()
+		}
+		nextCmd := m.handleCommand(tt.command)
+		if nextCmd != nil {
+			t.Fatalf("%s: expected immediate panel open, got command", tt.command)
+		}
+		if m.inspectorPanel == nil || m.inspectorPanel.kind != tt.kind {
+			t.Fatalf("%s: expected inspector panel %q, got %#v", tt.command, tt.kind, m.inspectorPanel)
+		}
+	}
+}
+
+func TestInspectorSessionsEnterSchedulesResumeCommand(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	ses := &session.Session{
+		ID:        "sess-1",
+		Title:     "Saved chat",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("hello")}},
+		},
+	}
+	if err := store.Save(ses); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	m := newTestModel()
+	m.sessionStore = store
+	m.openInspectorPanel(inspectorPanelSessions)
+
+	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected resume cmd from sessions panel")
+	}
+	if next.inspectorPanel != nil {
+		t.Fatal("expected sessions panel to close before resuming")
+	}
+}
+
+func TestInspectorTodosClearActionPersistsEmptyList(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	ggDir := filepath.Join(workspace, ".ggcode")
+	if err := os.MkdirAll(ggDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ggDir, "todos.json"), []byte(`[{"id":"t1","content":"work","status":"pending"}]`), 0o644); err != nil {
+		t.Fatalf("write todos: %v", err)
+	}
+
+	m := newTestModel()
+	m.openInspectorPanel(inspectorPanelTodos)
+	_, _ = m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	if _, err := os.Stat(filepath.Join(ggDir, "todos.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected todos file to be removed, err=%v", err)
+	}
+}
+
+func gitInitForTUI(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, out)
+	}
+}
+
+func asModel(t *testing.T, model tea.Model) Model {
+	t.Helper()
+	switch typed := model.(type) {
+	case Model:
+		return typed
+	case *Model:
+		return *typed
+	default:
+		t.Fatalf("unexpected tea.Model type %T", model)
+		return Model{}
 	}
 }
 
@@ -42,6 +170,40 @@ func TestFormatDiff(t *testing.T) {
 	result := FormatDiff(diff)
 	if result == "" {
 		t.Error("expected non-empty diff output")
+	}
+}
+
+func TestMCPServerUpdateRefreshesSkills(t *testing.T) {
+	m := newTestModel()
+	enabled := false
+	mgr := commands.NewManager(t.TempDir())
+	mgr.SetExtraProviders(func() []*commands.Command {
+		if !enabled {
+			return nil
+		}
+		return []*commands.Command{{
+			Name:          "docs:summarize",
+			Source:        commands.SourceMCP,
+			LoadedFrom:    commands.LoadedFromMCP,
+			UserInvocable: true,
+		}}
+	})
+	m.SetCommandsManager(mgr)
+	if _, ok := m.customCmds["docs:summarize"]; ok {
+		t.Fatalf("did not expect MCP skill before server update: %+v", m.customCmds)
+	}
+	enabled = true
+	next, cmd := m.Update(mcpServersMsg{Servers: []plugin.MCPServerInfo{{
+		Name:        "docs",
+		PromptNames: []string{"summarize"},
+		Status:      plugin.MCPStatusConnected,
+	}}})
+	if cmd != nil {
+		t.Fatalf("expected mcpServersMsg to complete inline")
+	}
+	updated := next.(Model)
+	if _, ok := updated.customCmds["docs:summarize"]; ok {
+		t.Fatalf("did not expect MCP skill to appear in slash commands: %+v", updated.customCmds)
 	}
 }
 
@@ -105,6 +267,31 @@ func TestFormatToolStatus_RunCommandErrorShowsOnlyExitStatus(t *testing.T) {
 	}
 	if !strings.Contains(result, "exit status 2") {
 		t.Error("expected exit status summary in TUI output")
+	}
+}
+
+func TestFormatToolStatus_WaitCommandShowsCompactProgress(t *testing.T) {
+	msg := ToolStatusMsg{
+		ToolName: "wait_command",
+		Running:  false,
+		Result:   "Job ID: cmd-1\nStatus: running\nDuration: 2s\nTimeout: 30s\nTotal lines: 4\nRecent output:\nstep 4\n",
+	}
+	result := FormatToolStatus(msg)
+	if !strings.Contains(result, "running") || !strings.Contains(result, "4 lines") || !strings.Contains(result, "step 4") {
+		t.Fatalf("expected compact async progress summary, got %q", result)
+	}
+}
+
+func TestDescribeToolWriteCommandInputUsesJobID(t *testing.T) {
+	present := describeTool(LangEnglish, "write_command_input", `{"job_id":"cmd-7","input":"y"}`)
+	if present.DisplayName != "Run" {
+		t.Fatalf("expected run display name, got %q", present.DisplayName)
+	}
+	if present.Detail != "cmd-7" {
+		t.Fatalf("expected job id detail, got %q", present.Detail)
+	}
+	if present.Activity != "Running cmd-7" {
+		t.Fatalf("expected job id activity, got %q", present.Activity)
 	}
 }
 
@@ -291,6 +478,9 @@ func TestHelpText(t *testing.T) {
 	if !strings.Contains(h, "/init") {
 		t.Error("expected /init in help text")
 	}
+	if !strings.Contains(h, "/harness") {
+		t.Error("expected /harness in help text")
+	}
 }
 
 func TestProviderCommandOpensProviderPanel(t *testing.T) {
@@ -475,6 +665,40 @@ func TestMCPPanelInstallPersistsConfigAndCallsManager(t *testing.T) {
 	}
 }
 
+func TestMCPPanelBrowserPresetInstallsPlaywright(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	m.SetConfig(cfg)
+	manager := &fakeMCPManager{}
+	m.SetMCPManager(manager)
+	m.openMCPPanel()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if cmd == nil {
+		t.Fatal("expected browser preset install to return a command")
+	}
+	msg := cmd()
+	next, cmd = next.(Model).Update(msg)
+	if cmd != nil {
+		t.Fatal("expected install result to update synchronously")
+	}
+	m2 := next.(Model)
+	if len(manager.installed) != 1 {
+		t.Fatalf("expected preset install call, got %+v", manager.installed)
+	}
+	got := manager.installed[0]
+	if got.Name != "playwright" || got.Command != "npx" || got.Type != "stdio" {
+		t.Fatalf("unexpected preset config: %+v", got)
+	}
+	if len(m2.config.MCPServers) != 1 || m2.config.MCPServers[0].Name != "playwright" {
+		t.Fatalf("expected playwright MCP server persisted, got %+v", m2.config.MCPServers)
+	}
+	if m2.mcpPanel == nil || !strings.Contains(m2.mcpPanel.message, "Installed MCP server playwright") {
+		t.Fatalf("expected preset success message, got %+v", m2.mcpPanel)
+	}
+}
+
 func TestMCPPanelUninstallRemovesConfigAndCallsManager(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
@@ -586,6 +810,37 @@ func TestModelPanelRefreshFallsBackToBuiltInModels(t *testing.T) {
 	}
 	if !strings.Contains(m2.modelPanel.message, "Using built-in models") && !strings.Contains(m2.modelPanel.message, "built-in") {
 		t.Fatalf("expected built-in fallback message, got %q", m2.modelPanel.message)
+	}
+}
+
+func TestModelPanelClosesAfterSelectingModel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "gpt-4o-mini"
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	m := newTestModel()
+	m.SetConfig(cfg)
+	m.modelPanel = &modelPanelState{
+		models:   []string{"gpt-4o-mini", "gpt-4.1"},
+		selected: 1,
+		filter:   newModelFilterInput("en"),
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("expected no follow-up command, got %v", cmd)
+	}
+	m2 := next.(Model)
+	if m2.modelPanel != nil {
+		t.Fatal("expected model panel to close after selecting a model")
+	}
+	if got := m2.config.Model; got != "gpt-4.1" {
+		t.Fatalf("config.Model = %q, want %q", got, "gpt-4.1")
 	}
 }
 
@@ -729,12 +984,10 @@ func TestInitCommandStartsRepoKnowledgeCollection(t *testing.T) {
 		t.Fatalf("getwd: %v", err)
 	}
 	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
 	subDir := filepath.Join(repoDir, "internal", "tui")
 	if err := os.MkdirAll(subDir, 0755); err != nil {
 		t.Fatalf("mkdir subdir: %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
 	}
 	if err := os.Chdir(subDir); err != nil {
 		t.Fatalf("chdir: %v", err)
@@ -763,9 +1016,7 @@ func TestInitCommandStartsEvenWhenOtherProjectMemoryExists(t *testing.T) {
 		t.Fatalf("getwd: %v", err)
 	}
 	repoDir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repoDir, ".git"), 0755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
-	}
+	gitInitForTUI(t, repoDir)
 	if err := os.WriteFile(filepath.Join(repoDir, "AGENTS.md"), []byte("existing"), 0644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
@@ -794,5 +1045,1491 @@ func TestBuildInitPromptRequestsRepositoryInspection(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "/tmp/repo/GGCODE.md") {
 		t.Fatalf("expected target path in prompt, got %q", prompt)
+	}
+}
+
+func TestHarnessCommandOpensPanel(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.width = 120
+	if cmd := m.handleCommand("/harness"); cmd != nil {
+		t.Fatal("expected /harness without args to complete inline")
+	}
+	if m.harnessPanel == nil {
+		t.Fatal("expected /harness to open harness panel")
+	}
+	panel := m.renderContextPanel()
+	if !strings.Contains(panel, "/harness") || !strings.Contains(panel, "Check") || !strings.Contains(panel, "Monitor") || !strings.Contains(panel, "Queue") || !strings.Contains(panel, "Run queued") || !strings.Contains(panel, "Rollouts") {
+		t.Fatalf("expected harness panel content, got %q", panel)
+	}
+}
+
+func TestBusyEnterAllowsHarnessPanelCommand(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.width = 120
+	m.loading = true
+	m.input.SetValue("/harness")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected busy /harness to open inline")
+	}
+	updated := next.(Model)
+	if updated.harnessPanel == nil {
+		t.Fatal("expected /harness to open while busy")
+	}
+	if len(updated.pendingSubmissions) != 0 {
+		t.Fatalf("expected /harness not to be queued, got %+v", updated.pendingSubmissions)
+	}
+}
+
+func TestBusyEnterStillQueuesNonHarnessCommands(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.input.SetValue("/help")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected busy /help to stay queued")
+	}
+	updated := next.(Model)
+	if len(updated.pendingSubmissions) != 1 || updated.pendingSubmissions[0] != "/help" {
+		t.Fatalf("expected /help to remain queued, got %+v", updated.pendingSubmissions)
+	}
+	if updated.harnessPanel != nil {
+		t.Fatal("did not expect harness panel to open for /help")
+	}
+}
+
+func TestHarnessUnavailablePanelCanInitProject(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	origSuggest := suggestHarnessContextsForTUI
+	defer func() { suggestHarnessContextsForTUI = origSuggest }()
+	suggestHarnessContextsForTUI = func(ctx context.Context, cfg *config.Config, root, goal string, elements []string) ([]harness.ContextConfig, error) {
+		return []harness.ContextConfig{{Name: "core"}}, nil
+	}
+
+	m := newTestModel()
+	m.width = 120
+	if cmd := m.handleCommand("/harness"); cmd != nil {
+		t.Fatal("expected /harness without args to complete inline")
+	}
+	if m.harnessPanel == nil || m.harnessPanel.loadErr == "" {
+		t.Fatalf("expected unavailable harness panel, got %+v", m.harnessPanel)
+	}
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	if cmd != nil {
+		t.Fatal("expected panel init to open prompt first")
+	}
+	updated := next
+	if updated.harnessContextPrompt == nil {
+		t.Fatal("expected harness init prompt from panel")
+	}
+	nextModel, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected init prompt to request suggestions")
+	}
+	nextModel, _ = nextModel.Update(cmd())
+	updated = asModel(t, nextModel)
+	nextModel, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected init prompt to execute harness init")
+	}
+	nextModel, _ = nextModel.Update(cmd())
+	updated = asModel(t, nextModel)
+	if updated.harnessPanel == nil || updated.harnessPanel.loadErr != "" {
+		t.Fatalf("expected initialized harness panel, got %+v", updated.harnessPanel)
+	}
+	for _, rel := range []string{"AGENTS.md", filepath.Join(".ggcode", "harness.yaml")} {
+		if _, err := os.Stat(filepath.Join(repoDir, rel)); err != nil {
+			t.Fatalf("expected %s to exist: %v", rel, err)
+		}
+	}
+}
+
+func TestHarnessInitCreatesScaffold(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	origSuggest := suggestHarnessContextsForTUI
+	defer func() { suggestHarnessContextsForTUI = origSuggest }()
+	suggestHarnessContextsForTUI = func(ctx context.Context, cfg *config.Config, root, goal string, elements []string) ([]harness.ContextConfig, error) {
+		return []harness.ContextConfig{{Name: "core", Description: "Core platform"}}, nil
+	}
+
+	m := newTestModel()
+	cmd := m.handleCommand("/harness init Build ERP system")
+	if cmd != nil {
+		t.Fatal("expected /harness init to open prompt first")
+	}
+	if m.harnessContextPrompt == nil {
+		t.Fatal("expected harness init prompt to open")
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected init prompt to request suggestions")
+	}
+	next, _ = next.Update(cmd())
+	m = asModel(t, next)
+	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepSelect {
+		t.Fatalf("expected init prompt to move to select step, got %+v", m.harnessContextPrompt)
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected init selection to execute harness init")
+	}
+	next, _ = next.Update(cmd())
+	m = asModel(t, next)
+	if m.harnessContextPrompt != nil {
+		t.Fatalf("expected harness init prompt to close, got %+v", m.harnessContextPrompt)
+	}
+	for _, rel := range []string{"AGENTS.md", filepath.Join(".ggcode", "harness.yaml")} {
+		if _, err := os.Stat(filepath.Join(repoDir, rel)); err != nil {
+			t.Fatalf("expected %s to exist: %v", rel, err)
+		}
+	}
+	if !strings.Contains(m.output.String(), "Harness initialized") {
+		t.Fatalf("expected harness init output, got %q", m.output.String())
+	}
+}
+
+func TestHarnessInitRerunPromptsForUpgradeChoice(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	origSuggest := suggestHarnessContextsForTUI
+	defer func() { suggestHarnessContextsForTUI = origSuggest }()
+	suggestHarnessContextsForTUI = func(ctx context.Context, cfg *config.Config, root, goal string, elements []string) ([]harness.ContextConfig, error) {
+		return []harness.ContextConfig{{Name: "core"}}, nil
+	}
+	origInit := executeHarnessInit
+	defer func() { executeHarnessInit = origInit }()
+	forced := false
+	executeHarnessInit = func(root string, opts harness.InitOptions) (*harness.InitResult, error) {
+		forced = opts.Force
+		return harness.Init(root, opts)
+	}
+
+	m := newTestModel()
+	if cmd := m.handleCommand("/harness init"); cmd != nil {
+		t.Fatal("expected /harness init to open prompt")
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected suggestion request")
+	}
+	next, _ = next.Update(cmd())
+	m = asModel(t, next)
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected rerun init to show upgrade choice before executing")
+	}
+	m = asModel(t, next)
+	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepUpgrade {
+		t.Fatalf("expected upgrade step, got %+v", m.harnessContextPrompt)
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmd != nil {
+		t.Fatal("did not expect immediate execution on force toggle")
+	}
+	m = asModel(t, next)
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected upgrade choice to execute init")
+	}
+	m = asModel(t, next)
+	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepApplying {
+		t.Fatalf("expected applying step, got %+v", m.harnessContextPrompt)
+	}
+	next, _ = next.Update(cmd())
+	m = asModel(t, next)
+	if !forced {
+		t.Fatal("expected rerun init to pass Force after confirmation")
+	}
+}
+
+func TestHarnessInitApplyingIgnoresCancelKey(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+
+	origSuggest := suggestHarnessContextsForTUI
+	defer func() { suggestHarnessContextsForTUI = origSuggest }()
+	suggestHarnessContextsForTUI = func(ctx context.Context, cfg *config.Config, root, goal string, elements []string) ([]harness.ContextConfig, error) {
+		return []harness.ContextConfig{{Name: "core"}}, nil
+	}
+	origInit := executeHarnessInit
+	defer func() { executeHarnessInit = origInit }()
+	executeHarnessInit = func(root string, opts harness.InitOptions) (*harness.InitResult, error) {
+		return &harness.InitResult{Project: harness.Project{RootDir: root}}, nil
+	}
+
+	m := newTestModel()
+	if cmd := m.handleCommand("/harness init"); cmd != nil {
+		t.Fatal("expected /harness init to open prompt")
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = next.Update(cmd())
+	m = asModel(t, next)
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected init execution")
+	}
+	m = asModel(t, next)
+	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepApplying {
+		t.Fatalf("expected applying step, got %+v", m.harnessContextPrompt)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = asModel(t, next)
+	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepApplying {
+		t.Fatalf("expected applying step to ignore cancel, got %+v", m.harnessContextPrompt)
+	}
+}
+
+func TestHarnessContextsShowsReport(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.MkdirAll(filepath.Join(repoDir, "internal", "inventory"), 0755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	m := newTestModel()
+	cmd := m.handleCommand("/harness contexts")
+	if cmd != nil {
+		t.Fatal("expected /harness contexts to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "Harness contexts:") {
+		t.Fatalf("expected contexts output, got %q", m.output.String())
+	}
+}
+
+func TestHarnessMonitorShowsSnapshotReport(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := harness.NewTask("Monitor inventory context", "tui")
+	if err != nil {
+		t.Fatalf("NewTask() error = %v", err)
+	}
+	task.Status = harness.TaskRunning
+	task.WorkerID = "worker-1"
+	task.WorkerStatus = "running"
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+
+	m := newTestModel()
+	cmd := m.handleCommand("/harness monitor")
+	if cmd != nil {
+		t.Fatal("expected /harness monitor to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "Harness monitor") || !strings.Contains(m.output.String(), task.ID) {
+		t.Fatalf("expected monitor output, got %q", m.output.String())
+	}
+}
+
+func TestHarnessRunCommandCreatesTrackedTask(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	origRun := executeHarnessRun
+	defer func() { executeHarnessRun = origRun }()
+	executeHarnessRun = func(ctx context.Context, project harness.Project, cfg *harness.Config, goal string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
+		if opts.ContextName != "core" {
+			t.Fatalf("expected run context core, got %+v", opts)
+		}
+		task, err := harness.EnqueueTask(project, goal, "tui")
+		if err != nil {
+			return nil, err
+		}
+		task.Status = harness.TaskCompleted
+		task.ReviewStatus = harness.ReviewPending
+		if err := harness.SaveTask(project, task); err != nil {
+			return nil, err
+		}
+		return &harness.RunSummary{Task: task, Result: &harness.RunResult{Output: "ok"}}, nil
+	}
+
+	m := newTestModel()
+	cmd := m.handleCommand("/harness run Build ERP backend")
+	if cmd != nil {
+		t.Fatal("expected /harness run to open context prompt first")
+	}
+	if m.harnessContextPrompt == nil {
+		t.Fatal("expected harness run prompt to open")
+	}
+	m.harnessContextPrompt.input.SetValue("core")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected custom run context to ask for persistence before starting")
+	}
+	m = asModel(t, next)
+	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepPersist {
+		t.Fatalf("expected persist prompt, got %+v", m.harnessContextPrompt)
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected /harness run to start after confirming context persistence")
+	}
+	m = asModel(t, next)
+	if !m.loading {
+		t.Fatal("expected harness run to set loading state")
+	}
+	if !strings.Contains(m.statusActivity, "Starting harness run") {
+		t.Fatalf("expected harness run start activity, got %q", m.statusActivity)
+	}
+	next, followup := m.Update(cmd())
+	if followup != nil {
+		t.Fatal("expected harness run result to update synchronously")
+	}
+	m = next.(Model)
+	tasks, err := harness.ListTasks(result.Project)
+	if err != nil {
+		t.Fatalf("ListTasks() error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Goal != "Build ERP backend" {
+		t.Fatalf("expected tracked task from /harness run, got %+v", tasks)
+	}
+	if !strings.Contains(m.output.String(), "Starting tracked harness run") || !strings.Contains(m.output.String(), "Harness run") {
+		t.Fatalf("expected harness run summary output, got %q", m.output.String())
+	}
+}
+
+func TestBusyHarnessPanelBlocksRunAction(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.loading = true
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionRun
+	m.updateHarnessPanelInputState()
+	m.harnessPanel.actionInput.SetValue("Ship billing")
+	m.harnessPanel.focus = harnessPanelFocusInput
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected busy panel run action to be blocked")
+	}
+	updated := next
+	if !strings.Contains(updated.harnessPanel.message, "read-only") {
+		t.Fatalf("expected busy panel message, got %+v", updated.harnessPanel.message)
+	}
+	if updated.harnessContextPrompt != nil {
+		t.Fatalf("did not expect run prompt while busy, got %+v", updated.harnessContextPrompt)
+	}
+}
+
+func TestBusyHarnessPanelAllowsQueueAction(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.loading = true
+	m.openHarnessPanel()
+	m.harnessPanel.project = &result.Project
+	m.harnessPanel.selectedSection = harnessSectionQueue
+	m.updateHarnessPanelInputState()
+	m.harnessPanel.actionInput.SetValue("Queue inventory reconciliation work")
+	m.harnessPanel.focus = harnessPanelFocusInput
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected busy panel queue action to complete synchronously")
+	}
+	updated := next
+	if updated.harnessPanel == nil || !strings.Contains(updated.harnessPanel.message, "Queued harness task") {
+		t.Fatalf("expected queue success message, got %+v", updated.harnessPanel)
+	}
+	tasks, err := harness.ListTasks(result.Project)
+	if err != nil {
+		t.Fatalf("ListTasks() error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Goal != "Queue inventory reconciliation work" {
+		t.Fatalf("expected queued task during busy run, got %+v", tasks)
+	}
+}
+
+func TestHarnessRerunCommandCreatesTrackedTask(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := harness.EnqueueTask(result.Project, "Retry ERP backend", "tui")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	task.Status = harness.TaskFailed
+	task.Attempt = 1
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+	origRerun := executeHarnessRerun
+	defer func() { executeHarnessRerun = origRerun }()
+	executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
+		reloaded, err := harness.LoadTask(project, taskID)
+		if err != nil {
+			return nil, err
+		}
+		reloaded.Status = harness.TaskCompleted
+		reloaded.Attempt = 2
+		reloaded.ReviewStatus = harness.ReviewPending
+		if err := harness.SaveTask(project, reloaded); err != nil {
+			return nil, err
+		}
+		return &harness.RunSummary{Task: reloaded, Result: &harness.RunResult{Output: "ok"}}, nil
+	}
+
+	m := newTestModel()
+	cmd := m.handleCommand("/harness rerun " + task.ID)
+	if cmd == nil {
+		t.Fatal("expected /harness rerun to start asynchronously")
+	}
+	if !m.loading {
+		t.Fatal("expected harness rerun to set loading state")
+	}
+	if !strings.Contains(m.statusActivity, "Starting harness rerun") {
+		t.Fatalf("expected harness rerun start activity, got %q", m.statusActivity)
+	}
+	next, followup := m.Update(cmd())
+	if followup != nil {
+		t.Fatal("expected harness rerun result to update synchronously")
+	}
+	m = next.(Model)
+	reloaded, err := harness.LoadTask(result.Project, task.ID)
+	if err != nil {
+		t.Fatalf("LoadTask() error = %v", err)
+	}
+	if reloaded.Status != harness.TaskCompleted || reloaded.Attempt != 2 {
+		t.Fatalf("expected rerun task completion, got %+v", reloaded)
+	}
+	if !strings.Contains(m.output.String(), "Starting tracked harness rerun") || !strings.Contains(m.output.String(), "Harness run") {
+		t.Fatalf("expected harness rerun summary output, got %q", m.output.String())
+	}
+}
+
+func TestHarnessPanelApprovesReviewTask(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := harness.NewTask("Review inventory slice", "tui")
+	if err != nil {
+		t.Fatalf("NewTask() error = %v", err)
+	}
+	task.Status = harness.TaskCompleted
+	task.VerificationStatus = harness.VerificationPassed
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.openHarnessPanel()
+	if m.harnessPanel == nil {
+		t.Fatal("expected harness panel to open")
+	}
+	m.harnessPanel.selectedSection = harnessSectionReview
+	m.harnessPanel.focus = harnessPanelFocusItem
+	m.syncHarnessPanelSelection()
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected review approval to complete inline")
+	}
+	updated := next
+	loaded, err := harness.LoadTask(result.Project, task.ID)
+	if err != nil {
+		t.Fatalf("LoadTask() error = %v", err)
+	}
+	if loaded.ReviewStatus != harness.ReviewApproved {
+		t.Fatalf("expected review approved, got %q", loaded.ReviewStatus)
+	}
+	if updated.harnessPanel == nil || !strings.Contains(updated.harnessPanel.message, task.ID) {
+		t.Fatalf("expected success message for approved task, got %+v", updated.harnessPanel)
+	}
+}
+
+func TestHarnessPanelQueuesInputDraft(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionQueue
+	m.updateHarnessPanelInputState()
+	m.harnessPanel.actionInput.SetValue("Queue inventory reconciliation work")
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected queue action to complete inline")
+	}
+	updated := next
+	tasks, err := harness.ListTasks(result.Project)
+	if err != nil {
+		t.Fatalf("ListTasks() error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Goal != "Queue inventory reconciliation work" {
+		t.Fatalf("expected queued task from input draft, got %+v", tasks)
+	}
+	if updated.harnessPanel == nil || !strings.Contains(updated.harnessPanel.message, "Queued harness task") {
+		t.Fatalf("expected queue success message, got %+v", updated.harnessPanel)
+	}
+}
+
+func TestHarnessPanelShowsDedicatedInputForQueueAndRun(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.width = 120
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionQueue
+	m.updateHarnessPanelInputState()
+	queuePanel := m.renderContextPanel()
+	if !strings.Contains(queuePanel, "Action") || !strings.Contains(queuePanel, "queued harness goal") || !strings.Contains(queuePanel, "Details") {
+		t.Fatalf("expected queue input guidance, got %q", queuePanel)
+	}
+
+	m.harnessPanel.selectedSection = harnessSectionRun
+	m.updateHarnessPanelInputState()
+	runPanel := m.renderContextPanel()
+	if !strings.Contains(runPanel, "Action") || !strings.Contains(runPanel, "harness run goal") || !strings.Contains(runPanel, "Details") {
+		t.Fatalf("expected run input guidance, got %q", runPanel)
+	}
+}
+
+func TestHarnessPanelRunClosesPanelAndCreatesTrackedTask(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.MkdirAll(filepath.Join(repoDir, "internal", "inventory"), 0755); err != nil {
+		t.Fatalf("mkdir inventory: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	origRun := executeHarnessRun
+	defer func() { executeHarnessRun = origRun }()
+	executeHarnessRun = func(ctx context.Context, project harness.Project, cfg *harness.Config, goal string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
+		if strings.TrimSpace(opts.ContextName) == "" {
+			t.Fatalf("expected panel run to pass context, got %+v", opts)
+		}
+		task, err := harness.EnqueueTask(project, goal, "tui")
+		if err != nil {
+			return nil, err
+		}
+		task.Status = harness.TaskCompleted
+		task.ReviewStatus = harness.ReviewPending
+		if err := harness.SaveTask(project, task); err != nil {
+			return nil, err
+		}
+		return &harness.RunSummary{Task: task, Result: &harness.RunResult{Output: "ok"}}, nil
+	}
+
+	m := newTestModel()
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionRun
+	m.updateHarnessPanelInputState()
+	m.harnessPanel.actionInput.SetValue("Fix inventory sync failures")
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected run panel to open context prompt first")
+	}
+	updated := next
+	if updated.harnessContextPrompt == nil {
+		t.Fatal("expected harness context prompt from panel run")
+	}
+	nextModel, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected tracked harness run to start after context selection")
+	}
+	updated = asModel(t, nextModel)
+	if updated.harnessPanel != nil {
+		t.Fatalf("expected harness panel to close after run, got %+v", updated.harnessPanel)
+	}
+	if !updated.loading {
+		t.Fatal("expected tracked harness run to enter loading state")
+	}
+	if updated.streamBuffer == nil {
+		t.Fatal("expected harness run to initialize streaming buffer")
+	}
+	nextModel, followup := updated.Update(cmd())
+	if followup != nil {
+		t.Fatal("expected harness run result update to complete synchronously")
+	}
+	updated = nextModel.(Model)
+	tasks, err := harness.ListTasks(harness.Project{
+		RootDir:      repoDir,
+		ConfigPath:   filepath.Join(repoDir, ".ggcode", "harness.yaml"),
+		StateDir:     filepath.Join(repoDir, ".ggcode", "harness"),
+		TasksDir:     filepath.Join(repoDir, ".ggcode", "harness", "tasks"),
+		LogsDir:      filepath.Join(repoDir, ".ggcode", "harness", "logs"),
+		ArchiveDir:   filepath.Join(repoDir, ".ggcode", "harness", "archive"),
+		WorktreesDir: filepath.Join(repoDir, ".ggcode", "harness", "worktrees"),
+		EventLogPath: filepath.Join(repoDir, ".ggcode", "harness", "events.jsonl"),
+		SnapshotPath: filepath.Join(repoDir, ".ggcode", "harness", "snapshot.db"),
+	})
+	if err != nil {
+		t.Fatalf("ListTasks() error = %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Goal != "Fix inventory sync failures" {
+		t.Fatalf("expected tracked harness task, got %+v", tasks)
+	}
+	if !strings.Contains(updated.output.String(), "Starting tracked harness run") || !strings.Contains(updated.output.String(), "Harness run") {
+		t.Fatalf("expected harness run summary in output, got %q", updated.output.String())
+	}
+}
+
+func TestHarnessRunProgressStreamsTrackedLogIntoConversation(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.harnessRunProject = &harness.Project{}
+	m.streamBuffer = &bytes.Buffer{}
+
+	next, cmd := m.Update(harnessRunProgressMsg{
+		TaskID:    "task-1",
+		Activity:  "Harness running • task-1",
+		Detail:    "running read_file README.md",
+		LogPath:   "/tmp/task-1.log",
+		LogChunk:  "Drafting inventory sync patch",
+		LogOffset: int64(len("Drafting inventory sync patch")),
+	})
+	if cmd == nil {
+		t.Fatal("expected follow-up poll command")
+	}
+	updated := next.(Model)
+	if !strings.Contains(updated.output.String(), "Drafting inventory sync patch") {
+		t.Fatalf("expected streamed harness log output, got %q", updated.output.String())
+	}
+	if !strings.Contains(updated.output.String(), "📖 Read file · README.md") {
+		t.Fatalf("expected deduplicated harness progress detail in output, got %q", updated.output.String())
+	}
+	if updated.streamBuffer == nil || !strings.Contains(updated.streamBuffer.String(), "📖 Read file · README.md") {
+		t.Fatalf("expected harness stream buffer to capture formatted progress detail, got %+v", updated.streamBuffer)
+	}
+	if updated.harnessRunLiveTail != "Drafting inventory sync patch" {
+		t.Fatalf("expected partial harness output to stay visible as live tail, got %q", updated.harnessRunLiveTail)
+	}
+	if updated.harnessRunTaskID != "task-1" || updated.harnessRunLogPath != "/tmp/task-1.log" {
+		t.Fatalf("expected harness run state to track task/log path, got task=%q log=%q", updated.harnessRunTaskID, updated.harnessRunLogPath)
+	}
+}
+
+func TestHarnessRunProgressDeduplicatesMainPanelDetail(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.harnessRunProject = &harness.Project{}
+	m.streamBuffer = &bytes.Buffer{}
+
+	next, _ := m.Update(harnessRunProgressMsg{Detail: "✅ Result · worktree"})
+	updated := next.(Model)
+	next, _ = updated.Update(harnessRunProgressMsg{Detail: "✅ Result · worktree"})
+	updated = next.(Model)
+	if strings.Count(updated.output.String(), "✅ Result · worktree") != 1 {
+		t.Fatalf("expected harness progress detail to be deduplicated, got %q", updated.output.String())
+	}
+}
+
+func TestHarnessRunProgressDoesNotReplayDetailAlreadyPresentInLogChunk(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.harnessRunProject = &harness.Project{}
+	m.streamBuffer = &bytes.Buffer{}
+
+	next, _ := m.Update(harnessRunProgressMsg{
+		Detail:   "running run_command cd client && npm run build 2>&1",
+		LogChunk: "tool: run_command cd client && npm run build 2>&1\n",
+	})
+	updated := next.(Model)
+	if strings.Count(updated.output.String(), "⚙️ Run command · cd client && npm run build 2>&1") != 1 {
+		t.Fatalf("expected harness detail to render once, got %q", updated.output.String())
+	}
+}
+
+func TestFormatHarnessRunLogChunkPrettifiesToolCallsAndPaths(t *testing.T) {
+	project := &harness.Project{RootDir: "/repo"}
+	chunk := "tool: read_file /repo/docs/runbooks/harness.md\n" +
+		"tool result: Successfully wrote 299 bytes to /repo/internal/tui/model.go\n" +
+		"Working through remaining diagnostics\n"
+	rendered := formatHarnessRunLogChunk(project, chunk)
+	if !strings.Contains(rendered, "📖 Read file · docs/runbooks/harness.md") {
+		t.Fatalf("expected pretty tool line, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "✅ wrote 299 bytes to internal/tui/model.go") {
+		t.Fatalf("expected shortened result path, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "Working through remaining diagnostics") {
+		t.Fatalf("expected plain prose to remain, got %q", rendered)
+	}
+}
+
+func TestHarnessRunResultDoesNotRedumpStreamedOutput(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.harnessRunLogOffset = 7
+	m.streamBuffer = &bytes.Buffer{}
+	m.streamBuffer.WriteString("working")
+	m.streamStartPos = m.output.Len()
+	m.streamPrefixWritten = true
+	m.output.WriteString("● working")
+
+	next, cmd := m.Update(harnessRunResultMsg{
+		Summary: &harness.RunSummary{
+			Task: &harness.Task{
+				ID:                 "task-1",
+				Status:             harness.TaskCompleted,
+				ReviewStatus:       harness.ReviewPending,
+				VerificationStatus: harness.VerificationPassed,
+			},
+			Result: &harness.RunResult{Output: "working"},
+		},
+	})
+	if cmd != nil {
+		t.Fatal("expected harness result not to schedule extra work")
+	}
+	updated := next.(Model)
+	if strings.Contains(updated.output.String(), "\nOutput:\n") {
+		t.Fatalf("expected streamed harness result to suppress bulk Output section, got %q", updated.output.String())
+	}
+	if strings.Count(updated.output.String(), "working") != 1 {
+		t.Fatalf("expected streamed output to appear once, got %q", updated.output.String())
+	}
+}
+
+func TestHarnessPanelUsesTwoColumnLayoutAcrossSections(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.width = 140
+	m.openHarnessPanel()
+
+	m.harnessPanel.selectedSection = harnessSectionDoctor
+	m.updateHarnessPanelInputState()
+	doctorPanel := m.renderContextPanel()
+	if !strings.Contains(doctorPanel, "Views") || !strings.Contains(doctorPanel, "Action") || !strings.Contains(doctorPanel, "Details") {
+		t.Fatalf("expected doctor panel to render navigation and main content sections, got %q", doctorPanel)
+	}
+	if strings.Contains(doctorPanel, "Selection") || strings.Contains(doctorPanel, "Action input") || strings.Contains(doctorPanel, "Preview") {
+		t.Fatalf("expected redesigned doctor panel to avoid the old stacked subsections, got %q", doctorPanel)
+	}
+
+	m.harnessPanel.selectedSection = harnessSectionQueue
+	m.updateHarnessPanelInputState()
+	queuePanel := m.renderContextPanel()
+	if !strings.Contains(queuePanel, "Views") || !strings.Contains(queuePanel, "Action") || !strings.Contains(queuePanel, "Details") {
+		t.Fatalf("expected queue panel to render navigation and main content sections, got %q", queuePanel)
+	}
+}
+
+func TestHarnessPanelUsesCompactLeftColumn(t *testing.T) {
+	m := newTestModel()
+	m.width = 140
+	m.harnessPanel = &harnessPanelState{}
+
+	leftWidth := m.harnessPanelLeftWidth(m.boxInnerWidth(m.mainColumnWidth()))
+	if leftWidth > 24 {
+		t.Fatalf("expected compact left column, got width %d", leftWidth)
+	}
+	if leftWidth < len("Run queued")+4 {
+		t.Fatalf("expected left column to fit command labels, got width %d", leftWidth)
+	}
+}
+
+func TestHarnessDoctorPanelUsesCompactPaths(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.width = 140
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionDoctor
+	m.updateHarnessPanelInputState()
+
+	panel := m.renderContextPanel()
+	if strings.Contains(panel, repoDir) {
+		t.Fatalf("expected doctor panel to avoid full repo path, got %q", panel)
+	}
+	if !strings.Contains(panel, "config: .ggcode/harness.yaml") {
+		t.Fatalf("expected doctor panel to show relative harness config path, got %q", panel)
+	}
+	if !strings.Contains(panel, "repo: "+filepath.Base(repoDir)) {
+		t.Fatalf("expected doctor panel to show repo basename, got %q", panel)
+	}
+}
+
+func TestHarnessPanelLocalizesZhNavigation(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.setLanguage(string(LangZhCN))
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionQueue
+	m.updateHarnessPanelInputState()
+
+	panel := m.renderContextPanel()
+	if !strings.Contains(panel, "视图") || !strings.Contains(panel, "排队") || !strings.Contains(panel, "操作") || !strings.Contains(panel, "详情") {
+		t.Fatalf("expected localized harness panel chrome, got %q", panel)
+	}
+}
+
+func TestWrapHarnessPanelTextHardWrapsLongTokens(t *testing.T) {
+	lines := wrapHarnessPanelText("goal: /very/long/path/without/any/spaces/that/used/to/overflow/the/right/panel", 20, 10)
+	if len(lines) < 2 {
+		t.Fatalf("expected long token to wrap, got %+v", lines)
+	}
+	for _, line := range lines {
+		if lipgloss.Width(line) > 20 {
+			t.Fatalf("expected wrapped line width <= 20, got %d for %q", lipgloss.Width(line), line)
+		}
+	}
+}
+
+func TestHarnessTasksPanelClipsDetailsToRightColumn(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := harness.EnqueueTask(result.Project, "Fix /very/long/path/without/any/spaces/that/previously/overflowed/the/tasks/panel/when/rendered/in/details", "tui")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	task.Attempt = 1
+	task.Status = harness.TaskFailed
+	task.WorkspacePath = filepath.Join(result.Project.WorktreesDir, task.ID)
+	task.BranchName = "harness-" + task.ID
+	task.WorkerID = "sa-1"
+	task.WorkerStatus = "completed"
+	task.WorkerProgress = "worker failed with exit code 1"
+	task.VerificationStatus = "skipped"
+	task.LogPath = filepath.Join(result.Project.LogsDir, "nested", "path", "with", "many", "segments", "task.log")
+	task.VerificationReportPath = filepath.Join(result.Project.LogsDir, task.ID+"-delivery.json")
+	task.Error = "ggcode exited with code 1"
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.width = 100
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionTasks
+	m.harnessPanel.selectedItem = 0
+	m.updateHarnessPanelInputState()
+
+	totalWidth := m.boxInnerWidth(m.mainColumnWidth())
+	leftWidth := m.harnessPanelLeftWidth(totalWidth)
+	rightWidth := max(1, totalWidth-leftWidth-2)
+	rightLines := m.renderHarnessPanelMainLines(rightWidth, 20)
+	for _, line := range rightLines {
+		if lipgloss.Width(line) > rightWidth {
+			t.Fatalf("expected right column width <= %d, got %d for %q", rightWidth, lipgloss.Width(line), line)
+		}
+	}
+	panel := strings.Join(rightLines, "\n")
+	if strings.Contains(panel, repoDir) {
+		t.Fatalf("expected task details to avoid full repo path, got %q", panel)
+	}
+	if !strings.Contains(panel, "goal:") || !strings.Contains(panel, "workspace:") {
+		t.Fatalf("expected structured task details, got %q", panel)
+	}
+}
+
+func TestHarnessTasksPanelAutoRefreshesActiveTask(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := harness.EnqueueTask(result.Project, "Watch this active task refresh itself", "tui")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	task.Status = harness.TaskRunning
+	task.WorkerID = "sa-1"
+	task.WorkerStatus = "running"
+	task.WorkerProgress = "tool: read_file README.md"
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionTasks
+	m.harnessPanel.selectedItem = 0
+	m.updateHarnessPanelInputState()
+	m.syncHarnessPanelSelection()
+	if !m.shouldAutoRefreshHarnessTask() {
+		t.Fatal("expected running selected task to enable auto refresh")
+	}
+
+	task.Status = harness.TaskCompleted
+	task.WorkerStatus = "completed"
+	task.WorkerProgress = "done"
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+
+	next, cmd := m.Update(harnessPanelAutoRefreshMsg{})
+	updated := next.(Model)
+	if updated.harnessPanel == nil || len(updated.harnessPanel.tasks) == 0 {
+		t.Fatal("expected harness panel tasks to remain loaded")
+	}
+	if updated.harnessPanel.tasks[0].Status != harness.TaskCompleted {
+		t.Fatalf("expected auto refresh to load completed status, got %s", updated.harnessPanel.tasks[0].Status)
+	}
+	if cmd != nil {
+		t.Fatal("expected auto refresh polling to stop once the task is no longer active")
+	}
+}
+
+func TestHarnessTasksPanelAutoRefreshSkipsInactiveSelection(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := harness.EnqueueTask(result.Project, "Inactive task should not poll", "tui")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	task.Status = harness.TaskFailed
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionTasks
+	m.harnessPanel.selectedItem = 0
+	m.updateHarnessPanelInputState()
+	m.syncHarnessPanelSelection()
+
+	if m.shouldAutoRefreshHarnessTask() {
+		t.Fatal("expected failed task selection not to auto refresh")
+	}
+	if cmd := m.pollHarnessPanelAutoRefresh(); cmd != nil {
+		t.Fatal("expected no polling command for inactive task selection")
+	}
+}
+
+func TestHarnessTasksPanelEnterRerunsFailedTask(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	task, err := harness.EnqueueTask(result.Project, "Retry failed panel task", "tui")
+	if err != nil {
+		t.Fatalf("EnqueueTask() error = %v", err)
+	}
+	task.Status = harness.TaskFailed
+	task.Attempt = 1
+	if err := harness.SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask() error = %v", err)
+	}
+	origRerun := executeHarnessRerun
+	defer func() { executeHarnessRerun = origRerun }()
+	executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
+		reloaded, err := harness.LoadTask(project, taskID)
+		if err != nil {
+			return nil, err
+		}
+		reloaded.Status = harness.TaskCompleted
+		reloaded.Attempt = 2
+		reloaded.ReviewStatus = harness.ReviewPending
+		if err := harness.SaveTask(project, reloaded); err != nil {
+			return nil, err
+		}
+		return &harness.RunSummary{Task: reloaded, Result: &harness.RunResult{Output: "ok"}}, nil
+	}
+
+	m := newTestModel()
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionTasks
+	m.harnessPanel.focus = harnessPanelFocusItem
+	m.harnessPanel.selectedItem = 0
+	m.updateHarnessPanelInputState()
+	m.syncHarnessPanelSelection()
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected Enter on failed task to start rerun")
+	}
+	updated := next
+	if updated.harnessPanel != nil {
+		t.Fatal("expected harness panel to close when launching tracked rerun")
+	}
+	if !updated.loading {
+		t.Fatal("expected tracked rerun to set loading state")
+	}
+	nextModel, followup := updated.Update(cmd())
+	if followup != nil {
+		t.Fatal("expected harness rerun result to update synchronously")
+	}
+	updated = nextModel.(Model)
+	reloaded, err := harness.LoadTask(result.Project, task.ID)
+	if err != nil {
+		t.Fatalf("LoadTask() error = %v", err)
+	}
+	if reloaded.Status != harness.TaskCompleted || reloaded.Attempt != 2 {
+		t.Fatalf("expected rerun task completion, got %+v", reloaded)
+	}
+	if !strings.Contains(updated.output.String(), "/harness rerun "+task.ID) {
+		t.Fatalf("expected rerun command in output, got %q", updated.output.String())
+	}
+}
+
+func TestHarnessMonitorPanelUsesCompactPaths(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if _, err := harness.Init(repoDir, harness.InitOptions{}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.width = 140
+	m.openHarnessPanel()
+	m.harnessPanel.selectedSection = harnessSectionMonitor
+	m.updateHarnessPanelInputState()
+
+	panel := m.renderContextPanel()
+	if strings.Contains(panel, repoDir) {
+		t.Fatalf("expected monitor panel to avoid full repo path, got %q", panel)
+	}
+	if !strings.Contains(panel, "snapshot: .ggcode/harness/snapshot.db") {
+		t.Fatalf("expected monitor panel to show relative snapshot path, got %q", panel)
+	}
+	if !strings.Contains(panel, "events: .ggcode/harness/events.jsonl") {
+		t.Fatalf("expected monitor panel to show relative event log path, got %q", panel)
+	}
+}
+
+func TestHarnessPanelHintsRenderInFooter(t *testing.T) {
+	m := newTestModel()
+	m.width = 140
+	m.harnessPanel = &harnessPanelState{
+		selectedSection: harnessSectionRollouts,
+	}
+
+	rightLines := m.renderHarnessPanelMainLines(80, 26)
+	for _, line := range rightLines {
+		if strings.Contains(line, "j/k move") {
+			t.Fatalf("expected shortcut hints to stay out of the main content pane, got %q", line)
+		}
+	}
+
+	footer := m.renderHarnessPanelFooterLines(100)
+	if len(footer) == 0 || !strings.Contains(footer[len(footer)-1], "j/k move") {
+		t.Fatalf("expected footer to carry shortcut hints, got %+v", footer)
+	}
+}
+
+func TestHarnessReleaseRolloutsShowsPersistedWaves(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	for _, rel := range []string{
+		filepath.Join(repoDir, "internal", "inventory"),
+		filepath.Join(repoDir, "internal", "pricing"),
+	} {
+		if err := os.MkdirAll(rel, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	for i := range result.Config.Contexts {
+		switch result.Config.Contexts[i].Path {
+		case filepath.Join("internal", "inventory"):
+			result.Config.Contexts[i].Owner = "inventory-team"
+		case filepath.Join("internal", "pricing"):
+			result.Config.Contexts[i].Owner = "pricing-team"
+		}
+	}
+	for _, item := range []string{filepath.Join("internal", "inventory"), filepath.Join("internal", "pricing")} {
+		task, err := harness.NewTask("Ship "+item, "tui")
+		if err != nil {
+			t.Fatalf("NewTask() error = %v", err)
+		}
+		task.ContextPath = item
+		task.ContextName = strings.ReplaceAll(item, string(filepath.Separator), "-")
+		task.Status = harness.TaskCompleted
+		task.VerificationStatus = harness.VerificationPassed
+		task.ReviewStatus = harness.ReviewApproved
+		task.PromotionStatus = harness.PromotionApplied
+		data, err := json.MarshalIndent(task, "", "  ")
+		if err != nil {
+			t.Fatalf("marshal task: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(result.Project.TasksDir, task.ID+".json"), data, 0644); err != nil {
+			t.Fatalf("write task: %v", err)
+		}
+	}
+	waves, err := harness.BuildReleaseWavePlan(result.Project, result.Config, harness.ReleasePlanOptions{}, harness.ReleaseGroupByOwner)
+	if err != nil {
+		t.Fatalf("BuildReleaseWavePlan() error = %v", err)
+	}
+	if _, err := harness.ApplyReleaseWavePlan(result.Project, waves, "", "rollout-tui"); err != nil {
+		t.Fatalf("ApplyReleaseWavePlan() error = %v", err)
+	}
+	m := newTestModel()
+	cmd := m.handleCommand("/harness release rollouts")
+	if cmd != nil {
+		t.Fatal("expected /harness release rollouts to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "Harness release rollouts") || !strings.Contains(m.output.String(), "rollout=rollout-tui") {
+		t.Fatalf("expected rollouts output, got %q", m.output.String())
+	}
+}
+
+func TestHarnessReleaseRolloutControls(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	for _, rel := range []string{
+		filepath.Join(repoDir, "internal", "inventory"),
+		filepath.Join(repoDir, "internal", "pricing"),
+	} {
+		if err := os.MkdirAll(rel, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	for i := range result.Config.Contexts {
+		switch result.Config.Contexts[i].Path {
+		case filepath.Join("internal", "inventory"):
+			result.Config.Contexts[i].Owner = "inventory-team"
+		case filepath.Join("internal", "pricing"):
+			result.Config.Contexts[i].Owner = "pricing-team"
+		}
+	}
+	for _, item := range []string{filepath.Join("internal", "inventory"), filepath.Join("internal", "pricing")} {
+		task, err := harness.NewTask("Ship "+item, "tui")
+		if err != nil {
+			t.Fatalf("NewTask() error = %v", err)
+		}
+		task.ContextPath = item
+		task.ContextName = strings.ReplaceAll(item, string(filepath.Separator), "-")
+		task.Status = harness.TaskCompleted
+		task.VerificationStatus = harness.VerificationPassed
+		task.ReviewStatus = harness.ReviewApproved
+		task.PromotionStatus = harness.PromotionApplied
+		data, err := json.MarshalIndent(task, "", "  ")
+		if err != nil {
+			t.Fatalf("marshal task: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(result.Project.TasksDir, task.ID+".json"), data, 0644); err != nil {
+			t.Fatalf("write task: %v", err)
+		}
+	}
+	waves, err := harness.BuildReleaseWavePlan(result.Project, result.Config, harness.ReleasePlanOptions{}, harness.ReleaseGroupByOwner)
+	if err != nil {
+		t.Fatalf("BuildReleaseWavePlan() error = %v", err)
+	}
+	if _, err := harness.ApplyReleaseWavePlan(result.Project, waves, "", "rollout-controls-tui"); err != nil {
+		t.Fatalf("ApplyReleaseWavePlan() error = %v", err)
+	}
+	m := newTestModel()
+	if cmd := m.handleCommand("/harness release reject rollout-controls-tui 2 waiting for policy"); cmd != nil {
+		t.Fatal("expected /harness release reject to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "gate=rejected") || !strings.Contains(m.output.String(), "waiting for policy") {
+		t.Fatalf("expected rejected gate output, got %q", m.output.String())
+	}
+	m.output.Reset()
+	if cmd := m.handleCommand("/harness release approve rollout-controls-tui 2 policy approved"); cmd != nil {
+		t.Fatal("expected /harness release approve to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "gate=approved") || !strings.Contains(m.output.String(), "policy approved") {
+		t.Fatalf("expected approved gate output, got %q", m.output.String())
+	}
+	m.output.Reset()
+	if cmd := m.handleCommand("/harness release pause rollout-controls-tui waiting for signoff"); cmd != nil {
+		t.Fatal("expected /harness release pause to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "status=paused") || !strings.Contains(m.output.String(), "waiting for signoff") {
+		t.Fatalf("expected paused rollout output, got %q", m.output.String())
+	}
+	m.output.Reset()
+	if cmd := m.handleCommand("/harness release resume rollout-controls-tui signoff received"); cmd != nil {
+		t.Fatal("expected /harness release resume to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "status=active") || !strings.Contains(m.output.String(), "signoff received") {
+		t.Fatalf("expected resumed rollout output, got %q", m.output.String())
+	}
+	m.output.Reset()
+	if cmd := m.handleCommand("/harness release abort rollout-controls-tui freeze window"); cmd != nil {
+		t.Fatal("expected /harness release abort to complete inline")
+	}
+	if !strings.Contains(m.output.String(), "status=aborted") || !strings.Contains(m.output.String(), "freeze window") {
+		t.Fatalf("expected aborted rollout output, got %q", m.output.String())
 	}
 }

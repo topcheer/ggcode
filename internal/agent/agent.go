@@ -45,6 +45,10 @@ type providerAwareContextManager interface {
 	SetProvider(provider.Provider)
 }
 
+type todoPathAwareContextManager interface {
+	SetTodoFilePath(path string)
+}
+
 type modeAwarePolicy interface {
 	Mode() permission.PermissionMode
 }
@@ -58,6 +62,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		contextManager: ctxpkg.NewManager(128000),
 	}
 	a.syncContextManagerProviderLocked()
+	a.syncContextManagerTodoPathLocked()
 	if systemPrompt != "" {
 		a.contextManager.Add(provider.Message{
 			Role:    "system",
@@ -102,6 +107,7 @@ func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
 	defer a.mu.Unlock()
 	a.contextManager = cm
 	a.syncContextManagerProviderLocked()
+	a.syncContextManagerTodoPathLocked()
 }
 
 // AddMessage appends a message to the conversation context.
@@ -177,48 +183,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		msgs := a.contextManager.Messages()
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
 
-		resp, err := a.provider.Chat(ctx, msgs, toolDefs)
+		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
 		if err != nil {
-			debug.Log("agent", "Chat error: %v", err)
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("chat error: %w", err)})
 			return err
 		}
 
-		var toolCalls []provider.ToolCallDelta
-		var textBuf string
-
-		for _, block := range resp.Message.Content {
-			switch block.Type {
-			case "text":
-				textBuf += block.Text
-			case "tool_use":
-				if textBuf != "" {
-					onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: textBuf})
-					textBuf = ""
-				}
-				tc := provider.ToolCallDelta{
-					ID:        block.ToolID,
-					Index:     len(toolCalls),
-					Name:      block.ToolName,
-					Arguments: block.Input,
-				}
-				toolCalls = append(toolCalls, tc)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventToolCallDone, Tool: tc})
-			}
-		}
-		if textBuf != "" {
-			onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: textBuf})
-		}
-
-		usage := resp.Usage
-		onEvent(provider.StreamEvent{Type: provider.StreamEventDone, Usage: &usage})
-
-		a.mu.Lock()
-		fn := a.onUsage
-		a.mu.Unlock()
-		if fn != nil {
-			fn(usage)
-		}
+		a.emitUsage(resp.Usage)
 
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
@@ -283,6 +253,77 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return err
 	}
 	return nil
+}
+
+func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, error) {
+	stream, err := a.provider.ChatStream(ctx, msgs, toolDefs)
+	if err != nil {
+		debug.Log("agent", "ChatStream error: %v", err)
+		wrapped := fmt.Errorf("chat error: %w", err)
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: wrapped})
+		return nil, "", nil, wrapped
+	}
+
+	var (
+		textBuf          strings.Builder
+		assistantTextBuf strings.Builder
+		content          []provider.ContentBlock
+		toolCalls        []provider.ToolCallDelta
+		usage            provider.TokenUsage
+	)
+
+	flushText := func() {
+		if textBuf.Len() == 0 {
+			return
+		}
+		content = append(content, provider.TextBlock(textBuf.String()))
+		textBuf.Reset()
+	}
+
+	for event := range stream {
+		switch event.Type {
+		case provider.StreamEventText:
+			onEvent(event)
+			textBuf.WriteString(event.Text)
+			assistantTextBuf.WriteString(event.Text)
+		case provider.StreamEventToolCallChunk:
+			onEvent(event)
+		case provider.StreamEventToolCallDone:
+			flushText()
+			onEvent(event)
+			toolCalls = append(toolCalls, event.Tool)
+			content = append(content, provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments))
+		case provider.StreamEventDone:
+			if event.Usage != nil {
+				usage = *event.Usage
+			}
+			onEvent(event)
+		case provider.StreamEventError:
+			debug.Log("agent", "ChatStream event error: %v", event.Error)
+			wrapped := fmt.Errorf("chat error: %w", event.Error)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: wrapped})
+			return nil, assistantTextBuf.String(), nil, wrapped
+		}
+	}
+
+	flushText()
+
+	return &provider.ChatResponse{
+		Message: provider.Message{
+			Role:    "assistant",
+			Content: content,
+		},
+		Usage: usage,
+	}, assistantTextBuf.String(), toolCalls, nil
+}
+
+func (a *Agent) emitUsage(usage provider.TokenUsage) {
+	a.mu.Lock()
+	fn := a.onUsage
+	a.mu.Unlock()
+	if fn != nil {
+		fn(usage)
+	}
 }
 
 func (a *Agent) currentMode() permission.PermissionMode {
@@ -355,11 +396,17 @@ func looksLikeCompletionOrHandoff(text string) bool {
 		"completed the requested", "finished the requested", "completed the task", "finished the task",
 		"completed the implementation", "finished the implementation", "completed the optimization pass",
 		"finished the optimization pass",
+		"waiting for your next request", "ready for next task", "ready for the next task",
+		"awaiting instructions", "no tasks pending", "no work to do", "standing by",
+		"idle — no tasks pending", "idle - no tasks pending", "idle — no pending tasks",
+		"idle - no pending tasks", "waiting for your next instruction",
 		"let me know if you'd like", "if you'd like, i can", "if you want, i can",
 		"feel free to ask", "feel free to tell me", "happy to help with anything else",
 		"全部完成", "已经全部完成", "任务已完成", "这个任务已经完成", "优化已完成", "实现已完成",
 		"没有更多可做", "没有进一步需要处理", "如需我继续", "如果你希望我继续", "我还可以继续",
 		"随时告诉我", "如果你还有其他", "如果你有其他", "还有其他任务需要我", "其他方面的具体任务需要我帮忙",
+		"等待你的下一条指令", "等待你的下一步指令", "等待下一条指令", "等待下一步指令",
+		"待命中", "没有待处理任务", "没有任务待处理", "没有工作可做",
 	}
 	for _, marker := range markers {
 		if strings.Contains(trimmed, marker) {
@@ -466,6 +513,13 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workingDir = dir
+	a.syncContextManagerTodoPathLocked()
+}
+
+func (a *Agent) syncContextManagerTodoPathLocked() {
+	if cm, ok := a.contextManager.(todoPathAwareContextManager); ok {
+		cm.SetTodoFilePath(tool.TodoFilePath(a.workingDir))
+	}
 }
 
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {

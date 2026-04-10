@@ -118,7 +118,7 @@ func (m Model) conversationPanelHeight() int {
 func (m Model) renderOutput() string {
 	var sb strings.Builder
 	output := m.output.String()
-	if output == "" && !m.loading && m.pendingApproval == nil && m.pendingDiffConfirm == nil {
+	if output == "" && !m.loading && m.pendingApproval == nil && m.pendingDiffConfirm == nil && m.pendingHarnessCheckpointConfirm == nil {
 		sb.WriteString(m.styles.assistant.Render(m.t("empty.ask")))
 		sb.WriteString("\n")
 		sb.WriteString(m.styles.prompt.Render(m.t("empty.tips")))
@@ -343,17 +343,52 @@ func (m Model) renderSidebarDetailRow(label, value string, width int) string {
 	const labelWidth = 9
 	key := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245")).
-		Render(fmt.Sprintf("%-*s", labelWidth, truncateString(label, labelWidth)))
+		Width(labelWidth).
+		MaxWidth(labelWidth).
+		Render(truncateDisplayWidth(label, labelWidth))
 	valueWidth := max(1, width-labelWidth-1)
-	return key + " " + truncateString(value, valueWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top, key, " ", truncateDisplayWidth(value, valueWidth))
 }
 
 func (m Model) renderSidebarBadgeRow(label, badge string) string {
 	const labelWidth = 9
 	key := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245")).
-		Render(fmt.Sprintf("%-*s", labelWidth, truncateString(label, labelWidth)))
+		Width(labelWidth).
+		MaxWidth(labelWidth).
+		Render(truncateDisplayWidth(label, labelWidth))
 	return key + " " + badge
+}
+
+func truncateDisplayWidth(s string, maxWidth int) string {
+	s = strings.TrimSpace(s)
+	if maxWidth <= 0 || s == "" {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	if maxWidth <= 3 {
+		return fitDisplayWidth(s, maxWidth)
+	}
+	return fitDisplayWidth(s, maxWidth-3) + "..."
+}
+
+func fitDisplayWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 || s == "" {
+		return ""
+	}
+	var b strings.Builder
+	currentWidth := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if currentWidth+rw > maxWidth {
+			break
+		}
+		b.WriteRune(r)
+		currentWidth += rw
+	}
+	return b.String()
 }
 
 func sidebarModeApprovalKey(mode permission.PermissionMode) string {
@@ -658,7 +693,10 @@ func (m Model) renderAutoComplete() string {
 			}
 		}
 
-		row := fmt.Sprintf(" %d. %-*s", realIdx+1, maxWidth, label)
+		row := fmt.Sprintf(" %-*s", maxWidth, label)
+		if m.autoCompleteKind == "mention" {
+			row = fmt.Sprintf(" %d. %-*s", realIdx+1, maxWidth, label)
+		}
 		if selected {
 			row = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("226")).
@@ -755,6 +793,12 @@ func (m Model) renderContextPanel() string {
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:
 		return m.renderSkillsPanel()
+	case m.inspectorPanel != nil:
+		return m.renderInspectorPanel()
+	case m.harnessContextPrompt != nil:
+		return m.renderHarnessContextPrompt()
+	case m.harnessPanel != nil:
+		return m.renderHarnessPanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
 	case m.pendingApproval != nil:
@@ -784,6 +828,16 @@ func (m Model) renderContextPanel() string {
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
 		)
 		return m.renderContextBox(m.t("panel.review_file_change"), body, lipgloss.Color("13"))
+	case m.pendingHarnessCheckpointConfirm != nil:
+		checkpoint := m.pendingHarnessCheckpointConfirm.Checkpoint
+		body := fmt.Sprintf(" Dirty workspace\n\n %s\n %s   %s\n\n%s\n%s",
+			truncateLines(strings.TrimSpace(checkpoint.Summary), 6),
+			"commit",
+			checkpoint.CommitMessage,
+			m.renderApprovalOptions(m.diffOptions, m.diffCursor),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
+		)
+		return m.renderContextBox("Confirm harness checkpoint", body, lipgloss.Color("13"))
 	case len(m.langOptions) > 0:
 		title := languageSwitchLabel(m.currentLanguage())
 		bodyLine := m.t("lang.selection.current", m.languageLabel())
@@ -811,7 +865,7 @@ func (m Model) renderContextPanel() string {
 func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
 	title := " " + m.t("panel.composer")
-	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || len(m.langOptions) > 0 {
+	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.pendingHarnessCheckpointConfirm != nil || m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.inspectorPanel != nil || m.harnessPanel != nil || m.harnessContextPrompt != nil || len(m.langOptions) > 0 {
 		title = " " + m.t("panel.composer_locked")
 	}
 

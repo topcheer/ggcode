@@ -45,7 +45,7 @@ func (m *Manager) UserSlashCommands() map[string]*Command {
 	all := m.combinedCommands()
 	out := make(map[string]*Command)
 	for name, cmd := range all {
-		if cmd == nil || !cmd.UserInvocable {
+		if !cmd.UserSlashVisible() {
 			continue
 		}
 		out[name] = cmd
