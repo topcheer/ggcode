@@ -6,7 +6,7 @@
     <title>ggcode — AI Coding CLI Tool</title>
     <meta
       name="description"
-      content="ggcode is an AI coding CLI that keeps code understanding, file editing, command execution, MCP integrations, and checkpoints inside one clean terminal workflow."
+      content="ggcode is an AI coding CLI that keeps code understanding, file editing, command execution, harnessed task queues, MCP integrations, and checkpoints inside one clean terminal workflow."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -14,7 +14,7 @@
       href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=e22881ec3575" />
+    <link rel="stylesheet" href="./styles.css?v=489874d74190" />
   </head>
   <body>
     <div class="site-shell">
@@ -41,7 +41,7 @@
             <div class="eyebrow" data-i18n="hero.eyebrow">terminal-native · self-update-ready · mcp-ready</div>
             <h1 data-i18n="hero.title">Bring the AI coding workflow back into your terminal.</h1>
             <p class="hero-text" data-i18n="hero.text">
-              ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, and keeping long tasks moving inside one fresh, modern, geek-forward interface.
+              ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, running harnessed task queues, and keeping long tasks moving inside one fresh, modern, geek-forward interface.
             </p>
 
             <div class="hero-actions">
@@ -71,7 +71,7 @@
               </div>
               <div class="stat-card">
                 <strong>background commands</strong>
-                <span data-i18n="hero.stats.background">Run long jobs in the background and keep visibility</span>
+                <span data-i18n="hero.stats.background">Run long jobs, harness queues, and release flows with live visibility</span>
               </div>
               <div class="stat-card">
                 <strong>MCP / skills / plugins</strong>
@@ -82,9 +82,9 @@
 
           <div class="hero-visual">
             <div class="hero-frame">
-              <div class="frame-badge" data-i18n="hero.badge">v1.1.8 · self-update ready</div>
+              <div class="frame-badge" data-i18n="hero.badge">v1.1.9 · self-update ready</div>
               <img
-                src="./assets/ggcode-banner.png?v=e22881ec3575"
+                src="./assets/ggcode-banner.png?v=489874d74190"
                 alt="ggcode CLI banner"
                 data-i18n-attr="alt"
                 data-i18n-key="hero.bannerAlt"
@@ -103,7 +103,7 @@
             <article class="feature-card feature-card-large">
               <h3 data-i18n="features.terminalFirst.title">Terminal-first, without breaking your workflow apart</h3>
               <p data-i18n="features.terminalFirst.text">
-                Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.
+                Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, drop into local shell mode, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.
               </p>
             </article>
 
@@ -114,7 +114,7 @@
 
             <article class="feature-card">
               <h3 data-i18n="features.control.title">More controllable</h3>
-              <p data-i18n="features.control.text">Checkpoints plus /undo make file changes reversible, which matters in real projects, not just demos.</p>
+              <p data-i18n="features.control.text">Checkpoints, /undo, and dirty-workspace confirmation keep file changes reversible and harness runs grounded in an explicit baseline.</p>
             </article>
 
             <article class="feature-card">
@@ -124,7 +124,7 @@
 
             <article class="feature-card">
               <h3 data-i18n="features.longTasks.title">Better for long-running work</h3>
-              <p data-i18n="features.longTasks.text">Background commands, sub-agents, activity panels, and status signals keep builds, tests, and releases from blocking the whole session.</p>
+              <p data-i18n="features.longTasks.text">Background commands, worker-backed harness runs, activity panels, and status signals keep builds, tests, and release batches from blocking the whole session.</p>
             </article>
 
             <article class="feature-card">
@@ -151,8 +151,8 @@
               <div class="terminal-body">
                 <div class="terminal-line"><span class="prompt">&gt;</span> <span data-i18n="workflow.demo.ask1">Explain the auth flow and why startup feels slow</span></div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply1">● reads config, traces provider setup, inspects startup banner logic</div>
-                <div class="terminal-line"><span class="prompt">&gt;</span> <span data-i18n="workflow.demo.ask2">Refactor it and keep Windows compatibility</span></div>
-                <div class="terminal-line muted" data-i18n="workflow.demo.reply2">● edits code, updates tests, keeps shell behavior aligned</div>
+                <div class="terminal-line"><span class="prompt">$</span> <span data-i18n="workflow.demo.ask2">go test ./internal/tui</span></div>
+                <div class="terminal-line muted" data-i18n="workflow.demo.reply2">● local shell mode runs in the main session view</div>
                 <div class="terminal-line"><span class="prompt">&gt;</span> /undo</div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply3">● rolls back the last file edit from checkpoint</div>
                 <div class="terminal-line"><span class="prompt">&gt;</span> start_command "go test ./..."</div>
@@ -174,7 +174,7 @@
               <article>
                 <span>03</span>
                 <h3 data-i18n="workflow.step3.title">Keep product-level interaction intact</h3>
-                <p data-i18n="workflow.step3.text">Language selection, permission modes, queueing, sidebar state, status, and MCP views all matter when you use the tool every day.</p>
+                <p data-i18n="workflow.step3.text">Language selection, permission modes, local shell mode, harness queues, review-promote-release loops, sidebar state, status, and MCP views all matter when you use the tool every day.</p>
               </article>
             </div>
           </div>
@@ -384,6 +384,6 @@
       </main>
     </div>
 
-    <script src="./script.js?v=e22881ec3575"></script>
+    <script src="./script.js?v=489874d74190"></script>
   </body>
 </html>
