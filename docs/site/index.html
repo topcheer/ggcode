@@ -82,7 +82,7 @@
 
           <div class="hero-visual">
             <div class="hero-frame">
-              <div class="frame-badge" data-i18n="hero.badge">v1.1.8 · self-update ready</div>
+              <div class="frame-badge" data-i18n="hero.badge">v1.1.9 · self-update ready</div>
               <img
                 src="./assets/ggcode-banner.png?v=__SITE_ASSET_VERSION__"
                 alt="ggcode CLI banner"
@@ -103,7 +103,7 @@
             <article class="feature-card feature-card-large">
               <h3 data-i18n="features.terminalFirst.title">Terminal-first, without breaking your workflow apart</h3>
               <p data-i18n="features.terminalFirst.text">
-                Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.
+                Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, drop into local shell mode, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.
               </p>
             </article>
 
@@ -151,8 +151,8 @@
               <div class="terminal-body">
                 <div class="terminal-line"><span class="prompt">&gt;</span> <span data-i18n="workflow.demo.ask1">Explain the auth flow and why startup feels slow</span></div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply1">● reads config, traces provider setup, inspects startup banner logic</div>
-                <div class="terminal-line"><span class="prompt">&gt;</span> <span data-i18n="workflow.demo.ask2">Refactor it and keep Windows compatibility</span></div>
-                <div class="terminal-line muted" data-i18n="workflow.demo.reply2">● edits code, updates tests, keeps shell behavior aligned</div>
+                <div class="terminal-line"><span class="prompt">$</span> <span data-i18n="workflow.demo.ask2">go test ./internal/tui</span></div>
+                <div class="terminal-line muted" data-i18n="workflow.demo.reply2">● local shell mode runs in the main session view</div>
                 <div class="terminal-line"><span class="prompt">&gt;</span> /undo</div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply3">● rolls back the last file edit from checkpoint</div>
                 <div class="terminal-line"><span class="prompt">&gt;</span> start_command "go test ./..."</div>
@@ -174,7 +174,7 @@
               <article>
                 <span>03</span>
                 <h3 data-i18n="workflow.step3.title">Keep product-level interaction intact</h3>
-                <p data-i18n="workflow.step3.text">Language selection, permission modes, harness queues, review-promote-release loops, sidebar state, status, and MCP views all matter when you use the tool every day.</p>
+                <p data-i18n="workflow.step3.text">Language selection, permission modes, local shell mode, harness queues, review-promote-release loops, sidebar state, status, and MCP views all matter when you use the tool every day.</p>
               </article>
             </div>
           </div>

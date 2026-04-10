@@ -592,7 +592,6 @@ func resolveGitDir(start string) (string, error) {
 func (m Model) renderConversationPanel(panelHeight int) string {
 	vp := m.conversationViewport()
 	content := vp.View()
-	body := lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true).Render(" "+m.t("panel.conversation")) + "\n" + content
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -600,7 +599,7 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 		Padding(0, 1).
 		Width(width).
 		Height(panelHeight).
-		Render(body)
+		Render(content)
 }
 
 func (m Model) renderApprovalOptions(options []approvalOption, cursor int) string {
@@ -864,11 +863,6 @@ func (m Model) renderContextPanel() string {
 
 func (m Model) renderComposerPanel() string {
 	accent := m.modeColor()
-	title := " " + m.t("panel.composer")
-	if m.pendingApproval != nil || m.pendingDiffConfirm != nil || m.pendingHarnessCheckpointConfirm != nil || m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.inspectorPanel != nil || m.harnessPanel != nil || m.harnessContextPrompt != nil || len(m.langOptions) > 0 {
-		title = " " + m.t("panel.composer_locked")
-	}
-
 	hints := []string{
 		m.t("hint.mode") + " " + m.renderModeBadge(),
 		m.t("hint.enter_send"),
@@ -901,7 +895,7 @@ func (m Model) renderComposerPanel() string {
 		BorderForeground(accent).
 		Padding(0, 1).
 		Width(width).
-		Render(lipgloss.NewStyle().Foreground(accent).Bold(true).Render(title) + "\n" + body)
+		Render(body)
 }
 
 func (m Model) renderContextBox(title, body string, accent lipgloss.Color) string {

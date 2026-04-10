@@ -15,7 +15,7 @@ const translations = {
     "hero.stats.update": "Upgrade in-app or install native packages from releases",
     "hero.stats.background": "Run long jobs, harness queues, and release flows with live visibility",
     "hero.stats.extensible": "Extend the CLI natively with more capabilities",
-    "hero.badge": "v1.1.8 · self-update ready",
+    "hero.badge": "v1.1.9 · self-update ready",
     "hero.bannerAlt": "ggcode CLI banner",
     "features.eyebrow": "what makes it memorable",
     "features.title":
@@ -23,7 +23,7 @@ const translations = {
     "features.terminalFirst.title":
       "Terminal-first, without breaking your workflow apart",
     "features.terminalFirst.text":
-      "Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.",
+      "Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, drop into local shell mode, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.",
     "features.stable.title": "Safer by design",
     "features.stable.text":
       "Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed without losing approval visibility.",
@@ -45,9 +45,9 @@ const translations = {
     "workflow.demo.ask1": "Explain the auth flow and why startup feels slow",
     "workflow.demo.reply1":
       "● reads config, traces provider setup, inspects startup banner logic",
-    "workflow.demo.ask2": "Refactor it and keep Windows compatibility",
+    "workflow.demo.ask2": "go test ./internal/tui",
     "workflow.demo.reply2":
-      "● edits code, updates tests, keeps shell behavior aligned",
+      "● local shell mode runs in the main session view",
     "workflow.demo.reply3": "● rolls back the last file edit from checkpoint",
     "workflow.demo.reply4":
       "● background job started · progress visible in-session",
@@ -59,7 +59,7 @@ const translations = {
       "Read files, search code, execute tools, and feed the results back into the model for iterative reasoning.",
     "workflow.step3.title": "Keep product-level interaction intact",
     "workflow.step3.text":
-      "Language selection, permission modes, harness queues, review-promote-release loops, sidebar state, status, and MCP views all matter when you use the tool every day.",
+      "Language selection, permission modes, local shell mode, harness queues, review-promote-release loops, sidebar state, status, and MCP views all matter when you use the tool every day.",
     "modes.eyebrow": "trust model",
     "modes.title":
       "Choose the level of automation that matches the risk of the task.",
@@ -116,13 +116,13 @@ const translations = {
     "hero.stats.update": "可在应用内升级，也能直接安装原生发布包",
     "hero.stats.background": "长任务、harness 队列和发布流都能持续看进度",
     "hero.stats.extensible": "从 CLI 原生长出扩展能力",
-    "hero.badge": "v1.1.8 · 可直接升级",
+    "hero.badge": "v1.1.9 · 可直接升级",
     "hero.bannerAlt": "ggcode CLI 横幅",
     "features.eyebrow": "what makes it memorable",
     "features.title": "不是“AI 接个壳”，而是一套终端里的完整产品体验。",
     "features.terminalFirst.title": "Terminal-first，不用切出你的工作流",
     "features.terminalFirst.text":
-      "你可以在 TUI 里直接读文件、查 diff、看状态、管理 session、切 provider、选语言、排队提交新任务，而不是把“AI 辅助开发”拆成十几个碎片化动作。",
+      "你可以在 TUI 里直接读文件、查 diff、看状态、管理 session、切 provider、选语言、进入本地 shell 模式、排队提交新任务，而不是把“AI 辅助开发”拆成十几个碎片化动作。",
     "features.stable.title": "更稳",
     "features.stable.text":
       "supervised、plan、auto、bypass、autopilot 五种模式，既能安全探索，也能高速推进，同时保留清晰的审批可见性。",
@@ -142,8 +142,8 @@ const translations = {
     "workflow.title": "像一个真正的工程搭档，而不是一次性回答器。",
     "workflow.demo.ask1": "解释一下认证流程，以及为什么启动会变慢",
     "workflow.demo.reply1": "● 读取配置，追踪 provider 初始化，检查启动 banner 逻辑",
-    "workflow.demo.ask2": "顺手重构一下，并保持 Windows 兼容",
-    "workflow.demo.reply2": "● 修改代码，更新测试，保持 shell 行为一致",
+    "workflow.demo.ask2": "go test ./internal/tui",
+    "workflow.demo.reply2": "● 本地 shell 模式会直接在主会话区展示输出",
     "workflow.demo.reply3": "● 从 checkpoint 回滚上一次文件修改",
     "workflow.demo.reply4": "● 后台任务已启动 · 进度可在会话中持续查看",
     "workflow.step1.title": "理解代码库",
@@ -154,7 +154,7 @@ const translations = {
       "自动读文件、搜代码、执行工具，把结果继续喂给模型迭代推理。",
     "workflow.step3.title": "保留产品级交互",
     "workflow.step3.text":
-      "语言选择、权限模式、harness 队列、review/promote/release 流、sidebar、status、MCP 视图，都是持续使用时真正重要的细节。",
+      "语言选择、权限模式、本地 shell 模式、harness 队列、review/promote/release 流、sidebar、status、MCP 视图，都是持续使用时真正重要的细节。",
     "modes.eyebrow": "trust model",
     "modes.title": "根据任务风险，切换你想要的自动化强度。",
     "modes.supervised": "适合大多数日常使用。遇到敏感动作时更稳。",

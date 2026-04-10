@@ -249,7 +249,6 @@ func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command
 func DetectSlashCommand(ti textinput.Model) (active bool, prefix string) {
 	value := ti.Value()
 	cursor := ti.Position()
-
 	if cursor < 1 {
 		return false, ""
 	}
@@ -279,7 +278,6 @@ func DetectSlashCommand(ti textinput.Model) (active bool, prefix string) {
 func DetectMention(ti textinput.Model) (active bool, prefix string) {
 	value := ti.Value()
 	cursor := ti.Position()
-
 	// Find "@" before cursor
 	for i := cursor - 1; i >= 0; i-- {
 		if value[i] == '@' {

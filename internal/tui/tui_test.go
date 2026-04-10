@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func TestRenderMarkdown(t *testing.T) {
@@ -975,6 +976,60 @@ func TestSubmitTextStripsImagePlaceholderButKeepsImageDisplay(t *testing.T) {
 	}
 	if !strings.Contains(m.output.String(), "[Image: ggcode-image-deadbeef.png, 10x10, 4B] 帮我看看") {
 		t.Fatal("expected conversation output to show image placeholder with text")
+	}
+}
+
+func TestHandleCommandShellPrefixEntersModeAndStartsCommand(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.handleCommand("$ echo hi")
+	if cmd == nil {
+		t.Fatal("expected prefixed shell command to start")
+	}
+	if !m.shellMode {
+		t.Fatal("expected prefixed shell command to enable shell mode")
+	}
+	if !m.loading {
+		t.Fatal("expected prefixed shell command to enter loading state")
+	}
+	if !strings.Contains(m.output.String(), "$ echo hi") {
+		t.Fatalf("expected shell command in output, got %q", m.output.String())
+	}
+}
+
+func TestShellCommandMessagesRenderOutputAndKeepMode(t *testing.T) {
+	m := newTestModel()
+	m.setShellMode(true)
+	if cmd := m.submitShellCommand("printf hi", true); cmd == nil {
+		t.Fatal("expected shell submit to return a command")
+	}
+
+	next, cmd := m.Update(shellCommandStreamMsg{RunID: m.activeShellRunID, Text: "hi\n"})
+	if cmd != nil {
+		t.Fatal("expected shell stream update inline")
+	}
+	m = next.(Model)
+
+	next, cmd = m.Update(shellCommandDoneMsg{RunID: m.activeShellRunID, Status: tool.CommandJobCompleted})
+	if cmd != nil {
+		t.Fatal("expected shell completion update inline")
+	}
+	m = next.(Model)
+
+	if m.loading {
+		t.Fatal("expected shell command to finish loading state")
+	}
+	if !m.shellMode {
+		t.Fatal("expected shell mode to remain enabled after command completion")
+	}
+	if !strings.Contains(m.output.String(), "hi") {
+		t.Fatalf("expected shell output in conversation, got %q", m.output.String())
+	}
+	if strings.Contains(m.output.String(), "$ printf hi\n\nhi") {
+		t.Fatalf("expected shell output to start immediately on the next line, got %q", m.output.String())
+	}
+	if !strings.Contains(m.output.String(), "$ printf hi\nhi\n\n") {
+		t.Fatalf("expected one trailing blank line after shell output, got %q", m.output.String())
 	}
 }
 
