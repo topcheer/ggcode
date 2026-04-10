@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1618,6 +1619,46 @@ func TestRenderStatusBarOmitsAgentTitle(t *testing.T) {
 	}
 	if !strings.Contains(result, "Thinking...") {
 		t.Fatal("expected agent activity content to remain visible")
+	}
+}
+
+func TestAgentErrMsgFormatsAnthropicSerializationFailure(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 7
+
+	next, _ := m.Update(agentErrMsg{
+		RunID: 7,
+		Err:   errors.New("chat error: json: error calling MarshalJSON for type anthropic.MessageParam: json: error calling MarshalJSON for type anthropic.ContentBlockParamUnion: json"),
+	})
+	m = next.(Model)
+
+	output := m.output.String()
+	if !strings.Contains(output, "Request serialization failed before sending to Anthropic") {
+		t.Fatalf("expected friendly anthropic serialization message, got %q", output)
+	}
+	if strings.Contains(output, "anthropic.ContentBlockParamUnion") {
+		t.Fatalf("expected internal SDK type names to be hidden, got %q", output)
+	}
+}
+
+func TestAgentErrMsgFormatsGenericChatFailureWithoutDoublePrefix(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 9
+
+	next, _ := m.Update(agentErrMsg{
+		RunID: 9,
+		Err:   errors.New("chat error: upstream timeout"),
+	})
+	m = next.(Model)
+
+	output := m.output.String()
+	if !strings.Contains(output, "Model request failed: upstream timeout") {
+		t.Fatalf("expected cleaned chat error prefix, got %q", output)
+	}
+	if strings.Contains(output, "Error: chat error:") {
+		t.Fatalf("expected nested chat error prefix to be removed, got %q", output)
 	}
 }
 

@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +57,26 @@ func TestOpenAIConvertMessages_Empty(t *testing.T) {
 	}
 }
 
+func TestOpenAIConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
+	p := &OpenAIProvider{}
+	msgs := []Message{
+		{Role: "assistant", Content: []ContentBlock{
+			ToolUseBlock("call_123", "edit_file", json.RawMessage(`{"path":"README.md"`)),
+		}},
+	}
+	result := p.convertMessages(msgs)
+	if len(result) != 1 || len(result[0].ToolCalls) != 1 {
+		t.Fatalf("expected one assistant message with one tool call, got %#v", result)
+	}
+	args := result[0].ToolCalls[0].Function.Arguments
+	if !json.Valid([]byte(args)) {
+		t.Fatalf("expected normalized OpenAI tool arguments to be valid JSON, got %q", args)
+	}
+	if !strings.Contains(args, "_ggcode_raw_input") {
+		t.Fatalf("expected fallback marker in normalized OpenAI tool arguments, got %q", args)
+	}
+}
+
 func TestEstimateTokensFromChars(t *testing.T) {
 	if got := estimateTokensFromChars(0); got != 0 {
 		t.Fatalf("expected 0, got %d", got)
@@ -94,6 +116,21 @@ func TestAnthropicBuildParams_SystemInUser(t *testing.T) {
 	// System should be embedded into first user message, not separate
 	if len(params.Messages) != 1 {
 		t.Fatalf("expected 1 message (system merged into user), got %d", len(params.Messages))
+	}
+}
+
+func TestGeminiConvertMessages_NormalizesInvalidToolUseInput(t *testing.T) {
+	p := &GeminiProvider{}
+	contents, _ := p.convertMessages([]Message{
+		{Role: "assistant", Content: []ContentBlock{
+			ToolUseBlock("call_123", "edit_file", json.RawMessage(`{"path":"README.md"`)),
+		}},
+	})
+	if len(contents) != 1 || len(contents[0].Parts) != 1 || contents[0].Parts[0].FunctionCall == nil {
+		t.Fatalf("expected one Gemini function call part, got %#v", contents)
+	}
+	if got := contents[0].Parts[0].FunctionCall.Args["_ggcode_raw_input"]; got == nil {
+		t.Fatalf("expected fallback marker in Gemini function args, got %#v", contents[0].Parts[0].FunctionCall.Args)
 	}
 }
 

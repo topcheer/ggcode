@@ -1191,7 +1191,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.pendingSubmissions) > 0 {
 			m.restorePendingInput()
 		}
-		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error: %v\n\n", msg.err)))
+		m.output.WriteString(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.err) + "\n\n"))
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil
@@ -1212,7 +1212,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.pendingSubmissions) > 0 {
 			m.restorePendingInput()
 		}
-		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Error: %v\n\n", msg.Err)))
+		m.output.WriteString(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.Err) + "\n\n"))
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil

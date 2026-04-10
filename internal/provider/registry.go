@@ -20,7 +20,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		return NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL), nil
 
 	case "gemini":
-		prov, err := NewGeminiProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens)
+		prov, err := NewGeminiProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("creating gemini provider: %w", err)
 		}
