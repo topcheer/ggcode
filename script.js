@@ -15,7 +15,7 @@ const translations = {
     "hero.stats.update": "Upgrade in-app or install native packages from releases",
     "hero.stats.background": "Run long jobs, harness queues, and release flows with live visibility",
     "hero.stats.extensible": "Extend the CLI natively with more capabilities",
-    "hero.badge": "v1.1.11 · self-update ready",
+    "hero.badge": "v1.1.12 · self-update ready",
     "hero.bannerAlt": "ggcode CLI banner",
     "features.eyebrow": "what makes it memorable",
     "features.title":
@@ -26,7 +26,7 @@ const translations = {
       "Read files, inspect diffs, watch status, manage sessions, switch providers, choose language, drop into local shell mode, and queue the next task directly in the TUI instead of turning AI-assisted development into a dozen disconnected steps.",
     "features.stable.title": "Safer by design",
     "features.stable.text":
-      "Five modes — supervised, plan, auto, bypass, and autopilot — let you balance caution and speed without losing approval visibility.",
+      "Five modes — supervised, plan, auto, bypass, and autopilot — balance caution and speed, while ask_user only interrupts when the agent is truly blocked.",
     "features.control.title": "More controllable",
     "features.control.text":
       "Checkpoints, /undo, and dirty-workspace confirmation keep file changes reversible and harness runs grounded in an explicit baseline.",
@@ -72,7 +72,7 @@ const translations = {
     "modes.bypass":
       "Fits the moments when you know what you want and want fewer pauses.",
     "modes.autopilot":
-      "Built for continuous progress and high-tempo delivery with minimal interruption.",
+      "Built for continuous progress and high-tempo delivery, with ask_user reserved for genuinely blocking gaps.",
     "install.eyebrow": "get running fast",
     "install.title": "Pick the installation or update path you already use.",
     "install.intro":
@@ -116,7 +116,7 @@ const translations = {
     "hero.stats.update": "可在应用内升级，也能直接安装原生发布包",
     "hero.stats.background": "长任务、harness 队列和发布流都能持续看进度",
     "hero.stats.extensible": "从 CLI 原生长出扩展能力",
-    "hero.badge": "v1.1.11 · 可直接升级",
+    "hero.badge": "v1.1.12 · 可直接升级",
     "hero.bannerAlt": "ggcode CLI 横幅",
     "features.eyebrow": "what makes it memorable",
     "features.title": "不是“AI 接个壳”，而是一套终端里的完整产品体验。",
@@ -125,7 +125,7 @@ const translations = {
       "你可以在 TUI 里直接读文件、查 diff、看状态、管理 session、切 provider、选语言、进入本地 shell 模式、排队提交新任务，而不是把“AI 辅助开发”拆成十几个碎片化动作。",
     "features.stable.title": "更稳",
     "features.stable.text":
-      "supervised、plan、auto、bypass、autopilot 五种模式，既能安全探索，也能高速推进，同时保留清晰的审批可见性。",
+      "supervised、plan、auto、bypass、autopilot 五种模式，兼顾安全和速度；而 ask_user 只会在 agent 真的被卡住时才打断你。",
     "features.control.title": "更可控",
     "features.control.text":
       "checkpoint、/undo 和 dirty workspace 确认，让文件改动可回滚，也让 harness run 始终基于明确基线启动。",
@@ -161,7 +161,7 @@ const translations = {
     "modes.plan": "适合只读探索、架构审阅、风险较高的排查场景。",
     "modes.auto": "适合频繁的小任务，默认更顺滑。",
     "modes.bypass": "适合你已经知道自己在做什么，希望 agent 少停顿。",
-    "modes.autopilot": "适合连续推进和高节奏交付，强调“别打断我”。",
+    "modes.autopilot": "适合连续推进和高节奏交付；只有在 agent 真的无法继续时才会触发 ask_user。",
     "install.eyebrow": "get running fast",
     "install.title": "安装或升级方式，选你已经在用的那一种。",
     "install.intro":
