@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ggcode"
-version = "1.1.9"
+version = "1.1.10"
 description = "Thin Python wrapper that installs the ggcode GitHub Release binary"
 readme = "README.md"
 requires-python = ">=3.9"
