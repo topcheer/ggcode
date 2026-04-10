@@ -25,6 +25,7 @@ func (m *Model) handleResize(width, height int) {
 		inputWidth = m.mainColumnWidth()
 	}
 	m.input.Width = inputWidth
+	m.syncQuestionnaireInputWidth()
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
 }

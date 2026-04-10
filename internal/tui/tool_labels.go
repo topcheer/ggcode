@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -82,7 +83,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "skill":
 		return toolPresentationFor(lang, "skill", displayToolTarget(argString(args, "skill")))
 	case "ask_user":
-		return toolPresentationFor(lang, "ask", displayToolTarget(argString(args, "question")))
+		return toolPresentationFor(lang, "ask", displayToolTarget(askUserToolTarget(args)))
 	case "git_diff", "git_status", "git_log":
 		return toolPresentationFor(lang, "inspect", displayToolTarget(strings.ReplaceAll(toolName, "_", " ")))
 	default:
@@ -101,6 +102,40 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Activity: localizedGenericActivity(lang, pretty),
 		}
 	}
+}
+
+func askUserToolTarget(args map[string]any) string {
+	if title := strings.TrimSpace(argString(args, "title")); title != "" {
+		return title
+	}
+	rawQuestions, ok := args["questions"]
+	if !ok {
+		return ""
+	}
+	questions, ok := rawQuestions.([]any)
+	if !ok || len(questions) == 0 {
+		return ""
+	}
+	first, ok := questions[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	title := strings.TrimSpace(firstNonEmpty(
+		argAnyString(first["title"]),
+		argAnyString(first["prompt"]),
+	))
+	if title == "" {
+		return ""
+	}
+	if len(questions) == 1 {
+		return title
+	}
+	return fmt.Sprintf("%s +%d", title, len(questions)-1)
+}
+
+func argAnyString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func toolPresentationFor(lang Language, action, target string) toolPresentation {
