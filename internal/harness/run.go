@@ -19,6 +19,7 @@ type Runner interface {
 
 type RunRequest struct {
 	GGCodeConfigPath    string
+	AllowedDirs         []string
 	ReadOnlyAllowedDirs []string
 	WorkingDir          string
 	Prompt              string
@@ -41,8 +42,9 @@ type RunSummary struct {
 }
 
 type RunTaskOptions struct {
-	ContextName string
-	ContextPath string
+	ContextName           string
+	ContextPath           string
+	ConfirmDirtyWorkspace ConfirmDirtyWorkspaceFunc
 }
 
 type RunQueueSummary struct {
@@ -50,10 +52,11 @@ type RunQueueSummary struct {
 }
 
 type QueueRunOptions struct {
-	All               bool
-	RetryFailed       bool
-	ResumeInterrupted bool
-	Owner             string
+	All                   bool
+	RetryFailed           bool
+	ResumeInterrupted     bool
+	Owner                 string
+	ConfirmDirtyWorkspace ConfirmDirtyWorkspaceFunc
 }
 
 func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
@@ -68,6 +71,11 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 	args := []string{"--bypass", "--prompt", req.Prompt}
 	if trimmed := strings.TrimSpace(req.GGCodeConfigPath); trimmed != "" {
 		args = append([]string{"--config", trimmed}, args...)
+	}
+	for _, dir := range req.AllowedDirs {
+		if trimmed := strings.TrimSpace(dir); trimmed != "" {
+			args = append([]string{"--allowedDir", trimmed}, args...)
+		}
 	}
 	for _, dir := range req.ReadOnlyAllowedDirs {
 		if trimmed := strings.TrimSpace(dir); trimmed != "" {
@@ -173,6 +181,10 @@ func RunTask(ctx context.Context, project Project, cfg *Config, goal string, run
 }
 
 func RerunTask(ctx context.Context, project Project, cfg *Config, taskID string, runner Runner) (*RunSummary, error) {
+	return RerunTaskWithOptions(ctx, project, cfg, taskID, runner, RunTaskOptions{})
+}
+
+func RerunTaskWithOptions(ctx context.Context, project Project, cfg *Config, taskID string, runner Runner, opts RunTaskOptions) (*RunSummary, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
 		return nil, fmt.Errorf("missing task id")
@@ -184,7 +196,9 @@ func RerunTask(ctx context.Context, project Project, cfg *Config, taskID string,
 	if task.Status != TaskFailed {
 		return nil, fmt.Errorf("harness task %s is %s; only failed tasks can be rerun", task.ID, task.Status)
 	}
-	return ExecuteTask(ctx, project, cfg, task, runner)
+	return ExecuteTask(ctx, project, cfg, task, runner, ExecuteTaskOptions{
+		ConfirmDirtyWorkspace: opts.ConfirmDirtyWorkspace,
+	})
 }
 
 func RunTaskWithOptions(ctx context.Context, project Project, cfg *Config, goal string, runner Runner, opts RunTaskOptions) (*RunSummary, error) {
@@ -195,12 +209,22 @@ func RunTaskWithOptions(ctx context.Context, project Project, cfg *Config, goal 
 	if err != nil {
 		return nil, err
 	}
-	return ExecuteTask(ctx, project, cfg, task, runner)
+	return ExecuteTask(ctx, project, cfg, task, runner, ExecuteTaskOptions{
+		ConfirmDirtyWorkspace: opts.ConfirmDirtyWorkspace,
+	})
 }
 
-func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, runner Runner) (*RunSummary, error) {
+type ExecuteTaskOptions struct {
+	ConfirmDirtyWorkspace ConfirmDirtyWorkspaceFunc
+}
+
+func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, runner Runner, opts ...ExecuteTaskOptions) (*RunSummary, error) {
 	if runner == nil {
 		runner = BinaryRunner{}
+	}
+	var execOpts ExecuteTaskOptions
+	if len(opts) > 0 {
+		execOpts = opts[0]
 	}
 	if task == nil {
 		return nil, fmt.Errorf("missing task")
@@ -234,11 +258,23 @@ func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, 
 	task.PromotionStatus = ""
 	task.PromotionNotes = ""
 	task.PromotedAt = nil
-	workspace, workspaceErr := PrepareWorkspace(ctx, project, cfg, task)
+	workspace, workspaceErr := PrepareWorkspace(ctx, project, cfg, task, WorkspacePrepareOptions{
+		ConfirmDirtyWorkspace: execOpts.ConfirmDirtyWorkspace,
+	})
 	if workspace != nil {
 		task.WorkspacePath = workspace.Path
 		task.WorkspaceMode = workspace.Mode
 		task.BranchName = workspace.Branch
+	}
+	if workspaceErr != nil && isCheckpointDeclinedError(workspaceErr) {
+		task.Status = TaskFailed
+		task.Error = workspaceErr.Error()
+		finished := time.Now().UTC()
+		task.FinishedAt = &finished
+		if err := SaveTask(project, task); err != nil {
+			return nil, err
+		}
+		return nil, workspaceErr
 	}
 	if workspaceErr != nil {
 		task.WorkspaceMode = "root-fallback"
@@ -256,6 +292,7 @@ func ExecuteTask(ctx context.Context, project Project, cfg *Config, task *Task, 
 	prompt := BuildRunPrompt(cfg, task)
 	req := RunRequest{
 		GGCodeConfigPath:    findGGCodeConfig(project.RootDir),
+		AllowedDirs:         []string{workingDir},
 		ReadOnlyAllowedDirs: harnessWorkerReadOnlyDirs(project),
 		WorkingDir:          workingDir,
 		Prompt:              prompt,
@@ -432,7 +469,9 @@ func RunQueuedTasks(ctx context.Context, project Project, cfg *Config, runner Ru
 		if task == nil {
 			break
 		}
-		runSummary, err := ExecuteTask(ctx, project, cfg, task, runner)
+		runSummary, err := ExecuteTask(ctx, project, cfg, task, runner, ExecuteTaskOptions{
+			ConfirmDirtyWorkspace: opts.ConfirmDirtyWorkspace,
+		})
 		if err != nil {
 			return nil, err
 		}

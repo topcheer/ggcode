@@ -153,11 +153,14 @@ func newHarnessCmd(cfgFile *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+			confirmDirtyWorkspace := newHarnessCheckpointConfirmer(cmd.InOrStdin(), cmd.OutOrStdout(), interactive)
 			if len(args) == 0 {
 				queueSummary, err := harness.RunQueuedTasks(context.Background(), project, cfg, harness.BinaryRunner{}, harness.QueueRunOptions{
-					All:               runAllQueued,
-					RetryFailed:       runRetryFailed,
-					ResumeInterrupted: runResumeInterrupted,
+					All:                   runAllQueued,
+					RetryFailed:           runRetryFailed,
+					ResumeInterrupted:     runResumeInterrupted,
+					ConfirmDirtyWorkspace: confirmDirtyWorkspace,
 				})
 				if err != nil {
 					return err
@@ -190,7 +193,9 @@ func newHarnessCmd(cfgFile *string) *cobra.Command {
 					}
 				}
 			}
-			runOpts := harness.RunTaskOptions{}
+			runOpts := harness.RunTaskOptions{
+				ConfirmDirtyWorkspace: confirmDirtyWorkspace,
+			}
 			if contextCfg != nil {
 				runOpts.ContextName = contextCfg.Name
 				runOpts.ContextPath = contextCfg.Path
@@ -220,7 +225,10 @@ func newHarnessCmd(cfgFile *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			summary, err := harness.RerunTask(context.Background(), project, cfg, args[0], harness.BinaryRunner{})
+			interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+			summary, err := harness.RerunTaskWithOptions(context.Background(), project, cfg, args[0], harness.BinaryRunner{}, harness.RunTaskOptions{
+				ConfirmDirtyWorkspace: newHarnessCheckpointConfirmer(cmd.InOrStdin(), cmd.OutOrStdout(), interactive),
+			})
 			if err != nil {
 				return err
 			}

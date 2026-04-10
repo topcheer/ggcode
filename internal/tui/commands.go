@@ -29,8 +29,8 @@ var executeHarnessRun = func(ctx context.Context, project harness.Project, cfg *
 	return harness.RunTaskWithOptions(ctx, project, cfg, goal, harness.BinaryRunner{}, opts)
 }
 
-var executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string) (*harness.RunSummary, error) {
-	return harness.RerunTask(ctx, project, cfg, taskID, harness.BinaryRunner{})
+var executeHarnessRerun = func(ctx context.Context, project harness.Project, cfg *harness.Config, taskID string, opts harness.RunTaskOptions) (*harness.RunSummary, error) {
+	return harness.RerunTaskWithOptions(ctx, project, cfg, taskID, harness.BinaryRunner{}, opts)
 }
 
 func (m *Model) updateAutoComplete() {
@@ -1003,6 +1003,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 				opts.ResumeInterrupted = true
 			}
 		}
+		opts.ConfirmDirtyWorkspace = m.newHarnessCheckpointConfirmer()
 		queueSummary, err := harness.RunQueuedTasks(context.Background(), project, cfg, nil, opts)
 		if err != nil {
 			m.output.WriteString(m.styles.error.Render(err.Error()))
@@ -1089,6 +1090,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamStartPos = m.output.Len()
 	m.streamPrefixWritten = false
+	opts.ConfirmDirtyWorkspace = m.newHarnessCheckpointConfirmer()
 	startSpinner := m.spinner.Start("Running harness")
 	if m.program == nil {
 		return func() tea.Msg {
@@ -1145,18 +1147,50 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamStartPos = m.output.Len()
 	m.streamPrefixWritten = false
+	opts := harness.RunTaskOptions{ConfirmDirtyWorkspace: m.newHarnessCheckpointConfirmer()}
 	startSpinner := m.spinner.Start("Running harness")
 	if m.program == nil {
 		return func() tea.Msg {
-			summary, err := executeHarnessRerun(ctx, project, cfg, task.ID)
+			summary, err := executeHarnessRerun(ctx, project, cfg, task.ID, opts)
 			return harnessRunResultMsg{Summary: summary, Err: err}
 		}
 	}
 	go func() {
-		summary, err := executeHarnessRerun(ctx, project, cfg, task.ID)
+		summary, err := executeHarnessRerun(ctx, project, cfg, task.ID, opts)
 		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
 	}()
 	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
+}
+
+func (m *Model) newHarnessCheckpointConfirmer() harness.ConfirmDirtyWorkspaceFunc {
+	var (
+		asked    bool
+		approved bool
+	)
+	return func(checkpoint harness.DirtyWorkspaceCheckpoint) (bool, error) {
+		if asked {
+			return approved, nil
+		}
+		asked = true
+		ok, err := m.requestHarnessCheckpointConfirm(checkpoint)
+		if err != nil {
+			return false, err
+		}
+		approved = ok
+		return approved, nil
+	}
+}
+
+func (m *Model) requestHarnessCheckpointConfirm(checkpoint harness.DirtyWorkspaceCheckpoint) (bool, error) {
+	if m.program == nil {
+		return true, nil
+	}
+	resp := make(chan bool, 1)
+	m.program.Send(HarnessCheckpointConfirmMsg{
+		Checkpoint: checkpoint,
+		Response:   resp,
+	})
+	return <-resp, nil
 }
 
 func (m *Model) pollHarnessRunProgress() tea.Cmd {
@@ -1741,6 +1775,21 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 	}()
 	if !approved {
 		m.output.WriteString(m.styles.error.Render(m.t("approval.rejected")))
+	}
+	return nil
+}
+
+func (m *Model) handleHarnessCheckpointConfirm(approved bool) tea.Cmd {
+	pc := m.pendingHarnessCheckpointConfirm
+	m.pendingHarnessCheckpointConfirm = nil
+	if pc == nil || pc.Response == nil {
+		return nil
+	}
+	go func() {
+		pc.Response <- approved
+	}()
+	if !approved {
+		m.output.WriteString(m.styles.error.Render("Harness run cancelled."))
 	}
 	return nil
 }

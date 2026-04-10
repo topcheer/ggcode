@@ -35,6 +35,7 @@ func NewRootCmd() *cobra.Command {
 	var resumeID string
 	var pipePrompt string
 	var allowedTools []string
+	var allowedDirs []string
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
@@ -77,7 +78,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, outputPath, bypassFlag, readOnlyAllowedDirs)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
 				if code != 0 {
 					os.Exit(code)
 				}
@@ -95,6 +96,8 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
+	cmd.Flags().StringArrayVar(&allowedDirs, "allowedDir", nil, "override writable sandbox directory for pipe mode (can be repeated)")
+	_ = cmd.Flags().MarkHidden("allowedDir")
 	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
@@ -242,6 +245,9 @@ func mergedFlags(cmd *cobra.Command) []*pflag.Flag {
 			return
 		}
 		fs.VisitAll(func(flag *pflag.Flag) {
+			if flag.Hidden {
+				return
+			}
 			if _, ok := seen[flag.Name]; ok {
 				return
 			}

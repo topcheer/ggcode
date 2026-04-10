@@ -255,6 +255,7 @@ Harness is the repo-scale control plane in ggcode. It is designed for work that 
    - `ggcode harness queue` creates persistent backlog items instead of immediately starting a one-off run
    - tasks can be scoped with `--context` and dependency-gated with `--depends-on`, so downstream work stays `blocked` until prerequisites complete
    - queued execution is **worker-backed by default** and normally runs inside isolated worktrees under `.ggcode/harness/worktrees/<task-id>`, which keeps repo-root state cleaner during long efforts
+   - if the repo root has real uncommitted or untracked project files, `harness run` now asks once whether ggcode should first create a **checkpoint commit** in the main workspace before creating task worktrees; declining the prompt cancels the run instead of silently forking from a stale base
    - `run.max_attempts` in `.ggcode/harness.yaml`, `ggcode harness run --retry-failed`, and `ggcode harness run --resume-interrupted` cover bounded retries and interrupted-session recovery
 
 3. **Inspect and route operational state**

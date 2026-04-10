@@ -2,12 +2,14 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -15,6 +17,31 @@ type Workspace struct {
 	Path   string
 	Mode   string
 	Branch string
+}
+
+type DirtyWorkspaceCheckpoint struct {
+	DirtyPaths    []string
+	Summary       string
+	CommitMessage string
+}
+
+type ConfirmDirtyWorkspaceFunc func(DirtyWorkspaceCheckpoint) (bool, error)
+
+type WorkspacePrepareOptions struct {
+	ConfirmDirtyWorkspace ConfirmDirtyWorkspaceFunc
+}
+
+type checkpointDeclinedError struct {
+	message string
+}
+
+func (e checkpointDeclinedError) Error() string {
+	return e.message
+}
+
+func isCheckpointDeclinedError(err error) bool {
+	var target checkpointDeclinedError
+	return errors.As(err, &target)
 }
 
 type sharedRuntimeDirRule struct {
@@ -56,7 +83,16 @@ var sharedRuntimeDirRules = []sharedRuntimeDirRule{
 	},
 }
 
-func PrepareWorkspace(ctx context.Context, project Project, cfg *Config, task *Task) (*Workspace, error) {
+var worktreeDirtyIgnoredPaths = []string{
+	StateRelDir,
+	".ggcode/todos.json",
+}
+
+func PrepareWorkspace(ctx context.Context, project Project, cfg *Config, task *Task, opts ...WorkspacePrepareOptions) (*Workspace, error) {
+	var prepareOpts WorkspacePrepareOptions
+	if len(opts) > 0 {
+		prepareOpts = opts[0]
+	}
 	mode := "auto"
 	if cfg != nil {
 		mode = strings.TrimSpace(cfg.Run.WorktreeMode)
@@ -72,6 +108,9 @@ func PrepareWorkspace(ctx context.Context, project Project, cfg *Config, task *T
 			return nil, fmt.Errorf("worktree mode is required but repository is not a git repo")
 		}
 		return &Workspace{Path: project.RootDir, Mode: "root"}, nil
+	}
+	if err := checkpointDirtyWorktreeBase(ctx, project.RootDir, prepareOpts.ConfirmDirtyWorkspace); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(project.WorktreesDir, 0755); err != nil {
 		return nil, fmt.Errorf("create worktrees dir: %w", err)
@@ -213,4 +252,143 @@ func linkWorkspaceRuntimeDir(rootDir, workspacePath, rel string) error {
 		return fmt.Errorf("link runtime dir %s -> %s: %w", target, source, err)
 	}
 	return nil
+}
+
+func checkpointDirtyWorktreeBase(ctx context.Context, rootDir string, confirm ConfirmDirtyWorkspaceFunc) error {
+	dirtyPaths, err := gitDirtyProjectPaths(ctx, rootDir)
+	if err != nil {
+		return err
+	}
+	if len(dirtyPaths) == 0 {
+		return nil
+	}
+	checkpoint := DirtyWorkspaceCheckpoint{
+		DirtyPaths:    append([]string(nil), dirtyPaths...),
+		Summary:       summarizeDirtyPaths(dirtyPaths, 8),
+		CommitMessage: buildWorktreeCheckpointMessage(dirtyPaths),
+	}
+	if confirm != nil {
+		approved, err := confirm(checkpoint)
+		if err != nil {
+			return err
+		}
+		if !approved {
+			return checkpointDeclinedError{message: "harness run cancelled: workspace checkpoint was not approved"}
+		}
+	}
+	if err := autoCommitWorktreeBase(ctx, rootDir, dirtyPaths); err != nil {
+		return fmt.Errorf("checkpoint dirty workspace before harness run: %w", err)
+	}
+	return nil
+}
+
+func gitDirtyProjectPaths(ctx context.Context, rootDir string) ([]string, error) {
+	sharedRuntimeDirs, err := discoverSharedRuntimeDirs(rootDir)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain", "--untracked-files=all")
+	cmd.Dir = rootDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("inspect git status: %s", strings.TrimSpace(string(out)))
+	}
+	lines := strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n")
+	var paths []string
+	seen := make(map[string]struct{})
+	for _, raw := range lines {
+		if strings.TrimSpace(raw) == "" || len(raw) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(raw[3:])
+		if idx := strings.Index(path, " -> "); idx >= 0 {
+			path = strings.TrimSpace(path[idx+4:])
+		}
+		path = filepath.ToSlash(path)
+		if shouldIgnoreWorktreeDirtyPath(path, sharedRuntimeDirs) {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func shouldIgnoreWorktreeDirtyPath(path string, sharedRuntimeDirs []string) bool {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if path == "" {
+		return true
+	}
+	for _, ignored := range worktreeDirtyIgnoredPaths {
+		ignored = filepath.ToSlash(strings.TrimSpace(ignored))
+		if path == ignored || strings.HasPrefix(path, ignored+"/") {
+			return true
+		}
+	}
+	for _, rel := range sharedRuntimeDirs {
+		rel = filepath.ToSlash(strings.TrimSpace(rel))
+		if rel == "" {
+			continue
+		}
+		if path == rel || strings.HasPrefix(path, rel+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func summarizeDirtyPaths(paths []string, limit int) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	if limit <= 0 || len(paths) <= limit {
+		return strings.Join(paths, ", ")
+	}
+	head := append([]string(nil), paths[:limit]...)
+	return fmt.Sprintf("%s (+%d more)", strings.Join(head, ", "), len(paths)-limit)
+}
+
+func autoCommitWorktreeBase(ctx context.Context, rootDir string, dirtyPaths []string) error {
+	if len(dirtyPaths) == 0 {
+		return nil
+	}
+	addArgs := append([]string{"add", "-A", "--"}, dirtyPaths...)
+	addCmd := exec.CommandContext(ctx, "git", addArgs...)
+	addCmd.Dir = rootDir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("stage dirty workspace paths (%s): %s", summarizeDirtyPaths(dirtyPaths, 8), strings.TrimSpace(string(out)))
+	}
+	hasStaged, err := gitHasStagedChanges(ctx, rootDir)
+	if err != nil {
+		return err
+	}
+	if !hasStaged {
+		return nil
+	}
+	message := buildWorktreeCheckpointMessage(dirtyPaths)
+	commitArgs := []string{"commit", "--quiet", "-m", message}
+	commitArgs = append(commitAuthorConfig(ctx, rootDir), commitArgs...)
+	commitCmd := exec.CommandContext(ctx, "git", commitArgs...)
+	commitCmd.Dir = rootDir
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("create checkpoint commit: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func buildWorktreeCheckpointMessage(paths []string) string {
+	base := "chore: checkpoint workspace before harness run"
+	if len(paths) == 0 {
+		return base
+	}
+	label := summarizeDirtyPaths(paths, 2)
+	message := fmt.Sprintf("%s (%s)", base, label)
+	if len(message) <= 72 {
+		return message
+	}
+	return base
 }
