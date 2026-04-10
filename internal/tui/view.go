@@ -219,8 +219,8 @@ func (m Model) renderSidebar(totalHeight int) string {
 	}
 	agentLine := m.t("agents.idle")
 	activity := m.sidebarActivity()
-	if len(m.pendingSubmissions) > 0 {
-		activity = fmt.Sprintf("%s • %s", activity, m.t("queued.count", len(m.pendingSubmissions)))
+	if count := m.pendingSubmissionCount(); count > 0 {
+		activity = fmt.Sprintf("%s • %s", activity, m.t("queued.count", count))
 	}
 
 	body := strings.Join([]string{
@@ -739,8 +739,8 @@ func (m Model) renderStatusBar() string {
 	}
 
 	line1 := fmt.Sprintf(" %s %s", spinnerChar, activity)
-	if len(m.pendingSubmissions) > 0 {
-		line1 += fmt.Sprintf(" │ 📨 %s", m.t("queued.count", len(m.pendingSubmissions)))
+	if count := m.pendingSubmissionCount(); count > 0 {
+		line1 += fmt.Sprintf(" │ 📨 %s", m.t("queued.count", count))
 	}
 	sb.WriteString(m.styles.statusBar.Render(line1))
 
@@ -882,8 +882,8 @@ func (m Model) renderComposerPanel() string {
 	} else {
 		hints = append(hints, m.t("hint.ctrlc_exit"))
 	}
-	if len(m.pendingSubmissions) > 0 {
-		hints = append(hints, m.t("queued.count", len(m.pendingSubmissions)))
+	if count := m.pendingSubmissionCount(); count > 0 {
+		hints = append(hints, m.t("queued.count", count))
 	}
 	if m.pendingImage != nil {
 		hints = append(hints, m.t("hint.image_attached"))
@@ -915,25 +915,9 @@ func (m Model) renderContextBox(title, body string, accent lipgloss.Color) strin
 }
 
 func (m Model) currentSelection() (string, string, string) {
-	vendor := m.startupVendor
-	endpoint := m.startupEndpoint
-	model := m.startupModel
-	if m.config != nil {
-		if m.config.Vendor != "" {
-			vendor = m.config.Vendor
-		}
-		if m.config.Endpoint != "" {
-			endpoint = m.config.Endpoint
-		}
-		if m.config.Model != "" {
-			model = m.config.Model
-		}
-		if resolved, err := m.config.ResolveActiveEndpoint(); err == nil {
-			vendor = resolved.VendorName
-			endpoint = resolved.EndpointName
-			model = resolved.Model
-		}
-	}
+	vendor := firstNonEmptyValue(m.activeVendor, m.startupVendor)
+	endpoint := firstNonEmptyValue(m.activeEndpoint, m.startupEndpoint)
+	model := firstNonEmptyValue(m.activeModel, m.startupModel)
 	if vendor == "" {
 		vendor = "unknown"
 	}

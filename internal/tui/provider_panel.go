@@ -249,46 +249,123 @@ func (m *Model) renderProviderPanel() string {
 		model = m.t("panel.provider.model.set_with_m")
 	}
 	window := buildModelListWindow(panel.models, panel.modelIndex, panel.modelFilter)
+	contentWidth := m.boxInnerWidth(m.mainColumnWidth())
+	leftWidth := max(24, contentWidth*2/5)
+	rightWidth := max(28, contentWidth-leftWidth-1)
+	if leftWidth+rightWidth+1 > contentWidth {
+		leftWidth = max(20, contentWidth-rightWidth-1)
+	}
+	if leftWidth < 1 {
+		leftWidth = 1
+	}
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
 
-	body := []string{
-		lipgloss.NewStyle().Bold(true).Render(" " + m.t("panel.provider.vendors")),
+	columnHeight := providerPanelColumnsHeight(m.viewHeight())
+	endpointHeight := max(5, columnHeight/3)
+	modelHeight := max(8, columnHeight-endpointHeight-1)
+	endpointHeight = columnHeight - modelHeight - 1
+	footerHeight := providerPanelFooterHeight()
+
+	leftColumn := renderProviderPanelSection(
+		m.t("panel.provider.vendors"),
 		m.renderProviderList(panel.vendorIDs, panel.vendorIndex, panel.focus == providerPanelFocusVendor),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(" " + m.t("panel.provider.endpoints")),
+		leftWidth,
+		columnHeight,
+	)
+
+	rightTop := renderProviderPanelSection(
+		m.t("panel.provider.endpoints"),
 		m.renderProviderList(panel.endpointIDs, panel.endpointIndex, panel.focus == providerPanelFocusEndpoint),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(" " + m.t("panel.provider.models")),
-	}
+		rightWidth,
+		endpointHeight,
+	)
+
+	modelBody := []string{}
 	if window.filterEnabled {
-		body = append(body, panel.modelFilter.View())
+		modelBody = append(modelBody, panel.modelFilter.View())
 	}
-	body = append(body,
-		renderModelListWindow(m.renderProviderList, window, panel.focus == providerPanelFocusModel, m.currentLanguage()),
-		"",
+	modelBody = append(modelBody, renderModelListWindow(m.renderProviderList, window, panel.focus == providerPanelFocusModel, m.currentLanguage()))
+	rightBottom := renderProviderPanelSection(
+		m.t("panel.provider.models"),
+		strings.Join(modelBody, "\n"),
+		rightWidth,
+		modelHeight,
+	)
+
+	columns := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftColumn,
+		horizontalColumnGap(),
+		lipgloss.JoinVertical(lipgloss.Left, rightTop, verticalSectionGap(), rightBottom),
+	)
+
+	footer := []string{
 		fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), firstNonEmptyValue(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.api_key"), apiKeyState),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.base_url"), baseURLState),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.tags"), strings.Join(ep.Tags, ", ")),
-	)
+	}
+	if panel.refreshing {
+		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(" "+m.t("panel.provider.refreshing_vendor", panel.refreshVendor)))
+	}
 	if panel.editingField != "" {
-		body = append(body,
-			"",
+		footer = append(footer,
 			lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(" "+m.t("panel.provider.edit")+" "+providerEditFieldLabel(m.currentLanguage(), panel.editingField)),
 			panel.editInput.View(),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.edit")),
 		)
 	} else {
-		body = append(body,
-			"",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.main")),
-		)
+		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.main")))
 	}
 	if panel.message != "" {
-		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
+		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
 	}
 
-	return m.renderContextBox("/provider", strings.Join(body, "\n"), lipgloss.Color("14"))
+	footerBox := lipgloss.NewStyle().
+		Width(contentWidth).
+		Height(footerHeight).
+		MaxHeight(footerHeight).
+		Render(strings.Join(footer, "\n"))
+
+	return m.renderContextBox("/provider", lipgloss.JoinVertical(lipgloss.Left, columns, "", footerBox), lipgloss.Color("14"))
+}
+
+func renderProviderPanelSection(title, body string, width, height int) string {
+	if width < 1 {
+		width = 1
+	}
+	if height < 2 {
+		height = 2
+	}
+	header := lipgloss.NewStyle().Bold(true).Render(" " + title)
+	bodyStyle := lipgloss.NewStyle().
+		Width(width).
+		Height(height - 1).
+		MaxHeight(height - 1)
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		MaxHeight(height).
+		Render(header + "\n" + bodyStyle.Render(body))
+}
+
+func providerPanelColumnsHeight(viewHeight int) int {
+	return min(28, max(16, viewHeight-12))
+}
+
+func providerPanelFooterHeight() int {
+	return 8
+}
+
+func horizontalColumnGap() string {
+	return " "
+}
+
+func verticalSectionGap() string {
+	return "\n"
 }
 
 func (m *Model) renderProviderList(items []string, selected int, focused bool) string {
@@ -474,11 +551,11 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			panel.message = err.Error()
 			return *m, nil
 		}
-		m.syncSessionSelection()
 		if err := m.tryActivateCurrentSelection(); err != nil {
 			panel.message = "Saved config, but current runtime is still inactive: " + err.Error()
 			return *m, nil
 		}
+		m.syncSessionSelection()
 		panel.message = m.t("panel.provider.saved_activated")
 		return *m, nil
 	}

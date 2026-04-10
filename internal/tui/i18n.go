@@ -667,12 +667,18 @@ func enCatalog(key string) string {
 		return "%d queued"
 	case "queued.output":
 		return "[queued %d pending]\n\n"
+	case "interrupt.delivered":
+		return "[delivered to active run; revising plan]\n"
 	case "status.thinking":
 		return "Thinking..."
 	case "status.writing":
 		return "Writing..."
 	case "status.cancelling":
 		return "Cancelling..."
+	case "status.compacting":
+		return "[compacting conversation to stay within context window]"
+	case "status.compacted":
+		return "[conversation compacted]"
 	case "status.tools_used":
 		return "%d tools used"
 	case "tool.done":
@@ -1669,12 +1675,18 @@ func zhCatalog(key string) string {
 		return "%d 条排队中"
 	case "queued.output":
 		return "[已排队 %d 条待发送]\n\n"
+	case "interrupt.delivered":
+		return "[已送达当前运行，正在调整方向]\n"
 	case "status.thinking":
 		return "思考中..."
 	case "status.writing":
 		return "输出中..."
 	case "status.cancelling":
 		return "取消中..."
+	case "status.compacting":
+		return "[正在压缩会话以保持在上下文窗口内]"
+	case "status.compacted":
+		return "[会话已压缩]"
 	case "status.tools_used":
 		return "已调用 %d 个工具"
 	case "tool.done":

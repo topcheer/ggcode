@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -85,6 +86,9 @@ type Model struct {
 	startupVendor                   string
 	startupEndpoint                 string
 	startupModel                    string
+	activeVendor                    string
+	activeEndpoint                  string
+	activeModel                     string
 	customCmds                      map[string]*commands.Command
 	commandMgr                      *commands.Manager
 	autoMem                         *memory.AutoMemory
@@ -153,6 +157,8 @@ type Model struct {
 	sidebarVisible       bool
 	exitConfirmPending   bool
 	pendingSubmissions   []string
+	pendingMu            *sync.Mutex
+	sessionMu            *sync.Mutex
 	projectMemoryLoading bool
 	runCanceled          bool
 	runFailed            bool
@@ -364,6 +370,11 @@ type agentStatusMsg struct {
 	statusMsg
 }
 
+type agentInterruptMsg struct {
+	RunID int
+	Text  string
+}
+
 // setProgramMsg is sent via program.Send so the model copy inside Bubble Tea's
 // event loop gets the real *tea.Program reference (NewProgram copies the model).
 type setProgramMsg struct {
@@ -403,13 +414,46 @@ func (m *Model) promptExitConfirm() {
 }
 
 func (m *Model) queuePendingSubmission(text string) {
-	m.pendingSubmissions = append(m.pendingSubmissions, text)
+	count := m.enqueuePendingSubmission(text)
+	if count == 0 {
+		return
+	}
 	m.ensureOutputHasBlankLine()
-	m.output.WriteString(m.styles.prompt.Render(m.t("queued.output", len(m.pendingSubmissions))))
+	m.output.WriteString(m.styles.prompt.Render(m.t("queued.output", count)))
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *Model) enqueuePendingSubmission(text string) int {
+	m.pendingMutex().Lock()
+	defer m.pendingMutex().Unlock()
+	m.pendingSubmissions = append(m.pendingSubmissions, text)
+	return len(m.pendingSubmissions)
+}
+
+func (m *Model) pendingSubmissionCount() int {
+	m.pendingMutex().Lock()
+	defer m.pendingMutex().Unlock()
+	return len(m.pendingSubmissions)
+}
+
+func (m *Model) clearPendingSubmissions() {
+	m.pendingMutex().Lock()
+	defer m.pendingMutex().Unlock()
+	m.pendingSubmissions = nil
+}
+
+func (m *Model) pendingSubmissionSnapshot() []string {
+	m.pendingMutex().Lock()
+	defer m.pendingMutex().Unlock()
+	if len(m.pendingSubmissions) == 0 {
+		return nil
+	}
+	out := make([]string, len(m.pendingSubmissions))
+	copy(out, m.pendingSubmissions)
+	return out
 }
 
 func (m *Model) cancelActiveRun() {
@@ -432,7 +476,7 @@ func (m *Model) cancelActiveRun() {
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 	m.resetActivityGroups()
-	if len(m.pendingSubmissions) > 0 {
+	if m.pendingSubmissionCount() > 0 {
 		m.restorePendingInput()
 	}
 	debug.Log("tui", "cancelling active loop")
@@ -444,16 +488,20 @@ func (m *Model) cancelActiveRun() {
 }
 
 func (m *Model) consumePendingSubmission() string {
+	m.pendingMutex().Lock()
+	defer m.pendingMutex().Unlock()
 	joined := strings.TrimSpace(strings.Join(m.pendingSubmissions, "\n\n"))
 	m.pendingSubmissions = nil
 	return joined
 }
 
 func (m *Model) restorePendingInput() {
+	m.pendingMutex().Lock()
 	pending := strings.TrimSpace(strings.Join(m.pendingSubmissions, "\n\n"))
 	draft := strings.TrimSpace(m.input.Value())
 	switch {
 	case pending == "":
+		m.pendingMutex().Unlock()
 		return
 	case draft == "":
 		m.input.SetValue(pending)
@@ -464,6 +512,33 @@ func (m *Model) restorePendingInput() {
 	}
 	m.input.CursorEnd()
 	m.pendingSubmissions = nil
+	m.pendingMutex().Unlock()
+}
+
+func (m *Model) drainPendingInterrupt(runID int) string {
+	text := m.consumePendingSubmission()
+	if text == "" {
+		return ""
+	}
+	m.appendUserMessage(text)
+	if m.program != nil {
+		m.program.Send(agentInterruptMsg{RunID: runID, Text: text})
+	}
+	return text
+}
+
+func (m *Model) pendingMutex() *sync.Mutex {
+	if m.pendingMu == nil {
+		m.pendingMu = &sync.Mutex{}
+	}
+	return m.pendingMu
+}
+
+func (m *Model) sessionMutex() *sync.Mutex {
+	if m.sessionMu == nil {
+		m.sessionMu = &sync.Mutex{}
+	}
+	return m.sessionMu
 }
 
 func stripImagePlaceholder(value, placeholder string) string {
@@ -671,10 +746,19 @@ func (m *Model) SetConfig(cfg *config.Config) {
 	if cfg != nil {
 		m.setLanguage(cfg.Language)
 		m.sidebarVisible = cfg.SidebarVisible()
+		if resolved, err := cfg.ResolveActiveEndpoint(); err == nil && m.activeVendor == "" && m.activeEndpoint == "" && m.activeModel == "" {
+			m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+		}
 		if cfg.FirstRun {
 			m.openLanguageSelector(true)
 		}
 	}
+}
+
+func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
+	m.activeVendor = strings.TrimSpace(vendor)
+	m.activeEndpoint = strings.TrimSpace(endpoint)
+	m.activeModel = strings.TrimSpace(model)
 }
 
 func asciiLogo() string {
@@ -741,6 +825,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.startupVendor = msg.Vendor
 		m.startupEndpoint = msg.Endpoint
 		m.startupModel = msg.Model
+		m.setActiveRuntimeSelection(msg.Vendor, msg.Endpoint, msg.Model)
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -1063,6 +1148,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendStreamChunk(msg.Text)
 		return m, nil
 
+	case agentInterruptMsg:
+		if msg.RunID != m.activeAgentRunID {
+			return m, nil
+		}
+		m.ensureOutputEndsWithNewline()
+		m.output.WriteString(m.renderConversationUserEntry("❯ ", msg.Text))
+		m.output.WriteString("\n")
+		m.output.WriteString(m.styles.prompt.Render(m.t("interrupt.delivered")))
+		m.output.WriteString("\n")
+		m.syncConversationViewport()
+		m.viewport.GotoBottom()
+		return m, nil
+
 	case shellCommandStreamMsg:
 		if msg.RunID != m.activeShellRunID || m.runCanceled || !m.loading {
 			return m, nil
@@ -1085,22 +1183,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolName = ""
 		m.statusToolArg = ""
 		m.statusToolCount = 0
-		// Render accumulated stream buffer as markdown
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-			rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
-			if err != nil {
-				rendered = m.streamBuffer.String()
-			}
-			rendered = trimLeadingRenderedSpacing(rendered)
-			m.output.Truncate(m.streamStartPos)
-			m.output.WriteString(bulletStyle.Render("● "))
-			m.output.WriteString(rendered)
+			m.renderStreamBuffer()
 			m.streamBuffer = nil
 		}
 		m.output.WriteString("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
-		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
+		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
 		}
 		return m, nil
@@ -1123,20 +1213,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolArg = ""
 		m.statusToolCount = 0
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-			rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
-			if err != nil {
-				rendered = m.streamBuffer.String()
-			}
-			rendered = trimLeadingRenderedSpacing(rendered)
-			m.output.Truncate(m.streamStartPos)
-			m.output.WriteString(bulletStyle.Render("● "))
-			m.output.WriteString(rendered)
+			m.renderStreamBuffer()
 			m.streamBuffer = nil
 		}
 		m.output.WriteString("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
-		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
+		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
 		}
 		return m, nil
@@ -1159,7 +1242,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolCount = 0
 		if msg.Status == toolpkg.CommandJobFailed || msg.Status == toolpkg.CommandJobTimedOut {
 			m.runFailed = true
-			if len(m.pendingSubmissions) > 0 {
+			if m.pendingSubmissionCount() > 0 {
 				m.restorePendingInput()
 			}
 			if text := strings.TrimSpace(msg.ErrText); text != "" {
@@ -1171,7 +1254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !wasCanceled && (hadShellOutput || strings.TrimSpace(msg.ErrText) != "") {
 			m.ensureOutputHasBlankLine()
 		}
-		if msg.Status == toolpkg.CommandJobCompleted && len(m.pendingSubmissions) > 0 && !wasCanceled && !wasFailed {
+		if msg.Status == toolpkg.CommandJobCompleted && m.pendingSubmissionCount() > 0 && !wasCanceled && !wasFailed {
 			return m, m.submitShellCommand(m.consumePendingSubmission(), false)
 		}
 		m.syncConversationViewport()
@@ -1188,7 +1271,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeToolActivityGroup()
 		m.flushGroupedActivitiesToOutput()
 		m.cancelFunc = nil
-		if len(m.pendingSubmissions) > 0 {
+		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
 		}
 		m.output.WriteString(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.err) + "\n\n"))
@@ -1209,7 +1292,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeToolActivityGroup()
 		m.flushGroupedActivitiesToOutput()
 		m.cancelFunc = nil
-		if len(m.pendingSubmissions) > 0 {
+		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
 		}
 		m.output.WriteString(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.Err) + "\n\n"))
@@ -1257,7 +1340,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			m.runFailed = true
-			if len(m.pendingSubmissions) > 0 {
+			if m.pendingSubmissionCount() > 0 {
 				m.restorePendingInput()
 			}
 			m.output.WriteString(m.styles.error.Render(msg.Err.Error()))
@@ -1280,7 +1363,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.output.WriteString("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
-		if !wasCanceled && !wasFailed && len(m.pendingSubmissions) > 0 {
+		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
 		}
 		return m, nil
@@ -1331,8 +1414,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if state != nil && strings.TrimSpace(state.commandText) != "" {
 				commandText = strings.TrimSpace(state.commandText)
 			}
-			m.output.WriteString(m.styles.user.Render("❯ "))
-			m.output.WriteString(commandText)
+			m.output.WriteString(m.renderConversationUserEntry("❯ ", commandText))
 			m.output.WriteString("\n")
 			m.appendUserMessage(commandText)
 			m.output.WriteString(m.styles.assistant.Render(formatHarnessInitResult(msg.Result)))
@@ -1390,7 +1472,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.projectMemoryLoading = false
 		if msg.Err != nil {
 			debug.Log("tui", "project memory load failed: %v", msg.Err)
-			if len(m.pendingSubmissions) > 0 && !m.loading {
+			if m.pendingSubmissionCount() > 0 && !m.loading {
 				return m, m.submitText(m.consumePendingSubmission(), false)
 			}
 			return m, nil
@@ -1402,7 +1484,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + msg.Content}},
 			})
 		}
-		if len(m.pendingSubmissions) > 0 && !m.loading {
+		if m.pendingSubmissionCount() > 0 && !m.loading {
 			if m.shellMode {
 				return m, m.submitShellCommand(m.consumePendingSubmission(), false)
 			}
@@ -1487,17 +1569,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateActiveMCPTools(ts)
 		if ts.Running {
 			m.startToolActivity(ts)
-			// Flush current stream buffer (render markdown) before tool output
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-				rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
-				if err != nil {
-					rendered = m.streamBuffer.String()
-				}
-				rendered = trimLeadingRenderedSpacing(rendered)
-				m.output.Truncate(m.streamStartPos)
-				m.output.WriteString(bulletStyle.Render("● "))
-				m.output.WriteString(rendered)
-				m.streamBuffer.Reset()
+				m.renderStreamBuffer()
 				m.streamStartPos = m.output.Len()
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
@@ -1526,15 +1599,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ts.Running {
 			m.startToolActivity(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-				rendered, err := m.mdRenderer.Render(m.streamBuffer.String())
-				if err != nil {
-					rendered = m.streamBuffer.String()
-				}
-				rendered = trimLeadingRenderedSpacing(rendered)
-				m.output.Truncate(m.streamStartPos)
-				m.output.WriteString(bulletStyle.Render("● "))
-				m.output.WriteString(rendered)
-				m.streamBuffer.Reset()
+				m.renderStreamBuffer()
 				m.streamStartPos = m.output.Len()
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))

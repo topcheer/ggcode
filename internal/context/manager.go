@@ -25,6 +25,7 @@ type ContextManager interface {
 	SetMaxTokens(n int)
 	Summarize(ctx context.Context, prov provider.Provider) error
 	CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error)
+	TruncateOldestGroupForRetry() bool
 	Clear()
 	UsageRatio() float64
 }
@@ -214,6 +215,18 @@ func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider)
 
 	err := m.Summarize(ctx, prov)
 	return changed || err == nil, err
+}
+
+func (m *Manager) TruncateOldestGroupForRetry() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	truncated, ok := truncateGroupsForPTLRetry(m.messages)
+	if !ok {
+		return false
+	}
+	m.messages = truncated
+	m.recalcTokens()
+	return true
 }
 
 func (m *Manager) recalcTokens() {

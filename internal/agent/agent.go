@@ -25,6 +25,8 @@ import (
 // It receives the file path and unified diff string, and returns true if approved.
 type DiffConfirmFunc func(filePath, diffText string) bool
 
+type interruptionHandler func() string
+
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
 	provider       provider.Provider
@@ -38,6 +40,7 @@ type Agent struct {
 	workingDir     string
 	checkpoints    *checkpoint.Manager
 	diffConfirm    DiffConfirmFunc
+	onInterrupt    interruptionHandler
 	mu             sync.RWMutex
 }
 
@@ -92,6 +95,13 @@ func (a *Agent) SetApprovalHandler(fn func(toolName string, input string) permis
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onApproval = fn
+}
+
+// SetInterruptionHandler sets a callback that drains user guidance arriving mid-run.
+func (a *Agent) SetInterruptionHandler(fn func() string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onInterrupt = fn
 }
 
 // PermissionPolicy returns the current policy.
@@ -175,26 +185,68 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 
 	toolDefs := a.tools.ToDefinitions()
+	reactiveCompactRetries := 0
+	idleAutopilotContinuations := 0
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if a.injectPendingInterruptions() {
+			continue
 		}
 		msgs := a.contextManager.Messages()
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
 
 		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
 		if err != nil {
+			if a.tryReactiveCompact(ctx, onEvent, err, &reactiveCompactRetries) {
+				idleAutopilotContinuations = 0
+				continue
+			}
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 			return err
 		}
+		reactiveCompactRetries = 0
 
 		a.emitUsage(resp.Usage)
 
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
+			a.contextManager.Add(resp.Message)
+			if a.injectPendingInterruptions() {
+				idleAutopilotContinuations = 0
+				continue
+			}
+			if a.shouldAutopilotAskUser(textBuf) {
+				idleAutopilotContinuations++
+				if shouldTriggerAutopilotLoopGuard(textBuf, idleAutopilotContinuations) {
+					if err := a.forceCompactAndPause(ctx, onEvent); err != nil {
+						onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("autopilot loop guard failed: %w", err)})
+						return err
+					}
+					return nil
+				}
+				debug.Log("agent", "Iteration %d: autopilot escalating external blocker to ask_user", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: autopilotAskUserInstruction(textBuf),
+					}},
+				})
+				continue
+			}
 			if a.shouldAutopilotContinue(textBuf) {
+				idleAutopilotContinuations++
+				if shouldTriggerAutopilotLoopGuard(textBuf, idleAutopilotContinuations) {
+					if err := a.forceCompactAndPause(ctx, onEvent); err != nil {
+						onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("autopilot loop guard failed: %w", err)})
+						return err
+					}
+					return nil
+				}
 				debug.Log("agent", "Iteration %d: autopilot continuing after assistant asked for input", i+1)
-				a.contextManager.Add(resp.Message)
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
@@ -204,10 +256,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				continue
 			}
+			idleAutopilotContinuations = 0
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
-			a.contextManager.Add(resp.Message)
 			return nil
 		}
+		idleAutopilotContinuations = 0
 
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
 
@@ -234,10 +287,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if a.injectToolResultsAndInterruptions(toolResults) {
+				toolResults = nil
+				break
+			}
 		}
 
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if len(toolResults) == 0 {
+			continue
 		}
 		debug.Log("agent", "Adding tool results to contextManager: blocks=%d", len(toolResults))
 		a.contextManager.Add(provider.Message{
@@ -255,13 +315,62 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	return nil
 }
 
+func (a *Agent) injectPendingInterruptions() bool {
+	a.mu.RLock()
+	fn := a.onInterrupt
+	a.mu.RUnlock()
+	if fn == nil {
+		return false
+	}
+	text := strings.TrimSpace(fn())
+	if text == "" {
+		return false
+	}
+	debug.Log("agent", "injecting mid-run user guidance")
+	a.contextManager.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: fmt.Sprintf("New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue.\n\n%s", text),
+		}},
+	})
+	return true
+}
+
+func (a *Agent) injectToolResultsAndInterruptions(toolResults []provider.ContentBlock) bool {
+	if len(toolResults) == 0 {
+		return a.injectPendingInterruptions()
+	}
+	a.mu.RLock()
+	fn := a.onInterrupt
+	a.mu.RUnlock()
+	if fn == nil {
+		return false
+	}
+	text := strings.TrimSpace(fn())
+	if text == "" {
+		return false
+	}
+	debug.Log("agent", "interrupt received after tool result; replanning before remaining tool calls")
+	a.contextManager.Add(provider.Message{
+		Role:    "user",
+		Content: toolResults,
+	})
+	a.contextManager.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: fmt.Sprintf("New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue.\n\n%s", text),
+		}},
+	})
+	return true
+}
+
 func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, error) {
 	stream, err := a.provider.ChatStream(ctx, msgs, toolDefs)
 	if err != nil {
 		debug.Log("agent", "ChatStream error: %v", err)
-		wrapped := fmt.Errorf("chat error: %w", err)
-		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: wrapped})
-		return nil, "", nil, wrapped
+		return nil, "", nil, fmt.Errorf("chat error: %w", err)
 	}
 
 	var (
@@ -300,9 +409,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			onEvent(event)
 		case provider.StreamEventError:
 			debug.Log("agent", "ChatStream event error: %v", event.Error)
-			wrapped := fmt.Errorf("chat error: %w", event.Error)
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: wrapped})
-			return nil, assistantTextBuf.String(), nil, wrapped
+			return nil, assistantTextBuf.String(), nil, fmt.Errorf("chat error: %w", event.Error)
 		}
 	}
 
@@ -342,8 +449,29 @@ func (a *Agent) shouldAutopilotContinue(text string) bool {
 	return shouldAutopilotKeepGoing(text)
 }
 
+func (a *Agent) shouldAutopilotAskUser(text string) bool {
+	if a.currentMode() != permission.AutopilotMode {
+		return false
+	}
+	if !looksLikeExternalBlocker(text) {
+		return false
+	}
+	toolAny, ok := a.tools.Get("ask_user")
+	if !ok {
+		return false
+	}
+	if askTool, ok := toolAny.(interface{ HasHandler() bool }); ok {
+		return askTool.HasHandler()
+	}
+	return false
+}
+
 func autopilotContinueInstruction(lastAssistantText string) string {
-	return "Autopilot is enabled. Do not wait for user confirmation. Choose the most reasonable assumption, state it briefly if helpful, and continue working until there is nothing meaningful left to do. If you only made partial progress, keep going instead of stopping for a progress update.\n\nPrevious assistant message:\n" + lastAssistantText
+	return "Autopilot is enabled. Do not wait for user confirmation when a safe, reasonable next step is available. Choose the most reasonable assumption, state it briefly if helpful, and continue working until there is nothing meaningful left to do. If you only made partial progress, keep going instead of stopping for a progress update. If progress is blocked on a user action or external step that you cannot do yourself, use `ask_user` instead of repeating a blocked or waiting status.\n\nPrevious assistant message:\n" + lastAssistantText
+}
+
+func autopilotAskUserInstruction(lastAssistantText string) string {
+	return "Autopilot is enabled. The previous assistant message indicates progress is blocked on a user action or external step. If you can perform that step yourself with the available tools, do it now. Otherwise, call the `ask_user` tool immediately with the specific action or information needed. Do not repeat a blocked or waiting summary.\n\nPrevious assistant message:\n" + lastAssistantText
 }
 
 func shouldAutopilotKeepGoing(text string) bool {
@@ -360,7 +488,121 @@ func shouldAutopilotKeepGoing(text string) bool {
 	if looksLikeMoreWorkRemaining(trimmed) {
 		return true
 	}
+	if looksLikeProgressUpdate(trimmed) {
+		return true
+	}
+	return false
+}
+
+const maxReactiveCompactRetries = 3
+const autopilotLoopGuardThreshold = 2
+
+func isPromptTooLongError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	keywords := []string{
+		"prompt too long",
+		"context length",
+		"context window",
+		"maximum context",
+		"too many tokens",
+		"input is too long",
+		"exceeds the model's context",
+		"maximum input tokens",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(s, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.StreamEvent), err error, retries *int) bool {
+	if !isPromptTooLongError(err) {
+		return false
+	}
+	if retries != nil && *retries >= maxReactiveCompactRetries {
+		return false
+	}
+
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: "[compacting conversation to stay within context window]\n",
+	})
+
+	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
+	if compactErr != nil {
+		return false
+	}
+	if changed {
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: "[conversation compacted]\n",
+		})
+	}
+
+	if cm, ok := a.contextManager.(interface{ TruncateOldestGroupForRetry() bool }); ok {
+		if cm.TruncateOldestGroupForRetry() {
+			changed = true
+		}
+	}
+
+	if !changed {
+		return false
+	}
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: "[conversation compacted]\n",
+	})
+	if retries != nil {
+		*retries = *retries + 1
+		debug.Log("agent", "reactive compact retry=%d", *retries)
+	}
 	return true
+}
+
+func shouldTriggerAutopilotLoopGuard(text string, streak int) bool {
+	if streak < autopilotLoopGuardThreshold {
+		return false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+	return looksLikeCompletionOrHandoff(trimmed) || looksLikeUserDecisionPrompt(trimmed) || looksLikeExternalBlocker(trimmed)
+}
+
+func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.StreamEvent)) error {
+	debug.Log("agent", "autopilot loop guard triggered; compacting and pausing")
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: "[autopilot loop guard triggered; compacting and pausing]\n",
+	})
+
+	compacted, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
+	if err != nil {
+		return err
+	}
+	if !compacted {
+		if err := a.contextManager.Summarize(ctx, a.provider); err != nil {
+			return err
+		}
+		compacted = true
+	}
+	if compacted {
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: "[conversation compacted]\n",
+		})
+	}
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: "[autopilot paused to prevent an idle loop]\n",
+	})
+	return nil
 }
 
 func looksLikeUserDecisionPrompt(text string) bool {
@@ -396,6 +638,8 @@ func looksLikeCompletionOrHandoff(text string) bool {
 		"completed the requested", "finished the requested", "completed the task", "finished the task",
 		"completed the implementation", "finished the implementation", "completed the optimization pass",
 		"finished the optimization pass",
+		"nothing more to do", "no remaining work", "all changes are complete", "all changes complete",
+		"all changes are in place", "done. no remaining work", "done. awaiting",
 		"waiting for your next request", "ready for next task", "ready for the next task",
 		"awaiting instructions", "no tasks pending", "no work to do", "standing by",
 		"idle — no tasks pending", "idle - no tasks pending", "idle — no pending tasks",
@@ -403,10 +647,11 @@ func looksLikeCompletionOrHandoff(text string) bool {
 		"let me know if you'd like", "if you'd like, i can", "if you want, i can",
 		"feel free to ask", "feel free to tell me", "happy to help with anything else",
 		"全部完成", "已经全部完成", "任务已完成", "这个任务已经完成", "优化已完成", "实现已完成",
+		"所有任务已完成", "所有工作已完成", "工作已完成",
 		"没有更多可做", "没有进一步需要处理", "如需我继续", "如果你希望我继续", "我还可以继续",
 		"随时告诉我", "如果你还有其他", "如果你有其他", "还有其他任务需要我", "其他方面的具体任务需要我帮忙",
 		"等待你的下一条指令", "等待你的下一步指令", "等待下一条指令", "等待下一步指令",
-		"待命中", "没有待处理任务", "没有任务待处理", "没有工作可做",
+		"等待新指令", "等待新的指令", "等待后续指令", "待命中", "没有待处理任务", "没有任务待处理", "没有工作可做",
 	}
 	for _, marker := range markers {
 		if strings.Contains(trimmed, marker) {
@@ -421,11 +666,53 @@ func looksLikeMoreWorkRemaining(text string) bool {
 	if trimmed == "" {
 		return false
 	}
+	if strings.Contains(trimmed, "no remaining work") || strings.Contains(trimmed, "nothing more to do") {
+		return false
+	}
 	markers := []string{
 		"next step", "next i", "next i'll", "still need", "still needs", "need to", "needs more",
 		"follow up", "follow-up", "continue with", "continue by", "identified", "more to do",
 		"another step", "hotspot", "todo", "then i can", "then i'll", "remaining work",
 		"接下来", "下一步", "还需要", "仍需", "还有", "后续", "继续", "再处理", "剩余",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeProgressUpdate(text string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(text))
+	if trimmed == "" {
+		return false
+	}
+	markers := []string{
+		"i inspected", "i checked", "i traced", "i investigated", "i analyzed", "i found",
+		"i fixed", "i updated", "i changed", "i refactored", "i implemented", "i added",
+		"identified", "root cause", "inspection shows",
+		"我检查了", "我排查了", "我分析了", "我定位到", "我发现了", "我修复了", "我更新了", "我添加了",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeExternalBlocker(text string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(text))
+	if trimmed == "" {
+		return false
+	}
+	markers := []string{
+		"blocked until", "blocked on user", "waiting for user to", "need user to",
+		"awaiting restart", "awaiting gateway restart", "awaiting test results",
+		"restart needed to validate", "needs to be restarted", "cannot proceed without",
+		"can't proceed without", "need diagnostic logs", "share logs to continue",
+		"需要用户", "等待用户", "阻塞于", "卡在", "需要重启", "等待重启", "等待测试结果", "需要日志",
 	}
 	for _, marker := range markers {
 		if strings.Contains(trimmed, marker) {

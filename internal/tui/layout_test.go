@@ -1203,6 +1203,35 @@ func TestRenderOutputDecoratesStreamingBullet(t *testing.T) {
 	}
 }
 
+func TestAgentStreamMsgRendersMarkdownIncrementally(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 32)
+	m.rebuildMarkdownRenderer()
+	m.loading = true
+	m.activeAgentRunID = 1
+	m.streamBuffer = &bytes.Buffer{}
+
+	next, _ := m.Update(agentStreamMsg{
+		RunID: 1,
+		Text:  "### Streaming title\n\nUse `foo` now.",
+	})
+	updated := next.(Model)
+
+	rendered := updated.renderCurrentStreamMarkdown()
+	if rendered == "" {
+		t.Fatal("expected rendered markdown preview during streaming")
+	}
+	if !strings.Contains(updated.output.String(), rendered) {
+		t.Fatalf("expected streaming output to contain rendered markdown, got %q", updated.output.String())
+	}
+	if strings.Contains(updated.output.String(), "`foo`") {
+		t.Fatalf("expected inline code markdown to be rendered before completion, got %q", updated.output.String())
+	}
+	if strings.Contains(updated.output.String(), "Use `foo` now.") {
+		t.Fatalf("expected rendered output to differ from raw markdown chunk, got %q", updated.output.String())
+	}
+}
+
 func TestStatusBarEmptyWhenNotLoading(t *testing.T) {
 	m := newTestModel()
 	m.loading = false
@@ -2032,6 +2061,40 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	}
 }
 
+func TestAgentInterruptMsgRendersDeliveredInput(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 3
+
+	next, cmd := m.Update(agentInterruptMsg{RunID: 3, Text: "please switch direction"})
+	if cmd != nil {
+		t.Fatal("expected interrupt delivery to render inline")
+	}
+	m = next.(Model)
+
+	if !strings.Contains(m.output.String(), "please switch direction") {
+		t.Fatalf("expected delivered interrupt text in output, got %q", m.output.String())
+	}
+	if !strings.Contains(m.output.String(), "[delivered to active run; revising plan]") {
+		t.Fatalf("expected delivery marker in output, got %q", m.output.String())
+	}
+}
+
+func TestRenderConversationUserEntryWrapsLongText(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(72, 30)
+	text := "再次好好建议查一下这个应用 qq-bot 插件的实现是否符合本应用的规范，同时实现的方式是否和 openclaw 的 qq-bot 实现机制是一致的"
+
+	rendered := m.renderConversationUserEntry("❯ ", text)
+
+	if !strings.Contains(rendered, "\n") {
+		t.Fatalf("expected wrapped user entry, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "openclaw") {
+		t.Fatalf("expected wrapped user entry to preserve full text, got %q", rendered)
+	}
+}
+
 func TestDollarKeyEntersShellMode(t *testing.T) {
 	m := newTestModel()
 
@@ -2163,7 +2226,8 @@ func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
 	if len(m.pendingSubmissions) != 0 {
 		t.Errorf("expected pending submissions to be consumed, got %#v", m.pendingSubmissions)
 	}
-	if !strings.Contains(m.output.String(), "first question\n\nsecond question") {
+	got := m.output.String()
+	if !strings.Contains(got, "first question") || !strings.Contains(got, "second question") {
 		t.Error("expected merged queued text to be submitted as one user message")
 	}
 }
@@ -2188,6 +2252,32 @@ func TestStreamReplyStartsAfterBlankLine(t *testing.T) {
 
 	if !strings.Contains(m.output.String(), "previous block\n\n● next reply") {
 		t.Fatalf("expected stream reply to start after a blank line, got %q", m.output.String())
+	}
+}
+
+func TestCompactionStatusRendersOnOwnLine(t *testing.T) {
+	m := newTestModel()
+	m.streamBuffer = &bytes.Buffer{}
+
+	m.appendStreamChunk("partial reply")
+	m.appendStreamChunk("[compacting conversation to stay within context window]\n")
+
+	got := m.output.String()
+	if !strings.Contains(got, "partial reply") || !strings.Contains(got, "\n● [compacting conversation to stay within context window]\n") {
+		t.Fatalf("expected compaction status on its own line, got %q", got)
+	}
+}
+
+func TestCompactionStatusLocalizesInChinese(t *testing.T) {
+	m := newTestModel()
+	m.setLanguage("zh-CN")
+	m.streamBuffer = &bytes.Buffer{}
+
+	m.appendStreamChunk("[conversation compacted]\n")
+
+	got := m.output.String()
+	if !strings.Contains(got, "● [会话已压缩]\n") {
+		t.Fatalf("expected localized compacted status, got %q", got)
 	}
 }
 

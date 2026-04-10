@@ -124,6 +124,9 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
 		systemPrompt += "\n\n## Skills\n" + skillsPrompt
 	}
+	if mode == permission.AutopilotMode {
+		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
+	}
 	if projectMem != "" {
 		systemPrompt += "\n\n## Project Memory\n" + projectMem
 	}
