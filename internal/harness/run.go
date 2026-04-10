@@ -3,6 +3,7 @@ package harness
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -129,7 +130,7 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 			if err == nil {
 				continue
 			}
-			if err == io.EOF {
+			if err == io.EOF || benignSubprocessPipeError(err) {
 				return
 			}
 			mu.Lock()
@@ -148,6 +149,9 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 			appendProgress(scanner.Text())
 		}
 		if err := scanner.Err(); err != nil {
+			if benignSubprocessPipeError(err) {
+				return
+			}
 			mu.Lock()
 			if readErr == nil {
 				readErr = err
@@ -174,6 +178,13 @@ func (r BinaryRunner) Run(ctx context.Context, req RunRequest) (*RunResult, erro
 		return result, nil
 	}
 	return nil, fmt.Errorf("run harness subprocess: %w", err)
+}
+
+func benignSubprocessPipeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, os.ErrClosed) || strings.Contains(err.Error(), "file already closed")
 }
 
 func RunTask(ctx context.Context, project Project, cfg *Config, goal string, runner Runner) (*RunSummary, error) {
