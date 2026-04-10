@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -137,6 +138,20 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	})
 }
 
+func (r *REPL) SetAskUserTool(tools *tool.Registry) {
+	tl, ok := tools.Get("ask_user")
+	if !ok {
+		return
+	}
+	askTool, ok := tl.(*tool.AskUserTool)
+	if !ok {
+		return
+	}
+	askTool.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+		return r.requestAskUser(ctx, req)
+	})
+}
+
 // requestDiffConfirm sends a diff confirmation request to the TUI and waits for response.
 func (r *REPL) requestDiffConfirm(filePath, diffText string) bool {
 	if r.program == nil {
@@ -150,6 +165,23 @@ func (r *REPL) requestDiffConfirm(filePath, diffText string) bool {
 		Response: resp,
 	})
 	return <-resp
+}
+
+func (r *REPL) requestAskUser(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+	if r.program == nil {
+		return tool.AskUserResponse{}, fmt.Errorf("interactive questionnaire unavailable")
+	}
+	resp := make(chan tool.AskUserResponse, 1)
+	r.program.Send(AskUserMsg{
+		Request:  req,
+		Response: resp,
+	})
+	select {
+	case result := <-resp:
+		return result, nil
+	case <-ctx.Done():
+		return tool.AskUserResponse{}, ctx.Err()
+	}
 }
 
 // Run starts the REPL event loop.

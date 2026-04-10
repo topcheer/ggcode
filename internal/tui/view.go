@@ -771,7 +771,7 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
-	return m.renderContextBox(m.t("panel.agent_status"), sb.String(), lipgloss.Color("6"))
+	return m.renderContextBox("", sb.String(), lipgloss.Color("6"))
 }
 
 func (m Model) sidebarActivity() string {
@@ -800,6 +800,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderHarnessPanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
+	case m.pendingQuestionnaire != nil:
+		return m.renderQuestionnairePanel()
 	case m.pendingApproval != nil:
 		title := m.t("panel.approval_required")
 		accent := lipgloss.Color("11")
@@ -900,12 +902,16 @@ func (m Model) renderComposerPanel() string {
 
 func (m Model) renderContextBox(title, body string, accent lipgloss.Color) string {
 	width := m.boxInnerWidth(m.mainColumnWidth())
+	content := body
+	if strings.TrimSpace(title) != "" {
+		content = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body
+	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
 		Width(width).
-		Render(lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body)
+		Render(content)
 }
 
 func (m Model) currentSelection() (string, string, string) {

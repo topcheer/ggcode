@@ -64,6 +64,10 @@ func (m *Model) setLanguage(lang string) {
 	if len(m.langOptions) > 0 {
 		m.langOptions = languageOptionsFor(m.currentLanguage())
 	}
+	if m.pendingQuestionnaire != nil {
+		m.pendingQuestionnaire.loadActiveQuestion(m.currentLanguage())
+		m.syncQuestionnaireInputWidth()
+	}
 }
 
 func (m Model) languageLabel() string {

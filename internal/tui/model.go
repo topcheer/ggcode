@@ -95,6 +95,7 @@ type Model struct {
 	mcpManager                      mcpManager
 	mode                            permission.PermissionMode
 	pendingDiffConfirm              *DiffConfirmMsg
+	pendingQuestionnaire            *questionnaireState
 	pendingHarnessCheckpointConfirm *HarnessCheckpointConfirmMsg
 	fullscreen                      bool
 	modelPanel                      *modelPanelState
@@ -227,6 +228,11 @@ type DiffConfirmMsg struct {
 type HarnessCheckpointConfirmMsg struct {
 	Checkpoint harness.DirtyWorkspaceCheckpoint
 	Response   chan bool
+}
+
+type AskUserMsg struct {
+	Request  toolpkg.AskUserRequest
+	Response chan toolpkg.AskUserResponse
 }
 
 // approvalOption represents a selectable option in the approval list.
@@ -810,6 +816,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.harnessPanel != nil {
 			return m.handleHarnessPanelKey(msg)
+		}
+
+		if m.pendingQuestionnaire != nil {
+			return m.handleQuestionnaireKey(msg)
 		}
 
 		if len(m.langOptions) > 0 {
@@ -1419,6 +1429,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingDiffConfirm = &msg
 		m.diffOptions = diffConfirmOptions()
 		m.diffCursor = 0
+		return m, nil
+
+	case AskUserMsg:
+		if m.pendingQuestionnaire != nil {
+			if msg.Response != nil {
+				go func() {
+					msg.Response <- toolpkg.AskUserResponse{
+						Status:        toolpkg.AskUserStatusCancelled,
+						Title:         msg.Request.Title,
+						QuestionCount: len(msg.Request.Questions),
+					}
+				}()
+			}
+			return m, nil
+		}
+		m.pendingQuestionnaire = newQuestionnaireState(msg.Request, msg.Response, m.currentLanguage())
+		m.syncQuestionnaireInputWidth()
 		return m, nil
 
 	case HarnessCheckpointConfirmMsg:

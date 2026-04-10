@@ -9,6 +9,7 @@ If you want a terminal-native coding workflow that feels like a product, not a d
 - **Stay in the terminal** — chat, inspect code, edit files, review diffs, and manage sessions in one place
 - **Work with real coding plans and endpoints** — OpenAI-compatible, Anthropic-compatible, Gemini, and multiple coding-oriented vendor presets
 - **Keep control when it matters** — supervised, plan, auto, bypass, and autopilot modes let you choose how much the agent can do
+- **Clarify without derailing** — the TUI can surface structured multi-question ask_user flows when the agent is genuinely blocked
 - **Recover quickly** — undo file changes with checkpoints instead of manually repairing bad edits
 - **Scale up when needed** — use MCP tools, plugins, skills, memory, background commands, and sub-agents
 - **Fit daily usage** — bilingual UI, resumable sessions, queueing while the agent is busy, local shell mode, and shell-friendly install flows
@@ -121,6 +122,7 @@ Find why startup feels slow in the TUI
 - **`/mode`** changes how much autonomy the agent gets
 - **`/mcp`** shows connected MCP servers and their tools
 - **`/harness`** runs repo harness workflows like scaffold, checks, and cleanup
+- When the agent truly cannot continue, it can open a **tabbed ask_user questionnaire** and resume from your batch answers
 
 ## What ggcode can do
 
@@ -143,7 +145,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 | `plan` | Safe exploration | Read-only style investigation; blocks writes and command execution |
 | `auto` | Faster routine work | Automatically proceed on safer actions, stay cautious on risky ones |
 | `bypass` | High-trust workflows | Allow almost everything, only stopping on critical operations |
-| `autopilot` | Power users | Like bypass, but also keeps going when the model would normally stop to ask |
+| `autopilot` | Power users | Like bypass, but prefers safe best guesses and only asks via `ask_user` as a last resort when blocked |
 
 ## Slash commands you will actually use
 

@@ -411,7 +411,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		systemPrompt += "\n\n## Skills\n" + skillsPrompt
 	}
 	if mode == permission.AutopilotMode {
-		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left."
+		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. Use `ask_user` only as a last resort: the missing answer must block further progress, and the current context must not provide a reliable best guess."
 	}
 	if autoContent != "" {
 		systemPrompt += "\n\n## Auto Memory\n" + autoContent
@@ -462,6 +462,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetAutoMemoryFiles(autoFiles)
 	repl.SetProjectMemoryLoader(projectMemoryLoader)
 	repl.SetSubAgentManager(subMgr, prov, registry)
+	repl.SetAskUserTool(registry)
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
 	}

@@ -1462,6 +1462,165 @@ func TestDiffConfirmUsesBasename(t *testing.T) {
 	}
 }
 
+func TestAskUserRenderedInContextPanel(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 32)
+	m.pendingQuestionnaire = newQuestionnaireState(tool.AskUserRequest{
+		Title: "Clarify release plan",
+		Questions: []tool.AskUserQuestion{
+			{
+				ID:            "scope",
+				Title:         "Scope",
+				Prompt:        "Which slice should land first?",
+				Kind:          tool.AskUserKindSingle,
+				AllowFreeform: true,
+				Choices: []tool.AskUserChoice{
+					{ID: "frontend", Label: "Frontend"},
+					{ID: "backend", Label: "Backend"},
+				},
+			},
+		},
+	}, make(chan tool.AskUserResponse, 1), LangEnglish)
+	m.syncQuestionnaireInputWidth()
+
+	result := m.renderContextPanel()
+
+	if !strings.Contains(result, "Answer questions") {
+		t.Fatal("expected ask_user panel title")
+	}
+	if !strings.Contains(result, "Clarify release plan") {
+		t.Fatal("expected questionnaire title")
+	}
+	if !strings.Contains(result, "Which slice should land first?") {
+		t.Fatal("expected active question prompt")
+	}
+	if !strings.Contains(result, "Submit") || !strings.Contains(result, "Cancel") {
+		t.Fatal("expected action tabs")
+	}
+}
+
+func TestAskUserEnterAdvancesAndSubmitReturnsStructuredResponse(t *testing.T) {
+	m := newTestModel()
+	response := make(chan tool.AskUserResponse, 1)
+	m.pendingQuestionnaire = newQuestionnaireState(tool.AskUserRequest{
+		Questions: []tool.AskUserQuestion{
+			{
+				ID:            "scope",
+				Title:         "Scope",
+				Prompt:        "Pick scope",
+				Kind:          tool.AskUserKindSingle,
+				AllowFreeform: true,
+				Choices: []tool.AskUserChoice{
+					{ID: "frontend", Label: "Frontend"},
+					{ID: "backend", Label: "Backend"},
+				},
+			},
+			{
+				ID:            "notes",
+				Title:         "Notes",
+				Prompt:        "Anything else?",
+				Kind:          tool.AskUserKindText,
+				AllowFreeform: true,
+			},
+		},
+	}, response, LangEnglish)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(Model)
+	if _, ok := m.pendingQuestionnaire.answers[0].selected["frontend"]; !ok {
+		t.Fatal("expected space to select the highlighted choice")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.pendingQuestionnaire.tabIndex != 1 {
+		t.Fatalf("expected enter to advance to next question, got tab %d", m.pendingQuestionnaire.tabIndex)
+	}
+
+	m.pendingQuestionnaire.input.SetValue("Release safety first.")
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.pendingQuestionnaire.onSubmitTab() {
+		t.Fatal("expected enter on last question to move to submit tab")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.pendingQuestionnaire != nil {
+		t.Fatal("expected questionnaire to clear after submission")
+	}
+
+	select {
+	case result := <-response:
+		if result.Status != tool.AskUserStatusSubmitted {
+			t.Fatalf("expected submitted result, got %q", result.Status)
+		}
+		if result.AnsweredCount != 2 {
+			t.Fatalf("expected answered_count=2, got %d", result.AnsweredCount)
+		}
+		if got := result.Answers[0].SelectedChoiceIDs; len(got) != 1 || got[0] != "frontend" {
+			t.Fatalf("unexpected selected ids: %#v", got)
+		}
+		if result.Answers[1].FreeformText != "Release safety first." {
+			t.Fatalf("unexpected freeform text: %q", result.Answers[1].FreeformText)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected ask_user submission response")
+	}
+}
+
+func TestAskUserEscapeReturnsCancelledResponse(t *testing.T) {
+	m := newTestModel()
+	response := make(chan tool.AskUserResponse, 1)
+	m.pendingQuestionnaire = newQuestionnaireState(tool.AskUserRequest{
+		Questions: []tool.AskUserQuestion{
+			{
+				ID:            "notes",
+				Title:         "Notes",
+				Prompt:        "Anything else?",
+				Kind:          tool.AskUserKindText,
+				AllowFreeform: true,
+			},
+		},
+	}, response, LangEnglish)
+
+	m.pendingQuestionnaire.input.SetValue("partial answer")
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.pendingQuestionnaire != nil {
+		t.Fatal("expected questionnaire to clear after escape")
+	}
+
+	select {
+	case result := <-response:
+		if result.Status != tool.AskUserStatusCancelled {
+			t.Fatalf("expected cancelled result, got %q", result.Status)
+		}
+		if len(result.Answers) != 1 || result.Answers[0].FreeformText != "partial answer" {
+			t.Fatalf("unexpected cancelled payload: %#v", result.Answers)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected ask_user cancel response")
+	}
+}
+
+func TestRenderStatusBarOmitsAgentTitle(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = "Thinking..."
+
+	result := m.renderStatusBar()
+
+	if strings.Contains(result, "Agent status") {
+		t.Fatal("expected agent status panel title to be hidden")
+	}
+	if !strings.Contains(result, "Thinking...") {
+		t.Fatal("expected agent activity content to remain visible")
+	}
+}
+
 // --- Update message handling ---
 
 func TestUpdateWindowSizeMsg(t *testing.T) {
