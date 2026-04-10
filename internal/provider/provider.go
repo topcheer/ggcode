@@ -44,6 +44,11 @@ func ToolResultBlock(id, output string, isError bool) ContentBlock {
 	return ContentBlock{Type: "tool_result", ToolID: id, Output: output, IsError: isError}
 }
 
+// ToolResultNamedBlock creates a tool result content block with the originating tool name.
+func ToolResultNamedBlock(id, name, output string, isError bool) ContentBlock {
+	return ContentBlock{Type: "tool_result", ToolID: id, ToolName: name, Output: output, IsError: isError}
+}
+
 // TokenUsage records token consumption for a single API call.
 type TokenUsage struct {
 	InputTokens  int `json:"input_tokens"`

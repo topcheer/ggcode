@@ -222,7 +222,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s", tc.Name, result.IsError, truncateStr(result.Content, 200))
-			toolResults = append(toolResults, provider.ToolResultBlock(tc.ID, result.Content, result.IsError))
+			toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
 
 			onEvent(provider.StreamEvent{
 				Type:    provider.StreamEventToolResult,

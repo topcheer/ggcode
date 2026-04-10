@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"google.golang.org/genai"
 )
@@ -17,10 +18,20 @@ type GeminiProvider struct {
 
 // NewGeminiProvider creates a new Gemini provider.
 func NewGeminiProvider(apiKey string, model string, maxTokens int) (*GeminiProvider, error) {
-	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+	return NewGeminiProviderWithBaseURL(apiKey, model, maxTokens, "")
+}
+
+// NewGeminiProviderWithBaseURL creates a new Gemini provider with a custom base URL.
+func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) (*GeminiProvider, error) {
+	clientConfig := &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
-	})
+	}
+	if trimmed := strings.TrimSpace(baseURL); trimmed != "" {
+		clientConfig.HTTPOptions.BaseURL = trimmed
+	}
+
+	client, err := genai.NewClient(context.Background(), clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("gemini client: %w", err)
 	}
@@ -113,7 +124,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				}
 
 				for _, part := range resp.Candidates[0].Content.Parts {
-					if part.Text != "" {
+					if part.Text != "" && !part.Thought {
 						emitted = true
 						ch <- StreamEvent{Type: StreamEventText, Text: part.Text}
 					}
@@ -160,6 +171,7 @@ func (p *GeminiProvider) CountTokens(ctx context.Context, messages []Message) (i
 func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, *genai.Content) {
 	var contents []*genai.Content
 	var systemParts []*genai.Part
+	toolNamesByID := make(map[string]string)
 
 	for _, m := range messages {
 		if m.Role == "system" {
@@ -190,9 +202,14 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 					},
 				})
 			case "tool_use":
-				var args map[string]any
-				if b.Input != nil {
-					json.Unmarshal(b.Input, &args)
+				if b.ToolID != "" && b.ToolName != "" {
+					toolNamesByID[b.ToolID] = b.ToolName
+				}
+				args, _ := normalizeToolInputValue(b.Input).(map[string]any)
+				if args == nil {
+					args = map[string]any{
+						"value": normalizeToolInputValue(b.Input),
+					}
 				}
 				parts = append(parts, &genai.Part{
 					FunctionCall: &genai.FunctionCall{
@@ -202,10 +219,17 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 					},
 				})
 			case "tool_result":
+				name := strings.TrimSpace(b.ToolName)
+				if name == "" {
+					name = toolNamesByID[b.ToolID]
+				}
+				if name == "" {
+					name = "_ggcode_unknown_tool"
+				}
 				parts = append(parts, &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
 						ID:   b.ToolID,
-						Name: b.ToolName,
+						Name: name,
 						Response: map[string]any{
 							"output": b.Output,
 						},
@@ -265,7 +289,7 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 
 	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
 		for _, part := range resp.Candidates[0].Content.Parts {
-			if part.Text != "" {
+			if part.Text != "" && !part.Thought {
 				blocks = append(blocks, TextBlock(part.Text))
 			}
 			if part.FunctionCall != nil {

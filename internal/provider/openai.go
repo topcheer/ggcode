@@ -370,7 +370,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 						Type: openai.ToolTypeFunction,
 						Function: openai.FunctionCall{
 							Name:      b.ToolName,
-							Arguments: string(b.Input),
+							Arguments: normalizeToolInputJSONString(b.Input),
 						},
 					})
 				}
