@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
@@ -36,10 +37,7 @@ func (m *Model) startToolActivity(ts ToolStatusMsg) {
 		group.Categories = append(group.Categories, kind)
 	}
 	group.Title = localizeToolGroupTitle(m.currentLanguage(), group.Categories)
-	group.Items = append(group.Items, toolActivityItem{
-		Summary: formatToolInline(toolDisplayName(ts), toolDetail(ts)),
-		Running: true,
-	})
+	group.Items = append(group.Items, buildToolActivityItem(m.currentLanguage(), ts))
 }
 
 func (m *Model) finishToolActivity(ts ToolStatusMsg) {
@@ -56,6 +54,11 @@ func (m *Model) finishToolActivity(ts ToolStatusMsg) {
 	item := &group.Items[len(group.Items)-1]
 	if ts.ToolName == "todo_write" {
 		item.Summary = m.applyTodoWrite(ts)
+		item.CommandTitle = ""
+		item.CommandLines = nil
+		item.CommandHiddenLineCount = 0
+		item.OutputLines = nil
+		item.OutputHiddenLineCount = 0
 		item.Running = false
 		if m.activeTodo != nil {
 			group.TodoID = m.activeTodo.ID
@@ -65,8 +68,7 @@ func (m *Model) finishToolActivity(ts ToolStatusMsg) {
 		m.closeToolActivityGroup()
 		return
 	}
-	item.Summary = formatToolItemSummary(m.currentLanguage(), ts)
-	item.Running = false
+	*item = buildToolActivityItem(m.currentLanguage(), ts)
 }
 
 func (m *Model) closeToolActivityGroup() {
@@ -253,21 +255,56 @@ func formatCommandToolItemSummary(lang Language, msg ToolStatusMsg) (string, boo
 		return "", false
 	}
 	preview := buildCommandPreview(rawCommandArg(parseToolArgs(msg.RawArgs)))
-	if len(preview.Lines) == 0 {
+	if preview.Title == "" && len(preview.CommandLines) == 0 {
 		return "", false
 	}
 
-	title := formatToolInline(toolDisplayName(msg), toolDetail(msg))
-	lines := make([]string, 0, 2+len(preview.Lines))
+	title := preview.Title
+	if title == "" && len(preview.CommandLines) > 0 {
+		title = preview.CommandLines[0]
+		preview.CommandLines = preview.CommandLines[1:]
+	}
+	lines := make([]string, 0, 2+len(preview.CommandLines))
 	lines = append(lines, title)
-	lines = append(lines, preview.Lines...)
-	if preview.HiddenLineCount > 0 {
-		lines = append(lines, localizeMoreLinesSummary(lang, preview.HiddenLineCount))
+	lines = append(lines, preview.CommandLines...)
+	if preview.CommandHiddenLineCount > 0 {
+		lines = append(lines, localizeMoreLinesSummary(lang, preview.CommandHiddenLineCount))
 	}
 	if summary := summarizeToolResult(lang, msg); summary != "" {
 		lines = append(lines, summary)
 	}
 	return strings.Join(lines, "\n"), true
+}
+
+func buildToolActivityItem(lang Language, msg ToolStatusMsg) toolActivityItem {
+	if item, ok := buildCommandToolActivityItem(lang, msg); ok {
+		return item
+	}
+	return toolActivityItem{
+		Summary: formatToolItemSummary(lang, msg),
+		Running: msg.Running,
+	}
+}
+
+func buildCommandToolActivityItem(_ Language, msg ToolStatusMsg) (toolActivityItem, bool) {
+	if !isCommandTool(msg.ToolName) {
+		return toolActivityItem{}, false
+	}
+	preview := buildCommandPreview(rawCommandArg(parseToolArgs(msg.RawArgs)))
+	outputPreview := buildTextPreview(msg.Result)
+
+	item := toolActivityItem{
+		Running:                msg.Running,
+		CommandTitle:           preview.Title,
+		CommandLines:           preview.CommandLines,
+		CommandHiddenLineCount: preview.CommandHiddenLineCount,
+		OutputLines:            outputPreview.Lines,
+		OutputHiddenLineCount:  outputPreview.HiddenLineCount,
+	}
+	if item.CommandTitle == "" && len(item.CommandLines) == 0 {
+		item.Summary = formatToolInline(toolDisplayName(msg), toolDetail(msg))
+	}
+	return item, true
 }
 
 func classifyToolGroup(toolName string) string {
@@ -412,6 +449,9 @@ func (m Model) renderToolActivityItem(item toolActivityItem) []string {
 	if item.Running {
 		prefix = "◦"
 	}
+	if item.CommandTitle != "" || len(item.CommandLines) > 0 || len(item.OutputLines) > 0 {
+		return m.renderCommandActivityItem(item, prefix)
+	}
 	lines := strings.Split(item.Summary, "\n")
 	if len(lines) == 0 {
 		return nil
@@ -425,11 +465,87 @@ func (m Model) renderToolActivityItem(item toolActivityItem) []string {
 	if bodyWidth < 8 {
 		bodyWidth = 8
 	}
-	rows := []string{fmt.Sprintf("    %s %s", prefix, truncateString(lines[0], firstWidth))}
+	rows := []string{fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), truncateString(lines[0], firstWidth))}
 	for _, line := range lines[1:] {
 		rows = append(rows, fmt.Sprintf("      %s", truncateString(line, bodyWidth)))
 	}
 	return rows
+}
+
+func (m Model) renderCommandActivityItem(item toolActivityItem, prefix string) []string {
+	firstWidth := m.conversationInnerWidth() - 10
+	bodyWidth := m.conversationInnerWidth() - 8
+	if firstWidth < 8 {
+		firstWidth = 8
+	}
+	if bodyWidth < 8 {
+		bodyWidth = 8
+	}
+
+	commandStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	resultStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("45"))
+	rows := make([]string, 0, 1+len(item.CommandLines)+len(item.OutputLines))
+
+	commandLines := append([]string(nil), item.CommandLines...)
+	if item.CommandTitle == "" && len(commandLines) > 0 {
+		first := appendHiddenLineSuffix(m.currentLanguage(), commandLines[0], item.CommandHiddenLineCount, "command")
+		rows = append(rows, fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), commandStyle.Render(truncateString(first, firstWidth))))
+		commandLines = commandLines[1:]
+	} else {
+		header := item.CommandTitle
+		if header == "" {
+			header = item.Summary
+		}
+		rows = append(rows, fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), truncateString(header, firstWidth)))
+		if item.CommandHiddenLineCount > 0 && len(commandLines) == 0 {
+			rows[len(rows)-1] = fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), truncateString(appendHiddenLineSuffix(m.currentLanguage(), header, item.CommandHiddenLineCount, "command"), firstWidth))
+		}
+	}
+
+	for i, line := range commandLines {
+		if i == len(commandLines)-1 {
+			line = appendHiddenLineSuffix(m.currentLanguage(), line, item.CommandHiddenLineCount, "command")
+		}
+		rows = append(rows, fmt.Sprintf("      %s", commandStyle.Render(truncateString(line, bodyWidth))))
+	}
+
+	for i, line := range item.OutputLines {
+		if i == len(item.OutputLines)-1 {
+			line = appendHiddenLineSuffix(m.currentLanguage(), line, item.OutputHiddenLineCount, "output")
+		}
+		rows = append(rows, fmt.Sprintf("      %s", resultStyle.Render(truncateString(line, bodyWidth))))
+	}
+
+	return rows
+}
+
+func appendHiddenLineSuffix(lang Language, line string, hidden int, kind string) string {
+	if hidden <= 0 {
+		return line
+	}
+	suffix := ""
+	switch kind {
+	case "command":
+		if lang == LangZhCN {
+			suffix = fmt.Sprintf(" … 还有 %d 行脚本", hidden)
+		} else if hidden == 1 {
+			suffix = " … 1 more script line"
+		} else {
+			suffix = fmt.Sprintf(" … %d more script lines", hidden)
+		}
+	default:
+		if lang == LangZhCN {
+			suffix = fmt.Sprintf(" … 还有 %d 行输出", hidden)
+		} else if hidden == 1 {
+			suffix = " … 1 more output line"
+		} else {
+			suffix = fmt.Sprintf(" … %d more output lines", hidden)
+		}
+	}
+	if strings.TrimSpace(line) == "" {
+		return strings.TrimSpace(suffix)
+	}
+	return line + suffix
 }
 
 func trimLeadingRenderedSpacing(rendered string) string {

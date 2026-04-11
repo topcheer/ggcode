@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
-
 	"github.com/topcheer/ggcode/internal/hooks"
 	"gopkg.in/yaml.v3"
 )
@@ -20,6 +20,7 @@ type EndpointConfig struct {
 	DisplayName   string   `yaml:"display_name"`
 	Protocol      string   `yaml:"protocol"`
 	BaseURL       string   `yaml:"base_url"`
+	AuthType      string   `yaml:"auth_type,omitempty"`
 	APIKey        string   `yaml:"api_key,omitempty"`
 	ContextWindow int      `yaml:"context_window,omitempty"`
 	MaxTokens     int      `yaml:"max_tokens"`
@@ -43,8 +44,10 @@ type ResolvedEndpoint struct {
 	EndpointID    string
 	EndpointName  string
 	Protocol      string
+	AuthType      string
 	BaseURL       string
 	APIKey        string
+	EnterpriseURL string
 	Model         string
 	ContextWindow int
 	MaxTokens     int
@@ -159,6 +162,7 @@ func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, models
 		DisplayName:   displayName,
 		Protocol:      protocol,
 		BaseURL:       baseURL,
+		AuthType:      "api_key",
 		ContextWindow: inferContextWindow(defaultModel, protocol),
 		MaxTokens:     inferMaxOutputTokens(defaultModel, protocol),
 		DefaultModel:  defaultModel,
@@ -413,6 +417,32 @@ func DefaultConfig() *Config {
 					"official", "openai-compatible", "search",
 				),
 			}),
+			"github-copilot": defaultVendor("GitHub Copilot", "", map[string]EndpointConfig{
+				"github.com": func() EndpointConfig {
+					ep := defaultEndpoint(
+						"GitHub.com",
+						"copilot",
+						auth.CopilotAPIBaseURL(""),
+						"gpt-4o",
+						[]string{"gpt-4o", "claude-3.5-sonnet", "gemini-2.0-flash-001"},
+						"official", "oauth", "copilot",
+					)
+					ep.AuthType = "oauth"
+					return ep
+				}(),
+				"enterprise": func() EndpointConfig {
+					ep := defaultEndpoint(
+						"GitHub Enterprise",
+						"copilot",
+						auth.CopilotAPIBaseURL("github.example.com"),
+						"gpt-4o",
+						[]string{"gpt-4o", "claude-3.5-sonnet", "gemini-2.0-flash-001"},
+						"official", "oauth", "copilot", "enterprise",
+					)
+					ep.AuthType = "oauth"
+					return ep
+				}(),
+			}),
 		},
 	}
 	cfg.expandEnv()
@@ -532,6 +562,7 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 			ep.DisplayName = ExpandEnvWithLookup(ep.DisplayName, lookup)
 			ep.Protocol = ExpandEnvWithLookup(ep.Protocol, lookup)
 			ep.BaseURL = ExpandEnvWithLookup(ep.BaseURL, lookup)
+			ep.AuthType = ExpandEnvWithLookup(ep.AuthType, lookup)
 			ep.APIKey = ExpandEnvWithLookup(ep.APIKey, lookup)
 			ep.DefaultModel = ExpandEnvWithLookup(ep.DefaultModel, lookup)
 			ep.SelectedModel = ExpandEnvWithLookup(ep.SelectedModel, lookup)
@@ -596,6 +627,9 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(ep.Protocol) == "" {
 		return fmt.Errorf("endpoint %q for vendor %q must declare a protocol", c.Endpoint, c.Vendor)
+	}
+	if strings.TrimSpace(ep.AuthType) == "" {
+		ep.AuthType = "api_key"
 	}
 	if strings.TrimSpace(c.Model) == "" && strings.TrimSpace(ep.SelectedModel) == "" && strings.TrimSpace(ep.DefaultModel) == "" {
 		return fmt.Errorf("model must not be empty")
@@ -716,7 +750,30 @@ func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, er
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(vc.APIKey)
 	}
-	if strings.TrimSpace(ep.BaseURL) == "" {
+	authType := strings.TrimSpace(ep.AuthType)
+	if authType == "" {
+		authType = "api_key"
+	}
+	baseURL := strings.TrimSpace(ep.BaseURL)
+	enterpriseURL := ""
+	if authType == "oauth" && vendor == auth.ProviderGitHubCopilot {
+		info, err := auth.DefaultStore().Load(auth.ProviderGitHubCopilot)
+		if err != nil {
+			return nil, err
+		}
+		if info != nil {
+			if apiKey == "" {
+				apiKey = strings.TrimSpace(info.AccessToken)
+			}
+			enterpriseURL = strings.TrimSpace(info.EnterpriseURL)
+			if endpoint == "enterprise" && enterpriseURL != "" {
+				baseURL = auth.CopilotAPIBaseURL(enterpriseURL)
+			} else if endpoint == "github.com" {
+				baseURL = auth.CopilotAPIBaseURL("")
+			}
+		}
+	}
+	if baseURL == "" {
 		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", endpoint, vendor)
 	}
 	maxTokens := ep.MaxTokens
@@ -733,8 +790,10 @@ func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, er
 		EndpointID:    endpoint,
 		EndpointName:  firstNonEmpty(ep.DisplayName, endpoint),
 		Protocol:      ep.Protocol,
-		BaseURL:       ep.BaseURL,
+		AuthType:      authType,
+		BaseURL:       baseURL,
 		APIKey:        apiKey,
+		EnterpriseURL: enterpriseURL,
 		Model:         model,
 		ContextWindow: contextWindow,
 		MaxTokens:     maxTokens,

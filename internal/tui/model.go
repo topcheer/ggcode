@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -171,6 +172,8 @@ type Model struct {
 	harnessRunLogOffset  int64
 	harnessRunLastDetail string
 	clipboardLoader      func() (imageAttachedMsg, error)
+	clipboardWriter      func(string) error
+	urlOpener            func(string) error
 	updateSvc            *update.Service
 	updateInfo           update.CheckResult
 	updateError          string
@@ -186,8 +189,13 @@ type toolActivityGroup struct {
 }
 
 type toolActivityItem struct {
-	Summary string
-	Running bool
+	Summary                string
+	Running                bool
+	CommandTitle           string
+	CommandLines           []string
+	CommandHiddenLineCount int
+	OutputLines            []string
+	OutputHiddenLineCount  int
 }
 
 // MCPInfo holds display info about a connected MCP server.
@@ -632,6 +640,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		sidebarVisible:       true,
 		activeMCPTools:       make(map[string]ToolStatusMsg),
 		clipboardLoader:      loadClipboardImage,
+		clipboardWriter:      copyTextToClipboard,
+		urlOpener:            openSystemURL,
 	}
 }
 
@@ -1653,6 +1663,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				m.providerPanel.message = m.t("panel.provider.refresh.none")
 			}
+		}
+		return m, nil
+
+	case providerAuthStartMsg:
+		if m.providerPanel != nil && msg.vendor == auth.ProviderGitHubCopilot {
+			if msg.err != nil {
+				m.providerPanel.authBusy = false
+				m.providerPanel.message = msg.err.Error()
+				return m, nil
+			}
+			if msg.flow != nil {
+				m.providerPanel.enterpriseURL = msg.flow.EnterpriseURL
+				notes := []string{m.t("panel.provider.login.instructions", msg.flow.VerificationURI, msg.flow.UserCode)}
+				switch {
+				case msg.copyErr == nil:
+					notes = append(notes, m.t("panel.provider.login.copied"))
+				default:
+					notes = append(notes, m.t("panel.provider.login.copy_failed", msg.copyErr.Error()))
+				}
+				switch {
+				case msg.openErr == nil:
+					notes = append(notes, m.t("panel.provider.login.browser_opened"))
+				default:
+					notes = append(notes, m.t("panel.provider.login.browser_failed", msg.openErr.Error()))
+				}
+				m.providerPanel.message = strings.Join(notes, "\n")
+				return m, m.pollCopilotLogin(msg.flow)
+			}
+		}
+		return m, nil
+
+	case providerAuthResultMsg:
+		if m.providerPanel != nil && msg.vendor == auth.ProviderGitHubCopilot {
+			m.providerPanel.authBusy = false
+			if msg.err != nil {
+				m.providerPanel.message = m.t("panel.provider.login.failed", msg.err.Error())
+				return m, nil
+			}
+			if msg.info != nil {
+				m.providerPanel.enterpriseURL = msg.info.EnterpriseURL
+			}
+			m.providerPanel.message = m.t("panel.provider.login.success")
+			return m, m.refreshProviderModelsForVendor(auth.ProviderGitHubCopilot)
 		}
 		return m, nil
 

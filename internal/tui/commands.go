@@ -186,7 +186,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if !m.streamPrefixWritten {
 		m.ensureOutputHasBlankLine()
 		m.streamStartPos = m.output.Len()
-		m.output.WriteString(bulletStyle.Render("● "))
+		m.output.WriteString(assistantBulletStyle.Render("● "))
 		m.streamPrefixWritten = true
 	}
 	if m.streamBuffer != nil {
@@ -232,7 +232,7 @@ func (m *Model) appendStreamStatusLine(text string) {
 	default:
 		m.ensureOutputEndsWithNewline()
 	}
-	m.output.WriteString(bulletStyle.Render("● "))
+	m.output.WriteString(compactionBulletStyle.Render("● "))
 	m.output.WriteString(text)
 	if !strings.HasSuffix(text, "\n") {
 		m.output.WriteString("\n")
@@ -250,7 +250,7 @@ func (m *Model) renderHarnessLiveTail(text string) {
 	if !m.streamPrefixWritten {
 		m.ensureOutputHasBlankLine()
 		m.streamStartPos = m.output.Len()
-		m.output.WriteString(bulletStyle.Render("● "))
+		m.output.WriteString(assistantBulletStyle.Render("● "))
 		m.streamPrefixWritten = true
 	}
 	m.harnessRunLiveTail = text
@@ -329,7 +329,7 @@ func (m *Model) rewriteActiveStreamOutput() {
 		return
 	}
 	m.output.Truncate(m.streamStartPos)
-	m.output.WriteString(bulletStyle.Render("● "))
+	m.output.WriteString(assistantBulletStyle.Render("● "))
 	rendered := m.renderCurrentStreamMarkdown()
 	if rendered != "" {
 		m.output.WriteString(rendered)
@@ -2151,6 +2151,9 @@ func (m *Model) tryActivateCurrentSelection() error {
 		return err
 	}
 	if resolved.APIKey == "" {
+		if resolved.AuthType == "oauth" {
+			return fmt.Errorf("no login configured for vendor %q endpoint %q", resolved.VendorID, resolved.EndpointID)
+		}
 		return fmt.Errorf("no api key configured for vendor %q endpoint %q", resolved.VendorID, resolved.EndpointID)
 	}
 	prov, err := provider.NewProvider(resolved)

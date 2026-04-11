@@ -115,13 +115,19 @@ type ToolStatusMsg struct {
 	Elapsed     time.Duration
 }
 
-// bulletStyle renders the ● prefix for assistant/tool lines.
-var bulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+// assistantBulletStyle renders the ● prefix for assistant text/status lines.
+var assistantBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+
+// compactionBulletStyle renders the ● prefix for compaction status lines.
+var compactionBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+
+// toolBulletStyle renders the ● prefix for tool call lines.
+var toolBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 
 // FormatToolStart formats the header line when a tool begins executing.
 func FormatToolStart(msg ToolStatusMsg) string {
 	var sb strings.Builder
-	sb.WriteString(bulletStyle.Render("● "))
+	sb.WriteString(toolBulletStyle.Render("● "))
 	sb.WriteString(formatToolInline(toolDisplayName(msg), toolDetail(msg)))
 	if msg.Args != "" && toolDetail(msg) == "" {
 		sb.WriteString("\n  │ ")

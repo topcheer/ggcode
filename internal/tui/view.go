@@ -151,11 +151,11 @@ func (m Model) decorateStreamingBullet(output string) string {
 	if !m.loading || !m.streamPrefixWritten || m.streamStartPos < 0 || m.streamStartPos >= len(output) {
 		return output
 	}
-	staticPrefix := bulletStyle.Render("● ")
+	staticPrefix := assistantBulletStyle.Render("● ")
 	if !strings.HasPrefix(output[m.streamStartPos:], staticPrefix) {
 		return output
 	}
-	animatedPrefix := bulletStyle.Render(streamingBulletFrame(m.spinner.CurrentFrame()) + " ")
+	animatedPrefix := assistantBulletStyle.Render(streamingBulletFrame(m.spinner.CurrentFrame()) + " ")
 	return output[:m.streamStartPos] + animatedPrefix + output[m.streamStartPos+len(staticPrefix):]
 }
 

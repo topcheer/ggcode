@@ -99,3 +99,34 @@ func TestDiscoverModelsGeminiModelsEndpoint(t *testing.T) {
 		t.Fatalf("unexpected models: %#v", models)
 	}
 }
+
+func TestDiscoverModelsCopilotEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/v1/models" {
+			t.Fatalf("expected /v1/models, got %s", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer copilot-token" {
+			t.Fatalf("expected bearer auth, got %q", got)
+		}
+		if got := r.Header.Get("User-Agent"); got != "ggcode" {
+			t.Fatalf("expected ggcode user agent, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o"},{"id":"claude-3.5-sonnet"}]}`))
+	}))
+	defer server.Close()
+
+	models, err := DiscoverModels(context.Background(), &config.ResolvedEndpoint{
+		EndpointID:   "github.com",
+		EndpointName: "GitHub.com",
+		Protocol:     "copilot",
+		BaseURL:      server.URL + "/v1",
+		APIKey:       "copilot-token",
+	})
+	if err != nil {
+		t.Fatalf("DiscoverModels: %v", err)
+	}
+	if len(models) != 2 || models[0] != "gpt-4o" || models[1] != "claude-3.5-sonnet" {
+		t.Fatalf("unexpected models: %#v", models)
+	}
+}

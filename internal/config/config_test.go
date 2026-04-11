@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/auth"
 )
 
 func TestBuildSystemPrompt(t *testing.T) {
@@ -90,6 +92,17 @@ func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
 func TestLoad_ExpandsEnvFromShellFilesWhenProcessEnvMissing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	original, hadOriginal := os.LookupEnv("ZAI_API_KEY")
+	if err := os.Unsetenv("ZAI_API_KEY"); err != nil {
+		t.Fatalf("Unsetenv() error = %v", err)
+	}
+	defer func() {
+		if hadOriginal {
+			_ = os.Setenv("ZAI_API_KEY", original)
+			return
+		}
+		_ = os.Unsetenv("ZAI_API_KEY")
+	}()
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	content := `
 vendor: zai
@@ -677,6 +690,42 @@ func TestDefaultConfigIncludesKimiCodingPlanCapabilities(t *testing.T) {
 	}
 	if ep.MaxTokens != 32768 {
 		t.Fatalf("expected kimi max output 32768, got %d", ep.MaxTokens)
+	}
+}
+
+func TestResolveActiveEndpointLoadsCopilotOAuthState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := auth.DefaultStore()
+	if err := store.Save(&auth.Info{
+		ProviderID:    auth.ProviderGitHubCopilot,
+		Type:          "oauth",
+		AccessToken:   "copilot-token",
+		EnterpriseURL: "ghe.example.com",
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Vendor = auth.ProviderGitHubCopilot
+	cfg.Endpoint = "enterprise"
+	cfg.Model = "gpt-4o"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.Protocol != "copilot" {
+		t.Fatalf("expected copilot protocol, got %q", resolved.Protocol)
+	}
+	if resolved.AuthType != "oauth" {
+		t.Fatalf("expected oauth auth type, got %q", resolved.AuthType)
+	}
+	if resolved.APIKey != "copilot-token" {
+		t.Fatalf("expected oauth access token, got %q", resolved.APIKey)
+	}
+	if resolved.BaseURL != "https://copilot-api.ghe.example.com" {
+		t.Fatalf("expected enterprise copilot base URL, got %q", resolved.BaseURL)
 	}
 }
 

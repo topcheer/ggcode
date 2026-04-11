@@ -19,6 +19,12 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 	case "openai":
 		return NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL), nil
 
+	case "copilot":
+		if err := validateCopilotResolved(resolved.BaseURL, resolved.APIKey); err != nil {
+			return nil, err
+		}
+		return NewCopilotProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL), nil
+
 	case "gemini":
 		prov, err := NewGeminiProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		if err != nil {
@@ -27,6 +33,6 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		return prov, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported protocol: %s (supported: anthropic, openai, gemini)", resolved.Protocol)
+		return nil, fmt.Errorf("unsupported protocol: %s (supported: anthropic, openai, gemini, copilot)", resolved.Protocol)
 	}
 }

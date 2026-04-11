@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -28,6 +29,8 @@ type providerPanelState struct {
 	message       string
 	refreshing    bool
 	refreshVendor string
+	authBusy      bool
+	enterpriseURL string
 }
 
 type providerModelsRefreshResultMsg struct {
@@ -37,6 +40,20 @@ type providerModelsRefreshResultMsg struct {
 	skipped     int
 	saveErr     error
 	discoverErr error
+}
+
+type providerAuthStartMsg struct {
+	vendor  string
+	flow    *auth.CopilotDeviceFlow
+	copyErr error
+	openErr error
+	err     error
+}
+
+type providerAuthResultMsg struct {
+	vendor string
+	info   *auth.Info
+	err    error
 }
 
 const (
@@ -50,6 +67,9 @@ func newProviderPanelFromConfig(cfg *ConfigView) *providerPanelState {
 	panel := &providerPanelState{
 		vendorIDs:   vendorIDs,
 		modelFilter: newModelFilterInput(LangEnglish),
+	}
+	if info, err := auth.DefaultStore().Load(auth.ProviderGitHubCopilot); err == nil && info != nil {
+		panel.enterpriseURL = info.EnterpriseURL
 	}
 	panel.selectVendor(cfg.Vendor)
 	panel.selectEndpoint(cfg.Endpoint, cfg.Model, cfg)
@@ -234,15 +254,13 @@ func (m *Model) renderProviderPanel() string {
 
 	vc := m.config.Vendors[panel.selectedVendor()]
 	ep := vc.Endpoints[panel.selectedEndpoint()]
-	apiKeyState := "missing"
-	if providerHasUsableAPIKey(firstNonEmptyValue(ep.APIKey, vc.APIKey)) {
-		apiKeyState = m.t("panel.provider.api_key.configured")
-	} else {
-		apiKeyState = m.t("panel.provider.api_key.missing")
-	}
+	apiKeyState := providerCredentialStatus(m, panel.selectedVendor(), panel.selectedEndpoint(), ep, vc, panel)
 	baseURLState := ep.BaseURL
 	if baseURLState == "" {
 		baseURLState = m.t("panel.provider.base_url.not_set")
+	}
+	if panel.selectedVendor() == auth.ProviderGitHubCopilot && panel.selectedEndpoint() == "enterprise" && strings.TrimSpace(panel.enterpriseURL) != "" {
+		baseURLState = auth.CopilotAPIBaseURL(panel.enterpriseURL)
 	}
 	model := panel.selectedModel()
 	if model == "" {
@@ -304,7 +322,7 @@ func (m *Model) renderProviderPanel() string {
 	footer := []string{
 		fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), firstNonEmptyValue(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
-		fmt.Sprintf(" %s: %s", m.t("panel.provider.api_key"), apiKeyState),
+		fmt.Sprintf(" %s: %s", m.t("panel.provider.auth"), apiKeyState),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.base_url"), baseURLState),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.tags"), strings.Join(ep.Tags, ", ")),
 	}
@@ -319,6 +337,12 @@ func (m *Model) renderProviderPanel() string {
 		)
 	} else {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.main")))
+	}
+	if panel.selectedVendor() == auth.ProviderGitHubCopilot {
+		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.copilot")))
+	}
+	if panel.selectedVendor() == auth.ProviderGitHubCopilot && panel.selectedEndpoint() == "enterprise" && strings.TrimSpace(panel.enterpriseURL) != "" {
+		footer = append(footer, fmt.Sprintf(" %s: %s", m.t("panel.provider.enterprise_url"), panel.enterpriseURL))
 	}
 	if panel.message != "" {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
@@ -425,9 +449,21 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.config.Vendors[panel.selectedVendor()] = vc
 				panel.models = uniqueStrings(append(panel.models, value))
 				panel.modelIndex = indexOf(panel.models, value)
+			case "enterprise url":
+				normalized, normErr := auth.NormalizeEnterpriseURL(value)
+				if normErr != nil {
+					err = normErr
+				} else {
+					panel.enterpriseURL = normalized
+				}
 			}
 			if err != nil {
 				panel.message = err.Error()
+				return *m, nil
+			}
+			if panel.editingField == "enterprise url" {
+				panel.editingField = ""
+				panel.message = m.t("panel.provider.saved")
 				return *m, nil
 			}
 			if err := m.config.Save(); err != nil {
@@ -535,12 +571,33 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		panel.startEditing("endpoint api key", ep.APIKey)
 		return *m, nil
 	case "b":
+		if panel.selectedVendor() == auth.ProviderGitHubCopilot && panel.selectedEndpoint() == "enterprise" {
+			panel.startEditing("enterprise url", panel.enterpriseURL)
+			return *m, nil
+		}
 		vc := m.config.Vendors[panel.selectedVendor()]
 		ep := vc.Endpoints[panel.selectedEndpoint()]
 		panel.startEditing("endpoint base url", ep.BaseURL)
 		return *m, nil
 	case "m":
 		panel.startEditing("custom model", panel.selectedModel())
+		return *m, nil
+	case "l":
+		if panel.selectedVendor() != auth.ProviderGitHubCopilot || panel.authBusy {
+			return *m, nil
+		}
+		panel.authBusy = true
+		panel.message = m.t("panel.provider.login.starting")
+		return *m, m.startCopilotLogin(panel.selectedEndpoint(), panel.enterpriseURL)
+	case "x":
+		if panel.selectedVendor() != auth.ProviderGitHubCopilot || panel.authBusy {
+			return *m, nil
+		}
+		if err := auth.DefaultStore().Delete(auth.ProviderGitHubCopilot); err != nil {
+			panel.message = err.Error()
+			return *m, nil
+		}
+		panel.message = m.t("panel.provider.logout.success")
 		return *m, nil
 	case "enter", "s":
 		if err := m.config.SetActiveSelection(panel.selectedVendor(), panel.selectedEndpoint(), panel.selectedModel()); err != nil {
@@ -573,13 +630,13 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 
 	refreshable := false
 	for endpointID, endpoint := range vc.Endpoints {
-		if !providerHasUsableAPIKey(firstNonEmptyValue(endpoint.APIKey, vc.APIKey)) {
+		if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) {
 			continue
 		}
 		if strings.TrimSpace(endpoint.BaseURL) == "" {
 			continue
 		}
-		if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" {
+		if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
 			continue
 		}
 		if _, err := m.config.ResolveEndpoint(vendor, endpointID); err == nil {
@@ -603,11 +660,11 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		defer cancel()
 
 		for endpointID, endpoint := range vc.Endpoints {
-			if !providerHasUsableAPIKey(firstNonEmptyValue(endpoint.APIKey, vc.APIKey)) || strings.TrimSpace(endpoint.BaseURL) == "" {
+			if !providerHasUsableCredential(vendor, endpointID, endpoint, vc, m.providerPanel) || strings.TrimSpace(endpoint.BaseURL) == "" {
 				result.skipped++
 				continue
 			}
-			if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" {
+			if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
 				result.skipped++
 				continue
 			}
@@ -647,12 +704,76 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 	}
 }
 
+func (m *Model) startCopilotLogin(endpoint, enterpriseURL string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if endpoint != "enterprise" {
+			enterpriseURL = ""
+		}
+		flow, err := auth.StartCopilotDeviceFlow(ctx, enterpriseURL)
+		msg := providerAuthStartMsg{vendor: auth.ProviderGitHubCopilot, flow: flow, err: err}
+		if err == nil && flow != nil {
+			if m.clipboardWriter != nil {
+				msg.copyErr = m.clipboardWriter(flow.UserCode)
+			}
+			if m.urlOpener != nil {
+				msg.openErr = m.urlOpener(flow.VerificationURI)
+			}
+		}
+		return msg
+	}
+}
+
+func (m *Model) pollCopilotLogin(flow *auth.CopilotDeviceFlow) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		info, err := auth.PollCopilotDeviceFlow(ctx, flow)
+		if err == nil && info != nil {
+			err = auth.DefaultStore().Save(info)
+		}
+		return providerAuthResultMsg{vendor: auth.ProviderGitHubCopilot, info: info, err: err}
+	}
+}
+
 func providerHasUsableAPIKey(value string) bool {
 	value = strings.TrimSpace(config.ExpandEnv(value))
 	if value == "" {
 		return false
 	}
 	return !(strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}"))
+}
+
+func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) bool {
+	if vendor == auth.ProviderGitHubCopilot {
+		info, err := auth.DefaultStore().Load(auth.ProviderGitHubCopilot)
+		if err != nil || info == nil || strings.TrimSpace(info.AccessToken) == "" {
+			return false
+		}
+		if endpoint == "enterprise" {
+			enterpriseURL := strings.TrimSpace(info.EnterpriseURL)
+			if panel != nil && strings.TrimSpace(panel.enterpriseURL) != "" {
+				enterpriseURL = strings.TrimSpace(panel.enterpriseURL)
+			}
+			return enterpriseURL != ""
+		}
+		return true
+	}
+	return providerHasUsableAPIKey(firstNonEmptyValue(ep.APIKey, vc.APIKey))
+}
+
+func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) string {
+	if vendor == auth.ProviderGitHubCopilot {
+		if providerHasUsableCredential(vendor, endpoint, ep, vc, panel) {
+			return m.t("panel.provider.auth.connected")
+		}
+		return m.t("panel.provider.auth.not_connected")
+	}
+	if providerHasUsableAPIKey(firstNonEmptyValue(ep.APIKey, vc.APIKey)) {
+		return m.t("panel.provider.api_key.configured")
+	}
+	return m.t("panel.provider.api_key.missing")
 }
 
 func providerEditFieldLabel(lang Language, field string) string {
@@ -665,6 +786,8 @@ func providerEditFieldLabel(lang Language, field string) string {
 		return tr(lang, "panel.provider.edit.endpoint_base_url")
 	case "custom model":
 		return tr(lang, "panel.provider.edit.custom_model")
+	case "enterprise url":
+		return tr(lang, "panel.provider.enterprise_url")
 	default:
 		return field
 	}
