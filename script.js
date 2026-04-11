@@ -15,7 +15,7 @@ const translations = {
     "hero.stats.update": "Upgrade in-app or install native packages from releases",
     "hero.stats.background": "Run long jobs, harness queues, and release flows with live visibility",
     "hero.stats.extensible": "Extend the CLI natively with more capabilities",
-    "hero.badge": "v1.1.14 · self-update ready",
+    "hero.badge": "v1.1.16 · self-update ready",
     "hero.bannerAlt": "ggcode CLI banner",
     "features.eyebrow": "what makes it memorable",
     "features.title":
@@ -116,7 +116,7 @@ const translations = {
     "hero.stats.update": "可在应用内升级，也能直接安装原生发布包",
     "hero.stats.background": "长任务、harness 队列和发布流都能持续看进度",
     "hero.stats.extensible": "从 CLI 原生长出扩展能力",
-    "hero.badge": "v1.1.14 · 可直接升级",
+    "hero.badge": "v1.1.16 · 可直接升级",
     "hero.bannerAlt": "ggcode CLI 横幅",
     "features.eyebrow": "what makes it memorable",
     "features.title": "不是“AI 接个壳”，而是一套终端里的完整产品体验。",
