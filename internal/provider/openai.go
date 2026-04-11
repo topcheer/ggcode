@@ -19,33 +19,40 @@ type OpenAIProvider struct {
 	client    *openai.Client
 	model     string
 	maxTokens int
+	name      string
 }
 
 // NewOpenAIProvider creates a new OpenAI provider.
 func NewOpenAIProvider(apiKey string, model string, maxTokens int) *OpenAIProvider {
 	config := openai.DefaultConfig(apiKey)
-	client := openai.NewClientWithConfig(config)
-	return &OpenAIProvider{
-		client:    client,
-		model:     model,
-		maxTokens: maxTokens,
-	}
+	return NewOpenAIProviderWithConfig(config, model, maxTokens, "openai")
 }
 
 // NewOpenAIProviderWithBaseURL creates a new OpenAI provider with a custom base URL.
 func NewOpenAIProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *OpenAIProvider {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = baseURL
+	return NewOpenAIProviderWithConfig(config, model, maxTokens, "openai")
+}
+
+func NewOpenAIProviderWithConfig(config openai.ClientConfig, model string, maxTokens int, name string) *OpenAIProvider {
 	client := openai.NewClientWithConfig(config)
+	if strings.TrimSpace(name) == "" {
+		name = "openai"
+	}
 	return &OpenAIProvider{
 		client:    client,
 		model:     model,
 		maxTokens: maxTokens,
+		name:      name,
 	}
 }
 
 func (p *OpenAIProvider) Name() string {
-	return "openai"
+	if strings.TrimSpace(p.name) == "" {
+		return "openai"
+	}
+	return p.name
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {

@@ -18,7 +18,12 @@ type toolPresentation struct {
 }
 
 type commandPreview struct {
-	Title           string
+	Title                  string
+	CommandLines           []string
+	CommandHiddenLineCount int
+}
+
+type textPreview struct {
 	Lines           []string
 	HiddenLineCount int
 }
@@ -534,17 +539,37 @@ func buildCommandPreview(rawCommand string) commandPreview {
 		previewLines = append(previewLines, compactSingleLine(strings.TrimRight(line, " \t")))
 	}
 
-	hidden := 0
-	if len(previewLines) > maxVisibleGroupItems {
-		hidden = len(previewLines) - maxVisibleGroupItems
-		previewLines = previewLines[:maxVisibleGroupItems]
-	}
-
 	return commandPreview{
-		Title:           title,
-		Lines:           previewLines,
+		Title:                  title,
+		CommandLines:           previewLines,
+		CommandHiddenLineCount: hiddenPreviewLineCount(len(previewLines)),
+	}
+}
+
+func buildTextPreview(rawText string) textPreview {
+	lines := commandPreviewLines(rawText)
+	if len(lines) == 0 {
+		return textPreview{}
+	}
+	visible := lines
+	hidden := hiddenPreviewLineCount(len(lines))
+	if hidden > 0 {
+		visible = visible[:maxVisibleGroupItems]
+	}
+	for i, line := range visible {
+		visible[i] = compactSingleLine(strings.TrimRight(line, " \t"))
+	}
+	return textPreview{
+		Lines:           visible,
 		HiddenLineCount: hidden,
 	}
+}
+
+func hiddenPreviewLineCount(total int) int {
+	if total <= maxVisibleGroupItems {
+		return 0
+	}
+	return total - maxVisibleGroupItems
 }
 
 func commandPreviewLines(rawCommand string) []string {

@@ -761,16 +761,24 @@ func enCatalog(key string) string {
 		return "Protocol"
 	case "panel.provider.protocol.unknown":
 		return "(unknown)"
+	case "panel.provider.auth":
+		return "Auth"
 	case "panel.provider.api_key":
 		return "API key"
 	case "panel.provider.api_key.missing":
 		return "missing"
 	case "panel.provider.api_key.configured":
 		return "configured"
+	case "panel.provider.auth.connected":
+		return "connected"
+	case "panel.provider.auth.not_connected":
+		return "not connected"
 	case "panel.provider.base_url":
 		return "Base URL"
 	case "panel.provider.base_url.not_set":
 		return "(not set)"
+	case "panel.provider.enterprise_url":
+		return "Enterprise URL"
 	case "panel.provider.tags":
 		return "Tags"
 	case "panel.provider.model.set_with_m":
@@ -789,10 +797,30 @@ func enCatalog(key string) string {
 		return "Enter save • Esc cancel"
 	case "panel.provider.hint.main":
 		return "Tab/Shift+Tab change focus • j/k move • / focus filter • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • Esc close"
+	case "panel.provider.hint.copilot":
+		return "GitHub Copilot: l login • x logout • b edit enterprise domain"
 	case "panel.provider.saved":
 		return "Saved."
 	case "panel.provider.saved_activated":
 		return "Saved and activated."
+	case "panel.provider.login.starting":
+		return "Starting GitHub Copilot login..."
+	case "panel.provider.login.instructions":
+		return "Open %s and enter code %s. Waiting for authorization..."
+	case "panel.provider.login.copied":
+		return "Device code copied to clipboard."
+	case "panel.provider.login.copy_failed":
+		return "Copying device code failed: %s"
+	case "panel.provider.login.browser_opened":
+		return "Opened the verification page in your browser."
+	case "panel.provider.login.browser_failed":
+		return "Opening the verification page failed: %s"
+	case "panel.provider.login.success":
+		return "GitHub Copilot connected."
+	case "panel.provider.login.failed":
+		return "GitHub Copilot login failed: %s"
+	case "panel.provider.logout.success":
+		return "GitHub Copilot disconnected."
 	case "panel.provider.refreshing_vendor":
 		return "Refreshing models for %s..."
 	case "panel.provider.refresh.save_failed":
@@ -1769,16 +1797,24 @@ func zhCatalog(key string) string {
 		return "协议"
 	case "panel.provider.protocol.unknown":
 		return "(未知)"
+	case "panel.provider.auth":
+		return "认证"
 	case "panel.provider.api_key":
 		return "API Key"
 	case "panel.provider.api_key.missing":
 		return "未配置"
 	case "panel.provider.api_key.configured":
 		return "已配置"
+	case "panel.provider.auth.connected":
+		return "已连接"
+	case "panel.provider.auth.not_connected":
+		return "未连接"
 	case "panel.provider.base_url":
 		return "Base URL"
 	case "panel.provider.base_url.not_set":
 		return "(未设置)"
+	case "panel.provider.enterprise_url":
+		return "企业地址"
 	case "panel.provider.tags":
 		return "标签"
 	case "panel.provider.model.set_with_m":
@@ -1797,10 +1833,30 @@ func zhCatalog(key string) string {
 		return "Enter 保存 • Esc 取消"
 	case "panel.provider.hint.main":
 		return "Tab/Shift+Tab 切换焦点 • j/k 移动 • / 聚焦筛选 • Enter 或 s 应用 • a 供应商 key • u 端点 key • b Base URL • m 自定义模型 • Esc 关闭"
+	case "panel.provider.hint.copilot":
+		return "GitHub Copilot：l 登录 • x 登出 • b 编辑企业域名"
 	case "panel.provider.saved":
 		return "已保存。"
 	case "panel.provider.saved_activated":
 		return "已保存并激活。"
+	case "panel.provider.login.starting":
+		return "正在启动 GitHub Copilot 登录..."
+	case "panel.provider.login.instructions":
+		return "打开 %s 并输入代码 %s，正在等待授权..."
+	case "panel.provider.login.copied":
+		return "已将 device code 复制到剪贴板。"
+	case "panel.provider.login.copy_failed":
+		return "复制 device code 失败：%s"
+	case "panel.provider.login.browser_opened":
+		return "已在浏览器中打开验证页面。"
+	case "panel.provider.login.browser_failed":
+		return "打开验证页面失败：%s"
+	case "panel.provider.login.success":
+		return "GitHub Copilot 已连接。"
+	case "panel.provider.login.failed":
+		return "GitHub Copilot 登录失败：%s"
+	case "panel.provider.logout.success":
+		return "GitHub Copilot 已断开。"
 	case "panel.provider.refreshing_vendor":
 		return "正在刷新 %s 的模型..."
 	case "panel.provider.refresh.save_failed":

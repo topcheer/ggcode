@@ -52,13 +52,37 @@ func TestRenderConversationMessageIncludesToolBlocks(t *testing.T) {
 	m.rebuildConversationFromMessages([]provider.Message{
 		{Role: "assistant", Content: []provider.ContentBlock{
 			{Type: "text", Text: "I used a tool."},
-			{Type: "tool_use", ToolName: "read_file", Input: []byte(`{"path":"README.md"}`)},
-			{Type: "tool_result", Output: "contents", IsError: false},
+			{Type: "tool_use", ToolID: "tool-1", ToolName: "read_file", Input: []byte(`{"path":"README.md"}`)},
+		}},
+		{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: "tool-1", ToolName: "read_file", Output: "line1\nline2", IsError: false},
 		}},
 	})
 	output := m.output.String()
-	if !containsAll(output, "I used a tool.", "Tool Call", "read_file", "Tool Result", "contents") {
+	if !containsAll(output, "I used a tool.", "Read README.md", "done: 2 lines of content") {
 		t.Fatalf("unexpected rendered output: %q", output)
+	}
+	if strings.Contains(output, "Tool Call:") || strings.Contains(output, `"path":"README.md"`) {
+		t.Fatalf("expected resume renderer to avoid raw tool markdown dump, got %q", output)
+	}
+}
+
+func TestResumeSessionRendersCommandToolsCompactly(t *testing.T) {
+	m := newTestModel()
+	m.rebuildConversationFromMessages([]provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{
+			{Type: "tool_use", ToolID: "tool-1", ToolName: "run_command", Input: []byte(`{"command":"# Check status\ngit status --short\nhead -5\n"}`)},
+		}},
+		{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: "tool-1", ToolName: "run_command", Output: "M README.md\nA internal/tui/view.go\n", IsError: false},
+		}},
+	})
+	output := m.output.String()
+	if !containsAll(output, "Check status", "git status --short", "M README.md", "A internal/tui/view.go") {
+		t.Fatalf("unexpected rendered output: %q", output)
+	}
+	if strings.Contains(output, `{"command":`) || strings.Contains(output, "# Check status") {
+		t.Fatalf("expected resume command renderer to avoid raw JSON/comment dump, got %q", output)
 	}
 }
 

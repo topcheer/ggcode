@@ -3,7 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -26,6 +29,8 @@ import (
 type DiffConfirmFunc func(filePath, diffText string) bool
 
 type interruptionHandler func() string
+
+var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
@@ -168,20 +173,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Content: content,
 	})
 
-	if threshold := ctxpkg.AutoCompactThresholdTokens(a.contextManager.MaxTokens()); threshold > 0 && a.contextManager.TokenCount() >= threshold {
-		onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: "[compacting conversation to stay within context window]\n",
-		})
-	}
-
-	if summarized, err := a.contextManager.CheckAndSummarize(ctx, a.provider); err != nil {
-		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: fmt.Errorf("auto-summarize failed: %w", err)})
-	} else if summarized {
-		onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: "[conversation compacted]\n",
-		})
+	transientCompactWarned := false
+	if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+		return err
 	}
 
 	toolDefs := a.tools.ToDefinitions()
@@ -195,11 +190,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.injectPendingInterruptions() {
 			continue
 		}
+		if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+			return err
+		}
 		msgs := a.contextManager.Messages()
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
 
 		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
 		if err != nil {
+			if errors.Is(err, errStreamInterruptedForReplan) {
+				idleAutopilotContinuations = 0
+				reactiveCompactRetries = 0
+				continue
+			}
 			if a.tryReactiveCompact(ctx, onEvent, err, &reactiveCompactRetries) {
 				idleAutopilotContinuations = 0
 				continue
@@ -367,7 +371,10 @@ func (a *Agent) injectToolResultsAndInterruptions(toolResults []provider.Content
 }
 
 func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, error) {
-	stream, err := a.provider.ChatStream(ctx, msgs, toolDefs)
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
 	if err != nil {
 		debug.Log("agent", "ChatStream error: %v", err)
 		return nil, "", nil, fmt.Errorf("chat error: %w", err)
@@ -395,6 +402,10 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			onEvent(event)
 			textBuf.WriteString(event.Text)
 			assistantTextBuf.WriteString(event.Text)
+			if a.injectPendingInterruptions() {
+				cancel()
+				return nil, assistantTextBuf.String(), nil, errStreamInterruptedForReplan
+			}
 		case provider.StreamEventToolCallChunk:
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
@@ -537,12 +548,6 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	if compactErr != nil {
 		return false
 	}
-	if changed {
-		onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: "[conversation compacted]\n",
-		})
-	}
 
 	if cm, ok := a.contextManager.(interface{ TruncateOldestGroupForRetry() bool }); ok {
 		if cm.TruncateOldestGroupForRetry() {
@@ -562,6 +567,92 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		debug.Log("agent", "reactive compact retry=%d", *retries)
 	}
 	return true
+}
+
+func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
+	threshold := ctxpkg.AutoCompactThresholdTokens(a.contextManager.MaxTokens())
+	if threshold <= 0 || a.contextManager.TokenCount() < threshold {
+		return nil
+	}
+
+	changed, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
+	if err != nil {
+		if shouldIgnoreAutoCompactError(err) {
+			debug.Log("agent", "ignoring transient auto-compact failure: %v", err)
+			if transientWarned == nil || !*transientWarned {
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventText,
+					Text: "[conversation compaction skipped due to transient provider error: " + compactErrorReason(err) + "]\n",
+				})
+				if transientWarned != nil {
+					*transientWarned = true
+				}
+			}
+			return nil
+		}
+		return fmt.Errorf("auto-summarize failed: %w", err)
+	}
+	if transientWarned != nil {
+		*transientWarned = false
+	}
+	if !changed {
+		return nil
+	}
+
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: "[compacting conversation to stay within context window]\n",
+	})
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: "[conversation compacted]\n",
+	})
+	return nil
+}
+
+func shouldIgnoreAutoCompactError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || isPromptTooLongError(err) {
+		return false
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, keyword := range []string{
+		"unexpected eof",
+		"connection reset by peer",
+		"broken pipe",
+		"timeout awaiting response headers",
+		"tls handshake timeout",
+		"server closed idle connection",
+		"temporary failure in name resolution",
+	} {
+		if strings.Contains(s, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func compactErrorReason(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	text := strings.TrimSpace(err.Error())
+	text = strings.TrimPrefix(text, "summarization call failed: ")
+	text = strings.TrimPrefix(text, "auto-summarize failed: ")
+	text = strings.ReplaceAll(text, "\n", " ")
+	if len(text) > 120 {
+		text = text[:117] + "..."
+	}
+	return text
 }
 
 func shouldTriggerAutopilotLoopGuard(text string, streak int) bool {

@@ -377,6 +377,27 @@ func TestContextManager_Summarize_PreservesWholeRecentGroup(t *testing.T) {
 	}
 }
 
+func TestContextManager_CheckAndSummarizeReturnsFalseWhenNothingCanBeCompacted(t *testing.T) {
+	cm := NewManager(120)
+	ctx := context.Background()
+	prov := &mockProvider{}
+
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("recent question ", 20)}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("recent answer ", 20)}}})
+
+	summarized, err := cm.CheckAndSummarize(ctx, prov)
+	if err != nil {
+		t.Fatalf("CheckAndSummarize failed: %v", err)
+	}
+	if summarized {
+		t.Fatal("expected CheckAndSummarize to report no change when only the current group remains")
+	}
+	if prov.chatCalls != 0 {
+		t.Fatalf("expected no summarization chat call, got %d", prov.chatCalls)
+	}
+}
+
 func TestContextManager_Summarize_RetriesPromptTooLongByDroppingOldestGroup(t *testing.T) {
 	ctx := context.Background()
 	prov := &promptTooLongOnceProvider{}

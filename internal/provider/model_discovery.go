@@ -35,7 +35,7 @@ func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]s
 	if strings.TrimSpace(resolved.BaseURL) == "" {
 		return nil, fmt.Errorf("endpoint %q has no base URL configured", resolved.EndpointID)
 	}
-	if resolved.Protocol != "openai" && resolved.Protocol != "anthropic" && resolved.Protocol != "gemini" {
+	if resolved.Protocol != "openai" && resolved.Protocol != "anthropic" && resolved.Protocol != "gemini" && resolved.Protocol != "copilot" {
 		return nil, fmt.Errorf("protocol %q does not support model discovery", resolved.Protocol)
 	}
 
@@ -71,6 +71,9 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 		query.Set("key", strings.TrimSpace(resolved.APIKey))
 		req.URL.RawQuery = query.Encode()
 		req.Header.Set("x-goog-api-key", strings.TrimSpace(resolved.APIKey))
+	case "copilot":
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
+		req.Header.Set("User-Agent", "ggcode")
 	default:
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(resolved.APIKey))
 	}

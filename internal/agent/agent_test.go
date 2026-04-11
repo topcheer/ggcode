@@ -677,6 +677,62 @@ func TestRunStreamInterruptOverridesAutopilotContinuation(t *testing.T) {
 	}
 }
 
+func TestRunStreamInterruptsStreamingTurnForReplan(t *testing.T) {
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				{Type: provider.StreamEventText, Text: "Starting long answer..."},
+			},
+			streamEventsFromResponse(&provider.ChatResponse{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Switched direction and finished.")},
+				},
+			}),
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 3)
+	interruptCalls := 0
+	a.SetInterruptionHandler(func() string {
+		interruptCalls++
+		if interruptCalls == 2 {
+			return "Actually, switch direction now."
+		}
+		return ""
+	})
+
+	var events []provider.StreamEvent
+	if err := a.RunStream(context.Background(), "start", func(event provider.StreamEvent) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 2 {
+		t.Fatalf("expected streaming turn to be interrupted and retried, got %d stream calls", mp.streamCalls)
+	}
+	joined := joinTextEvents(events)
+	if !strings.Contains(joined, "Starting long answer...") {
+		t.Fatalf("expected first partial stream text, got %q", joined)
+	}
+	if !strings.Contains(joined, "Switched direction and finished.") {
+		t.Fatalf("expected replanned answer after interrupt, got %q", joined)
+	}
+	msgs := a.Messages()
+	found := false
+	for _, msg := range msgs {
+		for _, block := range msg.Content {
+			if block.Type == "text" && strings.Contains(block.Text, "Actually, switch direction now.") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected streamed interrupt guidance to be recorded in context")
+	}
+}
+
 func TestRunStreamAutopilotContinuesAfterPartialProgressUpdate(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
@@ -929,8 +985,58 @@ func TestRunStreamReactiveCompactRetriesPromptTooLong(t *testing.T) {
 	if !strings.Contains(joined, "[conversation compacted]") {
 		t.Fatalf("expected reactive compact completion, got %q", joined)
 	}
+	if strings.Count(joined, "[conversation compacted]") > 2 {
+		t.Fatalf("expected at most one preflight compact and one reactive compact completion event, got %q", joined)
+	}
 	if !strings.Contains(joined, "Recovered after compaction.") {
 		t.Fatalf("expected final response after reactive compact retry, got %q", joined)
+	}
+}
+
+func TestRunStreamIgnoresTransientAutoCompactFailure(t *testing.T) {
+	mp := &mockProvider{
+		chatErr: errors.New("unexpected EOF"),
+		streamEvents: [][]provider.StreamEvent{
+			streamEventsFromResponse(&provider.ChatResponse{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("Still answered after compact skip.")},
+				},
+			}),
+		},
+	}
+
+	a := NewAgent(mp, tool.NewRegistry(), "", 2)
+	a.ContextManager().SetMaxTokens(80)
+	for i := 0; i < 6; i++ {
+		a.ContextManager().Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))},
+		})
+		a.ContextManager().Add(provider.Message{
+			Role:    "assistant",
+			Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 8))},
+		})
+	}
+
+	var events []provider.StreamEvent
+	if err := a.RunStream(context.Background(), "latest request", func(event provider.StreamEvent) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	joined := joinTextEvents(events)
+	if !strings.Contains(joined, "[conversation compaction skipped due to transient provider error: unexpected EOF]") {
+		t.Fatalf("expected transient compact skip message, got %q", joined)
+	}
+	if !strings.Contains(joined, "Still answered after compact skip.") {
+		t.Fatalf("expected run to continue after compact skip, got %q", joined)
+	}
+	for _, event := range events {
+		if event.Type == provider.StreamEventError {
+			t.Fatalf("expected no terminal error event, got %#v", event.Error)
+		}
 	}
 }
 

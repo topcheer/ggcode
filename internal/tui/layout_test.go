@@ -1037,11 +1037,77 @@ func TestRenderGroupedActivitiesShowsCommandPreviewInsteadOfRawOutput(t *testing
 	if !strings.Contains(output, "cd /tmp/app") || !strings.Contains(output, "npm run start -- --reset-cache") {
 		t.Fatalf("expected command preview lines to render, got %q", output)
 	}
-	if strings.Contains(output, "booting") || strings.Contains(output, "ready") {
-		t.Fatalf("expected command stdout to stay hidden, got %q", output)
+	if !strings.Contains(output, "booting") || !strings.Contains(output, "ready") {
+		t.Fatalf("expected command stdout preview to render, got %q", output)
 	}
-	if !strings.Contains(output, "2 lines of output") {
-		t.Fatalf("expected output summary footer, got %q", output)
+	if strings.Contains(output, "# Restart metro cleanly") {
+		t.Fatalf("expected title comment to be extracted from command preview, got %q", output)
+	}
+}
+
+func TestRenderGroupedActivitiesCommandWithoutCommentAvoidsDuplicateTitle(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 40)
+	m.loading = true
+
+	msg := ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Run",
+		Running:     false,
+		RawArgs:     `{"command":"git reset HEAD PR_DESCRIPTION.md .ggcode/todos.json 2>/dev/null\ngit status --short | head -5\n"}`,
+		Result:      "M README.md\nA internal/tui/view.go\n",
+	}
+	m.startToolActivity(ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Run",
+		Running:     true,
+		RawArgs:     msg.RawArgs,
+	})
+	m.finishToolActivity(msg)
+	m.closeToolActivityGroup()
+
+	output := m.renderGroupedActivities()
+
+	if strings.Contains(output, "Run git reset") || strings.Contains(output, "执行 git reset") {
+		t.Fatalf("expected command preview without duplicated title, got %q", output)
+	}
+	if !strings.Contains(output, "git reset HEAD PR_DESCRIPTION.md .ggcode/todos.json 2>/dev/null") {
+		t.Fatalf("expected first command line to render directly, got %q", output)
+	}
+	if !strings.Contains(output, "M README.md") {
+		t.Fatalf("expected output preview lines to render, got %q", output)
+	}
+}
+
+func TestRenderGroupedActivitiesCommandOutputAppendsHiddenCountToLastLine(t *testing.T) {
+	m := newTestModel()
+	m.setLanguage("zh-CN")
+	m.handleResize(120, 40)
+	m.loading = true
+
+	msg := ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Run",
+		Running:     false,
+		RawArgs:     `{"command":"echo one\necho two\n"}`,
+		Result:      "1\n2\n3\n4\n5\n6\n7\n",
+	}
+	m.startToolActivity(ToolStatusMsg{
+		ToolName:    "run_command",
+		DisplayName: "Run",
+		Running:     true,
+		RawArgs:     msg.RawArgs,
+	})
+	m.finishToolActivity(msg)
+	m.closeToolActivityGroup()
+
+	output := m.renderGroupedActivities()
+
+	if !strings.Contains(output, "5 … 还有 2 行输出") {
+		t.Fatalf("expected hidden output count to be appended to last visible line, got %q", output)
+	}
+	if strings.Contains(output, "\n      6") || strings.Contains(output, "\n      7") {
+		t.Fatalf("expected output preview to cap at five lines, got %q", output)
 	}
 }
 
@@ -1192,7 +1258,7 @@ func TestRenderOutputDecoratesStreamingBullet(t *testing.T) {
 	m.loading = true
 	m.streamPrefixWritten = true
 	m.streamStartPos = 0
-	m.output.WriteString(bulletStyle.Render("● ") + "streaming")
+	m.output.WriteString(assistantBulletStyle.Render("● ") + "streaming")
 	m.spinner.Start("Writing response")
 	m.spinner.frame = 2
 

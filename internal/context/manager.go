@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -213,8 +214,13 @@ func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider)
 		return changed, nil
 	}
 
+	before := m.Messages()
 	err := m.Summarize(ctx, prov)
-	return changed || err == nil, err
+	if err != nil {
+		return changed, err
+	}
+	after := m.Messages()
+	return changed || !reflect.DeepEqual(before, after), nil
 }
 
 func (m *Manager) TruncateOldestGroupForRetry() bool {

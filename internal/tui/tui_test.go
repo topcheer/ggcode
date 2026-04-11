@@ -16,7 +16,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
@@ -462,6 +464,52 @@ func TestFormatToolStartUsesFriendlyDisplay(t *testing.T) {
 	}
 	if !strings.Contains(result, "Read README.md") {
 		t.Fatalf("expected friendly inline label, got %q", result)
+	}
+}
+
+func TestAssistantAndToolBulletsUseDifferentStyles(t *testing.T) {
+	oldProfile := termenv.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	m := newTestModel()
+	m.appendStreamChunk("hello")
+	stream := m.output.String()
+	tool := FormatToolStart(ToolStatusMsg{
+		ToolName:    "read_file",
+		DisplayName: "Read",
+		Detail:      "README.md",
+		Running:     true,
+	})
+
+	assistantPrefix := assistantBulletStyle.Render("● ")
+	toolPrefix := toolBulletStyle.Render("● ")
+	if assistantPrefix == toolPrefix {
+		t.Fatal("expected assistant and tool bullet styles to differ")
+	}
+	if !strings.HasPrefix(stream, assistantPrefix) {
+		t.Fatalf("expected assistant stream output to use assistant bullet style, got %q", stream)
+	}
+	if !strings.HasPrefix(tool, toolPrefix) {
+		t.Fatalf("expected tool start output to use tool bullet style, got %q", tool)
+	}
+}
+
+func TestCompactionBulletUsesDedicatedStyle(t *testing.T) {
+	oldProfile := termenv.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
+	m := newTestModel()
+	m.appendStreamStatusLine("[compacting conversation to stay within context window]")
+	got := m.output.String()
+
+	statusPrefix := compactionBulletStyle.Render("● ")
+	if statusPrefix == assistantBulletStyle.Render("● ") || statusPrefix == toolBulletStyle.Render("● ") {
+		t.Fatal("expected compaction bullet style to differ from assistant and tool styles")
+	}
+	if !strings.HasPrefix(got, statusPrefix) {
+		t.Fatalf("expected compaction status output to use dedicated bullet style, got %q", got)
 	}
 }
 
@@ -956,6 +1004,92 @@ func TestCtrlVPastesClipboardImage(t *testing.T) {
 	}
 	if strings.Contains(m2.output.String(), "ggcode-image-deadbeef.png") {
 		t.Fatal("expected no attachment notice in output")
+	}
+}
+
+func TestProviderPanelShowsCopilotConnectedState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := auth.DefaultStore().Save(&auth.Info{
+		ProviderID:  auth.ProviderGitHubCopilot,
+		Type:        "oauth",
+		AccessToken: "copilot-token",
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendor = auth.ProviderGitHubCopilot
+	cfg.Endpoint = "github.com"
+	cfg.Model = "gpt-4o"
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+
+	rendered := m.renderProviderPanel()
+	if !strings.Contains(rendered, "connected") {
+		t.Fatalf("expected rendered provider panel to show connected auth state, got %q", rendered)
+	}
+}
+
+func TestProviderAuthResultUpdatesPanel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := auth.DefaultStore().Save(&auth.Info{
+		ProviderID:  auth.ProviderGitHubCopilot,
+		Type:        "oauth",
+		AccessToken: "copilot-token",
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendor = auth.ProviderGitHubCopilot
+	cfg.Endpoint = "github.com"
+	cfg.Model = "gpt-4o"
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+	m.providerPanel.authBusy = true
+
+	next, cmd := m.Update(providerAuthResultMsg{
+		vendor: auth.ProviderGitHubCopilot,
+		info: &auth.Info{
+			ProviderID:  auth.ProviderGitHubCopilot,
+			Type:        "oauth",
+			AccessToken: "copilot-token",
+		},
+	})
+	if cmd == nil {
+		t.Fatal("expected auth result to trigger model refresh")
+	}
+	updated := next.(Model)
+	if updated.providerPanel == nil || updated.providerPanel.authBusy {
+		t.Fatalf("expected authBusy to be cleared, got %+v", updated.providerPanel)
+	}
+	if !updated.providerPanel.refreshing || !strings.Contains(updated.providerPanel.message, "Refreshing models") {
+		t.Fatalf("expected refresh state after auth success, got %+v", updated.providerPanel)
+	}
+}
+
+func TestProviderAuthStartShowsClipboardAndBrowserNotes(t *testing.T) {
+	m := newTestModel()
+	m.SetConfig(config.DefaultConfig())
+	m.config.Vendor = auth.ProviderGitHubCopilot
+	m.config.Endpoint = "github.com"
+	m.config.Model = "gpt-4o"
+	m.openProviderPanel()
+	next, cmd := m.Update(providerAuthStartMsg{
+		vendor: auth.ProviderGitHubCopilot,
+		flow: &auth.CopilotDeviceFlow{
+			VerificationURI: "https://github.com/login/device",
+			UserCode:        "ABCD-EFGH",
+		},
+	})
+	if cmd == nil {
+		t.Fatal("expected auth start to schedule polling")
+	}
+	updated := next.(Model)
+	if updated.providerPanel == nil || !strings.Contains(updated.providerPanel.message, "copied to clipboard") || !strings.Contains(updated.providerPanel.message, "Opened the verification page") {
+		t.Fatalf("expected copied/opened login message, got %+v", updated.providerPanel)
 	}
 }
 
