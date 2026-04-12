@@ -1021,6 +1021,17 @@ func TestConversationViewportUnderlinesClickablePaths(t *testing.T) {
 	}
 }
 
+func TestPreviewTokenAtAllowsOneRowDownwardTolerance(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 30)
+	m.output.WriteString("● cmd/ggcode/root.go\n")
+
+	token, ok := m.previewTokenAt(4, m.conversationPanelTopOffset())
+	if !ok || token != "cmd/ggcode/root.go" {
+		t.Fatalf("expected downward tolerance to resolve file token, got %q", token)
+	}
+}
+
 func TestEscClosesPreviewPanel(t *testing.T) {
 	m := newTestModel()
 	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Lines: []string{"hello"}}
