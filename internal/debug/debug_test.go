@@ -50,15 +50,47 @@ func TestCloseRemovesAllLogs(t *testing.T) {
 	}
 }
 
+func TestResolveLogPathsUsesPerProcessFileForDefaultPath(t *testing.T) {
+	basePath, compatPath := resolveLogPaths(defaultLogPath, 4321)
+	if compatPath != defaultLogPath {
+		t.Fatalf("expected compat path %q, got %q", defaultLogPath, compatPath)
+	}
+	if basePath != filepath.Join(defaultLogDir, "ggcode-debug-4321.log") {
+		t.Fatalf("unexpected resolved base path %q", basePath)
+	}
+}
+
+func TestCleanupCompatPathDoesNotRemoveAnotherInstanceAlias(t *testing.T) {
+	dir := t.TempDir()
+	alias := filepath.Join(dir, "ggcode-debug.log")
+	other := filepath.Join(dir, "other.log")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatalf("write other log: %v", err)
+	}
+	if err := os.Symlink(other, alias); err != nil {
+		t.Fatalf("create alias: %v", err)
+	}
+
+	sink := &asyncFileSink{
+		basePath:   filepath.Join(dir, "self.log"),
+		compatPath: alias,
+	}
+	sink.cleanupCompatPath()
+
+	if _, err := os.Lstat(alias); err != nil {
+		t.Fatalf("expected alias for another instance to remain, err=%v", err)
+	}
+}
+
 func resetForTest(t *testing.T, basePath string, size int64, files, buffer int) {
 	t.Helper()
 	Close()
 	mu.Lock()
 	logger = nil
 	logSink = nil
-	once = sync.Once{}
-	logPath = basePath
-	maxLogSize = size
+		once = sync.Once{}
+		logPath = basePath
+		maxLogSize = size
 	maxLogFiles = files
 	asyncBufSize = buffer
 	mu.Unlock()

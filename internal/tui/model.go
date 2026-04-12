@@ -1599,6 +1599,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ts := ToolStatusMsg(msg)
 		m.updateActiveMCPTools(ts)
 		if ts.Running {
+			if !isSubAgentLifecycleTool(ts.ToolName) {
+				m.statusToolCount++
+			}
 			m.startToolActivity(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer()
@@ -1629,6 +1632,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		ts := msg.ToolStatusMsg
 		m.updateActiveMCPTools(ts)
 		if ts.Running {
+			if !isSubAgentLifecycleTool(ts.ToolName) {
+				m.statusToolCount++
+			}
 			m.startToolActivity(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer()

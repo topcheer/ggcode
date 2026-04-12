@@ -1619,6 +1619,46 @@ func TestFinishToolActivityMatchesParallelCompletionsByToolID(t *testing.T) {
 	}
 }
 
+func TestAgentToolStatusMsgCountsToolsInsideEventLoop(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 1
+
+	next, cmd := m.Update(agentToolStatusMsg{
+		RunID: 1,
+		ToolStatusMsg: ToolStatusMsg{
+			ToolID:      "tool-1",
+			ToolName:    "bash",
+			DisplayName: "Run",
+			Detail:      "first",
+			Running:     true,
+		},
+	})
+	if cmd == nil {
+		t.Fatal("expected tool start to schedule spinner work")
+	}
+	m = next.(Model)
+
+	next, cmd = m.Update(agentToolStatusMsg{
+		RunID: 1,
+		ToolStatusMsg: ToolStatusMsg{
+			ToolID:      "tool-2",
+			ToolName:    "bash",
+			DisplayName: "Run",
+			Detail:      "second",
+			Running:     true,
+		},
+	})
+	if cmd == nil {
+		t.Fatal("expected second tool start to schedule spinner work")
+	}
+	m = next.(Model)
+
+	if m.statusToolCount != 2 {
+		t.Fatalf("expected tool count 2 after two live tool starts, got %d", m.statusToolCount)
+	}
+}
+
 func TestAutopilotApprovalAutoContinues(t *testing.T) {
 	m := newTestModel()
 	m.mode = permission.AutopilotMode

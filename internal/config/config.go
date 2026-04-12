@@ -1140,7 +1140,7 @@ func uniqueNonEmptyStrings(values ...string) []string {
 }
 
 // BuildSystemPrompt enhances the base system prompt with runtime context.
-func BuildSystemPrompt(basePrompt, workingDir string, toolNames []string, gitStatus string, customCmds []string) string {
+func BuildSystemPrompt(basePrompt, workingDir, language string, toolNames []string, gitStatus string, customCmds []string) string {
 	if basePrompt == "" {
 		basePrompt = DefaultSystemPrompt
 	}
@@ -1151,6 +1151,12 @@ func BuildSystemPrompt(basePrompt, workingDir string, toolNames []string, gitSta
 
 	var sb strings.Builder
 	sb.WriteString(basePrompt)
+
+	if replyLanguageGuidance := buildReplyLanguageGuidance(language); replyLanguageGuidance != "" {
+		sb.WriteString("\n\n## Reply Language\n")
+		sb.WriteString(replyLanguageGuidance)
+		sb.WriteString("\n")
+	}
 
 	sb.WriteString("\n\n## Environment\n")
 	sb.WriteString(fmt.Sprintf("- Working directory: %s\n", workingDir))
@@ -1166,6 +1172,24 @@ func BuildSystemPrompt(basePrompt, workingDir string, toolNames []string, gitSta
 	}
 
 	return sb.String()
+}
+
+func buildReplyLanguageGuidance(language string) string {
+	switch normalizedConfigLanguage(language) {
+	case "zh-CN":
+		return "- Default to Simplified Chinese for user-facing replies because the configured interface language is Simplified Chinese.\n- If the user's current request clearly asks in another language or explicitly requests a different reply language, follow the user's current request for that turn."
+	default:
+		return "- Default to English for user-facing replies because the configured interface language is English.\n- If the user's current request clearly asks in another language or explicitly requests a different reply language, follow the user's current request for that turn."
+	}
+}
+
+func normalizedConfigLanguage(language string) string {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "zh", "zh-cn", "zh_hans", "zh-hans", "cn", "zh-sg":
+		return "zh-CN"
+	default:
+		return "en"
+	}
 }
 
 // ExpandAllowedDirs resolves allowed_dirs entries relative to baseDir.

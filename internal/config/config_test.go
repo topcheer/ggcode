@@ -12,6 +12,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 	tests := []struct {
 		name       string
 		basePrompt string
+		language   string
 		workingDir string
 		toolNames  []string
 		gitStatus  string
@@ -21,6 +22,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 		{
 			name:       "default prompt",
 			basePrompt: "",
+			language:   "en",
 			workingDir: "/tmp",
 			toolNames:  []string{"read_file", "write_file"},
 			want:       []string{"ggcode", "read_file", "write_file", "/tmp"},
@@ -28,6 +30,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 		{
 			name:       "custom prompt",
 			basePrompt: "You are a helper.",
+			language:   "en",
 			workingDir: "/home/user",
 			toolNames:  []string{"bash"},
 			want:       []string{"helper", "bash", "/home/user"},
@@ -35,6 +38,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 		{
 			name:       "with git status",
 			basePrompt: "",
+			language:   "en",
 			workingDir: "/tmp",
 			toolNames:  []string{"git_status"},
 			gitStatus:  "main, 2 commits ahead",
@@ -43,16 +47,25 @@ func TestBuildSystemPrompt(t *testing.T) {
 		{
 			name:       "with custom commands",
 			basePrompt: "",
+			language:   "en",
 			workingDir: "/tmp",
 			toolNames:  []string{"bash"},
 			customCmds: []string{"/deploy", "/build"},
 			want:       []string{"/deploy", "/build"},
 		},
+		{
+			name:       "with zh-CN reply guidance",
+			basePrompt: "",
+			language:   "zh-CN",
+			workingDir: "/tmp",
+			toolNames:  []string{"bash"},
+			want:       []string{"Default to Simplified Chinese", "follow the user's current request for that turn"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := BuildSystemPrompt(tt.basePrompt, tt.workingDir, tt.toolNames, tt.gitStatus, tt.customCmds)
+			result := BuildSystemPrompt(tt.basePrompt, tt.workingDir, tt.language, tt.toolNames, tt.gitStatus, tt.customCmds)
 			for _, substr := range tt.want {
 				if !contains(result, substr) {
 					t.Errorf("BuildSystemPrompt() missing %q in output", substr)

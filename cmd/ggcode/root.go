@@ -407,7 +407,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 
 	// Build enhanced system prompt with runtime context
-	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, toolNames, gitStatus, customCmdNames)
+	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
 	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
 		systemPrompt += "\n\n## Skills\n" + skillsPrompt
 	}
