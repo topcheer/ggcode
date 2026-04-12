@@ -191,6 +191,7 @@ type toolActivityGroup struct {
 }
 
 type toolActivityItem struct {
+	CallID                 string
 	Summary                string
 	Running                bool
 	CommandTitle           string

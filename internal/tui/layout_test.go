@@ -1595,6 +1595,30 @@ func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	}
 }
 
+func TestFinishToolActivityMatchesParallelCompletionsByToolID(t *testing.T) {
+	m := newTestModel()
+
+	m.startToolActivity(ToolStatusMsg{ToolID: "tool-1", ToolName: "bash", DisplayName: "Run", Detail: "cmd-1", Running: true, RawArgs: `{"command":"echo first"}`})
+	m.startToolActivity(ToolStatusMsg{ToolID: "tool-2", ToolName: "bash", DisplayName: "Run", Detail: "cmd-2", Running: true, RawArgs: `{"command":"echo second"}`})
+
+	m.finishToolActivity(ToolStatusMsg{ToolID: "tool-1", ToolName: "bash", DisplayName: "Run", Detail: "cmd-1", Running: false, Result: "first output", RawArgs: `{"command":"echo first"}`})
+
+	if len(m.activityGroups) != 1 || len(m.activityGroups[0].Items) != 2 {
+		t.Fatalf("expected one activity group with two items, got %#v", m.activityGroups)
+	}
+	first := m.activityGroups[0].Items[0]
+	second := m.activityGroups[0].Items[1]
+	if first.Running {
+		t.Fatal("expected first tool item to be marked complete")
+	}
+	if len(first.OutputLines) == 0 || first.OutputLines[0] != "first output" {
+		t.Fatalf("expected first tool output to be attached to the matching item, got %#v", first.OutputLines)
+	}
+	if !second.Running {
+		t.Fatal("expected second tool item to remain running")
+	}
+}
+
 func TestAutopilotApprovalAutoContinues(t *testing.T) {
 	m := newTestModel()
 	m.mode = permission.AutopilotMode

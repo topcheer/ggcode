@@ -118,6 +118,7 @@ func (m *Model) ensureLoadingSpinner(label string) tea.Cmd {
 
 // ToolStatusMsg is sent when a tool starts or finishes execution.
 type ToolStatusMsg struct {
+	ToolID      string
 	ToolName    string
 	DisplayName string
 	Detail      string

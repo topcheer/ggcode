@@ -120,6 +120,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
+					ToolID:   event.Tool.ID,
 					ToolName: event.Tool.Name,
 					Activity: m.t("status.thinking"),
 					Running:  true,
@@ -135,6 +136,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				ToolCount: m.statusToolCount + 1,
 			}})
 			m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
+				ToolID:      event.Tool.ID,
 				ToolName:    event.Tool.Name,
 				DisplayName: present.DisplayName,
 				Detail:      present.Detail,
@@ -147,6 +149,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
+					ToolID:   event.Tool.ID,
 					ToolName: event.Tool.Name,
 					Activity: m.t("status.thinking"),
 					Running:  false,
@@ -164,6 +167,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				ToolArg:  present.Detail,
 			}})
 			m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
+				ToolID:      event.Tool.ID,
 				ToolName:    event.Tool.Name,
 				DisplayName: present.DisplayName,
 				Detail:      present.Detail,
