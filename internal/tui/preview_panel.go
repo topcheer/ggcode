@@ -52,10 +52,20 @@ func (m Model) previewTokenAt(mouseX, mouseY int) (string, bool) {
 		return "", false
 	}
 	lines := visibleViewportLines(m.renderConversationPanel(m.conversationPanelHeight()))
-	if localY >= len(lines) {
+	if token, ok := previewTokenAtLine(lines, localY, mouseX); ok {
+		return token, true
+	}
+	// Bubble Tea mouse coordinates can land one visual row above the wrapped
+	// conversation content in some terminal layouts. Prefer a downward-only
+	// tolerance so clicks don't accidentally activate links from the line above.
+	return previewTokenAtLine(lines, localY+1, mouseX)
+}
+
+func previewTokenAtLine(lines []string, y, mouseX int) (string, bool) {
+	if y < 0 || y >= len(lines) {
 		return "", false
 	}
-	line := lines[localY]
+	line := lines[y]
 	for _, match := range previewTokenPattern.FindAllStringIndex(line, -1) {
 		start := lipgloss.Width(line[:match[0]])
 		end := lipgloss.Width(line[:match[1]])
