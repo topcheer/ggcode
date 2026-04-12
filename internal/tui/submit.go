@@ -106,6 +106,7 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 
 func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []provider.ContentBlock) (bool, error) {
 	streamErrSent := false
+	writingStatusSent := false
 	err := m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 		if m.program == nil {
 			return
@@ -113,10 +114,14 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		switch event.Type {
 		case provider.StreamEventText:
 			m.program.Send(agentStreamMsg{RunID: runID, Text: event.Text})
-			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
-				Activity: m.t("status.writing"),
-			}})
+			if !writingStatusSent {
+				writingStatusSent = true
+				m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
+					Activity: m.t("status.writing"),
+				}})
+			}
 		case provider.StreamEventToolCallDone:
+			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
@@ -145,6 +150,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 			}})
 		case provider.StreamEventToolResult:
+			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
