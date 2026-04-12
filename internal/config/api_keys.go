@@ -21,6 +21,7 @@ type APIKeyFinding struct {
 var envReferencePattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
 var preferredVendorAPIKeyEnvVars = map[string]string{
+	"aliyun":     "DASHSCOPE_API_KEY",
 	"anthropic":  "ANTHROPIC_API_KEY",
 	"ark":        "ARK_API_KEY",
 	"deepseek":   "DEEPSEEK_API_KEY",

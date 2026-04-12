@@ -326,6 +326,24 @@ func DefaultConfig() *Config {
 					"official", "openai-compatible", "cn",
 				),
 			}),
+			"aliyun": defaultVendor("Aliyun Bailian Coding Plan", "${DASHSCOPE_API_KEY}", map[string]EndpointConfig{
+				"coding-openai": defaultEndpoint(
+					"Aliyun Bailian Coding Plan",
+					"openai",
+					"https://coding.dashscope.aliyuncs.com/v1",
+					"qwen3-coder-plus",
+					[]string{"qwen3-coder-plus"},
+					"official", "coding", "cn", "openai-compatible",
+				),
+				"coding-anthropic": defaultEndpoint(
+					"Aliyun Bailian Coding Plan (Anthropic)",
+					"anthropic",
+					"https://coding.dashscope.aliyuncs.com/apps/anthropic",
+					"qwen3-coder-plus",
+					[]string{"qwen3-coder-plus"},
+					"official", "coding", "cn", "anthropic",
+				),
+			}),
 			"kimi": defaultVendor("Kimi Coding Plan", "${KIMI_API_KEY}", map[string]EndpointConfig{
 				"coding-openai": defaultEndpoint(
 					"Kimi Coding Plan",

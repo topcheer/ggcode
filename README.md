@@ -43,19 +43,22 @@ pip install ggcode
 The Python wrapper also downloads the latest ggcode GitHub Release by default and respects
 `GGCODE_INSTALL_VERSION` for explicit pinning.
 
-### Release archives and native Linux packages
+### Release archives and installer packages
 
-Each tagged release publishes platform archives for desktop use plus native package files for Linux:
+Each tagged release publishes desktop archives plus native installer/package files:
 
 | Platform | Release asset | Install example |
 | --- | --- | --- |
-| macOS | `.tar.gz` | `tar -xzf ./ggcode_darwin_<arch>.tar.gz && ./ggcode` |
-| Windows | `.zip` | `powershell -Command "Expand-Archive .\\ggcode_windows_<arch>.zip .\\ggcode"` |
+| macOS | `.pkg` | `sudo installer -pkg ./ggcode_<version>_darwin_universal.pkg -target /` |
+| Windows | `.msi` | `msiexec /i .\ggcode_<version>_windows_x64.msi` |
 | Debian / Ubuntu | `.deb` | `sudo dpkg -i ./ggcode_<version>_linux_<arch>.deb` |
 | Fedora / RHEL / openSUSE | `.rpm` | `sudo rpm -i ./ggcode-<version>-1.<arch>.rpm` |
 | Alpine | `.apk` | `sudo apk add --allow-untrusted ./ggcode-<version>-r1.<arch>.apk` |
 | OpenWrt / opkg | `.ipk` | `opkg install ./ggcode_<version>_<arch>.ipk` |
 | Arch Linux | `.pkg.tar.zst` | `sudo pacman -U ./ggcode-<version>-1-<arch>.pkg.tar.zst` |
+
+Desktop releases also include archive assets (`.tar.gz` on Unix-like platforms and `.zip` on
+Windows) if you prefer manual extraction over native installers.
 
 If you prefer not to install from a package manager, the existing release archives, Go installer,
 npm wrapper, and Python wrapper remain available.
@@ -109,11 +112,16 @@ The simplest path is still setting a normal vendor API key:
 
 ```bash
 export ZAI_API_KEY="your-key"
-# or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / ...
+# or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / DASHSCOPE_API_KEY / ...
 ```
 
 If you prefer GitHub Copilot, you can also sign in from the in-app **`/provider`** flow instead of
 exporting an API key.
+
+If you want Aliyun Bailian Coding Plan, use the built-in **`aliyun`** vendor with:
+
+- `coding-openai` → `https://coding.dashscope.aliyuncs.com/v1`
+- `coding-anthropic` → `https://coding.dashscope.aliyuncs.com/apps/anthropic`
 
 If you use an **Anthropic-compatible endpoint**, ggcode can also bootstrap it on first launch from:
 
@@ -335,7 +343,9 @@ tool_permissions:
   write_file: ask
 ```
 
-ggcode ships with built-in presets for mainstream vendors and several coding-oriented endpoints, so you usually start by choosing a vendor or setting API keys rather than writing the full provider catalog yourself.
+ggcode ships with built-in presets for mainstream vendors and several coding-oriented endpoints,
+including Aliyun Bailian Coding Plan, so you usually start by choosing a vendor or setting API keys
+rather than writing the full provider catalog yourself.
 
 For long-running or interactive shell work, the built-in async command tools let the agent start a background command, poll progress, send follow-up stdin input, and stop the job without blocking the whole session.
 
