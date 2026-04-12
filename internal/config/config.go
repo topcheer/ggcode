@@ -1241,6 +1241,13 @@ func BuildSystemPrompt(basePrompt, workingDir, language string, toolNames []stri
 	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 	sb.WriteString(fmt.Sprintf("- Available tools: %s\n", strings.Join(toolNames, ", ")))
 
+	if hasAnyToolPrefix(toolNames, "lsp_") {
+		sb.WriteString("\n## LSP Guidance\n")
+		sb.WriteString("- If lsp_* tools are available and the user asks about symbol definitions, references, hover/type information, diagnostics, rename, code actions, or workspace symbol lookup in a supported source file, prefer lsp_* tools before broad text search.\n")
+		sb.WriteString("- If you know a symbol name but not its exact position, use lsp_symbols or lsp_workspace_symbols first to obtain the precise line/character range, then call lsp_definition, lsp_references, or lsp_hover with that position.\n")
+		sb.WriteString("- Use read_file or search tools after LSP when you need extra surrounding context or when LSP is unavailable for that file.\n")
+	}
+
 	if gitStatus != "" {
 		sb.WriteString(fmt.Sprintf("- Git: %s\n", gitStatus))
 	}
@@ -1268,6 +1275,15 @@ func normalizedConfigLanguage(language string) string {
 	default:
 		return "en"
 	}
+}
+
+func hasAnyToolPrefix(toolNames []string, prefix string) bool {
+	for _, name := range toolNames {
+		if strings.HasPrefix(strings.TrimSpace(name), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ExpandAllowedDirs resolves allowed_dirs entries relative to baseDir.

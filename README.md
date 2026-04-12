@@ -175,6 +175,7 @@ Find why startup feels slow in the TUI
 From the product point of view, ggcode is more than “chat with a model”:
 
 - **Code understanding** — read files, search the repo, inspect git status and diffs
+- **Semantic code navigation** — use local LSP servers like `gopls` when available for hover, definition, references, symbols, workspace symbols, diagnostics, code actions, and rename
 - **Code changes** — create files, edit targeted regions, and checkpoint edits for undo
 - **Command execution** — run foreground commands or long-running background jobs
 - **Parallel help** — spawn sub-agents, inspect their progress, and poll long-running workers without blocking the main loop
@@ -203,7 +204,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 | `/provider [vendor]` | Open the provider manager and switch vendor / endpoint / model, including GitHub Copilot login/logout flows |
 | `/model <name>` | Switch model directly |
 | `/mode <mode>` | Change permission mode |
-| `/status` | Show current status |
+| `/status` | Show current status, including local LSP availability and install hints for supported languages |
 | `/config` | View or update configuration |
 | `/lang <en|zh-CN>` | Change interface language |
 

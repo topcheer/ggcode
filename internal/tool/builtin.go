@@ -24,6 +24,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Search
 		SearchFiles{SandboxCheck: sandboxFor("search_files")},
 		Glob{SandboxCheck: sandboxFor("glob")},
+	}
+	tools = append(tools, NewLSPTools(workingDir, sandboxFor("read_file"), sandboxFor("edit_file"))...)
+	tools = append(tools,
 
 		// Execution
 		RunCommand{WorkingDir: workingDir},
@@ -46,7 +49,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Productivity
 		NewAskUserTool(),
 		NewWorkspaceTodoWrite(workingDir),
-	}
+	)
 	for _, t := range tools {
 		if err := registry.Register(t); err != nil {
 			return err

@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/diff"
+	"github.com/topcheer/ggcode/internal/lsp"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -615,7 +616,85 @@ func (m Model) inspectorStatusItems() []inspectorPanelItem {
 			}, "\n"),
 		})
 	}
+	items = append(items, m.inspectorLSPStatusItems()...)
 	return items
+}
+
+func (m Model) inspectorLSPStatusItems() []inspectorPanelItem {
+	workspace := workingDirFromModel(&m)
+	status := lsp.DetectWorkspaceStatus(workspace)
+	if len(status.Languages) == 0 {
+		return []inspectorPanelItem{{
+			ID:      "lsp",
+			Title:   inspectorText(m.currentLanguage(), "lsp"),
+			Summary: inspectorText(m.currentLanguage(), "lsp_no_supported_languages"),
+			Detail: strings.Join([]string{
+				inspectorText(m.currentLanguage(), "lsp"),
+				"",
+				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "workspace"), compactWorkspaceLabelForTUI(workspace)),
+				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "status"), inspectorText(m.currentLanguage(), "lsp_no_supported_languages")),
+			}, "\n"),
+			Disabled: true,
+		}}
+	}
+
+	readyCount := 0
+	detectedNames := make([]string, 0, len(status.Languages))
+	for _, lang := range status.Languages {
+		detectedNames = append(detectedNames, lang.DisplayName)
+		if lang.Available {
+			readyCount++
+		}
+	}
+	items := []inspectorPanelItem{{
+		ID:      "lsp",
+		Title:   inspectorText(m.currentLanguage(), "lsp"),
+		Summary: fmt.Sprintf("%d/%d %s • %s", readyCount, len(status.Languages), inspectorText(m.currentLanguage(), "lsp_ready"), strings.Join(detectedNames, ", ")),
+		Detail: strings.Join([]string{
+			inspectorText(m.currentLanguage(), "lsp"),
+			"",
+			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "workspace"), compactWorkspaceLabelForTUI(workspace)),
+			fmt.Sprintf("%s: %d/%d", inspectorText(m.currentLanguage(), "lsp_ready"), readyCount, len(status.Languages)),
+			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "language"), strings.Join(detectedNames, ", ")),
+		}, "\n"),
+	}}
+	for _, lang := range status.Languages {
+		summary := inspectorText(m.currentLanguage(), "lsp_unavailable")
+		if lang.Available {
+			summary = fmt.Sprintf("%s • %s", inspectorText(m.currentLanguage(), "lsp_ready"), lang.Binary)
+		} else if lang.Binary != "" {
+			summary = fmt.Sprintf("%s • %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.Binary)
+		}
+		detailLines := []string{
+			lang.DisplayName,
+			"",
+			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "status"), ternaryString(lang.Available, inspectorText(m.currentLanguage(), "lsp_ready"), inspectorText(m.currentLanguage(), "lsp_unavailable"))),
+		}
+		if lang.Binary != "" {
+			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_binary"), lang.Binary))
+		}
+		if len(lang.Evidence) > 0 {
+			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_detected_by"), strings.Join(lang.Evidence, ", ")))
+		}
+		if !lang.Available && strings.TrimSpace(lang.InstallHint) != "" {
+			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.InstallHint))
+		}
+		items = append(items, inspectorPanelItem{
+			ID:       "lsp-" + lang.ID,
+			Title:    lang.DisplayName,
+			Summary:  summary,
+			Detail:   strings.Join(detailLines, "\n"),
+			Disabled: !lang.Available,
+		})
+	}
+	return items
+}
+
+func ternaryString(cond bool, yes, no string) string {
+	if cond {
+		return yes
+	}
+	return no
 }
 
 func (m Model) runningAgentCount() int {
@@ -900,6 +979,20 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "上下文窗口"
 		case "max_tokens":
 			msg = "最大输出"
+		case "lsp":
+			msg = "LSP"
+		case "lsp_ready":
+			msg = "可用"
+		case "lsp_unavailable":
+			msg = "不可用"
+		case "lsp_binary":
+			msg = "二进制"
+		case "lsp_install":
+			msg = "安装命令"
+		case "lsp_detected_by":
+			msg = "检测依据"
+		case "lsp_no_supported_languages":
+			msg = "当前工作区未检测到已支持的语言"
 		}
 	default:
 		switch key {
@@ -1035,6 +1128,20 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "Context window"
 		case "max_tokens":
 			msg = "Max tokens"
+		case "lsp":
+			msg = "LSP"
+		case "lsp_ready":
+			msg = "ready"
+		case "lsp_unavailable":
+			msg = "unavailable"
+		case "lsp_binary":
+			msg = "Binary"
+		case "lsp_install":
+			msg = "Install"
+		case "lsp_detected_by":
+			msg = "Detected by"
+		case "lsp_no_supported_languages":
+			msg = "No supported workspace languages detected"
 		}
 	}
 	if len(args) == 0 {

@@ -62,6 +62,14 @@ func TestBuildSystemPrompt(t *testing.T) {
 			toolNames:  []string{"bash"},
 			want:       []string{"Default to Simplified Chinese", "follow the user's current request for that turn"},
 		},
+		{
+			name:       "with lsp guidance",
+			basePrompt: "",
+			language:   "en",
+			workingDir: "/tmp",
+			toolNames:  []string{"read_file", "lsp_definition", "lsp_symbols"},
+			want:       []string{"## LSP Guidance", "prefer lsp_* tools before broad text search", "use lsp_symbols or lsp_workspace_symbols first", "Use read_file or search tools after LSP"},
+		},
 	}
 
 	for _, tt := range tests {
