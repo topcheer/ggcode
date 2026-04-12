@@ -8,6 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -129,25 +133,32 @@ func (p *previewPanelState) previewContent(width int) string {
 	if p.Error != "" {
 		return p.Error
 	}
-	if !isMarkdownPreviewPath(p.DisplayPath) && !isMarkdownPreviewPath(p.AbsPath) {
-		return p.Content
-	}
 	if p.rendered != "" && p.renderWidth == width {
 		return p.rendered
 	}
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(width),
-	)
-	if err != nil {
-		return p.Content
-	}
-	rendered, err := renderer.Render(p.Content)
-	if err != nil {
-		return p.Content
+	rendered := p.Content
+	switch {
+	case isMarkdownPreviewPath(p.DisplayPath) || isMarkdownPreviewPath(p.AbsPath):
+		renderer, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			return p.Content
+		}
+		out, err := renderer.Render(p.Content)
+		if err != nil {
+			return p.Content
+		}
+		rendered = trimLeadingRenderedSpacing(out)
+	case shouldSyntaxHighlightPreviewPath(p.DisplayPath) || shouldSyntaxHighlightPreviewPath(p.AbsPath):
+		out, ok := renderHighlightedPreview(p.DisplayPath, p.Content)
+		if ok {
+			rendered = out
+		}
 	}
 	p.renderWidth = width
-	p.rendered = trimLeadingRenderedSpacing(rendered)
+	p.rendered = rendered
 	return p.rendered
 }
 
@@ -159,6 +170,47 @@ func isMarkdownPreviewPath(path string) bool {
 	default:
 		return false
 	}
+}
+
+func shouldSyntaxHighlightPreviewPath(path string) bool {
+	if isMarkdownPreviewPath(path) {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml", ".toml", ".sh", ".bash", ".zsh", ".mod", ".sum", ".txt", ".html", ".css", ".scss", ".sql", ".xml", ".ini", ".conf":
+		return true
+	default:
+		return path == "Dockerfile" || strings.HasSuffix(path, ".env")
+	}
+}
+
+func renderHighlightedPreview(path, content string) (string, bool) {
+	lexer := lexers.Match(path)
+	if lexer == nil {
+		lexer = lexers.Analyse(content)
+	}
+	if lexer == nil {
+		return "", false
+	}
+	lexer = chroma.Coalesce(lexer)
+	iterator, err := lexer.Tokenise(nil, content)
+	if err != nil {
+		return "", false
+	}
+	formatter := formatters.Get("terminal256")
+	if formatter == nil {
+		return "", false
+	}
+	style := styles.Get("dracula")
+	if style == nil {
+		style = styles.Fallback
+	}
+	var buf strings.Builder
+	if err := formatter.Format(&buf, style, iterator); err != nil {
+		return "", false
+	}
+	return strings.TrimRight(buf.String(), "\n"), true
 }
 
 func parsePreviewTarget(token string) (string, int) {
