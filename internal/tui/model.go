@@ -110,6 +110,7 @@ type Model struct {
 	mcpPanel                        *mcpPanelState
 	skillsPanel                     *skillsPanelState
 	inspectorPanel                  *inspectorPanelState
+	previewPanel                    *previewPanelState
 	harnessPanel                    *harnessPanelState
 	harnessContextPrompt            *harnessContextPromptState
 
@@ -869,6 +870,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Alt {
 			return m, nil
 		}
+		if m.handlePreviewClick(msg) {
+			return m, nil
+		}
 		switch msg.Type {
 		case tea.MouseWheelUp:
 			m.syncConversationViewport()
@@ -1127,6 +1131,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.autoCompleteActive {
 				m.autoCompleteActive = false
 				m.autoCompleteItems = nil
+				return m, nil
+			}
+			if m.previewPanel != nil {
+				m.closePreviewPanel()
 				return m, nil
 			}
 			if m.shellMode && !m.loading {
