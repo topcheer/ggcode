@@ -733,6 +733,8 @@ func enCatalog(key string) string {
 		return " Tab/j/k move • Enter confirm • e/z shortcuts"
 	case "mode.current":
 		return "Current mode: %s\nUsage: /mode <supervised|plan|auto|bypass|autopilot>\n  supervised  Ask when a tool has no explicit rule\n  plan        Read-only exploration; deny writes and commands\n  auto        Allow safe operations, deny dangerous ones\n  bypass      Allow almost everything; only stop on critical actions\n  autopilot   bypass + keep going when the model asks back\n\n"
+	case "mode.persist_failed":
+		return "Failed to persist mode preference: %v"
 	case "input.placeholder":
 		return "Type a message... ($ / ! enters shell mode)"
 	case "panel.model_filter.prompt":
@@ -1769,6 +1771,8 @@ func zhCatalog(key string) string {
 		return " Tab/j/k 移动 • Enter 确认 • e/z 快捷键"
 	case "mode.current":
 		return "当前模式：%s\n用法：/mode <supervised|plan|auto|bypass|autopilot>\n  supervised  未显式配置的工具会询问\n  plan        严格只读探索；拒绝写入和命令\n  auto        自动允许安全操作，拒绝危险操作\n  bypass      基本全放行，只在关键操作时停下\n  autopilot   等同 bypass，并在模型反问时自动继续\n\n"
+	case "mode.persist_failed":
+		return "持久化模式偏好失败：%v"
 	case "input.placeholder":
 		return "输入消息...（$ / ! 进入 shell 模式）"
 	case "panel.model_filter.prompt":

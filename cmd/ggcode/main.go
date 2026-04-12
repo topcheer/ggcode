@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 func main() {
+	defer debug.Close()
+
 	if shouldPrintRootHelpDirectly(os.Args[1:]) {
 		_, _ = writeCLIText(os.Stdout, rootHelpText())
 		return
@@ -14,6 +18,7 @@ func main() {
 	cmd := NewRootCmd()
 	if err := cmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		debug.Close()
 		os.Exit(1)
 	}
 }

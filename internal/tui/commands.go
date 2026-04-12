@@ -1876,6 +1876,7 @@ func (m Model) handleModeSwitch() (tea.Model, tea.Cmd) {
 	if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(m.mode)
 	}
+	m.persistModePreference()
 	return m, nil
 }
 
@@ -1886,10 +1887,21 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 		if cp, ok := m.policy.(*permission.ConfigPolicy); ok {
 			cp.SetMode(newMode)
 		}
+		m.persistModePreference()
 	} else {
 		m.output.WriteString(m.t("mode.current", m.mode))
 	}
 	return nil
+}
+
+func (m *Model) persistModePreference() {
+	if m.config == nil {
+		return
+	}
+	if err := m.config.SaveDefaultModePreference(m.mode.String()); err != nil {
+		m.output.WriteString(m.styles.error.Render(m.t("mode.persist_failed", err)))
+		m.output.WriteString("\n\n")
+	}
 }
 
 func (m *Model) handleLangCommand(parts []string) tea.Cmd {
