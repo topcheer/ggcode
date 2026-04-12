@@ -46,13 +46,12 @@ func (m *Model) handlePreviewClick(msg tea.MouseMsg) bool {
 }
 
 func (m Model) previewTokenAt(mouseX, mouseY int) (string, bool) {
-	contentX, contentY := m.conversationContentOrigin()
-	localX := mouseX - contentX
-	localY := mouseY - contentY
-	if localX < 0 || localY < 0 || localX >= m.conversationInnerWidth() {
+	panelTop := m.conversationPanelTopOffset()
+	localY := mouseY - panelTop
+	if mouseX < 0 || localY < 0 {
 		return "", false
 	}
-	lines := visibleViewportLines(m.conversationViewport().View())
+	lines := visibleViewportLines(m.renderConversationPanel(m.conversationPanelHeight()))
 	if localY >= len(lines) {
 		return "", false
 	}
@@ -60,20 +59,19 @@ func (m Model) previewTokenAt(mouseX, mouseY int) (string, bool) {
 	for _, match := range previewTokenPattern.FindAllStringIndex(line, -1) {
 		start := lipgloss.Width(line[:match[0]])
 		end := lipgloss.Width(line[:match[1]])
-		if localX >= start && localX < end {
+		if mouseX >= start && mouseX < end {
 			return line[match[0]:match[1]], true
 		}
 	}
 	return "", false
 }
 
-func (m Model) conversationContentOrigin() (int, int) {
+func (m Model) conversationPanelTopOffset() int {
 	header := ""
 	if m.topHeaderEnabled() {
 		header = m.renderHeader()
 	}
-	top := lipgloss.Height(header) + lipgloss.Height(m.renderStartupBanner())
-	return 2, top + 1
+	return lipgloss.Height(header) + lipgloss.Height(m.renderStartupBanner())
 }
 
 func visibleViewportLines(rendered string) []string {
@@ -224,6 +222,36 @@ func (m Model) renderPreviewPanel() string {
 		return ""
 	}
 	return m.renderPreviewPanelBox(m.boxInnerWidth(m.mainColumnWidth()))
+}
+
+func (m Model) decoratePreviewTargets(rendered string) string {
+	if rendered == "" {
+		return rendered
+	}
+	linkStyle := lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("81"))
+	lines := strings.Split(rendered, "\n")
+	for i, line := range lines {
+		lines[i] = previewTokenPattern.ReplaceAllStringFunc(line, func(token string) string {
+			pathPart, _ := parsePreviewTarget(token)
+			if pathPart == "" {
+				return token
+			}
+			if !previewPathExists(pathPart) {
+				return token
+			}
+			return linkStyle.Render(token)
+		})
+	}
+	return strings.Join(lines, "\n")
+}
+
+func previewPathExists(pathPart string) bool {
+	absPath, ok := resolvePreviewPath(pathPart)
+	if !ok {
+		return false
+	}
+	info, err := os.Stat(absPath)
+	return err == nil && !info.IsDir()
 }
 
 func (m Model) renderSidebarPreviewPanel(totalHeight int) string {

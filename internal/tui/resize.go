@@ -33,7 +33,7 @@ func (m *Model) handleResize(width, height int) {
 func (m *Model) syncConversationViewport() {
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
-	m.viewport.SetContent(m.renderOutput())
+	m.viewport.SetContent(m.decoratePreviewTargets(m.renderOutput()))
 }
 
 // rebuildMarkdownRenderer creates a new glamour renderer matching the current width.
