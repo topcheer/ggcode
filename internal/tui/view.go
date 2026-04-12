@@ -87,7 +87,7 @@ func (m Model) conversationViewport() ViewportModel {
 	vp := m.viewport
 	panelHeight := m.conversationPanelHeight()
 	vp.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
-	vp.SetContent(m.decoratePreviewTargets(m.renderOutput()))
+	vp.SetContent(m.renderOutput())
 	return vp
 }
 
@@ -591,7 +591,7 @@ func resolveGitDir(start string) (string, error) {
 
 func (m Model) renderConversationPanel(panelHeight int) string {
 	vp := m.conversationViewport()
-	content := vp.View()
+	content := m.decoratePreviewTargets(vp.View())
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
