@@ -24,7 +24,7 @@ var (
 	once    sync.Once
 	mu      sync.RWMutex
 
-	logPath      = defaultLogPath
+	logPath            = defaultLogPath
 	maxLogSize   int64 = defaultMaxLogSize
 	maxLogFiles        = defaultMaxLogFiles
 	asyncBufSize       = defaultAsyncBufSize
