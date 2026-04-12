@@ -11,7 +11,7 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/alecthomas/chroma/v2/styles"
+	chromastyles "github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -202,9 +202,9 @@ func renderHighlightedPreview(path, content string) (string, bool) {
 	if formatter == nil {
 		return "", false
 	}
-	style := styles.Get("dracula")
+	style := chromastyles.Get("dracula")
 	if style == nil {
-		style = styles.Fallback
+		style = chromastyles.Fallback
 	}
 	var buf strings.Builder
 	if err := formatter.Format(&buf, style, iterator); err != nil {
