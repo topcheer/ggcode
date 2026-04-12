@@ -56,6 +56,8 @@ type providerAuthResultMsg struct {
 	err    error
 }
 
+const providerPanelVisibleModelRows = 5
+
 const (
 	providerPanelFocusVendor = iota
 	providerPanelFocusEndpoint
@@ -266,7 +268,6 @@ func (m *Model) renderProviderPanel() string {
 	if model == "" {
 		model = m.t("panel.provider.model.set_with_m")
 	}
-	window := buildModelListWindow(panel.models, panel.modelIndex, panel.modelFilter)
 	contentWidth := m.boxInnerWidth(m.mainColumnWidth())
 	leftWidth := max(24, contentWidth*2/5)
 	rightWidth := max(28, contentWidth-leftWidth-1)
@@ -280,31 +281,32 @@ func (m *Model) renderProviderPanel() string {
 		rightWidth = 1
 	}
 
-	columnHeight := providerPanelColumnsHeight(m.viewHeight())
-	endpointHeight := max(5, columnHeight/3)
-	modelHeight := max(8, columnHeight-endpointHeight-1)
-	endpointHeight = columnHeight - modelHeight - 1
-	footerHeight := providerPanelFooterHeight()
+	vendorHeight := providerPanelVendorHeight(len(panel.vendorIDs))
+	endpointHeight := providerPanelEndpointHeight(len(panel.endpointIDs))
+	modelFilterEnabled := providerPanelModelFilterEnabled(panel.models)
+	modelHeight := providerPanelModelHeight(modelFilterEnabled)
+	envVar := providerPanelAPIKeyEnvVar(panel.selectedVendor(), panel.selectedEndpoint(), vc, ep)
+	footerHeight := providerPanelFooterHeight(envVar != "")
 
 	leftColumn := renderProviderPanelSection(
 		m.t("panel.provider.vendors"),
-		m.renderProviderList(panel.vendorIDs, panel.vendorIndex, panel.focus == providerPanelFocusVendor),
+		renderProviderListWindow(m.renderProviderList, panel.vendorIDs, panel.vendorIndex, panel.focus == providerPanelFocusVendor, providerPanelVendorBodyRows(len(panel.vendorIDs))),
 		leftWidth,
-		columnHeight,
+		vendorHeight,
 	)
 
 	rightTop := renderProviderPanelSection(
 		m.t("panel.provider.endpoints"),
-		m.renderProviderList(panel.endpointIDs, panel.endpointIndex, panel.focus == providerPanelFocusEndpoint),
+		renderProviderListWindow(m.renderProviderList, panel.endpointIDs, panel.endpointIndex, panel.focus == providerPanelFocusEndpoint, providerPanelEndpointBodyRows(len(panel.endpointIDs))),
 		rightWidth,
 		endpointHeight,
 	)
 
 	modelBody := []string{}
-	if window.filterEnabled {
+	if modelFilterEnabled {
 		modelBody = append(modelBody, panel.modelFilter.View())
 	}
-	modelBody = append(modelBody, renderModelListWindow(m.renderProviderList, window, panel.focus == providerPanelFocusModel, m.currentLanguage()))
+	modelBody = append(modelBody, renderProviderModelListWindow(m.renderProviderList, panel.models, panel.modelIndex, panel.modelFilter, panel.focus == providerPanelFocusModel, m.currentLanguage()))
 	rightBottom := renderProviderPanelSection(
 		m.t("panel.provider.models"),
 		strings.Join(modelBody, "\n"),
@@ -323,9 +325,14 @@ func (m *Model) renderProviderPanel() string {
 		fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), firstNonEmptyValue(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.auth"), apiKeyState),
+	}
+	if envVar != "" {
+		footer = append(footer, fmt.Sprintf(" %s: %s", m.t("panel.provider.env_var"), envVar))
+	}
+	footer = append(footer,
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.base_url"), baseURLState),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.tags"), strings.Join(ep.Tags, ", ")),
-	}
+	)
 	if panel.refreshing {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(" "+m.t("panel.provider.refreshing_vendor", panel.refreshVendor)))
 	}
@@ -380,7 +387,84 @@ func providerPanelColumnsHeight(viewHeight int) int {
 	return min(28, max(16, viewHeight-12))
 }
 
-func providerPanelFooterHeight() int {
+func providerPanelVendorBodyRows(vendorCount int) int {
+	return providerPanelListBodyRows(vendorCount, 4, 12, 1)
+}
+
+func providerPanelVendorHeight(vendorCount int) int {
+	return providerPanelVendorBodyRows(vendorCount) + 1 + 4
+}
+
+func providerPanelEndpointBodyRows(endpointCount int) int {
+	return providerPanelListBodyRows(endpointCount, 3, 5, 2)
+}
+
+func providerPanelEndpointHeight(endpointCount int) int {
+	return max(3, providerPanelEndpointBodyRows(endpointCount)+1-2)
+}
+
+func providerPanelModelHeight(filterEnabled bool) int {
+	rows := providerPanelVisibleModelRows
+	if filterEnabled {
+		rows++
+	}
+	return rows + 1
+}
+
+func providerPanelListBodyRows(itemCount, minRows, maxRows, reserveRows int) int {
+	rows := itemCount + reserveRows
+	if rows < minRows {
+		rows = minRows
+	}
+	if rows > maxRows {
+		rows = maxRows
+	}
+	return rows
+}
+
+func renderProviderListWindow(renderList func([]string, int, bool) string, items []string, selected int, focused bool, maxRows int) string {
+	if len(items) == 0 || maxRows <= 0 || len(items) <= maxRows {
+		return renderList(items, selected, focused)
+	}
+	if selected < 0 || selected >= len(items) {
+		selected = 0
+	}
+	start := selected - maxRows/2
+	if start < 0 {
+		start = 0
+	}
+	maxStart := len(items) - maxRows
+	if start > maxStart {
+		start = maxStart
+	}
+	end := start + maxRows
+	windowItems := items[start:end]
+	return renderList(windowItems, selected-start, focused)
+}
+
+func renderProviderModelListWindow(renderList func([]string, int, bool) string, models []string, selected int, filter textinput.Model, focused bool, lang Language) string {
+	if len(models) == 0 {
+		return "  " + tr(lang, "panel.model_list.none")
+	}
+	items, indices := filteredModelItems(models, filter.Value())
+	if len(items) == 0 {
+		return "  " + tr(lang, "panel.model_list.no_matches")
+	}
+	selectedPos := indexOfInt(indices, selected)
+	if selectedPos < 0 {
+		selectedPos = 0
+	}
+	return renderProviderListWindow(renderList, items, selectedPos, focused, providerPanelVisibleModelRows)
+}
+
+func providerPanelModelFilterEnabled(models []string) bool {
+	return len(models) > providerPanelVisibleModelRows
+}
+
+func providerPanelFooterHeight(showEnvVar bool) int {
+	if showEnvVar {
+		return 9
+	}
 	return 8
 }
 
@@ -428,8 +512,9 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return *m, nil
 		case "enter":
 			value := strings.TrimSpace(panel.editInput.Value())
+			editedField := panel.editingField
 			var err error
-			switch panel.editingField {
+			switch editedField {
 			case "vendor api key":
 				err = m.config.SetEndpointAPIKey(panel.selectedVendor(), panel.selectedEndpoint(), value, true)
 			case "endpoint api key":
@@ -461,7 +546,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				panel.message = err.Error()
 				return *m, nil
 			}
-			if panel.editingField == "enterprise url" {
+			if editedField == "enterprise url" {
 				panel.editingField = ""
 				panel.message = m.t("panel.provider.saved")
 				return *m, nil
@@ -474,6 +559,11 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			panel.message = m.t("panel.provider.saved")
 			panel.refreshing = false
 			panel.refreshVendor = ""
+			if providerEditShouldRefreshModels(editedField) {
+				if cmd := m.refreshProviderModelsForVendor(panel.selectedVendor()); cmd != nil {
+					return *m, cmd
+				}
+			}
 			return *m, nil
 		default:
 			var cmd tea.Cmd
@@ -498,7 +588,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.closeProviderPanel()
 		return *m, nil
 	case "/":
-		if panel.focus == providerPanelFocusModel && shouldEnableModelFilter(panel.models) {
+		if panel.focus == providerPanelFocusModel && providerPanelModelFilterEnabled(panel.models) {
 			panel.modelFilter.Focus()
 			return *m, nil
 		}
@@ -774,6 +864,22 @@ func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.Endpo
 		return m.t("panel.provider.api_key.configured")
 	}
 	return m.t("panel.provider.api_key.missing")
+}
+
+func providerPanelAPIKeyEnvVar(vendor, endpoint string, vc config.VendorConfig, ep config.EndpointConfig) string {
+	if vendor == auth.ProviderGitHubCopilot {
+		return ""
+	}
+	return config.PreferredAPIKeyEnvVar(vendor, endpoint, vc.APIKey, ep.APIKey)
+}
+
+func providerEditShouldRefreshModels(field string) bool {
+	switch field {
+	case "endpoint api key", "endpoint base url":
+		return true
+	default:
+		return false
+	}
 }
 
 func providerEditFieldLabel(lang Language, field string) string {

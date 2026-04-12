@@ -1093,6 +1093,59 @@ func TestProviderAuthStartShowsClipboardAndBrowserNotes(t *testing.T) {
 	}
 }
 
+func TestSavingEndpointAPIKeyTriggersModelRefresh(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "gpt-4o"
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+	m.providerPanel.startEditing("endpoint api key", "")
+	m.providerPanel.editInput.SetValue("test-token")
+
+	next, cmd := m.handleProviderPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected saving endpoint api key to trigger model refresh")
+	}
+	updated := next
+	if updated.providerPanel == nil || !updated.providerPanel.refreshing {
+		t.Fatalf("expected provider panel refresh state after saving endpoint api key, got %+v", updated.providerPanel)
+	}
+	if updated.providerPanel.refreshVendor != "openai" {
+		t.Fatalf("expected refresh vendor openai, got %+v", updated.providerPanel)
+	}
+}
+
+func TestSavingEndpointBaseURLTriggersModelRefresh(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "gpt-4o"
+	if err := cfg.SetEndpointAPIKey("openai", "api", "test-token", false); err != nil {
+		t.Fatalf("SetEndpointAPIKey() error = %v", err)
+	}
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+	m.providerPanel.startEditing("endpoint base url", "https://api.openai.com/v1")
+	m.providerPanel.editInput.SetValue("https://api.openai.com/v1")
+
+	next, cmd := m.handleProviderPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected saving endpoint base url to trigger model refresh")
+	}
+	updated := next
+	if updated.providerPanel == nil || !updated.providerPanel.refreshing {
+		t.Fatalf("expected provider panel refresh state after saving endpoint base url, got %+v", updated.providerPanel)
+	}
+	if updated.providerPanel.refreshVendor != "openai" {
+		t.Fatalf("expected refresh vendor openai, got %+v", updated.providerPanel)
+	}
+}
+
 func TestSubmitTextStripsImagePlaceholderButKeepsImageDisplay(t *testing.T) {
 	m := newTestModel()
 	m.pendingImage = &imageAttachedMsg{

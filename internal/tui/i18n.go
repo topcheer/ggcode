@@ -801,6 +801,8 @@ func enCatalog(key string) string {
 		return "(unknown)"
 	case "panel.provider.auth":
 		return "Auth"
+	case "panel.provider.env_var":
+		return "Env var"
 	case "panel.provider.api_key":
 		return "API key"
 	case "panel.provider.api_key.missing":
@@ -1905,6 +1907,8 @@ func zhCatalog(key string) string {
 		return "(未知)"
 	case "panel.provider.auth":
 		return "认证"
+	case "panel.provider.env_var":
+		return "环境变量"
 	case "panel.provider.api_key":
 		return "API Key"
 	case "panel.provider.api_key.missing":
