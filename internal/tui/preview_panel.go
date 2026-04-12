@@ -46,19 +46,11 @@ func (m *Model) handlePreviewClick(msg tea.MouseMsg) bool {
 }
 
 func (m Model) previewTokenAt(mouseX, mouseY int) (string, bool) {
-	panelTop := m.conversationPanelTopOffset()
-	localY := mouseY - panelTop
-	if mouseX < 0 || localY < 0 {
+	if mouseX < 0 || mouseY < 0 {
 		return "", false
 	}
-	lines := visibleViewportLines(m.renderConversationPanel(m.conversationPanelHeight()))
-	if token, ok := previewTokenAtLine(lines, localY, mouseX); ok {
-		return token, true
-	}
-	// Bubble Tea mouse coordinates can land one visual row above the wrapped
-	// conversation content in some terminal layouts. Prefer a downward-only
-	// tolerance so clicks don't accidentally activate links from the line above.
-	return previewTokenAtLine(lines, localY+1, mouseX)
+	lines := visibleViewportLines(m.View())
+	return previewTokenAtLine(lines, mouseY, mouseX)
 }
 
 func previewTokenAtLine(lines []string, y, mouseX int) (string, bool) {
@@ -74,14 +66,6 @@ func previewTokenAtLine(lines []string, y, mouseX int) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func (m Model) conversationPanelTopOffset() int {
-	header := ""
-	if m.topHeaderEnabled() {
-		header = m.renderHeader()
-	}
-	return lipgloss.Height(header) + lipgloss.Height(m.renderStartupBanner())
 }
 
 func visibleViewportLines(rendered string) []string {
