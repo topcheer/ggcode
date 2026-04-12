@@ -140,6 +140,9 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
 	}
+	if resolved.MaxTokens > 0 {
+		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)
+	}
 	ag.SetPermissionPolicy(policy)
 
 	// Read stdin if available

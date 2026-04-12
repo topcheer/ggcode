@@ -24,45 +24,56 @@ type ContextManager interface {
 	TokenCount() int
 	MaxTokens() int
 	SetMaxTokens(n int)
+	SetOutputReserve(n int)
+	RecordUsage(usage provider.TokenUsage)
 	Summarize(ctx context.Context, prov provider.Provider) error
 	CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error)
 	TruncateOldestGroupForRetry() bool
 	Clear()
 	UsageRatio() float64
+	AutoCompactThreshold() int
 }
 
 const (
-	summarizeThreshold  = 0.8
-	compactTargetRatio  = 0.55
-	summaryReserveRatio = 0.10
-	minRecentGroups     = 1
-	maxSummarizePasses  = 2
-	minSummaryReserve   = 64
-	microcompactMinGain = 32
-	toolResultMinTokens = 96
-	maxPTLRetries       = 3
-	tokenCountTimeout   = 100 * time.Millisecond
+	summarizeThresholdWithUsage = 0.85
+	summarizeThresholdFallback  = 0.72
+	compactTargetRatio          = 0.55
+	summaryReserveRatio         = 0.10
+	defaultOutputReserveRatio   = 0.10
+	maxOutputReserveRatio       = 0.25
+	safetyMarginRatio           = 0.05
+	minRecentGroups             = 1
+	maxSummarizePasses          = 2
+	minSummaryReserve           = 64
+	microcompactMinGain         = 32
+	toolResultMinTokens         = 96
+	maxPTLRetries               = 3
+	tokenCountTimeout           = 100 * time.Millisecond
 )
 
 func AutoCompactThresholdRatio() float64 {
-	return summarizeThreshold
+	return summarizeThresholdWithUsage
 }
 
 func AutoCompactThresholdTokens(maxTokens int) int {
 	if maxTokens <= 0 {
 		return 0
 	}
-	return int(float64(maxTokens) * summarizeThreshold)
+	return int(float64(maxTokens) * summarizeThresholdFallback)
 }
 
 // Manager implements ContextManager.
 type Manager struct {
-	mu        sync.Mutex
-	messages  []provider.Message
-	tokens    int
-	maxTokens int
-	provider  provider.Provider
-	todoPath  string
+	mu                sync.Mutex
+	messages          []provider.Message
+	tokens            int
+	maxTokens         int
+	outputReserve     int
+	baselineTokens    int
+	baselineDelta     int
+	baselineAvailable bool
+	provider          provider.Provider
+	todoPath          string
 }
 
 // NewManager creates a ContextManager with the given context window limit.
@@ -90,8 +101,12 @@ func (m *Manager) SetProvider(p provider.Provider) {
 func (m *Manager) Add(msg provider.Message) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	msgTokens := m.countTokens(msg)
 	m.messages = append(m.messages, msg)
-	m.tokens += m.countTokens(msg)
+	m.tokens += msgTokens
+	if m.baselineAvailable {
+		m.baselineDelta += msgTokens
+	}
 }
 
 func (m *Manager) Messages() []provider.Message {
@@ -105,7 +120,7 @@ func (m *Manager) Messages() []provider.Message {
 func (m *Manager) TokenCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.tokens
+	return m.tokenCountLocked()
 }
 
 func (m *Manager) MaxTokens() int {
@@ -120,6 +135,26 @@ func (m *Manager) SetMaxTokens(n int) {
 	m.maxTokens = n
 }
 
+func (m *Manager) SetOutputReserve(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	m.outputReserve = n
+}
+
+func (m *Manager) RecordUsage(usage provider.TokenUsage) {
+	if usage.InputTokens <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.baselineTokens = usage.InputTokens
+	m.baselineDelta = 0
+	m.baselineAvailable = true
+}
+
 func (m *Manager) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -131,6 +166,7 @@ func (m *Manager) Clear() {
 		m.messages = nil
 		m.tokens = 0
 	}
+	m.invalidateUsageBaselineLocked()
 }
 
 func (m *Manager) UsageRatio() float64 {
@@ -139,7 +175,13 @@ func (m *Manager) UsageRatio() float64 {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return float64(m.tokens) / float64(m.maxTokens)
+	return float64(m.tokenCountLocked()) / float64(m.maxTokens)
+}
+
+func (m *Manager) AutoCompactThreshold() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.autoCompactThresholdLocked()
 }
 
 // Summarize compresses old messages into a summary while retaining an adaptive
@@ -205,12 +247,12 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 
 // CheckAndSummarize triggers summarization if usage ratio >= threshold.
 func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error) {
-	if m.UsageRatio() < summarizeThreshold {
+	if m.TokenCount() < m.AutoCompactThreshold() {
 		return false, nil
 	}
 
 	changed := m.Microcompact()
-	if m.UsageRatio() < summarizeThreshold {
+	if m.TokenCount() < m.AutoCompactThreshold() {
 		return changed, nil
 	}
 
@@ -240,6 +282,7 @@ func (m *Manager) recalcTokens() {
 	for _, msg := range m.messages {
 		m.tokens += m.countTokens(msg)
 	}
+	m.invalidateUsageBaselineLocked()
 }
 
 // countTokens uses the provider's token counting API when available,
@@ -269,7 +312,7 @@ func (m *Manager) Microcompact() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.tokens <= m.compactTargetTokens() {
+	if m.tokenCountLocked() <= m.compactTargetTokens() {
 		return false
 	}
 
@@ -285,7 +328,7 @@ func (m *Manager) Microcompact() bool {
 	protectedStart := groups[len(groups)-minRecentGroups].start
 
 	changed := false
-	currentTokens := m.tokens
+	currentTokens := m.tokenCountLocked()
 	targetTokens := m.compactTargetTokens()
 
 	for i := start; i < protectedStart && currentTokens > targetTokens; i++ {
@@ -447,10 +490,11 @@ func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provi
 }
 
 func (m *Manager) compactTargetTokens() int {
-	if m.maxTokens <= 0 {
+	budget := m.usablePromptBudgetLocked()
+	if budget <= 0 {
 		return 0
 	}
-	target := int(float64(m.maxTokens) * compactTargetRatio)
+	target := int(float64(budget) * compactTargetRatio)
 	if target < minSummaryReserve {
 		return minSummaryReserve
 	}
@@ -458,14 +502,101 @@ func (m *Manager) compactTargetTokens() int {
 }
 
 func (m *Manager) summaryReserveTokens() int {
-	if m.maxTokens <= 0 {
+	budget := m.usablePromptBudgetLocked()
+	if budget <= 0 {
 		return minSummaryReserve
 	}
-	reserve := int(float64(m.maxTokens) * summaryReserveRatio)
+	reserve := int(float64(budget) * summaryReserveRatio)
 	if reserve < minSummaryReserve {
 		return minSummaryReserve
 	}
 	return reserve
+}
+
+func (m *Manager) tokenCountLocked() int {
+	if m.baselineAvailable {
+		total := m.baselineTokens + m.baselineDelta
+		if total > 0 {
+			return total
+		}
+	}
+	return m.tokens
+}
+
+func (m *Manager) autoCompactThresholdLocked() int {
+	budget := m.usablePromptBudgetLocked()
+	if budget <= 0 {
+		return 0
+	}
+	ratio := summarizeThresholdFallback
+	if m.baselineAvailable {
+		ratio = summarizeThresholdWithUsage
+	}
+	return int(float64(budget) * ratio)
+}
+
+func (m *Manager) usablePromptBudgetLocked() int {
+	if m.maxTokens <= 0 {
+		return 0
+	}
+	reserve := m.effectiveOutputReserveLocked()
+	safety := m.effectiveSafetyMarginLocked()
+	budget := m.maxTokens - reserve - safety
+	if budget < minSummaryReserve {
+		return minSummaryReserve
+	}
+	return budget
+}
+
+func (m *Manager) effectiveOutputReserveLocked() int {
+	if m.maxTokens <= 0 {
+		return 0
+	}
+	floor := minInt(8192, maxInt(512, m.maxTokens/10))
+	ceiling := maxInt(floor, int(float64(m.maxTokens)*maxOutputReserveRatio))
+	reserve := m.outputReserve
+	if reserve <= 0 {
+		reserve = int(float64(m.maxTokens) * defaultOutputReserveRatio)
+	}
+	if reserve < floor {
+		reserve = floor
+	}
+	if reserve > ceiling {
+		reserve = ceiling
+	}
+	return reserve
+}
+
+func (m *Manager) effectiveSafetyMarginLocked() int {
+	if m.maxTokens <= 0 {
+		return minSummaryReserve
+	}
+	safety := int(float64(m.maxTokens) * safetyMarginRatio)
+	safetyFloor := minInt(4096, maxInt(minSummaryReserve, m.maxTokens/20))
+	if safety < safetyFloor {
+		safety = safetyFloor
+	}
+	return safety
+}
+
+func (m *Manager) invalidateUsageBaselineLocked() {
+	m.baselineTokens = 0
+	m.baselineDelta = 0
+	m.baselineAvailable = false
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func compactedToolResultPlaceholder(block provider.ContentBlock, originalTokens int) string {
@@ -557,7 +688,19 @@ func collectRecentFilePaths(msgs []provider.Message, limit int) []string {
 	paths := make([]string, 0, limit)
 	for i := len(msgs) - 1; i >= 0 && len(paths) < limit; i-- {
 		for _, block := range msgs[i].Content {
-			if block.Type != "tool_use" || len(block.Input) == 0 {
+			if block.Type == "text" && block.Text != "" {
+				for _, path := range extractPostCompactStateFilePaths(block.Text) {
+					if len(paths) >= limit {
+						break
+					}
+					if _, exists := seen[path]; exists {
+						continue
+					}
+					seen[path] = struct{}{}
+					paths = append(paths, path)
+				}
+			}
+			if block.Type != "tool_use" || len(block.Input) == 0 || len(paths) >= limit {
 				continue
 			}
 			var input map[string]any
@@ -579,6 +722,38 @@ func collectRecentFilePaths(msgs []provider.Message, limit int) []string {
 				seen[path] = struct{}{}
 				paths = append(paths, path)
 				break
+			}
+		}
+	}
+	return paths
+}
+
+func extractPostCompactStateFilePaths(text string) []string {
+	if !strings.Contains(text, "[Post-compact state]") || !strings.Contains(text, "Recent files:") {
+		return nil
+	}
+	lines := strings.Split(text, "\n")
+	paths := make([]string, 0, 4)
+	inFiles := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "Recent files:":
+			inFiles = true
+		case !inFiles:
+			continue
+		case strings.HasPrefix(trimmed, "- "):
+			path := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+			if path != "" {
+				paths = append(paths, path)
+			}
+		case trimmed == "":
+			if inFiles {
+				return paths
+			}
+		default:
+			if inFiles {
+				return paths
 			}
 		}
 	}

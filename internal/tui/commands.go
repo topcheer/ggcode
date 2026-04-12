@@ -511,7 +511,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.statusToolArg = ""
 					m.statusToolCount = 0
 					m.resetActivityGroups()
-					return m.startAgent(expanded)
+					return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(expanded))
 				}
 			}
 			m.output.WriteString(m.styles.error.Render(m.t("command.unknown", text)))
@@ -551,7 +551,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 	m.resetActivityGroups()
-	return m.startAgent(expandedMsg)
+	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(expandedMsg))
 }
 
 func (m *Model) handleInitCommand() tea.Cmd {
@@ -586,7 +586,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	m.statusToolCount = 0
 	m.resetActivityGroups()
 
-	return m.startAgent(prompt)
+	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(prompt))
 }
 
 func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
@@ -2165,6 +2165,9 @@ func (m *Model) tryActivateCurrentSelection() error {
 		if resolved.ContextWindow > 0 {
 			m.agent.ContextManager().SetMaxTokens(resolved.ContextWindow)
 		}
+		if resolved.MaxTokens > 0 {
+			m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
+		}
 	}
 	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	return nil
@@ -2208,11 +2211,16 @@ func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 		if err != nil {
 			return errMsg{err: fmt.Errorf("reading image: %w", err)}
 		}
+		sourcePath := path
+		if absPath, err := filepath.Abs(path); err == nil {
+			sourcePath = absPath
+		}
 		placeholder := image.Placeholder(path, img)
 		return imageAttachedMsg{
 			placeholder: placeholder,
 			img:         img,
 			filename:    path,
+			sourcePath:  sourcePath,
 		}
 	}
 }

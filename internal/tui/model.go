@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -654,10 +656,15 @@ func loadClipboardImage() (imageAttachedMsg, error) {
 	if err != nil {
 		return imageAttachedMsg{}, err
 	}
+	sourcePath, err := persistAttachedImage(filename, img)
+	if err != nil {
+		return imageAttachedMsg{}, err
+	}
 	return imageAttachedMsg{
 		placeholder: image.Placeholder(filename, img),
 		img:         img,
 		filename:    filename,
+		sourcePath:  sourcePath,
 	}, nil
 }
 
@@ -667,6 +674,18 @@ func newClipboardImageFilename() (string, error) {
 		return "", fmt.Errorf("generating clipboard image filename: %w", err)
 	}
 	return "ggcode-image-" + hex.EncodeToString(suffix[:]) + ".png", nil
+}
+
+func persistAttachedImage(filename string, img image.Image) (string, error) {
+	cacheDir := filepath.Join(os.TempDir(), "ggcode-images")
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+		return "", fmt.Errorf("creating image cache dir: %w", err)
+	}
+	path := filepath.Join(cacheDir, filepath.Base(filename))
+	if err := os.WriteFile(path, img.Data, 0o600); err != nil {
+		return "", fmt.Errorf("writing attached image: %w", err)
+	}
+	return path, nil
 }
 
 func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
@@ -821,6 +840,7 @@ type imageAttachedMsg struct {
 	placeholder string
 	img         image.Image
 	filename    string
+	sourcePath  string
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1149,14 +1169,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.appendStreamChunk(string(msg))
-		return m, nil
+		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case agentStreamMsg:
 		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
 			return m, nil
 		}
 		m.appendStreamChunk(msg.Text)
-		return m, nil
+		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case agentInterruptMsg:
 		if msg.RunID != m.activeAgentRunID {
@@ -1176,7 +1196,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.appendShellChunk(msg.Text)
-		return m, nil
+		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case doneMsg:
 		m.loading = false
@@ -1589,6 +1609,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finishToolActivity(ts)
 			ts.Elapsed = m.spinner.Elapsed()
 			m.spinner.Stop()
+			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 			// Reset stream prefix so next text block gets ●
 			m.streamPrefixWritten = false
 			// Reset stream buffer position for next text chunk
@@ -1618,6 +1639,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finishToolActivity(ts)
 			ts.Elapsed = m.spinner.Elapsed()
 			m.spinner.Stop()
+			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 			m.streamPrefixWritten = false
 			m.streamStartPos = m.output.Len()
 		}
@@ -1769,7 +1791,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ToolCount > 0 {
 			m.statusToolCount = msg.ToolCount
 		}
-		return m, nil
+		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case agentStatusMsg:
 		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
@@ -1781,7 +1803,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ToolCount > 0 {
 			m.statusToolCount = msg.ToolCount
 		}
-		return m, nil
+		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	}
 

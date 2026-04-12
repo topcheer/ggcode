@@ -48,16 +48,19 @@ func (m *Model) handleUpdateCommand() tea.Cmd {
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 	m.resetActivityGroups()
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		resumeID := ""
-		if m.session != nil {
-			resumeID = strings.TrimSpace(m.session.ID)
-		}
-		prepared, err := m.updateSvc.Prepare(ctx, resumeID)
-		return updatePrepareResultMsg{Prepared: prepared, Err: err}
-	}
+	return tea.Batch(
+		m.startLoadingSpinner(m.statusActivity),
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			resumeID := ""
+			if m.session != nil {
+				resumeID = strings.TrimSpace(m.session.ID)
+			}
+			prepared, err := m.updateSvc.Prepare(ctx, resumeID)
+			return updatePrepareResultMsg{Prepared: prepared, Err: err}
+		},
+	)
 }
 
 func (m Model) renderSidebarUpdateSection() string {

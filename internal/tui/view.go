@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/commands"
-	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -446,7 +445,7 @@ func (m Model) sidebarContextStats() (sidebarContextStatLine, bool) {
 	}
 	maxTokens := cm.MaxTokens()
 	tokenCount := cm.TokenCount()
-	threshold := ctxpkg.AutoCompactThresholdTokens(maxTokens)
+	threshold := cm.AutoCompactThreshold()
 	if maxTokens <= 0 || threshold <= 0 {
 		return sidebarContextStatLine{}, false
 	}
@@ -732,11 +731,7 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
-	spinnerChar := "⏳"
-	if m.spinner.IsActive() {
-		frame := m.spinner.CurrentFrame()
-		spinnerChar = spinnerFrameGlyph(frame)
-	}
+	spinnerChar := spinnerFrameGlyph(m.spinner.CurrentFrame())
 
 	line1 := fmt.Sprintf(" %s %s", spinnerChar, activity)
 	if count := m.pendingSubmissionCount(); count > 0 {

@@ -663,6 +663,69 @@ func TestResolveActiveEndpointInfersGLMCapabilities(t *testing.T) {
 	if resolved.MaxTokens != 128000 {
 		t.Fatalf("expected GLM max output 128000, got %d", resolved.MaxTokens)
 	}
+	if resolved.SupportsVision {
+		t.Fatal("expected GLM coding endpoint to default to non-vision")
+	}
+}
+
+func TestResolveActiveEndpointInfersVisionSupport(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "gpt-4o"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if !resolved.SupportsVision {
+		t.Fatal("expected gpt-4o endpoint to infer vision support")
+	}
+}
+
+func TestResolveActiveEndpointInfersKimiVisionSupport(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "kimi"
+	cfg.Endpoint = "coding-openai"
+	cfg.Model = "kimi-k2.5"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if !resolved.SupportsVision {
+		t.Fatal("expected kimi-k2.5 endpoint to infer vision support")
+	}
+}
+
+func TestResolveActiveEndpointInfersQwenVisionSupport(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "qwen3.6-plus"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if !resolved.SupportsVision {
+		t.Fatal("expected qwen3.6-plus endpoint to infer vision support")
+	}
+}
+
+func TestResolveActiveEndpointInfersGLMVVisionSupport(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "openai"
+	cfg.Endpoint = "api"
+	cfg.Model = "glm-4v-plus"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if !resolved.SupportsVision {
+		t.Fatal("expected glm-4v-plus endpoint to infer vision support")
+	}
 }
 
 func TestDefaultConfigUsesGLMCapabilitiesForZaiCatalog(t *testing.T) {

@@ -93,7 +93,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	m.shellBuffer = &bytes.Buffer{}
 	m.streamPrefixWritten = false
 	m.resetActivityGroups()
-	return m.startShellCommand(command)
+	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startShellCommand(command))
 }
 
 func (m *Model) appendShellChunk(chunk string) {
