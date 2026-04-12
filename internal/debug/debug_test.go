@@ -14,7 +14,7 @@ func TestRotationKeepsAtMostThreeFiles(t *testing.T) {
 	resetForTest(t, basePath, 128, 3, 64)
 
 	for i := 0; i < 200; i++ {
-		Logf(strings.Repeat("x", 32))
+		Logf("%s", strings.Repeat("x", 32))
 	}
 
 	waitFor(t, time.Second, func() bool {
@@ -31,7 +31,7 @@ func TestCloseRemovesAllLogs(t *testing.T) {
 	resetForTest(t, basePath, 128, 3, 64)
 
 	for i := 0; i < 200; i++ {
-		Logf(strings.Repeat("cleanup", 8))
+		Logf("%s", strings.Repeat("cleanup", 8))
 	}
 
 	waitFor(t, time.Second, func() bool {
