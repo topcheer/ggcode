@@ -782,6 +782,20 @@ func TestSidebarRendersWorkingDirectoryAndGitBranch(t *testing.T) {
 	}
 }
 
+func TestSidebarRendersHomepageHyperlink(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+
+	sidebar := m.renderSidebar(28)
+
+	if !strings.Contains(sidebar, sidebarHomepageURL) {
+		t.Fatalf("expected sidebar homepage url, got %q", sidebar)
+	}
+	if !strings.Contains(sidebar, "\x1b]8;;"+sidebarHomepageURL) {
+		t.Fatalf("expected sidebar homepage hyperlink escape, got %q", sidebar)
+	}
+}
+
 func TestLoadedSkillCountExcludesLegacyCommandsAndMCP(t *testing.T) {
 	m := newTestModel()
 	m.commandMgr = commands.NewManager(t.TempDir())

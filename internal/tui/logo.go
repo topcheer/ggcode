@@ -12,7 +12,10 @@ var (
 	logoCODEStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	logoTaglineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Faint(true)
 	logoSubtitleStyle = lipgloss.NewStyle().Foreground(mutedTextColor)
+	logoLinkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Underline(true)
 )
+
+const sidebarHomepageURL = "https://ggcode.dev"
 
 func renderLogo(width int) string {
 	if strings.TrimSpace(os.Getenv("GGCODE_ASCII_LOGO")) != "" {
@@ -62,12 +65,28 @@ func renderHeaderLogo(width int, subtitle string) string {
 
 func renderSidebarLogo(width int, subtitle string) string {
 	logo := renderLogo(width)
+	renderedSubtitle := renderLogoSubtitle(subtitle)
 	if logo == asciiLogo() {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true).Render(logo) +
-			logoSubtitleStyle.Render(subtitle)
+			renderedSubtitle
 	}
 	if strings.TrimSpace(subtitle) == "" {
 		return logo
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, logo, logoSubtitleStyle.Render(subtitle))
+	return lipgloss.JoinVertical(lipgloss.Left, logo, renderedSubtitle)
+}
+
+func renderLogoSubtitle(subtitle string) string {
+	subtitle = strings.TrimSpace(subtitle)
+	if subtitle == "" {
+		return ""
+	}
+	if strings.HasPrefix(subtitle, "https://") || strings.HasPrefix(subtitle, "http://") {
+		return terminalHyperlink(subtitle, logoLinkStyle.Render(subtitle))
+	}
+	return logoSubtitleStyle.Render(subtitle)
+}
+
+func terminalHyperlink(url, label string) string {
+	return "\x1b]8;;" + url + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }

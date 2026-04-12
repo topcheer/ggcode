@@ -232,7 +232,7 @@ func (m Model) renderSidebar(totalHeight int) string {
 
 	body := strings.Join([]string{
 		"",
-		renderSidebarLogo(m.sidebarWidth()-4, m.t("workspace.tagline")),
+		renderSidebarLogo(m.sidebarWidth()-4, sidebarHomepageURL),
 		"",
 		m.styles.title.Render("ggcode"),
 		m.renderSidebarDetailRow(m.t("label.vendor"), vendor, m.sidebarWidth()-4),
