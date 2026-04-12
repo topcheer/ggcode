@@ -950,6 +950,82 @@ func TestMouseEventsDoNotReachInput(t *testing.T) {
 	}
 }
 
+func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.MkdirAll(filepath.Join(workspace, "internal", "tui"), 0755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "internal", "tui", "model.go"), []byte("alpha\nbeta\ngamma\ndelta\nepsilon\n"), 0644); err != nil {
+		t.Fatalf("write preview target: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+
+	m := newTestModel()
+	m.handleResize(140, 36)
+	m.output.WriteString("● See internal/tui/model.go:3 for details\n")
+	m.syncConversationViewport()
+
+	lines := visibleViewportLines(m.conversationViewport().View())
+	if len(lines) == 0 {
+		t.Fatal("expected visible viewport lines")
+	}
+	idx := strings.Index(lines[0], "internal/tui/model.go:3")
+	if idx < 0 {
+		t.Fatalf("expected file token in visible line, got %q", lines[0])
+	}
+	originX, originY := m.conversationContentOrigin()
+	next, cmd := m.Update(tea.MouseMsg{
+		X:      originX + idx + 2,
+		Y:      originY,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	if cmd != nil {
+		t.Fatal("expected mouse preview click not to schedule a command")
+	}
+	m = next.(Model)
+
+	if m.previewPanel == nil {
+		t.Fatal("expected preview panel to open")
+	}
+	if m.previewPanel.DisplayPath != "internal/tui/model.go" {
+		t.Fatalf("expected display path to resolve relative file, got %q", m.previewPanel.DisplayPath)
+	}
+	if m.previewPanel.TargetLine != 3 {
+		t.Fatalf("expected target line 3, got %d", m.previewPanel.TargetLine)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "File preview") {
+		t.Fatalf("expected preview panel in view, got %q", view)
+	}
+	if !strings.Contains(view, "gamma") {
+		t.Fatalf("expected preview snippet to include target line, got %q", view)
+	}
+}
+
+func TestEscClosesPreviewPanel(t *testing.T) {
+	m := newTestModel()
+	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Lines: []string{"hello"}}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatal("expected escape to close preview without command")
+	}
+	m = next.(Model)
+
+	if m.previewPanel != nil {
+		t.Fatal("expected preview panel to close on escape")
+	}
+}
+
 // --- Status bar rendering ---
 
 func TestStatusBarWithCostInfo(t *testing.T) {

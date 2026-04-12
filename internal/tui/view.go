@@ -60,10 +60,11 @@ func (m Model) View() string {
 	}
 	sections = append(sections, composer)
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	if !m.sidebarEnabled() {
+	right := m.renderAuxColumn(lipgloss.Height(left))
+	if right == "" {
 		return left
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", m.renderSidebar(lipgloss.Height(left)))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
 func (m Model) conversationInnerWidth() int {
@@ -853,9 +854,21 @@ func (m Model) renderContextPanel() string {
 		return m.renderContextBox(title, body, accent)
 	case m.autoCompleteActive && len(m.autoCompleteItems) > 0:
 		return m.renderAutoComplete()
+	case m.previewPanel != nil && !m.sidebarEnabled():
+		return m.renderPreviewPanel()
 	default:
 		return ""
 	}
+}
+
+func (m Model) renderAuxColumn(totalHeight int) string {
+	if m.previewPanel != nil && m.sidebarEnabled() {
+		return m.renderSidebarPreviewPanel(totalHeight)
+	}
+	if m.sidebarEnabled() {
+		return m.renderSidebar(totalHeight)
+	}
+	return ""
 }
 
 func (m Model) renderComposerPanel() string {
