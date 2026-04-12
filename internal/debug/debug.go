@@ -12,6 +12,7 @@ import (
 
 const (
 	defaultLogPath      = "/tmp/ggcode-debug.log"
+	defaultLogDir       = "/tmp/ggcode-debug"
 	defaultMaxLogSize   = 50 * 1024 * 1024
 	defaultMaxLogFiles  = 3
 	defaultAsyncBufSize = 1024
@@ -32,7 +33,8 @@ var (
 // Init opens the debug log file. Safe to call multiple times.
 func Init() {
 	once.Do(func() {
-		sink, err := newAsyncFileSink(logPath, maxLogSize, maxLogFiles, asyncBufSize)
+		basePath, compatPath := resolveLogPaths(logPath, os.Getpid())
+		sink, err := newAsyncFileSink(basePath, compatPath, maxLogSize, maxLogFiles, asyncBufSize)
 		if err != nil {
 			return
 		}
@@ -80,9 +82,10 @@ func Close() {
 }
 
 type asyncFileSink struct {
-	basePath string
-	maxSize  int64
-	maxFiles int
+	basePath   string
+	compatPath string
+	maxSize    int64
+	maxFiles   int
 
 	ch      chan []byte
 	dropped atomic.Uint64
@@ -96,7 +99,7 @@ type asyncFileSink struct {
 	size int64
 }
 
-func newAsyncFileSink(basePath string, maxSize int64, maxFiles, buffer int) (*asyncFileSink, error) {
+func newAsyncFileSink(basePath, compatPath string, maxSize int64, maxFiles, buffer int) (*asyncFileSink, error) {
 	if maxFiles < 1 {
 		maxFiles = 1
 	}
@@ -104,10 +107,11 @@ func newAsyncFileSink(basePath string, maxSize int64, maxFiles, buffer int) (*as
 		buffer = 1
 	}
 	s := &asyncFileSink{
-		basePath: basePath,
-		maxSize:  maxSize,
-		maxFiles: maxFiles,
-		ch:       make(chan []byte, buffer),
+		basePath:   basePath,
+		compatPath: compatPath,
+		maxSize:    maxSize,
+		maxFiles:   maxFiles,
+		ch:         make(chan []byte, buffer),
 	}
 	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
 		return nil, err
@@ -115,6 +119,7 @@ func newAsyncFileSink(basePath string, maxSize int64, maxFiles, buffer int) (*as
 	if err := s.openFreshFile(); err != nil {
 		return nil, err
 	}
+	s.refreshCompatPath()
 	s.wg.Add(1)
 	go s.run()
 	return s, nil
@@ -236,4 +241,40 @@ func (s *asyncFileSink) cleanup() {
 			_ = os.Remove(path)
 		}
 	}
+	s.cleanupCompatPath()
+}
+
+func resolveLogPaths(requestedPath string, pid int) (basePath, compatPath string) {
+	if requestedPath != defaultLogPath {
+		return requestedPath, ""
+	}
+	return filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid)), defaultLogPath
+}
+
+func (s *asyncFileSink) refreshCompatPath() {
+	if s.compatPath == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(s.compatPath), 0o755); err != nil {
+		return
+	}
+	_ = os.Remove(s.compatPath)
+	_ = os.Symlink(s.basePath, s.compatPath)
+}
+
+func (s *asyncFileSink) cleanupCompatPath() {
+	if s.compatPath == "" {
+		return
+	}
+	target, err := os.Readlink(s.compatPath)
+	if err != nil {
+		return
+	}
+	if samePath(target, s.basePath) {
+		_ = os.Remove(s.compatPath)
+	}
+}
+
+func samePath(a, b string) bool {
+	return filepath.Clean(a) == filepath.Clean(b)
 }

@@ -133,7 +133,6 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				Activity:  present.Activity,
 				ToolName:  present.DisplayName,
 				ToolArg:   present.Detail,
-				ToolCount: m.statusToolCount + 1,
 			}})
 			m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 				ToolID:      event.Tool.ID,

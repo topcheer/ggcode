@@ -120,7 +120,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	for name := range userSlashCmds {
 		customCmdNames = append(customCmdNames, name)
 	}
-	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, registryToolNames(registry), gitStatus, customCmdNames)
+	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, cfg.Language, registryToolNames(registry), gitStatus, customCmdNames)
 	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
 		systemPrompt += "\n\n## Skills\n" + skillsPrompt
 	}
