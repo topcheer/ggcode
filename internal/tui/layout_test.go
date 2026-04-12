@@ -1130,6 +1130,36 @@ func TestMarkdownPreviewUsesMarkdownRendering(t *testing.T) {
 	}
 }
 
+func TestSourcePreviewUsesSyntaxHighlighting(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	target := filepath.Join(workspace, "main.go")
+	raw := "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n"
+	if err := os.WriteFile(target, []byte(raw), 0644); err != nil {
+		t.Fatalf("write source preview target: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+
+	m := newTestModel()
+	m.handleResize(100, 24)
+	if !m.openPreviewForToken("main.go") {
+		t.Fatal("expected source preview to open")
+	}
+	rendered := m.previewPanel.previewContent(m.previewContentWidth())
+	if rendered == raw {
+		t.Fatalf("expected source preview to be syntax highlighted, got raw content %q", rendered)
+	}
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected highlighted preview to contain ANSI color sequences, got %q", rendered)
+	}
+}
+
 func TestEscClosesPreviewPanel(t *testing.T) {
 	m := newTestModel()
 	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Lines: []string{"hello"}}
