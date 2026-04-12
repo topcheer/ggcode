@@ -2110,7 +2110,7 @@ func TestFormatHarnessRunLogChunkPrettifiesToolCallsAndPaths(t *testing.T) {
 	chunk := "tool: read_file /repo/docs/runbooks/harness.md\n" +
 		"tool result: Successfully wrote 299 bytes to /repo/internal/tui/model.go\n" +
 		"Working through remaining diagnostics\n"
-	rendered := formatHarnessRunLogChunk(project, chunk)
+	rendered := formatHarnessRunLogChunk(LangEnglish, project, chunk)
 	if !strings.Contains(rendered, "📖 Read file · docs/runbooks/harness.md") {
 		t.Fatalf("expected pretty tool line, got %q", rendered)
 	}
@@ -2119,6 +2119,15 @@ func TestFormatHarnessRunLogChunkPrettifiesToolCallsAndPaths(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "Working through remaining diagnostics") {
 		t.Fatalf("expected plain prose to remain, got %q", rendered)
+	}
+}
+
+func TestFormatHarnessRunLogChunkLocalizesToolLabels(t *testing.T) {
+	project := &harness.Project{RootDir: "/repo"}
+	chunk := "tool: read_file /repo/docs/runbooks/harness.md\n"
+	rendered := formatHarnessRunLogChunk(LangZhCN, project, chunk)
+	if !strings.Contains(rendered, "📖 读取文件 · docs/runbooks/harness.md") {
+		t.Fatalf("expected localized tool label, got %q", rendered)
 	}
 }
 
@@ -2263,6 +2272,41 @@ func TestHarnessPanelLocalizesZhNavigation(t *testing.T) {
 	panel := m.renderContextPanel()
 	if !strings.Contains(panel, "视图") || !strings.Contains(panel, "排队") || !strings.Contains(panel, "操作") || !strings.Contains(panel, "详情") {
 		t.Fatalf("expected localized harness panel chrome, got %q", panel)
+	}
+}
+
+func TestHarnessPanelQueueMessageLocalizesToChinese(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	repoDir := t.TempDir()
+	gitInitForTUI(t, repoDir)
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	result, err := harness.Init(repoDir, harness.InitOptions{})
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	m := newTestModel()
+	m.setLanguage(string(LangZhCN))
+	m.openHarnessPanel()
+	m.harnessPanel.project = &result.Project
+	m.harnessPanel.selectedSection = harnessSectionQueue
+	m.updateHarnessPanelInputState()
+	m.harnessPanel.actionInput.SetValue("整理库存对账流程")
+	m.harnessPanel.focus = harnessPanelFocusInput
+
+	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected queue action to complete inline")
+	}
+	updated := next
+	if updated.harnessPanel == nil || !strings.Contains(updated.harnessPanel.message, "已加入 harness 队列") {
+		t.Fatalf("expected localized queue success message, got %+v", updated.harnessPanel)
 	}
 }
 

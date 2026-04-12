@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -17,8 +18,11 @@ func (m *Model) startToolActivity(ts ToolStatusMsg) {
 	if isSubAgentLifecycleTool(ts.ToolName) {
 		return
 	}
-	if ts.ToolName == "todo_write" && len(m.activityGroups) > 0 && m.activityGroups[len(m.activityGroups)-1].Active && len(m.activityGroups[len(m.activityGroups)-1].Items) > 0 {
-		m.closeToolActivityGroup()
+	if ts.ToolName == "todo_write" {
+		if len(m.activityGroups) > 0 && m.activityGroups[len(m.activityGroups)-1].Active && len(m.activityGroups[len(m.activityGroups)-1].Items) > 0 {
+			m.closeToolActivityGroup()
+		}
+		return
 	}
 	if len(m.activityGroups) == 0 || !m.activityGroups[len(m.activityGroups)-1].Active {
 		group := toolActivityGroup{Active: true}
@@ -45,6 +49,9 @@ func (m *Model) finishToolActivity(ts ToolStatusMsg) {
 		return
 	}
 	if len(m.activityGroups) == 0 {
+		if ts.ToolName == "todo_write" {
+			m.applyTodoWrite(ts)
+		}
 		return
 	}
 	group := &m.activityGroups[len(m.activityGroups)-1]
@@ -74,19 +81,7 @@ func (m *Model) finishToolActivity(ts ToolStatusMsg) {
 	}
 	item := &group.Items[itemIndex]
 	if ts.ToolName == "todo_write" {
-		item.Summary = m.applyTodoWrite(ts)
-		item.CommandTitle = ""
-		item.CommandLines = nil
-		item.CommandHiddenLineCount = 0
-		item.OutputLines = nil
-		item.OutputHiddenLineCount = 0
-		item.Running = false
-		if m.activeTodo != nil {
-			group.TodoID = m.activeTodo.ID
-			group.TodoContent = m.activeTodo.Content
-		}
-		group.Title = localizeToolGroupTitle(m.currentLanguage(), group.Categories)
-		m.closeToolActivityGroup()
+		m.applyTodoWrite(ts)
 		return
 	}
 	*item = buildToolActivityItem(m.currentLanguage(), ts)
@@ -576,9 +571,11 @@ func trimLeadingRenderedSpacing(rendered string) string {
 }
 
 type todoStateItem struct {
-	ID      string `json:"id"`
-	Content string `json:"content"`
-	Status  string `json:"status"`
+	ID        string    `json:"id"`
+	Content   string    `json:"content"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"-"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
@@ -593,8 +590,27 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 	}
 	current := make(map[string]todoStateItem, len(todos))
 	changes := make([]string, 0, len(todos))
+	now := time.Now()
 
 	for _, td := range todos {
+		if prev, existed := previous[td.ID]; existed {
+			td.StartedAt = prev.StartedAt
+			td.UpdatedAt = prev.UpdatedAt
+		}
+		if td.UpdatedAt.IsZero() {
+			td.UpdatedAt = now
+		}
+		switch td.Status {
+		case "in_progress":
+			if td.StartedAt.IsZero() {
+				td.StartedAt = now
+			}
+			td.UpdatedAt = now
+		case "done", "blocked", "failed":
+			if td.StartedAt.IsZero() {
+				td.StartedAt = now
+			}
+		}
 		current[td.ID] = td
 		prev, existed := previous[td.ID]
 		switch {

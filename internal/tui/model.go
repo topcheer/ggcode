@@ -1491,7 +1491,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if detail := strings.TrimSpace(msg.Detail); detail != "" && detail != m.harnessRunLastDetail {
 			m.harnessRunLastDetail = detail
-			if !harnessLogChunkContainsDetail(m.harnessRunProject, msg.LogChunk, detail) {
+			if !harnessLogChunkContainsDetail(m.currentLanguage(), m.harnessRunProject, msg.LogChunk, detail) {
 				m.appendHarnessProgressDetail(detail)
 			}
 		}

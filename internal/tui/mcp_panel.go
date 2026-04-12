@@ -143,11 +143,11 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		case "enter":
 			spec := strings.TrimSpace(panel.installInput)
 			if spec == "" {
-				panel.message = "Enter an install spec first."
+				panel.message = m.t("panel.mcp.install_spec_required")
 				return *m, nil
 			}
 			panel.installMode = false
-			panel.message = "Installing MCP server..."
+			panel.message = m.t("panel.mcp.installing_server")
 			return *m, m.installMCPServer(spec)
 		case "backspace":
 			runes := []rune(panel.installInput)
@@ -182,28 +182,28 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			break
 		}
 		if m.mcpManager == nil {
-			panel.message = "Reconnect unavailable in this session."
+			panel.message = m.t("panel.mcp.reconnect_unavailable")
 			break
 		}
 		name := m.mcpServers[panel.selected].Name
 		if m.mcpManager.Retry(name) {
-			panel.message = fmt.Sprintf("Reconnecting %s...", name)
+			panel.message = m.t("panel.mcp.reconnecting", name)
 		} else {
-			panel.message = fmt.Sprintf("Unable to reconnect %s.", name)
+			panel.message = m.t("panel.mcp.reconnect_failed", name)
 		}
 	case "i", "I":
 		panel.installMode = true
 		panel.installInput = ""
 		panel.message = ""
 	case "b", "B":
-		panel.message = "Installing browser automation MCP preset..."
+		panel.message = m.t("panel.mcp.installing_browser_preset")
 		return *m, m.installMCPServer(mcp.BrowserAutomationInstallSpec)
 	case "x", "X", "u", "U":
 		if len(m.mcpServers) == 0 {
 			break
 		}
 		name := m.mcpServers[panel.selected].Name
-		panel.message = fmt.Sprintf("Uninstalling %s...", name)
+		panel.message = m.t("panel.mcp.uninstalling", name)
 		return *m, m.uninstallMCPServer(name)
 	case "esc":
 		m.closeMCPPanel()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -215,6 +216,9 @@ func (m Model) renderStartupBanner() string {
 }
 
 func (m Model) renderSidebar(totalHeight int) string {
+	if tracker := m.renderSidebarTaskTracker(totalHeight); tracker != "" {
+		return tracker
+	}
 	vendor, endpoint, model := m.currentSelection()
 	sessionLine := m.t("session.ephemeral")
 	if m.session != nil && m.session.ID != "" {
@@ -332,6 +336,134 @@ func (m Model) renderSidebarMCPSection() string {
 		}
 	}
 	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderSidebarTaskTracker(totalHeight int) string {
+	tasks := m.sidebarTrackedTodos()
+	if len(tasks) == 0 {
+		return ""
+	}
+	width := max(12, m.sidebarWidth()-4)
+	rows := []string{
+		"",
+		m.renderSidebarSectionTitle(sidebarTaskTrackerTitle(m.currentLanguage())),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(sidebarTaskTrackerHint(m.currentLanguage())),
+		"",
+	}
+	maxRows := max(6, totalHeight-4)
+	usedRows := len(rows)
+	for i, task := range tasks {
+		if usedRows+2 > maxRows {
+			remaining := len(tasks) - i
+			rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(sidebarTaskTrackerMore(m.currentLanguage(), remaining)))
+			break
+		}
+		rows = append(rows, m.renderSidebarTaskRow(task, width)...)
+		usedRows += 2
+	}
+	body := strings.Join(rows, "\n")
+	innerHeight := max(lipgloss.Height(body), totalHeight-2)
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(chromeBorderColor).
+		Padding(0, 1).
+		Height(innerHeight).
+		Width(m.boxInnerWidth(m.sidebarWidth())).
+		Render(body)
+}
+
+func (m Model) sidebarTrackedTodos() []todoStateItem {
+	if len(m.todoSnapshot) == 0 {
+		return nil
+	}
+	items := make([]todoStateItem, 0, len(m.todoSnapshot))
+	for _, td := range m.todoSnapshot {
+		switch td.Status {
+		case "in_progress", "done", "blocked", "failed":
+			items = append(items, td)
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i].StartedAt
+		if left.IsZero() {
+			left = items[i].UpdatedAt
+		}
+		right := items[j].StartedAt
+		if right.IsZero() {
+			right = items[j].UpdatedAt
+		}
+		if left.Equal(right) {
+			return items[i].Content > items[j].Content
+		}
+		return left.After(right)
+	})
+	return items
+}
+
+func (m Model) renderSidebarTaskRow(task todoStateItem, width int) []string {
+	bullet, statusLabel := sidebarTaskStatusDecor(m.currentLanguage(), task.Status)
+	titleWidth := max(8, width-2)
+	title := truncateDisplayWidth(compactSingleLine(task.Content), titleWidth)
+	if title == "" {
+		title = firstNonEmpty(task.ID, "-")
+	}
+	detail := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  " + statusLabel)
+	return []string{bullet + " " + title, detail}
+}
+
+func sidebarTaskStatusDecor(lang Language, status string) (string, string) {
+	switch status {
+	case "done":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●"), sidebarTaskStatusText(lang, status)
+	case "blocked", "failed":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●"), sidebarTaskStatusText(lang, status)
+	default:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("●"), sidebarTaskStatusText(lang, status)
+	}
+}
+
+func sidebarTaskStatusText(lang Language, status string) string {
+	switch lang {
+	case LangZhCN:
+		switch status {
+		case "done":
+			return "已完成"
+		case "blocked", "failed":
+			return "已失败"
+		default:
+			return "进行中"
+		}
+	default:
+		switch status {
+		case "done":
+			return "done"
+		case "blocked", "failed":
+			return "failed"
+		default:
+			return "in progress"
+		}
+	}
+}
+
+func sidebarTaskTrackerTitle(lang Language) string {
+	if lang == LangZhCN {
+		return "当前任务"
+	}
+	return "Current tasks"
+}
+
+func sidebarTaskTrackerHint(lang Language) string {
+	if lang == LangZhCN {
+		return "活动会话任务追踪（按启动时间倒序）"
+	}
+	return "Active-session task tracker (newest started first)"
+}
+
+func sidebarTaskTrackerMore(lang Language, remaining int) string {
+	if lang == LangZhCN {
+		return fmt.Sprintf("… 还有 %d 项", remaining)
+	}
+	return fmt.Sprintf("… %d more", remaining)
 }
 
 func (m Model) renderSidebarSectionTitle(title string) string {

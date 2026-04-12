@@ -272,7 +272,7 @@ func (m *Model) appendHarnessLogChunk(chunk string) {
 		return
 	}
 	m.harnessRunRemainder = text[lastNewline+1:]
-	formatted := formatHarnessRunLogChunk(m.harnessRunProject, text[:lastNewline+1])
+	formatted := formatHarnessRunLogChunk(m.currentLanguage(), m.harnessRunProject, text[:lastNewline+1])
 	if formatted != "" {
 		m.appendStreamChunk(formatted)
 	}
@@ -285,7 +285,7 @@ func (m *Model) flushHarnessLogRemainder() {
 		m.renderHarnessLiveTail("")
 		return
 	}
-	formatted := formatHarnessRunLogChunk(m.harnessRunProject, m.harnessRunRemainder+"\n")
+	formatted := formatHarnessRunLogChunk(m.currentLanguage(), m.harnessRunProject, m.harnessRunRemainder+"\n")
 	m.harnessRunRemainder = ""
 	if formatted != "" {
 		m.appendStreamChunk(formatted)
@@ -299,7 +299,7 @@ func (m *Model) appendHarnessProgressDetail(detail string) {
 		return
 	}
 	if m.harnessRunProject != nil {
-		detail = normalizeHarnessDetail(*m.harnessRunProject, detail)
+		detail = normalizeHarnessDetail(m.currentLanguage(), *m.harnessRunProject, detail)
 	}
 	chunk := formatHarnessStructuredLine(detail)
 	if chunk == "" {
@@ -490,7 +490,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
 				if custom, ok := m.customCmds[cmdName]; ok {
 					if !custom.UserInvocable {
-						m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Skill %s can only be invoked by the agent.", custom.SlashName())))
+						m.output.WriteString(m.styles.error.Render(m.t("command.skill_agent_only", custom.SlashName())))
 						return nil
 					}
 					if m.commandMgr != nil {
@@ -719,7 +719,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 				m.output.WriteString("\n")
 				return nil
 			}
-			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Promoted %d harness task(s) for owner %s.", len(tasks), parts[3])))
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_owner_promoted", len(tasks), parts[3])))
 			m.output.WriteString("\n")
 			return nil
 		case "retry":
@@ -768,7 +768,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 				m.output.WriteString("\n")
 				return nil
 			}
-			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Approved harness task %s.", task.ID)))
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_review_approved", task.ID)))
 			m.output.WriteString("\n")
 			return nil
 		case "reject":
@@ -778,7 +778,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 				m.output.WriteString("\n")
 				return nil
 			}
-			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Rejected harness task %s.", task.ID)))
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_review_rejected", task.ID)))
 			m.output.WriteString("\n")
 			return nil
 		}
@@ -816,7 +816,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 				m.output.WriteString("\n")
 				return nil
 			}
-			m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Promoted %d harness task(s).", len(tasks))))
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_promoted_many", len(tasks))))
 			m.output.WriteString("\n")
 			return nil
 		}
@@ -826,7 +826,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 			m.output.WriteString("\n")
 			return nil
 		}
-		m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Promoted harness task %s.", task.ID)))
+		m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_promoted_one", task.ID)))
 		m.output.WriteString("\n")
 		return nil
 	case "release":
@@ -1020,7 +1020,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 			m.output.WriteString("\n")
 			return nil
 		}
-		m.output.WriteString(m.styles.assistant.Render(fmt.Sprintf("Queued harness task %s.\n- goal: %s", task.ID, task.Goal)))
+		m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_task_queued_detail", task.ID, task.Goal)))
 		m.output.WriteString("\n")
 		return nil
 	case "tasks":
@@ -1037,7 +1037,7 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		if len(tasks) == 0 {
-			m.output.WriteString(m.styles.assistant.Render("No harness tasks recorded."))
+			m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_tasks_empty")))
 			m.output.WriteString("\n")
 			return nil
 		}
@@ -1122,7 +1122,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.output.WriteString("\n")
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.ensureOutputHasBlankLine()
-	m.output.WriteString(m.styles.assistant.Render("Starting tracked harness run...\nUse /harness monitor or the Tasks/Monitor views for live state."))
+	m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_run_start")))
 	m.output.WriteString("\n")
 	m.syncConversationViewport()
 	m.viewport.GotoBottom()
@@ -1132,7 +1132,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.loading = true
 	m.runCanceled = false
 	m.runFailed = false
-	m.statusActivity = "Starting harness run..."
+	m.statusActivity = m.t("command.harness_status_starting_run")
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
@@ -1149,7 +1149,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.streamStartPos = m.output.Len()
 	m.streamPrefixWritten = false
 	opts.ConfirmDirtyWorkspace = m.newHarnessCheckpointConfirmer()
-	startSpinner := m.spinner.Start("Running harness")
+	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
 	if m.program == nil {
 		return func() tea.Msg {
 			summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
@@ -1170,7 +1170,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 		return nil
 	}
 	if task.Status != harness.TaskFailed {
-		m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Harness task %s is %s; only failed tasks can be rerun.", task.ID, task.Status)))
+		m.output.WriteString(m.styles.error.Render(m.t("command.harness_rerun_invalid_status", task.ID, localizeHarnessTaskStatus(m.currentLanguage(), task.Status))))
 		m.output.WriteString("\n")
 		return nil
 	}
@@ -1178,7 +1178,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.output.WriteString("\n")
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.ensureOutputHasBlankLine()
-	m.output.WriteString(m.styles.assistant.Render("Starting tracked harness rerun...\nUse /harness monitor or the Tasks/Monitor views for live state."))
+	m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_rerun_start")))
 	m.output.WriteString("\n")
 	m.syncConversationViewport()
 	m.viewport.GotoBottom()
@@ -1188,7 +1188,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.loading = true
 	m.runCanceled = false
 	m.runFailed = false
-	m.statusActivity = "Starting harness rerun..."
+	m.statusActivity = m.t("command.harness_status_starting_rerun")
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
@@ -1205,7 +1205,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.streamStartPos = m.output.Len()
 	m.streamPrefixWritten = false
 	opts := harness.RunTaskOptions{ConfirmDirtyWorkspace: m.newHarnessCheckpointConfirmer()}
-	startSpinner := m.spinner.Start("Running harness")
+	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
 	if m.program == nil {
 		return func() tea.Msg {
 			summary, err := executeHarnessRerun(ctx, project, cfg, task.ID, opts)
@@ -1260,11 +1260,11 @@ func (m *Model) pollHarnessRunProgress() tea.Cmd {
 		return nil
 	}
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {
-		return readHarnessRunProgress(*project, goal, taskID, logPath, logOffset)
+		return readHarnessRunProgress(m.currentLanguage(), *project, goal, taskID, logPath, logOffset)
 	})
 }
 
-func readHarnessRunProgress(project harness.Project, goal, taskID, logPath string, logOffset int64) harnessRunProgressMsg {
+func readHarnessRunProgress(lang Language, project harness.Project, goal, taskID, logPath string, logOffset int64) harnessRunProgressMsg {
 	msg := harnessRunProgressMsg{
 		TaskID:    strings.TrimSpace(taskID),
 		LogPath:   strings.TrimSpace(logPath),
@@ -1274,7 +1274,7 @@ func readHarnessRunProgress(project harness.Project, goal, taskID, logPath strin
 	if msg.TaskID != "" {
 		task, err := harness.LoadTask(project, msg.TaskID)
 		if err == nil && task != nil {
-			msg = populateHarnessRunProgress(project, msg, task)
+			msg = populateHarnessRunProgress(lang, project, msg, task)
 			return msg
 		}
 	}
@@ -1286,20 +1286,20 @@ func readHarnessRunProgress(project harness.Project, goal, taskID, logPath strin
 		if task == nil || strings.TrimSpace(task.Goal) != goal {
 			continue
 		}
-		msg = populateHarnessRunProgress(project, msg, task)
+		msg = populateHarnessRunProgress(lang, project, msg, task)
 		return msg
 	}
-	msg.Activity = "Starting harness run..."
+	msg.Activity = tr(lang, "command.harness_status_starting_run")
 	return msg
 }
 
-func populateHarnessRunProgress(project harness.Project, msg harnessRunProgressMsg, task *harness.Task) harnessRunProgressMsg {
+func populateHarnessRunProgress(lang Language, project harness.Project, msg harnessRunProgressMsg, task *harness.Task) harnessRunProgressMsg {
 	if task == nil {
 		return msg
 	}
 	msg.TaskID = task.ID
-	msg.Activity = formatHarnessRunActivity(project, task)
-	msg.Detail = formatHarnessRunDetail(project, task)
+	msg.Activity = formatHarnessRunActivity(lang, project, task)
+	msg.Detail = formatHarnessRunDetail(lang, project, task)
 	if path := strings.TrimSpace(task.LogPath); path != "" {
 		msg.LogPath = path
 	}
@@ -1339,11 +1339,11 @@ func readHarnessRunLogChunk(path string, offset int64) (string, int64) {
 	return string(data), offset + int64(len(data))
 }
 
-func formatHarnessRunActivity(project harness.Project, task *harness.Task) string {
+func formatHarnessRunActivity(lang Language, project harness.Project, task *harness.Task) string {
 	if task == nil {
-		return "Starting harness run..."
+		return tr(lang, "command.harness_status_starting_run")
 	}
-	parts := []string{"Harness " + string(task.Status)}
+	parts := []string{tr(lang, "harness.activity.status", localizeHarnessTaskStatus(lang, task.Status))}
 	if task.ID != "" {
 		parts = append(parts, task.ID)
 	}
@@ -1354,44 +1354,44 @@ func formatHarnessRunActivity(project harness.Project, task *harness.Task) strin
 		parts = append(parts, phase)
 	}
 	if progress := strings.TrimSpace(task.WorkerProgress); progress != "" {
-		parts = append(parts, humanizeHarnessProgress(project, progress))
+		parts = append(parts, humanizeHarnessProgress(lang, project, progress))
 	}
 	return strings.Join(parts, " • ")
 }
 
-func formatHarnessRunDetail(project harness.Project, task *harness.Task) string {
+func formatHarnessRunDetail(lang Language, project harness.Project, task *harness.Task) string {
 	if task == nil {
 		return ""
 	}
 	if progress := strings.TrimSpace(task.WorkerProgress); progress != "" {
-		return humanizeHarnessProgress(project, progress)
+		return humanizeHarnessProgress(lang, project, progress)
 	}
 	if phase := strings.TrimSpace(task.WorkerPhase); phase != "" {
-		return "🪜 Phase · " + phase
+		return "🪜 " + tr(lang, "harness.log.phase") + " · " + phase
 	}
 	if status := strings.TrimSpace(task.WorkerStatus); status != "" {
-		return "🤖 Worker · " + status
+		return "🤖 " + tr(lang, "harness.log.worker") + " · " + status
 	}
 	return ""
 }
 
-func humanizeHarnessProgress(project harness.Project, progress string) string {
+func humanizeHarnessProgress(lang Language, project harness.Project, progress string) string {
 	progress = strings.TrimSpace(progress)
 	if progress == "" {
 		return ""
 	}
-	if rendered, structured := formatHarnessLogLine(&project, progress); structured {
+	if rendered, structured := formatHarnessLogLine(lang, &project, progress); structured {
 		return strings.TrimSpace(rendered)
 	}
-	return normalizeHarnessDetail(project, progress)
+	return normalizeHarnessDetail(lang, project, progress)
 }
 
-func normalizeHarnessDetail(project harness.Project, detail string) string {
+func normalizeHarnessDetail(lang Language, project harness.Project, detail string) string {
 	detail = strings.TrimSpace(detail)
 	switch {
 	case strings.HasPrefix(detail, "running "):
 		name, args := splitHarnessToolCall(strings.TrimSpace(strings.TrimPrefix(detail, "running ")))
-		label, icon := humanizeHarnessTool(name)
+		label, icon := humanizeHarnessTool(lang, name)
 		summary := summarizeHarnessToolArgs(&project, name, args)
 		if summary == "" {
 			return fmt.Sprintf("%s %s", icon, label)
@@ -1404,7 +1404,7 @@ func normalizeHarnessDetail(project harness.Project, detail string) string {
 	}
 }
 
-func formatHarnessRunLogChunk(project *harness.Project, chunk string) string {
+func formatHarnessRunLogChunk(lang Language, project *harness.Project, chunk string) string {
 	if chunk == "" {
 		return ""
 	}
@@ -1420,7 +1420,7 @@ func formatHarnessRunLogChunk(project *harness.Project, chunk string) string {
 		if trimmed == "" {
 			continue
 		}
-		rendered, structured := formatHarnessLogLine(project, trimmed)
+		rendered, structured := formatHarnessLogLine(lang, project, trimmed)
 		if rendered == "" {
 			continue
 		}
@@ -1446,7 +1446,7 @@ func formatHarnessRunLogChunk(project *harness.Project, chunk string) string {
 	return b.String()
 }
 
-func formatHarnessLogLine(project *harness.Project, line string) (string, bool) {
+func formatHarnessLogLine(lang Language, project *harness.Project, line string) (string, bool) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return "", false
@@ -1454,7 +1454,7 @@ func formatHarnessLogLine(project *harness.Project, line string) (string, bool) 
 	switch {
 	case strings.HasPrefix(line, "tool: "):
 		name, args := splitHarnessToolCall(strings.TrimSpace(strings.TrimPrefix(line, "tool: ")))
-		label, icon := humanizeHarnessTool(name)
+		label, icon := humanizeHarnessTool(lang, name)
 		summary := summarizeHarnessToolArgs(project, name, args)
 		if summary == "" {
 			return fmt.Sprintf("%s %s", icon, label), true
@@ -1463,9 +1463,9 @@ func formatHarnessLogLine(project *harness.Project, line string) (string, bool) 
 	case strings.HasPrefix(line, "tool result: "):
 		return formatHarnessToolResult(project, strings.TrimSpace(strings.TrimPrefix(line, "tool result: "))), true
 	case strings.HasPrefix(line, "phase: "):
-		return "🪜 Phase · " + shortenHarnessPaths(project, strings.TrimSpace(strings.TrimPrefix(line, "phase: "))), true
+		return "🪜 " + tr(lang, "harness.log.phase") + " · " + shortenHarnessPaths(project, strings.TrimSpace(strings.TrimPrefix(line, "phase: "))), true
 	case strings.HasPrefix(line, "worker: "):
-		return "🤖 Worker · " + shortenHarnessPaths(project, strings.TrimSpace(strings.TrimPrefix(line, "worker: "))), true
+		return "🤖 " + tr(lang, "harness.log.worker") + " · " + shortenHarnessPaths(project, strings.TrimSpace(strings.TrimPrefix(line, "worker: "))), true
 	default:
 		return shortenHarnessPaths(project, line), false
 	}
@@ -1479,20 +1479,20 @@ func formatHarnessStructuredLine(text string) string {
 	return text + "\n\n"
 }
 
-func harnessLogChunkContainsDetail(project *harness.Project, chunk, detail string) bool {
+func harnessLogChunkContainsDetail(lang Language, project *harness.Project, chunk, detail string) bool {
 	chunk = strings.TrimSpace(chunk)
 	detail = strings.TrimSpace(detail)
 	if chunk == "" || detail == "" {
 		return false
 	}
 	if project != nil {
-		detail = normalizeHarnessDetail(*project, detail)
+		detail = normalizeHarnessDetail(lang, *project, detail)
 	}
 	needle := strings.TrimSpace(formatHarnessStructuredLine(detail))
 	if needle == "" {
 		return false
 	}
-	return strings.Contains(formatHarnessRunLogChunk(project, chunk), needle)
+	return strings.Contains(formatHarnessRunLogChunk(lang, project, chunk), needle)
 }
 
 func splitHarnessToolCall(text string) (string, string) {
@@ -1507,26 +1507,63 @@ func splitHarnessToolCall(text string) (string, string) {
 	return name, strings.TrimSpace(rest)
 }
 
-func humanizeHarnessTool(name string) (string, string) {
+func humanizeHarnessTool(lang Language, name string) (string, string) {
 	switch name {
 	case "read_file", "view":
-		return "Read file", "📖"
+		return tr(lang, "harness.tool.read_file"), "📖"
 	case "write_file", "edit_file", "apply_patch":
-		return "Write file", "✍️"
+		return tr(lang, "harness.tool.write_file"), "✍️"
 	case "list_directory", "glob":
-		return "Browse files", "📂"
+		return tr(lang, "harness.tool.browse_files"), "📂"
 	case "grep", "rg":
-		return "Search code", "🔎"
+		return tr(lang, "harness.tool.search_code"), "🔎"
 	case "bash", "run_command", "start_command", "wait_command", "read_command", "write_command_input", "stop_command":
-		return "Run command", "⚙️"
+		return tr(lang, "harness.tool.run_command"), "⚙️"
 	case "web_fetch":
-		return "Fetch web page", "🌐"
+		return tr(lang, "harness.tool.fetch_web_page"), "🌐"
 	case "task", "read_agent", "list_agents":
-		return "Run sub-agent", "🤖"
+		return tr(lang, "harness.tool.run_subagent"), "🤖"
 	case "todo_write", "todo_read", "sql":
-		return "Update task state", "🗂️"
+		return tr(lang, "harness.tool.update_task_state"), "🗂️"
 	default:
 		return titleizeHarnessText(strings.ReplaceAll(name, "_", " ")), "🧰"
+	}
+}
+
+func localizeHarnessTaskStatus(lang Language, status harness.TaskStatus) string {
+	switch status {
+	case harness.TaskQueued:
+		if lang == LangZhCN {
+			return "排队中"
+		}
+		return "queued"
+	case harness.TaskRunning:
+		if lang == LangZhCN {
+			return "运行中"
+		}
+		return "running"
+	case harness.TaskCompleted:
+		if lang == LangZhCN {
+			return "已完成"
+		}
+		return "completed"
+	case harness.TaskFailed:
+		if lang == LangZhCN {
+			return "失败"
+		}
+		return "failed"
+	case harness.TaskBlocked:
+		if lang == LangZhCN {
+			return "阻塞"
+		}
+		return "blocked"
+	case harness.TaskAbandoned:
+		if lang == LangZhCN {
+			return "已放弃"
+		}
+		return "abandoned"
+	default:
+		return string(status)
 	}
 }
 
@@ -1846,7 +1883,7 @@ func (m *Model) handleHarnessCheckpointConfirm(approved bool) tea.Cmd {
 		pc.Response <- approved
 	}()
 	if !approved {
-		m.output.WriteString(m.styles.error.Render("Harness run cancelled."))
+		m.output.WriteString(m.styles.error.Render(m.t("command.harness_cancelled")))
 	}
 	return nil
 }

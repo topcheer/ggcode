@@ -609,7 +609,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if err := m.tryActivateCurrentSelection(); err != nil {
-			panel.message = "Saved config, but current runtime is still inactive: " + err.Error()
+			panel.message = m.t("panel.model.saved_runtime_inactive", err)
 			return *m, nil
 		}
 		m.syncSessionSelection()

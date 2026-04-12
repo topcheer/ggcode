@@ -14,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -1019,11 +1020,15 @@ func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
 }
 
 func TestConversationViewportUnderlinesClickablePaths(t *testing.T) {
+	oldProfile := termenv.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(oldProfile)
+
 	m := newTestModel()
 	m.handleResize(120, 30)
-	m.output.WriteString("● README.md and internal/tui/model.go:3\n")
+	m.output.WriteString("● model.go:3\n")
 
-	view := m.conversationViewport().View()
+	view := m.renderConversationPanel(12)
 	if !strings.Contains(view, "\x1b[4;") && !strings.Contains(view, "\x1b[4m") {
 		t.Fatalf("expected clickable paths to be underlined, got %q", view)
 	}
@@ -1162,7 +1167,7 @@ func TestSourcePreviewUsesSyntaxHighlighting(t *testing.T) {
 
 func TestEscClosesPreviewPanel(t *testing.T) {
 	m := newTestModel()
-	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Lines: []string{"hello"}}
+	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Content: "hello"}
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil {
@@ -1178,7 +1183,7 @@ func TestEscClosesPreviewPanel(t *testing.T) {
 func TestEscClosesPreviewPanelBeforeCancelingRun(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
-	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Lines: []string{"hello"}}
+	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Content: "hello"}
 	canceled := false
 	m.cancelFunc = func() { canceled = true }
 
@@ -1253,7 +1258,7 @@ func TestRenderOutputShowsGroupedToolActivity(t *testing.T) {
 	}
 }
 
-func TestTodoWriteOrganizesFollowingActivityUnderActiveTodo(t *testing.T) {
+func TestTodoWriteMovesTaskTrackingToSidebar(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 	m.loading = true
@@ -1269,43 +1274,33 @@ func TestTodoWriteOrganizesFollowingActivityUnderActiveTodo(t *testing.T) {
 	if strings.Contains(output, "Todo:") || strings.Contains(output, "🎯") {
 		t.Fatalf("expected main content to omit todo heading, got %q", output)
 	}
-	if !strings.Contains(output, "📦 Advancing tasks") {
-		t.Fatalf("expected todo update group, got %q", output)
-	}
-	if !strings.Contains(output, "Started Polish TUI activity flow") {
-		t.Fatalf("expected todo diff summary, got %q", output)
+	if strings.Contains(output, "Advancing tasks") || strings.Contains(output, "推进任务") {
+		t.Fatalf("expected main content to omit task tracker groups, got %q", output)
 	}
 	if !strings.Contains(output, "📦 Exploring project context") {
 		t.Fatalf("expected following tool work to render as its own group, got %q", output)
 	}
-	if !strings.Contains(output, "\n\n 📦 Exploring project context") {
-		t.Fatalf("expected spacing between grouped sections, got %q", output)
+	sidebar := m.renderSidebar(30)
+	if !strings.Contains(sidebar, "Polish TUI activity flow") {
+		t.Fatalf("expected active task in sidebar tracker, got %q", sidebar)
 	}
 }
 
-func TestRenderGroupedActivitiesMergesSameTodoIntoSingleBlock(t *testing.T) {
+func TestSidebarTaskTrackerSortsStartedTasksNewestFirst(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
-	m.loading = true
-	m.activeTodo = &todoStateItem{ID: "todo-1", Content: "Polish TUI activity flow", Status: "in_progress"}
-
-	m.startToolActivity(ToolStatusMsg{ToolName: "run_command", DisplayName: "Run", Detail: "build", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "run_command", DisplayName: "Run", Detail: "build", Running: false, Result: "ok"})
-	m.closeToolActivityGroup()
-	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
-	m.closeToolActivityGroup()
-
-	output := m.renderGroupedActivities()
-
-	if strings.Contains(output, "Todo:") || strings.Contains(output, "🎯") {
-		t.Fatalf("expected grouped activities to omit todo heading, got %q", output)
+	now := time.Now()
+	m.todoSnapshot = map[string]todoStateItem{
+		"todo-1": {ID: "todo-1", Content: "Older task", Status: "done", StartedAt: now.Add(-2 * time.Minute), UpdatedAt: now.Add(-time.Minute)},
+		"todo-2": {ID: "todo-2", Content: "Newest task", Status: "in_progress", StartedAt: now.Add(-30 * time.Second), UpdatedAt: now},
 	}
-	if !strings.Contains(output, "📦 Running commands\n    • Run build") {
-		t.Fatalf("expected running commands section, got %q", output)
+
+	sidebar := m.renderSidebar(30)
+	if strings.Index(sidebar, "Newest task") > strings.Index(sidebar, "Older task") {
+		t.Fatalf("expected newest started task first in sidebar, got %q", sidebar)
 	}
-	if !strings.Contains(output, "\n\n 📦 Exploring project context\n    • Read README.md") {
-		t.Fatalf("expected later same-todo work to stay in the same block with spacing, got %q", output)
+	if strings.Contains(sidebar, "供应商") || strings.Contains(sidebar, "vendor") {
+		t.Fatalf("expected task tracker to replace default sidebar details, got %q", sidebar)
 	}
 }
 
