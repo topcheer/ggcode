@@ -123,6 +123,15 @@ If you want Aliyun Bailian Coding Plan, use the built-in **`aliyun`** vendor wit
 - `coding-openai` → `https://coding.dashscope.aliyuncs.com/v1`
 - `coding-anthropic` → `https://coding.dashscope.aliyuncs.com/apps/anthropic`
 
+The built-in OpenAI-compatible router presets also include:
+
+- `aihubmix` → `https://aihubmix.com/v1` (`AIHUBMIX_API_KEY`)
+- `getgoapi` → `https://api.getgoapi.com/v1` (`GETGOAPI_API_KEY`)
+- `novita` → `https://api.novita.ai/openai/v1` (`NOVITA_API_KEY`)
+- `poe` → `https://api.poe.com/v1` (`POE_API_KEY`)
+- `requesty` → `https://router.requesty.ai/v1` (`REQUESTY_API_KEY`)
+- `vercel` → `https://ai-gateway.vercel.sh/v1` (`VERCEL_AI_GATEWAY_API_KEY`)
+
 If you use an **Anthropic-compatible endpoint**, ggcode can also bootstrap it on first launch from:
 
 ```bash
@@ -346,6 +355,11 @@ tool_permissions:
 ggcode ships with built-in presets for mainstream vendors and several coding-oriented endpoints,
 including Aliyun Bailian Coding Plan, so you usually start by choosing a vendor or setting API keys
 rather than writing the full provider catalog yourself.
+
+Recent built-in router-style presets include **AIHubMix**, **GetGoAPI**, **Novita AI**, **Poe**,
+**Requesty**, and **Vercel AI Gateway**. In the TUI `/provider` panel, ggcode also shows the
+expected API key env var for the currently selected vendor/endpoint so you can configure it without
+guessing.
 
 For long-running or interactive shell work, the built-in async command tools let the agent start a background command, poll progress, send follow-up stdin input, and stop the job without blocking the whole session.
 
