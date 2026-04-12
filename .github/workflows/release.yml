@@ -68,6 +68,16 @@ jobs:
           args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Render release notes
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          chmod +x ./scripts/release/render-notes.sh
+          ./scripts/release/render-notes.sh "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" > /tmp/release-notes.md
+      - name: Apply release notes
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release-notes.md
       - name: Upload GoReleaser dist artifacts
         uses: actions/upload-artifact@v4
         with:
