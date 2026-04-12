@@ -87,7 +87,7 @@ func (m Model) conversationViewport() ViewportModel {
 	vp := m.viewport
 	panelHeight := m.conversationPanelHeight()
 	vp.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
-	vp.SetContent(m.renderOutput())
+	vp.SetContent(m.decoratePreviewTargets(m.renderOutput()))
 	return vp
 }
 

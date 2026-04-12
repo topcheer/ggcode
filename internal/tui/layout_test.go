@@ -980,10 +980,9 @@ func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
 	if idx < 0 {
 		t.Fatalf("expected file token in visible line, got %q", lines[0])
 	}
-	originX, originY := m.conversationContentOrigin()
 	next, cmd := m.Update(tea.MouseMsg{
-		X:      originX + idx + 2,
-		Y:      originY,
+		X:      idx + 2,
+		Y:      m.conversationPanelTopOffset() + 1,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
@@ -1008,6 +1007,17 @@ func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
 	}
 	if !strings.Contains(view, "gamma") {
 		t.Fatalf("expected preview snippet to include target line, got %q", view)
+	}
+}
+
+func TestConversationViewportUnderlinesClickablePaths(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 30)
+	m.output.WriteString("● README.md and internal/tui/model.go:3\n")
+
+	view := m.conversationViewport().View()
+	if !strings.Contains(view, "\x1b[4;") && !strings.Contains(view, "\x1b[4m") {
+		t.Fatalf("expected clickable paths to be underlined, got %q", view)
 	}
 }
 
