@@ -12,8 +12,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const previewContextRadius = 6
-
 var (
 	previewTokenPattern = regexp.MustCompile(`(?:~/|/|\.\.?/)?(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?::\d+(?::\d+)?)?`)
 	ansiEscapePattern   = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
@@ -23,11 +21,10 @@ type previewPanelState struct {
 	DisplayPath string
 	AbsPath     string
 	TargetLine  int
-	StartLine   int
-	EndLine     int
-	TotalLines  int
-	Lines       []string
+	Content     string
 	Error       string
+	viewport    ViewportModel
+	anchored    bool
 }
 
 func (m *Model) closePreviewPanel() {
@@ -83,6 +80,7 @@ func (m *Model) openPreviewForToken(token string) bool {
 		return false
 	}
 	m.previewPanel = state
+	m.syncPreviewViewport(true)
 	return true
 }
 
@@ -102,27 +100,23 @@ func (m Model) buildPreviewPanelState(token string) *previewPanelState {
 	data, err := os.ReadFile(absPath)
 	displayPath := displayPreviewPath(pathPart, absPath)
 	if err != nil {
-		return &previewPanelState{
+		state := &previewPanelState{
 			DisplayPath: displayPath,
 			AbsPath:     absPath,
 			TargetLine:  targetLine,
 			Error:       err.Error(),
 		}
+		state.viewport = newPreviewViewport()
+		return state
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	start, end := previewSnippetWindow(len(lines), targetLine)
-	return &previewPanelState{
+	state := &previewPanelState{
 		DisplayPath: displayPath,
 		AbsPath:     absPath,
 		TargetLine:  targetLine,
-		StartLine:   start,
-		EndLine:     end,
-		TotalLines:  len(lines),
-		Lines:       append([]string(nil), lines[start-1:end]...),
+		Content:     strings.ReplaceAll(string(data), "\r\n", "\n"),
 	}
+	state.viewport = newPreviewViewport()
+	return state
 }
 
 func parsePreviewTarget(token string) (string, int) {
@@ -185,37 +179,33 @@ func displayPreviewPath(rawPath, absPath string) string {
 	return filepath.ToSlash(absPath)
 }
 
-func previewSnippetWindow(totalLines, targetLine int) (int, int) {
-	if totalLines <= 0 {
-		return 1, 0
-	}
-	if targetLine <= 0 {
-		end := min(totalLines, previewContextRadius*2+1)
-		return 1, end
-	}
-	start := targetLine - previewContextRadius
-	if start < 1 {
-		start = 1
-	}
-	end := targetLine + previewContextRadius
-	if end > totalLines {
-		end = totalLines
-	}
-	if end-start < previewContextRadius*2 && totalLines > previewContextRadius*2+1 {
-		if start == 1 {
-			end = min(totalLines, previewContextRadius*2+1)
-		} else if end == totalLines {
-			start = max(1, totalLines-previewContextRadius*2)
-		}
-	}
-	return start, end
-}
-
 func (m Model) renderPreviewPanel() string {
 	if m.previewPanel == nil {
 		return ""
 	}
-	return m.renderPreviewPanelBox(m.boxInnerWidth(m.mainColumnWidth()))
+	state := m.previewPanel
+	meta := fmt.Sprintf("%s %s", previewText(m.currentLanguage(), "path"), state.DisplayPath)
+	if state.TargetLine > 0 {
+		meta += fmt.Sprintf("  •  %s %d", previewText(m.currentLanguage(), "line"), state.TargetLine)
+	}
+	if scroll := state.viewport.ScrollIndicatorStyle(); scroll != "" {
+		meta += "  •  " + scroll
+	}
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true).Render(previewText(m.currentLanguage(), "title"))
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(previewText(m.currentLanguage(), "hint_fullscreen"))
+	content := strings.Join([]string{
+		title,
+		truncateDisplayWidth(meta, max(12, m.previewContentWidth())),
+		state.viewport.View(),
+		footer,
+	}, "\n")
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(chromeBorderColor).
+		Padding(0, 1).
+		Width(max(1, m.viewWidth()-m.terminalRightMargin())).
+		Height(max(6, m.viewHeight())).
+		Render(content)
 }
 
 func (m Model) decoratePreviewTargets(rendered string) string {
@@ -248,69 +238,93 @@ func previewPathExists(pathPart string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func (m Model) renderSidebarPreviewPanel(totalHeight int) string {
+func newPreviewViewport() ViewportModel {
+	vp := NewViewportModel(1, 1)
+	vp.autoFollow = false
+	return vp
+}
+
+func (m *Model) syncPreviewViewport(initial bool) {
 	if m.previewPanel == nil {
-		return ""
+		return
 	}
-	width := m.boxInnerWidth(m.sidebarWidth())
-	body := m.renderPreviewPanelBody(width)
-	innerHeight := max(lipgloss.Height(body), totalHeight-2)
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true).Render(" " + previewText(m.currentLanguage(), "title"))
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(chromeBorderColor).
-		Padding(0, 1).
-		Height(innerHeight).
-		Width(width).
-		Render(title + "\n" + body)
-}
-
-func (m Model) renderPreviewPanelBox(width int) string {
-	return m.renderContextBox(previewText(m.currentLanguage(), "title"), m.renderPreviewPanelBody(width), lipgloss.Color("13"))
-}
-
-func (m Model) renderPreviewPanelBody(width int) string {
 	state := m.previewPanel
-	if state == nil {
-		return ""
+	width := m.previewContentWidth()
+	height := m.previewContentHeight()
+	if width < 1 {
+		width = 1
 	}
-	lines := []string{
-		fmt.Sprintf("%s %s", previewText(m.currentLanguage(), "path"), truncateDisplayWidth(state.DisplayPath, max(12, width-6))),
+	if height < 1 {
+		height = 1
 	}
-	if state.TargetLine > 0 {
-		lines = append(lines, fmt.Sprintf("%s %d", previewText(m.currentLanguage(), "line"), state.TargetLine))
-	}
-	lines = append(lines, "")
+	oldOffset := state.viewport.YOffset()
+	state.viewport.autoFollow = false
+	state.viewport.SetSize(width, height)
+	content := state.Content
 	if state.Error != "" {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(truncateDisplayWidth(state.Error, width)))
-		lines = append(lines, "")
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(previewText(m.currentLanguage(), "hint")))
-		return strings.Join(lines, "\n")
+		content = state.Error
 	}
-	if state.StartLine > 1 {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("…"))
+	state.viewport.SetContent(content)
+	maxOffset := max(0, state.viewport.TotalLineCount()-state.viewport.VisibleLineCount())
+	switch {
+	case initial && state.TargetLine > 1 && !state.anchored:
+		offset := min(maxOffset, state.TargetLine-1)
+		state.viewport.vp.YOffset = offset
+		state.anchored = true
+	default:
+		state.viewport.vp.YOffset = min(maxOffset, oldOffset)
 	}
-	lineNoWidth := len(strconv.Itoa(max(state.EndLine, state.TargetLine)))
-	lineStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	targetStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
-	for idx, content := range state.Lines {
-		lineNo := state.StartLine + idx
-		prefix := "  "
-		numberStyle := lineStyle
-		if lineNo == state.TargetLine {
-			prefix = "› "
-			numberStyle = targetStyle
-			content = targetStyle.Render(truncateDisplayWidth(content, max(12, width-lineNoWidth-5)))
-		} else {
-			content = truncateDisplayWidth(content, max(12, width-lineNoWidth-5))
-		}
-		lines = append(lines, fmt.Sprintf("%s%s %s", prefix, numberStyle.Render(fmt.Sprintf("%*d", lineNoWidth, lineNo)), content))
+}
+
+func (m Model) previewContentWidth() int {
+	width := m.viewWidth() - m.terminalRightMargin() - 4
+	if width < 1 {
+		return 1
 	}
-	if state.EndLine > 0 && state.EndLine < state.TotalLines {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("…"))
+	return width
+}
+
+func (m Model) previewContentHeight() int {
+	height := m.viewHeight() - 5
+	if height < 3 {
+		return 3
 	}
-	lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(previewText(m.currentLanguage(), "hint")))
-	return strings.Join(lines, "\n")
+	return height
+}
+
+func (m *Model) handlePreviewMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
+	if m.previewPanel == nil {
+		return *m, nil
+	}
+	if msg.Alt {
+		return *m, nil
+	}
+	switch msg.Type {
+	case tea.MouseWheelUp:
+		m.previewPanel.viewport.ScrollUp(3)
+	case tea.MouseWheelDown:
+		m.previewPanel.viewport.ScrollDown(3)
+	}
+	return *m, nil
+}
+
+func (m *Model) handlePreviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if m.previewPanel == nil {
+		return *m, nil
+	}
+	switch msg.String() {
+	case "esc":
+		m.closePreviewPanel()
+	case "up", "k":
+		m.previewPanel.viewport.ScrollUp(1)
+	case "down", "j":
+		m.previewPanel.viewport.ScrollDown(1)
+	case "pgup":
+		m.previewPanel.viewport.ScrollUp(max(1, m.previewPanel.viewport.VisibleLineCount()/2))
+	case "pgdown":
+		m.previewPanel.viewport.ScrollDown(max(1, m.previewPanel.viewport.VisibleLineCount()/2))
+	}
+	return *m, nil
 }
 
 func previewText(lang Language, key string) string {
@@ -325,6 +339,8 @@ func previewText(lang Language, key string) string {
 			return "定位行:"
 		case "hint":
 			return "Esc 关闭 • 点击其它路径可切换预览"
+		case "hint_fullscreen":
+			return "Esc 关闭 • 鼠标滚轮 / ↑↓ / PgUp / PgDn 滚动"
 		}
 	default:
 		switch key {
@@ -336,6 +352,8 @@ func previewText(lang Language, key string) string {
 			return "line:"
 		case "hint":
 			return "Esc closes • click another path to switch preview"
+		case "hint_fullscreen":
+			return "Esc closes • mouse wheel / ↑↓ / PgUp / PgDn scroll"
 		}
 	}
 	return key

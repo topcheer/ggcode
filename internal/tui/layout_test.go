@@ -1013,6 +1013,9 @@ func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
 	if !strings.Contains(view, "gamma") {
 		t.Fatalf("expected preview snippet to include target line, got %q", view)
 	}
+	if strings.Contains(view, "Enter 发送") || strings.Contains(view, "Enter send") {
+		t.Fatalf("expected fullscreen preview to hide composer, got %q", view)
+	}
 }
 
 func TestConversationViewportUnderlinesClickablePaths(t *testing.T) {
@@ -1048,6 +1051,53 @@ func TestPreviewTokenAtAllowsOneRowDownwardTolerance(t *testing.T) {
 	token, ok := m.previewTokenAt(targetX, targetY)
 	if !ok || token != "cmd/ggcode/root.go" {
 		t.Fatalf("expected downward tolerance to resolve file token, got %q", token)
+	}
+}
+
+func TestPreviewViewportScrollControls(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	target := filepath.Join(workspace, "README.md")
+	var content strings.Builder
+	for i := 0; i < 80; i++ {
+		fmt.Fprintf(&content, "line %02d with enough content to wrap naturally in the preview viewport\n", i)
+	}
+	if err := os.WriteFile(target, []byte(content.String()), 0644); err != nil {
+		t.Fatalf("write preview target: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+
+	m := newTestModel()
+	m.handleResize(100, 24)
+	if !m.openPreviewForToken("README.md") {
+		t.Fatal("expected preview to open")
+	}
+	start := m.previewPanel.viewport.YOffset()
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if got := m.previewPanel.viewport.YOffset(); got <= start {
+		t.Fatalf("expected down key to scroll preview, start=%d got=%d", start, got)
+	}
+
+	start = m.previewPanel.viewport.YOffset()
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(Model)
+	if got := m.previewPanel.viewport.YOffset(); got <= start {
+		t.Fatalf("expected page down to scroll preview further, start=%d got=%d", start, got)
+	}
+
+	start = m.previewPanel.viewport.YOffset()
+	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	m = next.(Model)
+	if got := m.previewPanel.viewport.YOffset(); got <= start {
+		t.Fatalf("expected mouse wheel to scroll preview, start=%d got=%d", start, got)
 	}
 }
 

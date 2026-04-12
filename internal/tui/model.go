@@ -866,6 +866,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		if m.previewPanel != nil {
+			return m.handlePreviewMouse(msg)
+		}
 		// Option/Alt+mouse: release mouse to terminal for native text selection
 		if msg.Alt {
 			return m, nil
@@ -898,6 +901,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.config.SaveSidebarPreference(m.sidebarVisible)
 			}
 			return m, nil
+		}
+		if m.previewPanel != nil {
+			return m.handlePreviewKey(msg)
 		}
 
 		if msg.String() == "ctrl+c" && !m.loading && (m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.inspectorPanel != nil || m.harnessPanel != nil || m.harnessContextPrompt != nil || len(m.langOptions) > 0) {

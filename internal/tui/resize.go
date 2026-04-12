@@ -28,6 +28,7 @@ func (m *Model) handleResize(width, height int) {
 	m.syncQuestionnaireInputWidth()
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
+	m.syncPreviewViewport(false)
 }
 
 func (m *Model) syncConversationViewport() {

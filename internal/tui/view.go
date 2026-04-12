@@ -21,6 +21,9 @@ func (m Model) View() string {
 	if m.quitting {
 		return ""
 	}
+	if m.previewPanel != nil {
+		return m.renderPreviewPanel()
+	}
 
 	header := ""
 	if m.topHeaderEnabled() {
@@ -854,17 +857,12 @@ func (m Model) renderContextPanel() string {
 		return m.renderContextBox(title, body, accent)
 	case m.autoCompleteActive && len(m.autoCompleteItems) > 0:
 		return m.renderAutoComplete()
-	case m.previewPanel != nil && !m.sidebarEnabled():
-		return m.renderPreviewPanel()
 	default:
 		return ""
 	}
 }
 
 func (m Model) renderAuxColumn(totalHeight int) string {
-	if m.previewPanel != nil && m.sidebarEnabled() {
-		return m.renderSidebarPreviewPanel(totalHeight)
-	}
 	if m.sidebarEnabled() {
 		return m.renderSidebar(totalHeight)
 	}
