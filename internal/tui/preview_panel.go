@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -25,6 +26,8 @@ type previewPanelState struct {
 	Error       string
 	viewport    ViewportModel
 	anchored    bool
+	rendered    string
+	renderWidth int
 }
 
 func (m *Model) closePreviewPanel() {
@@ -117,6 +120,45 @@ func (m Model) buildPreviewPanelState(token string) *previewPanelState {
 	}
 	state.viewport = newPreviewViewport()
 	return state
+}
+
+func (p *previewPanelState) previewContent(width int) string {
+	if p == nil {
+		return ""
+	}
+	if p.Error != "" {
+		return p.Error
+	}
+	if !isMarkdownPreviewPath(p.DisplayPath) && !isMarkdownPreviewPath(p.AbsPath) {
+		return p.Content
+	}
+	if p.rendered != "" && p.renderWidth == width {
+		return p.rendered
+	}
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return p.Content
+	}
+	rendered, err := renderer.Render(p.Content)
+	if err != nil {
+		return p.Content
+	}
+	p.renderWidth = width
+	p.rendered = trimLeadingRenderedSpacing(rendered)
+	return p.rendered
+}
+
+func isMarkdownPreviewPath(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".md", ".markdown", ".mdx":
+		return true
+	default:
+		return false
+	}
 }
 
 func parsePreviewTarget(token string) (string, int) {
@@ -260,10 +302,7 @@ func (m *Model) syncPreviewViewport(initial bool) {
 	oldOffset := state.viewport.YOffset()
 	state.viewport.autoFollow = false
 	state.viewport.SetSize(width, height)
-	content := state.Content
-	if state.Error != "" {
-		content = state.Error
-	}
+	content := state.previewContent(width)
 	state.viewport.SetContent(content)
 	maxOffset := max(0, state.viewport.TotalLineCount()-state.viewport.VisibleLineCount())
 	switch {
