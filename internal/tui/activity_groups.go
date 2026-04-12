@@ -51,7 +51,28 @@ func (m *Model) finishToolActivity(ts ToolStatusMsg) {
 	if len(group.Items) == 0 {
 		return
 	}
-	item := &group.Items[len(group.Items)-1]
+	itemIndex := -1
+	if ts.ToolID != "" {
+		for i := len(group.Items) - 1; i >= 0; i-- {
+			item := group.Items[i]
+			if item.Running && item.CallID == ts.ToolID {
+				itemIndex = i
+				break
+			}
+		}
+	}
+	if itemIndex == -1 {
+		for i := len(group.Items) - 1; i >= 0; i-- {
+			if group.Items[i].Running {
+				itemIndex = i
+				break
+			}
+		}
+	}
+	if itemIndex == -1 {
+		itemIndex = len(group.Items) - 1
+	}
+	item := &group.Items[itemIndex]
 	if ts.ToolName == "todo_write" {
 		item.Summary = m.applyTodoWrite(ts)
 		item.CommandTitle = ""
@@ -281,6 +302,7 @@ func buildToolActivityItem(lang Language, msg ToolStatusMsg) toolActivityItem {
 		return item
 	}
 	return toolActivityItem{
+		CallID:  msg.ToolID,
 		Summary: formatToolItemSummary(lang, msg),
 		Running: msg.Running,
 	}
@@ -294,6 +316,7 @@ func buildCommandToolActivityItem(_ Language, msg ToolStatusMsg) (toolActivityIt
 	outputPreview := buildTextPreview(msg.Result)
 
 	item := toolActivityItem{
+		CallID:                 msg.ToolID,
 		Running:                msg.Running,
 		CommandTitle:           preview.Title,
 		CommandLines:           preview.CommandLines,
