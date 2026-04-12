@@ -88,9 +88,9 @@ func resetForTest(t *testing.T, basePath string, size int64, files, buffer int) 
 	mu.Lock()
 	logger = nil
 	logSink = nil
-		once = sync.Once{}
-		logPath = basePath
-		maxLogSize = size
+	once = sync.Once{}
+	logPath = basePath
+	maxLogSize = size
 	maxLogFiles = files
 	asyncBufSize = buffer
 	mu.Unlock()
