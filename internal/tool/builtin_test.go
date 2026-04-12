@@ -14,7 +14,7 @@ func TestBuiltinTools_Registration(t *testing.T) {
 	t.Logf("Total tools registered: %d", len(tools))
 
 	// Check that the new tools are registered
-	requiredTools := []string{"web_fetch", "web_search", "ask_user", "todo_write", "start_command", "read_command_output", "wait_command", "stop_command", "write_command_input", "list_commands"}
+	requiredTools := []string{"web_fetch", "web_search", "ask_user", "todo_write", "start_command", "read_command_output", "wait_command", "stop_command", "write_command_input", "list_commands", "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols", "lsp_workspace_symbols", "lsp_diagnostics", "lsp_code_actions", "lsp_rename"}
 	for _, name := range requiredTools {
 		tl, ok := registry.Get(name)
 		if !ok {

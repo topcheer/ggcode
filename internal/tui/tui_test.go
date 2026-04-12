@@ -1093,6 +1093,40 @@ func TestProviderAuthStartShowsClipboardAndBrowserNotes(t *testing.T) {
 	}
 }
 
+func TestInspectorStatusItemsIncludeLSPInstallHintForJavaWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.WriteFile(filepath.Join(workspace, "pom.xml"), []byte("<project/>"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	m := newTestModel()
+	items := m.inspectorStatusItems()
+	found := false
+	for _, item := range items {
+		if item.ID != "lsp-java" {
+			continue
+		}
+		found = true
+		if !strings.Contains(item.Detail, "Install") && !strings.Contains(item.Detail, "安装命令") {
+			t.Fatalf("expected java LSP detail to include install hint, got %#v", item)
+		}
+		if !strings.Contains(item.Detail, "jdtls") {
+			t.Fatalf("expected java LSP detail to mention jdtls, got %#v", item)
+		}
+	}
+	if !found {
+		t.Fatalf("expected java LSP item in status panel, got %#v", items)
+	}
+}
+
 func TestSavingEndpointAPIKeyTriggersModelRefresh(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
