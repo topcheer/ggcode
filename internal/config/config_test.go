@@ -603,6 +603,7 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 		"mistral":    "Mistral",
 		"deepseek":   "DeepSeek",
 		"moonshot":   "Moonshot AI",
+		"aliyun":     "Aliyun Bailian Coding Plan",
 		"kimi":       "Kimi Coding Plan",
 		"minimax":    "MiniMax Token Plan",
 		"ark":        "Volcengine Ark Coding Plan",
@@ -787,6 +788,27 @@ func TestDefaultConfigIncludesKimiCodingPlanCapabilities(t *testing.T) {
 	}
 	if ep.MaxTokens != 32768 {
 		t.Fatalf("expected kimi max output 32768, got %d", ep.MaxTokens)
+	}
+}
+
+func TestDefaultConfigIncludesAliyunBailianCodingPlanCapabilities(t *testing.T) {
+	cfg := DefaultConfig()
+	openai := cfg.Vendors["aliyun"].Endpoints["coding-openai"]
+	if openai.BaseURL != "https://coding.dashscope.aliyuncs.com/v1" {
+		t.Fatalf("expected aliyun openai base url, got %q", openai.BaseURL)
+	}
+	if openai.DefaultModel != "qwen3-coder-plus" {
+		t.Fatalf("expected aliyun default model qwen3-coder-plus, got %q", openai.DefaultModel)
+	}
+	if openai.Protocol != "openai" {
+		t.Fatalf("expected aliyun openai protocol, got %q", openai.Protocol)
+	}
+	anthropic := cfg.Vendors["aliyun"].Endpoints["coding-anthropic"]
+	if anthropic.BaseURL != "https://coding.dashscope.aliyuncs.com/apps/anthropic" {
+		t.Fatalf("expected aliyun anthropic base url, got %q", anthropic.BaseURL)
+	}
+	if anthropic.Protocol != "anthropic" {
+		t.Fatalf("expected aliyun anthropic protocol, got %q", anthropic.Protocol)
 	}
 }
 

@@ -162,6 +162,28 @@ vendors:
         max_tokens: 8192
         models: [moonshot-v1-8k, moonshot-v1-32k]
         tags: [official, openai-compatible, cn]
+  aliyun:
+    display_name: Aliyun Bailian Coding Plan
+    api_key: ${DASHSCOPE_API_KEY}
+    endpoints:
+      coding-openai:
+        display_name: Aliyun Bailian Coding Plan
+        protocol: openai
+        base_url: https://coding.dashscope.aliyuncs.com/v1
+        default_model: qwen3-coder-plus
+        selected_model: qwen3-coder-plus
+        max_tokens: 8192
+        models: [qwen3-coder-plus]
+        tags: [official, coding, cn, openai-compatible]
+      coding-anthropic:
+        display_name: Aliyun Bailian Coding Plan (Anthropic)
+        protocol: anthropic
+        base_url: https://coding.dashscope.aliyuncs.com/apps/anthropic
+        default_model: qwen3-coder-plus
+        selected_model: qwen3-coder-plus
+        max_tokens: 8192
+        models: [qwen3-coder-plus]
+        tags: [official, coding, cn, anthropic]
   kimi:
     display_name: Kimi Coding Plan
     api_key: ${KIMI_API_KEY}
