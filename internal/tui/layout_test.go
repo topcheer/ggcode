@@ -972,17 +972,22 @@ func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
 	m.output.WriteString("● See internal/tui/model.go:3 for details\n")
 	m.syncConversationViewport()
 
-	lines := visibleViewportLines(m.conversationViewport().View())
-	if len(lines) == 0 {
-		t.Fatal("expected visible viewport lines")
+	fullViewLines := visibleViewportLines(m.View())
+	targetY := -1
+	targetX := -1
+	for y, line := range fullViewLines {
+		if x := strings.Index(line, "internal/tui/model.go:3"); x >= 0 {
+			targetY = y
+			targetX = x + 1
+			break
+		}
 	}
-	idx := strings.Index(lines[0], "internal/tui/model.go:3")
-	if idx < 0 {
-		t.Fatalf("expected file token in visible line, got %q", lines[0])
+	if targetY < 0 {
+		t.Fatalf("expected token in rendered view, got %q", m.View())
 	}
 	next, cmd := m.Update(tea.MouseMsg{
-		X:      idx + 2,
-		Y:      m.conversationPanelTopOffset() + 1,
+		X:      targetX,
+		Y:      targetY,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
@@ -1026,7 +1031,21 @@ func TestPreviewTokenAtAllowsOneRowDownwardTolerance(t *testing.T) {
 	m.handleResize(120, 30)
 	m.output.WriteString("● cmd/ggcode/root.go\n")
 
-	token, ok := m.previewTokenAt(4, m.conversationPanelTopOffset())
+	fullViewLines := visibleViewportLines(m.View())
+	targetY := -1
+	targetX := -1
+	for y, line := range fullViewLines {
+		if x := strings.Index(line, "cmd/ggcode/root.go"); x >= 0 {
+			targetY = y
+			targetX = x + 1
+			break
+		}
+	}
+	if targetY < 0 {
+		t.Fatalf("expected token in rendered view, got %q", m.View())
+	}
+
+	token, ok := m.previewTokenAt(targetX, targetY)
 	if !ok || token != "cmd/ggcode/root.go" {
 		t.Fatalf("expected downward tolerance to resolve file token, got %q", token)
 	}
