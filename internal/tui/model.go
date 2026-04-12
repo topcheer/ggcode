@@ -1056,6 +1056,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if msg.String() == "esc" && m.previewPanel != nil {
+			m.closePreviewPanel()
+			return m, nil
+		}
+
 		if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") {
 			m.resetExitConfirm()
 			m.cancelActiveRun()
@@ -1131,10 +1136,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.autoCompleteActive {
 				m.autoCompleteActive = false
 				m.autoCompleteItems = nil
-				return m, nil
-			}
-			if m.previewPanel != nil {
-				m.closePreviewPanel()
 				return m, nil
 			}
 			if m.shellMode && !m.loading {

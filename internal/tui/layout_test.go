@@ -1036,6 +1036,27 @@ func TestEscClosesPreviewPanel(t *testing.T) {
 	}
 }
 
+func TestEscClosesPreviewPanelBeforeCancelingRun(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Lines: []string{"hello"}}
+	canceled := false
+	m.cancelFunc = func() { canceled = true }
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatal("expected escape to close preview without command")
+	}
+	m = next.(Model)
+
+	if m.previewPanel != nil {
+		t.Fatal("expected preview panel to close before canceling run")
+	}
+	if canceled {
+		t.Fatal("expected active run not to be canceled while closing preview panel")
+	}
+}
+
 // --- Status bar rendering ---
 
 func TestStatusBarWithCostInfo(t *testing.T) {
