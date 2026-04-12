@@ -101,6 +101,21 @@ func (s *ToolSpinner) Update(msg tea.Msg) tea.Cmd {
 	return s.tick()
 }
 
+func (m *Model) startLoadingSpinner(label string) tea.Cmd {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = m.t("status.thinking")
+	}
+	return m.spinner.Start(label)
+}
+
+func (m *Model) ensureLoadingSpinner(label string) tea.Cmd {
+	if !m.loading || m.spinner.IsActive() {
+		return nil
+	}
+	return m.startLoadingSpinner(label)
+}
+
 // ToolStatusMsg is sent when a tool starts or finishes execution.
 type ToolStatusMsg struct {
 	ToolName    string

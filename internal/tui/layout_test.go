@@ -122,6 +122,21 @@ func TestActiveStatusBarDoesNotShowBrokenSpinnerByte(t *testing.T) {
 	}
 }
 
+func TestActiveStatusBarUsesSpinnerGlyphInsteadOfHourglass(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = "Thinking"
+
+	rendered := m.renderStatusBar()
+
+	if strings.Contains(rendered, "⏳") {
+		t.Fatalf("expected status bar to avoid hourglass icon, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "⠋") {
+		t.Fatalf("expected status bar to show spinner glyph, got %q", rendered)
+	}
+}
+
 func TestToolStartReturnsSpinnerTickCommand(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
@@ -139,6 +154,19 @@ func TestToolStartReturnsSpinnerTickCommand(t *testing.T) {
 	}
 }
 
+func TestSubmitShellCommandStartsSpinnerImmediately(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.submitShellCommand("pwd", true)
+
+	if !m.spinner.IsActive() {
+		t.Fatal("expected shell submit to start spinner immediately")
+	}
+	if cmd == nil {
+		t.Fatal("expected shell submit to return commands")
+	}
+}
+
 func TestSpinnerMsgSchedulesNextTick(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
@@ -153,6 +181,59 @@ func TestSpinnerMsgSchedulesNextTick(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected spinner tick to schedule the next frame")
+	}
+}
+
+func TestStatusMsgRestartsStoppedLoadingSpinner(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = "Thinking..."
+
+	next, cmd := m.Update(statusMsg{Activity: "Writing...", ToolName: "read_file", ToolArg: "README.md", ToolCount: 1})
+	if cmd == nil {
+		t.Fatal("expected status update to restart spinner while loading")
+	}
+	m = next.(Model)
+	if !m.spinner.IsActive() {
+		t.Fatal("expected spinner to restart on status update")
+	}
+}
+
+func TestAgentStreamMsgRestartsStoppedLoadingSpinner(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 1
+	m.statusActivity = "Writing..."
+
+	next, cmd := m.Update(agentStreamMsg{RunID: 1, Text: "hello"})
+	if cmd == nil {
+		t.Fatal("expected stream update to restart spinner while loading")
+	}
+	m = next.(Model)
+	if !m.spinner.IsActive() {
+		t.Fatal("expected spinner to restart on stream update")
+	}
+}
+
+func TestToolCompletionResumesLoadingSpinner(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = "Thinking..."
+	m.spinner.Start("Read: README.md")
+
+	next, cmd := m.Update(toolStatusMsg(ToolStatusMsg{
+		ToolName:    "read_file",
+		DisplayName: "Read",
+		Detail:      "README.md",
+		Activity:    "Reading README.md",
+		Running:     false,
+	}))
+	if cmd == nil {
+		t.Fatal("expected tool completion to resume loading spinner")
+	}
+	m = next.(Model)
+	if !m.spinner.IsActive() {
+		t.Fatal("expected spinner to resume after tool completion")
 	}
 }
 

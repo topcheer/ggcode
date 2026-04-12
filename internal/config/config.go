@@ -17,17 +17,18 @@ import (
 
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
-	DisplayName   string   `yaml:"display_name"`
-	Protocol      string   `yaml:"protocol"`
-	BaseURL       string   `yaml:"base_url"`
-	AuthType      string   `yaml:"auth_type,omitempty"`
-	APIKey        string   `yaml:"api_key,omitempty"`
-	ContextWindow int      `yaml:"context_window,omitempty"`
-	MaxTokens     int      `yaml:"max_tokens"`
-	DefaultModel  string   `yaml:"default_model,omitempty"`
-	SelectedModel string   `yaml:"selected_model,omitempty"`
-	Models        []string `yaml:"models,omitempty"`
-	Tags          []string `yaml:"tags,omitempty"`
+	DisplayName    string   `yaml:"display_name"`
+	Protocol       string   `yaml:"protocol"`
+	BaseURL        string   `yaml:"base_url"`
+	AuthType       string   `yaml:"auth_type,omitempty"`
+	APIKey         string   `yaml:"api_key,omitempty"`
+	ContextWindow  int      `yaml:"context_window,omitempty"`
+	MaxTokens      int      `yaml:"max_tokens"`
+	SupportsVision *bool    `yaml:"supports_vision,omitempty"`
+	DefaultModel   string   `yaml:"default_model,omitempty"`
+	SelectedModel  string   `yaml:"selected_model,omitempty"`
+	Models         []string `yaml:"models,omitempty"`
+	Tags           []string `yaml:"tags,omitempty"`
 }
 
 // VendorConfig holds a real supplier plus its available endpoints.
@@ -39,20 +40,21 @@ type VendorConfig struct {
 
 // ResolvedEndpoint is the runtime selection after config inheritance is applied.
 type ResolvedEndpoint struct {
-	VendorID      string
-	VendorName    string
-	EndpointID    string
-	EndpointName  string
-	Protocol      string
-	AuthType      string
-	BaseURL       string
-	APIKey        string
-	EnterpriseURL string
-	Model         string
-	ContextWindow int
-	MaxTokens     int
-	Models        []string
-	Tags          []string
+	VendorID       string
+	VendorName     string
+	EndpointID     string
+	EndpointName   string
+	Protocol       string
+	AuthType       string
+	BaseURL        string
+	APIKey         string
+	EnterpriseURL  string
+	Model          string
+	ContextWindow  int
+	MaxTokens      int
+	SupportsVision bool
+	Models         []string
+	Tags           []string
 }
 
 // ToolPermission defines per-tool permission level in config.
@@ -784,21 +786,26 @@ func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, er
 	if contextWindow == 0 {
 		contextWindow = inferContextWindow(model, ep.Protocol)
 	}
+	supportsVision := inferVisionSupport(model, ep.Protocol)
+	if ep.SupportsVision != nil {
+		supportsVision = *ep.SupportsVision
+	}
 	return &ResolvedEndpoint{
-		VendorID:      vendor,
-		VendorName:    firstNonEmpty(vc.DisplayName, vendor),
-		EndpointID:    endpoint,
-		EndpointName:  firstNonEmpty(ep.DisplayName, endpoint),
-		Protocol:      ep.Protocol,
-		AuthType:      authType,
-		BaseURL:       baseURL,
-		APIKey:        apiKey,
-		EnterpriseURL: enterpriseURL,
-		Model:         model,
-		ContextWindow: contextWindow,
-		MaxTokens:     maxTokens,
-		Models:        append([]string(nil), ep.Models...),
-		Tags:          append([]string(nil), ep.Tags...),
+		VendorID:       vendor,
+		VendorName:     firstNonEmpty(vc.DisplayName, vendor),
+		EndpointID:     endpoint,
+		EndpointName:   firstNonEmpty(ep.DisplayName, endpoint),
+		Protocol:       ep.Protocol,
+		AuthType:       authType,
+		BaseURL:        baseURL,
+		APIKey:         apiKey,
+		EnterpriseURL:  enterpriseURL,
+		Model:          model,
+		ContextWindow:  contextWindow,
+		MaxTokens:      maxTokens,
+		SupportsVision: supportsVision,
+		Models:         append([]string(nil), ep.Models...),
+		Tags:           append([]string(nil), ep.Tags...),
 	}, nil
 }
 

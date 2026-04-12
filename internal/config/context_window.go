@@ -12,19 +12,29 @@ const defaultMaxOutputTokens = 8192
 type modelCapability struct {
 	ContextWindow   int
 	MaxOutputTokens int
+	SupportsVision  bool
 }
 
 var knownModelCapabilities = map[string]modelCapability{
-	"ark-code-latest": {ContextWindow: 200000},
-	"kimi-for-coding": {ContextWindow: 262144, MaxOutputTokens: 32768},
-	"minimax-m2.7":    {ContextWindow: 204800, MaxOutputTokens: 2048},
-	"glm-5":           {ContextWindow: 200000, MaxOutputTokens: 128000},
-	"glm-5-turbo":     {ContextWindow: 200000, MaxOutputTokens: 128000},
-	"glm-5.1":         {ContextWindow: 200000, MaxOutputTokens: 128000},
-	"glm-4.7":         {ContextWindow: 200000, MaxOutputTokens: 128000},
-	"glm-4.7-flashx":  {ContextWindow: 200000, MaxOutputTokens: 128000},
-	"glm-4.6":         {ContextWindow: 200000, MaxOutputTokens: 128000},
-	"glm-4.5-air":     {ContextWindow: 128000, MaxOutputTokens: 96000},
+	"ark-code-latest":          {ContextWindow: 200000},
+	"kimi-for-coding":          {ContextWindow: 262144, MaxOutputTokens: 32768},
+	"minimax-m2.7":             {ContextWindow: 204800, MaxOutputTokens: 2048},
+	"glm-5":                    {ContextWindow: 200000, MaxOutputTokens: 128000},
+	"glm-5-turbo":              {ContextWindow: 200000, MaxOutputTokens: 128000},
+	"glm-5.1":                  {ContextWindow: 200000, MaxOutputTokens: 128000},
+	"glm-4.7":                  {ContextWindow: 200000, MaxOutputTokens: 128000},
+	"glm-4.7-flashx":           {ContextWindow: 200000, MaxOutputTokens: 128000},
+	"glm-4.6":                  {ContextWindow: 200000, MaxOutputTokens: 128000},
+	"glm-4.5-air":              {ContextWindow: 128000, MaxOutputTokens: 96000},
+	"gpt-4o":                   {SupportsVision: true},
+	"gpt-4o-mini":              {SupportsVision: true},
+	"gpt-4.1":                  {SupportsVision: true},
+	"gpt-4.1-mini":             {SupportsVision: true},
+	"gpt-4.5":                  {SupportsVision: true},
+	"gpt-5":                    {SupportsVision: true},
+	"gpt-5-mini":               {SupportsVision: true},
+	"claude-3-5-sonnet-latest": {SupportsVision: true},
+	"claude-3-5-haiku-latest":  {SupportsVision: true},
 }
 
 var contextWindowHintPattern = regexp.MustCompile(`(^|[^0-9])(\d+)(k|m)($|[^a-z0-9])`)
@@ -80,6 +90,42 @@ func inferMaxOutputTokens(model, protocol string) int {
 	default:
 		return defaultMaxOutputTokens
 	}
+}
+
+func inferVisionSupport(model, protocol string) bool {
+	if cap, ok := lookupModelCapability(model); ok && cap.SupportsVision {
+		return true
+	}
+
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.Contains(m, "claude"),
+		strings.Contains(m, "gpt"),
+		strings.Contains(m, "gemini"),
+		strings.Contains(m, "gemma"),
+		strings.Contains(m, "grok"),
+		strings.Contains(m, "seed-2"),
+		strings.Contains(m, "qwen3.5"),
+		strings.Contains(m, "qwen-3.5"),
+		strings.Contains(m, "qwen3.6"),
+		strings.Contains(m, "qwen-3.6"),
+		(strings.Contains(m, "glm-") && strings.Contains(m, "v")),
+		strings.Contains(m, "kimi-2.5"),
+		strings.Contains(m, "kimi-k2"),
+		strings.Contains(m, "kimi-vl"):
+		return true
+	case strings.Contains(m, "glm-"),
+		strings.Contains(m, "kimi"),
+		strings.Contains(m, "deepseek"),
+		strings.Contains(m, "mistral"),
+		strings.Contains(m, "qwen"),
+		strings.Contains(m, "moonshot"),
+		strings.Contains(m, "minimax"),
+		strings.Contains(m, "llama"):
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(protocol), "gemini")
 }
 
 func lookupModelCapability(model string) (modelCapability, bool) {

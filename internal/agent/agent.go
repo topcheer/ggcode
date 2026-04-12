@@ -53,6 +53,10 @@ type providerAwareContextManager interface {
 	SetProvider(provider.Provider)
 }
 
+type usageAwareContextManager interface {
+	RecordUsage(provider.TokenUsage)
+}
+
 type todoPathAwareContextManager interface {
 	SetTodoFilePath(path string)
 }
@@ -159,6 +163,12 @@ func (a *Agent) syncContextManagerProviderLocked() {
 	}
 }
 
+func (a *Agent) syncContextManagerUsage(usage provider.TokenUsage) {
+	if cm, ok := a.contextManager.(usageAwareContextManager); ok {
+		cm.RecordUsage(usage)
+	}
+}
+
 // RunStream runs the agent loop with streaming, sending events to the callback.
 func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error {
 	return a.RunStreamWithContent(ctx, []provider.ContentBlock{{Type: "text", Text: userMsg}}, onEvent)
@@ -213,6 +223,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		reactiveCompactRetries = 0
 
+		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
 
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
@@ -570,7 +581,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 }
 
 func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
-	threshold := ctxpkg.AutoCompactThresholdTokens(a.contextManager.MaxTokens())
+	threshold := a.contextManager.AutoCompactThreshold()
 	if threshold <= 0 || a.contextManager.TokenCount() < threshold {
 		return nil
 	}

@@ -230,16 +230,16 @@ func TestContextManager_Summarize_BringsUsageBelowThreshold(t *testing.T) {
 		cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf("message-%d %s", i, strings.Repeat("z", 320))}}})
 	}
 
-	if cm.UsageRatio() < summarizeThreshold {
-		t.Fatalf("expected setup to exceed summarize threshold, got %.2f", cm.UsageRatio())
+	if cm.TokenCount() < cm.AutoCompactThreshold() {
+		t.Fatalf("expected setup to exceed auto-compact threshold, got tokens=%d threshold=%d", cm.TokenCount(), cm.AutoCompactThreshold())
 	}
 
 	if err := cm.Summarize(ctx, prov); err != nil {
 		t.Fatalf("Summarize failed: %v", err)
 	}
 
-	if cm.UsageRatio() >= summarizeThreshold {
-		t.Fatalf("expected summarized context to be below threshold, got %.2f", cm.UsageRatio())
+	if cm.TokenCount() >= cm.AutoCompactThreshold() {
+		t.Fatalf("expected summarized context to be below threshold, got tokens=%d threshold=%d", cm.TokenCount(), cm.AutoCompactThreshold())
 	}
 }
 
@@ -295,8 +295,8 @@ func TestContextManager_CheckAndSummarize_UsesMicrocompactBeforeSummary(t *testi
 	if prov.chatCalls != 0 {
 		t.Fatalf("expected microcompact-only path without summary call, got %d Chat calls", prov.chatCalls)
 	}
-	if cm.UsageRatio() >= summarizeThreshold {
-		t.Fatalf("expected microcompact to bring usage below threshold, got %.2f", cm.UsageRatio())
+	if cm.TokenCount() >= cm.AutoCompactThreshold() {
+		t.Fatalf("expected microcompact to bring usage below threshold, got tokens=%d threshold=%d", cm.TokenCount(), cm.AutoCompactThreshold())
 	}
 }
 
@@ -505,6 +505,31 @@ func TestContextManager_CountTokensTimeoutFallsBack(t *testing.T) {
 	}
 	if cm.TokenCount() == 0 {
 		t.Fatal("expected fallback heuristic token count")
+	}
+}
+
+func TestContextManager_RecordUsageUsesBaselinePlusDelta(t *testing.T) {
+	cm := NewManager(1000)
+	cm.RecordUsage(provider.TokenUsage{InputTokens: 620})
+
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 80)}}})
+
+	if got := cm.TokenCount(); got <= 620 {
+		t.Fatalf("expected token count to grow from recorded baseline, got %d", got)
+	}
+	if got := cm.AutoCompactThreshold(); got <= 0 {
+		t.Fatalf("expected positive threshold, got %d", got)
+	}
+}
+
+func TestContextManager_FallbackThresholdIsMoreConservativeWithoutUsageBaseline(t *testing.T) {
+	withUsage := NewManager(100000)
+	withUsage.RecordUsage(provider.TokenUsage{InputTokens: 1000})
+
+	withoutUsage := NewManager(100000)
+
+	if gotWithUsage, gotFallback := withUsage.AutoCompactThreshold(), withoutUsage.AutoCompactThreshold(); gotFallback >= gotWithUsage {
+		t.Fatalf("expected fallback threshold to trigger earlier: with_usage=%d fallback=%d", gotWithUsage, gotFallback)
 	}
 }
 
