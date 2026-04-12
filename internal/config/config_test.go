@@ -352,6 +352,27 @@ func TestSaveSidebarPreferenceCreatesUIConfig(t *testing.T) {
 	}
 }
 
+func TestSaveDefaultModePreferenceCreatesMinimalConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg := DefaultConfig()
+	cfg.FilePath = path
+
+	if err := cfg.SaveDefaultModePreference("auto"); err != nil {
+		t.Fatalf("SaveDefaultModePreference() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if got := string(data); got != "default_mode: auto\n" {
+		t.Fatalf("expected minimal default_mode config, got %q", got)
+	}
+	if cfg.DefaultMode != "auto" {
+		t.Fatalf("expected in-memory default mode to update, got %q", cfg.DefaultMode)
+	}
+}
+
 func TestLoad_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")

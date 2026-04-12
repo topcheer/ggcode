@@ -1067,6 +1067,48 @@ func (c *Config) SaveSidebarPreference(visible bool) error {
 	return nil
 }
 
+func (c *Config) SaveDefaultModePreference(mode string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(c.FilePath) == "" {
+		return fmt.Errorf("config file path is empty")
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "supervised", "plan", "auto", "bypass", "autopilot":
+	default:
+		return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", mode)
+	}
+
+	raw := map[string]interface{}{}
+	data, err := os.ReadFile(c.FilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+		}
+	} else if len(data) > 0 {
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
+		}
+	}
+	raw["default_mode"] = mode
+
+	updated, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+		return err
+	}
+	c.DefaultMode = mode
+	c.FirstRun = false
+	return nil
+}
+
 func boolPtr(v bool) *bool {
 	return &v
 }

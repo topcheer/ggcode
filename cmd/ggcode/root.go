@@ -80,6 +80,7 @@ func NewRootCmd() *cobra.Command {
 			if pipePrompt != "" {
 				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
 				if code != 0 {
+					debug.Close()
 					os.Exit(code)
 				}
 				return nil

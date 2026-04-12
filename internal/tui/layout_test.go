@@ -1547,6 +1547,54 @@ func TestModeCommandSetDoesNotWriteToOutput(t *testing.T) {
 	}
 }
 
+func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
+	m := newTestModel()
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg := config.DefaultConfig()
+	cfg.FilePath = path
+	m.config = cfg
+
+	next, cmd := m.handleModeSwitch()
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Fatal("expected no command from mode switch")
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.DefaultMode != permission.PlanMode.String() {
+		t.Fatalf("expected persisted mode %q, got %q", permission.PlanMode.String(), loaded.DefaultMode)
+	}
+	if m.output.Len() != 0 {
+		t.Errorf("expected no output on successful mode persistence, got %q", m.output.String())
+	}
+}
+
+func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
+	m := newTestModel()
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	cfg := config.DefaultConfig()
+	cfg.FilePath = path
+	m.config = cfg
+
+	cmd := m.handleModeCommand([]string{"/mode", "auto"})
+	if cmd != nil {
+		t.Fatal("expected no command from /mode set")
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.DefaultMode != permission.AutoMode.String() {
+		t.Fatalf("expected persisted mode %q, got %q", permission.AutoMode.String(), loaded.DefaultMode)
+	}
+	if m.output.Len() != 0 {
+		t.Errorf("expected no output on successful /mode persistence, got %q", m.output.String())
+	}
+}
+
 func TestAutopilotApprovalAutoContinues(t *testing.T) {
 	m := newTestModel()
 	m.mode = permission.AutopilotMode
