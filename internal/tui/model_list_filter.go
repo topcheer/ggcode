@@ -151,6 +151,28 @@ func renderModelListWindow(renderList func([]string, int, bool) string, window m
 	return strings.Join(rows, "\n")
 }
 
+func countModelBodyRows(window modelListWindow) int {
+	rows := 0
+	if window.filterEnabled {
+		rows++
+	}
+	switch {
+	case window.totalCount == 0, window.filteredCount == 0:
+		return rows + 1
+	}
+	if window.filterEnabled {
+		rows++
+	}
+	if window.hiddenBefore > 0 {
+		rows++
+	}
+	rows += len(window.items)
+	if window.hiddenAfter > 0 {
+		rows++
+	}
+	return rows
+}
+
 func modelFilterConsumesKey(msg string) bool {
 	switch msg {
 	case "up", "down", "tab", "shift+tab", "enter", "esc":

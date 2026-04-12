@@ -22,20 +22,26 @@ var envReferencePattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
 var preferredVendorAPIKeyEnvVars = map[string]string{
 	"aliyun":     "DASHSCOPE_API_KEY",
+	"aihubmix":   "AIHUBMIX_API_KEY",
 	"anthropic":  "ANTHROPIC_API_KEY",
 	"ark":        "ARK_API_KEY",
 	"deepseek":   "DEEPSEEK_API_KEY",
 	"gemini":     "GEMINI_API_KEY",
+	"getgoapi":   "GETGOAPI_API_KEY",
 	"google":     "GEMINI_API_KEY",
 	"groq":       "GROQ_API_KEY",
 	"kimi":       "KIMI_API_KEY",
 	"minimax":    "MINIMAX_API_KEY",
 	"mistral":    "MISTRAL_API_KEY",
 	"moonshot":   "MOONSHOT_API_KEY",
+	"novita":     "NOVITA_API_KEY",
 	"openai":     "OPENAI_API_KEY",
 	"openrouter": "OPENROUTER_API_KEY",
 	"perplexity": "PERPLEXITY_API_KEY",
+	"poe":        "POE_API_KEY",
+	"requesty":   "REQUESTY_API_KEY",
 	"together":   "TOGETHER_API_KEY",
+	"vercel":     "VERCEL_AI_GATEWAY_API_KEY",
 	"zai":        "ZAI_API_KEY",
 }
 
@@ -110,8 +116,16 @@ func preferredVendorAPIKeyEnvVar(vendor string) string {
 	return sanitizeEnvVarSegment(vendor) + "_API_KEY"
 }
 
+func PreferredVendorAPIKeyEnvVar(vendor string) string {
+	return preferredVendorAPIKeyEnvVar(vendor)
+}
+
 func preferredEndpointAPIKeyEnvVar(vendor, endpoint string) string {
 	return sanitizeEnvVarSegment(vendor) + "_" + sanitizeEnvVarSegment(endpoint) + "_API_KEY"
+}
+
+func PreferredEndpointAPIKeyEnvVar(vendor, endpoint string) string {
+	return preferredEndpointAPIKeyEnvVar(vendor, endpoint)
 }
 
 func apiKeyEnvVarForValue(vendor, endpoint, value string) string {
@@ -120,6 +134,16 @@ func apiKeyEnvVarForValue(vendor, endpoint, value string) string {
 	}
 	if strings.TrimSpace(endpoint) != "" {
 		return preferredEndpointAPIKeyEnvVar(vendor, endpoint)
+	}
+	return preferredVendorAPIKeyEnvVar(vendor)
+}
+
+func PreferredAPIKeyEnvVar(vendor, endpoint string, vendorAPIKey, endpointAPIKey string) string {
+	if strings.TrimSpace(endpointAPIKey) != "" {
+		return apiKeyEnvVarForValue(vendor, endpoint, endpointAPIKey)
+	}
+	if strings.TrimSpace(vendorAPIKey) != "" {
+		return apiKeyEnvVarForValue(vendor, "", vendorAPIKey)
 	}
 	return preferredVendorAPIKeyEnvVar(vendor)
 }

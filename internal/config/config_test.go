@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/auth"
@@ -229,8 +230,8 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Vendor != "requesty" {
-		t.Fatalf("expected bootstrapped vendor requesty, got %q", cfg.Vendor)
+	if !strings.HasPrefix(cfg.Vendor, "requesty") {
+		t.Fatalf("expected bootstrapped requesty vendor, got %q", cfg.Vendor)
 	}
 	if cfg.Endpoint != "env-anthropic" {
 		t.Fatalf("expected bootstrapped endpoint env-anthropic, got %q", cfg.Endpoint)
@@ -239,9 +240,9 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
 		t.Fatalf("expected model from Claude settings, got %q", cfg.Model)
 	}
 
-	vendor := cfg.Vendors["requesty"]
-	if vendor.DisplayName != "Requesty" {
-		t.Fatalf("expected display name Requesty, got %q", vendor.DisplayName)
+	vendor := cfg.Vendors[cfg.Vendor]
+	if !strings.HasPrefix(vendor.DisplayName, "Requesty") {
+		t.Fatalf("expected display name starting with Requesty, got %q", vendor.DisplayName)
 	}
 	ep := vendor.Endpoints["env-anthropic"]
 	if ep.Protocol != "anthropic" {
@@ -314,7 +315,7 @@ func TestLoad_ExistingLanguageOnlyFileStillBootstrapsAnthropicVendor(t *testing.
 	if cfg.Language != "zh-CN" {
 		t.Fatalf("expected persisted language zh-CN, got %q", cfg.Language)
 	}
-	if cfg.Vendor != "requesty" {
+	if !strings.HasPrefix(cfg.Vendor, "requesty") {
 		t.Fatalf("expected requesty bootstrap vendor, got %q", cfg.Vendor)
 	}
 }
@@ -595,6 +596,8 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 
 	wantVendors := map[string]string{
 		"zai":        "Z.ai",
+		"aihubmix":   "AIHubMix",
+		"getgoapi":   "GetGoAPI",
 		"anthropic":  "Anthropic",
 		"openai":     "OpenAI",
 		"google":     "Google Gemini",
@@ -603,7 +606,11 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 		"mistral":    "Mistral",
 		"deepseek":   "DeepSeek",
 		"moonshot":   "Moonshot AI",
+		"novita":     "Novita AI",
 		"aliyun":     "Aliyun Bailian Coding Plan",
+		"poe":        "Poe",
+		"requesty":   "Requesty",
+		"vercel":     "Vercel AI Gateway",
 		"kimi":       "Kimi Coding Plan",
 		"minimax":    "MiniMax Token Plan",
 		"ark":        "Volcengine Ark Coding Plan",
@@ -809,6 +816,30 @@ func TestDefaultConfigIncludesAliyunBailianCodingPlanCapabilities(t *testing.T) 
 	}
 	if anthropic.Protocol != "anthropic" {
 		t.Fatalf("expected aliyun anthropic protocol, got %q", anthropic.Protocol)
+	}
+}
+
+func TestDefaultConfigIncludesAdditionalOpenAICompatibleVendors(t *testing.T) {
+	cfg := DefaultConfig()
+	cases := map[string]string{
+		"aihubmix": "https://aihubmix.com/v1",
+		"getgoapi": "https://api.getgoapi.com/v1",
+		"novita":   "https://api.novita.ai/openai/v1",
+		"poe":      "https://api.poe.com/v1",
+		"requesty": "https://router.requesty.ai/v1",
+		"vercel":   "https://ai-gateway.vercel.sh/v1",
+	}
+	for vendorID, baseURL := range cases {
+		ep := cfg.Vendors[vendorID].Endpoints["api"]
+		if ep.Protocol != "openai" {
+			t.Fatalf("expected %s protocol openai, got %q", vendorID, ep.Protocol)
+		}
+		if ep.BaseURL != baseURL {
+			t.Fatalf("expected %s base url %q, got %q", vendorID, baseURL, ep.BaseURL)
+		}
+		if ep.DefaultModel != "gpt-4o-mini" {
+			t.Fatalf("expected %s default model gpt-4o-mini, got %q", vendorID, ep.DefaultModel)
+		}
 	}
 }
 

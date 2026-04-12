@@ -286,6 +286,26 @@ func DefaultConfig() *Config {
 					"router", "openai-compatible",
 				),
 			}),
+			"aihubmix": defaultVendor("AIHubMix", "${AIHUBMIX_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"AIHubMix API",
+					"openai",
+					"https://aihubmix.com/v1",
+					"gpt-4o-mini",
+					[]string{"gpt-4o-mini"},
+					"official", "openai-compatible", "router",
+				),
+			}),
+			"getgoapi": defaultVendor("GetGoAPI", "${GETGOAPI_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"GetGoAPI API",
+					"openai",
+					"https://api.getgoapi.com/v1",
+					"gpt-4o-mini",
+					[]string{"gpt-4o-mini"},
+					"official", "openai-compatible", "router",
+				),
+			}),
 			"groq": defaultVendor("Groq", "${GROQ_API_KEY}", map[string]EndpointConfig{
 				"api": defaultEndpoint(
 					"Groq API",
@@ -326,6 +346,16 @@ func DefaultConfig() *Config {
 					"official", "openai-compatible", "cn",
 				),
 			}),
+			"novita": defaultVendor("Novita AI", "${NOVITA_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Novita AI API",
+					"openai",
+					"https://api.novita.ai/openai/v1",
+					"gpt-4o-mini",
+					[]string{"gpt-4o-mini"},
+					"official", "openai-compatible", "router",
+				),
+			}),
 			"aliyun": defaultVendor("Aliyun Bailian Coding Plan", "${DASHSCOPE_API_KEY}", map[string]EndpointConfig{
 				"coding-openai": defaultEndpoint(
 					"Aliyun Bailian Coding Plan",
@@ -342,6 +372,36 @@ func DefaultConfig() *Config {
 					"qwen3-coder-plus",
 					[]string{"qwen3-coder-plus"},
 					"official", "coding", "cn", "anthropic",
+				),
+			}),
+			"poe": defaultVendor("Poe", "${POE_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Poe API",
+					"openai",
+					"https://api.poe.com/v1",
+					"gpt-4o-mini",
+					[]string{"gpt-4o-mini"},
+					"official", "openai-compatible", "router",
+				),
+			}),
+			"requesty": defaultVendor("Requesty", "${REQUESTY_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Requesty API",
+					"openai",
+					"https://router.requesty.ai/v1",
+					"gpt-4o-mini",
+					[]string{"gpt-4o-mini"},
+					"official", "openai-compatible", "router",
+				),
+			}),
+			"vercel": defaultVendor("Vercel AI Gateway", "${VERCEL_AI_GATEWAY_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"Vercel AI Gateway",
+					"openai",
+					"https://ai-gateway.vercel.sh/v1",
+					"gpt-4o-mini",
+					[]string{"gpt-4o-mini"},
+					"official", "openai-compatible", "gateway",
 				),
 			}),
 			"kimi": defaultVendor("Kimi Coding Plan", "${KIMI_API_KEY}", map[string]EndpointConfig{

@@ -913,6 +913,49 @@ func TestProviderPanelRendersInContextPanel(t *testing.T) {
 	}
 }
 
+func TestProviderPanelRendersSelectedVendorEnvVar(t *testing.T) {
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendor = "aliyun"
+	cfg.Endpoint = "coding-openai"
+	cfg.Model = "qwen3-coder-plus"
+	m.SetConfig(cfg)
+	m.openProviderPanel()
+
+	rendered := m.renderProviderPanel()
+	if !strings.Contains(rendered, "DASHSCOPE_API_KEY") {
+		t.Fatalf("expected provider panel to show selected vendor env var, got %q", rendered)
+	}
+}
+
+func TestProviderPanelEndpointSectionKeepsTightHeight(t *testing.T) {
+	height := providerPanelEndpointHeight(2)
+	if height != 3 {
+		t.Fatalf("expected endpoint section height 3 after lifting models, got %d", height)
+	}
+}
+
+func TestProviderPanelVendorSectionUsesWindowedHeight(t *testing.T) {
+	height := providerPanelVendorHeight(20)
+	if height != 17 {
+		t.Fatalf("expected vendor section height 17, got %d", height)
+	}
+}
+
+func TestProviderPanelModelSectionUsesStableFiveRowWindow(t *testing.T) {
+	height := providerPanelModelHeight(false)
+	if height != 6 {
+		t.Fatalf("expected provider model section height 6, got %d", height)
+	}
+}
+
+func TestProviderPanelModelSectionAddsFilterRowWhenNeeded(t *testing.T) {
+	height := providerPanelModelHeight(true)
+	if height != 7 {
+		t.Fatalf("expected provider model section height 7 with filter row, got %d", height)
+	}
+}
+
 func TestNarrowLayoutFallsBackToTopHeader(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(90, 28)
