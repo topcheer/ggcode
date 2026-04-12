@@ -16,6 +16,10 @@ GitHub releases are rendered from this directory.
 2. Fill in the highlights, fixes, and upgrade notes for that version.
 3. Commit the notes file together with the release bump.
 
-## Current next-release draft
+## Current release notes
 
-The next detailed notes draft starts at `docs/releases/v1.1.18.md`.
+The newest tag-specific notes live in the highest-versioned `v*.md` file in this directory
+(currently `docs/releases/v1.1.21.md`).
+
+When preparing the next release, copy `docs/releases/_template.md` to the new tag name instead of
+editing an older notes file in place.

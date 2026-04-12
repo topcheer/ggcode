@@ -7,7 +7,7 @@ If you want a terminal-native coding workflow that feels like a product, not a d
 ## Why people use ggcode
 
 - **Stay in the terminal** — chat, inspect code, edit files, review diffs, and manage sessions in one place
-- **Work with real coding plans and endpoints** — OpenAI-compatible, Anthropic-compatible, Gemini, and multiple coding-oriented vendor presets
+- **Work with real coding plans and endpoints** — OpenAI-compatible, Anthropic-compatible, Gemini, GitHub Copilot, and multiple coding-oriented vendor presets
 - **Keep control when it matters** — supervised, plan, auto, bypass, and autopilot modes let you choose how much the agent can do
 - **Clarify without derailing** — the TUI can surface structured multi-question ask_user flows when the agent is genuinely blocked
 - **Recover quickly** — undo file changes with checkpoints instead of manually repairing bad edits
@@ -43,14 +43,14 @@ pip install ggcode
 The Python wrapper also downloads the latest ggcode GitHub Release by default and respects
 `GGCODE_INSTALL_VERSION` for explicit pinning.
 
-### Native package files from GitHub Releases
+### Release archives and native Linux packages
 
-Each tagged release now also publishes native installer/package files across desktop and Linux:
+Each tagged release publishes platform archives for desktop use plus native package files for Linux:
 
 | Platform | Release asset | Install example |
 | --- | --- | --- |
-| macOS | `.pkg` | `sudo installer -pkg ./ggcode_<version>_darwin_universal.pkg -target /` |
-| Windows | `.msi` | `msiexec /i .\ggcode_<version>_windows_x64.msi` |
+| macOS | `.tar.gz` | `tar -xzf ./ggcode_darwin_<arch>.tar.gz && ./ggcode` |
+| Windows | `.zip` | `powershell -Command "Expand-Archive .\\ggcode_windows_<arch>.zip .\\ggcode"` |
 | Debian / Ubuntu | `.deb` | `sudo dpkg -i ./ggcode_<version>_linux_<arch>.deb` |
 | Fedora / RHEL / openSUSE | `.rpm` | `sudo rpm -i ./ggcode-<version>-1.<arch>.rpm` |
 | Alpine | `.apk` | `sudo apk add --allow-untrusted ./ggcode-<version>-r1.<arch>.apk` |
@@ -69,6 +69,32 @@ go build -o ggcode ./cmd/ggcode
 ./ggcode
 ```
 
+### Optional: install the local CI pre-commit hook
+
+If you want local commits to catch the same Go issues that CI checks, install the bundled git hook:
+
+```bash
+make install-git-hooks
+```
+
+The hook will:
+
+- auto-format staged Go files with `gofmt`
+- run `go mod download`
+- run `go build -o /tmp/ggcode ./cmd/ggcode`
+- run `go vet ./...`
+- run `go test -tags=!integration ./...`
+
+The shared `make verify-ci` script also clears provider integration-test env vars, inherited
+`GIT_*` hook context, and global git-hook config first, so local verification matches CI more
+closely even when your machine has extra Git tooling installed.
+
+You can also run the same check chain manually with:
+
+```bash
+make verify-ci
+```
+
 ### Platform notes
 
 - **macOS / Linux** command execution uses `sh`
@@ -85,6 +111,9 @@ The simplest path is still setting a normal vendor API key:
 export ZAI_API_KEY="your-key"
 # or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY / ...
 ```
+
+If you prefer GitHub Copilot, you can also sign in from the in-app **`/provider`** flow instead of
+exporting an API key.
 
 If you use an **Anthropic-compatible endpoint**, ggcode can also bootstrap it on first launch from:
 
@@ -154,7 +183,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 | Command | What it does |
 | --- | --- |
 | `/help` or `/?` | Show the in-app help |
-| `/provider [vendor]` | Open the provider manager and switch vendor / endpoint / model |
+| `/provider [vendor]` | Open the provider manager and switch vendor / endpoint / model, including GitHub Copilot login/logout flows |
 | `/model <name>` | Switch model directly |
 | `/mode <mode>` | Change permission mode |
 | `/status` | Show current status |

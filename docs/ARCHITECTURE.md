@@ -4,7 +4,7 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-04-09
+> Last updated: 2026-04-12
 
 ## Overview
 
@@ -83,6 +83,7 @@ internal/
     openai.go            # OpenAI-compatible provider
     anthropic.go         # Anthropic provider
     gemini.go            # Google Gemini provider
+    copilot.go           # GitHub Copilot provider
     registry.go          # Provider registry
     retry.go             # Retry logic with backoff
   session/               # Session persistence
@@ -121,8 +122,9 @@ internal/
     spinner.go           # Tool execution spinner
     diff.go              # Diff display formatting
     markdown.go          # Markdown rendering with glamour
-    fullscreen.go        # Fullscreen mode (unused)
-    app.go               # Package placeholder
+    preview_panel.go     # Fullscreen file preview, markdown rendering, syntax highlighting
+    fullscreen.go        # Legacy fullscreen wrapper model
+    app.go               # Minimal package marker
   util/                  # Shared utilities
     truncate.go          # String truncation
 docs/                    # Documentation
@@ -135,5 +137,5 @@ docs/                    # Documentation
 - **Permission policy**: Two layers — tool-level `ShouldAsk` + dangerous-command detection
 - **Import cycle avoidance**: Shared types defined in downstream packages; factory functions injected
 - **MCP client**: Spawns fresh process per tool call (`callToolStandalone`)
-- **Provider SDKs**: OpenAI (go-openai), Anthropic (anthropic-sdk-go), Gemini (genai)
+- **Provider SDKs**: OpenAI (go-openai), Anthropic (anthropic-sdk-go), Gemini (genai), Copilot (custom transport on top of the provider abstraction)
 - **Session format**: JSONL with index.json metadata
