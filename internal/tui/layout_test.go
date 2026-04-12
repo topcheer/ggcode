@@ -1101,6 +1101,35 @@ func TestPreviewViewportScrollControls(t *testing.T) {
 	}
 }
 
+func TestMarkdownPreviewUsesMarkdownRendering(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	target := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(target, []byte("# Title\n\n- item one\n- item two\n"), 0644); err != nil {
+		t.Fatalf("write markdown preview target: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+
+	m := newTestModel()
+	m.handleResize(100, 24)
+	if !m.openPreviewForToken("README.md") {
+		t.Fatal("expected markdown preview to open")
+	}
+	rendered := m.previewPanel.previewContent(m.previewContentWidth())
+	if rendered == m.previewPanel.Content {
+		t.Fatalf("expected markdown preview to render through glamour, got raw content %q", rendered)
+	}
+	if !strings.Contains(rendered, "Title") {
+		t.Fatalf("expected rendered markdown to contain title, got %q", rendered)
+	}
+}
+
 func TestEscClosesPreviewPanel(t *testing.T) {
 	m := newTestModel()
 	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Lines: []string{"hello"}}
