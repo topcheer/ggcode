@@ -219,6 +219,20 @@ func enCatalog(key string) string {
 		return "Context"
 	case "panel.mcp":
 		return "MCP"
+	case "panel.mcp.install_spec_required":
+		return "Enter an install spec first."
+	case "panel.mcp.installing_server":
+		return "Installing MCP server..."
+	case "panel.mcp.reconnect_unavailable":
+		return "Reconnect unavailable in this session."
+	case "panel.mcp.reconnecting":
+		return "Reconnecting %s..."
+	case "panel.mcp.reconnect_failed":
+		return "Unable to reconnect %s."
+	case "panel.mcp.installing_browser_preset":
+		return "Installing browser automation MCP preset..."
+	case "panel.mcp.uninstalling":
+		return "Uninstalling %s..."
 	case "panel.startup":
 		return "Initializing"
 	case "panel.approval_required":
@@ -451,6 +465,28 @@ func enCatalog(key string) string {
 		return "Type a queue goal in the panel input first."
 	case "harness.message.queued":
 		return "Queued harness task %s"
+	case "harness.activity.status":
+		return "Harness %s"
+	case "harness.log.phase":
+		return "Phase"
+	case "harness.log.worker":
+		return "Worker"
+	case "harness.tool.read_file":
+		return "Read file"
+	case "harness.tool.write_file":
+		return "Write file"
+	case "harness.tool.browse_files":
+		return "Browse files"
+	case "harness.tool.search_code":
+		return "Search code"
+	case "harness.tool.run_command":
+		return "Run command"
+	case "harness.tool.fetch_web_page":
+		return "Fetch web page"
+	case "harness.tool.run_subagent":
+		return "Run sub-agent"
+	case "harness.tool.update_task_state":
+		return "Update task state"
 	case "harness.message.run_goal_required":
 		return "Type a run goal in the panel input first."
 	case "harness.message.no_queued_executed":
@@ -1220,6 +1256,36 @@ Mouse:
 		return "Usage: /harness run <goal>"
 	case "command.harness_rerun_usage":
 		return "Usage: /harness rerun <task-id>"
+	case "command.skill_agent_only":
+		return "Skill %s can only be invoked by the agent."
+	case "command.harness_owner_promoted":
+		return "Promoted %d harness task(s) for owner %s."
+	case "command.harness_review_approved":
+		return "Approved harness task %s."
+	case "command.harness_review_rejected":
+		return "Rejected harness task %s."
+	case "command.harness_promoted_many":
+		return "Promoted %d harness task(s)."
+	case "command.harness_promoted_one":
+		return "Promoted harness task %s."
+	case "command.harness_task_queued_detail":
+		return "Queued harness task %s.\n- goal: %s"
+	case "command.harness_tasks_empty":
+		return "No harness tasks recorded."
+	case "command.harness_run_start":
+		return "Starting tracked harness run...\nUse /harness monitor or the Tasks/Monitor views for live state."
+	case "command.harness_rerun_start":
+		return "Starting tracked harness rerun...\nUse /harness monitor or the Tasks/Monitor views for live state."
+	case "command.harness_rerun_invalid_status":
+		return "Harness task %s is %s; only failed tasks can be rerun."
+	case "command.harness_status_starting_run":
+		return "Starting harness run..."
+	case "command.harness_status_starting_rerun":
+		return "Starting harness rerun..."
+	case "command.harness_spinner_running":
+		return "Running harness"
+	case "command.harness_cancelled":
+		return "Harness run cancelled."
 	default:
 		return key
 	}
@@ -1257,6 +1323,20 @@ func zhCatalog(key string) string {
 		return "上下文"
 	case "panel.mcp":
 		return "MCP"
+	case "panel.mcp.install_spec_required":
+		return "请先输入安装规格。"
+	case "panel.mcp.installing_server":
+		return "正在安装 MCP 服务..."
+	case "panel.mcp.reconnect_unavailable":
+		return "当前会话不支持重新连接。"
+	case "panel.mcp.reconnecting":
+		return "正在重新连接 %s..."
+	case "panel.mcp.reconnect_failed":
+		return "无法重新连接 %s。"
+	case "panel.mcp.installing_browser_preset":
+		return "正在安装浏览器自动化 MCP 预设..."
+	case "panel.mcp.uninstalling":
+		return "正在卸载 %s..."
 	case "panel.startup":
 		return "正在初始化"
 	case "panel.approval_required":
@@ -1489,6 +1569,28 @@ func zhCatalog(key string) string {
 		return "请先在面板输入框里填写排队目标。"
 	case "harness.message.queued":
 		return "已加入 harness 队列：%s"
+	case "harness.activity.status":
+		return "Harness %s"
+	case "harness.log.phase":
+		return "阶段"
+	case "harness.log.worker":
+		return "Worker"
+	case "harness.tool.read_file":
+		return "读取文件"
+	case "harness.tool.write_file":
+		return "写入文件"
+	case "harness.tool.browse_files":
+		return "浏览文件"
+	case "harness.tool.search_code":
+		return "搜索代码"
+	case "harness.tool.run_command":
+		return "执行命令"
+	case "harness.tool.fetch_web_page":
+		return "抓取网页"
+	case "harness.tool.run_subagent":
+		return "运行子代理"
+	case "harness.tool.update_task_state":
+		return "更新任务状态"
 	case "harness.message.run_goal_required":
 		return "请先在面板输入框里填写运行目标。"
 	case "harness.message.no_queued_executed":
@@ -2258,6 +2360,36 @@ func zhCatalog(key string) string {
 		return "用法：/harness run <goal>"
 	case "command.harness_rerun_usage":
 		return "用法：/harness rerun <task-id>"
+	case "command.skill_agent_only":
+		return "技能 %s 只能由 agent 调用。"
+	case "command.harness_owner_promoted":
+		return "已为 owner %[2]s 推进 %[1]d 个 harness 任务。"
+	case "command.harness_review_approved":
+		return "已批准 harness 任务 %s。"
+	case "command.harness_review_rejected":
+		return "已拒绝 harness 任务 %s。"
+	case "command.harness_promoted_many":
+		return "已推进 %d 个 harness 任务。"
+	case "command.harness_promoted_one":
+		return "已推进 harness 任务 %s。"
+	case "command.harness_task_queued_detail":
+		return "已加入 harness 队列：%s。\n- 目标：%s"
+	case "command.harness_tasks_empty":
+		return "还没有记录任何 harness 任务。"
+	case "command.harness_run_start":
+		return "正在启动跟踪型 harness 运行...\n可使用 /harness monitor 或 Tasks/Monitor 视图查看实时状态。"
+	case "command.harness_rerun_start":
+		return "正在启动跟踪型 harness 重跑...\n可使用 /harness monitor 或 Tasks/Monitor 视图查看实时状态。"
+	case "command.harness_rerun_invalid_status":
+		return "Harness 任务 %s 当前是 %s；只有失败任务才能重跑。"
+	case "command.harness_status_starting_run":
+		return "正在启动 harness 运行..."
+	case "command.harness_status_starting_rerun":
+		return "正在启动 harness 重跑..."
+	case "command.harness_spinner_running":
+		return "正在运行 harness"
+	case "command.harness_cancelled":
+		return "Harness 运行已取消。"
 	default:
 		return key
 	}
