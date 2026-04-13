@@ -121,7 +121,7 @@ for name in sorted(os.listdir(out_dir)):
     files.append({"name": name, "size": os.path.getsize(path)})
 
 with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-    json.dump({"source": source_label, "files": files}, fh, indent=2)
+    json.dump({"source": source_label, "version": source_label, "files": files}, fh, indent=2)
     fh.write("\n")
 
 items = "\n".join(
