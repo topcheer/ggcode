@@ -675,6 +675,28 @@ func TestWideLayoutSidebarMatchesColumnHeight(t *testing.T) {
 	}
 }
 
+func TestComposerPanelHeightDoesNotShrinkWhenInputWraps(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(100, 28)
+
+	samples := []string{
+		strings.Repeat("输入稳定性测试", 4),
+		strings.Repeat("输入稳定性测试", 6),
+		strings.Repeat("输入稳定性测试", 8),
+	}
+
+	prevHeight := 0
+	for _, sample := range samples {
+		m.input.SetValue(sample)
+		m.input.CursorEnd()
+		height := lipgloss.Height(m.renderComposerPanel())
+		if height < prevHeight {
+			t.Fatalf("expected composer height to stay monotonic, got %d after %d", height, prevHeight)
+		}
+		prevHeight = height
+	}
+}
+
 func TestRenderLogoUsesStyledWordmarkByDefault(t *testing.T) {
 	logo := renderLogo(16)
 	if logo == asciiLogo() {
