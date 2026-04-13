@@ -190,7 +190,7 @@ func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, err
 				return nil, err
 			}
 		}
-		deadline := time.Now().Add(400 * time.Millisecond)
+		deadline := time.Now().Add(publishedDiagnosticsWait)
 		for time.Now().Before(deadline) {
 			if published, seen := session.publishedDiagnostics(docURI); seen {
 				return published, nil

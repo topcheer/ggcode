@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -17,6 +19,7 @@ import (
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -46,6 +49,7 @@ type Agent struct {
 	checkpoints    *checkpoint.Manager
 	diffConfirm    DiffConfirmFunc
 	onInterrupt    interruptionHandler
+	projectMemory  map[string]struct{}
 	mu             sync.RWMutex
 }
 
@@ -72,6 +76,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		tools:          tools,
 		maxIter:        maxIter,
 		contextManager: ctxpkg.NewManager(128000),
+		projectMemory:  make(map[string]struct{}),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerTodoPathLocked()
@@ -132,6 +137,32 @@ func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
 // AddMessage appends a message to the conversation context.
 func (a *Agent) AddMessage(msg provider.Message) {
 	a.contextManager.Add(msg)
+}
+
+// SetProjectMemoryFiles seeds the set of already-loaded project memory files so
+// path-triggered dynamic loading can avoid reinjecting startup guidance.
+func (a *Agent) SetProjectMemoryFiles(files []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.projectMemory == nil {
+		a.projectMemory = make(map[string]struct{}, len(files))
+	}
+	for _, file := range files {
+		if normalized := normalizeProjectMemoryPath(file, a.workingDir); normalized != "" {
+			a.projectMemory[normalized] = struct{}{}
+		}
+	}
+}
+
+func (a *Agent) ProjectMemoryFiles() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	files := make([]string, 0, len(a.projectMemory))
+	for file := range a.projectMemory {
+		files = append(files, file)
+	}
+	slices.Sort(files)
+	return files
 }
 
 // Messages returns the current conversation messages.
@@ -287,6 +318,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if a.maybeInjectProjectMemoryForTool(tc, toolResults) {
+				toolResults = nil
+				break
+			}
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s", tc.Name, result.IsError, truncateStr(result.Content, 200))
@@ -328,6 +363,83 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return err
 	}
 	return nil
+}
+
+func (a *Agent) maybeInjectProjectMemoryForTool(tc provider.ToolCallDelta, pendingToolResults []provider.ContentBlock) bool {
+	content, files, target := a.pendingProjectMemoryForTool(tc)
+	if len(files) == 0 || strings.TrimSpace(content) == "" {
+		return false
+	}
+	if len(pendingToolResults) > 0 {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: pendingToolResults,
+		})
+	}
+	a.contextManager.Add(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
+	})
+	targetLabel := target
+	if targetLabel == "" {
+		targetLabel = "the pending path"
+	}
+	a.contextManager.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: fmt.Sprintf("Additional project memory now applies to %s. Review that guidance first, then continue the task with the updated constraints.", targetLabel),
+		}},
+	})
+	a.SetProjectMemoryFiles(files)
+	debug.Log("agent", "injected path-scoped project memory for %s (%d files)", targetLabel, len(files))
+	return true
+}
+
+func (a *Agent) pendingProjectMemoryForTool(tc provider.ToolCallDelta) (content string, files []string, target string) {
+	targets := projectMemoryTargetsForTool(tc.Name, tc.Arguments)
+	if len(targets) == 0 {
+		return "", nil, ""
+	}
+
+	a.mu.RLock()
+	workingDir := a.workingDir
+	loaded := make(map[string]struct{}, len(a.projectMemory))
+	for file := range a.projectMemory {
+		loaded[file] = struct{}{}
+	}
+	a.mu.RUnlock()
+
+	for _, candidate := range targets {
+		resolved := normalizeProjectMemoryPath(candidate, workingDir)
+		if resolved == "" {
+			continue
+		}
+		projectFiles, err := memory.ProjectMemoryFilesForPath(resolved)
+		if err != nil || len(projectFiles) == 0 {
+			continue
+		}
+		var unseen []string
+		for _, file := range projectFiles {
+			normalized := normalizeProjectMemoryPath(file, workingDir)
+			if normalized == "" {
+				continue
+			}
+			if _, ok := loaded[normalized]; ok {
+				continue
+			}
+			unseen = append(unseen, normalized)
+		}
+		if len(unseen) == 0 {
+			continue
+		}
+		content, files, err := memory.ReadProjectMemoryFiles(unseen)
+		if err == nil && strings.TrimSpace(content) != "" {
+			return content, files, resolved
+		}
+	}
+
+	return "", nil, ""
 }
 
 func (a *Agent) injectPendingInterruptions() bool {
@@ -1071,6 +1183,79 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+func projectMemoryTargetsForTool(toolName string, raw json.RawMessage) []string {
+	if !toolCanTriggerProjectMemory(toolName) {
+		return nil
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	var targets []string
+	seen := make(map[string]struct{})
+	collectProjectMemoryTargets(payload, "", seen, &targets)
+	return targets
+}
+
+func collectProjectMemoryTargets(value any, key string, seen map[string]struct{}, out *[]string) {
+	switch v := value.(type) {
+	case map[string]any:
+		for childKey, childValue := range v {
+			collectProjectMemoryTargets(childValue, childKey, seen, out)
+		}
+	case []any:
+		for _, item := range v {
+			collectProjectMemoryTargets(item, key, seen, out)
+		}
+	case string:
+		if !projectMemoryPathKey(key) {
+			return
+		}
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" || strings.Contains(trimmed, "://") {
+			return
+		}
+		if _, ok := seen[trimmed]; ok {
+			return
+		}
+		seen[trimmed] = struct{}{}
+		*out = append(*out, trimmed)
+	}
+}
+
+func toolCanTriggerProjectMemory(toolName string) bool {
+	switch toolName {
+	case "read_file", "write_file", "edit_file", "list_directory", "glob", "search_files":
+		return true
+	default:
+		return strings.HasPrefix(toolName, "lsp_")
+	}
+}
+
+func projectMemoryPathKey(key string) bool {
+	switch key {
+	case "path", "file_path", "file", "filename", "directory":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeProjectMemoryPath(target, workingDir string) string {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" || strings.Contains(trimmed, "://") {
+		return ""
+	}
+	if !filepath.IsAbs(trimmed) {
+		base := workingDir
+		if strings.TrimSpace(base) == "" {
+			base = "."
+		}
+		trimmed = filepath.Join(base, trimmed)
+	}
+	return filepath.Clean(trimmed)
 }
 
 // Clear resets the conversation (keeps system prompt).

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -19,54 +18,16 @@ var ProjectMemoryFilenames = []string{
 
 const DefaultProjectMemoryFilename = "GGCODE.md"
 
-// LoadProjectMemory reads supported project bootstrap documents from global,
-// project root, and subdirectories.
-// Merge order: global -> walked parents -> nested subdirectories.
+// LoadProjectMemory reads supported project bootstrap documents from the global
+// config dir and the current working directory's ancestor chain.
+// Merge order: global -> walked parents/current directory.
 func LoadProjectMemory(workingDir string) (content string, files []string, err error) {
-	seen := make(map[string]bool)
-
-	globalDir, err := os.UserHomeDir()
-	if err == nil {
-		for _, name := range ProjectMemoryFilenames {
-			globalPath := filepath.Join(globalDir, ".ggcode", name)
-			if data, err := readFileSafe(globalPath); err == nil && data != "" {
-				content += data + "\n"
-				files = append(files, globalPath)
-				seen[globalPath] = true
-			}
-		}
-	}
-
 	absDir, err := filepath.Abs(workingDir)
 	if err != nil {
 		absDir = workingDir
 	}
-
-	projectFiles := walkUpProjectMemory(absDir)
-	for _, p := range projectFiles {
-		if seen[p] {
-			continue
-		}
-		data, err := readFileSafe(p)
-		if err == nil && data != "" {
-			content += data + "\n"
-			files = append(files, p)
-			seen[p] = true
-		}
-	}
-
-	if scanRoot, ok := projectMemoryScanRoot(absDir); ok {
-		subFiles := scanSubdirs(scanRoot, seen)
-		for _, p := range subFiles {
-			data, err := readFileSafe(p)
-			if err == nil && data != "" {
-				content += data + "\n"
-				files = append(files, p)
-			}
-		}
-	}
-
-	return strings.TrimSpace(content), files, nil
+	paths := append(globalProjectMemoryFiles(), walkUpProjectMemory(absDir)...)
+	return ReadProjectMemoryFiles(paths)
 }
 
 // walkUpProjectMemory walks from dir upward looking for supported project docs.
@@ -98,21 +59,40 @@ func walkUpProjectMemory(dir string) []string {
 	return found
 }
 
-// scanSubdirs recursively scans for supported project docs in subdirectories.
-func scanSubdirs(root string, exclude map[string]bool) []string {
-	var found []string
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+// ProjectMemoryFilesForPath returns the supported project memory files that
+// apply to a specific path by walking that path's ancestor chain.
+func ProjectMemoryFilesForPath(targetPath string) ([]string, error) {
+	absPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		absPath = targetPath
+	}
+	dir := absPath
+	if info, err := os.Stat(absPath); err == nil {
+		if !info.IsDir() {
+			dir = filepath.Dir(absPath)
 		}
-		if !isProjectMemoryFile(d.Name()) || exclude[path] {
-			return nil
+	} else {
+		dir = filepath.Dir(absPath)
+	}
+	return walkUpProjectMemory(dir), nil
+}
+
+// ReadProjectMemoryFiles reads project memory files in order and returns their
+// merged content plus the subset that had non-empty readable contents.
+func ReadProjectMemoryFiles(paths []string) (content string, files []string, err error) {
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
 		}
-		found = append(found, path)
-		return nil
-	})
-	slices.Sort(found)
-	return found
+		seen[p] = true
+		data, err := readFileSafe(p)
+		if err == nil && data != "" {
+			content += data + "\n"
+			files = append(files, p)
+		}
+	}
+	return strings.TrimSpace(content), files, nil
 }
 
 func isProjectMemoryFile(name string) bool {
@@ -164,12 +144,16 @@ func findProjectMemoryRoot(dir string) string {
 	return dir
 }
 
-func projectMemoryScanRoot(dir string) (string, bool) {
-	root := findProjectMemoryRoot(dir)
-	if hasProjectMemoryFiles(root) || hasGitRootMarker(root) {
-		return root, true
+func globalProjectMemoryFiles() []string {
+	globalDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil
 	}
-	return "", false
+	var files []string
+	for _, name := range ProjectMemoryFilenames {
+		files = append(files, filepath.Join(globalDir, ".ggcode", name))
+	}
+	return files
 }
 
 func hasProjectMemoryFiles(dir string) bool {
