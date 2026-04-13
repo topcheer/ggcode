@@ -77,6 +77,31 @@ func TestReleaseURLsWithBaseURL(t *testing.T) {
 	}
 }
 
+func TestReleaseSourcesDefaultsToGitHubOnly(t *testing.T) {
+	t.Setenv(updateBaseURLsEnv, "")
+	got := releaseSources("")
+	if len(got) != 1 || got[0].baseURL != "https://github.com/topcheer/ggcode" || got[0].proxyPrefix != "" {
+		t.Fatalf("unexpected default release sources: %#v", got)
+	}
+}
+
+func TestReleaseSourcesUsesEnvOverride(t *testing.T) {
+	t.Setenv(updateBaseURLsEnv, " https://mirror-one.example/topcheer/ggcode , https://get.ystone.us/ \nhttps://mirror-one.example/topcheer/ggcode ")
+	got := releaseSources("")
+	if len(got) != 3 {
+		t.Fatalf("unexpected env release sources: %#v", got)
+	}
+	if got[0].baseURL != "https://mirror-one.example/topcheer/ggcode" {
+		t.Fatalf("unexpected first source: %#v", got[0])
+	}
+	if got[1].baseURL != "https://get.ystone.us" {
+		t.Fatalf("unexpected second source: %#v", got[1])
+	}
+	if got[2].proxyPrefix != "https://get.ystone.us/" {
+		t.Fatalf("unexpected third source: %#v", got[2])
+	}
+}
+
 func TestParseChecksums(t *testing.T) {
 	checksums := parseChecksums("abc123  ggcode_linux_x86_64.tar.gz\nxyz789 ggcode_windows_x86_64.zip\n")
 	if got := checksums["ggcode_windows_x86_64.zip"]; got != "xyz789" {
@@ -263,6 +288,74 @@ func TestDownloadBinaryFallsBackToMirror(t *testing.T) {
 	}
 	if !strings.HasPrefix(result.ArchiveURL, mirror.URL+"/") {
 		t.Fatalf("expected mirror archive URL, got %s", result.ArchiveURL)
+	}
+}
+
+func TestResolveReleaseVersionWithProxyPrefix(t *testing.T) {
+	apiBody := []byte(`{"tag_name":"v1.2.5"}`)
+	apiZip := makeZipArchive(t, "latest", apiBody)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/https://api.github.com/repos/topcheer/ggcode/releases/latest" {
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = w.Write(apiZip)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	t.Setenv(updateBaseURLsEnv, server.URL+"/")
+	version, err := resolveReleaseVersion(context.Background(), server.Client(), "", "latest")
+	if err != nil {
+		t.Fatalf("resolveReleaseVersion returned error: %v", err)
+	}
+	if version != "v1.2.5" {
+		t.Fatalf("unexpected version: %s", version)
+	}
+}
+
+func TestDownloadBinaryWithProxyPrefix(t *testing.T) {
+	archiveName := "ggcode_linux_x86_64.tar.gz"
+	binaryData := []byte("linux-binary")
+	archiveData := makeTarGzArchive(t, "ggcode", binaryData)
+	archiveZip := makeZipArchive(t, archiveName, archiveData)
+	checksum := sha256.Sum256(archiveData)
+	checksumBody := []byte(fmt.Sprintf("%s  %s\n", hex.EncodeToString(checksum[:]), archiveName))
+	checksumZip := makeZipArchive(t, "checksums.txt", checksumBody)
+	apiZip := makeZipArchive(t, "latest", []byte(`{"tag_name":"v1.2.3"}`))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/https://api.github.com/repos/topcheer/ggcode/releases/latest":
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = w.Write(apiZip)
+		case "/https://github.com/topcheer/ggcode/releases/download/v1.2.3/" + archiveName:
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = w.Write(archiveZip)
+		case "/https://github.com/topcheer/ggcode/releases/download/v1.2.3/checksums.txt":
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = w.Write(checksumZip)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv(updateBaseURLsEnv, server.URL+"/")
+	result, err := DownloadBinary(context.Background(), Options{
+		Version:        "latest",
+		PlatformGOOS:   "linux",
+		PlatformGOARCH: "amd64",
+		HTTPClient:     server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("DownloadBinary returned error: %v", err)
+	}
+	if result.Version != "v1.2.3" {
+		t.Fatalf("unexpected version: %s", result.Version)
+	}
+	if string(result.BinaryData) != string(binaryData) {
+		t.Fatalf("unexpected binary data: %q", string(result.BinaryData))
 	}
 }
 
