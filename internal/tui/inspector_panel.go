@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -757,19 +756,15 @@ func (m Model) inspectorLSPStatusItems() []inspectorPanelItem {
 		if !lang.Available {
 			switch len(lang.InstallOptions) {
 			case 0:
-				if strings.TrimSpace(lang.InstallHint) != "" {
-					detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.InstallHint))
+				if label := firstNonEmpty(lang.Binary, lang.DisplayName); label != "" {
+					detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), label))
 				}
 			case 1:
-				detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.InstallOptions[0].Command))
+				detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lspInstallOptionDetailLabel(lang.InstallOptions[0], m.currentLanguage())))
 			default:
 				detailLines = append(detailLines, inspectorText(m.currentLanguage(), "lsp_install_options")+":")
 				for _, option := range lang.InstallOptions {
-					line := fmt.Sprintf("- %s: %s", option.Label, option.Command)
-					if option.Recommended {
-						line = fmt.Sprintf("- %s (%s): %s", option.Label, inspectorText(m.currentLanguage(), "lsp_recommended"), option.Command)
-					}
-					detailLines = append(detailLines, line)
+					detailLines = append(detailLines, "- "+lspInstallOptionDetailLabel(option, m.currentLanguage()))
 				}
 			}
 			detailLines = append(detailLines, "", inspectorText(m.currentLanguage(), "lsp_install_enter_hint"))
@@ -807,7 +802,8 @@ func (m Model) inspectorLSPInstallItems() []inspectorPanelItem {
 		if option.Binary != "" {
 			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_binary"), option.Binary))
 		}
-		detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), option.Command))
+		detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lspInstallOptionDetailLabel(option, m.currentLanguage())))
+		detailLines = append(detailLines, "", inspectorText(m.currentLanguage(), "lsp_install_enter_hint"))
 		items = append(items, inspectorPanelItem{
 			ID:      option.ID,
 			Title:   title,
@@ -826,6 +822,14 @@ func lspInstallLabels(options []lsp.InstallOption) []string {
 		}
 	}
 	return labels
+}
+
+func lspInstallOptionDetailLabel(option lsp.InstallOption, lang Language) string {
+	label := firstNonEmpty(option.Label, option.Binary, option.ID)
+	if option.Recommended && label != "" {
+		return fmt.Sprintf("%s (%s)", label, inspectorText(lang, "lsp_recommended"))
+	}
+	return label
 }
 
 func ternaryString(cond bool, yes, no string) string {
@@ -928,11 +932,44 @@ func compactWorkspaceLabelForTUI(path string) string {
 	if normalized == "" {
 		return ""
 	}
-	base := filepath.Base(normalized)
-	if base == "." || base == string(filepath.Separator) || base == "" {
-		return normalized
+	return truncateMiddleDisplayWidth(shortenSidebarPath(normalized), 56)
+}
+
+func truncateMiddleDisplayWidth(s string, maxWidth int) string {
+	s = strings.TrimSpace(s)
+	if maxWidth <= 0 || s == "" {
+		return ""
 	}
-	return base + " — " + normalized
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	if maxWidth <= 3 {
+		return fitDisplayWidth(s, maxWidth)
+	}
+	runes := []rune(s)
+	leftBudget := (maxWidth - 3) / 2
+	rightBudget := maxWidth - 3 - leftBudget
+	left := fitDisplayWidth(string(runes), leftBudget)
+	right := fitDisplayWidthFromEnd(string(runes), rightBudget)
+	return left + "..." + right
+}
+
+func fitDisplayWidthFromEnd(s string, maxWidth int) string {
+	if maxWidth <= 0 || s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	currentWidth := 0
+	start := len(runes)
+	for i := len(runes) - 1; i >= 0; i-- {
+		rw := lipgloss.Width(string(runes[i]))
+		if currentWidth+rw > maxWidth {
+			break
+		}
+		currentWidth += rw
+		start = i
+	}
+	return string(runes[start:])
 }
 
 func formatInspectorTime(ts time.Time) string {
@@ -1136,7 +1173,7 @@ func inspectorText(lang Language, key string, args ...any) string {
 		case "lsp_binary":
 			msg = "二进制"
 		case "lsp_install":
-			msg = "安装命令"
+			msg = "安装"
 		case "lsp_detected_by":
 			msg = "检测依据"
 		case "lsp_install_options":

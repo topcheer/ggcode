@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,11 @@ const (
 	repo       = "ggcode"
 	binaryName = "ggcode"
 )
+
+var defaultReleaseBaseURLs = []string{
+	fmt.Sprintf("https://github.com/%s/%s", owner, repo),
+	fmt.Sprintf("https://relv.xgheaven.com.cn/%s/%s", owner, repo),
+}
 
 type Target struct {
 	GOOS        string
@@ -94,33 +100,40 @@ func DownloadBinary(ctx context.Context, opts Options) (BinaryResult, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
+	var errs []error
+	for _, baseURL := range releaseBaseURLs(opts.BaseURL) {
+		archiveURL := assetURLForBase(baseURL, version, target)
+		checksumURL := checksumsURLForBase(baseURL, version)
 
-	archiveURL := assetURLForBase(opts.BaseURL, version, target)
-	checksumURL := checksumsURLForBase(opts.BaseURL, version)
+		archiveData, err := download(ctx, client, archiveURL)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s archive: %w", archiveURL, err))
+			continue
+		}
+		checksumData, err := download(ctx, client, checksumURL)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s checksums: %w", checksumURL, err))
+			continue
+		}
+		if err := verifyArchive(target.ArchiveName, archiveData, checksumData); err != nil {
+			errs = append(errs, fmt.Errorf("%s verify: %w", baseURL, err))
+			continue
+		}
 
-	archiveData, err := download(ctx, client, archiveURL)
-	if err != nil {
-		return BinaryResult{}, fmt.Errorf("download archive: %w", err)
-	}
-	checksumData, err := download(ctx, client, checksumURL)
-	if err != nil {
-		return BinaryResult{}, fmt.Errorf("download checksums: %w", err)
-	}
-	if err := verifyArchive(target.ArchiveName, archiveData, checksumData); err != nil {
-		return BinaryResult{}, err
-	}
+		binaryData, err := extractBinary(target, archiveData)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s extract: %w", archiveURL, err))
+			continue
+		}
 
-	binaryData, err := extractBinary(target, archiveData)
-	if err != nil {
-		return BinaryResult{}, err
+		return BinaryResult{
+			Target:     target,
+			Version:    version,
+			BinaryData: binaryData,
+			ArchiveURL: archiveURL,
+		}, nil
 	}
-
-	return BinaryResult{
-		Target:     target,
-		Version:    version,
-		BinaryData: binaryData,
-		ArchiveURL: archiveURL,
-	}, nil
+	return BinaryResult{}, fmt.Errorf("download binary: %w", errors.Join(errs...))
 }
 
 func DetectTarget(goos, goarch string) (Target, error) {
@@ -214,9 +227,21 @@ func resolveReleaseVersion(ctx context.Context, client *http.Client, baseURL, ve
 	if client == nil {
 		client = http.DefaultClient
 	}
+	var errs []error
+	for _, candidate := range releaseBaseURLs(baseURL) {
+		version, err := resolveReleaseVersionForBase(ctx, client, candidate)
+		if err == nil {
+			return version, nil
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", candidate, err))
+	}
+	return "", fmt.Errorf("resolve latest release: %w", errors.Join(errs...))
+}
+
+func resolveReleaseVersionForBase(ctx context.Context, client *http.Client, baseURL string) (string, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
-		baseURL = fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+		baseURL = defaultReleaseBaseURLs[0]
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/releases/latest", nil)
 	if err != nil {
@@ -237,6 +262,26 @@ func resolveReleaseVersion(ctx context.Context, client *http.Client, baseURL, ve
 		return "", fmt.Errorf("could not resolve latest release from %s", resp.Request.URL.String())
 	}
 	return strings.TrimSpace(finalURL[idx+len(marker):]), nil
+}
+
+func releaseBaseURLs(baseURL string) []string {
+	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
+		return []string{strings.TrimRight(baseURL, "/")}
+	}
+	out := make([]string, 0, len(defaultReleaseBaseURLs))
+	seen := make(map[string]struct{}, len(defaultReleaseBaseURLs))
+	for _, candidate := range defaultReleaseBaseURLs {
+		candidate = strings.TrimRight(strings.TrimSpace(candidate), "/")
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	return out
 }
 
 func ResolveInstallDir(explicit string) (string, error) {

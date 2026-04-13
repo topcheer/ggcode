@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 )
 
 const sessionIdleTTL = 2 * time.Minute
+const csharpWarmupRetryDelay = 400 * time.Millisecond
+const csharpWarmupRetryAttempts = 8
 
 type documentState struct {
 	version int
@@ -31,10 +34,19 @@ type sessionClient struct {
 	opMu sync.Mutex
 	mu   sync.Mutex
 
-	docs        map[string]documentState
-	diagnostics map[string]diagnosticsState
-	lastUsed    time.Time
-	closed      bool
+	readyOnce   sync.Once
+	readySignal chan struct{}
+
+	docs                  map[string]documentState
+	diagnostics           map[string]diagnosticsState
+	pullDiagnosticsKnown  bool
+	pullDiagnosticsUsable bool
+	lastUsed              time.Time
+	closed                bool
+}
+
+func (s *sessionClient) shouldRetryEmptyResults() bool {
+	return binaryBaseName(s.resolved.Binary) == "csharp-ls"
 }
 
 type sessionManager struct {
@@ -66,6 +78,9 @@ func withOpenDocument[T any](ctx context.Context, workspace, path string, fn fun
 	if err != nil {
 		return zero, err
 	}
+	if err := session.primeProject(ctx, docURI); err != nil {
+		return zero, err
+	}
 	return fn(ctx, session, docURI)
 }
 
@@ -85,12 +100,17 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 		return nil, err
 	}
 	session := &sessionClient{
-		workspace:   workspace,
-		resolved:    resolved,
-		client:      client,
-		docs:        make(map[string]documentState),
-		diagnostics: make(map[string]diagnosticsState),
-		lastUsed:    time.Now(),
+		workspace:             workspace,
+		resolved:              resolved,
+		client:                client,
+		readySignal:           make(chan struct{}),
+		docs:                  make(map[string]documentState),
+		diagnostics:           make(map[string]diagnosticsState),
+		pullDiagnosticsUsable: true,
+		lastUsed:              time.Now(),
+	}
+	if !session.shouldRetryEmptyResults() {
+		session.markProjectReady()
 	}
 	client.notificationHandler = session.handleNotification
 	m.sessions[key] = session
@@ -199,35 +219,139 @@ func (s *sessionClient) close() {
 	}
 }
 
-func (s *sessionClient) handleNotification(method string, params json.RawMessage) {
-	if method != "textDocument/publishDiagnostics" {
-		return
+func (s *sessionClient) markProjectReady() {
+	s.readyOnce.Do(func() {
+		close(s.readySignal)
+	})
+}
+
+func (s *sessionClient) awaitProjectReady(ctx context.Context) error {
+	if !s.shouldRetryEmptyResults() {
+		return nil
 	}
-	var payload struct {
-		URI         string `json:"uri"`
-		Diagnostics []struct {
-			Severity int      `json:"severity"`
-			Message  string   `json:"message"`
-			Source   string   `json:"source"`
-			Range    rawRange `json:"range"`
-		} `json:"diagnostics"`
+	select {
+	case <-s.readySignal:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if err := json.Unmarshal(params, &payload); err != nil || payload.URI == "" {
-		return
+}
+
+func (s *sessionClient) projectReady() bool {
+	select {
+	case <-s.readySignal:
+		return true
+	default:
+		return false
 	}
-	diags := make([]Diagnostic, 0, len(payload.Diagnostics))
-	for _, item := range payload.Diagnostics {
-		diags = append(diags, Diagnostic{
-			Severity: item.Severity,
-			Message:  item.Message,
-			Source:   item.Source,
-			Range:    toRange(item.Range),
-		})
+}
+
+func (s *sessionClient) primeProject(ctx context.Context, docURI string) error {
+	if !s.shouldRetryEmptyResults() || s.projectReady() {
+		return nil
+	}
+	var raw json.RawMessage
+	if err := s.client.call(ctx, "textDocument/documentSymbol", map[string]any{
+		"textDocument": map[string]any{"uri": docURI},
+	}, &raw); err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	if err := s.awaitProjectReady(ctx); err != nil {
+		return err
+	}
+	return s.refreshDocument(ctx, docURI)
+}
+
+func (s *sessionClient) refreshDocument(ctx context.Context, uri string) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	state, ok := s.docs[uri]
+	s.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	nextVersion := state.version + 1
+	if err := s.client.notify(ctx, "textDocument/didChange", map[string]any{
+		"textDocument": map[string]any{
+			"uri":     uri,
+			"version": nextVersion,
+		},
+		"contentChanges": []map[string]any{{
+			"text": state.text,
+		}},
+	}); err != nil {
+		return err
 	}
 	s.mu.Lock()
-	s.diagnostics[payload.URI] = diagnosticsState{seen: true, diagnostics: diags}
+	s.docs[uri] = documentState{version: nextVersion, text: state.text}
 	s.lastUsed = time.Now()
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *sessionClient) handleNotification(method string, params json.RawMessage) {
+	switch method {
+	case "window/logMessage":
+		if !s.shouldRetryEmptyResults() {
+			return
+		}
+		var payload struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(params, &payload); err != nil {
+			return
+		}
+		message := strings.TrimSpace(payload.Message)
+		if strings.Contains(message, "Finished loading solution") ||
+			strings.Contains(message, "0 solution(s) found") ||
+			strings.Contains(message, "No solution found") {
+			s.markProjectReady()
+		}
+	case "textDocument/publishDiagnostics":
+		var payload struct {
+			URI         string `json:"uri"`
+			Diagnostics []struct {
+				Severity int      `json:"severity"`
+				Message  string   `json:"message"`
+				Source   string   `json:"source"`
+				Range    rawRange `json:"range"`
+			} `json:"diagnostics"`
+		}
+		if err := json.Unmarshal(params, &payload); err != nil || payload.URI == "" {
+			return
+		}
+		diags := make([]Diagnostic, 0, len(payload.Diagnostics))
+		for _, item := range payload.Diagnostics {
+			diags = append(diags, Diagnostic{
+				Severity: item.Severity,
+				Message:  item.Message,
+				Source:   item.Source,
+				Range:    toRange(item.Range),
+			})
+		}
+		s.mu.Lock()
+		s.diagnostics[payload.URI] = diagnosticsState{seen: true, diagnostics: diags}
+		s.lastUsed = time.Now()
+		s.mu.Unlock()
+	}
+}
+
+func (s *sessionClient) supportsPullDiagnostics() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.pullDiagnosticsKnown {
+		return true
+	}
+	return s.pullDiagnosticsUsable
+}
+
+func (s *sessionClient) setPullDiagnosticsSupport(supported bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pullDiagnosticsKnown = true
+	s.pullDiagnosticsUsable = supported
+	s.lastUsed = time.Now()
 }
 
 func (s *sessionClient) publishedDiagnostics(uri string) ([]Diagnostic, bool) {
