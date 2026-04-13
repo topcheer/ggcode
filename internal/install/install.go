@@ -29,11 +29,13 @@ const (
 var defaultReleaseSources = []releaseSource{
 	{baseURL: fmt.Sprintf("https://github.com/%s/%s", owner, repo)},
 	{proxyPrefix: "https://get.ystone.us/"},
+	{latestMirrorBase: "https://ggcode.dev/downloads/latest"},
 }
 
 type releaseSource struct {
-	baseURL     string
-	proxyPrefix string
+	baseURL          string
+	proxyPrefix      string
+	latestMirrorBase string
 }
 
 type Target struct {
@@ -99,6 +101,7 @@ func DownloadBinary(ctx context.Context, opts Options) (BinaryResult, error) {
 		return BinaryResult{}, err
 	}
 
+	requestedVersion := NormalizeVersion(opts.Version)
 	version, err := resolveReleaseVersion(ctx, opts.HTTPClient, opts.BaseURL, opts.Version)
 	if err != nil {
 		return BinaryResult{}, err
@@ -109,6 +112,9 @@ func DownloadBinary(ctx context.Context, opts Options) (BinaryResult, error) {
 	}
 	var errs []error
 	for _, source := range releaseSources(opts.BaseURL) {
+		if source.isLatestMirrorOnly() && requestedVersion != "latest" {
+			continue
+		}
 		archiveURL := source.assetURL(version, target)
 		checksumURL := source.checksumsURL(version)
 
@@ -289,6 +295,9 @@ func releaseSources(baseURL string) []releaseSource {
 		if strings.TrimSpace(source.proxyPrefix) != "" {
 			source.proxyPrefix = strings.TrimRight(strings.TrimSpace(source.proxyPrefix), "/") + "/"
 		}
+		if strings.TrimSpace(source.latestMirrorBase) != "" {
+			source.latestMirrorBase = strings.TrimRight(strings.TrimSpace(source.latestMirrorBase), "/")
+		}
 		if source.empty() {
 			continue
 		}
@@ -350,17 +359,23 @@ func parseReleaseSourceCandidates(raw string) []releaseSource {
 }
 
 func (s releaseSource) empty() bool {
-	return strings.TrimSpace(s.baseURL) == "" && strings.TrimSpace(s.proxyPrefix) == ""
+	return strings.TrimSpace(s.baseURL) == "" && strings.TrimSpace(s.proxyPrefix) == "" && strings.TrimSpace(s.latestMirrorBase) == ""
 }
 
 func (s releaseSource) label() string {
 	if strings.TrimSpace(s.baseURL) != "" {
 		return s.baseURL
 	}
+	if strings.TrimSpace(s.latestMirrorBase) != "" {
+		return s.latestMirrorBase
+	}
 	return s.proxyPrefix
 }
 
 func (s releaseSource) assetURL(version string, target Target) string {
+	if strings.TrimSpace(s.latestMirrorBase) != "" {
+		return s.latestMirrorBase + "/" + target.ArchiveName
+	}
 	if strings.TrimSpace(s.baseURL) != "" {
 		return assetURLForBase(s.baseURL, version, target)
 	}
@@ -368,6 +383,9 @@ func (s releaseSource) assetURL(version string, target Target) string {
 }
 
 func (s releaseSource) checksumsURL(version string) string {
+	if strings.TrimSpace(s.latestMirrorBase) != "" {
+		return s.latestMirrorBase + "/checksums.txt"
+	}
 	if strings.TrimSpace(s.baseURL) != "" {
 		return checksumsURLForBase(s.baseURL, version)
 	}
@@ -375,6 +393,22 @@ func (s releaseSource) checksumsURL(version string) string {
 }
 
 func (s releaseSource) resolveLatestVersion(ctx context.Context, client *http.Client) (string, error) {
+	if strings.TrimSpace(s.latestMirrorBase) != "" {
+		data, err := downloadAndMaybeUnwrap(ctx, client, s.latestMirrorBase+"/manifest.json", "manifest.json")
+		if err != nil {
+			return "", err
+		}
+		var payload struct {
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return "", fmt.Errorf("parse latest mirror manifest: %w", err)
+		}
+		if strings.TrimSpace(payload.Version) == "" {
+			return "", fmt.Errorf("missing version in latest mirror manifest")
+		}
+		return strings.TrimSpace(payload.Version), nil
+	}
 	if strings.TrimSpace(s.baseURL) != "" {
 		return resolveReleaseVersionForBase(ctx, client, s.baseURL)
 	}
@@ -396,6 +430,10 @@ func (s releaseSource) resolveLatestVersion(ctx context.Context, client *http.Cl
 
 func (s releaseSource) proxyURL(upstream string) string {
 	return strings.TrimRight(strings.TrimSpace(s.proxyPrefix), "/") + "/" + strings.TrimSpace(upstream)
+}
+
+func (s releaseSource) isLatestMirrorOnly() bool {
+	return strings.TrimSpace(s.latestMirrorBase) != ""
 }
 
 func githubLatestReleaseAPIURL() string {

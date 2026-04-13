@@ -77,10 +77,10 @@ func TestReleaseURLsWithBaseURL(t *testing.T) {
 	}
 }
 
-func TestReleaseSourcesDefaultsIncludeBuiltInFallback(t *testing.T) {
+func TestReleaseSourcesDefaultsIncludeBuiltInFallbacks(t *testing.T) {
 	t.Setenv(updateBaseURLsEnv, "")
 	got := releaseSources("")
-	if len(got) != 2 {
+	if len(got) != 3 {
 		t.Fatalf("unexpected default release sources: %#v", got)
 	}
 	if got[0].baseURL != "https://github.com/topcheer/ggcode" || got[0].proxyPrefix != "" {
@@ -88,6 +88,9 @@ func TestReleaseSourcesDefaultsIncludeBuiltInFallback(t *testing.T) {
 	}
 	if got[1].proxyPrefix != "https://get.ystone.us/" || got[1].baseURL != "" {
 		t.Fatalf("unexpected default release sources: %#v", got)
+	}
+	if got[2].latestMirrorBase != "https://ggcode.dev/downloads/latest" {
+		t.Fatalf("unexpected third default release source: %#v", got[2])
 	}
 }
 
@@ -358,6 +361,59 @@ func TestDownloadBinaryWithProxyPrefix(t *testing.T) {
 		t.Fatalf("DownloadBinary returned error: %v", err)
 	}
 	if result.Version != "v1.2.3" {
+		t.Fatalf("unexpected version: %s", result.Version)
+	}
+	if string(result.BinaryData) != string(binaryData) {
+		t.Fatalf("unexpected binary data: %q", string(result.BinaryData))
+	}
+}
+
+func TestDownloadBinaryWithLatestMirrorBase(t *testing.T) {
+	archiveName := "ggcode_linux_x86_64.tar.gz"
+	binaryData := []byte("linux-binary")
+	archiveData := makeTarGzArchive(t, "ggcode", binaryData)
+	checksum := sha256.Sum256(archiveData)
+	checksumBody := []byte(fmt.Sprintf("%s  %s\n", hex.EncodeToString(checksum[:]), archiveName))
+	manifest := []byte(`{"version":"v1.2.6","files":[{"name":"` + archiveName + `","size":12}]}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/manifest.json":
+			_, _ = w.Write(manifest)
+		case "/" + archiveName:
+			_, _ = w.Write(archiveData)
+		case "/checksums.txt":
+			_, _ = w.Write(checksumBody)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	result, err := DownloadBinary(context.Background(), Options{
+		Version:        "latest",
+		BaseURL:        server.URL,
+		PlatformGOOS:   "linux",
+		PlatformGOARCH: "amd64",
+		HTTPClient:     server.Client(),
+	})
+	if err == nil {
+		t.Fatal("expected plain BaseURL not to be treated as latest mirror")
+	}
+
+	prev := append([]releaseSource(nil), defaultReleaseSources...)
+	defaultReleaseSources = []releaseSource{{latestMirrorBase: server.URL}}
+	defer func() { defaultReleaseSources = prev }()
+	result, err = DownloadBinary(context.Background(), Options{
+		Version:        "latest",
+		PlatformGOOS:   "linux",
+		PlatformGOARCH: "amd64",
+		HTTPClient:     server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("DownloadBinary returned error: %v", err)
+	}
+	if result.Version != "v1.2.6" {
 		t.Fatalf("unexpected version: %s", result.Version)
 	}
 	if string(result.BinaryData) != string(binaryData) {
