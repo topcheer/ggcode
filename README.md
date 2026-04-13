@@ -207,6 +207,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 | `/mode <mode>` | Change permission mode |
 | `/status` | Show current status, including local LSP availability, install hints, and in-place installation for supported languages |
 | `/config` | View or update configuration |
+| `/update` | Download the latest release and restart into the updated binary |
 | `/lang <en|zh-CN>` | Change interface language |
 
 ### Session and recovery
@@ -218,6 +219,11 @@ From the product point of view, ggcode is more than “chat with a model”:
 | `/export <id>` | Export a session to Markdown |
 | `/clear` | Clear the current conversation |
 | `/compact` | Compress conversation history |
+
+For environments where direct GitHub release downloads are unreliable, set
+`GGCODE_UPDATE_BASE_URLS` to a comma-separated list of release sources for `/update`. Each entry can be
+either a normal release base URL or a full-URL proxy prefix, for example:
+`GGCODE_UPDATE_BASE_URLS=https://github.com/topcheer/ggcode,https://get.ystone.us/`
 | `/undo` | Revert the last file edit |
 | `/checkpoints` | List available edit checkpoints |
 

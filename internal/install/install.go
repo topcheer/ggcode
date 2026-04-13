@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,14 +20,19 @@ import (
 )
 
 const (
-	owner      = "topcheer"
-	repo       = "ggcode"
-	binaryName = "ggcode"
+	owner             = "topcheer"
+	repo              = "ggcode"
+	binaryName        = "ggcode"
+	updateBaseURLsEnv = "GGCODE_UPDATE_BASE_URLS"
 )
 
 var defaultReleaseBaseURLs = []string{
 	fmt.Sprintf("https://github.com/%s/%s", owner, repo),
-	fmt.Sprintf("https://relv.xgheaven.com.cn/%s/%s", owner, repo),
+}
+
+type releaseSource struct {
+	baseURL     string
+	proxyPrefix string
 }
 
 type Target struct {
@@ -101,22 +107,22 @@ func DownloadBinary(ctx context.Context, opts Options) (BinaryResult, error) {
 		client = http.DefaultClient
 	}
 	var errs []error
-	for _, baseURL := range releaseBaseURLs(opts.BaseURL) {
-		archiveURL := assetURLForBase(baseURL, version, target)
-		checksumURL := checksumsURLForBase(baseURL, version)
+	for _, source := range releaseSources(opts.BaseURL) {
+		archiveURL := source.assetURL(version, target)
+		checksumURL := source.checksumsURL(version)
 
-		archiveData, err := download(ctx, client, archiveURL)
+		archiveData, err := downloadAndMaybeUnwrap(ctx, client, archiveURL, target.ArchiveName)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s archive: %w", archiveURL, err))
 			continue
 		}
-		checksumData, err := download(ctx, client, checksumURL)
+		checksumData, err := downloadAndMaybeUnwrap(ctx, client, checksumURL, "checksums.txt")
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s checksums: %w", checksumURL, err))
 			continue
 		}
 		if err := verifyArchive(target.ArchiveName, archiveData, checksumData); err != nil {
-			errs = append(errs, fmt.Errorf("%s verify: %w", baseURL, err))
+			errs = append(errs, fmt.Errorf("%s verify: %w", source.label(), err))
 			continue
 		}
 
@@ -228,12 +234,12 @@ func resolveReleaseVersion(ctx context.Context, client *http.Client, baseURL, ve
 		client = http.DefaultClient
 	}
 	var errs []error
-	for _, candidate := range releaseBaseURLs(baseURL) {
-		version, err := resolveReleaseVersionForBase(ctx, client, candidate)
+	for _, candidate := range releaseSources(baseURL) {
+		version, err := candidate.resolveLatestVersion(ctx, client)
 		if err == nil {
 			return version, nil
 		}
-		errs = append(errs, fmt.Errorf("%s: %w", candidate, err))
+		errs = append(errs, fmt.Errorf("%s: %w", candidate.label(), err))
 	}
 	return "", fmt.Errorf("resolve latest release: %w", errors.Join(errs...))
 }
@@ -264,24 +270,130 @@ func resolveReleaseVersionForBase(ctx context.Context, client *http.Client, base
 	return strings.TrimSpace(finalURL[idx+len(marker):]), nil
 }
 
-func releaseBaseURLs(baseURL string) []string {
+func releaseSources(baseURL string) []releaseSource {
 	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
-		return []string{strings.TrimRight(baseURL, "/")}
+		return []releaseSource{{baseURL: strings.TrimRight(baseURL, "/")}}
 	}
-	out := make([]string, 0, len(defaultReleaseBaseURLs))
+	if env := strings.TrimSpace(os.Getenv(updateBaseURLsEnv)); env != "" {
+		if sources := parseReleaseSources(env); len(sources) > 0 {
+			return sources
+		}
+	}
+	out := make([]releaseSource, 0, len(defaultReleaseBaseURLs))
 	seen := make(map[string]struct{}, len(defaultReleaseBaseURLs))
 	for _, candidate := range defaultReleaseBaseURLs {
-		candidate = strings.TrimRight(strings.TrimSpace(candidate), "/")
-		if candidate == "" {
+		source := releaseSource{baseURL: strings.TrimRight(strings.TrimSpace(candidate), "/")}
+		if source.empty() {
 			continue
 		}
-		if _, ok := seen[candidate]; ok {
+		if _, ok := seen[source.label()]; ok {
 			continue
 		}
-		seen[candidate] = struct{}{}
-		out = append(out, candidate)
+		seen[source.label()] = struct{}{}
+		out = append(out, source)
 	}
 	return out
+}
+
+func parseReleaseSources(raw string) []releaseSource {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n'
+	})
+	out := make([]releaseSource, 0, len(fields)*2)
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		for _, source := range parseReleaseSourceCandidates(field) {
+			if source.empty() {
+				continue
+			}
+			if _, ok := seen[source.label()]; ok {
+				continue
+			}
+			seen[source.label()] = struct{}{}
+			out = append(out, source)
+		}
+	}
+	return out
+}
+
+func parseReleaseSource(raw string) releaseSource {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return releaseSource{}
+	}
+	repoPath := "/" + owner + "/" + repo
+	if strings.Contains(raw, repoPath) {
+		return releaseSource{baseURL: raw}
+	}
+	return releaseSource{proxyPrefix: raw + "/"}
+}
+
+func parseReleaseSourceCandidates(raw string) []releaseSource {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return nil
+	}
+	repoPath := "/" + owner + "/" + repo
+	if strings.Contains(raw, repoPath) {
+		return []releaseSource{{baseURL: raw}}
+	}
+	return []releaseSource{
+		{baseURL: raw},
+		{proxyPrefix: raw + "/"},
+	}
+}
+
+func (s releaseSource) empty() bool {
+	return strings.TrimSpace(s.baseURL) == "" && strings.TrimSpace(s.proxyPrefix) == ""
+}
+
+func (s releaseSource) label() string {
+	if strings.TrimSpace(s.baseURL) != "" {
+		return s.baseURL
+	}
+	return s.proxyPrefix
+}
+
+func (s releaseSource) assetURL(version string, target Target) string {
+	if strings.TrimSpace(s.baseURL) != "" {
+		return assetURLForBase(s.baseURL, version, target)
+	}
+	return s.proxyURL(AssetURL(version, target))
+}
+
+func (s releaseSource) checksumsURL(version string) string {
+	if strings.TrimSpace(s.baseURL) != "" {
+		return checksumsURLForBase(s.baseURL, version)
+	}
+	return s.proxyURL(ChecksumsURL(version))
+}
+
+func (s releaseSource) resolveLatestVersion(ctx context.Context, client *http.Client) (string, error) {
+	if strings.TrimSpace(s.baseURL) != "" {
+		return resolveReleaseVersionForBase(ctx, client, s.baseURL)
+	}
+	data, err := downloadAndMaybeUnwrap(ctx, client, s.proxyURL(githubLatestReleaseAPIURL()), "latest")
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", fmt.Errorf("parse latest release json: %w", err)
+	}
+	if strings.TrimSpace(payload.TagName) == "" {
+		return "", fmt.Errorf("missing tag_name in latest release response")
+	}
+	return strings.TrimSpace(payload.TagName), nil
+}
+
+func (s releaseSource) proxyURL(upstream string) string {
+	return strings.TrimRight(strings.TrimSpace(s.proxyPrefix), "/") + "/" + strings.TrimSpace(upstream)
+}
+
+func githubLatestReleaseAPIURL() string {
+	return fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
 }
 
 func ResolveInstallDir(explicit string) (string, error) {
@@ -320,6 +432,17 @@ func download(ctx context.Context, client *http.Client, url string) ([]byte, err
 	return io.ReadAll(resp.Body)
 }
 
+func downloadAndMaybeUnwrap(ctx context.Context, client *http.Client, url, expectedName string) ([]byte, error) {
+	data, err := download(ctx, client, url)
+	if err != nil {
+		return nil, err
+	}
+	if unwrapped, ok := unwrapExpectedSingleFileZip(data, expectedName); ok {
+		return unwrapped, nil
+	}
+	return data, nil
+}
+
 func verifyArchive(assetName string, archiveData, checksumData []byte) error {
 	expected, ok := parseChecksums(string(checksumData))[assetName]
 	if !ok {
@@ -350,6 +473,32 @@ func extractBinary(target Target, archiveData []byte) ([]byte, error) {
 		return extractZipBinary(target.BinaryName, archiveData)
 	}
 	return extractTarGzBinary(target.BinaryName, archiveData)
+}
+
+func unwrapExpectedSingleFileZip(data []byte, expectedName string) ([]byte, bool) {
+	expectedName = filepath.Base(strings.TrimSpace(expectedName))
+	if expectedName == "" || len(data) < 4 || !bytes.Equal(data[:4], []byte("PK\x03\x04")) {
+		return nil, false
+	}
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil || len(reader.File) != 1 {
+		return nil, false
+	}
+	file := reader.File[0]
+	name := filepath.Base(file.Name)
+	if name != expectedName {
+		return nil, false
+	}
+	rc, err := file.Open()
+	if err != nil {
+		return nil, false
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, false
+	}
+	return body, true
 }
 
 func extractZipBinary(name string, archiveData []byte) ([]byte, error) {
