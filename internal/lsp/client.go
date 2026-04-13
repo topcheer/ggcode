@@ -182,7 +182,7 @@ func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, err
 }
 
 func startClient(ctx context.Context, workspace string, resolved ResolvedServer) (*stdioClient, error) {
-	cmd := exec.Command(resolved.Binary)
+	cmd := exec.Command(resolved.Binary, resolved.Args...)
 	cmd.Dir = workspace
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

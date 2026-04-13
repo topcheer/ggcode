@@ -11,12 +11,13 @@ import (
 )
 
 type LanguageStatus struct {
-	ID          string
-	DisplayName string
-	Available   bool
-	Binary      string
-	InstallHint string
-	Evidence    []string
+	ID             string
+	DisplayName    string
+	Available      bool
+	Binary         string
+	InstallHint    string
+	InstallOptions []InstallOption
+	Evidence       []string
 }
 
 type WorkspaceStatus struct {
@@ -28,7 +29,16 @@ type ResolvedServer struct {
 	LanguageID  string
 	DisplayName string
 	Binary      string
+	Args        []string
 	InstallHint string
+}
+
+type InstallOption struct {
+	ID          string
+	Label       string
+	Binary      string
+	Command     string
+	Recommended bool
 }
 
 type serverSpec struct {
@@ -73,14 +83,16 @@ func DetectWorkspaceStatus(workspace string) WorkspaceStatus {
 		if len(evidence) == 0 {
 			continue
 		}
-		binary, available := firstAvailableBinary(spec.binaries)
+		options := installOptions(spec, workspace)
+		binary, available := detectAvailableBinary(spec, workspace)
 		languages = append(languages, LanguageStatus{
-			ID:          spec.id,
-			DisplayName: spec.displayName,
-			Available:   available,
-			Binary:      binary,
-			InstallHint: installHint(spec.id),
-			Evidence:    evidence,
+			ID:             spec.id,
+			DisplayName:    spec.displayName,
+			Available:      available,
+			Binary:         binary,
+			InstallHint:    installHint(spec.id),
+			InstallOptions: options,
+			Evidence:       evidence,
 		})
 	}
 	slices.SortFunc(languages, func(a, b LanguageStatus) int {
@@ -105,11 +117,12 @@ func ResolveServerForFile(workspace, path string) (ResolvedServer, bool) {
 	for _, spec := range builtinServerSpecs {
 		for _, candidateExt := range spec.extensions {
 			if strings.EqualFold(candidateExt, ext) {
-				binary, available := firstAvailableBinary(spec.binaries)
+				binary, available := resolveServerBinary(spec, workspace)
 				return ResolvedServer{
 					LanguageID:  languageIDForFile(spec.id, ext),
 					DisplayName: spec.displayName,
 					Binary:      binary,
+					Args:        launchArgs(spec.id, binary),
 					InstallHint: installHint(spec.id),
 				}, available
 			}
@@ -128,12 +141,14 @@ func ResolveServerForWorkspace(workspace string) (ResolvedServer, bool) {
 			if spec.id != lang.ID {
 				continue
 			}
+			binary, available := resolveServerBinary(spec, workspace)
 			return ResolvedServer{
 				LanguageID:  languageIDForFile(spec.id, firstLanguageExtension(spec)),
 				DisplayName: spec.displayName,
-				Binary:      lang.Binary,
+				Binary:      binary,
+				Args:        launchArgs(spec.id, lang.Binary),
 				InstallHint: installHint(spec.id),
-			}, true
+			}, available
 		}
 	}
 	return ResolvedServer{}, false
@@ -245,6 +260,133 @@ func firstAvailableBinary(candidates []string) (string, bool) {
 	return "", false
 }
 
+func detectAvailableBinary(spec serverSpec, workspace string) (string, bool) {
+	display, _, ok := resolveManagedBinary(spec, workspace)
+	if ok {
+		return display, true
+	}
+	if len(spec.binaries) > 0 {
+		return spec.binaries[0], false
+	}
+	return "", false
+}
+
+func resolveServerBinary(spec serverSpec, workspace string) (string, bool) {
+	_, command, ok := resolveManagedBinary(spec, workspace)
+	if ok {
+		return command, true
+	}
+	if len(spec.binaries) > 0 {
+		return spec.binaries[0], false
+	}
+	return "", false
+}
+
+func resolveManagedBinary(spec serverSpec, workspace string) (display string, command string, ok bool) {
+	if display, ok = firstAvailableBinary(spec.binaries); ok {
+		return display, display, true
+	}
+	switch spec.id {
+	case "rust":
+		return resolveRustAnalyzerFallback()
+	case "go":
+		return resolveGoBinaryFallback("gopls")
+	case "python":
+		return resolvePythonVenvFallback(spec.binaries, workspace)
+	default:
+		return "", "", false
+	}
+}
+
+func resolveRustAnalyzerFallback() (display string, command string, ok bool) {
+	if _, err := exec.LookPath("rustup"); err == nil {
+		out, err := exec.Command("rustup", "which", "rust-analyzer").Output()
+		if err == nil {
+			path := strings.TrimSpace(string(out))
+			if executableExists(path) {
+				return "rust-analyzer", path, true
+			}
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		path := filepath.Join(home, ".cargo", "bin", executableName("rust-analyzer"))
+		if executableExists(path) {
+			return "rust-analyzer", path, true
+		}
+	}
+	return "", "", false
+}
+
+func resolveGoBinaryFallback(binary string) (display string, command string, ok bool) {
+	candidates := make([]string, 0, 3)
+	if gobin := strings.TrimSpace(os.Getenv("GOBIN")); gobin != "" {
+		candidates = append(candidates, filepath.Join(gobin, executableName(binary)))
+	}
+	if gopath := strings.TrimSpace(os.Getenv("GOPATH")); gopath != "" {
+		first := strings.Split(gopath, string(os.PathListSeparator))[0]
+		if strings.TrimSpace(first) != "" {
+			candidates = append(candidates, filepath.Join(first, "bin", executableName(binary)))
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, "go", "bin", executableName(binary)))
+	}
+	for _, candidate := range candidates {
+		if executableExists(candidate) {
+			return binary, candidate, true
+		}
+	}
+	return "", "", false
+}
+
+func resolvePythonVenvFallback(candidates []string, workspace string) (display string, command string, ok bool) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return "", "", false
+	}
+	for _, venvDir := range []string{".venv", "venv"} {
+		for _, candidate := range candidates {
+			path := filepath.Join(workspace, venvDir, venvBinDir(), executableName(candidate))
+			if executableExists(path) {
+				return candidate, path, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func executableExists(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return true
+}
+
+func executableName(name string) string {
+	if runtime.GOOS == "windows" {
+		lower := strings.ToLower(name)
+		switch {
+		case strings.HasSuffix(lower, ".exe"), strings.HasSuffix(lower, ".cmd"), strings.HasSuffix(lower, ".bat"):
+			return name
+		default:
+			return name + ".exe"
+		}
+	}
+	return name
+}
+
+func venvBinDir() string {
+	if runtime.GOOS == "windows" {
+		return "Scripts"
+	}
+	return "bin"
+}
+
 func installHint(languageID string) string {
 	switch languageID {
 	case "go":
@@ -306,6 +448,95 @@ func installHint(languageID string) string {
 	default:
 		return ""
 	}
+}
+
+func installOptions(spec serverSpec, workspace string) []InstallOption {
+	switch spec.id {
+	case "python":
+		return []InstallOption{
+			{
+				ID:          "pyright",
+				Label:       "pyright-langserver",
+				Binary:      "pyright-langserver",
+				Command:     pythonVenvInstallCommand(workspace, "pyright"),
+				Recommended: true,
+			},
+			{
+				ID:      "pylsp",
+				Label:   "pylsp",
+				Binary:  "pylsp",
+				Command: pythonVenvInstallCommand(workspace, "python-lsp-server"),
+			},
+		}
+	default:
+		command := installHint(spec.id)
+		binary := ""
+		if len(spec.binaries) > 0 {
+			binary = spec.binaries[0]
+		}
+		if strings.TrimSpace(command) == "" && strings.TrimSpace(binary) == "" {
+			return nil
+		}
+		return []InstallOption{{
+			ID:          spec.id,
+			Label:       firstNonEmpty(binary, spec.displayName),
+			Binary:      binary,
+			Command:     command,
+			Recommended: true,
+		}}
+	}
+}
+
+func pythonVenvInstallCommand(workspace, packageName string) string {
+	packageName = strings.TrimSpace(packageName)
+	if packageName == "" {
+		return ""
+	}
+	if runtime.GOOS == "windows" {
+		return strings.Join([]string{
+			"if (Test-Path '.venv\\Scripts\\python.exe') { $venvPy = '.venv\\Scripts\\python.exe' }",
+			"elseif (Test-Path 'venv\\Scripts\\python.exe') { $venvPy = 'venv\\Scripts\\python.exe' }",
+			"else { py -m venv .venv; $venvPy = '.venv\\Scripts\\python.exe' }",
+			"& $venvPy -m pip install " + packageName,
+		}, "; ")
+	}
+	return "if [ -x .venv/bin/python ]; then VENV_PY=.venv/bin/python; " +
+		"elif [ -x venv/bin/python ]; then VENV_PY=venv/bin/python; " +
+		"else python3 -m venv .venv && VENV_PY=.venv/bin/python; fi " +
+		"&& \"$VENV_PY\" -m pip install " + packageName
+}
+
+func launchArgs(specID, binary string) []string {
+	base := binaryBaseName(binary)
+	switch {
+	case base == "pyright-langserver":
+		return []string{"--stdio"}
+	case base == "typescript-language-server":
+		return []string{"--stdio"}
+	case specID == "terraform" && base == "terraform-ls":
+		return []string{"serve"}
+	default:
+		return nil
+	}
+}
+
+func binaryBaseName(binary string) string {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(binary)))
+	switch {
+	case strings.HasSuffix(base, ".exe"), strings.HasSuffix(base, ".cmd"), strings.HasSuffix(base, ".bat"):
+		return strings.TrimSuffix(base, filepath.Ext(base))
+	default:
+		return base
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func languageIDForFile(specID, ext string) string {

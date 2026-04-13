@@ -64,6 +64,213 @@ func TestDetectWorkspaceStatusUsesInstalledBinaryFromPATH(t *testing.T) {
 	}
 }
 
+func TestDetectWorkspaceStatusUsesRustupManagedRustAnalyzer(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "Cargo.toml"), []byte("[package]\nname = \"board\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(Cargo.toml) error = %v", err)
+	}
+
+	binDir := t.TempDir()
+	rustupPath := filepath.Join(binDir, "rustup")
+	fakeAnalyzer := filepath.Join(t.TempDir(), "rust-analyzer")
+	if runtime.GOOS == "windows" {
+		rustupPath += ".bat"
+		fakeAnalyzer += ".exe"
+	}
+	if err := os.WriteFile(fakeAnalyzer, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake rust-analyzer) error = %v", err)
+	}
+	if err := os.WriteFile(rustupPath, []byte("#!/bin/sh\nprintf '%s\\n' \""+fakeAnalyzer+"\"\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake rustup) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	status := DetectWorkspaceStatus(workspace)
+	if len(status.Languages) != 1 {
+		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	}
+	rustStatus := status.Languages[0]
+	if rustStatus.ID != "rust" {
+		t.Fatalf("expected rust detection, got %#v", rustStatus)
+	}
+	if !rustStatus.Available || rustStatus.Binary != "rust-analyzer" {
+		t.Fatalf("expected rustup-managed rust-analyzer to be detected, got %#v", rustStatus)
+	}
+}
+
+func TestResolveServerForFileUsesRustupManagedBinaryPath(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "Cargo.toml"), []byte("[package]\nname = \"board\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(Cargo.toml) error = %v", err)
+	}
+	srcDir := filepath.Join(workspace, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(src) error = %v", err)
+	}
+	mainPath := filepath.Join(srcDir, "main.rs")
+	if err := os.WriteFile(mainPath, []byte("fn main() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(main.rs) error = %v", err)
+	}
+
+	binDir := t.TempDir()
+	rustupPath := filepath.Join(binDir, "rustup")
+	fakeAnalyzer := filepath.Join(t.TempDir(), "rust-analyzer")
+	if runtime.GOOS == "windows" {
+		rustupPath += ".bat"
+		fakeAnalyzer += ".exe"
+	}
+	if err := os.WriteFile(fakeAnalyzer, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake rust-analyzer) error = %v", err)
+	}
+	if err := os.WriteFile(rustupPath, []byte("#!/bin/sh\nprintf '%s\\n' \""+fakeAnalyzer+"\"\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake rustup) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	resolved, ok := ResolveServerForFile(workspace, mainPath)
+	if !ok {
+		t.Fatal("expected rust server resolution")
+	}
+	if resolved.Binary != fakeAnalyzer {
+		t.Fatalf("expected resolved rust-analyzer path %q, got %#v", fakeAnalyzer, resolved)
+	}
+}
+
+func TestDetectWorkspaceStatusIncludesPythonInstallOptions(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "pyproject.toml"), []byte("[project]\nname = \"board\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(pyproject.toml) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "app.py"), []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(app.py) error = %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	status := DetectWorkspaceStatus(workspace)
+	if len(status.Languages) != 1 {
+		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	}
+	python := status.Languages[0]
+	if python.ID != "python" {
+		t.Fatalf("expected python detection, got %#v", python)
+	}
+	if python.Available {
+		t.Fatalf("expected python server to be unavailable in isolated PATH, got %#v", python)
+	}
+	if len(python.InstallOptions) != 2 {
+		t.Fatalf("expected 2 python install options, got %#v", python.InstallOptions)
+	}
+	if !python.InstallOptions[0].Recommended || !strings.Contains(python.InstallOptions[0].Command, "pyright") {
+		t.Fatalf("expected recommended pyright install option, got %#v", python.InstallOptions)
+	}
+	if !strings.Contains(python.InstallOptions[0].Command, ".venv") || !strings.Contains(python.InstallOptions[0].Command, "python3 -m venv") {
+		t.Fatalf("expected python install option to bootstrap a venv, got %#v", python.InstallOptions[0])
+	}
+	if !strings.Contains(python.InstallOptions[1].Command, "python-lsp-server") {
+		t.Fatalf("expected pylsp install option, got %#v", python.InstallOptions)
+	}
+}
+
+func TestResolveServerForFileUsesPyrightStdioArgs(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "pyproject.toml"), []byte("[project]\nname = \"board\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(pyproject.toml) error = %v", err)
+	}
+	binDir := t.TempDir()
+	binaryName := "pyright-langserver"
+	if runtime.GOOS == "windows" {
+		binaryName += ".cmd"
+	}
+	binaryPath := filepath.Join(binDir, binaryName)
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(pyright-langserver) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	resolved, ok := ResolveServerForFile(workspace, filepath.Join(workspace, "app.py"))
+	if !ok {
+		t.Fatal("expected python server resolution")
+	}
+	if resolved.Binary != "pyright-langserver" {
+		t.Fatalf("expected pyright-langserver, got %#v", resolved)
+	}
+	if len(resolved.Args) != 1 || resolved.Args[0] != "--stdio" {
+		t.Fatalf("expected pyright stdio args, got %#v", resolved.Args)
+	}
+}
+
+func TestDetectWorkspaceStatusUsesPythonWorkspaceVenvBinary(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "pyproject.toml"), []byte("[project]\nname = \"board\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(pyproject.toml) error = %v", err)
+	}
+	binDir := filepath.Join(workspace, ".venv", venvBinDir())
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(.venv bin) error = %v", err)
+	}
+	pyrightPath := filepath.Join(binDir, executableName("pyright-langserver"))
+	if err := os.WriteFile(pyrightPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(pyright-langserver) error = %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	status := DetectWorkspaceStatus(workspace)
+	if len(status.Languages) != 1 {
+		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	}
+	python := status.Languages[0]
+	if python.ID != "python" {
+		t.Fatalf("expected python detection, got %#v", python)
+	}
+	if !python.Available || python.Binary != "pyright-langserver" {
+		t.Fatalf("expected workspace venv pyright to be detected, got %#v", python)
+	}
+}
+
+func TestResolveServerForFileUsesPythonWorkspaceVenvPath(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "pyproject.toml"), []byte("[project]\nname = \"board\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(pyproject.toml) error = %v", err)
+	}
+	appPath := filepath.Join(workspace, "app.py")
+	if err := os.WriteFile(appPath, []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(app.py) error = %v", err)
+	}
+	binDir := filepath.Join(workspace, ".venv", venvBinDir())
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(.venv bin) error = %v", err)
+	}
+	pyrightPath := filepath.Join(binDir, executableName("pyright-langserver"))
+	if err := os.WriteFile(pyrightPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(pyright-langserver) error = %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	resolved, ok := ResolveServerForFile(workspace, appPath)
+	if !ok {
+		t.Fatal("expected python server resolution from workspace venv")
+	}
+	if resolved.Binary != pyrightPath {
+		t.Fatalf("expected resolved python venv path %q, got %#v", pyrightPath, resolved)
+	}
+	if len(resolved.Args) != 1 || resolved.Args[0] != "--stdio" {
+		t.Fatalf("expected pyright stdio args for venv binary, got %#v", resolved.Args)
+	}
+}
+
+func TestPythonVenvInstallCommandHasValidShellSyntax(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell syntax check only applies to POSIX command generation")
+	}
+	cmd := pythonVenvInstallCommand("", "pyright")
+	if strings.TrimSpace(cmd) == "" {
+		t.Fatal("expected non-empty python venv install command")
+	}
+	if err := exec.Command("sh", "-n", "-c", cmd).Run(); err != nil {
+		t.Fatalf("expected valid shell syntax, got %v for %q", err, cmd)
+	}
+}
+
 func TestDocumentSymbolsWithInstalledGopls(t *testing.T) {
 	if _, err := exec.LookPath("gopls"); err != nil {
 		t.Skip("gopls not installed")

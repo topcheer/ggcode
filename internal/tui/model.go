@@ -150,36 +150,37 @@ type Model struct {
 	activeMCPTools  map[string]ToolStatusMsg
 
 	// Slash command autocomplete
-	autoCompleteItems    []string
-	autoCompleteIndex    int
-	autoCompleteActive   bool
-	autoCompleteKind     string // "slash" or "mention"
-	autoCompleteWorkDir  string // working directory for mention completion
-	startedAt            time.Time
-	startupBannerVisible bool
-	lastResizeAt         time.Time
-	sidebarVisible       bool
-	exitConfirmPending   bool
-	pendingSubmissions   []string
-	pendingMu            *sync.Mutex
-	sessionMu            *sync.Mutex
-	projectMemoryLoading bool
-	runCanceled          bool
-	runFailed            bool
-	activeAgentRunID     int
-	activeShellRunID     int
-	harnessRunProject    *harness.Project
-	harnessRunGoal       string
-	harnessRunTaskID     string
-	harnessRunLogPath    string
-	harnessRunLogOffset  int64
-	harnessRunLastDetail string
-	clipboardLoader      func() (imageAttachedMsg, error)
-	clipboardWriter      func(string) error
-	urlOpener            func(string) error
-	updateSvc            *update.Service
-	updateInfo           update.CheckResult
-	updateError          string
+	autoCompleteItems     []string
+	autoCompleteIndex     int
+	autoCompleteActive    bool
+	autoCompleteKind      string // "slash" or "mention"
+	autoCompleteWorkDir   string // working directory for mention completion
+	startedAt             time.Time
+	startupBannerVisible  bool
+	lastResizeAt          time.Time
+	sidebarVisible        bool
+	exitConfirmPending    bool
+	pendingSubmissions    []string
+	pendingMu             *sync.Mutex
+	sessionMu             *sync.Mutex
+	projectMemoryLoading  bool
+	runCanceled           bool
+	runFailed             bool
+	activeAgentRunID      int
+	activeShellRunID      int
+	shellCommandSubmitter func(command string, addToHistory bool) tea.Cmd
+	harnessRunProject     *harness.Project
+	harnessRunGoal        string
+	harnessRunTaskID      string
+	harnessRunLogPath     string
+	harnessRunLogOffset   int64
+	harnessRunLastDetail  string
+	clipboardLoader       func() (imageAttachedMsg, error)
+	clipboardWriter       func(string) error
+	urlOpener             func(string) error
+	updateSvc             *update.Service
+	updateInfo            update.CheckResult
+	updateError           string
 }
 
 type toolActivityGroup struct {
