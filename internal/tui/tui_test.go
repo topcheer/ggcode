@@ -1107,6 +1107,7 @@ func TestInspectorStatusItemsIncludeLSPInstallHintForJavaWorkspace(t *testing.T)
 	if err := os.Chdir(workspace); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
+	t.Setenv("PATH", t.TempDir())
 
 	m := newTestModel()
 	items := m.inspectorStatusItems()
@@ -1116,11 +1117,14 @@ func TestInspectorStatusItemsIncludeLSPInstallHintForJavaWorkspace(t *testing.T)
 			continue
 		}
 		found = true
-		if !strings.Contains(item.Detail, "Install") && !strings.Contains(item.Detail, "安装命令") {
+		if !strings.Contains(item.Detail, "Install") && !strings.Contains(item.Detail, "安装") {
 			t.Fatalf("expected java LSP detail to include install hint, got %#v", item)
 		}
 		if !strings.Contains(item.Detail, "jdtls") {
 			t.Fatalf("expected java LSP detail to mention jdtls, got %#v", item)
+		}
+		if strings.Contains(item.Detail, "brew install jdtls") {
+			t.Fatalf("expected java LSP detail to omit raw install command, got %#v", item)
 		}
 	}
 	if !found {
@@ -1235,6 +1239,46 @@ func TestInspectorLSPInstallEnterRunsSelectedCommand(t *testing.T) {
 	}
 	if gotCommand != "pip install pyright" {
 		t.Fatalf("expected pyright install command, got %q", gotCommand)
+	}
+}
+
+func TestInspectorLSPInstallItemsHideRawCommands(t *testing.T) {
+	m := newTestModel()
+	m.inspectorPanel = &inspectorPanelState{
+		kind:            inspectorPanelLSPInstall,
+		lspLanguageName: "Python",
+		lspInstallOptions: []lsp.InstallOption{
+			{ID: "pyright", Label: "pyright-langserver", Binary: "pyright-langserver", Command: "if [ -x .venv/bin/python ]; then ...", Recommended: true},
+			{ID: "pylsp", Label: "pylsp", Binary: "pylsp", Command: "pip install python-lsp-server"},
+		},
+	}
+
+	items := m.inspectorLSPInstallItems()
+	if len(items) != 2 {
+		t.Fatalf("expected 2 install items, got %#v", items)
+	}
+	if strings.Contains(items[0].Detail, ".venv/bin/python") || strings.Contains(items[1].Detail, "pip install") {
+		t.Fatalf("expected raw install commands to be hidden, got %#v", items)
+	}
+	if !strings.Contains(items[0].Detail, "pyright-langserver") {
+		t.Fatalf("expected install detail to keep option label, got %#v", items[0])
+	}
+}
+
+func TestCompactWorkspaceLabelForTUIShortensLongPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".openclaw", "workspace-teamclaw", "projects", "https-github-com-topcheer-cc-git-ggcode-coding-age-s7ccb6")
+
+	got := compactWorkspaceLabelForTUI(path)
+	if !strings.HasPrefix(got, "~/") {
+		t.Fatalf("expected home-relative workspace label, got %q", got)
+	}
+	if !strings.Contains(got, "...") {
+		t.Fatalf("expected long workspace label to be middle-truncated, got %q", got)
+	}
+	if lipgloss.Width(got) > 56 {
+		t.Fatalf("expected compact workspace label <= 56 cols, got %d for %q", lipgloss.Width(got), got)
 	}
 }
 

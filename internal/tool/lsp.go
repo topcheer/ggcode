@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -55,6 +56,8 @@ type lspRenameTool struct {
 	applyEdits   func(context.Context, string, string, lsp.Position, string) (string, error)
 }
 
+const lspToolTimeout = 30 * time.Second
+
 func (t lspPathTool) Name() string                  { return t.name }
 func (t lspPathTool) Description() string           { return t.description }
 func (t lspPositionTool) Name() string              { return t.name }
@@ -97,7 +100,7 @@ func (t lspPathTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
 	out, err := t.exec(ctx, t.workingDir, path)
 	if err != nil {
@@ -119,7 +122,7 @@ func (t lspPositionTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
 	out, err := t.exec(ctx, t.workingDir, path, lsp.Position{Line: args.Line, Character: args.Character})
 	if err != nil {
@@ -143,7 +146,7 @@ func (t lspRangeTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
 	out, err := t.exec(ctx, t.workingDir, path, lsp.Range{
 		Start: lsp.Position{Line: args.StartLine, Character: args.StartCharacter},
@@ -162,7 +165,7 @@ func (t lspWorkspaceQueryTool) Execute(ctx context.Context, input json.RawMessag
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
 	out, err := t.exec(ctx, t.workingDir, args.Query)
 	if err != nil {
@@ -185,7 +188,7 @@ func (t lspRenameTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
 	out, err := t.applyEdits(ctx, t.workingDir, path, lsp.Position{Line: args.Line, Character: args.Character}, args.NewName)
 	if err != nil {
@@ -220,6 +223,103 @@ func resolveLSPToolPath(path, workingDir string, sandboxCheck AllowedPathChecker
 	return path, nil
 }
 
+func runLSPPositionFallback[T any](path string, pos lsp.Position, exec func(lsp.Position) (T, error), ok func(T) bool) (T, error) {
+	result, err := exec(pos)
+	if err != nil || ok(result) {
+		return result, err
+	}
+	for _, candidate := range nearbyIdentifierPositions(path, pos) {
+		if candidate == pos {
+			continue
+		}
+		next, err := exec(candidate)
+		if err != nil {
+			return result, err
+		}
+		if ok(next) {
+			return next, nil
+		}
+	}
+	return result, nil
+}
+
+func nearbyIdentifierPositions(path string, pos lsp.Position) []lsp.Position {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(content), "\n")
+	lineIndex := pos.Line - 1
+	if lineIndex < 0 || lineIndex >= len(lines) {
+		return nil
+	}
+	line := []rune(lines[lineIndex])
+	if len(line) == 0 {
+		return nil
+	}
+	charIndex := pos.Character - 1
+	if charIndex < 0 {
+		charIndex = 0
+	}
+	if charIndex >= len(line) {
+		charIndex = len(line) - 1
+	}
+	type span struct {
+		start int
+		end   int
+		dist  int
+	}
+	var spans []span
+	for i := 0; i < len(line); {
+		if !isIdentifierRune(line[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(line) && isIdentifierRune(line[i]) {
+			i++
+		}
+		end := i
+		dist := 0
+		switch {
+		case charIndex < start:
+			dist = start - charIndex
+		case charIndex >= end:
+			dist = charIndex - (end - 1)
+		}
+		spans = append(spans, span{start: start, end: end, dist: dist})
+	}
+	sort.SliceStable(spans, func(i, j int) bool {
+		if spans[i].dist != spans[j].dist {
+			return spans[i].dist < spans[j].dist
+		}
+		rightI := spans[i].start >= charIndex
+		rightJ := spans[j].start >= charIndex
+		if rightI != rightJ {
+			return rightI
+		}
+		if rightI {
+			return spans[i].start < spans[j].start
+		}
+		return spans[i].start > spans[j].start
+	})
+	positions := make([]lsp.Position, 0, len(spans))
+	seen := make(map[lsp.Position]struct{}, len(spans))
+	for _, candidate := range spans {
+		position := lsp.Position{Line: pos.Line, Character: candidate.start + 1}
+		if _, ok := seen[position]; ok {
+			continue
+		}
+		seen[position] = struct{}{}
+		positions = append(positions, position)
+	}
+	return positions
+}
+
+func isIdentifierRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
 func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker) []Tool {
 	return []Tool{
 		lspPositionTool{
@@ -228,7 +328,11 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
-				text, err := lsp.Hover(ctx, workspace, path, pos)
+				text, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) (string, error) {
+					return lsp.Hover(ctx, workspace, path, candidate)
+				}, func(result string) bool {
+					return strings.TrimSpace(result) != ""
+				})
 				if err != nil {
 					return "", err
 				}
@@ -244,7 +348,11 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
-				locations, err := lsp.Definition(ctx, workspace, path, pos)
+				locations, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.Location, error) {
+					return lsp.Definition(ctx, workspace, path, candidate)
+				}, func(result []lsp.Location) bool {
+					return len(result) > 0
+				})
 				if err != nil {
 					return "", err
 				}
@@ -264,7 +372,11 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 			workingDir:   workingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
-				locations, err := lsp.References(ctx, workspace, path, pos)
+				locations, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.Location, error) {
+					return lsp.References(ctx, workspace, path, candidate)
+				}, func(result []lsp.Location) bool {
+					return len(result) > 0
+				})
 				if err != nil {
 					return "", err
 				}

@@ -197,7 +197,7 @@ func parseCodeActions(raw json.RawMessage) []CodeAction {
 
 func diagnosticsToLSP(diagnostics []Diagnostic) []map[string]any {
 	if len(diagnostics) == 0 {
-		return nil
+		return []map[string]any{}
 	}
 	out := make([]map[string]any, 0, len(diagnostics))
 	for _, diag := range diagnostics {

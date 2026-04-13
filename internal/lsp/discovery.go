@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -60,7 +61,7 @@ var builtinServerSpecs = []serverSpec{
 	{id: "java", displayName: "Java", binaries: []string{"jdtls"}, rootMarkers: []string{"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"}, extensions: []string{".java"}},
 	{id: "typescript", displayName: "TypeScript / JavaScript", binaries: []string{"typescript-language-server"}, rootMarkers: []string{"package.json", "tsconfig.json", "jsconfig.json"}, extensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}},
 	{id: "python", displayName: "Python", binaries: []string{"pyright-langserver", "pylsp"}, rootMarkers: []string{"pyproject.toml", "requirements.txt", "setup.py"}, extensions: []string{".py"}},
-	{id: "csharp", displayName: "C#", binaries: []string{"csharp-ls", "OmniSharp"}, rootMarkers: []string{"Directory.Build.props", "global.json"}, extensions: []string{".cs", ".csproj", ".sln"}},
+	{id: "csharp", displayName: "C#", binaries: []string{"csharp-ls"}, rootMarkers: []string{"Directory.Build.props", "global.json"}, extensions: []string{".cs", ".csproj", ".sln"}},
 }
 
 func DetectWorkspaceStatus(workspace string) WorkspaceStatus {
@@ -90,7 +91,7 @@ func DetectWorkspaceStatus(workspace string) WorkspaceStatus {
 			DisplayName:    spec.displayName,
 			Available:      available,
 			Binary:         binary,
-			InstallHint:    installHint(spec.id),
+			InstallHint:    installHint(spec.id, workspace),
 			InstallOptions: options,
 			Evidence:       evidence,
 		})
@@ -122,8 +123,8 @@ func ResolveServerForFile(workspace, path string) (ResolvedServer, bool) {
 					LanguageID:  languageIDForFile(spec.id, ext),
 					DisplayName: spec.displayName,
 					Binary:      binary,
-					Args:        launchArgs(spec.id, binary),
-					InstallHint: installHint(spec.id),
+					Args:        launchArgs(spec.id, binary, workspace),
+					InstallHint: installHint(spec.id, workspace),
 				}, available
 			}
 		}
@@ -146,8 +147,8 @@ func ResolveServerForWorkspace(workspace string) (ResolvedServer, bool) {
 				LanguageID:  languageIDForFile(spec.id, firstLanguageExtension(spec)),
 				DisplayName: spec.displayName,
 				Binary:      binary,
-				Args:        launchArgs(spec.id, lang.Binary),
-				InstallHint: installHint(spec.id),
+				Args:        launchArgs(spec.id, binary, workspace),
+				InstallHint: installHint(spec.id, workspace),
 			}, available
 		}
 	}
@@ -291,8 +292,15 @@ func resolveManagedBinary(spec serverSpec, workspace string) (display string, co
 		return resolveRustAnalyzerFallback()
 	case "go":
 		return resolveGoBinaryFallback("gopls")
+	case "typescript":
+		return resolveNodeBinaryFallback(spec.binaries, workspace)
 	case "python":
 		return resolvePythonVenvFallback(spec.binaries, workspace)
+	case "csharp":
+		if display, command, ok := resolveCSharpWorkspaceToolFallback(workspace); ok {
+			return display, command, true
+		}
+		return resolveDotnetToolFallback(spec.binaries)
 	default:
 		return "", "", false
 	}
@@ -346,10 +354,77 @@ func resolvePythonVenvFallback(candidates []string, workspace string) (display s
 	}
 	for _, venvDir := range []string{".venv", "venv"} {
 		for _, candidate := range candidates {
-			path := filepath.Join(workspace, venvDir, venvBinDir(), executableName(candidate))
+			for _, name := range executableNames(candidate) {
+				path := filepath.Join(workspace, venvDir, venvBinDir(), name)
+				if executableExists(path) {
+					return candidate, path, true
+				}
+			}
+		}
+	}
+	return "", "", false
+}
+
+func resolveNodeBinaryFallback(candidates []string, workspace string) (display string, command string, ok bool) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace != "" {
+		for _, candidate := range candidates {
+			for _, name := range executableNames(candidate) {
+				path := filepath.Join(workspace, "node_modules", ".bin", name)
+				if executableExists(path) {
+					return candidate, path, true
+				}
+			}
+		}
+	}
+	if _, err := exec.LookPath("npm"); err == nil {
+		out, err := exec.Command("npm", "config", "get", "prefix").Output()
+		if err == nil {
+			prefix := strings.TrimSpace(string(out))
+			if prefix != "" && prefix != "undefined" && prefix != "null" {
+				globalBin := prefix
+				if runtime.GOOS != "windows" {
+					globalBin = filepath.Join(prefix, "bin")
+				}
+				for _, candidate := range candidates {
+					for _, name := range executableNames(candidate) {
+						path := filepath.Join(globalBin, name)
+						if executableExists(path) {
+							return candidate, path, true
+						}
+					}
+				}
+			}
+		}
+	}
+	return "", "", false
+}
+
+func resolveDotnetToolFallback(candidates []string) (display string, command string, ok bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", false
+	}
+	for _, candidate := range candidates {
+		for _, name := range executableNames(candidate) {
+			path := filepath.Join(home, ".dotnet", "tools", name)
 			if executableExists(path) {
 				return candidate, path, true
 			}
+		}
+	}
+	return "", "", false
+}
+
+func resolveCSharpWorkspaceToolFallback(workspace string) (display string, command string, ok bool) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return "", "", false
+	}
+	for _, name := range executableNames("csharp-ls") {
+		path := filepath.Join(workspace, ".ggcode", "tools", name)
+		if executableExists(path) {
+			return "csharp-ls", path, true
 		}
 	}
 	return "", "", false
@@ -368,16 +443,24 @@ func executableExists(path string) bool {
 }
 
 func executableName(name string) string {
+	names := executableNames(name)
+	if len(names) == 0 {
+		return name
+	}
+	return names[0]
+}
+
+func executableNames(name string) []string {
 	if runtime.GOOS == "windows" {
 		lower := strings.ToLower(name)
 		switch {
 		case strings.HasSuffix(lower, ".exe"), strings.HasSuffix(lower, ".cmd"), strings.HasSuffix(lower, ".bat"):
-			return name
+			return []string{name}
 		default:
-			return name + ".exe"
+			return []string{name + ".exe", name + ".cmd", name + ".bat"}
 		}
 	}
-	return name
+	return []string{name}
 }
 
 func venvBinDir() string {
@@ -387,64 +470,54 @@ func venvBinDir() string {
 	return "bin"
 }
 
-func installHint(languageID string) string {
+func installHint(languageID, workspace string) string {
 	switch languageID {
 	case "go":
-		return "go install golang.org/x/tools/gopls@latest"
+		return commandWithPrereq("go", "go is required to install gopls. Install Go first.", "go install golang.org/x/tools/gopls@latest")
 	case "rust":
-		if runtime.GOOS == "windows" {
-			return "rustup component add rust-analyzer"
-		}
-		return "rustup component add rust-analyzer"
+		return commandWithPrereq("rustup", "rustup is required to install rust-analyzer. Install Rust first.", "rustup component add rust-analyzer")
 	case "lua":
 		switch runtime.GOOS {
 		case "darwin":
-			return "brew install lua-language-server"
+			return commandWithPrereq("brew", "Homebrew is required to install lua-language-server on macOS.", "brew install lua-language-server")
 		case "windows":
-			return "winget install LuaLS.lua-language-server"
+			return commandWithPrereq("winget", "winget is required to install lua-language-server on Windows.", "winget install --accept-package-agreements --accept-source-agreements LuaLS.lua-language-server")
 		default:
-			return "brew install lua-language-server or install from https://luals.github.io/"
+			return unsupportedInstallCommand("Automatic lua-language-server installation is not configured for this OS yet. Install it manually from https://luals.github.io/.")
 		}
 	case "terraform":
 		switch runtime.GOOS {
 		case "darwin":
-			return "brew install hashicorp/tap/terraform-ls"
+			return commandWithPrereq("brew", "Homebrew is required to install terraform-ls on macOS.", "brew install hashicorp/tap/terraform-ls")
 		case "windows":
-			return "winget install HashiCorp.TerraformLS"
+			return commandWithPrereq("winget", "winget is required to install terraform-ls on Windows.", "winget install --accept-package-agreements --accept-source-agreements HashiCorp.TerraformLS")
 		default:
-			return "brew install hashicorp/tap/terraform-ls or download from HashiCorp releases"
+			return unsupportedInstallCommand("Automatic terraform-ls installation is not configured for this OS yet. Install it manually from HashiCorp releases.")
 		}
 	case "zig":
 		switch runtime.GOOS {
 		case "darwin":
-			return "brew install zls"
+			return commandWithPrereq("brew", "Homebrew is required to install zls on macOS.", "brew install zls")
 		case "windows":
-			return "winget install zigtools.zls"
+			return commandWithPrereq("winget", "winget is required to install zls on Windows.", "winget install --accept-package-agreements --accept-source-agreements zigtools.zls")
 		default:
-			return "brew install zls or build from https://github.com/zigtools/zls"
+			return unsupportedInstallCommand("Automatic zls installation is not configured for this OS yet. Install it manually from https://github.com/zigtools/zls.")
 		}
 	case "java":
 		switch runtime.GOOS {
 		case "darwin":
-			return "brew install jdtls"
+			return commandWithPrereq("brew", "Homebrew is required to install jdtls on macOS.", "brew install jdtls")
 		case "windows":
-			return "winget install EclipseAdoptium.Temurin.21.JDK && install jdtls"
+			return unsupportedInstallCommand("Automatic jdtls installation is not configured for Windows yet. Install a JDK and jdtls manually from https://github.com/eclipse-jdtls/eclipse.jdt.ls.")
 		default:
-			return "install a JDK and jdtls from https://github.com/eclipse-jdtls/eclipse.jdt.ls"
+			return unsupportedInstallCommand("Automatic jdtls installation is not configured for this OS yet. Install a JDK and jdtls manually from https://github.com/eclipse-jdtls/eclipse.jdt.ls.")
 		}
 	case "typescript":
-		return "npm install -g typescript typescript-language-server"
+		return commandWithPrereq("npm", "npm is required to install typescript-language-server. Install Node.js first.", "npm install -g typescript typescript-language-server")
 	case "python":
-		return "pip install pyright or pip install python-lsp-server"
+		return pythonVenvInstallCommand(workspace, "pyright")
 	case "csharp":
-		switch runtime.GOOS {
-		case "darwin":
-			return "brew install csharp-ls"
-		case "windows":
-			return "dotnet tool install --global csharp-ls"
-		default:
-			return "dotnet tool install --global csharp-ls"
-		}
+		return csharpToolInstallCommand()
 	default:
 		return ""
 	}
@@ -468,8 +541,24 @@ func installOptions(spec serverSpec, workspace string) []InstallOption {
 				Command: pythonVenvInstallCommand(workspace, "python-lsp-server"),
 			},
 		}
+	case "typescript":
+		return []InstallOption{{
+			ID:          "typescript-language-server",
+			Label:       "typescript-language-server",
+			Binary:      "typescript-language-server",
+			Command:     installHint(spec.id, workspace),
+			Recommended: true,
+		}}
+	case "csharp":
+		return []InstallOption{{
+			ID:          "csharp-ls",
+			Label:       "csharp-ls",
+			Binary:      "csharp-ls",
+			Command:     csharpToolInstallCommand(),
+			Recommended: true,
+		}}
 	default:
-		command := installHint(spec.id)
+		command := installHint(spec.id, workspace)
 		binary := ""
 		if len(spec.binaries) > 0 {
 			binary = spec.binaries[0]
@@ -487,6 +576,26 @@ func installOptions(spec serverSpec, workspace string) []InstallOption {
 	}
 }
 
+func csharpToolInstallCommand() string {
+	if runtime.GOOS == "windows" {
+		return strings.Join([]string{
+			"if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { Write-Error 'dotnet is required to install csharp-ls. Install the .NET SDK first.'; exit 1 }",
+			"New-Item -ItemType Directory -Force -Path '.ggcode\\tools' | Out-Null",
+			"New-Item -ItemType Directory -Force -Path '.ggcode\\dotnet-cli-home' | Out-Null",
+			"$env:DOTNET_CLI_HOME = (Resolve-Path '.ggcode\\dotnet-cli-home').Path",
+			"$toolPath = (Resolve-Path '.ggcode\\tools').Path",
+			"if (Test-Path (Join-Path $toolPath 'csharp-ls.exe')) { dotnet tool update --tool-path $toolPath csharp-ls } else { dotnet tool install --tool-path $toolPath csharp-ls }",
+		}, "; ")
+	}
+	return "if ! command -v dotnet >/dev/null 2>&1; then " +
+		"echo 'dotnet is required to install csharp-ls. Install the .NET SDK first.' >&2; exit 1; fi " +
+		"&& mkdir -p .ggcode/tools .ggcode/dotnet-cli-home " +
+		"&& export DOTNET_CLI_HOME=\"$(pwd)/.ggcode/dotnet-cli-home\" " +
+		"&& if [ -x .ggcode/tools/csharp-ls ]; then " +
+		"dotnet tool update --tool-path \"$(pwd)/.ggcode/tools\" csharp-ls; " +
+		"else dotnet tool install --tool-path \"$(pwd)/.ggcode/tools\" csharp-ls; fi"
+}
+
 func pythonVenvInstallCommand(workspace, packageName string) string {
 	packageName = strings.TrimSpace(packageName)
 	if packageName == "" {
@@ -494,30 +603,182 @@ func pythonVenvInstallCommand(workspace, packageName string) string {
 	}
 	if runtime.GOOS == "windows" {
 		return strings.Join([]string{
+			"if (-not (Get-Command py -ErrorAction SilentlyContinue) -and -not (Get-Command python -ErrorAction SilentlyContinue)) { Write-Error 'Python is required to install Python LSP servers. Install Python first.'; exit 1 }",
 			"if (Test-Path '.venv\\Scripts\\python.exe') { $venvPy = '.venv\\Scripts\\python.exe' }",
 			"elseif (Test-Path 'venv\\Scripts\\python.exe') { $venvPy = 'venv\\Scripts\\python.exe' }",
-			"else { py -m venv .venv; $venvPy = '.venv\\Scripts\\python.exe' }",
+			"elseif (Get-Command py -ErrorAction SilentlyContinue) { py -m venv .venv; $venvPy = '.venv\\Scripts\\python.exe' }",
+			"else { python -m venv .venv; $venvPy = '.venv\\Scripts\\python.exe' }",
 			"& $venvPy -m pip install " + packageName,
 		}, "; ")
 	}
 	return "if [ -x .venv/bin/python ]; then VENV_PY=.venv/bin/python; " +
 		"elif [ -x venv/bin/python ]; then VENV_PY=venv/bin/python; " +
-		"else python3 -m venv .venv && VENV_PY=.venv/bin/python; fi " +
+		"elif command -v python3 >/dev/null 2>&1; then python3 -m venv .venv && VENV_PY=.venv/bin/python; " +
+		"elif command -v python >/dev/null 2>&1; then python -m venv .venv && VENV_PY=.venv/bin/python; " +
+		"else echo 'Python is required to install Python LSP servers. Install Python first.' >&2; exit 1; fi " +
 		"&& \"$VENV_PY\" -m pip install " + packageName
 }
 
-func launchArgs(specID, binary string) []string {
+func commandWithPrereq(command, missingMessage, installCommand string) string {
+	command = strings.TrimSpace(command)
+	missingMessage = strings.TrimSpace(missingMessage)
+	installCommand = strings.TrimSpace(installCommand)
+	if installCommand == "" {
+		return ""
+	}
+	if runtime.GOOS == "windows" {
+		if command == "" {
+			return installCommand
+		}
+		return fmt.Sprintf("if (-not (Get-Command %s -ErrorAction SilentlyContinue)) { Write-Error '%s'; exit 1 }; %s", command, escapePowerShellSingleQuoted(missingMessage), installCommand)
+	}
+	if command == "" {
+		return installCommand
+	}
+	return fmt.Sprintf("if ! command -v %s >/dev/null 2>&1; then echo '%s' >&2; exit 1; fi && %s", command, escapePOSIXSingleQuoted(missingMessage), installCommand)
+}
+
+func unsupportedInstallCommand(message string) string {
+	message = strings.TrimSpace(message)
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("Write-Error '%s'; exit 1", escapePowerShellSingleQuoted(message))
+	}
+	return fmt.Sprintf("echo '%s' >&2; exit 1", escapePOSIXSingleQuoted(message))
+}
+
+func escapePOSIXSingleQuoted(value string) string {
+	return strings.ReplaceAll(value, "'", `'\''`)
+}
+
+func escapePowerShellSingleQuoted(value string) string {
+	return strings.ReplaceAll(value, "'", "''")
+}
+
+func launchArgs(specID, binary, workspace string) []string {
 	base := binaryBaseName(binary)
 	switch {
 	case base == "pyright-langserver":
 		return []string{"--stdio"}
 	case base == "typescript-language-server":
 		return []string{"--stdio"}
+	case specID == "csharp" && base == "csharp-ls":
+		return csharpSolutionArgs(workspace)
 	case specID == "terraform" && base == "terraform-ls":
 		return []string{"serve"}
 	default:
 		return nil
 	}
+}
+
+func csharpSolutionArgs(workspace string) []string {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		return nil
+	}
+	var slnSolutions []string
+	var slnxSolutions []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		switch strings.ToLower(filepath.Ext(name)) {
+		case ".sln":
+			slnSolutions = append(slnSolutions, filepath.Join(workspace, name))
+		case ".slnx":
+			slnxSolutions = append(slnxSolutions, filepath.Join(workspace, name))
+		}
+	}
+	switch {
+	case len(slnSolutions) == 1:
+		return []string{"--solution", slnSolutions[0]}
+	case len(slnSolutions) == 0 && len(slnxSolutions) == 1:
+		if compat := ensureCSharpCompatSolution(workspace); compat != "" {
+			return []string{"--solution", compat}
+		}
+		return []string{"--solution", slnxSolutions[0]}
+	default:
+		return nil
+	}
+}
+
+func ensureCSharpCompatSolution(workspace string) string {
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		return ""
+	}
+	projects := findCSharpProjects(workspace)
+	if len(projects) == 0 {
+		return ""
+	}
+	compatDir := filepath.Join(workspace, ".ggcode", "lsp")
+	compatPath := filepath.Join(compatDir, "csharp-ls.sln")
+	if compatSolutionUpToDate(compatPath, projects) {
+		return compatPath
+	}
+	if err := os.MkdirAll(compatDir, 0o755); err != nil {
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".ggcode", "dotnet-cli-home"), 0o755); err != nil {
+		return ""
+	}
+	_ = os.Remove(compatPath)
+	env := append([]string{}, os.Environ()...)
+	env = append(env, "DOTNET_CLI_HOME="+filepath.Join(workspace, ".ggcode", "dotnet-cli-home"))
+	newSln := exec.Command("dotnet", "new", "sln", "-f", "sln", "-n", "csharp-ls", "-o", compatDir, "--force")
+	newSln.Dir = workspace
+	newSln.Env = env
+	if err := newSln.Run(); err != nil {
+		return ""
+	}
+	args := append([]string{"sln", compatPath, "add"}, projects...)
+	addProjects := exec.Command("dotnet", args...)
+	addProjects.Dir = workspace
+	addProjects.Env = env
+	if err := addProjects.Run(); err != nil {
+		return ""
+	}
+	return compatPath
+}
+
+func findCSharpProjects(workspace string) []string {
+	var projects []string
+	_ = filepath.WalkDir(workspace, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := strings.TrimSpace(d.Name())
+			if name == ".ggcode" || name == "bin" || name == "obj" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.EqualFold(filepath.Ext(path), ".csproj") {
+			projects = append(projects, path)
+		}
+		return nil
+	})
+	slices.Sort(projects)
+	return projects
+}
+
+func compatSolutionUpToDate(compatPath string, projects []string) bool {
+	info, err := os.Stat(compatPath)
+	if err != nil {
+		return false
+	}
+	compatTime := info.ModTime()
+	for _, project := range projects {
+		projectInfo, err := os.Stat(project)
+		if err != nil || projectInfo.ModTime().After(compatTime) {
+			return false
+		}
+	}
+	return true
 }
 
 func binaryBaseName(binary string) string {

@@ -185,6 +185,96 @@ func TestDownloadBinaryWithBaseURLZip(t *testing.T) {
 	}
 }
 
+func TestResolveReleaseVersionFallsBackToMirror(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer primary.Close()
+
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			http.Redirect(w, r, "/releases/tag/v1.2.4", http.StatusFound)
+		case "/releases/tag/v1.2.4":
+			_, _ = w.Write([]byte("ok"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mirror.Close()
+
+	restore := overrideReleaseBaseURLs(t, primary.URL, mirror.URL)
+	defer restore()
+
+	version, err := ResolveReleaseVersion(context.Background(), http.DefaultClient, "latest")
+	if err != nil {
+		t.Fatalf("ResolveReleaseVersion returned error: %v", err)
+	}
+	if version != "v1.2.4" {
+		t.Fatalf("unexpected version: %s", version)
+	}
+}
+
+func TestDownloadBinaryFallsBackToMirror(t *testing.T) {
+	archiveName := "ggcode_linux_x86_64.tar.gz"
+	binaryData := []byte("linux-binary")
+	archiveData := makeTarGzArchive(t, "ggcode", binaryData)
+	checksum := sha256.Sum256(archiveData)
+	checksumBody := fmt.Sprintf("%s  %s\n", hex.EncodeToString(checksum[:]), archiveName)
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer primary.Close()
+
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			http.Redirect(w, r, "/releases/tag/v1.2.3", http.StatusFound)
+		case "/releases/tag/v1.2.3":
+			_, _ = w.Write([]byte("ok"))
+		case "/releases/download/v1.2.3/" + archiveName:
+			_, _ = w.Write(archiveData)
+		case "/releases/download/v1.2.3/checksums.txt":
+			_, _ = w.Write([]byte(checksumBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mirror.Close()
+
+	restore := overrideReleaseBaseURLs(t, primary.URL, mirror.URL)
+	defer restore()
+
+	result, err := DownloadBinary(context.Background(), Options{
+		Version:        "latest",
+		PlatformGOOS:   "linux",
+		PlatformGOARCH: "amd64",
+		HTTPClient:     http.DefaultClient,
+	})
+	if err != nil {
+		t.Fatalf("DownloadBinary returned error: %v", err)
+	}
+	if result.Version != "v1.2.3" {
+		t.Fatalf("unexpected version: %s", result.Version)
+	}
+	if string(result.BinaryData) != string(binaryData) {
+		t.Fatalf("unexpected binary data: %q", string(result.BinaryData))
+	}
+	if !strings.HasPrefix(result.ArchiveURL, mirror.URL+"/") {
+		t.Fatalf("expected mirror archive URL, got %s", result.ArchiveURL)
+	}
+}
+
+func overrideReleaseBaseURLs(t *testing.T, urls ...string) func() {
+	t.Helper()
+	prev := append([]string(nil), defaultReleaseBaseURLs...)
+	defaultReleaseBaseURLs = append([]string(nil), urls...)
+	return func() {
+		defaultReleaseBaseURLs = prev
+	}
+}
+
 func makeTarGzArchive(t *testing.T, name string, data []byte) []byte {
 	t.Helper()
 
