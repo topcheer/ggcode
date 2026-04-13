@@ -18,15 +18,19 @@ const (
 var spinnerRunes = []rune(spinnerChars)
 
 // spinnerMsg is sent by tea.Tick to animate the spinner.
-type spinnerMsg struct{ time.Time }
+type spinnerMsg struct {
+	time.Time
+	generation uint64
+}
 
 // ToolSpinner manages spinner state for active tool execution.
 type ToolSpinner struct {
-	active    bool
-	label     string
-	frame     int
-	style     lipgloss.Style
-	startTime time.Time
+	active     bool
+	generation uint64
+	label      string
+	frame      int
+	style      lipgloss.Style
+	startTime  time.Time
 }
 
 // NewToolSpinner creates a new spinner.
@@ -38,15 +42,17 @@ func NewToolSpinner() *ToolSpinner {
 
 // Start begins the spinner for a tool.
 func (s *ToolSpinner) Start(label string) tea.Cmd {
+	s.generation++
 	s.active = true
 	s.label = label
 	s.frame = 0
 	s.startTime = time.Now()
-	return s.tick()
+	return s.tick(s.generation)
 }
 
 // Stop ends the spinner.
 func (s *ToolSpinner) Stop() {
+	s.generation++
 	s.active = false
 	s.label = ""
 }
@@ -83,22 +89,23 @@ func spinnerFrameGlyph(frame int) string {
 }
 
 // tick returns a tea.Cmd that sends the next spinner frame.
-func (s *ToolSpinner) tick() tea.Cmd {
+func (s *ToolSpinner) tick(generation uint64) tea.Cmd {
 	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
-		return spinnerMsg{Time: t}
+		return spinnerMsg{Time: t, generation: generation}
 	})
 }
 
 // Update handles spinner animation frames.
 func (s *ToolSpinner) Update(msg tea.Msg) tea.Cmd {
-	if _, ok := msg.(spinnerMsg); !ok {
+	tick, ok := msg.(spinnerMsg)
+	if !ok {
 		return nil
 	}
-	if !s.active {
+	if !s.active || tick.generation != s.generation {
 		return nil
 	}
 	s.frame++
-	return s.tick()
+	return s.tick(s.generation)
 }
 
 func (m *Model) startLoadingSpinner(label string) tea.Cmd {

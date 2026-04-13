@@ -17,7 +17,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -111,6 +110,7 @@ type Model struct {
 	skillsPanel                     *skillsPanelState
 	inspectorPanel                  *inspectorPanelState
 	previewPanel                    *previewPanelState
+	fileBrowser                     *fileBrowserState
 	harnessPanel                    *harnessPanelState
 	harnessContextPrompt            *harnessContextPromptState
 
@@ -129,9 +129,6 @@ type Model struct {
 	// Viewport for scrollable output
 	viewport ViewportModel
 
-	// Markdown rendering
-	mdRenderer          *glamour.TermRenderer
-	markdownWrapWidth   int
 	streamBuffer        *bytes.Buffer
 	shellBuffer         *bytes.Buffer
 	streamStartPos      int
@@ -622,11 +619,6 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 			Foreground(lipgloss.Color("6")),
 	}
 
-	mdRenderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(80),
-	)
-
 	return Model{
 		input:                ti,
 		output:               &bytes.Buffer{},
@@ -636,8 +628,6 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		policy:               policy,
 		spinner:              NewToolSpinner(),
 		history:              make([]string, 0, 100),
-		mdRenderer:           mdRenderer,
-		markdownWrapWidth:    80,
 		viewport:             NewViewportModel(80, 20),
 		mode:                 policyMode(policy),
 		startedAt:            time.Now(),
@@ -863,18 +853,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.handleResize(msg.Width, msg.Height)
-		m.rebuildMarkdownRenderer()
 		return m, nil
 
 	case tea.MouseMsg:
+		if m.fileBrowser != nil {
+			return m.handleFileBrowserMouse(msg)
+		}
 		if m.previewPanel != nil {
 			return m.handlePreviewMouse(msg)
 		}
 		// Option/Alt+mouse: release mouse to terminal for native text selection
 		if msg.Alt {
-			return m, nil
-		}
-		if m.handlePreviewClick(msg) {
 			return m, nil
 		}
 		switch msg.Type {
@@ -902,6 +891,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.config.SaveSidebarPreference(m.sidebarVisible)
 			}
 			return m, nil
+		}
+		if msg.String() == "ctrl+f" {
+			m.toggleFileBrowser()
+			return m, nil
+		}
+		if m.fileBrowser != nil {
+			return m.handleFileBrowserKey(msg)
 		}
 		if m.previewPanel != nil {
 			return m.handlePreviewKey(msg)
@@ -1231,7 +1227,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolArg = ""
 		m.statusToolCount = 0
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-			m.renderStreamBuffer()
+			m.renderStreamBuffer(true)
 			m.streamBuffer = nil
 		}
 		m.output.WriteString("\n")
@@ -1245,6 +1241,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentDoneMsg:
 		if msg.RunID != m.activeAgentRunID {
 			return m, nil
+		}
+		if m.agent != nil {
+			m.projMemFiles = m.agent.ProjectMemoryFiles()
 		}
 		m.loading = false
 		m.spinner.Stop()
@@ -1260,7 +1259,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolArg = ""
 		m.statusToolCount = 0
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-			m.renderStreamBuffer()
+			m.renderStreamBuffer(true)
 			m.streamBuffer = nil
 		}
 		m.output.WriteString("\n")
@@ -1400,7 +1399,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if streamedHarnessOutput {
 			rendered = trimHarnessRunOutputSection(rendered)
 		}
-		m.renderStreamBuffer()
+		m.renderStreamBuffer(true)
 		m.ensureOutputHasBlankLine()
 		if msg.Summary != nil && msg.Summary.Task != nil && msg.Summary.Task.Status == harness.TaskFailed {
 			m.output.WriteString(m.styles.error.Render(rendered))
@@ -1526,6 +1525,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.projMemFiles = append([]string(nil), msg.Files...)
 		if m.agent != nil && strings.TrimSpace(msg.Content) != "" {
+			m.agent.SetProjectMemoryFiles(msg.Files)
 			m.agent.AddMessage(provider.Message{
 				Role:    "system",
 				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + msg.Content}},
@@ -1620,7 +1620,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.startToolActivity(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-				m.renderStreamBuffer()
+				m.renderStreamBuffer(true)
 				m.streamStartPos = m.output.Len()
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
@@ -1653,7 +1653,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.startToolActivity(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
-				m.renderStreamBuffer()
+				m.renderStreamBuffer(true)
 				m.streamStartPos = m.output.Len()
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))

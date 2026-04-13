@@ -192,7 +192,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if m.streamBuffer != nil {
 		m.streamBuffer.WriteString(chunk)
 	}
-	m.rewriteActiveStreamOutput()
+	m.rewriteActiveStreamOutput(true)
 	m.trimOutput()
 	m.syncConversationViewport()
 	m.viewport.GotoBottom()
@@ -219,7 +219,7 @@ func (m *Model) appendStreamStatusLine(text string) {
 		m.streamBuffer = &bytes.Buffer{}
 	}
 	if m.streamBuffer.Len() > 0 {
-		m.renderStreamBuffer()
+		m.renderStreamBuffer(true)
 		m.streamBuffer.Reset()
 	}
 	m.harnessRunLiveTail = ""
@@ -254,7 +254,7 @@ func (m *Model) renderHarnessLiveTail(text string) {
 		m.streamPrefixWritten = true
 	}
 	m.harnessRunLiveTail = text
-	m.rewriteActiveStreamOutput()
+	m.rewriteActiveStreamOutput(true)
 	m.trimOutput()
 	m.syncConversationViewport()
 	m.viewport.GotoBottom()
@@ -315,22 +315,19 @@ func (m *Model) renderCurrentStreamMarkdown() string {
 	if m.streamBuffer == nil || m.streamBuffer.Len() == 0 {
 		return ""
 	}
-	rendered := m.streamBuffer.String()
-	if m.mdRenderer != nil {
-		if out, err := m.mdRenderer.Render(rendered); err == nil {
-			rendered = out
-		}
-	}
-	return trimLeadingRenderedSpacing(rendered)
+	return trimLeadingRenderedSpacing(RenderMarkdownWidth(m.streamBuffer.String(), max(20, m.conversationInnerWidth()-2)))
 }
 
-func (m *Model) rewriteActiveStreamOutput() {
+func (m *Model) rewriteActiveStreamOutput(renderMarkdown bool) {
 	if !m.streamPrefixWritten || m.streamStartPos < 0 || m.streamStartPos > m.output.Len() {
 		return
 	}
 	m.output.Truncate(m.streamStartPos)
 	m.output.WriteString(assistantBulletStyle.Render("● "))
-	rendered := m.renderCurrentStreamMarkdown()
+	rendered := m.streamBuffer.String()
+	if renderMarkdown {
+		rendered = m.renderCurrentStreamMarkdown()
+	}
 	if rendered != "" {
 		m.output.WriteString(rendered)
 	}
@@ -339,11 +336,11 @@ func (m *Model) rewriteActiveStreamOutput() {
 	}
 }
 
-func (m *Model) renderStreamBuffer() {
+func (m *Model) renderStreamBuffer(renderMarkdown bool) {
 	if m.streamBuffer == nil || m.streamBuffer.Len() == 0 {
 		return
 	}
-	m.rewriteActiveStreamOutput()
+	m.rewriteActiveStreamOutput(renderMarkdown)
 	m.streamBuffer.Reset()
 	m.harnessRunLiveTail = ""
 }

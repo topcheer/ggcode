@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unsafe"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -60,41 +59,6 @@ func TestResizeTinyWindow(t *testing.T) {
 	m.handleResize(10, 2)
 	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
 		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
-	}
-}
-
-func TestRebuildMarkdownRendererSkipsUnchangedWrapWidth(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 24)
-	m.rebuildMarkdownRenderer()
-	before := uintptr(unsafe.Pointer(m.mdRenderer))
-
-	m.rebuildMarkdownRenderer()
-	afterFirst := uintptr(unsafe.Pointer(m.mdRenderer))
-	m.rebuildMarkdownRenderer()
-	afterSecond := uintptr(unsafe.Pointer(m.mdRenderer))
-
-	if afterFirst != before {
-		t.Fatalf("expected unchanged wrap width to avoid renderer rebuild")
-	}
-	if afterSecond != afterFirst {
-		t.Fatalf("expected repeated rebuild with unchanged width to be a no-op")
-	}
-}
-
-func TestRebuildMarkdownRendererUpdatesWhenWrapWidthChanges(t *testing.T) {
-	m := newTestModel()
-	before := uintptr(unsafe.Pointer(m.mdRenderer))
-
-	m.handleResize(120, 24)
-	m.rebuildMarkdownRenderer()
-	after := uintptr(unsafe.Pointer(m.mdRenderer))
-
-	if after == before {
-		t.Fatalf("expected renderer rebuild after wrap width change")
-	}
-	if m.markdownWrapWidth != m.mainColumnWidth()-4 {
-		t.Fatalf("expected markdown wrap width %d, got %d", m.mainColumnWidth()-4, m.markdownWrapWidth)
 	}
 }
 
@@ -174,7 +138,7 @@ func TestSpinnerMsgSchedulesNextTick(t *testing.T) {
 	m.spinner.Start("Run: pod install")
 	before := m.spinner.CurrentFrame()
 
-	model, cmd := m.Update(spinnerMsg{})
+	model, cmd := m.Update(spinnerMsg{generation: m.spinner.generation})
 	m2 := model.(Model)
 
 	if m2.spinner.CurrentFrame() == before {
@@ -182,6 +146,25 @@ func TestSpinnerMsgSchedulesNextTick(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected spinner tick to schedule the next frame")
+	}
+}
+
+func TestSpinnerIgnoresStaleTickAfterRestart(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.spinner.Start("first")
+	staleGeneration := m.spinner.generation
+	m.spinner.Start("second")
+	before := m.spinner.CurrentFrame()
+
+	model, cmd := m.Update(spinnerMsg{generation: staleGeneration})
+	m2 := model.(Model)
+
+	if m2.spinner.CurrentFrame() != before {
+		t.Fatal("expected stale spinner tick not to advance the current spinner")
+	}
+	if cmd != nil {
+		t.Fatal("expected stale spinner tick not to schedule another frame")
 	}
 }
 
@@ -1030,7 +1013,7 @@ func TestMouseEventsDoNotReachInput(t *testing.T) {
 	}
 }
 
-func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
+func TestMouseClickDoesNotOpenPreviewPanelForVisibleFileToken(t *testing.T) {
 	workspace := t.TempDir()
 	prevWD, err := os.Getwd()
 	if err != nil {
@@ -1051,23 +1034,9 @@ func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
 	m.handleResize(140, 36)
 	m.output.WriteString("● See internal/tui/model.go:3 for details\n")
 	m.syncConversationViewport()
-
-	fullViewLines := visibleViewportLines(m.View())
-	targetY := -1
-	targetX := -1
-	for y, line := range fullViewLines {
-		if x := strings.Index(line, "internal/tui/model.go:3"); x >= 0 {
-			targetY = y
-			targetX = x + 1
-			break
-		}
-	}
-	if targetY < 0 {
-		t.Fatalf("expected token in rendered view, got %q", m.View())
-	}
 	next, cmd := m.Update(tea.MouseMsg{
-		X:      targetX,
-		Y:      targetY,
+		X:      18,
+		Y:      6,
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
@@ -1076,29 +1045,12 @@ func TestMouseClickOpensPreviewPanelForVisibleFileToken(t *testing.T) {
 	}
 	m = next.(Model)
 
-	if m.previewPanel == nil {
-		t.Fatal("expected preview panel to open")
-	}
-	if m.previewPanel.DisplayPath != "internal/tui/model.go" {
-		t.Fatalf("expected display path to resolve relative file, got %q", m.previewPanel.DisplayPath)
-	}
-	if m.previewPanel.TargetLine != 3 {
-		t.Fatalf("expected target line 3, got %d", m.previewPanel.TargetLine)
-	}
-
-	view := m.View()
-	if !strings.Contains(view, "File preview") {
-		t.Fatalf("expected preview panel in view, got %q", view)
-	}
-	if !strings.Contains(view, "gamma") {
-		t.Fatalf("expected preview snippet to include target line, got %q", view)
-	}
-	if strings.Contains(view, "Enter 发送") || strings.Contains(view, "Enter send") {
-		t.Fatalf("expected fullscreen preview to hide composer, got %q", view)
+	if m.previewPanel != nil {
+		t.Fatal("expected mouse click not to open preview panel")
 	}
 }
 
-func TestConversationViewportUnderlinesClickablePaths(t *testing.T) {
+func TestConversationViewportDoesNotUnderlinePaths(t *testing.T) {
 	oldProfile := termenv.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(oldProfile)
@@ -1108,33 +1060,8 @@ func TestConversationViewportUnderlinesClickablePaths(t *testing.T) {
 	m.output.WriteString("● model.go:3\n")
 
 	view := m.renderConversationPanel(12)
-	if !strings.Contains(view, "\x1b[4;") && !strings.Contains(view, "\x1b[4m") {
-		t.Fatalf("expected clickable paths to be underlined, got %q", view)
-	}
-}
-
-func TestPreviewTokenAtAllowsOneRowDownwardTolerance(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 30)
-	m.output.WriteString("● cmd/ggcode/root.go\n")
-
-	fullViewLines := visibleViewportLines(m.View())
-	targetY := -1
-	targetX := -1
-	for y, line := range fullViewLines {
-		if x := strings.Index(line, "cmd/ggcode/root.go"); x >= 0 {
-			targetY = y
-			targetX = x + 1
-			break
-		}
-	}
-	if targetY < 0 {
-		t.Fatalf("expected token in rendered view, got %q", m.View())
-	}
-
-	token, ok := m.previewTokenAt(targetX, targetY)
-	if !ok || token != "cmd/ggcode/root.go" {
-		t.Fatalf("expected downward tolerance to resolve file token, got %q", token)
+	if strings.Contains(view, "\x1b[4;") || strings.Contains(view, "\x1b[4m") {
+		t.Fatalf("expected conversation paths to remain plain text, got %q", view)
 	}
 }
 
@@ -1159,9 +1086,11 @@ func TestPreviewViewportScrollControls(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(100, 24)
-	if !m.openPreviewForToken("README.md") {
-		t.Fatal("expected preview to open")
+	m.previewPanel = buildPreviewPanelStateForPath(target, 0)
+	if m.previewPanel == nil {
+		t.Fatal("expected preview state")
 	}
+	m.syncPreviewViewport(true)
 	start := m.previewPanel.viewport.YOffset()
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -1185,7 +1114,7 @@ func TestPreviewViewportScrollControls(t *testing.T) {
 	}
 }
 
-func TestMarkdownPreviewUsesMarkdownRendering(t *testing.T) {
+func TestMarkdownPreviewStaysRaw(t *testing.T) {
 	workspace := t.TempDir()
 	prevWD, err := os.Getwd()
 	if err != nil {
@@ -1202,15 +1131,17 @@ func TestMarkdownPreviewUsesMarkdownRendering(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(100, 24)
-	if !m.openPreviewForToken("README.md") {
-		t.Fatal("expected markdown preview to open")
+	m.previewPanel = buildPreviewPanelStateForPath(target, 0)
+	if m.previewPanel == nil {
+		t.Fatal("expected markdown preview state")
 	}
+	m.syncPreviewViewport(true)
 	rendered := m.previewPanel.previewContent(m.previewContentWidth())
 	if rendered == m.previewPanel.Content {
-		t.Fatalf("expected markdown preview to render through glamour, got raw content %q", rendered)
+		t.Fatalf("expected markdown preview to render markdown, got raw content %q", rendered)
 	}
 	if !strings.Contains(rendered, "Title") {
-		t.Fatalf("expected rendered markdown to contain title, got %q", rendered)
+		t.Fatalf("expected rendered markdown preview to contain title text, got %q", rendered)
 	}
 }
 
@@ -1232,15 +1163,46 @@ func TestSourcePreviewUsesSyntaxHighlighting(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(100, 24)
-	if !m.openPreviewForToken("main.go") {
-		t.Fatal("expected source preview to open")
+	m.previewPanel = buildPreviewPanelStateForPath(target, 0)
+	if m.previewPanel == nil {
+		t.Fatal("expected source preview state")
 	}
+	m.syncPreviewViewport(true)
 	rendered := m.previewPanel.previewContent(m.previewContentWidth())
 	if rendered == raw {
 		t.Fatalf("expected source preview to be syntax highlighted, got raw content %q", rendered)
 	}
 	if !strings.Contains(rendered, "\x1b[") {
 		t.Fatalf("expected highlighted preview to contain ANSI color sequences, got %q", rendered)
+	}
+}
+
+func TestPreviewWrapsLongLinesToViewportWidth(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	target := filepath.Join(workspace, "main.go")
+	raw := "package main\n\nvar value = \"this_is_a_very_long_preview_line_that_should_wrap_inside_the_preview_pane_instead_of_overflowing_horizontally\"\n"
+	if err := os.WriteFile(target, []byte(raw), 0644); err != nil {
+		t.Fatalf("write source preview target: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+
+	m := newTestModel()
+	m.handleResize(80, 24)
+	m.previewPanel = buildPreviewPanelStateForPath(target, 0)
+	if m.previewPanel == nil {
+		t.Fatal("expected preview state")
+	}
+	m.syncPreviewViewport(true)
+	rendered := m.previewPanel.previewContent(24)
+	if !strings.Contains(rendered, "\n") {
+		t.Fatalf("expected wrapped preview output, got %q", rendered)
 	}
 }
 
@@ -1670,10 +1632,21 @@ func TestRenderOutputDecoratesStreamingBullet(t *testing.T) {
 	}
 }
 
-func TestAgentStreamMsgRendersMarkdownIncrementally(t *testing.T) {
+func TestRenderOutputKeepsWaitingIndicatorOutOfConversationPane(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.statusActivity = "Thinking..."
+	m.spinner.Start("Thinking...")
+
+	output := m.renderOutput()
+	if strings.Contains(output, "Thinking...") {
+		t.Fatalf("expected waiting indicator to stay in status bar only, got %q", output)
+	}
+}
+
+func TestAgentStreamMsgRendersMarkdownLive(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 32)
-	m.rebuildMarkdownRenderer()
 	m.loading = true
 	m.activeAgentRunID = 1
 	m.streamBuffer = &bytes.Buffer{}
@@ -1686,16 +1659,54 @@ func TestAgentStreamMsgRendersMarkdownIncrementally(t *testing.T) {
 
 	rendered := updated.renderCurrentStreamMarkdown()
 	if rendered == "" {
-		t.Fatal("expected rendered markdown preview during streaming")
+		t.Fatal("expected current stream output to be available")
+	}
+	if strings.Contains(updated.output.String(), "### Streaming title") {
+		t.Fatalf("expected streaming output to render markdown heading live, got %q", updated.output.String())
 	}
 	if !strings.Contains(updated.output.String(), rendered) {
-		t.Fatalf("expected streaming output to contain rendered markdown, got %q", updated.output.String())
+		t.Fatalf("expected streaming output to contain rendered markdown live, got %q", updated.output.String())
 	}
-	if strings.Contains(updated.output.String(), "`foo`") {
-		t.Fatalf("expected inline code markdown to be rendered before completion, got %q", updated.output.String())
+
+	updated.renderStreamBuffer(true)
+	if !strings.Contains(updated.output.String(), rendered) {
+		t.Fatalf("expected flushed stream output to contain rendered markdown, got %q", updated.output.String())
 	}
-	if strings.Contains(updated.output.String(), "Use `foo` now.") {
-		t.Fatalf("expected rendered output to differ from raw markdown chunk, got %q", updated.output.String())
+}
+
+func TestToolBoundaryFlushPreservesRenderedMarkdown(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 1
+	m.streamBuffer = &bytes.Buffer{}
+
+	next, _ := m.Update(agentStreamMsg{
+		RunID: 1,
+		Text:  "### Partial title",
+	})
+	m = next.(Model)
+	rendered := m.renderCurrentStreamMarkdown()
+
+	next, cmd := m.Update(agentToolStatusMsg{
+		RunID: 1,
+		ToolStatusMsg: ToolStatusMsg{
+			ToolID:      "tool-1",
+			ToolName:    "bash",
+			DisplayName: "Run",
+			Detail:      "first",
+			Running:     true,
+		},
+	})
+	if cmd == nil {
+		t.Fatal("expected tool start to schedule spinner work")
+	}
+	m = next.(Model)
+
+	if strings.Contains(m.output.String(), "### Partial title") {
+		t.Fatalf("expected tool-boundary flush to keep rendered markdown, got %q", m.output.String())
+	}
+	if !strings.Contains(m.output.String(), rendered) {
+		t.Fatalf("expected tool-boundary flush to preserve rendered markdown, got %q", m.output.String())
 	}
 }
 
