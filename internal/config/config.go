@@ -117,7 +117,10 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 ## Working style
 - Prefer the smallest concrete check that proves the requested behavior.
+- Batch related inspections or validations into a single assistant turn when the needed tool calls can be chosen together. Avoid one-tool-at-a-time exploration when several checks are obviously needed.
 - Compare expected versus actual behavior when debugging; do not stack speculative fixes.
+- Do not emit progress-only assistant messages while meaningful work remains. Continue directly to the next useful tool calls when you already know them.
+- Treat ` + "`todo_write`" + ` as optional bookkeeping for genuinely multi-step work. Do not update it after every micro-step; only write todos when the task spans multiple meaningful phases or the plan materially changes.
 - Keep user-facing summaries short and useful.
 - Use ` + "`@mentions`" + ` when referencing files for context.
 
@@ -1239,12 +1242,13 @@ func BuildSystemPrompt(basePrompt, workingDir, language string, toolNames []stri
 	sb.WriteString("\n\n## Environment\n")
 	sb.WriteString(fmt.Sprintf("- Working directory: %s\n", workingDir))
 	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
-	sb.WriteString(fmt.Sprintf("- Available tools: %s\n", strings.Join(toolNames, ", ")))
+	sb.WriteString(fmt.Sprintf("- Tool schemas are attached separately. Available tools: %s\n", summarizeNames(toolNames, 12)))
 
 	if hasAnyToolPrefix(toolNames, "lsp_") {
 		sb.WriteString("\n## LSP Guidance\n")
 		sb.WriteString("- If lsp_* tools are available and the user asks about symbol definitions, references, hover/type information, diagnostics, rename, code actions, or workspace symbol lookup in a supported source file, prefer lsp_* tools before broad text search.\n")
 		sb.WriteString("- If you know a symbol name but not its exact position, use lsp_symbols or lsp_workspace_symbols first to obtain the precise line/character range, then call lsp_definition, lsp_references, or lsp_hover with that position.\n")
+		sb.WriteString("- When several LSP checks are obviously needed, batch them into one turn instead of alternating single LSP calls with new model turns.\n")
 		sb.WriteString("- Use read_file or search tools after LSP when you need extra surrounding context or when LSP is unavailable for that file.\n")
 	}
 
@@ -1253,10 +1257,21 @@ func BuildSystemPrompt(basePrompt, workingDir, language string, toolNames []stri
 	}
 
 	if len(customCmds) > 0 {
-		sb.WriteString(fmt.Sprintf("- Custom slash commands: %s\n", strings.Join(customCmds, ", ")))
+		sb.WriteString(fmt.Sprintf("- Custom slash commands: %s\n", summarizeNames(customCmds, 8)))
 	}
 
 	return sb.String()
+}
+
+func summarizeNames(names []string, limit int) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	if limit <= 0 || len(names) <= limit {
+		return strings.Join(names, ", ")
+	}
+	head := append([]string(nil), names[:limit]...)
+	return fmt.Sprintf("%s (+%d more)", strings.Join(head, ", "), len(names)-limit)
 }
 
 func buildReplyLanguageGuidance(language string) string {

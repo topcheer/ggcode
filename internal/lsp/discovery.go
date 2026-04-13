@@ -47,6 +47,7 @@ type serverSpec struct {
 	displayName string
 	binaries    []string
 	rootMarkers []string
+	filenames   []string
 	extensions  []string
 }
 
@@ -55,8 +56,14 @@ const maxWorkspaceScanDepth = 3
 var builtinServerSpecs = []serverSpec{
 	{id: "go", displayName: "Go", binaries: []string{"gopls"}, rootMarkers: []string{"go.mod", "go.work"}, extensions: []string{".go"}},
 	{id: "rust", displayName: "Rust", binaries: []string{"rust-analyzer"}, rootMarkers: []string{"Cargo.toml"}, extensions: []string{".rs"}},
+	{id: "clang", displayName: "C / C++ / Objective-C", binaries: []string{"clangd"}, rootMarkers: []string{"compile_commands.json", "compile_flags.txt", "cmakelists.txt", "meson.build", "makefile"}, extensions: []string{".c", ".cc", ".cp", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm"}},
 	{id: "lua", displayName: "Lua", binaries: []string{"lua-language-server"}, rootMarkers: []string{".luarc.json", ".luarc.jsonc"}, extensions: []string{".lua"}},
+	{id: "swift", displayName: "Swift", binaries: []string{"sourcekit-lsp"}, rootMarkers: []string{"package.swift"}, extensions: []string{".swift"}},
 	{id: "terraform", displayName: "Terraform / HCL", binaries: []string{"terraform-ls"}, rootMarkers: []string{"main.tf", "versions.tf", "terragrunt.hcl"}, extensions: []string{".tf", ".tfvars", ".hcl"}},
+	{id: "yaml", displayName: "YAML", binaries: []string{"yaml-language-server"}, extensions: []string{".yaml", ".yml"}},
+	{id: "json", displayName: "JSON", binaries: []string{"vscode-json-language-server"}, extensions: []string{".json", ".jsonc"}},
+	{id: "dockerfile", displayName: "Dockerfile", binaries: []string{"docker-langserver"}, rootMarkers: []string{"dockerfile", "containerfile"}, filenames: []string{"Dockerfile", "Containerfile"}, extensions: []string{".dockerfile"}},
+	{id: "shell", displayName: "Shell / Bash", binaries: []string{"bash-language-server"}, extensions: []string{".sh", ".bash", ".zsh", ".ksh"}},
 	{id: "zig", displayName: "Zig", binaries: []string{"zls"}, rootMarkers: []string{"build.zig", "zls.json"}, extensions: []string{".zig"}},
 	{id: "java", displayName: "Java", binaries: []string{"jdtls"}, rootMarkers: []string{"pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"}, extensions: []string{".java"}},
 	{id: "typescript", displayName: "TypeScript / JavaScript", binaries: []string{"typescript-language-server"}, rootMarkers: []string{"package.json", "tsconfig.json", "jsconfig.json"}, extensions: []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}},
@@ -115,19 +122,34 @@ func ResolveServerForFile(workspace, path string) (ResolvedServer, bool) {
 		return ResolvedServer{}, false
 	}
 	ext := strings.ToLower(filepath.Ext(path))
+	base := filepath.Base(path)
 	for _, spec := range builtinServerSpecs {
+		matched := false
 		for _, candidateExt := range spec.extensions {
 			if strings.EqualFold(candidateExt, ext) {
-				binary, available := resolveServerBinary(spec, workspace)
-				return ResolvedServer{
-					LanguageID:  languageIDForFile(spec.id, ext),
-					DisplayName: spec.displayName,
-					Binary:      binary,
-					Args:        launchArgs(spec.id, binary, workspace),
-					InstallHint: installHint(spec.id, workspace),
-				}, available
+				matched = true
+				break
 			}
 		}
+		if !matched {
+			for _, candidateName := range spec.filenames {
+				if strings.EqualFold(candidateName, base) {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			continue
+		}
+		binary, available := resolveServerBinary(spec, workspace)
+		return ResolvedServer{
+			LanguageID:  languageIDForFile(spec.id, path),
+			DisplayName: spec.displayName,
+			Binary:      binary,
+			Args:        launchArgs(spec.id, binary, workspace),
+			InstallHint: installHint(spec.id, workspace),
+		}, available
 	}
 	return ResolvedServer{}, false
 }
@@ -217,6 +239,11 @@ func detectLanguageEvidence(spec serverSpec, rootEntries, extensions map[string]
 			evidence = append(evidence, marker)
 		}
 	}
+	for _, name := range spec.filenames {
+		if _, ok := rootEntries[strings.ToLower(name)]; ok {
+			evidence = append(evidence, name)
+		}
+	}
 	for _, ext := range spec.extensions {
 		if _, ok := extensions[strings.ToLower(ext)]; ok {
 			evidence = append(evidence, ext)
@@ -287,12 +314,15 @@ func resolveManagedBinary(spec serverSpec, workspace string) (display string, co
 	if display, ok = firstAvailableBinary(spec.binaries); ok {
 		return display, display, true
 	}
+	if display, command, ok = resolveWorkspaceToolFallback(spec.binaries, workspace); ok {
+		return display, command, true
+	}
 	switch spec.id {
 	case "rust":
 		return resolveRustAnalyzerFallback()
 	case "go":
 		return resolveGoBinaryFallback("gopls")
-	case "typescript":
+	case "typescript", "yaml", "json", "dockerfile", "shell":
 		return resolveNodeBinaryFallback(spec.binaries, workspace)
 	case "python":
 		return resolvePythonVenvFallback(spec.binaries, workspace)
@@ -304,6 +334,22 @@ func resolveManagedBinary(spec serverSpec, workspace string) (display string, co
 	default:
 		return "", "", false
 	}
+}
+
+func resolveWorkspaceToolFallback(candidates []string, workspace string) (display string, command string, ok bool) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return "", "", false
+	}
+	for _, candidate := range candidates {
+		for _, name := range executableNames(candidate) {
+			path := filepath.Join(workspace, ".ggcode", "tools", name)
+			if executableExists(path) {
+				return candidate, path, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 func resolveRustAnalyzerFallback() (display string, command string, ok bool) {
@@ -476,6 +522,15 @@ func installHint(languageID, workspace string) string {
 		return commandWithPrereq("go", "go is required to install gopls. Install Go first.", "go install golang.org/x/tools/gopls@latest")
 	case "rust":
 		return commandWithPrereq("rustup", "rustup is required to install rust-analyzer. Install Rust first.", "rustup component add rust-analyzer")
+	case "clang":
+		switch runtime.GOOS {
+		case "darwin":
+			return workspaceLinkOrInstallCommand("clangd", "brew", "Homebrew is required to install clangd automatically on macOS.", "brew install llvm", "$(brew --prefix llvm)/bin/clangd", "clangd is unavailable. Install Xcode Command Line Tools or Homebrew llvm first.")
+		case "windows":
+			return commandWithPrereq("winget", "winget is required to install clangd on Windows.", "winget install --accept-package-agreements --accept-source-agreements LLVM.LLVM")
+		default:
+			return unsupportedInstallCommand("Automatic clangd installation is not configured for this OS yet. Install clangd manually and ensure it is on PATH.")
+		}
 	case "lua":
 		switch runtime.GOOS {
 		case "darwin":
@@ -484,6 +539,13 @@ func installHint(languageID, workspace string) string {
 			return commandWithPrereq("winget", "winget is required to install lua-language-server on Windows.", "winget install --accept-package-agreements --accept-source-agreements LuaLS.lua-language-server")
 		default:
 			return unsupportedInstallCommand("Automatic lua-language-server installation is not configured for this OS yet. Install it manually from https://luals.github.io/.")
+		}
+	case "swift":
+		switch runtime.GOOS {
+		case "darwin":
+			return workspaceLinkExistingCommand("sourcekit-lsp", "sourcekit-lsp is unavailable. Install Xcode Command Line Tools or a Swift toolchain first.")
+		default:
+			return unsupportedInstallCommand("Automatic sourcekit-lsp installation is not configured for this OS yet. Install a Swift toolchain that provides sourcekit-lsp and ensure it is on PATH.")
 		}
 	case "terraform":
 		switch runtime.GOOS {
@@ -514,6 +576,14 @@ func installHint(languageID, workspace string) string {
 		}
 	case "typescript":
 		return commandWithPrereq("npm", "npm is required to install typescript-language-server. Install Node.js first.", "npm install -g typescript typescript-language-server")
+	case "yaml":
+		return nodeWorkspaceInstallCommand("yaml-language-server")
+	case "json":
+		return nodeWorkspaceInstallCommand("vscode-langservers-extracted")
+	case "dockerfile":
+		return nodeWorkspaceInstallCommand("dockerfile-language-server-nodejs")
+	case "shell":
+		return nodeWorkspaceInstallCommand("bash-language-server")
 	case "python":
 		return pythonVenvInstallCommand(workspace, "pyright")
 	case "csharp":
@@ -646,6 +716,50 @@ func unsupportedInstallCommand(message string) string {
 	return fmt.Sprintf("echo '%s' >&2; exit 1", escapePOSIXSingleQuoted(message))
 }
 
+func nodeWorkspaceInstallCommand(packages ...string) string {
+	joined := strings.Join(packages, " ")
+	if runtime.GOOS == "windows" {
+		return strings.Join([]string{
+			"if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Write-Error 'npm is required to install this LSP server. Install Node.js first.'; exit 1 }",
+			"if (-not (Test-Path 'package.json')) { npm init -y | Out-Null }",
+			"npm install --save-dev " + joined,
+		}, "; ")
+	}
+	return "if ! command -v npm >/dev/null 2>&1; then " +
+		"echo 'npm is required to install this LSP server. Install Node.js first.' >&2; exit 1; fi " +
+		"&& if [ ! -f package.json ]; then npm init -y >/dev/null 2>&1; fi " +
+		"&& npm install --save-dev " + joined
+}
+
+func workspaceLinkExistingCommand(binary, missingMessage string) string {
+	if runtime.GOOS == "windows" {
+		exe := executableName(binary)
+		return strings.Join([]string{
+			"if (-not (Get-Command " + binary + " -ErrorAction SilentlyContinue)) { Write-Error '" + escapePowerShellSingleQuoted(missingMessage) + "'; exit 1 }",
+			"New-Item -ItemType Directory -Force -Path '.ggcode\\tools' | Out-Null",
+			"$target = (Get-Command " + binary + ").Source",
+			"$link = Join-Path (Resolve-Path '.ggcode\\tools').Path '" + exe + "'",
+			"Copy-Item -Force $target $link",
+		}, "; ")
+	}
+	return "if ! command -v " + binary + " >/dev/null 2>&1; then " +
+		"echo '" + escapePOSIXSingleQuoted(missingMessage) + "' >&2; exit 1; fi " +
+		"&& mkdir -p .ggcode/tools " +
+		"&& ln -sf \"$(command -v " + binary + ")\" .ggcode/tools/" + executableName(binary)
+}
+
+func workspaceLinkOrInstallCommand(binary, installer, installerMissing, installCommand, linkedBinary, finalMissing string) string {
+	if runtime.GOOS == "windows" {
+		return commandWithPrereq(installer, installerMissing, installCommand)
+	}
+	return "mkdir -p .ggcode/tools " +
+		"&& if command -v " + binary + " >/dev/null 2>&1; then " +
+		"ln -sf \"$(command -v " + binary + ")\" .ggcode/tools/" + executableName(binary) + "; " +
+		"elif command -v " + installer + " >/dev/null 2>&1; then " +
+		installCommand + " && ln -sf \"" + linkedBinary + "\" .ggcode/tools/" + executableName(binary) + "; " +
+		"else echo '" + escapePOSIXSingleQuoted(finalMissing) + "' >&2; exit 1; fi"
+}
+
 func escapePOSIXSingleQuoted(value string) string {
 	return strings.ReplaceAll(value, "'", `'\''`)
 }
@@ -661,6 +775,14 @@ func launchArgs(specID, binary, workspace string) []string {
 		return []string{"--stdio"}
 	case base == "typescript-language-server":
 		return []string{"--stdio"}
+	case specID == "yaml" && base == "yaml-language-server":
+		return []string{"--stdio"}
+	case specID == "json" && base == "vscode-json-language-server":
+		return []string{"--stdio"}
+	case specID == "dockerfile" && base == "docker-langserver":
+		return []string{"--stdio"}
+	case specID == "shell" && base == "bash-language-server":
+		return []string{"start"}
 	case specID == "csharp" && base == "csharp-ls":
 		return csharpSolutionArgs(workspace)
 	case specID == "terraform" && base == "terraform-ls":
@@ -800,7 +922,8 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func languageIDForFile(specID, ext string) string {
+func languageIDForFile(specID, path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
 	switch specID {
 	case "typescript":
 		switch strings.ToLower(ext) {
@@ -813,6 +936,27 @@ func languageIDForFile(specID, ext string) string {
 		return "terraform"
 	case "csharp":
 		return "csharp"
+	case "clang":
+		switch ext {
+		case ".c":
+			return "c"
+		case ".m":
+			return "objective-c"
+		case ".mm":
+			return "objective-cpp"
+		default:
+			return "cpp"
+		}
+	case "swift":
+		return "swift"
+	case "yaml":
+		return "yaml"
+	case "json":
+		return "json"
+	case "dockerfile":
+		return "dockerfile"
+	case "shell":
+		return "shellscript"
 	default:
 		return specID
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -506,6 +508,91 @@ func TestRunStreamInterruptReplansBeforeRemainingToolCalls(t *testing.T) {
 	}
 	if events[5].Type != provider.StreamEventDone {
 		t.Fatalf("expected final done event, got %#v", events[5])
+	}
+}
+
+func TestRunStreamInjectsPathScopedProjectMemoryBeforeExecutingNestedTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	nestedDir := filepath.Join(repoDir, "internal", "feature")
+	targetFile := filepath.Join(nestedDir, "main.go")
+	for _, dir := range []string{repoDir, nestedDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	rootMem := filepath.Join(repoDir, "GGCODE.md")
+	nestedMem := filepath.Join(nestedDir, "AGENTS.md")
+	if err := os.WriteFile(rootMem, []byte("root guidance"), 0644); err != nil {
+		t.Fatalf("write root memory: %v", err)
+	}
+	if err := os.WriteFile(nestedMem, []byte("nested guidance"), 0644); err != nil {
+		t.Fatalf("write nested memory: %v", err)
+	}
+	if err := os.WriteFile(targetFile, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+
+	mp := &mockProvider{
+		chatResponses: []*provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					Content: []provider.ContentBlock{
+						provider.ToolUseBlock("call_1", "read_file", []byte(`{"path":"internal/feature/main.go"}`)),
+					},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					Content: []provider.ContentBlock{
+						provider.ToolUseBlock("call_2", "read_file", []byte(`{"path":"internal/feature/main.go"}`)),
+					},
+				},
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: []provider.ContentBlock{provider.TextBlock("done")},
+				},
+			},
+		},
+	}
+
+	registry := tool.NewRegistry()
+	var readCount int
+	if err := registry.Register(countingTool{name: "read_file", executed: &readCount}); err != nil {
+		t.Fatalf("register read_file: %v", err)
+	}
+
+	a := NewAgent(mp, registry, "", 4)
+	a.SetWorkingDir(repoDir)
+	a.SetProjectMemoryFiles([]string{rootMem})
+
+	if err := a.RunStream(context.Background(), "inspect it", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	if mp.streamCalls != 3 {
+		t.Fatalf("expected project memory replan to trigger 3 stream calls, got %d", mp.streamCalls)
+	}
+	if readCount != 1 {
+		t.Fatalf("expected nested tool to execute once after memory injection, got %d", readCount)
+	}
+	msgs := a.Messages()
+	var found bool
+	for _, msg := range msgs {
+		if msg.Role != "system" || len(msg.Content) == 0 {
+			continue
+		}
+		if strings.Contains(msg.Content[0].Text, "nested guidance") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected injected nested project memory in messages, got %#v", msgs)
 	}
 }
 

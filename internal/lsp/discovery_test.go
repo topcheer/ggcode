@@ -66,6 +66,42 @@ func TestDetectWorkspaceStatusUsesInstalledBinaryFromPATH(t *testing.T) {
 	}
 }
 
+func TestDetectWorkspaceStatusUsesInstalledClangdFromPATH(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "compile_commands.json"), []byte("[]\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(compile_commands.json) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "main.cpp"), []byte("int main() { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(main.cpp) error = %v", err)
+	}
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, executableName("clangd"))
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(clangd) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	status := DetectWorkspaceStatus(workspace)
+	var clang LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "clang" {
+			clang = lang
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected clang detection, got %#v", status.Languages)
+	}
+	if clang.ID != "clang" {
+		t.Fatalf("expected clang detection, got %#v", clang)
+	}
+	if !clang.Available || clang.Binary != "clangd" {
+		t.Fatalf("expected available clangd binary, got %#v", clang)
+	}
+}
+
 func TestDetectWorkspaceStatusUsesRustupManagedRustAnalyzer(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "Cargo.toml"), []byte("[package]\nname = \"board\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"), 0o644); err != nil {
@@ -184,10 +220,18 @@ func TestDetectWorkspaceStatusIncludesTypeScriptInstallOption(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	status := DetectWorkspaceStatus(workspace)
-	if len(status.Languages) != 1 {
-		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	var ts LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "typescript" {
+			ts = lang
+			found = true
+			break
+		}
 	}
-	ts := status.Languages[0]
+	if !found {
+		t.Fatalf("expected typescript detection, got %#v", status.Languages)
+	}
 	if ts.ID != "typescript" {
 		t.Fatalf("expected typescript detection, got %#v", ts)
 	}
@@ -196,6 +240,88 @@ func TestDetectWorkspaceStatusIncludesTypeScriptInstallOption(t *testing.T) {
 	}
 	if !ts.InstallOptions[0].Recommended || !strings.Contains(ts.InstallOptions[0].Command, "typescript-language-server") {
 		t.Fatalf("expected recommended typescript-language-server install option, got %#v", ts.InstallOptions)
+	}
+}
+
+func TestDetectWorkspaceStatusUsesInstalledSourceKitLSPFromPATH(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "Package.swift"), []byte("import PackageDescription\nlet package = Package(name: \"Board\")\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(Package.swift) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, "Sources", "Board"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(Sources/Board) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "Sources", "Board", "main.swift"), []byte("print(\"hello\")\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(main.swift) error = %v", err)
+	}
+	binDir := t.TempDir()
+	binaryPath := filepath.Join(binDir, executableName("sourcekit-lsp"))
+	if err := os.WriteFile(binaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(sourcekit-lsp) error = %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	status := DetectWorkspaceStatus(workspace)
+	var swift LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "swift" {
+			swift = lang
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected swift detection, got %#v", status.Languages)
+	}
+	if swift.ID != "swift" {
+		t.Fatalf("expected swift detection, got %#v", swift)
+	}
+	if !swift.Available || swift.Binary != "sourcekit-lsp" {
+		t.Fatalf("expected available sourcekit-lsp binary, got %#v", swift)
+	}
+}
+
+func TestDetectWorkspaceStatusIncludesConfigInstallOptions(t *testing.T) {
+	workspace := t.TempDir()
+	files := map[string]string{
+		"config.yaml": "name: board\n",
+		"config.json": "{\n  \"name\": \"board\"\n}\n",
+		"Dockerfile":  "FROM alpine:3.20\n",
+		"deploy.sh":   "#!/usr/bin/env bash\nset -euo pipefail\n",
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte(contents), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	status := DetectWorkspaceStatus(workspace)
+	got := map[string]LanguageStatus{}
+	for _, lang := range status.Languages {
+		got[lang.ID] = lang
+	}
+	for _, id := range []string{"yaml", "json", "dockerfile", "shell"} {
+		lang, ok := got[id]
+		if !ok {
+			t.Fatalf("expected %s detection in %#v", id, status.Languages)
+		}
+		if len(lang.InstallOptions) != 1 || !lang.InstallOptions[0].Recommended {
+			t.Fatalf("expected one recommended install option for %s, got %#v", id, lang.InstallOptions)
+		}
+	}
+	if !strings.Contains(got["yaml"].InstallOptions[0].Command, "yaml-language-server") {
+		t.Fatalf("expected yaml install command, got %#v", got["yaml"].InstallOptions)
+	}
+	if !strings.Contains(got["json"].InstallOptions[0].Command, "vscode-langservers-extracted") {
+		t.Fatalf("expected json install command, got %#v", got["json"].InstallOptions)
+	}
+	if !strings.Contains(got["dockerfile"].InstallOptions[0].Command, "dockerfile-language-server-nodejs") {
+		t.Fatalf("expected docker install command, got %#v", got["dockerfile"].InstallOptions)
+	}
+	if !strings.Contains(got["shell"].InstallOptions[0].Command, "bash-language-server") {
+		t.Fatalf("expected shell install command, got %#v", got["shell"].InstallOptions)
 	}
 }
 
@@ -222,10 +348,18 @@ func TestDetectWorkspaceStatusUsesWorkspaceNodeModulesBinary(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	status := DetectWorkspaceStatus(workspace)
-	if len(status.Languages) != 1 {
-		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	var ts LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "typescript" {
+			ts = lang
+			found = true
+			break
+		}
 	}
-	ts := status.Languages[0]
+	if !found {
+		t.Fatalf("expected typescript detection, got %#v", status.Languages)
+	}
 	if ts.ID != "typescript" {
 		t.Fatalf("expected typescript detection, got %#v", ts)
 	}
@@ -268,6 +402,93 @@ func TestResolveServerForFileUsesWorkspaceNodeModulesBinaryPath(t *testing.T) {
 	}
 }
 
+func TestResolveServerForFileUsesWorkspaceLocalClangdPath(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "compile_commands.json"), []byte("[]\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(compile_commands.json) error = %v", err)
+	}
+	sourcePath := filepath.Join(workspace, "main.cpp")
+	if err := os.WriteFile(sourcePath, []byte("int add(int a, int b) { return a + b; }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(main.cpp) error = %v", err)
+	}
+	toolDir := filepath.Join(workspace, ".ggcode", "tools")
+	if err := os.MkdirAll(toolDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(.ggcode/tools) error = %v", err)
+	}
+	clangdPath := filepath.Join(toolDir, executableName("clangd"))
+	if err := os.WriteFile(clangdPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(clangd) error = %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	resolved, ok := ResolveServerForFile(workspace, sourcePath)
+	if !ok {
+		t.Fatal("expected clang server resolution")
+	}
+	if resolved.Binary != clangdPath {
+		t.Fatalf("expected resolved clangd path %q, got %#v", clangdPath, resolved)
+	}
+	if resolved.LanguageID != "cpp" {
+		t.Fatalf("expected cpp language id, got %#v", resolved)
+	}
+}
+
+func TestResolveServerForFileUsesWorkspaceNodeModulesJSONServerPath(t *testing.T) {
+	workspace := t.TempDir()
+	sourcePath := filepath.Join(workspace, "config.json")
+	if err := os.WriteFile(sourcePath, []byte("{\"name\":\"board\"}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.json) error = %v", err)
+	}
+	binDir := filepath.Join(workspace, "node_modules", ".bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(node_modules/.bin) error = %v", err)
+	}
+	serverPath := filepath.Join(binDir, executableName("vscode-json-language-server"))
+	if err := os.WriteFile(serverPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(vscode-json-language-server) error = %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	resolved, ok := ResolveServerForFile(workspace, sourcePath)
+	if !ok {
+		t.Fatal("expected json server resolution")
+	}
+	if resolved.Binary != serverPath {
+		t.Fatalf("expected resolved json server path %q, got %#v", serverPath, resolved)
+	}
+	if len(resolved.Args) != 1 || resolved.Args[0] != "--stdio" {
+		t.Fatalf("expected json server stdio args, got %#v", resolved.Args)
+	}
+}
+
+func TestResolveServerForFileUsesDockerfileNameAndStdioArgs(t *testing.T) {
+	workspace := t.TempDir()
+	sourcePath := filepath.Join(workspace, "Dockerfile")
+	if err := os.WriteFile(sourcePath, []byte("FROM alpine:3.20\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(Dockerfile) error = %v", err)
+	}
+	binDir := filepath.Join(workspace, "node_modules", ".bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(node_modules/.bin) error = %v", err)
+	}
+	serverPath := filepath.Join(binDir, executableName("docker-langserver"))
+	if err := os.WriteFile(serverPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(docker-langserver) error = %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	resolved, ok := ResolveServerForFile(workspace, sourcePath)
+	if !ok {
+		t.Fatal("expected dockerfile server resolution")
+	}
+	if resolved.Binary != serverPath {
+		t.Fatalf("expected resolved dockerfile server path %q, got %#v", serverPath, resolved)
+	}
+	if resolved.LanguageID != "dockerfile" || len(resolved.Args) != 1 || resolved.Args[0] != "--stdio" {
+		t.Fatalf("expected dockerfile stdio launch, got %#v", resolved)
+	}
+}
+
 func TestDetectWorkspaceStatusUsesNPMGlobalTypeScriptBinary(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte("{\"name\":\"board\",\"private\":true}"), 0o644); err != nil {
@@ -296,10 +517,18 @@ func TestDetectWorkspaceStatusUsesNPMGlobalTypeScriptBinary(t *testing.T) {
 	t.Setenv("PATH", npmDir)
 
 	status := DetectWorkspaceStatus(workspace)
-	if len(status.Languages) != 1 {
-		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	var ts LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "typescript" {
+			ts = lang
+			found = true
+			break
+		}
 	}
-	ts := status.Languages[0]
+	if !found {
+		t.Fatalf("expected typescript detection, got %#v", status.Languages)
+	}
 	if ts.ID != "typescript" {
 		t.Fatalf("expected typescript detection, got %#v", ts)
 	}
@@ -406,10 +635,18 @@ func TestDetectWorkspaceStatusIncludesCSharpInstallOption(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	status := DetectWorkspaceStatus(workspace)
-	if len(status.Languages) != 1 {
-		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	var csharp LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "csharp" {
+			csharp = lang
+			found = true
+			break
+		}
 	}
-	csharp := status.Languages[0]
+	if !found {
+		t.Fatalf("expected csharp detection, got %#v", status.Languages)
+	}
 	if csharp.ID != "csharp" {
 		t.Fatalf("expected csharp detection, got %#v", csharp)
 	}
@@ -439,10 +676,18 @@ func TestDetectWorkspaceStatusUsesDotnetToolCSharpBinary(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	status := DetectWorkspaceStatus(workspace)
-	if len(status.Languages) != 1 {
-		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	var csharp LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "csharp" {
+			csharp = lang
+			found = true
+			break
+		}
 	}
-	csharp := status.Languages[0]
+	if !found {
+		t.Fatalf("expected csharp detection, got %#v", status.Languages)
+	}
 	if csharp.ID != "csharp" {
 		t.Fatalf("expected csharp detection, got %#v", csharp)
 	}
@@ -467,10 +712,18 @@ func TestDetectWorkspaceStatusUsesWorkspaceLocalCSharpBinary(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	status := DetectWorkspaceStatus(workspace)
-	if len(status.Languages) != 1 {
-		t.Fatalf("expected 1 detected language, got %#v", status.Languages)
+	var csharp LanguageStatus
+	found := false
+	for _, lang := range status.Languages {
+		if lang.ID == "csharp" {
+			csharp = lang
+			found = true
+			break
+		}
 	}
-	csharp := status.Languages[0]
+	if !found {
+		t.Fatalf("expected csharp detection, got %#v", status.Languages)
+	}
 	if csharp.ID != "csharp" {
 		t.Fatalf("expected csharp detection, got %#v", csharp)
 	}
@@ -1237,6 +1490,156 @@ func TestExternalPythonFixtureLSPCalls(t *testing.T) {
 				t.Logf("python lsp stderr:\n%s", stderr)
 			}
 		}
+	}
+}
+
+func TestExternalClangFixtureLSPCalls(t *testing.T) {
+	if _, err := exec.LookPath("clangd"); err != nil {
+		t.Skip("clangd not installed")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("home directory unavailable")
+	}
+	workspace := filepath.Join(home, "ggai", "clang-message-board")
+	mainPath := filepath.Join(workspace, "main.cpp")
+	headerPath := filepath.Join(workspace, "message_board.h")
+	brokenPath := filepath.Join(workspace, "broken.cpp")
+	for _, path := range []string{mainPath, headerPath, brokenPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Skip("external clang fixture not present")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	symbols, err := DocumentSymbols(ctx, workspace, headerPath)
+	if err != nil || len(symbols) == 0 {
+		t.Fatalf("DocumentSymbols() err=%v len=%d", err, len(symbols))
+	}
+	hover, err := Hover(ctx, workspace, mainPath, Position{Line: 6, Character: 9})
+	if err != nil || strings.TrimSpace(hover) == "" {
+		t.Fatalf("Hover() err=%v hover=%q", err, hover)
+	}
+	definition, err := Definition(ctx, workspace, mainPath, Position{Line: 6, Character: 9})
+	if err != nil || len(definition) == 0 {
+		t.Fatalf("Definition() err=%v definition=%#v", err, definition)
+	}
+	references, err := References(ctx, workspace, headerPath, Position{Line: 14, Character: 8})
+	if err != nil || len(references) == 0 {
+		t.Fatalf("References() err=%v references=%#v", err, references)
+	}
+	workspaceSymbols, err := WorkspaceSymbols(ctx, workspace, "MessageBoard")
+	if err != nil || len(workspaceSymbols) == 0 {
+		t.Fatalf("WorkspaceSymbols() err=%v symbols=%#v", err, workspaceSymbols)
+	}
+	diagnostics, err := Diagnostics(ctx, workspace, brokenPath)
+	if err != nil || len(diagnostics) == 0 {
+		t.Fatalf("Diagnostics() err=%v diagnostics=%#v", err, diagnostics)
+	}
+	edits, err := RenameEdits(ctx, workspace, headerPath, Position{Line: 14, Character: 8}, "PostMessage")
+	if err != nil || len(edits) == 0 {
+		t.Fatalf("RenameEdits() err=%v edits=%#v", err, edits)
+	}
+}
+
+func TestExternalSwiftFixtureLSPCalls(t *testing.T) {
+	if _, err := exec.LookPath("sourcekit-lsp"); err != nil {
+		t.Skip("sourcekit-lsp not installed")
+	}
+	if _, err := exec.LookPath("swift"); err != nil {
+		t.Skip("swift not installed")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("home directory unavailable")
+	}
+	workspace := filepath.Join(home, "ggai", "swift-message-board")
+	boardPath := filepath.Join(workspace, "Sources", "Board", "MessageBoard.swift")
+	mainPath := filepath.Join(workspace, "Sources", "Board", "main.swift")
+	for _, path := range []string{boardPath, mainPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Skip("external swift fixture not present")
+		}
+	}
+	buildCmd := exec.Command("swift", "build")
+	buildCmd.Dir = workspace
+	if output, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("swift build failed: %v\n%s", err, string(output))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	hover, err := Hover(ctx, workspace, boardPath, Position{Line: 1, Character: 13})
+	if err != nil || strings.TrimSpace(hover) == "" {
+		t.Fatalf("Hover() err=%v hover=%q", err, hover)
+	}
+	definition, err := Definition(ctx, workspace, mainPath, Position{Line: 1, Character: 13})
+	if err != nil || len(definition) == 0 {
+		t.Fatalf("Definition() err=%v definition=%#v", err, definition)
+	}
+	references, err := References(ctx, workspace, boardPath, Position{Line: 1, Character: 13})
+	if err != nil || len(references) == 0 {
+		t.Fatalf("References() err=%v references=%#v", err, references)
+	}
+	workspaceSymbols, err := WorkspaceSymbols(ctx, workspace, "MessageBoard")
+	if err != nil || len(workspaceSymbols) == 0 {
+		t.Fatalf("WorkspaceSymbols() err=%v symbols=%#v", err, workspaceSymbols)
+	}
+	edits, err := RenameEdits(ctx, workspace, boardPath, Position{Line: 4, Character: 10}, "append")
+	if err != nil || len(edits) == 0 {
+		t.Fatalf("RenameEdits() err=%v edits=%#v", err, edits)
+	}
+}
+
+func TestExternalConfigFixtureLSPCalls(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("home directory unavailable")
+	}
+	workspace := filepath.Join(home, "ggai", "config-message-board")
+	yamlPath := filepath.Join(workspace, "config.yaml")
+	brokenYAMLPath := filepath.Join(workspace, "broken.yaml")
+	jsonPath := filepath.Join(workspace, "config.json")
+	dockerPath := filepath.Join(workspace, "Dockerfile")
+	shellPath := filepath.Join(workspace, "deploy.sh")
+	for _, path := range []string{yamlPath, brokenYAMLPath, jsonPath, dockerPath, shellPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Skip("external config fixture not present")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	yamlSymbols, err := DocumentSymbols(ctx, workspace, yamlPath)
+	if err != nil || len(yamlSymbols) == 0 {
+		t.Fatalf("yaml DocumentSymbols() err=%v len=%d", err, len(yamlSymbols))
+	}
+	yamlDiagnostics, err := Diagnostics(ctx, workspace, brokenYAMLPath)
+	if err != nil || len(yamlDiagnostics) == 0 {
+		t.Fatalf("yaml Diagnostics() err=%v diagnostics=%#v", err, yamlDiagnostics)
+	}
+
+	jsonSymbols, err := DocumentSymbols(ctx, workspace, jsonPath)
+	if err != nil || len(jsonSymbols) == 0 {
+		t.Fatalf("json DocumentSymbols() err=%v len=%d", err, len(jsonSymbols))
+	}
+	dockerHover, err := Hover(ctx, workspace, dockerPath, Position{Line: 1, Character: 2})
+	if err != nil || strings.TrimSpace(dockerHover) == "" {
+		t.Fatalf("docker Hover() err=%v hover=%q", err, dockerHover)
+	}
+
+	resolved, ok := ResolveServerForFile(workspace, shellPath)
+	if !ok {
+		t.Fatal("expected shell server resolution")
+	}
+	session, err := globalSessions.acquire(ctx, workspace, resolved)
+	if err != nil {
+		t.Fatalf("shell acquire() error = %v", err)
+	}
+	docURI, err := session.prepareDocument(ctx, shellPath, resolved.LanguageID)
+	if err != nil || strings.TrimSpace(docURI) == "" {
+		t.Fatalf("shell prepareDocument() err=%v uri=%q", err, docURI)
 	}
 }
 

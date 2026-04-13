@@ -26,7 +26,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 			language:   "en",
 			workingDir: "/tmp",
 			toolNames:  []string{"read_file", "write_file"},
-			want:       []string{"ggcode", "read_file", "write_file", "/tmp"},
+			want:       []string{"ggcode", "read_file", "write_file", "/tmp", "Tool schemas are attached separately"},
 		},
 		{
 			name:       "custom prompt",
@@ -68,7 +68,15 @@ func TestBuildSystemPrompt(t *testing.T) {
 			language:   "en",
 			workingDir: "/tmp",
 			toolNames:  []string{"read_file", "lsp_definition", "lsp_symbols"},
-			want:       []string{"## LSP Guidance", "prefer lsp_* tools before broad text search", "use lsp_symbols or lsp_workspace_symbols first", "Use read_file or search tools after LSP"},
+			want:       []string{"## LSP Guidance", "prefer lsp_* tools before broad text search", "use lsp_symbols or lsp_workspace_symbols first", "batch them into one turn", "Use read_file or search tools after LSP"},
+		},
+		{
+			name:       "with summarized tools",
+			basePrompt: "",
+			language:   "en",
+			workingDir: "/tmp",
+			toolNames:  []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"},
+			want:       []string{"a, b, c, d, e, f, g, h, i, j, k, l (+1 more)"},
 		},
 	}
 
@@ -81,6 +89,18 @@ func TestBuildSystemPrompt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDefaultSystemPromptEncouragesBatchingAndSparseTodoWrites(t *testing.T) {
+	for _, substr := range []string{
+		"Batch related inspections or validations into a single assistant turn",
+		"Do not emit progress-only assistant messages while meaningful work remains",
+		"Do not update it after every micro-step",
+	} {
+		if !contains(DefaultSystemPrompt, substr) {
+			t.Fatalf("expected DefaultSystemPrompt to contain %q", substr)
+		}
 	}
 }
 

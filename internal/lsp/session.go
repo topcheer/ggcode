@@ -15,6 +15,7 @@ import (
 const sessionIdleTTL = 2 * time.Minute
 const csharpWarmupRetryDelay = 400 * time.Millisecond
 const csharpWarmupRetryAttempts = 8
+const publishedDiagnosticsWait = 1200 * time.Millisecond
 
 type documentState struct {
 	version int

@@ -92,7 +92,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	pluginMgr.RegisterTools(registry)
 
 	// Load project memory documents.
-	projectMem, _, _ := memory.LoadProjectMemory(workingDir)
+	projectMem, projectMemFiles, _ := memory.LoadProjectMemory(workingDir)
 
 	// Load auto memory
 	autoMem := memory.NewAutoMemory()
@@ -137,6 +137,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag := agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	ag.SetProjectMemoryFiles(projectMemFiles)
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
 	}
@@ -144,6 +145,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)
 	}
 	ag.SetPermissionPolicy(policy)
+	ag.SetWorkingDir(workingDir)
 
 	// Read stdin if available
 	stdinData, err := readStdin()

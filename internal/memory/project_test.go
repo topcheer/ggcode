@@ -78,6 +78,95 @@ func TestLoadProjectMemory_MultipleNamesInOneDir(t *testing.T) {
 	}
 }
 
+func TestLoadProjectMemory_DoesNotPreloadNestedSubdirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	nestedDir := filepath.Join(projectDir, "internal", "feature")
+	if err := os.MkdirAll(nestedDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "GGCODE.md"), []byte("root"), 0644); err != nil {
+		t.Fatalf("write root memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "AGENTS.md"), []byte("nested"), 0644); err != nil {
+		t.Fatalf("write nested memory: %v", err)
+	}
+	t.Setenv("HOME", tmpDir)
+
+	content, files, err := LoadProjectMemory(projectDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !contains(content, "root") {
+		t.Fatalf("expected root memory to load, got %q", content)
+	}
+	if contains(content, "nested") {
+		t.Fatalf("did not expect nested subdirectory memory at startup, got %q", content)
+	}
+	if len(files) != 1 || files[0] != filepath.Join(projectDir, "GGCODE.md") {
+		t.Fatalf("unexpected files: %v", files)
+	}
+}
+
+func TestProjectMemoryFilesForPath_LoadsAncestorChainOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	targetDir := filepath.Join(repoDir, "internal", "feature")
+	siblingDir := filepath.Join(repoDir, "docs")
+	targetFile := filepath.Join(targetDir, "main.go")
+	for _, dir := range []string{targetDir, siblingDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "GGCODE.md"), []byte("root"), 0644); err != nil {
+		t.Fatalf("write root memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Join(repoDir, "internal"), "AGENTS.md"), []byte("internal"), 0644); err != nil {
+		t.Fatalf("write internal memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "CLAUDE.md"), []byte("feature"), 0644); err != nil {
+		t.Fatalf("write feature memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(siblingDir, "COPILOT.md"), []byte("docs"), 0644); err != nil {
+		t.Fatalf("write sibling memory: %v", err)
+	}
+
+	files, err := ProjectMemoryFilesForPath(targetFile)
+	if err != nil {
+		t.Fatalf("ProjectMemoryFilesForPath() error = %v", err)
+	}
+	want := []string{
+		filepath.Join(repoDir, "GGCODE.md"),
+		filepath.Join(repoDir, "internal", "AGENTS.md"),
+		filepath.Join(targetDir, "CLAUDE.md"),
+	}
+	if len(files) != len(want) {
+		t.Fatalf("expected %d files, got %d: %v", len(want), len(files), files)
+	}
+	for i := range want {
+		if files[i] != want[i] {
+			t.Fatalf("unexpected file order: got %v want %v", files, want)
+		}
+	}
+
+	content, loaded, err := ReadProjectMemoryFiles(files)
+	if err != nil {
+		t.Fatalf("ReadProjectMemoryFiles() error = %v", err)
+	}
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 loaded files, got %d", len(loaded))
+	}
+	for _, expected := range []string{"root", "internal", "feature"} {
+		if !contains(content, expected) {
+			t.Fatalf("expected %q in content, got %q", expected, content)
+		}
+	}
+	if contains(content, "docs") {
+		t.Fatalf("did not expect sibling directory memory, got %q", content)
+	}
+}
+
 func TestResolveProjectMemoryInitTarget_UsesGitRoot(t *testing.T) {
 	tmpDir := t.TempDir()
 	repoDir := filepath.Join(tmpDir, "repo")
