@@ -1616,6 +1616,35 @@ func TestTrimLeadingRenderedSpacing(t *testing.T) {
 	}
 }
 
+func TestNormalizeTerminalMarkdownAnnotatesBareCodeFencesAsText(t *testing.T) {
+	input := "## Tree\n\n```\nroot/\n├── child\n└── leaf\n```\n"
+	normalized := normalizeTerminalMarkdown(input)
+	if !strings.Contains(normalized, "```text\nroot/") {
+		t.Fatalf("expected bare markdown fence to be annotated as text, got %q", normalized)
+	}
+}
+
+func TestMarkdownStyleConfigUsesCalmerCodeColors(t *testing.T) {
+	dark := markdownStyleConfigForDarkMode(true)
+	if dark.Code.BackgroundColor != nil {
+		t.Fatalf("expected dark markdown inline code to avoid background fills, got %#v", dark.Code.BackgroundColor)
+	}
+	if dark.Code.Color == nil || *dark.Code.Color == "#ff5555" || *dark.Code.Color == "203" {
+		t.Fatalf("expected dark markdown inline code to avoid the old red palette, got %#v", dark.Code.Color)
+	}
+	if dark.CodeBlock.Chroma == nil || dark.CodeBlock.Chroma.Punctuation.Color == nil || *dark.CodeBlock.Chroma.Punctuation.Color != "#a9b1d6" {
+		t.Fatalf("expected dark markdown punctuation to use the calmer text color, got %#v", dark.CodeBlock.Chroma)
+	}
+
+	light := markdownStyleConfigForDarkMode(false)
+	if light.Code.BackgroundColor != nil {
+		t.Fatalf("expected light markdown inline code to avoid background fills, got %#v", light.Code.BackgroundColor)
+	}
+	if light.Code.Color == nil || *light.Code.Color != "#005f87" {
+		t.Fatalf("expected light markdown inline code to use the calmer blue accent, got %#v", light.Code.Color)
+	}
+}
+
 func TestRenderOutputDecoratesStreamingBullet(t *testing.T) {
 	m := newTestModel()
 	m.loading = true

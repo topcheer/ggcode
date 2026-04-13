@@ -26,6 +26,7 @@ func (m *Model) handleResize(width, height int) {
 	m.syncQuestionnaireInputWidth()
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
+	prewarmMarkdownRenderers(m.previewContentWidth(), m.fileBrowserPreviewWidth())
 	m.syncPreviewViewport(false)
 	m.syncFileBrowser(false)
 }
