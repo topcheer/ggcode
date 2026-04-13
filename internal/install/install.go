@@ -26,8 +26,9 @@ const (
 	updateBaseURLsEnv = "GGCODE_UPDATE_BASE_URLS"
 )
 
-var defaultReleaseBaseURLs = []string{
-	fmt.Sprintf("https://github.com/%s/%s", owner, repo),
+var defaultReleaseSources = []releaseSource{
+	{baseURL: fmt.Sprintf("https://github.com/%s/%s", owner, repo)},
+	{proxyPrefix: "https://get.ystone.us/"},
 }
 
 type releaseSource struct {
@@ -247,7 +248,7 @@ func resolveReleaseVersion(ctx context.Context, client *http.Client, baseURL, ve
 func resolveReleaseVersionForBase(ctx context.Context, client *http.Client, baseURL string) (string, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
-		baseURL = defaultReleaseBaseURLs[0]
+		baseURL = fmt.Sprintf("https://github.com/%s/%s", owner, repo)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/releases/latest", nil)
 	if err != nil {
@@ -279,10 +280,15 @@ func releaseSources(baseURL string) []releaseSource {
 			return sources
 		}
 	}
-	out := make([]releaseSource, 0, len(defaultReleaseBaseURLs))
-	seen := make(map[string]struct{}, len(defaultReleaseBaseURLs))
-	for _, candidate := range defaultReleaseBaseURLs {
-		source := releaseSource{baseURL: strings.TrimRight(strings.TrimSpace(candidate), "/")}
+	out := make([]releaseSource, 0, len(defaultReleaseSources))
+	seen := make(map[string]struct{}, len(defaultReleaseSources))
+	for _, source := range defaultReleaseSources {
+		if strings.TrimSpace(source.baseURL) != "" {
+			source.baseURL = strings.TrimRight(strings.TrimSpace(source.baseURL), "/")
+		}
+		if strings.TrimSpace(source.proxyPrefix) != "" {
+			source.proxyPrefix = strings.TrimRight(strings.TrimSpace(source.proxyPrefix), "/") + "/"
+		}
 		if source.empty() {
 			continue
 		}

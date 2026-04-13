@@ -77,10 +77,16 @@ func TestReleaseURLsWithBaseURL(t *testing.T) {
 	}
 }
 
-func TestReleaseSourcesDefaultsToGitHubOnly(t *testing.T) {
+func TestReleaseSourcesDefaultsIncludeBuiltInFallback(t *testing.T) {
 	t.Setenv(updateBaseURLsEnv, "")
 	got := releaseSources("")
-	if len(got) != 1 || got[0].baseURL != "https://github.com/topcheer/ggcode" || got[0].proxyPrefix != "" {
+	if len(got) != 2 {
+		t.Fatalf("unexpected default release sources: %#v", got)
+	}
+	if got[0].baseURL != "https://github.com/topcheer/ggcode" || got[0].proxyPrefix != "" {
+		t.Fatalf("unexpected first default release source: %#v", got[0])
+	}
+	if got[1].proxyPrefix != "https://get.ystone.us/" || got[1].baseURL != "" {
 		t.Fatalf("unexpected default release sources: %#v", got)
 	}
 }
@@ -361,10 +367,13 @@ func TestDownloadBinaryWithProxyPrefix(t *testing.T) {
 
 func overrideReleaseBaseURLs(t *testing.T, urls ...string) func() {
 	t.Helper()
-	prev := append([]string(nil), defaultReleaseBaseURLs...)
-	defaultReleaseBaseURLs = append([]string(nil), urls...)
+	prev := append([]releaseSource(nil), defaultReleaseSources...)
+	defaultReleaseSources = make([]releaseSource, 0, len(urls))
+	for _, url := range urls {
+		defaultReleaseSources = append(defaultReleaseSources, releaseSource{baseURL: strings.TrimRight(url, "/")})
+	}
 	return func() {
-		defaultReleaseBaseURLs = prev
+		defaultReleaseSources = prev
 	}
 }
 

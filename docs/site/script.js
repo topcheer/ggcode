@@ -85,8 +85,8 @@ const translations = {
       "Works well for Python environments or standardized distribution across team machines.",
     "install.native.title": "Native release packages",
     "install.native.text":
-      "GitHub Releases now ship native installers and packages, including .pkg, .msi, .deb, .rpm, .apk, .ipk, and Arch packages.",
-    "install.native.cta": "Browse releases",
+      "Latest native installers and packages are mirrored on the website, including .pkg, .msi, .deb, .rpm, .apk, .ipk, and Arch packages.",
+    "install.native.cta": "Open latest downloads",
     "install.update.title": "In-app update",
     "install.update.text":
       "Already running ggcode? Use the built-in updater to fetch the latest release without reinstalling from scratch.",
@@ -170,8 +170,8 @@ const translations = {
     "install.npm.text": "适合已经在 Node 生态里的用户，通过 @ggcode-cli 作用域安装 Release 二进制。",
     "install.pip.text": "适合 Python 环境或团队机器统一分发。",
     "install.native.title": "原生发布包",
-    "install.native.text": "GitHub Releases 现在会同时提供 .pkg、.msi、.deb、.rpm、.apk、.ipk 和 Arch 包。",
-    "install.native.cta": "查看 releases",
+    "install.native.text": "官网会镜像最新的原生安装包与系统包，包括 .pkg、.msi、.deb、.rpm、.apk、.ipk 和 Arch 包。",
+    "install.native.cta": "打开最新下载",
     "install.update.title": "应用内升级",
     "install.update.text": "如果你已经在用 ggcode，可以直接用内置 updater 拉取最新版本，不用重新安装。",
     "install.copy": "复制命令",

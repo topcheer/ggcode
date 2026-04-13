@@ -222,8 +222,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 
 For environments where direct GitHub release downloads are unreliable, set
 `GGCODE_UPDATE_BASE_URLS` to a comma-separated list of release sources for `/update`. Each entry can be
-either a normal release base URL or a full-URL proxy prefix, for example:
-`GGCODE_UPDATE_BASE_URLS=https://github.com/topcheer/ggcode,https://get.ystone.us/`
+either a normal release base URL or a full-URL proxy prefix.
 | `/undo` | Revert the last file edit |
 | `/checkpoints` | List available edit checkpoints |
 
