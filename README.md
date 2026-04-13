@@ -161,6 +161,7 @@ Find why startup feels slow in the TUI
 ### 4. Use the built-in workflow features
 
 - **`Ctrl+C`** cancels the active run
+- **`Ctrl+F`** opens the fullscreen project file browser with tree navigation, filename filtering, and a live preview pane
 - If the agent is busy, you can keep typing — new prompts are **queued**
 - Type **`$`** or **`!`** on an empty composer to enter **local shell mode**; press **`Esc`** to leave it when idle
 - **`/undo`** reverts the last file edit
@@ -176,7 +177,8 @@ Find why startup feels slow in the TUI
 From the product point of view, ggcode is more than “chat with a model”:
 
 - **Code understanding** — read files, search the repo, inspect git status and diffs
-- **Semantic code navigation** — use first-class local LSP servers like `gopls`, `rust-analyzer`, `lua-language-server`, and Python servers for hover, definition, references, symbols, workspace symbols, diagnostics, code actions, rename, and in-app installation from `/status`
+- **Fast project browsing** — open the fullscreen file browser to expand folders, filter by filename, and preview Markdown / source files without leaving the TUI
+- **Semantic code navigation** — use first-class local LSP servers like `gopls`, `rust-analyzer`, `clangd`, `sourcekit-lsp`, `lua-language-server`, Python servers, and config-language servers for YAML / JSON / Dockerfile / shell files for hover, definition, references, symbols, workspace symbols, diagnostics, code actions, rename, and in-app installation from `/status`
 - **Code changes** — create files, edit targeted regions, and checkpoint edits for undo
 - **Command execution** — run foreground commands or long-running background jobs
 - **Parallel help** — spawn sub-agents, inspect their progress, and poll long-running workers without blocking the main loop

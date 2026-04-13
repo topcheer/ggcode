@@ -22,6 +22,9 @@ func (m Model) View() string {
 	if m.quitting {
 		return ""
 	}
+	if m.fileBrowser != nil {
+		return m.renderFileBrowser()
+	}
 	if m.previewPanel != nil {
 		return m.renderPreviewPanel()
 	}
@@ -140,12 +143,6 @@ func (m Model) renderOutput() string {
 			sb.WriteString("\n")
 		}
 		sb.WriteString(liveActivities)
-	}
-	if m.loading && m.spinner.IsActive() {
-		sb.WriteString("\n")
-		sb.WriteString(m.spinner.String())
-	} else if m.loading {
-		sb.WriteString("▌")
 	}
 	sb.WriteString("\n\n")
 	return sb.String()
@@ -726,7 +723,7 @@ func resolveGitDir(start string) (string, error) {
 
 func (m Model) renderConversationPanel(panelHeight int) string {
 	vp := m.conversationViewport()
-	content := m.decoratePreviewTargets(vp.View())
+	content := vp.View()
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

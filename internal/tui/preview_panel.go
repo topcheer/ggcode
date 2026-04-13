@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -13,13 +11,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	chromastyles "github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-)
-
-var (
-	previewTokenPattern = regexp.MustCompile(`(?:~/|/|\.\.?/)?(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?::\d+(?::\d+)?)?`)
-	ansiEscapePattern   = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 )
 
 type previewPanelState struct {
@@ -38,80 +30,29 @@ func (m *Model) closePreviewPanel() {
 	m.previewPanel = nil
 }
 
-func (m *Model) handlePreviewClick(msg tea.MouseMsg) bool {
-	if msg.Button != tea.MouseButtonLeft || msg.Action != tea.MouseActionPress {
-		return false
-	}
-	token, ok := m.previewTokenAt(msg.X, msg.Y)
-	if !ok {
-		return false
-	}
-	return m.openPreviewForToken(token)
-}
-
-func (m Model) previewTokenAt(mouseX, mouseY int) (string, bool) {
-	if mouseX < 0 || mouseY < 0 {
-		return "", false
-	}
-	lines := visibleViewportLines(m.View())
-	return previewTokenAtLine(lines, mouseY, mouseX)
-}
-
-func previewTokenAtLine(lines []string, y, mouseX int) (string, bool) {
-	if y < 0 || y >= len(lines) {
-		return "", false
-	}
-	line := lines[y]
-	for _, match := range previewTokenPattern.FindAllStringIndex(line, -1) {
-		start := lipgloss.Width(line[:match[0]])
-		end := lipgloss.Width(line[:match[1]])
-		if mouseX >= start && mouseX < end {
-			return line[match[0]:match[1]], true
-		}
-	}
-	return "", false
-}
-
-func visibleViewportLines(rendered string) []string {
-	plain := ansiEscapePattern.ReplaceAllString(rendered, "")
-	plain = strings.TrimRight(plain, "\n")
-	if plain == "" {
-		return nil
-	}
-	return strings.Split(plain, "\n")
-}
-
-func (m *Model) openPreviewForToken(token string) bool {
-	state := m.buildPreviewPanelState(token)
-	if state == nil {
-		return false
-	}
-	m.previewPanel = state
-	m.syncPreviewViewport(true)
-	return true
-}
-
-func (m Model) buildPreviewPanelState(token string) *previewPanelState {
-	pathPart, targetLine := parsePreviewTarget(token)
-	if pathPart == "" {
-		return nil
-	}
-	absPath, ok := resolvePreviewPath(pathPart)
-	if !ok {
-		return nil
-	}
+func buildPreviewPanelStateForPath(absPath string, targetLine int) *previewPanelState {
 	info, err := os.Stat(absPath)
 	if err != nil || info.IsDir() {
 		return nil
 	}
 	data, err := os.ReadFile(absPath)
-	displayPath := displayPreviewPath(pathPart, absPath)
+	displayPath := displayPreviewPath("", absPath)
 	if err != nil {
 		state := &previewPanelState{
 			DisplayPath: displayPath,
 			AbsPath:     absPath,
 			TargetLine:  targetLine,
 			Error:       err.Error(),
+		}
+		state.viewport = newPreviewViewport()
+		return state
+	}
+	if isBinaryPreviewData(data) {
+		state := &previewPanelState{
+			DisplayPath: displayPath,
+			AbsPath:     absPath,
+			TargetLine:  targetLine,
+			Error:       previewText(LangEnglish, "binary"),
 		}
 		state.viewport = newPreviewViewport()
 		return state
@@ -139,27 +80,24 @@ func (p *previewPanelState) previewContent(width int) string {
 	rendered := p.Content
 	switch {
 	case isMarkdownPreviewPath(p.DisplayPath) || isMarkdownPreviewPath(p.AbsPath):
-		renderer, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(width),
-		)
-		if err != nil {
-			return p.Content
-		}
-		out, err := renderer.Render(p.Content)
-		if err != nil {
-			return p.Content
-		}
-		rendered = trimLeadingRenderedSpacing(out)
+		rendered = trimLeadingRenderedSpacing(RenderMarkdownWidth(p.Content, max(20, width)))
 	case shouldSyntaxHighlightPreviewPath(p.DisplayPath) || shouldSyntaxHighlightPreviewPath(p.AbsPath):
-		out, ok := renderHighlightedPreview(p.DisplayPath, p.Content)
+		out, ok := renderHighlightedPreview(p.DisplayPath, wrapPreviewText(p.Content, width))
 		if ok {
 			rendered = out
+		} else {
+			rendered = wrapPreviewText(p.Content, width)
 		}
+	default:
+		rendered = wrapPreviewText(p.Content, width)
 	}
 	p.renderWidth = width
 	p.rendered = rendered
 	return p.rendered
+}
+
+func wrapPreviewText(text string, width int) string {
+	return strings.Join(wrapConversationText(text, max(1, width)), "\n")
 }
 
 func isMarkdownPreviewPath(path string) bool {
@@ -176,12 +114,22 @@ func shouldSyntaxHighlightPreviewPath(path string) bool {
 	if isMarkdownPreviewPath(path) {
 		return false
 	}
+	base := filepath.Base(path)
+	switch {
+	case base == "Dockerfile", base == "Containerfile", base == ".env", strings.HasPrefix(base, ".env."):
+		return true
+	}
+	if lexers.Match(path) != nil {
+		return true
+	}
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
-	case ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml", ".toml", ".sh", ".bash", ".zsh", ".mod", ".sum", ".txt", ".html", ".css", ".scss", ".sql", ".xml", ".ini", ".conf":
+	case ".rs", ".c", ".cc", ".cp", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".m", ".mm",
+		".lua", ".swift", ".tf", ".tfvars", ".hcl", ".zig", ".java", ".mjs", ".cjs", ".jsonc",
+		".ksh", ".cs", ".csproj", ".sln", ".slnx", ".txt", ".conf":
 		return true
 	default:
-		return path == "Dockerfile" || strings.HasSuffix(path, ".env")
+		return false
 	}
 }
 
@@ -211,52 +159,6 @@ func renderHighlightedPreview(path, content string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimRight(buf.String(), "\n"), true
-}
-
-func parsePreviewTarget(token string) (string, int) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return "", 0
-	}
-	match := previewTokenPattern.FindString(token)
-	if match == "" {
-		return "", 0
-	}
-	parts := strings.Split(match, ":")
-	if len(parts) >= 3 {
-		if _, colErr := strconv.Atoi(parts[len(parts)-1]); colErr == nil {
-			if line, lineErr := strconv.Atoi(parts[len(parts)-2]); lineErr == nil {
-				return strings.Join(parts[:len(parts)-2], ":"), line
-			}
-		}
-	}
-	if len(parts) >= 2 {
-		if line, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
-			return strings.Join(parts[:len(parts)-1], ":"), line
-		}
-	}
-	return match, 0
-}
-
-func resolvePreviewPath(pathPart string) (string, bool) {
-	if pathPart == "" {
-		return "", false
-	}
-	if strings.HasPrefix(pathPart, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", false
-		}
-		pathPart = filepath.Join(home, pathPart[2:])
-	}
-	if filepath.IsAbs(pathPart) {
-		return filepath.Clean(pathPart), true
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", false
-	}
-	return filepath.Clean(filepath.Join(cwd, pathPart)), true
 }
 
 func displayPreviewPath(rawPath, absPath string) string {
@@ -300,36 +202,6 @@ func (m Model) renderPreviewPanel() string {
 		Width(max(1, m.viewWidth()-m.terminalRightMargin())).
 		Height(max(6, m.viewHeight())).
 		Render(content)
-}
-
-func (m Model) decoratePreviewTargets(rendered string) string {
-	if rendered == "" {
-		return rendered
-	}
-	linkStyle := lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("81"))
-	lines := strings.Split(rendered, "\n")
-	for i, line := range lines {
-		lines[i] = previewTokenPattern.ReplaceAllStringFunc(line, func(token string) string {
-			pathPart, _ := parsePreviewTarget(token)
-			if pathPart == "" {
-				return token
-			}
-			if !previewPathExists(pathPart) {
-				return token
-			}
-			return linkStyle.Render(token)
-		})
-	}
-	return strings.Join(lines, "\n")
-}
-
-func previewPathExists(pathPart string) bool {
-	absPath, ok := resolvePreviewPath(pathPart)
-	if !ok {
-		return false
-	}
-	info, err := os.Stat(absPath)
-	return err == nil && !info.IsDir()
 }
 
 func newPreviewViewport() ViewportModel {
@@ -432,6 +304,8 @@ func previewText(lang Language, key string) string {
 			return "Esc 关闭 • 点击其它路径可切换预览"
 		case "hint_fullscreen":
 			return "Esc 关闭 • 鼠标滚轮 / ↑↓ / PgUp / PgDn 滚动"
+		case "binary":
+			return "二进制文件不支持预览"
 		}
 	default:
 		switch key {
@@ -445,6 +319,8 @@ func previewText(lang Language, key string) string {
 			return "Esc closes • click another path to switch preview"
 		case "hint_fullscreen":
 			return "Esc closes • mouse wheel / ↑↓ / PgUp / PgDn scroll"
+		case "binary":
+			return "Binary files cannot be previewed"
 		}
 	}
 	return key

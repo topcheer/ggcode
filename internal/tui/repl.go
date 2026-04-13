@@ -288,7 +288,6 @@ func (r *REPL) primeInitialWindowSize(getSize func(fd uintptr) (int, int, error)
 		return
 	}
 	r.model.handleResize(width, height)
-	r.model.rebuildMarkdownRenderer()
 }
 
 // createSession creates a fresh session and wires it into the model.

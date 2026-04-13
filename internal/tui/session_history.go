@@ -92,12 +92,7 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 }
 
 func (m *Model) renderConversationAssistantMarkdown(body string) {
-	rendered := body
-	if m.mdRenderer != nil {
-		if output, err := m.mdRenderer.Render(body); err == nil {
-			rendered = trimLeadingRenderedSpacing(output)
-		}
-	}
+	rendered := trimLeadingRenderedSpacing(RenderMarkdownWidth(body, max(20, m.conversationInnerWidth()-2)))
 	m.output.WriteString(assistantBulletStyle.Render("● "))
 	m.output.WriteString(rendered)
 	m.output.WriteString("\n")

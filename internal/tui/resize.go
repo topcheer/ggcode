@@ -2,8 +2,6 @@ package tui
 
 import (
 	"time"
-
-	"github.com/charmbracelet/glamour"
 )
 
 // handleResize updates viewport and input dimensions on window size changes.
@@ -29,22 +27,11 @@ func (m *Model) handleResize(width, height int) {
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
 	m.syncPreviewViewport(false)
+	m.syncFileBrowser(false)
 }
 
 func (m *Model) syncConversationViewport() {
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
 	m.viewport.SetContent(m.renderOutput())
-}
-
-// rebuildMarkdownRenderer creates a new glamour renderer matching the current width.
-func (m *Model) rebuildMarkdownRenderer() {
-	wrap := m.mainColumnWidth() - 4
-	if wrap <= 20 || wrap == m.markdownWrapWidth {
-		return
-	}
-	if r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(wrap)); err == nil {
-		m.mdRenderer = r
-		m.markdownWrapWidth = wrap
-	}
 }
