@@ -23,6 +23,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/lsp"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -1124,6 +1125,116 @@ func TestInspectorStatusItemsIncludeLSPInstallHintForJavaWorkspace(t *testing.T)
 	}
 	if !found {
 		t.Fatalf("expected java LSP item in status panel, got %#v", items)
+	}
+}
+
+func TestInspectorStatusEnterOpensPythonLSPInstallChooser(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.WriteFile(filepath.Join(workspace, "pyproject.toml"), []byte("[project]\nname = 'board'\nversion = '0.1.0'\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "app.py"), []byte("print('hi')\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	m := newTestModel()
+	m.openInspectorPanel(inspectorPanelStatus)
+	items := m.inspectorStatusItems()
+	for i, item := range items {
+		if item.ID == "lsp-python" {
+			m.inspectorPanel.cursor = i
+			break
+		}
+	}
+
+	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("expected python chooser to open inline")
+	}
+	if next.inspectorPanel == nil || next.inspectorPanel.kind != inspectorPanelLSPInstall {
+		t.Fatalf("expected LSP install chooser, got %#v", next.inspectorPanel)
+	}
+	if len(next.inspectorPanel.lspInstallOptions) != 2 {
+		t.Fatalf("expected 2 python install options, got %#v", next.inspectorPanel.lspInstallOptions)
+	}
+}
+
+func TestInspectorStatusEnterRunsSingleLSPInstallCommand(t *testing.T) {
+	workspace := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() { _ = os.Chdir(prevWD) }()
+	if err := os.WriteFile(filepath.Join(workspace, "pom.xml"), []byte("<project/>"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	m := newTestModel()
+	var gotCommand string
+	m.shellCommandSubmitter = func(command string, addToHistory bool) tea.Cmd {
+		gotCommand = command
+		return func() tea.Msg { return nil }
+	}
+	m.openInspectorPanel(inspectorPanelStatus)
+	items := m.inspectorStatusItems()
+	for i, item := range items {
+		if item.ID == "lsp-java" {
+			m.inspectorPanel.cursor = i
+			break
+		}
+	}
+
+	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected java install command")
+	}
+	if next.inspectorPanel != nil {
+		t.Fatalf("expected status panel to close before install, got %#v", next.inspectorPanel)
+	}
+	if !strings.Contains(gotCommand, "jdtls") {
+		t.Fatalf("expected jdtls install command, got %q", gotCommand)
+	}
+}
+
+func TestInspectorLSPInstallEnterRunsSelectedCommand(t *testing.T) {
+	m := newTestModel()
+	var gotCommand string
+	m.shellCommandSubmitter = func(command string, addToHistory bool) tea.Cmd {
+		gotCommand = command
+		return func() tea.Msg { return nil }
+	}
+	m.inspectorPanel = &inspectorPanelState{
+		kind:            inspectorPanelLSPInstall,
+		lspLanguageName: "Python",
+		lspInstallOptions: []lsp.InstallOption{
+			{ID: "pyright", Label: "pyright-langserver", Binary: "pyright-langserver", Command: "pip install pyright", Recommended: true},
+			{ID: "pylsp", Label: "pylsp", Binary: "pylsp", Command: "pip install python-lsp-server"},
+		},
+	}
+
+	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected selected install command")
+	}
+	if next.inspectorPanel != nil {
+		t.Fatalf("expected chooser to close before install, got %#v", next.inspectorPanel)
+	}
+	if gotCommand != "pip install pyright" {
+		t.Fatalf("expected pyright install command, got %q", gotCommand)
 	}
 }
 

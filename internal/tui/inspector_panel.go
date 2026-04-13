@@ -31,12 +31,16 @@ const (
 	inspectorPanelPlugins     inspectorPanelKind = "plugins"
 	inspectorPanelConfig      inspectorPanelKind = "config"
 	inspectorPanelStatus      inspectorPanelKind = "status"
+	inspectorPanelLSPInstall  inspectorPanelKind = "lsp-install"
 )
 
 type inspectorPanelState struct {
-	kind    inspectorPanelKind
-	cursor  int
-	message string
+	kind              inspectorPanelKind
+	cursor            int
+	message           string
+	lspLanguageID     string
+	lspLanguageName   string
+	lspInstallOptions []lsp.InstallOption
 }
 
 type inspectorPanelItem struct {
@@ -187,6 +191,10 @@ func (m *Model) handleInspectorPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m.handleInspectorTodoClear()
 		}
 	case "esc", "ctrl+c":
+		if m.inspectorPanel.kind == inspectorPanelLSPInstall {
+			m.openInspectorPanel(inspectorPanelStatus)
+			return *m, nil
+		}
 		m.closeInspectorPanel()
 	}
 	return *m, nil
@@ -217,8 +225,74 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 		}
 		m.setInspectorMessage(inspectorText(m.currentLanguage(), "reverted", displayToolFileTarget(cp.FilePath)))
 		return *m, nil
+	case inspectorPanelStatus:
+		return m.handleInspectorLSPStatusAction(items)
+	case inspectorPanelLSPInstall:
+		return m.handleInspectorLSPInstallAction(items)
 	default:
 		return *m, nil
+	}
+}
+
+func (m *Model) handleInspectorLSPStatusAction(items []inspectorPanelItem) (Model, tea.Cmd) {
+	if m.inspectorPanel == nil || len(items) == 0 {
+		return *m, nil
+	}
+	item := items[clampInspectorCursor(m.inspectorPanel.cursor, len(items))]
+	if !strings.HasPrefix(item.ID, "lsp-") {
+		return *m, nil
+	}
+	langID := strings.TrimPrefix(item.ID, "lsp-")
+	status := lsp.DetectWorkspaceStatus(workingDirFromModel(m))
+	for _, lang := range status.Languages {
+		if lang.ID != langID || lang.Available {
+			continue
+		}
+		if len(lang.InstallOptions) == 0 {
+			m.setInspectorMessage(inspectorText(m.currentLanguage(), "lsp_install_unavailable"))
+			return *m, nil
+		}
+		if len(lang.InstallOptions) == 1 {
+			m.closeInspectorPanel()
+			return *m, m.submitInspectorShellCommand(lang.InstallOptions[0].Command)
+		}
+		m.openLSPInstallPanel(lang)
+		return *m, nil
+	}
+	return *m, nil
+}
+
+func (m *Model) handleInspectorLSPInstallAction(items []inspectorPanelItem) (Model, tea.Cmd) {
+	if m.inspectorPanel == nil || len(items) == 0 {
+		return *m, nil
+	}
+	idx := clampInspectorCursor(m.inspectorPanel.cursor, len(items))
+	if idx >= len(m.inspectorPanel.lspInstallOptions) {
+		return *m, nil
+	}
+	command := strings.TrimSpace(m.inspectorPanel.lspInstallOptions[idx].Command)
+	if command == "" {
+		m.setInspectorMessage(inspectorText(m.currentLanguage(), "lsp_install_unavailable"))
+		return *m, nil
+	}
+	m.closeInspectorPanel()
+	return *m, m.submitInspectorShellCommand(command)
+}
+
+func (m *Model) submitInspectorShellCommand(command string) tea.Cmd {
+	if m.shellCommandSubmitter != nil {
+		return m.shellCommandSubmitter(command, true)
+	}
+	return m.submitShellCommand(command, true)
+}
+
+func (m *Model) openLSPInstallPanel(lang lsp.LanguageStatus) {
+	options := slices.Clone(lang.InstallOptions)
+	m.inspectorPanel = &inspectorPanelState{
+		kind:              inspectorPanelLSPInstall,
+		lspLanguageID:     lang.ID,
+		lspLanguageName:   lang.DisplayName,
+		lspInstallOptions: options,
 	}
 }
 
@@ -292,6 +366,8 @@ func (m Model) inspectorPanelItems(kind inspectorPanelKind) []inspectorPanelItem
 		return m.inspectorConfigItems()
 	case inspectorPanelStatus:
 		return m.inspectorStatusItems()
+	case inspectorPanelLSPInstall:
+		return m.inspectorLSPInstallItems()
 	default:
 		return nil
 	}
@@ -662,6 +738,8 @@ func (m Model) inspectorLSPStatusItems() []inspectorPanelItem {
 		summary := inspectorText(m.currentLanguage(), "lsp_unavailable")
 		if lang.Available {
 			summary = fmt.Sprintf("%s • %s", inspectorText(m.currentLanguage(), "lsp_ready"), lang.Binary)
+		} else if labels := lspInstallLabels(lang.InstallOptions); len(labels) > 0 {
+			summary = fmt.Sprintf("%s • %s", inspectorText(m.currentLanguage(), "lsp_install"), strings.Join(labels, ", "))
 		} else if lang.Binary != "" {
 			summary = fmt.Sprintf("%s • %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.Binary)
 		}
@@ -676,18 +754,78 @@ func (m Model) inspectorLSPStatusItems() []inspectorPanelItem {
 		if len(lang.Evidence) > 0 {
 			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_detected_by"), strings.Join(lang.Evidence, ", ")))
 		}
-		if !lang.Available && strings.TrimSpace(lang.InstallHint) != "" {
-			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.InstallHint))
+		if !lang.Available {
+			switch len(lang.InstallOptions) {
+			case 0:
+				if strings.TrimSpace(lang.InstallHint) != "" {
+					detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.InstallHint))
+				}
+			case 1:
+				detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lang.InstallOptions[0].Command))
+			default:
+				detailLines = append(detailLines, inspectorText(m.currentLanguage(), "lsp_install_options")+":")
+				for _, option := range lang.InstallOptions {
+					line := fmt.Sprintf("- %s: %s", option.Label, option.Command)
+					if option.Recommended {
+						line = fmt.Sprintf("- %s (%s): %s", option.Label, inspectorText(m.currentLanguage(), "lsp_recommended"), option.Command)
+					}
+					detailLines = append(detailLines, line)
+				}
+			}
+			detailLines = append(detailLines, "", inspectorText(m.currentLanguage(), "lsp_install_enter_hint"))
 		}
 		items = append(items, inspectorPanelItem{
-			ID:       "lsp-" + lang.ID,
-			Title:    lang.DisplayName,
-			Summary:  summary,
-			Detail:   strings.Join(detailLines, "\n"),
-			Disabled: !lang.Available,
+			ID:      "lsp-" + lang.ID,
+			Title:   lang.DisplayName,
+			Summary: summary,
+			Detail:  strings.Join(detailLines, "\n"),
 		})
 	}
 	return items
+}
+
+func (m Model) inspectorLSPInstallItems() []inspectorPanelItem {
+	if m.inspectorPanel == nil {
+		return nil
+	}
+	options := m.inspectorPanel.lspInstallOptions
+	items := make([]inspectorPanelItem, 0, len(options))
+	for _, option := range options {
+		title := option.Label
+		summary := option.Binary
+		if option.Recommended {
+			if summary == "" {
+				summary = inspectorText(m.currentLanguage(), "lsp_recommended")
+			} else {
+				summary += " • " + inspectorText(m.currentLanguage(), "lsp_recommended")
+			}
+		}
+		detailLines := []string{
+			firstNonEmpty(title, m.inspectorPanel.lspLanguageName),
+			"",
+		}
+		if option.Binary != "" {
+			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_binary"), option.Binary))
+		}
+		detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), option.Command))
+		items = append(items, inspectorPanelItem{
+			ID:      option.ID,
+			Title:   title,
+			Summary: summary,
+			Detail:  strings.Join(detailLines, "\n"),
+		})
+	}
+	return items
+}
+
+func lspInstallLabels(options []lsp.InstallOption) []string {
+	labels := make([]string, 0, len(options))
+	for _, option := range options {
+		if label := strings.TrimSpace(option.Label); label != "" {
+			labels = append(labels, label)
+		}
+	}
+	return labels
 }
 
 func ternaryString(cond bool, yes, no string) string {
@@ -725,6 +863,8 @@ func (m Model) inspectorPanelEmptyState() string {
 		return inspectorText(m.currentLanguage(), "todos_empty")
 	case inspectorPanelPlugins:
 		return inspectorText(m.currentLanguage(), "plugins_empty")
+	case inspectorPanelLSPInstall:
+		return inspectorText(m.currentLanguage(), "lsp_install_unavailable")
 	default:
 		return inspectorText(m.currentLanguage(), "panel_empty")
 	}
@@ -742,6 +882,10 @@ func (m Model) inspectorPanelHints(kind inspectorPanelKind) string {
 		return inspectorText(m.currentLanguage(), "hint_memory")
 	case inspectorPanelTodos:
 		return inspectorText(m.currentLanguage(), "hint_todos")
+	case inspectorPanelStatus:
+		return inspectorText(m.currentLanguage(), "hint_status")
+	case inspectorPanelLSPInstall:
+		return inspectorText(m.currentLanguage(), "hint_lsp_install")
 	default:
 		return inspectorText(m.currentLanguage(), "hint_default")
 	}
@@ -859,6 +1003,10 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ 选择 • C 清空 todo • Esc 关闭"
 		case "hint_default":
 			msg = "↑/↓ 选择 • Esc 关闭"
+		case "hint_status":
+			msg = "↑/↓ 选择 • Enter 安装缺失的 LSP • Esc 关闭"
+		case "hint_lsp_install":
+			msg = "↑/↓ 选择 • Enter 执行安装 • Esc 返回 /status"
 		case "sessions_empty":
 			msg = "暂无会话。"
 		case "agents_empty":
@@ -991,6 +1139,14 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "安装命令"
 		case "lsp_detected_by":
 			msg = "检测依据"
+		case "lsp_install_options":
+			msg = "安装选项"
+		case "lsp_recommended":
+			msg = "推荐"
+		case "lsp_install_enter_hint":
+			msg = "按 Enter 直接安装；如果有多个候选，会先让你选择。"
+		case "lsp_install_unavailable":
+			msg = "当前没有可用的安装选项"
 		case "lsp_no_supported_languages":
 			msg = "当前工作区未检测到已支持的语言"
 		}
@@ -1008,6 +1164,10 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ select • C clear todos • Esc close"
 		case "hint_default":
 			msg = "↑/↓ select • Esc close"
+		case "hint_status":
+			msg = "↑/↓ select • Enter install missing LSP • Esc close"
+		case "hint_lsp_install":
+			msg = "↑/↓ select • Enter run installer • Esc back to /status"
 		case "sessions_empty":
 			msg = "No sessions saved."
 		case "agents_empty":
@@ -1140,6 +1300,14 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "Install"
 		case "lsp_detected_by":
 			msg = "Detected by"
+		case "lsp_install_options":
+			msg = "Install options"
+		case "lsp_recommended":
+			msg = "recommended"
+		case "lsp_install_enter_hint":
+			msg = "Press Enter to install. Languages with multiple candidates will open a chooser first."
+		case "lsp_install_unavailable":
+			msg = "No install options available"
 		case "lsp_no_supported_languages":
 			msg = "No supported workspace languages detected"
 		}

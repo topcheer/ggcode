@@ -1,6 +1,6 @@
 # ggcode
 
-**ggcode** is an AI coding agent for the terminal. It can understand a codebase, edit files, run commands, manage checkpoints, connect to MCP tools, and keep working inside a polished TUI instead of bouncing between scripts and browser tabs.
+**ggcode** is an AI coding agent for the terminal. It can understand a codebase, edit files, run commands, manage checkpoints, use first-class LSP / MCP / skill workflows, and keep working inside a polished TUI instead of bouncing between scripts and browser tabs.
 
 If you want a terminal-native coding workflow that feels like a product, not a demo, this is what ggcode is for.
 
@@ -11,7 +11,7 @@ If you want a terminal-native coding workflow that feels like a product, not a d
 - **Keep control when it matters** — supervised, plan, auto, bypass, and autopilot modes let you choose how much the agent can do
 - **Clarify without derailing** — the TUI can surface structured multi-question ask_user flows when the agent is genuinely blocked
 - **Recover quickly** — undo file changes with checkpoints instead of manually repairing bad edits
-- **Scale up when needed** — use MCP tools, plugins, skills, memory, background commands, and sub-agents
+- **Scale up when needed** — use first-class LSP, MCP tools, skills, plugins, memory, background commands, and sub-agents
 - **Fit daily usage** — bilingual UI, resumable sessions, queueing while the agent is busy, local shell mode, and shell-friendly install flows
 
 ## Installation
@@ -166,6 +166,7 @@ Find why startup feels slow in the TUI
 - **`/undo`** reverts the last file edit
 - **`/provider`** switches vendor / endpoint / model
 - **`/mode`** changes how much autonomy the agent gets
+- **`/status`** shows current runtime state and lets you install missing LSP servers in-place
 - **`/mcp`** shows connected MCP servers and their tools
 - **`/harness`** runs repo harness workflows like scaffold, checks, and cleanup
 - When the agent truly cannot continue, it can open a **tabbed ask_user questionnaire** and resume from your batch answers
@@ -175,12 +176,12 @@ Find why startup feels slow in the TUI
 From the product point of view, ggcode is more than “chat with a model”:
 
 - **Code understanding** — read files, search the repo, inspect git status and diffs
-- **Semantic code navigation** — use local LSP servers like `gopls` when available for hover, definition, references, symbols, workspace symbols, diagnostics, code actions, and rename
+- **Semantic code navigation** — use first-class local LSP servers like `gopls`, `rust-analyzer`, `lua-language-server`, and Python servers for hover, definition, references, symbols, workspace symbols, diagnostics, code actions, rename, and in-app installation from `/status`
 - **Code changes** — create files, edit targeted regions, and checkpoint edits for undo
 - **Command execution** — run foreground commands or long-running background jobs
 - **Parallel help** — spawn sub-agents, inspect their progress, and poll long-running workers without blocking the main loop
 - **Memory and context** — load project memory files like `GGCODE.md`, `AGENTS.md`, `CLAUDE.md`, and `COPILOT.md`
-- **Extensibility** — connect MCP servers, custom plugins, and skills
+- **Extensibility** — connect MCP servers, custom plugins, and skills alongside the built-in LSP workflow
 - **Session continuity** — save, resume, export, and compact conversations
 - **Harness workflows** — scaffold repo guidance, enforce invariants, track runs, and garbage-collect stale task state
 
@@ -204,7 +205,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 | `/provider [vendor]` | Open the provider manager and switch vendor / endpoint / model, including GitHub Copilot login/logout flows |
 | `/model <name>` | Switch model directly |
 | `/mode <mode>` | Change permission mode |
-| `/status` | Show current status, including local LSP availability and install hints for supported languages |
+| `/status` | Show current status, including local LSP availability, install hints, and in-place installation for supported languages |
 | `/config` | View or update configuration |
 | `/lang <en|zh-CN>` | Change interface language |
 

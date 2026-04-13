@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -72,7 +73,7 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	m.once.Do(func() {
 		go m.reapIdle()
 	})
-	key := workspace + "\x00" + resolved.Binary
+	key := workspace + "\x00" + resolved.Binary + "\x00" + strings.Join(resolved.Args, "\x1f")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing := m.sessions[key]; existing != nil && !existing.isClosed() {
