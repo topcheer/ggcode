@@ -1027,7 +1027,7 @@ func (m Model) renderComposerPanel() string {
 		hints = append(hints, m.t("hint.image_attached"))
 	}
 
-	body := lipgloss.NewStyle().Bold(true).Render(m.input.View()) + "\n" +
+	body := m.renderComposerInput() + "\n" +
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
@@ -1036,6 +1036,71 @@ func (m Model) renderComposerPanel() string {
 		Padding(0, 1).
 		Width(width).
 		Render(body)
+}
+
+func (m Model) renderComposerInput() string {
+	value := m.input.Value()
+	if strings.TrimSpace(value) == "" {
+		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
+	}
+
+	prompt := m.input.Prompt
+	promptWidth := lipgloss.Width(prompt)
+	available := max(1, m.mainColumnWidth()-6-promptWidth)
+	if !composerNeedsWrap(value, available) {
+		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
+	}
+
+	display := composerDisplayValue(value, m.input.Position())
+	lines := wrapConversationText(display, available)
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	promptStyle := lipgloss.NewStyle().Bold(true)
+	indent := strings.Repeat(" ", promptWidth)
+	rows := make([]string, 0, len(lines))
+	for i, line := range lines {
+		line = promptStyle.Render(line)
+		if i == 0 {
+			rows = append(rows, promptStyle.Render(prompt)+line)
+			continue
+		}
+		rows = append(rows, indent+line)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func composerNeedsWrap(value string, width int) bool {
+	if width <= 0 {
+		return true
+	}
+	for _, line := range strings.Split(value, "\n") {
+		if lipgloss.Width(line) > width {
+			return true
+		}
+	}
+	return false
+}
+
+func composerDisplayValue(value string, cursor int) string {
+	runes := []rune(value)
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	var b strings.Builder
+	for i, r := range runes {
+		if i == cursor {
+			b.WriteRune('|')
+		}
+		b.WriteRune(r)
+	}
+	if cursor >= len(runes) {
+		b.WriteRune('|')
+	}
+	return b.String()
 }
 
 func (m Model) renderContextBox(title, body string, accent lipgloss.Color) string {
