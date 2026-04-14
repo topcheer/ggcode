@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -439,6 +440,135 @@ func (qs *questionnaireState) answeredCount() int {
 		}
 	}
 	return count
+}
+
+func (qs *questionnaireState) firstUnansweredQuestionIndex() int {
+	for i, question := range qs.request.Questions {
+		if !qs.buildAnswer(i, question).Answered {
+			return i
+		}
+	}
+	return -1
+}
+
+func (qs *questionnaireState) applyRemoteAnswer(raw string, lang Language) (bool, error) {
+	if qs == nil {
+		return false, fmt.Errorf("questionnaire unavailable")
+	}
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return false, fmt.Errorf("empty answer")
+	}
+	idx := qs.firstUnansweredQuestionIndex()
+	if idx < 0 {
+		idx = qs.activeQuestionIndex()
+	}
+	if idx < 0 || idx >= len(qs.request.Questions) {
+		return false, fmt.Errorf("no active question")
+	}
+	qs.tabIndex = idx
+	qs.loadActiveQuestion(lang)
+	answer := &qs.answers[idx]
+	question := qs.request.Questions[idx]
+
+	selected, freeform, err := parseRemoteQuestionnaireAnswer(text, question)
+	if err != nil {
+		return false, err
+	}
+	if selected != nil {
+		answer.selected = selected
+	}
+	if freeform != "" || question.Kind == toolpkg.AskUserKindText || question.AllowFreeform {
+		answer.freeform = freeform
+	}
+	if qs.answeredCount() >= len(qs.request.Questions) {
+		return true, nil
+	}
+	nextIdx := qs.firstUnansweredQuestionIndex()
+	if nextIdx >= 0 {
+		qs.tabIndex = nextIdx
+		qs.loadActiveQuestion(lang)
+	}
+	return false, nil
+}
+
+func parseRemoteQuestionnaireAnswer(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, string, error) {
+	text := strings.TrimSpace(raw)
+	switch question.Kind {
+	case toolpkg.AskUserKindText:
+		return nil, text, nil
+	case toolpkg.AskUserKindSingle, toolpkg.AskUserKindMulti:
+		selected, matched, err := parseRemoteQuestionnaireSelections(text, question)
+		if err != nil {
+			return nil, "", err
+		}
+		if matched {
+			return selected, "", nil
+		}
+		if question.AllowFreeform {
+			return nil, text, nil
+		}
+		return nil, "", fmt.Errorf("reply with a choice number")
+	default:
+		if question.AllowFreeform {
+			return nil, text, nil
+		}
+		return nil, "", fmt.Errorf("unsupported question kind %q", question.Kind)
+	}
+}
+
+func parseRemoteQuestionnaireSelections(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, bool, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" || len(question.Choices) == 0 {
+		return nil, false, nil
+	}
+	tokens := strings.FieldsFunc(text, func(r rune) bool {
+		switch r {
+		case ',', '，', '、', ';', '；', '\n', '\t', ' ':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(tokens) == 0 {
+		return nil, false, nil
+	}
+
+	allNumeric := true
+	selected := make(map[string]struct{})
+	for _, token := range tokens {
+		n, err := strconv.Atoi(token)
+		if err != nil {
+			allNumeric = false
+			break
+		}
+		if n < 1 || n > len(question.Choices) {
+			return nil, false, fmt.Errorf("choice %d is out of range", n)
+		}
+		selected[question.Choices[n-1].ID] = struct{}{}
+	}
+	if allNumeric {
+		if question.Kind == toolpkg.AskUserKindSingle && len(selected) > 1 {
+			return nil, false, fmt.Errorf("pick one choice")
+		}
+		return selected, true, nil
+	}
+
+	needle := normalizeRemoteAnswerToken(text)
+	for _, choice := range question.Choices {
+		if normalizeRemoteAnswerToken(choice.ID) == needle || normalizeRemoteAnswerToken(choice.Label) == needle {
+			return map[string]struct{}{choice.ID: {}}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func normalizeRemoteAnswerToken(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\t", "")
+	return s
 }
 
 func questionnairePanelTitle(lang Language) string {

@@ -217,6 +217,8 @@ func enCatalog(key string) string {
 		return "Mode policy"
 	case "panel.context":
 		return "Context"
+	case "panel.im":
+		return "IM"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":
@@ -283,6 +285,20 @@ func enCatalog(key string) string {
 		return "directory"
 	case "context.unavailable":
 		return "No context data yet"
+	case "im.none":
+		return "No adapters configured"
+	case "im.summary":
+		return "%d adapters • %d healthy"
+	case "im.more":
+		return "+%d more (/qq)"
+	case "im.runtime.available":
+		return "runtime available"
+	case "im.runtime.disabled":
+		return "disabled"
+	case "im.runtime.not_started":
+		return "enabled • restart to initialize"
+	case "im.status.not_started":
+		return "not started"
 	case "context.until_compact":
 		return "left"
 	case "empty.ask":
@@ -924,7 +940,7 @@ func enCatalog(key string) string {
 	case "command.model_failed":
 		return "Failed to switch model: %v\n\n"
 	case "command.model_current":
-		return "Current model: %s (vendor: %s)\nUse /model to open the model panel or /model <model-name> to switch directly.\n\n"
+		return "Current model: %s (vendor: %s)\nAvailable models: %s\nUse /model to open the model panel or /model <model-name> to switch directly.\n\n"
 	case "command.provider_unknown":
 		return "Unknown vendor: %s (available: %v)\n\n"
 	case "command.provider_switched":
@@ -932,7 +948,7 @@ func enCatalog(key string) string {
 	case "command.provider_failed":
 		return "Failed to update provider selection: %v\n\n"
 	case "command.provider_current":
-		return "Current vendor: %s (model: %s)\nAvailable vendors: %s\nUsage: /provider [vendor]\n\n"
+		return "Current vendor: %s (endpoint: %s, model: %s)\nAvailable vendors: %s\nAvailable endpoints: %s\nUsage: /provider [vendor] [endpoint]\n\n"
 	case "command.allow_set":
 		return "✓ %s is now always allowed\n\n"
 	case "command.custom":
@@ -1193,6 +1209,116 @@ func enCatalog(key string) string {
 		return "Report a bug"
 	case "slash.config":
 		return "View/modify configuration"
+	case "slash.qq":
+		return "Manage QQ channel binding"
+	case "panel.qq.directory":
+		return "Directory"
+	case "panel.qq.runtime":
+		return "Runtime"
+	case "panel.qq.bots":
+		return "QQ Bots"
+	case "panel.qq.created":
+		return "Created: %d"
+	case "panel.qq.bound":
+		return "Bound: %d"
+	case "panel.qq.available":
+		return "Available: %d"
+	case "panel.qq.current_binding":
+		return "Current Binding"
+	case "panel.qq.none":
+		return "(none)"
+	case "panel.qq.default":
+		return "(default)"
+	case "panel.qq.adapter":
+		return "Adapter: %s"
+	case "panel.qq.target":
+		return "Target: %s"
+	case "panel.qq.channel":
+		return "Channel: %s"
+	case "panel.qq.bot_list":
+		return "QQ Bot List"
+	case "panel.qq.no_bots":
+		return "No QQ bots configured."
+	case "panel.qq.entry.available":
+		return "Available"
+	case "panel.qq.entry.bound":
+		return "Bound"
+	case "panel.qq.details":
+		return "Details"
+	case "panel.qq.status":
+		return "Status: %s"
+	case "panel.qq.transport":
+		return "Transport: %s"
+	case "panel.qq.bound_directory":
+		return "Bound Directory: %s"
+	case "panel.qq.current_directory_target":
+		return "Current Directory Target: %s"
+	case "panel.qq.current_directory_channel":
+		return "Current Directory Channel: %s"
+	case "panel.qq.waiting_for_pairing":
+		return "(waiting for pairing)"
+	case "panel.qq.last_error":
+		return "Last Error: %s"
+	case "panel.qq.occupied_by":
+		return "Occupied by: %s"
+	case "panel.qq.create":
+		return "Create"
+	case "panel.qq.bot_input":
+		return "QQ Bot: %s"
+	case "panel.qq.create_format":
+		return "Format: <bot-id> <appid> <appsecret>"
+	case "panel.qq.create_example":
+		return "Example: qq-main 123456 secret-value"
+	case "panel.qq.create_hint":
+		return "Enter create bot • Esc cancel"
+	case "panel.qq.actions_hint":
+		return "j/k move • Enter or b bind bot • c bind channel • x unbind channel • u unbind bot • i create bot • Esc close"
+	case "panel.qq.bind_channel":
+		return "Bind Channel"
+	case "panel.qq.scan_hint":
+		return "Scan the QR code, add the bot, then send a message to start pairing."
+	case "panel.qq.qr_code":
+		return "QR Code:"
+	case "panel.qq.share_link":
+		return "Share Link:"
+	case "panel.qq.message.no_bot":
+		return "No QQ bot available."
+	case "panel.qq.message.bound_success":
+		return "QQ bot bound to current workspace. Use c to generate the channel bind QR code."
+	case "panel.qq.message.share_generated":
+		return "QQ share link generated. Scan the QR code, add the bot, then send a message to start pairing."
+	case "panel.qq.message.unbound":
+		return "QQ channel unbound."
+	case "panel.qq.message.cleared":
+		return "QQ channel authorization cleared for current workspace."
+	case "panel.qq.message.added_bot":
+		return "Added QQ bot %s."
+	case "panel.qq.error.config_unavailable":
+		return "config is unavailable"
+	case "panel.qq.error.config_format":
+		return "QQ bot config must be: <bot-id> <appid> <appsecret>"
+	case "panel.qq.error.adapter_required":
+		return "QQ adapter name is required"
+	case "panel.qq.error.not_configured":
+		return "QQ bot %q is not configured"
+	case "panel.qq.error.disabled":
+		return "QQ bot %q is disabled"
+	case "panel.qq.error.not_qq_adapter":
+		return "adapter %q is not a QQ bot"
+	case "panel.qq.error.not_online":
+		return "QQ bot %q is not online"
+	case "panel.qq.error.not_online_detail":
+		return "QQ bot %q is not online: %s"
+	case "panel.qq.runtime.available":
+		return "available"
+	case "panel.qq.runtime.disabled":
+		return "disabled (set im.enabled: true and restart ggcode)"
+	case "panel.qq.runtime.not_started":
+		return "not started (restart ggcode to initialize IM runtime)"
+	case "panel.qq.status.not_started":
+		return "not started"
+	case "panel.qq.status.unknown":
+		return "unknown"
 	case "slash.status":
 		return "Show current status"
 	case "slash.update":
@@ -1205,6 +1331,7 @@ func enCatalog(key string) string {
   /export <id>       Export session to markdown file
   /model [name]      Open model panel or switch directly
   /provider [vendor] Open provider manager
+  /qq                Open QQ binding panel
   /lang [code]       Choose or switch interface language
   /skills            Browse available skills
   /clear             Clear conversation history
@@ -1347,6 +1474,8 @@ func zhCatalog(key string) string {
 		return "Bypass 模式确认"
 	case "panel.review_file_change":
 		return "审阅文件修改"
+	case "panel.im":
+		return "IM"
 	case "label.vendor":
 		return "供应商"
 	case "label.endpoint":
@@ -1389,6 +1518,20 @@ func zhCatalog(key string) string {
 		return "目录"
 	case "context.unavailable":
 		return "暂无上下文数据"
+	case "im.none":
+		return "未配置适配器"
+	case "im.summary":
+		return "%d 个适配器 • %d 个健康"
+	case "im.more":
+		return "还有 %d 个（/qq）"
+	case "im.runtime.available":
+		return "运行时可用"
+	case "im.runtime.disabled":
+		return "已禁用"
+	case "im.runtime.not_started":
+		return "已启用 • 重启后初始化"
+	case "im.status.not_started":
+		return "未启动"
 	case "context.until_compact":
 		return "后触发"
 	case "empty.ask":
@@ -2030,7 +2173,7 @@ func zhCatalog(key string) string {
 	case "command.model_failed":
 		return "切换模型失败：%v\n\n"
 	case "command.model_current":
-		return "当前模型：%s（供应商：%s）\n使用 /model 打开模型面板，或用 /model <model-name> 直接切换。\n\n"
+		return "当前模型：%s（供应商：%s）\n可用模型：%s\n使用 /model 打开模型面板，或用 /model <model-name> 直接切换。\n\n"
 	case "command.provider_unknown":
 		return "未知供应商：%s（可用：%v）\n\n"
 	case "command.provider_switched":
@@ -2038,7 +2181,7 @@ func zhCatalog(key string) string {
 	case "command.provider_failed":
 		return "更新供应商选择失败：%v\n\n"
 	case "command.provider_current":
-		return "当前供应商：%s（模型：%s）\n可用供应商：%s\n用法：/provider [vendor]\n\n"
+		return "当前供应商：%s（接口：%s，模型：%s）\n可用供应商：%s\n可用接口：%s\n用法：/provider [vendor] [endpoint]\n\n"
 	case "command.allow_set":
 		return "✓ %s 已设为永久允许\n\n"
 	case "command.custom":
@@ -2299,6 +2442,116 @@ func zhCatalog(key string) string {
 		return "报告 bug"
 	case "slash.config":
 		return "查看/修改配置"
+	case "slash.qq":
+		return "管理 QQ 渠道绑定"
+	case "panel.qq.directory":
+		return "目录"
+	case "panel.qq.runtime":
+		return "运行时"
+	case "panel.qq.bots":
+		return "QQ 机器人"
+	case "panel.qq.created":
+		return "已创建：%d"
+	case "panel.qq.bound":
+		return "已绑定：%d"
+	case "panel.qq.available":
+		return "可用：%d"
+	case "panel.qq.current_binding":
+		return "当前绑定"
+	case "panel.qq.none":
+		return "(无)"
+	case "panel.qq.default":
+		return "(默认)"
+	case "panel.qq.adapter":
+		return "机器人：%s"
+	case "panel.qq.target":
+		return "目标：%s"
+	case "panel.qq.channel":
+		return "渠道：%s"
+	case "panel.qq.bot_list":
+		return "QQ 机器人列表"
+	case "panel.qq.no_bots":
+		return "没有配置 QQ 机器人。"
+	case "panel.qq.entry.available":
+		return "可用"
+	case "panel.qq.entry.bound":
+		return "已绑定"
+	case "panel.qq.details":
+		return "详情"
+	case "panel.qq.status":
+		return "状态：%s"
+	case "panel.qq.transport":
+		return "传输：%s"
+	case "panel.qq.bound_directory":
+		return "绑定目录：%s"
+	case "panel.qq.current_directory_target":
+		return "当前目录目标：%s"
+	case "panel.qq.current_directory_channel":
+		return "当前目录渠道：%s"
+	case "panel.qq.waiting_for_pairing":
+		return "(等待配对)"
+	case "panel.qq.last_error":
+		return "最近错误：%s"
+	case "panel.qq.occupied_by":
+		return "已被占用：%s"
+	case "panel.qq.create":
+		return "创建"
+	case "panel.qq.bot_input":
+		return "QQ 机器人：%s"
+	case "panel.qq.create_format":
+		return "格式：<bot-id> <appid> <appsecret>"
+	case "panel.qq.create_example":
+		return "示例：qq-main 123456 secret-value"
+	case "panel.qq.create_hint":
+		return "Enter 创建机器人 • Esc 取消"
+	case "panel.qq.actions_hint":
+		return "j/k 移动 • Enter 或 b 绑定机器人 • c 绑定渠道 • x 解绑渠道 • u 解绑机器人 • i 创建机器人 • Esc 关闭"
+	case "panel.qq.bind_channel":
+		return "绑定渠道"
+	case "panel.qq.scan_hint":
+		return "扫描二维码添加机器人，然后发送一条消息开始配对。"
+	case "panel.qq.qr_code":
+		return "二维码："
+	case "panel.qq.share_link":
+		return "分享链接："
+	case "panel.qq.message.no_bot":
+		return "当前没有可用的 QQ 机器人。"
+	case "panel.qq.message.bound_success":
+		return "QQ 机器人已绑定到当前工作区。按 c 生成渠道绑定二维码。"
+	case "panel.qq.message.share_generated":
+		return "已生成 QQ 分享链接。扫描二维码添加机器人，然后发送一条消息开始配对。"
+	case "panel.qq.message.unbound":
+		return "已解绑 QQ 渠道。"
+	case "panel.qq.message.cleared":
+		return "已清除当前工作区的 QQ 渠道授权。"
+	case "panel.qq.message.added_bot":
+		return "已添加 QQ 机器人 %s。"
+	case "panel.qq.error.config_unavailable":
+		return "配置不可用"
+	case "panel.qq.error.config_format":
+		return "QQ 机器人配置格式必须为：<bot-id> <appid> <appsecret>"
+	case "panel.qq.error.adapter_required":
+		return "QQ 适配器名称不能为空"
+	case "panel.qq.error.not_configured":
+		return "QQ 机器人 %q 未配置"
+	case "panel.qq.error.disabled":
+		return "QQ 机器人 %q 已禁用"
+	case "panel.qq.error.not_qq_adapter":
+		return "适配器 %q 不是 QQ 机器人"
+	case "panel.qq.error.not_online":
+		return "QQ 机器人 %q 未在线"
+	case "panel.qq.error.not_online_detail":
+		return "QQ 机器人 %q 未在线：%s"
+	case "panel.qq.runtime.available":
+		return "可用"
+	case "panel.qq.runtime.disabled":
+		return "已禁用（设置 im.enabled: true 并重启 ggcode）"
+	case "panel.qq.runtime.not_started":
+		return "未启动（重启 ggcode 以初始化 IM 运行时）"
+	case "panel.qq.status.not_started":
+		return "未启动"
+	case "panel.qq.status.unknown":
+		return "未知"
 	case "slash.status":
 		return "显示当前状态"
 	case "slash.update":
@@ -2311,6 +2564,7 @@ func zhCatalog(key string) string {
   /export <id>       导出会话为 Markdown 文件
   /model [name]      打开模型面板或直接切换
   /provider [vendor] 打开供应商管理界面
+  /qq                打开 QQ 绑定面板
   /lang [code]       选择或切换界面语言
   /skills            浏览可用 skills
   /clear             清空对话历史

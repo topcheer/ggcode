@@ -19,14 +19,17 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func newTestModel() Model {
 	m := NewModel(nil, permission.NewConfigPolicy(nil, nil))
+	m.startedAt = time.Now().Add(-2 * time.Second)
 	return m
 }
 
@@ -680,6 +683,40 @@ func TestComposerPanelHeightDoesNotShrinkWhenInputWraps(t *testing.T) {
 	}
 }
 
+func TestComposerPanelMultilineDraftRendersSinglePrompt(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	m.input.SetValue("first line\nsecond line\nthird line")
+	m.input.CursorEnd()
+
+	rendered := m.renderComposerPanel()
+
+	if got := strings.Count(rendered, m.input.Prompt); got != 1 {
+		t.Fatalf("expected a single composer prompt, got %d in %q", got, rendered)
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(line) > m.mainColumnWidth() {
+			t.Fatalf("expected composer line width <= %d, got %d for %q", m.mainColumnWidth(), lipgloss.Width(line), line)
+		}
+	}
+}
+
+func TestComposerPanelKeepsMixedWideTextInsideBorder(t *testing.T) {
+	m := newTestModel()
+	m.setLanguage("zh-CN")
+	m.handleResize(128, 28)
+	m.input.SetValue("说的方法：阿萨德浪费阿萨德浪费阿萨德浪费asdfasdfgggadggaaa")
+	m.input.CursorEnd()
+
+	rendered := m.renderComposerPanel()
+
+	for _, line := range strings.Split(rendered, "\n") {
+		if lipgloss.Width(line) > m.mainColumnWidth() {
+			t.Fatalf("expected composer line width <= %d, got %d for %q", m.mainColumnWidth(), lipgloss.Width(line), line)
+		}
+	}
+}
+
 func TestRenderLogoUsesStyledWordmarkByDefault(t *testing.T) {
 	logo := renderLogo(16)
 	if logo == asciiLogo() {
@@ -744,6 +781,127 @@ func TestSidebarRendersMCPSectionAndActiveTools(t *testing.T) {
 	}
 	if !strings.Contains(view, "Active tools") || !strings.Contains(view, "web-reader") {
 		t.Fatal("expected active MCP tool list in sidebar")
+	}
+}
+
+func TestSidebarRendersIMRuntimeDisabledState(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	m.config = &config.Config{}
+
+	view := m.View()
+
+	if !strings.Contains(view, "IM") {
+		t.Fatal("expected IM section in sidebar")
+	}
+	if !strings.Contains(view, "disabled") {
+		t.Fatalf("expected disabled IM runtime state, got %q", view)
+	}
+}
+
+func TestSidebarRendersIMAdapterStatuses(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	m.config = &config.Config{}
+	m.config.IM.Enabled = true
+	m.config.IM.Adapters = map[string]config.IMAdapterConfig{
+		"backup": {Enabled: true, Platform: "qq"},
+		"hermes": {Enabled: true, Platform: "qq"},
+	}
+	imMgr := im.NewManager()
+	imMgr.PublishAdapterState(im.AdapterState{
+		Name:     "hermes",
+		Platform: im.PlatformQQ,
+		Healthy:  true,
+		Status:   "ready",
+	})
+	imMgr.PublishAdapterState(im.AdapterState{
+		Name:      "backup",
+		Platform:  im.PlatformQQ,
+		Healthy:   false,
+		Status:    "connecting",
+		LastError: "dial failed",
+	})
+	m.SetIMManager(imMgr)
+	m.SetSession(&session.Session{ID: "session-1", Workspace: m.currentWorkspacePath()}, nil)
+	if _, err := imMgr.BindChannel(im.ChannelBinding{
+		Workspace: m.currentWorkspacePath(),
+		Platform:  im.PlatformQQ,
+		Adapter:   "hermes",
+		TargetID:  "ops",
+		ChannelID: "group-1",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+
+	view := m.View()
+
+	if !strings.Contains(view, "1 adapters • 1 healthy") {
+		t.Fatalf("expected IM summary in sidebar, got %q", view)
+	}
+	if !strings.Contains(view, "✓ hermes (qq) ready") {
+		t.Fatalf("expected healthy IM adapter row, got %q", view)
+	}
+	if strings.Contains(view, "backup (qq) connecting") {
+		t.Fatalf("expected unbound adapter to stay hidden, got %q", view)
+	}
+}
+
+func TestSidebarRendersConfiguredIMAdapterWithoutRuntimeState(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	m.config = &config.Config{}
+	m.config.IM.Enabled = true
+	m.config.IM.Adapters = map[string]config.IMAdapterConfig{
+		"ggcodetest": {Enabled: true, Platform: "qq"},
+	}
+	imMgr := im.NewManager()
+	m.SetIMManager(imMgr)
+	m.SetSession(&session.Session{ID: "session-1", Workspace: m.currentWorkspacePath()}, nil)
+	if _, err := imMgr.BindChannel(im.ChannelBinding{
+		Workspace: m.currentWorkspacePath(),
+		Platform:  im.PlatformQQ,
+		Adapter:   "ggcodetest",
+		TargetID:  "ops",
+		ChannelID: "group-ops",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+
+	view := m.View()
+
+	if !strings.Contains(view, "1 adapters • 0 healthy") {
+		t.Fatalf("expected IM summary for configured adapter, got %q", view)
+	}
+	if !strings.Contains(view, "… ggcodetest (qq) not started") {
+		t.Fatalf("expected configured adapter to appear before runtime starts, got %q", view)
+	}
+}
+
+func TestSidebarHidesUnboundIMAdapters(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(128, 28)
+	m.config = &config.Config{}
+	m.config.IM.Enabled = true
+	m.config.IM.Adapters = map[string]config.IMAdapterConfig{
+		"hermes": {Enabled: true, Platform: "qq"},
+	}
+	imMgr := im.NewManager()
+	imMgr.PublishAdapterState(im.AdapterState{
+		Name:     "hermes",
+		Platform: im.PlatformQQ,
+		Healthy:  true,
+		Status:   "ready",
+	})
+	m.SetIMManager(imMgr)
+
+	view := m.View()
+
+	if strings.Contains(view, "hermes (qq) ready") {
+		t.Fatalf("expected unbound IM adapter to stay hidden, got %q", view)
+	}
+	if !strings.Contains(view, m.t("im.none")) {
+		t.Fatalf("expected IM none state without current binding, got %q", view)
 	}
 }
 
@@ -2255,6 +2413,52 @@ func TestAskUserEscapeReturnsCancelledResponse(t *testing.T) {
 	}
 }
 
+func TestIMPairingRenderedInContextPanel(t *testing.T) {
+	m := newTestModel()
+	m.handleResize(120, 32)
+	imMgr := im.NewManager()
+	if err := imMgr.SetBindingStore(im.NewMemoryBindingStore()); err != nil {
+		t.Fatalf("SetBindingStore returned error: %v", err)
+	}
+	if err := imMgr.SetPairingStore(im.NewMemoryPairingStore()); err != nil {
+		t.Fatalf("SetPairingStore returned error: %v", err)
+	}
+	m.SetIMManager(imMgr)
+	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
+	if _, err := imMgr.BindChannel(im.ChannelBinding{
+		Platform: im.PlatformQQ,
+		Adapter:  "qq",
+		TargetID: "ops",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+	if _, err := imMgr.HandlePairingInbound(im.InboundMessage{
+		Envelope: im.Envelope{
+			Adapter:    "qq",
+			Platform:   im.PlatformQQ,
+			ChannelID:  "group-9",
+			SenderID:   "user-9",
+			MessageID:  "msg-9",
+			ReceivedAt: time.Now(),
+		},
+		Text: "bind me",
+	}); err != nil {
+		t.Fatalf("HandlePairingInbound returned error: %v", err)
+	}
+
+	result := m.renderContextPanel()
+
+	if !strings.Contains(result, "QQ pairing") && !strings.Contains(result, "QQ 绑定验证") {
+		t.Fatal("expected IM pairing panel title")
+	}
+	if !strings.Contains(result, "group-9") {
+		t.Fatal("expected pairing panel to show request channel")
+	}
+	if !strings.Contains(result, "Esc") {
+		t.Fatal("expected pairing panel reject hint")
+	}
+}
+
 func TestRenderStatusBarOmitsAgentTitle(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
@@ -2500,6 +2704,31 @@ func TestStartupOrphanTerminalFragmentDoesNotReachInput(t *testing.T) {
 	}
 }
 
+func TestStartupBareCursorReportDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("80;1R")})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored bare cursor report")
+	}
+	if m2.input.Value() != "" {
+		t.Fatalf("expected bare cursor report to be stripped, got %q", m2.input.Value())
+	}
+}
+
+func TestStartupBareCursorReportIsStrippedFromSlashInput(t *testing.T) {
+	m := newTestModel()
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("80;1R/qq")})
+	m2 := model.(Model)
+
+	if got := m2.input.Value(); got != "/qq" {
+		t.Fatalf("expected bare cursor report prefix to be stripped, got %q", got)
+	}
+}
+
 func TestResizeSanitizerPreservesNormalInput(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(100, 30)
@@ -2541,13 +2770,106 @@ func TestIdleTerminalNoiseDoesNotOverwriteExistingInput(t *testing.T) {
 	}
 }
 
+func TestAltBracketTerminalProbeWrapperDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+	m.startedAt = time.Now().Add(-10 * time.Second)
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]"), Alt: true})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored terminal probe wrapper")
+	}
+	if m2.input.Value() != "" {
+		t.Fatalf("expected terminal probe wrapper to be ignored, got %q", m2.input.Value())
+	}
+	if m2.exitConfirmPending {
+		t.Fatal("expected terminal probe wrapper not to arm exit confirmation")
+	}
+}
+
+func TestSplitOSCProbeSequenceDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+	m.startedAt = time.Now().Add(-10 * time.Second)
+
+	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]"), Alt: true})
+	m = model.(Model)
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`11;rgb:0000/0000/0000`)})
+	m = model.(Model)
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`\`), Alt: true})
+	m = model.(Model)
+
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected split OSC probe sequence to be ignored, got %q", got)
+	}
+	if m.exitConfirmPending {
+		t.Fatal("expected split OSC probe sequence not to arm exit confirmation")
+	}
+}
+
+func TestUserEntryAddsBlankLineAfterAssistantOutput(t *testing.T) {
+	m := newTestModel()
+	m.output.WriteString("● assistant reply\n")
+
+	cmd := m.handleCommand("next user message")
+	if cmd == nil {
+		t.Fatal("expected regular message to start agent")
+	}
+
+	got := m.output.String()
+	if !strings.Contains(got, "● assistant reply\n\n❯ next user message\n") {
+		t.Fatalf("expected blank line between assistant and user entry, got %q", got)
+	}
+}
+
+func TestCaretNotationMouseSequenceDoesNotReachInput(t *testing.T) {
+	m := newTestModel()
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`^[[<0;51;40M^[[<0;51;40m`)})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored caret-notation mouse sequence")
+	}
+	if m2.input.Value() != "" {
+		t.Fatalf("expected caret-notation mouse sequence to be stripped, got %q", m2.input.Value())
+	}
+}
+
+func TestDoubleBracketMouseSequenceIsStrippedFromExistingInput(t *testing.T) {
+	m := newTestModel()
+	m.input.SetValue("//hello[[<0;51;40M")
+	m.input.CursorEnd()
+	m.sanitizeTerminalResponseInput()
+
+	if got := m.input.Value(); got != "//hello" {
+		t.Fatalf("expected double-bracket mouse sequence to be stripped, got %q", got)
+	}
+}
+
+func TestStartupInputGraceWindowDropsEarlyKeyboardRunes(t *testing.T) {
+	m := newTestModel()
+	m.startedAt = time.Now()
+
+	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	m2 := model.(Model)
+
+	if cmd != nil {
+		t.Error("expected nil cmd for ignored early startup key input")
+	}
+	if m2.input.Value() != "" {
+		t.Fatalf("expected early startup key input to be dropped, got %q", m2.input.Value())
+	}
+}
+
 func TestTerminalSuppressionWindowOnlyAppliesAfterResize(t *testing.T) {
 	m := newTestModel()
-	if terminalResponseSuppressionActive(time.Time{}) {
-		t.Fatal("expected startup not to suppress terminal response fragments")
+	m.startedAt = time.Now().Add(-2 * time.Second)
+	if terminalResponseSuppressionActive(m.startedAt, time.Time{}) {
+		t.Fatal("expected settled startup not to suppress terminal response fragments")
 	}
 	m.handleResize(100, 30)
-	if !terminalResponseSuppressionActive(m.lastResizeAt) {
+	if !terminalResponseSuppressionActive(m.startedAt, m.lastResizeAt) {
 		t.Fatal("expected resize window to suppress terminal response fragments")
 	}
 }
@@ -2857,8 +3179,8 @@ func TestNextUserMessageStartsOnFreshLineAfterPartialOutput(t *testing.T) {
 
 	m.handleCommand("follow-up")
 
-	if !strings.Contains(m.output.String(), "partial tool output\n❯ follow-up\n") {
-		t.Fatalf("expected follow-up message to start on a fresh line, got %q", m.output.String())
+	if !strings.Contains(m.output.String(), "partial tool output\n\n❯ follow-up\n") {
+		t.Fatalf("expected follow-up message to start after a blank line, got %q", m.output.String())
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/topcheer/ggcode/internal/commands"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -28,7 +29,6 @@ func (m Model) View() string {
 	if m.previewPanel != nil {
 		return m.renderPreviewPanel()
 	}
-
 	header := ""
 	if m.topHeaderEnabled() {
 		header = m.renderHeader()
@@ -248,6 +248,8 @@ func (m Model) renderSidebar(totalHeight int) string {
 		m.renderSidebarModeSection(),
 		m.renderSidebarUpdateSection(),
 		"",
+		m.renderSidebarIMSection(),
+		"",
 		m.renderSidebarMCPSection(),
 	}, "\n")
 	innerHeight := max(lipgloss.Height(body), totalHeight-2)
@@ -333,6 +335,102 @@ func (m Model) renderSidebarMCPSection() string {
 		}
 	}
 	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderSidebarIMSection() string {
+	width := max(12, m.sidebarWidth()-4)
+	rows := []string{m.renderSidebarSectionTitle(m.t("panel.im"))}
+	if m.imManager == nil && (m.config == nil || !m.config.IM.Enabled) {
+		rows = append(rows, truncateString(m.sidebarIMRuntimeStatus(), width))
+		return strings.Join(rows, "\n")
+	}
+	adapters := m.sidebarIMAdapters()
+	if len(adapters) == 0 {
+		rows = append(rows, truncateString(m.t("im.none"), width))
+		return strings.Join(rows, "\n")
+	}
+	healthy := 0
+	for _, state := range adapters {
+		if state.Healthy {
+			healthy++
+		}
+	}
+	rows = append(rows, truncateString(m.t("im.summary", len(adapters), healthy), width))
+	visible := adapters
+	if len(visible) > 5 {
+		visible = visible[:5]
+	}
+	for _, state := range visible {
+		rows = append(rows, truncateString(sidebarIMAdapterLabel(state), width))
+	}
+	if hidden := len(adapters) - len(visible); hidden > 0 {
+		rows = append(rows, truncateString(m.t("im.more", hidden), width))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) sidebarIMSnapshot() (im.StatusSnapshot, bool) {
+	if m.imManager == nil {
+		return im.StatusSnapshot{}, false
+	}
+	return m.imManager.Snapshot(), true
+}
+
+func (m Model) sidebarIMAdapters() []im.AdapterState {
+	statesByName := make(map[string]im.AdapterState)
+	var currentBinding *im.ChannelBinding
+	if snapshot, ok := m.sidebarIMSnapshot(); ok {
+		currentBinding = snapshot.CurrentBinding
+		for _, state := range snapshot.Adapters {
+			statesByName[state.Name] = state
+		}
+	}
+	if currentBinding == nil || strings.TrimSpace(currentBinding.Adapter) == "" {
+		return nil
+	}
+	name := strings.TrimSpace(currentBinding.Adapter)
+	if state, ok := statesByName[name]; ok {
+		return []im.AdapterState{state}
+	}
+	if m.config != nil {
+		if adapter, ok := m.config.IM.Adapters[name]; ok && adapter.Enabled {
+			return []im.AdapterState{{
+				Name:     name,
+				Platform: im.Platform(strings.TrimSpace(adapter.Platform)),
+				Status:   m.t("im.status.not_started"),
+			}}
+		}
+	}
+	return nil
+}
+
+func (m Model) sidebarIMRuntimeStatus() string {
+	if m.imManager != nil {
+		return m.t("im.runtime.available")
+	}
+	if m.config == nil || !m.config.IM.Enabled {
+		return m.t("im.runtime.disabled")
+	}
+	return m.t("im.runtime.not_started")
+}
+
+func sidebarIMAdapterLabel(state im.AdapterState) string {
+	icon := "✕"
+	switch {
+	case state.Healthy:
+		icon = "✓"
+	case strings.TrimSpace(state.LastError) == "":
+		icon = "…"
+	}
+	status := compactSingleLine(firstNonEmpty(strings.TrimSpace(state.Status), strings.TrimSpace(state.LastError), "unknown"))
+	if status == "" {
+		status = "unknown"
+	}
+	platform := strings.TrimSpace(string(state.Platform))
+	if platform == "" {
+		platform = "im"
+	}
+	return fmt.Sprintf("%s %s (%s) %s", icon, firstNonEmpty(strings.TrimSpace(state.Name), "adapter"), platform, status)
 }
 
 func (m Model) renderSidebarTaskTracker(totalHeight int) string {
@@ -916,6 +1014,8 @@ func (m Model) renderContextPanel() string {
 	switch {
 	case m.modelPanel != nil:
 		return m.renderModelPanel()
+	case m.qqPanel != nil:
+		return m.renderQQPanel()
 	case m.mcpPanel != nil:
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:
@@ -928,6 +1028,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderHarnessPanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
+	case m.pendingPairingChallenge() != nil:
+		return m.renderIMPairingPanel()
 	case m.pendingQuestionnaire != nil:
 		return m.renderQuestionnairePanel()
 	case m.pendingApproval != nil:
@@ -991,6 +1093,58 @@ func (m Model) renderContextPanel() string {
 	}
 }
 
+func (m Model) renderIMPairingPanel() string {
+	challenge := m.pendingPairingChallenge()
+	if challenge == nil {
+		return ""
+	}
+	title := "QQ pairing required"
+	bodyText := "A QQ channel is requesting to bind this workspace. Ask the user to enter the 4-digit code shown below in QQ."
+	channelLabel := "request channel"
+	boundLabel := "currently bound"
+	codeLabel := "pairing code"
+	hint := "Esc reject • the correct code in QQ will complete binding automatically"
+	if m.currentLanguage() == LangZhCN {
+		title = "QQ 绑定验证"
+		bodyText = "有一个 QQ 渠道正在请求绑定当前工作区。请让用户在 QQ 中输入下方 4 位绑定码。"
+		channelLabel = "请求渠道"
+		boundLabel = "当前绑定"
+		codeLabel = "绑定码"
+		hint = "Esc 拒绝 • QQ 中输入正确绑定码后会自动完成绑定"
+	}
+	if challenge.Kind == im.PairingKindRebind {
+		if m.currentLanguage() == LangZhCN {
+			title = "QQ 重新绑定验证"
+			bodyText = "当前 bot 已经绑定到其他渠道。新渠道在 QQ 中输入下方 4 位绑定码后，将解绑旧渠道并切换到当前渠道。"
+		} else {
+			title = "QQ rebind requested"
+			bodyText = "This bot is already bound to another channel. Entering the 4-digit code below in QQ will unbind the old channel and switch to the new channel."
+		}
+	}
+
+	codeDigits := strings.Join(strings.Split(challenge.Code, ""), "   ")
+	codeStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("230")).
+		Background(lipgloss.Color("57")).
+		Padding(1, 3).
+		Margin(1, 0).
+		Render(codeDigits)
+
+	lines := []string{bodyText, ""}
+	lines = append(lines, fmt.Sprintf(" %s   %s", channelLabel, firstNonEmpty(strings.TrimSpace(challenge.ChannelID), "-")))
+	if challenge.ExistingBinding != nil && strings.TrimSpace(challenge.ExistingBinding.ChannelID) != "" {
+		lines = append(lines, fmt.Sprintf(" %s   %s", boundLabel, challenge.ExistingBinding.ChannelID))
+	}
+	lines = append(lines,
+		"",
+		lipgloss.NewStyle().Bold(true).Render(codeLabel),
+		codeStyle,
+		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(hint),
+	)
+	return m.renderContextBox(title, strings.Join(lines, "\n"), lipgloss.Color("11"))
+}
+
 func (m Model) renderAuxColumn(totalHeight int) string {
 	if m.sidebarEnabled() {
 		return m.renderSidebar(totalHeight)
@@ -1044,10 +1198,6 @@ func (m Model) renderComposerInput() string {
 	prompt := m.input.Prompt
 	promptWidth := lipgloss.Width(prompt)
 	available := max(1, m.mainColumnWidth()-6-promptWidth)
-	if !composerNeedsWrap(value, available) {
-		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
-	}
-
 	display := composerDisplayValue(value, m.input.Position())
 	lines := wrapConversationText(display, available)
 	if len(lines) == 0 {

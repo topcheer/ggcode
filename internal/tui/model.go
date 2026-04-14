@@ -25,6 +25,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/harness"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -61,6 +62,7 @@ type policyModeGetter interface {
 }
 
 const maxOutputLines = 50000
+const startupInputGateWindow = 1200 * time.Millisecond
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
@@ -82,6 +84,9 @@ type Model struct {
 	pendingApproval                 *ApprovalMsg
 	session                         *session.Session
 	sessionStore                    session.Store
+	imManager                       *im.Manager
+	imEmitter                       *imEmitterState
+	lastIMStatus                    string
 	mcpServers                      []MCPInfo
 	config                          *config.Config
 	language                        Language
@@ -106,6 +111,7 @@ type Model struct {
 	fullscreen                      bool
 	modelPanel                      *modelPanelState
 	providerPanel                   *providerPanelState
+	qqPanel                         *qqPanelState
 	mcpPanel                        *mcpPanelState
 	skillsPanel                     *skillsPanelState
 	inspectorPanel                  *inspectorPanelState
@@ -344,6 +350,12 @@ var terminalResponseChunkPattern = regexp.MustCompile(`(?:\\?\]?|[() \]]*)?\d{1,
 var terminalOrphanFragmentPattern = regexp.MustCompile(`^[\[\]()\\]+$`)
 var bareMouseFragmentPattern = regexp.MustCompile(`^(?:<\d+(?:;\d+){2}[mM])+$`)
 var bareMouseChunkPattern = regexp.MustCompile(`<\d+(?:;\d+){2}[mM]`)
+var doubleBracketMouseFragmentPattern = regexp.MustCompile(`^(?:\[\[<\d+(?:;\d+){2}[mM])+$`)
+var doubleBracketMouseChunkPattern = regexp.MustCompile(`\[\[<\d+(?:;\d+){2}[mM]`)
+var caretMouseFragmentPattern = regexp.MustCompile(`^(?:\^\[\[<\d+(?:;\d+){2}[mM])+$`)
+var caretMouseChunkPattern = regexp.MustCompile(`\^\[\[<\d+(?:;\d+){2}[mM]`)
+var bareCursorReportFragmentPattern = regexp.MustCompile(`^(?:\[?\d{1,4};\d{1,4}R)+$`)
+var bareCursorReportChunkPattern = regexp.MustCompile(`\[?\d{1,4};\d{1,4}R`)
 
 // toolStatusMsg wraps a tool status update.
 type toolStatusMsg ToolStatusMsg
@@ -378,6 +390,24 @@ type agentToolStatusMsg struct {
 type agentStatusMsg struct {
 	RunID int
 	statusMsg
+}
+
+type agentRoundProgressMsg struct {
+	RunID int
+	Text  string
+}
+
+type agentRoundSummaryMsg struct {
+	RunID         int
+	Text          string
+	ToolCalls     int
+	ToolSuccesses int
+	ToolFailures  int
+}
+
+type agentAskUserMsg struct {
+	RunID int
+	Text  string
 }
 
 type agentInterruptMsg struct {
@@ -702,15 +732,105 @@ func (m Model) Init() tea.Cmd {
 
 func (m *Model) SetProgram(p *tea.Program) {
 	m.program = p
+	m.refreshIMRuntimeHooks()
 }
 
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
+	m.bindIMSession()
 }
 
 func (m *Model) Session() *session.Session {
 	return m.session
+}
+
+func (m *Model) SetIMManager(mgr *im.Manager) {
+	m.imManager = mgr
+	m.refreshIMRuntimeHooks()
+	m.bindIMSession()
+}
+
+func (m *Model) refreshIMRuntimeHooks() {
+	if m.imManager == nil {
+		return
+	}
+	m.imManager.SetOnUpdate(func(im.StatusSnapshot) {
+		if m.program != nil {
+			m.program.Send(imRuntimeUpdatedMsg{})
+		}
+	})
+}
+
+func (m *Model) bindIMSession() {
+	if m.imManager == nil {
+		return
+	}
+	if m.session == nil {
+		m.imManager.UnbindSession()
+		return
+	}
+	m.imManager.BindSession(im.SessionBinding{
+		SessionID: m.session.ID,
+		Workspace: m.session.Workspace,
+	})
+}
+
+func (m Model) pendingPairingChallenge() *im.PairingChallenge {
+	if m.imManager == nil {
+		return nil
+	}
+	return m.imManager.Snapshot().PendingPairing
+}
+
+func (m *Model) rejectPendingPairing() tea.Cmd {
+	if m.imManager == nil {
+		return nil
+	}
+	challenge, blacklisted, err := m.imManager.RejectPendingPairing()
+	if err != nil {
+		return nil
+	}
+	mgr := m.imManager
+	reply := "当前配对请求已被拒绝，如需继续请重新发起。"
+	if blacklisted {
+		reply = "该 QQ 渠道因多次被拒绝，已被加入黑名单。"
+	}
+	binding := challenge.ReplyBinding()
+	return func() tea.Msg {
+		_ = mgr.SendDirect(context.Background(), binding, im.OutboundEvent{
+			Kind: im.OutboundEventText,
+			Text: reply,
+		})
+		return imRuntimeUpdatedMsg{}
+	}
+}
+
+func (m *Model) closeActivePanel() bool {
+	switch {
+	case m.modelPanel != nil:
+		m.closeModelPanel()
+	case m.providerPanel != nil:
+		m.closeProviderPanel()
+	case m.qqPanel != nil:
+		m.closeQQPanel()
+	case m.mcpPanel != nil:
+		m.closeMCPPanel()
+	case m.skillsPanel != nil:
+		m.closeSkillsPanel()
+	case m.inspectorPanel != nil:
+		m.closeInspectorPanel()
+	case m.harnessContextPrompt != nil:
+		m.harnessContextPrompt = nil
+	case m.harnessPanel != nil:
+		m.closeHarnessPanel()
+	case len(m.langOptions) > 0:
+		m.langOptions = nil
+	default:
+		return false
+	}
+	m.resetExitConfirm()
+	return true
 }
 
 func (m *Model) SetMCPServers(servers []MCPInfo) {
@@ -855,7 +975,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleResize(msg.Width, msg.Height)
 		return m, nil
 
+	case imRuntimeUpdatedMsg:
+		return m, nil
+
 	case tea.MouseMsg:
+		if startupInputSuppressionActive(m.startedAt) {
+			debug.Log("tui", "startup gate dropping mouse event type=%v age=%s", msg.Type, time.Since(m.startedAt))
+			return m, nil
+		}
 		if m.fileBrowser != nil {
 			return m.handleFileBrowserMouse(msg)
 		}
@@ -879,7 +1006,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.startupBannerVisible && !shouldIgnoreInputUpdate(msg, m.lastResizeAt) {
+		if startupInputSuppressionActive(m.startedAt) && msg.String() != "ctrl+c" {
+			debug.Log("tui", "startup gate dropping key event key=%q type=%v age=%s", msg.String(), msg.Type, time.Since(m.startedAt))
+			return m, nil
+		}
+		if shouldIgnoreTerminalProbeKey(msg) {
+			debug.Log("tui", "ignoring terminal probe key=%q type=%v alt=%t", msg.String(), msg.Type, msg.Alt)
+			return m, nil
+		}
+		if m.startupBannerVisible && !shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
 			m.startupBannerVisible = false
 		}
 		if msg.String() != "ctrl+c" {
@@ -903,12 +1038,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePreviewKey(msg)
 		}
 
-		if msg.String() == "ctrl+c" && !m.loading && (m.modelPanel != nil || m.providerPanel != nil || m.mcpPanel != nil || m.skillsPanel != nil || m.inspectorPanel != nil || m.harnessPanel != nil || m.harnessContextPrompt != nil || len(m.langOptions) > 0) {
-			if m.exitConfirmPending {
-				m.quitting = true
-				return m, tea.Quit
-			}
-			m.promptExitConfirm()
+		if msg.String() == "ctrl+c" && !m.loading && len(m.langOptions) == 0 && m.closeActivePanel() {
 			return m, nil
 		}
 
@@ -919,6 +1049,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.providerPanel != nil {
 			return m.handleProviderPanelKey(msg)
+		}
+
+		if m.qqPanel != nil {
+			return m.handleQQPanelKey(msg)
 		}
 
 		if m.mcpPanel != nil {
@@ -939,6 +1073,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.harnessPanel != nil {
 			return m.handleHarnessPanelKey(msg)
+		}
+
+		if m.pendingPairingChallenge() != nil {
+			switch msg.String() {
+			case "esc":
+				return m, m.rejectPendingPairing()
+			case "ctrl+c":
+				if m.loading {
+					m.resetExitConfirm()
+					m.cancelActiveRun()
+					return m, nil
+				}
+				if m.exitConfirmPending {
+					m.quitting = true
+					return m, tea.Quit
+				}
+				m.promptExitConfirm()
+				return m, nil
+			default:
+				return m, nil
+			}
 		}
 
 		if m.pendingQuestionnaire != nil {
@@ -967,6 +1122,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				m.langOptions = nil
+				return m, nil
+			case "ctrl+c":
+				m.promptExitConfirm()
 				return m, nil
 			}
 			return m, nil
@@ -1157,6 +1315,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.shellMode {
+				m.emitIMLocalUserText("$ " + text)
 				if m.loading || m.projectMemoryLoading {
 					m.history = append(m.history, "$ "+text)
 					m.historyIdx = len(m.history)
@@ -1165,6 +1324,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.submitShellCommand(text, true)
 			}
+			m.emitIMLocalUserText(text)
 			if m.loading || m.projectMemoryLoading {
 				if shouldAllowBusyHarnessPanel(text) {
 					return m, m.submitText(text, true)
@@ -1183,6 +1343,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.appendStreamChunk(string(msg))
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
+
+	case remoteInboundMsg:
+		prompt := buildRemoteInboundPrompt(msg.Message)
+		if m.pendingQuestionnaire != nil {
+			if strings.TrimSpace(prompt) == "" {
+				if msg.Response != nil {
+					msg.Response <- fmt.Errorf("empty remote message")
+				}
+				return m, nil
+			}
+			completed, err := m.pendingQuestionnaire.applyRemoteAnswer(prompt, m.currentLanguage())
+			if msg.Response != nil {
+				msg.Response <- nil
+			}
+			if err != nil {
+				switch m.currentLanguage() {
+				case LangZhCN:
+					m.emitIMText("没有识别出有效的问卷答案，请直接回复选项编号或文本答案。")
+				default:
+					m.emitIMText("I couldn't parse that questionnaire answer. Reply with choice numbers or plain text.")
+				}
+				return m, nil
+			}
+			if completed {
+				return m, m.handleQuestionnaireResult(toolpkg.AskUserStatusSubmitted)
+			}
+			if nextIdx := m.pendingQuestionnaire.firstUnansweredQuestionIndex(); nextIdx >= 0 {
+				m.emitIMAskUser(m.formatIMAskUserQuestion(m.pendingQuestionnaire.request.Title, m.pendingQuestionnaire.request.Questions[nextIdx]))
+			}
+			return m, nil
+		}
+		if response, handled := m.ExecuteRemoteSlashCommand(prompt); handled {
+			if strings.TrimSpace(response) != "" {
+				m.emitIMText(response)
+			}
+			if msg.Response != nil {
+				msg.Response <- nil
+			}
+			return m, nil
+		}
+		if strings.TrimSpace(prompt) == "" {
+			if msg.Response != nil {
+				msg.Response <- fmt.Errorf("empty remote message")
+			}
+			return m, nil
+		}
+		if msg.Response != nil {
+			msg.Response <- nil
+		}
+		if m.loading {
+			m.queuePendingSubmission(prompt)
+			return m, nil
+		}
+		return m, m.submitText(prompt, false)
 
 	case agentStreamMsg:
 		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
@@ -1212,6 +1426,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
 	case doneMsg:
+		finalIMText := m.pendingIMStreamText()
 		m.loading = false
 		m.spinner.Stop()
 		m.closeToolActivityGroup()
@@ -1229,6 +1444,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 			m.renderStreamBuffer(true)
 			m.streamBuffer = nil
+		}
+		if finalIMText != "" {
+			m.emitIMText(finalIMText)
 		}
 		m.output.WriteString("\n")
 		m.syncConversationViewport()
@@ -1342,6 +1560,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.restorePendingInput()
 		}
 		m.output.WriteString(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.Err) + "\n\n"))
+		m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil
@@ -1689,6 +1908,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case qqBindResultMsg:
+		if m.qqPanel != nil {
+			if msg.err != nil {
+				m.qqPanel.shareAdapter = ""
+				m.qqPanel.shareLink = ""
+				m.qqPanel.shareQRCode = ""
+				m.qqPanel.message = msg.err.Error()
+			} else {
+				m.qqPanel.shareAdapter = msg.shareAdapter
+				m.qqPanel.shareLink = msg.shareLink
+				m.qqPanel.shareQRCode = msg.shareQRCode
+				m.qqPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case providerModelsRefreshResultMsg:
 		if m.providerPanel != nil && m.providerPanel.refreshVendor == msg.vendor {
 			m.providerPanel.refreshing = false
@@ -1828,10 +2063,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
+	case agentRoundProgressMsg:
+		return m, nil
+
+	case agentRoundSummaryMsg:
+		if msg.RunID != m.activeAgentRunID {
+			return m, nil
+		}
+		m.emitIMRoundSummary(msg.Text, msg.ToolCalls, msg.ToolSuccesses, msg.ToolFailures)
+		return m, nil
+
+	case agentAskUserMsg:
+		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
+			return m, nil
+		}
+		m.emitIMAskUser(msg.Text)
+		return m, nil
+
 	}
 
 	var cmd tea.Cmd
-	if shouldIgnoreInputUpdate(msg, m.lastResizeAt) {
+	if shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
 		return m, nil
 	}
 	m.input, cmd = m.input.Update(msg)
@@ -1859,10 +2111,13 @@ func combineCmds(cmds ...tea.Cmd) tea.Cmd {
 	return tea.Batch(filtered...)
 }
 
-func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt time.Time) bool {
+func shouldIgnoreInputUpdate(msg tea.Msg, startedAt, lastResizeAt time.Time) bool {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok || keyMsg.Type != tea.KeyRunes || keyMsg.Paste || len(keyMsg.Runes) == 0 {
 		return false
+	}
+	if startupInputSuppressionActive(startedAt) {
+		return true
 	}
 
 	raw := string(keyMsg.Runes)
@@ -1877,13 +2132,32 @@ func shouldIgnoreInputUpdate(msg tea.Msg, lastResizeAt time.Time) bool {
 	if bareMouseFragmentPattern.MatchString(raw) {
 		return true
 	}
+	if doubleBracketMouseFragmentPattern.MatchString(raw) || caretMouseFragmentPattern.MatchString(raw) {
+		return true
+	}
+	if bareCursorReportFragmentPattern.MatchString(raw) {
+		return true
+	}
 	if looksLikeExactTerminalNoise(raw) {
 		return true
 	}
-	if !terminalResponseSuppressionActive(lastResizeAt) {
+	if !terminalResponseSuppressionActive(startedAt, lastResizeAt) {
 		return false
 	}
 	return ansiKeyFragmentPattern.MatchString(raw) || terminalResponseFragmentPattern.MatchString(raw) || terminalOrphanFragmentPattern.MatchString(raw)
+}
+
+func shouldIgnoreTerminalProbeKey(msg tea.KeyMsg) bool {
+	if msg.Type != tea.KeyRunes || !msg.Alt || len(msg.Runes) == 0 {
+		return false
+	}
+	raw := string(msg.Runes)
+	switch raw {
+	case "]", `\`:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Model) sanitizeTerminalResponseInput() {
@@ -1892,7 +2166,7 @@ func (m *Model) sanitizeTerminalResponseInput() {
 		return
 	}
 	cleaned := stripExactTerminalNoise(value)
-	if terminalResponseSuppressionActive(m.lastResizeAt) {
+	if terminalResponseSuppressionActive(m.startedAt, m.lastResizeAt) {
 		cleaned = ansiChunkPattern.ReplaceAllString(cleaned, "")
 	}
 	if terminalOrphanFragmentPattern.MatchString(strings.TrimSpace(cleaned)) {
@@ -1901,11 +2175,22 @@ func (m *Model) sanitizeTerminalResponseInput() {
 	if cleaned == value {
 		return
 	}
+	debug.Log("tui", "sanitize input changed value=%q cleaned=%q", truncateStr(value, 120), truncateStr(cleaned, 120))
 	m.input.SetValue(cleaned)
 	m.input.CursorEnd()
 }
 
-func terminalResponseSuppressionActive(lastResizeAt time.Time) bool {
+func startupInputSuppressionActive(startedAt time.Time) bool {
+	if !startedAt.IsZero() && time.Since(startedAt) <= startupInputGateWindow {
+		return true
+	}
+	return false
+}
+
+func terminalResponseSuppressionActive(startedAt, lastResizeAt time.Time) bool {
+	if startupInputSuppressionActive(startedAt) {
+		return true
+	}
 	if !lastResizeAt.IsZero() && time.Since(lastResizeAt) <= 1500*time.Millisecond {
 		return true
 	}
@@ -1921,7 +2206,10 @@ func looksLikeExactTerminalNoise(value string) bool {
 
 func stripExactTerminalNoise(value string) string {
 	cleaned := terminalResponseChunkPattern.ReplaceAllString(value, "")
+	cleaned = caretMouseChunkPattern.ReplaceAllString(cleaned, "")
+	cleaned = doubleBracketMouseChunkPattern.ReplaceAllString(cleaned, "")
 	cleaned = ansiMouseChunkPattern.ReplaceAllString(cleaned, "")
 	cleaned = bareMouseChunkPattern.ReplaceAllString(cleaned, "")
+	cleaned = bareCursorReportChunkPattern.ReplaceAllString(cleaned, "")
 	return cleaned
 }

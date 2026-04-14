@@ -30,8 +30,10 @@ func (m *Model) renderConversationMessage(msg provider.Message, toolCalls map[st
 	case "system":
 		return
 	case "user":
+		m.ensureOutputHasBlankLine()
 		m.renderConversationUserBlocks(msg.Content, toolCalls)
 	default:
+		m.ensureOutputHasBlankLine()
 		m.renderConversationAssistantBlocks(msg.Content, toolCalls)
 	}
 }

@@ -78,7 +78,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		m.history = append(m.history, "$ "+command)
 		m.historyIdx = len(m.history)
 	}
-	m.ensureOutputEndsWithNewline()
+	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.renderConversationUserEntry("$ ", command))
 	m.output.WriteString("\n")
 	m.appendUserMessage("$ " + command)
