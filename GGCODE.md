@@ -11,7 +11,7 @@
 | Database | SQLite (`modernc.org/sqlite`, pure Go) — harness subsystem only; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.1.32`](docs/releases/v1.1.32.md) |
+| Latest documented release | [`v1.1.33`](docs/releases/v1.1.33.md) |
 
 ## Build & Validation
 

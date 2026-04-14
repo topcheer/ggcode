@@ -201,6 +201,32 @@ func TestGenerateShareLinkRejectsMissingURL(t *testing.T) {
 	}
 }
 
+func TestNewQQAdapterDefaultsToC2C(t *testing.T) {
+	adapter, err := newQQAdapter("hermes", config.IMConfig{}, config.IMAdapterConfig{
+		Enabled:  true,
+		Platform: string(PlatformQQ),
+		Extra: map[string]interface{}{
+			"appid":     "123",
+			"appsecret": "secret",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("newQQAdapter returned error: %v", err)
+	}
+	if adapter.defaultChatType != "c2c" {
+		t.Fatalf("expected default chat type c2c, got %q", adapter.defaultChatType)
+	}
+}
+
+func TestQQMessagePathTreatsUsersAsC2C(t *testing.T) {
+	if got := qqMessagePath("users", "openid-1"); got != "/v2/users/openid-1/messages" {
+		t.Fatalf("unexpected users path: %q", got)
+	}
+	if got := qqMessagePath("c2c", "openid-1"); got != "/v2/users/openid-1/messages" {
+		t.Fatalf("unexpected c2c path: %q", got)
+	}
+}
+
 func TestHandleMessageEventStartsPairingForNewChannel(t *testing.T) {
 	mgr := NewManager()
 	bridge := &stubBridge{}
