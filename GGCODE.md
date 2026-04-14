@@ -11,7 +11,7 @@
 | Database | SQLite (`modernc.org/sqlite`, pure Go) — harness subsystem only; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.1.31`](docs/releases/v1.1.31.md) |
+| Latest documented release | [`v1.1.32`](docs/releases/v1.1.32.md) |
 
 ## Build & Validation
 
@@ -42,6 +42,7 @@ cmd/ggcode-installer/  Standalone Go installer that downloads release binaries
 internal/              215 Go source files (~41.7k LOC non-test)
   agent/               Core agent loop, tool execution, autopilot continuation (agent.go, ~33k bytes)
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
+  im/                  IM gateway runtime, QQ adapter, pairing state, channel bindings, and outbound routing
   tui/                 Bubble Tea TUI: views, panels, slash commands, i18n (en/zh-CN), fullscreen file browser + preview
   tool/                Built-in tools (file ops, search, commands, git, web, agents, productivity)
   harness/             Harness-engineering workflow engine (~6.2k LOC, 28 files — task management, worktrees, review, release)
@@ -78,6 +79,7 @@ config/                MCP preset configuration (mcporter.json)
 - **Provider adapters** (`internal/provider/`): Each LLM provider (OpenAI, Anthropic, Gemini, Copilot) has a protocol-specific adapter. `registry.go` maps protocol names to adapters via `NewProvider()`. Supported protocols: `openai`, `anthropic`, `gemini`, `copilot`. All implement the `Provider` interface (Name, Chat, ChatStream, CountTokens). Retry logic handles transient failures.
 - **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`.
 - **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses SQLite for event storage.
+- **IM runtime** (`internal/im/`): Workspace-bound IM routing, QQ transport, pairing, persisted bindings, and mirrored outbound delivery for remote chat surfaces.
 - **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
 - **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances.
 
@@ -169,6 +171,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Version info**: Injected at build time via `-X` ldflags into `internal/version` (Version, Commit, Date)
 - **npm** (`npm/`): Wrapper that installs the GitHub Release binary
 - **Python** (`python/`): PyPI package `ggcode`
+- **Release notes** (`docs/releases/`): Tag-specific Markdown files used directly as GitHub Release bodies
 
 ## Common Gotchas
 

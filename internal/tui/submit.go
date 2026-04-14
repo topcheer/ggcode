@@ -107,12 +107,14 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []provider.ContentBlock) (bool, error) {
 	streamErrSent := false
 	writingStatusSent := false
+	round := agentIMRoundState{}
 	err := m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 		if m.program == nil {
 			return
 		}
 		switch event.Type {
 		case provider.StreamEventText:
+			round.AppendText(event.Text)
 			m.program.Send(agentStreamMsg{RunID: runID, Text: event.Text})
 			if !writingStatusSent {
 				writingStatusSent = true
@@ -123,6 +125,9 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		case provider.StreamEventToolCallDone:
 			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
+			if event.Tool.Name == "ask_user" {
+				round.SetAskUser(m.formatIMAskUserPrompt(string(event.Tool.Arguments)))
+			}
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 					ToolID:   event.Tool.ID,
@@ -134,6 +139,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				}})
 				return
 			}
+			round.ToolCalls++
 			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: present.Activity,
 				ToolName: present.DisplayName,
@@ -166,6 +172,11 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				m.program.Send(subAgentUpdateMsg{})
 				return
 			}
+			if event.IsError {
+				round.ToolFailures++
+			} else {
+				round.ToolSuccesses++
+			}
 			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: m.t("status.thinking"),
 				ToolName: present.DisplayName,
@@ -188,12 +199,59 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				streamErrSent = true
 				m.program.Send(agentErrMsg{RunID: runID, Err: event.Error})
 			}
+		case provider.StreamEventDone:
+			writingStatusSent = false
+			switch {
+			case round.AskUserText != "":
+				m.program.Send(agentAskUserMsg{RunID: runID, Text: round.AskUserText})
+			case round.HasVisibleOutput():
+				m.program.Send(agentRoundSummaryMsg{
+					RunID:         runID,
+					Text:          round.Text(),
+					ToolCalls:     round.ToolCalls,
+					ToolSuccesses: round.ToolSuccesses,
+					ToolFailures:  round.ToolFailures,
+				})
+			}
+			round.Reset()
 		}
 	})
 	if err != nil && !errors.Is(err, context.Canceled) && !streamErrSent {
 		return false, err
 	}
 	return streamErrSent, err
+}
+
+type agentIMRoundState struct {
+	text          strings.Builder
+	ToolCalls     int
+	ToolSuccesses int
+	ToolFailures  int
+	AskUserText   string
+}
+
+func (s *agentIMRoundState) AppendText(text string) {
+	s.text.WriteString(text)
+}
+
+func (s *agentIMRoundState) Text() string {
+	return s.text.String()
+}
+
+func (s *agentIMRoundState) SetAskUser(text string) {
+	s.AskUserText = strings.TrimSpace(text)
+}
+
+func (s *agentIMRoundState) HasVisibleOutput() bool {
+	return strings.TrimSpace(s.Text()) != ""
+}
+
+func (s *agentIMRoundState) Reset() {
+	s.text.Reset()
+	s.ToolCalls = 0
+	s.ToolSuccesses = 0
+	s.ToolFailures = 0
+	s.AskUserText = ""
 }
 
 func buildAgentSubmissionContent(text string, img *imageAttachedMsg, includeImage bool) []provider.ContentBlock {

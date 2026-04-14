@@ -390,7 +390,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 				if err != nil {
 					m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
 				} else {
-					m.output.WriteString(m.t("command.model_current", resolved.Model, resolved.VendorName))
+					m.output.WriteString(m.t("command.model_current", resolved.Model, resolved.VendorName, strings.Join(uniqueStrings(append([]string(nil), resolved.Models...)), ", ")))
 				}
 				return m.openModelPanel()
 			}
@@ -403,7 +403,11 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.output.WriteString(m.styles.error.Render(m.t("command.provider_unknown", newVendor, m.vendorNames())))
 					return nil
 				}
-				if err := m.config.SetActiveSelection(newVendor, endpoints[0], ""); err == nil {
+				endpoint := endpoints[0]
+				if len(parts) > 2 {
+					endpoint = parts[2]
+				}
+				if err := m.config.SetActiveSelection(newVendor, endpoint, ""); err == nil {
 					if err := m.reloadActiveProvider(); err == nil {
 						m.output.WriteString(m.t("command.provider_switched", newVendor, m.config.Model))
 					} else {
@@ -413,9 +417,14 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
 				}
 			} else {
+				if summary := m.providerCommandSummary(); summary != "" {
+					m.output.WriteString(summary)
+				}
 				m.openProviderPanel()
 			}
 			return nil
+		case "/qq":
+			return m.handleQQCommand()
 		case "/allow":
 			if len(parts) > 1 {
 				if m.policy != nil {
@@ -530,7 +539,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	if m.pendingImage != nil {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
-	m.ensureOutputEndsWithNewline()
+	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.renderConversationUserEntry("❯ ", displayText))
 	m.output.WriteString("\n")
 
@@ -569,6 +578,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	}
 	prompt := buildInitPrompt(targetPath, existed, content)
 
+	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.styles.user.Render("❯ /init"))
 	m.output.WriteString("\n")
 	m.appendUserMessage("/init")
@@ -1795,7 +1805,7 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 		for _, msg := range ses.Messages {
 			m.agent.AddMessage(msg)
 		}
-		m.session = ses
+		m.SetSession(ses, m.sessionStore)
 		m.rebuildConversationFromMessages(ses.Messages)
 		title := ses.Title
 		if title == "" {
@@ -2242,6 +2252,11 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 		return nil
 	}
 	m.openMCPPanel()
+	return nil
+}
+
+func (m *Model) handleQQCommand() tea.Cmd {
+	m.openQQPanel()
 	return nil
 }
 

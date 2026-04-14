@@ -1,0 +1,212 @@
+package im
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
+)
+
+type Platform string
+
+const (
+	PlatformUnknown  Platform = ""
+	PlatformQQ       Platform = "qq"
+	PlatformTelegram Platform = "telegram"
+	PlatformDiscord  Platform = "discord"
+	PlatformFeishu   Platform = "feishu"
+)
+
+type AttachmentKind string
+
+const (
+	AttachmentImage AttachmentKind = "image"
+	AttachmentVoice AttachmentKind = "voice"
+	AttachmentAudio AttachmentKind = "audio"
+	AttachmentFile  AttachmentKind = "file"
+)
+
+type Envelope struct {
+	Adapter    string
+	Platform   Platform
+	ChannelID  string
+	ThreadID   string
+	SenderID   string
+	SenderName string
+	MessageID  string
+	ReceivedAt time.Time
+}
+
+type Attachment struct {
+	ID         string
+	Kind       AttachmentKind
+	Name       string
+	MIME       string
+	Path       string
+	URL        string
+	DataBase64 string
+	Transcript string
+	Metadata   map[string]string
+}
+
+type InboundMessage struct {
+	Envelope    Envelope
+	Text        string
+	Attachments []Attachment
+	Metadata    map[string]string
+}
+
+func (m InboundMessage) ProviderContent() []provider.ContentBlock {
+	blocks := make([]provider.ContentBlock, 0, 1+len(m.Attachments))
+	text := strings.TrimSpace(m.Text)
+	if text != "" {
+		blocks = append(blocks, provider.TextBlock(text))
+	}
+	for _, attachment := range m.Attachments {
+		switch attachment.Kind {
+		case AttachmentImage:
+			if hint := attachmentPromptHint(attachment); hint != "" {
+				blocks = append(blocks, provider.TextBlock(hint))
+			}
+			if strings.TrimSpace(attachment.MIME) != "" && strings.TrimSpace(attachment.DataBase64) != "" {
+				blocks = append(blocks, provider.ImageBlock(attachment.MIME, attachment.DataBase64))
+				continue
+			}
+		case AttachmentVoice, AttachmentAudio:
+			if transcript := strings.TrimSpace(attachment.Transcript); transcript != "" {
+				blocks = append(blocks, provider.TextBlock(transcript))
+			} else if hint := attachmentPromptHint(attachment); hint != "" {
+				blocks = append(blocks, provider.TextBlock(hint))
+			}
+		default:
+			if hint := attachmentPromptHint(attachment); hint != "" {
+				blocks = append(blocks, provider.TextBlock(hint))
+			}
+		}
+	}
+	if len(blocks) == 0 {
+		blocks = append(blocks, provider.TextBlock(""))
+	}
+	return blocks
+}
+
+func attachmentPromptHint(attachment Attachment) string {
+	label := strings.TrimSpace(attachment.Name)
+	if label == "" {
+		label = string(attachment.Kind)
+	}
+	switch {
+	case strings.TrimSpace(attachment.Path) != "":
+		return "[Attached " + label + " path: " + strings.TrimSpace(attachment.Path) + "]"
+	case strings.TrimSpace(attachment.URL) != "":
+		return "[Attached " + label + " url: " + strings.TrimSpace(attachment.URL) + "]"
+	default:
+		return ""
+	}
+}
+
+type OutboundEventKind string
+
+const (
+	OutboundEventText            OutboundEventKind = "text"
+	OutboundEventStatus          OutboundEventKind = "status"
+	OutboundEventApprovalRequest OutboundEventKind = "approval_request"
+	OutboundEventApprovalResult  OutboundEventKind = "approval_result"
+)
+
+type OutboundEvent struct {
+	Kind      OutboundEventKind
+	Text      string
+	Status    string
+	Approval  *ApprovalRequest
+	Result    *ApprovalResult
+	CreatedAt time.Time
+}
+
+type SessionBinding struct {
+	SessionID string
+	Workspace string
+	BoundAt   time.Time
+}
+
+type ChannelBinding struct {
+	Workspace             string
+	Platform              Platform
+	Adapter               string
+	TargetID              string
+	ChannelID             string
+	ThreadID              string
+	LastInboundMessageID  string
+	LastInboundAt         time.Time
+	PassiveReplyCount     int
+	PassiveReplyStartedAt time.Time
+	BoundAt               time.Time
+}
+
+type AdapterDescriptor struct {
+	Name         string
+	Platform     Platform
+	Capabilities []string
+}
+
+type AdapterState struct {
+	Name      string
+	Platform  Platform
+	Healthy   bool
+	Status    string
+	LastError string
+	UpdatedAt time.Time
+}
+
+type ApprovalRequest struct {
+	ID          string
+	ToolName    string
+	Input       string
+	RequestedAt time.Time
+	Source      string
+}
+
+type ApprovalResponse struct {
+	ApprovalID  string
+	Decision    permission.Decision
+	RespondedBy string
+	RespondedAt time.Time
+}
+
+type ApprovalResult struct {
+	Request     ApprovalRequest
+	Decision    permission.Decision
+	RespondedBy string
+	RespondedAt time.Time
+}
+
+type ApprovalState struct {
+	Request     ApprovalRequest
+	Resolved    bool
+	Decision    permission.Decision
+	RespondedBy string
+	RespondedAt time.Time
+}
+
+type StatusSnapshot struct {
+	ActiveSession    *SessionBinding
+	CurrentBinding   *ChannelBinding
+	PendingPairing   *PairingChallenge
+	Adapters         []AdapterState
+	PendingApprovals []ApprovalState
+}
+
+type Bridge interface {
+	SubmitInboundMessage(ctx context.Context, msg InboundMessage) error
+}
+
+type Sink interface {
+	Name() string
+	Send(context.Context, ChannelBinding, OutboundEvent) error
+}
+
+type ShareLinkProvider interface {
+	GenerateShareLink(context.Context, string) (string, error)
+}

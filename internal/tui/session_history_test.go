@@ -47,6 +47,20 @@ func TestResumeSessionRebuildsConversationOutput(t *testing.T) {
 	}
 }
 
+func TestResumeSessionAddsBlankLineBetweenMessages(t *testing.T) {
+	m := newTestModel()
+	m.rebuildConversationFromMessages([]provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "first reply"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "next prompt"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "second reply"}}},
+	})
+
+	output := m.output.String()
+	if !strings.Contains(output, "first reply\n\n❯ next prompt\n\n● second reply") {
+		t.Fatalf("expected restored messages to keep blank lines between turns, got %q", output)
+	}
+}
+
 func TestRenderConversationMessageIncludesToolBlocks(t *testing.T) {
 	m := newTestModel()
 	m.rebuildConversationFromMessages([]provider.Message{

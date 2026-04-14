@@ -652,21 +652,21 @@ func TestMCPPanelReconnectKeyRetriesSelectedServer(t *testing.T) {
 	}
 }
 
-func TestMCPPanelCtrlCUsesGlobalExitFlow(t *testing.T) {
+func TestMCPPanelCtrlCClosesPanel(t *testing.T) {
 	m := newTestModel()
 	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http"}}
 	m.openMCPPanel()
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd != nil {
-		t.Fatal("expected first ctrl-c to arm exit confirmation")
+		t.Fatal("expected ctrl-c panel close to be synchronous")
 	}
 	m2 := next.(Model)
-	if !m2.exitConfirmPending {
-		t.Fatal("expected ctrl-c in MCP panel to arm exit confirmation")
+	if m2.exitConfirmPending {
+		t.Fatal("expected ctrl-c in MCP panel to clear exit confirmation")
 	}
-	if m2.mcpPanel == nil {
-		t.Fatal("expected MCP panel to remain open until explicit quit or esc")
+	if m2.mcpPanel != nil {
+		t.Fatal("expected MCP panel to close on ctrl-c")
 	}
 }
 
@@ -781,39 +781,39 @@ func TestMCPPanelUninstallRemovesConfigAndCallsManager(t *testing.T) {
 	}
 }
 
-func TestProviderPanelCtrlCUsesGlobalExitFlow(t *testing.T) {
+func TestProviderPanelCtrlCClosesPanel(t *testing.T) {
 	m := newTestModel()
 	m.SetConfig(config.DefaultConfig())
 	m.openProviderPanel()
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd != nil {
-		t.Fatal("expected first ctrl-c to arm exit confirmation")
+		t.Fatal("expected ctrl-c panel close to be synchronous")
 	}
 	m2 := next.(Model)
-	if !m2.exitConfirmPending {
-		t.Fatal("expected ctrl-c in provider panel to arm exit confirmation")
+	if m2.exitConfirmPending {
+		t.Fatal("expected ctrl-c in provider panel to clear exit confirmation")
 	}
-	if m2.providerPanel == nil {
-		t.Fatal("expected provider panel to remain open until explicit quit or esc")
+	if m2.providerPanel != nil {
+		t.Fatal("expected provider panel to close on ctrl-c")
 	}
 }
 
-func TestModelPanelCtrlCUsesGlobalExitFlow(t *testing.T) {
+func TestModelPanelCtrlCClosesPanel(t *testing.T) {
 	m := newTestModel()
 	m.SetConfig(config.DefaultConfig())
 	m.modelPanel = &modelPanelState{models: []string{"gpt-4o-mini"}}
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd != nil {
-		t.Fatal("expected first ctrl-c to arm exit confirmation")
+		t.Fatal("expected ctrl-c panel close to be synchronous")
 	}
 	m2 := next.(Model)
-	if !m2.exitConfirmPending {
-		t.Fatal("expected ctrl-c in model panel to arm exit confirmation")
+	if m2.exitConfirmPending {
+		t.Fatal("expected ctrl-c in model panel to clear exit confirmation")
 	}
-	if m2.modelPanel == nil {
-		t.Fatal("expected model panel to remain open until explicit quit or esc")
+	if m2.modelPanel != nil {
+		t.Fatal("expected model panel to close on ctrl-c")
 	}
 }
 

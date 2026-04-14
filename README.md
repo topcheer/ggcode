@@ -169,6 +169,7 @@ Find why startup feels slow in the TUI
 - **`/mode`** changes how much autonomy the agent gets
 - **`/status`** shows current runtime state and lets you install missing LSP servers in-place
 - **`/mcp`** shows connected MCP servers and their tools
+- **`/qq`** opens the QQ / IM panel for pairing, binding status, and adapter health
 - **`/harness`** runs repo harness workflows like scaffold, checks, and cleanup
 - When the agent truly cannot continue, it can open a **tabbed ask_user questionnaire** and resume from your batch answers
 
@@ -184,6 +185,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 - **Parallel help** — spawn sub-agents, inspect their progress, and poll long-running workers without blocking the main loop
 - **Memory and context** — load project memory files like `GGCODE.md`, `AGENTS.md`, `CLAUDE.md`, and `COPILOT.md`
 - **Extensibility** — connect MCP servers, custom plugins, and skills alongside the built-in LSP workflow
+- **Remote IM surface** — bind the current workspace to QQ so a remote chat can mirror status and receive agent output
 - **Session continuity** — save, resume, export, and compact conversations
 - **Harness workflows** — scaffold repo guidance, enforce invariants, track runs, and garbage-collect stale task state
 
@@ -238,6 +240,7 @@ either a normal release base URL or a full-URL proxy prefix.
 | `/memory` | Inspect stored memory |
 | `/agents` | List active sub-agents |
 | `/agent <id>` | Inspect a sub-agent |
+| `/qq` | Open the QQ / IM panel to pair a channel, inspect bindings, and check adapter status |
 | `/todo` | View or manage todo state |
 | `/image` | Attach an image |
 | `/bug` | Report a bug |

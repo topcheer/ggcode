@@ -182,7 +182,7 @@ func CompleteMention(prefix string, workDir string) []string {
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider",
-	"/clear", "/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
+	"/clear", "/qq", "/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/fullscreen", "/mode", "/init", "/harness", "/exit", "/quit", "/agents", "/agent",
 	"/compact", "/todo", "/bug", "/config", "/status", "/update", "/lang", "/skills",
 }
@@ -197,6 +197,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/model":       "Open model panel",
 	"/provider":    "Open provider manager",
 	"/clear":       "Clear conversation",
+	"/qq":          "Manage QQ channel binding",
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
 	"/undo":        "Undo last file edit",

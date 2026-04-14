@@ -137,6 +137,7 @@ type Config struct {
 	Model         string                    `yaml:"model"`
 	Language      string                    `yaml:"language"`
 	UI            UIConfig                  `yaml:"ui,omitempty"`
+	IM            IMConfig                  `yaml:"im,omitempty"`
 	SystemPrompt  string                    `yaml:"system_prompt"`
 	Vendors       map[string]VendorConfig   `yaml:"vendors"`
 	AllowedDirs   []string                  `yaml:"allowed_dirs"`
@@ -153,6 +154,50 @@ type Config struct {
 
 type UIConfig struct {
 	SidebarVisible *bool `yaml:"sidebar_visible,omitempty"`
+}
+
+type IMConfig struct {
+	Enabled             bool                       `yaml:"enabled,omitempty"`
+	ActiveSessionPolicy string                     `yaml:"active_session_policy,omitempty"`
+	RequireLocalSession *bool                      `yaml:"require_local_session,omitempty"`
+	Streaming           IMStreamingConfig          `yaml:"streaming,omitempty"`
+	STT                 IMSTTConfig                `yaml:"stt,omitempty"`
+	Adapters            map[string]IMAdapterConfig `yaml:"adapters,omitempty"`
+}
+
+type IMStreamingConfig struct {
+	Enabled         bool    `yaml:"enabled,omitempty"`
+	Transport       string  `yaml:"transport,omitempty"`
+	EditIntervalSec float64 `yaml:"edit_interval_sec,omitempty"`
+	BufferThreshold int     `yaml:"buffer_threshold,omitempty"`
+	Cursor          string  `yaml:"cursor,omitempty"`
+}
+
+type IMSTTConfig struct {
+	Provider string `yaml:"provider,omitempty"`
+	BaseURL  string `yaml:"base_url,omitempty"`
+	APIKey   string `yaml:"api_key,omitempty"`
+	Model    string `yaml:"model,omitempty"`
+}
+
+type IMAdapterConfig struct {
+	Enabled   bool                   `yaml:"enabled,omitempty"`
+	Platform  string                 `yaml:"platform,omitempty"`
+	Transport string                 `yaml:"transport,omitempty"`
+	Command   string                 `yaml:"command,omitempty"`
+	Args      []string               `yaml:"args,omitempty"`
+	Env       map[string]string      `yaml:"env,omitempty"`
+	AllowFrom []string               `yaml:"allow_from,omitempty"`
+	Targets   []IMTargetConfig       `yaml:"targets,omitempty"`
+	Extra     map[string]interface{} `yaml:"extra,omitempty"`
+}
+
+type IMTargetConfig struct {
+	ID       string            `yaml:"id,omitempty"`
+	Label    string            `yaml:"label,omitempty"`
+	Channel  string            `yaml:"channel,omitempty"`
+	Thread   string            `yaml:"thread,omitempty"`
+	Metadata map[string]string `yaml:"metadata,omitempty"`
 }
 
 // SubAgentConfig holds sub-agent configuration.
@@ -1188,6 +1233,68 @@ func (c *Config) SaveDefaultModePreference(mode string) error {
 	c.DefaultMode = mode
 	c.FirstRun = false
 	return nil
+}
+
+func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	adapterName = strings.TrimSpace(adapterName)
+	if adapterName == "" {
+		return fmt.Errorf("adapter name is required")
+	}
+	if c.IM.Adapters == nil {
+		return fmt.Errorf("IM adapters are not configured")
+	}
+	adapter, ok := c.IM.Adapters[adapterName]
+	if !ok {
+		return fmt.Errorf("IM adapter %q is not configured", adapterName)
+	}
+	target.ID = strings.TrimSpace(target.ID)
+	target.Label = strings.TrimSpace(target.Label)
+	target.Channel = strings.TrimSpace(target.Channel)
+	target.Thread = strings.TrimSpace(target.Thread)
+	if target.ID == "" {
+		return fmt.Errorf("target id is required")
+	}
+	if target.Channel == "" {
+		return fmt.Errorf("channel is required")
+	}
+	replaced := false
+	for i := range adapter.Targets {
+		if strings.EqualFold(strings.TrimSpace(adapter.Targets[i].ID), target.ID) {
+			adapter.Targets[i] = target
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		adapter.Targets = append(adapter.Targets, target)
+	}
+	c.IM.Adapters[adapterName] = adapter
+	return c.Save()
+}
+
+func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("adapter name is required")
+	}
+	adapter.Platform = strings.TrimSpace(adapter.Platform)
+	if adapter.Platform == "" {
+		return fmt.Errorf("adapter platform is required")
+	}
+	if c.IM.Adapters == nil {
+		c.IM.Adapters = make(map[string]IMAdapterConfig)
+	}
+	if _, exists := c.IM.Adapters[name]; exists {
+		return fmt.Errorf("IM adapter %q already exists", name)
+	}
+	c.IM.Adapters[name] = adapter
+	return c.Save()
 }
 
 func boolPtr(v bool) *bool {

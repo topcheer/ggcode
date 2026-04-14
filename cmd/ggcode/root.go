@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -453,6 +455,38 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
+	if cfg.IM.Enabled {
+		imMgr := im.NewManager()
+		bindingsPath, err := im.DefaultBindingsPath()
+		if err != nil {
+			return fmt.Errorf("resolving IM bindings path: %w", err)
+		}
+		bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
+		if err != nil {
+			return fmt.Errorf("creating IM binding store: %w", err)
+		}
+		if err := imMgr.SetBindingStore(bindingStore); err != nil {
+			return fmt.Errorf("loading IM bindings: %w", err)
+		}
+		pairingPath, err := im.DefaultPairingStatePath()
+		if err != nil {
+			return fmt.Errorf("resolving IM pairing state path: %w", err)
+		}
+		pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
+		if err != nil {
+			return fmt.Errorf("creating IM pairing store: %w", err)
+		}
+		if err := imMgr.SetPairingStore(pairingStore); err != nil {
+			return fmt.Errorf("loading IM pairing state: %w", err)
+		}
+		imMgr.BindSession(im.SessionBinding{Workspace: workingDir})
+		controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, imMgr)
+		if err != nil {
+			return fmt.Errorf("starting current workspace IM adapter: %w", err)
+		}
+		defer controller.Stop()
+		repl.SetIMManager(imMgr)
+	}
 	if execPath, err := os.Executable(); err == nil {
 		repl.SetUpdateService(update.NewService(version.Display(), execPath, cfgFile, workingDir))
 	}

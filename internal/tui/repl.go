@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -33,6 +35,7 @@ type REPL struct {
 	resumeID            string
 	mcpMgr              *plugin.MCPManager
 	commandMgr          *commands.Manager
+	imManager           *im.Manager
 	projectMemoryLoader func() (string, []string, error)
 }
 
@@ -81,6 +84,14 @@ func (r *REPL) SetUpdateService(svc *update.Service) {
 func (r *REPL) SetCommandsManager(mgr *commands.Manager) {
 	r.commandMgr = mgr
 	r.model.SetCommandsManager(mgr)
+}
+
+func (r *REPL) SetIMManager(mgr *im.Manager) {
+	r.imManager = mgr
+	r.model.SetIMManager(mgr)
+	if mgr != nil {
+		mgr.SetBridge(newTUIIMBridge(func() *tea.Program { return r.program }))
+	}
 }
 
 func (r *REPL) SetAutoMemory(am *memory.AutoMemory) {
@@ -274,6 +285,12 @@ func (r *REPL) Run() error {
 
 	_, err := r.program.Run()
 	debug.Log("repl", "program.Run() returned err=%v", err)
+	if errors.Is(err, tea.ErrInterrupted) {
+		err = nil
+	}
+	if r.imManager != nil {
+		r.imManager.UnbindSession()
+	}
 	if err == nil && r.store != nil && r.model.session != nil {
 		// Save session on clean exit
 		r.model.session.Messages = r.agent.Messages()
