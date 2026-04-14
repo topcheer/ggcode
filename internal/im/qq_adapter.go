@@ -71,7 +71,7 @@ func newQQAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 		appSecret:        appSecret,
 		credentialSource: source,
 		markdownSupport:  boolValue(adapterCfg.Extra, true, "markdown_support"),
-		defaultChatType:  firstNonEmpty(strings.TrimSpace(stringValue(adapterCfg.Extra, "chat_type", "default_chat_type")), "group"),
+		defaultChatType:  normalizeQQChatType(firstNonEmpty(strings.TrimSpace(stringValue(adapterCfg.Extra, "chat_type", "default_chat_type")), "c2c")),
 		heartbeatEvery:   24 * time.Second,
 		chatTypes:        make(map[string]string),
 		seen:             make(map[string]time.Time),
@@ -912,7 +912,7 @@ func (a *qqAdapter) chatType(channelID string) string {
 func (a *qqAdapter) rememberChatType(channelID, chatType string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.chatTypes[channelID] = chatType
+	a.chatTypes[channelID] = normalizeQQChatType(chatType)
 }
 
 func (a *qqAdapter) resolveReplyMode(binding ChannelBinding) (string, int) {
@@ -1040,7 +1040,7 @@ func qqEnvelopeFields(eventType string, payload map[string]any) (channelID, send
 }
 
 func qqMessagePath(chatType, channelID string) string {
-	switch chatType {
+	switch normalizeQQChatType(chatType) {
 	case "c2c", "dm":
 		return "/v2/users/" + channelID + "/messages"
 	case "group":
@@ -1049,6 +1049,21 @@ func qqMessagePath(chatType, channelID string) string {
 		return "/channels/" + channelID + "/messages"
 	default:
 		return ""
+	}
+}
+
+func normalizeQQChatType(chatType string) string {
+	switch strings.ToLower(strings.TrimSpace(chatType)) {
+	case "user", "users", "c2c":
+		return "c2c"
+	case "group", "groups":
+		return "group"
+	case "dm":
+		return "dm"
+	case "guild", "channel", "channels":
+		return "guild"
+	default:
+		return strings.ToLower(strings.TrimSpace(chatType))
 	}
 }
 
