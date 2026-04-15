@@ -8,3 +8,19 @@ python/*.egg-info/
 python/**/__pycache__/
 npm/*.tgz
 /.site-build/
+
+# Test artifacts
+coverage.out
+internal/im/*.html
+internal/im/*_screenshot.png
+
+# IDE / tools
+.zread/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store

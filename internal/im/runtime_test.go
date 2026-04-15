@@ -497,3 +497,262 @@ func TestSyncSessionHistoryUsesCurrentBinding(t *testing.T) {
 		t.Fatalf("expected 2 history events, got %d", len(sink.events))
 	}
 }
+
+// --- Additional coverage tests ---
+
+func TestManager_SetOnUpdate_Callback(t *testing.T) {
+	m := NewManager()
+	var received StatusSnapshot
+	m.SetOnUpdate(func(s StatusSnapshot) {
+		received = s
+	})
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	if received.ActiveSession == nil || received.ActiveSession.Workspace != "/ws1" {
+		t.Error("expected callback to receive snapshot with session")
+	}
+}
+
+func TestManager_UnbindSession_ClearsState(t *testing.T) {
+	m := NewManager()
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	m.UnbindSession()
+	if m.ActiveSession() != nil {
+		t.Error("expected nil session")
+	}
+	if m.CurrentBinding() != nil {
+		t.Error("expected nil binding")
+	}
+}
+
+func TestManager_ActiveSession_Copy(t *testing.T) {
+	m := NewManager()
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	s := m.ActiveSession()
+	if s == nil || s.Workspace != "/ws1" {
+		t.Fatal("expected session with /ws1")
+	}
+}
+
+func TestManager_CurrentBinding_Copy(t *testing.T) {
+	m := NewManager()
+	m.SetBindingStore(NewMemoryBindingStore())
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	m.BindChannel(ChannelBinding{Workspace: "/ws1", TargetID: "t1", ChannelID: "c1"})
+
+	b := m.CurrentBinding()
+	if b == nil || b.ChannelID != "c1" {
+		t.Errorf("expected binding with c1, got %v", b)
+	}
+}
+
+func TestManager_ListBindings_NoStoreWithCurrent(t *testing.T) {
+	m := NewManager()
+	m.SetBindingStore(NewMemoryBindingStore())
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	m.BindChannel(ChannelBinding{Workspace: "/ws1", TargetID: "t1", ChannelID: "c1"})
+
+	// Remove store to test fallback path
+	m.mu.Lock()
+	m.bindingStore = nil
+	m.mu.Unlock()
+
+	list, err := m.ListBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Errorf("expected 1 binding from current, got %d", len(list))
+	}
+}
+
+func TestManager_RegisterUnregisterSink(t *testing.T) {
+	m := NewManager()
+	sink := &stubSink{name: "test-sink"}
+	m.RegisterSink(sink)
+
+	// Verify it is registered via GenerateShareLink
+	_, err := m.GenerateShareLink(context.Background(), "test-sink", "data")
+	if err == nil {
+		t.Error("expected error (not ShareLinkProvider)")
+	}
+
+	m.UnregisterSink("test-sink")
+	_, err = m.GenerateShareLink(context.Background(), "test-sink", "data")
+	if err == nil {
+		t.Error("expected error after unregister")
+	}
+}
+
+func TestManager_RegisterSink_Nil(t *testing.T) {
+	m := NewManager()
+	m.RegisterSink(nil) // should not panic
+}
+
+func TestManager_SendDirect_WithSink(t *testing.T) {
+	m := NewManager()
+	sink := &stubSink{name: "qq"}
+	m.RegisterSink(sink)
+
+	binding := ChannelBinding{Workspace: "/ws1", Adapter: "qq", ChannelID: "ch1"}
+	err := m.SendDirect(context.Background(), binding, OutboundEvent{Kind: OutboundEventText, Text: "direct-msg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 1 || sink.events[0].Text != "direct-msg" {
+		t.Errorf("unexpected sink state: %v", sink.events)
+	}
+}
+
+func TestManager_SendDirect_NoSink(t *testing.T) {
+	m := NewManager()
+	binding := ChannelBinding{Workspace: "/ws1", Adapter: "qq", ChannelID: "ch1"}
+	err := m.SendDirect(context.Background(), binding, OutboundEvent{Kind: OutboundEventText})
+	if err != nil {
+		t.Errorf("expected nil (no sink), got %v", err)
+	}
+}
+
+func TestManager_SendDirect_EmptyChannelID(t *testing.T) {
+	m := NewManager()
+	binding := ChannelBinding{Workspace: "/ws1", Adapter: "qq"}
+	err := m.SendDirect(context.Background(), binding, OutboundEvent{Kind: OutboundEventText})
+	if err != ErrNoChannelBound {
+		t.Errorf("expected ErrNoChannelBound, got %v", err)
+	}
+}
+
+func TestManager_RegisterApproval_AutoFields(t *testing.T) {
+	m := NewManager()
+	req := ApprovalRequest{ToolName: "bash"}
+	registered, ch := m.RegisterApproval(req)
+	if registered.ID == "" {
+		t.Error("expected auto-generated ID")
+	}
+	if registered.RequestedAt.IsZero() {
+		t.Error("expected auto-set RequestedAt")
+	}
+
+	// Resolve
+	result, ok, err := m.ResolveApproval(ApprovalResponse{
+		ApprovalID:  registered.ID,
+		Decision:    permission.Allow,
+		RespondedBy: "user",
+	})
+	if err != nil || !ok {
+		t.Fatalf("ResolveApproval: ok=%v err=%v", ok, err)
+	}
+	if result.Decision != permission.Allow {
+		t.Errorf("expected Allow, got %v", result.Decision)
+	}
+
+	select {
+	case d := <-ch:
+		if d != permission.Allow {
+			t.Errorf("channel got %v, want Allow", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestManager_ResolveApproval_DoubleResolve(t *testing.T) {
+	m := NewManager()
+	req := ApprovalRequest{ToolName: "bash"}
+	registered, _ := m.RegisterApproval(req)
+
+	m.ResolveApproval(ApprovalResponse{ApprovalID: registered.ID, Decision: permission.Allow})
+	_, ok, _ := m.ResolveApproval(ApprovalResponse{ApprovalID: registered.ID, Decision: permission.Deny})
+	if ok {
+		t.Error("expected ok=false for double resolve")
+	}
+}
+
+func TestManager_Snapshot_Empty(t *testing.T) {
+	m := NewManager()
+	snap := m.Snapshot()
+	if snap.ActiveSession != nil || snap.CurrentBinding != nil {
+		t.Error("expected empty snapshot")
+	}
+	if len(snap.Adapters) != 0 || len(snap.PendingApprovals) != 0 {
+		t.Error("expected empty snapshot")
+	}
+}
+
+func TestManager_Snapshot_WithData(t *testing.T) {
+	m := NewManager()
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	m.PublishAdapterState(AdapterState{Name: "qq", Status: "running"})
+	m.RegisterApproval(ApprovalRequest{ToolName: "bash"})
+
+	snap := m.Snapshot()
+	if snap.ActiveSession == nil {
+		t.Error("expected session")
+	}
+	if len(snap.Adapters) != 1 {
+		t.Errorf("expected 1 adapter, got %d", len(snap.Adapters))
+	}
+	if len(snap.PendingApprovals) != 1 {
+		t.Errorf("expected 1 approval, got %d", len(snap.PendingApprovals))
+	}
+}
+
+func TestManager_PublishAdapterState(t *testing.T) {
+	m := NewManager()
+	m.PublishAdapterState(AdapterState{Name: "qq", Status: "running"})
+	m.PublishAdapterState(AdapterState{Name: "tg", Status: "running"})
+
+	snap := m.Snapshot()
+	if len(snap.Adapters) != 2 {
+		t.Errorf("expected 2 adapters, got %d", len(snap.Adapters))
+	}
+}
+
+func TestManager_SetBridge(t *testing.T) {
+	m := NewManager()
+	bridge := &stubBridge{}
+	m.SetBridge(bridge)
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	err := m.HandleInbound(context.Background(), InboundMessage{Text: "hello", Envelope: Envelope{Adapter: "qq", ChannelID: "ch1"}})
+	if err == ErrNoBridge {
+		t.Error("expected bridge to be set")
+	}
+}
+
+func TestManager_UnbindChannel_UsesSessionWorkspace(t *testing.T) {
+	m := NewManager()
+	store := NewMemoryBindingStore()
+	m.SetBindingStore(store)
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	m.BindChannel(ChannelBinding{Workspace: "/ws1", TargetID: "t1", ChannelID: "c1"})
+
+	err := m.UnbindChannel("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.CurrentBinding() != nil {
+		t.Error("expected nil after unbind")
+	}
+}
+
+func TestManager_Emit_NoChannel(t *testing.T) {
+	m := NewManager()
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	err := m.Emit(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hi"})
+	if err != ErrNoChannelBound {
+		t.Errorf("expected ErrNoChannelBound, got %v", err)
+	}
+}
+
+func TestManager_Emit_AutoCreatedAt(t *testing.T) {
+	m := NewManager()
+	sink := &stubSink{name: "qq"}
+	m.RegisterSink(sink)
+	m.SetBindingStore(NewMemoryBindingStore())
+	m.BindSession(SessionBinding{Workspace: "/ws1"})
+	m.BindChannel(ChannelBinding{Workspace: "/ws1", Adapter: "qq", TargetID: "t1", ChannelID: "c1"})
+
+	m.Emit(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hi"})
+	if sink.events[0].CreatedAt.IsZero() {
+		t.Error("expected CreatedAt to be auto-set")
+	}
+}

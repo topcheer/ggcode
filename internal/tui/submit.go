@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -140,6 +141,14 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				return
 			}
 			round.ToolCalls++
+			m.emitIMEvent(im.OutboundEvent{
+				Kind: im.OutboundEventToolCall,
+				ToolCall: &im.ToolCallInfo{
+					ToolName: event.Tool.Name,
+					Args:     string(event.Tool.Arguments),
+					Detail:   present.Detail,
+				},
+			})
 			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: present.Activity,
 				ToolName: present.DisplayName,
@@ -177,6 +186,15 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			} else {
 				round.ToolSuccesses++
 			}
+			m.emitIMEvent(im.OutboundEvent{
+				Kind: im.OutboundEventToolResult,
+				ToolRes: &im.ToolResultInfo{
+					ToolName: event.Tool.Name,
+					Args:     string(event.Tool.Arguments),
+					Result:   event.Result,
+					IsError:  event.IsError,
+				},
+			})
 			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: m.t("status.thinking"),
 				ToolName: present.DisplayName,

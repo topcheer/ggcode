@@ -3,6 +3,7 @@ package im
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -33,6 +34,11 @@ const (
 	qqShareURLPath    = "/v2/generate_url_link"
 	qqMsgTypeText     = 0
 	qqMsgTypeMarkdown = 2
+	qqMsgTypeMedia    = 7
+	qqFileTypeImage   = 1
+
+	qqUploadCacheMaxEntries = 500
+	qqUploadCacheTTL        = 30 * time.Minute
 )
 
 var qqMentionPrefix = regexp.MustCompile(`^@\S+\s*`)
@@ -59,6 +65,14 @@ type qqAdapter struct {
 	heartbeatEvery time.Duration
 	chatTypes      map[string]string
 	seen           map[string]time.Time
+
+	uploadCache   map[string]qqUploadCacheEntry
+	uploadCacheMu sync.RWMutex
+}
+
+type qqUploadCacheEntry struct {
+	FileInfo  string
+	ExpiresAt time.Time
 }
 
 func newQQAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*qqAdapter, error) {
@@ -75,6 +89,7 @@ func newQQAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 		heartbeatEvery:   24 * time.Second,
 		chatTypes:        make(map[string]string),
 		seen:             make(map[string]time.Time),
+		uploadCache:      make(map[string]qqUploadCacheEntry),
 	}
 	if sttCfg := resolveQQSTTConfig(imCfg.STT, adapterCfg.Extra); sttCfg != nil {
 		adapter.stt = imstt.NewOpenAICompatible(sttCfg.BaseURL, sttCfg.APIKey, sttCfg.Model, sttCfg.Provider)
@@ -189,14 +204,51 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 		return fmt.Errorf("unknown QQ chat type %q for %s", chatType, channelID)
 	}
 	debug.Log("qq", "adapter=%s outbound kind=%s channel=%s len=%d reply_to=%q msg_seq=%d markdown=%t", a.name, event.Kind, channelID, len(content), replyTo, replySeq, a.markdownSupport)
-	deliveredReplyTo, err := a.sendTextMessage(ctx, path, chatType, content, replyTo, replySeq)
-	if err != nil {
-		return err
+
+	// Extract images from text and send them as rich media (msg_type: 7)
+	images, remainingText := ExtractImagesFromText(content)
+	var lastMsgID string
+	for i, img := range images {
+		b64, err := a.resolveImageSource(ctx, img)
+		if err != nil {
+			debug.Log("qq", "adapter=%s image resolve failed [%d/%d]: %v", a.name, i+1, len(images), err)
+			continue
+		}
+		useReplyTo := replyTo
+		useReplySeq := replySeq
+		if lastMsgID != "" {
+			useReplyTo = lastMsgID
+			useReplySeq = 0
+		}
+		if err := a.sendImageFromBase64(ctx, chatType, channelID, b64, useReplyTo, useReplySeq); err != nil {
+			debug.Log("qq", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
+			continue
+		}
+		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
 	}
-	if deliveredReplyTo != "" {
-		a.recordPassiveReply(binding, deliveredReplyTo)
+
+	// Send remaining text (images stripped)
+	remainingText = strings.TrimSpace(remainingText)
+	if remainingText != "" {
+		useReplyTo := replyTo
+		useReplySeq := replySeq
+		if lastMsgID != "" {
+			useReplyTo = lastMsgID
+			useReplySeq = 0
+		}
+		deliveredReplyTo, err := a.sendTextMessage(ctx, path, chatType, remainingText, useReplyTo, useReplySeq)
+		if err != nil {
+			return err
+		}
+		if deliveredReplyTo != "" {
+			lastMsgID = deliveredReplyTo
+		}
 	}
-	debug.Log("qq", "adapter=%s outbound delivered kind=%s channel=%s", a.name, event.Kind, channelID)
+
+	if lastMsgID != "" {
+		a.recordPassiveReply(binding, lastMsgID)
+	}
+	debug.Log("qq", "adapter=%s outbound delivered kind=%s channel=%s images=%d", a.name, event.Kind, channelID, len(images))
 	return nil
 }
 
@@ -238,6 +290,16 @@ func (a *qqAdapter) outboundText(event OutboundEvent) string {
 		return event.Text
 	case OutboundEventStatus:
 		return event.Status
+	case OutboundEventToolCall:
+		if event.ToolCall == nil {
+			return ""
+		}
+		return formatToolCallText(event.ToolCall)
+	case OutboundEventToolResult:
+		if event.ToolRes == nil {
+			return ""
+		}
+		return formatToolResultText(event.ToolRes)
 	case OutboundEventApprovalRequest:
 		if event.Approval == nil {
 			return ""
@@ -953,6 +1015,180 @@ func (a *qqAdapter) sendTextMessage(ctx context.Context, path, chatType, content
 	return replyTo, nil
 }
 
+// --- Image upload and media message ---
+
+func qqUploadPath(chatType, targetID string) string {
+	switch normalizeQQChatType(chatType) {
+	case "c2c", "dm":
+		return "/v2/users/" + targetID + "/files"
+	case "group":
+		return "/v2/groups/" + targetID + "/files"
+	default:
+		return ""
+	}
+}
+
+func (a *qqAdapter) uploadCacheKey(base64Data, scope, targetID string, fileType int) string {
+	h := md5.Sum([]byte(base64Data))
+	return fmt.Sprintf("%x:%s:%s:%d", h, scope, targetID, fileType)
+}
+
+func (a *qqAdapter) getUploadCache(key string) (string, bool) {
+	a.uploadCacheMu.RLock()
+	defer a.uploadCacheMu.RUnlock()
+	entry, ok := a.uploadCache[key]
+	if !ok || time.Now().After(entry.ExpiresAt) {
+		return "", false
+	}
+	return entry.FileInfo, true
+}
+
+func (a *qqAdapter) setUploadCache(key, fileInfo string) {
+	a.uploadCacheMu.Lock()
+	defer a.uploadCacheMu.Unlock()
+	// Evict expired entries if at capacity
+	if len(a.uploadCache) >= qqUploadCacheMaxEntries {
+		now := time.Now()
+		for k, v := range a.uploadCache {
+			if now.After(v.ExpiresAt) {
+				delete(a.uploadCache, k)
+			}
+		}
+	}
+	a.uploadCache[key] = qqUploadCacheEntry{
+		FileInfo:  fileInfo,
+		ExpiresAt: time.Now().Add(qqUploadCacheTTL),
+	}
+}
+
+// uploadMedia uploads an image to QQ CDN and returns the file_info string.
+func (a *qqAdapter) uploadMedia(ctx context.Context, chatType, targetID, base64Data string) (string, error) {
+	uploadPath := qqUploadPath(chatType, targetID)
+	if uploadPath == "" {
+		return "", fmt.Errorf("unsupported chat type for media upload: %s", chatType)
+	}
+
+	// Check cache
+	cacheKey := a.uploadCacheKey(base64Data, chatType, targetID, qqFileTypeImage)
+	if fileInfo, ok := a.getUploadCache(cacheKey); ok {
+		debug.Log("qq", "adapter=%s upload cache hit for %s", a.name, targetID)
+		return fileInfo, nil
+	}
+
+	body := map[string]any{
+		"file_type": qqFileTypeImage,
+		"file_data": base64Data,
+	}
+	debug.Log("qq", "adapter=%s uploading image to %s data_len=%d", a.name, uploadPath, len(base64Data))
+
+	var out map[string]any
+	if _, err := a.apiRequest(ctx, http.MethodPost, uploadPath, body, &out); err != nil {
+		return "", fmt.Errorf("upload QQ media: %w", err)
+	}
+
+	fileInfo := strings.TrimSpace(stringFromAny(out["file_info"]))
+	if fileInfo == "" {
+		if nested, ok := out["data"].(map[string]any); ok {
+			fileInfo = strings.TrimSpace(stringFromAny(nested["file_info"]))
+		}
+	}
+	if fileInfo == "" {
+		return "", fmt.Errorf("upload QQ media: response missing file_info (keys=%s)", mapKeysCSV(out))
+	}
+
+	debug.Log("qq", "adapter=%s upload ok file_info=%s", a.name, truncateStr(fileInfo, 60))
+	a.setUploadCache(cacheKey, fileInfo)
+	return fileInfo, nil
+}
+
+// sendMediaMessage sends a rich media message (msg_type: 7) with an uploaded image.
+func (a *qqAdapter) sendMediaMessage(ctx context.Context, path, chatType, fileInfo, replyTo string, replySeq int) error {
+	body := map[string]any{
+		"msg_type": qqMsgTypeMedia,
+		"media": map[string]any{
+			"file_info": fileInfo,
+		},
+	}
+	if strings.TrimSpace(replyTo) != "" {
+		body["msg_id"] = replyTo
+		body["msg_seq"] = max(replySeq, 1)
+	}
+	debug.Log("qq", "adapter=%s send media msg_type=7 path=%s", a.name, path)
+	if _, err := a.apiRequest(ctx, http.MethodPost, path, body, nil); err != nil {
+		return fmt.Errorf("send QQ media message: %w", err)
+	}
+	return nil
+}
+
+// sendImageFromBase64 uploads a base64 image and sends it as a media message.
+func (a *qqAdapter) sendImageFromBase64(ctx context.Context, chatType, channelID, base64Data, replyTo string, replySeq int) error {
+	path := qqMessagePath(chatType, channelID)
+	if path == "" {
+		return fmt.Errorf("unknown QQ chat type %q for media", chatType)
+	}
+	fileInfo, err := a.uploadMedia(ctx, chatType, channelID, base64Data)
+	if err != nil {
+		return err
+	}
+	return a.sendMediaMessage(ctx, path, chatType, fileInfo, replyTo, replySeq)
+}
+
+// sendImageFromURL downloads an image from a URL and sends it as a media message.
+func (a *qqAdapter) sendImageFromURL(ctx context.Context, chatType, channelID, imageURL, replyTo string, replySeq int) error {
+	debug.Log("qq", "adapter=%s downloading image from URL: %s", a.name, truncateStr(imageURL, 120))
+	data, mimeType, err := a.downloadImageURL(ctx, imageURL)
+	if err != nil {
+		return fmt.Errorf("download image %s: %w", truncateStr(imageURL, 60), err)
+	}
+	// Validate it's an image
+	if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && decoded.MIME != "" {
+		mimeType = decoded.MIME
+	}
+	if !strings.HasPrefix(mimeType, "image/") {
+		return fmt.Errorf("downloaded content is not an image: %s", mimeType)
+	}
+	b64 := base64.StdEncoding.EncodeToString(data)
+	return a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, replySeq)
+}
+
+// sendImageFromLocal reads a local file and sends it as a media message.
+func (a *qqAdapter) sendImageFromLocal(ctx context.Context, chatType, channelID, filePath, replyTo string, replySeq int) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("read local image %s: %w", filePath, err)
+	}
+	decoded, err := imagepkg.Decode(data)
+	if err != nil {
+		return fmt.Errorf("decode local image %s: %w", filePath, err)
+	}
+	b64 := imagepkg.EncodeBase64(decoded)
+	return a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, replySeq)
+}
+
+func (a *qqAdapter) downloadImageURL(ctx context.Context, imageURL string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, imagepkg.MaxSize))
+	if err != nil {
+		return nil, "", err
+	}
+	mimeType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if mimeType == "" {
+		mimeType = imagepkg.DetectMIME(data)
+	}
+	return data, mimeType, nil
+}
+
 func (a *qqAdapter) GenerateShareLink(ctx context.Context, callbackData string) (string, error) {
 	payload := map[string]any{}
 	callbackData = strings.TrimSpace(callbackData)
@@ -1171,5 +1407,60 @@ func intValue(value interface{}) (int, bool) {
 		return int(v), err == nil
 	default:
 		return 0, false
+	}
+}
+
+func truncateStr(s string, maxLen int) string {
+	if maxLen <= 0 || len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-1] + "…"
+}
+
+// resolveImageSource resolves an extracted image to a base64 string for upload.
+func (a *qqAdapter) resolveImageSource(ctx context.Context, img ExtractedImage) (string, error) {
+	switch img.Kind {
+	case "data_url":
+		// data:image/png;base64,XXXXX
+		parts := strings.SplitN(img.Data, ",", 2)
+		if len(parts) < 2 {
+			return "", fmt.Errorf("invalid data URL")
+		}
+		// Validate base64 by decoding
+		data, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return "", fmt.Errorf("invalid base64 in data URL: %w", err)
+		}
+		if _, err := imagepkg.Decode(data); err != nil {
+			return "", fmt.Errorf("data URL is not a valid image: %w", err)
+		}
+		return parts[1], nil
+	case "url":
+		if IsLocalFilePath(img.Data) {
+			// Local file path
+			data, err := os.ReadFile(img.Data)
+			if err != nil {
+				return "", fmt.Errorf("read local image: %w", err)
+			}
+			decoded, err := imagepkg.Decode(data)
+			if err != nil {
+				return "", fmt.Errorf("decode local image: %w", err)
+			}
+			return imagepkg.EncodeBase64(decoded), nil
+		}
+		// HTTP(S) URL
+		data, mimeType, err := a.downloadImageURL(ctx, img.Data)
+		if err != nil {
+			return "", err
+		}
+		if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && decoded.MIME != "" {
+			mimeType = decoded.MIME
+		}
+		if !strings.HasPrefix(mimeType, "image/") {
+			return "", fmt.Errorf("content is not an image: %s", mimeType)
+		}
+		return base64.StdEncoding.EncodeToString(data), nil
+	default:
+		return "", fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
 }

@@ -2,6 +2,8 @@
 
 GitHub releases are rendered from this directory.
 
+For the full end-to-end publishing playbook, see [`docs/release-process.md`](../release-process.md).
+
 ## How it works
 
 1. If `docs/releases/<tag>.md` exists, the Release workflow uses that file as the GitHub Release body.

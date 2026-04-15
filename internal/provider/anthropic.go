@@ -20,10 +20,9 @@ type AnthropicProvider struct {
 
 // NewAnthropicProvider creates a new Anthropic provider.
 func NewAnthropicProvider(apiKey string, model string, maxTokens int) *AnthropicProvider {
-	client := anthropic.NewClient(
-		option.WithAPIKey(apiKey),
-		option.WithMaxRetries(providerRetryAttempts-1),
-	)
+	opts := anthropicProviderOptions(apiKey, "")
+	client := anthropic.NewClient(opts...)
+	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d", model, maxTokens)
 	return &AnthropicProvider{
 		client:    client,
 		model:     model,
@@ -33,17 +32,32 @@ func NewAnthropicProvider(apiKey string, model string, maxTokens int) *Anthropic
 
 // NewAnthropicProviderWithBaseURL creates a new Anthropic provider with a custom base URL.
 func NewAnthropicProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) *AnthropicProvider {
-	opts := []option.RequestOption{
-		option.WithAPIKey(apiKey),
-		option.WithBaseURL(baseURL),
-		option.WithMaxRetries(providerRetryAttempts - 1),
-	}
+	opts := anthropicProviderOptions(apiKey, baseURL)
 	client := anthropic.NewClient(opts...)
+	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d baseURL=%s", model, maxTokens, baseURL)
 	return &AnthropicProvider{
 		client:    client,
 		model:     model,
 		maxTokens: maxTokens,
 	}
+}
+
+func anthropicProviderOptions(apiKey, baseURL string) []option.RequestOption {
+	opts := []option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(providerRetryAttempts - 1),
+	}
+	// Inject identity headers from impersonation state or protocol defaults.
+	headers := BuildHeadersForProvider("anthropic")
+	for k, vals := range headers {
+		for _, v := range vals {
+			opts = append(opts, option.WithHeader(k, v))
+		}
+	}
+	if baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	return opts
 }
 
 func (p *AnthropicProvider) Name() string {
@@ -183,7 +197,34 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			case "tool_use":
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
 			case "tool_result":
-				blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolID, b.Output, b.IsError))
+				if len(b.Images) > 0 && !b.IsError {
+					var content []anthropic.ToolResultBlockParamContentUnion
+					for _, img := range b.Images {
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfImage: &anthropic.ImageBlockParam{
+								Source: anthropic.ImageBlockParamSourceUnion{
+									OfBase64: &anthropic.Base64ImageSourceParam{
+										Data:      img.Base64,
+										MediaType: anthropic.Base64ImageSourceMediaType(img.MIME),
+									},
+								},
+							},
+						})
+					}
+					if b.Output != "" {
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfText: &anthropic.TextBlockParam{Text: b.Output},
+						})
+					}
+					blocks = append(blocks, anthropic.ContentBlockParamUnion{
+						OfToolResult: &anthropic.ToolResultBlockParam{
+							ToolUseID: b.ToolID,
+							Content:   content,
+						},
+					})
+				} else {
+					blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolID, b.Output, b.IsError))
+				}
 			}
 		}
 		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}

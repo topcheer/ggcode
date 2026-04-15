@@ -892,3 +892,15 @@ func newID() string {
 	}
 	return hex.EncodeToString(raw[:])
 }
+
+// PCAdapter returns the first registered PrivateClaw adapter, or nil.
+func (m *Manager) PCAdapter() PCAdapterAPI {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, sink := range m.sinks {
+		if a, ok := sink.(*pcAdapter); ok {
+			return a
+		}
+	}
+	return nil
+}

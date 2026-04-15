@@ -31,8 +31,9 @@ func NewCopilotProvider(apiKey, model string, maxTokens int, baseURL string) *Co
 }
 
 type copilotHeaderRoundTripper struct {
-	base  http.RoundTripper
-	token string
+	base           http.RoundTripper
+	token          string
+	impersonatedUA string // when non-empty, overrides the default "ggcode" UA
 }
 
 func (rt *copilotHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -64,7 +65,11 @@ func (rt *copilotHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Respons
 		clone.Header.Set("Authorization", "Bearer "+strings.TrimSpace(rt.token))
 	}
 	clone.Header.Set("Openai-Intent", "conversation-edits")
-	clone.Header.Set("User-Agent", "ggcode")
+	ua := "ggcode"
+	if rt.impersonatedUA != "" {
+		ua = rt.impersonatedUA
+	}
+	clone.Header.Set("User-Agent", ua)
 	return base.RoundTrip(clone)
 }
 
@@ -106,6 +111,17 @@ func inspectCopilotRequest(body []byte) (isAgent bool, isVision bool) {
 
 func (p *CopilotProvider) Name() string {
 	return "github-copilot"
+}
+
+// SetImpersonatedUA sets the impersonated User-Agent for the copilot transport.
+func (p *CopilotProvider) SetImpersonatedUA(ua string) {
+	if p.OpenAIProvider == nil || p.OpenAIProvider.transport == nil {
+		return
+	}
+	// The transport chain is: headerInjectingTransport -> copilotHeaderRoundTripper -> DefaultTransport
+	if copilotRT, ok := p.OpenAIProvider.transport.base.(*copilotHeaderRoundTripper); ok {
+		copilotRT.impersonatedUA = ua
+	}
 }
 
 func validateCopilotResolved(baseURL, apiKey string) error {

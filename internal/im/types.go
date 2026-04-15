@@ -17,6 +17,8 @@ const (
 	PlatformTelegram Platform = "telegram"
 	PlatformDiscord  Platform = "discord"
 	PlatformFeishu   Platform = "feishu"
+	PlatformDingTalk Platform = "dingtalk"
+	PlatformSlack    Platform = "slack"
 )
 
 type AttachmentKind string
@@ -112,6 +114,8 @@ type OutboundEventKind string
 const (
 	OutboundEventText            OutboundEventKind = "text"
 	OutboundEventStatus          OutboundEventKind = "status"
+	OutboundEventToolCall        OutboundEventKind = "tool_call"
+	OutboundEventToolResult      OutboundEventKind = "tool_result"
 	OutboundEventApprovalRequest OutboundEventKind = "approval_request"
 	OutboundEventApprovalResult  OutboundEventKind = "approval_result"
 )
@@ -120,9 +124,24 @@ type OutboundEvent struct {
 	Kind      OutboundEventKind
 	Text      string
 	Status    string
+	ToolCall  *ToolCallInfo
+	ToolRes   *ToolResultInfo
 	Approval  *ApprovalRequest
 	Result    *ApprovalResult
 	CreatedAt time.Time
+}
+
+type ToolCallInfo struct {
+	ToolName string
+	Args     string
+	Detail   string
+}
+
+type ToolResultInfo struct {
+	ToolName string
+	Args     string
+	Result   string
+	IsError  bool
 }
 
 type SessionBinding struct {

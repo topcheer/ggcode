@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -107,6 +108,12 @@ func (m *Manager) Add(msg provider.Message) {
 	if m.baselineAvailable {
 		m.baselineDelta += msgTokens
 	}
+	ratio := 0.0
+	if m.maxTokens > 0 {
+		ratio = float64(m.tokenCountLocked()) / float64(m.maxTokens)
+	}
+	debug.Log("ctx", "Add: role=%s blocks=%d msg_tokens=%d total=%d max=%d ratio=%.3f baseline=%t",
+		msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.maxTokens, ratio, m.baselineAvailable)
 }
 
 func (m *Manager) Messages() []provider.Message {
@@ -132,6 +139,7 @@ func (m *Manager) MaxTokens() int {
 func (m *Manager) SetMaxTokens(n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	debug.Log("ctx", "SetMaxTokens: %d→%d", m.maxTokens, n)
 	m.maxTokens = n
 }
 
@@ -141,6 +149,7 @@ func (m *Manager) SetOutputReserve(n int) {
 	if n < 0 {
 		n = 0
 	}
+	debug.Log("ctx", "SetOutputReserve: raw=%d effective=%d (ceiling=%d)", n, m.effectiveOutputReserveLocked(), int(float64(m.maxTokens)*maxOutputReserveRatio))
 	m.outputReserve = n
 }
 
@@ -150,9 +159,12 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	oldBaseline := m.baselineTokens
 	m.baselineTokens = usage.InputTokens
 	m.baselineDelta = 0
 	m.baselineAvailable = true
+	debug.Log("ctx", "RecordUsage: input=%d output=%d old_baseline=%d→new_baseline=%d estimated=%d delta=%d",
+		usage.InputTokens, usage.OutputTokens, oldBaseline, usage.InputTokens, m.tokens, usage.InputTokens-m.tokens)
 }
 
 func (m *Manager) Clear() {
@@ -190,13 +202,19 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	for pass := 0; pass < maxSummarizePasses; pass++ {
 		plan, ok := m.buildSummaryPlan()
 		if !ok {
+			debug.Log("ctx", "Summarize: no plan built, nothing to summarize")
 			return nil
 		}
 
+		debug.Log("ctx", "Summarize: pass=%d old_msgs=%d recent_msgs=%d has_system=%t",
+			pass, len(plan.oldMsgs), len(plan.recentMsgs), plan.hasSystem)
+
 		summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs)
 		if err != nil {
+			debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
 			return err
 		}
+		debug.Log("ctx", "Summarize: summary generated, len=%d chars", len(summaryText))
 
 		stateText := m.buildPostCompactState(plan.allMsgs)
 
@@ -232,9 +250,12 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 		newMsgs = append(newMsgs, plan.recentMsgs...)
 		newMsgs = append(newMsgs, extraMsgs...)
 
+		oldLen := len(m.messages)
 		m.messages = newMsgs
 		m.recalcTokens()
 		done := m.tokens <= m.compactTargetTokens()
+		debug.Log("ctx", "Summarize: pass=%d msgs=%d→%d tokens=%d target=%d done=%t",
+			pass, oldLen, len(newMsgs), m.tokens, m.compactTargetTokens(), done)
 		m.mu.Unlock()
 
 		if done {
@@ -242,27 +263,51 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 		}
 	}
 
+	debug.Log("ctx", "Summarize: exhausted %d passes", maxSummarizePasses)
 	return nil
 }
 
 // CheckAndSummarize triggers summarization if usage ratio >= threshold.
 func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error) {
-	if m.TokenCount() < m.AutoCompactThreshold() {
+	tokenCount := m.TokenCount()
+	threshold := m.AutoCompactThreshold()
+	budget := func() int {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.usablePromptBudgetLocked()
+	}()
+	ratio := m.UsageRatio()
+	debug.Log("ctx", "CheckAndSummarize: tokens=%d threshold=%d budget=%d ratio=%.3f maxTokens=%d — %s",
+		tokenCount, threshold, budget, ratio, m.MaxTokens(),
+		func() string {
+			if tokenCount < threshold {
+				return "SKIP (below threshold)"
+			}
+			return "TRIGGERED"
+		}())
+
+	if tokenCount < threshold {
 		return false, nil
 	}
 
 	changed := m.Microcompact()
 	if m.TokenCount() < m.AutoCompactThreshold() {
+		debug.Log("ctx", "CheckAndSummarize: Microcompact resolved, tokens now=%d", m.TokenCount())
 		return changed, nil
 	}
 
+	debug.Log("ctx", "CheckAndSummarize: Microcompact not enough, calling Summarize (tokens=%d)", m.TokenCount())
 	before := m.Messages()
 	err := m.Summarize(ctx, prov)
 	if err != nil {
+		debug.Log("ctx", "CheckAndSummarize: Summarize FAILED: %v", err)
 		return changed, err
 	}
 	after := m.Messages()
-	return changed || !reflect.DeepEqual(before, after), nil
+	summaryChanged := !reflect.DeepEqual(before, after)
+	debug.Log("ctx", "CheckAndSummarize: done tokens=%d msgs=%d→%d changed=%t",
+		m.TokenCount(), len(before), len(after), summaryChanged)
+	return changed || summaryChanged, nil
 }
 
 func (m *Manager) TruncateOldestGroupForRetry() bool {
@@ -295,7 +340,8 @@ func (m *Manager) countTokens(msg provider.Message) int {
 			return n
 		}
 	}
-	return estimateTokens(msg)
+	n := estimateTokens(msg)
+	return n
 }
 
 func estimateTokens(msg provider.Message) int {
@@ -313,6 +359,7 @@ func (m *Manager) Microcompact() bool {
 	defer m.mu.Unlock()
 
 	if m.tokenCountLocked() <= m.compactTargetTokens() {
+		debug.Log("ctx", "Microcompact: SKIP tokens=%d <= target=%d", m.tokenCountLocked(), m.compactTargetTokens())
 		return false
 	}
 
@@ -323,6 +370,7 @@ func (m *Manager) Microcompact() bool {
 
 	groups := buildMessageGroups(m.messages, start)
 	if len(groups) <= minRecentGroups {
+		debug.Log("ctx", "Microcompact: SKIP groups=%d <= min=%d", len(groups), minRecentGroups)
 		return false
 	}
 	protectedStart := groups[len(groups)-minRecentGroups].start
@@ -330,6 +378,10 @@ func (m *Manager) Microcompact() bool {
 	changed := false
 	currentTokens := m.tokenCountLocked()
 	targetTokens := m.compactTargetTokens()
+	compactedCount := 0
+
+	debug.Log("ctx", "Microcompact: START tokens=%d target=%d msgs=%d groups=%d protected_from=%d",
+		currentTokens, targetTokens, len(m.messages), len(groups), protectedStart)
 
 	for i := start; i < protectedStart && currentTokens > targetTokens; i++ {
 		msg := m.messages[i]
@@ -356,6 +408,7 @@ func (m *Manager) Microcompact() bool {
 			currentTokens -= originalTokens - newTokens
 			msgChanged = true
 			changed = true
+			compactedCount++
 
 			if currentTokens <= targetTokens {
 				break
@@ -370,6 +423,9 @@ func (m *Manager) Microcompact() bool {
 
 	if changed {
 		m.recalcTokens()
+		debug.Log("ctx", "Microcompact: DONE compacted=%d blocks tokens=%d→%d", compactedCount, currentTokens, m.tokenCountLocked())
+	} else {
+		debug.Log("ctx", "Microcompact: no eligible tool results found to compact")
 	}
 	return changed
 }
@@ -545,6 +601,7 @@ func (m *Manager) usablePromptBudgetLocked() int {
 	if budget < minSummaryReserve {
 		return minSummaryReserve
 	}
+	debug.Log("ctx", "usableBudget: max=%d - reserve=%d - safety=%d = %d", m.maxTokens, reserve, safety, budget)
 	return budget
 }
 

@@ -181,8 +181,9 @@ func CompleteMention(prefix string, workDir string) []string {
 
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
-	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider",
-	"/clear", "/qq", "/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
+	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
+	"/clear", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding",
+	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/fullscreen", "/mode", "/init", "/harness", "/exit", "/quit", "/agents", "/agent",
 	"/compact", "/todo", "/bug", "/config", "/status", "/update", "/lang", "/skills",
 }
@@ -195,9 +196,19 @@ var SlashCommandDescriptions = map[string]string{
 	"/resume":      "Resume a previous session",
 	"/export":      "Export session to markdown",
 	"/model":       "Open model panel",
+	"/impersonate": "Set client identity (impersonate CLI tools)",
 	"/provider":    "Open provider manager",
 	"/clear":       "Clear conversation",
 	"/qq":          "Manage QQ channel binding",
+	"/telegram":    "Manage Telegram channel binding",
+	"/tg":          "Manage Telegram channel binding",
+	"/pc":          "Manage PC channel binding",
+	"/discord":     "Manage Discord channel binding",
+	"/feishu":      "Manage Feishu channel binding",
+	"/lark":        "Manage Feishu channel binding",
+	"/slack":       "Manage Slack channel binding",
+	"/dingtalk":    "Manage DingTalk channel binding",
+	"/ding":        "Manage DingTalk channel binding",
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
 	"/undo":        "Undo last file edit",

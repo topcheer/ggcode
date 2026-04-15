@@ -1,15 +1,18 @@
 package context
 
-// EstimateTokens provides a more accurate token estimation than simple len/4.
-// It distinguishes ASCII characters (~0.25 token/char) from CJK characters (~0.5 token/char).
+// EstimateTokens provides a rough token estimation.
+// Uses ~4 chars/token for ASCII and ~1.5 chars/token for CJK, which matches
+// common BPE tokenizer behavior more closely than a flat len/4.
 func EstimateTokens(text string) int {
-	count := 0
+	ascii := 0
+	cjk := 0
 	for _, r := range text {
 		if r > 127 {
-			count += 2 // CJK
+			cjk++
 		} else {
-			count++ // ASCII
+			ascii++
 		}
 	}
-	return count/4 + 1
+	// ASCII: ~4 chars/token, CJK: ~1.5 chars/token
+	return ascii/4 + cjk*2/3 + 1
 }
