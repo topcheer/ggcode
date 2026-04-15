@@ -1,9 +1,11 @@
 const crypto = require("crypto");
 const fs = require("fs");
+const http = require("http");
 const https = require("https");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { URL } = require("url");
 
 const OWNER = "topcheer";
 const REPO = "ggcode";
@@ -108,11 +110,16 @@ function findInstalledBinary(requestedVersion, target) {
     if (!fs.existsSync(binary)) {
       continue;
     }
-    if (requestedVersion === "latest") {
-      return { dir, binary, version: readMetadata(dir)?.version || "unknown" };
-    }
     const metadata = readMetadata(dir);
-    if (metadata && metadata.version === requestedVersion) {
+    if (!metadata) {
+      // No .ggcode-wrapper.json means this binary was not installed by the wrapper
+      // (e.g. a Python pip entry point script with the same name). Skip it.
+      continue;
+    }
+    if (requestedVersion === "latest") {
+      return { dir, binary, version: metadata.version || "unknown" };
+    }
+    if (metadata.version === requestedVersion) {
       return { dir, binary, version: metadata.version };
     }
   }
@@ -358,24 +365,101 @@ async function downloadText(url) {
   return (await downloadBuffer(url)).toString("utf8");
 }
 
+function getProxyURL() {
+  return (
+    process.env.https_proxy ||
+    process.env.HTTPS_PROXY ||
+    process.env.http_proxy ||
+    process.env.HTTP_PROXY ||
+    ""
+  );
+}
+
+function httpsGetViaProxy(targetUrl, callback) {
+  const proxyURL = getProxyURL();
+  if (!proxyURL) {
+    return https.get(targetUrl, { rejectUnauthorized: false }, callback);
+  }
+
+  const parsed = new URL(targetUrl);
+  const proxy = new URL(proxyURL);
+  const tls = require("tls");
+
+  const connectReq = http.request({
+    host: proxy.hostname,
+    port: proxy.port || 80,
+    method: "CONNECT",
+    path: `${parsed.hostname}:443`,
+  });
+
+  connectReq.on("connect", (res, socket) => {
+    if (res.statusCode !== 200) {
+      socket.destroy();
+      callback(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
+      return;
+    }
+    const tlsSocket = tls.connect({
+      socket: socket,
+      servername: parsed.hostname,
+      rejectUnauthorized: false,
+    }, () => {
+      const req = https.request(
+        {
+          host: parsed.hostname,
+          port: 443,
+          path: parsed.pathname + (parsed.search || ""),
+          method: "GET",
+          rejectUnauthorized: false,
+          createConnection: () => tlsSocket,
+        },
+        callback,
+      );
+      req.on("error", (err) => callback(err));
+      req.end();
+    });
+    tlsSocket.on("error", (err) => callback(err));
+  });
+
+  connectReq.on("error", (err) => callback(err));
+  connectReq.end();
+
+  return connectReq;
+}
+
+function httpGetGeneric(targetUrl, callback) {
+  const parsed = new URL(targetUrl);
+  if (parsed.protocol === "https:") {
+    return httpsGetViaProxy(targetUrl, callback);
+  }
+  return http.get(targetUrl, callback);
+}
+
 function downloadBuffer(url) {
   return new Promise((resolve, reject) => {
     const get = (target) => {
-      https
-        .get(target, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            get(new URL(res.headers.location, target).toString());
-            return;
-          }
-          if (res.statusCode !== 200) {
-            reject(new Error(`${target} returned ${res.statusCode}`));
-            return;
-          }
-          const chunks = [];
-          res.on("data", (chunk) => chunks.push(chunk));
-          res.on("end", () => resolve(Buffer.concat(chunks)));
-        })
-        .on("error", reject);
+      let handled = false;
+      const cb = (res) => {
+        if (handled) return;
+        if (res instanceof Error) {
+          handled = true;
+          reject(res);
+          return;
+        }
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          get(new URL(res.headers.location, target).toString());
+          return;
+        }
+        if (res.statusCode !== 200) {
+          handled = true;
+          reject(new Error(`${target} returned ${res.statusCode}`));
+          return;
+        }
+        handled = true;
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve(Buffer.concat(chunks)));
+      };
+      httpGetGeneric(target, cb);
     };
     get(url);
   });
@@ -384,21 +468,29 @@ function downloadBuffer(url) {
 function resolveFinalURL(url) {
   return new Promise((resolve, reject) => {
     const get = (target) => {
-      https
-        .get(target, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            res.resume();
-            get(new URL(res.headers.location, target).toString());
-            return;
-          }
-          if (res.statusCode !== 200) {
-            reject(new Error(`${target} returned ${res.statusCode}`));
-            return;
-          }
+      let handled = false;
+      const cb = (res) => {
+        if (handled) return;
+        if (res instanceof Error) {
+          handled = true;
+          reject(res);
+          return;
+        }
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
-          resolve(target);
-        })
-        .on("error", reject);
+          get(new URL(res.headers.location, target).toString());
+          return;
+        }
+        if (res.statusCode !== 200) {
+          handled = true;
+          reject(new Error(`${target} returned ${res.statusCode}`));
+          return;
+        }
+        handled = true;
+        res.resume();
+        resolve(target);
+      };
+      httpGetGeneric(target, cb);
     };
     get(url);
   });

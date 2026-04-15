@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import ssl
 import tarfile
 import tempfile
 import urllib.parse
@@ -86,8 +87,20 @@ def metadata_path(directory: Path) -> Path:
     return directory / METADATA
 
 
+def _build_ssl_context() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _urlopen(url: str) -> object:
+    ctx = _build_ssl_context()
+    return urllib.request.urlopen(url, context=ctx)
+
+
 def download(url: str) -> bytes:
-    with urllib.request.urlopen(url) as response:
+    with _urlopen(url) as response:
         return response.read()
 
 
@@ -95,7 +108,7 @@ def resolve_release_version(version: str) -> str:
     if version != "latest":
         return version
 
-    with urllib.request.urlopen(f"https://github.com/{OWNER}/{REPO}/releases/latest") as response:
+    with _urlopen(f"https://github.com/{OWNER}/{REPO}/releases/latest") as response:
         final_url = response.geturl()
 
     parsed = urllib.parse.urlparse(final_url)
@@ -130,7 +143,11 @@ def existing_install(requested_version: str, binary_name: str) -> InstallResult 
         binary_path = directory / binary_name
         if not binary_path.exists():
             continue
-        metadata = read_metadata(directory) or {}
+        metadata = read_metadata(directory)
+        if metadata is None:
+            # No .ggcode-wrapper.json means this binary was not installed by the wrapper
+            # (e.g. a Python pip entry point script with the same name). Skip it.
+            continue
         if requested_version != "latest" and metadata.get("version") != requested_version:
             continue
         path_updated = ensure_installed_path(directory)
