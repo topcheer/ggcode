@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -148,8 +149,16 @@ type Config struct {
 	Hooks         hooks.HookConfig          `yaml:"hooks"`
 	DefaultMode   string                    `yaml:"default_mode"`
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
+	Impersonation ImpersonationConfig       `yaml:"impersonation,omitempty"`
 	FilePath      string                    `yaml:"-"`
 	FirstRun      bool                      `yaml:"-"`
+}
+
+// ImpersonationConfig holds persisted impersonation settings.
+type ImpersonationConfig struct {
+	Preset        string            `yaml:"preset,omitempty"`
+	CustomVersion string            `yaml:"custom_version,omitempty"`
+	CustomHeaders map[string]string `yaml:"custom_headers,omitempty"`
 }
 
 type UIConfig struct {
@@ -303,6 +312,18 @@ func DefaultConfig() *Config {
 					[]string{"claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"},
 					"official", "anthropic",
 				),
+				"oauth": func() EndpointConfig {
+					ep := defaultEndpoint(
+						"Anthropic OAuth",
+						"anthropic",
+						"https://api.anthropic.com",
+						"claude-sonnet-4-20250514",
+						[]string{"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"},
+						"official", "anthropic", "oauth",
+					)
+					ep.AuthType = "oauth"
+					return ep
+				}(),
 			}),
 			"openai": defaultVendor("OpenAI", "${OPENAI_API_KEY}", map[string]EndpointConfig{
 				"api": defaultEndpoint(
@@ -624,6 +645,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(expandedData, cfg); err != nil {
 		return nil, fmt.Errorf("parsing expanded config: %w", err)
 	}
+	mergeDefaultEndpoints(cfg, DefaultConfig())
 	migrateLegacyMaxIterations(path, raw, cfg)
 	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
@@ -901,6 +923,25 @@ func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, er
 			}
 		}
 	}
+	if authType == "oauth" && vendor == auth.ProviderAnthropic {
+		info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
+		if err != nil {
+			return nil, err
+		}
+		if info != nil {
+			if info.IsExpired() && strings.TrimSpace(info.RefreshToken) != "" {
+				refreshed, refreshErr := auth.RefreshClaudeToken(context.Background(), info.RefreshToken)
+				if refreshErr == nil && refreshed != nil {
+					_ = auth.DefaultStore().Save(refreshed)
+					apiKey = strings.TrimSpace(refreshed.AccessToken)
+				} else {
+					apiKey = strings.TrimSpace(info.AccessToken)
+				}
+			} else {
+				apiKey = strings.TrimSpace(info.AccessToken)
+			}
+		}
+	}
 	if baseURL == "" {
 		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", endpoint, vendor)
 	}
@@ -1142,6 +1183,57 @@ func (c *Config) SaveLanguagePreference(lang string) error {
 	}
 	c.Language = lang
 	c.FirstRun = false
+	return nil
+}
+
+// SaveImpersonation persists impersonation settings to the config file.
+func (c *Config) SaveImpersonation(imp ImpersonationConfig) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(c.FilePath) == "" {
+		return fmt.Errorf("config file path is empty")
+	}
+
+	raw := map[string]interface{}{}
+	data, err := os.ReadFile(c.FilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+		}
+	} else if len(data) > 0 {
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
+		}
+	}
+
+	if imp.Preset == "" && imp.CustomVersion == "" && len(imp.CustomHeaders) == 0 {
+		delete(raw, "impersonation")
+	} else {
+		impMap := map[string]interface{}{}
+		if imp.Preset != "" {
+			impMap["preset"] = imp.Preset
+		}
+		if imp.CustomVersion != "" {
+			impMap["custom_version"] = imp.CustomVersion
+		}
+		if len(imp.CustomHeaders) > 0 {
+			impMap["custom_headers"] = imp.CustomHeaders
+		}
+		raw["impersonation"] = impMap
+	}
+
+	updated, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+		return err
+	}
+	c.Impersonation = imp
 	return nil
 }
 
@@ -1421,4 +1513,28 @@ func (c *Config) ExpandAllowedDirs(baseDir string) []string {
 		}
 	}
 	return dirs
+}
+
+// mergeDefaultEndpoints merges endpoints from defaults that are missing in cfg.
+// This ensures new built-in endpoints (e.g. "oauth") are available even when
+// the user has an existing config file that doesn't include them.
+func mergeDefaultEndpoints(cfg, defaults *Config) {
+	if cfg == nil || defaults == nil {
+		return
+	}
+	for vendorName, defaultVC := range defaults.Vendors {
+		cfgVC, ok := cfg.Vendors[vendorName]
+		if !ok {
+			continue
+		}
+		if cfgVC.Endpoints == nil {
+			cfgVC.Endpoints = map[string]EndpointConfig{}
+		}
+		for epName, defaultEP := range defaultVC.Endpoints {
+			if _, exists := cfgVC.Endpoints[epName]; !exists {
+				cfgVC.Endpoints[epName] = defaultEP
+			}
+		}
+		cfg.Vendors[vendorName] = cfgVC
+	}
 }

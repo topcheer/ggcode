@@ -50,6 +50,7 @@ type Agent struct {
 	diffConfirm    DiffConfirmFunc
 	onInterrupt    interruptionHandler
 	projectMemory  map[string]struct{}
+	supportsVision bool
 	mu             sync.RWMutex
 }
 
@@ -184,6 +185,21 @@ func (a *Agent) Provider() provider.Provider {
 	return a.provider
 }
 
+// SetSupportsVision controls whether tool_result images are included in
+// messages sent to the provider. When false, image data is stripped from
+// tool results and only the text placeholder is sent.
+func (a *Agent) SetSupportsVision(v bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.supportsVision = v
+}
+
+func (a *Agent) SupportsVision() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.supportsVision
+}
+
 func (a *Agent) ContextManager() ctxpkg.ContextManager {
 	return a.contextManager
 }
@@ -196,6 +212,7 @@ func (a *Agent) syncContextManagerProviderLocked() {
 
 func (a *Agent) syncContextManagerUsage(usage provider.TokenUsage) {
 	if cm, ok := a.contextManager.(usageAwareContextManager); ok {
+		debug.Log("agent", "syncUsage: input=%d output=%d", usage.InputTokens, usage.OutputTokens)
 		cm.RecordUsage(usage)
 	}
 }
@@ -236,7 +253,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			return err
 		}
 		msgs := a.contextManager.Messages()
-		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d usage_ratio=%.2f", i+1, a.maxIter, len(msgs), a.contextManager.UsageRatio())
+		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
+			i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.MaxTokens())
 
 		resp, textBuf, toolCalls, err := a.streamChatResponse(ctx, msgs, toolDefs, onEvent)
 		if err != nil {
@@ -324,8 +342,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
-			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s", tc.Name, result.IsError, truncateStr(result.Content, 200))
-			toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
+			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, truncateStr(result.Content, 200), len(result.Images))
+			if len(result.Images) > 0 && a.SupportsVision() {
+				imgs := make([]provider.ContentImage, len(result.Images))
+				for i, ri := range result.Images {
+					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
+				}
+				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
+			} else {
+				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
+			}
 
 			onEvent(provider.StreamEvent{
 				Type:    provider.StreamEventToolResult,
@@ -656,11 +682,14 @@ func isPromptTooLongError(err error) bool {
 
 func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.StreamEvent), err error, retries *int) bool {
 	if !isPromptTooLongError(err) {
+		debug.Log("agent", "tryReactiveCompact: not a PTL error: %v", err)
 		return false
 	}
 	if retries != nil && *retries >= maxReactiveCompactRetries {
+		debug.Log("agent", "tryReactiveCompact: max retries (%d) reached", *retries)
 		return false
 	}
+	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d attempting compact", a.contextManager.TokenCount())
 
 	onEvent(provider.StreamEvent{
 		Type: provider.StreamEventText,
@@ -694,10 +723,15 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 
 func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
 	threshold := a.contextManager.AutoCompactThreshold()
-	if threshold <= 0 || a.contextManager.TokenCount() < threshold {
+	tokens := a.contextManager.TokenCount()
+	ratio := a.contextManager.UsageRatio()
+	debug.Log("agent", "maybeAutoCompact: tokens=%d threshold=%d ratio=%.3f maxTokens=%d",
+		tokens, threshold, ratio, a.contextManager.MaxTokens())
+	if threshold <= 0 || tokens < threshold {
 		return nil
 	}
 
+	debug.Log("agent", "maybeAutoCompact: TRIGGERED (tokens=%d >= threshold=%d)", tokens, threshold)
 	changed, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if err != nil {
 		if shouldIgnoreAutoCompactError(err) {

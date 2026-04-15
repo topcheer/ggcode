@@ -43,11 +43,12 @@ type providerModelsRefreshResultMsg struct {
 }
 
 type providerAuthStartMsg struct {
-	vendor  string
-	flow    *auth.CopilotDeviceFlow
-	copyErr error
-	openErr error
-	err     error
+	vendor     string
+	flow       *auth.CopilotDeviceFlow
+	claudeFlow *auth.ClaudeOAuthFlow
+	copyErr    error
+	openErr    error
+	err        error
 }
 
 type providerAuthResultMsg struct {
@@ -347,6 +348,9 @@ func (m *Model) renderProviderPanel() string {
 	}
 	if panel.selectedVendor() == auth.ProviderGitHubCopilot {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.copilot")))
+	}
+	if panel.selectedVendor() == auth.ProviderAnthropic && panel.selectedEndpoint() == "oauth" {
+		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.anthropic_oauth")))
 	}
 	if panel.selectedVendor() == auth.ProviderGitHubCopilot && panel.selectedEndpoint() == "enterprise" && strings.TrimSpace(panel.enterpriseURL) != "" {
 		footer = append(footer, fmt.Sprintf(" %s: %s", m.t("panel.provider.enterprise_url"), panel.enterpriseURL))
@@ -673,21 +677,40 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		panel.startEditing("custom model", panel.selectedModel())
 		return *m, nil
 	case "l":
-		if panel.selectedVendor() != auth.ProviderGitHubCopilot || panel.authBusy {
+		if panel.authBusy {
 			return *m, nil
 		}
-		panel.authBusy = true
-		panel.message = m.t("panel.provider.login.starting")
-		return *m, m.startCopilotLogin(panel.selectedEndpoint(), panel.enterpriseURL)
+		if panel.selectedVendor() == auth.ProviderAnthropic && panel.selectedEndpoint() == "oauth" {
+			panel.authBusy = true
+			panel.message = m.t("panel.provider.login.claude_starting")
+			return *m, m.startClaudeLogin()
+		}
+		if panel.selectedVendor() == auth.ProviderGitHubCopilot {
+			panel.authBusy = true
+			panel.message = m.t("panel.provider.login.starting")
+			return *m, m.startCopilotLogin(panel.selectedEndpoint(), panel.enterpriseURL)
+		}
+		return *m, nil
 	case "x":
-		if panel.selectedVendor() != auth.ProviderGitHubCopilot || panel.authBusy {
+		if panel.authBusy {
 			return *m, nil
 		}
-		if err := auth.DefaultStore().Delete(auth.ProviderGitHubCopilot); err != nil {
-			panel.message = err.Error()
+		if panel.selectedVendor() == auth.ProviderAnthropic && panel.selectedEndpoint() == "oauth" {
+			if err := auth.DefaultStore().Delete(auth.ProviderAnthropic); err != nil {
+				panel.message = err.Error()
+				return *m, nil
+			}
+			panel.message = m.t("panel.provider.logout.claude_success")
 			return *m, nil
 		}
-		panel.message = m.t("panel.provider.logout.success")
+		if panel.selectedVendor() == auth.ProviderGitHubCopilot {
+			if err := auth.DefaultStore().Delete(auth.ProviderGitHubCopilot); err != nil {
+				panel.message = err.Error()
+				return *m, nil
+			}
+			panel.message = m.t("panel.provider.logout.success")
+			return *m, nil
+		}
 		return *m, nil
 	case "enter", "s":
 		if err := m.config.SetActiveSelection(panel.selectedVendor(), panel.selectedEndpoint(), panel.selectedModel()); err != nil {
@@ -827,6 +850,53 @@ func (m *Model) pollCopilotLogin(flow *auth.CopilotDeviceFlow) tea.Cmd {
 	}
 }
 
+func (m *Model) startClaudeLogin() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		flow, err := auth.StartClaudeOAuthFlow(ctx)
+		msg := providerAuthStartMsg{vendor: auth.ProviderAnthropic, claudeFlow: flow, err: err}
+		if err == nil && flow != nil {
+			if m.urlOpener != nil {
+				msg.openErr = m.urlOpener(flow.AutoURL)
+			}
+		}
+		return msg
+	}
+}
+
+func (m *Model) waitForClaudeAuthCode(flow *auth.ClaudeOAuthFlow) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		code, isAutomatic, err := auth.WaitForClaudeAuthCode(ctx, flow)
+		flow.Close()
+		if err != nil {
+			return providerAuthResultMsg{vendor: auth.ProviderAnthropic, err: err}
+		}
+		// Exchange code for tokens
+		tokenResp, exchangeErr := auth.ExchangeClaudeCodeForTokens(ctx, code, flow.CodeVerifier, !isAutomatic, flow.Port)
+		if exchangeErr != nil {
+			return providerAuthResultMsg{vendor: auth.ProviderAnthropic, err: exchangeErr}
+		}
+		expiresIn := tokenResp.ExpiresIn
+		if expiresIn <= 0 {
+			expiresIn = 3600
+		}
+		info := &auth.Info{
+			ProviderID:   auth.ProviderAnthropic,
+			Type:         "oauth",
+			AccessToken:  tokenResp.AccessToken,
+			RefreshToken: tokenResp.RefreshToken,
+			ExpiresAt:    time.Now().Add(time.Duration(expiresIn) * time.Second),
+		}
+		if saveErr := auth.DefaultStore().Save(info); saveErr != nil {
+			return providerAuthResultMsg{vendor: auth.ProviderAnthropic, err: saveErr}
+		}
+		return providerAuthResultMsg{vendor: auth.ProviderAnthropic, info: info}
+	}
+}
+
 func providerHasUsableAPIKey(value string) bool {
 	value = strings.TrimSpace(config.ExpandEnv(value))
 	if value == "" {
@@ -836,6 +906,13 @@ func providerHasUsableAPIKey(value string) bool {
 }
 
 func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) bool {
+	if vendor == auth.ProviderAnthropic && endpoint == "oauth" {
+		info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
+		if err != nil || info == nil || strings.TrimSpace(info.AccessToken) == "" {
+			return false
+		}
+		return true
+	}
 	if vendor == auth.ProviderGitHubCopilot {
 		info, err := auth.DefaultStore().Load(auth.ProviderGitHubCopilot)
 		if err != nil || info == nil || strings.TrimSpace(info.AccessToken) == "" {
@@ -854,6 +931,12 @@ func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConf
 }
 
 func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) string {
+	if vendor == auth.ProviderAnthropic && endpoint == "oauth" {
+		if providerHasUsableCredential(vendor, endpoint, ep, vc, panel) {
+			return m.t("panel.provider.auth.connected")
+		}
+		return m.t("panel.provider.auth.not_connected")
+	}
 	if vendor == auth.ProviderGitHubCopilot {
 		if providerHasUsableCredential(vendor, endpoint, ep, vc, panel) {
 			return m.t("panel.provider.auth.connected")

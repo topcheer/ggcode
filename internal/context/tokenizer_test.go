@@ -11,11 +11,11 @@ func TestEstimateTokens(t *testing.T) {
 		{"empty", "", 1},
 		{"ascii_short", "hello", 2},      // 5/4+1 = 2
 		{"ascii_long", "hello world", 3}, // 11/4+1 = 3
-		{"cjk_short", "你好", 2},           // (2*2)/4+1 = 2
-		{"cjk_long", "你好世界", 3},          // (4*2)/4+1 = 3
-		{"mixed", "hello你好", 3},          // (5+4)/4+1 = 3
+		{"cjk_short", "你好", 2},           // 2*2/3+1 = 2
+		{"cjk_long", "你好世界", 3},          // 4*2/3+1 = 3
+		{"mixed", "hello你好", 3},          // 5/4+2*2/3+1 = 3
 		{"single_ascii", "a", 1},         // 1/4+1 = 1
-		{"single_cjk", "中", 1},           // 2/4+1 = 1
+		{"single_cjk", "中", 1},           // 1*2/3+1 = 1
 	}
 
 	for _, tt := range tests {

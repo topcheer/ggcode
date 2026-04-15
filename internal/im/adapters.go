@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 type AdapterController struct {
@@ -39,6 +40,7 @@ func StartConfiguredAdapters(parent context.Context, cfg config.IMConfig, mgr *M
 			return nil, err
 		}
 	}
+
 	return controller, nil
 }
 
@@ -53,6 +55,13 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 	if binding == nil || strings.TrimSpace(binding.Adapter) == "" {
 		return controller, nil
 	}
+
+	// Built-in PC adapter — only start when binding explicitly targets it
+	if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
+		startPCAdapter(ctx, cfg, mgr)
+		return controller, nil
+	}
+
 	adapterCfg, ok := cfg.Adapters[binding.Adapter]
 	if !ok || !adapterCfg.Enabled {
 		return controller, nil
@@ -87,6 +96,102 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 		}
 		mgr.RegisterSink(adapter)
 		adapter.Start(ctx)
+	case PlatformTelegram:
+		adapter, err := newTGAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			return err
+		}
+		mgr.RegisterSink(adapter)
+		adapter.Start(ctx)
+	case PlatformPrivateClaw:
+		sessionStore := newDefaultPCSessionStore()
+		adapter, err := newPCAdapter(name, cfg, adapterCfg, mgr, sessionStore)
+		if err != nil {
+			return err
+		}
+		mgr.RegisterSink(adapter)
+		adapter.Start(ctx)
+	case PlatformDiscord:
+		adapter, err := newDiscordAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			return err
+		}
+		mgr.RegisterSink(adapter)
+		adapter.Start(ctx)
+	case PlatformFeishu:
+		adapter, err := newFeishuAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			return err
+		}
+		mgr.RegisterSink(adapter)
+		adapter.Start(ctx)
+	case PlatformDingTalk:
+		adapter, err := newDingTalkAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			return err
+		}
+		mgr.RegisterSink(adapter)
+		adapter.Start(ctx)
+	case PlatformSlack:
+		adapter, err := newSlackAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			return err
+		}
+		mgr.RegisterSink(adapter)
+		adapter.Start(ctx)
 	}
 	return nil
+}
+
+// StartPCAdapterOnly starts only the built-in PrivateClaw adapter.
+// Used when IM is not explicitly enabled but PC should still be available.
+func StartPCAdapterOnly(parent context.Context, cfg config.IMConfig, mgr *Manager) (*AdapterController, error) {
+	if mgr == nil {
+		return nil, fmt.Errorf("IM manager is nil")
+	}
+	ctx, cancel := context.WithCancel(parent)
+	startPCAdapter(ctx, cfg, mgr)
+	return &AdapterController{cancel: cancel}, nil
+}
+
+// newDefaultPCSessionStore creates a JSONFilePCSessionStore at the default path.
+func newDefaultPCSessionStore() PCSessionStore {
+	storePath, err := DefaultPCSessionStorePath()
+	if err != nil {
+		debug.Log("pc", "resolve session store path: %v", err)
+		return NewMemoryPCSessionStore()
+	}
+	store, err := NewJSONFilePCSessionStore(storePath)
+	if err != nil {
+		debug.Log("pc", "create session store: %v", err)
+		return NewMemoryPCSessionStore()
+	}
+	return store
+}
+
+// startPCAdapter starts the built-in PrivateClaw adapter with defaults.
+// It uses config from im.adapters if a PrivateClaw entry exists, otherwise uses defaults.
+func startPCAdapter(ctx context.Context, cfg config.IMConfig, mgr *Manager) {
+	// Check if a PC adapter was already started via explicit config
+	for name, adapterCfg := range cfg.Adapters {
+		if adapterCfg.Enabled && strings.EqualFold(adapterCfg.Platform, string(PlatformPrivateClaw)) {
+			debug.Log("pc", "skip auto-start: explicit config %q already present", name)
+			return
+		}
+	}
+
+	// Build a default adapter config
+	defaultCfg := config.IMAdapterConfig{
+		Enabled:  true,
+		Platform: string(PlatformPrivateClaw),
+	}
+	sessionStore := newDefaultPCSessionStore()
+	adapter, err := newPCAdapter("_pc_builtin", cfg, defaultCfg, mgr, sessionStore)
+	if err != nil {
+		debug.Log("pc", "auto-start failed: %v", err)
+		return
+	}
+	mgr.RegisterSink(adapter)
+	adapter.Start(ctx)
+	debug.Log("pc", "auto-started _pc_builtin, sinks=%d", len(mgr.Snapshot().Adapters))
 }

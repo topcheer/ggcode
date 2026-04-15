@@ -22,6 +22,7 @@ type ContentBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	Output    string          `json:"output,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Images    []ContentImage  `json:"images,omitempty"` // images within a tool_result
 }
 
 // ImageBlock creates an image content block with base64-encoded data.
@@ -47,6 +48,24 @@ func ToolResultBlock(id, output string, isError bool) ContentBlock {
 // ToolResultNamedBlock creates a tool result content block with the originating tool name.
 func ToolResultNamedBlock(id, name, output string, isError bool) ContentBlock {
 	return ContentBlock{Type: "tool_result", ToolID: id, ToolName: name, Output: output, IsError: isError}
+}
+
+// ContentImage represents an image within a tool_result block.
+type ContentImage struct {
+	MIME   string `json:"mime"`
+	Base64 string `json:"base64"`
+}
+
+// ToolResultWithImages creates a tool result that carries both text and images.
+func ToolResultWithImages(id, name, textOutput string, images []ContentImage, isError bool) ContentBlock {
+	return ContentBlock{
+		Type:     "tool_result",
+		ToolID:   id,
+		ToolName: name,
+		Output:   textOutput,
+		Images:   images,
+		IsError:  isError,
+	}
 }
 
 // TokenUsage records token consumption for a single API call.

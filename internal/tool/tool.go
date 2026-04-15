@@ -13,8 +13,18 @@ import (
 // IsError: true means the tool execution had a user-visible error (shown to LLM).
 // The Go error return is for system-level failures only (panic recovery, etc).
 type Result struct {
-	Content string `json:"content"`
-	IsError bool   `json:"is_error"`
+	Content string        `json:"content"`
+	IsError bool          `json:"is_error"`
+	Images  []ResultImage `json:"images,omitempty"`
+}
+
+// ResultImage carries a single image within a tool Result.
+type ResultImage struct {
+	MIME       string `json:"mime"`        // "image/png", "image/jpeg", etc.
+	Base64     string `json:"base64"`      // base64-encoded image data
+	Width      int    `json:"width"`       // original pixel width (0 if unknown)
+	Height     int    `json:"height"`      // original pixel height (0 if unknown)
+	SourcePath string `json:"source_path"` // file path the image was read from
 }
 
 // Tool is the interface every tool (built-in, MCP-adapted, or plugin) must implement.

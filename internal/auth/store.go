@@ -11,6 +11,7 @@ import (
 
 const (
 	ProviderGitHubCopilot = "github-copilot"
+	ProviderAnthropic     = "anthropic"
 )
 
 type Info struct {
@@ -86,6 +87,17 @@ func (s *Store) Delete(providerID string) error {
 	}
 	delete(all, strings.TrimSpace(providerID))
 	return s.saveAll(all)
+}
+
+// IsExpired returns true if the token is expired or will expire within 5 minutes.
+func (i *Info) IsExpired() bool {
+	if i == nil {
+		return true
+	}
+	if i.ExpiresAt.IsZero() {
+		return false
+	}
+	return time.Now().Add(5 * time.Minute).After(i.ExpiresAt)
 }
 
 func (s *Store) HasUsableToken(providerID string) (bool, error) {

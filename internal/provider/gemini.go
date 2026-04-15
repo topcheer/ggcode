@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 
 	"google.golang.org/genai"
 )
@@ -14,6 +17,7 @@ type GeminiProvider struct {
 	client    *genai.Client
 	model     string
 	maxTokens int
+	transport *headerInjectingTransport // kept for runtime header updates
 }
 
 // NewGeminiProvider creates a new Gemini provider.
@@ -23,9 +27,17 @@ func NewGeminiProvider(apiKey string, model string, maxTokens int) (*GeminiProvi
 
 // NewGeminiProviderWithBaseURL creates a new Gemini provider with a custom base URL.
 func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) (*GeminiProvider, error) {
+	headers := BuildHeadersForProvider("gemini")
+	transport := &headerInjectingTransport{
+		base:    http.DefaultTransport,
+		headers: headers,
+	}
 	clientConfig := &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
+		HTTPClient: &http.Client{
+			Transport: transport,
+		},
 	}
 	if trimmed := strings.TrimSpace(baseURL); trimmed != "" {
 		clientConfig.HTTPOptions.BaseURL = trimmed
@@ -35,15 +47,24 @@ func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, ba
 	if err != nil {
 		return nil, fmt.Errorf("gemini client: %w", err)
 	}
+	debug.Log("provider", "GeminiProvider created: model=%s maxTokens=%d baseURL=%s", model, maxTokens, baseURL)
 	return &GeminiProvider{
 		client:    client,
 		model:     model,
 		maxTokens: maxTokens,
+		transport: transport,
 	}, nil
 }
 
 func (p *GeminiProvider) Name() string {
 	return "gemini"
+}
+
+// UpdateRuntimeHeaders updates the injected headers at runtime.
+func (p *GeminiProvider) UpdateRuntimeHeaders(headers http.Header) {
+	if p.transport != nil {
+		p.transport.UpdateHeaders(headers)
+	}
 }
 
 func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {

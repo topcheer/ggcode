@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -14,12 +15,50 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+const (
+	// claudeCLIVersion is the version we masquerade as.
+	claudeCLIVersion = "2.1.92"
+)
+
 // OpenAIProvider implements Provider using the OpenAI-compatible API.
 type OpenAIProvider struct {
 	client    *openai.Client
 	model     string
 	maxTokens int
 	name      string
+	transport *headerInjectingTransport // kept for runtime header updates
+}
+
+// headerInjectingTransport wraps an http.RoundTripper to inject custom headers
+// that mimic the claude-cli client identity.
+type headerInjectingTransport struct {
+	base    http.RoundTripper
+	headers http.Header
+}
+
+func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, vals := range t.headers {
+		for _, v := range vals {
+			req.Header.Set(k, v)
+		}
+	}
+	return t.base.RoundTrip(req)
+}
+
+// UpdateHeaders replaces the injected headers. Safe for concurrent use because
+// RoundTrip only reads the reference and we swap it atomically.
+func (t *headerInjectingTransport) UpdateHeaders(newHeaders http.Header) {
+	t.headers = newHeaders
+}
+
+// claudeCLIHeaders returns the set of HTTP headers that mimic the official
+// claude-cli client, allowing compatible API providers to recognize the client.
+func claudeCLIHeaders() http.Header {
+	h := make(http.Header)
+	h.Set("User-Agent", fmt.Sprintf("claude-cli/%s (individual, cli)", claudeCLIVersion))
+	h.Set("x-app", "cli")
+	h.Set("anthropic-version", "2023-06-01")
+	return h
 }
 
 // NewOpenAIProvider creates a new OpenAI provider.
@@ -36,7 +75,28 @@ func NewOpenAIProviderWithBaseURL(apiKey string, model string, maxTokens int, ba
 }
 
 func NewOpenAIProviderWithConfig(config openai.ClientConfig, model string, maxTokens int, name string) *OpenAIProvider {
+	// Build identity headers from impersonation state or defaults.
+	protocol := "openai"
+	extraHeaders := BuildHeadersForProvider(protocol)
+	var baseTransport http.RoundTripper
+	if hc, ok := config.HTTPClient.(*http.Client); ok && hc != nil && hc.Transport != nil {
+		baseTransport = hc.Transport
+	}
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	transport := &headerInjectingTransport{
+		base:    baseTransport,
+		headers: extraHeaders,
+	}
+	config.HTTPClient = &http.Client{
+		Transport: transport,
+	}
+
 	client := openai.NewClientWithConfig(config)
+	debug.Log("provider", "OpenAIProvider created: model=%s maxTokens=%d name=%s headers=%v",
+		model, maxTokens, name, extraHeaders)
+
 	if strings.TrimSpace(name) == "" {
 		name = "openai"
 	}
@@ -45,6 +105,7 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, model string, maxTo
 		model:     model,
 		maxTokens: maxTokens,
 		name:      name,
+		transport: transport,
 	}
 }
 
@@ -53,6 +114,13 @@ func (p *OpenAIProvider) Name() string {
 		return "openai"
 	}
 	return p.name
+}
+
+// UpdateRuntimeHeaders updates the injected headers at runtime.
+func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
+	if p.transport != nil {
+		p.transport.UpdateHeaders(headers)
+	}
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
@@ -250,20 +318,37 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 }
 
 func (p *OpenAIProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
-	total := 0
+	return estimateTokensForMessages(messages), nil
+}
+
+// estimateTokensForMessages counts all content fields (Text, Output, Input)
+// and converts to an approximate token count.
+func estimateTokensForMessages(messages []Message) int {
+	totalChars := 0
+	textChars := 0
+	outputChars := 0
+	inputChars := 0
 	for _, msg := range messages {
 		for _, block := range msg.Content {
-			total += len(block.Text)
+			textChars += len(block.Text)
+			outputChars += len(block.Output)
+			inputChars += len(block.Input)
 		}
 	}
-	return total / 4, nil
+	totalChars = textChars + outputChars + inputChars
+	tokens := estimateTokensFromChars(totalChars)
+	debug.Log("provider", "estimateTokensForMessages: msgs=%d text_chars=%d output_chars=%d input_chars=%d total_chars=%d tokens=%d",
+		len(messages), textChars, outputChars, inputChars, totalChars, tokens)
+	return tokens
 }
 
 func estimateTokensFromChars(chars int) int {
 	if chars <= 0 {
 		return 0
 	}
-	estimate := chars / 4
+	// Conservative estimate: ~3 chars/token on average (mixed ASCII/CJK/code).
+	// errs on the side of overcounting to trigger compaction early enough.
+	estimate := chars / 3
 	if estimate < 1 {
 		return 1
 	}
@@ -328,11 +413,36 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				// Convert tool_result blocks to OpenAI tool messages
 				for _, b := range m.Content {
 					if b.Type == "tool_result" {
-						result = append(result, openai.ChatCompletionMessage{
-							Role:       openai.ChatMessageRoleTool,
-							Content:    b.Output,
-							ToolCallID: b.ToolID,
-						})
+						if len(b.Images) > 0 && !b.IsError {
+							// Multimodal tool result: images + text
+							var parts []openai.ChatMessagePart
+							for _, img := range b.Images {
+								parts = append(parts, openai.ChatMessagePart{
+									Type: openai.ChatMessagePartTypeImageURL,
+									ImageURL: &openai.ChatMessageImageURL{
+										URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
+										Detail: openai.ImageURLDetailAuto,
+									},
+								})
+							}
+							if b.Output != "" {
+								parts = append(parts, openai.ChatMessagePart{
+									Type: openai.ChatMessagePartTypeText,
+									Text: b.Output,
+								})
+							}
+							result = append(result, openai.ChatCompletionMessage{
+								Role:         openai.ChatMessageRoleTool,
+								ToolCallID:   b.ToolID,
+								MultiContent: parts,
+							})
+						} else {
+							result = append(result, openai.ChatCompletionMessage{
+								Role:       openai.ChatMessageRoleTool,
+								Content:    b.Output,
+								ToolCallID: b.ToolID,
+							})
+						}
 					}
 				}
 				break
@@ -412,11 +522,35 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			// Tool results - each tool_result block becomes a separate message
 			for _, b := range m.Content {
 				if b.Type == "tool_result" {
-					result = append(result, openai.ChatCompletionMessage{
-						Role:       openai.ChatMessageRoleTool,
-						Content:    b.Output,
-						ToolCallID: b.ToolID,
-					})
+					if len(b.Images) > 0 && !b.IsError {
+						var parts []openai.ChatMessagePart
+						for _, img := range b.Images {
+							parts = append(parts, openai.ChatMessagePart{
+								Type: openai.ChatMessagePartTypeImageURL,
+								ImageURL: &openai.ChatMessageImageURL{
+									URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
+									Detail: openai.ImageURLDetailAuto,
+								},
+							})
+						}
+						if b.Output != "" {
+							parts = append(parts, openai.ChatMessagePart{
+								Type: openai.ChatMessagePartTypeText,
+								Text: b.Output,
+							})
+						}
+						result = append(result, openai.ChatCompletionMessage{
+							Role:         openai.ChatMessageRoleTool,
+							ToolCallID:   b.ToolID,
+							MultiContent: parts,
+						})
+					} else {
+						result = append(result, openai.ChatCompletionMessage{
+							Role:       openai.ChatMessageRoleTool,
+							Content:    b.Output,
+							ToolCallID: b.ToolID,
+						})
+					}
 				}
 			}
 		}

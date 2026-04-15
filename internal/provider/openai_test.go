@@ -84,8 +84,8 @@ func TestEstimateTokensFromChars(t *testing.T) {
 	if got := estimateTokensFromChars(3); got != 1 {
 		t.Fatalf("expected minimum 1 token for non-empty output, got %d", got)
 	}
-	if got := estimateTokensFromChars(40); got != 10 {
-		t.Fatalf("expected 10, got %d", got)
+	if got := estimateTokensFromChars(40); got != 13 { // 40/3 ≈ 13
+		t.Fatalf("expected 13, got %d", got)
 	}
 }
 

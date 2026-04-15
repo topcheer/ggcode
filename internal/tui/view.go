@@ -1014,8 +1014,20 @@ func (m Model) renderContextPanel() string {
 	switch {
 	case m.modelPanel != nil:
 		return m.renderModelPanel()
+	case m.tgPanel != nil:
+		return m.renderTGPanel()
 	case m.qqPanel != nil:
 		return m.renderQQPanel()
+	case m.pcPanel != nil:
+		return m.renderPCPanel()
+	case m.discordPanel != nil:
+		return m.renderDiscordPanel()
+	case m.feishuPanel != nil:
+		return m.renderFeishuPanel()
+	case m.slackPanel != nil:
+		return m.renderSlackPanel()
+	case m.dingtalkPanel != nil:
+		return m.renderDingtalkPanel()
 	case m.mcpPanel != nil:
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:
@@ -1026,6 +1038,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderHarnessContextPrompt()
 	case m.harnessPanel != nil:
 		return m.renderHarnessPanel()
+	case m.impersonatePanel != nil:
+		return m.renderImpersonatePanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
 	case m.pendingPairingChallenge() != nil:

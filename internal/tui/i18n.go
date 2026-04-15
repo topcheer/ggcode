@@ -3,7 +3,40 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
+
+var (
+	moduleCatalogsMu sync.RWMutex
+	enModuleCatalogs = make(map[string]string)
+	zhModuleCatalogs = make(map[string]string)
+)
+
+// registerCatalog merges a module's key-value pairs into the global extension catalogs.
+// Called from init() in i18n module files.
+func registerCatalog(en, zh map[string]string) {
+	moduleCatalogsMu.Lock()
+	defer moduleCatalogsMu.Unlock()
+	for k, v := range en {
+		enModuleCatalogs[k] = v
+	}
+	for k, v := range zh {
+		zhModuleCatalogs[k] = v
+	}
+}
+
+func lookupModuleCatalog(lang Language, key string) (string, bool) {
+	moduleCatalogsMu.RLock()
+	defer moduleCatalogsMu.RUnlock()
+	switch lang {
+	case LangZhCN:
+		v, ok := zhModuleCatalogs[key]
+		return v, ok
+	default:
+		v, ok := enModuleCatalogs[key]
+		return v, ok
+	}
+}
 
 type Language string
 
@@ -168,6 +201,20 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.status")
 	case "/update":
 		return tr(lang, "slash.update")
+	case "/qq":
+		return tr(lang, "slash.qq")
+	case "/telegram", "/tg":
+		return tr(lang, "slash.telegram")
+	case "/pc":
+		return tr(lang, "slash.pc")
+	case "/discord":
+		return tr(lang, "slash.discord")
+	case "/feishu", "/lark":
+		return tr(lang, "slash.feishu")
+	case "/slack":
+		return tr(lang, "slash.slack")
+	case "/dingtalk", "/ding":
+		return tr(lang, "slash.dingtalk")
 	default:
 		return cmd
 	}
@@ -1211,6 +1258,18 @@ func enCatalog(key string) string {
 		return "View/modify configuration"
 	case "slash.qq":
 		return "Manage QQ channel binding"
+	case "slash.telegram":
+		return "Manage Telegram channel binding"
+	case "slash.pc":
+		return "Manage PC channel binding"
+	case "slash.discord":
+		return "Manage Discord channel binding"
+	case "slash.feishu":
+		return "Manage Feishu channel binding"
+	case "slash.slack":
+		return "Manage Slack channel binding"
+	case "slash.dingtalk":
+		return "Manage DingTalk channel binding"
 	case "panel.qq.directory":
 		return "Directory"
 	case "panel.qq.runtime":
@@ -1332,6 +1391,12 @@ func enCatalog(key string) string {
   /model [name]      Open model panel or switch directly
   /provider [vendor] Open provider manager
   /qq                Open QQ binding panel
+  /telegram          Open Telegram binding panel
+  /pc                Open PC binding panel
+  /discord           Open Discord binding panel
+  /feishu            Open Feishu binding panel
+  /slack             Open Slack binding panel
+  /dingtalk          Open DingTalk binding panel
   /lang [code]       Choose or switch interface language
   /skills            Browse available skills
   /clear             Clear conversation history
@@ -1416,6 +1481,9 @@ Mouse:
 	case "command.harness_cancelled":
 		return "Harness run cancelled."
 	default:
+		if v, ok := lookupModuleCatalog(LangEnglish, key); ok {
+			return v
+		}
 		return key
 	}
 }
@@ -2444,6 +2512,18 @@ func zhCatalog(key string) string {
 		return "查看/修改配置"
 	case "slash.qq":
 		return "管理 QQ 渠道绑定"
+	case "slash.telegram":
+		return "管理 Telegram 渠道绑定"
+	case "slash.pc":
+		return "管理 PC 渠道绑定"
+	case "slash.discord":
+		return "管理 Discord 渠道绑定"
+	case "slash.feishu":
+		return "管理飞书渠道绑定"
+	case "slash.slack":
+		return "管理 Slack 渠道绑定"
+	case "slash.dingtalk":
+		return "管理钉钉渠道绑定"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":
@@ -2565,6 +2645,12 @@ func zhCatalog(key string) string {
   /model [name]      打开模型面板或直接切换
   /provider [vendor] 打开供应商管理界面
   /qq                打开 QQ 绑定面板
+  /telegram          打开 Telegram 绑定面板
+  /pc                打开 PC 绑定面板
+  /discord           打开 Discord 绑定面板
+  /feishu            打开飞书绑定面板
+  /slack             打开 Slack 绑定面板
+  /dingtalk          打开钉钉绑定面板
   /lang [code]       选择或切换界面语言
   /skills            浏览可用 skills
   /clear             清空对话历史
@@ -2649,6 +2735,9 @@ func zhCatalog(key string) string {
 	case "command.harness_cancelled":
 		return "Harness 运行已取消。"
 	default:
+		if v, ok := lookupModuleCatalog(LangZhCN, key); ok {
+			return v
+		}
 		return key
 	}
 }

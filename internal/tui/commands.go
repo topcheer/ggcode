@@ -395,6 +395,9 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 				return m.openModelPanel()
 			}
 			return nil
+		case "/impersonate":
+			m.openImpersonatePanel()
+			return nil
 		case "/provider":
 			if len(parts) > 1 {
 				newVendor := parts[1]
@@ -425,6 +428,24 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return nil
 		case "/qq":
 			return m.handleQQCommand()
+		case "/telegram", "/tg":
+			m.openTGPanel()
+			return nil
+		case "/pc":
+			m.openPCPanel()
+			return nil
+		case "/discord":
+			m.openDiscordPanel()
+			return nil
+		case "/feishu", "/lark":
+			m.openFeishuPanel()
+			return nil
+		case "/slack":
+			m.openSlackPanel()
+			return nil
+		case "/dingtalk", "/ding":
+			m.openDingtalkPanel()
+			return nil
 		case "/allow":
 			if len(parts) > 1 {
 				if m.policy != nil {

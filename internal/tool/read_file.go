@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -21,7 +23,7 @@ type ReadFile struct {
 func (t ReadFile) Name() string { return "read_file" }
 
 func (t ReadFile) Description() string {
-	return "Read the contents of a file. Returns the file content as text."
+	return "Read the contents of a file. Returns text content or image data (for png/jpg/jpeg/gif/webp files)."
 }
 
 func (t ReadFile) Parameters() json.RawMessage {
@@ -52,6 +54,25 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	data, err := os.ReadFile(args.Path)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error reading file: %v", err)}, nil
+	}
+
+	// Image file handling: decode and return as multimodal result.
+	if image.IsImageFile(args.Path) {
+		img, err := image.Decode(data)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("error decoding image: %v", err)}, nil
+		}
+		b64 := image.EncodeBase64(img)
+		return Result{
+			Content: image.Placeholder(filepath.Base(args.Path), img),
+			Images: []ResultImage{{
+				MIME:       img.MIME,
+				Base64:     b64,
+				Width:      img.Width,
+				Height:     img.Height,
+				SourcePath: args.Path,
+			}},
+		}, nil
 	}
 
 	content := string(data)

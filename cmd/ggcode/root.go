@@ -326,6 +326,19 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		return fmt.Errorf("no API key for vendor %q endpoint %q. Set the api_key in config or /provider", resolved.VendorID, resolved.EndpointID)
 	}
 
+	// Apply impersonation settings from config before creating provider
+	if imp := cfg.Impersonation; imp.Preset != "" {
+		var preset *provider.ImpersonationPreset
+		if imp.Preset != "none" {
+			preset = provider.FindPresetByID(imp.Preset)
+		}
+		customHeaders := make(map[string]string, len(imp.CustomHeaders))
+		for k, v := range imp.CustomHeaders {
+			customHeaders[k] = v
+		}
+		provider.SetActiveImpersonation(preset, imp.CustomVersion, customHeaders)
+	}
+
 	prov, err := provider.NewProvider(resolved)
 	if err != nil {
 		return err
@@ -436,6 +449,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	ag.SetSupportsVision(resolved.SupportsVision)
 
 	// Setup session store
 	store, err := session.NewDefaultStore()
@@ -455,7 +469,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
-	if cfg.IM.Enabled {
+	{
 		imMgr := im.NewManager()
 		bindingsPath, err := im.DefaultBindingsPath()
 		if err != nil {
@@ -480,11 +494,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			return fmt.Errorf("loading IM pairing state: %w", err)
 		}
 		imMgr.BindSession(im.SessionBinding{Workspace: workingDir})
-		controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, imMgr)
-		if err != nil {
-			return fmt.Errorf("starting current workspace IM adapter: %w", err)
+		if cfg.IM.Enabled {
+			controller, err := im.StartCurrentBindingAdapter(context.Background(), cfg.IM, imMgr)
+			if err != nil {
+				return fmt.Errorf("starting current workspace IM adapter: %w", err)
+			}
+			defer controller.Stop()
 		}
-		defer controller.Stop()
 		repl.SetIMManager(imMgr)
 	}
 	if execPath, err := os.Executable(); err == nil {

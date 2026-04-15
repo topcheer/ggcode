@@ -112,6 +112,12 @@ type Model struct {
 	modelPanel                      *modelPanelState
 	providerPanel                   *providerPanelState
 	qqPanel                         *qqPanelState
+	tgPanel                         *tgPanelState
+	pcPanel                         *pcPanelState
+	discordPanel                    *discordPanelState
+	feishuPanel                     *feishuPanelState
+	slackPanel                      *slackPanelState
+	dingtalkPanel                   *dingtalkPanelState
 	mcpPanel                        *mcpPanelState
 	skillsPanel                     *skillsPanelState
 	inspectorPanel                  *inspectorPanelState
@@ -119,6 +125,7 @@ type Model struct {
 	fileBrowser                     *fileBrowserState
 	harnessPanel                    *harnessPanelState
 	harnessContextPrompt            *harnessContextPromptState
+	impersonatePanel                *impersonatePanelState
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -812,8 +819,20 @@ func (m *Model) closeActivePanel() bool {
 		m.closeModelPanel()
 	case m.providerPanel != nil:
 		m.closeProviderPanel()
+	case m.tgPanel != nil:
+		m.closeTGPanel()
 	case m.qqPanel != nil:
 		m.closeQQPanel()
+	case m.pcPanel != nil:
+		m.closePCPanel()
+	case m.discordPanel != nil:
+		m.closeDiscordPanel()
+	case m.feishuPanel != nil:
+		m.closeFeishuPanel()
+	case m.slackPanel != nil:
+		m.closeSlackPanel()
+	case m.dingtalkPanel != nil:
+		m.closeDingtalkPanel()
 	case m.mcpPanel != nil:
 		m.closeMCPPanel()
 	case m.skillsPanel != nil:
@@ -824,6 +843,8 @@ func (m *Model) closeActivePanel() bool {
 		m.harnessContextPrompt = nil
 	case m.harnessPanel != nil:
 		m.closeHarnessPanel()
+	case m.impersonatePanel != nil:
+		m.closeImpersonatePanel()
 	case len(m.langOptions) > 0:
 		m.langOptions = nil
 	default:
@@ -1055,8 +1076,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleQQPanelKey(msg)
 		}
 
+		if m.tgPanel != nil {
+			return m.handleTGPanelKey(msg)
+		}
+
+		if m.pcPanel != nil {
+			return m.handlePCPanelKey(msg)
+		}
+
+		if m.discordPanel != nil {
+			return m.handleDiscordPanelKey(msg)
+		}
+
+		if m.feishuPanel != nil {
+			return m.handleFeishuPanelKey(msg)
+		}
+
+		if m.slackPanel != nil {
+			return m.handleSlackPanelKey(msg)
+		}
+
+		if m.dingtalkPanel != nil {
+			return m.handleDingtalkPanelKey(msg)
+		}
+
 		if m.mcpPanel != nil {
 			return m.handleMCPPanelKey(msg)
+		}
+
+		if m.impersonatePanel != nil {
+			return m.handleImpersonatePanelKey(msg)
 		}
 
 		if m.skillsPanel != nil {
@@ -1947,6 +1996,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case providerAuthStartMsg:
+		if m.providerPanel != nil && msg.vendor == auth.ProviderAnthropic {
+			if msg.err != nil {
+				m.providerPanel.authBusy = false
+				m.providerPanel.message = m.t("panel.provider.login.claude_failed", msg.err.Error())
+				return m, nil
+			}
+			if msg.claudeFlow != nil {
+				notes := []string{m.t("panel.provider.login.claude_instructions")}
+				switch {
+				case msg.openErr == nil:
+					notes = append(notes, m.t("panel.provider.login.browser_opened"))
+				default:
+					notes = append(notes, m.t("panel.provider.login.browser_failed", msg.openErr.Error()))
+					notes = append(notes, m.t("panel.provider.login.claude_manual", msg.claudeFlow.ManualURL))
+				}
+				m.providerPanel.message = strings.Join(notes, "\n")
+				return m, m.waitForClaudeAuthCode(msg.claudeFlow)
+			}
+		}
 		if m.providerPanel != nil && msg.vendor == auth.ProviderGitHubCopilot {
 			if msg.err != nil {
 				m.providerPanel.authBusy = false
@@ -1975,6 +2043,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case providerAuthResultMsg:
+		if m.providerPanel != nil && msg.vendor == auth.ProviderAnthropic {
+			m.providerPanel.authBusy = false
+			if msg.err != nil {
+				m.providerPanel.message = m.t("panel.provider.login.claude_failed", msg.err.Error())
+				return m, nil
+			}
+			m.providerPanel.message = m.t("panel.provider.login.claude_success")
+			return m, m.refreshProviderModelsForVendor(auth.ProviderAnthropic)
+		}
 		if m.providerPanel != nil && msg.vendor == auth.ProviderGitHubCopilot {
 			m.providerPanel.authBusy = false
 			if msg.err != nil {
