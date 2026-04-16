@@ -142,6 +142,7 @@ type ToolResultInfo struct {
 	Args     string
 	Result   string
 	IsError  bool
+	Detail   string // display text for the tool call (e.g. command line)
 }
 
 type SessionBinding struct {

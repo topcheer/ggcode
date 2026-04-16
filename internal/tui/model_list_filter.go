@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"charm.land/bubbles/v2/textinput"
 )
 
 const maxVisibleModelRows = 10

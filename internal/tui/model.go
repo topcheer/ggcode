@@ -15,9 +15,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/auth"
@@ -62,7 +62,12 @@ type policyModeGetter interface {
 }
 
 const maxOutputLines = 50000
-const startupInputGateWindow = 1200 * time.Millisecond
+
+// startupInputGateWindow suppresses terminal noise (CSI/OSC responses) that
+// arrive shortly after program start. During this window, only single
+// printable characters with no modifiers are passed to textinput; everything
+// else (multi-char text, modified keys) is dropped as likely terminal garbage.
+const startupInputGateWindow = 500 * time.Millisecond
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
@@ -166,6 +171,7 @@ type Model struct {
 	autoCompleteKind      string // "slash" or "mention"
 	autoCompleteWorkDir   string // working directory for mention completion
 	startedAt             time.Time
+	inputDrainUntil       time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
 	startupBannerVisible  bool
 	lastResizeAt          time.Time
 	sidebarVisible        bool
@@ -349,20 +355,7 @@ type subAgentUpdateMsg struct{}
 
 type skillsChangedMsg struct{}
 
-var ansiKeyFragmentPattern = regexp.MustCompile(`^(?:\[[0-9;?<>=]*[A-Za-z~]|\[<\d+(?:;\d+){0,2}[A-Za-zmM])$`)
-var terminalResponseFragmentPattern = regexp.MustCompile(`^(?:\]?(?:10|11);rgb:[0-9a-fA-F]{4}/[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\\?|[() \]]*\d{1,2};rgb:[0-9a-fA-F]{4}/[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\\?)$`)
 var ansiChunkPattern = regexp.MustCompile(`\[[0-9;?<>=]*[A-Za-z~]|\[<\d+(?:;\d+){0,2}[A-Za-zmM]`)
-var ansiMouseChunkPattern = regexp.MustCompile(`\[<\d+(?:;\d+){0,2}[A-Za-zmM]`)
-var terminalResponseChunkPattern = regexp.MustCompile(`(?:\\?\]?|[() \]]*)?\d{1,2};rgb:[0-9a-fA-F]{4}/[0-9a-fA-F]{4}/[0-9a-fA-F]{4}\\?`)
-var terminalOrphanFragmentPattern = regexp.MustCompile(`^[\[\]()\\]+$`)
-var bareMouseFragmentPattern = regexp.MustCompile(`^(?:<\d+(?:;\d+){2}[mM])+$`)
-var bareMouseChunkPattern = regexp.MustCompile(`<\d+(?:;\d+){2}[mM]`)
-var doubleBracketMouseFragmentPattern = regexp.MustCompile(`^(?:\[\[<\d+(?:;\d+){2}[mM])+$`)
-var doubleBracketMouseChunkPattern = regexp.MustCompile(`\[\[<\d+(?:;\d+){2}[mM]`)
-var caretMouseFragmentPattern = regexp.MustCompile(`^(?:\^\[\[<\d+(?:;\d+){2}[mM])+$`)
-var caretMouseChunkPattern = regexp.MustCompile(`\^\[\[<\d+(?:;\d+){2}[mM]`)
-var bareCursorReportFragmentPattern = regexp.MustCompile(`^(?:\[?\d{1,4};\d{1,4}R)+$`)
-var bareCursorReportChunkPattern = regexp.MustCompile(`\[?\d{1,4};\d{1,4}R`)
 
 // toolStatusMsg wraps a tool status update.
 type toolStatusMsg ToolStatusMsg
@@ -427,6 +420,9 @@ type agentInterruptMsg struct {
 type setProgramMsg struct {
 	Program *tea.Program
 }
+
+// inputDrainEndMsg signals the end of the startup input drain window.
+type inputDrainEndMsg struct{}
 
 type mcpServersMsg struct {
 	Servers []plugin.MCPServerInfo
@@ -629,7 +625,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ti.Prompt = "❯ "
 	ti.Placeholder = tr(LangEnglish, "input.placeholder")
 	ti.Focus()
-	ti.Width = 74
+	ti.SetWidth(74)
 
 	s := styles{
 		user:      lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true),
@@ -667,7 +663,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		history:              make([]string, 0, 100),
 		viewport:             NewViewportModel(80, 20),
 		mode:                 policyMode(policy),
-		startedAt:            time.Now(),
+		startedAt:            time.Time{}, // set on first WindowSizeMsg
 		startupBannerVisible: false,
 		sidebarVisible:       true,
 		activeMCPTools:       make(map[string]ToolStatusMsg),
@@ -727,8 +723,8 @@ func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
 
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		textinput.Blink,
-		tea.WindowSize(),
+		func() tea.Msg { return textinput.Blink() },
+		func() tea.Msg { return tea.RequestWindowSize() },
 	}
 	if m.updateSvc != nil {
 		cmds = append(cmds, m.checkForUpdateCmd())
@@ -994,6 +990,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.handleResize(msg.Width, msg.Height)
+		// Reset the startup clock when Bubble Tea sends the first WindowSizeMsg.
+		// This ensures the startup input gate window is measured from the moment
+		// the TUI event loop actually starts, not from model creation time (which
+		// can be hundreds of milliseconds earlier due to config loading, IM setup, etc.).
+		if m.startedAt.IsZero() || time.Since(m.startedAt) > startupInputGateWindow {
+			m.startedAt = time.Now()
+		}
 		return m, nil
 
 	case imRuntimeUpdatedMsg:
@@ -1001,7 +1004,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if startupInputSuppressionActive(m.startedAt) {
-			debug.Log("tui", "startup gate dropping mouse event type=%v age=%s", msg.Type, time.Since(m.startedAt))
+			debug.Log("tui", "startup gate dropping mouse event age=%s", time.Since(m.startedAt))
 			return m, nil
 		}
 		if m.fileBrowser != nil {
@@ -1011,28 +1014,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePreviewMouse(msg)
 		}
 		// Option/Alt+mouse: release mouse to terminal for native text selection
-		if msg.Alt {
+		return m, nil
+
+	case tea.MouseWheelMsg:
+		if startupInputSuppressionActive(m.startedAt) {
 			return m, nil
 		}
-		switch msg.Type {
-		case tea.MouseWheelUp:
-			m.syncConversationViewport()
+		m.syncConversationViewport()
+		if msg.Button == tea.MouseWheelUp {
 			m.viewport.ScrollUp(3)
-			return m, nil
-		case tea.MouseWheelDown:
-			m.syncConversationViewport()
+		} else {
 			m.viewport.ScrollDown(3)
-			return m, nil
 		}
 		return m, nil
 
-	case tea.KeyMsg:
-		if startupInputSuppressionActive(m.startedAt) && msg.String() != "ctrl+c" {
-			debug.Log("tui", "startup gate dropping key event key=%q type=%v age=%s", msg.String(), msg.Type, time.Since(m.startedAt))
+	case tea.KeyPressMsg:
+		// During startup input drain, suppress all keyboard input.
+		// This prevents terminal responses (OSC 11, CPR, Kitty mode report)
+		// from appearing as garbage in the text input field.
+		if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
+			debug.Log("tui", "KEYPRESS dropped (input drain) key=%q text=%q", msg.String(), msg.Text)
 			return m, nil
 		}
 		if shouldIgnoreTerminalProbeKey(msg) {
-			debug.Log("tui", "ignoring terminal probe key=%q type=%v alt=%t", msg.String(), msg.Type, msg.Alt)
+			debug.Log("tui", "ignoring terminal probe key=%q text=%q mod=%v", msg.String(), msg.Text, msg.Mod)
 			return m, nil
 		}
 		if m.startupBannerVisible && !shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
@@ -1041,6 +1046,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() != "ctrl+c" {
 			m.resetExitConfirm()
 		}
+		debug.Log("tui", "KEYPRESS str=%q text=%q mod=%v code=%v input_before=%q", msg.String(), msg.Text, msg.Mod, msg.Code, truncateStr(m.input.Value(), 80))
 		if msg.String() == "ctrl+r" {
 			m.sidebarVisible = !m.sidebarVisible
 			if m.config != nil {
@@ -2109,6 +2115,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case setProgramMsg:
 		debug.Log("tui", "setProgramMsg received, program was nil=%v", m.program == nil)
 		m.program = msg.Program
+		// Set startedAt for startup gate if not already set.
+		if m.startedAt.IsZero() {
+			m.startedAt = time.Now()
+		}
+		// Clear any terminal response garbage that leaked into the input
+		// field before we had a chance to set up the drain guard.
+		// Only clear when the content looks like terminal response fragments
+		// (contains ;, :, /, digits etc.) to avoid wiping legitimate input
+		// set programmatically by callers (e.g. IM tests).
+		if val := m.input.Value(); val != "" && looksLikeStartupGarbage(val) {
+			debug.Log("tui", "clearing pre-drain input garbage: %q", truncateStr(val, 80))
+			m.input.SetValue("")
+		}
+		// Start the input drain window. Terminal responses (OSC 11 color
+		// query, CPR, Kitty mode report) arrive as individual KeyPressMsg
+		// events that are indistinguishable from real typing. We suppress
+		// all keyboard input until inputDrainEndMsg arrives (50ms from now).
+		m.inputDrainUntil = time.Now().Add(50 * time.Millisecond)
+		return m, tea.Tick(50*time.Millisecond, func(_ time.Time) tea.Msg {
+			return inputDrainEndMsg{}
+		})
+
+	case inputDrainEndMsg:
+		m.inputDrainUntil = time.Time{} // zero = drain ended
+		debug.Log("tui", "input drain ended")
 		return m, nil
 
 	case imageAttachedMsg:
@@ -2159,12 +2190,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	}
 
-	var cmd tea.Cmd
-	if shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
-		return m, nil
+	debug.Log("tui", "CATCHALL msg=%T value=%q", msg, fmt.Sprintf("%+v", msg))
+	keyMsg, isKeyPress := msg.(tea.KeyPressMsg)
+	if !isKeyPress {
+		// Only KeyPressMsg should reach the textinput. Other message types
+		// (BackgroundColorMsg, ModeReportMsg, spinnerMsg, etc.) are not keyboard input.
+		return m, spinnerCmd
 	}
+	var cmd tea.Cmd
+	// During startup input drain, suppress all keyboard input.
+	if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
+		debug.Log("tui", "CATCHALL dropped (input drain) key=%q text=%q", keyMsg.String(), keyMsg.Text)
+		return m, spinnerCmd
+	}
+	if shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
+		debug.Log("tui", "CATCHALL ignored key text=%q", keyMsg.Text)
+		return m, spinnerCmd
+	}
+
+	// During the startup window, terminal CSI/OSC responses arrive as
+	// misparsed KeyPressMsg events. These are always multi-character or
+	// carry modifiers. Real human typing is always a single printable
+	// character with no modifiers (IME uses PasteMsg instead).
+	// Filter aggressively during startup to prevent garbage in textinput.
+	if startupInputSuppressionActive(m.startedAt) {
+		if len(keyMsg.Text) != 1 || keyMsg.Mod != 0 || !unicode.IsPrint(rune(keyMsg.Text[0])) {
+			debug.Log("tui", "CATCHALL startup gate dropped key=%q text=%q mod=%v", keyMsg.String(), keyMsg.Text, keyMsg.Mod)
+			return m, spinnerCmd
+		}
+	}
+
+	if len(keyMsg.Text) > 1 && looksLikeTerminalResponse(keyMsg.Text) {
+		// Human keyboard input produces at most 1 character per KeyPressMsg
+		// (IME compositions use PasteMsg instead). Multi-character Text
+		// containing terminal response patterns is a misparse from
+		// EscTimeout-truncated terminal responses.
+		debug.Log("tui", "CATCHALL ignored terminal fragment text=%q", truncateStr(keyMsg.Text, 60))
+		return m, spinnerCmd
+	}
+	oldValue := m.input.Value()
 	m.input, cmd = m.input.Update(msg)
-	m.sanitizeTerminalResponseInput()
+	newValue := m.input.Value()
+	if oldValue != newValue {
+		debug.Log("tui", "CATCHALL input changed old=%q new=%q", truncateStr(oldValue, 80), truncateStr(newValue, 80))
+	}
 
 	// Update autocomplete state based on current input
 	m.updateAutoComplete()
@@ -2188,53 +2257,118 @@ func combineCmds(cmds ...tea.Cmd) tea.Cmd {
 	return tea.Batch(filtered...)
 }
 
+// looksLikeStartupGarbage checks whether the input value accumulated before
+// setProgramMsg looks like terminal response garbage rather than legitimate
+// user input. Terminal responses contain ASCII control characters ([, ], digits,
+// and punctuation like ;, :, /) that don't appear in normal typing.
+// Normal pre-set values like "ping" contain only alphabetic characters.
+func looksLikeStartupGarbage(val string) bool {
+	for _, r := range val {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == ' ' || r == '-' || r == '_':
+			// Common in normal text, keep going
+		default:
+			// Contains characters not found in normal typing:
+			// ; : / [ ] $ ? = etc. — terminal response artifacts
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeTerminalResponse checks whether text appears to be a fragment of a
+// terminal response that leaked through due to EscTimeout truncation.
+// These fragments always contain ASCII punctuation like ;, :, /, $ combined
+// with digits, which never appears in normal human keyboard input (IME input
+// uses PasteMsg instead of multi-char KeyPressMsg).
+func looksLikeTerminalResponse(text string) bool {
+	hasDigit := false
+	hasPunct := false
+	for _, r := range text {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r == ';' || r == ':' || r == '/' || r == '$' || r == '?' || r == '=':
+			hasPunct = true
+		case r == 'r' || r == 'g' || r == 'b' || r == 'y' || r == 'R':
+			// Common in "rgb:", "R" (CPR), "y" (DECRPM)
+		default:
+			// Contains non-terminal-response characters (e.g. CJK text)
+			return false
+		}
+	}
+	return hasDigit && hasPunct
+}
+
 func shouldIgnoreInputUpdate(msg tea.Msg, startedAt, lastResizeAt time.Time) bool {
-	keyMsg, ok := msg.(tea.KeyMsg)
-	if !ok || keyMsg.Type != tea.KeyRunes || keyMsg.Paste || len(keyMsg.Runes) == 0 {
+	keyMsg, ok := msg.(tea.KeyPressMsg)
+	if !ok || len(keyMsg.Text) == 0 {
 		return false
 	}
-	if startupInputSuppressionActive(startedAt) {
-		return true
-	}
 
-	raw := string(keyMsg.Runes)
+	raw := keyMsg.Text
+	// Human keyboard input never contains ESC or control characters.
+	// Any KeyPressMsg carrying these is a misparse of a terminal response.
 	if strings.ContainsRune(raw, '\x1b') {
 		return true
 	}
-	for _, r := range keyMsg.Runes {
+	for _, r := range raw {
 		if unicode.IsControl(r) {
 			return true
 		}
 	}
-	if bareMouseFragmentPattern.MatchString(raw) {
-		return true
-	}
-	if doubleBracketMouseFragmentPattern.MatchString(raw) || caretMouseFragmentPattern.MatchString(raw) {
-		return true
-	}
-	if bareCursorReportFragmentPattern.MatchString(raw) {
-		return true
-	}
-	if looksLikeExactTerminalNoise(raw) {
-		return true
-	}
-	if !terminalResponseSuppressionActive(startedAt, lastResizeAt) {
-		return false
-	}
-	return ansiKeyFragmentPattern.MatchString(raw) || terminalResponseFragmentPattern.MatchString(raw) || terminalOrphanFragmentPattern.MatchString(raw)
+	return false
 }
 
-func shouldIgnoreTerminalProbeKey(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes || !msg.Alt || len(msg.Runes) == 0 {
+func shouldIgnoreTerminalProbeKey(msg tea.KeyPressMsg) bool {
+	// Fast path: normal single-character printable input is never a probe.
+	if len(msg.Text) == 1 && msg.Mod == 0 {
 		return false
 	}
-	raw := string(msg.Runes)
-	switch raw {
-	case "]", `\`:
+
+	raw := msg.Text
+
+	// Human keyboard input never contains ESC or other control characters.
+	// Terminal CSI/OSC responses often carry these when misparsed as key events.
+	for _, r := range raw {
+		if r == '\x1b' || unicode.IsControl(r) {
+			return true
+		}
+	}
+
+	// Terminal responses masquerading as Alt+key sequences:
+	// - Alt+] with text like "11;rgb:0000/0000/0000" (OSC 11 color query response)
+	// - Alt+\ with various CSI fragments
+	// - Any Alt+key with long text (human Alt shortcuts are at most 2-3 chars)
+	if msg.Mod.Contains(tea.ModAlt) {
+		switch raw {
+		case "]", "\\":
+			return true
+		default:
+			// Any Alt-modified text longer than 2 chars is almost certainly
+			// a misparsed terminal response (CSI/OSC fragments).
+			if len(raw) > 2 {
+				return true
+			}
+		}
+	}
+
+	// Catch CSI-like fragments even without Alt modifier.
+	// Patterns: "1;1R", "?1u", "11;rgb:...", "<0;93;43m", etc.
+	// These contain semicolons followed by letters or contain "rgb:".
+	if strings.Contains(raw, ";") && (strings.ContainsAny(raw, "RrumM") || strings.Contains(raw, "rgb:")) {
 		return true
-	default:
-		return false
 	}
+
+	// Mouse-like fragments without proper SGR encoding: "<0;93;43m"
+	if strings.HasPrefix(raw, "<") && strings.Contains(raw, ";") {
+		return true
+	}
+
+	return false
 }
 
 func (m *Model) sanitizeTerminalResponseInput() {
@@ -2242,13 +2376,17 @@ func (m *Model) sanitizeTerminalResponseInput() {
 	if value == "" {
 		return
 	}
-	cleaned := stripExactTerminalNoise(value)
-	if terminalResponseSuppressionActive(m.startedAt, m.lastResizeAt) {
-		cleaned = ansiChunkPattern.ReplaceAllString(cleaned, "")
+	// Strip any ESC sequences that leaked into input value.
+	cleaned := ansiChunkPattern.ReplaceAllString(value, "")
+	// Strip remaining fragments containing control characters.
+	var buf strings.Builder
+	for _, r := range cleaned {
+		if r == '\x1b' || unicode.IsControl(r) {
+			continue
+		}
+		buf.WriteRune(r)
 	}
-	if terminalOrphanFragmentPattern.MatchString(strings.TrimSpace(cleaned)) {
-		cleaned = ""
-	}
+	cleaned = buf.String()
 	if cleaned == value {
 		return
 	}
@@ -2258,35 +2396,8 @@ func (m *Model) sanitizeTerminalResponseInput() {
 }
 
 func startupInputSuppressionActive(startedAt time.Time) bool {
-	if !startedAt.IsZero() && time.Since(startedAt) <= startupInputGateWindow {
-		return true
-	}
-	return false
-}
-
-func terminalResponseSuppressionActive(startedAt, lastResizeAt time.Time) bool {
-	if startupInputSuppressionActive(startedAt) {
-		return true
-	}
-	if !lastResizeAt.IsZero() && time.Since(lastResizeAt) <= 1500*time.Millisecond {
-		return true
-	}
-	return false
-}
-
-func looksLikeExactTerminalNoise(value string) bool {
-	if strings.TrimSpace(value) == "" {
+	if startedAt.IsZero() {
 		return false
 	}
-	return strings.TrimSpace(stripExactTerminalNoise(value)) == ""
-}
-
-func stripExactTerminalNoise(value string) string {
-	cleaned := terminalResponseChunkPattern.ReplaceAllString(value, "")
-	cleaned = caretMouseChunkPattern.ReplaceAllString(cleaned, "")
-	cleaned = doubleBracketMouseChunkPattern.ReplaceAllString(cleaned, "")
-	cleaned = ansiMouseChunkPattern.ReplaceAllString(cleaned, "")
-	cleaned = bareMouseChunkPattern.ReplaceAllString(cleaned, "")
-	cleaned = bareCursorReportChunkPattern.ReplaceAllString(cleaned, "")
-	return cleaned
+	return time.Since(startedAt) <= startupInputGateWindow
 }

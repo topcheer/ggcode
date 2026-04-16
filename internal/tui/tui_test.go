@@ -14,9 +14,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -99,7 +98,7 @@ func TestInspectorSessionsEnterSchedulesResumeCommand(t *testing.T) {
 	m.sessionStore = store
 	m.openInspectorPanel(inspectorPanelSessions)
 
-	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleInspectorPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected resume cmd from sessions panel")
 	}
@@ -128,7 +127,7 @@ func TestInspectorTodosClearActionPersistsEmptyList(t *testing.T) {
 
 	m := newTestModel()
 	m.openInspectorPanel(inspectorPanelTodos)
-	_, _ = m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	_, _ = m.handleInspectorPanelKey(tea.KeyPressMsg{Text: "c"})
 
 	if _, err := os.Stat(filepath.Join(ggDir, "todos.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected todos file to be removed, err=%v", err)
@@ -469,10 +468,6 @@ func TestFormatToolStartUsesFriendlyDisplay(t *testing.T) {
 }
 
 func TestAssistantAndToolBulletsUseDifferentStyles(t *testing.T) {
-	oldProfile := termenv.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	defer lipgloss.SetColorProfile(oldProfile)
-
 	m := newTestModel()
 	m.appendStreamChunk("hello")
 	stream := m.output.String()
@@ -497,10 +492,6 @@ func TestAssistantAndToolBulletsUseDifferentStyles(t *testing.T) {
 }
 
 func TestCompactionBulletUsesDedicatedStyle(t *testing.T) {
-	oldProfile := termenv.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	defer lipgloss.SetColorProfile(oldProfile)
-
 	m := newTestModel()
 	m.appendStreamStatusLine("[compacting conversation to stay within context window]")
 	got := m.output.String()
@@ -578,8 +569,8 @@ func TestSidebarShowsUpdateHintWhenAvailable(t *testing.T) {
 	m.updateInfo.HasUpdate = true
 	m.updateInfo.LatestVersion = "v1.2.3"
 
-	sidebar := m.renderSidebar(30)
-	if !strings.Contains(sidebar, "Run /update") {
+	sidebar := stripAnsi(m.renderSidebar(30))
+	if !strings.Contains(sidebar, "New release available") || !strings.Contains(sidebar, "/update") {
 		t.Fatalf("expected update hint in sidebar, got %q", sidebar)
 	}
 }
@@ -639,7 +630,7 @@ func TestMCPPanelReconnectKeyRetriesSelectedServer(t *testing.T) {
 	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http", Error: "connection timed out"}}
 	m.openMCPPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "r"})
 	if cmd != nil {
 		t.Fatal("expected reconnect to run synchronously")
 	}
@@ -657,7 +648,7 @@ func TestMCPPanelCtrlCClosesPanel(t *testing.T) {
 	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http"}}
 	m.openMCPPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c panel close to be synchronous")
 	}
@@ -679,13 +670,13 @@ func TestMCPPanelInstallPersistsConfigAndCallsManager(t *testing.T) {
 	m.SetMCPManager(manager)
 	m.openMCPPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "i"})
 	if cmd != nil {
 		t.Fatal("expected install mode toggle to be synchronous")
 	}
 	m = next.(Model)
-	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune("stdio npx -y 12306-mcp stdio")},
+	for _, key := range []tea.KeyPressMsg{
+		{Text: "stdio npx -y 12306-mcp stdio"},
 	} {
 		next, cmd = m.Update(key)
 		if cmd != nil {
@@ -694,7 +685,7 @@ func TestMCPPanelInstallPersistsConfigAndCallsManager(t *testing.T) {
 		m = next.(Model)
 	}
 
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected install submission to return a command")
 	}
@@ -724,7 +715,7 @@ func TestMCPPanelBrowserPresetInstallsPlaywright(t *testing.T) {
 	m.SetMCPManager(manager)
 	m.openMCPPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "b"})
 	if cmd == nil {
 		t.Fatal("expected browser preset install to return a command")
 	}
@@ -760,7 +751,7 @@ func TestMCPPanelUninstallRemovesConfigAndCallsManager(t *testing.T) {
 	m.mcpServers = []MCPInfo{{Name: "web-reader", Transport: "http", Connected: true}}
 	m.openMCPPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "x"})
 	if cmd == nil {
 		t.Fatal("expected uninstall to return a command")
 	}
@@ -786,7 +777,7 @@ func TestProviderPanelCtrlCClosesPanel(t *testing.T) {
 	m.SetConfig(config.DefaultConfig())
 	m.openProviderPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c panel close to be synchronous")
 	}
@@ -804,7 +795,7 @@ func TestModelPanelCtrlCClosesPanel(t *testing.T) {
 	m.SetConfig(config.DefaultConfig())
 	m.modelPanel = &modelPanelState{models: []string{"gpt-4o-mini"}}
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c panel close to be synchronous")
 	}
@@ -881,7 +872,7 @@ func TestModelPanelClosesAfterSelectingModel(t *testing.T) {
 		filter:   newModelFilterInput("en"),
 	}
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatalf("expected no follow-up command, got %v", cmd)
 	}
@@ -946,7 +937,7 @@ func TestProviderPanelVendorSwitchRefreshesModels(t *testing.T) {
 	m.SetConfig(cfg)
 	m.openProviderPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "j"})
 	if cmd == nil {
 		t.Fatal("expected vendor switch to trigger async model refresh")
 	}
@@ -980,7 +971,7 @@ func TestCtrlVPastesClipboardImage(t *testing.T) {
 		}, nil
 	}
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+v"})
 	if cmd == nil {
 		t.Fatal("expected ctrl-v to schedule clipboard image loading")
 	}
@@ -1160,7 +1151,7 @@ func TestInspectorStatusEnterOpensPythonLSPInstallChooser(t *testing.T) {
 		}
 	}
 
-	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleInspectorPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected python chooser to open inline")
 	}
@@ -1202,7 +1193,7 @@ func TestInspectorStatusEnterRunsSingleLSPInstallCommand(t *testing.T) {
 		}
 	}
 
-	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleInspectorPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected java install command")
 	}
@@ -1230,7 +1221,7 @@ func TestInspectorLSPInstallEnterRunsSelectedCommand(t *testing.T) {
 		},
 	}
 
-	next, cmd := m.handleInspectorPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleInspectorPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected selected install command")
 	}
@@ -1294,7 +1285,7 @@ func TestSavingEndpointAPIKeyTriggersModelRefresh(t *testing.T) {
 	m.providerPanel.startEditing("endpoint api key", "")
 	m.providerPanel.editInput.SetValue("test-token")
 
-	next, cmd := m.handleProviderPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleProviderPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected saving endpoint api key to trigger model refresh")
 	}
@@ -1322,7 +1313,7 @@ func TestSavingEndpointBaseURLTriggersModelRefresh(t *testing.T) {
 	m.providerPanel.startEditing("endpoint base url", "https://api.openai.com/v1")
 	m.providerPanel.editInput.SetValue("https://api.openai.com/v1")
 
-	next, cmd := m.handleProviderPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleProviderPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected saving endpoint base url to trigger model refresh")
 	}
@@ -1368,7 +1359,7 @@ func TestHandleCommandShellPrefixEntersModeAndStartsCommand(t *testing.T) {
 	if !m.loading {
 		t.Fatal("expected prefixed shell command to enter loading state")
 	}
-	if !strings.Contains(m.output.String(), "$ echo hi") {
+	if !strings.Contains(stripAnsi(m.output.String()), "$ echo hi") {
 		t.Fatalf("expected shell command in output, got %q", m.output.String())
 	}
 }
@@ -1398,14 +1389,15 @@ func TestShellCommandMessagesRenderOutputAndKeepMode(t *testing.T) {
 	if !m.shellMode {
 		t.Fatal("expected shell mode to remain enabled after command completion")
 	}
-	if !strings.Contains(m.output.String(), "hi") {
-		t.Fatalf("expected shell output in conversation, got %q", m.output.String())
+	plain := stripAnsi(m.output.String())
+	if !strings.Contains(plain, "hi") {
+		t.Fatalf("expected shell output in conversation, got %q", plain)
 	}
-	if strings.Contains(m.output.String(), "$ printf hi\n\nhi") {
-		t.Fatalf("expected shell output to start immediately on the next line, got %q", m.output.String())
+	if strings.Contains(plain, "$ printf hi\n\nhi") {
+		t.Fatalf("expected shell output to start immediately on the next line, got %q", plain)
 	}
-	if !strings.Contains(m.output.String(), "$ printf hi\nhi\n\n") {
-		t.Fatalf("expected one trailing blank line after shell output, got %q", m.output.String())
+	if !strings.Contains(plain, "$ printf hi\nhi\n\n") {
+		t.Fatalf("expected one trailing blank line after shell output, got %q", plain)
 	}
 }
 
@@ -1528,7 +1520,7 @@ func TestBusyEnterAllowsHarnessPanelCommand(t *testing.T) {
 	m.loading = true
 	m.input.SetValue("/harness")
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected busy /harness to open inline")
 	}
@@ -1546,7 +1538,7 @@ func TestBusyEnterStillQueuesNonHarnessCommands(t *testing.T) {
 	m.loading = true
 	m.input.SetValue("/help")
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected busy /help to stay queued")
 	}
@@ -1586,7 +1578,7 @@ func TestHarnessUnavailablePanelCanInitProject(t *testing.T) {
 		t.Fatalf("expected unavailable harness panel, got %+v", m.harnessPanel)
 	}
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Text: "i"})
 	if cmd != nil {
 		t.Fatal("expected panel init to open prompt first")
 	}
@@ -1594,13 +1586,13 @@ func TestHarnessUnavailablePanelCanInitProject(t *testing.T) {
 	if updated.harnessContextPrompt == nil {
 		t.Fatal("expected harness init prompt from panel")
 	}
-	nextModel, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nextModel, cmd := updated.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected init prompt to request suggestions")
 	}
 	nextModel, _ = nextModel.Update(cmd())
 	updated = asModel(t, nextModel)
-	nextModel, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nextModel, cmd = updated.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected init prompt to execute harness init")
 	}
@@ -1642,7 +1634,7 @@ func TestHarnessInitCreatesScaffold(t *testing.T) {
 	if m.harnessContextPrompt == nil {
 		t.Fatal("expected harness init prompt to open")
 	}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected init prompt to request suggestions")
 	}
@@ -1651,7 +1643,7 @@ func TestHarnessInitCreatesScaffold(t *testing.T) {
 	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepSelect {
 		t.Fatalf("expected init prompt to move to select step, got %+v", m.harnessContextPrompt)
 	}
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected init selection to execute harness init")
 	}
@@ -1702,13 +1694,13 @@ func TestHarnessInitRerunPromptsForUpgradeChoice(t *testing.T) {
 	if cmd := m.handleCommand("/harness init"); cmd != nil {
 		t.Fatal("expected /harness init to open prompt")
 	}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected suggestion request")
 	}
 	next, _ = next.Update(cmd())
 	m = asModel(t, next)
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected rerun init to show upgrade choice before executing")
 	}
@@ -1716,12 +1708,12 @@ func TestHarnessInitRerunPromptsForUpgradeChoice(t *testing.T) {
 	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepUpgrade {
 		t.Fatalf("expected upgrade step, got %+v", m.harnessContextPrompt)
 	}
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	next, cmd = m.Update(tea.KeyPressMsg{Text: "y"})
 	if cmd != nil {
 		t.Fatal("did not expect immediate execution on force toggle")
 	}
 	m = asModel(t, next)
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected upgrade choice to execute init")
 	}
@@ -1763,10 +1755,10 @@ func TestHarnessInitApplyingIgnoresCancelKey(t *testing.T) {
 	if cmd := m.handleCommand("/harness init"); cmd != nil {
 		t.Fatal("expected /harness init to open prompt")
 	}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	next, _ = next.Update(cmd())
 	m = asModel(t, next)
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected init execution")
 	}
@@ -1774,7 +1766,7 @@ func TestHarnessInitApplyingIgnoresCancelKey(t *testing.T) {
 	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepApplying {
 		t.Fatalf("expected applying step, got %+v", m.harnessContextPrompt)
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = asModel(t, next)
 	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepApplying {
 		t.Fatalf("expected applying step to ignore cancel, got %+v", m.harnessContextPrompt)
@@ -1886,7 +1878,7 @@ func TestHarnessRunCommandCreatesTrackedTask(t *testing.T) {
 		t.Fatal("expected harness run prompt to open")
 	}
 	m.harnessContextPrompt.input.SetValue("core")
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected custom run context to ask for persistence before starting")
 	}
@@ -1894,7 +1886,7 @@ func TestHarnessRunCommandCreatesTrackedTask(t *testing.T) {
 	if m.harnessContextPrompt == nil || m.harnessContextPrompt.step != harnessContextPromptStepPersist {
 		t.Fatalf("expected persist prompt, got %+v", m.harnessContextPrompt)
 	}
-	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected /harness run to start after confirming context persistence")
 	}
@@ -1945,7 +1937,7 @@ func TestBusyHarnessPanelBlocksRunAction(t *testing.T) {
 	m.harnessPanel.actionInput.SetValue("Ship billing")
 	m.harnessPanel.focus = harnessPanelFocusInput
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected busy panel run action to be blocked")
 	}
@@ -1983,7 +1975,7 @@ func TestBusyHarnessPanelAllowsQueueAction(t *testing.T) {
 	m.harnessPanel.actionInput.SetValue("Queue inventory reconciliation work")
 	m.harnessPanel.focus = harnessPanelFocusInput
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected busy panel queue action to complete synchronously")
 	}
@@ -2102,7 +2094,7 @@ func TestHarnessPanelApprovesReviewTask(t *testing.T) {
 	m.harnessPanel.focus = harnessPanelFocusItem
 	m.syncHarnessPanelSelection()
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected review approval to complete inline")
 	}
@@ -2141,7 +2133,7 @@ func TestHarnessPanelQueuesInputDraft(t *testing.T) {
 	m.updateHarnessPanelInputState()
 	m.harnessPanel.actionInput.SetValue("Queue inventory reconciliation work")
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected queue action to complete inline")
 	}
@@ -2232,7 +2224,7 @@ func TestHarnessPanelRunClosesPanelAndCreatesTrackedTask(t *testing.T) {
 	m.updateHarnessPanelInputState()
 	m.harnessPanel.actionInput.SetValue("Fix inventory sync failures")
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected run panel to open context prompt first")
 	}
@@ -2240,7 +2232,7 @@ func TestHarnessPanelRunClosesPanelAndCreatesTrackedTask(t *testing.T) {
 	if updated.harnessContextPrompt == nil {
 		t.Fatal("expected harness context prompt from panel run")
 	}
-	nextModel, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nextModel, cmd := updated.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected tracked harness run to start after context selection")
 	}
@@ -2542,7 +2534,7 @@ func TestHarnessPanelQueueMessageLocalizesToChinese(t *testing.T) {
 	m.harnessPanel.actionInput.SetValue("整理库存对账流程")
 	m.harnessPanel.focus = harnessPanelFocusInput
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected queue action to complete inline")
 	}
@@ -2767,7 +2759,7 @@ func TestHarnessTasksPanelEnterRerunsFailedTask(t *testing.T) {
 	m.updateHarnessPanelInputState()
 	m.syncHarnessPanelSelection()
 
-	next, cmd := m.handleHarnessPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.handleHarnessPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected Enter on failed task to start rerun")
 	}

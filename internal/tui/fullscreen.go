@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // FullscreenModel wraps the main Model with alt-screen and viewport support.
@@ -61,7 +61,7 @@ func (f FullscreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return f, nil
 
 	case tea.MouseMsg:
-		switch msg.Type {
+		switch msg.Mouse().Button {
 		case tea.MouseWheelUp:
 			if f.fullscreen {
 				f.viewport.ScrollUp(3)
@@ -75,7 +75,7 @@ func (f FullscreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return f, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if !f.inner.loading && f.inner.pendingApproval == nil {
 			// Fullscreen toggle: Ctrl+L or /fullscreen command handled in inner
 		}
@@ -92,9 +92,9 @@ func (f FullscreenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // View renders the fullscreen UI.
-func (f FullscreenModel) View() string {
+func (f FullscreenModel) View() tea.View {
 	if f.inner.quitting {
-		return ""
+		return tea.NewView("")
 	}
 
 	if !f.fullscreen {
@@ -113,7 +113,7 @@ func (f FullscreenModel) View() string {
 	sb.WriteString("\n")
 
 	// Viewport with content
-	sb.WriteString(f.viewport.View())
+	sb.WriteString(f.viewport.View().Content)
 	sb.WriteString("\n")
 
 	// Status bar
@@ -137,7 +137,7 @@ func (f FullscreenModel) View() string {
 		sb.WriteString(" " + modeStr)
 	}
 
-	return sb.String()
+	return tea.NewView(sb.String())
 }
 
 // renderStatusBar shows a compact status line.

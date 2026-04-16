@@ -91,9 +91,7 @@ func newQQAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapte
 		seen:             make(map[string]time.Time),
 		uploadCache:      make(map[string]qqUploadCacheEntry),
 	}
-	if sttCfg := resolveQQSTTConfig(imCfg.STT, adapterCfg.Extra); sttCfg != nil {
-		adapter.stt = imstt.NewOpenAICompatible(sttCfg.BaseURL, sttCfg.APIKey, sttCfg.Model, sttCfg.Provider)
-	}
+	adapter.stt = buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveQQSTTConfig)
 	return adapter, nil
 }
 

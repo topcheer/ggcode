@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -15,7 +15,7 @@ import (
 func TestTGPanelEscClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openTGPanel()
-	updated, cmd := m.handleTGPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd := m.handleTGPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected esc panel close without command")
 	}
@@ -28,7 +28,7 @@ func TestTGPanelEscClosesPanel(t *testing.T) {
 func TestTGPanelCtrlCClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openTGPanel()
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c tg panel close to be synchronous")
 	}
@@ -80,15 +80,15 @@ func TestTGPanelRenderLocalizesToChinese(t *testing.T) {
 func TestTGPanelCreateModeInput(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openTGPanel()
-	updated, _ := m.handleTGPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, _ := m.handleTGPanelKey(tea.KeyPressMsg{Text: "i"})
 	m = updated
 	if !m.tgPanel.createMode {
 		t.Fatal("expected create mode to be active")
 	}
 	// Type some text
-	m.handleTGPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("tg-test")})
+	m.handleTGPanelKey(tea.KeyPressMsg{Text: "tg-test"})
 	// Cancel with Esc
-	updated, _ = m.handleTGPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.handleTGPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated
 	if m.tgPanel.createMode {
 		t.Fatal("expected create mode to be cancelled")
@@ -152,7 +152,7 @@ func TestTGPanelUnbindRemovesChannel(t *testing.T) {
 	}
 	m.SetIMManager(imMgr)
 	m.openTGPanel()
-	_, cmd := m.handleTGPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	_, cmd := m.handleTGPanelKey(tea.KeyPressMsg{Text: "u"})
 	if cmd == nil {
 		t.Fatal("expected unbind command")
 	}
@@ -169,7 +169,7 @@ func TestTGPanelUnbindRemovesChannel(t *testing.T) {
 func TestTGPanelNoEntriesShowsMessage(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openTGPanel()
-	updated, _ := m.handleTGPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.handleTGPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated
 	if m.tgPanel == nil {
 		t.Fatal("panel should still be open")

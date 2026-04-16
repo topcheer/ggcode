@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -15,7 +15,7 @@ import (
 func TestFeishuPanelEscClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openFeishuPanel()
-	updated, cmd := m.handleFeishuPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd := m.handleFeishuPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected esc panel close without command")
 	}
@@ -28,7 +28,7 @@ func TestFeishuPanelEscClosesPanel(t *testing.T) {
 func TestFeishuPanelCtrlCClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openFeishuPanel()
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c feishu panel close to be synchronous")
 	}
@@ -80,13 +80,13 @@ func TestFeishuPanelRenderLocalizesToChinese(t *testing.T) {
 func TestFeishuPanelCreateModeInput(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openFeishuPanel()
-	updated, _ := m.handleFeishuPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, _ := m.handleFeishuPanelKey(tea.KeyPressMsg{Text: "i"})
 	m = updated
 	if !m.feishuPanel.createMode {
 		t.Fatal("expected create mode to be active")
 	}
-	m.handleFeishuPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("fs-test")})
-	updated, _ = m.handleFeishuPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.handleFeishuPanelKey(tea.KeyPressMsg{Text: "fs-test"})
+	updated, _ = m.handleFeishuPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated
 	if m.feishuPanel.createMode {
 		t.Fatal("expected create mode to be cancelled")
@@ -150,7 +150,7 @@ func TestFeishuPanelUnbindRemovesChannel(t *testing.T) {
 	}
 	m.SetIMManager(imMgr)
 	m.openFeishuPanel()
-	_, cmd := m.handleFeishuPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	_, cmd := m.handleFeishuPanelKey(tea.KeyPressMsg{Text: "u"})
 	if cmd == nil {
 		t.Fatal("expected unbind command")
 	}
@@ -167,7 +167,7 @@ func TestFeishuPanelUnbindRemovesChannel(t *testing.T) {
 func TestFeishuPanelNoEntriesShowsMessage(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openFeishuPanel()
-	updated, _ := m.handleFeishuPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.handleFeishuPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated
 	if m.feishuPanel == nil {
 		t.Fatal("panel should still be open")

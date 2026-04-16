@@ -3,11 +3,12 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/session"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
@@ -66,6 +67,47 @@ func (m *Model) startAgent(text string) tea.Cmd {
 			}()
 
 			if err := m.runAgentSubmission(ctx, runID, text, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
+				m.program.Send(agentErrMsg{RunID: runID, Err: err})
+			}
+		}()
+
+		return nil
+	}
+}
+
+// startAgentWithExpand expands @mentions asynchronously then starts the agent.
+// This avoids blocking the TUI update loop with filesystem I/O.
+func (m *Model) startAgentWithExpand(text string) tea.Cmd {
+	img := m.pendingImage
+	m.pendingImage = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.activeAgentRunID++
+	runID := m.activeAgentRunID
+	if m.agent != nil {
+		m.agent.SetInterruptionHandler(func() string {
+			return m.drainPendingInterrupt(runID)
+		})
+	}
+
+	return func() tea.Msg {
+		go func() {
+			defer func() {
+				if m.program != nil {
+					m.program.Send(agentDoneMsg{RunID: runID})
+				}
+				cancel()
+			}()
+
+			// Expand @mentions asynchronously
+			workDir, _ := os.Getwd()
+			expandedMsg, expandErr := ExpandMentions(text, workDir)
+			if expandErr != nil && m.program != nil {
+				m.program.Send(agentErrMsg{RunID: runID, Err: expandErr})
+				return
+			}
+
+			if err := m.runAgentSubmission(ctx, runID, expandedMsg, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}
 		}()
@@ -141,14 +183,6 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				return
 			}
 			round.ToolCalls++
-			m.emitIMEvent(im.OutboundEvent{
-				Kind: im.OutboundEventToolCall,
-				ToolCall: &im.ToolCallInfo{
-					ToolName: event.Tool.Name,
-					Args:     string(event.Tool.Arguments),
-					Detail:   present.Detail,
-				},
-			})
 			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: present.Activity,
 				ToolName: present.DisplayName,
@@ -193,6 +227,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 					Args:     string(event.Tool.Arguments),
 					Result:   event.Result,
 					IsError:  event.IsError,
+					Detail:   present.Detail,
 				},
 			})
 			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{

@@ -10,8 +10,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -249,9 +249,9 @@ func ensureViewportSelectionVisible(vp *ViewportModel, selected int) {
 	offset := vp.YOffset()
 	switch {
 	case selected < offset:
-		vp.vp.YOffset = selected
+		vp.vp.SetYOffset(selected)
 	case selected >= offset+visible:
-		vp.vp.YOffset = selected - visible + 1
+		vp.vp.SetYOffset(selected - visible + 1)
 	}
 }
 
@@ -301,10 +301,10 @@ func (m *Model) syncFileBrowserPreview(initial bool) {
 	switch {
 	case initial && state.TargetLine > 1 && !state.anchored:
 		offset := min(maxOffset, state.TargetLine-1)
-		state.viewport.vp.YOffset = offset
+		state.viewport.vp.SetYOffset(offset)
 		state.anchored = true
 	default:
-		state.viewport.vp.YOffset = min(maxOffset, oldOffset)
+		state.viewport.vp.SetYOffset(min(maxOffset, oldOffset))
 	}
 }
 
@@ -318,7 +318,7 @@ func (m Model) renderFileBrowser() string {
 	filterLine := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(fileBrowserFilterText(m.currentLanguage(), state.filter, state.filtering))
 	left := lipgloss.NewStyle().
 		Width(m.fileBrowserTreeWidth()).
-		Render(strings.Join([]string{title, meta, filterLine, state.treeViewport.View()}, "\n"))
+		Render(strings.Join([]string{title, meta, filterLine, state.treeViewport.View().Content}, "\n"))
 
 	previewTitle := lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true).Render(fileBrowserText(m.currentLanguage(), "preview"))
 	previewMeta := ""
@@ -328,7 +328,7 @@ func (m Model) renderFileBrowser() string {
 			Foreground(lipgloss.Color("8")).
 			Bold(true).
 			Render(truncateDisplayWidth(displayPreviewPath("", state.preview.AbsPath), max(20, m.fileBrowserPreviewWidth())))
-		previewBody = state.preview.viewport.View()
+		previewBody = state.preview.viewport.View().Content
 	}
 	right := lipgloss.NewStyle().
 		Width(m.fileBrowserPreviewWidth()).
@@ -349,10 +349,10 @@ func (m *Model) handleFileBrowserMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	if m.fileBrowser == nil {
 		return *m, nil
 	}
-	if msg.Alt {
+	if msg.Mouse().Mod&tea.ModAlt != 0 {
 		return *m, nil
 	}
-	switch msg.Type {
+	switch msg.Mouse().Button {
 	case tea.MouseWheelUp:
 		if m.fileBrowser.preview != nil {
 			m.fileBrowser.preview.viewport.ScrollUp(3)
@@ -365,7 +365,7 @@ func (m *Model) handleFileBrowserMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-func (m *Model) handleFileBrowserKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleFileBrowserKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.fileBrowser == nil {
 		return *m, nil
 	}
@@ -450,8 +450,8 @@ func (m *Model) handleFileBrowserKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			state.preview.viewport.ScrollDown(max(1, state.preview.viewport.VisibleLineCount()/2))
 		}
 	default:
-		if state.filtering && len(msg.Runes) > 0 {
-			state.filter += string(msg.Runes)
+		if state.filtering && len(msg.Text) > 0 {
+			state.filter += msg.Text
 			m.syncFileBrowser(false)
 		}
 	}

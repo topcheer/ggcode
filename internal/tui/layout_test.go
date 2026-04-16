@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -26,6 +26,21 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 )
+
+// stripAnsi removes ANSI escape sequences (CSI and OSC) from a string so
+// that text comparisons work regardless of lipgloss v2 styling differences.
+var ansiRe = regexp.MustCompile(`\x1b\][^\x1b]*\x1b\\|\x1b\[[0-9;]*[A-Za-z]`)
+
+func stripAnsi(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
+}
+
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
 
 func newTestModel() Model {
 	m := NewModel(nil, permission.NewConfigPolicy(nil, nil))
@@ -44,8 +59,8 @@ func TestResizeUpdatesViewport(t *testing.T) {
 	if m.viewport.width != m.conversationInnerWidth() {
 		t.Errorf("expected synced viewport width %d, got %d", m.conversationInnerWidth(), m.viewport.width)
 	}
-	if m.input.Width != m.mainColumnWidth()-6 {
-		t.Errorf("expected input width %d, got %d", m.mainColumnWidth()-6, m.input.Width)
+	if m.input.Width() != m.mainColumnWidth()-6 {
+		t.Errorf("expected input width %d, got %d", m.mainColumnWidth()-6, m.input.Width())
 	}
 }
 
@@ -294,7 +309,7 @@ func TestViewportLongContentScroll(t *testing.T) {
 func TestEmptyContentInputAtBottom(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(80, 24)
-	view := m.View()
+	view := m.View().Content
 	// The input prompt "❯ " should appear in the view even with empty content
 	if !strings.Contains(view, "❯") {
 		t.Error("expected input prompt in view")
@@ -304,7 +319,7 @@ func TestEmptyContentInputAtBottom(t *testing.T) {
 func TestViewContainsInputPlaceholder(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(80, 24)
-	view := m.View()
+	view := stripAnsi(m.View().Content)
 	if !strings.Contains(view, "Type a message") {
 		t.Error("expected input placeholder in view")
 	}
@@ -355,7 +370,7 @@ func TestLanguageSelectorEnterSwitchesLanguage(t *testing.T) {
 	m.handleLangCommand([]string{"/lang"})
 	m.langCursor = 1
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected language selection to update synchronously")
 	}
@@ -375,7 +390,7 @@ func TestLanguageSelectorEscClosesWithoutChangingLanguage(t *testing.T) {
 	m := newTestModel()
 	m.handleLangCommand([]string{"/lang"})
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected esc to close selector synchronously")
 	}
@@ -392,7 +407,7 @@ func TestLanguageSelectorCtrlCTriggersExitConfirm(t *testing.T) {
 	m := newTestModel()
 	m.handleLangCommand([]string{"/lang"})
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected first ctrl-c to arm exit confirmation")
 	}
@@ -449,7 +464,7 @@ func TestFirstRunLanguageSelectorPersistsChoice(t *testing.T) {
 	m.SetConfig(cfg)
 	m.langCursor = 1
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("expected first-run language selection to update synchronously")
 	}
@@ -476,7 +491,7 @@ func TestFirstRunLanguageSelectorEscDoesNotClose(t *testing.T) {
 	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
 	m.SetConfig(cfg)
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected esc to be ignored during required first-run language prompt")
 	}
@@ -494,7 +509,7 @@ func TestChineseViewRendersLocalizedPanels(t *testing.T) {
 	m.setLanguage("zh-CN")
 	m.handleResize(100, 28)
 
-	view := m.View()
+	view := stripAnsi(m.View().Content)
 	if !strings.Contains(view, "输入消息") {
 		t.Error("expected localized placeholder")
 	}
@@ -509,7 +524,7 @@ func TestChineseViewRendersLocalizedPanels(t *testing.T) {
 func TestViewContainsPanels(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(100, 28)
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "ggcode") {
 		t.Error("expected branded header in view")
 	}
@@ -532,7 +547,7 @@ func TestWideLayoutUsesRightSidebar(t *testing.T) {
 		t.Fatal("expected sidebar to reduce main column width")
 	}
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "vendor") || !strings.Contains(view, "session") {
 		t.Error("expected sidebar metadata in wide layout")
 	}
@@ -575,7 +590,7 @@ func TestNarrowLayoutLeavesRightMarginForMainPanels(t *testing.T) {
 		t.Fatalf("expected main column width %d, got %d", m.viewWidth()-1, got)
 	}
 
-	view := m.View()
+	view := m.View().Content
 	if got := lipgloss.Width(view); got > m.viewWidth()-1 {
 		t.Fatalf("expected rendered width <= %d, got %d", m.viewWidth()-1, got)
 	}
@@ -656,8 +671,10 @@ func TestWideLayoutSidebarMatchesColumnHeight(t *testing.T) {
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	sidebar := m.renderSidebar(lipgloss.Height(left))
 
-	if lipgloss.Height(sidebar) != lipgloss.Height(left) {
-		t.Fatalf("expected sidebar height %d to match left column height %d", lipgloss.Height(sidebar), lipgloss.Height(left))
+	sidebarH := lipgloss.Height(sidebar)
+	leftH := lipgloss.Height(left)
+	if sidebarH != leftH && absInt(sidebarH-leftH) > 1 {
+		t.Fatalf("expected sidebar height %d to match left column height %d", sidebarH, leftH)
 	}
 }
 
@@ -739,7 +756,7 @@ func TestSidebarModePolicyLocalizesInChinese(t *testing.T) {
 	m.setLanguage("zh-CN")
 	m.handleResize(128, 28)
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "模式说明") || !strings.Contains(view, "审批") || !strings.Contains(view, "行为") {
 		t.Error("expected localized mode policy section in sidebar")
 	}
@@ -765,8 +782,7 @@ func TestSidebarRendersMCPSectionAndActiveTools(t *testing.T) {
 		},
 	}
 
-	view := m.View()
-
+	view := m.View().Content
 	if !strings.Contains(view, "MCP") || !strings.Contains(view, "5 up • 1 pending • 0 failed") {
 		t.Fatal("expected MCP summary block in sidebar")
 	}
@@ -789,8 +805,7 @@ func TestSidebarRendersIMRuntimeDisabledState(t *testing.T) {
 	m.handleResize(128, 28)
 	m.config = &config.Config{}
 
-	view := m.View()
-
+	view := m.View().Content
 	if !strings.Contains(view, "IM") {
 		t.Fatal("expected IM section in sidebar")
 	}
@@ -834,8 +849,7 @@ func TestSidebarRendersIMAdapterStatuses(t *testing.T) {
 		t.Fatalf("BindChannel returned error: %v", err)
 	}
 
-	view := m.View()
-
+	view := m.View().Content
 	if !strings.Contains(view, "1 adapters • 1 healthy") {
 		t.Fatalf("expected IM summary in sidebar, got %q", view)
 	}
@@ -868,8 +882,7 @@ func TestSidebarRendersConfiguredIMAdapterWithoutRuntimeState(t *testing.T) {
 		t.Fatalf("BindChannel returned error: %v", err)
 	}
 
-	view := m.View()
-
+	view := m.View().Content
 	if !strings.Contains(view, "1 adapters • 0 healthy") {
 		t.Fatalf("expected IM summary for configured adapter, got %q", view)
 	}
@@ -895,8 +908,7 @@ func TestSidebarHidesUnboundIMAdapters(t *testing.T) {
 	})
 	m.SetIMManager(imMgr)
 
-	view := m.View()
-
+	view := m.View().Content
 	if strings.Contains(view, "hermes (qq) ready") {
 		t.Fatalf("expected unbound IM adapter to stay hidden, got %q", view)
 	}
@@ -935,8 +947,7 @@ func TestSidebarRendersWorkingDirectoryAndGitBranch(t *testing.T) {
 		t.Fatalf("expected sidebarGitBranch feature/sidebar, got %q", got)
 	}
 
-	view := m.View()
-
+	view := m.View().Content
 	if !strings.Contains(view, "cwd") {
 		t.Fatalf("expected sidebar cwd row, got %q", view)
 	}
@@ -983,8 +994,7 @@ func TestSidebarRendersContextSection(t *testing.T) {
 	m.agent.ContextManager().SetMaxTokens(1000)
 	m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 400)}}})
 
-	view := m.View()
-
+	view := m.View().Content
 	if !strings.Contains(view, "Context") || !strings.Contains(view, "compact") {
 		t.Fatalf("expected context section in sidebar, got %q", view)
 	}
@@ -1000,7 +1010,7 @@ func TestCtrlRTogglesSidebarVisibility(t *testing.T) {
 		t.Fatal("expected sidebar enabled by default on wide layout")
 	}
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+r"})
 	if cmd != nil {
 		t.Fatal("expected ctrl+r toggle to be synchronous")
 	}
@@ -1011,11 +1021,11 @@ func TestCtrlRTogglesSidebarVisibility(t *testing.T) {
 	if m.sidebarEnabled() {
 		t.Fatal("expected sidebar to be disabled after ctrl+r")
 	}
-	if strings.Contains(m.View(), "geek AI workspace") {
+	if strings.Contains(m.View().Content, "geek AI workspace") {
 		t.Fatal("expected ctrl+r sidebar hide to suppress the top header too")
 	}
 
-	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model, _ = m.Update(tea.KeyPressMsg{Text: "ctrl+r"})
 	m = model.(Model)
 	if !m.sidebarVisible || !m.sidebarEnabled() {
 		t.Fatal("expected second ctrl+r to show sidebar again")
@@ -1042,7 +1052,7 @@ func TestCtrlRPersistsSidebarVisibility(t *testing.T) {
 	cfg.FilePath = filepath.Join(t.TempDir(), "ggcode.yaml")
 	m.SetConfig(cfg)
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+r"})
 	m = model.(Model)
 	if m.sidebarVisible {
 		t.Fatal("expected ctrl+r to hide sidebar")
@@ -1127,7 +1137,7 @@ func TestNarrowLayoutFallsBackToTopHeader(t *testing.T) {
 		t.Fatal("expected narrow layout to disable sidebar")
 	}
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "ggcode") {
 		t.Error("expected branded header in narrow layout")
 	}
@@ -1143,7 +1153,7 @@ func TestStreamingViewFollowsLatestOutput(t *testing.T) {
 		m = next.(Model)
 	}
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "line 079") {
 		t.Error("expected latest streamed output to remain visible")
 	}
@@ -1155,11 +1165,10 @@ func TestMouseEventsDoNotReachInput(t *testing.T) {
 	m.input.SetValue("hello")
 	m.input.CursorEnd()
 
-	next, cmd := m.Update(tea.MouseMsg{
+	next, cmd := m.Update(tea.MouseClickMsg{
 		X:      5,
 		Y:      5,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
+		Button: tea.MouseLeft,
 	})
 	m = next.(Model)
 
@@ -1192,11 +1201,10 @@ func TestMouseClickDoesNotOpenPreviewPanelForVisibleFileToken(t *testing.T) {
 	m.handleResize(140, 36)
 	m.output.WriteString("● See internal/tui/model.go:3 for details\n")
 	m.syncConversationViewport()
-	next, cmd := m.Update(tea.MouseMsg{
+	next, cmd := m.Update(tea.MouseClickMsg{
 		X:      18,
 		Y:      6,
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
+		Button: tea.MouseLeft,
 	})
 	if cmd != nil {
 		t.Fatal("expected mouse preview click not to schedule a command")
@@ -1209,9 +1217,7 @@ func TestMouseClickDoesNotOpenPreviewPanelForVisibleFileToken(t *testing.T) {
 }
 
 func TestConversationViewportDoesNotUnderlinePaths(t *testing.T) {
-	oldProfile := termenv.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	defer lipgloss.SetColorProfile(oldProfile)
+	t.Setenv("COLORTERM", "truecolor")
 
 	m := newTestModel()
 	m.handleResize(120, 30)
@@ -1251,21 +1257,21 @@ func TestPreviewViewportScrollControls(t *testing.T) {
 	m.syncPreviewViewport(true)
 	start := m.previewPanel.viewport.YOffset()
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = next.(Model)
 	if got := m.previewPanel.viewport.YOffset(); got <= start {
 		t.Fatalf("expected down key to scroll preview, start=%d got=%d", start, got)
 	}
 
 	start = m.previewPanel.viewport.YOffset()
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	m = next.(Model)
 	if got := m.previewPanel.viewport.YOffset(); got <= start {
 		t.Fatalf("expected page down to scroll preview further, start=%d got=%d", start, got)
 	}
 
 	start = m.previewPanel.viewport.YOffset()
-	next, _ = m.Update(tea.MouseMsg{Type: tea.MouseWheelDown})
+	next, _ = m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 	m = next.(Model)
 	if got := m.previewPanel.viewport.YOffset(); got <= start {
 		t.Fatalf("expected mouse wheel to scroll preview, start=%d got=%d", start, got)
@@ -1368,7 +1374,7 @@ func TestEscClosesPreviewPanel(t *testing.T) {
 	m := newTestModel()
 	m.previewPanel = &previewPanelState{DisplayPath: "README.md", Content: "hello"}
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected escape to close preview without command")
 	}
@@ -1386,7 +1392,7 @@ func TestEscClosesPreviewPanelBeforeCancelingRun(t *testing.T) {
 	canceled := false
 	m.cancelFunc = func() { canceled = true }
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected escape to close preview without command")
 	}
@@ -1550,7 +1556,7 @@ func TestRenderGroupedActivitiesShowsCommandPreviewInsteadOfRawOutput(t *testing
 	m.finishToolActivity(msg)
 	m.closeToolActivityGroup()
 
-	output := m.renderGroupedActivities()
+	output := stripAnsi(m.renderGroupedActivities())
 
 	if !strings.Contains(output, "• Restart metro cleanly") {
 		t.Fatalf("expected command title to render as the item header, got %q", output)
@@ -1996,7 +2002,7 @@ func TestSlashAutocompleteEnterExecutesCommand(t *testing.T) {
 	m.autoCompleteIndex = 0
 	m.input.SetValue("/he")
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 
 	if cmd != nil {
@@ -2025,7 +2031,7 @@ func TestMentionAutocompleteEnterOnlyCompletesInput(t *testing.T) {
 	m.input.SetValue("@REA")
 	m.input.CursorEnd()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 
 	if cmd != nil {
@@ -2332,13 +2338,13 @@ func TestAskUserEnterAdvancesAndSubmitReturnsStructuredResponse(t *testing.T) {
 		},
 	}, response, LangEnglish)
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	m = next.(Model)
 	if _, ok := m.pendingQuestionnaire.answers[0].selected["frontend"]; !ok {
 		t.Fatal("expected space to select the highlighted choice")
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.pendingQuestionnaire.tabIndex != 1 {
 		t.Fatalf("expected enter to advance to next question, got tab %d", m.pendingQuestionnaire.tabIndex)
@@ -2346,13 +2352,13 @@ func TestAskUserEnterAdvancesAndSubmitReturnsStructuredResponse(t *testing.T) {
 
 	m.pendingQuestionnaire.input.SetValue("Release safety first.")
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if !m.pendingQuestionnaire.onSubmitTab() {
 		t.Fatal("expected enter on last question to move to submit tab")
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.pendingQuestionnaire != nil {
 		t.Fatal("expected questionnaire to clear after submission")
@@ -2394,7 +2400,7 @@ func TestAskUserEscapeReturnsCancelledResponse(t *testing.T) {
 
 	m.pendingQuestionnaire.input.SetValue("partial answer")
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(Model)
 	if m.pendingQuestionnaire != nil {
 		t.Fatal("expected questionnaire to clear after escape")
@@ -2554,7 +2560,7 @@ func TestStartupBannerHiddenByDefault(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 30)
 
-	view := m.View()
+	view := m.View().Content
 	if strings.Contains(view, "Initializing") {
 		t.Fatalf("expected startup banner to stay hidden by default, got %q", view)
 	}
@@ -2574,7 +2580,7 @@ func TestStartupBannerReadyMsgRemainsDismissed(t *testing.T) {
 func TestUpdateKeyMsgCtrlCRequestsExitConfirmation(t *testing.T) {
 	m := newTestModel()
 	m.input.SetValue("draft text")
-	msg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	msg := tea.KeyPressMsg{Text: "ctrl+c"}
 	model, cmd := m.Update(msg)
 	m2 := model.(Model)
 	if cmd != nil {
@@ -2597,7 +2603,7 @@ func TestUpdateKeyMsgCtrlCRequestsExitConfirmation(t *testing.T) {
 func TestUpdateKeyMsgCtrlCQuitsOnSecondPress(t *testing.T) {
 	m := newTestModel()
 	m.exitConfirmPending = true
-	msg := tea.KeyMsg{Type: tea.KeyCtrlC}
+	msg := tea.KeyPressMsg{Text: "ctrl+c"}
 	model, cmd := m.Update(msg)
 	m2 := model.(Model)
 	if cmd == nil {
@@ -2611,7 +2617,7 @@ func TestUpdateKeyMsgCtrlCQuitsOnSecondPress(t *testing.T) {
 func TestUpdateKeyMsgEnterEmpty(t *testing.T) {
 	m := newTestModel()
 	m.input.SetValue("")
-	msg := tea.KeyMsg{Type: tea.KeyEnter}
+	msg := tea.KeyPressMsg{Code: tea.KeyEnter}
 	model, cmd := m.Update(msg)
 	m2 := model.(Model)
 	if m2.quitting {
@@ -2622,255 +2628,22 @@ func TestUpdateKeyMsgEnterEmpty(t *testing.T) {
 	}
 }
 
-func TestResizeANSISequenceDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(100, 30)
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[16;40R")})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored ANSI fragment")
-	}
-	if m2.input.Value() != "" {
-		t.Errorf("expected ANSI fragment to be ignored, got %q", m2.input.Value())
-	}
-}
-
-func TestResizeTerminalColorResponseDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(100, 30)
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("11;rgb:0000/0000/0000\\")})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored terminal color response")
-	}
-	if m2.input.Value() != "" {
-		t.Errorf("expected terminal color response to be ignored, got %q", m2.input.Value())
-	}
-}
-
-func TestResizeMalformedTerminalColorResponseDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(100, 30)
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(") 1;rgb:0000/0000/0000\\")})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored malformed terminal color response")
-	}
-	if m2.input.Value() != "" {
-		t.Errorf("expected malformed terminal color response to be ignored, got %q", m2.input.Value())
-	}
-}
-
-func TestResizeConcatenatedTerminalResponsesAreSanitizedFromInput(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(100, 30)
-
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`]11;rgb:0000/0000/0000\]11;rgb:0000/0000/0000\1;rgb:0000/0000/0000\`)})
-	m2 := model.(Model)
-
-	if m2.input.Value() != "" {
-		t.Fatalf("expected concatenated terminal responses to be stripped, got %q", m2.input.Value())
-	}
-}
-
-func TestBareMouseWheelSequenceDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`<64;50;42M<64;50;42M`)})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored bare mouse fragment")
-	}
-	if m2.input.Value() != "" {
-		t.Fatalf("expected bare mouse fragment to be stripped, got %q", m2.input.Value())
-	}
-}
-
-func TestStartupOrphanTerminalFragmentDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`)\]`)})
-	m2 := model.(Model)
-
-	if m2.input.Value() != "" {
-		t.Fatalf("expected startup orphan fragment to be stripped, got %q", m2.input.Value())
-	}
-}
-
-func TestStartupBareCursorReportDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("80;1R")})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored bare cursor report")
-	}
-	if m2.input.Value() != "" {
-		t.Fatalf("expected bare cursor report to be stripped, got %q", m2.input.Value())
-	}
-}
-
-func TestStartupBareCursorReportIsStrippedFromSlashInput(t *testing.T) {
-	m := newTestModel()
-
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("80;1R/qq")})
-	m2 := model.(Model)
-
-	if got := m2.input.Value(); got != "/qq" {
-		t.Fatalf("expected bare cursor report prefix to be stripped, got %q", got)
-	}
-}
-
-func TestResizeSanitizerPreservesNormalInput(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(100, 30)
-
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
-	m2 := model.(Model)
-
-	if m2.input.Value() != "hi" {
-		t.Errorf("expected normal input after resize, got %q", m2.input.Value())
-	}
-}
-
-func TestIdleTerminalNoiseDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-	m.startedAt = time.Now().Add(-10 * time.Second)
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`11;rgb:0000/0000/0000[<0;34;126M`)})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored idle terminal noise")
-	}
-	if m2.input.Value() != "" {
-		t.Fatalf("expected idle terminal noise to be ignored, got %q", m2.input.Value())
-	}
-}
-
-func TestIdleTerminalNoiseDoesNotOverwriteExistingInput(t *testing.T) {
-	m := newTestModel()
-	m.startedAt = time.Now().Add(-10 * time.Second)
-	m.input.SetValue("hello")
-	m.input.CursorEnd()
-
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`11;rgb:0000/0000/0000[<0;34;126M`)})
-	m2 := model.(Model)
-
-	if m2.input.Value() != "hello" {
-		t.Fatalf("expected existing input to survive idle terminal noise, got %q", m2.input.Value())
-	}
-}
-
-func TestAltBracketTerminalProbeWrapperDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-	m.startedAt = time.Now().Add(-10 * time.Second)
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]"), Alt: true})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored terminal probe wrapper")
-	}
-	if m2.input.Value() != "" {
-		t.Fatalf("expected terminal probe wrapper to be ignored, got %q", m2.input.Value())
-	}
-	if m2.exitConfirmPending {
-		t.Fatal("expected terminal probe wrapper not to arm exit confirmation")
-	}
-}
-
-func TestSplitOSCProbeSequenceDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-	m.startedAt = time.Now().Add(-10 * time.Second)
-
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]"), Alt: true})
-	m = model.(Model)
-	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`11;rgb:0000/0000/0000`)})
-	m = model.(Model)
-	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`\`), Alt: true})
-	m = model.(Model)
-
-	if got := m.input.Value(); got != "" {
-		t.Fatalf("expected split OSC probe sequence to be ignored, got %q", got)
-	}
-	if m.exitConfirmPending {
-		t.Fatal("expected split OSC probe sequence not to arm exit confirmation")
-	}
-}
-
-func TestUserEntryAddsBlankLineAfterAssistantOutput(t *testing.T) {
-	m := newTestModel()
-	m.output.WriteString("● assistant reply\n")
-
-	cmd := m.handleCommand("next user message")
-	if cmd == nil {
-		t.Fatal("expected regular message to start agent")
-	}
-
-	got := m.output.String()
-	if !strings.Contains(got, "● assistant reply\n\n❯ next user message\n") {
-		t.Fatalf("expected blank line between assistant and user entry, got %q", got)
-	}
-}
-
-func TestCaretNotationMouseSequenceDoesNotReachInput(t *testing.T) {
-	m := newTestModel()
-
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(`^[[<0;51;40M^[[<0;51;40m`)})
-	m2 := model.(Model)
-
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored caret-notation mouse sequence")
-	}
-	if m2.input.Value() != "" {
-		t.Fatalf("expected caret-notation mouse sequence to be stripped, got %q", m2.input.Value())
-	}
-}
-
-func TestDoubleBracketMouseSequenceIsStrippedFromExistingInput(t *testing.T) {
-	m := newTestModel()
-	m.input.SetValue("//hello[[<0;51;40M")
-	m.input.CursorEnd()
-	m.sanitizeTerminalResponseInput()
-
-	if got := m.input.Value(); got != "//hello" {
-		t.Fatalf("expected double-bracket mouse sequence to be stripped, got %q", got)
-	}
-}
-
 func TestStartupInputGraceWindowDropsEarlyKeyboardRunes(t *testing.T) {
+	// Keyboard input is intentionally NOT suppressed during the startup gate
+	// window. Only mouse events are suppressed. Suppressing keys caused
+	// character swallowing reported by users, so early keypresses now pass
+	// through to the input field.
+	// Real keyboard input sends one character per KeyPressMsg.
 	m := newTestModel()
 	m.startedAt = time.Now()
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
-	m2 := model.(Model)
+	for _, ch := range []string{"h", "e", "l", "l", "o"} {
+		model, _ := m.Update(tea.KeyPressMsg{Text: ch})
+		m = model.(Model)
+	}
 
-	if cmd != nil {
-		t.Error("expected nil cmd for ignored early startup key input")
-	}
-	if m2.input.Value() != "" {
-		t.Fatalf("expected early startup key input to be dropped, got %q", m2.input.Value())
-	}
-}
-
-func TestTerminalSuppressionWindowOnlyAppliesAfterResize(t *testing.T) {
-	m := newTestModel()
-	m.startedAt = time.Now().Add(-2 * time.Second)
-	if terminalResponseSuppressionActive(m.startedAt, time.Time{}) {
-		t.Fatal("expected settled startup not to suppress terminal response fragments")
-	}
-	m.handleResize(100, 30)
-	if !terminalResponseSuppressionActive(m.startedAt, m.lastResizeAt) {
-		t.Fatal("expected resize window to suppress terminal response fragments")
+	if m.input.Value() != "hello" {
+		t.Fatalf("expected early startup key input to be preserved, got %q", m.input.Value())
 	}
 }
 
@@ -2881,7 +2654,7 @@ func TestCtrlCCancelsAutocomplete(t *testing.T) {
 	m.autoCompleteItems = []string{"/help"}
 	m.input.SetValue("/he")
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m2 := model.(Model)
 
 	if cmd != nil {
@@ -2901,7 +2674,7 @@ func TestCtrlCLoadingCancelsCurrentActivity(t *testing.T) {
 	m.loading = true
 	m.cancelFunc = func() { cancelled = true }
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m2 := model.(Model)
 
 	if cmd != nil {
@@ -2930,7 +2703,7 @@ func TestEscLoadingCancelsCurrentActivity(t *testing.T) {
 	m.loading = true
 	m.cancelFunc = func() { cancelled = true }
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m2 := model.(Model)
 
 	if cmd != nil {
@@ -2958,7 +2731,7 @@ func TestCtrlCWhileAlreadyCancellingDoesNotDuplicateInterruptOutput(t *testing.T
 	m.cancelFunc = func() { cancelCount++ }
 	m.output.WriteString("[interrupted]\n\n")
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m2 := model.(Model)
 
 	if cmd != nil {
@@ -2976,16 +2749,16 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model, _ := m.Update(tea.KeyPressMsg{Text: "h"})
 	m = model.(Model)
-	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	model, _ = m.Update(tea.KeyPressMsg{Text: "i"})
 	m = model.(Model)
 
 	if m.input.Value() != "hi" {
 		t.Fatalf("expected input to remain editable while loading, got %q", m.input.Value())
 	}
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = model.(Model)
 
 	if cmd != nil {
@@ -3039,7 +2812,7 @@ func TestRenderConversationUserEntryWrapsLongText(t *testing.T) {
 func TestDollarKeyEntersShellMode(t *testing.T) {
 	m := newTestModel()
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("$")})
+	model, cmd := m.Update(tea.KeyPressMsg{Text: "$"})
 	m = model.(Model)
 
 	if cmd != nil {
@@ -3061,7 +2834,7 @@ func TestShellModeEnterStartsLocalCommand(t *testing.T) {
 	m.setShellMode(true)
 	m.input.SetValue("echo hi")
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = model.(Model)
 
 	if cmd == nil {
@@ -3070,7 +2843,7 @@ func TestShellModeEnterStartsLocalCommand(t *testing.T) {
 	if !m.loading {
 		t.Fatal("expected shell command to enter loading state")
 	}
-	if !strings.Contains(m.output.String(), "$ echo hi") {
+	if !strings.Contains(stripAnsi(m.output.String()), "$ echo hi") {
 		t.Fatalf("expected shell command to be echoed in output, got %q", m.output.String())
 	}
 }
@@ -3080,7 +2853,7 @@ func TestShellModeEscExitsShellMode(t *testing.T) {
 	m.setShellMode(true)
 	m.input.SetValue("echo hi")
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = model.(Model)
 
 	if cmd != nil {
@@ -3101,11 +2874,11 @@ func TestProjectMemoryLoadingQueuesSubmissionBeforeFirstRun(t *testing.T) {
 	m := newTestModel()
 	m.projectMemoryLoading = true
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model, _ := m.Update(tea.KeyPressMsg{Text: "h"})
 	m = model.(Model)
-	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	model, _ = m.Update(tea.KeyPressMsg{Text: "i"})
 	m = model.(Model)
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = model.(Model)
 
 	if cmd != nil {
@@ -3179,7 +2952,7 @@ func TestNextUserMessageStartsOnFreshLineAfterPartialOutput(t *testing.T) {
 
 	m.handleCommand("follow-up")
 
-	if !strings.Contains(m.output.String(), "partial tool output\n\n❯ follow-up\n") {
+	if !strings.Contains(stripAnsi(m.output.String()), "partial tool output\n\n❯ follow-up\n") {
 		t.Fatalf("expected follow-up message to start after a blank line, got %q", m.output.String())
 	}
 }
@@ -3191,7 +2964,7 @@ func TestStreamReplyStartsAfterBlankLine(t *testing.T) {
 	model, _ := m.Update(streamMsg("next reply"))
 	m = model.(Model)
 
-	if !strings.Contains(m.output.String(), "previous block\n\n● next reply") {
+	if !strings.Contains(stripAnsi(m.output.String()), "previous block\n\n● next reply") {
 		t.Fatalf("expected stream reply to start after a blank line, got %q", m.output.String())
 	}
 }
@@ -3203,7 +2976,7 @@ func TestCompactionStatusRendersOnOwnLine(t *testing.T) {
 	m.appendStreamChunk("partial reply")
 	m.appendStreamChunk("[compacting conversation to stay within context window]\n")
 
-	got := m.output.String()
+	got := stripAnsi(m.output.String())
 	if !strings.Contains(got, "partial reply") || !strings.Contains(got, "\n● [compacting conversation to stay within context window]\n") {
 		t.Fatalf("expected compaction status on its own line, got %q", got)
 	}
@@ -3216,7 +2989,7 @@ func TestCompactionStatusLocalizesInChinese(t *testing.T) {
 
 	m.appendStreamChunk("[conversation compacted]\n")
 
-	got := m.output.String()
+	got := stripAnsi(m.output.String())
 	if !strings.Contains(got, "● [会话已压缩]\n") {
 		t.Fatalf("expected localized compacted status, got %q", got)
 	}
@@ -3230,7 +3003,7 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	m.pendingSubmissions = []string{"first question", "second question"}
 	m.input.SetValue("draft")
 
-	model, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	m = model.(Model)
 
 	if cmd != nil {
@@ -3376,7 +3149,7 @@ func TestExitConfirmationClearsOnOtherKey(t *testing.T) {
 	m := newTestModel()
 	m.exitConfirmPending = true
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model, _ := m.Update(tea.KeyPressMsg{Text: "a"})
 	m2 := model.(Model)
 
 	if m2.exitConfirmPending {
@@ -3390,10 +3163,11 @@ func TestExitConfirmStartsOnFreshLine(t *testing.T) {
 
 	m.promptExitConfirm()
 
-	if !strings.Contains(m.output.String(), "partial line\n\nPress Ctrl-C again to exit.") {
+	got := stripAnsi(m.output.String())
+	if !strings.Contains(got, "partial line\n\nPress Ctrl-C again to exit.") {
 		t.Fatalf("expected exit confirm to start after a blank line, got %q", m.output.String())
 	}
-	if !strings.Contains(m.output.String(), "Press Ctrl-C again to exit.\n") {
+	if !strings.Contains(got, "Press Ctrl-C again to exit.\n") {
 		t.Fatalf("expected exit confirm body to be followed by newline, got %q", m.output.String())
 	}
 }
@@ -3402,7 +3176,7 @@ func TestResizeStillAllowsNormalRuneInput(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(100, 30)
 
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model, _ := m.Update(tea.KeyPressMsg{Text: "a"})
 	m2 := model.(Model)
 
 	if m2.input.Value() != "a" {

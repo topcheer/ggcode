@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
@@ -548,14 +548,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	}
 
 	// Regular message → start agent
-	// Expand @mentions
-	workDir, _ := os.Getwd()
-	expandedMsg, expandErr := ExpandMentions(text, workDir)
-	if expandErr != nil {
-		m.output.WriteString(m.styles.error.Render(m.t("command.mention_error", expandErr)))
-		m.output.WriteString("\n\n")
-	}
-
 	displayText := text
 	if m.pendingImage != nil {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
@@ -578,7 +570,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.statusToolArg = ""
 	m.statusToolCount = 0
 	m.resetActivityGroups()
-	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(expandedMsg))
+	// ExpandMentions runs asynchronously inside startAgentWithExpand to avoid blocking UI
+	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgentWithExpand(text))
 }
 
 func (m *Model) handleInitCommand() tea.Cmd {

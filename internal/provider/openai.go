@@ -191,127 +191,149 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		}
 	}
 
-	var streamer *openai.ChatCompletionStream
-	err := retryWithBackoffCtx(ctx, func() error {
-		var sErr error
-		streamer, sErr = p.client.CreateChatCompletionStream(ctx, req)
-		return sErr
-	}, providerRetryAttempts)
-	if err != nil {
-		debug.Log("openai", "ChatStream ERROR model=%s: %v", p.model, err)
-		var apiErr *openai.APIError
-		if errors.As(err, &apiErr) {
-			debug.Log("openai", "API error: status=%d code=%s message=%s", apiErr.HTTPStatusCode, apiErr.Code, apiErr.Message)
-		}
-		if len(req.Tools) > 0 {
-			if toolJSON, err := json.Marshal(req.Tools); err == nil {
-				t := string(toolJSON)
-				if len(t) > 500 {
-					t = t[:500] + "..."
-				}
-				debug.Log("openai", "Request had %d tools, first tool JSON: %s", len(req.Tools), t)
-			}
-		}
-		return nil, fmt.Errorf("openai stream: %w", err)
-	}
-
 	ch := make(chan StreamEvent, 64)
 
 	go func() {
 		defer close(ch)
-		defer streamer.Close()
-		debug.Log("openai", "Stream goroutine started")
 
-		toolCalls := make(map[int]*ToolCallDelta)
 		var usage *TokenUsage
 		var outputChars int
 
-		for {
-			resp, err := streamer.Recv()
+		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+			if attempt > 0 {
+				debug.Log("openai", "Stream retry attempt %d", attempt)
+			}
+
+			// (Re-)establish the stream for each attempt
+			var localStreamer *openai.ChatCompletionStream
+			err := retryWithBackoffCtx(ctx, func() error {
+				var sErr error
+				localStreamer, sErr = p.client.CreateChatCompletionStream(ctx, req)
+				return sErr
+			}, providerRetryAttempts)
 			if err != nil {
-				// Stream ended
-				if errors.Is(err, io.EOF) || err == context.Canceled || err == context.DeadlineExceeded {
-					debug.Log("openai", "Stream ended normally: %v", err)
-					break
+				if isRetryable(err) && attempt < providerRetryAttempts-1 {
+					if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+						return
+					}
+					continue
 				}
-				debug.Log("openai", "Stream ERROR: %v", err)
-				ch <- StreamEvent{Type: StreamEventError, Error: err}
+				debug.Log("openai", "ChatStream ERROR model=%s: %v", p.model, err)
+				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}
 				return
 			}
 
-			// Check for usage in final chunk (empty choices)
-			if resp.Usage != nil && (resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0) && len(resp.Choices) == 0 {
+			toolCalls := make(map[int]*ToolCallDelta)
+			emitted := false
+			retry := false
+
+			func() {
+				defer localStreamer.Close()
+				for {
+					resp, recvErr := localStreamer.Recv()
+					if recvErr != nil {
+						// Stream ended normally
+						if errors.Is(recvErr, io.EOF) || recvErr == context.Canceled || recvErr == context.DeadlineExceeded {
+							debug.Log("openai", "Stream ended normally: %v", recvErr)
+							return
+						}
+						debug.Log("openai", "Stream ERROR: %v", recvErr)
+						// Retry if no content emitted yet and error is retryable
+						if !emitted && isRetryable(recvErr) && attempt < providerRetryAttempts-1 {
+							if sleepErr := retrySleep(ctx, retryDelay(recvErr, attempt)); sleepErr != nil {
+								ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+								return
+							}
+							retry = true
+							return
+						}
+						ch <- StreamEvent{Type: StreamEventError, Error: recvErr}
+						return
+					}
+
+					// Check for usage in final chunk (empty choices)
+					if resp.Usage != nil && (resp.Usage.PromptTokens != 0 || resp.Usage.CompletionTokens != 0) && len(resp.Choices) == 0 {
+						usage = &TokenUsage{
+							InputTokens:  int(resp.Usage.PromptTokens),
+							OutputTokens: int(resp.Usage.CompletionTokens),
+						}
+						continue
+					}
+
+					if len(resp.Choices) == 0 {
+						continue
+					}
+
+					choice := resp.Choices[0]
+					delta := choice.Delta
+
+					// Text content
+					if delta.Content != "" {
+						debug.Log("openai", "chunk text=%q", delta.Content)
+						outputChars += len(delta.Content)
+						emitted = true
+						ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
+					}
+
+					// Tool call deltas
+					for _, tc := range delta.ToolCalls {
+						if tc.Index == nil {
+							continue
+						}
+						idx := int(*tc.Index)
+						existing, ok := toolCalls[idx]
+						if !ok {
+							existing = &ToolCallDelta{Index: idx}
+							toolCalls[idx] = existing
+						}
+						if tc.ID != "" {
+							existing.ID = tc.ID
+						}
+						if tc.Function.Name != "" {
+							existing.Name = tc.Function.Name
+						}
+						if tc.Function.Arguments != "" {
+							existing.Arguments = append(existing.Arguments, tc.Function.Arguments...)
+						}
+					}
+
+					// Check for finish reason to emit completed tool calls
+					finishReason := string(choice.FinishReason)
+					if finishReason != "" {
+						debug.Log("openai", "finish_reason=%s tool_calls=%d", finishReason, len(toolCalls))
+						for idx, tc := range toolCalls {
+							debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
+							outputChars += len(tc.Name) + len(tc.Arguments)
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
+							delete(toolCalls, idx)
+						}
+						if finishErr := finishReasonError(finishReason); finishErr != nil {
+							ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
+							return
+						}
+					}
+				}
+			}()
+
+			if retry {
+				continue
+			}
+
+			if usage == nil {
+				inputTokens, err := p.CountTokens(ctx, messages)
+				if err != nil {
+					inputTokens = 0
+				}
 				usage = &TokenUsage{
-					InputTokens:  int(resp.Usage.PromptTokens),
-					OutputTokens: int(resp.Usage.CompletionTokens),
-				}
-				continue
-			}
-
-			if len(resp.Choices) == 0 {
-				continue
-			}
-
-			choice := resp.Choices[0]
-			delta := choice.Delta
-
-			// Text content
-			if delta.Content != "" {
-				debug.Log("openai", "chunk text=%q", delta.Content)
-				outputChars += len(delta.Content)
-				ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
-			}
-
-			// Tool call deltas
-			for _, tc := range delta.ToolCalls {
-				if tc.Index == nil {
-					continue
-				}
-				idx := int(*tc.Index)
-				existing, ok := toolCalls[idx]
-				if !ok {
-					existing = &ToolCallDelta{Index: idx}
-					toolCalls[idx] = existing
-				}
-				if tc.ID != "" {
-					existing.ID = tc.ID
-				}
-				if tc.Function.Name != "" {
-					existing.Name = tc.Function.Name
-				}
-				if tc.Function.Arguments != "" {
-					existing.Arguments = append(existing.Arguments, tc.Function.Arguments...)
+					InputTokens:  inputTokens,
+					OutputTokens: estimateTokensFromChars(outputChars),
 				}
 			}
-
-			// Check for finish reason to emit completed tool calls
-			finishReason := string(choice.FinishReason)
-			if finishReason != "" {
-				debug.Log("openai", "finish_reason=%s tool_calls=%d", finishReason, len(toolCalls))
-				for idx, tc := range toolCalls {
-					debug.Log("openai", "tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
-					outputChars += len(tc.Name) + len(tc.Arguments)
-					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
-					delete(toolCalls, idx)
-				}
-				if finishErr := finishReasonError(finishReason); finishErr != nil {
-					ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
-					return
-				}
-			}
+			ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
+			return
 		}
-
-		if usage == nil {
-			inputTokens, err := p.CountTokens(ctx, messages)
-			if err != nil {
-				inputTokens = 0
-			}
-			usage = &TokenUsage{
-				InputTokens:  inputTokens,
-				OutputTokens: estimateTokensFromChars(outputChars),
-			}
-		}
-		ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
 	}()
 
 	return ch, nil

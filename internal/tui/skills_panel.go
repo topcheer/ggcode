@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/commands"
 )
@@ -103,7 +103,7 @@ func (m Model) renderSkillsPanel() string {
 	return m.renderContextBox("/skills", strings.TrimRight(strings.Join(body, "\n"), "\n"), lipgloss.Color("12"))
 }
 
-func (m *Model) handleSkillsPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleSkillsPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "left", "h":
 		if m.skillsPanel != nil && m.skillsPanel.page > 0 {

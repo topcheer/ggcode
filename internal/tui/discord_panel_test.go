@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -15,7 +15,7 @@ import (
 func TestDiscordPanelEscClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openDiscordPanel()
-	updated, cmd := m.handleDiscordPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd := m.handleDiscordPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected esc panel close without command")
 	}
@@ -28,7 +28,7 @@ func TestDiscordPanelEscClosesPanel(t *testing.T) {
 func TestDiscordPanelCtrlCClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openDiscordPanel()
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c discord panel close to be synchronous")
 	}
@@ -80,13 +80,13 @@ func TestDiscordPanelRenderLocalizesToChinese(t *testing.T) {
 func TestDiscordPanelCreateModeInput(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openDiscordPanel()
-	updated, _ := m.handleDiscordPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, _ := m.handleDiscordPanelKey(tea.KeyPressMsg{Text: "i"})
 	m = updated
 	if !m.discordPanel.createMode {
 		t.Fatal("expected create mode to be active")
 	}
-	m.handleDiscordPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("dc-test")})
-	updated, _ = m.handleDiscordPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.handleDiscordPanelKey(tea.KeyPressMsg{Text: "dc-test"})
+	updated, _ = m.handleDiscordPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated
 	if m.discordPanel.createMode {
 		t.Fatal("expected create mode to be cancelled")
@@ -150,7 +150,7 @@ func TestDiscordPanelUnbindRemovesChannel(t *testing.T) {
 	}
 	m.SetIMManager(imMgr)
 	m.openDiscordPanel()
-	_, cmd := m.handleDiscordPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	_, cmd := m.handleDiscordPanelKey(tea.KeyPressMsg{Text: "u"})
 	if cmd == nil {
 		t.Fatal("expected unbind command")
 	}
@@ -167,7 +167,7 @@ func TestDiscordPanelUnbindRemovesChannel(t *testing.T) {
 func TestDiscordPanelNoEntriesShowsMessage(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openDiscordPanel()
-	updated, _ := m.handleDiscordPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.handleDiscordPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated
 	if m.discordPanel == nil {
 		t.Fatal("panel should still be open")

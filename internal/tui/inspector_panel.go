@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/lsp"
@@ -153,7 +153,7 @@ func (m Model) renderInspectorPanelFooter(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *Model) handleInspectorPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleInspectorPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.inspectorPanel == nil {
 		return *m, nil
 	}
