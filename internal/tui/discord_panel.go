@@ -52,7 +52,7 @@ func (m Model) renderDiscordPanel() string {
 		return ""
 	}
 	entries := m.discordBindingEntries()
-	current := currentDiscordBinding(m.imManager)
+	currentBindings := currentDiscordBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -70,14 +70,16 @@ func (m Model) renderDiscordPanel() string {
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.discord.current_binding")),
 	}
-	if current == nil {
+	if len(currentBindings) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.discord.none")))
 	} else {
-		body = append(body,
-			fmt.Sprintf(" %s", m.t("panel.discord.adapter", current.Adapter)),
-			fmt.Sprintf(" %s", m.t("panel.discord.target", firstNonEmptyDiscord(current.TargetID, m.t("panel.discord.default")))),
-			fmt.Sprintf(" %s", m.t("panel.discord.channel", firstNonEmptyDiscord(current.ChannelID, m.t("panel.discord.none")))),
-		)
+		for _, current := range currentBindings {
+			body = append(body,
+				fmt.Sprintf(" %s", m.t("panel.discord.adapter", current.Adapter)),
+				fmt.Sprintf(" %s", m.t("panel.discord.target", firstNonEmptyDiscord(current.TargetID, m.t("panel.discord.default")))),
+				fmt.Sprintf(" %s", m.t("panel.discord.channel", firstNonEmptyDiscord(current.ChannelID, m.t("panel.discord.none")))),
+			)
+		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.discord.bot_list")))
 	if len(entries) == 0 {
@@ -172,9 +174,17 @@ func (m *Model) handleDiscordPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, m.bindDiscordEntry(entries[clampDiscordSelection(panel.selected, len(entries))])
 	case "x", "X":
-		return *m, m.clearDiscordChannel()
+		if len(entries) == 0 {
+			panel.message = m.t("panel.discord.message.no_bot")
+			return *m, nil
+		}
+		return *m, m.clearDiscordChannel(entries[clampDiscordSelection(panel.selected, len(entries))].Adapter)
 	case "u", "U":
-		return *m, m.unbindDiscordEntry()
+		if len(entries) == 0 {
+			panel.message = m.t("panel.discord.message.no_bot")
+			return *m, nil
+		}
+		return *m, m.unbindDiscordEntry(entries[clampDiscordSelection(panel.selected, len(entries))].Adapter)
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""
@@ -203,24 +213,24 @@ func (m *Model) bindDiscordEntry(entry discordBindingEntry) tea.Cmd {
 	}
 }
 
-func (m *Model) unbindDiscordEntry() tea.Cmd {
+func (m *Model) unbindDiscordEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureDiscordRuntime(); err != nil {
 			return discordBindResultMsg{err: err}
 		}
-		if err := m.imManager.UnbindChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
 			return discordBindResultMsg{err: err}
 		}
 		return discordBindResultMsg{message: m.t("panel.discord.message.unbound")}
 	}
 }
 
-func (m *Model) clearDiscordChannel() tea.Cmd {
+func (m *Model) clearDiscordChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureDiscordRuntime(); err != nil {
 			return discordBindResultMsg{err: err}
 		}
-		if err := m.imManager.ClearChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return discordBindResultMsg{err: err}
 		}
 		return discordBindResultMsg{message: m.t("panel.discord.message.cleared")}
@@ -293,13 +303,15 @@ func (m Model) discordBindingEntries() []discordBindingEntry {
 	occupied := make(map[string]string)
 	adapterStates := make(map[string]im.AdapterState)
 	currentWorkspace := strings.TrimSpace(m.currentWorkspacePath())
-	var currentBinding *im.ChannelBinding
+	bindingByAdapter := make(map[string]im.ChannelBinding)
 	if m.imManager != nil {
 		snapshot := m.imManager.Snapshot()
 		for _, state := range snapshot.Adapters {
 			adapterStates[state.Name] = state
 		}
-		currentBinding = m.imManager.CurrentBinding()
+		for _, b := range currentDiscordBindings(m.imManager) {
+			bindingByAdapter[b.Adapter] = b
+		}
 		if bindings, err := m.imManager.ListBindings(); err == nil {
 			for _, binding := range bindings {
 				occupied[binding.Adapter] = binding.Workspace
@@ -317,9 +329,9 @@ func (m Model) discordBindingEntries() []discordBindingEntry {
 	for _, name := range keys {
 		targetID := defaultDiscordTargetID(currentWorkspace)
 		workspaceChannel := ""
-		if currentBinding != nil && strings.TrimSpace(currentBinding.Workspace) == currentWorkspace && currentBinding.Adapter == name {
-			targetID = firstNonEmptyDiscord(currentBinding.TargetID, targetID)
-			workspaceChannel = strings.TrimSpace(currentBinding.ChannelID)
+		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
+			targetID = firstNonEmptyDiscord(b.TargetID, targetID)
+			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, discordBindingEntry{
 			Adapter:          name,
@@ -359,15 +371,17 @@ func clampDiscordSelection(selected, total int) int {
 	return selected
 }
 
-func currentDiscordBinding(mgr *im.Manager) *im.ChannelBinding {
+func currentDiscordBindings(mgr *im.Manager) []im.ChannelBinding {
 	if mgr == nil {
 		return nil
 	}
-	b := mgr.CurrentBinding()
-	if b != nil && b.Platform == im.PlatformDiscord {
-		return b
+	var result []im.ChannelBinding
+	for _, b := range mgr.CurrentBindings() {
+		if b.Platform == im.PlatformDiscord {
+			result = append(result, b)
+		}
 	}
-	return nil
+	return result
 }
 
 func firstNonEmptyDiscord(values ...string) string {
@@ -395,9 +409,10 @@ func (m *Model) ensureDiscordBotBinding(adapter string) error {
 		return err
 	}
 	workspace := m.currentWorkspacePath()
-	current := currentDiscordBinding(m.imManager)
-	if current != nil && strings.TrimSpace(current.Workspace) == strings.TrimSpace(workspace) && current.Adapter == adapter {
-		return nil
+	for _, b := range currentDiscordBindings(m.imManager) {
+		if strings.TrimSpace(b.Workspace) == strings.TrimSpace(workspace) && b.Adapter == adapter {
+			return nil
+		}
 	}
 	_, err := m.imManager.BindChannel(im.ChannelBinding{
 		Platform: im.PlatformDiscord,

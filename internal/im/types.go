@@ -212,7 +212,7 @@ type ApprovalState struct {
 
 type StatusSnapshot struct {
 	ActiveSession    *SessionBinding
-	CurrentBinding   *ChannelBinding
+	CurrentBindings  []ChannelBinding
 	PendingPairing   *PairingChallenge
 	Adapters         []AdapterState
 	PendingApprovals []ApprovalState

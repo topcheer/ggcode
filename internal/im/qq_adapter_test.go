@@ -485,11 +485,6 @@ func TestSendAllowsOutboundWithoutRecentInboundMessage(t *testing.T) {
 func TestSendUsesPersistedReplySequenceForSameInboundMessage(t *testing.T) {
 	var posts []string
 	store := NewMemoryBindingStore()
-	mgr := NewManager()
-	if err := mgr.SetBindingStore(store); err != nil {
-		t.Fatalf("SetBindingStore returned error: %v", err)
-	}
-	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
 	if err := store.Save(ChannelBinding{
 		Workspace:             "/tmp/project",
 		Platform:              PlatformQQ,
@@ -503,6 +498,11 @@ func TestSendUsesPersistedReplySequenceForSameInboundMessage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
 	}
+	mgr := NewManager()
+	if err := mgr.SetBindingStore(store); err != nil {
+		t.Fatalf("SetBindingStore returned error: %v", err)
+	}
+	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
 	adapter := &qqAdapter{
 		name:           "hermes",
 		manager:        mgr,
@@ -539,12 +539,12 @@ func TestSendUsesPersistedReplySequenceForSameInboundMessage(t *testing.T) {
 	if !strings.Contains(posts[0], `"msg_id":"msg-42"`) || !strings.Contains(posts[0], `"msg_seq":2`) {
 		t.Fatalf("expected persisted reply to continue at msg_seq=2, got %s", posts[0])
 	}
-	stored, err := store.Load("/tmp/project")
+	storedList, err := store.ListByWorkspace("/tmp/project")
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if stored == nil || stored.PassiveReplyCount != 2 {
-		t.Fatalf("expected reply sequence count to persist as 2, got %#v", stored)
+	if len(storedList) == 0 || storedList[0].PassiveReplyCount != 2 {
+		t.Fatalf("expected reply sequence count to persist as 2, got %#v", storedList)
 	}
 }
 
