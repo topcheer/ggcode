@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -208,8 +208,9 @@ func (r *REPL) Run() error {
 	}
 	r.primeInitialWindowSize(term.GetSize)
 
-	r.program = tea.NewProgram(r.model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	debug.Log("repl", "program created")
+	r.program = tea.NewProgram(r.model)
+	debug.Log("repl", "program created stdin_is_term=%v stdout_is_term=%v",
+		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()))
 	if r.mcpMgr != nil {
 		r.mcpMgr.SetOnUpdate(func(servers []plugin.MCPServerInfo) {
 			if r.program != nil {
@@ -267,7 +268,10 @@ func (r *REPL) Run() error {
 		modelName = r.model.config.Model
 	}
 	go func() {
-		time.Sleep(10 * time.Millisecond)
+		// Wait for Bubble Tea to complete initialization (raw mode, alt screen,
+		// mouse mode, renderer start, readLoop start) before sending any messages.
+		// Too short and messages arrive before the event loop is ready.
+		time.Sleep(100 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
 		if r.projectMemoryLoader != nil {

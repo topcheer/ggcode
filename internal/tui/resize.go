@@ -22,7 +22,7 @@ func (m *Model) handleResize(width, height int) {
 	if inputWidth < 20 {
 		inputWidth = m.mainColumnWidth()
 	}
-	m.input.Width = inputWidth
+	m.input.SetWidth(inputWidth)
 	m.syncQuestionnaireInputWidth()
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))

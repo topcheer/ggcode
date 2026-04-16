@@ -18,6 +18,10 @@ import (
 	"sync"
 	"time"
 
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -37,7 +41,7 @@ type feishuAdapter struct {
 	encryptKey  string
 	verifyToken string
 	domain      string
-	webhookPort int
+	webhookPort int // legacy: only used when transport=webhook
 
 	mu          sync.RWMutex
 	connected   bool
@@ -92,7 +96,7 @@ func (a *feishuAdapter) Start(ctx context.Context) {
 }
 
 func (a *feishuAdapter) run(ctx context.Context) {
-	// Initial token fetch
+	// Initial token fetch (needed for sending messages regardless of transport)
 	if err := a.refreshToken(ctx); err != nil {
 		a.publishState(false, "error", fmt.Sprintf("token refresh: %v", err))
 		return
@@ -106,17 +110,124 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	// Start token refresh goroutine
 	go a.tokenRefreshLoop(ctx)
 
-	// Start webhook server if port configured
+	// Start webhook server if port configured (legacy mode)
 	if a.webhookPort > 0 {
 		a.startWebhookServer(ctx)
+		<-ctx.Done()
+	} else {
+		// Default: use WebSocket long connection via Feishu SDK
+		a.runWebSocket(ctx)
 	}
 
-	// Block until context cancelled
-	<-ctx.Done()
 	a.mu.Lock()
 	a.connected = false
 	a.mu.Unlock()
 	a.publishState(false, "stopped", "")
+}
+
+func (a *feishuAdapter) runWebSocket(ctx context.Context) {
+	eventHandler := dispatcher.NewEventDispatcher("", "").
+		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+			a.handleLarkMessageEvent(ctx, event)
+			return nil
+		})
+
+	opts := []larkws.ClientOption{
+		larkws.WithEventHandler(eventHandler),
+		larkws.WithLogger(&feishuSilentLogger{}),
+		larkws.WithLogLevel(larkcore.LogLevelError),
+	}
+	if a.domain == "lark" {
+		opts = append(opts, larkws.WithDomain("https://open.larksuite.com"))
+	}
+	cli := larkws.NewClient(a.appID, a.appSecret, opts...)
+
+	debug.Log("feishu", "adapter=%s websocket client starting", a.name)
+
+	// SDK Start() blocks forever via select{}, run in goroutine
+	errCh := make(chan error, 1)
+	go func() {
+		if err := cli.Start(ctx); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		debug.Log("feishu", "adapter=%s context cancelled", a.name)
+		return
+	case err := <-errCh:
+		if err != nil {
+			a.publishState(false, "error", err.Error())
+			debug.Log("feishu", "adapter=%s websocket error: %v", a.name, err)
+		}
+	}
+}
+
+func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) {
+	if event.Event == nil || event.Event.Message == nil {
+		return
+	}
+	msg := event.Event.Message
+
+	var openID string
+	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
+		openID = derefStr(event.Event.Sender.SenderId.OpenId)
+	}
+
+	chatID := derefStr(msg.ChatId)
+	messageID := derefStr(msg.MessageId)
+	content := derefStr(msg.Content)
+	chatType := derefStr(msg.ChatType)
+
+	// Parse text content
+	text := a.parseMessageContent(content)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+
+	debug.Log("feishu", "adapter=%s inbound chat=%s type=%s sender=%s len=%d", a.name, chatID, chatType, openID, len(text))
+
+	inbound := InboundMessage{
+		Envelope: Envelope{
+			Adapter:    a.name,
+			Platform:   PlatformFeishu,
+			ChannelID:  chatID,
+			SenderID:   openID,
+			MessageID:  messageID,
+			ReceivedAt: time.Now(),
+		},
+		Text: text,
+	}
+
+	pairingResult, err := a.manager.HandlePairingInbound(inbound)
+	if err != nil && err != ErrNoSessionBound {
+		a.publishState(false, "warning", err.Error())
+	}
+	if pairingResult.Consumed {
+		if sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
+			a.publishState(false, "warning", sendErr.Error())
+		}
+		return
+	}
+
+	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
+		if err == ErrInboundChannelDenied {
+			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
+			return
+		}
+		if err != ErrNoChannelBound {
+			a.publishState(false, "warning", err.Error())
+		}
+	}
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func (a *feishuAdapter) tokenRefreshLoop(ctx context.Context) {
@@ -697,4 +808,21 @@ func intValueStr(s string) (int, bool) {
 		n = n*10 + int(ch-'0')
 	}
 	return n, true
+}
+
+// feishuSilentLogger redirects SDK log output to debug.Log instead of os.Stdout.
+// The default SDK logger writes to stdout which corrupts the TUI.
+type feishuSilentLogger struct{}
+
+func (l *feishuSilentLogger) Debug(_ context.Context, args ...interface{}) {
+	debug.Log("feishu-sdk", "%v", args)
+}
+func (l *feishuSilentLogger) Info(_ context.Context, args ...interface{}) {
+	debug.Log("feishu-sdk", "%v", args)
+}
+func (l *feishuSilentLogger) Warn(_ context.Context, args ...interface{}) {
+	debug.Log("feishu-sdk", "%v", args)
+}
+func (l *feishuSilentLogger) Error(_ context.Context, args ...interface{}) {
+	debug.Log("feishu-sdk", "%v", args)
 }

@@ -109,47 +109,75 @@ func formatToolCallText(tc *ToolCallInfo) string {
 }
 
 // formatToolResultText formats a tool result event into markdown text for IM delivery.
+// It merges the command/action and result into a single message.
 func formatToolResultText(tr *ToolResultInfo) string {
 	result := strings.TrimSpace(tr.Result)
-	if result == "" {
-		return ""
-	}
-	if len(result) > 2000 {
-		result = result[:1997] + "..."
-	}
 	switch tr.ToolName {
 	case "bash", "run_command", "start_command", "powershell":
-		if tr.IsError {
-			return fmt.Sprintf("❌ 命令失败:\n```\n%s\n```", result)
+		cmd := extractCommand(tr.Args)
+		if cmd == "" {
+			cmd = tr.Detail
 		}
-		return fmt.Sprintf("✅ 命令结果:\n```\n%s\n```", result)
+		if tr.IsError {
+			if result == "" {
+				return fmt.Sprintf("❌ 命令失败:\n```\n%s\n```", cmd)
+			}
+			if len(result) > 1500 {
+				result = result[:1497] + "..."
+			}
+			return fmt.Sprintf("❌ 命令失败:\n```\n%s\n```\n```\n%s\n```", cmd, result)
+		}
+		if result == "" {
+			return fmt.Sprintf("✅ 命令完成:\n```\n%s\n```", cmd)
+		}
+		if len(result) > 1500 {
+			result = result[:1497] + "..."
+		}
+		return fmt.Sprintf("⚡ 执行命令:\n```\n%s\n```\n结果:\n```\n%s\n```", cmd, result)
 	case "read_file":
 		if tr.IsError {
 			return fmt.Sprintf("❌ 读取失败: %s", result)
 		}
-		// Don't send full file contents, just a summary
 		return ""
 	case "edit_file", "write_file":
-		if tr.IsError {
-			return fmt.Sprintf("❌ 写入失败: %s", result)
+		path := extractFilePathFromArgs(tr.Args)
+		if path == "" {
+			path = tr.Detail
 		}
-		return "✅ 完成"
-	case "glob", "grep", "search_files":
 		if tr.IsError {
-			return fmt.Sprintf("❌ 搜索失败: %s", result)
+			return fmt.Sprintf("❌ 写入失败 `%s`: %s", path, result)
+		}
+		return fmt.Sprintf("✅ `%s` 完成", path)
+	case "glob", "grep", "search_files":
+		pattern := firstNonEmptyStr(extractArgValue(tr.Args, "pattern"), extractArgValue(tr.Args, "query"))
+		if pattern == "" {
+			pattern = tr.Detail
+		}
+		if tr.IsError {
+			return fmt.Sprintf("❌ 搜索 `%s` 失败: %s", pattern, result)
+		}
+		if result == "" {
+			return fmt.Sprintf("🔍 搜索 `%s`: 无结果", pattern)
 		}
 		if len(result) > 1000 {
 			result = result[:997] + "..."
 		}
-		return fmt.Sprintf("```\n%s\n```", result)
+		return fmt.Sprintf("🔍 搜索 `%s`:\n```\n%s\n```", pattern, result)
 	default:
+		name := tr.Detail
+		if name == "" {
+			name = tr.ToolName
+		}
 		if tr.IsError {
-			return fmt.Sprintf("❌ 失败: %s", result)
+			return fmt.Sprintf("❌ %s 失败: %s", name, result)
+		}
+		if result == "" {
+			return fmt.Sprintf("✅ %s 完成", name)
 		}
 		if len(result) > 500 {
 			result = result[:497] + "..."
 		}
-		return fmt.Sprintf("```\n%s\n```", result)
+		return fmt.Sprintf("🔧 %s:\n```\n%s\n```", name, result)
 	}
 }
 

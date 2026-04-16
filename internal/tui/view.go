@@ -2,12 +2,15 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/im"
@@ -15,19 +18,19 @@ import (
 )
 
 var (
-	chromeBorderColor = lipgloss.AdaptiveColor{Light: "240", Dark: "250"}
-	mutedTextColor    = lipgloss.AdaptiveColor{Light: "240", Dark: "248"}
+	chromeBorderColor = compat.AdaptiveColor{Light: lipgloss.Color("240"), Dark: lipgloss.Color("250")}
+	mutedTextColor    = compat.AdaptiveColor{Light: lipgloss.Color("240"), Dark: lipgloss.Color("248")}
 )
 
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
 	if m.fileBrowser != nil {
-		return m.renderFileBrowser()
+		return tea.NewView(m.renderFileBrowser())
 	}
 	if m.previewPanel != nil {
-		return m.renderPreviewPanel()
+		return tea.NewView(m.renderPreviewPanel())
 	}
 	header := ""
 	if m.topHeaderEnabled() {
@@ -69,9 +72,16 @@ func (m Model) View() string {
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	right := m.renderAuxColumn(lipgloss.Height(left))
 	if right == "" {
-		return left
+		v := tea.NewView(left)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	result := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	v := tea.NewView(result)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
 }
 
 func (m Model) conversationInnerWidth() int {
@@ -821,7 +831,7 @@ func resolveGitDir(start string) (string, error) {
 
 func (m Model) renderConversationPanel(panelHeight int) string {
 	vp := m.conversationViewport()
-	content := vp.View()
+	content := vp.View().Content
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1264,7 +1274,7 @@ func composerDisplayValue(value string, cursor int) string {
 	return b.String()
 }
 
-func (m Model) renderContextBox(title, body string, accent lipgloss.Color) string {
+func (m Model) renderContextBox(title, body string, accent color.Color) string {
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	content := body
 	if strings.TrimSpace(title) != "" {
@@ -1308,7 +1318,7 @@ func (m Model) viewHeight() int {
 	return 24
 }
 
-func (m Model) modeColor() lipgloss.Color {
+func (m Model) modeColor() color.Color {
 	switch m.mode {
 	case permission.SupervisedMode:
 		return lipgloss.Color("220")

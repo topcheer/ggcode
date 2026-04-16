@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
@@ -124,7 +124,7 @@ func (m Model) renderSlackPanel() string {
 	return m.renderContextBox("/slack", strings.Join(body, "\n"), lipgloss.Color("2"))
 }
 
-func (m *Model) handleSlackPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.slackPanel
 	if panel == nil {
 		return *m, nil
@@ -151,8 +151,8 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			panel.createInput += " "
 			return *m, nil
 		}
-		if len(msg.Runes) > 0 {
-			panel.createInput += string(msg.Runes)
+		if len(msg.Text) > 0 {
+			panel.createInput += msg.Text
 		}
 		return *m, nil
 	}

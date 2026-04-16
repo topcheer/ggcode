@@ -38,7 +38,7 @@ func TestResumeSessionRebuildsConversationOutput(t *testing.T) {
 		t.Fatal("expected resume stream message to finish inline")
 	}
 	updated := next.(Model)
-	output := updated.output.String()
+	output := stripAnsi(updated.output.String())
 	if output == "stale output" {
 		t.Fatal("expected resume to rebuild conversation output")
 	}
@@ -55,7 +55,7 @@ func TestResumeSessionAddsBlankLineBetweenMessages(t *testing.T) {
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "second reply"}}},
 	})
 
-	output := m.output.String()
+	output := stripAnsi(m.output.String())
 	if !strings.Contains(output, "first reply\n\n❯ next prompt\n\n● second reply") {
 		t.Fatalf("expected restored messages to keep blank lines between turns, got %q", output)
 	}

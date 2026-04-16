@@ -3,9 +3,9 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // ViewportModel wraps a viewport with auto-follow behavior.
@@ -18,7 +18,7 @@ type ViewportModel struct {
 
 // NewViewportModel creates a new viewport model.
 func NewViewportModel(width, height int) ViewportModel {
-	vp := viewport.New(width, height)
+	vp := viewport.New(viewport.WithWidth(width), viewport.WithHeight(height))
 	vp.SetContent("")
 	return ViewportModel{
 		vp:         vp,
@@ -51,8 +51,8 @@ func (v *ViewportModel) GotoBottom() {
 func (v *ViewportModel) SetSize(width, height int) {
 	v.width = width
 	v.height = height
-	v.vp.Width = width
-	v.vp.Height = height
+	v.vp.SetWidth(width)
+	v.vp.SetHeight(height)
 }
 
 // AutoFollow returns whether auto-follow is enabled.
@@ -87,12 +87,12 @@ func (v *ViewportModel) TotalLineCount() int {
 
 // VisibleLineCount returns the number of visible lines.
 func (v *ViewportModel) VisibleLineCount() int {
-	return v.vp.Height
+	return v.vp.Height()
 }
 
 // YOffset returns the current vertical scroll offset.
 func (v *ViewportModel) YOffset() int {
-	return v.vp.YOffset
+	return v.vp.YOffset()
 }
 
 // Update handles messages for the viewport.
@@ -103,8 +103,8 @@ func (v ViewportModel) Update(msg tea.Msg) (ViewportModel, tea.Cmd) {
 }
 
 // View renders the viewport.
-func (v ViewportModel) View() string {
-	return v.vp.View()
+func (v ViewportModel) View() tea.View {
+	return tea.NewView(v.vp.View())
 }
 
 // ScrollIndicatorStyle returns a styled scroll indicator.
@@ -116,8 +116,8 @@ func (v ViewportModel) ScrollIndicatorStyle() string {
 	if total == 0 {
 		return ""
 	}
-	offset := v.vp.YOffset
-	visible := v.vp.Height
+	offset := v.vp.YOffset()
+	visible := v.vp.Height()
 	pct := float64(offset+visible) / float64(total) * 100
 	if pct > 100 {
 		pct = 100

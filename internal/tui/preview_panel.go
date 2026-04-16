@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	chromastyles "github.com/alecthomas/chroma/v2/styles"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type previewPanelState struct {
@@ -192,7 +192,7 @@ func (m Model) renderPreviewPanel() string {
 	content := strings.Join([]string{
 		title,
 		truncateDisplayWidth(meta, max(12, m.previewContentWidth())),
-		state.viewport.View(),
+		state.viewport.View().Content,
 		footer,
 	}, "\n")
 	return lipgloss.NewStyle().
@@ -232,10 +232,10 @@ func (m *Model) syncPreviewViewport(initial bool) {
 	switch {
 	case initial && state.TargetLine > 1 && !state.anchored:
 		offset := min(maxOffset, state.TargetLine-1)
-		state.viewport.vp.YOffset = offset
+		state.viewport.vp.SetYOffset(offset)
 		state.anchored = true
 	default:
-		state.viewport.vp.YOffset = min(maxOffset, oldOffset)
+		state.viewport.vp.SetYOffset(min(maxOffset, oldOffset))
 	}
 }
 
@@ -259,10 +259,11 @@ func (m *Model) handlePreviewMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	if m.previewPanel == nil {
 		return *m, nil
 	}
-	if msg.Alt {
+	mouse := msg.Mouse()
+	if mouse.Mod.Contains(tea.ModAlt) {
 		return *m, nil
 	}
-	switch msg.Type {
+	switch mouse.Button {
 	case tea.MouseWheelUp:
 		m.previewPanel.viewport.ScrollUp(3)
 	case tea.MouseWheelDown:
@@ -271,7 +272,7 @@ func (m *Model) handlePreviewMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-func (m *Model) handlePreviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handlePreviewKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.previewPanel == nil {
 		return *m, nil
 	}

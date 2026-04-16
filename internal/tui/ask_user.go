@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -57,22 +57,22 @@ func (m *Model) syncQuestionnaireInputWidth() {
 	if width < 20 {
 		width = 20
 	}
-	m.pendingQuestionnaire.input.Width = width
+	m.pendingQuestionnaire.input.SetWidth(width)
 }
 
-func (m Model) handleQuestionnaireKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m Model) handleQuestionnaireKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	qs := m.pendingQuestionnaire
 	if qs == nil {
 		return m, nil
 	}
-	switch msg.Type {
-	case tea.KeyTab, tea.KeyRight:
+	switch msg.String() {
+	case "tab", "right":
 		qs.moveTab(1, m.currentLanguage())
 		return m, nil
-	case tea.KeyShiftTab, tea.KeyLeft:
+	case "shift+tab", "left":
 		qs.moveTab(-1, m.currentLanguage())
 		return m, nil
-	case tea.KeyEnter:
+	case "enter":
 		if qs.onSubmitTab() {
 			return m, m.handleQuestionnaireResult(toolpkg.AskUserStatusSubmitted)
 		}
@@ -81,19 +81,19 @@ func (m Model) handleQuestionnaireKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		qs.moveTab(1, m.currentLanguage())
 		return m, nil
-	case tea.KeyEsc, tea.KeyCtrlC:
+	case "esc", "ctrl+c":
 		return m, m.handleQuestionnaireResult(toolpkg.AskUserStatusCancelled)
-	case tea.KeyUp:
+	case "up":
 		if qs.activeQuestionHasChoices() {
 			qs.moveChoice(-1)
 		}
 		return m, nil
-	case tea.KeyDown:
+	case "down":
 		if qs.activeQuestionHasChoices() {
 			qs.moveChoice(1)
 		}
 		return m, nil
-	case tea.KeySpace:
+	case "space":
 		if qs.activeQuestionHasChoices() {
 			qs.toggleCurrentChoice()
 		}

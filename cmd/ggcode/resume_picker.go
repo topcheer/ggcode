@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/session"
 )
@@ -52,7 +52,7 @@ func pickResumeSession(store session.Store, currentWorkspace string) (string, er
 		return "", nil
 	}
 	model := newResumePickerModel(current, others, currentWorkspace)
-	finalModel, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
+	finalModel, err := tea.NewProgram(model).Run()
 	if err != nil {
 		return "", fmt.Errorf("running resume picker: %w", err)
 	}
@@ -102,7 +102,7 @@ func (m resumePickerModel) Init() tea.Cmd { return nil }
 
 func (m resumePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc", "q":
 			m.cancelled = true
@@ -125,7 +125,7 @@ func (m resumePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m resumePickerModel) View() string {
+func (m resumePickerModel) View() tea.View {
 	var b strings.Builder
 	b.WriteString("Resume session\n\n")
 	if m.currentLabel != "" {
@@ -143,7 +143,9 @@ func (m resumePickerModel) View() string {
 		b.WriteString(m.renderGroup("Other workspaces", resumePickerOtherWorkspaces))
 	}
 	b.WriteString("\n↑/↓ move • ←/→ page active group • Enter resume • Esc start a new session")
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	return v
 }
 
 func (m resumePickerModel) renderGroup(title string, group resumePickerGroup) string {

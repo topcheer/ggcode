@@ -105,12 +105,13 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_call_edit", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`}}, "✏️ 编辑文件: `main.go`"},
 		{"tool_call_todo", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "todo_write"}}, "📋 更新待办列表"},
 		{"tool_result_nil", OutboundEvent{Kind: OutboundEventToolResult}, ""},
-		{"tool_result_bash", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "file1.txt\nfile2.txt"}}, "✅ 命令结果:\n```\nfile1.txt\nfile2.txt\n```"},
-		{"tool_result_bash_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "command not found", IsError: true}}, "❌ 命令失败:\n```\ncommand not found\n```"},
+		{"tool_result_bash", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "file1.txt\nfile2.txt"}}, "\u26a1 \u6267\u884c\u547d\u4ee4:\n```\n\n```\n\u7ed3\u679c:\n```\nfile1.txt\nfile2.txt\n```"},
+		{"tool_result_bash_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"ls"}`, Result: "file1.txt\nfile2.txt"}}, "\u26a1 \u6267\u884c\u547d\u4ee4:\n```\nls\n```\n\u7ed3\u679c:\n```\nfile1.txt\nfile2.txt\n```"},
+		{"tool_result_bash_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "command not found", IsError: true}}, "\u274c \u547d\u4ee4\u5931\u8d25:\n```\n\n```\n```\ncommand not found\n```"},
 		{"tool_result_read_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Result: "file content..."}}, ""},
-		{"tool_result_read_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Result: "no such file", IsError: true}}, "❌ 读取失败: no such file"},
-		{"tool_result_edit_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Result: "ok"}}, "✅ 完成"},
-		{"tool_result_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: ""}}, ""},
+		{"tool_result_read_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Result: "no such file", IsError: true}}, "\u274c \u8bfb\u53d6\u5931\u8d25: no such file"},
+		{"tool_result_edit_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Result: "ok"}}, "\u2705 `` \u5b8c\u6210"},
+		{"tool_result_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: ""}}, "\u2705 \u547d\u4ee4\u5b8c\u6210:\n```\n\n```"},
 		{"unknown", OutboundEvent{Kind: "unknown"}, ""},
 	}
 	for _, tc := range tests {

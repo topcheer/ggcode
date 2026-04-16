@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -103,7 +103,7 @@ func (m Model) renderModelPanel() string {
 	return m.renderContextBox("/model", strings.Join(body, "\n"), lipgloss.Color("10"))
 }
 
-func (m *Model) handleModelPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.modelPanel
 	if panel == nil {
 		return *m, nil

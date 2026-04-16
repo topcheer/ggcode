@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -12,7 +12,7 @@ import (
 func TestPCPanelEscClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openPCPanel()
-	updated, cmd := m.handlePCPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd := m.handlePCPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected esc panel close without command")
 	}
@@ -25,7 +25,7 @@ func TestPCPanelEscClosesPanel(t *testing.T) {
 func TestPCPanelCtrlCClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openPCPanel()
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c pc panel close to be synchronous")
 	}
@@ -60,13 +60,13 @@ func TestPCPanelRenderLocalizesToChinese(t *testing.T) {
 func TestPCPanelCreateModeInput(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openPCPanel()
-	updated, _ := m.handlePCPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, _ := m.handlePCPanelKey(tea.KeyPressMsg{Text: "n"})
 	m = updated
 	if !m.pcPanel.createMode {
 		t.Fatal("expected create mode to be active")
 	}
-	m.handlePCPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
-	updated, _ = m.handlePCPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.handlePCPanelKey(tea.KeyPressMsg{Text: "test-session"})
+	updated, _ = m.handlePCPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated
 	if m.pcPanel.createMode {
 		t.Fatal("expected create mode to be cancelled")
@@ -78,7 +78,7 @@ func TestPCPanelQRViewExitsOnAnyKey(t *testing.T) {
 	m.openPCPanel()
 	m.pcPanel.showQR = true
 	m.pcPanel.qrCode = "fake-qr"
-	updated, _ := m.handlePCPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	updated, _ := m.handlePCPanelKey(tea.KeyPressMsg{Text: "a"})
 	m = updated
 	if m.pcPanel.showQR {
 		t.Fatal("expected QR view to be dismissed")
@@ -88,7 +88,7 @@ func TestPCPanelQRViewExitsOnAnyKey(t *testing.T) {
 func TestPCPanelNoSessionShowsMessage(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openPCPanel()
-	updated, _ := m.handlePCPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.handlePCPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated
 	if m.pcPanel == nil {
 		t.Fatal("panel should still be open")

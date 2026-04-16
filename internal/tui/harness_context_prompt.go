@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	appconfig "github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
@@ -97,7 +97,7 @@ func newHarnessPromptInput(placeholder string) textinput.Model {
 	ti.Prompt = "❯ "
 	ti.Placeholder = placeholder
 	ti.CharLimit = 512
-	ti.Width = 60
+	ti.SetWidth(60)
 	return ti
 }
 
@@ -172,7 +172,7 @@ func (m *Model) closeHarnessContextPrompt(message string) {
 	m.harnessContextPrompt = nil
 }
 
-func (m *Model) handleHarnessContextPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleHarnessContextPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.harnessContextPrompt
 	if state == nil {
 		return m, nil
@@ -198,7 +198,7 @@ func (m *Model) handleHarnessContextPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cm
 	}
 }
 
-func (m *Model) handleHarnessInitElementsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleHarnessInitElementsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.harnessContextPrompt
 	if state == nil {
 		return m, nil
@@ -219,7 +219,7 @@ func (m *Model) handleHarnessInitElementsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd
 	return m, cmd
 }
 
-func (m *Model) handleHarnessContextSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleHarnessContextSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.harnessContextPrompt
 	if state == nil {
 		return m, nil
@@ -405,7 +405,7 @@ func (m *Model) runHarnessInitWithContexts(contexts []harness.ContextConfig, for
 	}
 }
 
-func (m *Model) handleHarnessInitUpgradeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleHarnessInitUpgradeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.harnessContextPrompt
 	if state == nil {
 		return m, nil
@@ -428,7 +428,7 @@ func (m *Model) handleHarnessInitUpgradeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 	return m, nil
 }
 
-func (m *Model) handleHarnessContextPersistKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleHarnessContextPersistKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := m.harnessContextPrompt
 	if state == nil {
 		return m, nil

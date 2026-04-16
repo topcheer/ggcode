@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/mcp"
 )
@@ -129,7 +129,7 @@ func (m Model) renderMCPPanel() string {
 	return m.renderContextBox("/mcp", strings.Join(body, "\n"), lipgloss.Color("13"))
 }
 
-func (m *Model) handleMCPPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.mcpPanel
 	if panel == nil {
 		return *m, nil
@@ -159,8 +159,8 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			panel.installInput += " "
 			return *m, nil
 		}
-		if len(msg.Runes) > 0 {
-			panel.installInput += string(msg.Runes)
+		if len(msg.Text) > 0 {
+			panel.installInput += msg.Text
 		}
 		return *m, nil
 	}

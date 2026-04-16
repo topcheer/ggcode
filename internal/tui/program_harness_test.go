@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/image"
@@ -53,7 +53,7 @@ func (m liveProgramModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m liveProgramModel) View() string {
+func (m liveProgramModel) View() tea.View {
 	return m.inner.View()
 }
 
@@ -94,6 +94,12 @@ func startLiveProgramHarness(t *testing.T, model Model) *liveProgramHarness {
 	time.Sleep(25 * time.Millisecond)
 	h.program.Send(setProgramMsg{Program: h.program})
 	h.program.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	h.program.Send(tea.KeyboardEnhancementsMsg{Flags: 1})
+	h.sync()
+	// Wait for the startup input drain to end (setProgramMsg triggers a
+	// 50ms tea.Tick that sends inputDrainEndMsg). All tests that send
+	// keyboard input need the drain to have completed first.
+	time.Sleep(100 * time.Millisecond)
 	h.sync()
 	return h
 }
@@ -175,9 +181,9 @@ func TestLiveProgramHarnessProcessesKeyEventsAndPersistsMode(t *testing.T) {
 	h := startLiveProgramHarness(t, m)
 	defer h.close()
 
-	h.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
-	h.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
-	h.send(tea.KeyMsg{Type: tea.KeyShiftTab})
+	h.send(tea.KeyPressMsg{Text: "h"})
+	h.send(tea.KeyPressMsg{Text: "i"})
+	h.send(tea.KeyPressMsg{Text: "shift+tab"})
 	h.sync()
 
 	state := h.snapshot()
@@ -212,7 +218,7 @@ func TestLiveProgramHarnessExecutesAsyncClipboardPasteCommand(t *testing.T) {
 	h := startLiveProgramHarness(t, m)
 	defer h.close()
 
-	h.send(tea.KeyMsg{Type: tea.KeyCtrlV})
+	h.send(tea.KeyPressMsg{Text: "ctrl+v"})
 
 	state := waitForProgramState(t, h, func(state Model) bool {
 		return state.pendingImage != nil && strings.Contains(state.input.Value(), "ggcode-image-deadbeef.png")

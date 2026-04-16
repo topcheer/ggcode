@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -68,7 +68,7 @@ func TestCtrlFTogglesFileBrowser(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 32)
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	next, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+f"})
 	updated := next.(Model)
 	if updated.fileBrowser == nil {
 		t.Fatal("expected ctrl+f to open file browser")
@@ -77,7 +77,7 @@ func TestCtrlFTogglesFileBrowser(t *testing.T) {
 		t.Fatalf("expected file browser preview to load first file, got %#v", updated.fileBrowser.preview)
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	next, _ = updated.Update(tea.KeyPressMsg{Text: "ctrl+f"})
 	updated = next.(Model)
 	if updated.fileBrowser != nil {
 		t.Fatal("expected ctrl+f to close file browser")
@@ -108,7 +108,7 @@ func TestFileBrowserEnterTogglesDirectoryAndFilterSkipsBuildDirs(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(120, 32)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	next, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+f"})
 	m = next.(Model)
 	if m.fileBrowser == nil {
 		t.Fatal("expected file browser to open")
@@ -121,20 +121,20 @@ func TestFileBrowserEnterTogglesDirectoryAndFilterSkipsBuildDirs(t *testing.T) {
 	selectedDir := session.NormalizeWorkspacePath(filepath.Join(workspace, "src"))
 	m.fileBrowser.selectedPath = selectedDir
 	m.syncFileBrowser(false)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if !m.fileBrowser.expanded[selectedDir] {
 		t.Fatal("expected enter to expand directory")
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.fileBrowser.expanded[selectedDir] {
 		t.Fatal("expected enter to collapse directory on second press")
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	next, _ = m.Update(tea.KeyPressMsg{Text: "/"})
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("keep")})
+	next, _ = m.Update(tea.KeyPressMsg{Text: "keep"})
 	m = next.(Model)
 	if len(m.fileBrowser.entries) != 2 {
 		t.Fatalf("expected filtered tree to retain ancestor + file, got %#v", m.fileBrowser.entries)
@@ -143,12 +143,12 @@ func TestFileBrowserEnterTogglesDirectoryAndFilterSkipsBuildDirs(t *testing.T) {
 		t.Fatalf("expected filter to match keep.go, got %#v", m.fileBrowser.entries)
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 	if m.fileBrowser.filter != "keep" {
 		t.Fatalf("expected enter to leave filter applied, got %q", m.fileBrowser.filter)
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(Model)
 	if m.fileBrowser == nil {
 		t.Fatal("expected esc to clear filter without closing browser")
@@ -205,7 +205,7 @@ func TestFileBrowserDirectoryPreviewDoesNotDuplicatePath(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(120, 32)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	next, _ := m.Update(tea.KeyPressMsg{Text: "ctrl+f"})
 	m = next.(Model)
 	m.fileBrowser.selectedPath = filepath.Join(workspace, "docs")
 	m.syncFileBrowser(false)

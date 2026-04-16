@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/topcheer/ggcode/internal/harness"
@@ -247,7 +247,7 @@ func renderHarnessPanelMessage(message string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(message)
 }
 
-func (m *Model) handleHarnessPanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleHarnessPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.harnessPanel
 	if panel == nil {
 		return *m, nil
@@ -1500,7 +1500,7 @@ func newHarnessPanelInput(lang Language) textinput.Model {
 	ti.Prompt = "  "
 	ti.Placeholder = harnessPanelInputPlaceholder(harnessSectionQueue, lang)
 	ti.CharLimit = 240
-	ti.Width = 52
+	ti.SetWidth(52)
 	ti.Blur()
 	return ti
 }
@@ -1554,7 +1554,7 @@ func harnessPanelInputPlaceholder(section int, lang Language) string {
 
 func renderHarnessPanelInput(input textinput.Model, focused bool, width int) string {
 	control := input
-	control.Width = max(20, width-2)
+	control.SetWidth(max(20, width-2))
 	if focused {
 		control.Focus()
 	} else {
@@ -1633,9 +1633,12 @@ func normalizeHarnessPanelBody(body string, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func isHarnessPanelInputKey(msg tea.KeyMsg) bool {
-	switch msg.Type {
-	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace, tea.KeyDelete:
+func isHarnessPanelInputKey(msg tea.KeyPressMsg) bool {
+	if len(msg.Text) > 0 {
+		return true
+	}
+	switch msg.Code {
+	case tea.KeySpace, tea.KeyBackspace, tea.KeyDelete:
 		return true
 	default:
 		return false

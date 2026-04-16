@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -52,7 +52,7 @@ func TestQQPanelEscClosesPanel(t *testing.T) {
 	m.qqPanel.shareLink = "https://example.com/qq-share"
 	m.qqPanel.shareQRCode = "qr"
 
-	updated, cmd := m.handleQQPanelKey(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd := m.handleQQPanelKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd != nil {
 		t.Fatal("expected esc panel close without command")
 	}
@@ -71,7 +71,7 @@ func TestQQPanelViewShowsInlineShareQRCode(t *testing.T) {
 	m.qqPanel.shareLink = "https://example.com/qq-share"
 	m.qqPanel.shareQRCode = "QR\nQR"
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "QR") {
 		t.Fatalf("expected inline QR code in qq panel, got:\n%s", view)
 	}
@@ -114,10 +114,10 @@ func TestQQPanelCreateAdapterPersistsCredentials(t *testing.T) {
 		t.Fatalf("Save returned error: %v", err)
 	}
 	m.openQQPanel()
-	updated, _ := m.handleQQPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, _ := m.handleQQPanelKey(tea.KeyPressMsg{Text: "i"})
 	m = updated
 	m.qqPanel.createInput = "qq-main 123456 secret-abc"
-	_, cmd := m.handleQQPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.handleQQPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected create adapter command")
 	}
@@ -248,7 +248,7 @@ func TestQQPanelBindAutoStartsRuntime(t *testing.T) {
 		t.Fatalf("Save returned error: %v", err)
 	}
 	m.openQQPanel()
-	_, cmd := m.handleQQPanelKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.handleQQPanelKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected bind command")
 	}
@@ -289,7 +289,7 @@ func TestQQPanelClearChannelKeepsBotBinding(t *testing.T) {
 	m.SetIMManager(imMgr)
 	m.openQQPanel()
 
-	_, cmd := m.handleQQPanelKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	_, cmd := m.handleQQPanelKey(tea.KeyPressMsg{Text: "x"})
 	if cmd == nil {
 		t.Fatal("expected clear channel command")
 	}
@@ -342,7 +342,7 @@ func TestQQPanelCtrlCClosesPanel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.openQQPanel()
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
 	if cmd != nil {
 		t.Fatal("expected ctrl-c QQ panel close to be synchronous")
 	}

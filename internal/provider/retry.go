@@ -59,6 +59,10 @@ func isRetryable(err error) bool {
 	if strings.Contains(msg, "500") || strings.Contains(msg, "502") || strings.Contains(msg, "503") {
 		return true
 	}
+	// ZAI platform transient errors (e.g. "网络错误")
+	if strings.Contains(msg, "网络错误") {
+		return true
+	}
 	return false
 }
 

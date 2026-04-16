@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
@@ -174,7 +174,7 @@ func TestLivePromptEmitsSingleFinalIMText(t *testing.T) {
 
 	h := startLiveProgramHarness(t, m)
 	defer h.close()
-	h.send(tea.KeyMsg{Type: tea.KeyEnter})
+	h.send(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	waitForProgramState(t, h, func(state Model) bool {
 		return !state.loading
@@ -297,7 +297,7 @@ func TestEscapeRejectsPendingIMPairing(t *testing.T) {
 		t.Fatalf("HandlePairingInbound returned error: %v", err)
 	}
 
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(Model)
 	if cmd == nil {
 		t.Fatal("expected pairing rejection command")
@@ -339,7 +339,7 @@ func TestLocalInputEnterEmitsUserMirrorToIM(t *testing.T) {
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
 	m.input.SetValue("hello")
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(Model)
 
 	deadline := time.Now().Add(500 * time.Millisecond)

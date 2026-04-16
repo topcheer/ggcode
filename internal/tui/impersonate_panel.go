@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -206,7 +206,7 @@ func (m Model) renderImpersonatePanel() string {
 	return m.renderContextBox("/impersonate", strings.Join(body, "\n"), lipgloss.Color("13"))
 }
 
-func (m *Model) handleImpersonatePanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.impersonatePanel
 	if panel == nil {
 		return *m, nil
@@ -292,7 +292,7 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-func (m *Model) handleImpersonateHeaderEdit(msg tea.KeyMsg) (Model, tea.Cmd) {
+func (m *Model) handleImpersonateHeaderEdit(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.impersonatePanel
 	if panel == nil {
 		return *m, nil
