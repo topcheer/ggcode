@@ -136,6 +136,11 @@ func TestTGPanelUnbindRemovesChannel(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.SetConfig(config.DefaultConfig())
 	m.session = &session.Session{Workspace: "/tmp/project"}
+	m.config.IM.Enabled = true
+	if m.config.IM.Adapters == nil {
+		m.config.IM.Adapters = make(map[string]config.IMAdapterConfig)
+	}
+	m.config.IM.Adapters["tg-test"] = config.IMAdapterConfig{Enabled: true, Platform: "telegram"}
 	imMgr := im.NewManager()
 	store := im.NewMemoryBindingStore()
 	if err := imMgr.SetBindingStore(store); err != nil {

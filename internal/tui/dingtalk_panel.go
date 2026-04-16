@@ -52,7 +52,7 @@ func (m Model) renderDingtalkPanel() string {
 		return ""
 	}
 	entries := m.dingtalkBindingEntries()
-	current := currentDingtalkBinding(m.imManager)
+	currentBindings := currentDingtalkBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -70,14 +70,16 @@ func (m Model) renderDingtalkPanel() string {
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.current_binding")),
 	}
-	if current == nil {
+	if len(currentBindings) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.dingtalk.none")))
 	} else {
-		body = append(body,
-			fmt.Sprintf(" %s", m.t("panel.dingtalk.adapter", current.Adapter)),
-			fmt.Sprintf(" %s", m.t("panel.dingtalk.target", firstNonEmptyDingtalk(current.TargetID, m.t("panel.dingtalk.default")))),
-			fmt.Sprintf(" %s", m.t("panel.dingtalk.channel", firstNonEmptyDingtalk(current.ChannelID, m.t("panel.dingtalk.none")))),
-		)
+		for _, current := range currentBindings {
+			body = append(body,
+				fmt.Sprintf(" %s", m.t("panel.dingtalk.adapter", current.Adapter)),
+				fmt.Sprintf(" %s", m.t("panel.dingtalk.target", firstNonEmptyDingtalk(current.TargetID, m.t("panel.dingtalk.default")))),
+				fmt.Sprintf(" %s", m.t("panel.dingtalk.channel", firstNonEmptyDingtalk(current.ChannelID, m.t("panel.dingtalk.none")))),
+			)
+		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.bot_list")))
 	if len(entries) == 0 {
@@ -172,9 +174,17 @@ func (m *Model) handleDingtalkPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, m.bindDingtalkEntry(entries[clampDingtalkSelection(panel.selected, len(entries))])
 	case "x", "X":
-		return *m, m.clearDingtalkChannel()
+		if len(entries) == 0 {
+			panel.message = m.t("panel.dingtalk.message.no_bot")
+			return *m, nil
+		}
+		return *m, m.clearDingtalkChannel(entries[clampDingtalkSelection(panel.selected, len(entries))].Adapter)
 	case "u", "U":
-		return *m, m.unbindDingtalkEntry()
+		if len(entries) == 0 {
+			panel.message = m.t("panel.dingtalk.message.no_bot")
+			return *m, nil
+		}
+		return *m, m.unbindDingtalkEntry(entries[clampDingtalkSelection(panel.selected, len(entries))].Adapter)
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""
@@ -203,24 +213,24 @@ func (m *Model) bindDingtalkEntry(entry dingtalkBindingEntry) tea.Cmd {
 	}
 }
 
-func (m *Model) unbindDingtalkEntry() tea.Cmd {
+func (m *Model) unbindDingtalkEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureDingtalkRuntime(); err != nil {
 			return dingtalkBindResultMsg{err: err}
 		}
-		if err := m.imManager.UnbindChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
 			return dingtalkBindResultMsg{err: err}
 		}
 		return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.unbound")}
 	}
 }
 
-func (m *Model) clearDingtalkChannel() tea.Cmd {
+func (m *Model) clearDingtalkChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureDingtalkRuntime(); err != nil {
 			return dingtalkBindResultMsg{err: err}
 		}
-		if err := m.imManager.ClearChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return dingtalkBindResultMsg{err: err}
 		}
 		return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.cleared")}
@@ -295,13 +305,15 @@ func (m Model) dingtalkBindingEntries() []dingtalkBindingEntry {
 	occupied := make(map[string]string)
 	adapterStates := make(map[string]im.AdapterState)
 	currentWorkspace := strings.TrimSpace(m.currentWorkspacePath())
-	var currentBinding *im.ChannelBinding
+	bindingByAdapter := make(map[string]im.ChannelBinding)
 	if m.imManager != nil {
 		snapshot := m.imManager.Snapshot()
 		for _, state := range snapshot.Adapters {
 			adapterStates[state.Name] = state
 		}
-		currentBinding = m.imManager.CurrentBinding()
+		for _, b := range currentDingtalkBindings(m.imManager) {
+			bindingByAdapter[b.Adapter] = b
+		}
 		if bindings, err := m.imManager.ListBindings(); err == nil {
 			for _, binding := range bindings {
 				occupied[binding.Adapter] = binding.Workspace
@@ -319,9 +331,9 @@ func (m Model) dingtalkBindingEntries() []dingtalkBindingEntry {
 	for _, name := range keys {
 		targetID := defaultDingtalkTargetID(currentWorkspace)
 		workspaceChannel := ""
-		if currentBinding != nil && strings.TrimSpace(currentBinding.Workspace) == currentWorkspace && currentBinding.Adapter == name {
-			targetID = firstNonEmptyDingtalk(currentBinding.TargetID, targetID)
-			workspaceChannel = strings.TrimSpace(currentBinding.ChannelID)
+		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
+			targetID = firstNonEmptyDingtalk(b.TargetID, targetID)
+			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, dingtalkBindingEntry{
 			Adapter:          name,
@@ -361,15 +373,17 @@ func clampDingtalkSelection(selected, total int) int {
 	return selected
 }
 
-func currentDingtalkBinding(mgr *im.Manager) *im.ChannelBinding {
+func currentDingtalkBindings(mgr *im.Manager) []im.ChannelBinding {
 	if mgr == nil {
 		return nil
 	}
-	b := mgr.CurrentBinding()
-	if b != nil && b.Platform == im.PlatformDingTalk {
-		return b
+	var result []im.ChannelBinding
+	for _, b := range mgr.CurrentBindings() {
+		if b.Platform == im.PlatformDingTalk {
+			result = append(result, b)
+		}
 	}
-	return nil
+	return result
 }
 
 func firstNonEmptyDingtalk(values ...string) string {
@@ -397,9 +411,10 @@ func (m *Model) ensureDingtalkBotBinding(adapter string) error {
 		return err
 	}
 	workspace := m.currentWorkspacePath()
-	current := currentDingtalkBinding(m.imManager)
-	if current != nil && strings.TrimSpace(current.Workspace) == strings.TrimSpace(workspace) && current.Adapter == adapter {
-		return nil
+	for _, b := range currentDingtalkBindings(m.imManager) {
+		if strings.TrimSpace(b.Workspace) == strings.TrimSpace(workspace) && b.Adapter == adapter {
+			return nil
+		}
 	}
 	_, err := m.imManager.BindChannel(im.ChannelBinding{
 		Platform: im.PlatformDingTalk,

@@ -27,18 +27,18 @@ var (
 )
 
 type Manager struct {
-	mu             sync.RWMutex
-	bridge         Bridge
-	session        *SessionBinding
-	currentBinding *ChannelBinding
-	bindingStore   BindingStore
-	pairingStore   PairingStateStore
-	pairingStates  map[string]PairingChannelState
-	pendingPairing *PairingChallenge
-	sinks          map[string]Sink
-	adapters       map[string]AdapterState
-	approvals      map[string]*pendingApproval
-	onUpdate       func(StatusSnapshot)
+	mu              sync.RWMutex
+	bridge          Bridge
+	session         *SessionBinding
+	currentBindings map[string]*ChannelBinding // adapter name -> binding
+	bindingStore    BindingStore
+	pairingStore    PairingStateStore
+	pairingStates   map[string]PairingChannelState
+	pendingPairing  *PairingChallenge
+	sinks           map[string]Sink
+	adapters        map[string]AdapterState
+	approvals       map[string]*pendingApproval
+	onUpdate        func(StatusSnapshot)
 }
 
 type pendingApproval struct {
@@ -57,10 +57,11 @@ type PairingResult struct {
 
 func NewManager() *Manager {
 	return &Manager{
-		sinks:         make(map[string]Sink),
-		adapters:      make(map[string]AdapterState),
-		approvals:     make(map[string]*pendingApproval),
-		pairingStates: make(map[string]PairingChannelState),
+		currentBindings: make(map[string]*ChannelBinding),
+		sinks:           make(map[string]Sink),
+		adapters:        make(map[string]AdapterState),
+		approvals:       make(map[string]*pendingApproval),
+		pairingStates:   make(map[string]PairingChannelState),
 	}
 }
 
@@ -130,7 +131,7 @@ func (m *Manager) BindSession(binding SessionBinding) {
 func (m *Manager) UnbindSession() {
 	m.mu.Lock()
 	m.session = nil
-	m.currentBinding = nil
+	m.currentBindings = make(map[string]*ChannelBinding)
 	m.pendingPairing = nil
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -152,23 +153,36 @@ func (m *Manager) ActiveSession() *SessionBinding {
 func (m *Manager) CurrentBinding() *ChannelBinding {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.currentBinding == nil {
-		return nil
+	for _, b := range m.currentBindings {
+		copy := *b
+		return &copy
 	}
-	copy := *m.currentBinding
-	return &copy
+	return nil
+}
+
+func (m *Manager) CurrentBindings() []ChannelBinding {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]ChannelBinding, 0, len(m.currentBindings))
+	for _, b := range m.currentBindings {
+		out = append(out, *b)
+	}
+	return out
 }
 
 func (m *Manager) ListBindings() ([]ChannelBinding, error) {
 	m.mu.RLock()
 	store := m.bindingStore
-	maybeCurrent := m.currentBinding
+	currentSnapshot := make([]ChannelBinding, 0, len(m.currentBindings))
+	for _, b := range m.currentBindings {
+		currentSnapshot = append(currentSnapshot, *b)
+	}
 	m.mu.RUnlock()
 	if store == nil {
-		if maybeCurrent == nil {
+		if len(currentSnapshot) == 0 {
 			return nil, nil
 		}
-		return []ChannelBinding{*maybeCurrent}, nil
+		return currentSnapshot, nil
 	}
 	return store.List()
 }
@@ -219,7 +233,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	m.mu.Lock()
 	bridge := m.bridge
 	sessionBound := m.session != nil
-	binding := m.currentBinding
+	binding := m.currentBindings[msg.Envelope.Adapter]
 	changed := false
 	if !sessionBound {
 		m.mu.Unlock()
@@ -235,10 +249,6 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	}
 	if msg.Envelope.ReceivedAt.IsZero() {
 		msg.Envelope.ReceivedAt = time.Now()
-	}
-	if msg.Envelope.Adapter != binding.Adapter {
-		m.mu.Unlock()
-		return ErrInboundChannelDenied
 	}
 	if binding.ChannelID == "" && strings.TrimSpace(msg.Envelope.ChannelID) != "" {
 		binding.ChannelID = strings.TrimSpace(msg.Envelope.ChannelID)
@@ -302,7 +312,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 		}, nil
 	}
 
-	current := cloneBinding(m.currentBinding)
+	current := cloneBinding(m.currentBindings[msg.Envelope.Adapter])
 	if current != nil &&
 		current.Adapter == msg.Envelope.Adapter &&
 		strings.TrimSpace(current.ChannelID) != "" &&
@@ -444,25 +454,37 @@ func (m *Manager) RejectPendingPairing() (*PairingChallenge, bool, error) {
 
 func (m *Manager) Emit(ctx context.Context, event OutboundEvent) error {
 	m.mu.RLock()
-	binding := m.currentBinding
-	var sink Sink
-	if binding != nil {
-		sink = m.sinks[binding.Adapter]
+	var targets []struct {
+		binding ChannelBinding
+		sink    Sink
+	}
+	for _, b := range m.currentBindings {
+		if strings.TrimSpace(b.ChannelID) == "" {
+			continue
+		}
+		sink := m.sinks[b.Adapter]
+		if sink == nil {
+			continue
+		}
+		targets = append(targets, struct {
+			binding ChannelBinding
+			sink    Sink
+		}{binding: *b, sink: sink})
 	}
 	m.mu.RUnlock()
-	if binding == nil {
-		return ErrNoChannelBound
-	}
-	if strings.TrimSpace(binding.ChannelID) == "" {
+	if len(targets) == 0 {
 		return ErrNoChannelBound
 	}
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = time.Now()
 	}
-	if sink == nil {
-		return nil
+	var firstErr error
+	for _, t := range targets {
+		if err := t.sink.Send(ctx, t.binding, event); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return sink.Send(ctx, *binding, event)
+	return firstErr
 }
 
 func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
@@ -542,10 +564,13 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 		copy := *m.session
 		snapshot.ActiveSession = &copy
 	}
-	if m.currentBinding != nil {
-		copy := *m.currentBinding
-		snapshot.CurrentBinding = &copy
+	snapshot.CurrentBindings = make([]ChannelBinding, 0, len(m.currentBindings))
+	for _, b := range m.currentBindings {
+		snapshot.CurrentBindings = append(snapshot.CurrentBindings, *b)
 	}
+	sort.Slice(snapshot.CurrentBindings, func(i, j int) bool {
+		return snapshot.CurrentBindings[i].Adapter < snapshot.CurrentBindings[j].Adapter
+	})
 	if m.pendingPairing != nil {
 		copy := *m.pendingPairing
 		copy.ExistingBinding = cloneBinding(m.pendingPairing.ExistingBinding)
@@ -592,14 +617,98 @@ func (m *Manager) UnbindChannel(workspace string) error {
 		workspace = m.session.Workspace
 	}
 	workspace = normalizeWorkspace(workspace)
+	// Delete all bindings for this workspace
 	if m.bindingStore != nil {
-		if err := m.bindingStore.Delete(workspace); err != nil {
+		bindings, err := m.bindingStore.ListByWorkspace(workspace)
+		if err != nil {
 			m.mu.Unlock()
 			return err
 		}
+		for _, b := range bindings {
+			if err := m.bindingStore.Delete(b.Workspace, b.Adapter); err != nil {
+				m.mu.Unlock()
+				return err
+			}
+		}
 	}
-	if m.currentBinding != nil && m.currentBinding.Workspace == workspace {
-		m.currentBinding = nil
+	// Clear matching entries from currentBindings
+	for name, b := range m.currentBindings {
+		if normalizeWorkspace(b.Workspace) == workspace {
+			delete(m.currentBindings, name)
+		}
+	}
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
+// UnbindAdapter removes the binding for whatever workspace has the given
+// adapter name. This is needed when unbinding from a panel where the current
+// session workspace may differ from the workspace that originally bound the
+// adapter. Returns ErrNoChannelBound if no binding uses this adapter.
+func (m *Manager) UnbindAdapter(adapterName string) error {
+	m.mu.Lock()
+	if m.bindingStore != nil {
+		bindings, err := m.bindingStore.ListByAdapter(adapterName)
+		if err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		if len(bindings) == 0 {
+			m.mu.Unlock()
+			return ErrNoChannelBound
+		}
+		for _, b := range bindings {
+			if err := m.bindingStore.Delete(b.Workspace, b.Adapter); err != nil {
+				m.mu.Unlock()
+				return err
+			}
+		}
+	}
+	delete(m.currentBindings, adapterName)
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
+func (m *Manager) ClearChannelByAdapter(adapterName string) error {
+	m.mu.Lock()
+	if m.bindingStore != nil {
+		bindings, err := m.bindingStore.ListByAdapter(adapterName)
+		if err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		if len(bindings) == 0 {
+			m.mu.Unlock()
+			return ErrNoChannelBound
+		}
+		for _, b := range bindings {
+			b.ChannelID = ""
+			b.ThreadID = ""
+			b.LastInboundMessageID = ""
+			b.LastInboundAt = time.Time{}
+			b.PassiveReplyCount = 0
+			b.PassiveReplyStartedAt = time.Time{}
+			if err := m.bindingStore.Save(b); err != nil {
+				m.mu.Unlock()
+				return err
+			}
+		}
+	}
+	if b, ok := m.currentBindings[adapterName]; ok {
+		b.ChannelID = ""
+		b.ThreadID = ""
+		b.LastInboundMessageID = ""
+		b.LastInboundAt = time.Time{}
+		b.PassiveReplyCount = 0
+		b.PassiveReplyStartedAt = time.Time{}
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -615,40 +724,45 @@ func (m *Manager) ClearChannel(workspace string) error {
 		workspace = m.session.Workspace
 	}
 	workspace = normalizeWorkspace(workspace)
-	var binding *ChannelBinding
-	if m.currentBinding != nil && m.currentBinding.Workspace == workspace {
-		binding = m.currentBinding
-	} else if m.bindingStore != nil {
-		loaded, err := m.bindingStore.Load(workspace)
+	var bindings []ChannelBinding
+	for _, b := range m.currentBindings {
+		if normalizeWorkspace(b.Workspace) == workspace {
+			bindings = append(bindings, *b)
+		}
+	}
+	if len(bindings) == 0 && m.bindingStore != nil {
+		loaded, err := m.bindingStore.ListByWorkspace(workspace)
 		if err != nil {
 			m.mu.Unlock()
 			return err
 		}
-		binding = loaded
+		bindings = loaded
 	}
-	if binding == nil {
+	if len(bindings) == 0 {
 		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
-	binding.ChannelID = ""
-	binding.ThreadID = ""
-	binding.LastInboundMessageID = ""
-	binding.LastInboundAt = time.Time{}
-	binding.PassiveReplyCount = 0
-	binding.PassiveReplyStartedAt = time.Time{}
-	if m.bindingStore != nil {
-		if err := m.bindingStore.Save(*binding); err != nil {
-			m.mu.Unlock()
-			return err
+	for i := range bindings {
+		bindings[i].ChannelID = ""
+		bindings[i].ThreadID = ""
+		bindings[i].LastInboundMessageID = ""
+		bindings[i].LastInboundAt = time.Time{}
+		bindings[i].PassiveReplyCount = 0
+		bindings[i].PassiveReplyStartedAt = time.Time{}
+		if m.bindingStore != nil {
+			if err := m.bindingStore.Save(bindings[i]); err != nil {
+				m.mu.Unlock()
+				return err
+			}
 		}
-	}
-	if m.currentBinding != nil && m.currentBinding.Workspace == workspace {
-		m.currentBinding.ChannelID = ""
-		m.currentBinding.ThreadID = ""
-		m.currentBinding.LastInboundMessageID = ""
-		m.currentBinding.LastInboundAt = time.Time{}
-		m.currentBinding.PassiveReplyCount = 0
-		m.currentBinding.PassiveReplyStartedAt = time.Time{}
+		if b, ok := m.currentBindings[bindings[i].Adapter]; ok && normalizeWorkspace(b.Workspace) == workspace {
+			b.ChannelID = ""
+			b.ThreadID = ""
+			b.LastInboundMessageID = ""
+			b.LastInboundAt = time.Time{}
+			b.PassiveReplyCount = 0
+			b.PassiveReplyStartedAt = time.Time{}
+		}
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -664,36 +778,25 @@ func (m *Manager) ClearReplyWindow(workspace string) error {
 		workspace = m.session.Workspace
 	}
 	workspace = normalizeWorkspace(workspace)
-	var binding *ChannelBinding
-	if m.currentBinding != nil && m.currentBinding.Workspace == workspace {
-		binding = m.currentBinding
-	} else if m.bindingStore != nil {
-		loaded, err := m.bindingStore.Load(workspace)
-		if err != nil {
-			m.mu.Unlock()
-			return err
+	var found bool
+	for _, b := range m.currentBindings {
+		if normalizeWorkspace(b.Workspace) == workspace {
+			b.LastInboundMessageID = ""
+			b.LastInboundAt = time.Time{}
+			b.PassiveReplyCount = 0
+			b.PassiveReplyStartedAt = time.Time{}
+			found = true
+			if m.bindingStore != nil {
+				if err := m.bindingStore.Save(*b); err != nil {
+					m.mu.Unlock()
+					return err
+				}
+			}
 		}
-		binding = loaded
 	}
-	if binding == nil {
+	if !found {
 		m.mu.Unlock()
 		return ErrNoChannelBound
-	}
-	binding.LastInboundMessageID = ""
-	binding.LastInboundAt = time.Time{}
-	binding.PassiveReplyCount = 0
-	binding.PassiveReplyStartedAt = time.Time{}
-	if m.bindingStore != nil {
-		if err := m.bindingStore.Save(*binding); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-	}
-	if m.currentBinding != nil && m.currentBinding.Workspace == workspace {
-		m.currentBinding.LastInboundMessageID = ""
-		m.currentBinding.LastInboundAt = time.Time{}
-		m.currentBinding.PassiveReplyCount = 0
-		m.currentBinding.PassiveReplyStartedAt = time.Time{}
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -719,41 +822,33 @@ func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Ti
 	}
 	workspace = normalizeWorkspace(workspace)
 	messageID = strings.TrimSpace(messageID)
-	var binding *ChannelBinding
-	if m.currentBinding != nil && m.currentBinding.Workspace == workspace {
-		binding = m.currentBinding
-	} else if m.bindingStore != nil {
-		loaded, err := m.bindingStore.Load(workspace)
-		if err != nil {
-			m.mu.Unlock()
-			return err
+	var found bool
+	for _, b := range m.currentBindings {
+		if normalizeWorkspace(b.Workspace) != workspace {
+			continue
 		}
-		binding = loaded
+		if messageID == "" || strings.TrimSpace(b.LastInboundMessageID) != messageID {
+			continue
+		}
+		if sentAt.IsZero() {
+			sentAt = time.Now()
+		}
+		if b.PassiveReplyStartedAt.IsZero() {
+			b.PassiveReplyStartedAt = sentAt
+		}
+		b.PassiveReplyCount++
+		if m.bindingStore != nil {
+			if err := m.bindingStore.Save(*b); err != nil {
+				m.mu.Unlock()
+				return err
+			}
+		}
+		found = true
+		break
 	}
-	if binding == nil {
+	if !found {
 		m.mu.Unlock()
 		return ErrNoChannelBound
-	}
-	if messageID == "" || strings.TrimSpace(binding.LastInboundMessageID) != messageID {
-		m.mu.Unlock()
-		return nil
-	}
-	if sentAt.IsZero() {
-		sentAt = time.Now()
-	}
-	if binding.PassiveReplyStartedAt.IsZero() {
-		binding.PassiveReplyStartedAt = sentAt
-	}
-	binding.PassiveReplyCount++
-	if m.bindingStore != nil {
-		if err := m.bindingStore.Save(*binding); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-	}
-	if m.currentBinding != nil && m.currentBinding.Workspace == workspace {
-		m.currentBinding.PassiveReplyCount = binding.PassiveReplyCount
-		m.currentBinding.PassiveReplyStartedAt = binding.PassiveReplyStartedAt
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -764,17 +859,17 @@ func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Ti
 }
 
 func (m *Manager) reloadBindingLocked() error {
-	m.currentBinding = nil
+	m.currentBindings = make(map[string]*ChannelBinding)
 	if m.bindingStore == nil || m.session == nil {
 		return nil
 	}
-	binding, err := m.bindingStore.Load(m.session.Workspace)
+	bindings, err := m.bindingStore.ListByWorkspace(m.session.Workspace)
 	if err != nil {
 		return err
 	}
-	if binding != nil {
-		copy := *binding
-		m.currentBinding = &copy
+	for i := range bindings {
+		copy := bindings[i]
+		m.currentBindings[copy.Adapter] = &copy
 	}
 	return nil
 }
@@ -788,13 +883,16 @@ func (m *Manager) bindChannelLocked(binding ChannelBinding) (ChannelBinding, err
 		binding.BoundAt = time.Now()
 	}
 	if m.bindingStore != nil {
-		all, err := m.bindingStore.List()
+		// Auto-unbind: if adapter is bound to another workspace, remove old binding
+		existing, err := m.bindingStore.ListByAdapter(binding.Adapter)
 		if err != nil {
 			return ChannelBinding{}, err
 		}
-		for _, existing := range all {
-			if existing.Adapter == binding.Adapter && existing.Workspace != binding.Workspace {
-				return ChannelBinding{}, ErrAdapterAlreadyBound
+		for _, old := range existing {
+			if normalizeWorkspace(old.Workspace) != binding.Workspace {
+				if err := m.bindingStore.Delete(old.Workspace, old.Adapter); err != nil {
+					return ChannelBinding{}, err
+				}
 			}
 		}
 		if err := m.bindingStore.Save(binding); err != nil {
@@ -802,7 +900,7 @@ func (m *Manager) bindChannelLocked(binding ChannelBinding) (ChannelBinding, err
 		}
 	}
 	copy := binding
-	m.currentBinding = &copy
+	m.currentBindings[copy.Adapter] = &copy
 	return binding, nil
 }
 

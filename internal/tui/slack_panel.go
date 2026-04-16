@@ -52,7 +52,7 @@ func (m Model) renderSlackPanel() string {
 		return ""
 	}
 	entries := m.slackBindingEntries()
-	current := currentSlackBinding(m.imManager)
+	currentBindings := currentSlackBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -70,14 +70,16 @@ func (m Model) renderSlackPanel() string {
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.slack.current_binding")),
 	}
-	if current == nil {
+	if len(currentBindings) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.slack.none")))
 	} else {
-		body = append(body,
-			fmt.Sprintf(" %s", m.t("panel.slack.adapter", current.Adapter)),
-			fmt.Sprintf(" %s", m.t("panel.slack.target", firstNonEmptySlack(current.TargetID, m.t("panel.slack.default")))),
-			fmt.Sprintf(" %s", m.t("panel.slack.channel", firstNonEmptySlack(current.ChannelID, m.t("panel.slack.none")))),
-		)
+		for _, current := range currentBindings {
+			body = append(body,
+				fmt.Sprintf(" %s", m.t("panel.slack.adapter", current.Adapter)),
+				fmt.Sprintf(" %s", m.t("panel.slack.target", firstNonEmptySlack(current.TargetID, m.t("panel.slack.default")))),
+				fmt.Sprintf(" %s", m.t("panel.slack.channel", firstNonEmptySlack(current.ChannelID, m.t("panel.slack.none")))),
+			)
+		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.slack.bot_list")))
 	if len(entries) == 0 {
@@ -172,9 +174,17 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, m.bindSlackEntry(entries[clampSlackSelection(panel.selected, len(entries))])
 	case "x", "X":
-		return *m, m.clearSlackChannel()
+		if len(entries) == 0 {
+			panel.message = m.t("panel.slack.message.no_bot")
+			return *m, nil
+		}
+		return *m, m.clearSlackChannel(entries[clampSlackSelection(panel.selected, len(entries))].Adapter)
 	case "u", "U":
-		return *m, m.unbindSlackEntry()
+		if len(entries) == 0 {
+			panel.message = m.t("panel.slack.message.no_bot")
+			return *m, nil
+		}
+		return *m, m.unbindSlackEntry(entries[clampSlackSelection(panel.selected, len(entries))].Adapter)
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""
@@ -203,24 +213,24 @@ func (m *Model) bindSlackEntry(entry slackBindingEntry) tea.Cmd {
 	}
 }
 
-func (m *Model) unbindSlackEntry() tea.Cmd {
+func (m *Model) unbindSlackEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureSlackRuntime(); err != nil {
 			return slackBindResultMsg{err: err}
 		}
-		if err := m.imManager.UnbindChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
 			return slackBindResultMsg{err: err}
 		}
 		return slackBindResultMsg{message: m.t("panel.slack.message.unbound")}
 	}
 }
 
-func (m *Model) clearSlackChannel() tea.Cmd {
+func (m *Model) clearSlackChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureSlackRuntime(); err != nil {
 			return slackBindResultMsg{err: err}
 		}
-		if err := m.imManager.ClearChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return slackBindResultMsg{err: err}
 		}
 		return slackBindResultMsg{message: m.t("panel.slack.message.cleared")}
@@ -295,13 +305,15 @@ func (m Model) slackBindingEntries() []slackBindingEntry {
 	occupied := make(map[string]string)
 	adapterStates := make(map[string]im.AdapterState)
 	currentWorkspace := strings.TrimSpace(m.currentWorkspacePath())
-	var currentBinding *im.ChannelBinding
+	bindingByAdapter := make(map[string]im.ChannelBinding)
 	if m.imManager != nil {
 		snapshot := m.imManager.Snapshot()
 		for _, state := range snapshot.Adapters {
 			adapterStates[state.Name] = state
 		}
-		currentBinding = m.imManager.CurrentBinding()
+		for _, b := range currentSlackBindings(m.imManager) {
+			bindingByAdapter[b.Adapter] = b
+		}
 		if bindings, err := m.imManager.ListBindings(); err == nil {
 			for _, binding := range bindings {
 				occupied[binding.Adapter] = binding.Workspace
@@ -319,9 +331,9 @@ func (m Model) slackBindingEntries() []slackBindingEntry {
 	for _, name := range keys {
 		targetID := defaultSlackTargetID(currentWorkspace)
 		workspaceChannel := ""
-		if currentBinding != nil && strings.TrimSpace(currentBinding.Workspace) == currentWorkspace && currentBinding.Adapter == name {
-			targetID = firstNonEmptySlack(currentBinding.TargetID, targetID)
-			workspaceChannel = strings.TrimSpace(currentBinding.ChannelID)
+		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
+			targetID = firstNonEmptySlack(b.TargetID, targetID)
+			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, slackBindingEntry{
 			Adapter:          name,
@@ -361,15 +373,17 @@ func clampSlackSelection(selected, total int) int {
 	return selected
 }
 
-func currentSlackBinding(mgr *im.Manager) *im.ChannelBinding {
+func currentSlackBindings(mgr *im.Manager) []im.ChannelBinding {
 	if mgr == nil {
 		return nil
 	}
-	b := mgr.CurrentBinding()
-	if b != nil && b.Platform == im.PlatformSlack {
-		return b
+	var result []im.ChannelBinding
+	for _, b := range mgr.CurrentBindings() {
+		if b.Platform == im.PlatformSlack {
+			result = append(result, b)
+		}
 	}
-	return nil
+	return result
 }
 
 func firstNonEmptySlack(values ...string) string {
@@ -397,9 +411,10 @@ func (m *Model) ensureSlackBotBinding(adapter string) error {
 		return err
 	}
 	workspace := m.currentWorkspacePath()
-	current := currentSlackBinding(m.imManager)
-	if current != nil && strings.TrimSpace(current.Workspace) == strings.TrimSpace(workspace) && current.Adapter == adapter {
-		return nil
+	for _, b := range currentSlackBindings(m.imManager) {
+		if strings.TrimSpace(b.Workspace) == strings.TrimSpace(workspace) && b.Adapter == adapter {
+			return nil
+		}
 	}
 	_, err := m.imManager.BindChannel(im.ChannelBinding{
 		Platform: im.PlatformSlack,

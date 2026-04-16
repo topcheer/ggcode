@@ -108,14 +108,14 @@ func TestHandleInboundLearnsChannelFromFirstMessage(t *testing.T) {
 	if binding.LastInboundMessageID != "msg-1" || binding.LastInboundAt.IsZero() {
 		t.Fatalf("expected runtime to persist latest inbound message metadata, got %#v", binding)
 	}
-	stored, err := store.Load("/tmp/project")
+	stored, err := store.ListByWorkspace("/tmp/project")
 	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
+		t.Fatalf("ListByWorkspace returned error: %v", err)
 	}
-	if stored == nil || stored.ChannelID != "group-1" {
+	if len(stored) == 0 || stored[0].ChannelID != "group-1" {
 		t.Fatalf("expected store to persist learned channel, got %#v", stored)
 	}
-	if stored.LastInboundMessageID != "msg-1" || stored.LastInboundAt.IsZero() {
+	if stored[0].LastInboundMessageID != "msg-1" || stored[0].LastInboundAt.IsZero() {
 		t.Fatalf("expected store to persist latest inbound message metadata, got %#v", stored)
 	}
 }
@@ -170,11 +170,11 @@ func TestClearReplyWindowOnlyResetsLatestInboundMessage(t *testing.T) {
 	if binding == nil || binding.ChannelID != "group-1" || binding.LastInboundMessageID != "" || !binding.LastInboundAt.IsZero() {
 		t.Fatalf("expected reply window cleared but binding kept, got %#v", binding)
 	}
-	stored, err := store.Load("/tmp/project")
+	stored, err := store.ListByWorkspace("/tmp/project")
 	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
+		t.Fatalf("ListByWorkspace returned error: %v", err)
 	}
-	if stored == nil || stored.ChannelID != "group-1" || stored.LastInboundMessageID != "" || !stored.LastInboundAt.IsZero() {
+	if len(stored) == 0 || stored[0].ChannelID != "group-1" || stored[0].LastInboundMessageID != "" || !stored[0].LastInboundAt.IsZero() {
 		t.Fatalf("expected store reply window cleared but channel kept, got %#v", stored)
 	}
 }
@@ -436,16 +436,16 @@ func TestClearChannelKeepsBindingButResetsAuthorization(t *testing.T) {
 	if binding == nil || binding.Adapter != "qq" || binding.ChannelID != "" || binding.LastInboundMessageID != "" || !binding.LastInboundAt.IsZero() {
 		t.Fatalf("expected binding to remain with cleared channel, got %#v", binding)
 	}
-	stored, err := store.Load("/tmp/project")
+	stored, err := store.ListByWorkspace("/tmp/project")
 	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
+		t.Fatalf("ListByWorkspace returned error: %v", err)
 	}
-	if stored == nil || stored.Adapter != "qq" || stored.ChannelID != "" || stored.LastInboundMessageID != "" || !stored.LastInboundAt.IsZero() {
+	if len(stored) == 0 || stored[0].Adapter != "qq" || stored[0].ChannelID != "" || stored[0].LastInboundMessageID != "" || !stored[0].LastInboundAt.IsZero() {
 		t.Fatalf("expected stored binding to keep adapter and clear channel, got %#v", stored)
 	}
 }
 
-func TestBindChannelEnforcesAdapterExclusivity(t *testing.T) {
+func TestBindChannelAutoUnbindsOldWorkspace(t *testing.T) {
 	store := NewMemoryBindingStore()
 	mgrA := NewManager()
 	mgrB := NewManager()
@@ -462,13 +462,28 @@ func TestBindChannelEnforcesAdapterExclusivity(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("first BindChannel returned error: %v", err)
 	}
-	if _, err := mgrB.BindChannel(ChannelBinding{
+	// Second bind to same adapter from different workspace should auto-unbind old
+	bound, err := mgrB.BindChannel(ChannelBinding{
 		Platform:  PlatformQQ,
 		Adapter:   "qq-bot-1",
 		TargetID:  "other",
 		ChannelID: "group-2",
-	}); !errors.Is(err, ErrAdapterAlreadyBound) {
-		t.Fatalf("expected ErrAdapterAlreadyBound, got %v", err)
+	})
+	if err != nil {
+		t.Fatalf("expected auto-unbind to succeed, got %v", err)
+	}
+	if bound.Workspace != normalizeWorkspace("/tmp/b") {
+		t.Fatalf("expected binding to be for /tmp/b, got %q", bound.Workspace)
+	}
+	// Old workspace should no longer have the binding
+	oldBindings, _ := store.ListByWorkspace("/tmp/a")
+	if len(oldBindings) != 0 {
+		t.Fatalf("expected old workspace to have no bindings, got %d", len(oldBindings))
+	}
+	// New workspace should have it
+	newBindings, _ := store.ListByWorkspace("/tmp/b")
+	if len(newBindings) != 1 || newBindings[0].Adapter != "qq-bot-1" {
+		t.Fatalf("expected new workspace to have the binding, got %v", newBindings)
 	}
 }
 
@@ -670,7 +685,7 @@ func TestManager_ResolveApproval_DoubleResolve(t *testing.T) {
 func TestManager_Snapshot_Empty(t *testing.T) {
 	m := NewManager()
 	snap := m.Snapshot()
-	if snap.ActiveSession != nil || snap.CurrentBinding != nil {
+	if snap.ActiveSession != nil || len(snap.CurrentBindings) != 0 {
 		t.Error("expected empty snapshot")
 	}
 	if len(snap.Adapters) != 0 || len(snap.PendingApprovals) != 0 {

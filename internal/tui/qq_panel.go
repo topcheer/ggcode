@@ -59,7 +59,7 @@ func (m Model) renderQQPanel() string {
 		return ""
 	}
 	entries := m.qqBindingEntries()
-	current := currentQQBinding(m.imManager)
+	currentBindings := currentQQBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -80,14 +80,16 @@ func (m Model) renderQQPanel() string {
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.current_binding")),
 	}
-	if current == nil {
+	if len(currentBindings) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.qq.none")))
 	} else {
-		body = append(body,
-			fmt.Sprintf(" %s", m.t("panel.qq.adapter", current.Adapter)),
-			fmt.Sprintf(" %s", m.t("panel.qq.target", firstNonEmptyQQ(current.TargetID, m.t("panel.qq.default")))),
-			fmt.Sprintf(" %s", m.t("panel.qq.channel", firstNonEmptyQQ(current.ChannelID, m.t("panel.qq.none")))),
-		)
+		for _, current := range currentBindings {
+			body = append(body,
+				fmt.Sprintf(" %s", m.t("panel.qq.adapter", current.Adapter)),
+				fmt.Sprintf(" %s", m.t("panel.qq.target", firstNonEmptyQQ(current.TargetID, m.t("panel.qq.default")))),
+				fmt.Sprintf(" %s", m.t("panel.qq.channel", firstNonEmptyQQ(current.ChannelID, m.t("panel.qq.none")))),
+			)
+		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.bot_list")))
 	if len(entries) == 0 {
@@ -351,14 +353,16 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 	}
 	occupied := make(map[string]string)
 	adapterStates := make(map[string]im.AdapterState)
+	bindingByAdapter := make(map[string]im.ChannelBinding)
 	currentWorkspace := strings.TrimSpace(m.currentWorkspacePath())
-	var currentBinding *im.ChannelBinding
 	if m.imManager != nil {
 		snapshot := m.imManager.Snapshot()
 		for _, state := range snapshot.Adapters {
 			adapterStates[state.Name] = state
 		}
-		currentBinding = m.imManager.CurrentBinding()
+		for _, b := range currentQQBindings(m.imManager) {
+			bindingByAdapter[b.Adapter] = b
+		}
 		if bindings, err := m.imManager.ListBindings(); err == nil {
 			for _, binding := range bindings {
 				occupied[binding.Adapter] = binding.Workspace
@@ -376,9 +380,9 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 	for _, name := range keys {
 		targetID := defaultQQTargetID(currentWorkspace)
 		workspaceChannel := ""
-		if currentBinding != nil && strings.TrimSpace(currentBinding.Workspace) == currentWorkspace && currentBinding.Adapter == name {
-			targetID = firstNonEmptyQQ(currentBinding.TargetID, targetID)
-			workspaceChannel = strings.TrimSpace(currentBinding.ChannelID)
+		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
+			targetID = firstNonEmptyQQ(b.TargetID, targetID)
+			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, qqBindingEntry{
 			Adapter:          name,
@@ -418,11 +422,17 @@ func clampQQSelection(selected, total int) int {
 	return selected
 }
 
-func currentQQBinding(mgr *im.Manager) *im.ChannelBinding {
+func currentQQBindings(mgr *im.Manager) []im.ChannelBinding {
 	if mgr == nil {
 		return nil
 	}
-	return mgr.CurrentBinding()
+	var result []im.ChannelBinding
+	for _, b := range mgr.CurrentBindings() {
+		if b.Platform == im.PlatformQQ {
+			result = append(result, b)
+		}
+	}
+	return result
 }
 
 func (m Model) currentWorkspacePath() string {
@@ -557,9 +567,10 @@ func (m *Model) ensureQQBotBinding(adapter string) error {
 		return err
 	}
 	workspace := m.currentWorkspacePath()
-	current := currentQQBinding(m.imManager)
-	if current != nil && strings.TrimSpace(current.Workspace) == strings.TrimSpace(workspace) && current.Adapter == adapter {
-		return nil
+	for _, b := range currentQQBindings(m.imManager) {
+		if strings.TrimSpace(b.Workspace) == strings.TrimSpace(workspace) && b.Adapter == adapter {
+			return nil
+		}
 	}
 	_, err := m.imManager.BindChannel(im.ChannelBinding{
 		Platform: im.PlatformQQ,

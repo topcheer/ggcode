@@ -51,24 +51,29 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 	ctx, cancel := context.WithCancel(parent)
 	controller := &AdapterController{cancel: cancel}
 
-	binding := mgr.CurrentBinding()
-	if binding == nil || strings.TrimSpace(binding.Adapter) == "" {
+	bindings := mgr.CurrentBindings()
+	if len(bindings) == 0 {
 		return controller, nil
 	}
 
-	// Built-in PC adapter — only start when binding explicitly targets it
-	if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
-		startPCAdapter(ctx, cfg, mgr)
-		return controller, nil
-	}
+	for _, binding := range bindings {
+		if strings.TrimSpace(binding.Adapter) == "" {
+			continue
+		}
+		// Built-in PC adapter — only start when binding explicitly targets it
+		if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
+			startPCAdapter(ctx, cfg, mgr)
+			continue
+		}
 
-	adapterCfg, ok := cfg.Adapters[binding.Adapter]
-	if !ok || !adapterCfg.Enabled {
-		return controller, nil
-	}
-	if err := startConfiguredAdapter(ctx, cfg, binding.Adapter, adapterCfg, mgr); err != nil {
-		cancel()
-		return nil, err
+		adapterCfg, ok := cfg.Adapters[binding.Adapter]
+		if !ok || !adapterCfg.Enabled {
+			continue
+		}
+		if err := startConfiguredAdapter(ctx, cfg, binding.Adapter, adapterCfg, mgr); err != nil {
+			cancel()
+			return nil, err
+		}
 	}
 	return controller, nil
 }

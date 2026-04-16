@@ -388,30 +388,37 @@ func (m Model) sidebarIMSnapshot() (im.StatusSnapshot, bool) {
 
 func (m Model) sidebarIMAdapters() []im.AdapterState {
 	statesByName := make(map[string]im.AdapterState)
-	var currentBinding *im.ChannelBinding
+	var currentBindings []im.ChannelBinding
 	if snapshot, ok := m.sidebarIMSnapshot(); ok {
-		currentBinding = snapshot.CurrentBinding
+		currentBindings = snapshot.CurrentBindings
 		for _, state := range snapshot.Adapters {
 			statesByName[state.Name] = state
 		}
 	}
-	if currentBinding == nil || strings.TrimSpace(currentBinding.Adapter) == "" {
+	if len(currentBindings) == 0 {
 		return nil
 	}
-	name := strings.TrimSpace(currentBinding.Adapter)
-	if state, ok := statesByName[name]; ok {
-		return []im.AdapterState{state}
-	}
-	if m.config != nil {
-		if adapter, ok := m.config.IM.Adapters[name]; ok && adapter.Enabled {
-			return []im.AdapterState{{
-				Name:     name,
-				Platform: im.Platform(strings.TrimSpace(adapter.Platform)),
-				Status:   m.t("im.status.not_started"),
-			}}
+	var result []im.AdapterState
+	seen := make(map[string]bool)
+	for _, binding := range currentBindings {
+		name := strings.TrimSpace(binding.Adapter)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if state, ok := statesByName[name]; ok {
+			result = append(result, state)
+		} else if m.config != nil {
+			if adapter, ok := m.config.IM.Adapters[name]; ok && adapter.Enabled {
+				result = append(result, im.AdapterState{
+					Name:     name,
+					Platform: im.Platform(strings.TrimSpace(adapter.Platform)),
+					Status:   m.t("im.status.not_started"),
+				})
+			}
 		}
 	}
-	return nil
+	return result
 }
 
 func (m Model) sidebarIMRuntimeStatus() string {
@@ -1122,27 +1129,30 @@ func (m Model) renderIMPairingPanel() string {
 	if challenge == nil {
 		return ""
 	}
-	title := "QQ pairing required"
-	bodyText := "A QQ channel is requesting to bind this workspace. Ask the user to enter the 4-digit code shown below in QQ."
+	platformName := platformDisplayName(challenge.Platform)
+	title := fmt.Sprintf("%s pairing required", platformName)
+	bodyText := fmt.Sprintf("A %s channel is requesting to bind this workspace. Ask the user to enter the 4-digit code shown below in %s.", platformName, platformName)
 	channelLabel := "request channel"
 	boundLabel := "currently bound"
 	codeLabel := "pairing code"
-	hint := "Esc reject • the correct code in QQ will complete binding automatically"
+	hint := fmt.Sprintf("Esc reject • the correct code in %s will complete binding automatically", platformName)
 	if m.currentLanguage() == LangZhCN {
-		title = "QQ 绑定验证"
-		bodyText = "有一个 QQ 渠道正在请求绑定当前工作区。请让用户在 QQ 中输入下方 4 位绑定码。"
+		cnName := platformCNName(challenge.Platform)
+		title = fmt.Sprintf("%s 绑定验证", cnName)
+		bodyText = fmt.Sprintf("有一个 %s 渠道正在请求绑定当前工作区。请让用户在 %s 中输入下方 4 位绑定码。", cnName, cnName)
 		channelLabel = "请求渠道"
 		boundLabel = "当前绑定"
 		codeLabel = "绑定码"
-		hint = "Esc 拒绝 • QQ 中输入正确绑定码后会自动完成绑定"
+		hint = fmt.Sprintf("Esc 拒绝 • %s 中输入正确绑定码后会自动完成绑定", cnName)
 	}
 	if challenge.Kind == im.PairingKindRebind {
 		if m.currentLanguage() == LangZhCN {
-			title = "QQ 重新绑定验证"
-			bodyText = "当前 bot 已经绑定到其他渠道。新渠道在 QQ 中输入下方 4 位绑定码后，将解绑旧渠道并切换到当前渠道。"
+			cnName := platformCNName(challenge.Platform)
+			title = fmt.Sprintf("%s 重新绑定验证", cnName)
+			bodyText = fmt.Sprintf("当前 bot 已经绑定到其他渠道。新渠道在 %s 中输入下方 4 位绑定码后，将解绑旧渠道并切换到当前渠道。", cnName)
 		} else {
-			title = "QQ rebind requested"
-			bodyText = "This bot is already bound to another channel. Entering the 4-digit code below in QQ will unbind the old channel and switch to the new channel."
+			title = fmt.Sprintf("%s rebind requested", platformName)
+			bodyText = fmt.Sprintf("This bot is already bound to another channel. Entering the 4-digit code below in %s will unbind the old channel and switch to the new channel.", platformName)
 		}
 	}
 
@@ -1167,6 +1177,44 @@ func (m Model) renderIMPairingPanel() string {
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(hint),
 	)
 	return m.renderContextBox(title, strings.Join(lines, "\n"), lipgloss.Color("11"))
+}
+
+func platformDisplayName(p im.Platform) string {
+	switch p {
+	case im.PlatformQQ:
+		return "QQ"
+	case im.PlatformFeishu:
+		return "Feishu"
+	case im.PlatformTelegram:
+		return "Telegram"
+	case im.PlatformDiscord:
+		return "Discord"
+	case im.PlatformDingTalk:
+		return "DingTalk"
+	case im.PlatformSlack:
+		return "Slack"
+	default:
+		return "IM"
+	}
+}
+
+func platformCNName(p im.Platform) string {
+	switch p {
+	case im.PlatformQQ:
+		return "QQ"
+	case im.PlatformFeishu:
+		return "飞书"
+	case im.PlatformTelegram:
+		return "Telegram"
+	case im.PlatformDiscord:
+		return "Discord"
+	case im.PlatformDingTalk:
+		return "钉钉"
+	case im.PlatformSlack:
+		return "Slack"
+	default:
+		return "IM"
+	}
 }
 
 func (m Model) renderAuxColumn(totalHeight int) string {

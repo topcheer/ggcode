@@ -135,7 +135,7 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 	opts := []larkws.ClientOption{
 		larkws.WithEventHandler(eventHandler),
 		larkws.WithLogger(&feishuSilentLogger{}),
-		larkws.WithLogLevel(larkcore.LogLevelError),
+		larkws.WithLogLevel(larkcore.LogLevelDebug),
 	}
 	if a.domain == "lark" {
 		opts = append(opts, larkws.WithDomain("https://open.larksuite.com"))
@@ -165,7 +165,9 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 }
 
 func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) {
+	debug.Log("feishu", "adapter=%s handleLarkMessageEvent called, event=%p event.Event=%p", a.name, event, event.Event)
 	if event.Event == nil || event.Event.Message == nil {
+		debug.Log("feishu", "adapter=%s handleLarkMessageEvent: event.Event or event.Event.Message is nil", a.name)
 		return
 	}
 	msg := event.Event.Message
@@ -179,11 +181,15 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 	messageID := derefStr(msg.MessageId)
 	content := derefStr(msg.Content)
 	chatType := derefStr(msg.ChatType)
+	msgType := derefStr(msg.MessageType)
+
+	debug.Log("feishu", "adapter=%s raw inbound: chat=%s msgType=%s chatType=%s sender=%s contentLen=%d", a.name, chatID, msgType, chatType, openID, len(content))
 
 	// Parse text content
 	text := a.parseMessageContent(content)
 	text = strings.TrimSpace(text)
 	if text == "" {
+		debug.Log("feishu", "adapter=%s parsed text is empty, content=%q, msgType=%s", a.name, content, msgType)
 		return
 	}
 
@@ -506,15 +512,19 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		}
 	}
 
-	// Send remaining text
+	// Send remaining text as post (rich text) for better formatting
 	remainingText = strings.TrimSpace(remainingText)
 	if remainingText == "" {
 		return nil
 	}
 	chunks := splitFeishuMessage(remainingText, feishuMaxTextLen)
 	for _, chunk := range chunks {
-		if err := a.sendTextMessage(ctx, chatID, chunk); err != nil {
-			return err
+		if err := a.sendPostMessage(ctx, chatID, chunk); err != nil {
+			// Fallback to plain text if post format fails
+			debug.Log("feishu", "adapter=%s post send failed, falling back to text: %v", a.name, err)
+			if fallbackErr := a.sendTextMessage(ctx, chatID, stripFeishuMarkdown(chunk)); fallbackErr != nil {
+				return fallbackErr
+			}
 		}
 	}
 	return nil
@@ -813,6 +823,64 @@ func intValueStr(s string) (int, bool) {
 // feishuSilentLogger redirects SDK log output to debug.Log instead of os.Stdout.
 // The default SDK logger writes to stdout which corrupts the TUI.
 type feishuSilentLogger struct{}
+
+// sendPostMessage sends an interactive card message with markdown rendering.
+// Feishu interactive cards support markdown syntax (bold, code, links, lists, etc).
+func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content string) error {
+	a.mu.RLock()
+	token := a.token
+	a.mu.RUnlock()
+
+	apiBase := a.resolveAPIBase()
+	url := apiBase + "/im/v1/messages?receive_id_type=chat_id"
+
+	card := map[string]any{
+		"elements": []any{
+			map[string]any{
+				"tag":     "markdown",
+				"content": content,
+			},
+		},
+	}
+	cardBytes, _ := json.Marshal(card)
+	body := map[string]any{
+		"receive_id": chatID,
+		"msg_type":   "interactive",
+		"content":    string(cardBytes),
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Feishu card API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+// stripFeishuMarkdown removes basic markdown formatting for plain text fallback.
+func stripFeishuMarkdown(text string) string {
+	text = strings.ReplaceAll(text, "**", "")
+	result := strings.Builder{}
+	inCode := false
+	for _, ch := range text {
+		if ch == '`' {
+			inCode = !inCode
+			continue
+		}
+		result.WriteRune(ch)
+	}
+	return result.String()
+}
 
 func (l *feishuSilentLogger) Debug(_ context.Context, args ...interface{}) {
 	debug.Log("feishu-sdk", "%v", args)

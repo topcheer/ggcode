@@ -52,7 +52,7 @@ func (m Model) renderFeishuPanel() string {
 		return ""
 	}
 	entries := m.feishuBindingEntries()
-	current := currentFeishuBinding(m.imManager)
+	currentBindings := currentFeishuBindings(m.imManager)
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -70,14 +70,16 @@ func (m Model) renderFeishuPanel() string {
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.feishu.current_binding")),
 	}
-	if current == nil {
+	if len(currentBindings) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.feishu.none")))
 	} else {
-		body = append(body,
-			fmt.Sprintf(" %s", m.t("panel.feishu.adapter", current.Adapter)),
-			fmt.Sprintf(" %s", m.t("panel.feishu.target", firstNonEmptyFeishu(current.TargetID, m.t("panel.feishu.default")))),
-			fmt.Sprintf(" %s", m.t("panel.feishu.channel", firstNonEmptyFeishu(current.ChannelID, m.t("panel.feishu.none")))),
-		)
+		for _, current := range currentBindings {
+			body = append(body,
+				fmt.Sprintf(" %s", m.t("panel.feishu.adapter", current.Adapter)),
+				fmt.Sprintf(" %s", m.t("panel.feishu.target", firstNonEmptyFeishu(current.TargetID, m.t("panel.feishu.default")))),
+				fmt.Sprintf(" %s", m.t("panel.feishu.channel", firstNonEmptyFeishu(current.ChannelID, m.t("panel.feishu.none")))),
+			)
+		}
 	}
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.feishu.bot_list")))
 	if len(entries) == 0 {
@@ -172,9 +174,13 @@ func (m *Model) handleFeishuPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, m.bindFeishuEntry(entries[clampFeishuSelection(panel.selected, len(entries))])
 	case "x", "X":
-		return *m, m.clearFeishuChannel()
+		if len(entries) > 0 {
+			return *m, m.clearFeishuChannel(entries[clampFeishuSelection(panel.selected, len(entries))].Adapter)
+		}
 	case "u", "U":
-		return *m, m.unbindFeishuEntry()
+		if len(entries) > 0 {
+			return *m, m.unbindFeishuEntry(entries[clampFeishuSelection(panel.selected, len(entries))].Adapter)
+		}
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""
@@ -203,24 +209,24 @@ func (m *Model) bindFeishuEntry(entry feishuBindingEntry) tea.Cmd {
 	}
 }
 
-func (m *Model) unbindFeishuEntry() tea.Cmd {
+func (m *Model) unbindFeishuEntry(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureFeishuRuntime(); err != nil {
 			return feishuBindResultMsg{err: err}
 		}
-		if err := m.imManager.UnbindChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.UnbindAdapter(adapterName); err != nil {
 			return feishuBindResultMsg{err: err}
 		}
 		return feishuBindResultMsg{message: m.t("panel.feishu.message.unbound")}
 	}
 }
 
-func (m *Model) clearFeishuChannel() tea.Cmd {
+func (m *Model) clearFeishuChannel(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.ensureFeishuRuntime(); err != nil {
 			return feishuBindResultMsg{err: err}
 		}
-		if err := m.imManager.ClearChannel(m.currentWorkspacePath()); err != nil {
+		if err := m.imManager.ClearChannelByAdapter(adapterName); err != nil {
 			return feishuBindResultMsg{err: err}
 		}
 		return feishuBindResultMsg{message: m.t("panel.feishu.message.cleared")}
@@ -294,14 +300,16 @@ func (m Model) feishuBindingEntries() []feishuBindingEntry {
 	}
 	occupied := make(map[string]string)
 	adapterStates := make(map[string]im.AdapterState)
+	bindingByAdapter := make(map[string]im.ChannelBinding)
 	currentWorkspace := strings.TrimSpace(m.currentWorkspacePath())
-	var currentBinding *im.ChannelBinding
 	if m.imManager != nil {
 		snapshot := m.imManager.Snapshot()
 		for _, state := range snapshot.Adapters {
 			adapterStates[state.Name] = state
 		}
-		currentBinding = m.imManager.CurrentBinding()
+		for _, b := range currentFeishuBindings(m.imManager) {
+			bindingByAdapter[b.Adapter] = b
+		}
 		if bindings, err := m.imManager.ListBindings(); err == nil {
 			for _, binding := range bindings {
 				occupied[binding.Adapter] = binding.Workspace
@@ -319,9 +327,9 @@ func (m Model) feishuBindingEntries() []feishuBindingEntry {
 	for _, name := range keys {
 		targetID := defaultFeishuTargetID(currentWorkspace)
 		workspaceChannel := ""
-		if currentBinding != nil && strings.TrimSpace(currentBinding.Workspace) == currentWorkspace && currentBinding.Adapter == name {
-			targetID = firstNonEmptyFeishu(currentBinding.TargetID, targetID)
-			workspaceChannel = strings.TrimSpace(currentBinding.ChannelID)
+		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
+			targetID = firstNonEmptyFeishu(b.TargetID, targetID)
+			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, feishuBindingEntry{
 			Adapter:          name,
@@ -361,15 +369,17 @@ func clampFeishuSelection(selected, total int) int {
 	return selected
 }
 
-func currentFeishuBinding(mgr *im.Manager) *im.ChannelBinding {
+func currentFeishuBindings(mgr *im.Manager) []im.ChannelBinding {
 	if mgr == nil {
 		return nil
 	}
-	b := mgr.CurrentBinding()
-	if b != nil && b.Platform == im.PlatformFeishu {
-		return b
+	var result []im.ChannelBinding
+	for _, b := range mgr.CurrentBindings() {
+		if b.Platform == im.PlatformFeishu {
+			result = append(result, b)
+		}
 	}
-	return nil
+	return result
 }
 
 func firstNonEmptyFeishu(values ...string) string {
@@ -397,9 +407,10 @@ func (m *Model) ensureFeishuBotBinding(adapter string) error {
 		return err
 	}
 	workspace := m.currentWorkspacePath()
-	current := currentFeishuBinding(m.imManager)
-	if current != nil && strings.TrimSpace(current.Workspace) == strings.TrimSpace(workspace) && current.Adapter == adapter {
-		return nil
+	for _, b := range currentFeishuBindings(m.imManager) {
+		if strings.TrimSpace(b.Workspace) == strings.TrimSpace(workspace) && b.Adapter == adapter {
+			return nil
+		}
 	}
 	_, err := m.imManager.BindChannel(im.ChannelBinding{
 		Platform: im.PlatformFeishu,
