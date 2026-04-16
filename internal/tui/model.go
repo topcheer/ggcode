@@ -1979,6 +1979,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case feishuBindResultMsg:
+		if m.feishuPanel != nil {
+			if msg.err != nil {
+				m.feishuPanel.message = msg.err.Error()
+			} else {
+				m.feishuPanel.message = msg.message
+			}
+		}
+		return m, nil
+
+	case slackBindResultMsg:
+		if m.slackPanel != nil {
+			if msg.err != nil {
+				m.slackPanel.message = msg.err.Error()
+			} else {
+				m.slackPanel.message = msg.message
+			}
+		}
+		return m, nil
+
+	case discordBindResultMsg:
+		if m.discordPanel != nil {
+			if msg.err != nil {
+				m.discordPanel.message = msg.err.Error()
+			} else {
+				m.discordPanel.message = msg.message
+			}
+		}
+		return m, nil
+
+	case dingtalkBindResultMsg:
+		if m.dingtalkPanel != nil {
+			if msg.err != nil {
+				m.dingtalkPanel.message = msg.err.Error()
+			} else {
+				m.dingtalkPanel.message = msg.message
+			}
+		}
+		return m, nil
+
+	case tgBindResultMsg:
+		if m.tgPanel != nil {
+			if msg.err != nil {
+				m.tgPanel.message = msg.err.Error()
+			} else {
+				m.tgPanel.message = msg.message
+			}
+		}
+		return m, nil
 	case providerModelsRefreshResultMsg:
 		if m.providerPanel != nil && m.providerPanel.refreshVendor == msg.vendor {
 			m.providerPanel.refreshing = false
