@@ -28,6 +28,14 @@ type FollowSink interface {
 	Close()
 }
 
+// Lang represents the display language for follow output.
+type Lang string
+
+const (
+	LangZhCN Lang = "zh-CN"
+	LangEn   Lang = "en"
+)
+
 // ToolFormatter is a function that formats tool activity for display.
 // It takes a tool name and raw JSON args, and returns a human-readable status string.
 type ToolFormatter func(toolName, rawArgs string) string
@@ -57,6 +65,7 @@ type pendingToolCall struct {
 type TerminalFollowDisplay struct {
 	out         *os.File
 	formatTool  ToolFormatter
+	lang        Lang
 	mu          sync.Mutex
 	roundBuf    strings.Builder
 	hasToolLine bool
@@ -68,9 +77,10 @@ type TerminalFollowDisplay struct {
 // NewTerminalFollowDisplay creates a new follow display writing to the given file.
 // The formatTool callback is used to format tool status strings; if nil, tool names
 // are displayed as-is.
-func NewTerminalFollowDisplay(out *os.File, formatTool ToolFormatter) *TerminalFollowDisplay {
+func NewTerminalFollowDisplay(out *os.File, lang Lang, formatTool ToolFormatter) *TerminalFollowDisplay {
 	return &TerminalFollowDisplay{
 		out:        out,
+		lang:       lang,
 		formatTool: formatTool,
 	}
 }
@@ -81,7 +91,7 @@ func (d *TerminalFollowDisplay) OnUserMessage(text string) {
 	defer d.mu.Unlock()
 	d.clearToolLine()
 	text = truncateForTerminal(text, 200)
-	fmt.Fprintf(d.out, "%s[用户]%s %s"+nl, ansiCyanBold, ansiReset, text)
+	fmt.Fprintf(d.out, "%s[%s]%s %s"+nl, ansiCyanBold, d.userLabel(), ansiReset, text)
 }
 
 // OnToolStatus displays a pending tool status line.
@@ -128,7 +138,7 @@ func (d *TerminalFollowDisplay) emitToolResult(status, toolName, rawArgs, result
 	d.clearToolLine()
 
 	// Special formatting for certain tool types
-	special := formatSpecialToolResult(toolName, rawArgs, result, isError)
+	special := formatSpecialToolResult(d.lang, toolName, rawArgs, result, isError)
 	if special != "" {
 		fmt.Fprint(d.out, special+nl)
 		return
@@ -175,7 +185,7 @@ func (d *TerminalFollowDisplay) OnRoundDone() {
 
 	if text != "" {
 		displayText := renderMarkdown(text)
-		fmt.Fprintf(d.out, "%s[助手]%s"+nl, ansiGreenBold, ansiReset)
+		fmt.Fprintf(d.out, "%s[%s]%s"+nl, ansiGreenBold, d.assistantLabel(), ansiReset)
 		fmt.Fprint(d.out, displayText+nl)
 	}
 	// Separator
@@ -202,31 +212,45 @@ func (d *TerminalFollowDisplay) clearToolLine() {
 	}
 }
 
+func (d *TerminalFollowDisplay) userLabel() string {
+	if d.lang == LangZhCN {
+		return "用户"
+	}
+	return "User"
+}
+
+func (d *TerminalFollowDisplay) assistantLabel() string {
+	if d.lang == LangZhCN {
+		return "助手"
+	}
+	return "Assistant"
+}
+
 // --- Special tool result formatting ---
 
 // formatSpecialToolResult returns a specially formatted output for certain tool types.
 // Returns empty string if no special formatting applies.
-func formatSpecialToolResult(toolName, rawArgs, result string, isError bool) string {
+func formatSpecialToolResult(lang Lang, toolName, rawArgs, result string, isError bool) string {
 	if isError {
 		return ""
 	}
 
 	switch toolName {
 	case "todo_write":
-		return formatTodoResult(rawArgs)
+		return formatTodoResult(lang, rawArgs)
 	case "run_command", "bash", "powershell", "start_command":
-		return formatCommandResult(rawArgs, result, isError)
+		return formatCommandResult(lang, rawArgs, result, isError)
 	default:
 		// Check for MCP-style tool names (contain underscores or dots)
 		if strings.Contains(toolName, "_") || strings.Contains(toolName, ".") {
-			return formatMCPToolResult(toolName, rawArgs, result, isError)
+			return formatMCPToolResult(lang, toolName, rawArgs, result, isError)
 		}
 		return ""
 	}
 }
 
 // formatTodoResult renders todo_write as a markdown checklist.
-func formatTodoResult(rawArgs string) string {
+func formatTodoResult(lang Lang, rawArgs string) string {
 	var args struct {
 		Todos []struct {
 			Subject     string `json:"subject"`
@@ -240,7 +264,11 @@ func formatTodoResult(rawArgs string) string {
 
 	var sb strings.Builder
 	sb.WriteString(ansiDimYellow)
-	sb.WriteString("  📋 待办事项:" + nl)
+	todoLabel := "  📋 Todos:"
+	if lang == LangZhCN {
+		todoLabel = "  📋 待办事项:"
+	}
+	sb.WriteString(todoLabel + nl)
 	for _, t := range args.Todos {
 		icon := "○"
 		if t.Status == "completed" {
@@ -259,7 +287,7 @@ func formatTodoResult(rawArgs string) string {
 }
 
 // formatCommandResult renders command execution with output summary.
-func formatCommandResult(rawArgs, result string, isError bool) string {
+func formatCommandResult(lang Lang, rawArgs, result string, isError bool) string {
 	var args struct {
 		Command string `json:"command"`
 	}
@@ -294,7 +322,11 @@ func formatCommandResult(rawArgs, result string, isError bool) string {
 			for _, line := range lines[:maxLines] {
 				sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
 			}
-			sb.WriteString(fmt.Sprintf("%s    ... (%d more lines)%s"+nl, ansiDim, len(lines)-maxLines, ansiReset))
+			moreLabel := fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)
+			if lang == LangZhCN {
+				moreLabel = fmt.Sprintf("... (还有 %d 行)", len(lines)-maxLines)
+			}
+			sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, moreLabel, ansiReset))
 		} else {
 			for _, line := range lines {
 				sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
@@ -306,7 +338,7 @@ func formatCommandResult(rawArgs, result string, isError bool) string {
 }
 
 // formatMCPToolResult renders MCP tool calls with name, args summary, and result.
-func formatMCPToolResult(toolName, rawArgs, result string, isError bool) string {
+func formatMCPToolResult(lang Lang, toolName, rawArgs, result string, isError bool) string {
 	icon := "  ✓"
 	resultColor := ansiDim
 	if isError {
