@@ -1389,6 +1389,68 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 	return c.Save()
 }
 
+// RemoveIMAdapter removes an IM adapter from the configuration.
+func (c *Config) RemoveIMAdapter(name string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("adapter name is required")
+	}
+	if c.IM.Adapters == nil {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	if _, exists := c.IM.Adapters[name]; !exists {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	delete(c.IM.Adapters, name)
+	return c.Save()
+}
+
+// SetIMAdapterEnabled toggles the enabled state of an IM adapter.
+func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	name = strings.TrimSpace(name)
+	if c.IM.Adapters == nil {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	adapter, ok := c.IM.Adapters[name]
+	if !ok {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	adapter.Enabled = enabled
+	c.IM.Adapters[name] = adapter
+	return c.Save()
+}
+
+// SetIMAdapterExtra sets a single key in the adapter's Extra map.
+func (c *Config) SetIMAdapterExtra(name, key, value string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	name = strings.TrimSpace(name)
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("key is required")
+	}
+	if c.IM.Adapters == nil {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	adapter, ok := c.IM.Adapters[name]
+	if !ok {
+		return fmt.Errorf("IM adapter %q not found", name)
+	}
+	if adapter.Extra == nil {
+		adapter.Extra = make(map[string]interface{})
+	}
+	adapter.Extra[key] = value
+	c.IM.Adapters[name] = adapter
+	return c.Save()
+}
+
 func boolPtr(v bool) *bool {
 	return &v
 }
