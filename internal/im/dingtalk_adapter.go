@@ -3,10 +3,13 @@ package im
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
 const (
@@ -285,12 +289,16 @@ func (a *dingtalkAdapter) handleBotMessage(ctx context.Context, body string, mes
 		text = content
 	}
 
+	// Process non-text message types
+	msgType, _ := msgData["msgtype"].(string)
+	attachments := a.processDingTalkAttachments(ctx, msgType, msgData, messageID)
+
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return
 	}
 
-	debug.Log("dingtalk", "adapter=%s inbound conversation=%s sender=%s len=%d", a.name, conversationID, senderID, len(text))
+	debug.Log("dingtalk", "adapter=%s inbound conversation=%s sender=%s msgType=%s len=%d attachments=%d", a.name, conversationID, senderID, msgType, len(text), len(attachments))
 
 	// Send ack response
 	if conn != nil && messageID != "" {
@@ -314,7 +322,8 @@ func (a *dingtalkAdapter) handleBotMessage(ctx context.Context, body string, mes
 			MessageID:  messageID,
 			ReceivedAt: time.Now(),
 		},
-		Text: text,
+		Text:        text,
+		Attachments: attachments,
 	}
 
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
@@ -336,6 +345,168 @@ func (a *dingtalkAdapter) handleBotMessage(ctx context.Context, body string, mes
 		if err != ErrNoChannelBound {
 			a.publishState(false, "warning", err.Error())
 		}
+	}
+}
+
+// processDingTalkAttachments handles non-text message types (picture, voice, file).
+// DingTalk Stream API sends msgtype + corresponding content field.
+func (a *dingtalkAdapter) processDingTalkAttachments(ctx context.Context, msgType string, msgData map[string]any, messageID string) []Attachment {
+	switch msgType {
+	case "picture":
+		picData, _ := msgData["content"].(map[string]any)
+		if picData == nil {
+			picData, _ = msgData["picture"].(map[string]any)
+		}
+		if picData == nil {
+			return nil
+		}
+		downloadCode, _ := picData["downloadCode"].(string)
+		if downloadCode == "" {
+			return nil
+		}
+		data, mimeType, err := a.downloadDingTalkFile(ctx, downloadCode)
+		if err != nil {
+			debug.Log("dingtalk", "adapter=%s download image failed: %v", a.name, err)
+			return nil
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
+			mimeType = decoded.MIME
+		}
+		return []Attachment{{
+			Kind:       AttachmentImage,
+			Name:       "image.jpg",
+			MIME:       mimeType,
+			DataBase64: base64.StdEncoding.EncodeToString(data),
+		}}
+	case "voice":
+		voiceData, _ := msgData["content"].(map[string]any)
+		if voiceData == nil {
+			voiceData, _ = msgData["voice"].(map[string]any)
+		}
+		if voiceData == nil {
+			return nil
+		}
+		downloadCode, _ := voiceData["downloadCode"].(string)
+		if downloadCode == "" {
+			return nil
+		}
+		data, mimeType, err := a.downloadDingTalkFile(ctx, downloadCode)
+		if err != nil {
+			debug.Log("dingtalk", "adapter=%s download voice failed: %v", a.name, err)
+			return nil
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		return []Attachment{{
+			Kind: AttachmentVoice,
+			Name: "voice.amr",
+			MIME: mimeType,
+		}}
+	case "file", "richText":
+		fileData, _ := msgData["content"].(map[string]any)
+		if fileData == nil {
+			fileData, _ = msgData[msgType].(map[string]any)
+		}
+		if fileData == nil {
+			return nil
+		}
+		downloadCode, _ := fileData["downloadCode"].(string)
+		fileName, _ := fileData["fileName"].(string)
+		if downloadCode == "" {
+			return nil
+		}
+		data, mimeType, err := a.downloadDingTalkFile(ctx, downloadCode)
+		if err != nil {
+			debug.Log("dingtalk", "adapter=%s download file failed: %v", a.name, err)
+			return nil
+		}
+		localPath, cacheErr := cacheDingTalkAttachment(data, fileName, mimeType)
+		if cacheErr != nil {
+			debug.Log("dingtalk", "adapter=%s cache file failed: %v", a.name, cacheErr)
+		}
+		return []Attachment{{
+			Kind: AttachmentFile,
+			Name: fileName,
+			MIME: mimeType,
+			Path: localPath,
+		}}
+	}
+	return nil
+}
+
+// downloadDingTalkFile downloads a file using the robot's downloadCode.
+// DingTalk API: POST https://api.dingtalk.com/v1.0/robot/messageFiles/download
+func (a *dingtalkAdapter) downloadDingTalkFile(ctx context.Context, downloadCode string) ([]byte, string, error) {
+	a.mu.RLock()
+	token := a.accessToken
+	a.mu.RUnlock()
+
+	url := dingtalkAPIBase + "/v1.0/robot/messageFiles/download"
+	body := map[string]any{"downloadCode": downloadCode}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("x-acs-dingtalk-access-token", token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("DingTalk download [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, strings.TrimSpace(resp.Header.Get("Content-Type")), nil
+}
+
+func cacheDingTalkAttachment(data []byte, filename, mimeType string) (string, error) {
+	ext := filepath.Ext(strings.TrimSpace(filename))
+	if ext == "" {
+		ext = dingtalkAttachmentExt(mimeType)
+	}
+	tmpFile, err := os.CreateTemp("", "ggcode-dingtalk-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	return tmpFile.Name(), nil
+}
+
+func dingtalkAttachmentExt(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "audio/amr":
+		return ".amr"
+	case "audio/wav":
+		return ".wav"
+	case "application/pdf":
+		return ".pdf"
+	default:
+		return ".bin"
 	}
 }
 

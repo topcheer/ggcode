@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
 const (
@@ -250,12 +251,15 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		return
 	}
 
+	// Process file attachments (images, files)
+	attachments := a.processSlackAttachments(ctx, event)
+
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return
 	}
 
-	debug.Log("slack", "adapter=%s inbound channel=%s user=%s len=%d", a.name, channel, userID, len(text))
+	debug.Log("slack", "adapter=%s inbound channel=%s user=%s len=%d attachments=%d", a.name, channel, userID, len(text), len(attachments))
 
 	inbound := InboundMessage{
 		Envelope: Envelope{
@@ -266,7 +270,8 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 			MessageID:  ts,
 			ReceivedAt: time.Now(),
 		},
-		Text: text,
+		Text:        text,
+		Attachments: attachments,
 	}
 
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
@@ -288,6 +293,118 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		if err != ErrNoChannelBound {
 			a.publishState(false, "warning", err.Error())
 		}
+	}
+}
+
+// processSlackAttachments extracts file attachments from a Slack message event.
+func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[string]any) []Attachment {
+	files, ok := event["files"].([]any)
+	if !ok || len(files) == 0 {
+		return nil
+	}
+	var attachments []Attachment
+	for _, f := range files {
+		file, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		fileID, _ := file["id"].(string)
+		mimetype, _ := file["mimetype"].(string)
+		name, _ := file["name"].(string)
+		// url_private_download is the direct download URL (needs Authorization header)
+		downloadURL, _ := file["url_private_download"].(string)
+		if downloadURL == "" {
+			downloadURL, _ = file["url_private"].(string)
+		}
+		if downloadURL == "" {
+			continue
+		}
+		data, respMime, err := a.downloadSlackFile(ctx, downloadURL)
+		if err != nil {
+			debug.Log("slack", "adapter=%s download file %s failed: %v", a.name, fileID, err)
+			continue
+		}
+		if strings.HasPrefix(mimetype, "image/") || strings.HasPrefix(respMime, "image/") {
+			if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
+				respMime = decoded.MIME
+			}
+			attachments = append(attachments, Attachment{
+				Kind:       AttachmentImage,
+				Name:       name,
+				MIME:       firstNonEmpty(mimetype, respMime),
+				DataBase64: base64.StdEncoding.EncodeToString(data),
+			})
+		} else {
+			localPath, cacheErr := cacheSlackAttachment(data, name, firstNonEmpty(mimetype, respMime))
+			if cacheErr != nil {
+				debug.Log("slack", "adapter=%s cache file failed: %v", a.name, cacheErr)
+			}
+			attachments = append(attachments, Attachment{
+				Kind: AttachmentFile,
+				Name: name,
+				MIME: firstNonEmpty(mimetype, respMime),
+				Path: localPath,
+			})
+		}
+	}
+	return attachments
+}
+
+func (a *slackAdapter) downloadSlackFile(ctx context.Context, url string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.botToken)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("Slack download [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, strings.TrimSpace(resp.Header.Get("Content-Type")), nil
+}
+
+func cacheSlackAttachment(data []byte, filename, mimeType string) (string, error) {
+	ext := filepath.Ext(strings.TrimSpace(filename))
+	if ext == "" {
+		ext = slackAttachmentExt(mimeType)
+	}
+	tmpFile, err := os.CreateTemp("", "ggcode-slack-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	return tmpFile.Name(), nil
+}
+
+func slackAttachmentExt(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "application/pdf":
+		return ".pdf"
+	default:
+		return ".bin"
 	}
 }
 
