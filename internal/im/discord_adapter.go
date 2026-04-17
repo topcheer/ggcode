@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
 const (
@@ -257,11 +258,15 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 	messageID, _ := d["id"].(string)
 
 	content = strings.TrimSpace(content)
-	if content == "" {
+
+	// Process attachments (images, files)
+	attachments := a.processDiscordAttachments(ctx, d)
+
+	if content == "" && len(attachments) == 0 {
 		return
 	}
 
-	debug.Log("discord", "adapter=%s inbound channel=%s sender=%s len=%d", a.name, channelID, senderID, len(content))
+	debug.Log("discord", "adapter=%s inbound channel=%s sender=%s len=%d attachments=%d", a.name, channelID, senderID, len(content), len(attachments))
 
 	inbound := InboundMessage{
 		Envelope: Envelope{
@@ -273,7 +278,8 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 			MessageID:  messageID,
 			ReceivedAt: time.Now(),
 		},
-		Text: content,
+		Text:        content,
+		Attachments: attachments,
 	}
 
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
@@ -295,6 +301,120 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 		if err != ErrNoChannelBound {
 			a.publishState(false, "warning", err.Error())
 		}
+	}
+}
+
+// processDiscordAttachments extracts image and file attachments from a Discord message.
+func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[string]any) []Attachment {
+	raw, ok := d["attachments"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	var attachments []Attachment
+	for _, item := range raw {
+		att, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		url, _ := att["url"].(string)
+		contentType, _ := att["content_type"].(string)
+		filename, _ := att["filename"].(string)
+		if url == "" {
+			continue
+		}
+		if strings.HasPrefix(contentType, "image/") {
+			// Download image data
+			data, mimeType, err := a.downloadDiscordAttachment(ctx, url)
+			if err != nil {
+				debug.Log("discord", "adapter=%s download image failed: %v", a.name, err)
+				continue
+			}
+			if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
+				mimeType = decoded.MIME
+			}
+			attachments = append(attachments, Attachment{
+				Kind:       AttachmentImage,
+				Name:       filename,
+				MIME:       mimeType,
+				DataBase64: base64.StdEncoding.EncodeToString(data),
+			})
+		} else {
+			// Non-image file: download and cache locally
+			data, mimeType, err := a.downloadDiscordAttachment(ctx, url)
+			if err != nil {
+				debug.Log("discord", "adapter=%s download file failed: %v", a.name, err)
+				continue
+			}
+			localPath, cacheErr := cacheDiscordAttachment(data, filename, firstNonEmpty(contentType, mimeType))
+			if cacheErr != nil {
+				debug.Log("discord", "adapter=%s cache file failed: %v", a.name, cacheErr)
+			}
+			attachments = append(attachments, Attachment{
+				Kind: AttachmentFile,
+				Name: filename,
+				MIME: firstNonEmpty(contentType, mimeType),
+				Path: localPath,
+			})
+		}
+	}
+	return attachments
+}
+
+func (a *discordAdapter) downloadDiscordAttachment(ctx context.Context, url string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, "", fmt.Errorf("Discord download [%d]", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, strings.TrimSpace(resp.Header.Get("Content-Type")), nil
+}
+
+func cacheDiscordAttachment(data []byte, filename, mimeType string) (string, error) {
+	ext := filepath.Ext(strings.TrimSpace(filename))
+	if ext == "" {
+		ext = discordAttachmentExt(mimeType)
+	}
+	tmpFile, err := os.CreateTemp("", "ggcode-discord-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	return tmpFile.Name(), nil
+}
+
+func discordAttachmentExt(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "application/pdf":
+		return ".pdf"
+	default:
+		return ".bin"
 	}
 }
 

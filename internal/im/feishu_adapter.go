@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +25,8 @@ import (
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imstt "github.com/topcheer/ggcode/internal/im/stt"
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
 const (
@@ -48,9 +51,10 @@ type feishuAdapter struct {
 	token       string
 	tokenExpire time.Time
 	httpServer  *http.Server
+	stt         imstt.Transcriber
 }
 
-func newFeishuAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*feishuAdapter, error) {
+func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*feishuAdapter, error) {
 	appID := strings.TrimSpace(stringValue(adapterCfg.Extra, "app_id"))
 	if appID == "" {
 		return nil, fmt.Errorf("Feishu app_id is required for adapter %q", name)
@@ -74,7 +78,7 @@ func newFeishuAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 			_ = err
 		}
 	}
-	return &feishuAdapter{
+	adapter := &feishuAdapter{
 		name:        name,
 		manager:     mgr,
 		httpClient:  &http.Client{Timeout: 30 * time.Second},
@@ -84,7 +88,30 @@ func newFeishuAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 		verifyToken: verifyToken,
 		domain:      domain,
 		webhookPort: webhookPort,
-	}, nil
+	}
+	adapter.stt = buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveFeishuSTTConfig)
+	return adapter, nil
+}
+
+func resolveFeishuSTTConfig(global config.IMSTTConfig, extra map[string]interface{}) *config.IMSTTConfig {
+	var cfg config.IMSTTConfig
+	hasOverride := false
+	if sttExtra, ok := extra["stt"].(map[string]interface{}); ok {
+		cfg.Provider = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["provider"])), cfg.Provider)
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["baseUrl"])), strings.TrimSpace(stringFromAny(sttExtra["base_url"])), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["apiKey"])), strings.TrimSpace(stringFromAny(sttExtra["api_key"])), cfg.APIKey)
+		cfg.Model = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["model"])), cfg.Model)
+		if cfg.Provider != "" || cfg.BaseURL != "" || cfg.APIKey != "" || cfg.Model != "" {
+			hasOverride = true
+		}
+	}
+	if !hasOverride {
+		if global.Provider == "" && global.BaseURL == "" && global.APIKey == "" {
+			return nil
+		}
+		return &global
+	}
+	return &cfg
 }
 
 func (a *feishuAdapter) Name() string { return a.name }
@@ -185,15 +212,25 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 
 	debug.Log("feishu", "adapter=%s raw inbound: chat=%s msgType=%s chatType=%s sender=%s contentLen=%d", a.name, chatID, msgType, chatType, openID, len(content))
 
+	// Process non-text message types into attachments
+	attachments, voiceText := a.processAttachments(ctx, msgType, content, messageID)
+
 	// Parse text content
 	text := a.parseMessageContent(content)
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if voiceText != "" {
+		if text != "" {
+			text += "\n\n" + voiceText
+		} else {
+			text = voiceText
+		}
+	}
+	if text == "" && len(attachments) == 0 {
 		debug.Log("feishu", "adapter=%s parsed text is empty, content=%q, msgType=%s", a.name, content, msgType)
 		return
 	}
 
-	debug.Log("feishu", "adapter=%s inbound chat=%s type=%s sender=%s len=%d", a.name, chatID, chatType, openID, len(text))
+	debug.Log("feishu", "adapter=%s inbound chat=%s type=%s sender=%s len=%d attachments=%d", a.name, chatID, chatType, openID, len(text), len(attachments))
 
 	inbound := InboundMessage{
 		Envelope: Envelope{
@@ -204,7 +241,8 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 			MessageID:  messageID,
 			ReceivedAt: time.Now(),
 		},
-		Text: text,
+		Text:        text,
+		Attachments: attachments,
 	}
 
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
@@ -446,6 +484,248 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 		if err != ErrNoChannelBound {
 			a.publishState(false, "warning", err.Error())
 		}
+	}
+}
+
+// processAttachments handles non-text message types (image, audio, file)
+// and returns attachments plus an optional voice transcript text.
+func (a *feishuAdapter) processAttachments(ctx context.Context, msgType, content, messageID string) ([]Attachment, string) {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return nil, ""
+	}
+
+	switch msgType {
+	case "image":
+		return a.processImageAttachment(ctx, parsed)
+	case "audio":
+		return a.processAudioAttachment(ctx, parsed, messageID)
+	case "file":
+		return a.processFileAttachment(ctx, parsed, messageID)
+	case "sticker":
+		// Sticker is essentially an image
+		return a.processImageAttachment(ctx, parsed)
+	}
+	return nil, ""
+}
+
+func (a *feishuAdapter) processImageAttachment(ctx context.Context, parsed map[string]any) ([]Attachment, string) {
+	imageKey, _ := parsed["image_key"].(string)
+	if imageKey == "" {
+		return nil, ""
+	}
+	data, mimeType, err := a.downloadFeishuImage(ctx, imageKey)
+	if err != nil {
+		debug.Log("feishu", "adapter=%s download image %s failed: %v", a.name, imageKey, err)
+		return nil, ""
+	}
+	if len(data) == 0 {
+		return nil, ""
+	}
+	// Detect real MIME type from content
+	if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
+		mimeType = decoded.MIME
+	}
+	return []Attachment{{
+		Kind:       AttachmentImage,
+		Name:       "image.jpg",
+		MIME:       mimeType,
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+	}}, ""
+}
+
+func (a *feishuAdapter) processAudioAttachment(ctx context.Context, parsed map[string]any, messageID string) ([]Attachment, string) {
+	fileKey, _ := parsed["file_key"].(string)
+	if fileKey == "" {
+		return nil, ""
+	}
+	data, mimeType, err := a.downloadFeishuResource(ctx, messageID, fileKey, "file")
+	if err != nil {
+		debug.Log("feishu", "adapter=%s download audio %s failed: %v", a.name, fileKey, err)
+		return nil, ""
+	}
+	if len(data) == 0 {
+		return nil, ""
+	}
+
+	// Try STT transcription
+	transcript := ""
+	if a.stt != nil {
+		transcript = a.transcribeFeishuAudio(ctx, data, mimeType)
+	}
+
+	return []Attachment{{
+		Kind:       AttachmentVoice,
+		Name:       "audio.opus",
+		MIME:       mimeType,
+		Transcript: transcript,
+	}}, transcript
+}
+
+func (a *feishuAdapter) processFileAttachment(ctx context.Context, parsed map[string]any, messageID string) ([]Attachment, string) {
+	fileKey, _ := parsed["file_key"].(string)
+	fileName, _ := parsed["file_name"].(string)
+	if fileKey == "" {
+		return nil, ""
+	}
+	data, mimeType, err := a.downloadFeishuResource(ctx, messageID, fileKey, "file")
+	if err != nil {
+		debug.Log("feishu", "adapter=%s download file %s failed: %v", a.name, fileKey, err)
+		return nil, ""
+	}
+	if len(data) == 0 {
+		return nil, ""
+	}
+	// Cache file locally
+	localPath, cacheErr := cacheFeishuAttachment(data, fileName, mimeType)
+	if cacheErr != nil {
+		debug.Log("feishu", "adapter=%s cache file failed: %v", a.name, cacheErr)
+	}
+	return []Attachment{{
+		Kind: AttachmentFile,
+		Name: fileName,
+		MIME: mimeType,
+		Path: localPath,
+	}}, ""
+}
+
+// downloadFeishuImage downloads an image by image_key via GET /im/v1/images/{image_key}.
+func (a *feishuAdapter) downloadFeishuImage(ctx context.Context, imageKey string) ([]byte, string, error) {
+	apiBase := a.resolveAPIBase()
+	url := apiBase + "/im/v1/images/" + imageKey
+	return a.downloadFeishuFile(ctx, url)
+}
+
+// downloadFeishuResource downloads a message resource (audio/file) via
+// GET /im/v1/messages/{message_id}/resources/{file_key}?type=file.
+func (a *feishuAdapter) downloadFeishuResource(ctx context.Context, messageID, fileKey, resourceType string) ([]byte, string, error) {
+	apiBase := a.resolveAPIBase()
+	url := apiBase + "/im/v1/messages/" + messageID + "/resources/" + fileKey + "?type=" + resourceType
+	return a.downloadFeishuFile(ctx, url)
+}
+
+func (a *feishuAdapter) downloadFeishuFile(ctx context.Context, url string) ([]byte, string, error) {
+	a.mu.RLock()
+	token := a.token
+	a.mu.RUnlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("Feishu download [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, strings.TrimSpace(resp.Header.Get("Content-Type")), nil
+}
+
+func (a *feishuAdapter) transcribeFeishuAudio(ctx context.Context, data []byte, mimeType string) string {
+	ext := ".opus"
+	if strings.Contains(mimeType, "wav") {
+		ext = ".wav"
+	} else if strings.Contains(mimeType, "mp3") || strings.Contains(mimeType, "mpeg") {
+		ext = ".mp3"
+	} else if strings.Contains(mimeType, "ogg") {
+		ext = ".ogg"
+	}
+
+	src, err := os.CreateTemp("", "ggcode-feishu-audio-*"+ext)
+	if err != nil {
+		return ""
+	}
+	if _, err := src.Write(data); err != nil {
+		src.Close()
+		return ""
+	}
+	src.Close()
+	audioPath := src.Name()
+	cleanup := func() { _ = os.Remove(audioPath) }
+
+	// Convert to wav if needed
+	if ext != ".wav" {
+		dst, err := os.CreateTemp("", "ggcode-feishu-audio-*.wav")
+		if err != nil {
+			cleanup()
+			return ""
+		}
+		dst.Close()
+		cmd := exec.Command("ffmpeg", "-y", "-i", audioPath, dst.Name())
+		if _, err := cmd.CombinedOutput(); err != nil {
+			_ = os.Remove(dst.Name())
+			cleanup()
+			return ""
+		}
+		cleanup()
+		audioPath = dst.Name()
+		cleanup = func() { _ = os.Remove(audioPath) }
+	}
+	defer cleanup()
+
+	result, err := a.stt.Transcribe(ctx, imstt.Request{
+		MIME: "audio/wav",
+		Name: filepath.Base(audioPath),
+		Path: audioPath,
+	})
+	if err != nil {
+		debug.Log("feishu", "adapter=%s STT failed: %v", a.name, err)
+		return ""
+	}
+	return strings.TrimSpace(result.Text)
+}
+
+// cacheFeishuAttachment writes attachment data to a temp file.
+func cacheFeishuAttachment(data []byte, filename, mimeType string) (string, error) {
+	ext := filepath.Ext(strings.TrimSpace(filename))
+	if ext == "" {
+		ext = feishuAttachmentExt(mimeType)
+	}
+	tmpFile, err := os.CreateTemp("", "ggcode-feishu-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	return tmpFile.Name(), nil
+}
+
+func feishuAttachmentExt(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "audio/ogg", "audio/opus":
+		return ".opus"
+	case "audio/wav":
+		return ".wav"
+	case "audio/mpeg", "audio/mp3":
+		return ".mp3"
+	case "application/pdf":
+		return ".pdf"
+	default:
+		return ".bin"
 	}
 }
 
