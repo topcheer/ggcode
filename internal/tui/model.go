@@ -754,7 +754,7 @@ func (m *Model) SetIMManager(mgr *im.Manager) {
 		if m.language == LangZhCN {
 			lang = "zh-CN"
 		}
-		m.imEmitter = im.NewIMEmitter(mgr, lang)
+		m.imEmitter = im.NewIMEmitter(mgr, lang, m.autoCompleteWorkDir)
 	}
 	m.refreshIMRuntimeHooks()
 	m.bindIMSession()

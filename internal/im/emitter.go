@@ -10,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // IMEmitter handles asynchronous outbound IM event emission with typing keepalive.
@@ -19,6 +20,7 @@ type IMEmitter struct {
 	typing     *imTypingKeeper
 	manager    *Manager
 	language   string // "zh-CN" or "en"
+	workDir    string // project working directory for path relativization
 	lastStatus string // dedup status messages
 }
 
@@ -62,11 +64,12 @@ type imTypingKeeper struct {
 
 const imTypingKeepaliveInterval = 5 * time.Second
 
-// NewIMEmitter creates a new IM emitter for the given manager and language.
-func NewIMEmitter(mgr *Manager, lang string) *IMEmitter {
+// NewIMEmitter creates a new IM emitter for the given manager, language, and working directory.
+func NewIMEmitter(mgr *Manager, lang, workDir string) *IMEmitter {
 	return &IMEmitter{
 		manager:  mgr,
 		language: lang,
+		workDir:  workDir,
 	}
 }
 
@@ -86,6 +89,15 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 			return
 		}
 	}
+
+	// Relativize absolute paths in all output text
+	event.Text = e.relativizePaths(event.Text)
+	event.Status = e.relativizePaths(event.Status)
+	if event.ToolRes != nil {
+		event.ToolRes.Args = e.relativizePaths(event.ToolRes.Args)
+		event.ToolRes.Result = e.relativizePaths(event.ToolRes.Result)
+	}
+
 	switch event.Kind {
 	case OutboundEventText:
 		debug.Log("emitter", "emit im text len=%d", len(event.Text))
@@ -252,4 +264,9 @@ func extractAskUserTarget(rawArgs string) string {
 		return title
 	}
 	return ""
+}
+
+// relativizePaths replaces absolute paths under workDir with relative paths (./).
+func (e *IMEmitter) relativizePaths(text string) string {
+	return util.RelativizePaths(text, e.workDir)
 }

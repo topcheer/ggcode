@@ -8,13 +8,14 @@ import (
 	"sync"
 
 	charm "charm.land/glamour/v2"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // FollowSink receives agent events for terminal follow-mode display.
 type FollowSink interface {
 	// OnUserMessage displays a user message.
 	OnUserMessage(text string)
-	// OnToolStatus displays a tool status line.
+	// OnToolStatus is called when a tool starts (used only for internal tracking, not display).
 	OnToolStatus(toolName, rawArgs string)
 	// OnToolResult displays the result of a tool call.
 	OnToolResult(toolName, rawArgs, result string, isError bool)
@@ -36,6 +37,14 @@ const (
 	LangEn   Lang = "en"
 )
 
+// ResolveLang returns a Lang from a raw config language string.
+func ResolveLang(s string) Lang {
+	if s == "zh-CN" || s == "zh" {
+		return LangZhCN
+	}
+	return LangEn
+}
+
 // ToolFormatter is a function that formats tool activity for display.
 // It takes a tool name and raw JSON args, and returns a human-readable status string.
 type ToolFormatter func(toolName, rawArgs string) string
@@ -54,33 +63,81 @@ const (
 	nl = "\r\n"
 )
 
-// pendingToolCall tracks a tool call waiting for its result.
-type pendingToolCall struct {
-	toolName string
-	rawArgs  string
-	status   string // formatted status text
+// --- i18n catalog for daemon/follow output ---
+
+var catalogEn = map[string]string{
+	"daemon.started_bg":    "ggcode daemon started in background (PID: %d)",
+	"daemon.workdir":       "Working directory: %s",
+	"daemon.started":       "ggcode daemon started (session: %s)",
+	"daemon.keys_full":     "Press x to exit, d for background, f to toggle follow",
+	"daemon.keys_minimal":  "Press x to exit",
+	"daemon.shutting_down": "\nShutting down...",
+	"daemon.stopped":       "ggcode daemon stopped",
+	"daemon.follow_on":     "follow mode enabled",
+	"daemon.follow_off":    "follow mode disabled",
+	"daemon.bg_ok":         "Switched to background (PID: %d)",
+	"daemon.bg_fail":       "Failed to start background: %v",
+	"daemon.no_binding":    "No IM channel paired with this workspace.\nPair an IM channel via /qq, /tg etc in TUI mode first, then use daemon mode.",
+
+	"follow.user":         "User",
+	"follow.assistant":    "Assistant",
+	"follow.todos_header": "  📋 Todos:",
+	"follow.more_lines":   "... (%d more lines)",
+}
+
+var catalogZhCN = map[string]string{
+	"daemon.started_bg":    "ggcode daemon 已在后台启动 (PID: %d)",
+	"daemon.workdir":       "工作目录: %s",
+	"daemon.started":       "ggcode daemon 已启动 (session: %s)",
+	"daemon.keys_full":     "按 x 退出, d 后台运行, f 切换 follow 模式",
+	"daemon.keys_minimal":  "按 x 退出",
+	"daemon.shutting_down": "\n正在关闭...",
+	"daemon.stopped":       "ggcode daemon 已停止",
+	"daemon.follow_on":     "follow 模式已开启",
+	"daemon.follow_off":    "follow 模式已关闭",
+	"daemon.bg_ok":         "已切换到后台 (PID: %d)",
+	"daemon.bg_fail":       "后台启动失败: %v",
+	"daemon.no_binding":    "当前工作目录没有配对的 IM 渠道。\n请先在 TUI 模式下通过 /qq、/tg 等命令配对 IM 渠道，然后再使用 daemon 模式。",
+
+	"follow.user":         "用户",
+	"follow.assistant":    "助手",
+	"follow.todos_header": "  📋 待办事项:",
+	"follow.more_lines":   "... (还有 %d 行)",
+}
+
+// Tr looks up a localized string by key. Falls back to English if key missing.
+func Tr(lang Lang, key string, args ...any) string {
+	var msg string
+	if lang == LangZhCN {
+		msg = catalogZhCN[key]
+	}
+	if msg == "" {
+		msg = catalogEn[key]
+	}
+	if len(args) == 0 {
+		return msg
+	}
+	return fmt.Sprintf(msg, args...)
 }
 
 // TerminalFollowDisplay renders agent activity to the terminal using ANSI codes.
 type TerminalFollowDisplay struct {
-	out         *os.File
-	formatTool  ToolFormatter
-	lang        Lang
-	mu          sync.Mutex
-	roundBuf    strings.Builder
-	hasToolLine bool
-
-	// Pending tool call awaiting result
-	pendingTool *pendingToolCall
+	out        *os.File
+	formatTool ToolFormatter
+	lang       Lang
+	workDir    string // project working directory, for path relativization
+	mu         sync.Mutex
+	roundBuf   strings.Builder
 }
 
 // NewTerminalFollowDisplay creates a new follow display writing to the given file.
 // The formatTool callback is used to format tool status strings; if nil, tool names
 // are displayed as-is.
-func NewTerminalFollowDisplay(out *os.File, lang Lang, formatTool ToolFormatter) *TerminalFollowDisplay {
+func NewTerminalFollowDisplay(out *os.File, lang Lang, workDir string, formatTool ToolFormatter) *TerminalFollowDisplay {
 	return &TerminalFollowDisplay{
 		out:        out,
 		lang:       lang,
+		workDir:    workDir,
 		formatTool: formatTool,
 	}
 }
@@ -89,53 +146,23 @@ func NewTerminalFollowDisplay(out *os.File, lang Lang, formatTool ToolFormatter)
 func (d *TerminalFollowDisplay) OnUserMessage(text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.clearToolLine()
-	text = truncateForTerminal(text, 200)
-	fmt.Fprintf(d.out, "%s[%s]%s %s"+nl, ansiCyanBold, d.userLabel(), ansiReset, text)
+	text = truncateForTerminal(d.relativizePaths(text), 200)
+	fmt.Fprintf(d.out, "%s[%s]%s %s"+nl, ansiCyanBold, Tr(d.lang, "follow.user"), ansiReset, text)
 }
 
-// OnToolStatus displays a pending tool status line.
-// The display is buffered — we'll wait for OnToolResult to show the combined output.
+// OnToolStatus is a no-op — we only display final results via OnToolResult.
 func (d *TerminalFollowDisplay) OnToolStatus(toolName, rawArgs string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	var status string
-	if d.formatTool != nil {
-		status = d.formatTool(toolName, rawArgs)
-	}
-	if status == "" {
-		status = prettifyToolName(toolName)
-	}
-
-	// Store pending tool call — result will be shown via OnToolResult
-	d.pendingTool = &pendingToolCall{
-		toolName: toolName,
-		rawArgs:  rawArgs,
-		status:   status,
-	}
+	// intentionally not displayed
 }
 
-// OnToolResult displays the combined tool call + result.
+// OnToolResult displays the tool call result.
 func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, isError bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Match with pending tool call
-	pending := d.pendingTool
-	if pending != nil && pending.toolName == toolName {
-		d.pendingTool = nil
-		d.emitToolResult(pending.status, toolName, rawArgs, result, isError)
-	} else {
-		// No pending call matched — just show the result
-		status := prettifyToolName(toolName)
-		d.emitToolResult(status, toolName, rawArgs, result, isError)
-	}
-}
-
-// emitToolResult renders a tool call + result line.
-func (d *TerminalFollowDisplay) emitToolResult(status, toolName, rawArgs, result string, isError bool) {
-	d.clearToolLine()
+	// Relativize paths in args and result
+	rawArgs = d.relativizePaths(rawArgs)
+	result = d.relativizePaths(result)
 
 	// Special formatting for certain tool types
 	special := formatSpecialToolResult(d.lang, toolName, rawArgs, result, isError)
@@ -144,7 +171,7 @@ func (d *TerminalFollowDisplay) emitToolResult(status, toolName, rawArgs, result
 		return
 	}
 
-	// Default: show status + abbreviated result
+	// Default: show icon + tool name + abbreviated result
 	icon := "  ✓"
 	resultColor := ansiDim
 	if isError {
@@ -152,12 +179,13 @@ func (d *TerminalFollowDisplay) emitToolResult(status, toolName, rawArgs, result
 		resultColor = ansiRedBold
 	}
 
+	pretty := prettifyToolName(toolName)
 	resultPreview := summarizeToolResult(result, 120)
 	if resultPreview != "" {
-		fmt.Fprintf(d.out, "%s%s %s%s"+nl, resultColor, icon, status, ansiReset)
+		fmt.Fprintf(d.out, "%s%s %s%s"+nl, resultColor, icon, pretty, ansiReset)
 		fmt.Fprintf(d.out, "%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 120), ansiReset)
 	} else {
-		fmt.Fprintf(d.out, "%s%s %s%s"+nl, resultColor, icon, status, ansiReset)
+		fmt.Fprintf(d.out, "%s%s %s%s"+nl, resultColor, icon, pretty, ansiReset)
 	}
 }
 
@@ -168,35 +196,25 @@ func (d *TerminalFollowDisplay) OnStreamText(text string) {
 	d.roundBuf.WriteString(text)
 }
 
-// OnRoundDone displays the accumulated assistant text (rendered as markdown) and a separator.
+// OnRoundDone displays the accumulated assistant text rendered as markdown.
 func (d *TerminalFollowDisplay) OnRoundDone() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.clearToolLine()
-
-	// Flush any pending tool call that never got a result
-	if d.pendingTool != nil {
-		fmt.Fprintf(d.out, "%s  ⏳ %s%s"+nl, ansiDimYellow, d.pendingTool.status, ansiReset)
-		d.pendingTool = nil
-	}
 
 	text := strings.TrimSpace(d.roundBuf.String())
 	d.roundBuf.Reset()
 
 	if text != "" {
-		displayText := renderMarkdown(text)
-		fmt.Fprintf(d.out, "%s[%s]%s"+nl, ansiGreenBold, d.assistantLabel(), ansiReset)
+		displayText := renderMarkdown(d.relativizePaths(text))
+		fmt.Fprintf(d.out, "%s[%s]%s"+nl, ansiGreenBold, Tr(d.lang, "follow.assistant"), ansiReset)
 		fmt.Fprint(d.out, displayText+nl)
 	}
-	// Separator
-	fmt.Fprintf(d.out, "%s────────────────────────────────%s"+nl, ansiDim, ansiReset)
 }
 
 // OnError displays an error message.
 func (d *TerminalFollowDisplay) OnError(err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.clearToolLine()
 	fmt.Fprintf(d.out, "❌ %v"+nl, err)
 }
 
@@ -205,25 +223,9 @@ func (d *TerminalFollowDisplay) Close() {
 	// no-op for now
 }
 
-func (d *TerminalFollowDisplay) clearToolLine() {
-	if d.hasToolLine {
-		fmt.Fprintf(d.out, "%s", ansiClearLine)
-		d.hasToolLine = false
-	}
-}
-
-func (d *TerminalFollowDisplay) userLabel() string {
-	if d.lang == LangZhCN {
-		return "用户"
-	}
-	return "User"
-}
-
-func (d *TerminalFollowDisplay) assistantLabel() string {
-	if d.lang == LangZhCN {
-		return "助手"
-	}
-	return "Assistant"
+// relativizePaths replaces absolute paths under workDir with relative paths.
+func (d *TerminalFollowDisplay) relativizePaths(text string) string {
+	return util.RelativizePaths(text, d.workDir)
 }
 
 // --- Special tool result formatting ---
@@ -253,9 +255,9 @@ func formatSpecialToolResult(lang Lang, toolName, rawArgs, result string, isErro
 func formatTodoResult(lang Lang, rawArgs string) string {
 	var args struct {
 		Todos []struct {
-			Subject     string `json:"subject"`
-			Description string `json:"description"`
-			Status      string `json:"status"`
+			ID      string `json:"id"`
+			Content string `json:"content"`
+			Status  string `json:"status"`
 		} `json:"todos"`
 	}
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil || len(args.Todos) == 0 {
@@ -264,23 +266,15 @@ func formatTodoResult(lang Lang, rawArgs string) string {
 
 	var sb strings.Builder
 	sb.WriteString(ansiDimYellow)
-	todoLabel := "  📋 Todos:"
-	if lang == LangZhCN {
-		todoLabel = "  📋 待办事项:"
-	}
-	sb.WriteString(todoLabel + nl)
+	sb.WriteString(Tr(lang, "follow.todos_header") + nl)
 	for _, t := range args.Todos {
 		icon := "○"
-		if t.Status == "completed" {
+		if t.Status == "done" {
 			icon = "●"
 		} else if t.Status == "in_progress" {
 			icon = "◐"
 		}
-		desc := ""
-		if t.Description != "" {
-			desc = ansiDim + " — " + truncateForTerminal(t.Description, 60) + ansiReset + ansiDim
-		}
-		sb.WriteString(fmt.Sprintf("    %s %s%s"+nl, icon, t.Subject, desc))
+		sb.WriteString(fmt.Sprintf("    %s %s%s"+nl, icon, t.Content, ansiReset+ansiDimYellow))
 	}
 	sb.WriteString(ansiReset)
 	return sb.String()
@@ -322,11 +316,7 @@ func formatCommandResult(lang Lang, rawArgs, result string, isError bool) string
 			for _, line := range lines[:maxLines] {
 				sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
 			}
-			moreLabel := fmt.Sprintf("... (%d more lines)", len(lines)-maxLines)
-			if lang == LangZhCN {
-				moreLabel = fmt.Sprintf("... (还有 %d 行)", len(lines)-maxLines)
-			}
-			sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, moreLabel, ansiReset))
+			sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, Tr(lang, "follow.more_lines", len(lines)-maxLines), ansiReset))
 		} else {
 			for _, line := range lines {
 				sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
@@ -339,6 +329,7 @@ func formatCommandResult(lang Lang, rawArgs, result string, isError bool) string
 
 // formatMCPToolResult renders MCP tool calls with name, args summary, and result.
 func formatMCPToolResult(lang Lang, toolName, rawArgs, result string, isError bool) string {
+	_ = lang // MCP tool result formatting is language-independent for now
 	icon := "  ✓"
 	resultColor := ansiDim
 	if isError {

@@ -186,9 +186,8 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				b.emitter.EmitToolStatus(toolName, string(event.Tool.Arguments))
 			}
 			b.emitter.TriggerTyping()
-			if b.followSink != nil {
-				b.followSink.OnToolStatus(toolName, string(event.Tool.Arguments))
-			}
+			// Note: followSink does NOT get OnToolStatus — only final
+			// OnToolResult is forwarded to keep terminal output clean.
 
 		case provider.StreamEventToolResult:
 			if event.IsError {
