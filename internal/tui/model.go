@@ -90,9 +90,7 @@ type Model struct {
 	session                         *session.Session
 	sessionStore                    session.Store
 	imManager                       *im.Manager
-	imEmitter                       *imEmitterState
-	imTypingLast                    *imTypingKeeper
-	lastIMStatus                    string
+	imEmitter                       *im.IMEmitter
 	mcpServers                      []MCPInfo
 	config                          *config.Config
 	language                        Language
@@ -751,6 +749,13 @@ func (m *Model) Session() *session.Session {
 
 func (m *Model) SetIMManager(mgr *im.Manager) {
 	m.imManager = mgr
+	if mgr != nil {
+		lang := "en"
+		if m.language == LangZhCN {
+			lang = "zh-CN"
+		}
+		m.imEmitter = im.NewIMEmitter(mgr, lang)
+	}
 	m.refreshIMRuntimeHooks()
 	m.bindIMSession()
 }
@@ -2260,7 +2265,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	}
 
-	debug.Log("tui", "CATCHALL msg=%T value=%q", msg, fmt.Sprintf("%+v", msg))
+	// Skip spinnerMsg — it fires every tick and would flood the log.
+	if _, isSpinner := msg.(spinnerMsg); !isSpinner {
+		debug.Log("tui", "CATCHALL msg=%T value=%q", msg, fmt.Sprintf("%+v", msg))
+	}
 	keyMsg, isKeyPress := msg.(tea.KeyPressMsg)
 	if !isKeyPress {
 		// Only KeyPressMsg should reach the textinput. Other message types

@@ -29,7 +29,7 @@ func TestRootHelpUsesCompactLayout(t *testing.T) {
 	help := out.String()
 	want := []string{
 		"Usage:\nggcode [flags]\nggcode [command]\n",
-		"Available Commands:\n- completion: Generate shell completion script\n- harness: Manage harness-engineering workflows\n- im: Manage IM adapters, bindings, and pairing\n- mcp: Manage MCP server configuration\n",
+		"Available Commands:\n- completion: Generate shell completion script\n- daemon: Run ggcode in daemon mode, controlled via IM\n- harness: Manage harness-engineering workflows\n- im: Manage IM adapters, bindings, and pairing\n- mcp: Manage MCP server configuration\n",
 		"Flags:\n- --allowedTools stringArray: tools to allow in pipe mode (can be repeated)\n",
 		"- -h, --help: help for ggcode\n",
 	}

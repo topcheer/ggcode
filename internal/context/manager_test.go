@@ -300,7 +300,7 @@ func TestContextManager_CheckAndSummarize_UsesMicrocompactBeforeSummary(t *testi
 	}
 }
 
-func TestContextManager_Microcompact_PreservesMostRecentGroup(t *testing.T) {
+func TestContextManager_Microcompact_ExtendsToRecentGroupWhenOverBudget(t *testing.T) {
 	cm := NewManager(500)
 
 	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
@@ -319,22 +319,24 @@ func TestContextManager_Microcompact_PreservesMostRecentGroup(t *testing.T) {
 
 	msgs := cm.Messages()
 	oldCompacted := false
-	recentStillRaw := false
+	recentCompacted := false
 	for _, block := range msgs[3].Content {
 		if block.Type == "tool_result" && strings.Contains(block.Output, "[tool result compacted:") {
 			oldCompacted = true
 		}
 	}
 	for _, block := range msgs[7].Content {
-		if block.Type == "tool_result" && strings.Contains(block.Output, strings.Repeat("R", 200)) {
-			recentStillRaw = true
+		if block.Type == "tool_result" && strings.Contains(block.Output, "[tool result compacted:") {
+			recentCompacted = true
 		}
 	}
 	if !oldCompacted {
 		t.Fatal("expected old group tool result to be compacted")
 	}
-	if !recentStillRaw {
-		t.Fatal("expected most recent group tool result to remain intact")
+	// When old group compaction isn't enough to reach target, recent group's
+	// large tool results should also be compacted (proactive compression).
+	if !recentCompacted {
+		t.Fatal("expected recent group tool result to be compacted when over budget after old group compaction")
 	}
 }
 

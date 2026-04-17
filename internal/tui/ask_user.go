@@ -2,13 +2,13 @@ package tui
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/topcheer/ggcode/internal/im"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -560,95 +560,37 @@ func (qs *questionnaireState) applyRemoteAnswer(raw string, lang Language) (bool
 	return false, nil
 }
 
-// splitNonEmptyLines splits text into non-empty trimmed lines.
+// splitNonEmptyLines delegates to the shared implementation in the im package.
 func splitNonEmptyLines(text string) []string {
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines
+	return im.SplitNonEmptyLines(text)
 }
 
 func parseRemoteQuestionnaireAnswer(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, string, error) {
-	text := strings.TrimSpace(raw)
-	switch question.Kind {
-	case toolpkg.AskUserKindText:
-		return nil, text, nil
-	case toolpkg.AskUserKindSingle, toolpkg.AskUserKindMulti:
-		selected, matched, err := parseRemoteQuestionnaireSelections(text, question)
-		if err != nil {
-			return nil, "", err
-		}
-		if matched {
-			return selected, "", nil
-		}
-		if question.AllowFreeform {
-			return nil, text, nil
-		}
-		return nil, "", fmt.Errorf("reply with a choice number")
-	default:
-		if question.AllowFreeform {
-			return nil, text, nil
-		}
-		return nil, "", fmt.Errorf("unsupported question kind %q", question.Kind)
-	}
+	return im.ParseRemoteQuestionnaireAnswer(raw, question)
 }
 
 func parseRemoteQuestionnaireSelections(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, bool, error) {
-	text := strings.TrimSpace(raw)
-	if text == "" || len(question.Choices) == 0 {
-		return nil, false, nil
+	// Delegate to im package — but this function is only called internally
+	// by parseRemoteQuestionnaireAnswer above, which already delegates.
+	// Keep this stub for any direct callers.
+	selected, freeform, err := im.ParseRemoteQuestionnaireAnswer(raw, question)
+	if err != nil {
+		return nil, false, err
 	}
-	tokens := strings.FieldsFunc(text, func(r rune) bool {
-		switch r {
-		case ',', '，', '、', ';', '；', '\n', '\t', ' ':
-			return true
-		default:
-			return false
-		}
-	})
-	if len(tokens) == 0 {
-		return nil, false, nil
-	}
-
-	allNumeric := true
-	selected := make(map[string]struct{})
-	for _, token := range tokens {
-		n, err := strconv.Atoi(token)
-		if err != nil {
-			allNumeric = false
-			break
-		}
-		if n < 1 || n > len(question.Choices) {
-			return nil, false, fmt.Errorf("choice %d is out of range", n)
-		}
-		selected[question.Choices[n-1].ID] = struct{}{}
-	}
-	if allNumeric {
-		if question.Kind == toolpkg.AskUserKindSingle && len(selected) > 1 {
-			return nil, false, fmt.Errorf("pick one choice")
-		}
+	if len(selected) > 0 {
 		return selected, true, nil
 	}
-
-	needle := normalizeRemoteAnswerToken(text)
-	for _, choice := range question.Choices {
-		if normalizeRemoteAnswerToken(choice.ID) == needle || normalizeRemoteAnswerToken(choice.Label) == needle {
-			return map[string]struct{}{choice.ID: {}}, true, nil
-		}
+	if freeform != "" {
+		return nil, false, nil
 	}
 	return nil, false, nil
 }
 
 func normalizeRemoteAnswerToken(s string) string {
-	s = strings.TrimSpace(strings.ToLower(s))
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, "\n", "")
-	s = strings.ReplaceAll(s, "\t", "")
-	return s
+	// normalizeRemoteAnswerToken is no longer used directly — the logic
+	// lives in im.NormalizeRemoteAnswerToken (unexported). This stub
+	// satisfies any remaining references.
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 func questionnairePanelTitle(lang Language) string {
