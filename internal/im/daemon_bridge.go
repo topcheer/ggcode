@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -33,6 +34,7 @@ type DaemonBridge struct {
 	mu         sync.Mutex
 	cancelFunc context.CancelFunc
 	pendingAsk *pendingAskUser
+	followSink daemon.FollowSink
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -46,6 +48,13 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		language: emitter.Language(),
 	}
 	return b
+}
+
+// SetFollowSink sets or clears the follow-mode display sink.
+func (b *DaemonBridge) SetFollowSink(sink daemon.FollowSink) {
+	b.mu.Lock()
+	b.followSink = sink
+	b.mu.Unlock()
 }
 
 // SubmitInboundMessage handles an inbound IM message by submitting it to the agent.
@@ -85,6 +94,11 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// Immediately trigger typing indicator so the user sees feedback
 	// before waiting for the first LLM token.
 	b.emitter.TriggerTyping()
+
+	// Notify follow sink of user message
+	if b.followSink != nil {
+		b.followSink.OnUserMessage(text)
+	}
 
 	// Cancel previous run if active
 	b.mu.Lock()
@@ -158,6 +172,9 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			// Accumulate text, do NOT send to IM per-token
 			round.AppendText(event.Text)
 			b.emitter.TriggerTyping()
+			if b.followSink != nil {
+				b.followSink.OnStreamText(event.Text)
+			}
 
 		case provider.StreamEventToolCallDone:
 			toolName := strings.TrimSpace(event.Tool.Name)
@@ -169,6 +186,9 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				b.emitter.EmitToolStatus(toolName, string(event.Tool.Arguments))
 			}
 			b.emitter.TriggerTyping()
+			if b.followSink != nil {
+				b.followSink.OnToolStatus(toolName, string(event.Tool.Arguments))
+			}
 
 		case provider.StreamEventToolResult:
 			if event.IsError {
@@ -198,10 +218,16 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			// Save assistant messages to session
 			b.appendAssistantMessages()
 			round.Reset()
+			if b.followSink != nil {
+				b.followSink.OnRoundDone()
+			}
 
 		case provider.StreamEventError:
 			if !errors.Is(event.Error, context.Canceled) {
 				b.emitter.EmitText(fmt.Sprintf("错误: %v", event.Error))
+			}
+			if b.followSink != nil {
+				b.followSink.OnError(event.Error)
 			}
 		}
 	})
