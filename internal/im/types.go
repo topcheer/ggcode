@@ -159,6 +159,7 @@ type ChannelBinding struct {
 	ChannelID             string
 	ThreadID              string
 	LastInboundMessageID  string
+	LastOutboundMessageID string
 	LastInboundAt         time.Time
 	PassiveReplyCount     int
 	PassiveReplyStartedAt time.Time
@@ -229,4 +230,19 @@ type Sink interface {
 
 type ShareLinkProvider interface {
 	GenerateShareLink(context.Context, string) (string, error)
+}
+
+// TypingIndicator is an optional interface that adapters can implement
+// to show a native "bot is typing" indicator on the IM platform.
+type TypingIndicator interface {
+	TriggerTyping(ctx context.Context, binding ChannelBinding) error
+}
+
+// LastMessageID returns the most recent message ID for typing reaction targeting:
+// prefers the user's inbound message, falls back to the bot's last outbound message.
+func LastMessageID(b ChannelBinding) string {
+	if id := strings.TrimSpace(b.LastInboundMessageID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(b.LastOutboundMessageID)
 }
