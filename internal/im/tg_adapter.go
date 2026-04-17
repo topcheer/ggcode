@@ -789,6 +789,21 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 	return nil
 }
 
+// TriggerTyping sends a "typing" chat action to the Telegram chat.
+func (a *tgAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	channelID := strings.TrimSpace(binding.ChannelID)
+	if channelID == "" {
+		return nil
+	}
+	path := "/bot" + a.botToken + "/sendChatAction"
+	body := map[string]any{"chat_id": channelID, "action": "typing"}
+	_, err := a.apiRequest(ctx, http.MethodPost, path, body, nil)
+	if err != nil {
+		debug.Log("tg", "adapter=%s typing failed: %v", a.name, err)
+	}
+	return err
+}
+
 func (a *tgAdapter) resolveReplyTo(binding ChannelBinding) string {
 	return strings.TrimSpace(binding.LastInboundMessageID)
 }

@@ -858,6 +858,64 @@ func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Ti
 	return nil
 }
 
+// RecordOutboundMessage records the message ID of a bot reply so that
+// typing indicator reactions can target it when no inbound message exists.
+func (m *Manager) RecordOutboundMessage(workspace, adapter, messageID string) error {
+	m.mu.Lock()
+	workspace = normalizeWorkspace(workspace)
+	messageID = strings.TrimSpace(messageID)
+	adapter = strings.TrimSpace(adapter)
+	if messageID == "" || adapter == "" {
+		m.mu.Unlock()
+		return nil
+	}
+	b, ok := m.currentBindings[adapter]
+	if !ok || normalizeWorkspace(b.Workspace) != workspace {
+		m.mu.Unlock()
+		return nil
+	}
+	b.LastOutboundMessageID = messageID
+	if m.bindingStore != nil {
+		if err := m.bindingStore.Save(*b); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// TriggerTyping sends a typing indicator to all bound adapters that
+// implement the TypingIndicator interface.
+func (m *Manager) TriggerTyping(ctx context.Context) {
+	m.mu.RLock()
+	var targets []struct {
+		binding ChannelBinding
+		sink    TypingIndicator
+	}
+	for _, b := range m.currentBindings {
+		if strings.TrimSpace(b.ChannelID) == "" {
+			continue
+		}
+		sink := m.sinks[b.Adapter]
+		if sink == nil {
+			continue
+		}
+		ti, ok := sink.(TypingIndicator)
+		if !ok {
+			continue
+		}
+		targets = append(targets, struct {
+			binding ChannelBinding
+			sink    TypingIndicator
+		}{binding: *b, sink: ti})
+	}
+	m.mu.RUnlock()
+	for _, t := range targets {
+		_ = t.sink.TriggerTyping(ctx, t.binding)
+	}
+}
+
 func (m *Manager) reloadBindingLocked() error {
 	m.currentBindings = make(map[string]*ChannelBinding)
 	if m.bindingStore == nil || m.session == nil {

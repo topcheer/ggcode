@@ -593,6 +593,43 @@ func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content str
 	return nil
 }
 
+// TriggerTyping adds a "Typing" emoji reaction on the most recent message to indicate
+// the bot is processing. Feishu does not have a native typing indicator, so we use
+// a Typing reaction as a visual cue.
+func (a *feishuAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	msgID := LastMessageID(binding)
+	if msgID == "" {
+		return nil
+	}
+	a.mu.RLock()
+	token := a.token
+	a.mu.RUnlock()
+
+	apiBase := a.resolveAPIBase()
+	url := apiBase + "/im/v1/messages/" + msgID + "/reactions"
+	body := map[string]any{
+		"reaction_type": map[string]string{"emoji_type": "Typing"},
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		debug.Log("feishu", "adapter=%s typing reaction failed: %v", a.name, err)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		debug.Log("feishu", "adapter=%s typing reaction [%d]: %s", a.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
 func (a *feishuAdapter) resolveAPIBase() string {
 	switch strings.ToLower(a.domain) {
 	case "lark":

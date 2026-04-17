@@ -361,6 +361,49 @@ func (a *slackAdapter) outboundText(event OutboundEvent) string {
 	}
 }
 
+// TriggerTyping adds an "eyes" emoji reaction on the most recent message to indicate
+// the bot is processing. Slack does not have a native typing indicator for bots,
+// so we use a reaction as a visual cue.
+func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	channelID := strings.TrimSpace(binding.ChannelID)
+	ts := LastMessageID(binding)
+	if channelID == "" || ts == "" {
+		return nil
+	}
+	url := slackAPIBase + "/reactions.add"
+	body := map[string]any{
+		"channel":   channelID,
+		"timestamp": ts,
+		"name":      "eyes",
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.botToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		debug.Log("slack", "adapter=%s typing reaction failed: %v", a.name, err)
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil
+	}
+	if ok, _ := result["ok"].(bool); !ok {
+		errMsg, _ := result["error"].(string)
+		// "already_reacted" is not an error — typing indicator already present
+		if errMsg != "already_reacted" {
+			debug.Log("slack", "adapter=%s typing reaction error: %s", a.name, errMsg)
+		}
+	}
+	return nil
+}
+
 func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, content string) error {
 	url := slackAPIBase + "/chat.postMessage"
 	body := map[string]any{

@@ -389,6 +389,31 @@ func (a *discordAdapter) sendChannelMessage(ctx context.Context, channelID, cont
 	return nil
 }
 
+// TriggerTyping triggers the "Bot is typing..." indicator in a Discord channel.
+func (a *discordAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	channelID := strings.TrimSpace(binding.ChannelID)
+	if channelID == "" {
+		return nil
+	}
+	url := a.apiBase + "/channels/" + channelID + "/typing"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+a.token)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		debug.Log("discord", "adapter=%s typing failed: %v", a.name, err)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		debug.Log("discord", "adapter=%s typing failed [%d]: %s", a.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
 func (a *discordAdapter) getGatewayBotURL(ctx context.Context) (string, error) {
 	url := a.apiBase + discordGatewayBotPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

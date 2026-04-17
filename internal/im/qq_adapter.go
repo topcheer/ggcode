@@ -975,6 +975,40 @@ func (a *qqAdapter) rememberChatType(channelID, chatType string) {
 	a.chatTypes[channelID] = normalizeQQChatType(chatType)
 }
 
+// TriggerTyping sends an input notify to indicate the bot is typing.
+// Only supported for C2C chats; group chats do not support this API.
+func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	channelID := strings.TrimSpace(binding.ChannelID)
+	if channelID == "" {
+		return nil
+	}
+	chatType := a.chatType(channelID)
+	if chatType != "c2c" {
+		return nil // QQ typing notify only works for C2C
+	}
+	path := "/v2/users/" + channelID + "/messages"
+	seq := 1
+	if msgID := strings.TrimSpace(binding.LastInboundMessageID); msgID != "" {
+		seq = binding.PassiveReplyCount + 1
+		if seq < 1 {
+			seq = 1
+		}
+	}
+	body := map[string]any{
+		"msg_type": 6,
+		"input_notify": map[string]any{
+			"input_type":   1,
+			"input_second": 60,
+		},
+		"msg_seq": seq,
+	}
+	if _, err := a.apiRequest(ctx, http.MethodPost, path, body, nil); err != nil {
+		debug.Log("qq", "adapter=%s typing notify failed: %v", a.name, err)
+		return err
+	}
+	return nil
+}
+
 func (a *qqAdapter) resolveReplyMode(binding ChannelBinding) (string, int) {
 	replyTo := strings.TrimSpace(binding.LastInboundMessageID)
 	if replyTo == "" {
