@@ -91,6 +91,7 @@ type Model struct {
 	sessionStore                    session.Store
 	imManager                       *im.Manager
 	imEmitter                       *imEmitterState
+	imTypingLast                    *imTypingKeeper
 	lastIMStatus                    string
 	mcpServers                      []MCPInfo
 	config                          *config.Config
@@ -1002,6 +1003,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case imRuntimeUpdatedMsg:
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		if startupInputSuppressionActive(m.startedAt) {
+			return m, nil
+		}
+		// Route mouse wheel to the active panel's viewport if one is open.
+		// MouseWheelMsg implements the MouseMsg interface, so it must appear
+		// BEFORE case tea.MouseMsg in this type switch to be matched here.
+		if m.fileBrowser != nil && m.fileBrowser.preview != nil {
+			if msg.Button == tea.MouseWheelUp {
+				m.fileBrowser.preview.viewport.ScrollUp(3)
+			} else {
+				m.fileBrowser.preview.viewport.ScrollDown(3)
+			}
+			return m, nil
+		}
+		if m.previewPanel != nil {
+			if msg.Button == tea.MouseWheelUp {
+				m.previewPanel.viewport.ScrollUp(3)
+			} else {
+				m.previewPanel.viewport.ScrollDown(3)
+			}
+			return m, nil
+		}
+		// Default: scroll the main conversation viewport.
+		m.syncConversationViewport()
+		if msg.Button == tea.MouseWheelUp {
+			m.viewport.ScrollUp(3)
+		} else {
+			m.viewport.ScrollDown(3)
+		}
+		return m, nil
+
 	case tea.MouseMsg:
 		if startupInputSuppressionActive(m.startedAt) {
 			debug.Log("tui", "startup gate dropping mouse event age=%s", time.Since(m.startedAt))
@@ -1014,18 +1047,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePreviewMouse(msg)
 		}
 		// Option/Alt+mouse: release mouse to terminal for native text selection
-		return m, nil
-
-	case tea.MouseWheelMsg:
-		if startupInputSuppressionActive(m.startedAt) {
-			return m, nil
-		}
-		m.syncConversationViewport()
-		if msg.Button == tea.MouseWheelUp {
-			m.viewport.ScrollUp(3)
-		} else {
-			m.viewport.ScrollDown(3)
-		}
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -2284,6 +2305,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		debug.Log("tui", "CATCHALL input changed old=%q new=%q", truncateStr(oldValue, 80), truncateStr(newValue, 80))
 	}
 
+	// Post-update terminal response cleanup: after textinput processes the
+	// key, check if the accumulated value looks like a terminal response that
+	// leaked through as individual single-character KeyPressMsg events.
+	// Terminal responses (OSC 11, CSI CPR, DECRPM, etc.) arrive character by
+	// character, each indistinguishable from normal typing. We detect them by
+	// inspecting the accumulated value for distinctive patterns.
+	if oldValue != newValue && looksLikeTerminalResponseInput(newValue) {
+		debug.Log("tui", "CATCHALL terminal response detected in input, clearing: %q", truncateStr(newValue, 80))
+		m.input.SetValue("")
+	}
+
 	// Update autocomplete state based on current input
 	m.updateAutoComplete()
 
@@ -2442,6 +2474,111 @@ func (m *Model) sanitizeTerminalResponseInput() {
 	debug.Log("tui", "sanitize input changed value=%q cleaned=%q", truncateStr(value, 120), truncateStr(cleaned, 120))
 	m.input.SetValue(cleaned)
 	m.input.CursorEnd()
+}
+
+// terminalResponsePattern matches terminal response fragments that leak into
+// the text input field as individual KeyPressMsg characters. These arrive from:
+//   - OSC 11 background color query: ]11;rgb:XXXX/XXXX/XXXX
+//   - CSI CPR (cursor position report): [1;1R
+//   - CSI DECRPM (mode report): [?2026;2$y, [?1u
+//   - CSI SGR mouse: [<0;93;43m
+//   - Partial/truncated fragments: 11;rgb:..., ;1R, 35;1
+//
+// The pattern detects these by looking for distinctive subsequences that never
+// appear in normal human typing:
+//   - "rgb:" — always from OSC 11 color responses
+//   - "]11;" or "11;rgb" — OSC 11 response or fragment
+//   - "[<digits;" — SGR mouse encoding
+//   - "[?digits" followed by letter/$ — DECRPM responses
+//   - ";digitsR" — CPR response tail (e.g. ";1R", ";16R")
+//   - "$y" — XTVERSION/DECRPM response tail
+var terminalResponsePattern = regexp.MustCompile(
+	`rgb:` +
+		`|\]11;` +
+		`|11;rgb` +
+		`|\[<\d+;` +
+		`|\[\?\d+[a-zA-Z\$]` +
+		`|;\d+R` +
+		`|\$\d+y` +
+		`|\[\d+;\d+R` +
+		`|\[\d+;\d+;\d+`)
+
+// looksLikeTerminalResponseInput checks whether the textinput value appears to
+// have accumulated terminal response garbage. Unlike the per-keystroke checks
+// (shouldIgnoreTerminalProbeKey, shouldIgnoreInputUpdate) which inspect
+// individual KeyPressMsg events, this function inspects the accumulated input
+// value after it has been updated. This catches the case where terminal
+// responses arrive as a rapid burst of individual single-character
+// KeyPressMsg events that each look like legitimate typing.
+//
+// Returns true if the entire value looks like a terminal response (should be
+// cleared), false otherwise.
+func looksLikeTerminalResponseInput(val string) bool {
+	if val == "" {
+		return false
+	}
+
+	// Fast path: if the full terminalResponsePattern matches, it's definitely garbage.
+	if terminalResponsePattern.MatchString(val) {
+		return true
+	}
+
+	// Check for partial OSC/CSI patterns that build up character-by-character.
+	// These are fragments that start with ] or [ followed by digits/semicolons,
+	// which is how terminal responses begin before the distinctive tail arrives.
+	//
+	// We require the value to be ENTIRELY composed of terminal-response-like
+	// characters (no letters except r/g/b/y/R/u, no CJK, no spaces between words)
+	// to avoid false positives on normal input.
+	if looksLikePartialTerminalSequence(val) {
+		return true
+	}
+
+	return false
+}
+
+// looksLikePartialTerminalSequence checks if the entire string looks like the
+// beginning of a terminal response sequence. Terminal responses consist of:
+//   - ] or [ prefix characters
+//   - digits and semicolons as separators
+//   - lowercase letters r, g, b (from "rgb:"), y (from "$y"), u (from "?1u")
+//   - uppercase R (from CPR responses), m/M (from mouse/SGR responses)
+//   - / and : (from OSC 11 color specifiers like "rgb:0000/0000/0000")
+//   - ? (from CSI ? sequences)
+//   - $ (from DECRPM responses like "?2026;2$y")
+//   - < (from SGR mouse encoding like "<0;93")
+//
+// Normal human typing in the input box would contain a mix of CJK characters,
+// spaces between words, or diverse letters — not this narrow character set.
+func looksLikePartialTerminalSequence(val string) bool {
+	// Too short to be meaningful; avoid false positives on single characters.
+	if len(val) < 3 {
+		return false
+	}
+
+	hasStructuralPunct := false // ; : / ? $ < — terminal sequence punctuation
+	allTerminalChars := true
+
+	for _, r := range val {
+		switch {
+		case r >= '0' && r <= '9':
+			// digits appear in both terminal responses and normal input
+		case r == ']' || r == '[':
+			hasStructuralPunct = true
+		case r == ';' || r == ':' || r == '/' || r == '?' || r == '$' || r == '<':
+			hasStructuralPunct = true
+		case r == 'r' || r == 'g' || r == 'b' || r == 'y' || r == 'u':
+			// Letters commonly appearing in terminal responses (rgb, y, u)
+		case r == 'R' || r == 'm' || r == 'M':
+			// Uppercase terminators (CPR "R", mouse "m/M")
+		default:
+			// Any other character (CJK, most Latin letters, spaces, etc.)
+			// means this is likely normal human input.
+			allTerminalChars = false
+		}
+	}
+
+	return allTerminalChars && hasStructuralPunct
 }
 
 func startupInputSuppressionActive(startedAt time.Time) bool {
