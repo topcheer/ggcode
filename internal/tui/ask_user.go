@@ -459,7 +459,75 @@ func (qs *questionnaireState) applyRemoteAnswer(raw string, lang Language) (bool
 	if text == "" {
 		return false, fmt.Errorf("empty answer")
 	}
-	idx := qs.firstUnansweredQuestionIndex()
+
+	// Multi-question fast path: if there are multiple unanswered questions and
+	// the input contains multiple lines, try to split and answer each question
+	// with its corresponding line.
+	unansweredCount := 0
+	firstUnanswered := -1
+	for i, q := range qs.request.Questions {
+		if !qs.buildAnswer(i, q).Answered {
+			if firstUnanswered < 0 {
+				firstUnanswered = i
+			}
+			unansweredCount++
+		}
+	}
+
+	if unansweredCount > 1 {
+		// Split input into lines (handle both \n and \r\n), skip blank lines.
+		rawLines := splitNonEmptyLines(text)
+		if len(rawLines) > 1 && len(rawLines) <= unansweredCount {
+			applied := 0
+			qi := firstUnanswered
+			for _, line := range rawLines {
+				// Find next unanswered question
+				for qi < len(qs.request.Questions) {
+					if !qs.buildAnswer(qi, qs.request.Questions[qi]).Answered {
+						break
+					}
+					qi++
+				}
+				if qi >= len(qs.request.Questions) {
+					break
+				}
+
+				answer := &qs.answers[qi]
+				question := qs.request.Questions[qi]
+				selected, freeform, err := parseRemoteQuestionnaireAnswer(line, question)
+				if err != nil {
+					// If a line fails to parse, skip it and let the single-question
+					// fallback handle the entire input.
+					break
+				}
+				if selected != nil {
+					answer.selected = selected
+				}
+				if freeform != "" || question.Kind == toolpkg.AskUserKindText || question.AllowFreeform {
+					answer.freeform = freeform
+				}
+				applied++
+				qi++
+			}
+
+			if applied > 0 {
+				if qs.answeredCount() >= len(qs.request.Questions) {
+					return true, nil
+				}
+				nextIdx := qs.firstUnansweredQuestionIndex()
+				if nextIdx >= 0 {
+					qs.tabIndex = nextIdx
+					qs.loadActiveQuestion(lang)
+				}
+				return false, nil
+			}
+			// Fall through to single-question handling
+		}
+	}
+
+	// Single-question path: process the entire input as the answer to the
+	// first unanswered question.
+	idx := firstUnanswered
 	if idx < 0 {
 		idx = qs.activeQuestionIndex()
 	}
@@ -490,6 +558,18 @@ func (qs *questionnaireState) applyRemoteAnswer(raw string, lang Language) (bool
 		qs.loadActiveQuestion(lang)
 	}
 	return false, nil
+}
+
+// splitNonEmptyLines splits text into non-empty trimmed lines.
+func splitNonEmptyLines(text string) []string {
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func parseRemoteQuestionnaireAnswer(raw string, question toolpkg.AskUserQuestion) (map[string]struct{}, string, error) {

@@ -74,6 +74,32 @@ func (m *Model) emitIMEvent(event im.OutboundEvent) {
 		m.imEmitter = newIMEmitterState()
 	}
 	m.imEmitter.enqueue(m.imManager, event)
+	m.triggerIMTyping()
+}
+
+// imTypingKeeper tracks the last typing trigger time to implement keepalive.
+// Typing indicators typically expire after a few seconds; this ensures periodic
+// refresh during long-running tool executions.
+type imTypingKeeper struct {
+	lastTrigger time.Time
+	interval    time.Duration
+}
+
+const imTypingKeepaliveInterval = 5 * time.Second
+
+func (m *Model) triggerIMTyping() {
+	if m.imManager == nil {
+		return
+	}
+	now := time.Now()
+	if m.imTypingLast == nil {
+		m.imTypingLast = &imTypingKeeper{interval: imTypingKeepaliveInterval}
+	}
+	if now.Sub(m.imTypingLast.lastTrigger) < m.imTypingLast.interval {
+		return
+	}
+	m.imTypingLast.lastTrigger = now
+	go m.imManager.TriggerTyping(context.Background())
 }
 
 func (m *Model) emitIMText(text string) {
@@ -283,50 +309,244 @@ func (m *Model) formatIMAskUserPrompt(rawArgs string) string {
 		}
 	}
 
-	lines := make([]string, 0, 8)
+	lang := m.currentLanguage()
+	multiQuestion := len(req.Questions) > 1
+	lines := make([]string, 0, 16+len(req.Questions)*4)
+
+	// Title
 	title := strings.TrimSpace(req.Title)
-	switch m.currentLanguage() {
+	switch lang {
 	case LangZhCN:
 		if title != "" {
-			lines = append(lines, "我需要你补充一些信息："+title)
+			lines = append(lines, "📋 **"+title+"**")
 		} else {
-			lines = append(lines, "我需要你补充一些信息：")
+			lines = append(lines, "📋 **需要补充信息**")
 		}
 	default:
 		if title != "" {
-			lines = append(lines, "I need a bit more input: "+title)
+			lines = append(lines, "📋 **"+title+"**")
 		} else {
-			lines = append(lines, "I need a bit more input:")
+			lines = append(lines, "📋 **Input needed**")
 		}
 	}
 
-	multiQuestion := len(req.Questions) > 1
+	// Questions
 	for idx, question := range req.Questions {
-		prompt := strings.TrimSpace(firstNonEmpty(question.Prompt, question.Title))
-		if prompt == "" {
+		qLines := formatIMQuestionBlock(lang, idx, question, multiQuestion)
+		lines = append(lines, qLines...)
+	}
+
+	// Reply instructions
+	lines = append(lines, "")
+	lines = append(lines, formatIMReplyInstructions(lang, req.Questions, multiQuestion))
+
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// formatIMQuestionBlock formats a single question with its choices and
+// question-type-specific guidance.
+func formatIMQuestionBlock(lang Language, idx int, q toolpkg.AskUserQuestion, multiQuestion bool) []string {
+	prompt := strings.TrimSpace(firstNonEmpty(q.Prompt, q.Title))
+	if prompt == "" {
+		return nil
+	}
+
+	var lines []string
+
+	// Question header
+	if multiQuestion {
+		lines = append(lines, fmt.Sprintf("**%d. %s**", idx+1, prompt))
+	} else {
+		lines = append(lines, fmt.Sprintf("**%s**", prompt))
+	}
+
+	// Choices with numbered labels
+	for ci, choice := range q.Choices {
+		label := strings.TrimSpace(choice.Label)
+		if label == "" {
 			continue
 		}
 		if multiQuestion {
-			lines = append(lines, fmt.Sprintf("%d. %s", idx+1, prompt))
+			// Multi-question: prefix with question number + choice number
+			// e.g. "1a. QQ  1b. 飞书" so user can reply "1a"
+			lines = append(lines, fmt.Sprintf("  %d%c. %s", idx+1, 'a'+ci, label))
 		} else {
-			lines = append(lines, prompt)
-		}
-		for _, choice := range question.Choices {
-			label := strings.TrimSpace(choice.Label)
-			if label == "" {
-				continue
-			}
-			lines = append(lines, "- "+label)
+			lines = append(lines, fmt.Sprintf("  %d. %s", ci+1, label))
 		}
 	}
 
-	switch m.currentLanguage() {
-	case LangZhCN:
-		lines = append(lines, "请直接回复你的选择或答案。")
-	default:
-		lines = append(lines, "Reply directly with your choice or answer.")
+	// Question-type hint
+	switch q.Kind {
+	case toolpkg.AskUserKindText:
+		placeholder := strings.TrimSpace(q.Placeholder)
+		if placeholder != "" {
+			switch lang {
+			case LangZhCN:
+				lines = append(lines, fmt.Sprintf("  _（输入文本，例如：%s）_", placeholder))
+			default:
+				lines = append(lines, fmt.Sprintf("  _(type text, e.g. %s)_", placeholder))
+			}
+		} else {
+			switch lang {
+			case LangZhCN:
+				lines = append(lines, "  _（输入文本）_")
+			default:
+				lines = append(lines, "  _(type text)_")
+			}
+		}
+	case toolpkg.AskUserKindSingle:
+		hint := ""
+		switch lang {
+		case LangZhCN:
+			if len(q.Choices) > 0 {
+				hint = fmt.Sprintf("  _（回复编号 %d-%d 或选项文本", 1, len(q.Choices))
+				if q.AllowFreeform {
+					hint += "，也可以直接输入其他内容"
+				}
+				hint += "）_"
+			}
+		default:
+			if len(q.Choices) > 0 {
+				hint = fmt.Sprintf("  _(reply %d-%d or option text", 1, len(q.Choices))
+				if q.AllowFreeform {
+					hint += ", or type freely"
+				}
+				hint += ")_"
+			}
+		}
+		if hint != "" {
+			lines = append(lines, hint)
+		}
+	case toolpkg.AskUserKindMulti:
+		hint := ""
+		switch lang {
+		case LangZhCN:
+			if len(q.Choices) > 0 {
+				hint = fmt.Sprintf("  _（可多选，回复编号如 \"%d,%d\" 或选项文本", 1, min(3, len(q.Choices)))
+				if q.AllowFreeform {
+					hint += "，也可以输入其他内容"
+				}
+				hint += "）_"
+			}
+		default:
+			if len(q.Choices) > 0 {
+				hint = fmt.Sprintf("  _(select multiple, e.g. \"%d,%d\" or option text", 1, min(3, len(q.Choices)))
+				if q.AllowFreeform {
+					hint += ", or type freely"
+				}
+				hint += ")_"
+			}
+		}
+		if hint != "" {
+			lines = append(lines, hint)
+		}
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+
+	return lines
+}
+
+// formatIMReplyInstructions generates the overall reply instructions based on
+// the number and types of questions.
+func formatIMReplyInstructions(lang Language, questions []toolpkg.AskUserQuestion, multiQuestion bool) string {
+	if len(questions) == 0 {
+		return ""
+	}
+
+	if !multiQuestion {
+		// Single question: simple instruction
+		q := questions[0]
+		switch lang {
+		case LangZhCN:
+			switch q.Kind {
+			case toolpkg.AskUserKindText:
+				return "💬 直接回复文本即可。"
+			case toolpkg.AskUserKindSingle:
+				return "💬 回复编号或选项文本。"
+			case toolpkg.AskUserKindMulti:
+				return "💬 回复多个编号（用逗号或空格分隔）或选项文本。"
+			}
+		default:
+			switch q.Kind {
+			case toolpkg.AskUserKindText:
+				return "💬 Just reply with your text."
+			case toolpkg.AskUserKindSingle:
+				return "💬 Reply with the number or option text."
+			case toolpkg.AskUserKindMulti:
+				return "💬 Reply with multiple numbers (comma or space separated) or option text."
+			}
+		}
+		return ""
+	}
+
+	// Multi-question: provide structured reply guidance
+	switch lang {
+	case LangZhCN:
+		lines := []string{"💬 **回复格式：**"}
+		if len(questions) == 2 {
+			lines = append(lines, "每行回答一个问题，或用空行分隔。例如：")
+		} else {
+			lines = append(lines, "按顺序逐行回答，每行对应一个问题。例如：")
+		}
+		examples := buildIMReplyExamples(lang, questions)
+		for _, ex := range examples {
+			lines = append(lines, "> "+ex)
+		}
+		return strings.Join(lines, "\n")
+	default:
+		lines := []string{"💬 **Reply format:**"}
+		if len(questions) == 2 {
+			lines = append(lines, "Answer one question per line, or separate with blank lines. Example:")
+		} else {
+			lines = append(lines, "Answer in order, one per line. Example:")
+		}
+		examples := buildIMReplyExamples(lang, questions)
+		for _, ex := range examples {
+			lines = append(lines, "> "+ex)
+		}
+		return strings.Join(lines, "\n")
+	}
+}
+
+// buildIMReplyExamples generates concrete reply examples based on the actual
+// question types, so the user sees exactly what format to use.
+func buildIMReplyExamples(lang Language, questions []toolpkg.AskUserQuestion) []string {
+	examples := make([]string, len(questions))
+	for i, q := range questions {
+		switch q.Kind {
+		case toolpkg.AskUserKindSingle:
+			if len(q.Choices) > 0 {
+				examples[i] = fmt.Sprintf("%d", 1) // "1" — pick first choice
+			}
+		case toolpkg.AskUserKindMulti:
+			if len(q.Choices) >= 2 {
+				examples[i] = fmt.Sprintf("%d,%d", 1, 2) // "1,2"
+			} else if len(q.Choices) == 1 {
+				examples[i] = "1"
+			}
+		case toolpkg.AskUserKindText:
+			switch lang {
+			case LangZhCN:
+				switch i {
+				case 0:
+					examples[i] = "我的答案"
+				case 1:
+					examples[i] = "另一个回答"
+				default:
+					examples[i] = fmt.Sprintf("第%d个回答", i+1)
+				}
+			default:
+				switch i {
+				case 0:
+					examples[i] = "my answer"
+				case 1:
+					examples[i] = "another answer"
+				default:
+					examples[i] = fmt.Sprintf("answer %d", i+1)
+				}
+			}
+		}
+	}
+	return examples
 }
 
 func (m *Model) formatIMAskUserQuestion(title string, question toolpkg.AskUserQuestion) string {
