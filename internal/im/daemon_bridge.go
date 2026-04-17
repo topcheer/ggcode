@@ -183,8 +183,9 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			}
 			if !isDaemonSkippedTool(toolName) {
 				round.ToolCalls++
-				b.emitter.EmitToolStatus(toolName, string(event.Tool.Arguments))
 			}
+			// Do NOT emit intermediate status to IM — only final results
+			// via OutboundEventToolResult (mirrors terminal follow behavior).
 			b.emitter.TriggerTyping()
 			// Note: followSink does NOT get OnToolStatus — only final
 			// OnToolResult is forwarded to keep terminal output clean.
