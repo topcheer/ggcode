@@ -758,6 +758,181 @@ func TestManager_Emit_NoChannel(t *testing.T) {
 	}
 }
 
+func TestHandleInboundDedupDuplicateMessageID(t *testing.T) {
+	mgr := NewManager()
+	bridge := &stubBridge{}
+	mgr.SetBridge(bridge)
+	store := NewMemoryBindingStore()
+	_ = mgr.SetBindingStore(store)
+	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
+	if _, err := mgr.BindChannel(ChannelBinding{
+		Platform:  PlatformQQ,
+		Adapter:   "qq",
+		TargetID:  "ops",
+		ChannelID: "group-1",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+
+	msg := InboundMessage{
+		Text: "hello",
+		Envelope: Envelope{
+			Adapter:   "qq",
+			ChannelID: "group-1",
+			MessageID: "msg-dup-1",
+		},
+	}
+
+	// First call should succeed and reach the bridge
+	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
+		t.Fatalf("first HandleInbound returned error: %v", err)
+	}
+	if bridge.last.Text != "hello" {
+		t.Fatalf("expected bridge to receive first message, got %#v", bridge.last)
+	}
+
+	// Reset bridge to detect second call
+	bridge.last = InboundMessage{}
+
+	// Second call with same MessageID should be silently dropped
+	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
+		t.Fatalf("duplicate HandleInbound returned error: %v", err)
+	}
+	if bridge.last.Text != "" {
+		t.Fatalf("expected bridge to NOT receive duplicate message, but got %#v", bridge.last)
+	}
+}
+
+func TestHandleInboundDedupDifferentMessageIDs(t *testing.T) {
+	mgr := NewManager()
+	bridge := &stubBridge{}
+	mgr.SetBridge(bridge)
+	store := NewMemoryBindingStore()
+	_ = mgr.SetBindingStore(store)
+	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
+	if _, err := mgr.BindChannel(ChannelBinding{
+		Platform:  PlatformQQ,
+		Adapter:   "qq",
+		TargetID:  "ops",
+		ChannelID: "group-1",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+
+	msg1 := InboundMessage{
+		Text: "hello",
+		Envelope: Envelope{
+			Adapter:   "qq",
+			ChannelID: "group-1",
+			MessageID: "msg-1",
+		},
+	}
+	msg2 := InboundMessage{
+		Text: "world",
+		Envelope: Envelope{
+			Adapter:   "qq",
+			ChannelID: "group-1",
+			MessageID: "msg-2",
+		},
+	}
+
+	if err := mgr.HandleInbound(context.Background(), msg1); err != nil {
+		t.Fatalf("first HandleInbound returned error: %v", err)
+	}
+	if err := mgr.HandleInbound(context.Background(), msg2); err != nil {
+		t.Fatalf("second HandleInbound returned error: %v", err)
+	}
+	if bridge.last.Text != "world" {
+		t.Fatalf("expected bridge to receive second message, got %#v", bridge.last)
+	}
+}
+
+func TestHandleInboundDedupNoMessageID(t *testing.T) {
+	mgr := NewManager()
+	bridge := &stubBridge{}
+	mgr.SetBridge(bridge)
+	store := NewMemoryBindingStore()
+	_ = mgr.SetBindingStore(store)
+	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
+	if _, err := mgr.BindChannel(ChannelBinding{
+		Platform:  PlatformQQ,
+		Adapter:   "qq",
+		TargetID:  "ops",
+		ChannelID: "group-1",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+
+	msg := InboundMessage{
+		Text: "hello",
+		Envelope: Envelope{
+			Adapter:   "qq",
+			ChannelID: "group-1",
+			MessageID: "", // no MessageID — should not dedup
+		},
+	}
+
+	// Both calls should go through since MessageID is empty
+	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
+		t.Fatalf("first HandleInbound returned error: %v", err)
+	}
+	if err := mgr.HandleInbound(context.Background(), msg); err != nil {
+		t.Fatalf("second HandleInbound returned error: %v", err)
+	}
+	// bridge.last is overwritten on each call, so we just verify no error
+}
+
+func TestHandleInboundDedupDifferentAdapters(t *testing.T) {
+	mgr := NewManager()
+	bridge := &stubBridge{}
+	mgr.SetBridge(bridge)
+	store := NewMemoryBindingStore()
+	_ = mgr.SetBindingStore(store)
+	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
+	if _, err := mgr.BindChannel(ChannelBinding{
+		Platform:  PlatformQQ,
+		Adapter:   "qq",
+		TargetID:  "ops",
+		ChannelID: "group-1",
+	}); err != nil {
+		t.Fatalf("BindChannel returned error: %v", err)
+	}
+	if _, err := mgr.BindChannel(ChannelBinding{
+		Platform:  PlatformTelegram,
+		Adapter:   "tg",
+		TargetID:  "ops2",
+		ChannelID: "tg-chat-1",
+	}); err != nil {
+		t.Fatalf("BindChannel tg returned error: %v", err)
+	}
+
+	// Same MessageID but different adapters — should both go through
+	msgQQ := InboundMessage{
+		Text: "hello",
+		Envelope: Envelope{
+			Adapter:   "qq",
+			ChannelID: "group-1",
+			MessageID: "shared-msg-id",
+		},
+	}
+	msgTG := InboundMessage{
+		Text: "hello",
+		Envelope: Envelope{
+			Adapter:   "tg",
+			ChannelID: "tg-chat-1",
+			MessageID: "shared-msg-id",
+		},
+	}
+
+	if err := mgr.HandleInbound(context.Background(), msgQQ); err != nil {
+		t.Fatalf("qq HandleInbound returned error: %v", err)
+	}
+	if err := mgr.HandleInbound(context.Background(), msgTG); err != nil {
+		t.Fatalf("tg HandleInbound returned error: %v", err)
+	}
+	// Both should have been accepted (dedup key is adapter:messageID)
+}
+
 func TestManager_Emit_AutoCreatedAt(t *testing.T) {
 	m := NewManager()
 	sink := &stubSink{name: "qq"}

@@ -206,6 +206,9 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				},
 			})
 			b.emitter.TriggerTyping()
+			if b.followSink != nil {
+				b.followSink.OnToolResult(event.Tool.Name, string(event.Tool.Arguments), event.Result, event.IsError)
+			}
 
 		case provider.StreamEventDone:
 			text := round.Text()
