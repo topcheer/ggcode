@@ -399,8 +399,8 @@ func TestAskUserRoundEmitsExplicitQuestionMessage(t *testing.T) {
 	if events[0].Kind != im.OutboundEventText {
 		t.Fatalf("expected ask_user to emit text, got %#v", events)
 	}
-	if events[0].Text != "我需要你补充一些信息：Clarify scope\nWhat scope should I use?\n- small\n- full\n请直接回复你的选择或答案。" {
-		t.Fatalf("unexpected ask_user IM message: %#v", events)
+	if events[0].Text != "📋 **Clarify scope**\n**What scope should I use?**\n  1. small\n  2. full\n  _（回复编号 1-2 或选项文本）_\n\n💬 回复编号或选项文本。" {
+		t.Fatalf("unexpected ask_user IM message:\n%s", events[0].Text)
 	}
 }
 
