@@ -240,6 +240,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	toolDefs := a.tools.ToDefinitions()
 	reactiveCompactRetries := 0
 	idleAutopilotContinuations := 0
+	consecutiveEmptyResponses := 0
 
 	for i := 0; a.maxIter <= 0 || i < a.maxIter; i++ {
 		if err := ctx.Err(); err != nil {
@@ -274,6 +275,33 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
+
+		// Detect empty LLM response: API accepted input but produced no output.
+		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
+		// in tests or scenarios where usage stats are unavailable.
+		if resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens > 0 && len(toolCalls) == 0 {
+			consecutiveEmptyResponses++
+			debug.Log("agent", "Iteration %d: empty response detected (consecutive=%d, input_tokens=%d)",
+				i+1, consecutiveEmptyResponses, resp.Usage.InputTokens)
+			if consecutiveEmptyResponses >= 3 {
+				debug.Log("agent", "too many consecutive empty responses (%d), aborting", consecutiveEmptyResponses)
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventText,
+					Text: "[context overflow — conversation reset for recovery]\n",
+				})
+				return nil
+			}
+			// Retry: inject a nudge and continue
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: "The previous response was empty. Please try again.",
+				}},
+			})
+			continue
+		}
+		consecutiveEmptyResponses = 0
 
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
@@ -691,11 +719,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	}
 	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d attempting compact", a.contextManager.TokenCount())
 
-	onEvent(provider.StreamEvent{
-		Type: provider.StreamEventText,
-		Text: "[compacting conversation to stay within context window]\n",
-	})
-
+	debug.Log("agent", "reactive compact: compacting conversation")
 	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if compactErr != nil {
 		return false
@@ -710,10 +734,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	if !changed {
 		return false
 	}
-	onEvent(provider.StreamEvent{
-		Type: provider.StreamEventText,
-		Text: "[conversation compacted]\n",
-	})
+	debug.Log("agent", "reactive compact: conversation compacted successfully")
 	if retries != nil {
 		*retries = *retries + 1
 		debug.Log("agent", "reactive compact retry=%d", *retries)
@@ -737,10 +758,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 		if shouldIgnoreAutoCompactError(err) {
 			debug.Log("agent", "ignoring transient auto-compact failure: %v", err)
 			if transientWarned == nil || !*transientWarned {
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventText,
-					Text: "[conversation compaction skipped due to transient provider error: " + compactErrorReason(err) + "]\n",
-				})
+				debug.Log("agent", "transient compact error details: %s", compactErrorReason(err))
 				if transientWarned != nil {
 					*transientWarned = true
 				}
@@ -756,14 +774,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 		return nil
 	}
 
-	onEvent(provider.StreamEvent{
-		Type: provider.StreamEventText,
-		Text: "[compacting conversation to stay within context window]\n",
-	})
-	onEvent(provider.StreamEvent{
-		Type: provider.StreamEventText,
-		Text: "[conversation compacted]\n",
-	})
+	debug.Log("agent", "auto-compact: conversation compacted successfully")
 	return nil
 }
 
@@ -825,10 +836,6 @@ func shouldTriggerAutopilotLoopGuard(text string, streak int) bool {
 
 func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.StreamEvent)) error {
 	debug.Log("agent", "autopilot loop guard triggered; compacting and pausing")
-	onEvent(provider.StreamEvent{
-		Type: provider.StreamEventText,
-		Text: "[autopilot loop guard triggered; compacting and pausing]\n",
-	})
 
 	compacted, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if err != nil {
@@ -840,16 +847,7 @@ func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.
 		}
 		compacted = true
 	}
-	if compacted {
-		onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: "[conversation compacted]\n",
-		})
-	}
-	onEvent(provider.StreamEvent{
-		Type: provider.StreamEventText,
-		Text: "[autopilot paused to prevent an idle loop]\n",
-	})
+	debug.Log("agent", "autopilot loop guard: compact completed")
 	return nil
 }
 

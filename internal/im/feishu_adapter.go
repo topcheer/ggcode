@@ -862,7 +862,9 @@ func intValueStr(s string) (int, bool) {
 type feishuSilentLogger struct{}
 
 // sendPostMessage sends an interactive card message with markdown rendering.
-// Feishu interactive cards support markdown syntax (bold, code, links, lists, etc).
+// Uses Feishu Card JSON 2.0 structure which supports full markdown including
+// tables, headings, code blocks, and more. JSON 1.0's markdown tag does NOT
+// support tables or headings.
 func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content string) error {
 	a.mu.RLock()
 	token := a.token
@@ -871,11 +873,19 @@ func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content str
 	apiBase := a.resolveAPIBase()
 	url := apiBase + "/im/v1/messages?receive_id_type=chat_id"
 
+	// Card JSON 2.0 structure: schema + config + body.elements
+	// This enables full markdown rendering (tables, headings, code blocks, etc.)
 	card := map[string]any{
-		"elements": []any{
-			map[string]any{
-				"tag":     "markdown",
-				"content": content,
+		"schema": "2.0",
+		"config": map[string]any{
+			"wide_screen_mode": true,
+		},
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{
+					"tag":     "markdown",
+					"content": content,
+				},
 			},
 		},
 	}

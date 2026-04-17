@@ -147,6 +147,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newHarnessCmd(&cfgFile))
 	cmd.AddCommand(newMCPCmd(&cfgFile))
 	cmd.AddCommand(newIMCmd(&cfgFile))
+	cmd.AddCommand(newDaemonCmd(&cfgFile))
 	configureHelpRendering(cmd)
 
 	return cmd

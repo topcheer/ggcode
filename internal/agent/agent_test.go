@@ -246,7 +246,7 @@ func TestAgent_ContextManager(t *testing.T) {
 	}
 }
 
-func TestRunStreamWithContent_EmitsCompactionProgressMessages(t *testing.T) {
+func TestRunStreamWithContent_CompactsSilentlyAndProducesResponse(t *testing.T) {
 	mp := &mockProvider{
 		chatResponses: []*provider.ChatResponse{
 			{
@@ -288,14 +288,15 @@ func TestRunStreamWithContent_EmitsCompactionProgressMessages(t *testing.T) {
 	}
 
 	joined := strings.Join(texts, "\n")
-	if !strings.Contains(joined, "[compacting conversation to stay within context window]") {
-		t.Fatalf("expected compaction progress message, got %q", joined)
+	// Compaction is now silent — no "[compacting conversation...]" or "[conversation compacted]" text events.
+	if strings.Contains(joined, "[compacting conversation to stay within context window]") {
+		t.Fatalf("compaction should be silent, but found progress message in %q", joined)
 	}
-	if !strings.Contains(joined, "[conversation compacted]") {
-		t.Fatalf("expected compaction completion message, got %q", joined)
+	if strings.Contains(joined, "[conversation compacted]") {
+		t.Fatalf("compaction should be silent, but found completion message in %q", joined)
 	}
 	if !strings.Contains(joined, "Final answer.") {
-		t.Fatalf("expected assistant response after compaction, got %q", joined)
+		t.Fatalf("expected assistant response after silent compaction, got %q", joined)
 	}
 }
 
@@ -1066,14 +1067,12 @@ func TestRunStreamReactiveCompactRetriesPromptTooLong(t *testing.T) {
 		t.Fatalf("expected prompt-too-long recovery to retry once, got %d stream calls", mp.streamCalls)
 	}
 	joined := joinTextEvents(events)
-	if !strings.Contains(joined, "[compacting conversation to stay within context window]") {
-		t.Fatalf("expected reactive compaction status, got %q", joined)
+	// Compaction is now silent — no visible compression messages emitted.
+	if strings.Contains(joined, "[compacting conversation to stay within context window]") {
+		t.Fatalf("compaction should be silent, but found progress message in %q", joined)
 	}
-	if !strings.Contains(joined, "[conversation compacted]") {
-		t.Fatalf("expected reactive compact completion, got %q", joined)
-	}
-	if strings.Count(joined, "[conversation compacted]") > 2 {
-		t.Fatalf("expected at most one preflight compact and one reactive compact completion event, got %q", joined)
+	if strings.Contains(joined, "[conversation compacted]") {
+		t.Fatalf("compaction should be silent, but found completion message in %q", joined)
 	}
 	if !strings.Contains(joined, "Recovered after compaction.") {
 		t.Fatalf("expected final response after reactive compact retry, got %q", joined)
@@ -1114,8 +1113,9 @@ func TestRunStreamIgnoresTransientAutoCompactFailure(t *testing.T) {
 	}
 
 	joined := joinTextEvents(events)
-	if !strings.Contains(joined, "[conversation compaction skipped due to transient provider error: unexpected EOF]") {
-		t.Fatalf("expected transient compact skip message, got %q", joined)
+	// Transient compact errors are now logged silently via debug.Log instead of emitted as text events.
+	if strings.Contains(joined, "[conversation compaction skipped due to transient provider error:") {
+		t.Fatalf("transient compact skip should be silent, but found message in %q", joined)
 	}
 	if !strings.Contains(joined, "Still answered after compact skip.") {
 		t.Fatalf("expected run to continue after compact skip, got %q", joined)
@@ -1179,14 +1179,15 @@ func TestRunStreamAutopilotLoopGuardCompactsAndPauses(t *testing.T) {
 		t.Fatalf("expected loop guard to stop before a third empty turn, got %d stream calls", mp.streamCalls)
 	}
 	joined := joinTextEvents(events)
-	if !strings.Contains(joined, "[autopilot loop guard triggered; compacting and pausing]") {
-		t.Fatalf("expected loop guard trigger message, got %q", joined)
+	// Compression is now silent — no visible compact/loop-guard messages.
+	if strings.Contains(joined, "[autopilot loop guard triggered") {
+		t.Fatalf("loop guard should be silent, but found message in %q", joined)
 	}
-	if !strings.Contains(joined, "[conversation compacted]") {
-		t.Fatalf("expected forced compaction message, got %q", joined)
+	if strings.Contains(joined, "[conversation compacted]") {
+		t.Fatalf("compaction should be silent, but found message in %q", joined)
 	}
-	if !strings.Contains(joined, "[autopilot paused to prevent an idle loop]") {
-		t.Fatalf("expected idle-loop pause message, got %q", joined)
+	if strings.Contains(joined, "[autopilot paused") {
+		t.Fatalf("autopilot pause should be silent, but found message in %q", joined)
 	}
 }
 

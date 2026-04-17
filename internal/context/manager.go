@@ -421,6 +421,48 @@ func (m *Manager) Microcompact() bool {
 		}
 	}
 
+	// Extension: also compact large tool_results in recent groups if still over budget.
+	// This prevents infinite compression loops when recent rounds contain huge tool output.
+	if currentTokens > targetTokens {
+		for i := protectedStart; i < len(m.messages) && currentTokens > targetTokens; i++ {
+			msg := m.messages[i]
+			blocks := append([]provider.ContentBlock(nil), msg.Content...)
+			msgChanged := false
+
+			for j, block := range blocks {
+				if block.Type != "tool_result" || block.Output == "" {
+					continue
+				}
+				// Use a higher threshold for recent groups to avoid over-truncation.
+				originalTokens := EstimateTokens(block.Output)
+				if originalTokens < toolResultMinTokens*3 {
+					continue
+				}
+
+				placeholder := compactedToolResultPlaceholder(block, originalTokens)
+				newTokens := EstimateTokens(placeholder)
+				if originalTokens-newTokens < microcompactMinGain {
+					continue
+				}
+
+				blocks[j].Output = placeholder
+				currentTokens -= originalTokens - newTokens
+				msgChanged = true
+				changed = true
+				compactedCount++
+
+				if currentTokens <= targetTokens {
+					break
+				}
+			}
+
+			if msgChanged {
+				msg.Content = blocks
+				m.messages[i] = msg
+			}
+		}
+	}
+
 	if changed {
 		m.recalcTokens()
 		debug.Log("ctx", "Microcompact: DONE compacted=%d blocks tokens=%d→%d", compactedCount, currentTokens, m.tokenCountLocked())
@@ -486,6 +528,16 @@ func (m *Manager) buildSummaryPlan() (summaryPlan, bool) {
 		break
 	}
 
+	// If recent side still far exceeds budget, force-compress oldest recent group.
+	// This handles the case where a single huge round causes infinite compression loops.
+	if recentTokens > recentBudget*2 && keptGroups > 1 {
+		// Move the oldest kept group to oldMsgs by advancing keepStart past it
+		firstKeptIdx := len(groups) - keptGroups
+		keepStart = groups[firstKeptIdx+1].start
+		keptGroups--
+		debug.Log("ctx", "buildSummaryPlan: forcing single-round compression, keptGroups=%d->%d recentTokens=%d budget=%d",
+			keptGroups+1, keptGroups, recentTokens, recentBudget)
+	}
 	if keptGroups >= len(groups) {
 		keepStart = groups[1].start
 	}
