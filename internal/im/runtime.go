@@ -39,6 +39,10 @@ type Manager struct {
 	adapters        map[string]AdapterState
 	approvals       map[string]*pendingApproval
 	onUpdate        func(StatusSnapshot)
+
+	// Dedup inbound messages by adapter+messageID to prevent platforms
+	// from delivering the same event twice (e.g. Feishu SDK retries).
+	seenMessages map[string]time.Time
 }
 
 type pendingApproval struct {
@@ -62,6 +66,7 @@ func NewManager() *Manager {
 		adapters:        make(map[string]AdapterState),
 		approvals:       make(map[string]*pendingApproval),
 		pairingStates:   make(map[string]PairingChannelState),
+		seenMessages:    make(map[string]time.Time),
 	}
 }
 
@@ -231,6 +236,24 @@ func (m *Manager) PublishAdapterState(state AdapterState) {
 
 func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	m.mu.Lock()
+
+	// Dedup: skip if we've already processed this message recently.
+	if msgID := strings.TrimSpace(msg.Envelope.MessageID); msgID != "" {
+		dedupKey := msg.Envelope.Adapter + ":" + msgID
+		if _, seen := m.seenMessages[dedupKey]; seen {
+			m.mu.Unlock()
+			return nil
+		}
+		m.seenMessages[dedupKey] = time.Now()
+		// Prune entries older than 5 minutes to bound memory.
+		now := time.Now()
+		for k, t := range m.seenMessages {
+			if now.Sub(t) > 5*time.Minute {
+				delete(m.seenMessages, k)
+			}
+		}
+	}
+
 	bridge := m.bridge
 	sessionBound := m.session != nil
 	binding := m.currentBindings[msg.Envelope.Adapter]

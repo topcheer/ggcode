@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -27,7 +29,7 @@ import (
 )
 
 func newDaemonCmd(cfgFile *string) *cobra.Command {
-	var bypassFlag bool
+	var bypassFlag, followFlag, backgroundFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "daemon",
@@ -51,15 +53,45 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			if _, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
 				return fmt.Errorf("persisting Claude MCP servers: %w", err)
 			}
-			return runDaemon(cfg, resolvedCfg, bypassFlag)
+
+			// If --__daemonized, skip fork logic — we ARE the daemonized child
+			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
+				return runDaemon(cfg, resolvedCfg, bypassFlag, true)
+			}
+
+			// If --background, fork and exit parent
+			if backgroundFlag {
+				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag)
+			}
+
+			// Normal foreground start
+			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag)
 		},
 	}
 
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops)")
+	cmd.Flags().BoolVar(&followFlag, "follow", false, "auto-enable follow mode")
+	cmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "start in background")
+	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
+	_ = cmd.Flags().MarkHidden("__daemonized")
+	cmd.MarkFlagsMutuallyExclusive("follow", "background")
 	return cmd
 }
 
-func runDaemon(cfg *config.Config, cfgFile string, bypass bool) error {
+// startBackgroundDaemon forks the process into background and exits the parent.
+func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool) error {
+	workingDir, _ := os.Getwd()
+
+	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, "", "--bypass="+fmt.Sprintf("%v", bypass))
+	if err != nil {
+		return fmt.Errorf("starting background daemon: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "ggcode daemon 已在后台启动 (PID: %d)\n", pid)
+	fmt.Fprintf(os.Stderr, "工作目录: %s\n", workingDir)
+	return nil
+}
+
+func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
 	resolved, err := cfg.ResolveActiveEndpoint()
@@ -323,14 +355,87 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool) error {
 		}()
 	}
 
-	// Wait for shutdown signal
+	// --- Follow mode setup ---
+	toolLang := im.ToolLangEn
+	if lang == "zh-CN" {
+		toolLang = im.ToolLangZhCN
+	}
+	toolFormatter := func(toolName, rawArgs string) string {
+		pres := im.DescribeTool(toolLang, toolName, rawArgs)
+		activity := pres.Activity
+		if activity == "" {
+			activity = im.FormatToolInline(pres.DisplayName, pres.Detail)
+		}
+		if activity == "" {
+			return ""
+		}
+		return im.LocalizeIMProgress(toolLang, activity)
+	}
+	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, toolFormatter)
+	if followActive {
+		bridge.SetFollowSink(followDisplay)
+	}
+
+	// Check if stdin is a terminal (for keyboard handling)
+	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
+
+	// Startup message (before raw mode — normal \n is fine)
 	fmt.Fprintf(os.Stderr, "ggcode daemon 已启动 (session: %s)\n", ses.ID)
 	fmt.Fprintf(os.Stderr, "工作目录: %s\n", workingDir)
-	fmt.Fprintf(os.Stderr, "按 Ctrl+C 退出\n")
+	if isTerminal {
+		fmt.Fprintf(os.Stderr, "按 x 退出, d 后台运行, f 切换 follow 模式\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "按 x 退出\n")
+	}
 
+	// Signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+
+	// Keyboard goroutine (only if stdin is a terminal)
+	kbCh := make(chan byte, 8)
+	var restoreTerminal func()
+	if isTerminal {
+		restoreTerminal = readKeyboard(kbCh)
+	}
+
+	// Register PID file for cleanup
+	defer daemon.CleanupDaemon(workingDir)
+
+	// Main loop
+loop:
+	for {
+		select {
+		case sig := <-sigCh:
+			_ = sig
+			break loop
+		case b, ok := <-kbCh:
+			if !ok {
+				break loop
+			}
+			switch b {
+			case 'x': // exit
+				break loop
+			case 'd': // detach to background
+				detachToBackground(cfgFile, workingDir, ses.ID)
+				break loop
+			case 'f': // toggle follow mode
+				followActive = !followActive
+				if followActive {
+					bridge.SetFollowSink(followDisplay)
+					fmt.Fprint(os.Stderr, "follow 模式已开启\r\n")
+				} else {
+					bridge.SetFollowSink(nil)
+					fmt.Fprint(os.Stderr, "follow 模式已关闭\r\n")
+				}
+			}
+		}
+	}
+
+	// Restore terminal before printing further output
+	if restoreTerminal != nil {
+		restoreTerminal()
+	}
 
 	fmt.Fprintln(os.Stderr, "\n正在关闭...")
 
@@ -340,4 +445,39 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool) error {
 
 	fmt.Fprintln(os.Stderr, "ggcode daemon 已停止")
 	return nil
+}
+
+// readKeyboard reads raw keystrokes from stdin and sends them to the channel.
+// Returns a function that restores the terminal to its original state.
+func readKeyboard(ch chan<- byte) func() {
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return func() {}
+	}
+
+	go func() {
+		defer close(ch)
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				return
+			}
+			ch <- buf[0]
+		}
+	}()
+
+	return func() {
+		term.Restore(int(os.Stdin.Fd()), oldState)
+	}
+}
+
+// detachToBackground forks the daemon into background mode.
+func detachToBackground(cfgFile, workingDir, sessionID string) {
+	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "后台启动失败: %v\n", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "已切换到后台 (PID: %d)\n", pid)
 }
