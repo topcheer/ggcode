@@ -81,19 +81,14 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 // startBackgroundDaemon forks the process into background and exits the parent.
 func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool) error {
 	workingDir, _ := os.Getwd()
-	lang := daemonLang(cfg)
+	lang := daemon.ResolveLang(cfg.Language)
 
 	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, "", "--bypass="+fmt.Sprintf("%v", bypass))
 	if err != nil {
 		return fmt.Errorf("starting background daemon: %w", err)
 	}
-	if lang == "zh-CN" {
-		fmt.Fprintf(os.Stderr, "ggcode daemon 已在后台启动 (PID: %d)\n", pid)
-		fmt.Fprintf(os.Stderr, "工作目录: %s\n", workingDir)
-	} else {
-		fmt.Fprintf(os.Stderr, "ggcode daemon started in background (PID: %d)\n", pid)
-		fmt.Fprintf(os.Stderr, "Working directory: %s\n", workingDir)
-	}
+	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.started_bg", pid))
+	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.workdir", workingDir))
 	return nil
 }
 
@@ -266,10 +261,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 	if !hasActiveBinding {
-		if daemonLang(cfg) == "zh-CN" {
-			return fmt.Errorf("当前工作目录没有配对的 IM 渠道。\n请先在 TUI 模式下通过 /qq、/tg 等命令配对 IM 渠道，然后再使用 daemon 模式。")
-		}
-		return fmt.Errorf("No IM channel paired with this workspace.\nPair an IM channel via /qq, /tg etc in TUI mode first, then use daemon mode.")
+		return fmt.Errorf("%s", daemon.Tr(daemon.ResolveLang(cfg.Language), "daemon.no_binding"))
 	}
 
 	pairingPath, err := im.DefaultPairingStatePath()
@@ -288,10 +280,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	imMgr.BindSession(im.SessionBinding{Workspace: workingDir})
 
 	// Determine language
-	lang := "en"
-	if cfg.Language == "zh-CN" || cfg.Language == "zh" {
-		lang = "zh-CN"
-	}
+	lang := daemon.ResolveLang(cfg.Language)
 
 	// Create session
 	vendor := cfg.Vendor
@@ -303,7 +292,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	// Create emitter and daemon bridge
-	emitter := im.NewIMEmitter(imMgr, lang)
+	emitter := im.NewIMEmitter(imMgr, string(lang), workingDir)
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
 
 	// Wire ask_user handler
@@ -366,12 +355,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// --- Follow mode setup ---
 	toolLang := im.ToolLangEn
-	if lang == "zh-CN" {
+	if lang == daemon.LangZhCN {
 		toolLang = im.ToolLangZhCN
-	}
-	followLang := daemon.LangEn
-	if lang == "zh-CN" {
-		followLang = daemon.LangZhCN
 	}
 	toolFormatter := func(toolName, rawArgs string) string {
 		pres := im.DescribeTool(toolLang, toolName, rawArgs)
@@ -384,7 +369,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		return im.LocalizeIMProgress(toolLang, activity)
 	}
-	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, followLang, toolFormatter)
+	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, lang, workingDir, toolFormatter)
 	if followActive {
 		bridge.SetFollowSink(followDisplay)
 	}
@@ -393,22 +378,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
 
 	// Startup message (before raw mode — normal \n is fine)
-	if lang == "zh-CN" {
-		fmt.Fprintf(os.Stderr, "ggcode daemon 已启动 (session: %s)\n", ses.ID)
-		fmt.Fprintf(os.Stderr, "工作目录: %s\n", workingDir)
-		if isTerminal {
-			fmt.Fprintf(os.Stderr, "按 x 退出, d 后台运行, f 切换 follow 模式\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "按 x 退出\n")
-		}
+	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.started", ses.ID))
+	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.workdir", workingDir))
+	if isTerminal {
+		fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.keys_full"))
 	} else {
-		fmt.Fprintf(os.Stderr, "ggcode daemon started (session: %s)\n", ses.ID)
-		fmt.Fprintf(os.Stderr, "Working directory: %s\n", workingDir)
-		if isTerminal {
-			fmt.Fprintf(os.Stderr, "Press x to exit, d for background, f to toggle follow\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "Press x to exit\n")
-		}
+		fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.keys_minimal"))
 	}
 
 	// Signal handling
@@ -446,18 +421,10 @@ loop:
 				followActive = !followActive
 				if followActive {
 					bridge.SetFollowSink(followDisplay)
-					if lang == "zh-CN" {
-						fmt.Fprint(os.Stderr, "follow 模式已开启\r\n")
-					} else {
-						fmt.Fprint(os.Stderr, "follow mode enabled\r\n")
-					}
+					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.follow_on"))
 				} else {
 					bridge.SetFollowSink(nil)
-					if lang == "zh-CN" {
-						fmt.Fprint(os.Stderr, "follow 模式已关闭\r\n")
-					} else {
-						fmt.Fprint(os.Stderr, "follow mode disabled\r\n")
-					}
+					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.follow_off"))
 				}
 			}
 		}
@@ -468,21 +435,13 @@ loop:
 		restoreTerminal()
 	}
 
-	if lang == "zh-CN" {
-		fmt.Fprintln(os.Stderr, "\n正在关闭...")
-	} else {
-		fmt.Fprintln(os.Stderr, "\nShutting down...")
-	}
+	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\n")
 
 	// Save session on exit
 	ses.Messages = ag.Messages()
 	_ = store.Save(ses)
 
-	if lang == "zh-CN" {
-		fmt.Fprintln(os.Stderr, "ggcode daemon 已停止")
-	} else {
-		fmt.Fprintln(os.Stderr, "ggcode daemon stopped")
-	}
+	fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.stopped"))
 	return nil
 }
 
@@ -512,27 +471,11 @@ func readKeyboard(ch chan<- byte) func() {
 }
 
 // detachToBackground forks the daemon into background mode.
-func detachToBackground(lang, cfgFile, workingDir, sessionID string) {
+func detachToBackground(lang daemon.Lang, cfgFile, workingDir, sessionID string) {
 	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, sessionID)
 	if err != nil {
-		if lang == "zh-CN" {
-			fmt.Fprintf(os.Stderr, "后台启动失败: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "Failed to start background: %v\n", err)
-		}
+		fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.bg_fail", err))
 		return
 	}
-	if lang == "zh-CN" {
-		fmt.Fprintf(os.Stderr, "已切换到后台 (PID: %d)\n", pid)
-	} else {
-		fmt.Fprintf(os.Stderr, "Switched to background (PID: %d)\n", pid)
-	}
-}
-
-// daemonLang returns the language string from config.
-func daemonLang(cfg *config.Config) string {
-	if cfg.Language == "zh-CN" || cfg.Language == "zh" {
-		return "zh-CN"
-	}
-	return "en"
+	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.bg_ok", pid))
 }
