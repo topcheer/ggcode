@@ -977,6 +977,7 @@ func (a *qqAdapter) rememberChatType(channelID, chatType string) {
 
 // TriggerTyping sends an input notify to indicate the bot is typing.
 // Only supported for C2C chats; group chats do not support this API.
+// Must include msg_id to be treated as a passive reply (avoids proactive message rate limits).
 func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
 	channelID := strings.TrimSpace(binding.ChannelID)
 	if channelID == "" {
@@ -986,13 +987,17 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 	if chatType != "c2c" {
 		return nil // QQ typing notify only works for C2C
 	}
+
+	// Need a msg_id to send as passive reply; without it QQ treats this as proactive message.
+	msgID := strings.TrimSpace(binding.LastInboundMessageID)
+	if msgID == "" {
+		return nil // No passive context, skip to avoid proactive rate limit
+	}
+
 	path := "/v2/users/" + channelID + "/messages"
-	seq := 1
-	if msgID := strings.TrimSpace(binding.LastInboundMessageID); msgID != "" {
-		seq = binding.PassiveReplyCount + 1
-		if seq < 1 {
-			seq = 1
-		}
+	seq := binding.PassiveReplyCount + 1
+	if seq < 1 {
+		seq = 1
 	}
 	body := map[string]any{
 		"msg_type": 6,
@@ -1000,6 +1005,7 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 			"input_type":   1,
 			"input_second": 60,
 		},
+		"msg_id":  msgID,
 		"msg_seq": seq,
 	}
 	if _, err := a.apiRequest(ctx, http.MethodPost, path, body, nil); err != nil {

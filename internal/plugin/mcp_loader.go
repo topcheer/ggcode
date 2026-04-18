@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -34,19 +35,31 @@ type MCPServerInfo struct {
 	Status        MCPStatus
 	Error         string
 	Migrated      bool
+	Disabled      bool
+}
+
+// MCPOAuthRequiredError signals that OAuth is needed for an MCP server.
+type MCPOAuthRequiredError struct {
+	ServerName string
+	Handler    *mcp.OAuthHandler
+}
+
+func (e *MCPOAuthRequiredError) Error() string {
+	return fmt.Sprintf("mcp server %q requires OAuth authentication", e.ServerName)
 }
 
 // MCPPlugin connects to an MCP server and registers its tools.
 type MCPPlugin struct {
-	cfg       config.MCPServerConfig
-	client    *mcp.Client
-	adapter   *mcp.Adapter
-	mu        sync.RWMutex
-	connected bool
-	status    MCPStatus
-	lastError string
-	prompts   []string
-	resources []string
+	cfg           config.MCPServerConfig
+	client        *mcp.Client
+	adapter       *mcp.Adapter
+	mu            sync.RWMutex
+	connected     bool
+	awaitingOAuth bool
+	status        MCPStatus
+	lastError     string
+	prompts       []string
+	resources     []string
 }
 
 // NewMCPPlugin creates a plugin from an MCP server configuration.
@@ -79,6 +92,13 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	}
 	tools, prompts, resources, err := discoverCapabilities(ctx, client)
 	if err != nil {
+		var oauthErr *mcp.OAuthRequiredError
+		if errors.As(err, &oauthErr) {
+			return nil, &MCPOAuthRequiredError{
+				ServerName: m.cfg.Name,
+				Handler:    oauthErr.Handler,
+			}
+		}
 		client.Close()
 		m.mu.Lock()
 		m.status = MCPStatusFailed
@@ -96,6 +116,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.client = client
 	m.adapter = mcp.NewAdapter(m.cfg.Name, client, tools)
 	m.connected = true
+	m.awaitingOAuth = false
 	m.status = MCPStatusConnected
 	m.lastError = ""
 	m.prompts = prompts
@@ -114,15 +135,18 @@ func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDe
 	go func() {
 		initResult, err := client.Initialize(ctx)
 		if err != nil {
+			debug.Log("mcp-discover", "initialize_failed error=%v", err)
 			done <- result{err: err}
 			return
 		}
-		_ = initResult
+		debug.Log("mcp-discover", "initialize_ok server=%s protocol=%s", initResult.ServerInfo.Name, initResult.ProtocolVersion)
 		tools, err := client.ListTools(ctx)
 		if err != nil {
+			debug.Log("mcp-discover", "list_tools_failed error=%v", err)
 			done <- result{err: err}
 			return
 		}
+		debug.Log("mcp-discover", "list_tools_ok count=%d", len(tools))
 		done <- result{
 			tools:     tools,
 			prompts:   listPromptNames(client.ListPrompts(ctx)),
@@ -194,14 +218,20 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 
 func (m *MCPPlugin) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.client == nil {
+		m.adapter = nil
+		m.connected = false
+		m.status = MCPStatusPending
+		m.mu.Unlock()
 		return nil
 	}
-	err := m.client.Close()
+	client := m.client
 	m.client = nil
+	m.adapter = nil
 	m.connected = false
-	return err
+	m.status = MCPStatusPending
+	m.mu.Unlock()
+	return client.Close()
 }
 
 func (m *MCPPlugin) GetPrompt(ctx context.Context, name string, args map[string]interface{}) (*mcp.GetPromptResult, error) {
@@ -251,6 +281,8 @@ type MCPManager struct {
 	startOnce    sync.Once
 	timeout      time.Duration
 	stdioTimeout time.Duration
+	pendingOAuth *MCPOAuthRequiredError
+	urlOpener    func(string) error
 }
 
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry) *MCPManager {
@@ -272,13 +304,33 @@ func (m *MCPManager) SetOnUpdate(fn func([]MCPServerInfo)) {
 	m.onUpdate = fn
 }
 
+func (m *MCPManager) SetURLOpener(fn func(string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.urlOpener = fn
+}
+
+func (m *MCPManager) PendingOAuth() *MCPOAuthRequiredError {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.pendingOAuth
+}
+
+func (m *MCPManager) ClearPendingOAuth() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pendingOAuth = nil
+}
+
 func (m *MCPManager) Snapshot() []MCPServerInfo {
 	m.mu.RLock()
 	plugins := append([]*MCPPlugin(nil), m.plugins...)
 	m.mu.RUnlock()
 	out := make([]MCPServerInfo, 0, len(plugins))
 	for _, plugin := range plugins {
-		out = append(out, plugin.Info())
+		info := plugin.Info()
+		info.Disabled = MCPDisabled(plugin.Name())
+		out = append(out, info)
 	}
 	return out
 }
@@ -314,10 +366,26 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 	defer cancel()
 	p.markPending()
 	m.emitUpdate()
+	debug.Log("mcp-connect", "start server=%s timeout=%v", p.Name(), m.connectTimeoutFor(p))
 	if err := p.RegisterTools(connectCtx, m.registry); err != nil {
+		var oauthErr *MCPOAuthRequiredError
+		if errors.As(err, &oauthErr) {
+			debug.Log("mcp-connect", "oauth_required server=%s", p.Name())
+			p.mu.Lock()
+			p.awaitingOAuth = true
+			p.mu.Unlock()
+			m.mu.Lock()
+			m.pendingOAuth = oauthErr
+			m.mu.Unlock()
+			m.emitUpdate()
+			return
+		}
+		debug.Log("mcp-connect", "failed server=%s error=%v", p.Name(), err)
 		m.mu.Lock()
 		m.warnings = append(m.warnings, fmt.Sprintf("warning: MCP server %s failed: %v", p.Name(), err))
 		m.mu.Unlock()
+	} else {
+		debug.Log("mcp-connect", "connected server=%s tools=%d", p.Name(), len(p.Info().ToolNames))
 	}
 	m.emitUpdate()
 }
@@ -339,6 +407,9 @@ func (m *MCPManager) StartBackground(ctx context.Context) {
 		m.emitUpdate()
 		for _, plugin := range m.plugins {
 			plugin := plugin
+			if MCPDisabled(plugin.Name()) {
+				continue
+			}
 			go m.connectWithRetry(ctx, plugin)
 		}
 	})
@@ -348,6 +419,9 @@ func (m *MCPManager) ConnectAll(ctx context.Context) []string {
 	m.emitUpdate()
 	var wg sync.WaitGroup
 	for _, plugin := range m.plugins {
+		if MCPDisabled(plugin.Name()) {
+			continue
+		}
 		wg.Add(1)
 		go func(plugin *MCPPlugin) {
 			defer wg.Done()
@@ -422,6 +496,45 @@ func (m *MCPManager) Uninstall(name string) bool {
 	return false
 }
 
+// Disconnect closes the MCP server connection and unregisters its tools,
+// but keeps the plugin in the list so it can be reconnected later.
+// Runs asynchronously to avoid blocking the caller.
+func (m *MCPManager) Disconnect(name string) bool {
+	m.mu.RLock()
+	plugins := append([]*MCPPlugin(nil), m.plugins...)
+	m.mu.RUnlock()
+	for _, plugin := range plugins {
+		if plugin.Name() != name {
+			continue
+		}
+		go func(p *MCPPlugin) {
+			toolNames := p.Info().ToolNames
+			for _, toolName := range toolNames {
+				m.registry.Unregister(toolName)
+			}
+			_ = p.Close()
+			m.emitUpdate()
+		}(plugin)
+		return true
+	}
+	return false
+}
+
+// Reconnect reconnects a previously disconnected MCP server.
+func (m *MCPManager) Reconnect(name string) bool {
+	m.mu.RLock()
+	plugins := append([]*MCPPlugin(nil), m.plugins...)
+	m.mu.RUnlock()
+	for _, plugin := range plugins {
+		if plugin.Name() != name {
+			continue
+		}
+		go m.connectOne(context.Background(), plugin)
+		return true
+	}
+	return false
+}
+
 func (m *MCPManager) GetPrompt(ctx context.Context, server, name string, args map[string]interface{}) (*tool.MCPPromptResult, error) {
 	plugin := m.pluginByName(server)
 	if plugin == nil {
@@ -477,6 +590,14 @@ func (m *MCPManager) connectWithRetry(ctx context.Context, plugin *MCPPlugin) {
 		}
 		m.connectOne(ctx, plugin)
 		if plugin.IsConnected() {
+			return
+		}
+		// Stop retrying if OAuth is needed — the TUI will handle reconnection
+		// after the user completes the browser auth flow.
+		plugin.mu.RLock()
+		waiting := plugin.awaitingOAuth
+		plugin.mu.RUnlock()
+		if waiting {
 			return
 		}
 	}

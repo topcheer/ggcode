@@ -72,6 +72,9 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		}
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q not found", strings.TrimSpace(args.Skill))}, nil
 	}
+	if !cmd.Enabled {
+		return Result{IsError: true, Content: fmt.Sprintf("skill %q is disabled", cmd.Name)}, nil
+	}
 	if cmd.DisableModelInvocation {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q is only available for direct user invocation", cmd.Name)}, nil
 	}

@@ -117,7 +117,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	b.mu.Unlock()
 
 	if err != nil && !errors.Is(err, context.Canceled) {
-		b.emitter.EmitText(fmt.Sprintf("错误: %v", err))
+		b.emitter.EmitText(provider.UserFacingError(err))
 	}
 	return nil
 }
@@ -227,7 +227,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 
 		case provider.StreamEventError:
 			if !errors.Is(event.Error, context.Canceled) {
-				b.emitter.EmitText(fmt.Sprintf("错误: %v", event.Error))
+				b.emitter.EmitText(provider.UserFacingError(event.Error))
 			}
 			if b.followSink != nil {
 				b.followSink.OnError(event.Error)

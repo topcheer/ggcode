@@ -143,6 +143,7 @@ func loadCommandFile(path, name string, target loadTarget) (*Command, bool) {
 		DisableModelInvocation: meta.DisableModelInvocation,
 		Context:                strings.TrimSpace(meta.Context),
 		UserInvocable:          true,
+		Enabled:                true,
 	}
 	if meta.UserInvocable != nil {
 		cmd.UserInvocable = *meta.UserInvocable

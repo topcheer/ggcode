@@ -138,6 +138,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
+	dumpRequestJSON("openai", "Chat", req)
 
 	var resp openai.ChatCompletionResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -182,9 +183,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	}
 
 	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
-	if msgJSON, err := json.Marshal(chatMsgs); err == nil {
-		debug.Log("openai", "Messages: %s", string(msgJSON))
-	}
+	dumpRequestJSON("openai", "ChatStream", req)
 	if len(req.Tools) > 0 {
 		if toolJSON, err := json.Marshal(req.Tools); err == nil {
 			debug.Log("openai", "Tools: %s", string(toolJSON))

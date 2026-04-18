@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
@@ -33,13 +35,14 @@ type slackAdapter struct {
 	botToken   string
 	appToken   string
 	botUserID  string
+	stt        imstt.Transcriber
 
 	mu        sync.RWMutex
 	connected bool
 	ws        *websocket.Conn
 }
 
-func newSlackAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*slackAdapter, error) {
+func newSlackAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*slackAdapter, error) {
 	botToken := strings.TrimSpace(stringValue(adapterCfg.Extra, "bot_token", "token"))
 	if botToken == "" {
 		return nil, fmt.Errorf("Slack bot_token is required for adapter %q", name)
@@ -48,13 +51,15 @@ func newSlackAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 	if appToken == "" {
 		return nil, fmt.Errorf("Slack app_token is required for Socket Mode (adapter %q)", name)
 	}
-	return &slackAdapter{
+	adapter := &slackAdapter{
 		name:       name,
 		manager:    mgr,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		botToken:   botToken,
 		appToken:   appToken,
-	}, nil
+	}
+	adapter.stt = buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveSlackSTTConfig)
+	return adapter, nil
 }
 
 func (a *slackAdapter) Name() string { return a.name }
@@ -251,8 +256,15 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		return
 	}
 
-	// Process file attachments (images, files)
-	attachments := a.processSlackAttachments(ctx, event)
+	// Process file attachments (images, files, audio)
+	attachments, voiceText := a.processSlackAttachments(ctx, event)
+	if voiceText != "" {
+		if text != "" {
+			text += "\n\n" + voiceText
+		} else {
+			text = voiceText
+		}
+	}
 
 	text = strings.TrimSpace(text)
 	if text == "" && len(attachments) == 0 {
@@ -296,13 +308,15 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 	}
 }
 
-// processSlackAttachments extracts file attachments from a Slack message event.
-func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[string]any) []Attachment {
+// processSlackAttachments extracts file attachments (images, audio, files) from a Slack message event.
+func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[string]any) ([]Attachment, string) {
 	files, ok := event["files"].([]any)
 	if !ok || len(files) == 0 {
-		return nil
+		return nil, ""
 	}
 	var attachments []Attachment
+	var voiceText string
+
 	for _, f := range files {
 		file, ok := f.(map[string]any)
 		if !ok {
@@ -319,6 +333,29 @@ func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[st
 		if downloadURL == "" {
 			continue
 		}
+
+		if strings.HasPrefix(mimetype, "audio/") {
+			// Audio/voice attachment — transcribe if STT is available
+			transcript := ""
+			if a.stt != nil {
+				transcript = a.transcribeSlackAudio(ctx, downloadURL, name, mimetype)
+			}
+			attachments = append(attachments, Attachment{
+				Kind:       AttachmentVoice,
+				Name:       name,
+				MIME:       mimetype,
+				Transcript: transcript,
+			})
+			if transcript != "" {
+				if voiceText != "" {
+					voiceText += "\n\n" + transcript
+				} else {
+					voiceText = transcript
+				}
+			}
+			continue
+		}
+
 		data, respMime, err := a.downloadSlackFile(ctx, downloadURL)
 		if err != nil {
 			debug.Log("slack", "adapter=%s download file %s failed: %v", a.name, fileID, err)
@@ -347,7 +384,7 @@ func (a *slackAdapter) processSlackAttachments(ctx context.Context, event map[st
 			})
 		}
 	}
-	return attachments
+	return attachments, voiceText
 }
 
 func (a *slackAdapter) downloadSlackFile(ctx context.Context, url string) ([]byte, string, error) {
@@ -723,4 +760,80 @@ func splitSlackMessage(text string, maxLen int) []string {
 		text = text[splitAt:]
 	}
 	return chunks
+}
+
+// transcribeSlackAudio downloads an audio file from Slack and transcribes it via STT.
+func (a *slackAdapter) transcribeSlackAudio(ctx context.Context, downloadURL, filename, contentType string) string {
+	data, _, err := a.downloadSlackFile(ctx, downloadURL)
+	if err != nil || len(data) == 0 {
+		debug.Log("slack", "adapter=%s download audio failed: %v", a.name, err)
+		return ""
+	}
+
+	// Determine extension
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		ext = audioExtFromMIME(contentType)
+	}
+
+	// Write to temp file
+	src, err := os.CreateTemp("", "ggcode-slack-audio-*"+ext)
+	if err != nil {
+		return ""
+	}
+	if _, err := src.Write(data); err != nil {
+		src.Close()
+		_ = os.Remove(src.Name())
+		return ""
+	}
+	src.Close()
+	audioPath := src.Name()
+	cleanup := func() { _ = os.Remove(audioPath) }
+
+	// Convert to wav if needed
+	if ext != ".wav" {
+		dst, err := os.CreateTemp("", "ggcode-slack-audio-*.wav")
+		if err != nil {
+			cleanup()
+			return ""
+		}
+		dst.Close()
+		cmd := exec.Command("ffmpeg", "-y", "-i", audioPath, dst.Name())
+		if _, err := cmd.CombinedOutput(); err != nil {
+			_ = os.Remove(dst.Name())
+			cleanup()
+			debug.Log("slack", "adapter=%s ffmpeg convert failed: %v", a.name, err)
+			return ""
+		}
+		cleanup()
+		audioPath = dst.Name()
+		cleanup = func() { _ = os.Remove(audioPath) }
+	}
+	defer cleanup()
+
+	result, err := a.stt.Transcribe(ctx, imstt.Request{
+		MIME: "audio/wav",
+		Name: filepath.Base(audioPath),
+		Path: audioPath,
+	})
+	if err != nil {
+		debug.Log("slack", "adapter=%s STT failed: %v", a.name, err)
+		return ""
+	}
+	debug.Log("slack", "adapter=%s STT result: %d chars", a.name, len(result.Text))
+	return result.Text
+}
+
+func resolveSlackSTTConfig(global config.IMSTTConfig, extra map[string]interface{}) *config.IMSTTConfig {
+	cfg := global
+	if sttExtra, ok := extra["stt"].(map[string]interface{}); ok {
+		cfg.Provider = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["provider"])), cfg.Provider)
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["baseUrl"])), strings.TrimSpace(stringFromAny(sttExtra["base_url"])), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["apiKey"])), strings.TrimSpace(stringFromAny(sttExtra["api_key"])), cfg.APIKey)
+		cfg.Model = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["model"])), cfg.Model)
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return nil
+	}
+	return &cfg
 }

@@ -189,6 +189,7 @@ func TestMCPServerUpdateRefreshesSkills(t *testing.T) {
 			Source:        commands.SourceMCP,
 			LoadedFrom:    commands.LoadedFromMCP,
 			UserInvocable: true,
+			Enabled:       true,
 		}}
 	})
 	m.SetCommandsManager(mgr)
@@ -311,11 +312,12 @@ func TestSkillsPanelPagination(t *testing.T) {
 			UserInvocable: true,
 			Source:        commands.SourceUser,
 			LoadedFrom:    commands.LoadedFromSkills,
+			Enabled:       true,
 		}
 	}
 
 	pageOne := m.renderSkillsPanel()
-	if !strings.Contains(pageOne, "page 1/2") {
+	if !strings.Contains(pageOne, "1/2") {
 		t.Fatalf("expected first page footer, got %q", pageOne)
 	}
 	if !strings.Contains(pageOne, "skill-10") {
@@ -327,7 +329,7 @@ func TestSkillsPanelPagination(t *testing.T) {
 
 	m.skillsPanel.page = 1
 	pageTwo := m.renderSkillsPanel()
-	if !strings.Contains(pageTwo, "page 2/2") {
+	if !strings.Contains(pageTwo, "2/2") {
 		t.Fatalf("expected second page footer, got %q", pageTwo)
 	}
 	if !strings.Contains(pageTwo, "skill-11") {
@@ -595,6 +597,13 @@ func (f *fakeMCPManager) Uninstall(name string) bool {
 	f.uninstalled = append(f.uninstalled, name)
 	return true
 }
+
+func (f *fakeMCPManager) Disconnect(name string) bool { return true }
+func (f *fakeMCPManager) Reconnect(name string) bool  { return true }
+func (f *fakeMCPManager) PendingOAuth() *plugin.MCPOAuthRequiredError {
+	return nil
+}
+func (f *fakeMCPManager) ClearPendingOAuth() {}
 
 func TestMCPCommandOpensPanel(t *testing.T) {
 	m := newTestModel()

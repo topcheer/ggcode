@@ -79,6 +79,12 @@ var catalogEn = map[string]string{
 	"daemon.bg_fail":       "Failed to start background: %v",
 	"daemon.no_binding":    "No IM channel paired with this workspace.\nPair an IM channel via /qq, /tg etc in TUI mode first, then use daemon mode.",
 
+	"daemon.resume.title":   "Available sessions:",
+	"daemon.resume.item":    "  %d. %s  (%s)",
+	"daemon.resume.prompt":  "Enter session number to resume (or press Enter to start new): ",
+	"daemon.resume.invalid": "Invalid selection, starting new session.",
+	"daemon.resume.empty":   "No previous sessions found. Starting new session.",
+
 	"follow.user":         "User",
 	"follow.assistant":    "Assistant",
 	"follow.todos_header": "  📋 Todos:",
@@ -98,6 +104,12 @@ var catalogZhCN = map[string]string{
 	"daemon.bg_ok":         "已切换到后台 (PID: %d)",
 	"daemon.bg_fail":       "后台启动失败: %v",
 	"daemon.no_binding":    "当前工作目录没有配对的 IM 渠道。\n请先在 TUI 模式下通过 /qq、/tg 等命令配对 IM 渠道，然后再使用 daemon 模式。",
+
+	"daemon.resume.title":   "可恢复的会话:",
+	"daemon.resume.item":    "  %d. %s  (%s)",
+	"daemon.resume.prompt":  "输入序号恢复会话 (直接回车创建新会话): ",
+	"daemon.resume.invalid": "无效选择, 将创建新会话。",
+	"daemon.resume.empty":   "没有历史会话, 将创建新会话。",
 
 	"follow.user":         "用户",
 	"follow.assistant":    "助手",

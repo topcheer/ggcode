@@ -98,6 +98,12 @@ func (r *REPL) SetAutoMemory(am *memory.AutoMemory) {
 	r.model.SetAutoMemory(am)
 }
 
+// SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt
+// when skills or other dynamic parts change.
+func (r *REPL) SetSystemPromptRebuilder(fn func() string) {
+	r.model.SetSystemPromptRebuilder(fn)
+}
+
 func (r *REPL) SetProjectMemoryFiles(files []string) {
 	r.model.SetProjectMemoryFiles(files)
 }

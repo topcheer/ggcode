@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
@@ -43,6 +45,7 @@ type discordAdapter struct {
 	httpClient *http.Client
 	token      string
 	apiBase    string
+	stt        imstt.Transcriber
 
 	mu        sync.RWMutex
 	connected bool
@@ -51,7 +54,7 @@ type discordAdapter struct {
 	ws        *websocket.Conn
 }
 
-func newDiscordAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*discordAdapter, error) {
+func newDiscordAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*discordAdapter, error) {
 	token := strings.TrimSpace(stringValue(adapterCfg.Extra, "token", "bot_token"))
 	if token == "" {
 		return nil, fmt.Errorf("Discord bot token is required for adapter %q", name)
@@ -60,13 +63,15 @@ func newDiscordAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapt
 	if apiBase == "" {
 		apiBase = discordAPIBase
 	}
-	return &discordAdapter{
+	adapter := &discordAdapter{
 		name:       name,
 		manager:    mgr,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		token:      token,
 		apiBase:    apiBase,
-	}, nil
+	}
+	adapter.stt = buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveDiscordSTTConfig)
+	return adapter, nil
 }
 
 func (a *discordAdapter) Name() string { return a.name }
@@ -259,8 +264,15 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 
 	content = strings.TrimSpace(content)
 
-	// Process attachments (images, files)
-	attachments := a.processDiscordAttachments(ctx, d)
+	// Process attachments (images, files, audio)
+	attachments, voiceText := a.processDiscordAttachments(ctx, d)
+	if voiceText != "" {
+		if content != "" {
+			content += "\n\n" + voiceText
+		} else {
+			content = voiceText
+		}
+	}
 
 	if content == "" && len(attachments) == 0 {
 		return
@@ -304,13 +316,15 @@ func (a *discordAdapter) handleMessage(ctx context.Context, d map[string]any) {
 	}
 }
 
-// processDiscordAttachments extracts image and file attachments from a Discord message.
-func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[string]any) []Attachment {
+// processDiscordAttachments extracts image, audio, and file attachments from a Discord message.
+func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[string]any) ([]Attachment, string) {
 	raw, ok := d["attachments"].([]any)
 	if !ok || len(raw) == 0 {
-		return nil
+		return nil, ""
 	}
 	var attachments []Attachment
+	var voiceText string
+
 	for _, item := range raw {
 		att, ok := item.(map[string]any)
 		if !ok {
@@ -322,6 +336,7 @@ func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[st
 		if url == "" {
 			continue
 		}
+
 		if strings.HasPrefix(contentType, "image/") {
 			// Download image data
 			data, mimeType, err := a.downloadDiscordAttachment(ctx, url)
@@ -338,8 +353,27 @@ func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[st
 				MIME:       mimeType,
 				DataBase64: base64.StdEncoding.EncodeToString(data),
 			})
+		} else if strings.HasPrefix(contentType, "audio/") {
+			// Audio/voice attachment — transcribe if STT is available
+			transcript := ""
+			if a.stt != nil {
+				transcript = a.transcribeDiscordAudio(ctx, url, filename, contentType)
+			}
+			attachments = append(attachments, Attachment{
+				Kind:       AttachmentVoice,
+				Name:       filename,
+				MIME:       contentType,
+				Transcript: transcript,
+			})
+			if transcript != "" {
+				if voiceText != "" {
+					voiceText += "\n\n" + transcript
+				} else {
+					voiceText = transcript
+				}
+			}
 		} else {
-			// Non-image file: download and cache locally
+			// Non-image/non-audio file: download and cache locally
 			data, mimeType, err := a.downloadDiscordAttachment(ctx, url)
 			if err != nil {
 				debug.Log("discord", "adapter=%s download file failed: %v", a.name, err)
@@ -357,7 +391,7 @@ func (a *discordAdapter) processDiscordAttachments(ctx context.Context, d map[st
 			})
 		}
 	}
-	return attachments
+	return attachments, voiceText
 }
 
 func (a *discordAdapter) downloadDiscordAttachment(ctx context.Context, url string) ([]byte, string, error) {
@@ -700,4 +734,80 @@ func jsonInt(v any) int {
 	default:
 		return 0
 	}
+}
+
+// transcribeDiscordAudio downloads an audio attachment and transcribes it via STT.
+func (a *discordAdapter) transcribeDiscordAudio(ctx context.Context, url, filename, contentType string) string {
+	data, _, err := a.downloadDiscordAttachment(ctx, url)
+	if err != nil || len(data) == 0 {
+		debug.Log("discord", "adapter=%s download audio failed: %v", a.name, err)
+		return ""
+	}
+
+	// Determine extension
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		ext = audioExtFromMIME(contentType)
+	}
+
+	// Write to temp file
+	src, err := os.CreateTemp("", "ggcode-discord-audio-*"+ext)
+	if err != nil {
+		return ""
+	}
+	if _, err := src.Write(data); err != nil {
+		src.Close()
+		_ = os.Remove(src.Name())
+		return ""
+	}
+	src.Close()
+	audioPath := src.Name()
+	cleanup := func() { _ = os.Remove(audioPath) }
+
+	// Convert to wav if needed
+	if ext != ".wav" {
+		dst, err := os.CreateTemp("", "ggcode-discord-audio-*.wav")
+		if err != nil {
+			cleanup()
+			return ""
+		}
+		dst.Close()
+		cmd := exec.Command("ffmpeg", "-y", "-i", audioPath, dst.Name())
+		if _, err := cmd.CombinedOutput(); err != nil {
+			_ = os.Remove(dst.Name())
+			cleanup()
+			debug.Log("discord", "adapter=%s ffmpeg convert failed: %v", a.name, err)
+			return ""
+		}
+		cleanup()
+		audioPath = dst.Name()
+		cleanup = func() { _ = os.Remove(audioPath) }
+	}
+	defer cleanup()
+
+	result, err := a.stt.Transcribe(ctx, imstt.Request{
+		MIME: "audio/wav",
+		Name: filepath.Base(audioPath),
+		Path: audioPath,
+	})
+	if err != nil {
+		debug.Log("discord", "adapter=%s STT failed: %v", a.name, err)
+		return ""
+	}
+	debug.Log("discord", "adapter=%s STT result: %d chars", a.name, len(result.Text))
+	return result.Text
+}
+
+func resolveDiscordSTTConfig(global config.IMSTTConfig, extra map[string]interface{}) *config.IMSTTConfig {
+	cfg := global
+	if sttExtra, ok := extra["stt"].(map[string]interface{}); ok {
+		cfg.Provider = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["provider"])), cfg.Provider)
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["baseUrl"])), strings.TrimSpace(stringFromAny(sttExtra["base_url"])), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["apiKey"])), strings.TrimSpace(stringFromAny(sttExtra["api_key"])), cfg.APIKey)
+		cfg.Model = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["model"])), cfg.Model)
+	}
+	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return nil
+	}
+	return &cfg
 }

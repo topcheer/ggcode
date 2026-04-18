@@ -12,7 +12,16 @@ func normalizeToolInputValue(raw json.RawMessage) any {
 	}
 	var decoded any
 	if err := json.Unmarshal(trimmed, &decoded); err == nil {
-		return decoded
+		// Anthropic tool_use input MUST be a JSON object (dict), not a list or scalar.
+		// Some API proxies (e.g. ZAI/open.bigmodel.cn) will crash with
+		// "'list' object has no attribute 'get'" if input is not a dict.
+		if _, ok := decoded.(map[string]any); ok {
+			return decoded
+		}
+		// Wrap non-object values into an object.
+		return map[string]any{
+			"value": decoded,
+		}
 	}
 	return map[string]any{
 		"_ggcode_raw_input": string(trimmed),

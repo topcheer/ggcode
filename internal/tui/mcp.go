@@ -20,6 +20,7 @@ func toMCPInfos(infos []plugin.MCPServerInfo) []MCPInfo {
 			Error:         info.Error,
 			Transport:     info.Transport,
 			Migrated:      info.Migrated,
+			Disabled:      info.Disabled,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })

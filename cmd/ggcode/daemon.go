@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +32,7 @@ import (
 
 func newDaemonCmd(cfgFile *string) *cobra.Command {
 	var bypassFlag, followFlag, backgroundFlag bool
+	var resumeID string
 
 	cmd := &cobra.Command{
 		Use:   "daemon",
@@ -56,22 +59,25 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 
 			// If --__daemonized, skip fork logic — we ARE the daemonized child
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
-				return runDaemon(cfg, resolvedCfg, bypassFlag, true)
+				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true)
 			}
 
 			// If --background, fork and exit parent
 			if backgroundFlag {
-				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag)
+				return startBackgroundDaemon(cfg, resolvedCfg, bypassFlag, resumeID)
 			}
 
 			// Normal foreground start
-			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag)
+			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false)
 		},
 	}
 
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops)")
 	cmd.Flags().BoolVar(&followFlag, "follow", false, "auto-enable follow mode")
 	cmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "start in background")
+	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
+	// Allow --resume without a value to trigger interactive session selection
+	cmd.Flags().Lookup("resume").NoOptDefVal = "-"
 	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
 	_ = cmd.Flags().MarkHidden("__daemonized")
 	cmd.MarkFlagsMutuallyExclusive("follow", "background")
@@ -79,11 +85,15 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 }
 
 // startBackgroundDaemon forks the process into background and exits the parent.
-func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool) error {
+func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resumeID string) error {
 	workingDir, _ := os.Getwd()
 	lang := daemon.ResolveLang(cfg.Language)
 
-	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, "", "--bypass="+fmt.Sprintf("%v", bypass))
+	extraArgs := []string{"--bypass=" + fmt.Sprintf("%v", bypass)}
+	if resumeID != "" {
+		extraArgs = append(extraArgs, "--resume="+resumeID)
+	}
+	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, "", extraArgs...)
 	if err != nil {
 		return fmt.Errorf("starting background daemon: %w", err)
 	}
@@ -92,7 +102,7 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool) erro
 	return nil
 }
 
-func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool) error {
+func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
 	resolved, err := cfg.ResolveActiveEndpoint()
@@ -282,13 +292,30 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Determine language
 	lang := daemon.ResolveLang(cfg.Language)
 
-	// Create session
-	vendor := cfg.Vendor
-	endpoint := cfg.Endpoint
-	modelName := cfg.Model
-	ses := session.NewSession(vendor, endpoint, modelName)
+	// Create or resume session
+	var ses *session.Session
+	if resumeID == "-" {
+		// Interactive session selection
+		resumeID = pickSessionInteractive(store, lang)
+	}
+	if resumeID != "" {
+		existing, err := store.Load(resumeID)
+		if err != nil {
+			return fmt.Errorf("loading session %s: %w", resumeID, err)
+		}
+		ses = existing
+		// Restore messages to agent
+		for _, msg := range ses.Messages {
+			ag.AddMessage(msg)
+		}
+	} else {
+		vendor := cfg.Vendor
+		endpoint := cfg.Endpoint
+		modelName := cfg.Model
+		ses = session.NewSession(vendor, endpoint, modelName)
+	}
 	if err := store.Save(ses); err != nil {
-		return fmt.Errorf("creating session: %w", err)
+		return fmt.Errorf("saving session: %w", err)
 	}
 
 	// Create emitter and daemon bridge
@@ -478,4 +505,56 @@ func detachToBackground(lang daemon.Lang, cfgFile, workingDir, sessionID string)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.bg_ok", pid))
+}
+
+// pickSessionInteractive lists up to 10 sessions for the current workspace and reads the user's choice from stdin.
+// Returns the selected session ID, or empty string to start a new session.
+func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
+	sessions, err := store.List()
+	if err != nil || len(sessions) == 0 {
+		fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.resume.empty"))
+		return ""
+	}
+
+	// Filter to current workspace only
+	workingDir, _ := os.Getwd()
+	normalizedWD := session.NormalizeWorkspacePath(workingDir)
+	var filtered []*session.Session
+	for _, s := range sessions {
+		if s.Workspace == normalizedWD {
+			filtered = append(filtered, s)
+		}
+	}
+	if len(filtered) == 0 {
+		fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.resume.empty"))
+		return ""
+	}
+
+	// Limit to latest 10
+	if len(filtered) > 10 {
+		filtered = filtered[:10]
+	}
+
+	fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.resume.title"))
+	for i, s := range filtered {
+		title := s.Title
+		if title == "" {
+			title = "untitled"
+		}
+		fmt.Fprintf(os.Stderr, daemon.Tr(lang, "daemon.resume.item")+"\n", i+1, s.ID, title)
+	}
+	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.resume.prompt"))
+
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	idx, err := strconv.Atoi(line)
+	if err != nil || idx < 1 || idx > len(filtered) {
+		fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.resume.invalid"))
+		return ""
+	}
+	return filtered[idx-1].ID
 }
