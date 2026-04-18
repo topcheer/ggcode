@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -104,7 +103,7 @@ func CheckExistingDaemon(workingDir string) (int, error) {
 		return 0, nil
 	}
 	// Send signal 0 to check existence
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
+	if err := checkProcessAlive(proc); err != nil {
 		// Process doesn't exist, clean up stale PID file
 		_ = os.Remove(pidPath)
 		return 0, nil
@@ -157,9 +156,7 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 			logFile,  // stdout → log
 			logFile,  // stderr → log
 		},
-		Sys: &syscall.SysProcAttr{
-			Setpgid: true, // create new process group
-		},
+		Sys: newBackgroundSysProcAttr(),
 	}
 
 	process, err := os.StartProcess(executable, args, procAttr)
