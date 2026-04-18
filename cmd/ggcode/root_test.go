@@ -265,18 +265,21 @@ func TestBuildSkillsSystemPromptPrioritizesBundledAndSummarizesMCP(t *testing.T)
 			Description: "MCP prompt from docs",
 			Source:      commands.SourceMCP,
 			LoadedFrom:  commands.LoadedFromMCP,
+			Enabled:     true,
 		},
 		{
 			Name:        "verify",
 			Description: "Verify work",
 			Source:      commands.SourceBundled,
 			LoadedFrom:  commands.LoadedFromBundled,
+			Enabled:     true,
 		},
 		{
 			Name:        "update-config",
 			Description: "Update config",
 			Source:      commands.SourceBundled,
 			LoadedFrom:  commands.LoadedFromBundled,
+			Enabled:     true,
 		},
 	})
 
