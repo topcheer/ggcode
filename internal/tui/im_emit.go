@@ -41,6 +41,18 @@ func (m *Model) emitIMLocalUserText(text string) {
 	m.imEmitter.EmitUserText(text)
 }
 
+// emitIMLocalUserTextExcept sends user echo to all channels except the originating adapter.
+func (m *Model) emitIMLocalUserTextExcept(text, excludeAdapter string) {
+	if m.imEmitter == nil {
+		return
+	}
+	if excludeAdapter == "" {
+		m.imEmitter.EmitUserText(text)
+		return
+	}
+	m.imEmitter.EmitUserTextExcept(text, excludeAdapter)
+}
+
 func (m *Model) emitIMStatus(status string) {
 	if m.imEmitter == nil {
 		return

@@ -105,6 +105,12 @@ func (h *OAuthHandler) providerID() string {
 
 // GetAccessToken returns a valid access token, refreshing if needed.
 // Returns empty string if no token exists.
+// If the token is expired but there is a refresh token, it attempts to refresh.
+// If the token is expired and there is no refresh token, it still returns the
+// access token optimistically — the server will return 401 if truly expired,
+// which triggers the OAuth flow. This avoids premature re-authentication when
+// the token has a few minutes left (the 5-minute IsExpired() buffer caused
+// tokens to be discarded too early, requiring re-auth every time).
 func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
 	info, err := h.store.Load(h.providerID())
 	if err != nil || info == nil {
@@ -113,15 +119,21 @@ func (h *OAuthHandler) GetAccessToken(ctx context.Context) (string, error) {
 	if !info.IsExpired() {
 		return info.AccessToken, nil
 	}
-	// Try refresh
-	if info.RefreshToken == "" {
-		return "", nil
+	// Token is near-expiry or expired. Try refresh if we have a refresh token.
+	if info.RefreshToken != "" {
+		newInfo, err := h.refreshToken(ctx, info.RefreshToken)
+		if err == nil && newInfo != nil {
+			return newInfo.AccessToken, nil
+		}
+		// Refresh failed — fall through to return existing token optimistically.
+		debug.Log("mcp-oauth", "refresh_failed server=%s error=%v, using existing token", h.serverName, err)
 	}
-	newInfo, err := h.refreshToken(ctx, info.RefreshToken)
-	if err != nil {
-		return "", nil // refresh failed, will re-trigger 401
+	// Return the existing access token optimistically. If it's truly expired,
+	// the server will return 401 and trigger re-auth.
+	if info.AccessToken != "" {
+		return info.AccessToken, nil
 	}
-	return newInfo.AccessToken, nil
+	return "", nil
 }
 
 func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*auth.Info, error) {
@@ -813,6 +825,9 @@ func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, err
 				return nil, fmt.Errorf("parsing device token response: %w", err)
 			}
 
+			debug.Log("mcp-oauth", "device_token_parsed server=%s has_access=%v has_refresh=%v expires_in=%d error=%s",
+				h.serverName, tokenResp.AccessToken != "", tokenResp.RefreshToken != "", tokenResp.ExpiresIn, tokenResp.Error)
+
 			switch tokenResp.Error {
 			case "":
 				// Success
@@ -850,7 +865,7 @@ type DeviceFlowResponse struct {
 // Used when the server does not support dynamic client registration (DCR) and the user
 // has not configured oauth_client_id in their MCP server config.
 var wellKnownClientIDs = map[string]string{
-	"https://github.com/login/oauth": "Ov23liDxpGgEvrlyx6oQ",
+	"https://github.com/login/oauth": "Iv23liJhRuCX7QU1DfgT",
 }
 
 // wellKnownClientSecrets maps authorization server issuers to their client secrets.

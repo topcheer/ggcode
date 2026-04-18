@@ -185,7 +185,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 - **Parallel help** — spawn sub-agents, inspect their progress, and poll long-running workers without blocking the main loop
 - **Memory and context** — load project memory files like `GGCODE.md`, `AGENTS.md`, `CLAUDE.md`, and `COPILOT.md`
 - **Extensibility** — connect MCP servers, custom plugins, and skills alongside the built-in LSP workflow
-- **Remote IM surface** — bind the current workspace to QQ so a remote chat can mirror status and receive agent output
+- **Remote IM surface** — bind the current workspace to IM channels (QQ, Telegram, Discord, Slack, DingTalk, Feishu) so remote chats can mirror status and receive agent output; user echo is suppressed on the originating channel to avoid duplicate messages
 - **Session continuity** — save, resume, export, and compact conversations
 - **Harness workflows** — scaffold repo guidance, enforce invariants, track runs, and garbage-collect stale task state
 
@@ -400,6 +400,27 @@ mcp_servers:
 ```
 
 ggcode discovers MCP tools automatically and makes them available in the agent loop.
+
+#### MCP OAuth 2.1
+
+HTTP-type MCP servers that require authentication are supported through the standard MCP OAuth 2.1 flow. When an MCP server returns a `401 Unauthorized`, ggcode automatically:
+
+1. Discovers the OAuth authorization server metadata
+2. Registers a client via Dynamic Client Registration (or uses a built-in / configured client ID)
+3. Opens a browser for the device-flow authorization
+4. Stores and refreshes access tokens in `~/.ggcode/provider_auth.json`
+
+For servers that do not support Dynamic Client Registration, you can configure a client ID:
+
+```yaml
+mcp_servers:
+  - name: github
+    type: http
+    url: https://api.githubcopilot.com/mcp/
+    oauth_client_id: "Iv1.xxxxxxxxxxxx"
+```
+
+Built-in client IDs are provided for common servers (e.g., GitHub MCP).
 
 If you want browser automation, connect a browser-oriented MCP server first. Once connected, its tools appear in `/mcp`, and any prompt-backed browser workflows also show up in `/skills`. ggcode does **not** pretend to have built-in browser control when no browser MCP server is configured.
 

@@ -510,6 +510,50 @@ func (m *Manager) Emit(ctx context.Context, event OutboundEvent) error {
 	return firstErr
 }
 
+// EmitExcept sends an event to all bound channels except those matching excludeAdapter.
+// This is used to suppress user mirror echo on the originating IM channel while still
+// delivering it to other bound channels.
+func (m *Manager) EmitExcept(ctx context.Context, event OutboundEvent, excludeAdapter string) error {
+	if excludeAdapter == "" {
+		return m.Emit(ctx, event)
+	}
+	m.mu.RLock()
+	var targets []struct {
+		binding ChannelBinding
+		sink    Sink
+	}
+	for _, b := range m.currentBindings {
+		if strings.TrimSpace(b.ChannelID) == "" {
+			continue
+		}
+		if b.Adapter == excludeAdapter {
+			continue
+		}
+		sink := m.sinks[b.Adapter]
+		if sink == nil {
+			continue
+		}
+		targets = append(targets, struct {
+			binding ChannelBinding
+			sink    Sink
+		}{binding: *b, sink: sink})
+	}
+	m.mu.RUnlock()
+	if len(targets) == 0 {
+		return ErrNoChannelBound
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now()
+	}
+	var firstErr error
+	for _, t := range targets {
+		if err := t.sink.Send(ctx, t.binding, event); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	m.mu.RLock()
 	sink := m.sinks[binding.Adapter]

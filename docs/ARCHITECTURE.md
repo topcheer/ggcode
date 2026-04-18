@@ -4,7 +4,7 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-04-12
+> Last updated: 2026-04-18
 
 ## Overview
 
@@ -26,7 +26,11 @@ The core agent loop is now complemented by a lightweight **harness control plane
 cmd/ggcode/              # CLI entrypoint (main.go, root.go, pipe.go)
 internal/
   agent/                 # Agent: agentic loop, provider abstraction
-    agent.go             # Agent struct, Run/RunStream, tool execution
+    agent.go             # Agent struct, Run/RunStream, core orchestration
+    agent_autopilot.go   # Autopilot continuation logic
+    agent_compact.go     # Auto-compaction of conversation history
+    agent_memory.go      # Memory management helpers
+    agent_tool.go        # Tool execution, diff confirm, hooks
     agent_test.go
   checkpoint/            # File edit checkpoints for undo
     checkpoint.go
@@ -65,6 +69,7 @@ internal/
     client.go            # MCPClient: spawn and communicate with MCP servers
     adapter.go           # Tool adapter (MCP tool → ggcode tool interface)
     jsonrpc.go           # JSON-RPC protocol
+    oauth.go             # OAuth 2.1 handler: metadata discovery, DCR, device flow, token refresh
   memory/                # Project and auto memory
     auto.go              # AutoMemory: automatic memory extraction
     project.go           # ProjectMemory: load memory files
@@ -111,7 +116,13 @@ internal/
     spawn_agent.go       # Spawn sub-agents
     list_agents.go / wait_agent.go  # Sub-agent polling and wait tools
   tui/                   # Terminal UI (Bubble Tea)
-    model.go             # Model struct, Init, Update, msg types
+    model.go             # Model struct, Init, configuration methods
+    model_update.go      # Update loop: message routing, key handling, agent lifecycle
+    model_messages.go    # Message types (streamMsg, doneMsg, errMsg, etc.)
+    model_approval.go    # Approval/diff confirmation selection lists
+    model_pending.go     # Pending state helpers (device codes, questionnaires)
+    model_clipboard.go   # Clipboard image loading
+    model_terminal.go    # Terminal utility helpers (open URL, resize)
     view.go              # View rendering, status bar, autocomplete
     commands.go          # Slash command handlers
     submit.go            # Message submission and agent startup
@@ -136,6 +147,7 @@ docs/                    # Documentation
 - **Bubble Tea streaming**: Agent runs in a goroutine; events flow into the TUI via `tea.Program.Send()`
 - **Permission policy**: Two layers — tool-level `ShouldAsk` + dangerous-command detection
 - **Import cycle avoidance**: Shared types defined in downstream packages; factory functions injected
-- **MCP client**: Spawns fresh process per tool call (`callToolStandalone`)
+- **MCP client**: Spawns fresh process per tool call (`callToolStandalone`); HTTP transport supports OAuth 2.1 with automatic metadata discovery, dynamic client registration, device flow, and token refresh
 - **Provider SDKs**: OpenAI (go-openai), Anthropic (anthropic-sdk-go), Gemini (genai), Copilot (custom transport on top of the provider abstraction)
+- **IM routing**: IM events are fanned out to all bound adapters; per-channel echo suppression skips the originating adapter for user mirror messages
 - **Session format**: JSONL with index.json metadata

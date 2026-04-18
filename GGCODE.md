@@ -11,7 +11,7 @@
 | Database | SQLite (`modernc.org/sqlite`, pure Go) — harness subsystem only; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.1.33`](docs/releases/v1.1.33.md) |
+| Latest documented release | [`v1.1.34`](docs/releases/v1.1.34.md) |
 
 ## Build & Validation
 
@@ -40,13 +40,13 @@ Linter config (`.golangci.yml`): `gofmt`, `govet`, `errcheck`, `staticcheck`, `u
 cmd/ggcode/            CLI entrypoint, root command, pipe mode, resume, harness/mcp subcommands
 cmd/ggcode-installer/  Standalone Go installer that downloads release binaries
 internal/              215 Go source files (~41.7k LOC non-test)
-  agent/               Core agent loop, tool execution, autopilot continuation (agent.go, ~33k bytes)
+  agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
-  im/                  IM gateway runtime, QQ adapter, pairing state, channel bindings, and outbound routing
+  im/                  IM gateway runtime, QQ/Telegram/Discord/Slack/DingTalk/Feishu adapters, pairing, channel bindings, per-channel echo suppression, and outbound routing
   tui/                 Bubble Tea TUI: views, panels, slash commands, i18n (en/zh-CN), fullscreen file browser + preview
   tool/                Built-in tools (file ops, search, commands, git, web, agents, productivity)
   harness/             Harness-engineering workflow engine (~6.2k LOC, 28 files — task management, worktrees, review, release)
-  mcp/                 MCP client: JSON-RPC, process management, install, migration, presets
+  mcp/                 MCP client: JSON-RPC, process management, install, migration, presets, OAuth 2.1 auth
   config/              YAML config loading, env expansion, API key handling, Anthropic bootstrap
   memory/              Project memory loading (GGCODE.md, AGENTS.md, etc.) + auto-memory persistence
   subagent/            Sub-agent spawning, tracking, coordination (manager + runner)
@@ -58,7 +58,7 @@ internal/              215 Go source files (~41.7k LOC non-test)
   plugin/              External tool plugins (command-based, MCP-based)
   hooks/               Pre/post hooks runner
   cost/                Token usage tracking (local TokenUsage type to avoid circular deps)
-  auth/                Auth store + GitHub Copilot token management (OAuth flow)
+  auth/                Auth store + GitHub Copilot token management + PKCE helpers (OAuth flow)
   image/               Image processing, clipboard integration (platform-specific: darwin, linux, windows)
   install/             Self-update and install logic
   update/              Version checking and auto-update
@@ -75,11 +75,11 @@ config/                MCP preset configuration (mcporter.json)
 
 ## Architecture
 
-- **Agent loop** (`internal/agent/agent.go`): Central loop sends user messages to the LLM, executes tool calls, feeds results back. Supports streaming, multi-turn, autopilot continuation, mid-run interruptions, auto-compaction, and loop guards.
+- **Agent loop** (`internal/agent/`): Central loop sends user messages to the LLM, executes tool calls, feeds results back. Split into focused files: `agent.go` (core struct, Run/RunStream), `agent_autopilot.go` (continuation), `agent_compact.go` (auto-compaction), `agent_memory.go` (memory helpers), `agent_tool.go` (tool execution, diff confirm, hooks).
 - **Provider adapters** (`internal/provider/`): Each LLM provider (OpenAI, Anthropic, Gemini, Copilot) has a protocol-specific adapter. `registry.go` maps protocol names to adapters via `NewProvider()`. Supported protocols: `openai`, `anthropic`, `gemini`, `copilot`. All implement the `Provider` interface (Name, Chat, ChatStream, CountTokens). Retry logic handles transient failures.
 - **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`.
 - **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses SQLite for event storage.
-- **IM runtime** (`internal/im/`): Workspace-bound IM routing, QQ transport, pairing, persisted bindings, and mirrored outbound delivery for remote chat surfaces.
+- **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces.
 - **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
 - **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances.
 
@@ -179,7 +179,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - `ggcode.yaml` (actual config) is gitignored; only `ggcode.example.yaml` is tracked
 - `.ggcode/` directory (runtime data) is gitignored
 - Integration tests require real API keys; the shared local verify script clears provider env vars before `go test -tags=!integration ./...` so local checks behave like CI
-- The `internal/tui/` package is the largest (~17.6k LOC, 41 files) — changes here need careful TUI regression testing
+- The `internal/tui/` package is the largest (~17.6k LOC, 47+ files) — changes here need careful TUI regression testing
 - Provider protocol adapters must handle both streaming and non-streaming responses
 - `modernc.org/sqlite` is a pure-Go SQLite implementation (no CGO needed), used only by harness
 - The `copilot` protocol uses GitHub's OAuth flow (not API key) — handled by `internal/auth/`

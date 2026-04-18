@@ -31,29 +31,35 @@ type imEmitterState struct {
 }
 
 type queuedIMEvent struct {
-	mgr   *Manager
-	event OutboundEvent
+	mgr            *Manager
+	event          OutboundEvent
+	excludeAdapter string // if set, skip this adapter when emitting
 }
 
 func newIMEmitterState() *imEmitterState {
 	return &imEmitterState{ch: make(chan queuedIMEvent, 256)}
 }
 
-func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent) {
+func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapter string) {
 	if s == nil || mgr == nil {
 		return
 	}
 	s.once.Do(func() {
 		go func() {
 			for item := range s.ch {
-				err := item.mgr.Emit(context.Background(), item.event)
+				var err error
+				if item.excludeAdapter != "" {
+					err = item.mgr.EmitExcept(context.Background(), item.event, item.excludeAdapter)
+				} else {
+					err = item.mgr.Emit(context.Background(), item.event)
+				}
 				if err != nil && !errors.Is(err, ErrNoChannelBound) {
 					debug.Log("emitter", "emit im kind=%s failed: %v", item.event.Kind, err)
 				}
 			}
 		}()
 	})
-	s.ch <- queuedIMEvent{mgr: mgr, event: event}
+	s.ch <- queuedIMEvent{mgr: mgr, event: event, excludeAdapter: excludeAdapter}
 }
 
 // imTypingKeeper tracks the last typing trigger time to implement keepalive.
@@ -109,7 +115,7 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	if e.state == nil {
 		e.state = newIMEmitterState()
 	}
-	e.state.enqueue(e.manager, event)
+	e.state.enqueue(e.manager, event, "")
 	e.TriggerTyping()
 }
 
@@ -137,6 +143,30 @@ func (e *IMEmitter) EmitUserText(text string) {
 		return
 	}
 	e.EmitText("【用户】" + text + "\n")
+}
+
+// EmitUserTextExcept sends a user echo message to all bound IM channels except the originating adapter.
+// This prevents the user from seeing their own message echoed back on the channel they sent from.
+func (e *IMEmitter) EmitUserTextExcept(text, excludeAdapter string) {
+	if e == nil {
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	echoText := "【用户】" + text + "\n"
+	if strings.TrimSpace(echoText) == "" {
+		return
+	}
+	e.lastStatus = ""
+	if e.state == nil {
+		e.state = newIMEmitterState()
+	}
+	e.state.enqueue(e.manager, OutboundEvent{
+		Kind: OutboundEventText,
+		Text: echoText,
+	}, excludeAdapter)
+	e.TriggerTyping()
 }
 
 // EmitStatus sends a status update to IM. Duplicate consecutive statuses are suppressed.
