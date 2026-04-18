@@ -27,6 +27,7 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -123,6 +124,7 @@ type Model struct {
 	slackPanel                      *slackPanelState
 	dingtalkPanel                   *dingtalkPanelState
 	mcpPanel                        *mcpPanelState
+	pendingDeviceCodes              []deviceCodeInfo
 	skillsPanel                     *skillsPanelState
 	inspectorPanel                  *inspectorPanelState
 	previewPanel                    *previewPanelState
@@ -196,6 +198,7 @@ type Model struct {
 	updateSvc             *update.Service
 	updateInfo            update.CheckResult
 	updateError           string
+	systemPromptRebuilder func() string // rebuilds and returns the full system prompt
 }
 
 type toolActivityGroup struct {
@@ -229,12 +232,17 @@ type MCPInfo struct {
 	Error         string
 	Transport     string
 	Migrated      bool
+	Disabled      bool
 }
 
 type mcpManager interface {
 	Retry(name string) bool
 	Install(ctx context.Context, server config.MCPServerConfig) error
 	Uninstall(name string) bool
+	Disconnect(name string) bool
+	Reconnect(name string) bool
+	PendingOAuth() *plugin.MCPOAuthRequiredError
+	ClearPendingOAuth()
 }
 
 type styles struct {
@@ -425,6 +433,26 @@ type inputDrainEndMsg struct{}
 
 type mcpServersMsg struct {
 	Servers []plugin.MCPServerInfo
+}
+
+type deviceCodeInfo struct {
+	serverName string
+	userCode   string
+	verifyURL  string
+}
+
+type mcpOAuthStartMsg struct {
+	serverName     string
+	authorizeURL   string
+	handler        *mcp.OAuthHandler
+	openErr        error
+	err            error
+	deviceUserCode string // set when using device flow
+}
+
+type mcpOAuthResultMsg struct {
+	serverName string
+	err        error
 }
 
 type updateCheckResultMsg struct {
@@ -918,6 +946,20 @@ func (m *Model) SetConfig(cfg *config.Config) {
 			m.openLanguageSelector(true)
 		}
 	}
+}
+
+// SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt.
+func (m *Model) SetSystemPromptRebuilder(fn func() string) {
+	m.systemPromptRebuilder = fn
+}
+
+// rebuildSystemPrompt rebuilds the system prompt and updates the agent context.
+func (m *Model) rebuildSystemPrompt() {
+	if m.systemPromptRebuilder == nil || m.agent == nil {
+		return
+	}
+	newPrompt := m.systemPromptRebuilder()
+	m.agent.UpdateSystemPrompt(newPrompt)
 }
 
 func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
@@ -1975,6 +2017,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case mcpServersMsg:
 		m.mcpServers = toMCPInfos(msg.Servers)
 		m.refreshCommands()
+		if m.mcpManager != nil {
+			if pending := m.mcpManager.PendingOAuth(); pending != nil {
+				m.mcpManager.ClearPendingOAuth()
+				return m, m.startMCPOAuth(pending)
+			}
+		}
 		return m, nil
 
 	case mcpInstallResultMsg:
@@ -2184,6 +2232,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.mcpPanel.selected = len(m.mcpServers) - 1
 				}
 			}
+		}
+		return m, nil
+
+	case mcpOAuthStartMsg:
+		if msg.err != nil {
+			if m.mcpPanel != nil {
+				m.mcpPanel.message = fmt.Sprintf("MCP OAuth failed for %s: %v", msg.serverName, msg.err)
+			}
+			return m, nil
+		}
+		if msg.deviceUserCode != "" {
+			// Device flow: store code info for banner display, poll in background
+			m.addDeviceCode(msg.serverName, msg.deviceUserCode, msg.authorizeURL)
+			if m.mcpPanel != nil {
+				m.mcpPanel.message = fmt.Sprintf("Waiting for %s device authorization...", msg.serverName)
+			}
+			return m, m.waitForMCPOAuthDevice(msg.handler)
+		}
+		// Browser flow
+		// Auto-open MCP panel so user can see the auth instructions
+		if m.mcpPanel == nil {
+			m.openMCPPanel()
+		}
+		notes := []string{fmt.Sprintf("Opening browser for MCP server %s authentication...", msg.serverName)}
+		if msg.openErr != nil {
+			notes = append(notes, fmt.Sprintf("Browser failed: %v", msg.openErr))
+			notes = append(notes, fmt.Sprintf("Visit: %s", msg.authorizeURL))
+		}
+		m.mcpPanel.message = strings.Join(notes, "\n")
+		return m, m.waitForMCPOAuthCallback(msg.handler)
+
+	case mcpOAuthResultMsg:
+		if msg.err != nil {
+			m.removeDeviceCode(msg.serverName)
+			if m.mcpPanel != nil {
+				m.mcpPanel.message = fmt.Sprintf("MCP OAuth failed for %s: %v", msg.serverName, msg.err)
+			}
+			return m, nil
+		}
+		m.removeDeviceCode(msg.serverName)
+		if m.mcpPanel != nil {
+			m.mcpPanel.message = fmt.Sprintf("MCP server %s authenticated successfully", msg.serverName)
+		}
+		if m.mcpManager != nil {
+			m.mcpManager.Retry(msg.serverName)
 		}
 		return m, nil
 

@@ -15,34 +15,38 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Client connects to an MCP server via stdio transport.
 type Client struct {
-	name       string
-	transport  string
-	command    string
-	args       []string
-	env        map[string]string
-	url        string
-	headers    map[string]string
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	stdout     io.Reader
-	reader     *bufio.Reader // reused stdout reader
-	httpClient *http.Client
-	wsConn     *websocket.Conn
-	sessionID  string
-	mu         sync.Mutex
-	stderrMu   sync.RWMutex
-	stderrBuf  strings.Builder
-	abortOnce  sync.Once
-	nextID     atomic.Int64
-	closed     bool
+	name         string
+	transport    string
+	command      string
+	args         []string
+	env          map[string]string
+	url          string
+	headers      map[string]string
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	stdout       io.Reader
+	reader       *bufio.Reader // reused stdout reader
+	httpClient   *http.Client
+	wsConn       *websocket.Conn
+	sessionID    string
+	mu           sync.Mutex
+	stderrMu     sync.RWMutex
+	stderrBuf    strings.Builder
+	abortOnce    sync.Once
+	nextID       atomic.Int64
+	closed       bool
+	oauthHandler *OAuthHandler
 }
 
 // NewClient creates a new MCP client for the given server config.
@@ -60,7 +64,7 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 	if transport == "" {
 		transport = "stdio"
 	}
-	return &Client{
+	client := &Client{
 		name:      cfg.Name,
 		transport: transport,
 		command:   cfg.Command,
@@ -69,6 +73,13 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 		url:       cfg.URL,
 		headers:   cloneStringMap(cfg.Headers),
 	}
+	if transport == "http" {
+		client.oauthHandler = NewOAuthHandler(cfg.Name, cfg.URL, auth.DefaultStore())
+		if cfg.OAuthClientID != "" {
+			client.oauthHandler.SetClientCredentials(cfg.OAuthClientID, cfg.OAuthClientSecret)
+		}
+	}
+	return client
 }
 
 // Start launches the MCP server process.
@@ -225,11 +236,24 @@ func (c *Client) Close() error {
 	transport := c.transport
 	c.sessionID = ""
 	c.httpClient = nil
+	oauthHandler := c.oauthHandler
+	c.oauthHandler = nil
 	c.mu.Unlock()
 
+	if oauthHandler != nil {
+		oauthHandler.Close()
+	}
 	c.Abort()
 	if (transport == "stdio" || transport == "") && cmd != nil {
-		_ = cmd.Wait()
+		done := make(chan struct{})
+		go func() {
+			_ = cmd.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		}
 	}
 	return nil
 }
@@ -387,6 +411,14 @@ func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, erro
 	if c.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
+	if c.oauthHandler != nil {
+		if token, _ := c.oauthHandler.GetAccessToken(ctx); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+			debug.Log("mcp-http", "send_with_token server=%s has_token=true", c.name)
+		} else {
+			debug.Log("mcp-http", "send_no_token server=%s", c.name)
+		}
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: http request: %w", c.name, err)
@@ -399,8 +431,19 @@ func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, erro
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: read http body: %w", c.name, err)
 	}
+	debug.Log("mcp-http", "response server=%s status=%d content_type=%s body_len=%d", c.name, resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
+	if resp.StatusCode == http.StatusUnauthorized && c.oauthHandler != nil {
+		needsOAuth, _ := c.oauthHandler.Handle401(resp)
+		if needsOAuth {
+			return nil, &OAuthRequiredError{Handler: c.oauthHandler}
+		}
+	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("mcp[%s]: http status %d: %s", c.name, resp.StatusCode, strings.TrimSpace(string(body)))
+		bodyPreview := strings.TrimSpace(string(body))
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200]
+		}
+		return nil, fmt.Errorf("mcp[%s]: http status %d: %s", c.name, resp.StatusCode, bodyPreview)
 	}
 	switch msg.(type) {
 	case Notification:
@@ -465,6 +508,9 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 
 func extractSSEData(body []byte) []byte {
 	scanner := bufio.NewScanner(bytes.NewReader(body))
+	// MCP responses can have very large data lines (e.g., GitHub returns 100K+ tool lists).
+	// The default bufio.MaxScanTokenSize (64KB) is too small.
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 	var dataLines []string
 	for scanner.Scan() {
 		line := scanner.Text()

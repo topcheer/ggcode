@@ -84,7 +84,7 @@ func generateState() (string, error) {
 }
 
 func base64urlEncode(data []byte) string {
-	return base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString(data)
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(data)
 }
 
 // --- Local callback server ---

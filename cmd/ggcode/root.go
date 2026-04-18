@@ -679,7 +679,7 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 func prioritizedSkillsForPrompt(skills []*commands.Command) []*commands.Command {
 	out := make([]*commands.Command, 0, len(skills))
 	for _, skill := range skills {
-		if skill == nil || skill.DisableModelInvocation || strings.TrimSpace(skill.Name) == "" {
+		if skill == nil || skill.DisableModelInvocation || !skill.Enabled || strings.TrimSpace(skill.Name) == "" {
 			continue
 		}
 		out = append(out, skill)
@@ -715,7 +715,7 @@ func sortedStringKeys(values map[string]struct{}) []string {
 func countModelVisibleSkills(skills []*commands.Command) int {
 	count := 0
 	for _, skill := range skills {
-		if skill != nil && !skill.DisableModelInvocation && strings.TrimSpace(skill.Name) != "" {
+		if skill != nil && !skill.DisableModelInvocation && skill.Enabled && strings.TrimSpace(skill.Name) != "" {
 			count++
 		}
 	}

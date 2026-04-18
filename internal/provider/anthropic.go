@@ -65,6 +65,7 @@ func (p *AnthropicProvider) Name() string {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
+	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	params := p.buildParams(messages, tools)
 
 	resp, err := p.client.Messages.New(ctx, params)
@@ -309,6 +310,10 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 		}
 		params.Tools = toolParams
 	}
+
+	// Dump full request JSON for debugging protocol violations.
+	// Covers both Chat() (e.g. summarization) and ChatStream() (normal flow).
+	dumpRequestJSON("anthropic", "buildParams", params)
 
 	return params
 }

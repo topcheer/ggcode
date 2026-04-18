@@ -39,6 +39,7 @@ func (m Model) View() tea.View {
 	startupBanner := m.renderStartupBanner()
 	actionPanel := m.renderContextPanel()
 	statusBar := m.renderStatusBar()
+	deviceBanner := m.renderDeviceCodeBanner()
 	composer := m.renderComposerPanel()
 
 	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
@@ -48,13 +49,16 @@ func (m Model) View() tea.View {
 	if statusBar != "" {
 		availableHeight -= lipgloss.Height(statusBar)
 	}
+	if deviceBanner != "" {
+		availableHeight -= lipgloss.Height(deviceBanner)
+	}
 	if availableHeight < 8 {
 		availableHeight = 8
 	}
 
 	conversation := m.renderConversationPanel(availableHeight)
 
-	sections := make([]string, 0, 6)
+	sections := make([]string, 0, 7)
 	if header != "" {
 		sections = append(sections, header)
 	}
@@ -62,6 +66,9 @@ func (m Model) View() tea.View {
 		sections = append(sections, startupBanner)
 	}
 	sections = append(sections, conversation)
+	if deviceBanner != "" {
+		sections = append(sections, deviceBanner)
+	}
 	if actionPanel != "" {
 		sections = append(sections, actionPanel)
 	}
@@ -116,6 +123,7 @@ func (m Model) conversationPanelHeight() int {
 	startupBanner := m.renderStartupBanner()
 	actionPanel := m.renderContextPanel()
 	statusBar := m.renderStatusBar()
+	deviceBanner := m.renderDeviceCodeBanner()
 	composer := m.renderComposerPanel()
 
 	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
@@ -124,6 +132,9 @@ func (m Model) conversationPanelHeight() int {
 	}
 	if statusBar != "" {
 		availableHeight -= lipgloss.Height(statusBar)
+	}
+	if deviceBanner != "" {
+		availableHeight -= lipgloss.Height(deviceBanner)
 	}
 	if availableHeight < 8 {
 		availableHeight = 8
@@ -226,12 +237,7 @@ func (m Model) renderSidebar(totalHeight int) string {
 	if tracker := m.renderSidebarTaskTracker(totalHeight); tracker != "" {
 		return tracker
 	}
-	vendor, endpoint, model := m.currentSelection()
-	sessionLine := m.t("session.ephemeral")
-	if m.session != nil && m.session.ID != "" {
-		sessionLine = truncateString(m.session.ID, 18)
-	}
-	agentLine := m.t("agents.idle")
+	vendor, _, model := m.currentSelection()
 	activity := m.sidebarActivity()
 	if count := m.pendingSubmissionCount(); count > 0 {
 		activity = fmt.Sprintf("%s • %s", activity, m.t("queued.count", count))
@@ -242,13 +248,7 @@ func (m Model) renderSidebar(totalHeight int) string {
 		renderSidebarLogo(m.sidebarWidth()-4, sidebarHomepageURL),
 		"",
 		m.styles.title.Render("ggcode"),
-		m.renderSidebarDetailRow(m.t("label.vendor"), vendor, m.sidebarWidth()-4),
-		m.renderSidebarDetailRow(m.t("label.endpoint"), endpoint, m.sidebarWidth()-4),
-		m.renderSidebarDetailRow(m.t("label.model"), model, m.sidebarWidth()-4),
-		m.renderSidebarBadgeRow(m.t("label.mode"), m.renderModeBadge()),
-		m.renderSidebarDetailRow(m.t("label.session"), sessionLine, m.sidebarWidth()-4),
-		m.renderSidebarDetailRow(m.t("label.agents"), agentLine, m.sidebarWidth()-4),
-		m.renderSidebarDetailRow(m.t("label.cwd"), m.sidebarWorkingDirectory(), m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.model"), vendor+"/"+model, m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.branch"), firstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.activity"), activity, m.sidebarWidth()-4),
@@ -304,12 +304,19 @@ func (m Model) renderSidebarContextSection() string {
 func (m Model) renderSidebarMCPSection() string {
 	width := max(12, m.sidebarWidth()-4)
 	rows := []string{m.renderSidebarSectionTitle(m.t("panel.mcp"))}
-	if len(m.mcpServers) == 0 {
+	// Filter out disabled MCP servers
+	activeServers := make([]MCPInfo, 0, len(m.mcpServers))
+	for _, srv := range m.mcpServers {
+		if !srv.Disabled {
+			activeServers = append(activeServers, srv)
+		}
+	}
+	if len(activeServers) == 0 {
 		rows = append(rows, truncateString(m.t("mcp.none"), width))
 		return strings.Join(rows, "\n")
 	}
 	connected, pending, failed := 0, 0, 0
-	for _, srv := range m.mcpServers {
+	for _, srv := range activeServers {
 		switch {
 		case srv.Connected:
 			connected++
@@ -320,7 +327,7 @@ func (m Model) renderSidebarMCPSection() string {
 		}
 	}
 	rows = append(rows, truncateString(fmt.Sprintf("%d up • %d pending • %d failed", connected, pending, failed), width))
-	visibleServers := m.mcpServers
+	visibleServers := activeServers
 	if len(visibleServers) > 5 {
 		visibleServers = visibleServers[:5]
 	}
@@ -335,7 +342,7 @@ func (m Model) renderSidebarMCPSection() string {
 		label := fmt.Sprintf("%s %s (%s)", icon, srv.Name, firstNonEmpty(srv.Transport, "stdio"))
 		rows = append(rows, truncateString(label, width))
 	}
-	if hidden := len(m.mcpServers) - len(visibleServers); hidden > 0 {
+	if hidden := len(activeServers) - len(visibleServers); hidden > 0 {
 		rows = append(rows, truncateString(m.t("mcp.more", hidden), width))
 	}
 	if active := m.activeMCPToolSummaries(); len(active) > 0 {
@@ -757,7 +764,7 @@ func (m Model) loadedSkillCount() int {
 	}
 	count := 0
 	for _, cmd := range m.commandMgr.Commands() {
-		if cmd == nil {
+		if cmd == nil || !cmd.Enabled {
 			continue
 		}
 		switch cmd.LoadedFrom {

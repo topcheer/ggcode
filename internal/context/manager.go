@@ -116,6 +116,26 @@ func (m *Manager) Add(msg provider.Message) {
 		msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.maxTokens, ratio, m.baselineAvailable)
 }
 
+// UpdateFirstSystemMessage replaces the first system message in the context.
+// If no system message exists, it prepends one.
+func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, existing := range m.messages {
+		if existing.Role == "system" {
+			oldTokens := m.countTokens(existing)
+			newTokens := m.countTokens(msg)
+			m.messages[i] = msg
+			m.tokens += newTokens - oldTokens
+			return
+		}
+	}
+	// No system message found, prepend
+	newTokens := m.countTokens(msg)
+	m.messages = append([]provider.Message{msg}, m.messages...)
+	m.tokens += newTokens
+}
+
 func (m *Manager) Messages() []provider.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()

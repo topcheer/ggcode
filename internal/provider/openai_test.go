@@ -186,8 +186,19 @@ func TestIsRetryableRecognizesProviderErrors(t *testing.T) {
 	if !isRetryable(&anthropic.Error{StatusCode: http.StatusBadGateway}) {
 		t.Fatal("expected anthropic 502 to be retryable")
 	}
-	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusBadRequest, Message: "bad request"}) {
-		t.Fatal("expected openai 400 not to be retryable")
+	// 400 is retryable under the aggressive retry policy (only 401/403/404 are permanent)
+	if !isRetryable(&openai.APIError{HTTPStatusCode: http.StatusBadRequest, Message: "bad request"}) {
+		t.Fatal("expected openai 400 to be retryable")
+	}
+	// 401/403/404 are NOT retryable
+	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusUnauthorized, Message: "unauthorized"}) {
+		t.Fatal("expected openai 401 not to be retryable")
+	}
+	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusForbidden, Message: "forbidden"}) {
+		t.Fatal("expected openai 403 not to be retryable")
+	}
+	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusNotFound, Message: "not found"}) {
+		t.Fatal("expected openai 404 not to be retryable")
 	}
 }
 

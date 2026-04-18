@@ -9,7 +9,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/topcheer/ggcode/internal/auth"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/plugin"
 )
 
 type mcpPanelState struct {
@@ -45,6 +48,50 @@ func (m *Model) closeMCPPanel() {
 	m.mcpPanel = nil
 }
 
+func (m *Model) addDeviceCode(serverName, userCode, verifyURL string) {
+	for _, dc := range m.pendingDeviceCodes {
+		if dc.serverName == serverName {
+			return // already showing
+		}
+	}
+	m.pendingDeviceCodes = append(m.pendingDeviceCodes, deviceCodeInfo{
+		serverName: serverName,
+		userCode:   userCode,
+		verifyURL:  verifyURL,
+	})
+}
+
+func (m *Model) removeDeviceCode(serverName string) {
+	for i, dc := range m.pendingDeviceCodes {
+		if dc.serverName == serverName {
+			m.pendingDeviceCodes = append(m.pendingDeviceCodes[:i], m.pendingDeviceCodes[i+1:]...)
+			return
+		}
+	}
+}
+
+func (m Model) renderDeviceCodeBanner() string {
+	if len(m.pendingDeviceCodes) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, dc := range m.pendingDeviceCodes {
+		codeDigits := strings.Join(strings.Split(dc.userCode, ""), "   ")
+		codeStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("57")).
+			Padding(0, 3).
+			Render(codeDigits)
+		lines = append(lines,
+			fmt.Sprintf(" MCP server %s requires authentication", dc.serverName),
+			fmt.Sprintf(" Visit %s and enter:", dc.verifyURL),
+			codeStyle,
+		)
+	}
+	return m.renderContextBox("MCP Device Authorization", strings.Join(lines, "\n"), lipgloss.Color("11"))
+}
+
 func (m Model) renderMCPPanel() string {
 	panel := m.mcpPanel
 	if panel == nil {
@@ -74,6 +121,12 @@ func (m Model) renderMCPPanel() string {
 			lipgloss.NewStyle().Bold(true).Render(" Details"),
 			fmt.Sprintf(" Name: %s", srv.Name),
 			fmt.Sprintf(" Status: %s", status),
+			func() string {
+				if srv.Disabled {
+					return " Disabled: yes"
+				}
+				return ""
+			}(),
 			fmt.Sprintf(" Transport: %s", firstNonEmptyValue(srv.Transport, "stdio")),
 			fmt.Sprintf(" Tools: %d", len(srv.ToolNames)),
 			fmt.Sprintf(" Prompts: %d", len(srv.PromptNames)),
@@ -86,25 +139,19 @@ func (m Model) renderMCPPanel() string {
 		if len(srv.ToolNames) == 0 {
 			body = append(body, "  (none discovered yet)")
 		} else {
-			for _, toolName := range srv.ToolNames {
-				body = append(body, "  • "+toolName)
-			}
+			body = append(body, renderTruncatedList(srv.ToolNames, 4)...)
 		}
 		body = append(body, "", lipgloss.NewStyle().Bold(true).Render(" Prompts"))
 		if len(srv.PromptNames) == 0 {
 			body = append(body, "  (none)")
 		} else {
-			for _, promptName := range srv.PromptNames {
-				body = append(body, "  • "+promptName)
-			}
+			body = append(body, renderTruncatedList(srv.PromptNames, 4)...)
 		}
 		body = append(body, "", lipgloss.NewStyle().Bold(true).Render(" Resources"))
 		if len(srv.ResourceNames) == 0 {
 			body = append(body, "  (none)")
 		} else {
-			for _, resourceName := range srv.ResourceNames {
-				body = append(body, "  • "+resourceName)
-			}
+			body = append(body, renderTruncatedList(srv.ResourceNames, 4)...)
 		}
 	}
 
@@ -120,7 +167,7 @@ func (m Model) renderMCPPanel() string {
 		body = append(body,
 			" Press i to install a new MCP server.",
 			" Press b to install the built-in Playwright browser automation preset.",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Enter or r reconnect • i install • b browser preset • x uninstall • Esc close"),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" j/k move • Space toggle • Enter/r reconnect • i install • b browser • x uninstall • Esc close"),
 		)
 	}
 	if panel.message != "" {
@@ -191,6 +238,25 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		} else {
 			panel.message = m.t("panel.mcp.reconnect_failed", name)
 		}
+	case " ", "space":
+		if len(m.mcpServers) == 0 {
+			break
+		}
+		srv := m.mcpServers[panel.selected]
+		willDisable := !srv.Disabled
+		plugin.SetMCPDisabled(srv.Name, willDisable)
+		m.mcpServers[panel.selected].Disabled = willDisable
+		if willDisable {
+			if m.mcpManager != nil {
+				m.mcpManager.Disconnect(srv.Name)
+			}
+			panel.message = fmt.Sprintf(" %s disabled and disconnected", srv.Name)
+		} else {
+			if m.mcpManager != nil {
+				m.mcpManager.Reconnect(srv.Name)
+			}
+			panel.message = fmt.Sprintf(" %s enabled, reconnecting...", srv.Name)
+		}
 	case "i", "I":
 		panel.installMode = true
 		panel.installInput = ""
@@ -253,6 +319,8 @@ func (m *Model) uninstallMCPServer(name string) tea.Cmd {
 		if m.mcpManager != nil && !m.mcpManager.Uninstall(name) {
 			return mcpUninstallResultMsg{name: name, err: fmt.Errorf("saved config, but runtime uninstall failed for %s", name)}
 		}
+		// Clean up stored OAuth tokens
+		_ = auth.DefaultStore().Delete("mcp:" + name)
 		return mcpUninstallResultMsg{name: name}
 	}
 }
@@ -267,7 +335,120 @@ func mcpServerLabels(servers []MCPInfo) []string {
 		case srv.Pending:
 			status = "…"
 		}
+		if srv.Disabled {
+			status = "✗"
+		}
 		out = append(out, fmt.Sprintf("%s %s (%s)", status, srv.Name, firstNonEmptyValue(srv.Transport, "stdio")))
 	}
 	return out
+}
+
+// renderTruncatedList renders up to max items with "•" prefix, and a summary for the rest.
+func renderTruncatedList(items []string, max int) []string {
+	out := make([]string, 0, min(len(items), max+1))
+	end := len(items)
+	if end > max {
+		end = max
+	}
+	for i := 0; i < end; i++ {
+		out = append(out, "  • "+items[i])
+	}
+	if len(items) > max {
+		out = append(out, fmt.Sprintf("  ... + %d more", len(items)-max))
+	}
+	return out
+}
+
+func (m *Model) startMCPOAuth(oauthErr *plugin.MCPOAuthRequiredError) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		handler := oauthErr.Handler
+		if handler.SupportsDCR() {
+			if err := handler.RegisterClient(ctx); err != nil {
+				debug.Log("mcp-oauth", "dcr_failed server=%s error=%v, continuing with existing client_id", oauthErr.ServerName, err)
+				// DCR failed, but we may still have a client_id from config or built-in mapping
+			}
+		}
+
+		// Try device flow first (no client_secret needed, no callback server needed)
+		if handler.SupportsDeviceFlow() {
+			scopes := handler.GetScopes()
+			// Limit scopes to avoid overly permissive requests
+			if len(scopes) > 4 {
+				scopes = scopes[:4]
+			}
+			devResp, err := handler.StartDeviceFlow(ctx, scopes)
+			if err == nil {
+				// Open verification URI in browser
+				var openErr error
+				if m.urlOpener != nil {
+					openErr = m.urlOpener(devResp.VerificationURI)
+				}
+				return mcpOAuthStartMsg{
+					serverName:     oauthErr.ServerName,
+					authorizeURL:   devResp.VerificationURI,
+					handler:        handler,
+					openErr:        openErr,
+					deviceUserCode: devResp.UserCode,
+				}
+			}
+			// Device flow failed, fall through to browser flow
+		}
+
+		authorizeURL, err := handler.StartAuthFlow(ctx)
+		if err != nil {
+			return mcpOAuthStartMsg{serverName: oauthErr.ServerName, err: err}
+		}
+
+		msg := mcpOAuthStartMsg{
+			serverName:   oauthErr.ServerName,
+			authorizeURL: authorizeURL,
+			handler:      handler,
+		}
+		if m.urlOpener != nil {
+			msg.openErr = m.urlOpener(authorizeURL)
+		}
+		return msg
+	}
+}
+
+func (m *Model) waitForMCPOAuthCallback(handler *mcp.OAuthHandler) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		code, err := handler.WaitForCallback(ctx)
+		if err != nil {
+			return mcpOAuthResultMsg{serverName: handler.ServerName(), err: err}
+		}
+
+		tokenResp, err := handler.ExchangeCode(ctx, code)
+		if err != nil {
+			return mcpOAuthResultMsg{serverName: handler.ServerName(), err: err}
+		}
+
+		if err := handler.SaveToken(tokenResp); err != nil {
+			return mcpOAuthResultMsg{serverName: handler.ServerName(), err: err}
+		}
+		return mcpOAuthResultMsg{serverName: handler.ServerName()}
+	}
+}
+
+func (m *Model) waitForMCPOAuthDevice(handler *mcp.OAuthHandler) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+
+		tokenResp, err := handler.PollDeviceToken(ctx)
+		if err != nil {
+			return mcpOAuthResultMsg{serverName: handler.ServerName(), err: err}
+		}
+
+		if err := handler.SaveToken(tokenResp); err != nil {
+			return mcpOAuthResultMsg{serverName: handler.ServerName(), err: err}
+		}
+		return mcpOAuthResultMsg{serverName: handler.ServerName()}
+	}
 }

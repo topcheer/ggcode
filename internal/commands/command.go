@@ -38,6 +38,7 @@ type Command struct {
 	UserInvocable          bool
 	DisableModelInvocation bool
 	Context                string
+	Enabled                bool // false = skill is disabled and won't be invoked by the agent
 }
 
 // Expand replaces template variables in the command template.
@@ -59,6 +60,14 @@ func (c *Command) SlashName() string {
 
 func (c *Command) UserSlashVisible() bool {
 	return c != nil && c.UserInvocable && c.LoadedFrom == LoadedFromCommands && c.SlashName() != ""
+}
+
+// IsBuiltin returns true for bundled/internal skills that cannot be disabled.
+func (c *Command) IsBuiltin() bool {
+	if c == nil {
+		return false
+	}
+	return c.Source == SourceBundled || c.LoadedFrom == LoadedFromBundled
 }
 
 func (c *Command) Title() string {

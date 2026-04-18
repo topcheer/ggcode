@@ -26,6 +26,8 @@ func (m *Manager) Reload() bool {
 		return false
 	}
 	cmds := m.loader.Load()
+	// Apply persisted disabled state to newly loaded commands
+	ApplyDisabledState(cmds)
 	sig := commandSetSignature(cmds)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -111,6 +113,20 @@ func (m *Manager) SetExtraProviders(providers ...func() []*Command) {
 	m.extraProviders = append([]func() []*Command(nil), providers...)
 }
 
+// SetEnabled enables or disables a skill by name and persists the state.
+func (m *Manager) SetEnabled(name string, enabled bool) {
+	if m == nil {
+		return
+	}
+	normalized := normalizeSkillName(name)
+	m.mu.Lock()
+	if cmd, ok := m.commands[normalized]; ok && cmd != nil {
+		cmd.Enabled = enabled
+	}
+	m.mu.Unlock()
+	PersistEnabledState(normalized, enabled)
+}
+
 func (m *Manager) combinedCommands() map[string]*Command {
 	m.mu.RLock()
 	base := make(map[string]*Command, len(m.commands))
@@ -141,6 +157,8 @@ func (m *Manager) combinedCommands() map[string]*Command {
 	for name, cmd := range base {
 		out[name] = cmd
 	}
+	// Apply persisted disabled state to all merged commands
+	ApplyDisabledState(out)
 	return out
 }
 

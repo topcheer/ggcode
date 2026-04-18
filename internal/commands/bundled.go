@@ -11,6 +11,7 @@ func bundledSkills() []*Command {
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,
+			Enabled:       true,
 		},
 		{
 			Name:          "debug",
@@ -21,6 +22,7 @@ func bundledSkills() []*Command {
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,
+			Enabled:       true,
 			Context:       "fork",
 			AllowedTools: []string{
 				"read_file",
@@ -49,6 +51,7 @@ func bundledSkills() []*Command {
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,
+			Enabled:       true,
 		},
 		{
 			Name:          "update-config",
@@ -59,6 +62,7 @@ func bundledSkills() []*Command {
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,
+			Enabled:       true,
 		},
 		{
 			Name:          "browser-automation",
@@ -69,6 +73,7 @@ func bundledSkills() []*Command {
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,
+			Enabled:       true,
 		},
 	}
 }

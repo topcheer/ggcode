@@ -204,6 +204,21 @@ func (a *Agent) ContextManager() ctxpkg.ContextManager {
 	return a.contextManager
 }
 
+// UpdateSystemPrompt replaces the first system message in the context.
+// If no system message exists, it adds one.
+func (a *Agent) UpdateSystemPrompt(text string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cm, ok := a.contextManager.(*ctxpkg.Manager)
+	if !ok {
+		return
+	}
+	cm.UpdateFirstSystemMessage(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: text}},
+	})
+}
+
 func (a *Agent) syncContextManagerProviderLocked() {
 	if cm, ok := a.contextManager.(providerAwareContextManager); ok {
 		cm.SetProvider(a.provider)

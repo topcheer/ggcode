@@ -67,6 +67,7 @@ func TestSkillToolExecute(t *testing.T) {
 				Name:        "deploy",
 				Template:    "Run from $DIR with $ARGS",
 				Description: "Deploy the current build",
+				Enabled:     true,
 			},
 		},
 	}
@@ -97,6 +98,7 @@ func TestSkillToolExecuteRejectsModelDisabledSkill(t *testing.T) {
 				Name:                   "deploy",
 				Template:               "Run deploy",
 				DisableModelInvocation: true,
+				Enabled:                true,
 			},
 		},
 	}
@@ -120,6 +122,7 @@ func TestSkillToolExecuteForkedSkill(t *testing.T) {
 				Template:    "Deploy with $ARGS",
 				Context:     "fork",
 				Description: "Deploy the app",
+				Enabled:     true,
 			},
 		},
 		Provider: fakeProvider{},

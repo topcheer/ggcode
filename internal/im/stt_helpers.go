@@ -1,6 +1,8 @@
 package im
 
 import (
+	"strings"
+
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
@@ -33,4 +35,26 @@ func buildSTTWithFallback(global config.IMSTTConfig, extra map[string]interface{
 	}
 
 	return primary
+}
+
+// audioExtFromMIME returns a file extension for common audio MIME types.
+func audioExtFromMIME(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "audio/mpeg", "audio/mp3":
+		return ".mp3"
+	case "audio/wav", "audio/wave", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg", "audio/opus":
+		return ".ogg"
+	case "audio/mp4", "audio/m4a", "audio/x-m4a":
+		return ".m4a"
+	case "audio/flac":
+		return ".flac"
+	case "audio/webm":
+		return ".webm"
+	case "audio/aac":
+		return ".aac"
+	default:
+		return ".bin"
+	}
 }

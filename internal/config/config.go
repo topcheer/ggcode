@@ -69,16 +69,18 @@ const (
 
 // MCPServerConfig defines an MCP server to connect to.
 type MCPServerConfig struct {
-	Name       string            `yaml:"name"`
-	Type       string            `yaml:"type,omitempty"`
-	Command    string            `yaml:"command,omitempty"`
-	Args       []string          `yaml:"args,omitempty"`
-	Env        map[string]string `yaml:"env,omitempty"`
-	URL        string            `yaml:"url,omitempty"`
-	Headers    map[string]string `yaml:"headers,omitempty"`
-	Source     string            `yaml:"-"`
-	OriginPath string            `yaml:"-"`
-	Migrated   bool              `yaml:"-"`
+	Name              string            `yaml:"name"`
+	Type              string            `yaml:"type,omitempty"`
+	Command           string            `yaml:"command,omitempty"`
+	Args              []string          `yaml:"args,omitempty"`
+	Env               map[string]string `yaml:"env,omitempty"`
+	URL               string            `yaml:"url,omitempty"`
+	Headers           map[string]string `yaml:"headers,omitempty"`
+	OAuthClientID     string            `yaml:"oauth_client_id,omitempty" json:"oauth_client_id,omitempty"`
+	OAuthClientSecret string            `yaml:"oauth_client_secret,omitempty" json:"oauth_client_secret,omitempty"`
+	Source            string            `yaml:"-"`
+	OriginPath        string            `yaml:"-"`
+	Migrated          bool              `yaml:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
