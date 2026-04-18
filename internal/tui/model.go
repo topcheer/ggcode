@@ -173,6 +173,7 @@ type Model struct {
 	autoCompleteWorkDir   string // working directory for mention completion
 	startedAt             time.Time
 	inputDrainUntil       time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
+	inputReady            bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
 	startupBannerVisible  bool
 	lastResizeAt          time.Time
 	sidebarVisible        bool
@@ -2307,7 +2308,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case inputDrainEndMsg:
 		m.inputDrainUntil = time.Time{} // zero = drain ended
-		debug.Log("tui", "input drain ended")
+		m.inputReady = true
+		debug.Log("tui", "input drain ended, input ready")
 		return m, nil
 
 	case imageAttachedMsg:
@@ -2372,6 +2374,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// During startup input drain, suppress all keyboard input.
 	if !m.inputDrainUntil.IsZero() && time.Now().Before(m.inputDrainUntil) {
 		debug.Log("tui", "CATCHALL dropped (input drain) key=%q text=%q", keyMsg.String(), keyMsg.Text)
+		return m, spinnerCmd
+	}
+	// Before inputReady, discard all keyboard input (same reason as KeyPressMsg handler).
+	if !m.inputReady {
+		debug.Log("tui", "CATCHALL dropped (not ready) key=%q text=%q", keyMsg.String(), keyMsg.Text)
 		return m, spinnerCmd
 	}
 	if shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {

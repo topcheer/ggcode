@@ -45,6 +45,7 @@ func absInt(x int) int {
 func newTestModel() Model {
 	m := NewModel(nil, permission.NewConfigPolicy(nil, nil))
 	m.startedAt = time.Now().Add(-2 * time.Second)
+	m.inputReady = true
 	return m
 }
 
