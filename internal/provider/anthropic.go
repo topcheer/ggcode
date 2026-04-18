@@ -88,77 +88,118 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 	debug.Log("anthropic", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	params := p.buildParams(messages, tools)
 
-	stream := p.client.Messages.NewStreaming(ctx, params)
-
 	ch := make(chan StreamEvent, 64)
 
 	go func() {
 		defer close(ch)
-		debug.Log("anthropic", "Stream goroutine started")
-		toolCalls := make(map[int]*ToolCallDelta)
-		var inputTokens, outputTokens int
 
-		for stream.Next() {
-			event := stream.Current()
+		var usage *TokenUsage
+		var outputChars int
 
-			switch event.Type {
-			case "content_block_start":
-				cb := event.ContentBlock
-				if cb.Type == "tool_use" {
-					idx := int(event.Index)
-					tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
-					toolCalls[idx] = tc
-					debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
-				}
-
-			case "content_block_delta":
-				delta := event.Delta
-				switch delta.Type {
-				case "text_delta":
-					debug.Log("anthropic", "chunk text=%q", delta.Text)
-					ch <- StreamEvent{Type: StreamEventText, Text: delta.Text}
-				case "input_json_delta":
-					tc, ok := toolCalls[int(event.Index)]
-					if !ok {
-						tc = &ToolCallDelta{Index: int(event.Index)}
-						toolCalls[int(event.Index)] = tc
-					}
-					tc.Arguments = append(tc.Arguments, delta.PartialJSON...)
-				}
-
-			case "content_block_stop":
-				idx := int(event.Index)
-				if tc, ok := toolCalls[idx]; ok {
-					debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
-					ch <- StreamEvent{
-						Type: StreamEventToolCallDone,
-						Tool: *tc,
-					}
-					delete(toolCalls, idx)
-				}
-
-			case "message_delta":
-				outputTokens = int(event.Usage.OutputTokens)
-
-			case "message_start":
-				inputTokens = int(event.Message.Usage.InputTokens)
+		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+			if attempt > 0 {
+				debug.Log("anthropic", "Stream retry attempt %d", attempt)
 			}
-		}
 
-		if err := stream.Err(); err != nil {
-			debug.Log("anthropic", "Stream ERROR: %v", err)
-			ch <- StreamEvent{Type: StreamEventError, Error: err}
-			return
-		}
-		debug.Log("anthropic", "Stream completed input_tokens=%d output_tokens=%d", inputTokens, outputTokens)
+			toolCalls := make(map[int]*ToolCallDelta)
+			var inputTokens, outputTokens int
+			emitted := false
+			retry := false
 
-		ch <- StreamEvent{
-			Type: StreamEventDone,
-			Usage: &TokenUsage{
+			func() {
+				stream := p.client.Messages.NewStreaming(ctx, params)
+				defer func() {
+					// The Anthropic SDK stream doesn't expose a Close method;
+					// it drains automatically when the loop exits.
+					_ = stream
+				}()
+
+				for stream.Next() {
+					event := stream.Current()
+
+					switch event.Type {
+					case "content_block_start":
+						cb := event.ContentBlock
+						if cb.Type == "tool_use" {
+							idx := int(event.Index)
+							tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
+							toolCalls[idx] = tc
+							debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
+						}
+
+					case "content_block_delta":
+						delta := event.Delta
+						switch delta.Type {
+						case "text_delta":
+							debug.Log("anthropic", "chunk text=%q", delta.Text)
+							outputChars += len(delta.Text)
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventText, Text: delta.Text}
+						case "input_json_delta":
+							tc, ok := toolCalls[int(event.Index)]
+							if !ok {
+								tc = &ToolCallDelta{Index: int(event.Index)}
+								toolCalls[int(event.Index)] = tc
+							}
+							tc.Arguments = append(tc.Arguments, delta.PartialJSON...)
+						}
+
+					case "content_block_stop":
+						idx := int(event.Index)
+						if tc, ok := toolCalls[idx]; ok {
+							debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
+							outputChars += len(tc.Name) + len(tc.Arguments)
+							emitted = true
+							ch <- StreamEvent{
+								Type: StreamEventToolCallDone,
+								Tool: *tc,
+							}
+							delete(toolCalls, idx)
+						}
+
+					case "message_delta":
+						outputTokens = int(event.Usage.OutputTokens)
+
+					case "message_start":
+						inputTokens = int(event.Message.Usage.InputTokens)
+					}
+				}
+
+				if err := stream.Err(); err != nil {
+					debug.Log("anthropic", "Stream ERROR: %v", err)
+					// Retry if no content has been emitted yet and the error is retryable.
+					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
+						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+							return
+						}
+						retry = true
+						return
+					}
+					ch <- StreamEvent{Type: StreamEventError, Error: err}
+					return
+				}
+			}()
+
+			if retry {
+				continue
+			}
+
+			// Stream completed successfully.
+			usage = &TokenUsage{
 				InputTokens:  inputTokens,
 				OutputTokens: outputTokens,
-			},
+			}
+			debug.Log("anthropic", "Stream completed input_tokens=%d output_tokens=%d", usage.InputTokens, usage.OutputTokens)
+			break
 		}
+
+		if usage == nil {
+			usage = &TokenUsage{
+				OutputTokens: estimateTokensFromChars(outputChars),
+			}
+		}
+		ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
 	}()
 
 	return ch, nil

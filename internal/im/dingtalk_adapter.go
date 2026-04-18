@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 )
 
@@ -31,6 +33,7 @@ type dingtalkAdapter struct {
 	httpClient *http.Client
 	appKey     string
 	appSecret  string
+	stt        imstt.Transcriber
 
 	mu          sync.RWMutex
 	connected   bool
@@ -39,7 +42,7 @@ type dingtalkAdapter struct {
 	ws          *websocket.Conn
 }
 
-func newDingTalkAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*dingtalkAdapter, error) {
+func newDingTalkAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*dingtalkAdapter, error) {
 	appKey := strings.TrimSpace(stringValue(adapterCfg.Extra, "app_key", "appKey"))
 	if appKey == "" {
 		return nil, fmt.Errorf("DingTalk app_key is required for adapter %q", name)
@@ -54,7 +57,29 @@ func newDingTalkAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdap
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		appKey:     appKey,
 		appSecret:  appSecret,
+		stt:        buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveDingTalkSTTConfig),
 	}, nil
+}
+
+func resolveDingTalkSTTConfig(global config.IMSTTConfig, extra map[string]interface{}) *config.IMSTTConfig {
+	var cfg config.IMSTTConfig
+	hasOverride := false
+	if sttExtra, ok := extra["stt"].(map[string]interface{}); ok {
+		cfg.Provider = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["provider"])), cfg.Provider)
+		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["baseUrl"])), strings.TrimSpace(stringFromAny(sttExtra["base_url"])), cfg.BaseURL)
+		cfg.APIKey = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["apiKey"])), strings.TrimSpace(stringFromAny(sttExtra["api_key"])), cfg.APIKey)
+		cfg.Model = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["model"])), cfg.Model)
+		if cfg.Provider != "" || cfg.BaseURL != "" || cfg.APIKey != "" || cfg.Model != "" {
+			hasOverride = true
+		}
+	}
+	if !hasOverride {
+		if global.Provider == "" && global.BaseURL == "" && global.APIKey == "" {
+			return nil
+		}
+		return &global
+	}
+	return &cfg
 }
 
 func (a *dingtalkAdapter) Name() string { return a.name }
@@ -401,10 +426,16 @@ func (a *dingtalkAdapter) processDingTalkAttachments(ctx context.Context, msgTyp
 		if len(data) == 0 {
 			return nil
 		}
+		// Try STT transcription
+		transcript := ""
+		if a.stt != nil {
+			transcript = a.transcribeDingTalkAudio(ctx, data, mimeType)
+		}
 		return []Attachment{{
-			Kind: AttachmentVoice,
-			Name: "voice.amr",
-			MIME: mimeType,
+			Kind:       AttachmentVoice,
+			Name:       "voice.amr",
+			MIME:       mimeType,
+			Transcript: transcript,
 		}}
 	case "file", "richText":
 		fileData, _ := msgData["content"].(map[string]any)
@@ -712,4 +743,71 @@ func splitDingTalkMessage(text string, maxLen int) []string {
 		text = text[splitAt:]
 	}
 	return chunks
+}
+
+// TriggerTyping sends a brief "⏳ processing..." status message to indicate
+// the bot is working. DingTalk does not have a native typing indicator API,
+// so we send and then immediately try to recall the status message.
+func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	conversationID := strings.TrimSpace(binding.ChannelID)
+	if conversationID == "" {
+		return nil
+	}
+	// Send a typing status message that the agent loop will overwrite
+	// with actual content once the response is ready.
+	return a.sendGroupMessage(ctx, conversationID, "⏳ ...")
+}
+
+func (a *dingtalkAdapter) transcribeDingTalkAudio(ctx context.Context, data []byte, mimeType string) string {
+	ext := ".amr"
+	if strings.Contains(mimeType, "wav") {
+		ext = ".wav"
+	} else if strings.Contains(mimeType, "mp3") || strings.Contains(mimeType, "mpeg") {
+		ext = ".mp3"
+	} else if strings.Contains(mimeType, "ogg") || strings.Contains(mimeType, "opus") {
+		ext = ".ogg"
+	}
+
+	src, err := os.CreateTemp("", "ggcode-dingtalk-audio-*"+ext)
+	if err != nil {
+		return ""
+	}
+	if _, err := src.Write(data); err != nil {
+		src.Close()
+		return ""
+	}
+	src.Close()
+	audioPath := src.Name()
+	cleanup := func() { _ = os.Remove(audioPath) }
+
+	// Convert to wav if needed
+	if ext != ".wav" {
+		dst, err := os.CreateTemp("", "ggcode-dingtalk-audio-*.wav")
+		if err != nil {
+			cleanup()
+			return ""
+		}
+		dst.Close()
+		cmd := exec.Command("ffmpeg", "-y", "-i", audioPath, dst.Name())
+		if _, err := cmd.CombinedOutput(); err != nil {
+			_ = os.Remove(dst.Name())
+			cleanup()
+			return ""
+		}
+		cleanup()
+		audioPath = dst.Name()
+		cleanup = func() { _ = os.Remove(audioPath) }
+	}
+	defer cleanup()
+
+	result, err := a.stt.Transcribe(ctx, imstt.Request{
+		MIME: "audio/wav",
+		Name: filepath.Base(audioPath),
+		Path: audioPath,
+	})
+	if err != nil {
+		debug.Log("dingtalk", "adapter=%s STT failed: %v", a.name, err)
+		return ""
+	}
+	return strings.TrimSpace(result.Text)
 }
