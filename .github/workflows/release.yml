@@ -129,7 +129,7 @@ jobs:
   release-smoke-windows:
     name: Smoke Windows binary
     runs-on: windows-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     continue-on-error: true
     needs: release
     steps:
@@ -143,13 +143,8 @@ jobs:
         run: |
           $workDir = Join-Path $env:RUNNER_TEMP "ggcode-windows-smoke"
           New-Item -ItemType Directory -Force -Path $workDir | Out-Null
-          # Pre-emptively exclude from Defender before extracting the unsigned binary
-          try { Add-MpPreference -ExclusionPath $workDir -ErrorAction SilentlyContinue } catch {}
-          try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {}
           Expand-Archive -Path dist\ggcode_windows_x86_64.zip -DestinationPath $workDir -Force
-          # Remove Zone.Identifier to prevent Defender from treating as "downloaded from internet"
           $exe = Join-Path $workDir "ggcode.exe"
-          try { Unblock-File -Path $exe -ErrorAction SilentlyContinue } catch {}
           .\scripts\release\smoke-binary.ps1 -BinaryPath $exe
 
   release-smoke-installer:
