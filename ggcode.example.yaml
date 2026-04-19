@@ -389,6 +389,77 @@ vendors:
 allowed_dirs:
   - .
 
+# ------------------------------------------------------------------
+# IM (Instant Messaging) integration
+# Connect ggcode to chat platforms for remote coding via IM.
+# Use /im in the TUI to manage bindings, or configure adapters here.
+# ------------------------------------------------------------------
+im:
+  enabled: true
+
+  # Streaming: deliver agent output to IM channels in real-time
+  streaming:
+    enabled: true
+    transport: message          # "message" (edit updates) or "reaction" (emoji ticker)
+    edit_interval_sec: 2.0      # seconds between edit updates
+    buffer_threshold: 500       # characters before flushing
+
+  # Speech-to-text for voice messages (optional)
+  # stt:
+  #   provider: openai
+  #   base_url: https://api.openai.com/v1
+  #   api_key: ${OPENAI_API_KEY}
+  #   model: whisper-1
+
+  adapters:
+    # QQ — requires a running QQ bot gateway
+    qq:
+      enabled: true
+      platform: qq
+      transport: ws
+      extra:
+        app_id: "your-qq-app-id"
+        token: "your-qq-bot-token"
+
+    # Telegram — uses long-polling or webhook
+    telegram:
+      enabled: true
+      platform: telegram
+      transport: polling
+      extra:
+        bot_token: ${TELEGRAM_BOT_TOKEN}
+
+    # Discord — uses Discord Gateway
+    discord:
+      enabled: true
+      platform: discord
+      extra:
+        bot_token: ${DISCORD_BOT_TOKEN}
+
+    # Feishu / Lark — uses Feishu WebSocket gateway
+    feishu:
+      enabled: true
+      platform: feishu
+      extra:
+        app_id: "your-feishu-app-id"
+        app_secret: ${FEISHU_APP_SECRET}
+
+    # DingTalk — uses DingTalk Stream mode
+    dingtalk:
+      enabled: true
+      platform: dingtalk
+      extra:
+        client_id: "your-dingtalk-client-id"
+        client_secret: ${DINGTALK_CLIENT_SECRET}
+
+    # Slack — uses Slack Socket Mode
+    slack:
+      enabled: true
+      platform: slack
+      extra:
+        bot_token: ${SLACK_BOT_TOKEN}
+        app_token: ${SLACK_APP_TOKEN}
+
 # Maximum agentic loop iterations per user turn (0 = unlimited)
 max_iterations: 0
 

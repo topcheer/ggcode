@@ -176,7 +176,8 @@ Find why startup feels slow in the TUI
 - **`/mode`** changes how much autonomy the agent gets
 - **`/status`** shows current runtime state and lets you install missing LSP servers in-place
 - **`/mcp`** shows connected MCP servers and their tools
-- **`/qq`** opens the QQ / IM panel for pairing, binding status, and adapter health
+- **`/im`** opens the unified IM panel — manage all channel bindings, enable/disable adapters, and check status in one view
+- **`/qq`**, **`/telegram`**, **`/discord`**, **`/slack`**, **`/feishu`**, **`/dingtalk`** open the platform-specific panel for pairing and binding
 - **`/harness`** runs repo harness workflows like scaffold, checks, and cleanup
 - When the agent truly cannot continue, it can open a **tabbed ask_user questionnaire** and resume from your batch answers
 
@@ -192,7 +193,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 - **Parallel help** — spawn sub-agents, inspect their progress, and poll long-running workers without blocking the main loop
 - **Memory and context** — load project memory files like `GGCODE.md`, `AGENTS.md`, `CLAUDE.md`, and `COPILOT.md`
 - **Extensibility** — connect MCP servers, custom plugins, and skills alongside the built-in LSP workflow
-- **Remote IM surface** — bind the current workspace to IM channels (QQ, Telegram, Discord, Slack, DingTalk, Feishu) so remote chats can mirror status and receive agent output; user echo is suppressed on the originating channel to avoid duplicate messages
+- **Remote IM surface** — bind the current workspace to IM channels (QQ, Telegram, Discord, Slack, DingTalk, Feishu, PC) so remote chats can mirror status and receive agent output with real-time streaming; user echo is suppressed on the originating channel to avoid duplicate messages; see [IM integration](#im-integration) below
 - **Session continuity** — save, resume, export, and compact conversations
 - **Harness workflows** — scaffold repo guidance, enforce invariants, track runs, and garbage-collect stale task state
 
@@ -247,7 +248,13 @@ either a normal release base URL or a full-URL proxy prefix.
 | `/memory` | Inspect stored memory |
 | `/agents` | List active sub-agents |
 | `/agent <id>` | Inspect a sub-agent |
-| `/qq` | Open the QQ / IM panel to pair a channel, inspect bindings, and check adapter status |
+| `/im` | Open the unified IM panel — manage all channels, enable/disable bindings, check adapter health |
+| `/qq` | Open QQ-specific panel for pairing and bindings |
+| `/telegram` or `/tg` | Open Telegram panel |
+| `/discord` | Open Discord panel |
+| `/slack` | Open Slack panel |
+| `/feishu` or `/lark` | Open Feishu panel |
+| `/dingtalk` or `/ding` | Open DingTalk panel |
 | `/todo` | View or manage todo state |
 | `/image` | Attach an image |
 | `/bug` | Report a bug |
@@ -349,6 +356,58 @@ Useful flags:
 - `--bypass` — start in bypass mode
 - `--resume <id>` — resume a previous session immediately
 - `--config <path>` — use a specific config file
+
+## IM integration
+
+ggcode can connect to chat platforms so you can interact with the agent from your phone, another machine, or a shared team channel. Supported platforms:
+
+| Platform | Command | Transport |
+| --- | --- | --- |
+| QQ | `/qq` | WebSocket (QQ bot gateway) |
+| Telegram | `/telegram` or `/tg` | Long-polling or webhook |
+| Discord | `/discord` | Discord Gateway |
+| Feishu / Lark | `/feishu` or `/lark` | Feishu WebSocket |
+| DingTalk | `/dingtalk` or `/ding` | DingTalk Stream mode |
+| Slack | `/slack` | Socket Mode |
+| PC | `/pc` | PC relay |
+
+### Quick setup
+
+1. **Configure an adapter** in `ggcode.yaml` under `im.adapters` (see `ggcode.example.yaml` for full examples):
+
+```yaml
+im:
+  enabled: true
+  adapters:
+    telegram:
+      enabled: true
+      platform: telegram
+      extra:
+        bot_token: ${TELEGRAM_BOT_TOKEN}
+```
+
+2. **Start ggcode** — adapters connect automatically on startup.
+
+3. **Bind a channel** — use `/im` in the TUI to see all adapters and bind/unbind channels, or use the platform-specific command (e.g. `/telegram`) to pair.
+
+### Features
+
+- **Real-time streaming** — agent output is delivered live to IM channels as it is generated
+- **Remote commands** — send `/provider`, `/model`, `/mode` and other commands from the chat
+- **Ask-user forwarding** — when the agent needs clarification, the question appears in the chat and your reply feeds back to the agent
+- **Echo suppression** — messages you send from the originating channel are not mirrored back, avoiding duplicate noise
+- **Per-channel binding** — bind multiple channels to the same workspace; each channel sees agent output independently
+- **Voice messages** — optional STT integration transcribes voice messages into text prompts (configure `im.stt`)
+- **Enable/disable channels** — use `/im` to temporarily disable a binding without removing it
+
+### Unified IM panel (`/im`)
+
+Type `/im` in the TUI to open the unified IM panel. From there you can:
+
+- View all active and disabled channel bindings across all platforms
+- **Disable** a channel (press `d`) — pauses agent output to that channel
+- **Enable** a previously disabled channel (press `e`)
+- Navigate with `j`/`k` or arrow keys; press `Esc` to close
 
 ## Configuration
 
