@@ -185,6 +185,16 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Knight agent (created later but referenced via closure)
 	var knightAgent *knight.Knight
 
+	// Knight uses a different factory signature — it doesn't need provider/tools
+	// passed each time because it creates its own agent for analysis tasks.
+	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
+		a := agent.NewAgent(prov, registry, systemPrompt, maxTurns)
+		if onUsage != nil {
+			a.SetUsageHandler(onUsage)
+		}
+		return a, nil
+	}
+
 	_ = registry.Register(tool.SkillTool{
 		Skills:       commandMgr,
 		Runtime:      mcpMgr,
@@ -194,6 +204,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		OnSkillUsed: func(name string) {
 			if knightAgent != nil {
 				knightAgent.RecordSkillUse(name)
+				// Default effectiveness score of 3 (neutral) on each use.
+				// Real user feedback scoring can be added later.
+				knightAgent.RecordSkillEffectiveness(name, 3)
 			}
 		},
 	})
@@ -383,6 +396,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Start Knight background agent (if enabled)
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
+	knightAgent.SetFactory(knightFactory)
 	if cfg.Knight().Enabled {
 		// Create Knight emitter (reuse IM emitter)
 		knightAgent.SetEmitter(emitter)

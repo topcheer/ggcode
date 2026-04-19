@@ -123,6 +123,15 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	e.TriggerTyping()
 }
 
+// HasTargets returns true if at least one IM channel is bound.
+func (e *IMEmitter) HasTargets() bool {
+	if e == nil || e.manager == nil {
+		return false
+	}
+	bindings, _ := e.manager.ListBindings()
+	return len(bindings) > 0
+}
+
 // EmitText sends a text message to IM.
 func (e *IMEmitter) EmitText(text string) {
 	if e == nil {

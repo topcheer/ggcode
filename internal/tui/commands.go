@@ -83,7 +83,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 	var replacement string
 	if m.autoCompleteKind == "slash" {
 		if m.loading {
-			if shouldAllowBusyHarnessPanel(selected) {
+			if shouldExecuteWhileBusy(selected) {
 				m.input.SetValue("")
 				m.autoCompleteActive = false
 				m.autoCompleteItems = nil
@@ -135,15 +135,35 @@ func (m *Model) submitText(text string, addToHistory bool) tea.Cmd {
 	return m.handleCommand(text)
 }
 
-func shouldAllowBusyHarnessPanel(text string) bool {
-	parts := strings.Fields(strings.TrimSpace(text))
+// shouldExecuteWhileBusy returns true for commands that should run immediately
+// even when the agent is loading (instead of being queued as pending submissions).
+// Built-in slash commands that only open panels or change settings are safe;
+// custom commands (which may start a new agent run) and /harness subcommands
+// (which may start runs) are excluded.
+func shouldExecuteWhileBusy(text string) bool {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "/") {
+		return false
+	}
+	parts := strings.Fields(t)
 	if len(parts) == 0 {
 		return false
 	}
-	if parts[0] != "/harness" {
-		return false
+	cmd := parts[0]
+	switch cmd {
+	// Panel / UI commands — always safe
+	case "/lang", "/model", "/provider", "/impersonate",
+		"/qq", "/telegram", "/tg", "/pc", "/discord",
+		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/im",
+		"/skills", "/sessions", "/mcp", "/agents", "/agent",
+		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
+		"/help", "/?", "/fullscreen":
+		return true
+	// Harness: only the bare command (opens panel) is safe
+	case "/harness":
+		return len(parts) == 1 || (len(parts) == 2 && strings.EqualFold(parts[1], "panel"))
 	}
-	return len(parts) == 1 || (len(parts) == 2 && strings.EqualFold(parts[1], "panel"))
+	return false
 }
 
 func (m *Model) ensureOutputEndsWithNewline() {

@@ -229,23 +229,34 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 func (sa *SessionAnalyzer) detectFailurePatterns(ses *session.Session) []SkillCandidate {
 	var candidates []SkillCandidate
 
-	// Build a map: toolID → toolName from tool_use blocks
+	// Build maps: toolID → toolName and toolID → input summary from tool_use blocks
 	toolIDToName := make(map[string]string)
+	toolIDToInput := make(map[string]string)
 	for _, msg := range ses.Messages {
 		for _, block := range msg.Content {
 			if block.Type == "tool_use" {
 				toolIDToName[block.ToolID] = block.ToolName
+				if block.Input != nil {
+					if b, err := json.Marshal(block.Input); err == nil {
+						toolIDToInput[block.ToolID] = truncate(string(b), 200)
+					}
+				}
 			}
 		}
 	}
 
-	// Find [tool_result(is_error=true)] followed by [tool_result(success)] for the same tool
+	// Find [tool_result(is_error=true)] followed by [tool_result(success)] for the same tool.
+	// To avoid false positives (e.g. two unrelated run_command calls), we track
+	// which failure→success pairs have already been matched per toolName so each
+	// tool only generates at most one candidate per session.
 	type failure struct {
-		toolName string
-		errMsg   string
-		index    int
+		toolName  string
+		toolInput string
+		errMsg    string
+		index     int
 	}
 	var failures []failure
+	matched := make(map[string]bool) // toolName → already matched
 
 	for i, msg := range ses.Messages {
 		for _, block := range msg.Content {
@@ -255,18 +266,36 @@ func (sa *SessionAnalyzer) detectFailurePatterns(ses *session.Session) []SkillCa
 					continue
 				}
 				failures = append(failures, failure{
-					toolName: toolName,
-					errMsg:   truncate(block.Output, 200),
-					index:    i,
+					toolName:  toolName,
+					toolInput: toolIDToInput[block.ToolID],
+					errMsg:    truncate(block.Output, 200),
+					index:     i,
 				})
 			}
 		}
 	}
 
-	// For each failure, look for a successful use of the same tool within 4 messages
+	// For each failure, look for a successful use of the same tool within 4 messages.
+	// Only match if there is at least one assistant message (a correction attempt)
+	// between the failure and the success.
 	for _, f := range failures {
+		if matched[f.toolName] {
+			continue
+		}
 		for j := f.index + 1; j < len(ses.Messages) && j <= f.index+4; j++ {
-			for _, block := range ses.Messages[j].Content {
+			msg := ses.Messages[j]
+			// Require an assistant correction message between failure and fix
+			hasCorrection := false
+			for k := f.index + 1; k < j; k++ {
+				if ses.Messages[k].Role == "assistant" {
+					hasCorrection = true
+					break
+				}
+			}
+			if !hasCorrection {
+				continue
+			}
+			for _, block := range msg.Content {
 				if block.Type == "tool_result" && !block.IsError {
 					toolName := toolIDToName[block.ToolID]
 					if toolName == f.toolName {
@@ -275,8 +304,9 @@ func (sa *SessionAnalyzer) detectFailurePatterns(ses *session.Session) []SkillCa
 							Description: fmt.Sprintf("%s failure recovery: %s", f.toolName, f.errMsg),
 							Scope:       "project",
 							Score:       1.5,
-							Reason:      fmt.Sprintf("error->fix pattern for %s in session %s", f.toolName, ses.ID),
+							Reason:      fmt.Sprintf("error->fix pattern for %s (input: %s) in session %s", f.toolName, truncate(f.toolInput, 60), ses.ID),
 						})
+						matched[f.toolName] = true
 						break
 					}
 				}
@@ -459,11 +489,12 @@ func (d toolCallDetail) filePath() string {
 	return ""
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+func truncate(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxRunes]) + "..."
 }
 
 func sanitizeName(s string) string {
