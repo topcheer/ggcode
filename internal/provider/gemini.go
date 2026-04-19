@@ -146,6 +146,14 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					return
 				}
 
+				// Check finish reason for truncation / policy errors.
+				if len(resp.Candidates) > 0 {
+					if finishErr := geminiFinishReasonError(resp.Candidates[0].FinishReason); finishErr != nil {
+						ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
+						return
+					}
+				}
+
 				// Extract usage metadata
 				if resp.UsageMetadata != nil {
 					usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
@@ -337,4 +345,27 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 	}
 
 	return blocks, usage
+}
+
+// geminiFinishReasonError returns an error for finish reasons that indicate
+// truncation or policy issues. Returns nil for normal completion.
+func geminiFinishReasonError(reason genai.FinishReason) error {
+	switch reason {
+	case "", genai.FinishReasonStop, genai.FinishReasonUnspecified:
+		return nil
+	case genai.FinishReasonMaxTokens:
+		return fmt.Errorf("gemini stream ended with FinishReason=MAX_TOKENS (output truncated)")
+	case genai.FinishReasonSafety:
+		return fmt.Errorf("gemini stream ended with FinishReason=SAFETY (content filtered)")
+	case genai.FinishReasonRecitation:
+		return fmt.Errorf("gemini stream ended with FinishReason=RECITATION (cited content blocked)")
+	case genai.FinishReasonProhibitedContent:
+		return fmt.Errorf("gemini stream ended with FinishReason=PROHIBITED_CONTENT")
+	case genai.FinishReasonBlocklist:
+		return fmt.Errorf("gemini stream ended with FinishReason=BLOCKLIST")
+	case genai.FinishReasonMalformedFunctionCall:
+		return fmt.Errorf("gemini stream ended with FinishReason=MALFORMED_FUNCTION_CALL")
+	default:
+		return fmt.Errorf("gemini stream ended with FinishReason=%s", reason)
+	}
 }

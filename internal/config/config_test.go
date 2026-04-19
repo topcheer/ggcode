@@ -1005,8 +1005,8 @@ func TestDefaultConfigIncludesArkCodingPlanCapabilities(t *testing.T) {
 	if openai.ContextWindow != 200000 {
 		t.Fatalf("expected ark context window 200000, got %d", openai.ContextWindow)
 	}
-	if openai.MaxTokens != 8192 {
-		t.Fatalf("expected ark default max output 8192, got %d", openai.MaxTokens)
+	if openai.MaxTokens != 16384 {
+		t.Fatalf("expected ark default max output 16384, got %d", openai.MaxTokens)
 	}
 	anthropic := cfg.Vendors["ark"].Endpoints["coding-anthropic"]
 	if anthropic.BaseURL != "https://ark.cn-beijing.volces.com/api/coding" {

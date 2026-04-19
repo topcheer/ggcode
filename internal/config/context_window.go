@@ -7,7 +7,7 @@ import (
 )
 
 const defaultContextWindow = 128000
-const defaultMaxOutputTokens = 8192
+const defaultMaxOutputTokens = 16384
 
 type modelCapability struct {
 	ContextWindow   int
