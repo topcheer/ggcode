@@ -36,8 +36,8 @@ type ContextManager interface {
 }
 
 const (
-	summarizeThresholdWithUsage = 0.85
-	summarizeThresholdFallback  = 0.72
+	summarizeThresholdWithUsage = 0.75
+	summarizeThresholdFallback  = 0.65
 	compactTargetRatio          = 0.55
 	summaryReserveRatio         = 0.10
 	defaultOutputReserveRatio   = 0.10
@@ -50,6 +50,12 @@ const (
 	toolResultMinTokens         = 96
 	maxPTLRetries               = 3
 	tokenCountTimeout           = 100 * time.Millisecond
+
+	// Microcompact truncation thresholds
+	truncationHeadLines  = 10
+	truncationTailLines  = 5
+	truncationMinLines   = 20  // don't truncate if fewer than this many lines
+	truncationMaxLineLen = 200 // truncate individual lines longer than this
 )
 
 func AutoCompactThresholdRatio() float64 {
@@ -582,7 +588,23 @@ func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provi
 				Role: "system",
 				Content: []provider.ContentBlock{{
 					Type: "text",
-					Text: "Summarize the following conversation concisely, preserving key decisions and context. Output only the summary.",
+					Text: `You are summarizing a conversation between a user and an AI coding assistant. Produce a concise, structured summary that preserves the information most critical for continuing work.
+
+Focus on preserving:
+- Key decisions made and WHY (rationale, trade-offs considered)
+- File paths that were read, created, or modified
+- Code structure: function/class names, signatures, key variables, configuration values
+- Errors encountered and how they were resolved
+- Incomplete or pending work the assistant was about to do
+- User preferences or constraints mentioned
+
+You may omit:
+- Full source code contents (reference file paths and key changes instead)
+- Verbose command output (summarize the outcome)
+- Repeated status checks or confirmations
+- Tool call mechanics (focus on what was done, not which tool was used)
+
+Format: Use clear sections with bullet points. Be specific with names, paths, and values.`,
 				}},
 			},
 			{
@@ -728,18 +750,55 @@ func maxInt(a, b int) int {
 	return b
 }
 
+// compactedToolResultPlaceholder truncates large tool results while preserving
+// head and tail content so the LLM retains enough context to avoid redundant
+// operations (e.g. re-reading a file it already inspected).
 func compactedToolResultPlaceholder(block provider.ContentBlock, originalTokens int) string {
-	status := "ok"
-	if block.IsError {
-		status = "error"
+	output := block.Output
+
+	// For multi-line content with enough lines: preserve head + tail
+	lines := strings.Split(output, "\n")
+	if len(lines) >= truncationMinLines {
+		// Truncate individual long lines first
+		for i, line := range lines {
+			if len(line) > truncationMaxLineLen {
+				lines[i] = line[:truncationMaxLineLen-3] + "..."
+			}
+		}
+
+		headEnd := truncationHeadLines
+		tailStart := len(lines) - truncationTailLines
+		if tailStart > headEnd {
+			head := lines[:headEnd]
+			tail := lines[tailStart:]
+			skipped := tailStart - headEnd
+
+			var sb strings.Builder
+			sb.WriteString(strings.Join(head, "\n"))
+			sb.WriteString(fmt.Sprintf("\n... (truncated %d lines, original %d tokens)\n", skipped, originalTokens))
+			sb.WriteString(strings.Join(tail, "\n"))
+			return sb.String()
+		}
 	}
-	if block.ToolID != "" {
-		return fmt.Sprintf("[tool result compacted: id=%s status=%s original_tokens=%d]", block.ToolID, status, originalTokens)
+
+	// For few-line but very long content (e.g. single-line minified output):
+	// truncate by character position.
+	if len(output) > truncationMaxLineLen*2 {
+		headLen := minInt(len(output), truncationMaxLineLen)
+		tailLen := minInt(len(output)-headLen, truncationMaxLineLen/2)
+		return fmt.Sprintf("%s\n... (truncated, original %d tokens)\n%s",
+			output[:headLen], originalTokens, output[len(output)-tailLen:])
 	}
-	return fmt.Sprintf("[tool result compacted: status=%s original_tokens=%d]", status, originalTokens)
+
+	return output
 }
 
 func buildSummaryPayload(msgs []provider.Message) string {
+	const (
+		payloadToolResultMaxLen = 500 // max chars for tool result in summary payload
+		payloadToolResultHead   = 200 // keep first N chars
+	)
+
 	var sb strings.Builder
 	for _, msg := range msgs {
 		sb.WriteString(fmt.Sprintf("[%s]\n", msg.Role))
@@ -751,7 +810,11 @@ func buildSummaryPayload(msgs []provider.Message) string {
 			case "tool_use":
 				sb.WriteString(fmt.Sprintf("Tool call: %s\n", block.ToolName))
 			case "tool_result":
-				sb.WriteString(fmt.Sprintf("Tool result: %s\n", block.Output))
+				output := block.Output
+				if len(output) > payloadToolResultMaxLen {
+					output = output[:payloadToolResultHead] + fmt.Sprintf("\n... (truncated, original %d chars)", len(output))
+				}
+				sb.WriteString(fmt.Sprintf("Tool result: %s\n", output))
 			}
 		}
 		sb.WriteByte('\n')
