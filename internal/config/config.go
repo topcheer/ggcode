@@ -550,6 +550,23 @@ func DefaultConfig() *Config {
 					"official", "coding", "cn", "anthropic",
 				),
 			}),
+			"nvidia": defaultVendor("NVIDIA NIM", "${NVIDIA_API_KEY}", map[string]EndpointConfig{
+				"api": defaultEndpoint(
+					"NVIDIA NIM API",
+					"openai",
+					"https://integrate.api.nvidia.com/v1",
+					"moonshotai/kimi-k2.5",
+					[]string{
+						"moonshotai/kimi-k2.5",
+						"minimaxai/minimax-m2.5",
+						"z-ai/glm-5.1",
+						"minimaxai/minimax-m2.7",
+						"qwen/qwen3.5-397b-a17b",
+						"deepseek-ai/deepseek-v3.2",
+					},
+					"official", "openai-compatible", "open-models",
+				),
+			}),
 			"together": defaultVendor("Together AI", "${TOGETHER_API_KEY}", map[string]EndpointConfig{
 				"api": defaultEndpoint(
 					"Together API",

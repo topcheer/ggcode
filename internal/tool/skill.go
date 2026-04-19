@@ -28,6 +28,7 @@ type SkillTool struct {
 	Provider     provider.Provider
 	Tools        *Registry
 	AgentFactory subagent.AgentFactory
+	OnSkillUsed  func(name string) // optional callback when a skill is loaded by the agent
 }
 
 func (t SkillTool) Name() string { return "skill" }
@@ -81,6 +82,9 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	if recorder, ok := t.Skills.(skillUsageRecorder); ok {
 		recorder.RecordUsage(cmd.Name)
+	}
+	if t.OnSkillUsed != nil {
+		t.OnSkillUsed(cmd.Name)
 	}
 	if cmd.LoadedFrom == commands.LoadedFromMCP && t.Runtime != nil {
 		result, _ := t.executeMCPPromptSkill(ctx, cmd.Name, strings.TrimSpace(args.Args))

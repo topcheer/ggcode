@@ -10,11 +10,16 @@ import (
 
 // UsageTracker tracks skill usage for Knight's lifecycle management.
 // Persists to a JSON file in the project's .ggcode/ directory.
+// Uses a dirty flag to batch disk writes — only saves when data changed
+// and at most once per writeInterval.
 type UsageTracker struct {
-	mu     sync.Mutex
-	path   string
-	data   map[string]*skillUsage
-	loaded bool
+	mu            sync.Mutex
+	path          string
+	data          map[string]*skillUsage
+	loaded        bool
+	dirty         bool
+	writeInterval time.Duration
+	lastWrite     time.Time
 }
 
 type skillUsage struct {
@@ -23,11 +28,14 @@ type skillUsage struct {
 	Effectiveness []int     `json:"effectiveness_scores,omitempty"`
 }
 
+const defaultWriteInterval = 30 * time.Second
+
 // NewUsageTracker creates a usage tracker that persists to the given path.
 func NewUsageTracker(path string) *UsageTracker {
 	return &UsageTracker{
-		path: path,
-		data: make(map[string]*skillUsage),
+		path:          path,
+		data:          make(map[string]*skillUsage),
+		writeInterval: defaultWriteInterval,
 	}
 }
 
@@ -40,7 +48,7 @@ func (ut *UsageTracker) RecordUse(name string) {
 	entry := ut.getOrCreate(name)
 	entry.UsageCount++
 	entry.LastUsed = time.Now()
-	ut.save()
+	ut.markDirty()
 }
 
 // RecordEffectiveness adds an effectiveness score (1-5) for a skill.
@@ -55,7 +63,7 @@ func (ut *UsageTracker) RecordEffectiveness(name string, score int) {
 	if len(entry.Effectiveness) > 10 {
 		entry.Effectiveness = entry.Effectiveness[len(entry.Effectiveness)-10:]
 	}
-	ut.save()
+	ut.markDirty()
 }
 
 // GetUsage returns usage data for a skill.
@@ -100,6 +108,21 @@ func (ut *UsageTracker) AllUsage() map[string]skillUsage {
 	return result
 }
 
+// Flush persists dirty data to disk. Called periodically by the scheduler.
+func (ut *UsageTracker) Flush() {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	if !ut.dirty {
+		return
+	}
+	ut.saveLocked()
+}
+
+// EnsureDir creates the parent directory for the usage file.
+func (ut *UsageTracker) EnsureDir() error {
+	return os.MkdirAll(filepath.Dir(ut.path), 0755)
+}
+
 func (ut *UsageTracker) getOrCreate(name string) *skillUsage {
 	if entry, ok := ut.data[name]; ok {
 		return entry
@@ -133,15 +156,22 @@ func (ut *UsageTracker) ensureLoaded() {
 	json.Unmarshal(data, &ut.data)
 }
 
-func (ut *UsageTracker) save() {
+// markDirty flags data as needing persistence. Saves immediately if enough
+// time has passed since last write; otherwise defers until next Flush().
+func (ut *UsageTracker) markDirty() {
+	ut.dirty = true
+	if time.Since(ut.lastWrite) >= ut.writeInterval {
+		ut.saveLocked()
+	}
+}
+
+func (ut *UsageTracker) saveLocked() {
 	data, err := json.MarshalIndent(ut.data, "", "  ")
 	if err != nil {
 		return
 	}
-	os.WriteFile(ut.path, data, 0600)
-}
-
-// EnsureDir creates the parent directory for the usage file.
-func (ut *UsageTracker) EnsureDir() error {
-	return os.MkdirAll(filepath.Dir(ut.path), 0755)
+	if err := os.WriteFile(ut.path, data, 0600); err == nil {
+		ut.dirty = false
+		ut.lastWrite = time.Now()
+	}
 }

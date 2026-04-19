@@ -229,30 +229,56 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 func (sa *SessionAnalyzer) detectFailurePatterns(ses *session.Session) []SkillCandidate {
 	var candidates []SkillCandidate
 
-	// Find [tool_use -> tool_result(is_error=true)] -> [tool_use -> tool_result(success)] pairs
-	for i := 0; i < len(ses.Messages)-3; i++ {
-		// Look for error result
-		msg := ses.Messages[i]
-		failedTool, errMsg := extractFailedTool(msg)
-		if failedTool == "" {
-			continue
+	// Build a map: toolID → toolName from tool_use blocks
+	toolIDToName := make(map[string]string)
+	for _, msg := range ses.Messages {
+		for _, block := range msg.Content {
+			if block.Type == "tool_use" {
+				toolIDToName[block.ToolID] = block.ToolName
+			}
 		}
+	}
 
-		// Look for the fix in subsequent messages (within 4 messages)
-		for j := i + 1; j < len(ses.Messages) && j <= i+4; j++ {
-			nextMsg := ses.Messages[j]
-			details := extractToolDetails(nextMsg)
-			for _, d := range details {
-				if d.ToolName == failedTool && !d.IsError {
-					// Found a fix!
-					candidates = append(candidates, SkillCandidate{
-						Name:        "troubleshoot-" + failedTool,
-						Description: fmt.Sprintf("%s failure recovery: %s", failedTool, truncate(errMsg, 60)),
-						Scope:       "project",
-						Score:       1.5,
-						Reason:      fmt.Sprintf("error→fix pattern for %s in session %s", failedTool, ses.ID),
-					})
-					break
+	// Find [tool_result(is_error=true)] followed by [tool_result(success)] for the same tool
+	type failure struct {
+		toolName string
+		errMsg   string
+		index    int
+	}
+	var failures []failure
+
+	for i, msg := range ses.Messages {
+		for _, block := range msg.Content {
+			if block.Type == "tool_result" && block.IsError {
+				toolName := toolIDToName[block.ToolID]
+				if toolName == "" {
+					continue
+				}
+				failures = append(failures, failure{
+					toolName: toolName,
+					errMsg:   truncate(block.Output, 200),
+					index:    i,
+				})
+			}
+		}
+	}
+
+	// For each failure, look for a successful use of the same tool within 4 messages
+	for _, f := range failures {
+		for j := f.index + 1; j < len(ses.Messages) && j <= f.index+4; j++ {
+			for _, block := range ses.Messages[j].Content {
+				if block.Type == "tool_result" && !block.IsError {
+					toolName := toolIDToName[block.ToolID]
+					if toolName == f.toolName {
+						candidates = append(candidates, SkillCandidate{
+							Name:        "troubleshoot-" + sanitizeName(f.toolName),
+							Description: fmt.Sprintf("%s failure recovery: %s", f.toolName, f.errMsg),
+							Scope:       "project",
+							Score:       1.5,
+							Reason:      fmt.Sprintf("error->fix pattern for %s in session %s", f.toolName, ses.ID),
+						})
+						break
+					}
 				}
 			}
 		}
@@ -404,29 +430,6 @@ func findPrevAssistant(messages []provider.Message, beforeIdx int) *provider.Mes
 		}
 	}
 	return nil
-}
-
-func extractFailedTool(msg provider.Message) (toolName, errMsg string) {
-	for _, block := range msg.Content {
-		if block.Type == "tool_result" && block.IsError {
-			return block.ToolID, truncate(block.Output, 200)
-		}
-	}
-	return "", ""
-}
-
-func extractToolDetails(msg provider.Message) []toolCallDetail {
-	var details []toolCallDetail
-	for _, block := range msg.Content {
-		if block.Type == "tool_result" {
-			details = append(details, toolCallDetail{
-				ToolName: block.ToolID, // approximate — may need refinement
-				IsError:  block.IsError,
-				Output:   block.Output,
-			})
-		}
-	}
-	return details
 }
 
 func extractToolDetailFromBlock(block provider.ContentBlock) toolCallDetail {

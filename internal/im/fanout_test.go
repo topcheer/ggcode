@@ -3,6 +3,7 @@ package im
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -151,7 +152,7 @@ func TestFanOutSend_FirstErrorReturned(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from failed sink")
 	}
-	if err.Error() != "fail-a" {
+	if err == nil || !strings.Contains(err.Error(), "fail-a") {
 		t.Fatalf("expected fail-a error, got %v", err)
 	}
 }

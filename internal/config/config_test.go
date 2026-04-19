@@ -701,6 +701,7 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 		"kimi":       "Kimi Coding Plan",
 		"minimax":    "MiniMax Token Plan",
 		"ark":        "Volcengine Ark Coding Plan",
+		"nvidia":     "NVIDIA NIM",
 		"together":   "Together AI",
 		"perplexity": "Perplexity",
 	}
