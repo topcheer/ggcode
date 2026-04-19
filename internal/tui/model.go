@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -97,6 +98,7 @@ type Model struct {
 	autoMemFiles                    []string
 	pluginMgr                       *plugin.Manager
 	subAgentMgr                     *subagent.Manager
+	knight                          *knight.Knight
 	mcpManager                      mcpManager
 	mode                            permission.PermissionMode
 	pendingDiffConfirm              *DiffConfirmMsg
@@ -574,6 +576,10 @@ func asciiLogo() string {
 
 func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
 	m.subAgentMgr = mgr
+}
+
+func (m *Model) SetKnight(k *knight.Knight) {
+	m.knight = k
 }
 
 func (m *Model) vendorNames() string {

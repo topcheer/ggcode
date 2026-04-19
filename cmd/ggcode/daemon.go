@@ -376,6 +376,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	homeDir, _ := os.UserHomeDir()
 	knightAgent := knight.New(cfg.Knight(), homeDir, workingDir, store)
 	if cfg.Knight().Enabled {
+		// Create Knight emitter (reuse IM emitter)
+		knightAgent.SetEmitter(emitter)
 		if err := knightAgent.Start(context.Background()); err != nil {
 			fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
 		} else {

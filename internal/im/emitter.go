@@ -304,3 +304,17 @@ func extractAskUserTarget(rawArgs string) string {
 func (e *IMEmitter) relativizePaths(text string) string {
 	return util.RelativizePaths(text, e.workDir)
 }
+
+// EmitKnightReport sends a Knight status report to IM.
+func (e *IMEmitter) EmitKnightReport(report string) {
+	if e == nil {
+		return
+	}
+	if strings.TrimSpace(report) == "" {
+		return
+	}
+	e.EmitEvent(OutboundEvent{
+		Kind: OutboundEventText,
+		Text: "🌙 " + report,
+	})
+}
