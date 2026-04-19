@@ -215,6 +215,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.slack")
 	case "/dingtalk", "/ding":
 		return tr(lang, "slash.dingtalk")
+	case "/im":
+		return tr(lang, "slash.im")
 	default:
 		return cmd
 	}
@@ -1270,6 +1272,8 @@ func enCatalog(key string) string {
 		return "Manage Slack channel binding"
 	case "slash.dingtalk":
 		return "Manage DingTalk channel binding"
+	case "slash.im":
+		return "Open unified IM channels panel"
 	case "panel.qq.directory":
 		return "Directory"
 	case "panel.qq.runtime":
@@ -1397,6 +1401,7 @@ func enCatalog(key string) string {
   /feishu            Open Feishu binding panel
   /slack             Open Slack binding panel
   /dingtalk          Open DingTalk binding panel
+  /im                Open unified IM channels panel
   /lang [code]       Choose or switch interface language
   /skills            Browse available skills
   /clear             Clear conversation history
@@ -2524,6 +2529,8 @@ func zhCatalog(key string) string {
 		return "管理 Slack 渠道绑定"
 	case "slash.dingtalk":
 		return "管理钉钉渠道绑定"
+	case "slash.im":
+		return "打开统一 IM 渠道面板"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":
@@ -2651,6 +2658,7 @@ func zhCatalog(key string) string {
   /feishu            打开飞书绑定面板
   /slack             打开 Slack 绑定面板
   /dingtalk          打开钉钉绑定面板
+  /im                打开统一 IM 渠道面板
   /lang [code]       选择或切换界面语言
   /skills            浏览可用 skills
   /clear             清空对话历史

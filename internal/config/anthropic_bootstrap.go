@@ -30,6 +30,12 @@ func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
 		return false
 	}
 
+	// Only bootstrap when the URL points to a known built-in vendor.
+	// For bigmodel URLs, reuse the existing zai/cn-coding-anthropic endpoint.
+	if !isBootstrapKnownHost(baseURL) {
+		return false
+	}
+
 	claudeEnv := loadClaudeEnv()
 	model := firstNonEmpty(
 		strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")),
@@ -46,6 +52,18 @@ func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
 	cfg.Endpoint = endpointID
 	cfg.Model = model
 	return true
+}
+
+// isBootstrapKnownHost returns true when the URL belongs to a known built-in
+// vendor that should be auto-bootstrapped. Unknown URLs are ignored so that
+// the user's configured vendor/endpoint/model selection is preserved.
+func isBootstrapKnownHost(rawURL string) bool {
+	for _, p := range knownAnthropicHostPatterns {
+		if strings.Contains(strings.ToLower(rawURL), p.substring) {
+			return true
+		}
+	}
+	return false
 }
 
 func preferredAnthropicCredential() (string, string) {
@@ -99,6 +117,7 @@ func upsertAnthropicBootstrapVendor(cfg *Config, baseURL, apiKey, model, authVar
 		normalizedBaseURL = strings.TrimSpace(baseURL)
 	}
 
+	// Exact baseURL match against existing vendor endpoints.
 	for vendorID, vendor := range cfg.Vendors {
 		for endpointID, ep := range vendor.Endpoints {
 			if strings.TrimSpace(ep.Protocol) != "anthropic" {
@@ -121,28 +140,51 @@ func upsertAnthropicBootstrapVendor(cfg *Config, baseURL, apiKey, model, authVar
 		}
 	}
 
-	vendorID := uniqueBootstrapVendorID(cfg, inferBootstrapVendorID(baseURL))
-	displayName := inferBootstrapVendorDisplayName(vendorID)
-	endpointID := "env-anthropic"
-	cfg.Vendors[vendorID] = VendorConfig{
-		DisplayName: displayName,
-		APIKey:      apiKey,
-		Endpoints: map[string]EndpointConfig{
-			endpointID: {
-				DisplayName:   displayName + " (Anthropic)",
-				Protocol:      "anthropic",
-				BaseURL:       normalizedBaseURL,
-				APIKey:        apiKey,
-				DefaultModel:  model,
-				SelectedModel: model,
-				Models:        []string{model},
-				ContextWindow: inferContextWindow(model, "anthropic"),
-				MaxTokens:     inferMaxOutputTokens(model, "anthropic"),
-				Tags:          []string{"bootstrapped", "anthropic", strings.ToLower(authVar)},
-			},
-		},
+	// Fallback: match against known host patterns (e.g. bigmodel → zai/cn-coding-anthropic).
+	if vendorID, endpointID := matchKnownAnthropicEndpoint(cfg, apiKey, model); vendorID != "" {
+		return vendorID, endpointID
 	}
-	return vendorID, endpointID
+
+	return "", ""
+}
+
+// knownAnthropicHostPatterns maps URL substrings to (vendorID, endpointID)
+// pairs for known built-in anthropic-compatible endpoints. When the
+// ANTHROPIC_BASE_URL contains one of these substrings, the bootstrap
+// reuses the existing endpoint instead of creating a new vendor.
+var knownAnthropicHostPatterns = []struct {
+	substring  string
+	vendorID   string
+	endpointID string
+}{
+	{"bigmodel", "zai", "cn-coding-anthropic"},
+}
+
+// matchKnownAnthropicEndpoint finds the first known built-in anthropic endpoint
+// and injects the API key and model. Called only when isBootstrapKnownHost is true.
+func matchKnownAnthropicEndpoint(cfg *Config, apiKey, model string) (string, string) {
+	for _, p := range knownAnthropicHostPatterns {
+		vendor, ok := cfg.Vendors[p.vendorID]
+		if !ok {
+			continue
+		}
+		ep, ok := vendor.Endpoints[p.endpointID]
+		if !ok {
+			continue
+		}
+		ep.APIKey = apiKey
+		if ep.DefaultModel == "" {
+			ep.DefaultModel = model
+		}
+		ep.SelectedModel = model
+		if !slices.Contains(ep.Models, model) {
+			ep.Models = append(ep.Models, model)
+		}
+		vendor.Endpoints[p.endpointID] = ep
+		cfg.Vendors[p.vendorID] = vendor
+		return p.vendorID, p.endpointID
+	}
+	return "", ""
 }
 
 func normalizeBaseURL(raw string) string {

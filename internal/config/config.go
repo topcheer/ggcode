@@ -275,7 +275,7 @@ func DefaultConfig() *Config {
 				"global-coding-openai": defaultEndpoint(
 					"Global Coding Plan",
 					"openai",
-					"https://your-global-coding-endpoint.example.com/v1",
+					"https://api.z.ai/api/coding/paas/v4",
 					"glm-5-turbo",
 					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"coding", "global",
@@ -283,7 +283,7 @@ func DefaultConfig() *Config {
 				"global-coding-anthropic": defaultEndpoint(
 					"Global Coding Plan (Anthropic)",
 					"anthropic",
-					"https://your-global-anthropic-endpoint.example.com",
+					"https://api.z.ai/api/anthropic",
 					"glm-5-turbo",
 					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"coding", "global", "anthropic",
@@ -299,7 +299,7 @@ func DefaultConfig() *Config {
 				"global-api-openai": defaultEndpoint(
 					"Global Standard API",
 					"openai",
-					"https://your-global-api-endpoint.example.com/v1",
+					"https://api.z.ai/api/paas/v4",
 					"glm-4.5-air",
 					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"api", "global",
@@ -1053,6 +1053,9 @@ func (c *Config) SetActiveSelection(vendor, endpoint, model string) error {
 }
 
 // SetEndpointAPIKey updates the active endpoint or vendor-level API key.
+// The key is stored as an environment variable reference (e.g. ${ZAI_API_KEY})
+// rather than plaintext, and the caller should set the actual value in the
+// shell environment (os.Setenv) so the current session can use it immediately.
 func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped bool) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -1061,18 +1064,51 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	if !ok {
 		return fmt.Errorf("vendor %q is not configured", vendor)
 	}
-	if vendorScoped {
-		vc.APIKey = strings.TrimSpace(apiKey)
-		c.Vendors[vendor] = vc
+
+	apiKey = strings.TrimSpace(apiKey)
+
+	// If the value is already an env reference (${VAR}), store as-is.
+	if _, isRef := envReferenceVarName(apiKey); isRef || apiKey == "" {
+		if vendorScoped {
+			vc.APIKey = apiKey
+			c.Vendors[vendor] = vc
+		} else {
+			ep, ok := vc.Endpoints[endpoint]
+			if !ok {
+				return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+			}
+			ep.APIKey = apiKey
+			vc.Endpoints[endpoint] = ep
+			c.Vendors[vendor] = vc
+		}
 		return nil
 	}
-	ep, ok := vc.Endpoints[endpoint]
-	if !ok {
-		return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+
+	// Plaintext key: resolve the preferred env var name and store the reference.
+	var envVarName string
+	if vendorScoped {
+		envVarName = preferredVendorAPIKeyEnvVar(vendor)
+	} else {
+		envVarName = preferredEndpointAPIKeyEnvVar(vendor, endpoint)
 	}
-	ep.APIKey = strings.TrimSpace(apiKey)
-	vc.Endpoints[endpoint] = ep
-	c.Vendors[vendor] = vc
+
+	// Set the actual value in the current process environment so it works
+	// immediately for the current session.
+	os.Setenv(envVarName, apiKey)
+
+	ref := "${" + envVarName + "}"
+	if vendorScoped {
+		vc.APIKey = ref
+		c.Vendors[vendor] = vc
+	} else {
+		ep, ok := vc.Endpoints[endpoint]
+		if !ok {
+			return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+		}
+		ep.APIKey = ref
+		vc.Endpoints[endpoint] = ep
+		c.Vendors[vendor] = vc
+	}
 	return nil
 }
 
