@@ -37,6 +37,7 @@ type Agent struct {
 	policy         permission.PermissionPolicy
 	onApproval     func(toolName string, input string) permission.Decision
 	onUsage        func(usage provider.TokenUsage)
+	onCheckpoint   func(messages []provider.Message, tokenCount int)
 	hookConfig     hooks.HookConfig
 	workingDir     string
 	checkpoints    *checkpoint.Manager
@@ -251,6 +252,14 @@ func (a *Agent) SetHookConfig(cfg hooks.HookConfig) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.hookConfig = cfg
+}
+
+// SetCheckpointHandler sets a callback invoked after summarize compaction
+// to persist the compacted message state.
+func (a *Agent) SetCheckpointHandler(fn func(messages []provider.Message, tokenCount int)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onCheckpoint = fn
 }
 
 // SetWorkingDir sets the working directory for hooks.

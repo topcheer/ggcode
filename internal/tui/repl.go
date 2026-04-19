@@ -258,6 +258,19 @@ func (r *REPL) Run() error {
 		return <-resp
 	})
 
+	// Wire checkpoint handler — persist compacted state after summarize
+	r.agent.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
+		ses := r.model.Session()
+		if ses == nil || r.store == nil {
+			return
+		}
+		if err := r.store.AppendCheckpoint(ses, messages, tokenCount); err != nil {
+			debug.Log("repl", "checkpoint save failed: %v", err)
+		} else {
+			debug.Log("repl", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+		}
+	})
+
 	// NewProgram copies the model, so SetProgram on r.model is useless.
 	// We can't Send before Run (deadlock). Instead, run in a goroutine and
 	// send the reference once the event loop is up.

@@ -67,6 +67,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return false
 	}
 	debug.Log("agent", "reactive compact: conversation compacted successfully")
+	a.maybeSaveCheckpoint()
 	if retries != nil {
 		*retries = *retries + 1
 		debug.Log("agent", "reactive compact retry=%d", *retries)
@@ -107,7 +108,15 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 		return nil
 	}
 
-	debug.Log("agent", "auto-compact: conversation compacted successfully")
+	newTokens := a.contextManager.TokenCount()
+	debug.Log("agent", "auto-compact: conversation compacted successfully (%d → %d tokens)", tokens, newTokens)
+
+	// If token reduction is significant (>30%), likely a summarize happened.
+	// Persist checkpoint so --resume won't need to re-compact.
+	if newTokens < tokens*7/10 {
+		a.maybeSaveCheckpoint()
+	}
+
 	return nil
 }
 
@@ -176,4 +185,20 @@ func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.
 	}
 	debug.Log("agent", "autopilot loop guard: compact completed")
 	return nil
+}
+
+// maybeSaveCheckpoint triggers the checkpoint callback if one is registered.
+// This persists the compacted message state so --resume can skip re-compacting.
+func (a *Agent) maybeSaveCheckpoint() {
+	a.mu.RLock()
+	fn := a.onCheckpoint
+	a.mu.RUnlock()
+
+	if fn == nil {
+		return
+	}
+
+	msgs := a.contextManager.Messages()
+	tokenCount := a.contextManager.TokenCount()
+	fn(msgs, tokenCount)
 }
