@@ -162,7 +162,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Plugin interface**: Plugins must implement `plugin.Plugin` (Name, Tools, Init)
 - **Commit style**: Conventional commits — `fix:`, `feat:`, `chore:`, `docs:`, `ci:`
 - **Config validation**: Legacy `provider`/`providers` keys are explicitly rejected; only `vendor`/`endpoint`/`vendors` schema is supported
-- **Session persistence**: JSONL format in `~/.ggcode/sessions/<id>.jsonl`, not SQLite
+- **Session persistence**: JSONL format in `~/.ggcode/sessions/<id>.jsonl` with checkpoint support after summarize compaction
 - **SQLite usage**: Only used by `internal/harness/` for event/snapshot storage
 
 ## Release & Distribution
