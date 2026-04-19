@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -377,7 +378,8 @@ func (m *Model) SetIMManager(mgr *im.Manager) {
 		if m.language == LangZhCN {
 			lang = "zh-CN"
 		}
-		m.imEmitter = im.NewIMEmitter(mgr, lang, m.autoCompleteWorkDir)
+		workDir, _ := os.Getwd()
+		m.imEmitter = im.NewIMEmitter(mgr, lang, workDir)
 	}
 	m.refreshIMRuntimeHooks()
 	m.bindIMSession()

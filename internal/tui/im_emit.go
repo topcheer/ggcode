@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -208,4 +209,41 @@ func (m *Model) formatIMAskUserQuestion(title string, question toolpkg.AskUserQu
 		return strings.TrimSpace(firstNonEmpty(question.Prompt, question.Title))
 	}
 	return m.formatIMAskUserPrompt(string(data))
+}
+
+// emitIMQuestionnaireSummary sends a summary of all questions and their answers to IM
+// after the TUI user submits the questionnaire. This gives IM users visibility into
+// what was answered.
+func (m *Model) emitIMQuestionnaireSummary(req toolpkg.AskUserRequest, resp toolpkg.AskUserResponse) {
+	if m.imEmitter == nil {
+		return
+	}
+	var sb strings.Builder
+	title := strings.TrimSpace(req.Title)
+	if title != "" {
+		sb.WriteString("📋 **")
+		sb.WriteString(title)
+		sb.WriteString("**\n\n")
+	}
+	for i, q := range req.Questions {
+		answer := ""
+		if i < len(resp.Answers) && resp.Answers[i].Answered {
+			a := resp.Answers[i]
+			switch {
+			case len(a.SelectedChoices) > 0 && a.FreeformText != "":
+				answer = strings.Join(a.SelectedChoices, ", ") + " + " + a.FreeformText
+			case len(a.SelectedChoices) > 0:
+				answer = strings.Join(a.SelectedChoices, ", ")
+			case a.FreeformText != "":
+				answer = a.FreeformText
+			}
+		}
+		sb.WriteString(fmt.Sprintf("**%d. %s**\n", i+1, firstNonEmpty(q.Prompt, q.Title)))
+		if answer != "" {
+			sb.WriteString(fmt.Sprintf("  → %s\n", answer))
+		} else {
+			sb.WriteString("  → _未回答_\n")
+		}
+	}
+	m.emitIMAskUser(strings.TrimSpace(sb.String()))
 }
