@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Promoter handles moving skills from staging to active directories.
@@ -178,51 +180,75 @@ func (p *Promoter) appendChangelog(action, name, scope, path string) {
 	f.Write(append(line, '\n'))
 }
 
-// updateTimestamps updates created_at and updated_at in frontmatter.
+// updateTimestamps updates the skill's YAML frontmatter with proper timestamps.
+// Uses yaml.Unmarshal/Marshal for safe handling of multi-line and special characters.
 func updateTimestamps(content string, now time.Time) string {
 	dateStr := now.Format("2006-01-02")
-	lines := strings.Split(content, "\n")
-	inFrontmatter := false
-	fmEnd := 0
 
-	for i, line := range lines {
-		if i == 0 && strings.TrimSpace(line) == "---" {
-			inFrontmatter = true
-			continue
-		}
-		if inFrontmatter && strings.TrimSpace(line) == "---" {
-			fmEnd = i
-			break
-		}
+	// Split into frontmatter and body
+	bodyStart := splitFrontmatter(content)
+	if bodyStart < 0 {
+		return content // no valid frontmatter, return as-is
 	}
 
-	if fmEnd == 0 {
-		return content // no frontmatter, return as-is
+	fmText := extractFrontmatterText(content, bodyStart)
+	bodyText := content[bodyStart:]
+
+	// Parse frontmatter into a map
+	var fmMap map[string]interface{}
+	if err := yaml.Unmarshal([]byte(fmText), &fmMap); err != nil {
+		return content // can't parse, return as-is
 	}
 
-	// Update or add updated_at, add created_at if missing
-	hasCreated := false
-	hasUpdated := false
-	for i := 1; i < fmEnd; i++ {
-		if strings.HasPrefix(lines[i], "updated_at:") {
-			lines[i] = "updated_at: " + dateStr
-			hasUpdated = true
-		}
-		if strings.HasPrefix(lines[i], "created_at:") {
-			hasCreated = true
-		}
+	// Update timestamps
+	fmMap["updated_at"] = dateStr
+	if _, ok := fmMap["created_at"]; !ok {
+		fmMap["created_at"] = dateStr
 	}
 
-	// Insert missing fields before the closing ---
-	insertAt := fmEnd
-	if !hasUpdated {
-		lines = append(lines[:insertAt], append([]string{"updated_at: " + dateStr}, lines[insertAt:]...)...)
-		insertAt++
-	}
-	if !hasCreated {
-		// Insert created_at before the closing ---
-		lines = append(lines[:fmEnd], append([]string{"created_at: " + dateStr}, lines[fmEnd:]...)...)
+	// Re-serialize frontmatter
+	newFM, err := yaml.Marshal(fmMap)
+	if err != nil {
+		return content
 	}
 
-	return strings.Join(lines, "\n")
+	return "---\n" + strings.TrimRight(string(newFM), "\n") + "\n---" + bodyText
+}
+
+// splitFrontmatter returns the byte offset where the body starts (after closing ---).
+// Returns -1 if no valid frontmatter found.
+func splitFrontmatter(content string) int {
+	if !strings.HasPrefix(content, "---") {
+		return -1
+	}
+	rest := content[3:]
+	// Skip optional newline after opening ---
+	if len(rest) > 0 && rest[0] == '\n' {
+		rest = rest[1:]
+	}
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return -1
+	}
+	// Body starts after the closing --- and its trailing newline
+	bodyStart := 3 + len(content[3:]) - len(rest) + idx + 4 // 4 = len("\n---")
+	if bodyStart < len(content) && content[bodyStart] == '\n' {
+		bodyStart++
+	}
+	return bodyStart
+}
+
+// extractFrontmatterText extracts the YAML text between --- markers.
+func extractFrontmatterText(content string, bodyStart int) string {
+	// Find opening --- end
+	openEnd := 3
+	if openEnd < len(content) && content[openEnd] == '\n' {
+		openEnd++
+	}
+	// Find closing --- start
+	closeStart := bodyStart - 4 // 4 = len("\n---")
+	if closeStart > openEnd {
+		return strings.TrimSpace(content[openEnd:closeStart])
+	}
+	return ""
 }

@@ -38,12 +38,20 @@ type SkillEntry struct {
 }
 
 // SkillIndex scans and indexes skills from both global and project directories.
+// Results are cached with a TTL to avoid repeated disk reads.
 type SkillIndex struct {
 	globalDir      string // ~/.ggcode/skills/
 	globalStaging  string // ~/.ggcode/skills-staging/
 	projectDir     string // .ggcode/skills/
 	projectStaging string // .ggcode/skills-staging/
+
+	cache     []*SkillEntry
+	cacheTime time.Time
+	cacheTTL  time.Duration
 }
+
+// Default index cache TTL — avoid re-scanning disk on every call.
+const defaultCacheTTL = 30 * time.Second
 
 // NewSkillIndex creates a skill index for the given home and project dirs.
 func NewSkillIndex(homeDir, projectDir string) *SkillIndex {
@@ -52,11 +60,22 @@ func NewSkillIndex(homeDir, projectDir string) *SkillIndex {
 		globalStaging:  filepath.Join(homeDir, ".ggcode", "skills-staging"),
 		projectDir:     filepath.Join(projectDir, ".ggcode", "skills"),
 		projectStaging: filepath.Join(projectDir, ".ggcode", "skills-staging"),
+		cacheTTL:       defaultCacheTTL,
 	}
 }
 
-// Scan returns all discovered skills (active + staging).
+// Invalidate clears the cache, forcing a fresh scan on next access.
+func (si *SkillIndex) Invalidate() {
+	si.cache = nil
+	si.cacheTime = time.Time{}
+}
+
+// Scan returns all discovered skills (active + staging), using cache when fresh.
 func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
+	if si.cache != nil && time.Since(si.cacheTime) < si.cacheTTL {
+		return si.cache, nil
+	}
+
 	var entries []*SkillEntry
 
 	// Global active skills
@@ -74,6 +93,10 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 	// Project staging skills
 	projectStaging, _ := si.scanDir(si.projectStaging, "project", true)
 	entries = append(entries, projectStaging...)
+
+	// Cache result
+	si.cache = entries
+	si.cacheTime = time.Now()
 
 	return entries, nil
 }
@@ -220,15 +243,27 @@ func parseSkillFrontmatter(content string) (SkillMeta, error) {
 	var meta SkillMeta
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 
-	// Extract frontmatter between --- markers
+	// Content too short to have valid frontmatter
+	if len(content) < 7 { // minimum: ---\nx\n---\n
+		return meta, fmt.Errorf("content too short for frontmatter")
+	}
+
+	// Must start with ---
 	if !strings.HasPrefix(content, "---") {
 		return meta, fmt.Errorf("no frontmatter found")
 	}
-	end := strings.Index(content[3:], "\n---")
+
+	// Find the closing ---
+	// Skip the opening --- and optional whitespace
+	rest := content[3:]
+	if len(rest) > 0 && rest[0] == '\n' {
+		rest = rest[1:]
+	}
+	end := strings.Index(rest, "\n---")
 	if end < 0 {
 		return meta, fmt.Errorf("unclosed frontmatter")
 	}
-	fm := content[3 : end+3]
+	fm := rest[:end]
 	fm = strings.TrimSpace(fm)
 
 	if err := yaml.Unmarshal([]byte(fm), &meta); err != nil {
