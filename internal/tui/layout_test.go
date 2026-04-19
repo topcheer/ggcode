@@ -607,7 +607,7 @@ func TestPanelRenderWidthsStayWithinAssignedColumns(t *testing.T) {
 	if got := lipgloss.Width(m.renderComposerPanel()); got > m.mainColumnWidth() {
 		t.Fatalf("expected composer width <= %d, got %d", m.mainColumnWidth(), got)
 	}
-	if got := lipgloss.Width(m.renderSidebar(20)); got > m.sidebarWidth() {
+	if got := lipgloss.Width(m.renderSidebar()); got > m.sidebarWidth() {
 		t.Fatalf("expected sidebar width <= %d, got %d", m.sidebarWidth(), got)
 	}
 }
@@ -629,53 +629,16 @@ func TestTruncateDisplayWidthHandlesWideRunes(t *testing.T) {
 	}
 }
 
-func TestWideLayoutSidebarMatchesColumnHeight(t *testing.T) {
+func TestWideLayoutSidebarDoesNotExceedScreenHeight(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 40)
 
-	header := ""
-	if m.topHeaderEnabled() {
-		header = m.renderHeader()
-	}
-	startupBanner := m.renderStartupBanner()
-	actionPanel := m.renderContextPanel()
-	statusBar := m.renderStatusBar()
-	composer := m.renderComposerPanel()
-
-	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(startupBanner) - lipgloss.Height(composer)
-	if actionPanel != "" {
-		availableHeight -= lipgloss.Height(actionPanel)
-	}
-	if statusBar != "" {
-		availableHeight -= lipgloss.Height(statusBar)
-	}
-	if availableHeight < 8 {
-		availableHeight = 8
-	}
-
-	sections := []string{}
-	if header != "" {
-		sections = append(sections, header)
-	}
-	if startupBanner != "" {
-		sections = append(sections, startupBanner)
-	}
-	sections = append(sections, m.renderConversationPanel(availableHeight))
-	if actionPanel != "" {
-		sections = append(sections, actionPanel)
-	}
-	if statusBar != "" {
-		sections = append(sections, statusBar)
-	}
-	sections = append(sections, composer)
-
-	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	sidebar := m.renderSidebar(lipgloss.Height(left))
-
+	sidebar := m.renderSidebar()
 	sidebarH := lipgloss.Height(sidebar)
-	leftH := lipgloss.Height(left)
-	if sidebarH != leftH && absInt(sidebarH-leftH) > 2 {
-		t.Fatalf("expected sidebar height %d to match left column height %d (within tolerance)", sidebarH, leftH)
+
+	// Sidebar uses content-based height and should not exceed total view height.
+	if sidebarH > m.viewHeight() {
+		t.Fatalf("sidebar height %d exceeds view height %d", sidebarH, m.viewHeight())
 	}
 }
 
@@ -958,7 +921,7 @@ func TestSidebarRendersHomepageHyperlink(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
 
-	sidebar := m.renderSidebar(28)
+	sidebar := m.renderSidebar()
 
 	if !strings.Contains(sidebar, sidebarHomepageURL) {
 		t.Fatalf("expected sidebar homepage url, got %q", sidebar)
@@ -985,7 +948,7 @@ func TestLoadedSkillCountExcludesLegacyCommandsAndMCP(t *testing.T) {
 	}
 }
 
-func TestSidebarRendersContextSection(t *testing.T) {
+func TestSidebarHidesContextSection(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
 	m.agent = agent.NewAgent(nil, tool.NewRegistry(), "", 1)
@@ -993,11 +956,8 @@ func TestSidebarRendersContextSection(t *testing.T) {
 	m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 400)}}})
 
 	view := m.View().Content
-	if !strings.Contains(view, "Context") || !strings.Contains(view, "compact") {
-		t.Fatalf("expected context section in sidebar, got %q", view)
-	}
-	if !strings.Contains(view, "1k") {
-		t.Fatalf("expected context window display, got %q", view)
+	if strings.Contains(view, "Context") {
+		t.Fatal("expected context section to be removed from sidebar")
 	}
 }
 
@@ -1483,7 +1443,7 @@ func TestTodoWriteMovesTaskTrackingToSidebar(t *testing.T) {
 	if !strings.Contains(output, "📦 Exploring project context") {
 		t.Fatalf("expected following tool work to render as its own group, got %q", output)
 	}
-	sidebar := m.renderSidebar(30)
+	sidebar := m.renderSidebar()
 	if !strings.Contains(sidebar, "Polish TUI activity flow") {
 		t.Fatalf("expected active task in sidebar tracker, got %q", sidebar)
 	}
@@ -1498,7 +1458,7 @@ func TestSidebarTaskTrackerSortsStartedTasksNewestFirst(t *testing.T) {
 		"todo-2": {ID: "todo-2", Content: "Newest task", Status: "in_progress", StartedAt: now.Add(-30 * time.Second), UpdatedAt: now},
 	}
 
-	sidebar := m.renderSidebar(30)
+	sidebar := m.renderSidebar()
 	if strings.Index(sidebar, "Newest task") > strings.Index(sidebar, "Older task") {
 		t.Fatalf("expected newest started task first in sidebar, got %q", sidebar)
 	}

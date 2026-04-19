@@ -77,7 +77,7 @@ func (m Model) View() tea.View {
 	}
 	sections = append(sections, composer)
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	right := m.renderAuxColumn(lipgloss.Height(left))
+	right := m.renderAuxColumn()
 	if right == "" {
 		v := tea.NewView(left)
 		v.AltScreen = true
@@ -233,8 +233,8 @@ func (m Model) renderStartupBanner() string {
 	return m.renderContextBox(m.t("panel.startup"), m.t("startup.banner"), lipgloss.Color("11"))
 }
 
-func (m Model) renderSidebar(totalHeight int) string {
-	if tracker := m.renderSidebarTaskTracker(totalHeight); tracker != "" {
+func (m Model) renderSidebar() string {
+	if tracker := m.renderSidebarTaskTracker(); tracker != "" {
 		return tracker
 	}
 	vendor, _, model := m.currentSelection()
@@ -253,8 +253,6 @@ func (m Model) renderSidebar(totalHeight int) string {
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.activity"), activity, m.sidebarWidth()-4),
 		"",
-		m.renderSidebarContextSection(),
-		"",
 		m.renderSidebarModeSection(),
 		m.renderSidebarUpdateSection(),
 		"",
@@ -262,13 +260,11 @@ func (m Model) renderSidebar(totalHeight int) string {
 		"",
 		m.renderSidebarMCPSection(),
 	}, "\n")
-	innerHeight := max(lipgloss.Height(body), totalHeight-2)
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
-		Height(innerHeight).
 		Width(m.boxInnerWidth(m.sidebarWidth())).
 		Render(body)
 }
@@ -457,7 +453,7 @@ func sidebarIMAdapterLabel(state im.AdapterState) string {
 	return fmt.Sprintf("%s %s (%s) %s", icon, firstNonEmpty(strings.TrimSpace(state.Name), "adapter"), platform, status)
 }
 
-func (m Model) renderSidebarTaskTracker(totalHeight int) string {
+func (m Model) renderSidebarTaskTracker() string {
 	tasks := m.sidebarTrackedTodos()
 	if len(tasks) == 0 {
 		return ""
@@ -469,24 +465,14 @@ func (m Model) renderSidebarTaskTracker(totalHeight int) string {
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(sidebarTaskTrackerHint(m.currentLanguage())),
 		"",
 	}
-	maxRows := max(6, totalHeight-4)
-	usedRows := len(rows)
-	for i, task := range tasks {
-		if usedRows+2 > maxRows {
-			remaining := len(tasks) - i
-			rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(sidebarTaskTrackerMore(m.currentLanguage(), remaining)))
-			break
-		}
+	for _, task := range tasks {
 		rows = append(rows, m.renderSidebarTaskRow(task, width)...)
-		usedRows += 2
 	}
 	body := strings.Join(rows, "\n")
-	innerHeight := max(lipgloss.Height(body), totalHeight-2)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
-		Height(innerHeight).
 		Width(m.boxInnerWidth(m.sidebarWidth())).
 		Render(body)
 }
@@ -1226,9 +1212,9 @@ func platformCNName(p im.Platform) string {
 	}
 }
 
-func (m Model) renderAuxColumn(totalHeight int) string {
+func (m Model) renderAuxColumn() string {
 	if m.sidebarEnabled() {
-		return m.renderSidebar(totalHeight)
+		return m.renderSidebar()
 	}
 	return ""
 }
