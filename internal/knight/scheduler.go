@@ -26,6 +26,7 @@ type Knight struct {
 	budget   *Budget
 	index    *SkillIndex
 	promoter *Promoter
+	usage    *UsageTracker
 	store    session.Store
 	emitter  Emitter
 	factory  AgentFactory
@@ -50,6 +51,7 @@ func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) 
 		budget:   NewBudget(knightDir, cfg),
 		index:    NewSkillIndex(homeDir, projDir),
 		promoter: NewPromoter(homeDir, projDir),
+		usage:    NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
 		store:    store,
 		homeDir:  homeDir,
 		projDir:  projDir,
@@ -65,6 +67,9 @@ func (k *Knight) Start(ctx context.Context) error {
 
 	if err := k.budget.EnsureDir(); err != nil {
 		return fmt.Errorf("knight: init budget dir: %w", err)
+	}
+	if err := k.usage.EnsureDir(); err != nil {
+		return fmt.Errorf("knight: init usage dir: %w", err)
 	}
 
 	// Ensure staging directories exist
@@ -117,6 +122,21 @@ func (k *Knight) SetFactory(f AgentFactory) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.factory = f
+}
+
+// RecordSkillUse increments the usage counter for a skill.
+// Called from the skill tool when a Knight-managed skill is loaded.
+func (k *Knight) RecordSkillUse(name string) {
+	if k.usage != nil {
+		k.usage.RecordUse(name)
+	}
+}
+
+// RecordSkillEffectiveness records a 1-5 effectiveness score for a skill.
+func (k *Knight) RecordSkillEffectiveness(name string, score int) {
+	if k.usage != nil {
+		k.usage.RecordEffectiveness(name, score)
+	}
 }
 
 // Index returns the skill index for external access.
@@ -384,7 +404,7 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 	return nil
 }
 
-// validateAllSkills checks all active skills for validity.
+// validateAllSkills checks all active skills for validity and freshness.
 func (k *Knight) validateAllSkills(ctx context.Context) {
 	active, err := k.index.ActiveSkills()
 	if err != nil {
@@ -392,11 +412,29 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 	}
 
 	for _, skill := range active {
+		// Basic validation
 		result := ValidateSkill(skill)
 		if !result.Valid {
 			debug.Log("knight", "skill %s has issues: %v", skill.Name, result.Errors)
 		}
-		// TODO: mark stale skills, notify user via IM
+
+		// Freshness check: is the skill stale?
+		if k.usage.IsStale(skill.Name, 30*24*time.Hour) {
+			count, lastUsed, _ := k.usage.GetUsage(skill.Name)
+			debug.Log("knight", "skill %s may be stale: used=%d last=%v", skill.Name, count, lastUsed)
+			if count == 0 {
+				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' has never been used. Consider removing it.", skill.Name))
+			} else {
+				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' not used in 30+ days (last: %s). /knight freeze %s to keep or let it expire.", skill.Name, lastUsed.Format("2006-01-02"), skill.Name))
+			}
+		}
+
+		// Effectiveness check: low average score?
+		_, _, avgScore := k.usage.GetUsage(skill.Name)
+		if avgScore > 0 && avgScore < 3.0 {
+			debug.Log("knight", "skill %s has low effectiveness: %.1f/5", skill.Name, avgScore)
+			k.emitReport(fmt.Sprintf("📉 Skill '%s' effectiveness: %.1f/5. Consider updating or removing.", skill.Name, avgScore))
+		}
 	}
 }
 
