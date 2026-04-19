@@ -287,14 +287,19 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 	// Increase buffer for large tool outputs
 	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
-	// Track the latest checkpoint and post-checkpoint messages.
-	// We do a two-pass approach: first scan to find checkpoint positions,
-	// then decide which messages to keep.
-	type scanEntry struct {
-		isCheckpoint bool
-		record       jsonlRecord
+	// Single-pass scan: track the last checkpoint and all post-checkpoint records.
+	// We only keep lightweight non-checkpoint records; checkpoint messages are
+	// stored once for the latest checkpoint only.
+	type lightweightEntry struct {
+		recType string
+		record  jsonlRecord
 	}
-	var entries []scanEntry
+	var (
+		metaRecords    []jsonlRecord // always accumulate meta for metadata
+		lastCpMessages []provider.Message
+		postCPEntries  []lightweightEntry // entries after the last checkpoint
+		haveCheckpoint bool
+	)
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -305,77 +310,54 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			continue // skip malformed lines
 		}
-		entries = append(entries, scanEntry{isCheckpoint: rec.Type == "checkpoint", record: rec})
+
+		switch rec.Type {
+		case "meta":
+			metaRecords = append(metaRecords, rec)
+		case "checkpoint":
+			// New checkpoint replaces any previous one; discard old post-CP entries
+			lastCpMessages = rec.CheckpointMessages
+			postCPEntries = nil
+			haveCheckpoint = true
+		case "message", "cost":
+			if haveCheckpoint {
+				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
+			} else {
+				// No checkpoint yet — treat as legacy
+				postCPEntries = append(postCPEntries, lightweightEntry{recType: rec.Type, record: rec})
+			}
+		}
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("reading session %s: %w", id, err)
 	}
 
-	// Find the index of the last checkpoint
-	lastCheckpointIdx := -1
-	for i, e := range entries {
-		if e.isCheckpoint {
-			lastCheckpointIdx = i
-		}
+	// Apply metadata from meta records (always the latest meta wins)
+	for _, rec := range metaRecords {
+		ses.Title = rec.Title
+		ses.Workspace = rec.Workspace
+		ses.Vendor = rec.Vendor
+		ses.Endpoint = rec.Endpoint
+		ses.Model = rec.Model
+		ses.CreatedAt = rec.CreatedAt
+		ses.UpdatedAt = rec.UpdatedAt
 	}
 
-	if lastCheckpointIdx >= 0 {
-		// Use checkpoint as base
-		cp := entries[lastCheckpointIdx].record
-		if len(cp.CheckpointMessages) > 0 {
-			ses.Messages = make([]provider.Message, len(cp.CheckpointMessages))
-			copy(ses.Messages, cp.CheckpointMessages)
-		}
+	// Build messages
+	if haveCheckpoint && len(lastCpMessages) > 0 {
+		ses.Messages = make([]provider.Message, len(lastCpMessages))
+		copy(ses.Messages, lastCpMessages)
+	}
 
-		// Apply meta from the checkpoint or earlier records
-		for i := 0; i <= lastCheckpointIdx; i++ {
-			if entries[i].record.Type == "meta" {
-				rec := entries[i].record
-				ses.Title = rec.Title
-				ses.Workspace = rec.Workspace
-				ses.Vendor = rec.Vendor
-				ses.Endpoint = rec.Endpoint
-				ses.Model = rec.Model
-				ses.CreatedAt = rec.CreatedAt
-				ses.UpdatedAt = rec.UpdatedAt
+	for _, e := range postCPEntries {
+		switch e.recType {
+		case "message":
+			if e.record.Message != nil {
+				ses.Messages = append(ses.Messages, *e.record.Message)
 			}
-		}
-
-		// Append messages after the checkpoint
-		for i := lastCheckpointIdx + 1; i < len(entries); i++ {
-			rec := entries[i].record
-			switch rec.Type {
-			case "message":
-				if rec.Message != nil {
-					ses.Messages = append(ses.Messages, *rec.Message)
-				}
-			case "cost":
-				if rec.CostJSON != nil {
-					ses.CostJSON = []byte(rec.CostJSON)
-				}
-			}
-		}
-	} else {
-		// No checkpoint — legacy full load
-		for _, e := range entries {
-			rec := e.record
-			switch rec.Type {
-			case "meta":
-				ses.Title = rec.Title
-				ses.Workspace = rec.Workspace
-				ses.Vendor = rec.Vendor
-				ses.Endpoint = rec.Endpoint
-				ses.Model = rec.Model
-				ses.CreatedAt = rec.CreatedAt
-				ses.UpdatedAt = rec.UpdatedAt
-			case "message":
-				if rec.Message != nil {
-					ses.Messages = append(ses.Messages, *rec.Message)
-				}
-			case "cost":
-				if rec.CostJSON != nil {
-					ses.CostJSON = []byte(rec.CostJSON)
-				}
+		case "cost":
+			if e.record.CostJSON != nil {
+				ses.CostJSON = []byte(e.record.CostJSON)
 			}
 		}
 	}
@@ -717,7 +699,8 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
-	// Deep copy the messages to avoid aliasing
+	// Shallow copy to avoid slice aliasing with the caller's slice.
+	// JSON serialization below breaks any interior reference sharing.
 	msgs := make([]provider.Message, len(compactedMessages))
 	copy(msgs, compactedMessages)
 
@@ -732,5 +715,5 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider
 	}
 
 	ses.UpdatedAt = time.Now()
-	return nil
+	return s.updateIndex(ses)
 }

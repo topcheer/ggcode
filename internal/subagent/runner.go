@@ -45,6 +45,13 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	}
 	defer cfg.Manager.ReleaseSemaphore()
 
+	// Panic recovery: ensures Complete() is always called so Wait() never blocks forever.
+	defer func() {
+		if r := recover(); r != nil {
+			cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("sub-agent panic: %v", r))
+		}
+	}()
+
 	// Create sub-context with timeout
 	timeout := cfg.Manager.Timeout()
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
