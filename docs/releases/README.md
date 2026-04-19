@@ -21,7 +21,7 @@ For the full end-to-end publishing playbook, see [`docs/release-process.md`](../
 ## Current release notes
 
 The newest tag-specific notes live in the highest-versioned `v*.md` file in this directory
-(currently `docs/releases/v1.1.33.md`).
+(currently `docs/releases/v1.1.38.md`).
 
 When preparing the next release, copy `docs/releases/_template.md` to the new tag name instead of
 editing an older notes file in place.
