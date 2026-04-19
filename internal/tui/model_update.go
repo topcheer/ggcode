@@ -103,6 +103,77 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.loading {
 			return m, spinnerCmd
 		}
+		// Forward paste to active panel inputs.
+		if m.providerPanel != nil {
+			if m.providerPanel.editingField != "" {
+				var cmd tea.Cmd
+				m.providerPanel.editInput, cmd = m.providerPanel.editInput.Update(msg)
+				return m, cmd
+			}
+			if m.providerPanel.modelFilter.Focused() {
+				var cmd tea.Cmd
+				m.providerPanel.modelFilter, cmd = m.providerPanel.modelFilter.Update(msg)
+				syncModelSelection(&m.providerPanel.modelIndex, m.providerPanel.models, m.providerPanel.modelFilter)
+				return m, cmd
+			}
+		}
+		if m.modelPanel != nil && m.modelPanel.filter.Focused() {
+			var cmd tea.Cmd
+			m.modelPanel.filter, cmd = m.modelPanel.filter.Update(msg)
+			syncModelSelection(&m.modelPanel.selected, m.modelPanel.models, m.modelPanel.filter)
+			return m, cmd
+		}
+		if m.impersonatePanel != nil {
+			if m.impersonatePanel.editingHeader >= 0 {
+				var cmd tea.Cmd
+				if m.impersonatePanel.headerKeyInput.Focused() {
+					m.impersonatePanel.headerKeyInput, cmd = m.impersonatePanel.headerKeyInput.Update(msg)
+				} else if m.impersonatePanel.headerValueInput.Focused() {
+					m.impersonatePanel.headerValueInput, cmd = m.impersonatePanel.headerValueInput.Update(msg)
+				}
+				return m, cmd
+			}
+			if m.impersonatePanel.versionInput.Focused() {
+				var cmd tea.Cmd
+				m.impersonatePanel.versionInput, cmd = m.impersonatePanel.versionInput.Update(msg)
+				return m, cmd
+			}
+		}
+		if m.harnessContextPrompt != nil && m.harnessContextPrompt.inputFocus {
+			var cmd tea.Cmd
+			m.harnessContextPrompt.input, cmd = m.harnessContextPrompt.input.Update(msg)
+			return m, cmd
+		}
+		if m.harnessPanel != nil && m.harnessPanel.actionInput.Focused() {
+			var cmd tea.Cmd
+			m.harnessPanel.actionInput, cmd = m.harnessPanel.actionInput.Update(msg)
+			return m, cmd
+		}
+		// Forward paste to IM panel create-input fields (manual string inputs).
+		if m.qqPanel != nil && m.qqPanel.createMode {
+			m.qqPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.tgPanel != nil && m.tgPanel.createMode {
+			m.tgPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.discordPanel != nil && m.discordPanel.createMode {
+			m.discordPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.slackPanel != nil && m.slackPanel.createMode {
+			m.slackPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.feishuPanel != nil && m.feishuPanel.createMode {
+			m.feishuPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.dingtalkPanel != nil && m.dingtalkPanel.createMode {
+			m.dingtalkPanel.createInput += msg.Content
+			return m, nil
+		}
 		// Forward paste to questionnaire input if active.
 		if m.pendingQuestionnaire != nil && m.pendingQuestionnaire.activeQuestionAllowsFreeform() {
 			var cmd tea.Cmd
