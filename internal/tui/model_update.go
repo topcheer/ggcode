@@ -946,6 +946,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pendingQuestionnaire = newQuestionnaireState(msg.Request, msg.Response, m.currentLanguage())
 		m.syncQuestionnaireInputWidth()
+		// Push the first question to IM so remote users can answer.
+		if len(msg.Request.Questions) > 0 {
+			m.emitIMAskUser(m.formatIMAskUserQuestion(msg.Request.Title, msg.Request.Questions[0]))
+		}
 		return m, nil
 
 	case HarnessCheckpointConfirmMsg:
@@ -1390,10 +1394,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case agentAskUserMsg:
-		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
-			return m, nil
-		}
-		m.emitIMAskUser(msg.Text)
+		// Don't emit IM here — AskUserMsg handler will emit the first question
+		// after creating the questionnaire state.
 		return m, nil
 
 	}

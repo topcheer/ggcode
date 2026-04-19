@@ -128,6 +128,11 @@ func (m *Model) handleQuestionnaireResult(status string) tea.Cmd {
 		return nil
 	}
 	response := qs.buildResponse(status)
+
+	// Emit IM summary: show all questions with their answers.
+	// This gives IM users visibility into what was answered via TUI.
+	m.emitIMQuestionnaireSummary(qs.request, response)
+
 	go func() {
 		qs.response <- response
 	}()
@@ -549,6 +554,11 @@ func (qs *questionnaireState) applyRemoteAnswer(raw string, lang Language) (bool
 	}
 	if freeform != "" || question.Kind == toolpkg.AskUserKindText || question.AllowFreeform {
 		answer.freeform = freeform
+		// Sync the input widget so saveActiveQuestionInput() won't overwrite
+		// the remote answer with a stale (empty) input value.
+		if idx == qs.activeQuestionIndex() {
+			qs.input.SetValue(freeform)
+		}
 	}
 	if qs.answeredCount() >= len(qs.request.Questions) {
 		return true, nil

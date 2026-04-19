@@ -144,12 +144,12 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMCommandResult(tr)
 	case "todo_write":
 		return true, formatIMTodoResult(tr)
-	case "read_file", "list_directory", "glob":
-		// Silent on success — reading/listing files doesn't need IM notification
-		if tr.IsError {
-			return true, formatIMErrorResult(tr)
-		}
-		return true, ""
+	case "read_file":
+		return true, formatIMReadFileResult(tr)
+	case "list_directory":
+		return true, formatIMListDirResult(tr)
+	case "glob":
+		return true, formatIMGlobResult(tr)
 	case "edit_file":
 		return true, formatIMEditResult(tr)
 	case "write_file":
@@ -160,6 +160,8 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMWebResult(tr)
 	case "git_diff", "git_status", "git_log":
 		return true, formatIMGitResult(tr)
+	case "ask_user":
+		return true, formatIMAskUserResult(tr)
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
@@ -172,14 +174,23 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	}
 }
 
+// formatIMAskUserResult renders ask_user result.
+func formatIMAskUserResult(tr *ToolResultInfo) string {
+	icon := "✓"
+	if tr.IsError {
+		icon = "✗"
+	}
+	return icon + " 💬 收到回复"
+}
+
 // formatIMErrorResult formats error results for any tool.
 func formatIMErrorResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
-	result := summarizeIMResult(tr.Result, 120)
-	if result != "" {
-		return fmt.Sprintf("  ✗ %s\n    %s", pretty, result)
+	output := strings.TrimSpace(tr.Result)
+	if output != "" {
+		return fmt.Sprintf("✗ 🔧 %s\n```\n%s\n```", pretty, output)
 	}
-	return fmt.Sprintf("  ✗ %s", pretty)
+	return fmt.Sprintf("✗ 🔧 %s", pretty)
 }
 
 // formatIMCommandResult renders command execution with full output.
@@ -219,11 +230,11 @@ func formatIMTodoResult(tr *ToolResultInfo) string {
 		} `json:"todos"`
 	}
 	if err := json.Unmarshal([]byte(tr.Args), &args); err != nil || len(args.Todos) == 0 {
-		return "  📋 更新待办"
+		return "✓ 📋 更新待办"
 	}
 
 	var sb strings.Builder
-	sb.WriteString("  📋 待办:\n")
+	sb.WriteString("✓ 📋 待办:\n")
 	for _, t := range args.Todos {
 		icon := "○"
 		if t.Status == "done" {
@@ -231,21 +242,95 @@ func formatIMTodoResult(tr *ToolResultInfo) string {
 		} else if t.Status == "in_progress" {
 			icon = "◐"
 		}
-		sb.WriteString(fmt.Sprintf("    %s %s\n", icon, t.Content))
+		sb.WriteString(fmt.Sprintf("  %s %s\n", icon, t.Content))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// formatIMEditResult renders edit_file result.
+// formatIMReadFileResult renders read_file result with path and status only.
+func formatIMReadFileResult(tr *ToolResultInfo) string {
+	path := extractFilePathFromArgs(tr.Args)
+	if path == "" {
+		path = tr.Detail
+	}
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ 📖 %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+		}
+		return fmt.Sprintf("✗ 📖 Read\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	if path == "" {
+		return "✓ 📖 Read"
+	}
+	return fmt.Sprintf("✓ 📖 %s", path)
+}
+
+// formatIMListDirResult renders list_directory result with full output in code block.
+func formatIMListDirResult(tr *ToolResultInfo) string {
+	path := firstNonEmptyStr(extractArgValue(tr.Args, "path"), extractArgValue(tr.Args, "directory"))
+	if path == "" {
+		path = tr.Detail
+	}
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ 📂 %s\n```\n%s\n```", path, output)
+		}
+		return fmt.Sprintf("✗ 📂 List\n```\n%s\n```", output)
+	}
+	if output == "" {
+		if path != "" {
+			return fmt.Sprintf("✓ 📂 %s", path)
+		}
+		return "✓ 📂 List"
+	}
+	if path != "" {
+		return fmt.Sprintf("✓ 📂 %s\n```\n%s\n```", path, output)
+	}
+	return fmt.Sprintf("✓ 📂\n```\n%s\n```", output)
+}
+
+// formatIMGlobResult renders glob result with full output in code block.
+func formatIMGlobResult(tr *ToolResultInfo) string {
+	pattern := extractArgValue(tr.Args, "pattern")
+	if pattern == "" {
+		pattern = tr.Detail
+	}
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		if pattern != "" {
+			return fmt.Sprintf("✗ 🔍 `%s`\n```\n%s\n```", pattern, output)
+		}
+		return fmt.Sprintf("✗ 🔍 Glob\n```\n%s\n```", output)
+	}
+	if output == "" {
+		if pattern != "" {
+			return fmt.Sprintf("✓ 🔍 `%s`: 无匹配", pattern)
+		}
+		return "✓ 🔍 Glob"
+	}
+	if pattern != "" {
+		return fmt.Sprintf("✓ 🔍 `%s`\n```\n%s\n```", pattern, output)
+	}
+	return fmt.Sprintf("✓ 🔍\n```\n%s\n```", output)
+}
+
+// formatIMEditResult renders edit_file result — show emoji icon + path.
 func formatIMEditResult(tr *ToolResultInfo) string {
 	path := extractFilePathFromArgs(tr.Args)
 	if path == "" {
 		path = tr.Detail
 	}
-	if path == "" {
-		return "  ✓ Edit"
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ ✏️ %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+		}
+		return fmt.Sprintf("✗ ✏️ Edit\n```\n%s\n```", strings.TrimSpace(tr.Result))
 	}
-	return fmt.Sprintf("  ✏️ %s", path)
+	if path == "" {
+		return "✓ ✏️ Edit"
+	}
+	return fmt.Sprintf("✓ ✏️ %s", path)
 }
 
 // formatIMWriteResult renders write_file result.
@@ -254,92 +339,88 @@ func formatIMWriteResult(tr *ToolResultInfo) string {
 	if path == "" {
 		path = tr.Detail
 	}
-	if path == "" {
-		return "  ✓ Write"
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ 📝 %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+		}
+		return fmt.Sprintf("✗ 📝 Write\n```\n%s\n```", strings.TrimSpace(tr.Result))
 	}
-	return fmt.Sprintf("  📝 %s", path)
+	if path == "" {
+		return "✓ 📝 Write"
+	}
+	return fmt.Sprintf("✓ 📝 %s", path)
 }
 
-// formatIMSearchResult renders search/grep result with match count only.
+// formatIMSearchResult renders search/grep result with full output in code block.
 func formatIMSearchResult(tr *ToolResultInfo) string {
 	pattern := firstNonEmptyStr(extractArgValue(tr.Args, "pattern"), extractArgValue(tr.Args, "query"))
 	if pattern == "" {
 		pattern = tr.Detail
 	}
-	result := strings.TrimSpace(tr.Result)
-	if result == "" {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
 		if pattern != "" {
-			return fmt.Sprintf("  🔍 `%s`: 无结果", pattern)
+			return fmt.Sprintf("✗ 🔍 `%s`\n```\n%s\n```", pattern, output)
 		}
-		return "  🔍 Search"
+		return fmt.Sprintf("✗ 🔍 Search\n```\n%s\n```", output)
 	}
-	// Count matching lines/files
-	lines := strings.Split(result, "\n")
-	count := 0
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			count++
+	if output == "" {
+		if pattern != "" {
+			return fmt.Sprintf("✓ 🔍 `%s`: 0 条结果", pattern)
 		}
+		return "✓ 🔍 Search"
 	}
 	if pattern != "" {
-		return fmt.Sprintf("  🔍 `%s`: %d 条结果", pattern, count)
+		return fmt.Sprintf("✓ 🔍 `%s`\n```\n%s\n```", pattern, output)
 	}
-	return fmt.Sprintf("  🔍 %d 条结果", count)
+	return fmt.Sprintf("✓ 🔍\n```\n%s\n```", output)
 }
 
-// formatIMWebResult renders web fetch/search result.
+// formatIMWebResult renders web fetch/search result with full output in code block.
 func formatIMWebResult(tr *ToolResultInfo) string {
-	result := strings.TrimSpace(tr.Result)
-	if result == "" {
-		return "  🌐 Web"
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🌐\n```\n%s\n```", output)
 	}
-	// Show first meaningful line, truncated
-	summary := summarizeIMResult(result, 100)
-	if summary != "" {
-		return fmt.Sprintf("  🌐 %s", summary)
+	if output == "" {
+		return "✓ 🌐 Web"
 	}
-	return "  🌐 Web"
+	return fmt.Sprintf("✓ 🌐\n```\n%s\n```", output)
 }
 
-// formatIMGitResult renders git tool results.
+// formatIMGitResult renders git tool results with full output in code block.
 func formatIMGitResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
-	result := strings.TrimSpace(tr.Result)
-	if result == "" {
-		return fmt.Sprintf("  ✓ %s", pretty)
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔧 %s\n```\n%s\n```", pretty, output)
 	}
-	// Show brief summary
-	summary := summarizeIMResult(result, 100)
-	if summary != "" {
-		return fmt.Sprintf("  ✓ %s\n    %s", pretty, summary)
+	if output == "" {
+		return fmt.Sprintf("✓ 🔧 %s", pretty)
 	}
-	return fmt.Sprintf("  ✓ %s", pretty)
+	return fmt.Sprintf("✓ 🔧 %s\n```\n%s\n```", pretty, output)
 }
 
-// formatIMMCPToolResult renders MCP tool results with brief summary.
+// formatIMMCPToolResult renders MCP tool results with full output in code block.
 func formatIMMCPToolResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
 	argSummary := summarizeMCPArgs(tr.Args, 50)
+	output := strings.TrimSpace(tr.Result)
 
-	icon := "  ✓"
+	icon := "✓"
 	if tr.IsError {
-		icon = "  ✗"
+		icon = "✗"
 	}
 
+	header := icon + " 🔧 " + pretty
 	if argSummary != "" {
-		result := fmt.Sprintf("%s %s(%s)", icon, pretty, argSummary)
-		summary := summarizeIMResult(tr.Result, 80)
-		if summary != "" {
-			return result + "\n    " + summary
-		}
-		return result
+		header = fmt.Sprintf("%s 🔧 %s(%s)", icon, pretty, argSummary)
 	}
 
-	summary := summarizeIMResult(tr.Result, 80)
-	if summary != "" {
-		return fmt.Sprintf("%s %s\n    %s", icon, pretty, summary)
+	if output == "" {
+		return header
 	}
-	return fmt.Sprintf("%s %s", icon, pretty)
+	return fmt.Sprintf("%s\n```\n%s\n```", header, output)
 }
 
 // summarizeIMResult extracts a brief summary from a tool result string.

@@ -380,8 +380,17 @@ func TestAskUserRoundEmitsExplicitQuestionMessage(t *testing.T) {
 	m.loading = true
 	m.activeAgentRunID = 1
 
-	text := m.formatIMAskUserPrompt(`{"title":"Clarify scope","questions":[{"title":"Need scope","prompt":"What scope should I use?","kind":"single","choices":[{"label":"small"},{"label":"full"}]}]}`)
-	next, _ := m.Update(agentAskUserMsg{RunID: 1, Text: text})
+	next, _ := m.Update(AskUserMsg{
+		Request: tool.AskUserRequest{
+			Title: "Clarify scope",
+			Questions: []tool.AskUserQuestion{{
+				Title:   "Need scope",
+				Prompt:  "What scope should I use?",
+				Kind:    tool.AskUserKindSingle,
+				Choices: []tool.AskUserChoice{{Label: "small"}, {Label: "full"}},
+			}},
+		},
+	})
 	m = next.(Model)
 
 	deadline := time.Now().Add(500 * time.Millisecond)

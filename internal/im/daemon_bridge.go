@@ -122,39 +122,67 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	return nil
 }
 
-// HandleAskUser is the AskUserHandler for daemon mode — sends question to IM
-// and blocks until the user replies via IM.
+// HandleAskUser is the AskUserHandler for daemon mode — sends questions to IM
+// one at a time and collects answers interactively.
 func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserRequest) (toolpkg.AskUserResponse, error) {
-	// Format the question for IM display
-	argsJSON, _ := jsonMarshalArgs(req)
-	text := b.emitter.FormatAskUserPrompt(argsJSON)
-	if text == "" {
-		// Fallback: use title
-		text = strings.TrimSpace(req.Title)
-	}
-	if text != "" {
-		b.emitter.EmitAskUser(text)
-	}
+	answers := make([]toolpkg.AskUserAnswer, len(req.Questions))
+	answeredCount := 0
 
-	// Set pending state
-	pending := &pendingAskUser{
-		request:  req,
-		response: make(chan toolpkg.AskUserResponse, 1),
-	}
-	b.mu.Lock()
-	b.pendingAsk = pending
-	b.mu.Unlock()
+	for i, q := range req.Questions {
+		// Format and send a single question
+		singleReq := toolpkg.AskUserRequest{
+			Title:     req.Title,
+			Questions: []toolpkg.AskUserQuestion{q},
+		}
+		argsJSON, _ := jsonMarshalArgs(singleReq)
+		text := b.emitter.FormatAskUserPrompt(argsJSON)
+		if text == "" {
+			text = strings.TrimSpace(q.Title)
+		}
+		if text != "" {
+			b.emitter.EmitAskUser(text)
+		}
 
-	// Block until reply or context cancel
-	select {
-	case resp := <-pending.response:
-		return resp, nil
-	case <-ctx.Done():
+		// Block until the user replies via IM
+		pending := &pendingAskUser{
+			request:  req,
+			response: make(chan toolpkg.AskUserResponse, 1),
+		}
 		b.mu.Lock()
-		b.pendingAsk = nil
+		b.pendingAsk = pending
 		b.mu.Unlock()
-		return toolpkg.AskUserResponse{}, ctx.Err()
+
+		select {
+		case resp := <-pending.response:
+			// Extract the answer for this question
+			if len(resp.Answers) > 0 && resp.Answers[0].Answered {
+				answers[i] = resp.Answers[0]
+				answeredCount++
+			} else {
+				answers[i] = toolpkg.AskUserAnswer{
+					ID:               q.ID,
+					Title:            q.Title,
+					Kind:             q.Kind,
+					CompletionStatus: toolpkg.AskUserCompletionUnanswered,
+					AnswerMode:       toolpkg.AskUserAnswerModeNone,
+					Answered:         false,
+				}
+			}
+		case <-ctx.Done():
+			b.mu.Lock()
+			b.pendingAsk = nil
+			b.mu.Unlock()
+			return toolpkg.AskUserResponse{}, ctx.Err()
+		}
 	}
+
+	return toolpkg.AskUserResponse{
+		Status:        toolpkg.AskUserStatusSubmitted,
+		Title:         req.Title,
+		QuestionCount: len(req.Questions),
+		AnsweredCount: answeredCount,
+		Answers:       answers,
+	}, nil
 }
 
 // runAgentStream executes the agent with streaming output sent to IM.
@@ -215,9 +243,8 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if strings.TrimSpace(text) != "" {
 				b.emitter.EmitRoundSummary(text, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 			}
-			if round.AskUserText != "" {
-				b.emitter.EmitAskUser(round.AskUserText)
-			}
+			// AskUser is already emitted by HandleAskUser when the tool executes;
+			// do not emit again here to avoid duplicate messages.
 			// Save assistant messages to session
 			b.appendAssistantMessages()
 			round.Reset()
