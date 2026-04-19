@@ -1075,6 +1075,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case imPanelResultMsg:
+		if m.imPanel != nil {
+			if msg.err != nil {
+				m.imPanel.message = msg.err.Error()
+			} else {
+				m.imPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case feishuBindResultMsg:
 		if m.feishuPanel != nil {
 			if msg.err != nil {
