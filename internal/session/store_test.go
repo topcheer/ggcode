@@ -144,3 +144,133 @@ func TestCleanupOlderThan(t *testing.T) {
 		t.Fatalf("removed=%d, want 1", removed)
 	}
 }
+
+func TestAppendCheckpoint(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "test-checkpoint"
+
+	// Save initial session with some messages
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
+	}
+	store.Save(ses)
+
+	// Append a checkpoint with compacted messages
+	compacted := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nUser asked about X"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "follow-up"}}},
+	}
+	err := store.AppendCheckpoint(ses, compacted, 50)
+	if err != nil {
+		t.Fatalf("AppendCheckpoint failed: %v", err)
+	}
+
+	// Append messages after checkpoint
+	store.AppendMessage(ses, provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "response after checkpoint"}}})
+	store.AppendMessage(ses, provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "new question"}}})
+
+	// Load and verify
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Should have: 2 checkpoint messages + 2 post-checkpoint messages = 4
+	if len(loaded.Messages) != 4 {
+		t.Fatalf("expected 4 messages (2 checkpoint + 2 post-checkpoint), got %d", len(loaded.Messages))
+	}
+
+	// First message should be from checkpoint
+	if loaded.Messages[0].Role != "system" {
+		t.Fatalf("expected first message role 'system', got '%s'", loaded.Messages[0].Role)
+	}
+	// Last message should be the post-checkpoint user message
+	lastMsg := loaded.Messages[len(loaded.Messages)-1]
+	if lastMsg.Role != "user" {
+		t.Fatalf("expected last message role 'user', got '%s'", lastMsg.Role)
+	}
+	if lastMsg.Content[0].Text != "new question" {
+		t.Fatalf("expected last message text 'new question', got '%s'", lastMsg.Content[0].Text)
+	}
+}
+
+func TestLoadWithoutCheckpoint(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg1"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "msg2"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg3"}}},
+	}
+	store.Save(ses)
+
+	// Load without any checkpoint — should return all 3 messages
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(loaded.Messages) != 3 {
+		t.Fatalf("expected 3 messages (no checkpoint), got %d", len(loaded.Messages))
+	}
+}
+
+func TestLoadWithMultipleCheckpoints(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "multi-checkpoint"
+
+	// Initial save
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "original msg"}}},
+	}
+	store.Save(ses)
+
+	// First checkpoint
+	cp1 := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v1"}}},
+	}
+	store.AppendCheckpoint(ses, cp1, 100)
+
+	// Messages after first checkpoint
+	store.AppendMessage(ses, provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg after cp1"}}})
+
+	// Second checkpoint (should supersede first)
+	cp2 := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary v2"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained context"}}},
+	}
+	store.AppendCheckpoint(ses, cp2, 80)
+
+	// Messages after second checkpoint
+	store.AppendMessage(ses, provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "final response"}}})
+
+	// Load — should use second checkpoint + 1 post-checkpoint message = 3 total
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(loaded.Messages) != 3 {
+		t.Fatalf("expected 3 messages (2 from cp2 + 1 post-checkpoint), got %d", len(loaded.Messages))
+	}
+
+	// First should be "summary v2"
+	if loaded.Messages[0].Content[0].Text != "summary v2" {
+		t.Fatalf("expected first msg 'summary v2', got '%s'", loaded.Messages[0].Content[0].Text)
+	}
+	// Last should be "final response"
+	if loaded.Messages[2].Content[0].Text != "final response" {
+		t.Fatalf("expected last msg 'final response', got '%s'", loaded.Messages[2].Content[0].Text)
+	}
+}
