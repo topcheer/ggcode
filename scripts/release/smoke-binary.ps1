@@ -24,18 +24,26 @@ try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyCon
 # This prevents Defender from hanging the entire job indefinitely.
 function Invoke-WithTimeout {
     param([string]$Cmd, [string[]]$Args, [int]$Seconds = 30)
-    $proc = Start-Process -FilePath $Cmd -ArgumentList $Args -NoNewWindow -PassThru -RedirectStandardOutput NUL -RedirectStandardError NUL
-    $exited = $proc.WaitForExit($Seconds * 1000)
-    if (-not $exited) {
-        $proc.Kill()
-        Write-Warning "Command timed out after ${Seconds}s: $Cmd $($Args -join ' ')"
-        return $false
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $Cmd -ArgumentList $Args -NoNewWindow -PassThru `
+            -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr
+        $exited = $proc.WaitForExit($Seconds * 1000)
+        if (-not $exited) {
+            $proc.Kill()
+            Write-Warning "Command timed out after ${Seconds}s: $Cmd $($Args -join ' ')"
+            return $false
+        }
+        if ($proc.ExitCode -ne 0) {
+            Write-Warning "Command exited with code $($proc.ExitCode): $Cmd $($Args -join ' ')"
+            return $false
+        }
+        return $true
+    } finally {
+        Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue
+        Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue
     }
-    if ($proc.ExitCode -ne 0) {
-        Write-Warning "Command exited with code $($proc.ExitCode): $Cmd $($Args -join ' ')"
-        return $false
-    }
-    return $true
 }
 
 $ok = $true
