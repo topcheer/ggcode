@@ -64,7 +64,13 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 
 	for i := 0; i < limit; i++ {
 		ses := sessions[i]
-		candidates := sa.analyzeSession(ses)
+		// List() only returns metadata; load full session to get messages
+		full, err := sa.store.Load(ses.ID)
+		if err != nil {
+			debug.Log("knight", "cannot load session %s: %v", ses.ID, err)
+			continue
+		}
+		candidates := sa.analyzeSession(full)
 		result.SkillCandidates = append(result.SkillCandidates, candidates...)
 		result.SessionsAnalyzed++
 	}
@@ -168,7 +174,7 @@ func (p *toolPattern) SuggestedName() string {
 
 // Description generates a description from the tool pattern.
 func (p *toolPattern) Description() string {
-	return fmt.Sprintf("Workflow: %s (repeated %d times)", strings.Join(p.Tools, " → "), p.Count)
+	return fmt.Sprintf("Workflow: %s (repeated %d times)", strings.Join(p.Tools, " -> "), p.Count)
 }
 
 // detectRepeatedPatterns finds tool sequences that appear multiple times.
