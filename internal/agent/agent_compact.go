@@ -49,7 +49,8 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		debug.Log("agent", "tryReactiveCompact: max retries (%d) reached", *retries)
 		return false
 	}
-	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d attempting compact", a.contextManager.TokenCount())
+	tokens := a.contextManager.TokenCount()
+	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d attempting compact", tokens)
 
 	debug.Log("agent", "reactive compact: compacting conversation")
 	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
@@ -67,7 +68,10 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return false
 	}
 	debug.Log("agent", "reactive compact: conversation compacted successfully")
-	a.maybeSaveCheckpoint()
+	newTokens := a.contextManager.TokenCount()
+	if newTokens < tokens*7/10 {
+		a.maybeSaveCheckpoint()
+	}
 	if retries != nil {
 		*retries = *retries + 1
 		debug.Log("agent", "reactive compact retry=%d", *retries)
@@ -172,6 +176,7 @@ func compactErrorReason(err error) string {
 // autopilot loop guard to break out of repetitive continuation loops.
 func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.StreamEvent)) error {
 	debug.Log("agent", "autopilot loop guard triggered; compacting and pausing")
+	tokens := a.contextManager.TokenCount()
 
 	compacted, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if err != nil {
@@ -183,7 +188,11 @@ func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.
 		}
 		compacted = true
 	}
-	debug.Log("agent", "autopilot loop guard: compact completed")
+	newTokens := a.contextManager.TokenCount()
+	debug.Log("agent", "autopilot loop guard: compact completed (%d → %d tokens)", tokens, newTokens)
+	if newTokens < tokens*7/10 {
+		a.maybeSaveCheckpoint()
+	}
 	return nil
 }
 
