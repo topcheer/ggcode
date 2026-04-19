@@ -68,8 +68,6 @@ nfpms:
 
 brews:
   - name: ggcode
-    ids:
-      - ggcode
     homepage: https://github.com/topcheer/ggcode
     description: AI coding agent for the terminal with TUI, MCP, and IM integrations.
     license: MIT
