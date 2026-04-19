@@ -544,10 +544,7 @@ func fanOutSend(ctx context.Context, targets []emitTarget, event OutboundEvent) 
 
 func (m *Manager) Emit(ctx context.Context, event OutboundEvent) error {
 	m.mu.RLock()
-	var targets []struct {
-		binding ChannelBinding
-		sink    Sink
-	}
+	var targets []emitTarget
 	for _, b := range m.currentBindings {
 		if strings.TrimSpace(b.ChannelID) == "" {
 			continue
@@ -556,25 +553,13 @@ func (m *Manager) Emit(ctx context.Context, event OutboundEvent) error {
 		if sink == nil {
 			continue
 		}
-		targets = append(targets, struct {
-			binding ChannelBinding
-			sink    Sink
-		}{binding: *b, sink: sink})
+		targets = append(targets, emitTarget{binding: *b, sink: sink})
 	}
 	m.mu.RUnlock()
 	if len(targets) == 0 {
 		return ErrNoChannelBound
 	}
-	if event.CreatedAt.IsZero() {
-		event.CreatedAt = time.Now()
-	}
-	var firstErr error
-	for _, t := range targets {
-		if err := t.sink.Send(ctx, t.binding, event); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	return fanOutSend(ctx, targets, event)
 }
 
 // EmitExcept sends an event to all bound channels except those matching excludeAdapter.
@@ -585,10 +570,7 @@ func (m *Manager) EmitExcept(ctx context.Context, event OutboundEvent, excludeAd
 		return m.Emit(ctx, event)
 	}
 	m.mu.RLock()
-	var targets []struct {
-		binding ChannelBinding
-		sink    Sink
-	}
+	var targets []emitTarget
 	for _, b := range m.currentBindings {
 		if strings.TrimSpace(b.ChannelID) == "" {
 			continue
@@ -600,25 +582,13 @@ func (m *Manager) EmitExcept(ctx context.Context, event OutboundEvent, excludeAd
 		if sink == nil {
 			continue
 		}
-		targets = append(targets, struct {
-			binding ChannelBinding
-			sink    Sink
-		}{binding: *b, sink: sink})
+		targets = append(targets, emitTarget{binding: *b, sink: sink})
 	}
 	m.mu.RUnlock()
 	if len(targets) == 0 {
 		return ErrNoChannelBound
 	}
-	if event.CreatedAt.IsZero() {
-		event.CreatedAt = time.Now()
-	}
-	var firstErr error
-	for _, t := range targets {
-		if err := t.sink.Send(ctx, t.binding, event); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	return fanOutSend(ctx, targets, event)
 }
 
 func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
