@@ -202,13 +202,22 @@ func updateTimestamps(content string, now time.Time) string {
 
 	// Update or add updated_at, add created_at if missing
 	hasCreated := false
+	hasUpdated := false
 	for i := 1; i < fmEnd; i++ {
 		if strings.HasPrefix(lines[i], "updated_at:") {
 			lines[i] = "updated_at: " + dateStr
+			hasUpdated = true
 		}
 		if strings.HasPrefix(lines[i], "created_at:") {
 			hasCreated = true
 		}
+	}
+
+	// Insert missing fields before the closing ---
+	insertAt := fmEnd
+	if !hasUpdated {
+		lines = append(lines[:insertAt], append([]string{"updated_at: " + dateStr}, lines[insertAt:]...)...)
+		insertAt++
 	}
 	if !hasCreated {
 		// Insert created_at before the closing ---
