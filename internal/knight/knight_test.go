@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -372,5 +373,123 @@ func TestDetectRepeatedPatterns(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected read_file|edit_file pattern with count>=3, got %v", patterns)
+	}
+}
+
+func TestUsageTrackerRecordAndGet(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-usage-*")
+	defer os.RemoveAll(dir)
+
+	ut := NewUsageTracker(filepath.Join(dir, "usage.json"))
+	ut.EnsureDir()
+
+	ut.RecordUse("test-skill")
+	ut.RecordUse("test-skill")
+
+	count, lastUsed, avg := ut.GetUsage("test-skill")
+	if count != 2 {
+		t.Fatalf("expected usage_count=2, got %d", count)
+	}
+	if lastUsed.IsZero() {
+		t.Fatal("expected non-zero last_used")
+	}
+	if avg != 0 {
+		t.Fatalf("expected avg_score=0 (no scores), got %f", avg)
+	}
+}
+
+func TestUsageTrackerEffectiveness(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-usage-*")
+	defer os.RemoveAll(dir)
+
+	ut := NewUsageTracker(filepath.Join(dir, "usage.json"))
+	ut.EnsureDir()
+
+	ut.RecordUse("test-skill")
+	ut.RecordEffectiveness("test-skill", 4)
+	ut.RecordEffectiveness("test-skill", 5)
+	ut.RecordEffectiveness("test-skill", 3)
+
+	_, _, avg := ut.GetUsage("test-skill")
+	if avg != 4.0 {
+		t.Fatalf("expected avg_score=4.0, got %f", avg)
+	}
+}
+
+func TestUsageTrackerStale(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-usage-*")
+	defer os.RemoveAll(dir)
+
+	ut := NewUsageTracker(filepath.Join(dir, "usage.json"))
+	ut.EnsureDir()
+
+	// Never used = stale
+	if !ut.IsStale("unknown-skill", time.Hour) {
+		t.Fatal("expected unused skill to be stale")
+	}
+
+	// Recently used = not stale
+	ut.RecordUse("fresh-skill")
+	if ut.IsStale("fresh-skill", time.Hour) {
+		t.Fatal("expected recently used skill to not be stale")
+	}
+}
+
+func TestUsageTrackerPersistence(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-usage-*")
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "usage.json")
+	ut1 := NewUsageTracker(path)
+	ut1.EnsureDir()
+	ut1.RecordUse("test-skill")
+	ut1.RecordEffectiveness("test-skill", 5)
+
+	// New tracker instance should load persisted data
+	ut2 := NewUsageTracker(path)
+	count, _, avg := ut2.GetUsage("test-skill")
+	if count != 1 {
+		t.Fatalf("expected persisted count=1, got %d", count)
+	}
+	if avg != 5.0 {
+		t.Fatalf("expected persisted avg=5.0, got %f", avg)
+	}
+}
+
+func TestSkillIndexCache(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-cache-*")
+	defer os.RemoveAll(dir)
+
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+
+	// Create a skill
+	skillDir := filepath.Join(homeDir, ".ggcode", "skills", "test")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: test\ndescription: test\n---\n# Test"), 0644)
+
+	idx := NewSkillIndex(homeDir, projDir)
+
+	// First scan reads disk
+	entries1, _ := idx.Scan()
+	if len(entries1) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries1))
+	}
+
+	// Add another skill — cache should prevent seeing it
+	skillDir2 := filepath.Join(projDir, ".ggcode", "skills", "test2")
+	os.MkdirAll(skillDir2, 0755)
+	os.WriteFile(filepath.Join(skillDir2, "SKILL.md"), []byte("---\nname: test2\ndescription: test2\n---\n# Test2"), 0644)
+
+	entries2, _ := idx.Scan()
+	if len(entries2) != 1 {
+		t.Fatalf("cache should prevent seeing new skill, got %d", len(entries2))
+	}
+
+	// Invalidate and rescan
+	idx.Invalidate()
+	entries3, _ := idx.Scan()
+	if len(entries3) != 2 {
+		t.Fatalf("after invalidate, expected 2 entries, got %d", len(entries3))
 	}
 }
