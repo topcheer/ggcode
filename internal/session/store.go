@@ -49,6 +49,10 @@ type Store interface {
 
 	// CleanupOlderThan removes sessions whose UpdatedAt is before the given time.
 	CleanupOlderThan(before time.Time) (int, error)
+
+	// AppendCheckpoint persists a checkpoint of compacted messages after summarize.
+	// The checkpoint allows --resume to skip re-compacting old history.
+	AppendCheckpoint(s *Session, compactedMessages []provider.Message, tokenCount int) error
 }
 
 // indexEntry is a lightweight record for fast session listing.
@@ -180,7 +184,7 @@ func sessionToIndexEntry(s *Session) indexEntry {
 
 // jsonlRecord is written one-per-line in the session file.
 type jsonlRecord struct {
-	Type      string            `json:"type"` // "meta" or "message"
+	Type      string            `json:"type"` // "meta", "message", "cost", or "checkpoint"
 	SessionID string            `json:"session_id,omitempty"`
 	Title     string            `json:"title,omitempty"`
 	Workspace string            `json:"workspace,omitempty"`
@@ -191,6 +195,9 @@ type jsonlRecord struct {
 	UpdatedAt time.Time         `json:"updated_at,omitempty"`
 	Message   *provider.Message `json:"message,omitempty"`
 	CostJSON  json.RawMessage   `json:"cost,omitempty"`
+	// Checkpoint fields: compacted messages snapshot after summarize.
+	CheckpointMessages []provider.Message `json:"checkpoint_messages,omitempty"`
+	CheckpointTokens   int                `json:"checkpoint_tokens,omitempty"`
 }
 
 func (s *JSONLStore) sessionPath(id string) string {
@@ -261,6 +268,9 @@ func (s *JSONLStore) Save(ses *Session) error {
 }
 
 // Load reads a session from its JSONL file.
+// It finds the latest checkpoint and uses it as the base, then appends
+// only messages that were recorded after the checkpoint. If no checkpoint
+// exists, all messages are loaded (legacy behavior).
 func (s *JSONLStore) Load(id string) (*Session, error) {
 	path := s.sessionPath(id)
 	f, err := os.Open(path)
@@ -277,6 +287,15 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 	// Increase buffer for large tool outputs
 	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
+	// Track the latest checkpoint and post-checkpoint messages.
+	// We do a two-pass approach: first scan to find checkpoint positions,
+	// then decide which messages to keep.
+	type scanEntry struct {
+		isCheckpoint bool
+		record       jsonlRecord
+	}
+	var entries []scanEntry
+
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
@@ -286,28 +305,81 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			continue // skip malformed lines
 		}
-		switch rec.Type {
-		case "meta":
-			ses.Title = rec.Title
-			ses.Workspace = rec.Workspace
-			ses.Vendor = rec.Vendor
-			ses.Endpoint = rec.Endpoint
-			ses.Model = rec.Model
-			ses.CreatedAt = rec.CreatedAt
-			ses.UpdatedAt = rec.UpdatedAt
-		case "message":
-			if rec.Message != nil {
-				ses.Messages = append(ses.Messages, *rec.Message)
-			}
-		case "cost":
-			if rec.CostJSON != nil {
-				ses.CostJSON = []byte(rec.CostJSON)
-			}
-		}
+		entries = append(entries, scanEntry{isCheckpoint: rec.Type == "checkpoint", record: rec})
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("reading session %s: %w", id, err)
 	}
+
+	// Find the index of the last checkpoint
+	lastCheckpointIdx := -1
+	for i, e := range entries {
+		if e.isCheckpoint {
+			lastCheckpointIdx = i
+		}
+	}
+
+	if lastCheckpointIdx >= 0 {
+		// Use checkpoint as base
+		cp := entries[lastCheckpointIdx].record
+		if len(cp.CheckpointMessages) > 0 {
+			ses.Messages = make([]provider.Message, len(cp.CheckpointMessages))
+			copy(ses.Messages, cp.CheckpointMessages)
+		}
+
+		// Apply meta from the checkpoint or earlier records
+		for i := 0; i <= lastCheckpointIdx; i++ {
+			if entries[i].record.Type == "meta" {
+				rec := entries[i].record
+				ses.Title = rec.Title
+				ses.Workspace = rec.Workspace
+				ses.Vendor = rec.Vendor
+				ses.Endpoint = rec.Endpoint
+				ses.Model = rec.Model
+				ses.CreatedAt = rec.CreatedAt
+				ses.UpdatedAt = rec.UpdatedAt
+			}
+		}
+
+		// Append messages after the checkpoint
+		for i := lastCheckpointIdx + 1; i < len(entries); i++ {
+			rec := entries[i].record
+			switch rec.Type {
+			case "message":
+				if rec.Message != nil {
+					ses.Messages = append(ses.Messages, *rec.Message)
+				}
+			case "cost":
+				if rec.CostJSON != nil {
+					ses.CostJSON = []byte(rec.CostJSON)
+				}
+			}
+		}
+	} else {
+		// No checkpoint — legacy full load
+		for _, e := range entries {
+			rec := e.record
+			switch rec.Type {
+			case "meta":
+				ses.Title = rec.Title
+				ses.Workspace = rec.Workspace
+				ses.Vendor = rec.Vendor
+				ses.Endpoint = rec.Endpoint
+				ses.Model = rec.Model
+				ses.CreatedAt = rec.CreatedAt
+				ses.UpdatedAt = rec.UpdatedAt
+			case "message":
+				if rec.Message != nil {
+					ses.Messages = append(ses.Messages, *rec.Message)
+				}
+			case "cost":
+				if rec.CostJSON != nil {
+					ses.CostJSON = []byte(rec.CostJSON)
+				}
+			}
+		}
+	}
+
 	if ses.CreatedAt.IsZero() {
 		ses.CreatedAt = time.Now()
 	}
@@ -628,4 +700,37 @@ func generateID() string {
 // Dir returns the store's directory path.
 func (s *JSONLStore) Dir() string {
 	return s.dir
+}
+
+// AppendCheckpoint appends a checkpoint record to the session JSONL file.
+// The checkpoint captures the compacted messages state after a summarize operation,
+// so that future --resume operations can skip re-compacting old history.
+func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider.Message, tokenCount int) error {
+	path := s.sessionPath(ses.ID)
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+
+	// Deep copy the messages to avoid aliasing
+	msgs := make([]provider.Message, len(compactedMessages))
+	copy(msgs, compactedMessages)
+
+	rec := jsonlRecord{
+		Type:               "checkpoint",
+		SessionID:          ses.ID,
+		CheckpointMessages: msgs,
+		CheckpointTokens:   tokenCount,
+	}
+	if err := enc.Encode(rec); err != nil {
+		return fmt.Errorf("encoding checkpoint: %w", err)
+	}
+
+	ses.UpdatedAt = time.Now()
+	return nil
 }

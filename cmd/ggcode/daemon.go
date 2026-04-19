@@ -322,6 +322,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	emitter := im.NewIMEmitter(imMgr, string(lang), workingDir)
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
 
+	// Wire checkpoint handler — persist compacted state after summarize
+	ag.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
+		if err := store.AppendCheckpoint(ses, messages, tokenCount); err != nil {
+			debug.Log("daemon", "checkpoint save failed: %v", err)
+		} else {
+			debug.Log("daemon", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+		}
+	})
+
 	// Wire ask_user handler
 	if tl, ok := registry.Get("ask_user"); ok {
 		if askTool, ok := tl.(*tool.AskUserTool); ok {
