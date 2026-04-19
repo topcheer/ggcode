@@ -103,6 +103,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.loading {
 			return m, spinnerCmd
 		}
+		// Forward paste to questionnaire input if active.
+		if m.pendingQuestionnaire != nil && m.pendingQuestionnaire.activeQuestionAllowsFreeform() {
+			var cmd tea.Cmd
+			m.pendingQuestionnaire.input, cmd = m.pendingQuestionnaire.input.Update(msg)
+			m.pendingQuestionnaire.saveActiveQuestionInput()
+			return m, cmd
+		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd

@@ -96,20 +96,21 @@ func (m Model) handleQuestionnaireKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "space":
 		if qs.activeQuestionHasChoices() {
 			qs.toggleCurrentChoice()
+			return m, nil
 		}
-		return m, nil
+		// No choices: space goes to freeform text input.
 	}
 	switch msg.String() {
 	case "k":
 		if qs.activeQuestionHasChoices() {
 			qs.moveChoice(-1)
+			return m, nil
 		}
-		return m, nil
 	case "j":
 		if qs.activeQuestionHasChoices() {
 			qs.moveChoice(1)
+			return m, nil
 		}
-		return m, nil
 	}
 	if qs.activeQuestionAllowsFreeform() {
 		var cmd tea.Cmd
