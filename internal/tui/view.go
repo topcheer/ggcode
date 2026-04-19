@@ -1052,6 +1052,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderSlackPanel()
 	case m.dingtalkPanel != nil:
 		return m.renderDingtalkPanel()
+	case m.imPanel != nil:
+		return m.renderIMPanel()
 	case m.mcpPanel != nil:
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:

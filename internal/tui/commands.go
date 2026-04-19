@@ -446,6 +446,9 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		case "/dingtalk", "/ding":
 			m.openDingtalkPanel()
 			return nil
+		case "/im":
+			m.openIMPanel()
+			return nil
 		case "/allow":
 			if len(parts) > 1 {
 				if m.policy != nil {

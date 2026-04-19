@@ -128,6 +128,7 @@ jobs:
   release-smoke-windows:
     name: Smoke Windows binary
     runs-on: windows-latest
+    timeout-minutes: 5
     needs: release
     steps:
       - uses: actions/checkout@v6

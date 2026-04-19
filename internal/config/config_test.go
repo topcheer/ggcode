@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/auth"
@@ -242,14 +241,15 @@ func TestPlaintextAPIKeyWarningIgnoreState(t *testing.T) {
 func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("ANTHROPIC_BASE_URL", "https://router.requesty.ai/")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
+	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	settingsDir := filepath.Join(home, ".claude")
 	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	settings := `{"env":{"ANTHROPIC_MODEL":"anthropic/claude-sonnet-4-5"}}`
+	settings := `{"env":{"ANTHROPIC_MODEL":"glm-5-turbo"}}`
 	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -258,27 +258,17 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if !strings.HasPrefix(cfg.Vendor, "requesty") {
-		t.Fatalf("expected bootstrapped requesty vendor, got %q", cfg.Vendor)
+	if cfg.Vendor != "zai" {
+		t.Fatalf("expected bootstrapped zai vendor, got %q", cfg.Vendor)
 	}
-	if cfg.Endpoint != "env-anthropic" {
-		t.Fatalf("expected bootstrapped endpoint env-anthropic, got %q", cfg.Endpoint)
+	if cfg.Endpoint != "cn-coding-anthropic" {
+		t.Fatalf("expected bootstrapped endpoint cn-coding-anthropic, got %q", cfg.Endpoint)
 	}
-	if cfg.Model != "anthropic/claude-sonnet-4-5" {
+	if cfg.Model != "glm-5-turbo" {
 		t.Fatalf("expected model from Claude settings, got %q", cfg.Model)
 	}
 
-	vendor := cfg.Vendors[cfg.Vendor]
-	if !strings.HasPrefix(vendor.DisplayName, "Requesty") {
-		t.Fatalf("expected display name starting with Requesty, got %q", vendor.DisplayName)
-	}
-	ep := vendor.Endpoints["env-anthropic"]
-	if ep.Protocol != "anthropic" {
-		t.Fatalf("expected anthropic protocol, got %q", ep.Protocol)
-	}
-	if ep.BaseURL != "https://router.requesty.ai" {
-		t.Fatalf("expected normalized base url, got %q", ep.BaseURL)
-	}
+	ep := cfg.Vendors["zai"].Endpoints["cn-coding-anthropic"]
 	if ep.APIKey != "auth-token" {
 		t.Fatalf("expected auth token to be used, got %q", ep.APIKey)
 	}
@@ -287,7 +277,7 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
 func TestLoad_NonExistentBootstrapsAnthropicVendorPrefersAuthToken(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
 	t.Setenv("ANTHROPIC_API_KEY", "api-key")
 
@@ -296,19 +286,23 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorPrefersAuthToken(t *testing.T)
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.Vendor != "anthropic" {
-		t.Fatalf("expected existing anthropic vendor to be reused, got %q", cfg.Vendor)
+	if cfg.Vendor != "zai" {
+		t.Fatalf("expected zai vendor to be reused, got %q", cfg.Vendor)
 	}
-	if got := cfg.Vendors["anthropic"].Endpoints["api"].APIKey; got != "auth-token" {
-		t.Fatalf("expected auth token to override api key, got %q", got)
+	if cfg.Endpoint != "cn-coding-anthropic" {
+		t.Fatalf("expected cn-coding-anthropic endpoint, got %q", cfg.Endpoint)
+	}
+	if got := cfg.Vendors["zai"].Endpoints["cn-coding-anthropic"].APIKey; got != "auth-token" {
+		t.Fatalf("expected auth token to be injected, got %q", got)
 	}
 }
 
 func TestLoad_NonExistentBootstrapsAnthropicVendorDefaultsModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("ANTHROPIC_BASE_URL", "https://api.example.ai")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
 	t.Setenv("ANTHROPIC_API_KEY", "api-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
 
 	cfg, err := Load("/nonexistent/path/ggcode.yaml")
 	if err != nil {
@@ -317,16 +311,17 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorDefaultsModel(t *testing.T) {
 	if cfg.Model != defaultBootstrapAnthropicModel {
 		t.Fatalf("expected default bootstrap model %q, got %q", defaultBootstrapAnthropicModel, cfg.Model)
 	}
-	if got := cfg.Vendors["example"].Endpoints["env-anthropic"].DefaultModel; got != defaultBootstrapAnthropicModel {
-		t.Fatalf("expected endpoint default model %q, got %q", defaultBootstrapAnthropicModel, got)
+	if got := cfg.Vendors["zai"].Endpoints["cn-coding-anthropic"].SelectedModel; got != defaultBootstrapAnthropicModel {
+		t.Fatalf("expected endpoint selected model %q, got %q", defaultBootstrapAnthropicModel, got)
 	}
 }
 
 func TestLoad_ExistingLanguageOnlyFileStillBootstrapsAnthropicVendor(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("ANTHROPIC_BASE_URL", "https://router.requesty.ai")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
+	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	if err := os.WriteFile(path, []byte("language: zh-CN\n"), 0o644); err != nil {
@@ -343,8 +338,8 @@ func TestLoad_ExistingLanguageOnlyFileStillBootstrapsAnthropicVendor(t *testing.
 	if cfg.Language != "zh-CN" {
 		t.Fatalf("expected persisted language zh-CN, got %q", cfg.Language)
 	}
-	if !strings.HasPrefix(cfg.Vendor, "requesty") {
-		t.Fatalf("expected requesty bootstrap vendor, got %q", cfg.Vendor)
+	if cfg.Vendor != "zai" {
+		t.Fatalf("expected zai bootstrap vendor, got %q", cfg.Vendor)
 	}
 }
 
@@ -370,6 +365,70 @@ func TestSaveLanguagePreferenceCreatesMinimalConfig(t *testing.T) {
 	}
 	if cfg.FirstRun {
 		t.Fatal("expected SaveLanguagePreference to clear first-run flag")
+	}
+}
+
+func TestLoad_BigmodelBaseURLReusesZaiAnthropicEndpoint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic/v1")
+	t.Setenv("ANTHROPIC_API_KEY", "test-zai-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "") // ensure AUTH_TOKEN doesn't override
+
+	cfg, err := Load("/nonexistent/path/ggcode.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Vendor != "zai" {
+		t.Fatalf("expected vendor zai for bigmodel URL, got %q", cfg.Vendor)
+	}
+	if cfg.Endpoint != "cn-coding-anthropic" {
+		t.Fatalf("expected endpoint cn-coding-anthropic for bigmodel URL, got %q", cfg.Endpoint)
+	}
+	ep := cfg.Vendors["zai"].Endpoints["cn-coding-anthropic"]
+	if ep.APIKey != "test-zai-key" {
+		t.Fatalf("expected API key to be injected into zai endpoint, got %q", ep.APIKey)
+	}
+}
+
+func TestLoad_BigmodelBaseURLExactMatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+	t.Setenv("ANTHROPIC_API_KEY", "test-zai-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+
+	cfg, err := Load("/nonexistent/path/ggcode.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// Exact match should also route to zai
+	if cfg.Vendor != "zai" {
+		t.Fatalf("expected vendor zai for exact bigmodel URL, got %q", cfg.Vendor)
+	}
+	if cfg.Endpoint != "cn-coding-anthropic" {
+		t.Fatalf("expected endpoint cn-coding-anthropic for exact bigmodel URL, got %q", cfg.Endpoint)
+	}
+}
+
+func TestLoad_NonBigmodelURLDoesNotBootstrap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://api.example.ai")
+	t.Setenv("ANTHROPIC_API_KEY", "api-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+
+	cfg, err := Load("/nonexistent/path/ggcode.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// Non-bigmodel URL should NOT trigger bootstrap at all.
+	// Default vendor/endpoint/model should be preserved.
+	if cfg.Vendor != "zai" {
+		t.Fatalf("expected default vendor zai, got %q", cfg.Vendor)
+	}
+	if cfg.Endpoint != "cn-coding-openai" {
+		t.Fatalf("expected default endpoint cn-coding-openai, got %q", cfg.Endpoint)
 	}
 }
 

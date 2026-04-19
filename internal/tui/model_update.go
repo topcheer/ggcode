@@ -96,6 +96,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Option/Alt+mouse: release mouse to terminal for native text selection
 		return m, nil
 
+	case tea.PasteMsg:
+		if !m.inputReady {
+			return m, spinnerCmd
+		}
+		if m.loading {
+			return m, spinnerCmd
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+
 	case tea.KeyPressMsg:
 		// During startup input drain, suppress all keyboard input.
 		// This prevents terminal responses (OSC 11, CPR, Kitty mode report)
@@ -172,6 +183,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.dingtalkPanel != nil {
 			return m.handleDingtalkPanelKey(msg)
+		}
+
+		if m.imPanel != nil {
+			return m.handleIMPanelKey(msg)
 		}
 
 		if m.mcpPanel != nil {

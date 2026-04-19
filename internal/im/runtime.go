@@ -43,6 +43,11 @@ type Manager struct {
 	// Dedup inbound messages by adapter+messageID to prevent platforms
 	// from delivering the same event twice (e.g. Feishu SDK retries).
 	seenMessages map[string]time.Time
+
+	// disabledBindings stores adapters that have been temporarily disabled.
+	// The binding is moved out of currentBindings so Emit/HandleInbound skip it,
+	// but the persistent binding is retained so EnableBinding can restore it.
+	disabledBindings map[string]*ChannelBinding // adapter name -> binding
 }
 
 type pendingApproval struct {
@@ -61,12 +66,13 @@ type PairingResult struct {
 
 func NewManager() *Manager {
 	return &Manager{
-		currentBindings: make(map[string]*ChannelBinding),
-		sinks:           make(map[string]Sink),
-		adapters:        make(map[string]AdapterState),
-		approvals:       make(map[string]*pendingApproval),
-		pairingStates:   make(map[string]PairingChannelState),
-		seenMessages:    make(map[string]time.Time),
+		currentBindings:  make(map[string]*ChannelBinding),
+		sinks:            make(map[string]Sink),
+		adapters:         make(map[string]AdapterState),
+		approvals:        make(map[string]*pendingApproval),
+		pairingStates:    make(map[string]PairingChannelState),
+		seenMessages:     make(map[string]time.Time),
+		disabledBindings: make(map[string]*ChannelBinding),
 	}
 }
 
@@ -137,6 +143,7 @@ func (m *Manager) UnbindSession() {
 	m.mu.Lock()
 	m.session = nil
 	m.currentBindings = make(map[string]*ChannelBinding)
+	m.disabledBindings = make(map[string]*ChannelBinding)
 	m.pendingPairing = nil
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -650,6 +657,13 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 	sort.Slice(snapshot.Adapters, func(i, j int) bool {
 		return snapshot.Adapters[i].Name < snapshot.Adapters[j].Name
 	})
+	snapshot.DisabledBindings = make([]ChannelBinding, 0, len(m.disabledBindings))
+	for _, b := range m.disabledBindings {
+		snapshot.DisabledBindings = append(snapshot.DisabledBindings, *b)
+	}
+	sort.Slice(snapshot.DisabledBindings, func(i, j int) bool {
+		return snapshot.DisabledBindings[i].Adapter < snapshot.DisabledBindings[j].Adapter
+	})
 	snapshot.PendingApprovals = make([]ApprovalState, 0, len(m.approvals))
 	for _, approval := range m.approvals {
 		snapshot.PendingApprovals = append(snapshot.PendingApprovals, approval.state)
@@ -783,6 +797,67 @@ func (m *Manager) ClearChannelByAdapter(adapterName string) error {
 		cb(snapshot)
 	}
 	return nil
+}
+
+// DisableBinding temporarily disables an adapter's binding for the current session.
+// The binding is moved from currentBindings to disabledBindings, so it will no
+// longer receive outbound messages and inbound messages will be rejected.
+// The persistent binding is NOT deleted, so it can be re-enabled later.
+func (m *Manager) DisableBinding(adapterName string) error {
+	m.mu.Lock()
+	binding, ok := m.currentBindings[adapterName]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNoChannelBound
+	}
+	copy := *binding
+	m.disabledBindings[adapterName] = &copy
+	delete(m.currentBindings, adapterName)
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
+// EnableBinding re-enables a previously disabled adapter binding.
+// The binding is moved back to currentBindings so it resumes receiving messages.
+func (m *Manager) EnableBinding(adapterName string) error {
+	m.mu.Lock()
+	binding, ok := m.disabledBindings[adapterName]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNoChannelBound
+	}
+	copy := *binding
+	m.currentBindings[adapterName] = &copy
+	delete(m.disabledBindings, adapterName)
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
+// DisabledBindings returns a snapshot of currently disabled bindings.
+func (m *Manager) DisabledBindings() []ChannelBinding {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]ChannelBinding, 0, len(m.disabledBindings))
+	for _, b := range m.disabledBindings {
+		out = append(out, *b)
+	}
+	return out
+}
+
+// IsBindingDisabled returns true if the given adapter's binding is currently disabled.
+func (m *Manager) IsBindingDisabled(adapterName string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.disabledBindings[adapterName]
+	return ok
 }
 
 func (m *Manager) ClearChannel(workspace string) error {

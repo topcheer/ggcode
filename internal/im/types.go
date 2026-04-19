@@ -214,6 +214,7 @@ type ApprovalState struct {
 type StatusSnapshot struct {
 	ActiveSession    *SessionBinding
 	CurrentBindings  []ChannelBinding
+	DisabledBindings []ChannelBinding
 	PendingPairing   *PairingChallenge
 	Adapters         []AdapterState
 	PendingApprovals []ApprovalState
