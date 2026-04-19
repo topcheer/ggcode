@@ -152,6 +152,10 @@ func (si *SkillIndex) scanDir(dir, scope string, staging bool) ([]*SkillEntry, e
 			if err != nil {
 				continue
 			}
+			// Prefer frontmatter name over filename-derived name
+			if meta.Name != "" {
+				name = meta.Name
+			}
 			entries = append(entries, &SkillEntry{
 				Name:    name,
 				Meta:    meta,
