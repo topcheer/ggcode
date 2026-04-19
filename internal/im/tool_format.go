@@ -138,17 +138,17 @@ func formatToolResultText(tr *ToolResultInfo) string {
 // handled=true means this function has dealt with the tool (either producing output
 // or intentionally suppressing it); handled=false means "use default formatting".
 func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
-	if tr.IsError {
-		return true, formatIMErrorResult(tr)
-	}
-
 	switch tr.ToolName {
 	case "run_command", "bash", "powershell", "start_command":
+		// Command tools always use the dedicated formatter (handles both success and error)
 		return true, formatIMCommandResult(tr)
 	case "todo_write":
 		return true, formatIMTodoResult(tr)
 	case "read_file", "list_directory", "glob":
 		// Silent on success — reading/listing files doesn't need IM notification
+		if tr.IsError {
+			return true, formatIMErrorResult(tr)
+		}
 		return true, ""
 	case "edit_file":
 		return true, formatIMEditResult(tr)
@@ -161,6 +161,9 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "git_diff", "git_status", "git_log":
 		return true, formatIMGitResult(tr)
 	default:
+		if tr.IsError {
+			return true, formatIMErrorResult(tr)
+		}
 		// Check for MCP-style tool names (contain underscores or dots)
 		if strings.Contains(tr.ToolName, "_") || strings.Contains(tr.ToolName, ".") {
 			return true, formatIMMCPToolResult(tr)
@@ -179,63 +182,31 @@ func formatIMErrorResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("  ✗ %s", pretty)
 }
 
-// formatIMCommandResult renders command execution with output summary.
+// formatIMCommandResult renders command execution with full output.
+// Command is shown in a bash code block; result in a plain code block.
 func formatIMCommandResult(tr *ToolResultInfo) string {
 	cmd := extractCommand(tr.Args)
 	if cmd == "" {
 		cmd = tr.Detail
 	}
-	cmdPreview := compactSingleLine(cmd)
-	if len(cmdPreview) > 60 {
-		cmdPreview = cmdPreview[:57] + "..."
-	}
 
-	icon := "  ✓"
+	icon := "✓"
 	if tr.IsError {
-		icon = "  ✗"
+		icon = "✗"
 	}
 
 	output := strings.TrimSpace(tr.Result)
 	if output == "" {
-		return fmt.Sprintf("%s $ %s", icon, cmdPreview)
+		if cmd == "" {
+			return icon
+		}
+		return fmt.Sprintf("%s\n```bash\n%s\n```\n```\n(无输出)\n```", icon, cmd)
 	}
 
-	lines := strings.Split(output, "\n")
-	maxLines := 3
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s $ %s\n", icon, cmdPreview))
-
-	showLines := lines
-	truncated := 0
-	if len(lines) > maxLines {
-		showLines = lines[:maxLines]
-		truncated = len(lines) - maxLines
+	if cmd == "" {
+		return fmt.Sprintf("%s\n```\n%s\n```", icon, output)
 	}
-	for _, line := range showLines {
-		trimmed := compactSingleLine(line)
-		if trimmed == "" {
-			continue
-		}
-		if len(trimmed) > 100 {
-			trimmed = trimmed[:97] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("    %s", trimmed))
-		if sb.Len() > 400 {
-			break
-		}
-		sb.WriteString("\n")
-	}
-	if truncated > 0 {
-		sb.WriteString(fmt.Sprintf("    ...(%d more lines)", truncated))
-	} else {
-		// Remove trailing newline for clean output
-		s := sb.String()
-		if strings.HasSuffix(s, "\n") {
-			sb.Reset()
-			sb.WriteString(strings.TrimRight(s, "\n"))
-		}
-	}
-	return sb.String()
+	return fmt.Sprintf("%s\n```bash\n%s\n```\n```\n%s\n```", icon, cmd, output)
 }
 
 // formatIMTodoResult renders todo_write as a visual checklist.
