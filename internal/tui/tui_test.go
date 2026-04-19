@@ -1545,18 +1545,18 @@ func TestBusyEnterAllowsHarnessPanelCommand(t *testing.T) {
 func TestBusyEnterStillQueuesNonHarnessCommands(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
-	m.input.SetValue("/help")
+	m.input.SetValue("/run_command echo hi")
 
 	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
-		t.Fatal("expected busy /help to stay queued")
+		t.Fatal("expected busy /run_command to stay queued")
 	}
 	updated := next.(Model)
-	if len(updated.pendingSubmissions) != 1 || updated.pendingSubmissions[0] != "/help" {
-		t.Fatalf("expected /help to remain queued, got %+v", updated.pendingSubmissions)
+	if len(updated.pendingSubmissions) != 1 || updated.pendingSubmissions[0] != "/run_command echo hi" {
+		t.Fatalf("expected /run_command to remain queued, got %+v", updated.pendingSubmissions)
 	}
 	if updated.harnessPanel != nil {
-		t.Fatal("did not expect harness panel to open for /help")
+		t.Fatal("did not expect harness panel to open for /run_command")
 	}
 }
 

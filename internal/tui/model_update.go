@@ -542,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.emitIMLocalUserText(text)
 			if m.loading || m.projectMemoryLoading {
-				if shouldAllowBusyHarnessPanel(text) {
+				if shouldExecuteWhileBusy(text) {
 					return m, m.submitText(text, true)
 				}
 				m.history = append(m.history, text)

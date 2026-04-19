@@ -50,6 +50,11 @@ func (b *Budget) EnsureDir() error {
 	return os.MkdirAll(b.dir, 0755)
 }
 
+// ensureLoaded is a convenience wrapper that calls ensureLoadedAt with time.Now().
+func (b *Budget) ensureLoaded() {
+	b.ensureLoadedAt(time.Now())
+}
+
 // CanSpend returns true if Knight has enough remaining budget to start a task.
 func (b *Budget) CanSpend() bool {
 	b.mu.Lock()
@@ -81,13 +86,14 @@ func (b *Budget) DailyLimit() int {
 
 // Record adds a token usage entry to today's log.
 func (b *Budget) Record(task string, inputTokens, outputTokens int) error {
+	now := time.Now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.ensureLoaded()
+	b.ensureLoadedAt(now)
 
 	total := inputTokens + outputTokens
 	rec := usageRecord{
-		Time:   time.Now(),
+		Time:   now,
 		Task:   task,
 		Input:  inputTokens,
 		Output: outputTokens,
@@ -99,7 +105,7 @@ func (b *Budget) Record(task string, inputTokens, outputTokens int) error {
 		return fmt.Errorf("knight budget: marshal record: %w", err)
 	}
 
-	path := b.usageFile()
+	path := b.usageFileAt(now)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return fmt.Errorf("knight budget: open %s: %w", path, err)
@@ -114,14 +120,19 @@ func (b *Budget) Record(task string, inputTokens, outputTokens int) error {
 	return nil
 }
 
-// usageFile returns the path to today's usage JSONL file.
-func (b *Budget) usageFile() string {
-	return filepath.Join(b.dir, "usage-"+time.Now().Format("2006-01-02")+".jsonl")
+// usageFileAt returns the path to the usage JSONL file for the given time.
+func (b *Budget) usageFileAt(t time.Time) string {
+	return filepath.Join(b.dir, "usage-"+t.Format("2006-01-02")+".jsonl")
 }
 
-// ensureLoaded reads today's usage from disk if not already done.
-func (b *Budget) ensureLoaded() {
-	today := time.Now().Format("2006-01-02")
+// usageFile returns the path to today's usage JSONL file.
+func (b *Budget) usageFile() string {
+	return b.usageFileAt(time.Now())
+}
+
+// ensureLoadedAt reads usage from disk for the given date if not already done.
+func (b *Budget) ensureLoadedAt(now time.Time) {
+	today := now.Format("2006-01-02")
 	if b.loaded && b.todayKey == today {
 		return
 	}

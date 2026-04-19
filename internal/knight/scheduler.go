@@ -17,6 +17,7 @@ import (
 // Emitter is the interface Knight uses to send IM notifications.
 type Emitter interface {
 	EmitKnightReport(report string)
+	HasTargets() bool
 }
 
 // Knight is the background auto-evolution agent. It runs scheduled tasks
@@ -39,22 +40,25 @@ type Knight struct {
 	lastIdle time.Time
 
 	// Throttle timestamps — prevent running the same task every tick
-	lastAnalysis   time.Time
-	lastValidation time.Time
+	lastAnalysis    time.Time
+	lastValidation  time.Time
+	lastMaintenance time.Time
+	notifiedStaging map[string]bool // tracks staging skills already notified to avoid spam
 }
 
 // New creates a new Knight instance.
 func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) *Knight {
 	knightDir := filepath.Join(homeDir, ".ggcode")
 	return &Knight{
-		cfg:      cfg,
-		budget:   NewBudget(knightDir, cfg),
-		index:    NewSkillIndex(homeDir, projDir),
-		promoter: NewPromoter(homeDir, projDir),
-		usage:    NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
-		store:    store,
-		homeDir:  homeDir,
-		projDir:  projDir,
+		cfg:             cfg,
+		budget:          NewBudget(knightDir, cfg),
+		index:           NewSkillIndex(homeDir, projDir),
+		promoter:        NewPromoter(homeDir, projDir),
+		usage:           NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
+		store:           store,
+		homeDir:         homeDir,
+		projDir:         projDir,
+		notifiedStaging: make(map[string]bool),
 	}
 }
 
@@ -226,6 +230,7 @@ func (k *Knight) PromoteStaging(skillName string) error {
 				return err
 			}
 			k.index.Invalidate()
+			delete(k.notifiedStaging, s.Name)
 			return nil
 		}
 	}
@@ -245,6 +250,7 @@ func (k *Knight) RejectStaging(skillName string) error {
 				return err
 			}
 			k.index.Invalidate()
+			delete(k.notifiedStaging, s.Name)
 			return nil
 		}
 	}
@@ -305,7 +311,8 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 	}
 
 	// Nightly (2 AM): deep maintenance
-	if now.Hour() == 2 && now.Sub(k.lastValidation) >= 24*time.Hour {
+	if now.Hour() == 2 && now.Sub(k.lastMaintenance) >= 24*time.Hour {
+		k.lastMaintenance = now
 		k.nightlyMaintenance(ctx)
 	}
 }
@@ -355,11 +362,15 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			debug.Log("knight", "auto-promoting skill %s", s.Name)
 			k.promoter.Promote(s)
 			k.index.Invalidate()
+			delete(k.notifiedStaging, s.Name)
 			k.emitReport(fmt.Sprintf("✅ Skill auto-promoted: %s (%s)", s.Name, s.Meta.Description))
 		} else {
-			// For "staged" trust level, notify user for review
-			k.emitReport(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
-				s.Name, s.Meta.Description, s.Name, s.Name))
+			// For "staged" trust level, notify user once per skill
+			if !k.notifiedStaging[s.Name] {
+				k.notifiedStaging[s.Name] = true
+				k.emitReport(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
+					s.Name, s.Meta.Description, s.Name, s.Name))
+			}
 		}
 	}
 }
@@ -464,7 +475,8 @@ func (k *Knight) emitReport(report string) {
 	k.mu.Lock()
 	em := k.emitter
 	k.mu.Unlock()
-	if em != nil {
-		em.EmitKnightReport(report)
+	if em == nil || !em.HasTargets() {
+		return
 	}
+	em.EmitKnightReport(report)
 }
