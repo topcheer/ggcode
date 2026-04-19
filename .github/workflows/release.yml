@@ -180,7 +180,6 @@ jobs:
       - release
       - release-smoke-linux
       - release-smoke-macos
-      - release-smoke-windows
       - release-smoke-installer
     permissions:
       contents: write
@@ -222,7 +221,6 @@ jobs:
       - release
       - release-smoke-linux
       - release-smoke-macos
-      - release-smoke-windows
       - release-smoke-installer
     permissions:
       contents: write
@@ -274,7 +272,6 @@ jobs:
       - release
       - release-smoke-linux
       - release-smoke-macos
-      - release-smoke-windows
       - release-smoke-installer
       - release-macos-pkg
       - release-windows-msi
