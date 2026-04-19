@@ -4,7 +4,7 @@
 > If you want to install and use ggcode as a product, start with the main [README](../README.md) first.
 
 > Module: `github.com/topcheer/ggcode`
-> Last updated: 2026-04-18
+> Last updated: 2026-04-19
 
 ## Overview
 
@@ -151,3 +151,64 @@ docs/                    # Documentation
 - **Provider SDKs**: OpenAI (go-openai), Anthropic (anthropic-sdk-go), Gemini (genai), Copilot (custom transport on top of the provider abstraction)
 - **IM routing**: IM events are fanned out to all bound adapters; per-channel echo suppression skips the originating adapter for user mirror messages
 - **Session format**: JSONL with index.json metadata
+
+## Conversation Context Management
+
+### Auto-Compact Strategy
+
+The agent monitors conversation token usage and triggers compaction when it approaches the model's context window limit. Compaction has two levels:
+
+1. **Microcompact** — Truncates large tool results by preserving the first 10 and last 5 lines, with individual lines truncated to 200 characters. This is fast and cheap but only saves tokens from tool output.
+
+2. **Summarize** — When microcompact is insufficient, older messages are replaced with an LLM-generated summary. The summary prompt is optimized for coding contexts: it preserves key decisions, file paths, code structure, error resolutions, and pending work. Tool results in the summary payload are pre-truncated to 500 characters to prevent the summary request itself from triggering context overflow.
+
+Thresholds:
+- With usage baseline: 75% of context window triggers compaction
+- Without baseline: 65% triggers compaction
+- Target after compaction: 55% of context window
+
+### Session Checkpoints
+
+After summarize compaction, the compacted message state is persisted as a **checkpoint** record in the session JSONL file. This enables efficient session recovery:
+
+```
+Session JSONL:
+  msg1 → msg2 → ... → msg50
+  [checkpoint: 3 compacted messages, 500 tokens]
+  msg51 → msg52 → ...
+```
+
+On `--resume`, the loader finds the latest checkpoint and only loads:
+1. Messages from the checkpoint snapshot
+2. Messages recorded after the checkpoint
+
+This avoids re-loading and re-compacting the entire conversation history. Checkpoints are triggered by all compaction paths:
+- `maybeAutoCompact` (periodic check at loop start)
+- `tryReactiveCompact` (after prompt-too-long errors)
+- `forceCompactAndPause` (autopilot loop guard)
+
+### IM Tool Call Display
+
+All IM adapters (Telegram, QQ, Discord, Slack, DingTalk, Feishu) share a unified tool result formatter (`internal/im/tool_format.go`). Each built-in tool has a dedicated format with emoji icon + code block:
+
+| Category | Format |
+|----------|--------|
+| Commands | `✓` + bash code block for command + plain code block for output (no truncation) |
+| File read | `✓ 📖 {path}` (status only, no content) |
+| File edit/write | `✓ ✏️/📝 {path}` (status only) |
+| Directory/glob/search | Icon + pattern + full results in code block |
+| Git | `✓ 🔧 Git Status/Log/Diff` + output in code block |
+| Web | `✓ 🌐` + output in code block |
+| MCP tools | `✓ 🔧 PrettyName(args)` + output in code block |
+| Error variants use `✗` + error in code block |
+
+All absolute paths are relativized against the project working directory before sending to IM.
+
+### Provider Error Detection
+
+All provider adapters detect output truncation and policy errors:
+- **OpenAI**: `finish_reason=length` returns error
+- **Anthropic**: `stop_reason=max_tokens` or `stop_reason=refusal` returns error
+- **Gemini**: `FinishReason=MAX_TOKENS`, `SAFETY`, `RECITATION`, etc. returns error
+
+Default `max_output_tokens` is 16384 (configurable per endpoint).

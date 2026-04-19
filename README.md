@@ -200,7 +200,7 @@ From the product point of view, ggcode is more than “chat with a model”:
 - **Memory and context** — load project memory files like `GGCODE.md`, `AGENTS.md`, `CLAUDE.md`, and `COPILOT.md`
 - **Extensibility** — connect MCP servers, custom plugins, and skills alongside the built-in LSP workflow
 - **Remote IM surface** — bind the current workspace to IM channels (QQ, Telegram, Discord, Slack, DingTalk, Feishu, PC) so remote chats can mirror status and receive agent output with real-time streaming; user echo is suppressed on the originating channel to avoid duplicate messages; see [IM integration](#im-integration) below
-- **Session continuity** — save, resume, export, and compact conversations
+- **Session continuity** — save, resume, export, and compact conversations; auto-compact uses intelligent truncation and LLM-powered summarization with session checkpoints for fast recovery
 - **Harness workflows** — scaffold repo guidance, enforce invariants, track runs, and garbage-collect stale task state
 
 ## Modes: how much freedom the agent gets
