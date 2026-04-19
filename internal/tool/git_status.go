@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -37,7 +36,7 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd := gitCommand(ctx, "status", "--porcelain")
 	cmd.Dir = args.Path
 
 	out, err := cmd.CombinedOutput()

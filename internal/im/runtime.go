@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -480,6 +481,65 @@ func (m *Manager) RejectPendingPairing() (*PairingChallenge, bool, error) {
 		cb(snapshot)
 	}
 	return &challenge, blacklisted, nil
+}
+
+const (
+	defaultSendTimeout = 10 * time.Second
+	maxSendRetries     = 1
+	retryDelay         = 500 * time.Millisecond
+)
+
+type emitTarget struct {
+	binding ChannelBinding
+	sink    Sink
+}
+
+func sendWithTimeout(ctx context.Context, sink Sink, binding ChannelBinding, event OutboundEvent) error {
+	var lastErr error
+	for attempt := 0; attempt <= maxSendRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
+		sendCtx, cancel := context.WithTimeout(ctx, defaultSendTimeout)
+		err := sink.Send(sendCtx, binding, event)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		debug.Log("im-send", "adapter=%s channel=%s attempt=%d error: %v", binding.Adapter, binding.ChannelID, attempt+1, err)
+	}
+	return lastErr
+}
+
+func fanOutSend(ctx context.Context, targets []emitTarget, event OutboundEvent) error {
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now()
+	}
+	var (
+		wg       sync.WaitGroup
+		firstMu  sync.Mutex
+		firstErr error
+	)
+	for _, t := range targets {
+		wg.Add(1)
+		go func(binding ChannelBinding, sink Sink) {
+			defer wg.Done()
+			if err := sendWithTimeout(ctx, sink, binding, event); err != nil {
+				firstMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				firstMu.Unlock()
+			}
+		}(t.binding, t.sink)
+	}
+	wg.Wait()
+	return firstErr
 }
 
 func (m *Manager) Emit(ctx context.Context, event OutboundEvent) error {

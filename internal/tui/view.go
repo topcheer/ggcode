@@ -1279,16 +1279,15 @@ func (m Model) renderComposerInput() string {
 	prompt := m.input.Prompt
 	promptWidth := lipgloss.Width(prompt)
 	available := max(1, m.mainColumnWidth()-6-promptWidth)
-	display := composerDisplayValue(value, m.input.Position())
-	lines := wrapConversationText(display, available)
+	cursor := m.input.Position()
+	lines := composerWrappedLines(value, cursor, available)
 	if len(lines) == 0 {
-		lines = []string{""}
+		lines = []string{"", ""}
 	}
 	promptStyle := lipgloss.NewStyle().Bold(true)
 	indent := strings.Repeat(" ", promptWidth)
 	rows := make([]string, 0, len(lines))
 	for i, line := range lines {
-		line = promptStyle.Render(line)
 		if i == 0 {
 			rows = append(rows, promptStyle.Render(prompt)+line)
 			continue
@@ -1318,17 +1317,71 @@ func composerDisplayValue(value string, cursor int) string {
 	if cursor > len(runes) {
 		cursor = len(runes)
 	}
+
+	cursorStyle := lipgloss.NewStyle().Reverse(true).Bold(true)
+
 	var b strings.Builder
 	for i, r := range runes {
 		if i == cursor {
-			b.WriteRune('|')
+			// Render cursor by reversing the character under it (no extra width)
+			b.WriteString(cursorStyle.Render(string(r)))
+		} else {
+			b.WriteRune(r)
 		}
-		b.WriteRune(r)
 	}
 	if cursor >= len(runes) {
-		b.WriteRune('|')
+		// Cursor at end: render a space with reverse style
+		b.WriteString(cursorStyle.Render(" "))
 	}
 	return b.String()
+}
+
+// composerWrappedLines wraps plain text to the given width, then applies the
+// cursor reverse style at the correct position. This avoids ANSI escape codes
+// being split across line boundaries during word wrapping.
+func composerWrappedLines(value string, cursor, width int) []string {
+	// Wrap the plain text first (no ANSI codes yet)
+	lines := wrapConversationText(value, width)
+	if len(lines) == 0 {
+		return lines
+	}
+
+	// Find which line and column the cursor falls on
+	cursorStyle := lipgloss.NewStyle().Reverse(true).Bold(true)
+	offset := 0
+	for i, line := range lines {
+		runes := []rune(line)
+		lineEnd := offset + len(runes)
+		if cursor <= lineEnd {
+			// Cursor is within this line
+			col := cursor - offset
+			if col < 0 {
+				col = 0
+			}
+			if col > len(runes) {
+				col = len(runes)
+			}
+			var b strings.Builder
+			for j, r := range runes {
+				if j == col {
+					b.WriteString(cursorStyle.Render(string(r)))
+				} else {
+					b.WriteRune(r)
+				}
+			}
+			if col >= len(runes) {
+				b.WriteString(cursorStyle.Render(" "))
+			}
+			lines[i] = b.String()
+			return lines
+		}
+		offset = lineEnd
+	}
+
+	// Cursor at the very end of all lines
+	last := len(lines) - 1
+	lines[last] = lines[last] + cursorStyle.Render(" ")
+	return lines
 }
 
 func (m Model) renderContextBox(title, body string, accent color.Color) string {

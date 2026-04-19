@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -55,7 +54,7 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 		gitArgs = append(gitArgs, "--", args.File)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", gitArgs...)
+	cmd := gitCommand(ctx, gitArgs...)
 	cmd.Dir = args.Path
 
 	out, err := cmd.CombinedOutput()

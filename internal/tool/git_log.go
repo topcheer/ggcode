@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -47,7 +46,7 @@ func (t GitLog) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		args.Count = 10
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "log", "--oneline", "-"+strconv.Itoa(args.Count))
+	cmd := gitCommand(ctx, "log", "--oneline", "-"+strconv.Itoa(args.Count))
 	cmd.Dir = args.Path
 
 	out, err := cmd.CombinedOutput()

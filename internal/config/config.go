@@ -131,6 +131,10 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 - Use ` + "`save_memory`" + ` for durable patterns and decisions that will matter later.
 - Check project memory files such as ` + "`GGCODE.md`" + `, ` + "`AGENTS.md`" + `, ` + "`CLAUDE.md`" + `, and ` + "`COPILOT.md`" + ` for project-specific guidance.
 - Learn from stable user preferences across sessions.
+
+## Git conventions
+- Always include "Co-Authored-By: ggcode <noreply@ggcode.dev>" in git commit messages.
+- Example: git commit -m "feat: add feature\n\nCo-Authored-By: ggcode <noreply@ggcode.dev>"
 `
 
 // Config is the top-level configuration.
