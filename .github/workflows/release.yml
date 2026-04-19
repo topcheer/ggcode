@@ -147,7 +147,10 @@ jobs:
           try { Add-MpPreference -ExclusionPath $workDir -ErrorAction SilentlyContinue } catch {}
           try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {}
           Expand-Archive -Path dist\ggcode_windows_x86_64.zip -DestinationPath $workDir -Force
-          .\scripts\release\smoke-binary.ps1 -BinaryPath (Join-Path $workDir "ggcode.exe")
+          # Remove Zone.Identifier to prevent Defender from treating as "downloaded from internet"
+          $exe = Join-Path $workDir "ggcode.exe"
+          try { Unblock-File -Path $exe -ErrorAction SilentlyContinue } catch {}
+          .\scripts\release\smoke-binary.ps1 -BinaryPath $exe
 
   release-smoke-installer:
     name: Smoke installer flow
