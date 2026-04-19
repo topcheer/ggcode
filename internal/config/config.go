@@ -156,6 +156,7 @@ type Config struct {
 	DefaultMode   string                    `yaml:"default_mode"`
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
 	Impersonation ImpersonationConfig       `yaml:"impersonation,omitempty"`
+	KnightConfig  KnightConfig              `yaml:"knight,omitempty"`
 	FilePath      string                    `yaml:"-"`
 	FirstRun      bool                      `yaml:"-"`
 }
