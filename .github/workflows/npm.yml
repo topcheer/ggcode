@@ -1,0 +1,52 @@
+name: npm
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish npm wrapper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Check npm release version
+        id: release
+        working-directory: npm
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          package_name="$(node -p "require('./package.json').name")"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "package_name=${package_name}" >> "${GITHUB_OUTPUT}"
+          if [[ "${version}" == 0.0.0* ]]; then
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "${package_name}@${version} is a development placeholder; skipping publish."
+            exit 0
+          fi
+          if npm view "${package_name}@${version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+            echo "${package_name}@${version} already exists on npm; skipping publish."
+          else
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Verify npm package
+        if: steps.release.outputs.publish == 'true'
+        working-directory: npm
+        run: npm pack --quiet
+      - name: Publish npm package
+        if: steps.release.outputs.publish == 'true'
+        working-directory: npm
+        run: npm publish --access public --provenance=false

@@ -1,0 +1,86 @@
+{
+  "source": "v1.1.41",
+  "version": "v1.1.41",
+  "files": [
+    {
+      "name": "checksums.txt",
+      "size": 2104
+    },
+    {
+      "name": "ggcode-1.1.41-1-aarch64.pkg.tar.zst",
+      "size": 12454963
+    },
+    {
+      "name": "ggcode-1.1.41-1-x86_64.pkg.tar.zst",
+      "size": 13628869
+    },
+    {
+      "name": "ggcode-1.1.41-1.aarch64.rpm",
+      "size": 12634893
+    },
+    {
+      "name": "ggcode-1.1.41-1.x86_64.rpm",
+      "size": 13772254
+    },
+    {
+      "name": "ggcode_1.1.41_aarch64.apk",
+      "size": 13214215
+    },
+    {
+      "name": "ggcode_1.1.41_amd64.deb",
+      "size": 13805460
+    },
+    {
+      "name": "ggcode_1.1.41_arm64.deb",
+      "size": 12701882
+    },
+    {
+      "name": "ggcode_1.1.41_arm64.ipk",
+      "size": 12705814
+    },
+    {
+      "name": "ggcode_1.1.41_darwin_universal.pkg",
+      "size": 26853587
+    },
+    {
+      "name": "ggcode_1.1.41_windows_arm64.msi",
+      "size": 10256384
+    },
+    {
+      "name": "ggcode_1.1.41_windows_x64.msi",
+      "size": 11210752
+    },
+    {
+      "name": "ggcode_1.1.41_x86_64.apk",
+      "size": 14431683
+    },
+    {
+      "name": "ggcode_1.1.41_x86_64.ipk",
+      "size": 13816040
+    },
+    {
+      "name": "ggcode_darwin_arm64.tar.gz",
+      "size": 13316459
+    },
+    {
+      "name": "ggcode_darwin_x86_64.tar.gz",
+      "size": 14116343
+    },
+    {
+      "name": "ggcode_linux_arm64.tar.gz",
+      "size": 12710219
+    },
+    {
+      "name": "ggcode_linux_x86_64.tar.gz",
+      "size": 13812405
+    },
+    {
+      "name": "ggcode_windows_arm64.zip",
+      "size": 12779211
+    },
+    {
+      "name": "ggcode_windows_x86_64.zip",
+      "size": 14112710
+    }
+  ]
+}

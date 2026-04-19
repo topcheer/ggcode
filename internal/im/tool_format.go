@@ -1,0 +1,694 @@
+package im
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+func (a *tgAdapter) outboundText(event OutboundEvent) string {
+	switch event.Kind {
+	case OutboundEventText:
+		return event.Text
+	case OutboundEventStatus:
+		return event.Status
+	case OutboundEventToolCall:
+		if event.ToolCall == nil {
+			return ""
+		}
+		return formatToolCallText(event.ToolCall)
+	case OutboundEventToolResult:
+		if event.ToolRes == nil {
+			return ""
+		}
+		return formatToolResultText(event.ToolRes)
+	case OutboundEventApprovalRequest:
+		if event.Approval == nil {
+			return ""
+		}
+		return fmt.Sprintf("[approval] %s\n%s", event.Approval.ToolName, event.Approval.Input)
+	case OutboundEventApprovalResult:
+		if event.Result == nil {
+			return ""
+		}
+		return fmt.Sprintf("[approval result] %s", event.Result.Decision)
+	default:
+		return ""
+	}
+}
+
+// formatToolCallText formats a tool call event into markdown text for IM delivery.
+func formatToolCallText(tc *ToolCallInfo) string {
+	name := tc.ToolName
+	args := tc.Args
+	switch name {
+	case "bash", "run_command", "start_command", "powershell":
+		cmd := extractCommand(args)
+		if cmd == "" {
+			cmd = tc.Detail
+		}
+		return fmt.Sprintf("⚡ 执行命令:\n```\n%s\n```", cmd)
+	case "read_file":
+		path := extractFilePathFromArgs(args)
+		if path == "" {
+			path = tc.Detail
+		}
+		return fmt.Sprintf("📖 读取文件: `%s`", path)
+	case "edit_file":
+		path := extractFilePathFromArgs(args)
+		if path == "" {
+			path = tc.Detail
+		}
+		return fmt.Sprintf("✏️ 编辑文件: `%s`", path)
+	case "write_file":
+		path := extractFilePathFromArgs(args)
+		if path == "" {
+			path = tc.Detail
+		}
+		return fmt.Sprintf("📝 写入文件: `%s`", path)
+	case "glob":
+		pattern := extractArgValue(args, "pattern")
+		if pattern == "" {
+			pattern = tc.Detail
+		}
+		return fmt.Sprintf("🔍 查找文件: `%s`", pattern)
+	case "grep", "search_files":
+		pattern := firstNonEmptyStr(extractArgValue(args, "pattern"), extractArgValue(args, "query"))
+		if pattern == "" {
+			pattern = tc.Detail
+		}
+		return fmt.Sprintf("🔍 搜索: `%s`", pattern)
+	case "list_directory":
+		path := firstNonEmptyStr(extractArgValue(args, "path"), extractArgValue(args, "directory"))
+		if path == "" {
+			path = tc.Detail
+		}
+		return fmt.Sprintf("📂 列出目录: `%s`", path)
+	case "web_fetch":
+		url := extractArgValue(args, "url")
+		if url == "" {
+			url = tc.Detail
+		}
+		return fmt.Sprintf("🌐 抓取: %s", url)
+	case "web_search":
+		q := extractArgValue(args, "query")
+		if q == "" {
+			q = tc.Detail
+		}
+		return fmt.Sprintf("🔍 搜索: %s", q)
+	case "todo_write":
+		return "📋 更新待办列表"
+	case "skill":
+		return fmt.Sprintf("🔧 加载技能: `%s`", tc.Detail)
+	default:
+		if tc.Detail != "" {
+			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
+		}
+		return fmt.Sprintf("🔧 %s", name)
+	}
+}
+
+// formatToolResultText formats a tool result event into concise IM text,
+// mirroring the terminal follow display style: icon + tool name + brief summary.
+// Returns empty string if the tool result should be silently suppressed (e.g. read_file success).
+func formatToolResultText(tr *ToolResultInfo) string {
+	// Special formatting for certain tool types.
+	// handled is true when formatSpecialIMToolResult has handled this tool
+	// (including the "suppress" case like read_file success).
+	handled, special := formatSpecialIMToolResult(tr)
+	if handled {
+		return special
+	}
+
+	// Default: icon + prettified tool name
+	icon := "✓"
+	if tr.IsError {
+		icon = "✗"
+	}
+	pretty := prettifyToolName(tr.ToolName)
+	output := strings.TrimSpace(tr.Result)
+	if output != "" {
+		return fmt.Sprintf("%s 🔧 %s\n```\n%s\n```", icon, pretty, output)
+	}
+	return fmt.Sprintf("%s 🔧 %s", icon, pretty)
+}
+
+// formatSpecialIMToolResult returns (handled, formatted) for special tool types.
+// handled=true means this function has dealt with the tool (either producing output
+// or intentionally suppressing it); handled=false means "use default formatting".
+func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
+	switch tr.ToolName {
+	case "run_command", "bash", "powershell":
+		// Command tools always use the dedicated formatter (handles both success and error)
+		return true, formatIMCommandResult(tr)
+	case "todo_write":
+		return true, formatIMTodoResult(tr)
+	case "read_file":
+		return true, formatIMReadFileResult(tr)
+	case "list_directory":
+		return true, formatIMListDirResult(tr)
+	case "glob":
+		return true, formatIMGlobResult(tr)
+	case "edit_file":
+		return true, formatIMEditResult(tr)
+	case "write_file":
+		return true, formatIMWriteResult(tr)
+	case "search_files", "grep":
+		return true, formatIMSearchResult(tr)
+	case "web_fetch", "web_search":
+		return true, formatIMWebResult(tr)
+	case "git_diff", "git_status", "git_log":
+		return true, formatIMGitResult(tr)
+	case "ask_user":
+		return true, formatIMAskUserResult(tr)
+	case "start_command":
+		return true, formatIMStartCommandResult(tr)
+	case "stop_command":
+		return true, formatIMStopCommandResult(tr)
+	case "read_command_output":
+		return true, formatIMReadCmdOutputResult(tr)
+	case "wait_command":
+		return true, formatIMWaitCommandResult(tr)
+	case "write_command_input":
+		return true, formatIMWriteCmdInputResult(tr)
+	case "list_commands":
+		return true, formatIMListCommandsResult(tr)
+	case "spawn_agent":
+		return true, formatIMSpawnAgentResult(tr)
+	case "wait_agent":
+		return true, formatIMWaitAgentResult(tr)
+	case "list_agents":
+		return true, formatIMListAgentsResult(tr)
+	case "list_mcp_capabilities":
+		return true, formatIMMCPCapabilitiesResult(tr)
+	case "get_mcp_prompt":
+		return true, formatIMMCPPromptResult(tr)
+	case "read_mcp_resource":
+		return true, formatIMMCPResourceResult(tr)
+	case "skill":
+		return true, formatIMSkillResult(tr)
+	case "save_memory":
+		return true, formatIMSaveMemoryResult(tr)
+	default:
+		if tr.IsError {
+			return true, formatIMErrorResult(tr)
+		}
+		// Check for MCP-style tool names (contain underscores or dots)
+		if strings.Contains(tr.ToolName, "_") || strings.Contains(tr.ToolName, ".") {
+			return true, formatIMMCPToolResult(tr)
+		}
+		return false, ""
+	}
+}
+
+// formatIMAskUserResult renders ask_user result.
+func formatIMAskUserResult(tr *ToolResultInfo) string {
+	icon := "✓"
+	if tr.IsError {
+		icon = "✗"
+	}
+	return icon + " 💬 收到回复"
+}
+
+// --- Background command tools ---
+
+// formatIMStartCommandResult renders start_command result.
+func formatIMStartCommandResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ ⚡ 后台命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ ⚡ 后台命令已启动"
+	}
+	return fmt.Sprintf("✓ ⚡ 后台命令\n```\n%s\n```", output)
+}
+
+// formatIMStopCommandResult renders stop_command result.
+func formatIMStopCommandResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🛑 停止命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🛑 命令已停止"
+	}
+	return fmt.Sprintf("✓ 🛑\n```\n%s\n```", output)
+}
+
+// formatIMReadCmdOutputResult renders read_command_output result.
+func formatIMReadCmdOutputResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 📄 读取输出\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 📄 (无新输出)"
+	}
+	return fmt.Sprintf("✓ 📄\n```\n%s\n```", output)
+}
+
+// formatIMWaitCommandResult renders wait_command result.
+func formatIMWaitCommandResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ ⏳ 等待命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ ⏳ 命令完成"
+	}
+	return fmt.Sprintf("✓ ⏳\n```\n%s\n```", output)
+}
+
+// formatIMWriteCmdInputResult renders write_command_input result.
+func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ ⌨️ 输入发送\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ ⌨️ 输入已发送"
+	}
+	return fmt.Sprintf("✓ ⌨️\n```\n%s\n```", output)
+}
+
+// formatIMListCommandsResult renders list_commands result.
+func formatIMListCommandsResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 📋 活动命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 📋 无活动命令"
+	}
+	return fmt.Sprintf("✓ 📋\n```\n%s\n```", output)
+}
+
+// --- Agent tools ---
+
+// formatIMSpawnAgentResult renders spawn_agent result.
+func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🤖 子任务\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🤖 子任务已启动"
+	}
+	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+}
+
+// formatIMWaitAgentResult renders wait_agent result.
+func formatIMWaitAgentResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🤖 子任务\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🤖 子任务完成"
+	}
+	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+}
+
+// formatIMListAgentsResult renders list_agents result.
+func formatIMListAgentsResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🤖 子任务列表\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🤖 无活动子任务"
+	}
+	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+}
+
+// --- MCP internal tools ---
+
+// formatIMMCPCapabilitiesResult renders list_mcp_capabilities result.
+func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔗 MCP 服务\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔗 MCP 服务列表"
+	}
+	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+}
+
+// formatIMMCPPromptResult renders get_mcp_prompt result.
+func formatIMMCPPromptResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔗 MCP Prompt\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔗 MCP Prompt"
+	}
+	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+}
+
+// formatIMMCPResourceResult renders read_mcp_resource result.
+func formatIMMCPResourceResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔗 资源读取\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔗 资源内容"
+	}
+	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+}
+
+// --- Productivity tools ---
+
+// formatIMSkillResult renders skill result.
+func formatIMSkillResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔧 技能加载\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔧 技能已加载"
+	}
+	return fmt.Sprintf("✓ 🔧\n```\n%s\n```", output)
+}
+
+// formatIMSaveMemoryResult renders save_memory result.
+func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 💾 记忆保存\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 💾 记忆已保存"
+	}
+	return fmt.Sprintf("✓ 💾\n```\n%s\n```", output)
+}
+
+// formatIMErrorResult formats error results for any tool.
+func formatIMErrorResult(tr *ToolResultInfo) string {
+	pretty := prettifyToolName(tr.ToolName)
+	output := strings.TrimSpace(tr.Result)
+	if output != "" {
+		return fmt.Sprintf("✗ 🔧 %s\n```\n%s\n```", pretty, output)
+	}
+	return fmt.Sprintf("✗ 🔧 %s", pretty)
+}
+
+// formatIMCommandResult renders command execution with full output.
+// Command is shown in a bash code block; result in a plain code block.
+func formatIMCommandResult(tr *ToolResultInfo) string {
+	cmd := extractCommand(tr.Args)
+	if cmd == "" {
+		cmd = tr.Detail
+	}
+
+	icon := "✓"
+	if tr.IsError {
+		icon = "✗"
+	}
+
+	output := strings.TrimSpace(tr.Result)
+	if output == "" {
+		if cmd == "" {
+			return icon
+		}
+		return fmt.Sprintf("%s\n```bash\n%s\n```\n```\n(无输出)\n```", icon, cmd)
+	}
+
+	if cmd == "" {
+		return fmt.Sprintf("%s\n```\n%s\n```", icon, output)
+	}
+	return fmt.Sprintf("%s\n```bash\n%s\n```\n```\n%s\n```", icon, cmd, output)
+}
+
+// formatIMTodoResult renders todo_write as a visual checklist.
+func formatIMTodoResult(tr *ToolResultInfo) string {
+	var args struct {
+		Todos []struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"todos"`
+	}
+	if err := json.Unmarshal([]byte(tr.Args), &args); err != nil || len(args.Todos) == 0 {
+		return "✓ 📋 更新待办"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("✓ 📋 待办:\n")
+	for _, t := range args.Todos {
+		icon := "○"
+		if t.Status == "done" {
+			icon = "●"
+		} else if t.Status == "in_progress" {
+			icon = "◐"
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s\n", icon, t.Content))
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// formatIMReadFileResult renders read_file result with path and status only.
+func formatIMReadFileResult(tr *ToolResultInfo) string {
+	path := extractFilePathFromArgs(tr.Args)
+	if path == "" {
+		path = tr.Detail
+	}
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ 📖 %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+		}
+		return fmt.Sprintf("✗ 📖 Read\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	if path == "" {
+		return "✓ 📖 Read"
+	}
+	return fmt.Sprintf("✓ 📖 %s", path)
+}
+
+// formatIMListDirResult renders list_directory result with full output in code block.
+func formatIMListDirResult(tr *ToolResultInfo) string {
+	path := firstNonEmptyStr(extractArgValue(tr.Args, "path"), extractArgValue(tr.Args, "directory"))
+	if path == "" {
+		path = tr.Detail
+	}
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ 📂 %s\n```\n%s\n```", path, output)
+		}
+		return fmt.Sprintf("✗ 📂 List\n```\n%s\n```", output)
+	}
+	if output == "" {
+		if path != "" {
+			return fmt.Sprintf("✓ 📂 %s", path)
+		}
+		return "✓ 📂 List"
+	}
+	if path != "" {
+		return fmt.Sprintf("✓ 📂 %s\n```\n%s\n```", path, output)
+	}
+	return fmt.Sprintf("✓ 📂\n```\n%s\n```", output)
+}
+
+// formatIMGlobResult renders glob result with full output in code block.
+func formatIMGlobResult(tr *ToolResultInfo) string {
+	pattern := extractArgValue(tr.Args, "pattern")
+	if pattern == "" {
+		pattern = tr.Detail
+	}
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		if pattern != "" {
+			return fmt.Sprintf("✗ 🔍 `%s`\n```\n%s\n```", pattern, output)
+		}
+		return fmt.Sprintf("✗ 🔍 Glob\n```\n%s\n```", output)
+	}
+	if output == "" {
+		if pattern != "" {
+			return fmt.Sprintf("✓ 🔍 `%s`: 无匹配", pattern)
+		}
+		return "✓ 🔍 Glob"
+	}
+	if pattern != "" {
+		return fmt.Sprintf("✓ 🔍 `%s`\n```\n%s\n```", pattern, output)
+	}
+	return fmt.Sprintf("✓ 🔍\n```\n%s\n```", output)
+}
+
+// formatIMEditResult renders edit_file result — show emoji icon + path.
+func formatIMEditResult(tr *ToolResultInfo) string {
+	path := extractFilePathFromArgs(tr.Args)
+	if path == "" {
+		path = tr.Detail
+	}
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ ✏️ %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+		}
+		return fmt.Sprintf("✗ ✏️ Edit\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	if path == "" {
+		return "✓ ✏️ Edit"
+	}
+	return fmt.Sprintf("✓ ✏️ %s", path)
+}
+
+// formatIMWriteResult renders write_file result.
+func formatIMWriteResult(tr *ToolResultInfo) string {
+	path := extractFilePathFromArgs(tr.Args)
+	if path == "" {
+		path = tr.Detail
+	}
+	if tr.IsError {
+		if path != "" {
+			return fmt.Sprintf("✗ 📝 %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+		}
+		return fmt.Sprintf("✗ 📝 Write\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	if path == "" {
+		return "✓ 📝 Write"
+	}
+	return fmt.Sprintf("✓ 📝 %s", path)
+}
+
+// formatIMSearchResult renders search/grep result with full output in code block.
+func formatIMSearchResult(tr *ToolResultInfo) string {
+	pattern := firstNonEmptyStr(extractArgValue(tr.Args, "pattern"), extractArgValue(tr.Args, "query"))
+	if pattern == "" {
+		pattern = tr.Detail
+	}
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		if pattern != "" {
+			return fmt.Sprintf("✗ 🔍 `%s`\n```\n%s\n```", pattern, output)
+		}
+		return fmt.Sprintf("✗ 🔍 Search\n```\n%s\n```", output)
+	}
+	if output == "" {
+		if pattern != "" {
+			return fmt.Sprintf("✓ 🔍 `%s`: 0 条结果", pattern)
+		}
+		return "✓ 🔍 Search"
+	}
+	if pattern != "" {
+		return fmt.Sprintf("✓ 🔍 `%s`\n```\n%s\n```", pattern, output)
+	}
+	return fmt.Sprintf("✓ 🔍\n```\n%s\n```", output)
+}
+
+// formatIMWebResult renders web fetch/search result with full output in code block.
+func formatIMWebResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🌐\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🌐 Web"
+	}
+	return fmt.Sprintf("✓ 🌐\n```\n%s\n```", output)
+}
+
+// formatIMGitResult renders git tool results with full output in code block.
+func formatIMGitResult(tr *ToolResultInfo) string {
+	pretty := prettifyToolName(tr.ToolName)
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔧 %s\n```\n%s\n```", pretty, output)
+	}
+	if output == "" {
+		return fmt.Sprintf("✓ 🔧 %s", pretty)
+	}
+	return fmt.Sprintf("✓ 🔧 %s\n```\n%s\n```", pretty, output)
+}
+
+// formatIMMCPToolResult renders MCP tool results with full output in code block.
+func formatIMMCPToolResult(tr *ToolResultInfo) string {
+	pretty := prettifyToolName(tr.ToolName)
+	argSummary := summarizeMCPArgs(tr.Args, 50)
+	output := strings.TrimSpace(tr.Result)
+
+	icon := "✓"
+	if tr.IsError {
+		icon = "✗"
+	}
+
+	header := icon + " 🔧 " + pretty
+	if argSummary != "" {
+		header = fmt.Sprintf("%s 🔧 %s(%s)", icon, pretty, argSummary)
+	}
+
+	if output == "" {
+		return header
+	}
+	return fmt.Sprintf("%s\n```\n%s\n```", header, output)
+}
+
+// summarizeIMResult extracts a brief summary from a tool result string.
+func summarizeIMResult(result string, maxLen int) string {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return ""
+	}
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		line = compactSingleLine(line)
+		if line != "" {
+			if len(line) > maxLen {
+				return line[:maxLen-3] + "..."
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+// summarizeMCPArgs produces a brief summary of MCP tool arguments.
+func summarizeMCPArgs(rawArgs string, maxLen int) string {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil || len(args) == 0 {
+		return ""
+	}
+	for k, v := range args {
+		if s, ok := v.(string); ok && s != "" && k != "context" && k != "system_prompt" {
+			s = compactSingleLine(s)
+			if len(s) > maxLen {
+				s = s[:maxLen-3] + "..."
+			}
+			return s
+		}
+	}
+	return ""
+}
+
+func extractCommand(args string) string {
+	var a map[string]any
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return strings.TrimSpace(args)
+	}
+	return firstNonEmptyStr(
+		stringFromAny(a["command"]),
+		stringFromAny(a["cmd"]),
+	)
+}
+
+func extractFilePathFromArgs(args string) string {
+	var a map[string]any
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return ""
+	}
+	return firstNonEmptyStr(
+		stringFromAny(a["file_path"]),
+		stringFromAny(a["path"]),
+	)
+}
+
+func extractArgValue(args, key string) string {
+	var a map[string]any
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return ""
+	}
+	return stringFromAny(a[key])
+}

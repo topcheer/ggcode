@@ -1,0 +1,99 @@
+version: 2
+
+project_name: ggcode
+
+builds:
+  - id: ggcode
+    main: ./cmd/ggcode
+    binary: ggcode
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/topcheer/ggcode/internal/version.Version={{ .Version }}
+        -X github.com/topcheer/ggcode/internal/version.Commit={{ .Commit }}
+        -X github.com/topcheer/ggcode/internal/version.Date={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+nfpms:
+  - id: packages
+    ids:
+      - ggcode
+    package_name: ggcode
+    file_name_template: "{{ .ConventionalFileName }}"
+    homepage: https://github.com/topcheer/ggcode
+    vendor: topcheer
+    maintainer: topcheer
+    description: >-
+      AI coding agent for the terminal with a polished TUI, resumable sessions,
+      MCP integrations, built-in tools, and self-update support.
+    license: MIT
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm
+      - apk
+      - ipk
+      - archlinux
+    section: utils
+    priority: optional
+    contents:
+      - src: ./LICENSE
+        dst: /usr/share/doc/ggcode/LICENSE
+      - src: ./README.md
+        dst: /usr/share/doc/ggcode/README.md
+
+brews:
+  - name: ggcode
+    homepage: https://github.com/topcheer/ggcode
+    description: AI coding agent for the terminal with TUI, MCP, and IM integrations.
+    license: MIT
+    skip_upload: auto
+    repository:
+      owner: topcheer
+      name: homebrew-ggcode
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: ggcode-bot
+      email: bot@ggcode.dev
+    directory: Formula
+    install: |
+      bin.install "ggcode"
+    test: |
+      system "#{bin}/ggcode", "--version"
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^ci:"
+      - "^chore:"
+      - "^style:"

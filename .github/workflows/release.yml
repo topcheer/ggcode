@@ -1,0 +1,307 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: "Version label for manual packaging runs"
+        required: false
+        default: "v0.0.0"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  verify:
+    name: Verify release inputs
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go mod download
+      - run: go build -o /tmp/ggcode-release ./cmd/ggcode
+      - run: go test ./...
+      - run: go vet ./...
+
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    needs: verify
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          install-only: true
+          version: latest
+      - name: Validate GoReleaser config
+        run: goreleaser check
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean --skip=publish' || 'release --clean' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+      - name: Render release notes
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          chmod +x ./scripts/release/render-notes.sh
+          ./scripts/release/render-notes.sh "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" > /tmp/release-notes.md
+      - name: Apply release notes
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release-notes.md
+      - name: Upload GoReleaser dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist/
+
+  release-smoke-linux:
+    name: Smoke Linux binary
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test linux archive
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/smoke-binary.sh
+          workdir="$(mktemp -d)"
+          tar -xzf dist/ggcode_linux_x86_64.tar.gz -C "${workdir}"
+          ./scripts/release/smoke-binary.sh "${workdir}/ggcode"
+
+  release-smoke-macos:
+    name: Smoke macOS binary
+    runs-on: macos-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test macOS archive
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/smoke-binary.sh
+          workdir="$(mktemp -d)"
+          arch="$(uname -m)"
+          case "${arch}" in
+            arm64) archive="dist/ggcode_darwin_arm64.tar.gz" ;;
+            *) archive="dist/ggcode_darwin_x86_64.tar.gz" ;;
+          esac
+          tar -xzf "${archive}" -C "${workdir}"
+          ./scripts/release/smoke-binary.sh "${workdir}/ggcode"
+
+  release-smoke-windows:
+    name: Smoke Windows binary
+    runs-on: windows-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    needs: release
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test windows archive
+        shell: pwsh
+        run: |
+          $workDir = Join-Path $env:RUNNER_TEMP "ggcode-windows-smoke"
+          New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+          Expand-Archive -Path dist\ggcode_windows_x86_64.zip -DestinationPath $workDir -Force
+          $exe = Join-Path $workDir "ggcode.exe"
+          .\scripts\release\smoke-binary.ps1 -BinaryPath $exe
+
+  release-smoke-installer:
+    name: Smoke installer flow
+    runs-on: ubuntu-latest
+    needs: release
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - name: Smoke test installer against local release mirror
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/smoke-binary.sh ./scripts/release/smoke-installer.sh
+          ./scripts/release/smoke-installer.sh "${GGCODE_VERSION}" dist
+
+  release-macos-pkg:
+    name: Build macOS pkg
+    runs-on: macos-latest
+    needs:
+      - release
+      - release-smoke-linux
+      - release-smoke-macos
+      - release-smoke-installer
+    permissions:
+      contents: write
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Build macOS installer package
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-macos-pkg.sh
+          ./scripts/release/build-macos-pkg.sh "${GGCODE_VERSION}" dist
+      - name: Upload macOS package to release
+        if: github.event_name != 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.pkg --clobber
+      - name: Upload macOS package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist/*.pkg
+
+  release-windows-msi:
+    name: Build Windows msi
+    runs-on: windows-latest
+    needs:
+      - release
+      - release-smoke-linux
+      - release-smoke-macos
+      - release-smoke-installer
+    permissions:
+      contents: write
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          wix --version
+      - name: Capture build date
+        shell: pwsh
+        run: |
+          $date = git show -s --format=%cI $env:GITHUB_SHA
+          Add-Content -Path $env:GITHUB_ENV -Value "GGCODE_DATE=$date"
+      - name: Build Windows MSI packages
+        shell: pwsh
+        run: .\scripts\release\build-windows-msi.ps1 -Version $env:GGCODE_VERSION -OutputDir dist
+      - name: Upload Windows MSI packages to release
+        if: github.event_name != 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Get-ChildItem -Path dist -Filter *.msi | ForEach-Object {
+            gh release upload $env:GITHUB_REF_NAME $_.FullName --clobber
+          }
+      - name: Upload Windows MSI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: dist/*.msi
+
+  publish-site-release-branch:
+    name: Publish site release branch
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs:
+      - release
+      - release-smoke-linux
+      - release-smoke-macos
+      - release-smoke-installer
+      - release-macos-pkg
+      - release-windows-msi
+    permissions:
+      contents: write
+    env:
+      TARGET_BRANCH: copilot/site-release-update
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist-site/macos-pkg
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi
+          path: dist-site/windows-msi
+      - name: Publish release assets into deployment branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/publish-site-branch.sh
+          ./scripts/release/publish-site-branch.sh \
+            --target-branch "${TARGET_BRANCH}" \
+            --asset-dir dist \
+            --asset-dir dist-site/macos-pkg \
+            --asset-dir dist-site/windows-msi \
+            --source-label "${GITHUB_REF_NAME}"
