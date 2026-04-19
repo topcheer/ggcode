@@ -1,5 +1,11 @@
 # ggcode
 
+<p align="center">
+  <img src="ggcode_cli_banner_1775456774280.png" alt="ggcode" width="600" />
+</p>
+
+**English** | **[中文](README_zh-CN.md)**
+
 **ggcode** is an AI coding agent for the terminal. It can understand a codebase, edit files, run commands, manage checkpoints, use first-class LSP / MCP / skill workflows, and keep working inside a polished TUI instead of bouncing between scripts and browser tabs.
 
 If you want a terminal-native coding workflow that feels like a product, not a demo, this is what ggcode is for.
