@@ -444,6 +444,7 @@ func TestUsageTrackerPersistence(t *testing.T) {
 	ut1.EnsureDir()
 	ut1.RecordUse("test-skill")
 	ut1.RecordEffectiveness("test-skill", 5)
+	ut1.Flush() // force persist
 
 	// New tracker instance should load persisted data
 	ut2 := NewUsageTracker(path)

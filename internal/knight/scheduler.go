@@ -222,10 +222,13 @@ func (k *Knight) PromoteStaging(skillName string) error {
 				return fmt.Errorf("skill %q duplicates an existing skill", skillName)
 			}
 
-			return k.promoter.Promote(s)
+			if err := k.promoter.Promote(s); err != nil {
+				return err
+			}
+			k.index.Invalidate()
+			return nil
 		}
 	}
-
 	return fmt.Errorf("staging skill %q not found", skillName)
 }
 
@@ -238,7 +241,11 @@ func (k *Knight) RejectStaging(skillName string) error {
 
 	for _, s := range staging {
 		if s.Name == skillName {
-			return k.promoter.Reject(s)
+			if err := k.promoter.Reject(s); err != nil {
+				return err
+			}
+			k.index.Invalidate()
+			return nil
 		}
 	}
 	return fmt.Errorf("staging skill %q not found", skillName)
@@ -272,6 +279,11 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 	if !k.budget.CanSpend() {
 		debug.Log("knight", "daily budget exhausted, skipping tick")
 		return
+	}
+
+	// Flush usage tracker to disk periodically
+	if k.usage != nil {
+		k.usage.Flush()
 	}
 
 	// Only run heavy tasks when user is idle
@@ -335,12 +347,14 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 		if CheckDuplicate(s, active) {
 			debug.Log("knight", "staging skill %s is duplicate, rejecting", s.Name)
 			k.promoter.Reject(s)
+			k.index.Invalidate()
 			continue
 		}
 
 		if k.cfg.TrustLevel == "auto" {
 			debug.Log("knight", "auto-promoting skill %s", s.Name)
 			k.promoter.Promote(s)
+			k.index.Invalidate()
 			k.emitReport(fmt.Sprintf("✅ Skill auto-promoted: %s (%s)", s.Name, s.Meta.Description))
 		} else {
 			// For "staged" trust level, notify user for review

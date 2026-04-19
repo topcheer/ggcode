@@ -521,25 +521,32 @@ func fanOutSend(ctx context.Context, targets []emitTarget, event OutboundEvent) 
 		event.CreatedAt = time.Now()
 	}
 	var (
-		wg       sync.WaitGroup
-		firstMu  sync.Mutex
-		firstErr error
+		wg     sync.WaitGroup
+		errsMu sync.Mutex
+		errs   []error
 	)
 	for _, t := range targets {
 		wg.Add(1)
 		go func(binding ChannelBinding, sink Sink) {
 			defer wg.Done()
+			// Check if context is already cancelled before sending
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			if err := sendWithTimeout(ctx, sink, binding, event); err != nil {
-				firstMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				firstMu.Unlock()
+				errsMu.Lock()
+				errs = append(errs, fmt.Errorf("%s: %w", binding.Adapter, err))
+				errsMu.Unlock()
 			}
 		}(t.binding, t.sink)
 	}
 	wg.Wait()
-	return firstErr
+	if len(errs) > 0 {
+		return fmt.Errorf("fanOutSend: %d adapter(s) failed: %w", len(errs), errors.Join(errs...))
+	}
+	return nil
 }
 
 func (m *Manager) Emit(ctx context.Context, event OutboundEvent) error {
