@@ -142,6 +142,9 @@ jobs:
         run: |
           $workDir = Join-Path $env:RUNNER_TEMP "ggcode-windows-smoke"
           New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+          # Pre-emptively exclude from Defender before extracting the unsigned binary
+          try { Add-MpPreference -ExclusionPath $workDir -ErrorAction SilentlyContinue } catch {}
+          try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {}
           Expand-Archive -Path dist\ggcode_windows_x86_64.zip -DestinationPath $workDir -Force
           .\scripts\release\smoke-binary.ps1 -BinaryPath (Join-Path $workDir "ggcode.exe")
 
