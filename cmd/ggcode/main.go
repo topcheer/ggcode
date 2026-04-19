@@ -45,8 +45,11 @@ ggcode [command]
 
 Available Commands:
 - completion: Generate shell completion script
+- daemon: Run ggcode in daemon mode, controlled via IM
 - harness: Manage harness-engineering workflows
 - help: Help about any command
+- im: Manage IM adapters, bindings, and pairing
+- mcp: Manage MCP server configuration
 
 Flags:
 - --allowedTools stringArray: tools to allow in pipe mode (can be repeated)
