@@ -152,6 +152,7 @@ type Model struct {
 	statusToolCount int    // tool calls executed this iteration
 	activityGroups  []toolActivityGroup
 	todoSnapshot    map[string]todoStateItem
+	todoOrder       []string // preserves original insertion order from todo_write
 	activeTodo      *todoStateItem
 	activeMCPTools  map[string]ToolStatusMsg
 

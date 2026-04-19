@@ -635,7 +635,28 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 	}
 
 	m.todoSnapshot = current
+	m.todoOrder = make([]string, 0, len(todos))
+	for _, td := range todos {
+		m.todoOrder = append(m.todoOrder, td.ID)
+	}
 	m.activeTodo = nil
+	// Auto-show sidebar when task mode starts (first todo_write with active items).
+	// Auto-hide when all todos reach terminal state (done/failed/blocked) or are cleared.
+	if len(previous) == 0 && len(current) > 0 {
+		// Task mode just started — ensure sidebar is visible.
+		m.sidebarVisible = true
+	} else if len(current) > 0 {
+		allDone := true
+		for _, td := range current {
+			if td.Status != "done" && td.Status != "failed" && td.Status != "blocked" {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			m.sidebarVisible = false
+		}
+	}
 	for _, td := range todos {
 		if td.Status == "in_progress" {
 			tdCopy := td

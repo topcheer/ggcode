@@ -1449,18 +1449,26 @@ func TestTodoWriteMovesTaskTrackingToSidebar(t *testing.T) {
 	}
 }
 
-func TestSidebarTaskTrackerSortsStartedTasksNewestFirst(t *testing.T) {
+func TestSidebarTaskTrackerPreservesOriginalOrder(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 	now := time.Now()
 	m.todoSnapshot = map[string]todoStateItem{
-		"todo-1": {ID: "todo-1", Content: "Older task", Status: "done", StartedAt: now.Add(-2 * time.Minute), UpdatedAt: now.Add(-time.Minute)},
-		"todo-2": {ID: "todo-2", Content: "Newest task", Status: "in_progress", StartedAt: now.Add(-30 * time.Second), UpdatedAt: now},
+		"todo-1": {ID: "todo-1", Content: "First task", Status: "pending", UpdatedAt: now},
+		"todo-2": {ID: "todo-2", Content: "Second task", Status: "in_progress", StartedAt: now, UpdatedAt: now},
+		"todo-3": {ID: "todo-3", Content: "Third task", Status: "done", StartedAt: now.Add(-time.Minute), UpdatedAt: now},
 	}
+	m.todoOrder = []string{"todo-1", "todo-2", "todo-3"}
 
 	sidebar := m.renderSidebar()
-	if strings.Index(sidebar, "Newest task") > strings.Index(sidebar, "Older task") {
-		t.Fatalf("expected newest started task first in sidebar, got %q", sidebar)
+	idx1 := strings.Index(sidebar, "First task")
+	idx2 := strings.Index(sidebar, "Second task")
+	idx3 := strings.Index(sidebar, "Third task")
+	if idx1 == -1 || idx2 == -1 || idx3 == -1 {
+		t.Fatalf("expected all tasks in sidebar, got %q", sidebar)
+	}
+	if !(idx1 < idx2 && idx2 < idx3) {
+		t.Fatalf("expected original order [First, Second, Third], got indices %d, %d, %d", idx1, idx2, idx3)
 	}
 	if strings.Contains(sidebar, "供应商") || strings.Contains(sidebar, "vendor") {
 		t.Fatalf("expected task tracker to replace default sidebar details, got %q", sidebar)
