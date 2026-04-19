@@ -2,11 +2,13 @@ package subagent
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 func TestManagerSpawnAndGet(t *testing.T) {
@@ -156,5 +158,46 @@ func TestWaitForSnapshotReturnsRunningStateAfterTimeout(t *testing.T) {
 	}
 	if snap.ProgressSummary == "" {
 		t.Fatal("expected progress summary")
+	}
+}
+
+func TestRunPanicRecoveryCompletesAgent(t *testing.T) {
+	// Verify that a panic inside Run() triggers Complete() so Wait() does not hang.
+	mgr := NewManager(config.SubAgentConfig{
+		MaxConcurrent: 1,
+		Timeout:       5 * time.Second,
+	})
+	id := mgr.Spawn("panic task", "panic task", nil, context.Background())
+
+	Run(context.Background(), RunnerConfig{
+		Provider:   nil,
+		Manager:    mgr,
+		SubAgentID: id,
+		AgentFactory: func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
+			panic("intentional test panic")
+		},
+	})
+
+	// Wait must return quickly with a failed status, not block forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	result, err := Wait(ctx, mgr, id)
+	if err == nil {
+		t.Fatal("expected error from panicked sub-agent, got nil")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Fatalf("expected panic error message, got: %v", err)
+	}
+	if result != "" {
+		t.Fatalf("expected empty result from panicked sub-agent, got: %q", result)
+	}
+
+	sa, ok := mgr.Get(id)
+	if !ok {
+		t.Fatal("sub-agent not found")
+	}
+	if sa.Status != StatusFailed {
+		t.Fatalf("expected status %s, got %s", StatusFailed, sa.Status)
 	}
 }

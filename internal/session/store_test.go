@@ -274,3 +274,199 @@ func TestLoadWithMultipleCheckpoints(t *testing.T) {
 		t.Fatalf("expected last msg 'final response', got '%s'", loaded.Messages[2].Content[0].Text)
 	}
 }
+
+func TestLoadWithEmptyCheckpoint(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "empty-checkpoint"
+	ses.Workspace = "/tmp/empty-ws"
+
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+	}
+	store.Save(ses)
+
+	// Append checkpoint with empty messages — simulates summarize producing
+	// zero retained messages (edge case).
+	err := store.AppendCheckpoint(ses, []provider.Message{}, 0)
+	if err != nil {
+		t.Fatalf("AppendCheckpoint with empty messages failed: %v", err)
+	}
+
+	// Append a post-checkpoint message
+	store.AppendMessage(ses, provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "after empty cp"}}})
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Messages: only the post-checkpoint message (empty checkpoint contributes 0)
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("expected 1 message (empty checkpoint + 1 post-checkpoint), got %d", len(loaded.Messages))
+	}
+	if loaded.Messages[0].Role != "assistant" {
+		t.Fatalf("expected role 'assistant', got '%s'", loaded.Messages[0].Role)
+	}
+	if loaded.Messages[0].Content[0].Text != "after empty cp" {
+		t.Fatalf("expected 'after empty cp', got '%s'", loaded.Messages[0].Content[0].Text)
+	}
+
+	// Metadata must survive past the checkpoint
+	if loaded.Title != "empty-checkpoint" {
+		t.Fatalf("title lost after empty checkpoint: got '%s'", loaded.Title)
+	}
+	if loaded.Workspace != "/tmp/empty-ws" {
+		t.Fatalf("workspace lost after empty checkpoint: got '%s'", loaded.Workspace)
+	}
+	if loaded.Vendor != "zai" {
+		t.Fatalf("vendor lost: got '%s'", loaded.Vendor)
+	}
+	if loaded.Endpoint != "cn-coding-openai" {
+		t.Fatalf("endpoint lost: got '%s'", loaded.Endpoint)
+	}
+	if loaded.Model != "glm-5-turbo" {
+		t.Fatalf("model lost: got '%s'", loaded.Model)
+	}
+}
+
+func TestLoadCheckpointWithNoPostCheckpointMessages(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "cp-only"
+	ses.Workspace = "/tmp/cp-ws"
+
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "original"}}},
+	}
+	store.Save(ses)
+
+	// Append checkpoint — no messages after it, simulating a crash
+	// immediately after compaction.
+	compacted := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summary only"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "retained user context"}}},
+	}
+	store.AppendCheckpoint(ses, compacted, 10)
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Must have exactly the 2 checkpoint messages — no more, no less
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("expected 2 messages from checkpoint, got %d", len(loaded.Messages))
+	}
+	if loaded.Messages[0].Role != "system" {
+		t.Fatalf("expected first role 'system', got '%s'", loaded.Messages[0].Role)
+	}
+	if loaded.Messages[0].Content[0].Text != "summary only" {
+		t.Fatalf("expected first text 'summary only', got '%s'", loaded.Messages[0].Content[0].Text)
+	}
+	if loaded.Messages[1].Role != "user" {
+		t.Fatalf("expected second role 'user', got '%s'", loaded.Messages[1].Role)
+	}
+	if loaded.Messages[1].Content[0].Text != "retained user context" {
+		t.Fatalf("expected second text 'retained user context', got '%s'", loaded.Messages[1].Content[0].Text)
+	}
+
+	// Metadata preserved through checkpoint
+	if loaded.Title != "cp-only" {
+		t.Fatalf("title lost: got '%s'", loaded.Title)
+	}
+	if loaded.Workspace != "/tmp/cp-ws" {
+		t.Fatalf("workspace lost: got '%s'", loaded.Workspace)
+	}
+}
+
+func TestAppendCheckpointUpdatesIndex(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "index-test"
+	ses.Messages = []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "msg"}}},
+	}
+	store.Save(ses)
+
+	originalUpdatedAt := ses.UpdatedAt
+	time.Sleep(10 * time.Millisecond) // ensure time difference
+
+	compacted := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "summarized"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "post-summary"}}},
+	}
+	if err := store.AppendCheckpoint(ses, compacted, 10); err != nil {
+		t.Fatalf("AppendCheckpoint failed: %v", err)
+	}
+
+	// Verify index was updated (UpdatedAt should be newer)
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *Session
+	for _, s := range list {
+		if s.ID == ses.ID {
+			found = s
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("session not found in index")
+	}
+	if !found.UpdatedAt.After(originalUpdatedAt) {
+		t.Fatalf("index UpdatedAt not updated after checkpoint: original=%v current=%v", originalUpdatedAt, found.UpdatedAt)
+	}
+	// Title must survive through index round-trip
+	if found.Title != "index-test" {
+		t.Fatalf("title lost in index: got '%s'", found.Title)
+	}
+
+	// Verify MsgCount reflects checkpoint content by loading via index ID
+	loaded, err := store.Load(found.ID)
+	if err != nil {
+		t.Fatalf("Load after index update failed: %v", err)
+	}
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("expected 2 checkpoint messages on reload, got %d", len(loaded.Messages))
+	}
+}
+
+func TestAppendCheckpointFileNotExist(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Title = "no-file"
+
+	// Do NOT call Save — the JSONL file does not exist yet.
+	// AppendCheckpoint should create it (O_CREATE flag).
+	compacted := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "from scratch"}}},
+	}
+	if err := store.AppendCheckpoint(ses, compacted, 5); err != nil {
+		t.Fatalf("AppendCheckpoint on non-existent file should succeed, got: %v", err)
+	}
+
+	loaded, err := store.Load(ses.ID)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("expected 1 checkpoint message, got %d", len(loaded.Messages))
+	}
+	if loaded.Messages[0].Content[0].Text != "from scratch" {
+		t.Fatalf("expected 'from scratch', got '%s'", loaded.Messages[0].Content[0].Text)
+	}
+}

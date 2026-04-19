@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -113,7 +114,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q has no executable content", cmd.Name)}, nil
 	}
 
-	mgr := subagent.NewManager(config.SubAgentConfig{MaxConcurrent: 1})
+	mgr := subagent.NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: 5 * time.Minute})
 	id := mgr.Spawn(task, cmd.Name, cmd.AllowedTools, ctx)
 	allToolInfo := make([]subagent.ToolInfo, 0, len(t.Tools.List()))
 	for _, tl := range t.Tools.List() {

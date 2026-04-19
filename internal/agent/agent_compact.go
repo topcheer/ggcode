@@ -190,9 +190,9 @@ func (a *Agent) forceCompactAndPause(ctx context.Context, onEvent func(provider.
 	}
 	newTokens := a.contextManager.TokenCount()
 	debug.Log("agent", "autopilot loop guard: compact completed (%d → %d tokens)", tokens, newTokens)
-	if newTokens < tokens*7/10 {
-		a.maybeSaveCheckpoint()
-	}
+	// Always save checkpoint for forced compaction — it's initiator-driven
+	// and represents a deliberate state transition.
+	a.maybeSaveCheckpoint()
 	return nil
 }
 
@@ -207,7 +207,6 @@ func (a *Agent) maybeSaveCheckpoint() {
 		return
 	}
 
-	msgs := a.contextManager.Messages()
-	tokenCount := a.contextManager.TokenCount()
+	msgs, tokenCount := a.contextManager.MessagesAndTokenCount()
 	fn(msgs, tokenCount)
 }

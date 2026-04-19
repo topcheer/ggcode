@@ -23,6 +23,9 @@ type ContextManager interface {
 	Add(msg provider.Message)
 	Messages() []provider.Message
 	TokenCount() int
+	// MessagesAndTokenCount returns both values under a single lock,
+	// guaranteeing a consistent snapshot.
+	MessagesAndTokenCount() ([]provider.Message, int)
 	MaxTokens() int
 	SetMaxTokens(n int)
 	SetOutputReserve(n int)
@@ -148,6 +151,14 @@ func (m *Manager) Messages() []provider.Message {
 	out := make([]provider.Message, len(m.messages))
 	copy(out, m.messages)
 	return out
+}
+
+func (m *Manager) MessagesAndTokenCount() ([]provider.Message, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]provider.Message, len(m.messages))
+	copy(out, m.messages)
+	return out, m.tokenCountLocked()
 }
 
 func (m *Manager) TokenCount() int {
