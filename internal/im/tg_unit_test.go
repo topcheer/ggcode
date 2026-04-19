@@ -105,14 +105,15 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_call_edit", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`}}, "✏️ 编辑文件: `main.go`"},
 		{"tool_call_todo", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "todo_write"}}, "📋 更新待办列表"},
 		{"tool_result_nil", OutboundEvent{Kind: OutboundEventToolResult}, ""},
-		// Tool results — new concise style (mirrors terminal follow display)
-		{"tool_result_bash", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "file1.txt\nfile2.txt"}}, "  ✓ $ \n    file1.txt\n    file2.txt"},
-		{"tool_result_bash_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"ls"}`, Result: "file1.txt\nfile2.txt"}}, "  ✓ $ ls\n    file1.txt\n    file2.txt"},
-		{"tool_result_bash_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "command not found", IsError: true}}, "  ✗ Bash\n    command not found"},
+		// Tool results — command style: icon + bash code block for cmd + plain code block for output
+		{"tool_result_bash", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "file1.txt\nfile2.txt"}}, "✓\n```\nfile1.txt\nfile2.txt\n```"},
+		{"tool_result_bash_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"ls"}`, Result: "file1.txt\nfile2.txt"}}, "✓\n```bash\nls\n```\n```\nfile1.txt\nfile2.txt\n```"},
+		{"tool_result_bash_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"bad_cmd"}`, Result: "command not found", IsError: true}}, "✗\n```bash\nbad_cmd\n```\n```\ncommand not found\n```"},
 		{"tool_result_read_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Result: "file content..."}}, ""},
 		{"tool_result_read_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Result: "no such file", IsError: true}}, "  ✗ Read File\n    no such file"},
 		{"tool_result_edit_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Result: "ok"}}, "  ✓ Edit"},
-		{"tool_result_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: ""}}, "  ✓ $ "},
+		{"tool_result_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: ""}}, "✓"},
+		{"tool_result_empty_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"echo ok"}`, Result: ""}}, "✓\n```bash\necho ok\n```\n```\n(无输出)\n```"},
 		{"unknown", OutboundEvent{Kind: "unknown"}, ""},
 	}
 	for _, tc := range tests {

@@ -16,6 +16,13 @@ If you want a terminal-native coding workflow that feels like a product, not a d
 
 ## Installation
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap topcheer/ggcode
+brew install ggcode
+```
+
 ### Go installer
 
 ```bash
