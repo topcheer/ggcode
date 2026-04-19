@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 // setupModelForPaste creates a minimal model ready to accept paste events.
@@ -268,3 +269,139 @@ func TestIMPanelPasteTakesPriorityOverMainInput(t *testing.T) {
 
 // ensure im import is used
 var _ im.AdapterState
+
+// ============================================================
+// Tests for paths originally fixed by Claude's paste commit
+// ============================================================
+
+// --- Provider panel modelFilter paste ---
+
+func TestProviderPanelModelFilterPaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.SetConfig(&config.Config{
+		Vendor:   "test",
+		Endpoint: "default",
+		Vendors: map[string]config.VendorConfig{
+			"test": {
+				Endpoints: map[string]config.EndpointConfig{
+					"default": {
+						Protocol: "openai",
+						Models:   []string{"gpt-4", "gpt-4o", "gpt-4o-mini"},
+					},
+				},
+			},
+		},
+	})
+	m.openProviderPanel()
+	m.providerPanel.modelFilter.Focus()
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "gpt-4o"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.providerPanel.modelFilter.Value(), "gpt-4o") {
+		t.Fatalf("expected modelFilter to contain pasted text, got %q", m.providerPanel.modelFilter.Value())
+	}
+}
+
+// --- Model panel filter paste ---
+
+func TestModelPanelFilterPaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.modelPanel = &modelPanelState{
+		models:   []string{"gpt-4", "gpt-4o", "gpt-4o-mini"},
+		selected: 0,
+	}
+	ti := textinput.New()
+	ti.Focus()
+	m.modelPanel.filter = ti
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "gpt-4o"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.modelPanel.filter.Value(), "gpt-4o") {
+		t.Fatalf("expected modelPanel filter to contain pasted text, got %q", m.modelPanel.filter.Value())
+	}
+}
+
+// --- Impersonate panel header key input paste ---
+
+func TestImpersonatePanelHeaderKeyInputPaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.openImpersonatePanel()
+	ti := textinput.New()
+	ti.Focus()
+	m.impersonatePanel.headerKeyInput = ti
+	m.impersonatePanel.editingHeader = 0 // >= 0 means editing a header
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "Authorization"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.impersonatePanel.headerKeyInput.Value(), "Authorization") {
+		t.Fatalf("expected headerKeyInput to contain pasted text, got %q", m.impersonatePanel.headerKeyInput.Value())
+	}
+}
+
+// --- Impersonate panel header value input paste ---
+
+func TestImpersonatePanelHeaderValueInputPaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.openImpersonatePanel()
+	// headerKeyInput NOT focused, headerValueInput focused
+	m.impersonatePanel.headerKeyInput = textinput.New()
+	vi := textinput.New()
+	vi.Focus()
+	m.impersonatePanel.headerValueInput = vi
+	m.impersonatePanel.editingHeader = 0
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "Bearer sk-xxx"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.impersonatePanel.headerValueInput.Value(), "Bearer sk-xxx") {
+		t.Fatalf("expected headerValueInput to contain pasted text, got %q", m.impersonatePanel.headerValueInput.Value())
+	}
+}
+
+// --- Harness context prompt input paste ---
+
+func TestHarnessContextPromptInputPaste(t *testing.T) {
+	m := setupModelForPaste()
+	ti := textinput.New()
+	ti.Focus()
+	m.harnessContextPrompt = &harnessContextPromptState{
+		inputFocus: true,
+		input:      ti,
+	}
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "user context data"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.harnessContextPrompt.input.Value(), "user context data") {
+		t.Fatalf("expected harness context prompt input to contain pasted text, got %q", m.harnessContextPrompt.input.Value())
+	}
+}
+
+// --- Questionnaire input paste ---
+
+func TestQuestionnaireInputPaste(t *testing.T) {
+	m := setupModelForPaste()
+	ti := textinput.New()
+	ti.Focus()
+	m.pendingQuestionnaire = &questionnaireState{
+		request: toolpkg.AskUserRequest{
+			Questions: []toolpkg.AskUserQuestion{
+				{ID: "q1", Title: "Test", Prompt: "Enter value", Kind: "text", AllowFreeform: true},
+			},
+		},
+		input: ti,
+	}
+	// Must initialize answers slice to match questions length
+	m.pendingQuestionnaire.answers = make([]questionnaireAnswerState, 1)
+	m.pendingQuestionnaire.answers[0].selected = make(map[string]struct{})
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "answer-from-clipboard"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.pendingQuestionnaire.input.Value(), "answer-from-clipboard") {
+		t.Fatalf("expected questionnaire input to contain pasted text, got %q", m.pendingQuestionnaire.input.Value())
+	}
+}
