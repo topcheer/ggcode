@@ -28,6 +28,7 @@ type Knight struct {
 	promoter *Promoter
 	store    session.Store
 	emitter  Emitter
+	factory  AgentFactory
 	homeDir  string
 	projDir  string
 
@@ -35,6 +36,10 @@ type Knight struct {
 	running  bool
 	cancel   context.CancelFunc
 	lastIdle time.Time
+
+	// Throttle timestamps — prevent running the same task every tick
+	lastAnalysis   time.Time
+	lastValidation time.Time
 }
 
 // New creates a new Knight instance.
@@ -107,6 +112,13 @@ func (k *Knight) SetEmitter(e Emitter) {
 	k.emitter = e
 }
 
+// SetFactory sets the agent factory for LLM-powered tasks.
+func (k *Knight) SetFactory(f AgentFactory) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.factory = f
+}
+
 // Index returns the skill index for external access.
 func (k *Knight) Index() *SkillIndex {
 	return k.index
@@ -129,7 +141,7 @@ func (k *Knight) Status() string {
 func (k *Knight) NotifyActivity() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.lastIdle = time.Time{} // reset idle timer
+	k.lastIdle = time.Now()
 }
 
 // CanPerformTask checks if Knight has budget and is allowed to run.
@@ -242,26 +254,38 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 		return
 	}
 
-	// Rotate tasks based on time of day
-	hour := now.Hour()
+	// Only run heavy tasks when user is idle
+	isIdle := k.isIdle(now)
 
 	// Every tick: check for staging skills that need attention
 	k.reviewStagingSkills(ctx)
 
-	// Hourly: analyze recent sessions for skill candidates
-	if hour%1 == 0 && k.hasCapability("skill_creation") {
+	// Hourly (throttled): analyze recent sessions for skill candidates
+	if isIdle && now.Sub(k.lastAnalysis) >= time.Hour && k.hasCapability("skill_creation") {
+		k.lastAnalysis = now
 		k.analyzeRecentSessions(ctx)
 	}
 
 	// Every 6 hours: validate all skills
-	if hour%6 == 0 && k.hasCapability("skill_validation") {
+	if now.Sub(k.lastValidation) >= 6*time.Hour && k.hasCapability("skill_validation") {
+		k.lastValidation = now
 		k.validateAllSkills(ctx)
 	}
 
 	// Nightly (2 AM): deep maintenance
-	if hour == 2 {
+	if now.Hour() == 2 && now.Sub(k.lastValidation) >= 24*time.Hour {
 		k.nightlyMaintenance(ctx)
 	}
+}
+
+// isIdle returns true if no user activity has happened for the configured idle delay.
+func (k *Knight) isIdle(now time.Time) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.lastIdle.IsZero() {
+		return true // never set = assume idle
+	}
+	return now.Sub(k.lastIdle) >= time.Duration(k.cfg.IdleDelaySec)*time.Second
 }
 
 func (k *Knight) hasCapability(cap string) bool {
@@ -297,16 +321,17 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 		if k.cfg.TrustLevel == "auto" {
 			debug.Log("knight", "auto-promoting skill %s", s.Name)
 			k.promoter.Promote(s)
-			k.emitReport(fmt.Sprintf("✅ Skill 已自动晋升：%s (%s)", s.Name, s.Meta.Description))
+			k.emitReport(fmt.Sprintf("✅ Skill auto-promoted: %s (%s)", s.Name, s.Meta.Description))
 		} else {
 			// For "staged" trust level, notify user for review
-			k.emitReport(fmt.Sprintf("📝 新 Skill 候选：%s\n%s\n👉 /knight approve %s 晋升 / /knight reject %s 拒绝",
+			k.emitReport(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
 				s.Name, s.Meta.Description, s.Name, s.Name))
 		}
 	}
 }
 
 // analyzeRecentSessions scans recent session history for reusable patterns.
+// High-score candidates are refined via LLM and written to staging.
 func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 	if k.store == nil {
 		return nil
@@ -318,12 +343,40 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 		return err
 	}
 
-	if result.SessionsAnalyzed > 0 && len(result.SkillCandidates) > 0 {
+	if result.SessionsAnalyzed == 0 {
+		return nil
+	}
+
+	// Process candidates: high-score ones get LLM refinement + staging
+	var reported []SkillCandidate
+	for _, c := range result.SkillCandidates {
+		if c.Score >= 1.0 && k.factory != nil {
+			// High-value candidate: use LLM to generate a proper skill
+			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.factory)
+			if genErr != nil {
+				debug.Log("knight", "LLM skill generation failed for %s: %v", c.Name, genErr)
+				reported = append(reported, c)
+				continue
+			}
+			path, writeErr := k.promoter.WriteStaging(c.Name, c.Scope, content)
+			if writeErr != nil {
+				debug.Log("knight", "write staging failed for %s: %v", c.Name, writeErr)
+				reported = append(reported, c)
+				continue
+			}
+			c.Reason += fmt.Sprintf(" (refined and staged: %s)", filepath.Base(path))
+			reported = append(reported, c)
+		} else {
+			reported = append(reported, c)
+		}
+	}
+
+	if len(reported) > 0 {
 		var report strings.Builder
-		report.WriteString(fmt.Sprintf("📊 分析了 %d 个 session，发现 %d 个可复用模式",
-			result.SessionsAnalyzed, len(result.SkillCandidates)))
-		for _, c := range result.SkillCandidates {
-			report.WriteString(fmt.Sprintf("\n• %s (%s): %s", c.Name, c.Scope, c.Description))
+		report.WriteString(fmt.Sprintf("📊 Analyzed %d sessions, found %d patterns",
+			result.SessionsAnalyzed, len(reported)))
+		for _, c := range reported {
+			report.WriteString(fmt.Sprintf("\n• [%.1f] %s (%s): %s", c.Score, c.Name, c.Scope, c.Description))
 		}
 		k.emitReport(report.String())
 	}
@@ -350,7 +403,7 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 // nightlyMaintenance runs deep maintenance tasks.
 func (k *Knight) nightlyMaintenance(ctx context.Context) {
 	debug.Log("knight", "running nightly maintenance")
-	k.emitReport("Knight 夜间维护开始")
+	k.emitReport("Knight nightly maintenance started")
 	// TODO: clean old snapshots, compress changelog, check test coverage
 }
 

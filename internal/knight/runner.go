@@ -14,6 +14,7 @@ import (
 type TaskResult struct {
 	TaskName string
 	Output   string
+	Tokens   provider.TokenUsage
 	Duration time.Duration
 	Error    error
 }
@@ -25,11 +26,11 @@ type AgentRunner interface {
 }
 
 // AgentFactory creates a Knight agent with restricted tools.
-type AgentFactory func(systemPrompt string, maxTurns int) (AgentRunner, error)
+// The onUsage callback receives token usage after each LLM call.
+type AgentFactory func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error)
 
 // RunTask executes a single Knight task with budget tracking.
-// Token usage is tracked by the caller wiring the agent's onUsage callback
-// to the budget — the runner itself focuses on orchestration.
+// Token usage is tracked via the onUsage callback wired into the agent.
 func (k *Knight) RunTask(ctx context.Context, taskName, prompt string, factory AgentFactory) TaskResult {
 	start := time.Now()
 	result := TaskResult{TaskName: taskName}
@@ -44,8 +45,21 @@ func (k *Knight) RunTask(ctx context.Context, taskName, prompt string, factory A
 	// Build system prompt for Knight tasks
 	sysPrompt := buildKnightSystemPrompt(taskName)
 
+	// Wire up usage tracking — each LLM call's tokens go to budget
+	var totalUsage provider.TokenUsage
+	onUsage := func(usage provider.TokenUsage) {
+		totalUsage.InputTokens += usage.InputTokens
+		totalUsage.OutputTokens += usage.OutputTokens
+		totalUsage.CacheRead += usage.CacheRead
+		totalUsage.CacheWrite += usage.CacheWrite
+		// Record immediately so budget stays current
+		if err := k.budget.Record(taskName, usage.InputTokens, usage.OutputTokens); err != nil {
+			debug.Log("knight", "budget record error: %v", err)
+		}
+	}
+
 	// Create agent via factory
-	runner, err := factory(sysPrompt, 10) // max 10 turns for Knight tasks
+	runner, err := factory(sysPrompt, 10, onUsage)
 	if err != nil {
 		result.Error = fmt.Errorf("create agent: %w", err)
 		return result
@@ -64,10 +78,12 @@ func (k *Knight) RunTask(ctx context.Context, taskName, prompt string, factory A
 	})
 
 	result.Output = output.String()
+	result.Tokens = totalUsage
 	result.Duration = time.Since(start)
 	result.Error = err
 
-	debug.Log("knight", "task %s completed in %v", taskName, result.Duration)
+	debug.Log("knight", "task %s completed in %v (tokens: in=%d out=%d)",
+		taskName, result.Duration, totalUsage.InputTokens, totalUsage.OutputTokens)
 	return result
 }
 
