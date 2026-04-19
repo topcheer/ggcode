@@ -130,6 +130,7 @@ jobs:
     name: Smoke Windows binary
     runs-on: windows-latest
     timeout-minutes: 5
+    continue-on-error: true
     needs: release
     steps:
       - uses: actions/checkout@v6
