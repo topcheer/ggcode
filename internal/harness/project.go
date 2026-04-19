@@ -10,6 +10,15 @@ import (
 	"strings"
 )
 
+// gitCmd creates a git command with GIT_PAGER=cat.
+func gitCmd(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+	return cmd
+}
+
+const harnessCoAuthor = "\n\nCo-Authored-By: ggcode <noreply@ggcode.dev>"
+
 type Project struct {
 	RootDir      string
 	ConfigPath   string
@@ -141,7 +150,7 @@ func ensureGitRepository(ctx context.Context, root string) (bool, error) {
 	if isGitWorkingTree(ctx, root) {
 		return false, nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "init", "--quiet", root)
+	cmd := gitCmd(ctx, "init", "--quiet", root)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false, fmt.Errorf("initialize git repository: %s", strings.TrimSpace(string(out)))
@@ -160,14 +169,14 @@ func commitInitialHarnessScaffold(ctx context.Context, root string, created, ove
 	if len(paths) == 0 {
 		return "", nil
 	}
-	addCmd := exec.CommandContext(ctx, "git", append([]string{"add", "--"}, paths...)...)
+	addCmd := gitCmd(ctx, append([]string{"add", "--"}, paths...)...)
 	addCmd.Dir = root
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("stage harness scaffold: %s", strings.TrimSpace(string(out)))
 	}
-	commitArgs := []string{"commit", "--quiet", "-m", "chore: initialize harness scaffold"}
+	commitArgs := []string{"commit", "--quiet", "-m", "chore: initialize harness scaffold" + harnessCoAuthor}
 	commitArgs = append(commitAuthorConfig(ctx, root), commitArgs...)
-	commitCmd := exec.CommandContext(ctx, "git", commitArgs...)
+	commitCmd := gitCmd(ctx, commitArgs...)
 	commitCmd.Dir = root
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("commit harness scaffold: %s", strings.TrimSpace(string(out)))
@@ -223,13 +232,13 @@ func collectInitPath(result *InitResult, path string, created bool, overwritten 
 }
 
 func hasHeadCommit(ctx context.Context, root string) bool {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "HEAD")
+	cmd := gitCmd(ctx, "rev-parse", "--verify", "HEAD")
 	cmd.Dir = root
 	return cmd.Run() == nil
 }
 
 func gitHeadCommit(ctx context.Context, root string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	cmd := gitCmd(ctx, "rev-parse", "HEAD")
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -239,9 +248,9 @@ func gitHeadCommit(ctx context.Context, root string) (string, error) {
 }
 
 func commitAuthorConfig(ctx context.Context, root string) []string {
-	nameCmd := exec.CommandContext(ctx, "git", "config", "--get", "user.name")
+	nameCmd := gitCmd(ctx, "config", "--get", "user.name")
 	nameCmd.Dir = root
-	emailCmd := exec.CommandContext(ctx, "git", "config", "--get", "user.email")
+	emailCmd := gitCmd(ctx, "config", "--get", "user.email")
 	emailCmd.Dir = root
 	if nameCmd.Run() == nil && emailCmd.Run() == nil {
 		return nil

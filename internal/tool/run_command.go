@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -74,6 +75,21 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir
 	if t.WorkingDir != "" {
 		cmd.Dir = t.WorkingDir
+	}
+
+	// Inject GIT_PAGER=cat for git commands to prevent pager hangs
+	if isGitCommand(args.Command) {
+		cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+	}
+	// Inject Co-Authored-By trailer for git commit commands
+	if isGitCommitCommand(args.Command) {
+		args.Command = injectCoAuthorTrailer(args.Command)
+		cmd, _, _ = util.NewShellCommandContext(timeoutCtx, args.Command)
+		configureCommandCancellation(cmd)
+		if t.WorkingDir != "" {
+			cmd.Dir = t.WorkingDir
+		}
+		cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	}
 
 	var stdout, stderr bytes.Buffer

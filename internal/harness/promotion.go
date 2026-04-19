@@ -95,7 +95,7 @@ func mergePromotedBranch(ctx context.Context, project Project, branch string) er
 	if len(overlaps) > 0 {
 		return fmt.Errorf("project workspace has overlapping uncommitted or untracked files; commit/stash them first or sync them into the task worktree before promotion: %s", strings.Join(overlaps, ", "))
 	}
-	cmd := exec.CommandContext(ctx, "git", "merge", "--no-ff", "--no-edit", branch)
+	cmd := gitCmd(ctx, "merge", "--no-ff", "--no-edit", branch)
 	cmd.Dir = project.RootDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -115,13 +115,13 @@ func ensurePromotionCommit(ctx context.Context, task *Task) error {
 	if !dirty {
 		return nil
 	}
-	addCmd := exec.CommandContext(ctx, "git", "add", "-A")
+	addCmd := gitCmd(ctx, "add", "-A")
 	addCmd.Dir = task.WorkspacePath
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("stage promotion changes for %s: %s", task.ID, strings.TrimSpace(string(out)))
 	}
 	for _, ignored := range promotionIgnoredPaths {
-		rmCmd := exec.CommandContext(ctx, "git", "rm", "--cached", "--ignore-unmatch", "--", ignored)
+		rmCmd := gitCmd(ctx, "rm", "--cached", "--ignore-unmatch", "--", ignored)
 		rmCmd.Dir = task.WorkspacePath
 		if out, err := rmCmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("exclude promotion runtime state for %s: %s", task.ID, strings.TrimSpace(string(out)))
@@ -135,7 +135,7 @@ func ensurePromotionCommit(ctx context.Context, task *Task) error {
 		return nil
 	}
 	message := fmt.Sprintf("harness promote %s: %s", task.ID, truncatePromotionMessage(task.Goal))
-	commitCmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
+	commitCmd := gitCmd(ctx, "commit", "-m", message+harnessCoAuthor)
 	commitCmd.Dir = task.WorkspacePath
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("commit promotion changes for %s: %s", task.ID, strings.TrimSpace(string(out)))
@@ -144,7 +144,7 @@ func ensurePromotionCommit(ctx context.Context, task *Task) error {
 }
 
 func gitDirty(ctx context.Context, workingDir string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd := gitCmd(ctx, "status", "--porcelain")
 	cmd.Dir = workingDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -154,7 +154,7 @@ func gitDirty(ctx context.Context, workingDir string) (bool, error) {
 }
 
 func gitHasStagedChanges(ctx context.Context, workingDir string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet", "--exit-code")
+	cmd := gitCmd(ctx, "diff", "--cached", "--quiet", "--exit-code")
 	cmd.Dir = workingDir
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
@@ -198,7 +198,7 @@ func promotionWorkspaceOverlaps(ctx context.Context, workingDir, branch string) 
 }
 
 func gitDirtyPaths(ctx context.Context, workingDir string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain", "--untracked-files=all")
+	cmd := gitCmd(ctx, "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = workingDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -230,7 +230,7 @@ func gitDirtyPaths(ctx context.Context, workingDir string) ([]string, error) {
 }
 
 func gitBranchChangedPaths(ctx context.Context, workingDir, branch string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "HEAD.."+branch)
+	cmd := gitCmd(ctx, "diff", "--name-only", "HEAD.."+branch)
 	cmd.Dir = workingDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

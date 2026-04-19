@@ -121,7 +121,7 @@ func PrepareWorkspace(ctx context.Context, project Project, cfg *Config, task *T
 		baseRef = strings.TrimSpace(cfg.Run.WorktreeBaseBranch)
 	}
 	workspacePath := filepath.Join(project.WorktreesDir, task.ID)
-	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-B", branch, workspacePath, baseRef)
+	cmd := gitCmd(ctx, "worktree", "add", "-B", branch, workspacePath, baseRef)
 	cmd.Dir = project.RootDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -287,7 +287,7 @@ func gitDirtyProjectPaths(ctx context.Context, rootDir string) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain", "--untracked-files=all")
+	cmd := gitCmd(ctx, "status", "--porcelain", "--untracked-files=all")
 	cmd.Dir = rootDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -357,7 +357,7 @@ func autoCommitWorktreeBase(ctx context.Context, rootDir string, dirtyPaths []st
 		return nil
 	}
 	addArgs := append([]string{"add", "-A", "--"}, dirtyPaths...)
-	addCmd := exec.CommandContext(ctx, "git", addArgs...)
+	addCmd := gitCmd(ctx, addArgs...)
 	addCmd.Dir = rootDir
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("stage dirty workspace paths (%s): %s", summarizeDirtyPaths(dirtyPaths, 8), strings.TrimSpace(string(out)))
@@ -370,9 +370,9 @@ func autoCommitWorktreeBase(ctx context.Context, rootDir string, dirtyPaths []st
 		return nil
 	}
 	message := buildWorktreeCheckpointMessage(dirtyPaths)
-	commitArgs := []string{"commit", "--quiet", "-m", message}
+	commitArgs := []string{"commit", "--quiet", "-m", message + harnessCoAuthor}
 	commitArgs = append(commitAuthorConfig(ctx, rootDir), commitArgs...)
-	commitCmd := exec.CommandContext(ctx, "git", commitArgs...)
+	commitCmd := gitCmd(ctx, commitArgs...)
 	commitCmd.Dir = rootDir
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("create checkpoint commit: %s", strings.TrimSpace(string(out)))
