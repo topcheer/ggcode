@@ -20,6 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -368,6 +369,17 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				Role:    "system",
 				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
 			})
+		}
+	}
+
+	// Start Knight background agent (if enabled)
+	homeDir, _ := os.UserHomeDir()
+	knightAgent := knight.New(cfg.Knight(), homeDir, workingDir, store)
+	if cfg.Knight().Enabled {
+		if err := knightAgent.Start(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "🌙 Knight started (budget: %dM tokens/day)\n", cfg.Knight().DailyTokenBudget/1_000_000)
 		}
 	}
 
