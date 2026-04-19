@@ -5,12 +5,12 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/im"
@@ -481,39 +481,36 @@ func (m Model) sidebarTrackedTodos() []todoStateItem {
 	if len(m.todoSnapshot) == 0 {
 		return nil
 	}
-	items := make([]todoStateItem, 0, len(m.todoSnapshot))
-	for _, td := range m.todoSnapshot {
-		switch td.Status {
-		case "in_progress", "done", "blocked", "failed":
+	items := make([]todoStateItem, 0, len(m.todoOrder))
+	for _, id := range m.todoOrder {
+		if td, ok := m.todoSnapshot[id]; ok {
 			items = append(items, td)
 		}
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		left := items[i].StartedAt
-		if left.IsZero() {
-			left = items[i].UpdatedAt
-		}
-		right := items[j].StartedAt
-		if right.IsZero() {
-			right = items[j].UpdatedAt
-		}
-		if left.Equal(right) {
-			return items[i].Content > items[j].Content
-		}
-		return left.After(right)
-	})
 	return items
 }
 
 func (m Model) renderSidebarTaskRow(task todoStateItem, width int) []string {
 	bullet, statusLabel := sidebarTaskStatusDecor(m.currentLanguage(), task.Status)
 	titleWidth := max(8, width-2)
-	title := truncateDisplayWidth(compactSingleLine(task.Content), titleWidth)
+	title := compactSingleLine(task.Content)
 	if title == "" {
 		title = firstNonEmpty(task.ID, "-")
 	}
+	wrapped := wordwrap.String(title, titleWidth)
+	lines := strings.Split(wrapped, "\n")
+	rows := make([]string, 0, len(lines)+1)
+	for i, line := range lines {
+		if i == 0 {
+			rows = append(rows, bullet+" "+line)
+		} else {
+			// Continuation lines aligned with the title text (bullet + space = 2 chars)
+			rows = append(rows, "  "+line)
+		}
+	}
 	detail := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  " + statusLabel)
-	return []string{bullet + " " + title, detail}
+	rows = append(rows, detail)
+	return rows
 }
 
 func sidebarTaskStatusDecor(lang Language, status string) (string, string) {
@@ -522,8 +519,10 @@ func sidebarTaskStatusDecor(lang Language, status string) (string, string) {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●"), sidebarTaskStatusText(lang, status)
 	case "blocked", "failed":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●"), sidebarTaskStatusText(lang, status)
-	default:
+	case "in_progress":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("●"), sidebarTaskStatusText(lang, status)
+	default: // pending and unknown
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("○"), sidebarTaskStatusText(lang, status)
 	}
 }
 
@@ -535,8 +534,10 @@ func sidebarTaskStatusText(lang Language, status string) string {
 			return "已完成"
 		case "blocked", "failed":
 			return "已失败"
-		default:
+		case "in_progress":
 			return "进行中"
+		default:
+			return "待处理"
 		}
 	default:
 		switch status {
@@ -544,8 +545,10 @@ func sidebarTaskStatusText(lang Language, status string) string {
 			return "done"
 		case "blocked", "failed":
 			return "failed"
-		default:
+		case "in_progress":
 			return "in progress"
+		default:
+			return "pending"
 		}
 	}
 }
