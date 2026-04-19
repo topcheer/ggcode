@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,11 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/session"
 )
+
+// Emitter is the interface Knight uses to send IM notifications.
+type Emitter interface {
+	EmitKnightReport(report string)
+}
 
 // Knight is the background auto-evolution agent. It runs scheduled tasks
 // during idle time, analyzes sessions, creates and validates skills.
@@ -21,6 +27,7 @@ type Knight struct {
 	index    *SkillIndex
 	promoter *Promoter
 	store    session.Store
+	emitter  Emitter
 	homeDir  string
 	projDir  string
 
@@ -91,6 +98,18 @@ func (k *Knight) Running() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.running
+}
+
+// SetEmitter sets the IM emitter for Knight notifications.
+func (k *Knight) SetEmitter(e Emitter) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.emitter = e
+}
+
+// Index returns the skill index for external access.
+func (k *Knight) Index() *SkillIndex {
+	return k.index
 }
 
 // Status returns a human-readable status string.
@@ -278,8 +297,12 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 		if k.cfg.TrustLevel == "auto" {
 			debug.Log("knight", "auto-promoting skill %s", s.Name)
 			k.promoter.Promote(s)
+			k.emitReport(fmt.Sprintf("✅ Skill 已自动晋升：%s (%s)", s.Name, s.Meta.Description))
+		} else {
+			// For "staged" trust level, notify user for review
+			k.emitReport(fmt.Sprintf("📝 新 Skill 候选：%s\n%s\n👉 /knight approve %s 晋升 / /knight reject %s 拒绝",
+				s.Name, s.Meta.Description, s.Name, s.Name))
 		}
-		// For "staged" trust level, leave for user review
 	}
 }
 
@@ -289,22 +312,20 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 		return nil
 	}
 
-	sessions, err := k.store.List()
+	analyzer := NewSessionAnalyzer(k)
+	result, err := analyzer.AnalyzeRecent(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Look at the 5 most recent sessions
-	limit := 5
-	if len(sessions) < limit {
-		limit = len(sessions)
-	}
-
-	for i := 0; i < limit; i++ {
-		ses := sessions[i]
-		debug.Log("knight", "analyzing session %s (%s)", ses.ID, ses.Title)
-		// TODO: load session messages, analyze tool call patterns,
-		// detect reusable workflows, create skill candidates
+	if result.SessionsAnalyzed > 0 && len(result.SkillCandidates) > 0 {
+		var report strings.Builder
+		report.WriteString(fmt.Sprintf("📊 分析了 %d 个 session，发现 %d 个可复用模式",
+			result.SessionsAnalyzed, len(result.SkillCandidates)))
+		for _, c := range result.SkillCandidates {
+			report.WriteString(fmt.Sprintf("\n• %s (%s): %s", c.Name, c.Scope, c.Description))
+		}
+		k.emitReport(report.String())
 	}
 
 	return nil
@@ -329,5 +350,16 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 // nightlyMaintenance runs deep maintenance tasks.
 func (k *Knight) nightlyMaintenance(ctx context.Context) {
 	debug.Log("knight", "running nightly maintenance")
+	k.emitReport("Knight 夜间维护开始")
 	// TODO: clean old snapshots, compress changelog, check test coverage
+}
+
+// emitReport sends a Knight report via IM if an emitter is configured.
+func (k *Knight) emitReport(report string) {
+	k.mu.Lock()
+	em := k.emitter
+	k.mu.Unlock()
+	if em != nil {
+		em.EmitKnightReport(report)
+	}
 }

@@ -513,6 +513,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleConfigCommand(parts)
 		case "/status":
 			return m.handleStatusCommand()
+		case "/knight":
+			return m.handleKnightCommand(parts)
 		case "/update":
 			return m.handleUpdateCommand()
 		default:
@@ -2364,5 +2366,69 @@ func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 		m.output.WriteString(m.t("agent.error", sa.Error))
 	}
 	m.output.WriteString("\n")
+	return nil
+}
+
+func (m Model) handleKnightCommand(parts []string) tea.Cmd {
+	if m.knight == nil {
+		m.output.WriteString("Knight is not available (only in daemon mode)\n")
+		return nil
+	}
+
+	subcmd := ""
+	if len(parts) > 1 {
+		subcmd = parts[1]
+	}
+
+	switch subcmd {
+	case "status", "":
+		m.output.WriteString(fmt.Sprintf("🌙 Knight: %s\n", m.knight.Status()))
+		// Show staging skills
+		staging, _ := m.knight.Index().StagingSkills()
+		if len(staging) > 0 {
+			m.output.WriteString("\nStaging skills:\n")
+			for _, s := range staging {
+				m.output.WriteString(fmt.Sprintf("  • %s (%s): %s\n", s.Name, s.Scope, s.Meta.Description))
+			}
+		}
+	case "approve":
+		if len(parts) < 3 {
+			m.output.WriteString("Usage: /knight approve <skill-name>\n")
+			return nil
+		}
+		name := parts[2]
+		if err := m.knight.PromoteStaging(name); err != nil {
+			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+		} else {
+			m.output.WriteString(fmt.Sprintf("✅ Skill '%s' promoted\n", name))
+		}
+	case "reject":
+		if len(parts) < 3 {
+			m.output.WriteString("Usage: /knight reject <skill-name>\n")
+			return nil
+		}
+		name := parts[2]
+		if err := m.knight.RejectStaging(name); err != nil {
+			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+		} else {
+			m.output.WriteString(fmt.Sprintf("❌ Skill '%s' rejected\n", name))
+		}
+	case "skills":
+		active, _ := m.knight.Index().ActiveSkills()
+		if len(active) == 0 {
+			m.output.WriteString("No active skills\n")
+		} else {
+			m.output.WriteString(fmt.Sprintf("Active skills (%d):\n", len(active)))
+			for _, s := range active {
+				status := "✓"
+				if s.Meta.Frozen {
+					status = "🔒"
+				}
+				m.output.WriteString(fmt.Sprintf("  %s %s (%s): %s [used: %d]\n", status, s.Name, s.Scope, s.Meta.Description, s.Meta.UsageCount))
+			}
+		}
+	default:
+		m.output.WriteString("Knight commands: status, approve <name>, reject <name>, skills\n")
+	}
 	return nil
 }
