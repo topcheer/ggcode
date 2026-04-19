@@ -59,7 +59,11 @@ func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapt
 			}
 		}()
 	})
-	s.ch <- queuedIMEvent{mgr: mgr, event: event, excludeAdapter: excludeAdapter}
+	select {
+	case s.ch <- queuedIMEvent{mgr: mgr, event: event, excludeAdapter: excludeAdapter}:
+	default:
+		debug.Log("emitter", "drop im event kind=%s: buffer full (len=%d)", event.Kind, len(s.ch))
+	}
 }
 
 // imTypingKeeper tracks the last typing trigger time to implement keepalive.
