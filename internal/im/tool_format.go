@@ -126,12 +126,11 @@ func formatToolResultText(tr *ToolResultInfo) string {
 		icon = "✗"
 	}
 	pretty := prettifyToolName(tr.ToolName)
-
-	resultPreview := summarizeIMResult(tr.Result, 100)
-	if resultPreview != "" {
-		return fmt.Sprintf("  %s %s\n    %s", icon, pretty, resultPreview)
+	output := strings.TrimSpace(tr.Result)
+	if output != "" {
+		return fmt.Sprintf("%s 🔧 %s\n```\n%s\n```", icon, pretty, output)
 	}
-	return fmt.Sprintf("  %s %s", icon, pretty)
+	return fmt.Sprintf("%s 🔧 %s", icon, pretty)
 }
 
 // formatSpecialIMToolResult returns (handled, formatted) for special tool types.
@@ -139,7 +138,7 @@ func formatToolResultText(tr *ToolResultInfo) string {
 // or intentionally suppressing it); handled=false means "use default formatting".
 func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	switch tr.ToolName {
-	case "run_command", "bash", "powershell", "start_command":
+	case "run_command", "bash", "powershell":
 		// Command tools always use the dedicated formatter (handles both success and error)
 		return true, formatIMCommandResult(tr)
 	case "todo_write":
@@ -162,6 +161,34 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMGitResult(tr)
 	case "ask_user":
 		return true, formatIMAskUserResult(tr)
+	case "start_command":
+		return true, formatIMStartCommandResult(tr)
+	case "stop_command":
+		return true, formatIMStopCommandResult(tr)
+	case "read_command_output":
+		return true, formatIMReadCmdOutputResult(tr)
+	case "wait_command":
+		return true, formatIMWaitCommandResult(tr)
+	case "write_command_input":
+		return true, formatIMWriteCmdInputResult(tr)
+	case "list_commands":
+		return true, formatIMListCommandsResult(tr)
+	case "spawn_agent":
+		return true, formatIMSpawnAgentResult(tr)
+	case "wait_agent":
+		return true, formatIMWaitAgentResult(tr)
+	case "list_agents":
+		return true, formatIMListAgentsResult(tr)
+	case "list_mcp_capabilities":
+		return true, formatIMMCPCapabilitiesResult(tr)
+	case "get_mcp_prompt":
+		return true, formatIMMCPPromptResult(tr)
+	case "read_mcp_resource":
+		return true, formatIMMCPResourceResult(tr)
+	case "skill":
+		return true, formatIMSkillResult(tr)
+	case "save_memory":
+		return true, formatIMSaveMemoryResult(tr)
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
@@ -181,6 +208,182 @@ func formatIMAskUserResult(tr *ToolResultInfo) string {
 		icon = "✗"
 	}
 	return icon + " 💬 收到回复"
+}
+
+// --- Background command tools ---
+
+// formatIMStartCommandResult renders start_command result.
+func formatIMStartCommandResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ ⚡ 后台命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ ⚡ 后台命令已启动"
+	}
+	return fmt.Sprintf("✓ ⚡ 后台命令\n```\n%s\n```", output)
+}
+
+// formatIMStopCommandResult renders stop_command result.
+func formatIMStopCommandResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🛑 停止命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🛑 命令已停止"
+	}
+	return fmt.Sprintf("✓ 🛑\n```\n%s\n```", output)
+}
+
+// formatIMReadCmdOutputResult renders read_command_output result.
+func formatIMReadCmdOutputResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 📄 读取输出\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 📄 (无新输出)"
+	}
+	return fmt.Sprintf("✓ 📄\n```\n%s\n```", output)
+}
+
+// formatIMWaitCommandResult renders wait_command result.
+func formatIMWaitCommandResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ ⏳ 等待命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ ⏳ 命令完成"
+	}
+	return fmt.Sprintf("✓ ⏳\n```\n%s\n```", output)
+}
+
+// formatIMWriteCmdInputResult renders write_command_input result.
+func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ ⌨️ 输入发送\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ ⌨️ 输入已发送"
+	}
+	return fmt.Sprintf("✓ ⌨️\n```\n%s\n```", output)
+}
+
+// formatIMListCommandsResult renders list_commands result.
+func formatIMListCommandsResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 📋 活动命令\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 📋 无活动命令"
+	}
+	return fmt.Sprintf("✓ 📋\n```\n%s\n```", output)
+}
+
+// --- Agent tools ---
+
+// formatIMSpawnAgentResult renders spawn_agent result.
+func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🤖 子任务\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🤖 子任务已启动"
+	}
+	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+}
+
+// formatIMWaitAgentResult renders wait_agent result.
+func formatIMWaitAgentResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🤖 子任务\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🤖 子任务完成"
+	}
+	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+}
+
+// formatIMListAgentsResult renders list_agents result.
+func formatIMListAgentsResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🤖 子任务列表\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🤖 无活动子任务"
+	}
+	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+}
+
+// --- MCP internal tools ---
+
+// formatIMMCPCapabilitiesResult renders list_mcp_capabilities result.
+func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔗 MCP 服务\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔗 MCP 服务列表"
+	}
+	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+}
+
+// formatIMMCPPromptResult renders get_mcp_prompt result.
+func formatIMMCPPromptResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔗 MCP Prompt\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔗 MCP Prompt"
+	}
+	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+}
+
+// formatIMMCPResourceResult renders read_mcp_resource result.
+func formatIMMCPResourceResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔗 资源读取\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔗 资源内容"
+	}
+	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+}
+
+// --- Productivity tools ---
+
+// formatIMSkillResult renders skill result.
+func formatIMSkillResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 🔧 技能加载\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 🔧 技能已加载"
+	}
+	return fmt.Sprintf("✓ 🔧\n```\n%s\n```", output)
+}
+
+// formatIMSaveMemoryResult renders save_memory result.
+func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("✗ 💾 记忆保存\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "✓ 💾 记忆已保存"
+	}
+	return fmt.Sprintf("✓ 💾\n```\n%s\n```", output)
 }
 
 // formatIMErrorResult formats error results for any tool.

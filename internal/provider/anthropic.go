@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -160,6 +161,14 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					case "message_delta":
 						outputTokens = int(event.Usage.OutputTokens)
+						// Check stop_reason for truncation / policy errors.
+						if stopReason := string(event.Delta.StopReason); stopReason != "" {
+							debug.Log("anthropic", "stop_reason=%s", stopReason)
+							if stopErr := anthropicStopReasonError(stopReason); stopErr != nil {
+								ch <- StreamEvent{Type: StreamEventError, Error: stopErr}
+								return
+							}
+						}
 
 					case "message_start":
 						inputTokens = int(event.Message.Usage.InputTokens)
@@ -329,4 +338,19 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 		}
 	}
 	return result
+}
+
+// anthropicStopReasonError returns an error for stop reasons that indicate
+// truncation or policy issues. Returns nil for normal completion reasons.
+func anthropicStopReasonError(reason string) error {
+	switch reason {
+	case "end_turn", "tool_use", "stop_sequence", "pause_turn":
+		return nil
+	case "max_tokens":
+		return fmt.Errorf("anthropic stream ended with stop_reason=max_tokens (output truncated)")
+	case "refusal":
+		return fmt.Errorf("anthropic stream ended with stop_reason=refusal (content filtered)")
+	default:
+		return fmt.Errorf("anthropic stream ended with stop_reason=%s", reason)
+	}
 }
