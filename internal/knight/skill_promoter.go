@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ type Promoter struct {
 	projectDir string
 }
 
+var safeSkillNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 // NewPromoter creates a skill promoter.
 func NewPromoter(homeDir, projectDir string) *Promoter {
 	return &Promoter{homeDir: homeDir, projectDir: projectDir}
@@ -28,6 +31,9 @@ func NewPromoter(homeDir, projectDir string) *Promoter {
 func (p *Promoter) Promote(entry *SkillEntry) error {
 	if !entry.Staging {
 		return fmt.Errorf("skill %q is not in staging", entry.Name)
+	}
+	if err := validateSkillName(entry.Name); err != nil {
+		return err
 	}
 
 	// Determine target directory
@@ -100,6 +106,9 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 	if entry.Staging {
 		return fmt.Errorf("skill %q is in staging and cannot be rolled back", entry.Name)
 	}
+	if err := validateSkillName(entry.Name); err != nil {
+		return err
+	}
 
 	snapshots, err := p.listSnapshots(entry.Name)
 	if err != nil {
@@ -130,6 +139,9 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 
 // WriteStaging writes a new skill to the appropriate staging directory.
 func (p *Promoter) WriteStaging(name, scope, content string) (string, error) {
+	if err := validateSkillName(name); err != nil {
+		return "", err
+	}
 	stagingDir := p.stagingDir(scope)
 	if stagingDir == "" {
 		return "", fmt.Errorf("unknown scope: %q", scope)
@@ -169,6 +181,9 @@ func (p *Promoter) stagingDir(scope string) string {
 
 // createSnapshot copies the current active skill to the snapshots directory.
 func (p *Promoter) createSnapshot(name, activePath string) error {
+	if err := validateSkillName(name); err != nil {
+		return err
+	}
 	snapDir := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots")
 	if err := os.MkdirAll(snapDir, 0755); err != nil {
 		return err
@@ -218,6 +233,9 @@ func (p *Promoter) appendChangelog(action, name, scope, path string) {
 }
 
 func (p *Promoter) listSnapshots(name string) ([]string, error) {
+	if err := validateSkillName(name); err != nil {
+		return nil, err
+	}
 	pattern := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots", name+".*.md")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -225,6 +243,17 @@ func (p *Promoter) listSnapshots(name string) ([]string, error) {
 	}
 	sort.Strings(matches)
 	return matches, nil
+}
+
+func validateSkillName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("skill name is empty")
+	}
+	if strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) || !safeSkillNamePattern.MatchString(name) {
+		return fmt.Errorf("unsafe skill name %q", name)
+	}
+	return nil
 }
 
 // updateTimestamps updates the skill's YAML frontmatter with proper timestamps.

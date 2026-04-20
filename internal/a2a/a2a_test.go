@@ -478,7 +478,7 @@ func TestHandleUnknownSkill(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	_, err := handler.Handle(context.Background(), "unknown-skill", Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "test"}},
-	})
+	}, "")
 	if err == nil {
 		t.Fatal("expected error for unknown skill")
 	}
@@ -492,7 +492,7 @@ func TestHandleEmptyInput(t *testing.T) {
 	// Empty text input for file-search should fail during execution.
 	task, err := handler.Handle(context.Background(), SkillFileSearch, Message{
 		Role: "user", Parts: []Part{},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +511,7 @@ func TestHandleDefaultSkill(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	task, err := handler.Handle(context.Background(), "", Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "test"}},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestCancelTask(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	task, _ := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "test"}},
-	})
+	}, "")
 
 	// Cancel the task.
 	if err := handler.CancelTask(task.ID); err != nil {
@@ -751,7 +751,7 @@ func TestHandlerConcurrentAccess(t *testing.T) {
 			_, _ = handler.Handle(context.Background(), SkillFullTask, Message{
 				Role:  "user",
 				Parts: []Part{{Kind: "text", Text: fmt.Sprintf("task %d", i)}},
-			})
+			}, "")
 		}(i)
 	}
 	wg.Wait()
@@ -759,6 +759,148 @@ func TestHandlerConcurrentAccess(t *testing.T) {
 	if handler.ActiveTaskCount() != 50 {
 		t.Logf("active tasks: %d (some may have completed)", handler.ActiveTaskCount())
 		// Don't fail — tasks without agent will complete as failed.
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-turn (input-required flow)
+// ---------------------------------------------------------------------------
+
+func TestRequestInput(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually set to working for the test.
+	handler.mu.Lock()
+	task.Status = TaskStatus{State: TaskStateWorking}
+	handler.mu.Unlock()
+
+	// Request input.
+	if err := handler.RequestInput(task.ID, "What file do you want to edit?"); err != nil {
+		t.Fatal(err)
+	}
+
+	gotTask, ok := handler.GetTask(task.ID)
+	if !ok {
+		t.Fatal("task not found")
+	}
+	if gotTask.Status.State != TaskStateInputRequired {
+		t.Errorf("expected input-required, got %s", gotTask.Status.State)
+	}
+	// Check agent question is in history.
+	lastMsg := gotTask.History[len(gotTask.History)-1]
+	if lastMsg.Role != "agent" || !containsStr(lastMsg.Parts[0].Text, "What file") {
+		t.Errorf("expected agent question in history, got: %+v", lastMsg)
+	}
+}
+
+func TestContinueTask(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Put task into input-required state.
+	handler.mu.Lock()
+	task.Status = TaskStatus{State: TaskStateInputRequired}
+	handler.mu.Unlock()
+
+	// Continue with user response.
+	_, err = handler.Handle(context.Background(), "", Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "main.go"}},
+	}, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotTask, _ := handler.GetTask(task.ID)
+	// original msg + continue msg (no agent question msg in this test)
+	if len(gotTask.History) != 2 {
+		t.Errorf("expected 2 history messages, got %d", len(gotTask.History))
+	}
+	// Last message should be the continuation.
+	lastMsg := gotTask.History[len(gotTask.History)-1]
+	if lastMsg.Parts[0].Text != "main.go" {
+		t.Errorf("expected 'main.go' in last message, got %s", lastMsg.Parts[0].Text)
+	}
+}
+
+func TestContinueTaskRejectsNonInputRequired(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Task is in "submitted" or "working" state — not input-required.
+	time.Sleep(100 * time.Millisecond)
+
+	_, err = handler.Handle(context.Background(), "", Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "response"}},
+	}, task.ID)
+	if err == nil {
+		t.Fatal("expected error for non-input-required task")
+	}
+	if !containsStr(err.Error(), "not in input-required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestContinueTaskNotFound(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	_, err := handler.Handle(context.Background(), "", Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "response"}},
+	}, "nonexistent-id")
+	if err == nil {
+		t.Fatal("expected error for nonexistent task")
+	}
+}
+
+func TestRequestInputRejectsNonWorking(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	task, _ := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	// Task is submitted, not working.
+	handler.mu.Lock()
+	task.Status = TaskStatus{State: TaskStateCompleted}
+	handler.mu.Unlock()
+
+	err := handler.RequestInput(task.ID, "question?")
+	if err == nil {
+		t.Fatal("expected error for non-working task")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Resubscribe (server-level)
+// ---------------------------------------------------------------------------
+
+func TestClientResubscribe(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "")
+
+	// Resubscribe to nonexistent task should fail.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := client.Resubscribe(ctx, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for resubscribing to nonexistent task")
 	}
 }
 

@@ -374,6 +374,9 @@ func trimHarnessRunOutputSection(rendered string) string {
 }
 
 func (m *Model) handleCommand(text string) tea.Cmd {
+	if m.knight != nil && strings.TrimSpace(text) != "" {
+		m.knight.NotifyActivity()
+	}
 	if shellCommand, ok := parseShellCommand(text); ok {
 		m.setShellMode(true)
 		return m.submitShellCommand(shellCommand, true)
@@ -2433,10 +2436,8 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		}
 		if len(parts) >= 3 {
 			name := parts[2]
-			for _, s := range staging {
-				if s.Name != name {
-					continue
-				}
+			s, err := m.knight.FindStagingSkill(name)
+			if err == nil {
 				result := knight.ValidateSkill(s)
 				content, err := os.ReadFile(s.Path)
 				if err != nil {
@@ -2462,7 +2463,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				m.output.WriteString("\n")
 				return nil
 			}
-			m.output.WriteString(fmt.Sprintf("Staging skill '%s' not found\n", name))
+			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
 			return nil
 		}
 		m.output.WriteString(fmt.Sprintf("Staging skills (%d):\n", len(staging)))
@@ -2585,16 +2586,8 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			m.output.WriteString("Usage: /knight rate <skill-name> <1-5>\n")
 			return nil
 		}
-		active, _ := m.knight.Index().ActiveSkills()
-		found := false
-		for _, s := range active {
-			if s.Name == name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			m.output.WriteString(fmt.Sprintf("Active skill '%s' not found\n", name))
+		if _, err := m.knight.FindActiveSkill(name); err != nil {
+			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
 			return nil
 		}
 		m.knight.RecordSkillEffectiveness(name, score)

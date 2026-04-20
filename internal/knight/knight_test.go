@@ -1,6 +1,7 @@
 package knight
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -1022,5 +1023,59 @@ Previous
 	}
 	if !contains(string(data), "# Previous") {
 		t.Fatalf("expected active skill to be restored from snapshot, got:\n%s", string(data))
+	}
+}
+
+func TestValidateSkillNameRejectsUnsafePaths(t *testing.T) {
+	for _, name := range []string{"../escape", "nested/name", `nested\name`} {
+		if err := validateSkillName(name); err == nil {
+			t.Fatalf("expected unsafe name %q to be rejected", name)
+		}
+	}
+	if err := validateSkillName("safe-name_1"); err != nil {
+		t.Fatalf("expected safe skill name to pass, got %v", err)
+	}
+}
+
+func TestFindActiveSkillRejectsAmbiguousUnscopedName(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	globalDir := filepath.Join(homeDir, ".ggcode", "skills", "build-flow")
+	projectDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(global) error = %v", err)
+	}
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	content := []byte(`---
+name: build-flow
+description: Build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds.
+
+## Steps
+1. Run the build
+`)
+	if err := os.WriteFile(filepath.Join(globalDir, "SKILL.md"), bytes.ReplaceAll(content, []byte("scope: project"), []byte("scope: global")), 0o644); err != nil {
+		t.Fatalf("WriteFile(global) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "SKILL.md"), content, 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+
+	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	if _, err := k.FindActiveSkill("build-flow"); err == nil {
+		t.Fatal("expected ambiguous unscoped reference to fail")
+	}
+	entry, err := k.FindActiveSkill("project:build-flow")
+	if err != nil || entry.Scope != "project" {
+		t.Fatalf("expected scoped reference to resolve project skill, got entry=%#v err=%v", entry, err)
 	}
 }

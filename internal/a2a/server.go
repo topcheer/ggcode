@@ -199,6 +199,8 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 		s.handleTaskGet(w, req)
 	case "tasks/cancel":
 		s.handleTaskCancel(w, req)
+	case "tasks/resubscribe":
+		s.handleTaskResubscribe(w, r, req)
 	default:
 		writeRPCError(w, req.ID, ErrMethodNotFound)
 	}
@@ -215,7 +217,7 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest) {
 		return
 	}
 
-	task, err := s.handler.Handle(context.Background(), params.Skill, params.Message)
+	task, err := s.handler.Handle(context.Background(), params.Skill, params.Message, params.TaskID)
 	if err != nil {
 		writeRPCError(w, req.ID, &JSONRPCError{
 			Code:    -32000,
@@ -258,7 +260,7 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 
-	task, err := s.handler.Handle(context.Background(), params.Skill, params.Message)
+	task, err := s.handler.Handle(context.Background(), params.Skill, params.Message, params.TaskID)
 	if err != nil {
 		writeRPCError(w, req.ID, &JSONRPCError{
 			Code:    -32000,
@@ -345,6 +347,61 @@ func (s *Server) handleTaskCancel(w http.ResponseWriter, req *JSONRPCRequest) {
 	}
 
 	writeRPCResult(w, req.ID, task)
+}
+
+func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
+	var params TaskSubscriptionParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		writeRPCError(w, req.ID, ErrInvalidParams)
+		return
+	}
+
+	task, ok := s.handler.GetTask(params.ID)
+	if !ok {
+		// Return JSON-RPC error. Note: this is HTTP 200 per JSON-RPC spec.
+		// Client should check the JSON-RPC error field, not HTTP status.
+		writeRPCError(w, req.ID, ErrTaskNotFound)
+		return
+	}
+
+	// If task is already terminal, just return it immediately.
+	if task.Status.IsTerminal() {
+		writeRPCResult(w, req.ID, task)
+		return
+	}
+
+	// Stream updates until terminal.
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeRPCResult(w, req.ID, task)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Send current state immediately.
+	s.sendSSE(w, flusher, req.ID, task)
+
+	// Poll until terminal.
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		<-ticker.C
+		t, ok := s.handler.GetTask(params.ID)
+		if !ok {
+			s.sendSSE(w, flusher, req.ID, map[string]interface{}{
+				"error": "task not found",
+			})
+			return
+		}
+
+		if t.Status.IsTerminal() {
+			s.sendSSE(w, flusher, req.ID, t)
+			return
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
