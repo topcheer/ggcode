@@ -302,6 +302,18 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ti.Placeholder = tr(LangEnglish, "input.placeholder")
 	ti.Focus()
 	ti.SetWidth(74)
+	// Apply bold to the input's own Text style so the composer text is rendered
+	// as bold without wrapping textinput.View() in an outer lipgloss style.
+	// Wrapping the View string (which already contains the virtual-cursor ANSI
+	// sequences) caused lipgloss v2 to re-encode/trim the trailing reverse-space
+	// the textinput uses for its end-of-line cursor, making the cursor look
+	// stuck on the previous character whenever the user typed a trailing space.
+	tiStyles := ti.Styles()
+	tiStyles.Focused.Text = tiStyles.Focused.Text.Bold(true)
+	tiStyles.Focused.Prompt = tiStyles.Focused.Prompt.Bold(true)
+	tiStyles.Blurred.Text = tiStyles.Blurred.Text.Bold(true)
+	tiStyles.Blurred.Prompt = tiStyles.Blurred.Prompt.Bold(true)
+	ti.SetStyles(tiStyles)
 
 	s := styles{
 		user:      lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true),

@@ -42,6 +42,46 @@ from task_templates import TASKS
 # Daemon lifecycle
 # ---------------------------------------------------------------------------
 
+def write_dummy_binding(working_dir: str):
+    """Pre-write the IM binding JSON so daemon finds the dummy adapter binding.
+
+    The daemon checks bindings before starting adapters. Dummy adapter's autoBind()
+    runs after StartCurrentBindingAdapter has already checked, so we must pre-seed.
+    """
+    import hashlib
+    bindings_path = Path.home() / ".ggcode" / "im-bindings.json"
+
+    # Normalize workspace path (EvalSymlinks + lowercase on macOS)
+    norm_dir = working_dir
+    try:
+        norm_dir = str(Path(working_dir).resolve())
+    except Exception:
+        pass
+
+    key = f"{norm_dir}\x00dummy"
+    binding = {
+        "Workspace": norm_dir,
+        "Platform": "dummy",
+        "Adapter": "dummy",
+        "TargetID": "eval-user",
+        "ChannelID": "eval-channel",
+        "BoundAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    # Load existing bindings, add ours
+    existing = {}
+    if bindings_path.exists():
+        try:
+            existing = json.loads(bindings_path.read_text())
+        except Exception:
+            pass
+
+    existing[key] = binding
+    bindings_path.parent.mkdir(parents=True, exist_ok=True)
+    bindings_path.write_text(json.dumps(existing, indent=2))
+    print(f"[eval] Pre-seeded binding for {norm_dir}")
+
+
 def start_daemon(
     config_path: str,
     port_file: str,
@@ -55,9 +95,12 @@ def start_daemon(
     # Clean up stale port file
     Path(port_file).unlink(missing_ok=True)
 
+    # Pre-seed IM binding so daemon finds dummy adapter
+    write_dummy_binding(working_dir)
+
     cmd = [
         "ggcode", "daemon",
-        "-c", config_path,
+        "--config", config_path,
         "--bypass",
     ]
     print(f"[eval] Starting daemon: {' '.join(cmd)}")
@@ -155,7 +198,7 @@ def consume_sse_events(
     """Connect to /events SSE stream and process events until task completes.
 
     Task completion is detected by:
-    1. Idle timeout: no events for TASK_IDLE_TIMEOUT seconds after a round_done
+    1. Idle timeout: no events for TASK_IDLE_TIMEOUT seconds after content received
     2. Hard timeout: task_timeout seconds total elapsed
 
     Returns event summary dict.
@@ -188,8 +231,9 @@ def consume_sse_events(
                     summary["timed_out"] = True
                     break
 
-                # Idle timeout after round_done
-                if seen_round_done and (now - last_event_time) > TASK_IDLE_TIMEOUT:
+                # Idle timeout: after receiving any meaningful content (text/tool),
+                # 30s of silence means the agent finished.
+                if summary["text_chunks"] > 0 and (now - last_event_time) > TASK_IDLE_TIMEOUT:
                     summary["completed"] = True
                     break
 
@@ -233,7 +277,7 @@ def consume_sse_events(
                         pass
 
             # Stream ended naturally
-            if not summary["timed_out"] and seen_round_done:
+            if not summary["timed_out"] and summary["text_chunks"] > 0:
                 summary["completed"] = True
 
     except httpx.ReadTimeout:
@@ -306,7 +350,6 @@ def run_task(
         prompt = task["description"]
     print(f"[eval] Prompt ({len(prompt)} chars): {prompt[:80]}...")
 
-    # Step 2: Send prompt with reset_metrics
     start_time = time.time()
 
     def send_fn(text: str):
@@ -322,7 +365,33 @@ def run_task(
             print(f"[eval] send error: {e}")
             return {}
 
-    # Initial send with metrics reset
+    # Step 2: Start SSE consumer in a thread FIRST, so we don't miss events.
+    # Then send the prompt. SSE connection must be established before /send
+    # to avoid missing fast agent responses.
+    import threading
+
+    sse_result = [None]  # mutable container for thread result
+
+    def sse_worker():
+        try:
+            sse_result[0] = consume_sse_events(base_url, llm, send_fn, timeout, log_file)
+        except Exception as e:
+            import traceback
+            print(f"[eval] SSE worker error: {e}")
+            traceback.print_exc()
+            sse_result[0] = {
+                "rounds": 0, "knight_reports": 0, "tool_calls": 0,
+                "tool_errors": 0, "ask_user_count": 0, "text_chunks": 0,
+                "timed_out": False, "completed": False, "events": [],
+            }
+
+    sse_thread = threading.Thread(target=sse_worker, daemon=True)
+    sse_thread.start()
+
+    # Small delay to let SSE connect
+    time.sleep(0.5)
+
+    # Step 3: Send prompt with metrics reset
     try:
         resp = httpx.post(
             f"{base_url}/send",
@@ -343,8 +412,13 @@ def run_task(
             "error": str(e),
         }
 
-    # Step 3: Consume SSE events until task completes or times out
-    summary = consume_sse_events(base_url, llm, send_fn, timeout, log_file)
+    # Step 4: Wait for SSE consumer to finish
+    sse_thread.join(timeout=timeout + 60)
+    summary = sse_result[0] or {
+        "rounds": 0, "knight_reports": 0, "tool_calls": 0,
+        "tool_errors": 0, "ask_user_count": 0, "text_chunks": 0,
+        "timed_out": True, "completed": False, "events": [],
+    }
 
     elapsed = time.time() - start_time
 

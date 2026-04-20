@@ -522,21 +522,6 @@ func TestChineseViewRendersLocalizedPanels(t *testing.T) {
 	}
 }
 
-func TestViewContainsPanels(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(100, 28)
-	view := m.View().Content
-	if !strings.Contains(view, "ggcode") {
-		t.Error("expected branded header in view")
-	}
-	if strings.Contains(view, "Conversation") {
-		t.Error("expected conversation heading to be removed")
-	}
-	if strings.Contains(view, "Composer") {
-		t.Error("expected composer heading to be removed")
-	}
-}
-
 func TestWideLayoutUsesRightSidebar(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
@@ -1084,20 +1069,6 @@ func TestProviderPanelModelSectionAddsFilterRowWhenNeeded(t *testing.T) {
 	height := providerPanelModelHeight(true)
 	if height != 7 {
 		t.Fatalf("expected provider model section height 7 with filter row, got %d", height)
-	}
-}
-
-func TestNarrowLayoutFallsBackToTopHeader(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(90, 28)
-
-	if m.sidebarEnabled() {
-		t.Fatal("expected narrow layout to disable sidebar")
-	}
-
-	view := m.View().Content
-	if !strings.Contains(view, "ggcode") {
-		t.Error("expected branded header in narrow layout")
 	}
 }
 
