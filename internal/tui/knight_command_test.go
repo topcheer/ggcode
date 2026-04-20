@@ -356,3 +356,53 @@ Do not use this for unrelated tasks.
 		t.Fatalf("expected staging summary, got %q", m.output.String())
 	}
 }
+
+func TestKnightRateCommandRejectsAmbiguousUnscopedName(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	globalDir := filepath.Join(homeDir, ".ggcode", "skills", "build-flow")
+	projectDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(global) error = %v", err)
+	}
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	globalSkill := `---
+name: build-flow
+description: Global build flow
+scope: global
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use this globally.
+
+## Steps
+1. Run the build
+`
+	projectSkill := strings.Replace(globalSkill, "scope: global", "scope: project", 1)
+	if err := os.WriteFile(filepath.Join(globalDir, "SKILL.md"), []byte(globalSkill), 0o644); err != nil {
+		t.Fatalf("WriteFile(global) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "SKILL.md"), []byte(projectSkill), 0o644); err != nil {
+		t.Fatalf("WriteFile(project) error = %v", err)
+	}
+
+	k := knight.New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	if err := k.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer k.Stop()
+
+	m := newTestModel()
+	m.SetKnight(k)
+	if cmd := m.handleKnightCommand([]string{"/knight", "rate", "build-flow", "5"}); cmd != nil {
+		t.Fatal("expected rate command to complete synchronously")
+	}
+	if !strings.Contains(m.output.String(), "multiple active skills") {
+		t.Fatalf("expected ambiguous-skill error, got %q", m.output.String())
+	}
+}

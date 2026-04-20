@@ -176,9 +176,9 @@ func (k *Knight) BudgetStatus() (used int, remaining int, limit int) {
 
 // SetSkillFrozen updates an active skill's frozen flag.
 func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
-	entry := k.index.FindActiveByName(name)
-	if entry == nil {
-		return fmt.Errorf("active skill %q not found", name)
+	entry, err := k.FindActiveSkill(name)
+	if err != nil {
+		return err
 	}
 	if err := updateSkillFrontmatter(entry.Path, func(fmMap map[string]interface{}) {
 		fmMap["frozen"] = frozen
@@ -191,15 +191,33 @@ func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
 
 // RollbackSkill restores the latest snapshot for an active skill.
 func (k *Knight) RollbackSkill(name string) error {
-	entry := k.index.FindActiveByName(name)
-	if entry == nil {
-		return fmt.Errorf("active skill %q not found", name)
+	entry, err := k.FindActiveSkill(name)
+	if err != nil {
+		return err
 	}
 	if err := k.promoter.Rollback(entry); err != nil {
 		return err
 	}
 	k.index.Invalidate()
 	return nil
+}
+
+// FindActiveSkill resolves an active skill reference, optionally scoped as project:name or global:name.
+func (k *Knight) FindActiveSkill(ref string) (*SkillEntry, error) {
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		return nil, err
+	}
+	return findSkillByRef(active, ref, "active")
+}
+
+// FindStagingSkill resolves a staging skill reference, optionally scoped as project:name or global:name.
+func (k *Knight) FindStagingSkill(ref string) (*SkillEntry, error) {
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		return nil, err
+	}
+	return findSkillByRef(staging, ref, "staging")
 }
 
 // Index returns the skill index for external access.
@@ -299,54 +317,40 @@ Requirements:
 
 // PromoteStaging promotes a staging skill to active after validation.
 func (k *Knight) PromoteStaging(skillName string) error {
-	staging, err := k.index.StagingSkills()
+	s, err := k.FindStagingSkill(skillName)
 	if err != nil {
 		return err
 	}
-
-	for _, s := range staging {
-		if s.Name == skillName {
-			// Validate first
-			result := ValidateSkill(s)
-			if !result.Valid {
-				return fmt.Errorf("skill %q failed validation: %s", skillName, result.Errors)
-			}
-
-			// Check for duplicates
-			active, _ := k.index.ActiveSkills()
-			if CheckDuplicate(s, active) {
-				return fmt.Errorf("skill %q duplicates an existing skill", skillName)
-			}
-
-			if err := k.promoter.Promote(s); err != nil {
-				return err
-			}
-			k.index.Invalidate()
-			k.clearStagingNotification(s.Name)
-			return nil
-		}
+	result := ValidateSkill(s)
+	if !result.Valid {
+		return fmt.Errorf("skill %q failed validation: %s", skillName, result.Errors)
 	}
-	return fmt.Errorf("staging skill %q not found", skillName)
+
+	active, _ := k.index.ActiveSkills()
+	if CheckDuplicate(s, active) {
+		return fmt.Errorf("skill %q duplicates an existing skill", skillName)
+	}
+
+	if err := k.promoter.Promote(s); err != nil {
+		return err
+	}
+	k.index.Invalidate()
+	k.clearStagingNotification(s.Name)
+	return nil
 }
 
 // RejectStaging removes a staging skill.
 func (k *Knight) RejectStaging(skillName string) error {
-	staging, err := k.index.StagingSkills()
+	s, err := k.FindStagingSkill(skillName)
 	if err != nil {
 		return err
 	}
-
-	for _, s := range staging {
-		if s.Name == skillName {
-			if err := k.promoter.Reject(s); err != nil {
-				return err
-			}
-			k.index.Invalidate()
-			k.clearStagingNotification(s.Name)
-			return nil
-		}
+	if err := k.promoter.Reject(s); err != nil {
+		return err
 	}
-	return fmt.Errorf("staging skill %q not found", skillName)
+	k.index.Invalidate()
+	k.clearStagingNotification(s.Name)
+	return nil
 }
 
 // runLoop is the main Knight background loop.
@@ -453,14 +457,20 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 		}
 		if CheckDuplicate(s, active) {
 			debug.Log("knight", "staging skill %s is duplicate, rejecting", s.Name)
-			k.promoter.Reject(s)
+			if err := k.promoter.Reject(s); err != nil {
+				debug.Log("knight", "reject staging skill %s failed: %v", s.Name, err)
+				continue
+			}
 			k.index.Invalidate()
 			continue
 		}
 
 		if k.cfg.TrustLevel == "auto" {
 			debug.Log("knight", "auto-promoting skill %s", s.Name)
-			k.promoter.Promote(s)
+			if err := k.promoter.Promote(s); err != nil {
+				debug.Log("knight", "auto-promote skill %s failed: %v", s.Name, err)
+				continue
+			}
 			k.index.Invalidate()
 			k.clearStagingNotification(s.Name)
 			k.emitReport(fmt.Sprintf("✅ Skill auto-promoted: %s (%s)", s.Name, s.Meta.Description))
@@ -688,12 +698,46 @@ func formatKnightTaskOutput(output string) string {
 	return output
 }
 
+func findSkillByRef(entries []*SkillEntry, ref string, kind string) (*SkillEntry, error) {
+	scope, name := parseSkillRef(ref)
+	var matches []*SkillEntry
+	for _, entry := range entries {
+		if entry.Name != name {
+			continue
+		}
+		if scope != "" && entry.Scope != scope {
+			continue
+		}
+		matches = append(matches, entry)
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("%s skill %q not found", kind, ref)
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, fmt.Errorf("multiple %s skills named %q found; use project:%s or global:%s", kind, name, name, name)
+	}
+}
+
+func parseSkillRef(ref string) (scope string, name string) {
+	ref = strings.TrimSpace(ref)
+	parts := strings.SplitN(ref, ":", 2)
+	if len(parts) == 2 {
+		switch strings.ToLower(strings.TrimSpace(parts[0])) {
+		case "project", "global":
+			return strings.ToLower(strings.TrimSpace(parts[0])), strings.TrimSpace(parts[1])
+		}
+	}
+	return "", ref
+}
+
 func (k *Knight) syncSkillMetadata(name string) {
 	if k.usage == nil {
 		return
 	}
-	entry := k.index.FindActiveByName(name)
-	if entry == nil {
+	entry, err := k.FindActiveSkill(name)
+	if err != nil {
 		return
 	}
 	snapshot, ok := k.usage.Snapshot(name)

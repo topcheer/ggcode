@@ -91,7 +91,14 @@ type WorkspaceMeta struct {
 }
 
 // Handle processes an incoming message as an A2A task.
-func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message) (*Task, error) {
+// If params.TaskID is set, it continues an existing task (multi-turn).
+// Otherwise it creates a new task.
+func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, existingTaskID string) (*Task, error) {
+	// Continue existing task (multi-turn / input-required flow).
+	if existingTaskID != "" {
+		return h.continueTask(ctx, existingTaskID, input)
+	}
+
 	if skill == "" {
 		skill = SkillFullTask
 	}
@@ -137,6 +144,38 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message) (
 	h.mu.Unlock()
 
 	// Execute asynchronously.
+	go h.execute(taskCtx, task, perm)
+
+	return task, nil
+}
+
+// continueTask resumes an existing task that is in input-required state.
+func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Message) (*Task, error) {
+	h.mu.Lock()
+	task, ok := h.tasks[taskID]
+	if !ok {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("task not found: %s", taskID)
+	}
+	if task.Status.State != TaskStateInputRequired {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("task %s is not in input-required state (current: %s)", taskID, task.Status.State)
+	}
+
+	// Append the new user message to history.
+	task.History = append(task.History, input)
+
+	// Re-create the cancel context for the resumed execution.
+	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
+	h.cancels[taskID] = cancel
+	h.mu.Unlock()
+
+	perm, ok := skillPermissions[task.Skill]
+	if !ok {
+		return nil, fmt.Errorf("unknown skill: %s", task.Skill)
+	}
+
+	// Resume execution.
 	go h.execute(taskCtx, task, perm)
 
 	return task, nil
@@ -284,7 +323,7 @@ func (h *TaskHandler) CancelTask(id string) error {
 		return fmt.Errorf("task not found: %s", id)
 	}
 	if t.Status.IsTerminal() {
-		return fmt.Errorf("task already in terminal state: %s", t.Status)
+		return fmt.Errorf("task already in terminal state: %s", t.Status.State)
 	}
 	t.Status = TaskStatus{State: TaskStateCanceled}
 	t.UpdatedAt = time.Now()
@@ -292,6 +331,32 @@ func (h *TaskHandler) CancelTask(id string) error {
 	if cancel, ok := h.cancels[id]; ok {
 		cancel()
 		delete(h.cancels, id)
+	}
+	return nil
+}
+
+// RequestInput puts a task into input-required state and returns.
+// The caller should then wait for the client to send a follow-up message.
+func (h *TaskHandler) RequestInput(id string, prompt string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	t, ok := h.tasks[id]
+	if !ok {
+		return fmt.Errorf("task not found: %s", id)
+	}
+	if t.Status.State != TaskStateWorking {
+		return fmt.Errorf("can only request input from working state, current: %s", t.Status.State)
+	}
+	t.Status = TaskStatus{State: TaskStateInputRequired}
+	t.UpdatedAt = time.Now()
+	if prompt != "" {
+		t.History = append(t.History, Message{
+			Role: "agent",
+			Parts: []Part{{
+				Kind: "text",
+				Text: prompt,
+			}},
+		})
 	}
 	return nil
 }

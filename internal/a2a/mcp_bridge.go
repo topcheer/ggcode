@@ -92,6 +92,10 @@ func (t *a2aSendTaskTool) Parameters() json.RawMessage {
 			"message": {
 				"type": "string",
 				"description": "The task description or instruction to send"
+			},
+			"task_id": {
+				"type": "string",
+				"description": "Optional existing task ID to continue a multi-turn conversation (input-required flow)"
 			}
 		},
 		"required": ["skill", "message"]
@@ -101,6 +105,7 @@ func (t *a2aSendTaskTool) Parameters() json.RawMessage {
 type sendTaskInput struct {
 	Skill   string `json:"skill"`
 	Message string `json:"message"`
+	TaskID  string `json:"task_id,omitempty"`
 }
 
 func (t *a2aSendTaskTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
@@ -109,7 +114,13 @@ func (t *a2aSendTaskTool) Execute(ctx context.Context, input json.RawMessage) (t
 		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
 	}
 
-	task, err := t.client.SendMessage(ctx, params.Skill, params.Message)
+	var task *Task
+	var err error
+	if params.TaskID != "" {
+		task, err = t.client.SendMessage(ctx, params.Skill, params.Message, params.TaskID)
+	} else {
+		task, err = t.client.SendMessage(ctx, params.Skill, params.Message)
+	}
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("Task failed: %v", err), IsError: true}, nil
 	}

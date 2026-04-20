@@ -62,14 +62,20 @@ func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
 func (c *Client) Card() *AgentCard { return c.card }
 
 // SendMessage sends a synchronous message and waits for task completion.
-func (c *Client) SendMessage(ctx context.Context, skill, text string) (*Task, error) {
+// If existingTaskID is non-empty, continues an existing task (multi-turn).
+func (c *Client) SendMessage(ctx context.Context, skill, text string, existingTaskID ...string) (*Task, error) {
+	taskID := ""
+	if len(existingTaskID) > 0 {
+		taskID = existingTaskID[0]
+	}
 	params := SendMessageParams{
 		Message: Message{
 			Role:      "user",
 			MessageID: generateID(),
 			Parts:     []Part{{Kind: "text", Text: text}},
 		},
-		Skill: skill,
+		Skill:  skill,
+		TaskID: taskID,
 	}
 
 	var result Task
@@ -146,6 +152,60 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) (*Task, error) {
 		return nil, err
 	}
 	return &result, nil
+}
+
+// Resubscribe reconnects to a task's SSE stream. Use this when a previous
+// SendMessageStream connection was interrupted.
+func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPCResponse, error) {
+	params := TaskSubscriptionParams{ID: taskID}
+	paramsJSON, _ := json.Marshal(params)
+	rpcReq := JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`1`),
+		Method:  "tasks/resubscribe",
+		Params:  paramsJSON,
+	}
+	body, _ := json.Marshal(rpcReq)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check Content-Type: if JSON (not SSE), this is a sync error response.
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "application/json") {
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		var rpcResp JSONRPCResponse
+		if json.Unmarshal(respBody, &rpcResp) == nil && rpcResp.Error != nil {
+			return nil, rpcResp.Error
+		}
+		return nil, fmt.Errorf("a2a resubscribe: unexpected JSON response")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("a2a resubscribe: HTTP %d", resp.StatusCode)
+	}
+
+	ch := make(chan JSONRPCResponse, 32)
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+		decodeSSE(resp.Body, ch)
+	}()
+
+	return ch, nil
 }
 
 // ---------------------------------------------------------------------------
