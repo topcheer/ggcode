@@ -35,6 +35,7 @@ type DaemonBridge struct {
 	cancelFunc context.CancelFunc
 	pendingAsk *pendingAskUser
 	followSink daemon.FollowSink
+	onActivity func()
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -57,10 +58,27 @@ func (b *DaemonBridge) SetFollowSink(sink daemon.FollowSink) {
 	b.mu.Unlock()
 }
 
+// SetActivityHook installs a callback fired when an inbound IM message counts as
+// real user activity. Daemon mode uses this to keep Knight's idle timer honest.
+func (b *DaemonBridge) SetActivityHook(fn func()) {
+	b.mu.Lock()
+	b.onActivity = fn
+	b.mu.Unlock()
+}
+
 // SubmitInboundMessage handles an inbound IM message by submitting it to the agent.
 func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMessage) error {
 	if b == nil {
 		return fmt.Errorf("daemon bridge not initialized")
+	}
+	text := strings.TrimSpace(msg.Text)
+	if text != "" {
+		b.mu.Lock()
+		onActivity := b.onActivity
+		b.mu.Unlock()
+		if onActivity != nil {
+			onActivity()
+		}
 	}
 
 	// Check for pending ask_user — if so, route reply there
@@ -68,7 +86,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	pending := b.pendingAsk
 	b.mu.Unlock()
 	if pending != nil {
-		text := strings.TrimSpace(msg.Text)
 		if text != "" {
 			resp := buildAskUserResponse(pending.request, text)
 			pending.response <- resp
@@ -86,7 +103,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	}
 
 	// Check text is not empty
-	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		return nil
 	}

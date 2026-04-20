@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -39,11 +40,13 @@ type AnalysisResult struct {
 
 // SkillCandidate is a potential skill discovered from session analysis.
 type SkillCandidate struct {
-	Name        string
-	Description string
-	Scope       string // "global" or "project"
-	Score       float64
-	Reason      string
+	Name           string
+	Description    string
+	Scope          string // "global" or "project"
+	Score          float64
+	Reason         string
+	EvidenceCount  int
+	SourceSessions []string
 }
 
 // toolCallDetail holds extracted information from a single tool call.
@@ -68,6 +71,7 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 	}
 
 	result := &AnalysisResult{}
+	aggregated := make(map[string]*candidateAggregate)
 
 	// Analyze up to 10 most recent sessions
 	limit := 10
@@ -82,9 +86,12 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 			continue
 		}
 		candidates := sa.analyzeSession(full)
-		result.SkillCandidates = append(result.SkillCandidates, candidates...)
+		for _, candidate := range candidates {
+			aggregateCandidate(aggregated, candidate, full.ID)
+		}
 		result.SessionsAnalyzed++
 	}
+	result.SkillCandidates = finalizeCandidates(aggregated)
 
 	debug.Log("knight", "session analysis: %d sessions, %d candidates",
 		result.SessionsAnalyzed, len(result.SkillCandidates))
@@ -213,9 +220,9 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 		}
 
 		candidates = append(candidates, SkillCandidate{
-			Name:        "correction-" + ses.ID[:8],
+			Name:        buildCorrectionName(text, toolsUsed),
 			Description: desc,
-			Scope:       "project",
+			Scope:       inferCorrectionScope(text, prevText, toolsUsed),
 			Score:       2.0, // Corrections are the highest value signal
 			Reason:      fmt.Sprintf("user correction in session %s (tools: %s)", ses.ID, strings.Join(toolsUsed, ",")),
 		})
@@ -353,7 +360,7 @@ func (sa *SessionAnalyzer) detectToolParameterInsights(ses *session.Session) []S
 			candidates = append(candidates, SkillCandidate{
 				Name:        "project-command-" + sanitizeName(cmd),
 				Description: fmt.Sprintf("Project uses command: %s (used %d times)", cmd, count),
-				Scope:       "project",
+				Scope:       inferCommandScope(cmd),
 				Score:       float64(count) * 0.4,
 				Reason:      fmt.Sprintf("frequent command in session %s", ses.ID),
 			})
@@ -568,12 +575,162 @@ func detectRepeatedPatterns(tools []string) []toolPattern {
 }
 
 func inferScope(tools []string) string {
+	if len(tools) == 0 {
+		return "project"
+	}
 	for _, t := range tools {
-		if t == "edit_file" || t == "write_file" {
+		switch t {
+		case "edit_file", "write_file", "read_file", "search_files", "glob", "run_command":
+			return "project"
+		}
+	}
+	for _, t := range tools {
+		switch t {
+		case "web_fetch", "web_search":
+		default:
 			return "project"
 		}
 	}
 	return "global"
+}
+
+func inferCommandScope(cmd string) string {
+	cmd = strings.ToLower(strings.TrimSpace(cmd))
+	if cmd == "" {
+		return "project"
+	}
+	projectHints := []string{
+		"./", "../", ".ggcode", "go.mod", "go.sum", "package.json", "pyproject.toml",
+		"make ", "internal/", "cmd/", "scripts/", "docs/", "src/", "test ",
+	}
+	for _, hint := range projectHints {
+		if strings.Contains(cmd, hint) {
+			return "project"
+		}
+	}
+	globalPrefixes := []string{
+		"git status", "git diff", "git log", "docker ps", "docker images", "docker logs",
+		"kubectl get", "go env", "go version", "python --version", "node --version",
+	}
+	for _, prefix := range globalPrefixes {
+		if strings.HasPrefix(cmd, prefix) {
+			return "global"
+		}
+	}
+	return "project"
+}
+
+func inferCorrectionScope(text, prevText string, toolsUsed []string) string {
+	scope := inferScope(toolsUsed)
+	if scope == "project" {
+		return scope
+	}
+	combined := strings.ToLower(text + " " + prevText)
+	for _, hint := range []string{"internal/", "cmd/", "src/", ".ggcode", "go.mod", "package.json", "pyproject.toml"} {
+		if strings.Contains(combined, hint) {
+			return "project"
+		}
+	}
+	if len(toolsUsed) == 0 {
+		return "project"
+	}
+	return scope
+}
+
+func buildCorrectionName(text string, toolsUsed []string) string {
+	parts := []string{"correction"}
+	if len(toolsUsed) > 0 {
+		parts = append(parts, sanitizeName(strings.Join(uniqueStrings(toolsUsed), "-")))
+	}
+	if slug := sanitizeName(truncate(text, 40)); slug != "" {
+		parts = append(parts, slug)
+	}
+	name := strings.Join(parts, "-")
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	return strings.Trim(name, "-")
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+type candidateAggregate struct {
+	candidate SkillCandidate
+	hits      int
+	scoreSum  float64
+	sessions  map[string]struct{}
+}
+
+func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate SkillCandidate, sessionID string) {
+	key := strings.ToLower(strings.TrimSpace(candidate.Scope + "|" + candidate.Name))
+	if key == "" {
+		return
+	}
+	agg, ok := aggregated[key]
+	if !ok {
+		aggregated[key] = &candidateAggregate{
+			candidate: candidate,
+			hits:      1,
+			scoreSum:  candidate.Score,
+			sessions: map[string]struct{}{
+				sessionID: {},
+			},
+		}
+		return
+	}
+	agg.hits++
+	agg.scoreSum += candidate.Score
+	if len(candidate.Description) > len(agg.candidate.Description) {
+		agg.candidate.Description = candidate.Description
+	}
+	if len(candidate.Reason) > len(agg.candidate.Reason) {
+		agg.candidate.Reason = candidate.Reason
+	}
+	agg.sessions[sessionID] = struct{}{}
+}
+
+func finalizeCandidates(aggregated map[string]*candidateAggregate) []SkillCandidate {
+	candidates := make([]SkillCandidate, 0, len(aggregated))
+	for _, agg := range aggregated {
+		candidate := agg.candidate
+		candidate.EvidenceCount = len(agg.sessions)
+		candidate.SourceSessions = make([]string, 0, len(agg.sessions))
+		for sessionID := range agg.sessions {
+			candidate.SourceSessions = append(candidate.SourceSessions, sessionID)
+		}
+		sort.Strings(candidate.SourceSessions)
+		avgScore := agg.scoreSum / float64(agg.hits)
+		candidate.Score = avgScore + 0.5*float64(candidate.EvidenceCount-1)
+		if candidate.EvidenceCount > 1 {
+			candidate.Reason = fmt.Sprintf("%s; converged across %d sessions", candidate.Reason, candidate.EvidenceCount)
+		}
+		candidates = append(candidates, candidate)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].EvidenceCount != candidates[j].EvidenceCount {
+			return candidates[i].EvidenceCount > candidates[j].EvidenceCount
+		}
+		if candidates[i].Score != candidates[j].Score {
+			return candidates[i].Score > candidates[j].Score
+		}
+		return candidates[i].Name < candidates[j].Name
+	})
+	return candidates
 }
 
 // RecordUsage records token usage for session analysis tasks.

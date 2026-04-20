@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -299,6 +300,11 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 		k.usage.Flush()
 	}
 
+	if k.inQuietHours(now) {
+		debug.Log("knight", "within quiet hours, skipping scheduled work")
+		return
+	}
+
 	// Only run heavy tasks when user is idle
 	isIdle := k.isIdle(now)
 
@@ -345,6 +351,9 @@ func (k *Knight) hasCapability(cap string) bool {
 
 // reviewStagingSkills checks staging skills and auto-promotes if trust_level=auto.
 func (k *Knight) reviewStagingSkills(ctx context.Context) {
+	if strings.EqualFold(k.cfg.TrustLevel, "readonly") {
+		return
+	}
 	staging, err := k.index.StagingSkills()
 	if err != nil || len(staging) == 0 {
 		return
@@ -399,10 +408,17 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 		return nil
 	}
 
-	// Process candidates: high-score ones get LLM refinement + staging
+	active, _ := k.index.ActiveSkills()
+	staging, _ := k.index.StagingSkills()
+
+	// Process candidates: only converged candidates become staging writes.
 	var reported []SkillCandidate
 	for _, c := range result.SkillCandidates {
-		if c.Score >= 1.0 && k.getFactory() != nil {
+		if k.isKnownCandidate(c, active, staging) {
+			debug.Log("knight", "skip known candidate %s (%s)", c.Name, c.Scope)
+			continue
+		}
+		if k.shouldStageCandidate(c) && k.getFactory() != nil && !strings.EqualFold(k.cfg.TrustLevel, "readonly") {
 			// High-value candidate: use LLM to generate a proper skill
 			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.getFactory())
 			if genErr != nil {
@@ -425,10 +441,17 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 
 	if len(reported) > 0 {
 		var report strings.Builder
-		report.WriteString(fmt.Sprintf("📊 Analyzed %d sessions, found %d patterns",
+		maxShown := len(reported)
+		if maxShown > 5 {
+			maxShown = 5
+		}
+		report.WriteString(fmt.Sprintf("📊 Analyzed %d sessions, found %d converged patterns",
 			result.SessionsAnalyzed, len(reported)))
-		for _, c := range reported {
-			report.WriteString(fmt.Sprintf("\n• [%.1f] %s (%s): %s", c.Score, c.Name, c.Scope, c.Description))
+		for _, c := range reported[:maxShown] {
+			report.WriteString(fmt.Sprintf("\n• [%.1f] %s (%s, evidence=%d): %s", c.Score, c.Name, c.Scope, c.EvidenceCount, c.Description))
+		}
+		if len(reported) > maxShown {
+			report.WriteString(fmt.Sprintf("\n… and %d more", len(reported)-maxShown))
 		}
 		k.emitReport(report.String())
 	}
@@ -479,6 +502,9 @@ func (k *Knight) nightlyMaintenance(ctx context.Context) {
 
 // emitReport sends a Knight report via IM if an emitter is configured.
 func (k *Knight) emitReport(report string) {
+	if k.inQuietHours(time.Now()) {
+		return
+	}
 	k.mu.Lock()
 	em := k.emitter
 	k.mu.Unlock()
@@ -486,4 +512,84 @@ func (k *Knight) emitReport(report string) {
 		return
 	}
 	em.EmitKnightReport(report)
+}
+
+func (k *Knight) shouldStageCandidate(c SkillCandidate) bool {
+	if c.EvidenceCount >= 2 {
+		return true
+	}
+	return c.Score >= 3.0
+}
+
+func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntry) bool {
+	candidate := &SkillEntry{
+		Name:  c.Name,
+		Meta:  SkillMeta{Name: c.Name, Description: c.Description},
+		Scope: c.Scope,
+	}
+	if CheckDuplicate(candidate, active) {
+		return true
+	}
+	for _, s := range staging {
+		if strings.EqualFold(strings.TrimSpace(s.Name), strings.TrimSpace(c.Name)) {
+			return true
+		}
+		if len(c.Description) > 20 && len(s.Meta.Description) > 20 {
+			desc := strings.ToLower(c.Description)
+			existing := strings.ToLower(s.Meta.Description)
+			if strings.Contains(desc, existing) || strings.Contains(existing, desc) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (k *Knight) inQuietHours(now time.Time) bool {
+	current := now.Hour()*60 + now.Minute()
+	for _, spec := range k.cfg.QuietHours {
+		start, end, ok := parseQuietWindow(spec)
+		if !ok {
+			continue
+		}
+		if start == end {
+			return true
+		}
+		if start < end {
+			if current >= start && current < end {
+				return true
+			}
+			continue
+		}
+		if current >= start || current < end {
+			return true
+		}
+	}
+	return false
+}
+
+func parseQuietWindow(spec string) (startMinutes, endMinutes int, ok bool) {
+	parts := strings.Split(strings.TrimSpace(spec), "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	start, okStart := parseClockMinutes(parts[0])
+	end, okEnd := parseClockMinutes(parts[1])
+	if !okStart || !okEnd {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+func parseClockMinutes(raw string) (int, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	hour, errHour := strconv.Atoi(parts[0])
+	minute, errMinute := strconv.Atoi(parts[1])
+	if errHour != nil || errMinute != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	return hour*60 + minute, true
 }

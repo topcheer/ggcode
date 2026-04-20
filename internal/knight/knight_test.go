@@ -1,12 +1,15 @@
 package knight
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func TestBudgetRecordAndCheck(t *testing.T) {
@@ -271,6 +274,52 @@ func TestSkillValidatorDuplicateDetection(t *testing.T) {
 	}
 }
 
+func TestAnalyzeRecentAggregatesAcrossSessions(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-aggregate-*")
+	defer os.RemoveAll(dir)
+
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	storeDir := filepath.Join(homeDir, ".ggcode", "sessions")
+	os.MkdirAll(storeDir, 0755)
+	store, err := session.NewJSONLStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		ses := session.NewSession("zai", "test", "test-model")
+		for j := 0; j < 4; j++ {
+			store.AppendMessage(ses, provider.Message{
+				Role: "assistant",
+				Content: []provider.ContentBlock{
+					{Type: "tool_use", ToolName: "run_command"},
+				},
+			})
+		}
+		for j := 0; j < 3; j++ {
+			store.AppendMessage(ses, provider.Message{
+				Role: "assistant",
+				Content: []provider.ContentBlock{
+					{Type: "tool_use", ToolName: "read_file"},
+				},
+			})
+		}
+	}
+
+	k := New(config.DefaultKnightConfig(), homeDir, projDir, store)
+	result, err := NewSessionAnalyzer(k).AnalyzeRecent(context.Background())
+	if err != nil {
+		t.Fatalf("AnalyzeRecent: %v", err)
+	}
+	if len(result.SkillCandidates) == 0 {
+		t.Fatal("expected aggregated candidates")
+	}
+	if result.SkillCandidates[0].EvidenceCount < 2 {
+		t.Fatalf("expected top candidate to converge across sessions, got %+v", result.SkillCandidates[0])
+	}
+}
+
 func TestSkillNameFromFile(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -317,6 +366,17 @@ created_by: knight
 	// Verify file exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		t.Fatalf("staging file not created at %s", path)
+	}
+}
+
+func TestBuildCorrectionNameIsStableAcrossSessions(t *testing.T) {
+	first := buildCorrectionName("不要用 group，应该用 users", []string{"run_command"})
+	second := buildCorrectionName("不要用 group，应该用 users", []string{"run_command"})
+	if first != second {
+		t.Fatalf("expected stable correction name, got %q vs %q", first, second)
+	}
+	if contains(first, "session") {
+		t.Fatalf("expected correction name to avoid session-specific suffix, got %q", first)
 	}
 }
 
@@ -454,6 +514,24 @@ func TestUsageTrackerPersistence(t *testing.T) {
 	}
 	if avg != 5.0 {
 		t.Fatalf("expected persisted avg=5.0, got %f", avg)
+	}
+}
+
+func TestInferCommandScope(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{"git status", "global"},
+		{"docker ps", "global"},
+		{"go test ./...", "project"},
+		{"make verify-ci", "project"},
+		{"cat internal/knight/analyzer.go", "project"},
+	}
+	for _, tt := range tests {
+		if got := inferCommandScope(tt.command); got != tt.want {
+			t.Errorf("inferCommandScope(%q) = %q, want %q", tt.command, got, tt.want)
+		}
 	}
 }
 
