@@ -337,6 +337,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		clipboardLoader:      loadClipboardImage,
 		clipboardWriter:      copyTextToClipboard,
 		urlOpener:            openSystemURL,
+		pendingMu:            &sync.Mutex{},
+		sessionMu:            &sync.Mutex{},
 	}
 }
 

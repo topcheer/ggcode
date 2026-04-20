@@ -25,6 +25,7 @@ func (m *Model) promptExitConfirm() {
 
 func (m *Model) queuePendingSubmission(text string) {
 	count := m.enqueuePendingSubmission(text)
+	debug.Log("tui", "queuePendingSubmission: count=%d text=%s", count, truncateStr(text, 100))
 	if count == 0 {
 		return
 	}
@@ -130,6 +131,7 @@ func (m *Model) drainPendingInterrupt(runID int) string {
 	if text == "" {
 		return ""
 	}
+	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, truncateStr(text, 100))
 	m.appendUserMessage(text)
 	if m.program != nil {
 		m.program.Send(agentInterruptMsg{RunID: runID, Text: text})
