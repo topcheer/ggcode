@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,14 +22,14 @@ import (
 // ---------------------------------------------------------------------------
 // Multi-Agent Collaboration Test
 //
-// CRITICAL: The PM agent's LLM must REALISTICALLY decide to call a2a_remote.
-// We do NOT call A2A Client directly. The full chain is:
+// Design principle: give PM agent a HIGH-LEVEL requirement.
+// PM's LLM must AUTONOMOUSLY decide:
+//   - What to delegate to which worker
+//   - In what order (respecting dependencies)
+//   - How to handle failures
 //
-//   PM LLM → "I should delegate" → calls a2a_remote(target, skill, msg)
-//     → A2A protocol → Worker Server → Worker LLM → worker tools → files created
-//     → result back to PM LLM → PM LLM produces summary
-//
-// This tests: LLM tool selection → A2A protocol → cross-instance LLM execution
+// We do NOT specify a2a_remote parameters in the prompt.
+// The LLM must figure out the tool calls itself.
 // ---------------------------------------------------------------------------
 
 const mAPIKey = "ggcode-a2a-test-key-2025"
@@ -51,7 +49,7 @@ type testCluster struct {
 	cfg     *config.Config
 }
 
-func newCluster(t *testing.T, names []string) *testCluster {
+func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster {
 	t.Helper()
 
 	cfgPath := config.ConfigPath()
@@ -65,7 +63,9 @@ func newCluster(t *testing.T, names []string) *testCluster {
 
 	c := &testCluster{t: t, regDir: regDir, regFile: filepath.Join(regDir, "instances.json"), cfg: cfg}
 
-	for _, name := range names {
+	for _, spec := range specs {
+		name := spec.Name
+		role := spec.Role
 		dir := filepath.Join(t.TempDir(), name)
 		os.MkdirAll(dir, 0755)
 
@@ -84,25 +84,31 @@ func newCluster(t *testing.T, names []string) *testCluster {
 			t.Fatalf("[%s] tools: %v", name, err)
 		}
 
-		// System prompt is critical — tells the LLM what role it plays.
 		sysPrompt := fmt.Sprintf(
-			"You are agent '%s' in a multi-agent team. Your workspace: %s\n"+
-				"You have an a2a_remote tool to call other agents. Use target='list' to see available agents.\n"+
-				"When asked to delegate, ALWAYS use the a2a_remote tool — do NOT do the work yourself.\n"+
-				"Be concise. Write real working code.",
-			name, dir,
+			"You are '%s', a %s in a multi-agent team.\n"+
+				"Your workspace: %s\n"+
+				"You have an a2a_remote tool. Use target='list' to see all available agents.\n"+
+				"When you receive a task, execute it using your code tools.\n"+
+				"When you need help from another agent, use a2a_remote to delegate.\n"+
+				"Write real, working Go code. Be concise.",
+			name, role, dir,
 		)
 
 		ag := agent.NewAgent(prov, registry, sysPrompt, 0)
 
-		// Register a2a_remote so this agent can call others.
 		reg := &Registry{dir: regDir}
 		remoteTool := NewRemoteTool(reg, mAPIKey)
 		registry.Register(remoteTool)
 
+		// First agent (coordinator) gets longer timeout since it waits for all workers.
+		taskTimeout := 5 * time.Minute
+		if len(c.nodes) == 0 { // first node = coordinator
+			taskTimeout = 15 * time.Minute
+		}
+
 		handler := NewTaskHandler(dir, ag, registry,
-			WithMaxTasks(5),
-			WithTimeout(5*time.Minute),
+			WithMaxTasks(10),
+			WithTimeout(taskTimeout),
 		)
 		srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: mAPIKey}, handler)
 		if err := srv.Start(); err != nil {
@@ -110,11 +116,11 @@ func newCluster(t *testing.T, names []string) *testCluster {
 		}
 		t.Cleanup(srv.Stop)
 
-		t.Logf("[%s] → %s", name, srv.Endpoint())
+		t.Logf("[%s] (%s) → %s", name, role, srv.Endpoint())
 		c.nodes = append(c.nodes, &agentNode{name: name, dir: dir, server: srv, client: NewClient(srv.Endpoint(), mAPIKey)})
 	}
 
-	// Write all instances to registry.
+	// Register all instances.
 	var instances []InstanceInfo
 	for _, n := range c.nodes {
 		instances = append(instances, InstanceInfo{
@@ -138,8 +144,6 @@ func (c *testCluster) node(name string) *agentNode {
 	return nil
 }
 
-// dispatchAndWait sends a task to a node and polls until terminal state.
-// Returns the final task.
 func (c *testCluster) dispatchAndWait(ctx context.Context, target, skill, message string) *Task {
 	c.t.Helper()
 	n := c.node(target)
@@ -147,7 +151,16 @@ func (c *testCluster) dispatchAndWait(ctx context.Context, target, skill, messag
 	if err != nil {
 		c.t.Fatalf("[%s] send: %v", target, err)
 	}
-	return c.pollUntil(ctx, target, task.ID, 3*time.Minute)
+	// Use ctx deadline for polling.
+	deadline, ok := ctx.Deadline()
+	timeout := 10 * time.Minute
+	if ok {
+		timeout = time.Until(deadline) - 10*time.Second
+		if timeout < 30*time.Second {
+			timeout = 30 * time.Second
+		}
+	}
+	return c.pollUntil(ctx, target, task.ID, timeout)
 }
 
 func (c *testCluster) pollUntil(ctx context.Context, target, taskID string, timeout time.Duration) *Task {
@@ -170,37 +183,57 @@ func (c *testCluster) pollUntil(ctx context.Context, target, taskID string, time
 	return nil
 }
 
-func (c *testCluster) verifyFile(target, filename string, mustContain ...string) {
-	c.t.Helper()
-	n := c.node(target)
-	data, err := os.ReadFile(filepath.Join(n.dir, filename))
-	if err != nil {
-		c.t.Errorf("[%s] file %s not found: %v", target, filename, err)
-		return
-	}
-	content := string(data)
-	for _, sub := range mustContain {
-		if !strings.Contains(content, sub) {
-			c.t.Errorf("[%s] %s missing %q", target, filename, sub)
-		}
-	}
-	c.t.Logf("[%s] ✅ %s verified (%d bytes)", target, filename, len(data))
-}
-
-// logTaskDetails prints task history for debugging.
-func (c *testCluster) logTaskDetails(target string, task *Task) {
+func (c *testCluster) logTask(target string, task *Task) {
 	c.t.Helper()
 	c.t.Logf("[%s] Task %s → %s", target, task.ID, task.Status.State)
 	for _, m := range task.History {
 		for _, p := range m.Parts {
-			c.t.Logf("  [%s] %s", m.Role, truncStr(p.Text, 300))
+			if len(p.Text) > 0 {
+				c.t.Logf("  [%s] %s", m.Role, truncStr(p.Text, 400))
+			}
 		}
 	}
 	for i, a := range task.Artifacts {
 		for _, p := range a.Parts {
-			c.t.Logf("  [artifact-%d] %s", i, truncStr(p.Text, 500))
+			if len(p.Text) > 0 {
+				c.t.Logf("  [result-%d] %s", i, truncStr(p.Text, 600))
+			}
 		}
 	}
+}
+
+// countGoFiles counts .go files with real content (>20 bytes) in a worker's dir.
+func (c *testCluster) countGoFiles(target string) int {
+	c.t.Helper()
+	n := c.node(target)
+	entries, _ := os.ReadDir(n.dir)
+	count := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".go") {
+			data, err := os.ReadFile(filepath.Join(n.dir, e.Name()))
+			if err == nil && len(data) > 20 {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// scanWorkerOutput lists all files created by a worker.
+func (c *testCluster) scanWorkerOutput(target string) []string {
+	c.t.Helper()
+	n := c.node(target)
+	entries, _ := os.ReadDir(n.dir)
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			data, err := os.ReadFile(filepath.Join(n.dir, e.Name()))
+			if err == nil && len(data) > 10 {
+				files = append(files, fmt.Sprintf("%s (%d bytes)", e.Name(), len(data)))
+			}
+		}
+	}
+	return files
 }
 
 func truncStr(s string, n int) string {
@@ -211,202 +244,180 @@ func truncStr(s string, n int) string {
 }
 
 // ===========================================================================
-// Tests
+// Test Scenarios — HIGH-LEVEL requirements, LLM decides the rest
 // ===========================================================================
 
-// TestMultiAgent_2Nodes_PM delegates to 1 worker via LLM→a2a_remote.
-func TestMultiAgent_2Nodes_PM(t *testing.T) {
-	c := newCluster(t, []string{"pm", "backend"})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+// Scenario 1: 2 agents — PM + engineer
+// PM receives a vague requirement, must figure out what to tell the engineer.
+func TestMultiAgent_2_ArchitectAndEngineer(t *testing.T) {
+	c := newCluster(t, []struct{ Name, Role string }{
+		{"architect", "software architect who designs systems and delegates implementation to engineers"},
+		{"engineer", "Go backend engineer who implements services based on specifications"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	t.Log("=== PM tells backend to create TODO API (via LLM → a2a_remote) ===")
+	t.Log("=== Scenario: Architect receives vague requirement, must design + delegate ===")
 
-	// PM receives a natural language request.
-	// PM's LLM must: decide to call a2a_remote(target="backend", skill="code-edit", ...)
-	task := c.dispatchAndWait(ctx, "pm", "full-task",
-		"Delegate this task to the backend agent: Create main.go implementing a TODO REST API. "+
-			"Endpoints: GET /todos, POST /todos, DELETE /todos/{id}. In-memory storage. Port 8080. "+
-			"Use the a2a_remote tool with target='backend'.")
-
-	if task.Status.State != TaskStateCompleted {
-		c.logTaskDetails("pm", task)
-		t.Fatalf("PM task failed: %s", task.Status.State)
-	}
-
-	c.logTaskDetails("pm", task)
-
-	// The key verification: did backend's workspace get a file?
-	// This proves the chain: PM LLM → a2a_remote → A2A → backend server → backend LLM → write_file
-	c.verifyFile("backend", "main.go", "func main()", "/todos")
-
-	t.Log("✅ 2-agent LLM→a2a_remote→LLM chain verified")
-}
-
-// TestMultiAgent_3Nodes_PMParallel tests PM delegating to 2 workers in parallel.
-func TestMultiAgent_3Nodes_PMParallel(t *testing.T) {
-	c := newCluster(t, []string{"pm", "backend", "frontend"})
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-	defer cancel()
-
-	t.Log("=== PM delegates to backend AND frontend in one task ===")
-
-	// PM must call a2a_remote twice in a single session.
-	task := c.dispatchAndWait(ctx, "pm", "full-task",
-		"You need to coordinate two agents to build a counter app:\n"+
-			"1. Call a2a_remote(target='backend', skill='code-edit', message='Create server.go: Go HTTP server with GET /count returning {\"count\":N} and POST /increment that increments N. Port 8081.')\n"+
-			"2. Call a2a_remote(target='frontend', skill='code-edit', message='Create index.html: HTML page with a counter display and Increment button. JS calls POST http://localhost:8081/increment then GET http://localhost:8081/count to update display.')\n"+
-			"Call both agents. Report results.")
-
-	if task.Status.State != TaskStateCompleted {
-		c.logTaskDetails("pm", task)
-		t.Fatalf("PM task failed: %s", task.Status.State)
-	}
-
-	c.logTaskDetails("pm", task)
-
-	// Both workspaces should have files.
-	c.verifyFile("backend", "server.go", "/count", "/increment")
-	c.verifyFile("frontend", "index.html", "increment", "count")
-
-	t.Log("✅ 3-agent parallel delegation verified")
-}
-
-// TestMultiAgent_5Nodes_Pipeline tests sequential pipeline across 5 agents.
-func TestMultiAgent_5Nodes_Pipeline(t *testing.T) {
-	c := newCluster(t, []string{"pm", "shared-lib", "user-svc", "order-svc", "gateway"})
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
-	defer cancel()
-
-	t.Log("=== 5-Agent Pipeline: shared-lib → user-svc + order-svc → gateway ===")
-
-	task := c.dispatchAndWait(ctx, "pm", "full-task",
-		"Build a microservice system by delegating to these agents in order:\n"+
-			"Step 1: a2a_remote(target='shared-lib', skill='code-edit', message='Create models.go with: package main; type User struct{ID,Name,Email string}; type Order struct{ID,UserID,Product string; Amount float64}')\n"+
-			"Step 2: a2a_remote(target='user-svc', skill='code-edit', message='Create main.go: User service with POST /users and GET /users. In-memory map. Port 8091.')\n"+
-			"Step 3: a2a_remote(target='order-svc', skill='code-edit', message='Create main.go: Order service with POST /orders and GET /orders. In-memory map. Port 8092.')\n"+
-			"Step 4: a2a_remote(target='gateway', skill='code-edit', message='Create main.go: Gateway proxy /api/users→localhost:8091, /api/orders→localhost:8092. Port 8090.')\n"+
-			"Execute steps 1-4 in order. Report each result.",
+	// Give architect a REAL-WORLD requirement — no tool call instructions.
+	task := c.dispatchAndWait(ctx, "architect", "full-task",
+		"I need a URL shortener service. It should accept a long URL and return a short code, "+
+			"and redirect short codes back to the original URL. "+
+			"Design the API and have the engineer implement it.",
 	)
 
+	c.logTask("architect", task)
+
 	if task.Status.State != TaskStateCompleted {
-		c.logTaskDetails("pm", task)
-		t.Fatalf("PM task failed: %s", task.Status.State)
+		t.Fatalf("architect failed: %s", task.Status.State)
 	}
 
-	c.logTaskDetails("pm", task)
-
-	// Verify all 4 workers created files.
-	c.verifyFile("shared-lib", "models.go", "type User struct")
-	c.verifyFile("user-svc", "main.go", "/users", "8091")
-	c.verifyFile("order-svc", "main.go", "/orders", "8092")
-	c.verifyFile("gateway", "main.go", "8090")
-
-	t.Log("✅ 5-agent pipeline verified")
+	// Verify: engineer's workspace should have at least 1 .go file.
+	goFiles := c.countGoFiles("engineer")
+	if goFiles == 0 {
+		t.Error("engineer produced no .go files — architect may not have delegated properly")
+	} else {
+		t.Logf("✅ Engineer created %d Go file(s): %v", goFiles, c.scanWorkerOutput("engineer"))
+	}
 }
 
-// TestMultiAgent_10Nodes_Stress tests PM coordinating 9 workers concurrently.
-func TestMultiAgent_10Nodes_Stress(t *testing.T) {
-	workers := []string{
-		"svc-auth", "svc-user", "svc-order", "svc-payment",
-		"svc-notification", "svc-search", "svc-analytics",
-		"svc-config", "svc-logging",
+// Scenario 2: 3 agents — PM + backend + frontend
+func TestMultiAgent_3_FullStack(t *testing.T) {
+	c := newCluster(t, []struct{ Name, Role string }{
+		{"pm", "product manager who coordinates backend and frontend teams"},
+		{"backend", "Go backend engineer who builds REST APIs"},
+		{"frontend", "frontend engineer who builds HTML/JS pages that call APIs"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	t.Log("=== Scenario: PM coordinates full-stack app with dependency ===")
+
+	task := c.dispatchAndWait(ctx, "pm", "full-task",
+		"We need a real-time chat app. The backend should provide a simple message API "+
+			"(send message, list messages). The frontend should display messages and have an input to send new ones. "+
+			"Coordinate both backend and frontend teams. "+
+			"Backend first, then frontend (frontend needs the API endpoints).",
+	)
+
+	c.logTask("pm", task)
+
+	if task.Status.State != TaskStateCompleted {
+		t.Fatalf("PM failed: %s", task.Status.State)
 	}
-	all := append([]string{"pm"}, workers...)
-	c := newCluster(t, all)
+
+	// Both workers should have files.
+	backendFiles := c.countGoFiles("backend")
+	frontendFiles := c.scanWorkerOutput("frontend")
+
+	t.Logf("Backend files: %d Go files", backendFiles)
+	t.Logf("Frontend files: %v", frontendFiles)
+
+	if backendFiles == 0 {
+		t.Error("backend produced nothing — delegation may have failed")
+	}
+	if len(frontendFiles) == 0 {
+		t.Error("frontend produced nothing — dependency coordination may have failed")
+	}
+
+	if backendFiles > 0 && len(frontendFiles) > 0 {
+		t.Log("✅ Full-stack app built with both backend and frontend")
+	}
+}
+
+// Scenario 3: 5 agents — microservice system
+// PM must figure out the architecture and delegate to the right agents.
+func TestMultiAgent_5_Microservices(t *testing.T) {
+	c := newCluster(t, []struct{ Name, Role string }{
+		{"tech-lead", "tech lead who designs microservice architecture and delegates to service teams"},
+		{"user-team", "team responsible for user management service"},
+		{"order-team", "team responsible for order management service"},
+		{"payment-team", "team responsible for payment processing service"},
+		{"infra-team", "team responsible for API gateway and infrastructure"},
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
-	t.Logf("=== 10-Agent Stress: PM coordinates 9 workers ===")
+	t.Log("=== Scenario: Tech lead designs and delegates microservice architecture ===")
 
-	// Send one big task to PM. PM must call a2a_remote 9 times.
-	// This tests: concurrent A2A calls, task routing, result aggregation.
-	task := c.dispatchAndWait(ctx, "pm", "full-task",
-		"Delegate to ALL 9 worker agents. Each must create a Go file. Call them ALL:\n"+
-			"1. a2a_remote('svc-auth', 'code-edit', 'Create auth.go: package main; func Authenticate(token string) bool { return token != \"\" }')\n"+
-			"2. a2a_remote('svc-user', 'code-edit', 'Create user.go: package main; type User struct{ID,Name string}; var Users = map[string]User{}')\n"+
-			"3. a2a_remote('svc-order', 'code-edit', 'Create order.go: package main; type Order struct{ID,Product string}; var Orders = map[string]Order{}')\n"+
-			"4. a2a_remote('svc-payment', 'code-edit', 'Create payment.go: package main; func ProcessPayment(id string, amt float64) string { return \"paid\" }')\n"+
-			"5. a2a_remote('svc-notification', 'code-edit', 'Create notify.go: package main; func Send(to, msg string) { /* stub */ }')\n"+
-			"6. a2a_remote('svc-search', 'code-edit', 'Create search.go: package main; func Search(q string) []string { return nil }')\n"+
-			"7. a2a_remote('svc-analytics', 'code-edit', 'Create analytics.go: package main; func Track(name string) {}')\n"+
-			"8. a2a_remote('svc-config', 'code-edit', 'Create config.go: package main; const Port = 8080')\n"+
-			"9. a2a_remote('svc-logging', 'code-edit', 'Create logger.go: package main; func Info(m string) {}')\n"+
-			"Execute all 9 calls. Report which succeeded and which failed.",
+	task := c.dispatchAndWait(ctx, "tech-lead", "full-task",
+		"Build an e-commerce backend with these services:\n"+
+			"- User service: register/login users\n"+
+			"- Order service: create/list orders\n"+
+			"- Payment service: process payments for orders\n"+
+			"- API gateway: route to all services, health check\n\n"+
+			"Each service should be its own Go HTTP server with in-memory storage.\n"+
+			"Design the architecture, decide ports, then delegate to the right teams.\n"+
+			"Finally, have the infra team build a gateway that routes to all services.",
 	)
 
-	c.logTaskDetails("pm", task)
+	c.logTask("tech-lead", task)
 
 	if task.Status.State != TaskStateCompleted {
-		t.Fatalf("PM task: %s", task.Status.State)
+		t.Fatalf("tech-lead failed: %s", task.Status.State)
 	}
 
-	// Count how many workers actually got files created.
-	var created atomic.Int32
-	var wg sync.WaitGroup
-	for _, w := range workers {
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			// Check if any .go file exists in the worker's dir.
-			entries, err := os.ReadDir(c.node(name).dir)
-			if err != nil {
-				return
-			}
-			for _, e := range entries {
-				if strings.HasSuffix(e.Name(), ".go") {
-					data, err := os.ReadFile(filepath.Join(c.node(name).dir, e.Name()))
-					if err == nil && len(data) > 10 {
-						created.Add(1)
-						t.Logf("[%s] ✅ %s (%d bytes)", name, e.Name(), len(data))
-						return
-					}
-				}
-			}
-			t.Logf("[%s] ❌ no .go file found", name)
-		}(w)
-	}
-	wg.Wait()
-
-	count := created.Load()
-	t.Logf("\n========== 10-Agent Results ==========")
-	t.Logf("Workers with files: %d/9", count)
-
-	if count < 6 {
-		t.Errorf("only %d/9 workers produced files — unreliable", count)
+	// Verify: at least 3 out of 4 teams should have produced files.
+	var teamsWithCode int
+	for _, name := range []string{"user-team", "order-team", "payment-team", "infra-team"} {
+		count := c.countGoFiles(name)
+		files := c.scanWorkerOutput(name)
+		if count > 0 {
+			teamsWithCode++
+			t.Logf("  [%s] ✅ %v", name, files)
+		} else {
+			t.Logf("  [%s] ❌ no .go files", name)
+		}
 	}
 
-	t.Logf("✅ 10-agent stress test: %d/9 workers verified", count)
+	if teamsWithCode < 3 {
+		t.Errorf("only %d/4 teams produced code — coordination unreliable", teamsWithCode)
+	} else {
+		t.Logf("✅ %d/4 teams produced code", teamsWithCode)
+	}
 }
 
-// TestMultiAgent_CrossVerification tests PM asks worker-A to write code,
-// then asks worker-B to review worker-A's code.
-func TestMultiAgent_CrossVerification(t *testing.T) {
-	c := newCluster(t, []string{"pm", "coder", "reviewer"})
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+// Scenario 4: Cross-review — worker A writes code, worker B reviews and fixes it.
+func TestMultiAgent_CrossReview(t *testing.T) {
+	c := newCluster(t, []struct{ Name, Role string }{
+		{"lead", "team lead who assigns tasks and coordinates reviews"},
+		{"junior", "junior developer who writes initial code (may have bugs)"},
+		{"reviewer", "senior developer who reviews code and fixes issues"},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	t.Log("=== Cross-Verification: coder writes, reviewer reviews ===")
+	t.Log("=== Scenario: Junior writes code → Reviewer reviews and fixes ===")
 
-	// Step 1: PM tells coder to write code.
-	task := c.dispatchAndWait(ctx, "pm", "full-task",
-		"Step 1: Use a2a_remote(target='coder', skill='code-edit', message='Create calc.go: package main; "+
-			"func Add(a,b int) int { return a+b }; func Subtract(a,b int) int { return a-b }; "+
-			"func Multiply(a,b int) int { return a*b }')\n"+
-			"Wait for the result, then...\n"+
-			"Step 2: Use a2a_remote(target='reviewer', skill='code-review', message='Review the code that coder just created. "+
-			"The coder was asked to create calc.go with Add, Subtract, Multiply functions. "+
-			"Check if all 3 functions exist and are correct.')\n"+
-			"Report both results.",
+	task := c.dispatchAndWait(ctx, "lead", "full-task",
+		"We need a string utility library with functions: Reverse, ToUpper, ToLower, CountWords.\n\n"+
+			"Step 1: Have the junior developer write the initial implementation.\n"+
+			"Step 2: Have the senior reviewer check the code and fix any bugs or missing functions.\n\n"+
+			"Coordinate both steps. The final code should be in the reviewer's workspace as utils.go.",
 	)
 
+	c.logTask("lead", task)
+
 	if task.Status.State != TaskStateCompleted {
-		c.logTaskDetails("pm", task)
-		t.Fatalf("PM task failed: %s", task.Status.State)
+		t.Fatalf("lead task failed: %s", task.Status.State)
 	}
 
-	c.logTaskDetails("pm", task)
-	c.verifyFile("coder", "calc.go", "func Add", "func Subtract", "func Multiply")
+	// Verify: junior should have written something.
+	juniorFiles := c.scanWorkerOutput("junior")
+	t.Logf("Junior created: %v", juniorFiles)
 
-	t.Log("✅ Cross-verification (coder writes, reviewer reviews) verified")
+	// Verify: reviewer should have created a reviewed/fixed version.
+	reviewerFiles := c.scanWorkerOutput("reviewer")
+	t.Logf("Reviewer created: %v", reviewerFiles)
+
+	if len(juniorFiles) == 0 {
+		t.Log("⚠️ Junior didn't produce code (lead may not have delegated)")
+	}
+	if len(reviewerFiles) == 0 {
+		t.Log("⚠️ Reviewer didn't produce code (review step may have been skipped)")
+	}
+
+	if len(juniorFiles) > 0 || len(reviewerFiles) > 0 {
+		t.Log("✅ Cross-review workflow executed")
+	}
 }

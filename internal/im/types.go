@@ -135,6 +135,7 @@ type ToolCallInfo struct {
 	ToolName string
 	Args     string
 	Detail   string
+	Lang     string // "zh-CN" or "en", set by emitter
 }
 
 type ToolResultInfo struct {
@@ -143,6 +144,7 @@ type ToolResultInfo struct {
 	Result   string
 	IsError  bool
 	Detail   string // display text for the tool call (e.g. command line)
+	Lang     string // "zh-CN" or "en", set by emitter
 }
 
 type SessionBinding struct {

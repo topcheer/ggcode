@@ -26,7 +26,7 @@ func NewClient(baseURL, apiKey string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Minute,
+			Timeout: 15 * time.Minute, // must exceed coordinator handler timeout
 		},
 	}
 }

@@ -108,6 +108,14 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 		event.ToolRes.Result = e.relativizePaths(event.ToolRes.Result)
 	}
 
+	// Set language on tool events so format functions can localize
+	if event.ToolCall != nil && event.ToolCall.Lang == "" {
+		event.ToolCall.Lang = e.language
+	}
+	if event.ToolRes != nil && event.ToolRes.Lang == "" {
+		event.ToolRes.Lang = e.language
+	}
+
 	switch event.Kind {
 	case OutboundEventText:
 		debug.Log("emitter", "emit im text len=%d", len(event.Text))

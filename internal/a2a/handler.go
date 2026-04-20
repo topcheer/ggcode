@@ -62,6 +62,11 @@ func WithTimeout(d time.Duration) HandlerOption {
 	return func(h *TaskHandler) { h.timeout = d }
 }
 
+// Timeout returns the configured task timeout.
+func (h *TaskHandler) Timeout() time.Duration {
+	return h.timeout
+}
+
 // NewTaskHandler creates a handler bound to a specific workspace.
 func NewTaskHandler(workspace string, a *agent.Agent, reg *tool.Registry, opts ...HandlerOption) *TaskHandler {
 	h := &TaskHandler{

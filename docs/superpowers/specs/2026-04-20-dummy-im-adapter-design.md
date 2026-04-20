@@ -87,11 +87,32 @@ func (a *dummyAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 }
 
 func (a *dummyAdapter) Start(ctx context.Context) {
-    // 1. Start HTTP server on listener
-    // 2. Write port to portFile
-    // 3. Block until ctx.Done()
+    // 1. Auto-bind channel (skip pairing — no real IM user to verify)
+    // 2. Start HTTP server on listener
+    // 3. Write port to portFile (atomic: write tmp then rename)
+    // 4. Block until ctx.Done(), then cleanup portFile
 }
 ```
+
+#### Channel Binding (Critical Path)
+
+Dummy adapter must establish a `ChannelBinding` before any message can flow through `HandleInbound`. Unlike real IM adapters that go through pairing, dummy adapter auto-binds in `Start()`:
+
+```go
+func (a *dummyAdapter) autoBind() error {
+    binding := ChannelBinding{
+        Workspace:  workingDir,
+        Platform:   PlatformDummy,
+        Adapter:    a.name,
+        TargetID:   "eval-user",
+        ChannelID:  "eval-channel",
+        BoundAt:    time.Now(),
+    }
+    return a.manager.BindChannel(binding)
+}
+```
+
+This is called after `RegisterSink` but before the HTTP server starts accepting requests.
 
 ### 2. HTTP Server (`internal/im/dummy_server.go`)
 
@@ -108,6 +129,12 @@ Query params:
 ```
 
 Handler constructs an `InboundMessage` and calls `mgr.HandleInbound()`. If `DaemonBridge` has a pending ask_user, the message fills the pending channel and unblocks the agent.
+
+**Concurrency:** `/send` handler serializes requests via a mutex. Only one message is processed at a time. The orchestrator must NOT call `/send` concurrently. Response blocks until the message has been submitted to the bridge.
+
+**Message ID:** Server generates a UUID for each message's `Envelope.MessageID`. Client may optionally include `client_message_id` in the request body for idempotent retries (server deduplicates within the 5-minute window).
+
+**Shutdown token:** The server generates a random token at startup, written to the port file alongside the address. `POST /shutdown` requires `Authorization: Bearer <token>` header.
 
 #### `GET /events` — SSE event stream
 
@@ -132,7 +159,15 @@ event: metrics
 data: {"tool_calls":{"bash":3,"read":2},"ask_user_count":1,...}
 ```
 
-SSE broker maintains a ring buffer (default 256 entries). New SSE connections replay unexpired buffered events.
+SSE broker maintains a ring buffer (default 1024 entries). Each event carries a monotonically increasing `seq` field. New SSE connections receive:
+1. `event: hello` with `{"last_seq": N}` so the client knows the current position
+2. Replay of buffered events from oldest available seq
+
+Client can detect gaps: if replay starts at seq=50 but last known was seq=40, events 40-49 were lost.
+
+`approval_request` events are pinned in the buffer (never evicted by ring rotation) since they block agent execution.
+
+Heartbeat: every 15 seconds, send SSE comment frame `: keepalive\n\n` to detect dead connections.
 
 #### `GET /status` — Current state snapshot
 
@@ -144,7 +179,11 @@ SSE broker maintains a ring buffer (default 256 entries). New SSE connections re
 }
 ```
 
-#### `POST /shutdown` — Graceful shutdown (optional)
+#### `GET /healthz` — Readiness check
+
+Returns `{"status":"ok"}`. Orchestrator should poll this after startup until it succeeds, rather than relying solely on the port file.
+
+#### `POST /shutdown` — Graceful shutdown
 
 ### 3. EvalMetrics (`internal/im/dummy_metrics.go`)
 
@@ -160,6 +199,8 @@ type EvalMetrics struct {
     ToolCalls        map[string]int      // tool_name → count
     TotalToolCalls   int
     ToolErrors       int
+    ToolErrorsByTool map[string]int      // tool_name → error count
+    ReworkCount      int                 // consecutive same-tool calls detected
     Rounds           int
 
     InputTokens      int
@@ -176,11 +217,27 @@ Collection happens in `Sink.Send()`:
 
 | OutboundEventKind | Action |
 |---|---|
-| `tool_result` | ToolCalls[name]++, TotalToolCalls++, ToolErrors++ if error |
+| `tool_result` | ToolCalls[name]++, TotalToolCalls++, ToolErrorsByTool[name]++ if error |
 | `approval_request` | AskUserCount++, record start time |
-| `text` (round_done marker) | Rounds++ |
+| `text` | Heuristic detection: if text starts with "🌙 " prefix → KnightReports++; if text contains round summary markers → Rounds++ |
 
-Token usage comes from agent `StreamEventDone` via `round_done` SSE event, fed back into metrics.
+#### SSE Event Type Detection
+
+Dummy adapter uses heuristics to distinguish SSE event types, since `OutboundEvent.Kind` does not have dedicated knight_report or round_done values:
+
+- **knight_report**: `OutboundEventText` where text has prefix `"🌙 "` (set by `IMEmitter.EmitKnightReport`)
+- **round_done**: `OutboundEventText` where text matches the round summary pattern (set by `IMEmitter.EmitRoundSummary`: includes tool call counts)
+- **approval_request**: `OutboundEventApprovalRequest` — already a dedicated kind
+
+#### Token Usage Collection
+
+Token counts are NOT available in `Sink.Send()`. Two options were considered:
+1. Add `TokenUsage` field to `OutboundEvent` (would require modifying emitter + daemon_bridge)
+2. Accept limitation and collect tokens separately
+
+**Decision: Option 2 — deferred token collection.** The `/status` endpoint will read token usage from the agent's session store (JSONL files) after each task completes. This avoids modifying core components. If this proves insufficient, a future iteration can add `TokenUsage` to `OutboundEvent`.
+
+EvalMetrics records `InputTokens` and `OutputTokens` as 0 during streaming, then fills them from session data when `GET /status?final=true` is called after task completion.
 
 Output:
 - Real-time: `metrics` SSE event after each `round_done`
@@ -215,12 +272,16 @@ im:
     dummy:
       enabled: true
       platform: dummy
-      listen_addr: "127.0.0.1:0"       # auto-assign port
-      metrics_path: ".tmp/knight-eval/metrics.json"
-      sse_buffer_size: 256
+      extra:
+        listen_addr: "127.0.0.1:0"       # auto-assign port
+        metrics_path: ".tmp/knight-eval/metrics.json"
+        sse_buffer_size: "1024"
+        port_file: ".tmp/dummy-adapter-port"  # includes shutdown token
 ```
 
-Port discovery: adapter writes actual address to `.tmp/dummy-adapter-port` after listener starts.
+Config values are read from `adapterCfg.Extra` map, consistent with existing adapters (QQ reads `appid`, Telegram reads `bot_token` from Extra). Helper functions `stringValue()`, `intValue()` extract with defaults.
+
+Port file format: `<host>:<port>\n<shutdown_token>`. Written atomically (write tmp file, then rename). Cleaned up on process exit. For multi-instance A/B testing, each instance uses a different config with distinct `port_file` and `metrics_path`.
 
 ### 6. Eval Orchestrator (`scripts/eval/`)
 
@@ -256,6 +317,9 @@ Task set (Phase 3):
 | 8 | docs | Verify README command references match actual CLI |
 | 9 | docs | Write package-level doc comments for internal/extract |
 | 10 | docs | Audit skills in .ggcode/skills/, update stale descriptions |
+| 11 | code_edit | Add a multi-file refactoring (cross-package edit, triggers ask_user) |
+| 12 | code_edit | Implement a feature with ambiguous requirements (forces ask_user) |
+| 13 | code_edit | Leave idle after completing a task (triggers Knight idle analysis) |
 
 A/B execution:
 
@@ -306,12 +370,29 @@ Knight Score
 | `internal/im/types.go` | Add `PlatformDummy` constant |
 | `internal/im/adapters.go` | Add `case "dummy"` in switch |
 
-No changes to: agent, knight, provider, daemon, TUI, pipe mode.
+No changes to: agent, knight, provider, daemon bridge, TUI, pipe mode.
+
+## Resolved Review Issues
+
+| # | Severity | Issue | Resolution |
+|---|----------|-------|------------|
+| 1 | Critical | No binding mechanism — first message rejected | Auto-bind in Start() before HTTP server accepts |
+| 2 | Critical | SSE event loss on disconnect | Seq numbers, pinned approval_request, heartbeat keepalive, buffer size 1024 |
+| 3 | Major | No dedicated SSE event types for knight/round | Heuristic detection: "🌙 " prefix for knight, round summary pattern for round_done |
+| 4 | Major | Token counts not available in Sink.Send() | Deferred: read from session store after task via /status |
+| 5 | Major | Concurrent /send race condition | Serialize via mutex; orchestrator must not call concurrently |
+| 6 | Major | Port file conflicts in multi-instance | Configurable port_file path; atomic write; PID-scoped cleanup |
+| 7 | Minor | Shutdown endpoint security | Random bearer token, written to port file |
+| 8 | Minor | Missing ToolErrorsByTool and ReworkCount | Added to EvalMetrics |
+| 9 | Minor | Config values not in Extra map | Clarified: all custom config via adapterCfg.Extra |
+| 10 | Minor | Orchestrator LLM failure handling | Fallback: "yes, proceed" on timeout; per-task 10min deadline |
+| 11 | Suggestion | Task set lacks ask_user/Knight trigger scenarios | Added tasks 11-13 |
+| 12 | Suggestion | Health check endpoint | Added GET /healthz |
 
 ## Open Questions
 
 None. All key decisions confirmed:
 - Protocol: HTTP + SSE
-- ask_user strategy: LLM intelligent response
-- Metrics: adapter built-in
+- ask_user strategy: LLM intelligent response, "yes proceed" fallback
+- Metrics: adapter built-in, tokens deferred to session store
 - Runtime: daemon mode with existing IM infrastructure
