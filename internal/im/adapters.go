@@ -144,6 +144,10 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 		}
 		mgr.RegisterSink(adapter)
 		adapter.Start(ctx)
+	case PlatformDummy:
+		adapter := newDummyAdapter(name, cfg, adapterCfg, mgr)
+		mgr.RegisterSink(adapter)
+		adapter.Start(ctx)
 	}
 	return nil
 }
