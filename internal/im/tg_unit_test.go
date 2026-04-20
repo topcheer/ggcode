@@ -153,6 +153,78 @@ func TestTGOutboundText(t *testing.T) {
 	}
 }
 
+func TestTGOutboundText_English(t *testing.T) {
+	adapter := &tgAdapter{}
+
+	tests := []struct {
+		name  string
+		event OutboundEvent
+		want  string
+	}{
+		// Tool calls — English
+		{"tool_call_bash", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "bash", Lang: "en", Args: `{"command":"ls -la"}`}}, "⚡ Run command:\n```\nls -la\n```"},
+		{"tool_call_read", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"file_path":"chart.html"}`}}, "📖 Reading file: `chart.html`"},
+		{"tool_call_read_pdf", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"report.pdf"}`}}, "📄 Reading PDF: `report.pdf`"},
+		{"tool_call_read_xlsx", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"data.xlsx"}`}}, "📊 Reading Excel: `data.xlsx`"},
+		{"tool_call_read_zip", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"src.zip"}`}}, "📦 Reading ZIP: `src.zip`"},
+		{"tool_call_edit", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "edit_file", Lang: "en", Args: `{"file_path":"main.go"}`}}, "✏️ Edit file: `main.go`"},
+		{"tool_call_write", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "write_file", Lang: "en", Args: `{"file_path":"output.md"}`}}, "📝 Write file: `output.md`"},
+		{"tool_call_todo", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "todo_write", Lang: "en"}}, "📋 Update todos"},
+		{"tool_call_glob", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "glob", Lang: "en", Args: `{"pattern":"*.go"}`}}, "🔍 Find files: `*.go`"},
+		{"tool_call_search", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "search_files", Lang: "en", Args: `{"pattern":"TODO"}`}}, "🔍 Search: `TODO`"},
+		{"tool_call_listdir", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "list_directory", Lang: "en", Args: `{"path":"src"}`}}, "📂 List directory: `src`"},
+		{"tool_call_webfetch", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "web_fetch", Lang: "en", Args: `{"url":"https://example.com"}`}}, "🌐 Fetch: https://example.com"},
+		{"tool_call_websearch", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "web_search", Lang: "en", Args: `{"query":"golang tutorial"}`}}, "🔍 Search: golang tutorial"},
+		{"tool_call_skill", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "skill", Lang: "en", Detail: "commit"}}, "🔧 Load skill: `commit`"},
+
+		// Tool results — English
+		{"tool_result_bash_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Lang: "en", Args: `{"command":"echo ok"}`, Result: ""}}, "✓\n```bash\necho ok\n```\n```\n(no output)\n```"},
+		{"tool_result_read_pdf", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"report.pdf"}`, Result: "[Extracted from pdf, 3 pages]\n     1\tline1\n     2\tline2"}}, "✓ 📄 report.pdf (3 pages, 2 lines)"},
+		{"tool_result_read_docx", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"doc.docx"}`, Result: "[Extracted from docx]\n     1\thello world"}}, "✓ 📄 doc.docx (1 lines extracted)"},
+		{"tool_result_read_zip", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"src.zip"}`, Result: "[Archive: zip format, 15 files]\n\n--- README.md ---\nhello"}}, "✓ 📦 src.zip (15 files)"},
+		{"tool_result_read_zip_truncated", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"big.tar.gz"}`, Result: "[Archive: tar.gz format, 500 files]\n[Showing first 500 of 1000 files]\n--- main.go ---\npackage main"}}, "✓ 📦 big.tar.gz (1000 files, showing first 500)"},
+		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Lang: "en", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "✓ 🔍 `*.xyz`: no matches"},
+		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Lang: "en", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "✓ 🔍 `NONEXIST`: 0 results"},
+
+		// Read range — English
+		{"tool_call_read_offset", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":100,"limit":50}`}}, "📖 Reading file: `log.txt` [lines 100-149]"},
+		{"tool_call_read_offset_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":200}`}}, "📖 Reading file: `log.txt` [from line 200]"},
+		{"tool_call_read_limit_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","limit":10}`}}, "📖 Reading file: `log.txt` [first 10 lines]"},
+		{"tool_result_read_offset", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":100,"limit":50}`, Result: "line100\nline101"}}, "✓ 📖 log.txt [lines 100-149]"},
+
+		// Background commands — English
+		{"tool_result_start_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "start_command", Lang: "en", Result: ""}}, "✓ ⚡ Background command started"},
+		{"tool_result_stop_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "stop_command", Lang: "en", Result: ""}}, "✓ 🛑 Command stopped"},
+		{"tool_result_wait_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_command", Lang: "en", Result: ""}}, "✓ ⏳ Command completed"},
+		{"tool_result_write_input", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_command_input", Lang: "en", Result: ""}}, "✓ ⌨️ Input sent"},
+		{"tool_result_list_cmds", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_commands", Lang: "en", Result: ""}}, "✓ 📋 no active commands"},
+
+		// Agent tools — English
+		{"tool_result_spawn_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "spawn_agent", Lang: "en", Result: ""}}, "✓ 🤖 Sub-task started"},
+		{"tool_result_wait_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_agent", Lang: "en", Result: ""}}, "✓ 🤖 Sub-task completed"},
+		{"tool_result_list_agents", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_agents", Lang: "en", Result: ""}}, "✓ 🤖 no active agents"},
+
+		// MCP / Skill / Memory — English
+		{"tool_result_skill_loaded", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "skill", Lang: "en", Result: ""}}, "✓ 🔧 Skill loaded"},
+		{"tool_result_memory_saved", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "save_memory", Lang: "en", Result: ""}}, "✓ 💾 Memory saved"},
+		{"tool_result_mcp_capabilities", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_mcp_capabilities", Lang: "en", Result: ""}}, "✓ 🔗 MCP service list"},
+		{"tool_result_mcp_resource", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_mcp_resource", Lang: "en", Result: ""}}, "✓ 🔗 Resource content"},
+		{"tool_result_ask_user", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "ask_user", Lang: "en", Result: ""}}, "✓ 💬 Reply received"},
+
+		// Todo — English
+		{"tool_result_todo_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "todo_write", Lang: "en", Args: `{}`}}, "✓ 📋 Update todos"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := adapter.outboundText(tc.event)
+			if got != tc.want {
+				t.Errorf("outboundText(en) = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTGPayloadKeys(t *testing.T) {
 	tests := []struct {
 		name  string
