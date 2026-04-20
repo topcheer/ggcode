@@ -1256,7 +1256,7 @@ func (m Model) renderComposerPanel() string {
 
 func (m Model) renderComposerInput() string {
 	value := m.input.Value()
-	if strings.TrimSpace(value) == "" {
+	if value == "" {
 		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
 	}
 
