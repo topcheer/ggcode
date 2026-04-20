@@ -1325,17 +1325,27 @@ func composerDisplayValue(value string, cursor int) string {
 // being split across line boundaries during word wrapping.
 // NOTE: Unlike wrapConversationText, this function preserves trailing spaces
 // because the composer input field needs accurate cursor positioning.
+// wordwrap.String trims trailing spaces, so we only use it when the line is
+// actually wider than available width.
 func composerWrappedLines(value string, cursor, width int) []string {
 	if width <= 0 {
 		return []string{composerDisplayValue(value, cursor)}
 	}
 
-	// Wrap plain text preserving trailing spaces (no TrimRight).
+	// Split by newlines first, preserving trailing spaces.
+	rawLines := strings.Split(value, "\n")
 	var lines []string
-	for _, raw := range strings.Split(value, "\n") {
-		wrapped := wordwrap.String(raw, width)
-		for _, candidate := range strings.Split(wrapped, "\n") {
-			lines = append(lines, candidate)
+	for _, raw := range rawLines {
+		if lipgloss.Width(raw) <= width {
+			// Line fits — keep as-is (preserves trailing spaces).
+			lines = append(lines, raw)
+		} else {
+			// Line too wide — must wrap (wordwrap may trim trailing spaces,
+			// but that's acceptable for overflow lines only).
+			wrapped := wordwrap.String(raw, width)
+			for _, candidate := range strings.Split(wrapped, "\n") {
+				lines = append(lines, candidate)
+			}
 		}
 	}
 	if len(lines) == 0 {
