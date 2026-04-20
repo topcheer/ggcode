@@ -142,6 +142,7 @@ func (k *Knight) RecordSkillUse(name string) {
 	if k.usage != nil {
 		k.usage.RecordUse(name)
 	}
+	k.syncSkillMetadata(name)
 }
 
 // RecordSkillEffectiveness records a 1-5 effectiveness score for a skill.
@@ -149,6 +150,7 @@ func (k *Knight) RecordSkillEffectiveness(name string, score int) {
 	if k.usage != nil {
 		k.usage.RecordEffectiveness(name, score)
 	}
+	k.syncSkillMetadata(name)
 }
 
 // SkillUsage returns runtime usage stats for a skill.
@@ -165,6 +167,21 @@ func (k *Knight) SkillFeedback(name string) (avgScore float64, samples int) {
 		return 0, 0
 	}
 	return k.usage.GetFeedback(name)
+}
+
+// SetSkillFrozen updates an active skill's frozen flag.
+func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
+	entry := k.index.FindActiveByName(name)
+	if entry == nil {
+		return fmt.Errorf("active skill %q not found", name)
+	}
+	if err := updateSkillFrontmatter(entry.Path, func(fmMap map[string]interface{}) {
+		fmMap["frozen"] = frozen
+	}); err != nil {
+		return fmt.Errorf("update skill %q frontmatter: %w", name, err)
+	}
+	k.index.Invalidate()
+	return nil
 }
 
 // Index returns the skill index for external access.
@@ -520,6 +537,9 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 		if !result.Valid {
 			debug.Log("knight", "skill %s has issues: %v", skill.Name, result.Errors)
 		}
+		if skill.Meta.Frozen {
+			continue
+		}
 
 		// Freshness check: is the skill stale?
 		if k.usage.IsStale(skill.Name, 30*24*time.Hour) {
@@ -540,6 +560,7 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 		if shouldWarn {
 			debug.Log("knight", "skill %s has low effectiveness: %.1f/5", skill.Name, avgScore)
 			k.emitReport(fmt.Sprintf("📉 Skill '%s' effectiveness: %.1f/5 across %d signals. Consider updating or removing.", skill.Name, avgScore, samples))
+			k.maybeStageSkillPatch(ctx, skill, avgScore, samples)
 		}
 	}
 }
@@ -647,6 +668,105 @@ func formatKnightTaskOutput(output string) string {
 		output = strings.TrimSpace(output[:1500]) + "\n…"
 	}
 	return output
+}
+
+func (k *Knight) syncSkillMetadata(name string) {
+	if k.usage == nil {
+		return
+	}
+	entry := k.index.FindActiveByName(name)
+	if entry == nil {
+		return
+	}
+	snapshot, ok := k.usage.Snapshot(name)
+	if !ok {
+		return
+	}
+	if err := updateSkillFrontmatter(entry.Path, func(fmMap map[string]interface{}) {
+		fmMap["usage_count"] = snapshot.UsageCount
+		if snapshot.LastUsed.IsZero() {
+			fmMap["last_used"] = nil
+		} else {
+			fmMap["last_used"] = snapshot.LastUsed.Format(time.RFC3339)
+		}
+		fmMap["effectiveness_scores"] = append([]int(nil), snapshot.Effectiveness...)
+	}); err == nil {
+		k.index.Invalidate()
+	}
+}
+
+func (k *Knight) maybeStageSkillPatch(ctx context.Context, skill *SkillEntry, avgScore float64, samples int) {
+	if skill == nil || strings.EqualFold(k.cfg.TrustLevel, "readonly") || !k.hasCapability("skill_creation") {
+		return
+	}
+	factory := k.getFactory()
+	if factory == nil {
+		return
+	}
+	staging, err := k.index.StagingSkills()
+	if err == nil {
+		for _, candidate := range staging {
+			if candidate.Name == skill.Name {
+				return
+			}
+		}
+	}
+
+	content, err := readSkillContent(skill.Path)
+	if err != nil {
+		debug.Log("knight", "read skill %s for patch failed: %v", skill.Name, err)
+		return
+	}
+	prompt := fmt.Sprintf(`Revise the following existing SKILL.md to improve its usefulness.
+
+Skill name: %s
+Scope: %s
+Observed effectiveness: %.1f/5 across %d signals
+
+Requirements:
+- Keep the same skill name and scope
+- Improve clarity, ordering, and guardrails based on the weak effectiveness
+- Preserve it as a complete SKILL.md document with valid YAML frontmatter
+- Add clearer "When to Use", "When Not to Use", "Steps", and "Gotchas" guidance if missing
+- Output only the revised SKILL.md content
+
+Current skill:
+%s`, skill.Name, skill.Scope, avgScore, samples, string(content))
+
+	result := k.RunTask(ctx, "skill-patch", prompt, factory)
+	if result.Error != nil {
+		debug.Log("knight", "skill patch generation failed for %s: %v", skill.Name, result.Error)
+		return
+	}
+	revised := strings.TrimSpace(result.Output)
+	if revised == "" {
+		return
+	}
+	path, err := k.promoter.WriteStaging(skill.Name, skill.Scope, revised)
+	if err != nil {
+		debug.Log("knight", "write patched staging skill %s failed: %v", skill.Name, err)
+		return
+	}
+	meta, err := parseSkillFile(path)
+	if err != nil {
+		_ = os.Remove(path)
+		debug.Log("knight", "patched skill %s frontmatter invalid: %v", skill.Name, err)
+		return
+	}
+	validation := ValidateSkill(&SkillEntry{
+		Name:    skill.Name,
+		Meta:    meta,
+		Path:    path,
+		Scope:   skill.Scope,
+		Staging: true,
+	})
+	if !validation.Valid {
+		_ = os.Remove(path)
+		debug.Log("knight", "patched skill %s validation failed: %v", skill.Name, validation.Errors)
+		return
+	}
+	k.index.Invalidate()
+	k.emitReport(fmt.Sprintf("🛠️ Staged updated skill '%s' after low-effectiveness signals (%.1f/5 over %d ratings). Review with /knight approve %s or /knight reject %s.", skill.Name, avgScore, samples, skill.Name, skill.Name))
 }
 
 func (k *Knight) shouldStageCandidate(c SkillCandidate) bool {

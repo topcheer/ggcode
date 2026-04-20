@@ -159,3 +159,67 @@ func TestKnightRunCommandExecutesTask(t *testing.T) {
 		t.Fatalf("expected Knight task summary, got %q", output)
 	}
 }
+
+func TestKnightFreezeAndUnfreezeCommands(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(`---
+name: build-flow
+description: Build the project reliably
+scope: project
+created_by: knight
+frozen: false
+---
+# Build Flow
+
+## When to Use
+Use this when validating builds.
+
+## Steps
+1. Run the build
+
+## When Not to Use
+Do not use this for unrelated tasks.
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	k := knight.New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	if err := k.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer k.Stop()
+
+	m := newTestModel()
+	m.SetKnight(k)
+	if cmd := m.handleKnightCommand([]string{"/knight", "freeze", "build-flow"}); cmd != nil {
+		t.Fatal("expected freeze command to complete synchronously")
+	}
+	if !strings.Contains(m.output.String(), "frozen") {
+		t.Fatalf("expected freeze confirmation, got %q", m.output.String())
+	}
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "frozen: true") {
+		t.Fatal("expected frozen flag after /knight freeze")
+	}
+
+	if cmd := m.handleKnightCommand([]string{"/knight", "unfreeze", "build-flow"}); cmd != nil {
+		t.Fatal("expected unfreeze command to complete synchronously")
+	}
+	data, err = os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "frozen: false") {
+		t.Fatal("expected unfrozen flag after /knight unfreeze")
+	}
+}

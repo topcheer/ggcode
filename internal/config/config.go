@@ -157,6 +157,7 @@ type Config struct {
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
 	Impersonation ImpersonationConfig       `yaml:"impersonation,omitempty"`
 	KnightConfig  KnightConfig              `yaml:"knight,omitempty"`
+	A2A           A2AConfig                 `yaml:"a2a,omitempty"`
 	FilePath      string                    `yaml:"-"`
 	FirstRun      bool                      `yaml:"-"`
 }
@@ -221,6 +222,16 @@ type SubAgentConfig struct {
 	MaxConcurrent int           `yaml:"max_concurrent"`
 	Timeout       time.Duration `yaml:"timeout"`
 	ShowOutput    bool          `yaml:"show_output"`
+}
+
+// A2AConfig holds A2A protocol server configuration.
+type A2AConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	Port        int    `yaml:"port"`         // 0 = auto-assign
+	Host        string `yaml:"host"`         // default "127.0.0.1"
+	APIKey      string `yaml:"api_key"`      // empty = no auth
+	MaxTasks    int    `yaml:"max_tasks"`    // concurrent task limit (default 5)
+	TaskTimeout string `yaml:"task_timeout"` // per-task timeout (default "5m")
 }
 
 func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, models []string, tags ...string) EndpointConfig {
@@ -781,6 +792,9 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 		}
 		c.MCPServers[i] = mcp
 	}
+	// A2A env expansion.
+	c.A2A.APIKey = ExpandEnvWithLookup(c.A2A.APIKey, lookup)
+	c.A2A.Host = ExpandEnvWithLookup(c.A2A.Host, lookup)
 }
 
 // Validate checks for invalid core configuration values that should fail fast.
@@ -823,6 +837,21 @@ func (c *Config) Validate() error {
 	}
 	if c.SubAgents.Timeout < 0 {
 		return fmt.Errorf("subagents.timeout must not be negative")
+	}
+	// A2A defaults and validation.
+	if c.A2A.Enabled {
+		if c.A2A.Port < 0 {
+			return fmt.Errorf("a2a.port must not be negative")
+		}
+		if c.A2A.MaxTasks == 0 {
+			c.A2A.MaxTasks = 5
+		}
+		if c.A2A.TaskTimeout == "" {
+			c.A2A.TaskTimeout = "5m"
+		}
+		if c.A2A.Host == "" {
+			c.A2A.Host = "127.0.0.1"
+		}
 	}
 	for _, dir := range c.AllowedDirs {
 		if strings.TrimSpace(dir) == "" {

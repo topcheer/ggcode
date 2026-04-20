@@ -92,6 +92,18 @@ func (ut *UsageTracker) GetFeedback(name string) (avgScore float64, samples int)
 	return entry.avgScore(), len(entry.Effectiveness)
 }
 
+func (ut *UsageTracker) Snapshot(name string) (skillUsage, bool) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.ensureLoaded()
+
+	entry, ok := ut.data[name]
+	if !ok {
+		return skillUsage{}, false
+	}
+	return *entry, true
+}
+
 // IsStale returns true if a skill hasn't been used for the given duration.
 func (ut *UsageTracker) IsStale(name string, threshold time.Duration) bool {
 	ut.mu.Lock()

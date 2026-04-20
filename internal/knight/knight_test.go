@@ -802,3 +802,164 @@ func TestKnightNightlyMaintenanceRunsRealAuditTasks(t *testing.T) {
 		t.Fatalf("expected task outputs in maintenance report, got %q", report)
 	}
 }
+
+func TestKnightSyncSkillMetadataPersistsUsageToSkillFile(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(`---
+name: build-flow
+description: Build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds.
+
+## Steps
+1. Run the build
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	k.RecordSkillUse("build-flow")
+	k.RecordSkillEffectiveness("build-flow", 5)
+
+	meta, err := parseSkillFile(skillPath)
+	if err != nil {
+		t.Fatalf("parseSkillFile() error = %v", err)
+	}
+	if meta.UsageCount != 1 {
+		t.Fatalf("expected usage_count=1, got %d", meta.UsageCount)
+	}
+	if meta.LastUsed == "" {
+		t.Fatal("expected last_used to be persisted")
+	}
+	if len(meta.EffectivenessScores) != 1 || meta.EffectivenessScores[0] != 5 {
+		t.Fatalf("expected effectiveness_scores=[5], got %#v", meta.EffectivenessScores)
+	}
+}
+
+func TestKnightSetSkillFrozenPersistsFlag(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(`---
+name: build-flow
+description: Build flow
+scope: project
+created_by: knight
+frozen: false
+---
+# Build Flow
+
+## When to Use
+Use for builds.
+
+## Steps
+1. Run the build
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	if err := k.SetSkillFrozen("build-flow", true); err != nil {
+		t.Fatalf("SetSkillFrozen() error = %v", err)
+	}
+
+	meta, err := parseSkillFile(skillPath)
+	if err != nil {
+		t.Fatalf("parseSkillFile() error = %v", err)
+	}
+	if !meta.Frozen {
+		t.Fatal("expected frozen flag to be true")
+	}
+}
+
+func TestKnightStagesPatchForLowEffectivenessSkill(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(`---
+name: build-flow
+description: Build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds.
+
+## Steps
+1. Run the build
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	k := New(config.KnightConfig{
+		Enabled:      true,
+		TrustLevel:   "staged",
+		Capabilities: []string{"skill_creation"},
+	}, homeDir, projDir, nil)
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return stubKnightRunner{output: `---
+name: build-flow
+description: Build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds and test validation.
+
+## Steps
+1. Run the build
+2. Run tests
+
+## Gotchas
+- Watch for integration-only failures
+
+## When Not to Use
+Do not use this for unrelated tasks.
+`}, nil
+	})
+	k.RecordSkillEffectiveness("build-flow", 1)
+	k.RecordSkillEffectiveness("build-flow", 2)
+
+	k.validateAllSkills(context.Background())
+
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		t.Fatalf("StagingSkills() error = %v", err)
+	}
+	found := false
+	for _, entry := range staging {
+		if entry.Name == "build-flow" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected low-effectiveness skill patch to be staged")
+	}
+}

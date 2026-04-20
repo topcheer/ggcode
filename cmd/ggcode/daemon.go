@@ -418,6 +418,20 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
+	// Start A2A server if enabled.
+	if cfg.A2A.Enabled {
+		a2aSrv, a2aReg, err := startA2AServer(cfg, ag, registry, workingDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
+		} else {
+			defer func() {
+				_ = a2aReg.Unregister()
+				a2aSrv.Stop()
+			}()
+			fmt.Fprintf(os.Stderr, "🔗 A2A server: %s\n", a2aSrv.Endpoint())
+		}
+	}
+
 	// Start command watcher
 	if commandMgr != nil {
 		stop := make(chan struct{})

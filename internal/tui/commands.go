@@ -2458,6 +2458,28 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		} else {
 			m.output.WriteString(fmt.Sprintf("❌ Skill '%s' rejected\n", name))
 		}
+	case "freeze":
+		if len(parts) < 3 {
+			m.output.WriteString("Usage: /knight freeze <skill-name>\n")
+			return nil
+		}
+		name := parts[2]
+		if err := m.knight.SetSkillFrozen(name, true); err != nil {
+			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+		} else {
+			m.output.WriteString(fmt.Sprintf("🔒 Skill '%s' frozen\n", name))
+		}
+	case "unfreeze":
+		if len(parts) < 3 {
+			m.output.WriteString("Usage: /knight unfreeze <skill-name>\n")
+			return nil
+		}
+		name := parts[2]
+		if err := m.knight.SetSkillFrozen(name, false); err != nil {
+			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+		} else {
+			m.output.WriteString(fmt.Sprintf("🔓 Skill '%s' unfrozen\n", name))
+		}
 	case "skills":
 		active, _ := m.knight.Index().ActiveSkills()
 		if len(active) == 0 {
@@ -2505,7 +2527,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		avg, samples := m.knight.SkillFeedback(name)
 		m.output.WriteString(fmt.Sprintf("⭐ Rated skill '%s' %d/5 (avg: %.1f/5 over %d signals)\n", name, score, avg, samples))
 	default:
-		m.output.WriteString("Knight commands: status, run <task>, approve <name>, reject <name>, rate <name> <1-5>, skills\n")
+		m.output.WriteString("Knight commands: status, run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rate <name> <1-5>, skills\n")
 	}
 	return nil
 }

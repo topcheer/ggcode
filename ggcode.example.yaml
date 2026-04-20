@@ -508,3 +508,13 @@ plugins:
         description: Run custom linter
         execute: npm
         args: ["run", "lint"]
+
+# A2A protocol server — expose this ggcode instance as an A2A agent
+# so other ggcode instances (or any A2A client) can discover and collaborate.
+# a2a:
+#   enabled: true
+#   port: 0                    # 0 = auto-assign (recommended for multi-instance)
+#   host: "127.0.0.1"          # bind address ("0.0.0.0" for LAN access)
+#   api_key: ""                # optional API key (supports ${ENV_VAR} expansion)
+#   max_tasks: 5               # concurrent task limit
+#   task_timeout: "5m"         # per-task timeout
