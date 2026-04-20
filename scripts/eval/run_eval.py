@@ -703,6 +703,8 @@ def main():
     parser.add_argument("--llm-base-url", help="LLM API base URL")
     parser.add_argument("--no-llm", action="store_true", help="Skip LLM, use raw descriptions")
     parser.add_argument("--timeout", type=float, default=600, help="Per-task timeout in seconds")
+    parser.add_argument("--workdir", default=os.path.expanduser("~/ggai/eval-workbench"),
+                        help="Working directory for the daemon (default: ~/ggai/eval-workbench)")
     args = parser.parse_args()
 
     if not args.auto and not args.base_url and not args.port_file:
@@ -721,7 +723,7 @@ def main():
         model=args.llm_model,
     )
 
-    working_dir = os.getcwd()
+    working_dir = os.path.abspath(args.workdir)
 
     if args.ab:
         # A/B comparison: run baseline then knight

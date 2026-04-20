@@ -5,6 +5,7 @@
 #   ./scripts/dev/knight-eval.sh --knight     # 仅 Knight 模式
 #   ./scripts/dev/knight-eval.sh --baseline   # 仅 Baseline 模式
 #   ./scripts/dev/knight-eval.sh --tasks task-01,task-02  # 指定任务
+#   ./scripts/dev/knight-eval.sh --workdir ~/ggai/eval-workbench  # 指定测试项目
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -24,8 +25,6 @@ fail()  { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
 
 # ---- 依赖检查 ----
 check_deps() {
-    local missing=0
-
     if ! command -v ggcode &>/dev/null; then
         fail "ggcode binary not found in PATH. Run 'make build' first."
     fi
@@ -43,10 +42,22 @@ check_deps() {
     ok "Dependencies checked."
 }
 
+# ---- 重置测试项目 ----
+reset_workdir() {
+    local wd="$1"
+    if [[ ! -d "${wd}/.git" ]]; then
+        fail "Workdir ${wd} is not a git repository. Run init first."
+    fi
+    info "Resetting test project: ${wd}"
+    (cd "${wd}" && git checkout . && git clean -fd)
+    ok "Test project reset to clean state."
+}
+
 # ---- 参数解析 ----
 MODE_FLAG=""
 EXTRA_ARGS=()
 TASKS_ARG=""
+WORKDIR=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -57,6 +68,8 @@ while [[ $# -gt 0 ]]; do
         --no-llm)   EXTRA_ARGS+=("--no-llm"); shift ;;
         --llm-model) EXTRA_ARGS+=("--llm-model" "$2"); shift 2 ;;
         --output)   OUTPUT_DIR="$2"; shift 2 ;;
+        --workdir)  WORKDIR="$2"; shift 2 ;;
+        --no-reset) NO_RESET=1; shift ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -68,6 +81,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-llm       Skip LLM, use raw task descriptions"
             echo "  --llm-model M  Use specific LLM model"
             echo "  --output DIR   Output directory"
+            echo "  --workdir DIR  Test project directory (default: ~/ggai/eval-workbench)"
+            echo "  --no-reset     Don't reset test project before running"
             echo "  -h, --help     Show this help"
             exit 0
             ;;
@@ -80,6 +95,10 @@ if [[ -z "${MODE_FLAG}" ]]; then
     MODE_FLAG="--ab"
 fi
 
+# Default workdir
+WORKDIR="${WORKDIR:-$HOME/ggai/eval-workbench}"
+WORKDIR="$(eval echo "${WORKDIR}")"  # expand ~
+
 timestamp="$(date +"%Y%m%d-%H%M%S")"
 OUTPUT_DIR="${OUTPUT_DIR:-${repo_root}/.tmp/knight-eval-${timestamp}}"
 
@@ -89,12 +108,18 @@ echo "========================================================"
 echo "  Knight Automated Evaluation"
 echo "========================================================"
 echo "  Mode:      ${MODE_FLAG}"
+echo "  Workdir:   ${WORKDIR}"
 echo "  Output:    ${OUTPUT_DIR}"
 echo "  Timestamp: ${timestamp}"
 echo "========================================================"
 echo ""
 
 check_deps
+
+# Reset test project
+if [[ -z "${NO_RESET:-}" ]]; then
+    reset_workdir "${WORKDIR}"
+fi
 
 mkdir -p "${OUTPUT_DIR}"
 
@@ -104,6 +129,7 @@ info "Starting evaluation orchestrator..."
 python3 "${repo_root}/scripts/eval/run_eval.py" \
     ${MODE_FLAG} \
     --auto \
+    --workdir "${WORKDIR}" \
     --output "${OUTPUT_DIR}" \
     --run-id "${timestamp}" \
     ${TASKS_ARG} \
@@ -121,7 +147,8 @@ fi
 
 echo ""
 echo "Results:"
-echo "  Output dir: ${OUTPUT_DIR}"
+echo "  Workdir:   ${WORKDIR}"
+echo "  Output:    ${OUTPUT_DIR}"
 
 # Show scorecard if exists
 for sc in "${OUTPUT_DIR}/ab-comparison.scorecard.md" \
