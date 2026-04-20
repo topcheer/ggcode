@@ -154,7 +154,7 @@ func FormatToolStart(msg ToolStatusMsg) string {
 	sb.WriteString(formatToolInline(toolDisplayName(msg), toolDetail(msg)))
 	if msg.Args != "" && toolDetail(msg) == "" {
 		sb.WriteString("\n  │ ")
-		sb.WriteString(msg.Args)
+		sb.WriteString(relativizeResult(msg.Args))
 	}
 	sb.WriteString("\n")
 	return sb.String()
@@ -189,7 +189,7 @@ func FormatToolStatus(msg ToolStatusMsg) string {
 }
 
 func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
-	result := strings.TrimSpace(msg.Result)
+	result := relativizeResult(strings.TrimSpace(msg.Result))
 	if msg.IsError {
 		if exit := firstMatch(result, `exit status \d+`); exit != "" {
 			return exit

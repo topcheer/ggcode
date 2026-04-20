@@ -25,3 +25,5 @@ internal/im/*_screenshot.png
 # OS
 .DS_Store
 __pycache__/
+.claude/
+.tmp/

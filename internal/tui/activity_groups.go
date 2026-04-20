@@ -270,7 +270,7 @@ func formatCommandToolItemSummary(lang Language, msg ToolStatusMsg) (string, boo
 	if !isCommandTool(msg.ToolName) {
 		return "", false
 	}
-	preview := buildCommandPreview(rawCommandArg(parseToolArgs(msg.RawArgs)))
+	preview := buildCommandPreview(relativizeResult(rawCommandArg(parseToolArgs(msg.RawArgs))))
 	if preview.Title == "" && len(preview.CommandLines) == 0 {
 		return "", false
 	}
@@ -307,8 +307,8 @@ func buildCommandToolActivityItem(_ Language, msg ToolStatusMsg) (toolActivityIt
 	if !isCommandTool(msg.ToolName) {
 		return toolActivityItem{}, false
 	}
-	preview := buildCommandPreview(rawCommandArg(parseToolArgs(msg.RawArgs)))
-	outputPreview := buildTextPreview(msg.Result)
+	preview := buildCommandPreview(relativizeResult(rawCommandArg(parseToolArgs(msg.RawArgs))))
+	outputPreview := buildTextPreview(relativizeResult(msg.Result))
 
 	item := toolActivityItem{
 		CallID:                 msg.ToolID,
@@ -491,11 +491,7 @@ func (m Model) renderToolActivityItem(item toolActivityItem) []string {
 }
 
 func (m Model) renderCommandActivityItem(item toolActivityItem, prefix string) []string {
-	firstWidth := m.conversationInnerWidth() - 10
 	bodyWidth := m.conversationInnerWidth() - 8
-	if firstWidth < 8 {
-		firstWidth = 8
-	}
 	if bodyWidth < 8 {
 		bodyWidth = 8
 	}
@@ -507,16 +503,16 @@ func (m Model) renderCommandActivityItem(item toolActivityItem, prefix string) [
 	commandLines := append([]string(nil), item.CommandLines...)
 	if item.CommandTitle == "" && len(commandLines) > 0 {
 		first := appendHiddenLineSuffix(m.currentLanguage(), commandLines[0], item.CommandHiddenLineCount, "command")
-		rows = append(rows, fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), commandStyle.Render(truncateString(first, firstWidth))))
+		rows = append(rows, fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), commandStyle.Render(first)))
 		commandLines = commandLines[1:]
 	} else {
 		header := item.CommandTitle
 		if header == "" {
 			header = item.Summary
 		}
-		rows = append(rows, fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), truncateString(header, firstWidth)))
+		rows = append(rows, fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), header))
 		if item.CommandHiddenLineCount > 0 && len(commandLines) == 0 {
-			rows[len(rows)-1] = fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), truncateString(appendHiddenLineSuffix(m.currentLanguage(), header, item.CommandHiddenLineCount, "command"), firstWidth))
+			rows[len(rows)-1] = fmt.Sprintf("    %s %s", toolBulletStyle.Render(prefix), appendHiddenLineSuffix(m.currentLanguage(), header, item.CommandHiddenLineCount, "command"))
 		}
 	}
 
@@ -524,7 +520,7 @@ func (m Model) renderCommandActivityItem(item toolActivityItem, prefix string) [
 		if i == len(commandLines)-1 {
 			line = appendHiddenLineSuffix(m.currentLanguage(), line, item.CommandHiddenLineCount, "command")
 		}
-		rows = append(rows, fmt.Sprintf("      %s", commandStyle.Render(truncateString(line, bodyWidth))))
+		rows = append(rows, fmt.Sprintf("      %s", commandStyle.Render(line)))
 	}
 
 	for i, line := range item.OutputLines {

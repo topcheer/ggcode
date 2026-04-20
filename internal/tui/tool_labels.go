@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type toolPresentation struct {
@@ -152,6 +153,7 @@ func toolPresentationFor(lang Language, action, target string) toolPresentation 
 }
 
 func commandToolPresentation(lang Language, rawCommand string) (toolPresentation, bool) {
+	rawCommand = relativizeResult(rawCommand)
 	preview := buildCommandPreview(rawCommand)
 	if preview.Title == "" {
 		return toolPresentation{}, false
@@ -631,4 +633,13 @@ func prettifyToolName(name string) string {
 		parts[i] = strings.ToUpper(part[:1]) + part[1:]
 	}
 	return strings.Join(parts, " ")
+}
+
+// relativizeResult replaces absolute paths in tool result text with relative paths.
+func relativizeResult(text string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return text
+	}
+	return util.RelativizePaths(text, cwd)
 }
