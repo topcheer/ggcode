@@ -1,7 +1,12 @@
 package extract
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"embed"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -290,4 +295,67 @@ func TestRTFInvalidInput(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for non-RTF input")
 	}
+}
+
+func TestLargeZipIsBounded(t *testing.T) {
+	// Create a ZIP with 600 files to verify maxArchiveEntries=500 limit
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for i := 0; i < 600; i++ {
+		f, _ := w.Create(fmt.Sprintf("file_%04d.txt", i))
+		f.Write([]byte(fmt.Sprintf("content %d", i)))
+	}
+	w.Close()
+
+	result, err := Extract("large.zip", buf.Bytes())
+	if err != nil {
+		t.Fatalf("large ZIP: %v", err)
+	}
+	// Should mention 500 files were read (truncated from 600)
+	if !strings.Contains(result.Text, "500 files") {
+		t.Errorf("expected '500 files' in output, got first 200 chars: %q", result.Text[:min(200, len(result.Text))])
+	}
+	if !strings.Contains(result.Text, "Showing first") {
+		t.Errorf("expected 'Showing first' truncation notice, got: %q", result.Text[:min(200, len(result.Text))])
+	}
+	// Should NOT contain file_0500+ since we only read 500
+	if strings.Contains(result.Text, "file_0500") {
+		t.Error("expected file_0500 to be truncated, but it was found")
+	}
+}
+
+func TestTarGzOutputIsBounded(t *testing.T) {
+	// Create a tar.gz with many files, verify output doesn't exceed limits
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
+	for i := 0; i < 100; i++ {
+		hdr := &tar.Header{
+			Name: fmt.Sprintf("src/pkg_%d/main.go", i),
+			Mode: 0644,
+			Size: int64(len([]byte("package main"))),
+		}
+		tw.WriteHeader(hdr)
+		tw.Write([]byte("package main"))
+	}
+	tw.Close()
+
+	var gzBuf bytes.Buffer
+	gw := gzip.NewWriter(&gzBuf)
+	gw.Write(tarBuf.Bytes())
+	gw.Close()
+
+	result, err := Extract("test.tar.gz", gzBuf.Bytes())
+	if err != nil {
+		t.Fatalf("tar.gz: %v", err)
+	}
+	if !strings.Contains(result.Text, "package main") {
+		t.Error("expected 'package main' in output")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

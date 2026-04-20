@@ -226,8 +226,12 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest) {
 		return
 	}
 
-	// For message/send, wait for completion (with timeout).
-	deadline := time.After(5 * time.Minute)
+	// For message/send, wait for completion (with timeout from handler config).
+	timeout := s.handler.Timeout()
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	deadline := time.After(timeout)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
