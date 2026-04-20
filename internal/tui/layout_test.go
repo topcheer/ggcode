@@ -2738,8 +2738,15 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	if m.input.Value() != "" {
 		t.Errorf("expected input to clear after queuing, got %q", m.input.Value())
 	}
-	if !strings.Contains(m.output.String(), "[queued 1 pending]") {
-		t.Error("expected queued hint in output")
+	// User input should be rendered in the conversation view like a normal submission.
+	// The prefix "❯ " is styled with ANSI codes, so we just check for the text content.
+	outputStr := m.output.String()
+	if !strings.Contains(outputStr, "hi") {
+		t.Error("expected user input 'hi' to appear in output, got:", outputStr)
+	}
+	// Should NOT show the old "[queued N pending]" hint.
+	if strings.Contains(outputStr, "[queued") {
+		t.Error("should not show [queued...] hint, got:", outputStr)
 	}
 }
 

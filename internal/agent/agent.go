@@ -580,10 +580,6 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			onEvent(event)
 			textBuf.WriteString(event.Text)
 			assistantTextBuf.WriteString(event.Text)
-			if a.injectPendingInterruptions() {
-				cancel()
-				return nil, assistantTextBuf.String(), nil, errStreamInterruptedForReplan
-			}
 		case provider.StreamEventToolCallChunk:
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
