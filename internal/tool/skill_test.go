@@ -93,7 +93,7 @@ func TestSkillToolExecute(t *testing.T) {
 	if result.Content == "" {
 		t.Fatal("expected expanded skill content")
 	}
-	if callback.Name != "deploy" || callback.Mode != SkillExecutionModeInline || callback.Result.IsError {
+	if callback.Name != "deploy" || callback.Ref != "deploy" || callback.Mode != SkillExecutionModeInline || callback.Result.IsError {
 		t.Fatalf("unexpected callback: %+v", callback)
 	}
 }
@@ -154,8 +154,45 @@ func TestSkillToolExecuteForkedSkill(t *testing.T) {
 	if result.Content != "forked result" {
 		t.Fatalf("result.Content = %q", result.Content)
 	}
-	if callback.Name != "deploy" || callback.Mode != SkillExecutionModeFork || callback.Result.IsError {
+	if callback.Name != "deploy" || callback.Ref != "deploy" || callback.Mode != SkillExecutionModeFork || callback.Result.IsError {
 		t.Fatalf("unexpected callback: %+v", callback)
+	}
+}
+
+func TestSkillToolUsesScopedProjectSkillRef(t *testing.T) {
+	var usedRef string
+	var callback SkillExecutionEvent
+	tool := SkillTool{
+		Skills: stubSkillLookup{
+			"deploy": {
+				Name:        "deploy",
+				Template:    "Run deploy",
+				Description: "Deploy the app",
+				Enabled:     true,
+				Source:      commands.SourceProject,
+				LoadedFrom:  commands.LoadedFromSkills,
+			},
+		},
+		OnSkillUsed: func(ref string) {
+			usedRef = ref
+		},
+		OnSkillCompleted: func(event SkillExecutionEvent) {
+			callback = event
+		},
+	}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"skill":"deploy"}`))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %+v", result)
+	}
+	if usedRef != "project:deploy" {
+		t.Fatalf("expected scoped usage ref, got %q", usedRef)
+	}
+	if callback.Ref != "project:deploy" || callback.Scope != "project" {
+		t.Fatalf("expected scoped callback, got %+v", callback)
 	}
 }
 

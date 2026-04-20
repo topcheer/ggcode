@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/topcheer/ggcode/internal/extract"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -23,7 +23,7 @@ type ReadFile struct {
 func (t ReadFile) Name() string { return "read_file" }
 
 func (t ReadFile) Description() string {
-	return "Read the contents of a file. Returns text content or image data (for png/jpg/jpeg/gif/webp files)."
+	return "Read file contents. Supports text files, images (png/jpg/gif/webp), PDF, Office documents (docx/xlsx/pptx), OpenDocument (odt/ods/odp), EPUB, and RTF. Use offset and limit for range reading large files."
 }
 
 func (t ReadFile) Parameters() json.RawMessage {
@@ -32,16 +32,28 @@ func (t ReadFile) Parameters() json.RawMessage {
 		"properties": {
 			"path": {
 				"type": "string",
-				"description": "Path to the file to read"
+				"description": "Absolute path to the file to read"
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Line number to start reading from (1-based). Only applies to text files and extracted documents."
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of lines to read."
 			}
 		},
 		"required": ["path"]
 	}`)
 }
 
+const maxFileSize = 10 * 1024 * 1024 // 10MB pre-check limit
+
 func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		Offset int    `json:"offset"`
+		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -51,12 +63,21 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
+	// Pre-check file size
+	info, err := os.Stat(args.Path)
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("error accessing file: %v", err)}, nil
+	}
+	if info.Size() > maxFileSize {
+		return Result{IsError: true, Content: fmt.Sprintf("file too large (%d MB). Use read_file with offset/limit for range reading.", info.Size()/(1024*1024))}, nil
+	}
+
 	data, err := os.ReadFile(args.Path)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error reading file: %v", err)}, nil
 	}
 
-	// Image file handling: decode and return as multimodal result.
+	// Image file handling: decode and return as multimodal result (ignores offset/limit).
 	if image.IsImageFile(args.Path) {
 		img, err := image.Decode(data)
 		if err != nil {
@@ -75,35 +96,28 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		}, nil
 	}
 
-	content := string(data)
-	content = truncateFileContent(content)
-
-	return Result{Content: content}, nil
-}
-
-const (
-	maxFileLines = 500
-	maxFileChars = 50000
-)
-
-func truncateFileContent(content string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) > maxFileLines {
-		truncated := strings.Join(lines[:maxFileLines], "\n")
-		return truncated + "\n\n[File truncated: showing first 500 of " + fmt.Sprintf("%d", len(lines)) + " lines. Use line_range or glob to read specific sections.]"
-	}
-	if len(content) > maxFileChars {
-		// UTF-8 safe truncation: find the last valid rune boundary before maxFileChars
-		truncated := content[:maxFileChars]
-		for i := maxFileChars - 1; i >= 0; i-- {
-			if truncated[i]&0xC0 != 0x80 {
-				truncated = content[:i+1]
-				break
-			}
+	// Document file handling: extract text, then apply range reading.
+	if extract.IsDocumentFile(args.Path) {
+		result, err := extract.Extract(args.Path, data)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("error extracting document text: %v", err)}, nil
 		}
-		return truncated + "\n\n[File truncated: showing first " + fmt.Sprintf("%d", maxFileChars) + " of " + fmt.Sprintf("%d", len(content)) + " characters. Use line_range or glob to read specific sections.]"
+
+		var header string
+		if result.Pages > 0 {
+			header = fmt.Sprintf("[Extracted from %s, %d pages]\n", result.Format, result.Pages)
+		} else {
+			header = fmt.Sprintf("[Extracted from %s]\n", result.Format)
+		}
+
+		text := readFileRange(result.Text, args.Offset, args.Limit, 0)
+		return Result{Content: header + text}, nil
 	}
-	return content
+
+	// Plain text file: apply range reading.
+	content := string(data)
+	text := readFileRange(content, args.Offset, args.Limit, 0)
+	return Result{Content: text}, nil
 }
 
 // --- provider.ToolDefinition helper ---

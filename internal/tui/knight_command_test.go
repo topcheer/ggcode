@@ -67,7 +67,7 @@ Do not use this for unrelated tasks.
 		t.Fatalf("expected rating confirmation, got %q", output)
 	}
 
-	avg, samples := k.SkillFeedback("build-flow")
+	avg, samples := k.SkillFeedback("project:build-flow")
 	if avg != 5.0 || samples != 1 {
 		t.Fatalf("expected recorded feedback avg=5.0 samples=1, got avg=%f samples=%d", avg, samples)
 	}

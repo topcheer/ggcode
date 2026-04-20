@@ -131,6 +131,69 @@ vendors:
 	}
 }
 
+func TestKnightStartInitializesIdleTimer(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultKnightConfig()
+	cfg.Enabled = true
+	k := New(cfg, dir, dir, nil)
+	if err := k.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer k.Stop()
+
+	if k.lastIdle.IsZero() {
+		t.Fatal("expected lastIdle to be initialized on start")
+	}
+	if k.isIdle(time.Now()) {
+		t.Fatal("expected freshly started Knight to wait for idle delay")
+	}
+}
+
+func TestShouldRunScheduledTaskUsesRetryBackoff(t *testing.T) {
+	now := time.Date(2026, 4, 20, 3, 0, 0, 0, time.UTC)
+	if !shouldRunScheduledTask(now, time.Time{}, time.Time{}, time.Hour, 15*time.Minute) {
+		t.Fatal("expected first scheduled task run to be allowed")
+	}
+	if shouldRunScheduledTask(now, time.Time{}, now.Add(-10*time.Minute), time.Hour, 15*time.Minute) {
+		t.Fatal("expected retry backoff to suppress rerun")
+	}
+	if !shouldRunScheduledTask(now, time.Time{}, now.Add(-20*time.Minute), time.Hour, 15*time.Minute) {
+		t.Fatal("expected task to rerun after retry backoff")
+	}
+	if shouldRunScheduledTask(now, now.Add(-30*time.Minute), now.Add(-20*time.Minute), time.Hour, 15*time.Minute) {
+		t.Fatal("expected recent successful run to suppress rerun")
+	}
+}
+
+func TestTickRetriesNightlyMaintenanceAfterFailureBackoff(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultKnightConfig()
+	cfg.Enabled = true
+	cfg.Capabilities = []string{"regression_testing"}
+	k := New(cfg, dir, dir, nil)
+	k.SetEmitter(&stubKnightEmitter{})
+
+	first := time.Date(2026, 4, 20, 2, 0, 0, 0, time.UTC)
+	k.tick(context.Background(), first)
+	if !k.lastMaintenance.IsZero() {
+		t.Fatal("expected failed maintenance to avoid recording success time")
+	}
+	if !k.lastMaintenanceAttempt.Equal(first) {
+		t.Fatalf("expected first maintenance attempt at %v, got %v", first, k.lastMaintenanceAttempt)
+	}
+
+	k.tick(context.Background(), first.Add(10*time.Minute))
+	if !k.lastMaintenanceAttempt.Equal(first) {
+		t.Fatal("expected retry backoff to suppress another maintenance attempt")
+	}
+
+	retry := first.Add(20 * time.Minute)
+	k.tick(context.Background(), retry)
+	if !k.lastMaintenanceAttempt.Equal(retry) {
+		t.Fatalf("expected maintenance retry at %v, got %v", retry, k.lastMaintenanceAttempt)
+	}
+}
+
 func TestBudgetPersistence(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "knight-budget-*")
 	defer os.RemoveAll(dir)
@@ -1077,5 +1140,20 @@ Use for builds.
 	entry, err := k.FindActiveSkill("project:build-flow")
 	if err != nil || entry.Scope != "project" {
 		t.Fatalf("expected scoped reference to resolve project skill, got entry=%#v err=%v", entry, err)
+	}
+}
+
+func TestUsageTrackerScopedKeyFallsBackToLegacyName(t *testing.T) {
+	ut := NewUsageTracker(filepath.Join(t.TempDir(), "usage.json"))
+	ut.RecordUse("build-flow")
+	ut.RecordEffectiveness("build-flow", 4)
+
+	count, _, avg := ut.GetUsage("project:build-flow")
+	if count != 1 || avg != 4 {
+		t.Fatalf("expected legacy fallback usage, got count=%d avg=%f", count, avg)
+	}
+	feedbackAvg, samples := ut.GetFeedback("project:build-flow")
+	if feedbackAvg != 4 || samples != 1 {
+		t.Fatalf("expected legacy fallback feedback, got avg=%f samples=%d", feedbackAvg, samples)
 	}
 }

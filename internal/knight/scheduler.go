@@ -41,11 +41,24 @@ type Knight struct {
 	lastIdle time.Time
 
 	// Throttle timestamps — prevent running the same task every tick
-	lastAnalysis    time.Time
-	lastValidation  time.Time
-	lastMaintenance time.Time
-	notifiedStaging map[string]bool // tracks staging skills already notified to avoid spam
+	lastAnalysis           time.Time
+	lastAnalysisAttempt    time.Time
+	lastValidation         time.Time
+	lastValidationAttempt  time.Time
+	lastMaintenance        time.Time
+	lastMaintenanceAttempt time.Time
+	notifiedStaging        map[string]bool // tracks staging skills already notified to avoid spam
 }
+
+const (
+	knightTickInterval       = 5 * time.Minute
+	knightInitialDelay       = 1 * time.Minute
+	knightAnalysisEvery      = 1 * time.Hour
+	knightValidationEvery    = 6 * time.Hour
+	knightMaintenanceEvery   = 24 * time.Hour
+	knightRetryBackoffEvery  = 15 * time.Minute
+	knightMaxGeneratedSkills = 3
+)
 
 // New creates a new Knight instance.
 func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) *Knight {
@@ -88,9 +101,17 @@ func (k *Knight) Start(ctx context.Context) error {
 		}
 	}
 
+	k.mu.Lock()
+	if k.running {
+		k.mu.Unlock()
+		debug.Log("knight", "already running, start skipped")
+		return nil
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	k.cancel = cancel
 	k.running = true
+	k.lastIdle = time.Now()
+	k.mu.Unlock()
 
 	go k.runLoop(ctx)
 	debug.Log("knight", "started (budget=%dM, trust=%s)", k.cfg.DailyTokenBudget/1_000_000, k.cfg.TrustLevel)
@@ -103,9 +124,10 @@ func (k *Knight) Stop() {
 	defer k.mu.Unlock()
 	if k.cancel != nil {
 		k.cancel()
-		k.running = false
-		debug.Log("knight", "stopped")
+		k.cancel = nil
 	}
+	k.running = false
+	debug.Log("knight", "stopped")
 }
 
 // Running returns whether Knight is currently active.
@@ -138,35 +160,35 @@ func (k *Knight) getFactory() AgentFactory {
 
 // RecordSkillUse increments the usage counter for a skill.
 // Called from the skill tool when a Knight-managed skill is loaded.
-func (k *Knight) RecordSkillUse(name string) {
+func (k *Knight) RecordSkillUse(ref string) {
 	if k.usage != nil {
-		k.usage.RecordUse(name)
+		k.usage.RecordUse(ref)
 	}
-	k.syncSkillMetadata(name)
+	k.syncSkillMetadata(ref)
 }
 
 // RecordSkillEffectiveness records a 1-5 effectiveness score for a skill.
-func (k *Knight) RecordSkillEffectiveness(name string, score int) {
+func (k *Knight) RecordSkillEffectiveness(ref string, score int) {
 	if k.usage != nil {
-		k.usage.RecordEffectiveness(name, score)
+		k.usage.RecordEffectiveness(ref, score)
 	}
-	k.syncSkillMetadata(name)
+	k.syncSkillMetadata(ref)
 }
 
 // SkillUsage returns runtime usage stats for a skill.
-func (k *Knight) SkillUsage(name string) (count int, lastUsed time.Time, avgScore float64) {
+func (k *Knight) SkillUsage(ref string) (count int, lastUsed time.Time, avgScore float64) {
 	if k.usage == nil {
 		return 0, time.Time{}, 0
 	}
-	return k.usage.GetUsage(name)
+	return k.usage.GetUsage(ref)
 }
 
 // SkillFeedback returns runtime feedback stats for a skill.
-func (k *Knight) SkillFeedback(name string) (avgScore float64, samples int) {
+func (k *Knight) SkillFeedback(ref string) (avgScore float64, samples int) {
 	if k.usage == nil {
 		return 0, 0
 	}
-	return k.usage.GetFeedback(name)
+	return k.usage.GetFeedback(ref)
 }
 
 // BudgetStatus returns current Knight token usage counters.
@@ -356,12 +378,12 @@ func (k *Knight) RejectStaging(skillName string) error {
 // runLoop is the main Knight background loop.
 func (k *Knight) runLoop(ctx context.Context) {
 	// Tick every 5 minutes
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(knightTickInterval)
 	defer ticker.Stop()
 
 	// Initial delay — wait 1 minute before first task
 	select {
-	case <-time.After(1 * time.Minute):
+	case <-time.After(knightInitialDelay):
 	case <-ctx.Done():
 		return
 	}
@@ -400,21 +422,33 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 	k.reviewStagingSkills(ctx)
 
 	// Hourly (throttled): analyze recent sessions for skill candidates
-	if isIdle && now.Sub(k.lastAnalysis) >= time.Hour && k.hasCapability("skill_creation") {
-		k.lastAnalysis = now
-		k.analyzeRecentSessions(ctx)
+	if isIdle && k.hasCapability("skill_creation") && shouldRunScheduledTask(now, k.lastAnalysis, k.lastAnalysisAttempt, knightAnalysisEvery, knightRetryBackoffEvery) {
+		k.lastAnalysisAttempt = now
+		if err := k.analyzeRecentSessions(ctx); err != nil {
+			debug.Log("knight", "scheduled analysis failed: %v", err)
+		} else {
+			k.lastAnalysis = now
+		}
 	}
 
 	// Every 6 hours: validate all skills
-	if now.Sub(k.lastValidation) >= 6*time.Hour && k.hasCapability("skill_validation") {
-		k.lastValidation = now
-		k.validateAllSkills(ctx)
+	if k.hasCapability("skill_validation") && shouldRunScheduledTask(now, k.lastValidation, k.lastValidationAttempt, knightValidationEvery, knightRetryBackoffEvery) {
+		k.lastValidationAttempt = now
+		if err := k.validateAllSkills(ctx); err != nil {
+			debug.Log("knight", "scheduled validation failed: %v", err)
+		} else {
+			k.lastValidation = now
+		}
 	}
 
 	// Nightly (2 AM): deep maintenance
-	if now.Hour() == 2 && now.Sub(k.lastMaintenance) >= 24*time.Hour {
-		k.lastMaintenance = now
-		k.nightlyMaintenance(ctx)
+	if now.Hour() == 2 && shouldRunScheduledTask(now, k.lastMaintenance, k.lastMaintenanceAttempt, knightMaintenanceEvery, knightRetryBackoffEvery) {
+		k.lastMaintenanceAttempt = now
+		if err := k.nightlyMaintenance(ctx); err != nil {
+			debug.Log("knight", "scheduled maintenance failed: %v", err)
+		} else {
+			k.lastMaintenance = now
+		}
 	}
 }
 
@@ -506,12 +540,21 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 
 	// Process candidates: only converged candidates become staging writes.
 	var reported []SkillCandidate
+	generatedCount := 0
+	deferredCount := 0
 	for _, c := range result.SkillCandidates {
 		if k.isKnownCandidate(c, active, staging) {
 			debug.Log("knight", "skip known candidate %s (%s)", c.Name, c.Scope)
 			continue
 		}
 		if k.shouldStageCandidate(c) && k.getFactory() != nil && !strings.EqualFold(k.cfg.TrustLevel, "readonly") {
+			if generatedCount >= knightMaxGeneratedSkills {
+				deferredCount++
+				c.Reason += fmt.Sprintf(" (deferred: per-tick generation cap %d reached)", knightMaxGeneratedSkills)
+				reported = append(reported, c)
+				continue
+			}
+			generatedCount++
 			// High-value candidate: use LLM to generate a proper skill
 			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.getFactory())
 			if genErr != nil {
@@ -546,6 +589,9 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 		if len(reported) > maxShown {
 			report.WriteString(fmt.Sprintf("\n… and %d more", len(reported)-maxShown))
 		}
+		if deferredCount > 0 {
+			report.WriteString(fmt.Sprintf("\n⏸️ Deferred %d additional high-value candidates because the per-tick generation cap (%d) was reached.", deferredCount, knightMaxGeneratedSkills))
+		}
 		k.emitReport(report.String())
 	}
 
@@ -553,10 +599,10 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 }
 
 // validateAllSkills checks all active skills for validity and freshness.
-func (k *Knight) validateAllSkills(ctx context.Context) {
+func (k *Knight) validateAllSkills(ctx context.Context) error {
 	active, err := k.index.ActiveSkills()
 	if err != nil {
-		return
+		return err
 	}
 
 	for _, skill := range active {
@@ -568,38 +614,40 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 		if skill.Meta.Frozen {
 			continue
 		}
+		skillRef := formatSkillRef(skill.Scope, skill.Name)
 
 		// Freshness check: is the skill stale?
-		if k.usage.IsStale(skill.Name, 30*24*time.Hour) {
-			if k.shouldSuppressStaleNotice(skill.Name) {
+		if k.usage.IsStale(skillRef, 30*24*time.Hour) {
+			if k.shouldSuppressStaleNotice(skillRef) {
 				continue
 			}
-			count, lastUsed, _ := k.usage.GetUsage(skill.Name)
+			count, lastUsed, _ := k.usage.GetUsage(skillRef)
 			debug.Log("knight", "skill %s may be stale: used=%d last=%v", skill.Name, count, lastUsed)
 			if count == 0 {
 				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' has never been used. Consider removing it.", skill.Name))
 			} else {
-				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' not used in 30+ days (last: %s). /knight rate %s 5 if it is still valuable, or let it fade out.", skill.Name, lastUsed.Format("2006-01-02"), skill.Name))
+				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' not used in 30+ days (last: %s). /knight rate %s 5 if it is still valuable, or let it fade out.", skill.Name, lastUsed.Format("2006-01-02"), skillRef))
 			}
 		}
 
 		// Effectiveness check: low average score?
-		avgScore, samples, shouldWarn := k.shouldWarnLowEffectiveness(skill.Name)
+		avgScore, samples, shouldWarn := k.shouldWarnLowEffectiveness(skillRef)
 		if shouldWarn {
 			debug.Log("knight", "skill %s has low effectiveness: %.1f/5", skill.Name, avgScore)
 			k.emitReport(fmt.Sprintf("📉 Skill '%s' effectiveness: %.1f/5 across %d signals. Consider updating or removing.", skill.Name, avgScore, samples))
 			k.maybeStageSkillPatch(ctx, skill, avgScore, samples)
 		}
 	}
+	return nil
 }
 
 // nightlyMaintenance runs deep maintenance tasks.
-func (k *Knight) nightlyMaintenance(ctx context.Context) {
+func (k *Knight) nightlyMaintenance(ctx context.Context) error {
 	debug.Log("knight", "running nightly maintenance")
 	factory := k.getFactory()
 	if factory == nil {
 		k.emitReport("Knight nightly maintenance skipped: no task runner configured")
-		return
+		return fmt.Errorf("no task runner configured")
 	}
 
 	var sections []string
@@ -630,9 +678,10 @@ Do not edit files. Produce a concise report with:
 	}
 	if len(sections) == 0 {
 		k.emitReport("Knight nightly maintenance had no enabled maintenance tasks")
-		return
+		return nil
 	}
 	k.emitReport("🌙 Knight nightly maintenance\n\n" + strings.Join(sections, "\n\n"))
+	return nil
 }
 
 // emitReport sends a Knight report via IM if an emitter is configured.
@@ -732,15 +781,39 @@ func parseSkillRef(ref string) (scope string, name string) {
 	return "", ref
 }
 
-func (k *Knight) syncSkillMetadata(name string) {
+func formatSkillRef(scope, name string) string {
+	name = strings.TrimSpace(name)
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return name
+	}
+	return scope + ":" + name
+}
+
+// FormatSkillRefForDisplay returns the canonical scope-qualified skill reference.
+func FormatSkillRefForDisplay(scope, name string) string {
+	return formatSkillRef(scope, name)
+}
+
+func shouldRunScheduledTask(now, lastSuccess, lastAttempt time.Time, interval, retryBackoff time.Duration) bool {
+	if !lastSuccess.IsZero() && now.Sub(lastSuccess) < interval {
+		return false
+	}
+	if !lastAttempt.IsZero() && now.Sub(lastAttempt) < retryBackoff {
+		return false
+	}
+	return true
+}
+
+func (k *Knight) syncSkillMetadata(ref string) {
 	if k.usage == nil {
 		return
 	}
-	entry, err := k.FindActiveSkill(name)
+	entry, err := k.FindActiveSkill(ref)
 	if err != nil {
 		return
 	}
-	snapshot, ok := k.usage.Snapshot(name)
+	snapshot, ok := k.usage.Snapshot(formatSkillRef(entry.Scope, entry.Name))
 	if !ok {
 		return
 	}
@@ -754,6 +827,8 @@ func (k *Knight) syncSkillMetadata(name string) {
 		fmMap["effectiveness_scores"] = append([]int(nil), snapshot.Effectiveness...)
 	}); err == nil {
 		k.index.Invalidate()
+	} else {
+		debug.Log("knight", "sync skill metadata for %s failed: %v", entry.Name, err)
 	}
 }
 

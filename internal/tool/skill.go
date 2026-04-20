@@ -32,6 +32,8 @@ const (
 
 type SkillExecutionEvent struct {
 	Name   string
+	Ref    string
+	Scope  string
 	Mode   SkillExecutionMode
 	Result Result
 	Err    error
@@ -43,7 +45,7 @@ type SkillTool struct {
 	Provider         provider.Provider
 	Tools            *Registry
 	AgentFactory     subagent.AgentFactory
-	OnSkillUsed      func(name string)               // optional callback when a skill is loaded by the agent
+	OnSkillUsed      func(ref string)                // optional callback when a skill is loaded by the agent
 	OnSkillCompleted func(event SkillExecutionEvent) // optional callback when execution finishes
 }
 
@@ -99,17 +101,18 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if recorder, ok := t.Skills.(skillUsageRecorder); ok {
 		recorder.RecordUsage(cmd.Name)
 	}
+	ref := skillRefForCommand(cmd)
 	if t.OnSkillUsed != nil {
-		t.OnSkillUsed(cmd.Name)
+		t.OnSkillUsed(ref)
 	}
 	if cmd.LoadedFrom == commands.LoadedFromMCP && t.Runtime != nil {
 		result, _ := t.executeMCPPromptSkill(ctx, cmd.Name, strings.TrimSpace(args.Args))
-		t.notifySkillCompleted(cmd.Name, SkillExecutionModeMCP, result, nil)
+		t.notifySkillCompleted(cmd, SkillExecutionModeMCP, result, nil)
 		return result, nil
 	}
 	if strings.EqualFold(strings.TrimSpace(cmd.Context), "fork") {
 		result, err := t.executeForkedSkill(ctx, cmd, strings.TrimSpace(args.Args))
-		t.notifySkillCompleted(cmd.Name, SkillExecutionModeFork, result, err)
+		t.notifySkillCompleted(cmd, SkillExecutionModeFork, result, err)
 		return result, err
 	}
 	workDir, _ := os.Getwd()
@@ -118,7 +121,7 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		"ARGS": strings.TrimSpace(args.Args),
 	})
 	result := Result{Content: strings.TrimSpace(content)}
-	t.notifySkillCompleted(cmd.Name, SkillExecutionModeInline, result, nil)
+	t.notifySkillCompleted(cmd, SkillExecutionModeInline, result, nil)
 	return result, nil
 }
 
@@ -242,14 +245,47 @@ func parseMCPPromptArgs(raw string) (map[string]interface{}, error) {
 	return map[string]interface{}{"input": raw}, nil
 }
 
-func (t SkillTool) notifySkillCompleted(name string, mode SkillExecutionMode, result Result, err error) {
+func (t SkillTool) notifySkillCompleted(cmd *commands.Command, mode SkillExecutionMode, result Result, err error) {
 	if t.OnSkillCompleted == nil {
 		return
 	}
+	name := ""
+	scope := ""
+	ref := ""
+	if cmd != nil {
+		name = cmd.Name
+		scope = skillScopeForCommand(cmd)
+		ref = skillRefForCommand(cmd)
+	}
 	t.OnSkillCompleted(SkillExecutionEvent{
 		Name:   name,
+		Ref:    ref,
+		Scope:  scope,
 		Mode:   mode,
 		Result: result,
 		Err:    err,
 	})
+}
+
+func skillRefForCommand(cmd *commands.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	if scope := skillScopeForCommand(cmd); scope != "" {
+		return scope + ":" + strings.TrimSpace(cmd.Name)
+	}
+	return strings.TrimSpace(cmd.Name)
+}
+
+func skillScopeForCommand(cmd *commands.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	if cmd.Source == commands.SourceProject {
+		return "project"
+	}
+	if cmd.LoadedFrom == commands.LoadedFromSkills && cmd.Source == commands.SourceUser {
+		return "global"
+	}
+	return ""
 }

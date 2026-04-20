@@ -201,9 +201,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		Provider:     prov,
 		Tools:        registry,
 		AgentFactory: skillAgentFactory,
-		OnSkillUsed: func(name string) {
+		OnSkillUsed: func(ref string) {
 			if knightAgent != nil {
-				knightAgent.RecordSkillUse(name)
+				knightAgent.RecordSkillUse(ref)
 			}
 		},
 		OnSkillCompleted: func(event tool.SkillExecutionEvent) {
@@ -211,12 +211,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				return
 			}
 			if event.Err != nil || event.Result.IsError {
-				knightAgent.RecordSkillEffectiveness(event.Name, 1)
+				knightAgent.RecordSkillEffectiveness(event.Ref, 1)
 				return
 			}
 			if event.Mode == tool.SkillExecutionModeFork {
-				knightAgent.RecordSkillEffectiveness(event.Name, 4)
+				knightAgent.RecordSkillEffectiveness(event.Ref, 4)
+				return
 			}
+			knightAgent.RecordSkillEffectiveness(event.Ref, 3)
 		},
 	})
 
