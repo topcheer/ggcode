@@ -184,35 +184,16 @@ func (p *Promoter) appendChangelog(action, name, scope, path string) {
 // Uses yaml.Unmarshal/Marshal for safe handling of multi-line and special characters.
 func updateTimestamps(content string, now time.Time) string {
 	dateStr := now.Format("2006-01-02")
-
-	// Split into frontmatter and body
-	bodyStart := splitFrontmatter(content)
-	if bodyStart < 0 {
-		return content // no valid frontmatter, return as-is
-	}
-
-	fmText := extractFrontmatterText(content, bodyStart)
-	bodyText := content[bodyStart:]
-
-	// Parse frontmatter into a map
-	var fmMap map[string]interface{}
-	if err := yaml.Unmarshal([]byte(fmText), &fmMap); err != nil {
-		return content // can't parse, return as-is
-	}
-
-	// Update timestamps
-	fmMap["updated_at"] = dateStr
-	if _, ok := fmMap["created_at"]; !ok {
-		fmMap["created_at"] = dateStr
-	}
-
-	// Re-serialize frontmatter
-	newFM, err := yaml.Marshal(fmMap)
+	updated, err := mutateSkillFrontmatter(content, func(fmMap map[string]interface{}) {
+		fmMap["updated_at"] = dateStr
+		if _, ok := fmMap["created_at"]; !ok {
+			fmMap["created_at"] = dateStr
+		}
+	})
 	if err != nil {
 		return content
 	}
-
-	return "---\n" + strings.TrimRight(string(newFM), "\n") + "\n---" + bodyText
+	return updated
 }
 
 // splitFrontmatter returns the byte offset where the body starts (after closing ---).
@@ -251,4 +232,41 @@ func extractFrontmatterText(content string, bodyStart int) string {
 		return strings.TrimSpace(content[openEnd:closeStart])
 	}
 	return ""
+}
+
+func updateSkillFrontmatter(path string, mutate func(map[string]interface{})) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	updated, err := mutateSkillFrontmatter(string(content), mutate)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(updated), 0644)
+}
+
+func mutateSkillFrontmatter(content string, mutate func(map[string]interface{})) (string, error) {
+	bodyStart := splitFrontmatter(content)
+	if bodyStart < 0 {
+		return "", fmt.Errorf("no valid frontmatter found")
+	}
+
+	fmText := extractFrontmatterText(content, bodyStart)
+	bodyText := content[bodyStart:]
+
+	var fmMap map[string]interface{}
+	if err := yaml.Unmarshal([]byte(fmText), &fmMap); err != nil {
+		return "", err
+	}
+	if fmMap == nil {
+		fmMap = make(map[string]interface{})
+	}
+	mutate(fmMap)
+
+	newFM, err := yaml.Marshal(fmMap)
+	if err != nil {
+		return "", err
+	}
+	return "---\n" + strings.TrimRight(string(newFM), "\n") + "\n---" + bodyText, nil
 }

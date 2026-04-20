@@ -9,10 +9,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -505,6 +507,27 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Build MCP info for TUI
 	mcpInfos := toTuiMCPInfos(mcpMgr.Snapshot())
 
+	// Start A2A server if enabled.
+	var a2aServer *a2a.Server
+	var a2aRegistry *a2a.Registry
+	if cfg.A2A.Enabled {
+		a2aSrv, a2aReg, err := startA2AServer(cfg, ag, registry, workingDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "A2A server startup warning: %v\n", err)
+		} else {
+			a2aServer = a2aSrv
+			a2aRegistry = a2aReg
+			defer func() {
+				if a2aRegistry != nil {
+					_ = a2aRegistry.Unregister()
+				}
+				if a2aServer != nil {
+					a2aServer.Stop()
+				}
+			}()
+		}
+	}
+
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
 	{
@@ -560,6 +583,51 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		repl.SetResumeID(resumeID)
 	}
 	return repl.Run()
+}
+
+// startA2AServer starts the A2A HTTP server and registers this instance in the local registry.
+func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, error) {
+	a2aReg, err := a2a.NewRegistry()
+	if err != nil {
+		return nil, nil, fmt.Errorf("a2a registry: %w", err)
+	}
+
+	handler := a2a.NewTaskHandler(workingDir, ag, reg)
+
+	srv := a2a.NewServer(a2a.ServerConfig{
+		Host:   cfg.A2A.Host,
+		Port:   cfg.A2A.Port,
+		APIKey: cfg.A2A.APIKey,
+	}, handler)
+
+	if err := srv.Start(); err != nil {
+		return nil, nil, fmt.Errorf("a2a start: %w", err)
+	}
+
+	// Register this instance.
+	instance := a2a.InstanceInfo{
+		ID:           a2a.GenerateInstanceID(),
+		PID:          os.Getpid(),
+		Workspace:    workingDir,
+		StartedAt:    time.Now().Format(time.RFC3339),
+		Endpoint:     srv.Endpoint(),
+		AgentCardURL: srv.Endpoint() + "/.well-known/agent.json",
+		Status:       "ready",
+	}
+	if err := a2aReg.Register(instance); err != nil {
+		srv.Stop()
+		return nil, nil, fmt.Errorf("a2a register: %w", err)
+	}
+
+	// Register MCP bridge tools so any MCP client can discover and call remote ggcode instances.
+	// Also register A2A client tools pointing to this server for local MCP access.
+	bridgeClient := a2a.NewClient(srv.Endpoint(), cfg.A2A.APIKey)
+	for _, t := range a2a.MCPBridgeTools(bridgeClient) {
+		_ = reg.Register(t)
+	}
+
+	debug.Log("root", "A2A server started at %s", srv.Endpoint())
+	return srv, a2aReg, nil
 }
 
 func init() {
