@@ -868,6 +868,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ensureOutputEndsWithNewline()
 			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Knight task failed: %v", msg.Err)))
 			m.output.WriteString("\n")
+			m.syncConversationViewport()
+			m.viewport.GotoBottom()
 			return m, nil
 		}
 		m.ensureOutputEndsWithNewline()
