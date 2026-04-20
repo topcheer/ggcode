@@ -179,6 +179,32 @@ func (a *Agent) Provider() provider.Provider {
 	return a.provider
 }
 
+// ToolRegistry returns the tool registry used by this agent.
+func (a *Agent) ToolRegistry() *tool.Registry {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.tools
+}
+
+// SystemPrompt returns the current system prompt (from the first system message).
+func (a *Agent) SystemPrompt() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	msgs := a.contextManager.Messages()
+	for _, m := range msgs {
+		if m.Role == "system" {
+			var parts []string
+			for _, c := range m.Content {
+				if c.Type == "text" {
+					parts = append(parts, c.Text)
+				}
+			}
+			return strings.Join(parts, "\n")
+		}
+	}
+	return ""
+}
+
 // SetSupportsVision controls whether tool_result images are included in
 // messages sent to the provider. When false, image data is stripped from
 // tool results and only the text placeholder is sent.

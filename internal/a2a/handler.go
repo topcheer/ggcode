@@ -42,19 +42,42 @@ type TaskHandler struct {
 	workspace string
 	agent     *agent.Agent
 	registry  *tool.Registry
-	tasks     map[string]*Task // active tasks by ID
+	tasks     map[string]*Task              // active tasks by ID
+	cancels   map[string]context.CancelFunc // per-task cancel functions
 	meta      WorkspaceMeta
+	maxTasks  int
+	timeout   time.Duration
+}
+
+// HandlerOption configures a TaskHandler.
+type HandlerOption func(*TaskHandler)
+
+// WithMaxTasks sets the concurrent task limit.
+func WithMaxTasks(n int) HandlerOption {
+	return func(h *TaskHandler) { h.maxTasks = n }
+}
+
+// WithTimeout sets the per-task timeout.
+func WithTimeout(d time.Duration) HandlerOption {
+	return func(h *TaskHandler) { h.timeout = d }
 }
 
 // NewTaskHandler creates a handler bound to a specific workspace.
-func NewTaskHandler(workspace string, a *agent.Agent, reg *tool.Registry) *TaskHandler {
-	return &TaskHandler{
+func NewTaskHandler(workspace string, a *agent.Agent, reg *tool.Registry, opts ...HandlerOption) *TaskHandler {
+	h := &TaskHandler{
 		workspace: workspace,
 		agent:     a,
 		registry:  reg,
 		tasks:     make(map[string]*Task),
+		cancels:   make(map[string]context.CancelFunc),
 		meta:      detectWorkspaceMeta(workspace),
+		maxTasks:  5,
+		timeout:   5 * time.Minute,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // WorkspaceMeta holds dynamically detected workspace properties.
@@ -83,21 +106,38 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message) (
 		return nil, fmt.Errorf("workspace has no git repository")
 	}
 
+	// Check concurrency limit.
+	h.mu.Lock()
+	active := 0
+	for _, t := range h.tasks {
+		if !t.Status.IsTerminal() {
+			active++
+		}
+	}
+	if active >= h.maxTasks {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("too many concurrent tasks (%d/%d)", active, h.maxTasks)
+	}
+
 	task := &Task{
 		ID:        generateID(),
 		ContextID: generateID(),
-		Status:    TaskStateSubmitted,
+		Status:    TaskStatus{State: TaskStateSubmitted},
 		Skill:     skill,
 		History:   []Message{input},
 		CreatedAt: time.Now(),
 	}
-
-	h.mu.Lock()
 	h.tasks[task.ID] = task
 	h.mu.Unlock()
 
+	// Create cancellable context for this task.
+	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
+	h.mu.Lock()
+	h.cancels[task.ID] = cancel
+	h.mu.Unlock()
+
 	// Execute asynchronously.
-	go h.execute(context.Background(), task, perm)
+	go h.execute(taskCtx, task, perm)
 
 	return task, nil
 }
@@ -109,16 +149,28 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	var err error
 
 	switch t.Skill {
-	case SkillFileSearch:
-		result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[0])
-	case SkillGitOps:
-		result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[0])
-	case SkillCommandExec:
+	case SkillFileSearch, SkillGitOps, SkillCommandExec:
 		result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[0])
 	case SkillCodeEdit, SkillCodeReview, SkillFullTask:
 		result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
 	default:
 		err = fmt.Errorf("unsupported skill: %s", t.Skill)
+	}
+
+	// Check if task was canceled *before* execution completed.
+	canceled := ctx.Err() == context.Canceled
+
+	// Clean up cancel func.
+	h.mu.Lock()
+	if c, ok := h.cancels[t.ID]; ok {
+		c()
+		delete(h.cancels, t.ID)
+	}
+	h.mu.Unlock()
+
+	if canceled {
+		h.updateStatus(t, TaskStateCanceled, "canceled by client")
+		return
 	}
 
 	if err != nil {
@@ -143,8 +195,18 @@ func (h *TaskHandler) executeDirectTool(ctx context.Context, perm *SkillPermissi
 		return "", fmt.Errorf("empty input")
 	}
 
+	if h.registry == nil {
+		return "", fmt.Errorf("no tool registry available")
+	}
+
 	// Pick the best tool for the skill.
 	toolName := pickToolForSkill(skill, text)
+
+	// Enforce permission whitelist (nil/empty = all tools allowed).
+	if !isToolAllowed(toolName, perm.AllowedTools) {
+		return "", fmt.Errorf("skill %s is not allowed to use tool %s", skill, toolName)
+	}
+
 	t, ok := h.registry.Get(toolName)
 	if !ok {
 		return "", fmt.Errorf("tool %s not found", toolName)
@@ -166,10 +228,17 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 		return "", fmt.Errorf("empty input")
 	}
 
+	if h.agent == nil {
+		return "", fmt.Errorf("no agent available for skill %s", skill)
+	}
+
 	prompt := buildAgentPrompt(skill, text)
 
+	// Create a restricted agent for A2A tasks.
+	a := agent.NewAgent(h.agent.Provider(), h.agent.ToolRegistry(), h.agent.SystemPrompt(), perm.MaxIterations)
+
 	var buf strings.Builder
-	err := h.agent.RunStream(ctx, prompt, func(event provider.StreamEvent) {
+	err := a.RunStream(ctx, prompt, func(event provider.StreamEvent) {
 		if event.Type == provider.StreamEventText {
 			buf.WriteString(event.Text)
 		}
@@ -184,7 +253,7 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	t.Status = state
+	t.Status = TaskStatus{State: state}
 	t.UpdatedAt = time.Now()
 	if message != "" {
 		t.History = append(t.History, Message{
@@ -206,7 +275,7 @@ func (h *TaskHandler) GetTask(id string) (*Task, bool) {
 	return t, ok
 }
 
-// CancelTask cancels a running task.
+// CancelTask cancels a running task by canceling its context.
 func (h *TaskHandler) CancelTask(id string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -217,8 +286,13 @@ func (h *TaskHandler) CancelTask(id string) error {
 	if t.Status.IsTerminal() {
 		return fmt.Errorf("task already in terminal state: %s", t.Status)
 	}
-	t.Status = TaskStateCanceled
+	t.Status = TaskStatus{State: TaskStateCanceled}
 	t.UpdatedAt = time.Now()
+	// Cancel the underlying context to stop tool/agent execution.
+	if cancel, ok := h.cancels[id]; ok {
+		cancel()
+		delete(h.cancels, id)
+	}
 	return nil
 }
 
@@ -246,9 +320,9 @@ func (h *TaskHandler) WorkspaceMetadata() WorkspaceMeta {
 
 // SkillPermission defines what a skill can do.
 type SkillPermission struct {
-	AllowedTools  []string
+	AllowedTools  []string // nil = all tools allowed
 	ReadOnly      bool
-	MaxIterations int
+	MaxIterations int // 0 = unlimited
 }
 
 var skillPermissions = map[string]*SkillPermission{
@@ -263,6 +337,18 @@ var skillPermissions = map[string]*SkillPermission{
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+func isToolAllowed(toolName string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true // nil/empty = all tools allowed
+	}
+	for _, a := range allowed {
+		if a == toolName {
+			return true
+		}
+	}
+	return false
+}
 
 func extractText(msg Message) string {
 	var parts []string

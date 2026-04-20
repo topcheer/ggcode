@@ -126,11 +126,20 @@ func (s TaskState) IsTerminal() bool {
 	return false
 }
 
+// TaskStatus wraps a TaskState to satisfy the A2A spec requirement that
+// task.status is serialized as { "state": "..." } rather than a bare string.
+type TaskStatus struct {
+	State TaskState `json:"state"`
+}
+
+// IsTerminal returns true for states that cannot transition further.
+func (s TaskStatus) IsTerminal() bool { return s.State.IsTerminal() }
+
 // Task represents an A2A task with its full lifecycle.
 type Task struct {
 	ID        string     `json:"id"`
 	ContextID string     `json:"contextId"`
-	Status    TaskState  `json:"status"`
+	Status    TaskStatus `json:"status"`
 	Skill     string     `json:"skill,omitempty"`
 	History   []Message  `json:"history,omitempty"`
 	Artifacts []Artifact `json:"artifacts,omitempty"`

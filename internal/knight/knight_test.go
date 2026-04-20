@@ -963,3 +963,64 @@ Do not use this for unrelated tasks.
 		t.Fatal("expected low-effectiveness skill patch to be staged")
 	}
 }
+
+func TestKnightRollbackSkillRestoresLatestSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	snapshotDir := filepath.Join(projDir, ".ggcode", "skills-snapshots")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(skillDir) error = %v", err)
+	}
+	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(snapshotDir) error = %v", err)
+	}
+	activePath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(activePath, []byte(`---
+name: build-flow
+description: Current version
+scope: project
+created_by: knight
+---
+# Current
+
+## When to Use
+Current
+
+## Steps
+1. Current
+`), 0644); err != nil {
+		t.Fatalf("WriteFile(active) error = %v", err)
+	}
+	snapshotPath := filepath.Join(snapshotDir, "build-flow.20260420-010203.md")
+	if err := os.WriteFile(snapshotPath, []byte(`---
+name: build-flow
+description: Previous version
+scope: project
+created_by: knight
+---
+# Previous
+
+## When to Use
+Previous
+
+## Steps
+1. Previous
+`), 0644); err != nil {
+		t.Fatalf("WriteFile(snapshot) error = %v", err)
+	}
+
+	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	if err := k.RollbackSkill("build-flow"); err != nil {
+		t.Fatalf("RollbackSkill() error = %v", err)
+	}
+
+	data, err := os.ReadFile(activePath)
+	if err != nil {
+		t.Fatalf("ReadFile(active) error = %v", err)
+	}
+	if !contains(string(data), "# Previous") {
+		t.Fatalf("expected active skill to be restored from snapshot, got:\n%s", string(data))
+	}
+}

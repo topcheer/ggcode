@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -2403,6 +2404,12 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	switch subcmd {
 	case "status", "":
 		m.output.WriteString(fmt.Sprintf("🌙 Knight: %s\n", m.knight.Status()))
+		used, remaining, limit := m.knight.BudgetStatus()
+		if limit == 0 {
+			m.output.WriteString(fmt.Sprintf("Budget: %d tokens used / unlimited\n", used))
+		} else {
+			m.output.WriteString(fmt.Sprintf("Budget: %d used / %d remaining / %d total\n", used, remaining, limit))
+		}
 		// Show staging skills
 		staging, _ := m.knight.Index().StagingSkills()
 		if len(staging) > 0 {
@@ -2410,6 +2417,62 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			for _, s := range staging {
 				m.output.WriteString(fmt.Sprintf("  • %s (%s): %s\n", s.Name, s.Scope, s.Meta.Description))
 			}
+		}
+	case "budget":
+		used, remaining, limit := m.knight.BudgetStatus()
+		if limit == 0 {
+			m.output.WriteString(fmt.Sprintf("Knight budget: %d tokens used / unlimited\n", used))
+		} else {
+			m.output.WriteString(fmt.Sprintf("Knight budget: %d used / %d remaining / %d total\n", used, remaining, limit))
+		}
+	case "review":
+		staging, _ := m.knight.Index().StagingSkills()
+		if len(staging) == 0 {
+			m.output.WriteString("No staging skills\n")
+			return nil
+		}
+		if len(parts) >= 3 {
+			name := parts[2]
+			for _, s := range staging {
+				if s.Name != name {
+					continue
+				}
+				result := knight.ValidateSkill(s)
+				content, err := os.ReadFile(s.Path)
+				if err != nil {
+					m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+					return nil
+				}
+				m.output.WriteString(fmt.Sprintf("Reviewing staging skill '%s' (%s)\n", s.Name, s.Scope))
+				m.output.WriteString(fmt.Sprintf("Validation: valid=%v warnings=%d errors=%d\n", result.Valid, len(result.Warnings), len(result.Errors)))
+				if len(result.Warnings) > 0 {
+					m.output.WriteString("Warnings:\n")
+					for _, warning := range result.Warnings {
+						m.output.WriteString(fmt.Sprintf("  - %s\n", warning))
+					}
+				}
+				if len(result.Errors) > 0 {
+					m.output.WriteString("Errors:\n")
+					for _, issue := range result.Errors {
+						m.output.WriteString(fmt.Sprintf("  - %s\n", issue))
+					}
+				}
+				m.output.WriteString("\n")
+				m.output.WriteString(strings.TrimSpace(string(content)))
+				m.output.WriteString("\n")
+				return nil
+			}
+			m.output.WriteString(fmt.Sprintf("Staging skill '%s' not found\n", name))
+			return nil
+		}
+		m.output.WriteString(fmt.Sprintf("Staging skills (%d):\n", len(staging)))
+		for _, s := range staging {
+			result := knight.ValidateSkill(s)
+			status := "valid"
+			if !result.Valid {
+				status = "invalid"
+			}
+			m.output.WriteString(fmt.Sprintf("  • %s (%s): %s [%s, warnings=%d, errors=%d]\n", s.Name, s.Scope, s.Meta.Description, status, len(result.Warnings), len(result.Errors)))
 		}
 	case "run":
 		if len(parts) < 3 {
@@ -2480,6 +2543,17 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		} else {
 			m.output.WriteString(fmt.Sprintf("🔓 Skill '%s' unfrozen\n", name))
 		}
+	case "rollback":
+		if len(parts) < 3 {
+			m.output.WriteString("Usage: /knight rollback <skill-name>\n")
+			return nil
+		}
+		name := parts[2]
+		if err := m.knight.RollbackSkill(name); err != nil {
+			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+		} else {
+			m.output.WriteString(fmt.Sprintf("↩️ Skill '%s' rolled back\n", name))
+		}
 	case "skills":
 		active, _ := m.knight.Index().ActiveSkills()
 		if len(active) == 0 {
@@ -2527,7 +2601,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		avg, samples := m.knight.SkillFeedback(name)
 		m.output.WriteString(fmt.Sprintf("⭐ Rated skill '%s' %d/5 (avg: %.1f/5 over %d signals)\n", name, score, avg, samples))
 	default:
-		m.output.WriteString("Knight commands: status, run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rate <name> <1-5>, skills\n")
+		m.output.WriteString("Knight commands: status, budget, review [name], run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills\n")
 	}
 	return nil
 }
