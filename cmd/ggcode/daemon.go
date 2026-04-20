@@ -397,12 +397,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
+	bridge.SetActivityHook(knightAgent.NotifyActivity)
 	if cfg.Knight().Enabled {
 		// Create Knight emitter (reuse IM emitter)
 		knightAgent.SetEmitter(emitter)
 		if err := knightAgent.Start(context.Background()); err != nil {
 			fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
 		} else {
+			defer knightAgent.Stop()
 			fmt.Fprintf(os.Stderr, "🌙 Knight started (budget: %dM tokens/day)\n", cfg.Knight().DailyTokenBudget/1_000_000)
 		}
 	}

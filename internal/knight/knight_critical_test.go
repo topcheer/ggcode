@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -202,9 +203,9 @@ func TestInferScope(t *testing.T) {
 		tools []string
 		want  string
 	}{
-		{[]string{"run_command"}, "global"},
+		{[]string{"run_command"}, "project"},
 		{[]string{"edit_file"}, "project"},
-		{[]string{"read_file", "search_files"}, "global"},
+		{[]string{"read_file", "search_files"}, "project"},
 		{[]string{"read_file", "edit_file", "run_command"}, "project"},
 		{[]string{"web_fetch", "web_search"}, "global"},
 		{[]string{"write_file"}, "project"},
@@ -214,6 +215,29 @@ func TestInferScope(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("inferScope(%v) = %q, want %q", tt.tools, got, tt.want)
 		}
+	}
+}
+
+func TestParseQuietWindow(t *testing.T) {
+	start, end, ok := parseQuietWindow("23:00-06:30")
+	if !ok {
+		t.Fatal("expected quiet window to parse")
+	}
+	if start != 23*60 || end != 6*60+30 {
+		t.Fatalf("unexpected quiet window parse result: start=%d end=%d", start, end)
+	}
+}
+
+func TestKnightInQuietHours(t *testing.T) {
+	k := &Knight{cfg: config.KnightConfig{QuietHours: []string{"23:00-06:30"}}}
+	if !k.inQuietHours(time.Date(2026, 4, 20, 23, 15, 0, 0, time.Local)) {
+		t.Fatal("expected 23:15 to be inside quiet hours")
+	}
+	if !k.inQuietHours(time.Date(2026, 4, 21, 5, 45, 0, 0, time.Local)) {
+		t.Fatal("expected 05:45 to be inside wrapped quiet hours")
+	}
+	if k.inQuietHours(time.Date(2026, 4, 20, 12, 0, 0, 0, time.Local)) {
+		t.Fatal("expected noon to be outside quiet hours")
 	}
 }
 
