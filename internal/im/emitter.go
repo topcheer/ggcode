@@ -124,12 +124,12 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 }
 
 // HasTargets returns true if at least one IM channel is bound.
+// Uses a lightweight check that avoids copying the bindings list.
 func (e *IMEmitter) HasTargets() bool {
 	if e == nil || e.manager == nil {
 		return false
 	}
-	bindings, _ := e.manager.ListBindings()
-	return len(bindings) > 0
+	return e.manager.HasActiveBindings()
 }
 
 // EmitText sends a text message to IM.
