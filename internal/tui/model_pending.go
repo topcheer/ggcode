@@ -29,8 +29,11 @@ func (m *Model) queuePendingSubmission(text string) {
 	if count == 0 {
 		return
 	}
+	// Render the user's input in the conversation view so it looks like a
+	// normal submission, rather than showing a "[queued N pending]" hint.
 	m.ensureOutputHasBlankLine()
-	m.output.WriteString(m.styles.prompt.Render(m.t("queued.output", count)))
+	m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
+	m.output.WriteString("\n")
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
 		m.viewport.GotoBottom()
@@ -133,9 +136,8 @@ func (m *Model) drainPendingInterrupt(runID int) string {
 	}
 	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, truncateStr(text, 100))
 	m.appendUserMessage(text)
-	if m.program != nil {
-		m.program.Send(agentInterruptMsg{RunID: runID, Text: text})
-	}
+	// Don't send agentInterruptMsg — the user already saw their input rendered
+	// in the conversation when it was queued. No extra "[delivered]" hint needed.
 	return text
 }
 
