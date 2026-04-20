@@ -195,9 +195,19 @@ func isPIDAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
-	// Send signal 0 to check existence.
+	// Signal nil checks process existence on most platforms.
+	// On macOS this may return "unsupported signal type" for signal 0,
+	// so we also check if the error indicates the process doesn't exist.
 	err = proc.Signal(nil)
-	return err == nil
+	if err == nil {
+		return true
+	}
+	// If the error is "signal type" related, the process exists
+	// (only non-existent processes return "no such process").
+	errStr := err.Error()
+	return !strings.Contains(errStr, "no such process") &&
+		!strings.Contains(errStr, "already finished") &&
+		!strings.Contains(errStr, "not initialized")
 }
 
 // ---------------------------------------------------------------------------

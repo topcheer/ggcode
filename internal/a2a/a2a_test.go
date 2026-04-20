@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -938,4 +940,156 @@ func (r *stringReader) Read(p []byte) (n int, err error) {
 	n = copy(p, r.s[r.pos:])
 	r.pos += n
 	return n, nil
+}
+
+// ---------------------------------------------------------------------------
+// RemoteTool
+// ---------------------------------------------------------------------------
+
+func TestRemoteToolName(t *testing.T) {
+	reg, _ := NewRegistry()
+	remote := NewRemoteTool(reg, "key")
+	if remote.Name() != "a2a_remote" {
+		t.Errorf("expected a2a_remote, got %s", remote.Name())
+	}
+}
+
+func TestRemoteToolParameters(t *testing.T) {
+	reg, _ := NewRegistry()
+	remote := NewRemoteTool(reg, "key")
+	params := remote.Parameters()
+	var schema map[string]interface{}
+	if err := json.Unmarshal(params, &schema); err != nil {
+		t.Fatal(err)
+	}
+	props := schema["properties"].(map[string]interface{})
+	for _, field := range []string{"target", "skill", "message"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("missing parameter: %s", field)
+		}
+	}
+}
+
+func TestRemoteToolListInstances(t *testing.T) {
+	reg, _ := NewRegistry()
+	remote := NewRemoteTool(reg, "key")
+
+	// No instances → friendly message.
+	result, err := remote.Execute(context.Background(), json.RawMessage(`{"target":"list","skill":"full-task","message":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Errorf("unexpected error: %s", result.Content)
+	}
+	if !containsStr(result.Content, "No other ggcode instances found") {
+		t.Errorf("expected 'no instances' message, got: %s", result.Content)
+	}
+}
+
+func TestRemoteToolInvalidInput(t *testing.T) {
+	reg, _ := NewRegistry()
+	remote := NewRemoteTool(reg, "key")
+
+	result, err := remote.Execute(context.Background(), json.RawMessage(`{invalid}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error result")
+	}
+}
+
+func TestRemoteToolTargetNotFound(t *testing.T) {
+	reg, _ := NewRegistry()
+	remote := NewRemoteTool(reg, "key")
+
+	result, err := remote.Execute(context.Background(), json.RawMessage(`{"target":"nonexistent","skill":"full-task","message":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for nonexistent target")
+	}
+	if !containsStr(result.Content, "no instance matching") {
+		t.Errorf("unexpected error: %s", result.Content)
+	}
+}
+
+func TestRemoteToolCacheRefresh(t *testing.T) {
+	reg, _ := NewRegistry()
+	remote := NewRemoteTool(reg, "key")
+
+	// Initially empty.
+	instances, err := remote.discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 0 {
+		t.Error("expected 0 instances")
+	}
+
+	// Refresh (no-op since registry is empty).
+	remote.RefreshCache()
+
+	instances, err = remote.discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 0 {
+		t.Error("expected 0 instances after refresh")
+	}
+}
+
+func TestRemoteToolE2E(t *testing.T) {
+	// Use isolated temp dir for registry to avoid pollution from other tests.
+	tmpDir := t.TempDir()
+	dir := filepath.Join(tmpDir, "a2a")
+	os.MkdirAll(dir, 0755)
+
+	reg := &Registry{dir: dir}
+
+	// Start an A2A server to simulate a remote ggcode instance.
+	handler1 := NewTaskHandler(".", nil, nil)
+	srv1 := NewServer(ServerConfig{Port: 0}, handler1)
+	if err := srv1.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv1.Stop()
+
+	// Write a fake "remote" instance with our PID (so pruneDead keeps it).
+	inst := InstanceInfo{
+		ID:        "remote-test-id",
+		PID:       os.Getpid(),
+		Workspace: "/Users/zhanju/ggai/a2a-order-service",
+		Endpoint:  srv1.Endpoint(),
+		Status:    "ready",
+	}
+	instances := []InstanceInfo{inst}
+	data, _ := json.MarshalIndent(instances, "", "  ")
+	regPath := reg.instancesPath()
+	os.WriteFile(regPath, data, 0644)
+
+	remote := NewRemoteTool(reg, "")
+
+	// List instances.
+	result, err := remote.Execute(context.Background(), json.RawMessage(`{"target":"list","skill":"full-task","message":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsStr(result.Content, "a2a-order-service") {
+		t.Errorf("expected order-service in list, got: %s", result.Content)
+	}
+
+	// Call by name.
+	result, err = remote.Execute(context.Background(), json.RawMessage(`{"target":"order-service","skill":"file-search","message":"find TODOs"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Errorf("unexpected error: %s", result.Content)
+	}
+	if !containsStr(result.Content, "Task sent to order-service") {
+		t.Errorf("expected task sent message, got: %s", result.Content)
+	}
 }

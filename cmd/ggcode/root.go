@@ -651,8 +651,19 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		_ = reg.Register(t)
 	}
 
-	// Discover other ggcode instances and report them.
-	reportDiscoveredInstances(a2aReg)
+	// Register A2A remote tool for agent-to-agent communication.
+	// This lets this ggcode agent discover and call other running ggcode instances.
+	remoteTool := a2a.NewRemoteTool(a2aReg, cfg.A2A.APIKey)
+	_ = reg.Register(remoteTool)
+
+	// Periodically refresh the remote instance cache so new instances are discovered.
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			remoteTool.RefreshCache()
+		}
+	}()
 
 	debug.Log("root", "A2A server started at %s", srv.Endpoint())
 	return srv, a2aReg, nil
