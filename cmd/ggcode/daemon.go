@@ -131,6 +131,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	if err != nil {
 		return err
 	}
+	_, knightProv, err := resolveKnightProvider(cfg, resolved, prov)
+	if err != nil {
+		return err
+	}
 
 	// Permission policy
 	workingDir, _ := os.Getwd()
@@ -188,7 +192,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Knight uses a different factory signature — it doesn't need provider/tools
 	// passed each time because it creates its own agent for analysis tasks.
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
-		a := agent.NewAgent(prov, registry, systemPrompt, maxTurns)
+		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
 		if onUsage != nil {
 			a.SetUsageHandler(onUsage)
 		}

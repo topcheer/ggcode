@@ -9,7 +9,12 @@ import (
 )
 
 // MCPBridgeTools returns MCP-compatible tool definitions that wrap A2A client operations.
-// These tools can be registered in the tool registry so any MCP client can use them.
+// These tools are for external MCP clients (Claude, Cursor, Copilot, etc.) that don't
+// speak A2A natively. They let the MCP client discover and interact with this ggcode
+// instance as if it were a set of MCP tools.
+//
+// ggcode instances talking to each other should use A2A protocol directly,
+// NOT through MCP.
 func MCPBridgeTools(client *Client) []tool.Tool {
 	return []tool.Tool{
 		&a2aDiscoverTool{client: client},

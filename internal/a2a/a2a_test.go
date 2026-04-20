@@ -870,7 +870,10 @@ func TestRequestInputRejectsNonWorking(t *testing.T) {
 	task, _ := handler.Handle(context.Background(), SkillFullTask, Message{
 		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
 	}, "")
-	// Task is submitted, not working.
+	// Wait for async execution to finish (no agent → will fail quickly).
+	time.Sleep(200 * time.Millisecond)
+
+	// Force to completed state.
 	handler.mu.Lock()
 	task.Status = TaskStatus{State: TaskStateCompleted}
 	handler.mu.Unlock()

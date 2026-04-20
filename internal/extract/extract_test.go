@@ -1,207 +1,163 @@
 package extract
 
 import (
-	"archive/zip"
-	"bytes"
+	"embed"
 	"strings"
 	"testing"
 )
 
-// --- RTF tests ---
+//go:embed testdata/*
+var testdata embed.FS
 
-func TestRTFExtraction(t *testing.T) {
-	rtf := "{\\rtf1\\ansi\nHello \\b{world}\\par\nSecond line\\line Third\\tab tabbed\\par\n\\u233? \\u4567? unicode\n}"
-	result, err := Extract("test.rtf", []byte(rtf))
-	if err != nil {
-		t.Fatalf("RTF extraction failed: %v", err)
-	}
-	if result.Format != "rtf" {
-		t.Errorf("expected format rtf, got %s", result.Format)
-	}
-	if !strings.Contains(result.Text, "Hello") {
-		t.Error("expected text to contain 'Hello'")
-	}
-	if !strings.Contains(result.Text, "Second line") {
-		t.Error("expected text to contain 'Second line'")
-	}
-	if !strings.Contains(result.Text, "\t") {
-		t.Error("expected text to contain tab character")
-	}
-}
-
-func TestRTFInvalidInput(t *testing.T) {
-	_, err := Extract("test.rtf", []byte("not rtf at all"))
-	if err == nil {
-		t.Error("expected error for non-RTF input")
-	}
-}
-
-// --- ODF tests ---
-
-func createODF(t *testing.T, content string) []byte {
+func readTestFile(t *testing.T, name string) []byte {
 	t.Helper()
-	var buf bytes.Buffer
-	w := zip.NewWriter(&buf)
-
-	// mimetype
-	f, _ := w.Create("mimetype")
-	f.Write([]byte("application/vnd.oasis.opendocument.text"))
-
-	// content.xml
-	f, _ = w.Create("content.xml")
-	f.Write([]byte(content))
-
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	data, err := testdata.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatalf("read testdata/%s: %v", name, err)
 	}
-	return buf.Bytes()
+	return data
+}
+
+func TestPDFExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.pdf")
+	result, err := Extract("test.pdf", data)
+	if err != nil {
+		t.Fatalf("PDF: %v", err)
+	}
+	if result.Format != "pdf" {
+		t.Errorf("format = %q, want pdf", result.Format)
+	}
+	if result.Pages != 1 {
+		t.Errorf("pages = %d, want 1", result.Pages)
+	}
+	if !strings.Contains(result.Text, "Dummy PDF") {
+		t.Errorf("expected 'Dummy PDF' in text, got: %q", result.Text)
+	}
+}
+
+func TestDOCXExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.docx")
+	result, err := Extract("test.docx", data)
+	if err != nil {
+		t.Fatalf("DOCX: %v", err)
+	}
+	if result.Format != "docx" {
+		t.Errorf("format = %q, want docx", result.Format)
+	}
+	if !strings.Contains(result.Text, "Hello World") {
+		t.Errorf("expected 'Hello World', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "test document") {
+		t.Errorf("expected 'test document', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Third paragraph") {
+		t.Errorf("expected 'Third paragraph', got: %q", result.Text)
+	}
+}
+
+func TestXLSXExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.xlsx")
+	result, err := Extract("test.xlsx", data)
+	if err != nil {
+		t.Fatalf("XLSX: %v", err)
+	}
+	if result.Format != "xlsx" {
+		t.Errorf("format = %q, want xlsx", result.Format)
+	}
+	// Should contain header row: Name, Age, City
+	if !strings.Contains(result.Text, "Name") {
+		t.Errorf("expected 'Name', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Alice") {
+		t.Errorf("expected 'Alice', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Beijing") {
+		t.Errorf("expected 'Beijing', got: %q", result.Text)
+	}
+}
+
+func TestPPTXExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.pptx")
+	result, err := Extract("test.pptx", data)
+	if err != nil {
+		t.Fatalf("PPTX: %v", err)
+	}
+	if result.Format != "pptx" {
+		t.Errorf("format = %q, want pptx", result.Format)
+	}
+	if !strings.Contains(result.Text, "Slide One Title") {
+		t.Errorf("expected 'Slide One Title', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Bullet point one") {
+		t.Errorf("expected 'Bullet point one', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Slide Two Title") {
+		t.Errorf("expected 'Slide Two Title', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Content on slide two") {
+		t.Errorf("expected 'Content on slide two', got: %q", result.Text)
+	}
 }
 
 func TestODTExtraction(t *testing.T) {
-	xml := `<?xml version="1.0" encoding="UTF-8"?>
-<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
-  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
-  <office:body>
-    <office:text>
-      <text:p>Hello World</text:p>
-      <text:p>Second paragraph</text:p>
-    </office:text>
-  </office:body>
-</office:document-content>`
-
-	data := createODF(t, xml)
+	data := readTestFile(t, "sample.odt")
 	result, err := Extract("test.odt", data)
 	if err != nil {
-		t.Fatalf("ODT extraction failed: %v", err)
+		t.Fatalf("ODT: %v", err)
 	}
 	if result.Format != "odt" {
-		t.Errorf("expected format odt, got %s", result.Format)
+		t.Errorf("format = %q, want odt", result.Format)
 	}
-	if !strings.Contains(result.Text, "Hello World") {
-		t.Error("expected text to contain 'Hello World'")
+	if !strings.Contains(result.Text, "Hello from ODT") {
+		t.Errorf("expected 'Hello from ODT', got: %q", result.Text)
 	}
 	if !strings.Contains(result.Text, "Second paragraph") {
-		t.Error("expected text to contain 'Second paragraph'")
+		t.Errorf("expected 'Second paragraph', got: %q", result.Text)
 	}
-}
-
-func TestODSExtraction(t *testing.T) {
-	xml := `<?xml version="1.0" encoding="UTF-8"?>
-<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
-  xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
-  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
-  <office:body>
-    <office:spreadsheet>
-      <table:table>
-        <table:table-row>
-          <table:table-cell><text:p>A1</text:p></table:table-cell>
-          <table:table-cell><text:p>B1</text:p></table:table-cell>
-        </table:table-row>
-        <table:table-row>
-          <table:table-cell><text:p>A2</text:p></table:table-cell>
-          <table:table-cell><text:p>B2</text:p></table:table-cell>
-        </table:table-row>
-      </table:table>
-    </office:spreadsheet>
-  </office:body>
-</office:document-content>`
-
-	data := createODF(t, xml)
-	result, err := Extract("test.ods", data)
-	if err != nil {
-		t.Fatalf("ODS extraction failed: %v", err)
-	}
-	if result.Format != "ods" {
-		t.Errorf("expected format ods, got %s", result.Format)
-	}
-	if !strings.Contains(result.Text, "A1") || !strings.Contains(result.Text, "B1") {
-		t.Error("expected text to contain cell data")
-	}
-}
-
-// --- EPUB tests ---
-
-func createEPUB(t *testing.T) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	w := zip.NewWriter(&buf)
-
-	// mimetype (must be first, uncompressed)
-	f, _ := w.Create("mimetype")
-	f.Write([]byte("application/epub+zip"))
-
-	// META-INF/container.xml
-	f, _ = w.Create("META-INF/container.xml")
-	f.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>`))
-
-	// OPF
-	f, _ = w.Create("OEBPS/content.opf")
-	f.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>Test Book</dc:title>
-  </metadata>
-  <manifest>
-    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="ch2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
-  </manifest>
-  <spine>
-    <itemref idref="ch1"/>
-    <itemref idref="ch2"/>
-  </spine>
-</package>`))
-
-	// Chapter 1
-	f, _ = w.Create("OEBPS/chapter1.xhtml")
-	f.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Chapter 1</title></head>
-<body><h1>Chapter One</h1><p>Hello from chapter 1.</p></body>
-</html>`))
-
-	// Chapter 2
-	f, _ = w.Create("OEBPS/chapter2.xhtml")
-	f.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Chapter 2</title></head>
-<body><h1>Chapter Two</h1><p>Hello from chapter 2.</p></body>
-</html>`))
-
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
 }
 
 func TestEPUBExtraction(t *testing.T) {
-	data := createEPUB(t)
+	data := readTestFile(t, "sample.epub")
 	result, err := Extract("test.epub", data)
 	if err != nil {
-		t.Fatalf("EPUB extraction failed: %v", err)
+		t.Fatalf("EPUB: %v", err)
 	}
 	if result.Format != "epub" {
-		t.Errorf("expected format epub, got %s", result.Format)
-	}
-	if !strings.Contains(result.Text, "Chapter One") {
-		t.Error("expected text to contain 'Chapter One'")
-	}
-	if !strings.Contains(result.Text, "Hello from chapter 2") {
-		t.Error("expected text to contain 'Hello from chapter 2'")
+		t.Errorf("format = %q, want epub", result.Format)
 	}
 	if result.Pages != 2 {
-		t.Errorf("expected 2 chapters, got %d", result.Pages)
+		t.Errorf("chapters = %d, want 2", result.Pages)
+	}
+	if !strings.Contains(result.Text, "quick brown fox") {
+		t.Errorf("expected 'quick brown fox', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Second chapter content") {
+		t.Errorf("expected 'Second chapter content', got: %q", result.Text)
 	}
 }
 
-// --- Registry tests ---
+func TestRTFExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.rtf")
+	result, err := Extract("test.rtf", data)
+	if err != nil {
+		t.Fatalf("RTF: %v", err)
+	}
+	if result.Format != "rtf" {
+		t.Errorf("format = %q, want rtf", result.Format)
+	}
+	if !strings.Contains(result.Text, "Hello World") {
+		t.Errorf("expected 'Hello World', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "test RTF document") {
+		t.Errorf("expected 'test RTF document', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "\t") {
+		t.Errorf("expected tab character from \\tab, got: %q", result.Text)
+	}
+}
 
 func TestIsDocumentFile(t *testing.T) {
-	tests := []struct {
+	cases := []struct {
 		path   string
 		expect bool
 	}{
@@ -218,11 +174,13 @@ func TestIsDocumentFile(t *testing.T) {
 		{"test.go", false},
 		{"test.png", false},
 		{"README", false},
+		{"file.PDF", true},  // case insensitive
+		{"file.DOCX", true}, // case insensitive
 	}
-	for _, tt := range tests {
-		got := IsDocumentFile(tt.path)
-		if got != tt.expect {
-			t.Errorf("IsDocumentFile(%q) = %v, want %v", tt.path, got, tt.expect)
+	for _, tc := range cases {
+		got := IsDocumentFile(tc.path)
+		if got != tc.expect {
+			t.Errorf("IsDocumentFile(%q) = %v, want %v", tc.path, got, tc.expect)
 		}
 	}
 }
@@ -231,5 +189,12 @@ func TestUnsupportedFormat(t *testing.T) {
 	_, err := Extract("test.xyz", []byte("data"))
 	if err == nil {
 		t.Error("expected error for unsupported format")
+	}
+}
+
+func TestRTFInvalidInput(t *testing.T) {
+	_, err := Extract("test.rtf", []byte("not rtf at all"))
+	if err == nil {
+		t.Error("expected error for non-RTF input")
 	}
 }

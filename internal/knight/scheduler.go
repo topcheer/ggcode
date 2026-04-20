@@ -29,6 +29,7 @@ type Knight struct {
 	index    *SkillIndex
 	promoter *Promoter
 	usage    *UsageTracker
+	queue    *CandidateQueue
 	store    session.Store
 	emitter  Emitter
 	factory  AgentFactory
@@ -69,6 +70,7 @@ func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) 
 		index:           NewSkillIndex(homeDir, projDir),
 		promoter:        NewPromoter(homeDir, projDir),
 		usage:           NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
+		queue:           NewCandidateQueue(filepath.Join(projDir, ".ggcode", "knight-candidate-queue.json")),
 		store:           store,
 		homeDir:         homeDir,
 		projDir:         projDir,
@@ -88,6 +90,9 @@ func (k *Knight) Start(ctx context.Context) error {
 	}
 	if err := k.usage.EnsureDir(); err != nil {
 		return fmt.Errorf("knight: init usage dir: %w", err)
+	}
+	if err := k.queue.EnsureDir(); err != nil {
+		return fmt.Errorf("knight: init candidate queue dir: %w", err)
 	}
 
 	// Ensure staging directories exist
@@ -521,17 +526,21 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 // analyzeRecentSessions scans recent session history for reusable patterns.
 // High-score candidates are refined via LLM and written to staging.
 func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
-	if k.store == nil {
-		return nil
-	}
-
 	analyzer := NewSessionAnalyzer(k)
-	result, err := analyzer.AnalyzeRecent(ctx)
+	result := &AnalysisResult{}
+	if k.store != nil {
+		var err error
+		result, err = analyzer.AnalyzeRecent(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	queued, err := k.queue.List()
 	if err != nil {
 		return err
 	}
-
-	if result.SessionsAnalyzed == 0 {
+	candidates := mergeSkillCandidates(queued, result.SkillCandidates)
+	if result.SessionsAnalyzed == 0 && len(candidates) == 0 {
 		return nil
 	}
 
@@ -542,14 +551,16 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 	var reported []SkillCandidate
 	generatedCount := 0
 	deferredCount := 0
-	for _, c := range result.SkillCandidates {
+	for _, c := range candidates {
 		if k.isKnownCandidate(c, active, staging) {
 			debug.Log("knight", "skip known candidate %s (%s)", c.Name, c.Scope)
+			_ = k.queue.Remove(c)
 			continue
 		}
 		if k.shouldStageCandidate(c) && k.getFactory() != nil && !strings.EqualFold(k.cfg.TrustLevel, "readonly") {
 			if generatedCount >= knightMaxGeneratedSkills {
 				deferredCount++
+				_ = k.queue.Upsert(c)
 				c.Reason += fmt.Sprintf(" (deferred: per-tick generation cap %d reached)", knightMaxGeneratedSkills)
 				reported = append(reported, c)
 				continue
@@ -559,15 +570,18 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.getFactory())
 			if genErr != nil {
 				debug.Log("knight", "LLM skill generation failed for %s: %v", c.Name, genErr)
+				_ = k.queue.Upsert(c)
 				reported = append(reported, c)
 				continue
 			}
 			path, writeErr := k.promoter.WriteStaging(c.Name, c.Scope, content)
 			if writeErr != nil {
 				debug.Log("knight", "write staging failed for %s: %v", c.Name, writeErr)
+				_ = k.queue.Upsert(c)
 				reported = append(reported, c)
 				continue
 			}
+			_ = k.queue.Remove(c)
 			c.Reason += fmt.Sprintf(" (refined and staged: %s)", filepath.Base(path))
 			reported = append(reported, c)
 		} else {
@@ -581,8 +595,8 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 		if maxShown > 5 {
 			maxShown = 5
 		}
-		report.WriteString(fmt.Sprintf("📊 Analyzed %d sessions, found %d converged patterns",
-			result.SessionsAnalyzed, len(reported)))
+		report.WriteString(fmt.Sprintf("📊 Analyzed %d sessions and considered %d queued candidates; found %d converged patterns",
+			result.SessionsAnalyzed, len(queued), len(reported)))
 		for _, c := range reported[:maxShown] {
 			report.WriteString(fmt.Sprintf("\n• [%.1f] %s (%s, evidence=%d): %s", c.Score, c.Name, c.Scope, c.EvidenceCount, c.Description))
 		}

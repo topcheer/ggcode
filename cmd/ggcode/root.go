@@ -348,6 +348,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if err != nil {
 		return err
 	}
+	_, knightProv, err := resolveKnightProvider(cfg, resolved, prov)
+	if err != nil {
+		return err
+	}
 
 	// Setup permission policy
 	allowedDirs := cfg.ExpandAllowedDirs(".")
@@ -404,7 +408,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	var knightAgent *knight.Knight
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
-		a := agent.NewAgent(prov, registry, systemPrompt, maxTurns)
+		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
 		if onUsage != nil {
 			a.SetUsageHandler(onUsage)
 		}
@@ -590,7 +594,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	return repl.Run()
 }
 
-// startA2AServer starts the A2A HTTP server and registers this instance in the local registry.
+// startA2AServer starts the A2A HTTP server, registers this instance in the local
+// registry, discovers other running instances, and registers cross-instance MCP tools.
 func parseA2ATimeout(s string) time.Duration {
 	if s == "" {
 		return 5 * time.Minute
@@ -623,7 +628,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		return nil, nil, fmt.Errorf("a2a start: %w", err)
 	}
 
-	// Register this instance.
+	// Register this instance in the shared local registry.
 	instance := a2a.InstanceInfo{
 		ID:           a2a.GenerateInstanceID(),
 		PID:          os.Getpid(),
@@ -638,15 +643,37 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		return nil, nil, fmt.Errorf("a2a register: %w", err)
 	}
 
-	// Register MCP bridge tools so any MCP client can discover and call remote ggcode instances.
-	// Also register A2A client tools pointing to this server for local MCP access.
+	// Register MCP bridge tools for external MCP clients (Claude, Cursor, etc.)
+	// that don't speak A2A natively. These 4 tools let any MCP client discover
+	// and interact with this ggcode instance.
 	bridgeClient := a2a.NewClient(srv.Endpoint(), cfg.A2A.APIKey)
 	for _, t := range a2a.MCPBridgeTools(bridgeClient) {
 		_ = reg.Register(t)
 	}
 
+	// Discover other ggcode instances and report them.
+	reportDiscoveredInstances(a2aReg)
+
 	debug.Log("root", "A2A server started at %s", srv.Endpoint())
 	return srv, a2aReg, nil
+}
+
+// reportDiscoveredInstances logs discovered ggcode instances at startup.
+func reportDiscoveredInstances(a2aReg *a2a.Registry) {
+	others, err := a2aReg.Discover()
+	if err != nil {
+		debug.Log("a2a", "discover failed: %v", err)
+		return
+	}
+	if len(others) > 0 {
+		fmt.Fprintf(os.Stderr, "🔗 A2A: discovered %d other ggcode instance(s):\n", len(others))
+		for _, inst := range others {
+			name := filepath.Base(inst.Workspace)
+			fmt.Fprintf(os.Stderr, "   - %s → %s\n", name, inst.Endpoint)
+		}
+	} else {
+		debug.Log("a2a", "no other instances found")
+	}
 }
 
 func init() {

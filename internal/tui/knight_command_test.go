@@ -107,8 +107,8 @@ Do not use this for unrelated tasks.
 		t.Fatalf("Start() error = %v", err)
 	}
 	defer k.Stop()
-	k.RecordSkillUse("build-flow")
-	k.RecordSkillEffectiveness("build-flow", 4)
+	k.RecordSkillUse("project:build-flow")
+	k.RecordSkillEffectiveness("project:build-flow", 4)
 
 	m := newTestModel()
 	m.SetKnight(k)
