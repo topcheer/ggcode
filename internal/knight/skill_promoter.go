@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -88,6 +89,42 @@ func (p *Promoter) Reject(entry *SkillEntry) error {
 	}
 
 	p.appendChangelog("reject", entry.Name, entry.Scope, entry.Path)
+	return nil
+}
+
+// Rollback restores the most recent snapshot for an active skill.
+func (p *Promoter) Rollback(entry *SkillEntry) error {
+	if entry == nil {
+		return fmt.Errorf("skill entry is nil")
+	}
+	if entry.Staging {
+		return fmt.Errorf("skill %q is in staging and cannot be rolled back", entry.Name)
+	}
+
+	snapshots, err := p.listSnapshots(entry.Name)
+	if err != nil {
+		return err
+	}
+	if len(snapshots) == 0 {
+		return fmt.Errorf("no snapshots available for skill %q", entry.Name)
+	}
+	latest := snapshots[len(snapshots)-1]
+
+	if _, err := os.Stat(entry.Path); err == nil {
+		if snapErr := p.createSnapshot(entry.Name, entry.Path); snapErr != nil {
+			fmt.Fprintf(os.Stderr, "knight: rollback snapshot warning: %v\n", snapErr)
+		}
+	}
+
+	data, err := os.ReadFile(latest)
+	if err != nil {
+		return fmt.Errorf("read snapshot: %w", err)
+	}
+	restored := updateTimestamps(string(data), time.Now())
+	if err := os.WriteFile(entry.Path, []byte(restored), 0644); err != nil {
+		return fmt.Errorf("write restored skill: %w", err)
+	}
+	p.appendChangelog("rollback", entry.Name, entry.Scope, latest)
 	return nil
 }
 
@@ -178,6 +215,16 @@ func (p *Promoter) appendChangelog(action, name, scope, path string) {
 	}
 	defer f.Close()
 	f.Write(append(line, '\n'))
+}
+
+func (p *Promoter) listSnapshots(name string) ([]string, error) {
+	pattern := filepath.Join(p.projectDir, ".ggcode", "skills-snapshots", name+".*.md")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(matches)
+	return matches, nil
 }
 
 // updateTimestamps updates the skill's YAML frontmatter with proper timestamps.

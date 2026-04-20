@@ -215,15 +215,6 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest) {
 		return
 	}
 
-	// Check max concurrent tasks.
-	if s.handler.ActiveTaskCount() >= maxConcurrentTasks {
-		writeRPCError(w, req.ID, &JSONRPCError{
-			Code:    -32050,
-			Message: "too many concurrent tasks",
-		})
-		return
-	}
-
 	task, err := s.handler.Handle(context.Background(), params.Skill, params.Message)
 	if err != nil {
 		writeRPCError(w, req.ID, &JSONRPCError{
@@ -234,7 +225,6 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest) {
 	}
 
 	// For message/send, wait for completion (with timeout).
-	// Poll until terminal state or timeout.
 	deadline := time.After(5 * time.Minute)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()

@@ -201,7 +201,7 @@ func (t *a2aCancelTaskTool) Execute(ctx context.Context, input json.RawMessage) 
 		return tool.Result{Content: fmt.Sprintf("Cancel failed: %v", err), IsError: true}, nil
 	}
 
-	return tool.Result{Content: fmt.Sprintf("Task %s canceled (state: %s)", task.ID, task.Status)}, nil
+	return tool.Result{Content: fmt.Sprintf("Task %s canceled (state: %s)", task.ID, task.Status.State)}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +209,7 @@ func (t *a2aCancelTaskTool) Execute(ctx context.Context, input json.RawMessage) 
 // ---------------------------------------------------------------------------
 
 func formatTaskResult(t *Task) string {
-	result := fmt.Sprintf("Task %s\nStatus: %s\nSkill: %s", t.ID, t.Status, t.Skill)
+	result := fmt.Sprintf("Task %s\nStatus: %s\nSkill: %s", t.ID, t.Status.State, t.Skill)
 
 	if len(t.Artifacts) > 0 {
 		result += "\n\nResults:"

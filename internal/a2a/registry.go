@@ -111,16 +111,19 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	return others, nil
 }
 
-// DiscoverByCapability returns instances that have a specific language/tag.
+// DiscoverByCapability returns instances whose metadata matches the given tag.
+// Tag can be a language name ("go", "typescript"), framework ("npm"), or partial workspace path.
 func (r *Registry) DiscoverByCapability(tag string) ([]InstanceInfo, error) {
 	all, err := r.Discover()
 	if err != nil {
 		return nil, err
 	}
 
+	tag = strings.ToLower(tag)
 	var matched []InstanceInfo
 	for _, inst := range all {
-		if strings.Contains(inst.Workspace, tag) {
+		ws := strings.ToLower(inst.Workspace)
+		if strings.Contains(ws, tag) || strings.Contains(tag, filepath.Base(ws)) {
 			matched = append(matched, inst)
 		}
 	}

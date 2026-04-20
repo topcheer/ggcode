@@ -169,6 +169,11 @@ func (k *Knight) SkillFeedback(name string) (avgScore float64, samples int) {
 	return k.usage.GetFeedback(name)
 }
 
+// BudgetStatus returns current Knight token usage counters.
+func (k *Knight) BudgetStatus() (used int, remaining int, limit int) {
+	return k.budget.Used(), k.budget.Remaining(), k.budget.DailyLimit()
+}
+
 // SetSkillFrozen updates an active skill's frozen flag.
 func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
 	entry := k.index.FindActiveByName(name)
@@ -179,6 +184,19 @@ func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
 		fmMap["frozen"] = frozen
 	}); err != nil {
 		return fmt.Errorf("update skill %q frontmatter: %w", name, err)
+	}
+	k.index.Invalidate()
+	return nil
+}
+
+// RollbackSkill restores the latest snapshot for an active skill.
+func (k *Knight) RollbackSkill(name string) error {
+	entry := k.index.FindActiveByName(name)
+	if entry == nil {
+		return fmt.Errorf("active skill %q not found", name)
+	}
+	if err := k.promoter.Rollback(entry); err != nil {
+		return err
 	}
 	k.index.Invalidate()
 	return nil

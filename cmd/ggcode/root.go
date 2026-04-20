@@ -586,13 +586,27 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 }
 
 // startA2AServer starts the A2A HTTP server and registers this instance in the local registry.
+func parseA2ATimeout(s string) time.Duration {
+	if s == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 5 * time.Minute
+	}
+	return d
+}
+
 func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, error) {
 	a2aReg, err := a2a.NewRegistry()
 	if err != nil {
 		return nil, nil, fmt.Errorf("a2a registry: %w", err)
 	}
 
-	handler := a2a.NewTaskHandler(workingDir, ag, reg)
+	handler := a2a.NewTaskHandler(workingDir, ag, reg,
+		a2a.WithMaxTasks(cfg.A2A.MaxTasks),
+		a2a.WithTimeout(parseA2ATimeout(cfg.A2A.TaskTimeout)),
+	)
 
 	srv := a2a.NewServer(a2a.ServerConfig{
 		Host:   cfg.A2A.Host,
