@@ -23,7 +23,7 @@ type ReadFile struct {
 func (t ReadFile) Name() string { return "read_file" }
 
 func (t ReadFile) Description() string {
-	return "Read file contents. Supports text files, images (png/jpg/gif/webp), PDF, Office documents (docx/xlsx/pptx), OpenDocument (odt/ods/odp), EPUB, and RTF. Use offset and limit for range reading large files."
+	return "Read file contents. Supports text files, images (png/jpg/gif/webp), PDF, Office (docx/xlsx/pptx), OpenDocument (odt/ods/odp), EPUB, RTF, archives (zip/tar/tar.gz/tar.bz2), iWork (pages/numbers/key), and SVG. Archives are recursively extracted showing file listings and text content. Use offset and limit for range reading large files."
 }
 
 func (t ReadFile) Parameters() json.RawMessage {

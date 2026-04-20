@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <title>Demo Chart</title>
+  <desc>A sample SVG for testing text extraction</desc>
+  <text x="10" y="30" aria-label="Sales Label">Sales: 1000</text>
+  <text x="10" y="50">
+    <tspan>Q1: 250</tspan>
+    <tspan>Q2: 350</tspan>
+  </text>
+</svg>

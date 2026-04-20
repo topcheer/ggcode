@@ -156,6 +156,91 @@ func TestRTFExtraction(t *testing.T) {
 	}
 }
 
+func TestZIPExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.zip")
+	result, err := Extract("test.zip", data)
+	if err != nil {
+		t.Fatalf("ZIP: %v", err)
+	}
+	if result.Format != "zip" {
+		t.Errorf("format = %q, want zip", result.Format)
+	}
+	if !strings.Contains(result.Text, "hello from zip") {
+		t.Errorf("expected 'hello from zip', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "README") {
+		t.Errorf("expected 'README', got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Alice") {
+		t.Errorf("expected 'Alice' from CSV, got: %q", result.Text)
+	}
+}
+
+func TestTarGzExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.tar.gz")
+	result, err := Extract("test.tar.gz", data)
+	if err != nil {
+		t.Fatalf("tar.gz: %v", err)
+	}
+	if result.Format != "tar.gz" {
+		t.Errorf("format = %q, want tar.gz", result.Format)
+	}
+	if !strings.Contains(result.Text, "port: 8080") {
+		t.Errorf("expected 'port: 8080' from yaml, got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "deploying") {
+		t.Errorf("expected 'deploying' from sh, got: %q", result.Text)
+	}
+}
+
+func TestTarExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.tar")
+	result, err := Extract("test.tar", data)
+	if err != nil {
+		t.Fatalf("tar: %v", err)
+	}
+	if result.Format != "tar" {
+		t.Errorf("format = %q, want tar", result.Format)
+	}
+	if !strings.Contains(result.Text, "plain text in tar") {
+		t.Errorf("expected 'plain text in tar', got: %q", result.Text)
+	}
+}
+
+func TestSVGExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.svg")
+	result, err := Extract("test.svg", data)
+	if err != nil {
+		t.Fatalf("SVG: %v", err)
+	}
+	if result.Format != "svg" {
+		t.Errorf("format = %q, want svg", result.Format)
+	}
+	if !strings.Contains(result.Text, "Demo Chart") {
+		t.Errorf("expected 'Demo Chart' from title, got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Sales: 1000") {
+		t.Errorf("expected 'Sales: 1000' from text, got: %q", result.Text)
+	}
+	if !strings.Contains(result.Text, "Q1: 250") {
+		t.Errorf("expected 'Q1: 250' from tspan, got: %q", result.Text)
+	}
+}
+
+func TestPagesExtraction(t *testing.T) {
+	data := readTestFile(t, "sample.pages")
+	result, err := Extract("test.pages", data)
+	if err != nil {
+		t.Fatalf("Pages: %v", err)
+	}
+	if result.Format != "pages" {
+		t.Errorf("format = %q, want pages", result.Format)
+	}
+	if !strings.Contains(result.Text, "Hello from Pages") {
+		t.Errorf("expected 'Hello from Pages', got: %q", result.Text)
+	}
+}
+
 func TestIsDocumentFile(t *testing.T) {
 	cases := []struct {
 		path   string
@@ -171,6 +256,14 @@ func TestIsDocumentFile(t *testing.T) {
 		{"test.epub", true},
 		{"test.rtf", true},
 		{"test.txt", false},
+		{"test.zip", true},
+		{"test.tar", true},
+		{"test.tar.gz", true},
+		{"test.tgz", true},
+		{"test.pages", true},
+		{"test.numbers", true},
+		{"test.key", true},
+		{"test.svg", true},
 		{"test.go", false},
 		{"test.png", false},
 		{"README", false},
