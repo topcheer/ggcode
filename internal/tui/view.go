@@ -1255,36 +1255,7 @@ func (m Model) renderComposerPanel() string {
 }
 
 func (m Model) renderComposerInput() string {
-	value := m.input.Value()
-	if value == "" {
-		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
-	}
-
-	// Use textinput's built-in View for short single-line input.
-	// composerWrappedLines has a wordwrap dependency that trims trailing spaces.
-	if !strings.Contains(value, "\n") && !composerNeedsWrap(value, m.mainColumnWidth()-6-lipgloss.Width(m.input.Prompt)) {
-		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
-	}
-
-	prompt := m.input.Prompt
-	promptWidth := lipgloss.Width(prompt)
-	available := max(1, m.mainColumnWidth()-6-promptWidth)
-	cursor := m.input.Position()
-	lines := composerWrappedLines(value, cursor, available)
-	if len(lines) == 0 {
-		lines = []string{"", ""}
-	}
-	promptStyle := lipgloss.NewStyle().Bold(true)
-	indent := strings.Repeat(" ", promptWidth)
-	rows := make([]string, 0, len(lines))
-	for i, line := range lines {
-		if i == 0 {
-			rows = append(rows, promptStyle.Render(prompt)+line)
-			continue
-		}
-		rows = append(rows, indent+line)
-	}
-	return strings.Join(rows, "\n")
+	return lipgloss.NewStyle().Bold(true).Render(m.input.View())
 }
 
 func composerNeedsWrap(value string, width int) bool {
