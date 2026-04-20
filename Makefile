@@ -2,7 +2,7 @@ BINARY  := bin/ggcode
 PKG     := github.com/topcheer/ggcode/cmd/ggcode
 INSTALLER_PKG := github.com/topcheer/ggcode/cmd/ggcode-installer
 
-.PHONY: build test lint verify-ci install install-installer install-git-hooks clean
+.PHONY: build test lint verify-ci knight-eval install install-installer install-git-hooks clean
 
 build:
 	go build -o $(BINARY) ./cmd/ggcode
@@ -15,6 +15,9 @@ lint:
 
 verify-ci:
 	./scripts/dev/verify-ci.sh
+
+knight-eval:
+	./scripts/dev/knight-eval.sh
 
 install:
 	go install $(PKG)
