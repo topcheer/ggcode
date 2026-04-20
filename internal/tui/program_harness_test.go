@@ -97,9 +97,9 @@ func startLiveProgramHarness(t *testing.T, model Model) *liveProgramHarness {
 	h.program.Send(tea.KeyboardEnhancementsMsg{Flags: 1})
 	h.sync()
 	// Wait for the startup input drain to end (setProgramMsg triggers a
-	// 50ms tea.Tick that sends inputDrainEndMsg). All tests that send
+	// 250ms tea.Tick that sends inputDrainEndMsg). All tests that send
 	// keyboard input need the drain to have completed first.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	h.sync()
 	return h
 }

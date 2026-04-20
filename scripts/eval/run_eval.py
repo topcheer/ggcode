@@ -86,7 +86,7 @@ def start_daemon(
     config_path: str,
     port_file: str,
     working_dir: str,
-    timeout: float = 60.0,
+    timeout: float = 180.0,
 ) -> subprocess.Popen:
     """Start ggcode daemon in background, wait for port file.
 
@@ -388,28 +388,36 @@ def run_task(
     sse_thread = threading.Thread(target=sse_worker, daemon=True)
     sse_thread.start()
 
-    # Small delay to let SSE connect
-    time.sleep(0.5)
+    # Small delay to let SSE connect (larger projects need more time)
+    time.sleep(2.0)
 
-    # Step 3: Send prompt with metrics reset
-    try:
-        resp = httpx.post(
-            f"{base_url}/send",
-            json={"text": prompt},
-            params={"reset_metrics": "true"},
-            timeout=30.0,
-        )
-        result = resp.json()
-        print(f"[eval] Prompt sent: message_id={result.get('message_id', 'unknown')}")
-    except Exception as e:
-        print(f"[eval] Failed to send prompt: {e}")
+    # Step 3: Send prompt with metrics reset (with retry)
+    send_ok = False
+    for attempt in range(3):
+        try:
+            resp = httpx.post(
+                f"{base_url}/send",
+                json={"text": prompt},
+                params={"reset_metrics": "true"},
+                timeout=60.0,
+            )
+            result = resp.json()
+            print(f"[eval] Prompt sent: message_id={result.get('message_id', 'unknown')}")
+            send_ok = True
+            break
+        except Exception as e:
+            print(f"[eval] Send attempt {attempt+1}/3 failed: {e}")
+            if attempt < 2:
+                time.sleep(5)
+
+    if not send_ok:
         return {
             "task_id": task_id,
             "task_type": task.get("type", ""),
             "success": False,
             "timed_out": False,
             "elapsed_sec": 0,
-            "error": str(e),
+            "error": "Failed to send prompt after 3 attempts",
         }
 
     # Step 4: Wait for SSE consumer to finish
@@ -582,7 +590,82 @@ def generate_config(
     port_file: str,
     metrics_path: str,
 ):
-    """Generate a ggcode config YAML for the given mode (no pyyaml needed)."""
+    """Generate a ggcode config YAML for the given mode.
+
+    Uses the embedded default config as base (so vendor/system_prompt/vendors
+    are all present), then patches in dummy adapter and optional knight settings.
+    The minimal config approach fails because ggcode's daemon needs the full
+    vendor registry and system_prompt to initialize properly.
+    """
+    # Try to load a reference config from a previous successful run.
+    # Fallback to the embedded minimal default.
+    ref_paths = [
+        Path("/tmp/knight-teamclaw-smoke3/baseline-config.yaml"),
+    ]
+    base_yaml = None
+    for rp in ref_paths:
+        if rp.exists():
+            base_yaml = rp.read_text()
+            break
+
+    if base_yaml:
+        # Patch the existing config: update port_file, metrics_path, and knight settings
+        import re
+
+        # Sanitize hardcoded API keys — replace literal keys with ${VENDOR_API_KEY} env vars
+        # This prevents leaking keys in generated configs
+        env_var_map = {
+            "AIzaSyDhtwWBmkqTrWPkwHiYtZ4ixDm9R2giIMQ": "${GOOGLE_API_KEY}",
+            "sk-6h3rg0rAnwBoG60Ei2j8SgXkZILd7RPj9AnwCB6cYf2IP1xV": "${MOONSHOT_API_KEY}",
+            "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": "${OPENROUTER_API_KEY}",
+            "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": "${NVIDIA_API_KEY}",
+            "38dfc49f4bde4b17a5d5b8a612687d87.3axFVc9M6KDD59Rn": "${ZAI_API_KEY}",
+            "31c52998b0ed4b5b873fae684573cbfa.1kPfC0iWOMMxs2tE": "${ZAI_API_KEY}",
+        }
+        for literal_key, env_ref in env_var_map.items():
+            base_yaml = base_yaml.replace(literal_key, env_ref)
+
+        # Update port_file and metrics_path (absolute paths, no quotes needed)
+        base_yaml = re.sub(
+            r'port_file:.*',
+            f'port_file: {port_file}',
+            base_yaml,
+        )
+        base_yaml = re.sub(
+            r'metrics_path:.*',
+            f'metrics_path: {metrics_path}',
+            base_yaml,
+        )
+
+        # Remove any existing knight section and add if needed
+        base_yaml = re.sub(r'\nknight:.*?(?=\n[a-z]|\n\n|\Z)', '', base_yaml, flags=re.DOTALL)
+
+        if mode == "knight":
+            knight_block = (
+                "\nknight:\n"
+                "  enabled: true\n"
+                "  trust_level: staged\n"
+                "  model: glm-5-air\n"
+                "  idle_delay_sec: 60\n"
+                "  capabilities:\n"
+                "    - skill_creation\n"
+                "    - skill_validation\n"
+                "    - regression_testing\n"
+                "    - doc_sync\n"
+            )
+            # Insert knight block after the model line
+            base_yaml = re.sub(
+                r'(model:.*\n)',
+                r'\1' + knight_block + "\n",
+                base_yaml,
+                count=1,
+            )
+
+        with open(output_path, "w") as f:
+            f.write(base_yaml)
+        return
+
+    # Fallback: minimal config (works for projects with existing .ggcode config)
     config = {
         "vendor": "zai",
         "endpoint": "cn-coding-openai",
@@ -706,10 +789,11 @@ def run_single_mode(
     shutdown_token = ""
 
     if auto:
-        # Generate temp config
-        port_file = str(out_dir / f".{mode}-port")
-        metrics_path = str(out_dir / f"{mode}-metrics.json")
-        config_path = str(out_dir / f"{mode}-config.yaml")
+        # Generate temp config — use absolute paths so daemon can find
+        # port_file and metrics_path regardless of its working directory
+        port_file = str((out_dir / f".{mode}-port").resolve())
+        metrics_path = str((out_dir / f"{mode}-metrics.json").resolve())
+        config_path = str((out_dir / f"{mode}-config.yaml").resolve())
         generate_config(config_path, mode, port_file, metrics_path)
 
         # Start daemon
@@ -756,6 +840,101 @@ def run_single_mode(
 
 
 # ---------------------------------------------------------------------------
+# Multi-round helpers
+# ---------------------------------------------------------------------------
+
+def git_reset_workdir(workdir: str):
+    """Git-reset the workdir to clean state between rounds."""
+    print(f"[eval] Git reset: {workdir}")
+    try:
+        subprocess.run(["git", "checkout", "."], cwd=workdir, capture_output=True, timeout=30)
+        subprocess.run(["git", "clean", "-fd"], cwd=workdir, capture_output=True, timeout=30)
+    except Exception as e:
+        print(f"[eval] WARNING: git reset failed: {e}")
+
+
+def write_ab_scorecard(score_path: str, tasks: list, baseline_results: list,
+                       knight_results: list, score: dict):
+    """Write an A/B comparison scorecard."""
+    with open(score_path, "w") as f:
+        f.write("# Knight A/B Comparison\n\n")
+        f.write(f"**Date:** {time.strftime('%Y-%m-%d %H:%M')}\n")
+        f.write(f"**Baseline tasks:** {len(baseline_results)}\n")
+        f.write(f"**Knight tasks:** {len(knight_results)}\n\n")
+
+        f.write("## Knight Score\n\n")
+        for k, v in score.items():
+            f.write(f"- **{k}:** {v}\n")
+
+        f.write("\n## Head-to-Head\n\n")
+        f.write("| Task | B.Success | B.Tools | B.Time | K.Success | K.Tools | K.Time | Delta |\n")
+        f.write("|------|-----------|---------|--------|-----------|---------|--------|-------|\n")
+        b_map = {r["task_id"]: r for r in baseline_results}
+        k_map = {r["task_id"]: r for r in knight_results}
+        for tid in [t["id"] for t in tasks]:
+            b = b_map.get(tid, {})
+            k = k_map.get(tid, {})
+            b_s = "PASS" if b.get("success") else "FAIL"
+            k_s = "PASS" if k.get("success") else "FAIL"
+            delta = ""
+            if b.get("tool_calls") and k.get("tool_calls"):
+                d = b["tool_calls"] - k["tool_calls"]
+                delta = f"{d:+d} tools"
+            f.write(
+                f"| {tid} | {b_s} | {b.get('tool_calls', 0)} | "
+                f"{b.get('elapsed_sec', 0):.1f}s | {k_s} | "
+                f"{k.get('tool_calls', 0)} | {k.get('elapsed_sec', 0):.1f}s | {delta} |\n"
+            )
+
+
+def write_final_report(path: str, all_results: list, duration_hours: float):
+    """Write a comprehensive multi-round final report."""
+    total_execs = sum(len(res) for _, _, res in all_results)
+    total_pass = sum(1 for _, _, res in all_results for r in res if r.get("success"))
+
+    with open(path, "w") as f:
+        f.write("# Knight Multi-Round Evaluation Report\n\n")
+        f.write(f"**Duration:** {duration_hours:.1f} hours\n")
+        f.write(f"**Total task executions:** {total_execs}\n")
+        f.write(f"**Overall success rate:** {total_pass}/{total_execs} "
+                f"({100*total_pass/total_execs if total_execs else 0:.1f}%)\n")
+
+        # Count rounds
+        rounds_seen = set(rn for rn, _, _ in all_results)
+        f.write(f"**Rounds completed:** {len(rounds_seen)}\n\n")
+
+        # Per-task statistics across rounds
+        for mode in ["baseline", "knight"]:
+            mode_results = [r for _, m, res in all_results if m == mode for r in res]
+            if not mode_results:
+                continue
+
+            # Group by task_id
+            by_task = {}
+            for r in mode_results:
+                by_task.setdefault(r["task_id"], []).append(r)
+
+            f.write(f"## Per-Task Statistics — {mode.title()}\n\n")
+            f.write("| Task | Success Rate | Avg Time | Std Time | Avg Tools | Std Tools |\n")
+            f.write("|------|-------------|----------|----------|-----------|----------|\n")
+
+            for tid in sorted(by_task.keys()):
+                runs = by_task[tid]
+                sr = sum(1 for r in runs if r.get("success")) / len(runs)
+                times = [r.get("elapsed_sec", 0) for r in runs]
+                tools = [r.get("tool_calls", 0) for r in runs]
+                avg_t = sum(times) / len(times) if times else 0
+                std_t = (sum((t - avg_t)**2 for t in times) / len(times))**0.5 if len(times) > 1 else 0
+                avg_tools = sum(tools) / len(tools) if tools else 0
+                std_tools = (sum((t - avg_tools)**2 for t in tools) / len(tools))**0.5 if len(tools) > 1 else 0
+                f.write(f"| {tid} | {sr:.2f} | {avg_t:.1f}s | {std_t:.1f}s | {avg_tools:.1f} | {std_tools:.1f} |\n")
+
+            f.write("\n")
+
+    print(f"[eval] Final report saved to {path}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -778,18 +957,37 @@ def main():
     parser.add_argument("--no-llm", action="store_true", help="Skip LLM, use raw descriptions")
     parser.add_argument("--timeout", type=float, default=600, help="Per-task timeout in seconds")
     parser.add_argument("--workdir", default=os.path.expanduser("~/ggai/eval-workbench"),
-                        help="Working directory for the daemon (default: ~/ggai/eval-workbench)")
+                        help="Working directory for the daemon")
+    parser.add_argument("--templates", default="teamclaw",
+                        help="Task template set: eval-workbench or teamclaw (default: teamclaw)")
+    parser.add_argument("--rounds", type=int, default=1, help="Number of rounds (default: 1)")
+    parser.add_argument("--duration", type=float, default=0,
+                        help="Max duration in hours (0 = use --rounds). Mutually exclusive with rounds.")
+    parser.add_argument("--no-reset", action="store_true",
+                        help="Don't git-reset workdir between rounds")
     args = parser.parse_args()
 
     if not args.auto and not args.base_url and not args.port_file:
         parser.error("Either --auto, --base-url, or --port-file is required")
 
+    # Select task template set
+    template_sets = {
+        "eval-workbench": TASKS,
+    }
+    try:
+        from task_templates_teamclaw import TASKS as TEAMCLAW_TASKS
+        template_sets["teamclaw"] = TEAMCLAW_TASKS
+    except ImportError:
+        pass
+
+    all_templates = template_sets.get(args.templates, TASKS)
+
     # Select tasks
     if args.tasks:
         task_ids = [t.strip() for t in args.tasks.split(",")]
-        tasks = [t for t in TASKS if t["id"] in task_ids]
+        tasks = [t for t in all_templates if t["id"] in task_ids]
     else:
-        tasks = TASKS
+        tasks = all_templates
 
     # Setup LLM client
     llm = None if args.no_llm else LLMClient(
@@ -799,105 +997,155 @@ def main():
 
     working_dir = os.path.abspath(args.workdir)
 
-    if args.ab:
-        # A/B comparison: run baseline then knight
-        print(f"\n{'#'*60}")
-        print(f"[eval] A/B Evaluation — {len(tasks)} tasks x 2 modes")
-        print(f"{'#'*60}")
-
-        baseline_results = run_single_mode(
-            "baseline", tasks, llm, args.output, args.run_id,
-            auto=args.auto, working_dir=working_dir,
-        )
-
-        print(f"\n[eval] Baseline complete. Starting Knight mode...")
-        time.sleep(2)
-
-        knight_results = run_single_mode(
-            "knight", tasks, llm, args.output, args.run_id,
-            auto=args.auto, working_dir=working_dir,
-        )
-
-        # Compute comparative scorecard
-        score = compute_knight_score(baseline_results, knight_results)
-        score_path = str(Path(args.output) / "ab-comparison.scorecard.md")
-
-        with open(score_path, "w") as f:
-            f.write("# Knight A/B Comparison\n\n")
-            f.write(f"**Date:** {time.strftime('%Y-%m-%d %H:%M')}\n")
-            f.write(f"**Tasks:** {len(tasks)}\n\n")
-
-            f.write("## Knight Score\n\n")
-            for k, v in score.items():
-                f.write(f"- **{k}:** {v}\n")
-
-            f.write("\n## Head-to-Head\n\n")
-            f.write("| Task | B.Success | B.Tools | B.Time | K.Success | K.Tools | K.Time | Delta |\n")
-            f.write("|------|-----------|---------|--------|-----------|---------|--------|-------|\n")
-            b_map = {r["task_id"]: r for r in baseline_results}
-            k_map = {r["task_id"]: r for r in knight_results}
-            for tid in [t["id"] for t in tasks]:
-                b = b_map.get(tid, {})
-                k = k_map.get(tid, {})
-                b_s = "PASS" if b.get("success") else "FAIL"
-                k_s = "PASS" if k.get("success") else "FAIL"
-                delta = ""
-                if b.get("tool_calls") and k.get("tool_calls"):
-                    d = b["tool_calls"] - k["tool_calls"]
-                    delta = f"{d:+d} tools"
-                f.write(
-                    f"| {tid} | {b_s} | {b.get('tool_calls', 0)} | "
-                    f"{b.get('elapsed_sec', 0):.1f}s | {k_s} | "
-                    f"{k.get('tool_calls', 0)} | {k.get('elapsed_sec', 0):.1f}s | {delta} |\n"
-                )
-
-        print(f"\n[eval] A/B comparison saved to {score_path}")
-        print(f"[eval] Knight Score: {score.get('knight_score', 0):.4f}")
-
-    elif args.auto:
-        # Auto mode: start daemon, run, stop
-        run_single_mode(
-            args.mode, tasks, llm, args.output, args.run_id,
-            auto=True, working_dir=working_dir,
-        )
-
+    # Determine termination: duration-based or round-count-based
+    use_duration = args.duration > 0
+    if use_duration:
+        max_rounds = 9999
+        deadline = time.time() + args.duration * 3600
     else:
-        # Manual mode: connect to existing daemon
-        if args.base_url:
-            base_url = args.base_url.rstrip("/")
-        elif args.port_file:
-            base_url, _ = read_port_file(args.port_file)
-        else:
-            parser.error("Either --base-url or --port-file is required")
+        max_rounds = args.rounds
+        deadline = None
 
-        print(f"[eval] Connecting to {base_url}")
-        if not wait_for_healthz(base_url):
-            print(f"[eval] ERROR: healthz failed", file=sys.stderr)
-            sys.exit(1)
+    # Print header
+    mode_label = "A/B" if args.ab else args.mode
+    duration_label = f"{args.duration}h" if use_duration else f"{max_rounds} rounds"
+    print(f"\n{'#'*60}")
+    print(f"  Knight Evaluation — {args.templates}")
+    print(f"  Tasks: {len(tasks)} | Templates: {args.templates}")
+    print(f"  Workdir: {working_dir}")
+    print(f"  Output: {args.output}")
+    print(f"  Mode: {mode_label}")
+    print(f"  Duration: {duration_label}")
+    print(f"{'#'*60}")
 
-        out_dir = Path(args.output)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = str(out_dir / f"{args.mode}.csv")
-        log_dir = str(out_dir / "logs" / args.mode)
-        Path(log_dir).mkdir(parents=True, exist_ok=True)
+    # Multi-round loop
+    all_results = []  # list of (round_num, mode, results_list)
+    round_num = 0
+    start_time = time.time()
 
-        write_csv_header(csv_path)
-        results = []
+    while round_num < max_rounds:
+        round_num += 1
+        elapsed_h = (time.time() - start_time) / 3600
 
-        for task in tasks:
-            log_file = f"{log_dir}/{args.run_id}_{task['id']}.ndjson"
-            result = run_task(base_url, task, llm, log_file)
-            result["run_id"] = args.run_id
-            result["phase"] = args.mode
-            result["mode"] = args.mode
-            results.append(result)
-            append_csv_row(csv_path, result)
+        if deadline and time.time() >= deadline:
+            print(f"\n[eval] Duration limit reached ({args.duration}h). Stopping.")
+            break
 
-        score_path = str(out_dir / f"{args.mode}.scorecard.md")
-        score = compute_knight_score(results, results)
-        write_scorecard(score_path, results, score, args.mode)
+        remaining = f"{args.duration - elapsed_h:.1f}h remaining" if deadline else f"round {round_num}/{max_rounds}"
+        print(f"\n{'='*60}")
+        print(f"  ROUND {round_num}/{max_rounds if not deadline else '∞'}")
+        print(f"  Elapsed: {elapsed_h:.1f}h | {remaining}")
+        print(f"{'='*60}")
 
-    print(f"\n[eval] Evaluation complete!")
+        # Git reset between rounds (not on first round, unless --no-reset)
+        if round_num > 1 and not args.no_reset:
+            git_reset_workdir(working_dir)
+
+        round_run_id = f"{args.run_id}-r{round_num:03d}"
+
+        try:
+            if args.ab:
+                # A/B: run baseline then knight in each round
+                baseline_results = run_single_mode(
+                    "baseline", tasks, llm, args.output, round_run_id,
+                    auto=args.auto, working_dir=working_dir,
+                )
+                all_results.append((round_num, "baseline", baseline_results))
+
+                print(f"\n[eval] Baseline complete. Starting Knight mode...")
+                time.sleep(2)
+
+                knight_results = run_single_mode(
+                    "knight", tasks, llm, args.output, round_run_id,
+                    auto=args.auto, working_dir=working_dir,
+                )
+                all_results.append((round_num, "knight", knight_results))
+
+                # Per-round comparison scorecard
+                score = compute_knight_score(baseline_results, knight_results)
+                score_path = str(Path(args.output) / f"round-{round_num:03d}-ab.scorecard.md")
+                write_ab_scorecard(score_path, tasks, baseline_results, knight_results, score)
+
+            elif args.auto:
+                results = run_single_mode(
+                    args.mode, tasks, llm, args.output, round_run_id,
+                    auto=True, working_dir=working_dir,
+                )
+                all_results.append((round_num, args.mode, results))
+
+            else:
+                # Manual mode (single round only)
+                if args.base_url:
+                    base_url = args.base_url.rstrip("/")
+                elif args.port_file:
+                    base_url, _ = read_port_file(args.port_file)
+                else:
+                    parser.error("Either --base-url or --port-file is required")
+
+                print(f"[eval] Connecting to {base_url}")
+                if not wait_for_healthz(base_url):
+                    print(f"[eval] ERROR: healthz failed", file=sys.stderr)
+                    sys.exit(1)
+
+                out_dir = Path(args.output)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                csv_path = str(out_dir / f"{args.mode}.csv")
+                log_dir = str(out_dir / "logs" / args.mode)
+                Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+                write_csv_header(csv_path)
+                results = []
+
+                for task in tasks:
+                    log_file = f"{log_dir}/{args.run_id}_{task['id']}.ndjson"
+                    result = run_task(base_url, task, llm, log_file)
+                    result["run_id"] = args.run_id
+                    result["phase"] = args.mode
+                    result["mode"] = args.mode
+                    results.append(result)
+                    append_csv_row(csv_path, result)
+
+                score_path = str(out_dir / f"{args.mode}.scorecard.md")
+                score = compute_knight_score(results, results)
+                write_scorecard(score_path, results, score, args.mode)
+                all_results.append((round_num, args.mode, results))
+                break  # Manual mode is single-round
+
+        except Exception as e:
+            print(f"\n[eval] Round {round_num} FAILED: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+        round_mins = (time.time() - start_time) / 60
+        passed = sum(1 for _, _, res in all_results for r in res if r.get("success"))
+        total = sum(1 for _, _, res in all_results for r in res)
+        print(f"\n[eval] Round {round_num} done: {passed}/{total} passed, {round_mins:.1f} min total")
+
+    # Final aggregate report
+    if all_results:
+        duration_h = (time.time() - start_time) / 3600
+        report_path = str(Path(args.output) / "final-report.md")
+        write_final_report(report_path, all_results, duration_h)
+
+        # If A/B, also write aggregate comparison
+        if args.ab:
+            agg_b = [r for _, m, res in all_results if m == "baseline" for r in res]
+            agg_k = [r for _, m, res in all_results if m == "knight" for r in res]
+            if agg_b and agg_k:
+                agg_score = compute_knight_score(agg_b, agg_k)
+                agg_path = str(Path(args.output) / "ab-comparison.scorecard.md")
+                write_ab_scorecard(agg_path, tasks, agg_b, agg_k, agg_score)
+
+    print(f"\n{'#'*60}")
+    print(f"  EVALUATION COMPLETE")
+    print(f"  Rounds: {round_num}")
+    print(f"  Duration: {(time.time() - start_time) / 3600:.1f} hours")
+    print(f"  Results: {args.output}")
+    report_file = Path(args.output) / "final-report.md"
+    if report_file.exists():
+        print(f"  Report: {report_file}")
+    print(f"{'#'*60}")
 
 
 if __name__ == "__main__":

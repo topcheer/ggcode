@@ -195,6 +195,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if chunk == "" {
 		return
 	}
+	chunk = relativizeResult(chunk)
 	if localized, ok := m.localizedStreamStatus(chunk); ok {
 		m.appendStreamStatusLine(localized)
 		return

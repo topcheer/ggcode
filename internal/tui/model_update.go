@@ -1435,11 +1435,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 		}
 		// Start the input drain window. Terminal responses (OSC 11 color
-		// query, CPR, Kitty mode report) arrive as individual KeyPressMsg
-		// events that are indistinguishable from real typing. We suppress
-		// all keyboard input until inputDrainEndMsg arrives (50ms from now).
-		m.inputDrainUntil = time.Now().Add(50 * time.Millisecond)
-		return m, tea.Tick(50*time.Millisecond, func(_ time.Time) tea.Msg {
+		// query, CPR, Kitty mode report, mouse-mode/altscreen ACKs) arrive
+		// as individual KeyPressMsg events that are indistinguishable from
+		// real typing. We suppress all keyboard input until inputDrainEndMsg
+		// arrives. The window is intentionally generous (~250ms) because
+		// some terminals (and especially when re-running the binary right
+		// after a build, with leftover sequences from the previous process
+		// in the input buffer) take longer than 50ms to settle.
+		m.inputDrainUntil = time.Now().Add(250 * time.Millisecond)
+		return m, tea.Tick(250*time.Millisecond, func(_ time.Time) tea.Msg {
 			return inputDrainEndMsg{}
 		})
 

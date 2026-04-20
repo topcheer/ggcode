@@ -124,6 +124,7 @@ func (m *Model) renderConversationToolCall(block provider.ContentBlock) string {
 }
 
 func (m *Model) renderConversationToolResult(block provider.ContentBlock, toolCalls map[string]resumedToolCall) string {
+	relOutput := relativizeResult(block.Output)
 	state, ok := toolCalls[block.ToolID]
 	if ok && isCommandTool(state.ToolName) {
 		item, ok := buildCommandToolActivityItem(m.currentLanguage(), ToolStatusMsg{
@@ -131,7 +132,7 @@ func (m *Model) renderConversationToolResult(block provider.ContentBlock, toolCa
 			DisplayName: state.Presentation.DisplayName,
 			Detail:      state.Presentation.Detail,
 			RawArgs:     state.RawArgs,
-			Result:      block.Output,
+			Result:      relOutput,
 			IsError:     block.IsError,
 			Running:     false,
 		})
@@ -147,7 +148,7 @@ func (m *Model) renderConversationToolResult(block provider.ContentBlock, toolCa
 		ToolName:    block.ToolName,
 		DisplayName: present.DisplayName,
 		Detail:      present.Detail,
-		Result:      block.Output,
+		Result:      relOutput,
 		IsError:     block.IsError,
 		Running:     false,
 	})
@@ -155,33 +156,25 @@ func (m *Model) renderConversationToolResult(block provider.ContentBlock, toolCa
 
 func (m *Model) renderConversationCommandCall(item toolActivityItem) string {
 	commandStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	firstWidth := m.conversationInnerWidth() - 4
-	bodyWidth := m.conversationInnerWidth() - 4
-	if firstWidth < 8 {
-		firstWidth = 8
-	}
-	if bodyWidth < 8 {
-		bodyWidth = 8
-	}
 
 	var rows []string
 	commandLines := append([]string(nil), item.CommandLines...)
 	if item.CommandTitle == "" && len(commandLines) > 0 {
 		first := appendHiddenLineSuffix(m.currentLanguage(), commandLines[0], item.CommandHiddenLineCount, "command")
-		rows = append(rows, toolBulletStyle.Render("● ")+commandStyle.Render(truncateString(first, firstWidth)))
+		rows = append(rows, toolBulletStyle.Render("● ")+commandStyle.Render(first))
 		commandLines = commandLines[1:]
 	} else {
 		header := item.CommandTitle
 		if header == "" {
 			header = item.Summary
 		}
-		rows = append(rows, toolBulletStyle.Render("● ")+truncateString(header, firstWidth))
+		rows = append(rows, toolBulletStyle.Render("● ")+header)
 	}
 	for i, line := range commandLines {
 		if i == len(commandLines)-1 {
 			line = appendHiddenLineSuffix(m.currentLanguage(), line, item.CommandHiddenLineCount, "command")
 		}
-		rows = append(rows, "  "+commandStyle.Render(truncateString(line, bodyWidth)))
+		rows = append(rows, "  "+commandStyle.Render(line))
 	}
 	return strings.Join(rows, "\n") + "\n"
 }

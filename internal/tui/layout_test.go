@@ -554,8 +554,8 @@ func TestWideLayoutLeavesRightMarginForSidebarBorder(t *testing.T) {
 	}
 
 	total := m.mainColumnWidth() + 1 + m.sidebarWidth()
-	if total != m.viewWidth()-1 {
-		t.Fatalf("expected composed width %d, got %d", m.viewWidth()-1, total)
+	if total != m.viewWidth()-m.terminalLeftMargin()-m.terminalRightMargin() {
+		t.Fatalf("expected composed width %d, got %d", m.viewWidth()-m.terminalLeftMargin()-m.terminalRightMargin(), total)
 	}
 
 	if margin := m.terminalRightMargin(); margin != 1 {
@@ -572,13 +572,13 @@ func TestNarrowLayoutLeavesRightMarginForMainPanels(t *testing.T) {
 		t.Fatal("expected sidebar to be disabled")
 	}
 
-	if got := m.mainColumnWidth(); got != m.viewWidth()-1 {
-		t.Fatalf("expected main column width %d, got %d", m.viewWidth()-1, got)
+	if got := m.mainColumnWidth(); got != m.viewWidth()-m.terminalLeftMargin()-m.terminalRightMargin() {
+		t.Fatalf("expected main column width %d, got %d", m.viewWidth()-m.terminalLeftMargin()-m.terminalRightMargin(), got)
 	}
 
 	view := m.View().Content
-	if got := lipgloss.Width(view); got > m.viewWidth()-1 {
-		t.Fatalf("expected rendered width <= %d, got %d", m.viewWidth()-1, got)
+	if got := lipgloss.Width(view); got > m.viewWidth() {
+		t.Fatalf("expected rendered width <= %d, got %d", m.viewWidth(), got)
 	}
 }
 

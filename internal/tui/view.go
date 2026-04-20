@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/topcheer/ggcode/internal/commands"
@@ -24,13 +25,21 @@ var (
 
 func (m Model) View() tea.View {
 	if m.quitting {
-		return tea.NewView("")
+		v := tea.NewView("")
+		v.AltScreen = true
+		return v
 	}
 	if m.fileBrowser != nil {
-		return tea.NewView(m.renderFileBrowser())
+		v := tea.NewView(m.renderFileBrowser())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 	if m.previewPanel != nil {
-		return tea.NewView(m.renderPreviewPanel())
+		v := tea.NewView(m.renderPreviewPanel())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 	header := ""
 	if m.topHeaderEnabled() {
@@ -52,8 +61,8 @@ func (m Model) View() tea.View {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
-	if availableHeight < 8 {
-		availableHeight = 8
+	if availableHeight < 3 {
+		availableHeight = 3
 	}
 
 	conversation := m.renderConversationPanel(availableHeight)
@@ -77,17 +86,45 @@ func (m Model) View() tea.View {
 	}
 	sections = append(sections, composer)
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	// Clamp left column to terminal height so the composer is never pushed
+	// off-screen (e.g. when the minimum availableHeight + other rows would
+	// otherwise exceed viewHeight).
+	maxH := m.viewHeight()
+	if maxH > 0 {
+		left = lipgloss.NewStyle().MaxHeight(maxH).Render(left)
+	}
+
 	right := m.renderAuxColumn()
+	// Mouse mode: disable capture in the main chat so the host terminal can
+	// do native text selection AND clickable URLs/file paths. Mouse-wheel
+	// scroll in the chat viewport is sacrificed for selection; PgUp/PgDn
+	// keyboard scrolling remains available. File browser / preview panels
+	// keep CellMotion in their own View() paths.
+	mainMouseMode := tea.MouseModeNone
+	// 1-col left gutter to balance the right margin for visual symmetry.
+	// MUST be applied to every row of the multi-line output, not just the
+	// first line — naively prepending " " only shifts the first row and
+	// leaves all subsequent rows starting at column 0, which is the bug
+	// users reported as "header aligned but everything below is offset".
+	addLeftGutter := func(s string) string {
+		const gutter = " "
+		lines := strings.Split(s, "\n")
+		for i, line := range lines {
+			lines[i] = gutter + line
+		}
+		return strings.Join(lines, "\n")
+	}
 	if right == "" {
-		v := tea.NewView(left)
+		v := tea.NewView(addLeftGutter(left))
 		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
+		v.MouseMode = mainMouseMode
 		return v
 	}
-	result := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+	result := addLeftGutter(lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right))
 	v := tea.NewView(result)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = mainMouseMode
 	return v
 }
 
@@ -110,14 +147,23 @@ func conversationInnerHeight(panelHeight int) int {
 func (m Model) conversationViewport() ViewportModel {
 	vp := m.viewport
 	panelHeight := m.conversationPanelHeight()
-	vp.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
+	innerWidth := m.conversationInnerWidth()
+	vp.SetSize(innerWidth, conversationInnerHeight(panelHeight))
 	content := m.renderOutput()
 	// In narrow mode (no sidebar), prepend a borderless logo at the top of
 	// the conversation content so it scrolls with the messages.
 	if m.narrowMode() {
-		logoWidth := m.conversationInnerWidth()
-		logo := renderHeaderLogo(logoWidth, m.t("header.terminal_native"))
+		logo := renderHeaderLogo(innerWidth, m.t("header.terminal_native"))
 		content = logo + "\n\n" + content
+	}
+	// Re-wrap content to the current inner width. Pieces of the output were
+	// wrapped at write-time using the width that was active then, so when
+	// the layout changes (e.g. sidebar toggled with ctrl+r, terminal
+	// resized) older lines can overflow into the sidebar. ansi.Wrap is
+	// ANSI-aware, preserves styling, and combines word-wrap with hard-wrap
+	// for long unbreakable tokens like URLs/paths.
+	if innerWidth > 0 {
+		content = ansi.Wrap(content, innerWidth, "")
 	}
 	vp.SetContent(content)
 	return vp
@@ -144,8 +190,8 @@ func (m Model) conversationPanelHeight() int {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
-	if availableHeight < 8 {
-		availableHeight = 8
+	if availableHeight < 3 {
+		availableHeight = 3
 	}
 
 	return availableHeight
@@ -1466,12 +1512,23 @@ func (m Model) terminalRightMargin() int {
 	return 1
 }
 
+// terminalLeftMargin reserves a single column on the left so the rendered
+// frame is visually symmetric with the right margin.
+func (m Model) terminalLeftMargin() int {
+	return 1
+}
+
+// boxInnerWidth returns the value to pass to lipgloss.Style.Width when you
+// want the resulting bordered/padded block to span exactly totalWidth columns.
+// In lipgloss v2, Style.Width sets the BLOCK width (border + padding + content
+// included), so the correct value is simply totalWidth itself. (The historical
+// "-2" here under-sized every bordered panel by two columns, leaving a gap on
+// the right of the screen.)
 func (m Model) boxInnerWidth(totalWidth int) int {
-	innerWidth := totalWidth - 2
-	if innerWidth < 1 {
+	if totalWidth < 1 {
 		return 1
 	}
-	return innerWidth
+	return totalWidth
 }
 
 func (m Model) sidebarEnabled() bool {
@@ -1489,19 +1546,19 @@ func (m Model) narrowMode() bool {
 }
 
 func (m Model) sidebarAvailableByWidth() bool {
-	required := 72 + m.sidebarWidth() + 1 + m.terminalRightMargin()
+	required := 72 + m.sidebarWidth() + 1 + m.terminalLeftMargin() + m.terminalRightMargin()
 	return m.viewWidth() >= required
 }
 
 func (m Model) mainColumnWidth() int {
 	if !m.sidebarEnabled() {
-		width := m.viewWidth() - m.terminalRightMargin()
+		width := m.viewWidth() - m.terminalLeftMargin() - m.terminalRightMargin()
 		if width < 1 {
 			width = 1
 		}
 		return width
 	}
-	width := m.viewWidth() - m.sidebarWidth() - 1 - m.terminalRightMargin()
+	width := m.viewWidth() - m.sidebarWidth() - 1 - m.terminalLeftMargin() - m.terminalRightMargin()
 	if width < 1 {
 		width = 1
 	}

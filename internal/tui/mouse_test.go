@@ -374,12 +374,12 @@ func TestMouseMsgDuringStartupGateIsDropped(t *testing.T) {
 // View() configuration
 // ============================================================
 
-func TestViewSetsMouseModeCellMotion(t *testing.T) {
+func TestViewSetsMouseModeNone(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 	v := m.View()
-	if v.MouseMode != tea.MouseModeCellMotion {
-		t.Errorf("View().MouseMode = %v, want MouseModeCellMotion", v.MouseMode)
+	if v.MouseMode != tea.MouseModeNone {
+		t.Errorf("View().MouseMode = %v, want MouseModeNone (native selection)", v.MouseMode)
 	}
 }
 
