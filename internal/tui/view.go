@@ -1260,6 +1260,12 @@ func (m Model) renderComposerInput() string {
 		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
 	}
 
+	// Use textinput's built-in View for short single-line input.
+	// composerWrappedLines has a wordwrap dependency that trims trailing spaces.
+	if !strings.Contains(value, "\n") && !composerNeedsWrap(value, m.mainColumnWidth()-6-lipgloss.Width(m.input.Prompt)) {
+		return lipgloss.NewStyle().Bold(true).Render(m.input.View())
+	}
+
 	prompt := m.input.Prompt
 	promptWidth := lipgloss.Width(prompt)
 	available := max(1, m.mainColumnWidth()-6-promptWidth)
