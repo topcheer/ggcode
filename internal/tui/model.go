@@ -171,8 +171,7 @@ type Model struct {
 	lastResizeAt          time.Time
 	sidebarVisible        bool
 	exitConfirmPending    bool
-	pendingSubmissions    []string
-	pendingMu             *sync.Mutex
+	pending               *pendingQueue
 	sessionMu             *sync.Mutex
 	projectMemoryLoading  bool
 	runCanceled           bool
@@ -194,6 +193,16 @@ type Model struct {
 	updateInfo            update.CheckResult
 	updateError           string
 	systemPromptRebuilder func() string // rebuilds and returns the full system prompt
+}
+
+// pendingQueue holds the queue of user messages submitted while the agent
+// loop is running.  Stored behind a pointer so that Bubble Tea's value-copy
+// semantics for Model don't split the queue into independent copies — the
+// agent goroutine's closure and the TUI goroutine's Update both reach the
+// same underlying slice through the pointer.
+type pendingQueue struct {
+	mu    sync.Mutex
+	items []string
 }
 
 type toolActivityGroup struct {
@@ -337,7 +346,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		clipboardLoader:      loadClipboardImage,
 		clipboardWriter:      copyTextToClipboard,
 		urlOpener:            openSystemURL,
-		pendingMu:            &sync.Mutex{},
+		pending:              &pendingQueue{},
 		sessionMu:            &sync.Mutex{},
 	}
 }

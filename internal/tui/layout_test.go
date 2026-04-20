@@ -2732,8 +2732,8 @@ func TestLoadingAllowsTypingAndQueuesSubmission(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected queued submission not to start a new agent immediately")
 	}
-	if len(m.pendingSubmissions) != 1 || m.pendingSubmissions[0] != "hi" {
-		t.Fatalf("expected one queued submission, got %#v", m.pendingSubmissions)
+	if len(m.pending.items) != 1 || m.pending.items[0] != "hi" {
+		t.Fatalf("expected one queued submission, got %#v", m.pending.items)
 	}
 	if m.input.Value() != "" {
 		t.Errorf("expected input to clear after queuing, got %q", m.input.Value())
@@ -2859,8 +2859,8 @@ func TestProjectMemoryLoadingQueuesSubmissionBeforeFirstRun(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected submission to queue while project memory is still loading")
 	}
-	if len(m.pendingSubmissions) != 1 || m.pendingSubmissions[0] != "hi" {
-		t.Fatalf("expected queued submission, got %#v", m.pendingSubmissions)
+	if len(m.pending.items) != 1 || m.pending.items[0] != "hi" {
+		t.Fatalf("expected queued submission, got %#v", m.pending.items)
 	}
 	if m.projectMemoryLoading != true {
 		t.Fatal("expected project memory loading flag to remain set until async load completes")
@@ -2871,7 +2871,7 @@ func TestProjectMemoryLoadedConsumesQueuedSubmissionAndInjectsMemory(t *testing.
 	ag := agent.NewAgent(nil, tool.NewRegistry(), "base", 1)
 	m := NewModel(ag, permission.NewConfigPolicy(nil, nil))
 	m.projectMemoryLoading = true
-	m.pendingSubmissions = []string{"hello"}
+	m.pending.items = []string{"hello"}
 
 	model, cmd := m.Update(projectMemoryLoadedMsg{
 		Content: "repo guidance",
@@ -2900,7 +2900,7 @@ func TestProjectMemoryLoadedConsumesQueuedSubmissionAndInjectsMemory(t *testing.
 func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
-	m.pendingSubmissions = []string{"first question", "second question"}
+	m.pending.items = []string{"first question", "second question"}
 	m.streamBuffer = &bytes.Buffer{}
 
 	model, cmd := m.Update(doneMsg{})
@@ -2912,8 +2912,8 @@ func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
 	if !m.loading {
 		t.Error("expected next merged submission to start immediately")
 	}
-	if len(m.pendingSubmissions) != 0 {
-		t.Errorf("expected pending submissions to be consumed, got %#v", m.pendingSubmissions)
+	if len(m.pending.items) != 0 {
+		t.Errorf("expected pending submissions to be consumed, got %#v", m.pending.items)
 	}
 	got := m.output.String()
 	if !strings.Contains(got, "first question") || !strings.Contains(got, "second question") {
@@ -2975,7 +2975,7 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	cancelled := false
 	m.loading = true
 	m.cancelFunc = func() { cancelled = true }
-	m.pendingSubmissions = []string{"first question", "second question"}
+	m.pending.items = []string{"first question", "second question"}
 	m.input.SetValue("draft")
 
 	model, cmd := m.Update(tea.KeyPressMsg{Text: "ctrl+c"})
@@ -2990,8 +2990,8 @@ func TestCtrlCRestoresPendingMessagesToInput(t *testing.T) {
 	if got := m.input.Value(); got != "first question  second question  draft" {
 		t.Fatalf("unexpected restored input: %q", got)
 	}
-	if len(m.pendingSubmissions) != 0 {
-		t.Errorf("expected pending submissions to be cleared after restore, got %#v", m.pendingSubmissions)
+	if len(m.pending.items) != 0 {
+		t.Errorf("expected pending submissions to be cleared after restore, got %#v", m.pending.items)
 	}
 }
 

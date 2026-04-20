@@ -1537,8 +1537,8 @@ func TestBusyEnterAllowsHarnessPanelCommand(t *testing.T) {
 	if updated.harnessPanel == nil {
 		t.Fatal("expected /harness to open while busy")
 	}
-	if len(updated.pendingSubmissions) != 0 {
-		t.Fatalf("expected /harness not to be queued, got %+v", updated.pendingSubmissions)
+	if len(updated.pending.items) != 0 {
+		t.Fatalf("expected /harness not to be queued, got %+v", updated.pending.items)
 	}
 }
 
@@ -1552,8 +1552,8 @@ func TestBusyEnterStillQueuesNonHarnessCommands(t *testing.T) {
 		t.Fatal("expected busy /run_command to stay queued")
 	}
 	updated := next.(Model)
-	if len(updated.pendingSubmissions) != 1 || updated.pendingSubmissions[0] != "/run_command echo hi" {
-		t.Fatalf("expected /run_command to remain queued, got %+v", updated.pendingSubmissions)
+	if len(updated.pending.items) != 1 || updated.pending.items[0] != "/run_command echo hi" {
+		t.Fatalf("expected /run_command to remain queued, got %+v", updated.pending.items)
 	}
 	if updated.harnessPanel != nil {
 		t.Fatal("did not expect harness panel to open for /run_command")

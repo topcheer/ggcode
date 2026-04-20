@@ -403,11 +403,11 @@ func TestEnqueueAndConsumePendingSubmission(t *testing.T) {
 		t.Fatal("expected 0 pending submissions initially")
 	}
 
-	count := m.enqueuePendingSubmission("first message")
+	count := m.pending.enqueue("first message")
 	if count != 1 {
 		t.Fatalf("expected count 1, got %d", count)
 	}
-	m.enqueuePendingSubmission("second message")
+	m.pending.enqueue("second message")
 	if m.pendingSubmissionCount() != 2 {
 		t.Fatalf("expected count 2, got %d", m.pendingSubmissionCount())
 	}
@@ -430,8 +430,8 @@ func TestEnqueueAndConsumePendingSubmission(t *testing.T) {
 
 func TestClearPendingSubmissions(t *testing.T) {
 	m := newTestModel()
-	m.enqueuePendingSubmission("a")
-	m.enqueuePendingSubmission("b")
+	m.pending.enqueue("a")
+	m.pending.enqueue("b")
 	m.clearPendingSubmissions()
 	if m.pendingSubmissionCount() != 0 {
 		t.Fatalf("expected 0 after clear, got %d", m.pendingSubmissionCount())
@@ -447,7 +447,7 @@ func TestPendingSubmissionSnapshot_Empty(t *testing.T) {
 
 func TestRestorePendingInput_PendingOnly(t *testing.T) {
 	m := newTestModel()
-	m.enqueuePendingSubmission("queued text")
+	m.pending.enqueue("queued text")
 	m.restorePendingInput()
 	if m.input.Value() != "queued text" {
 		t.Fatalf("expected input 'queued text', got %q", m.input.Value())
@@ -459,7 +459,7 @@ func TestRestorePendingInput_PendingOnly(t *testing.T) {
 
 func TestRestorePendingInput_MergesWithDraft(t *testing.T) {
 	m := newTestModel()
-	m.enqueuePendingSubmission("queued")
+	m.pending.enqueue("queued")
 	m.input.SetValue("draft")
 	m.restorePendingInput()
 	got := m.input.Value()
@@ -700,7 +700,7 @@ func TestDrainPendingInterrupt_Empty(t *testing.T) {
 
 func TestDrainPendingInterrupt_WithPending(t *testing.T) {
 	m := newTestModel()
-	m.enqueuePendingSubmission("user interrupt text")
+	m.pending.enqueue("user interrupt text")
 	got := m.drainPendingInterrupt(1)
 	if got != "user interrupt text" {
 		t.Fatalf("expected 'user interrupt text', got %q", got)
@@ -711,18 +711,24 @@ func TestDrainPendingInterrupt_WithPending(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// pendingMutex / sessionMutex lazy init
+// pendingQueue pointer safety
 // ---------------------------------------------------------------------------
 
-func TestPendingMutexLazyInit(t *testing.T) {
-	m := Model{}
-	mu := m.pendingMutex()
-	if mu == nil {
-		t.Fatal("expected non-nil mutex after lazy init")
+func TestPendingQueueIsPointerShared(t *testing.T) {
+	m := newTestModel()
+	q := m.pending
+	if q == nil {
+		t.Fatal("expected pending queue to be initialized")
 	}
-	// Second call returns same instance
-	if m.pendingMutex() != mu {
-		t.Fatal("expected same mutex instance")
+	// Verify the queue is reachable through a Model copy.
+	m2 := m // value copy
+	if m2.pending != q {
+		t.Fatal("expected Model copy to share the same pendingQueue pointer")
+	}
+	// Enqueue via copy, read via original.
+	m2.pending.enqueue("hello")
+	if q.count() != 1 || q.items[0] != "hello" {
+		t.Fatal("expected enqueue on copy to be visible on original")
 	}
 }
 
