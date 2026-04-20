@@ -5,21 +5,25 @@ Drives automated multi-turn conversations with ggcode agent via the dummy IM
 adapter's HTTP+SSE interface. Supports A/B benchmarking (baseline vs
 Knight-assisted) and produces CSV metrics + scorecard.
 
+Can be used standalone (pointing to a running daemon) or in one-shot mode
+where it starts and stops the daemon automatically.
+
 Usage:
-    # Start ggcode daemon with dummy adapter first:
-    ggcode daemon -c docs/examples/eval-dummy.yaml &
+    # One-shot mode (recommended — starts daemon, runs eval, shuts down):
+    python scripts/eval/run_eval.py --auto --output .tmp/knight-eval/results.csv
 
-    # Run evaluation:
-    python scripts/eval/run_eval.py --port-file .tmp/dummy-adapter-port --output .tmp/knight-eval/results.csv
+    # Connect to already-running daemon:
+    python scripts/eval/run_eval.py --port-file .tmp/dummy-adapter-port --output results.csv
 
-    # Or with explicit URL:
-    python scripts/eval/run_eval.py --base-url http://127.0.0.1:12345 --output .tmp/knight-eval/results.csv
+    # A/B mode (runs baseline then knight, compares):
+    python scripts/eval/run_eval.py --auto --ab --output .tmp/knight-eval
 """
 
 import argparse
 import csv
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -32,6 +36,72 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from llm_client import FALLBACK_ANSWER, LLMClient
 from task_templates import TASKS
+
+
+# ---------------------------------------------------------------------------
+# Daemon lifecycle
+# ---------------------------------------------------------------------------
+
+def start_daemon(
+    config_path: str,
+    port_file: str,
+    working_dir: str,
+    timeout: float = 60.0,
+) -> subprocess.Popen:
+    """Start ggcode daemon in background, wait for port file.
+
+    Returns the Popen process handle.
+    """
+    # Clean up stale port file
+    Path(port_file).unlink(missing_ok=True)
+
+    cmd = [
+        "ggcode", "daemon",
+        "-c", config_path,
+        "--bypass",
+    ]
+    print(f"[eval] Starting daemon: {' '.join(cmd)}")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=working_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    # Wait for port file
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            stderr = proc.stderr.read().decode() if proc.stderr else ""
+            raise RuntimeError(f"Daemon exited early (code {proc.returncode}): {stderr[:500]}")
+        if Path(port_file).exists():
+            time.sleep(0.5)  # small grace for server to be ready
+            return proc
+        time.sleep(0.5)
+
+    proc.kill()
+    raise TimeoutError(f"Daemon did not produce port file {port_file} within {timeout}s")
+
+
+def stop_daemon(proc: subprocess.Popen, base_url: str, shutdown_token: str = ""):
+    """Gracefully stop the daemon via /shutdown or SIGTERM."""
+    if shutdown_token:
+        try:
+            httpx.post(
+                f"{base_url}/shutdown",
+                headers={"Authorization": f"Bearer {shutdown_token}"},
+                timeout=5.0,
+            )
+        except Exception:
+            pass
+
+    # Give it a moment, then SIGTERM
+    try:
+        proc.terminate()
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +139,12 @@ def wait_for_healthz(base_url: str, timeout: float = 30.0) -> bool:
     return False
 
 
+# Idle timeout: how long to wait after last event before declaring task done.
+# After a round_done event, if no new events arrive within this window, the
+# agent has finished processing.
+TASK_IDLE_TIMEOUT = 30.0  # seconds of silence = task complete
+
+
 def consume_sse_events(
     base_url: str,
     llm: LLMClient,
@@ -78,12 +154,9 @@ def consume_sse_events(
 ) -> dict:
     """Connect to /events SSE stream and process events until task completes.
 
-    Handles:
-    - approval_request: calls LLM to generate answer, then sends via send_fn
-    - round_done: tracks rounds
-    - knight_report: records count
-    - text: logs
-    - status: logs
+    Task completion is detected by:
+    1. Idle timeout: no events for TASK_IDLE_TIMEOUT seconds after a round_done
+    2. Hard timeout: task_timeout seconds total elapsed
 
     Returns event summary dict.
     """
@@ -95,18 +168,29 @@ def consume_sse_events(
         "ask_user_count": 0,
         "text_chunks": 0,
         "timed_out": False,
+        "completed": False,
         "events": [],
     }
 
-    deadline = time.time() + task_timeout
+    hard_deadline = time.time() + task_timeout
+    last_event_time = time.time()
+    seen_round_done = False
     log_fh = open(log_file, "a") if log_file else None
 
     try:
-        with httpx.stream("GET", f"{base_url}/events", timeout=task_timeout + 60) as resp:
+        with httpx.stream("GET", f"{base_url}/events", timeout=task_timeout + 120) as resp:
             buf = ""
             for raw_chunk in resp.iter_text():
-                if time.time() > deadline:
+                now = time.time()
+
+                # Hard timeout
+                if now > hard_deadline:
                     summary["timed_out"] = True
+                    break
+
+                # Idle timeout after round_done
+                if seen_round_done and (now - last_event_time) > TASK_IDLE_TIMEOUT:
+                    summary["completed"] = True
                     break
 
                 buf += raw_chunk
@@ -117,7 +201,8 @@ def consume_sse_events(
                     if event_type is None:
                         continue
 
-                    event = {"type": event_type, "data": data}
+                    last_event_time = time.time()
+                    event = {"type": event_type, "data": data, "ts": now}
                     summary["events"].append(event)
 
                     if log_fh:
@@ -130,6 +215,7 @@ def consume_sse_events(
 
                     elif event_type == "round_done":
                         summary["rounds"] += 1
+                        seen_round_done = True
 
                     elif event_type == "knight_report":
                         summary["knight_reports"] += 1
@@ -141,6 +227,14 @@ def consume_sse_events(
 
                     elif event_type == "text":
                         summary["text_chunks"] += 1
+
+                    elif event_type == "status":
+                        # Status updates don't count as activity for idle detection
+                        pass
+
+            # Stream ended naturally
+            if not summary["timed_out"] and seen_round_done:
+                summary["completed"] = True
 
     except httpx.ReadTimeout:
         summary["timed_out"] = True
@@ -175,11 +269,13 @@ def _handle_approval(llm: LLMClient, send_fn, data: dict):
     """Handle an approval_request by generating an answer and sending it."""
     question = data.get("title", data.get("content", ""))
     if not question:
-        # No question text — give a default positive response
         send_fn("Yes, proceed.")
         return
 
-    answer = llm.answer_ask_user(question)
+    if llm:
+        answer = llm.answer_ask_user(question)
+    else:
+        answer = FALLBACK_ANSWER
     send_fn(answer)
 
 
@@ -190,7 +286,7 @@ def _handle_approval(llm: LLMClient, send_fn, data: dict):
 def run_task(
     base_url: str,
     task: dict,
-    llm: LLMClient,
+    llm: LLMClient | None,
     log_file: str | None = None,
 ) -> dict:
     """Run a single evaluation task.
@@ -204,8 +300,11 @@ def run_task(
     print(f"{'='*60}")
 
     # Step 1: Generate prompt (optionally via LLM)
-    prompt = llm.generate_prompt(task["description"])
-    print(f"[eval] Generated prompt ({len(prompt)} chars)")
+    if llm:
+        prompt = llm.generate_prompt(task["description"])
+    else:
+        prompt = task["description"]
+    print(f"[eval] Prompt ({len(prompt)} chars): {prompt[:80]}...")
 
     # Step 2: Send prompt with reset_metrics
     start_time = time.time()
@@ -216,7 +315,6 @@ def run_task(
             resp = httpx.post(
                 f"{base_url}/send",
                 json={"text": text},
-                params={"reset_metrics": "false"},
                 timeout=30.0,
             )
             return resp.json()
@@ -238,12 +336,14 @@ def run_task(
         print(f"[eval] Failed to send prompt: {e}")
         return {
             "task_id": task_id,
+            "task_type": task.get("type", ""),
             "success": False,
-            "error": str(e),
+            "timed_out": False,
             "elapsed_sec": 0,
+            "error": str(e),
         }
 
-    # Step 3: Consume SSE events
+    # Step 3: Consume SSE events until task completes or times out
     summary = consume_sse_events(base_url, llm, send_fn, timeout, log_file)
 
     elapsed = time.time() - start_time
@@ -257,11 +357,18 @@ def run_task(
         print(f"[eval] Failed to get status: {e}")
         metrics = {}
 
+    success = summary["completed"] and not summary["timed_out"]
+    # If we got at least one round_done and the agent produced text, consider it a success
+    # even if we didn't have a clean idle timeout
+    if summary["rounds"] > 0 and summary["text_chunks"] > 0 and not summary["timed_out"]:
+        success = True
+
     result = {
         "task_id": task_id,
         "task_type": task.get("type", ""),
-        "success": not summary["timed_out"],
+        "success": success,
         "timed_out": summary["timed_out"],
+        "completed": summary["completed"],
         "elapsed_sec": round(elapsed, 1),
         "rounds": summary["rounds"],
         "tool_calls": metrics.get("total_tool_calls", summary["tool_calls"]),
@@ -272,9 +379,10 @@ def run_task(
         "rework_count": metrics.get("rework_count", 0),
     }
 
-    print(f"[eval] Task {task_id} complete: success={result['success']} "
-          f"elapsed={result['elapsed_sec']}s tools={result['tool_calls']} "
-          f"errors={result['tool_errors']} rounds={result['rounds']}")
+    status = "DONE" if success else ("TIMEOUT" if summary["timed_out"] else "PARTIAL")
+    print(f"[eval] Task {task_id} {status}: elapsed={result['elapsed_sec']}s "
+          f"tools={result['tool_calls']} errors={result['tool_errors']} "
+          f"rounds={result['rounds']} knight={result['knight_reports']}")
 
     return result
 
@@ -284,64 +392,41 @@ def run_task(
 # ---------------------------------------------------------------------------
 
 def compute_knight_score(baseline: list[dict], knight: list[dict]) -> dict:
-    """Compute Knight Score comparing baseline vs knight-assisted results.
-
-    Knight Score =
-        35% * task success rate delta
-      + 20% * elapsed time improvement
-      + 15% * tool call reduction
-      + 10% * turn reduction
-      + 10% * useful skill rate
-      + 10% * operator trust score
-    """
+    """Compute Knight Score comparing baseline vs knight-assisted results."""
     if not baseline or not knight:
         return {"knight_score": 0, "note": "insufficient data"}
 
-    # Match tasks by ID
     baseline_map = {r["task_id"]: r for r in baseline}
     knight_map = {r["task_id"]: r for r in knight}
-
     common_ids = set(baseline_map) & set(knight_map)
     if not common_ids:
         return {"knight_score": 0, "note": "no common tasks"}
 
     n = len(common_ids)
 
-    # Success rate delta (0 to 1)
     b_success = sum(1 for tid in common_ids if baseline_map[tid].get("success"))
     k_success = sum(1 for tid in common_ids if knight_map[tid].get("success"))
     success_delta = (k_success - b_success) / n
 
-    # Elapsed time improvement (normalized)
-    time_improvements = []
-    for tid in common_ids:
-        b_t = baseline_map[tid].get("elapsed_sec", 1)
-        k_t = knight_map[tid].get("elapsed_sec", 1)
-        if b_t > 0:
-            time_improvements.append((b_t - k_t) / b_t)
-    time_avg = sum(time_improvements) / len(time_improvements) if time_improvements else 0
+    def avg_improvement(key, higher_is_better=False):
+        vals = []
+        for tid in common_ids:
+            b_v = baseline_map[tid].get(key, 0)
+            k_v = knight_map[tid].get(key, 0)
+            base = max(b_v, 1)
+            if higher_is_better:
+                vals.append((k_v - b_v) / base)
+            else:
+                vals.append((b_v - k_v) / base)
+        return sum(vals) / len(vals) if vals else 0
 
-    # Tool call reduction (normalized)
-    tool_improvements = []
-    for tid in common_ids:
-        b_tc = max(baseline_map[tid].get("tool_calls", 0), 1)
-        k_tc = knight_map[tid].get("tool_calls", 0)
-        tool_improvements.append((b_tc - k_tc) / b_tc)
-    tool_avg = sum(tool_improvements) / len(tool_improvements) if tool_improvements else 0
+    time_avg = avg_improvement("elapsed_sec")
+    tool_avg = avg_improvement("tool_calls")
+    turn_avg = avg_improvement("rounds")
 
-    # Turn reduction
-    turn_improvements = []
-    for tid in common_ids:
-        b_r = max(baseline_map[tid].get("rounds", 0), 1)
-        k_r = knight_map[tid].get("rounds", 0)
-        turn_improvements.append((b_r - k_r) / b_r)
-    turn_avg = sum(turn_improvements) / len(turn_improvements) if turn_improvements else 0
-
-    # Useful skill rate (knight reports that actually helped)
     k_reports = sum(knight_map[tid].get("knight_reports", 0) for tid in common_ids)
     skill_rate = min(k_reports / max(n, 1), 1.0)
 
-    # Trust score (fewer errors = more trust)
     k_errors = sum(knight_map[tid].get("tool_errors", 0) for tid in common_ids)
     b_errors = sum(baseline_map[tid].get("tool_errors", 0) for tid in common_ids)
     trust = max(0, (b_errors - k_errors)) / max(b_errors, 1)
@@ -387,7 +472,7 @@ def write_scorecard(path: str, results: list[dict], score: dict, mode: str):
         for r in results:
             f.write(
                 f"| {r['task_id']} | {r.get('task_type', '')} | "
-                f"{'✓' if r.get('success') else '✗'} | "
+                f"{'PASS' if r.get('success') else 'FAIL'} | "
                 f"{r.get('elapsed_sec', 0):.1f}s | "
                 f"{r.get('tool_calls', 0)} | "
                 f"{r.get('tool_errors', 0)} | "
@@ -395,13 +480,205 @@ def write_scorecard(path: str, results: list[dict], score: dict, mode: str):
                 f"{r.get('knight_reports', 0)} |\n"
             )
 
-        f.write("\n## Key Observations\n\n")
+        successes = [r for r in results if r.get("success")]
+        failures = [r for r in results if not r.get("success")]
+        timed_out = [r for r in results if r.get("timed_out")]
 
-        best = max(results, key=lambda r: r.get("tool_calls", 0))
-        worst = min(results, key=lambda r: 1 if r.get("success") else 0)
-        f.write(f"- **Most improved:** {best['task_id']}\n")
-        f.write(f"- **Worst regression:** {worst['task_id']}\n")
-        f.write(f"- **Timed out:** {sum(1 for r in results if r.get('timed_out'))}\n")
+        f.write("\n## Summary\n\n")
+        f.write(f"- **Passed:** {len(successes)}/{len(results)}\n")
+        f.write(f"- **Failed:** {len(failures)}\n")
+        f.write(f"- **Timed out:** {len(timed_out)}\n")
+        f.write(f"- **Total tool calls:** {sum(r.get('tool_calls', 0) for r in results)}\n")
+        f.write(f"- **Total errors:** {sum(r.get('tool_errors', 0) for r in results)}\n")
+        f.write(f"- **Total elapsed:** {sum(r.get('elapsed_sec', 0) for r in results):.1f}s\n")
+
+        if successes:
+            f.write(f"- **Best task:** {successes[0]['task_id']} "
+                    f"({successes[0].get('elapsed_sec', 0):.1f}s, "
+                    f"{successes[0].get('tool_calls', 0)} tools)\n")
+
+
+# ---------------------------------------------------------------------------
+# Config generation
+# ---------------------------------------------------------------------------
+
+def generate_config(
+    output_path: str,
+    mode: str,  # "baseline" or "knight"
+    port_file: str,
+    metrics_path: str,
+):
+    """Generate a ggcode config YAML for the given mode (no pyyaml needed)."""
+    config = {
+        "vendor": "zai",
+        "endpoint": "cn-coding-openai",
+        "model": "glm-5-turbo",
+    }
+
+    if mode == "knight":
+        config["knight"] = {
+            "enabled": True,
+            "trust_level": "staged",
+            "model": "glm-5-air",
+            "idle_delay_sec": 60,
+            "capabilities": [
+                "skill_creation",
+                "skill_validation",
+                "regression_testing",
+                "doc_sync",
+            ],
+        }
+
+    config["im"] = {
+        "enabled": True,
+        "adapters": {
+            "dummy": {
+                "enabled": True,
+                "platform": "dummy",
+                "extra": {
+                    "listen_addr": "127.0.0.1:0",
+                    "metrics_path": metrics_path,
+                    "sse_buffer_size": "1024",
+                    "port_file": port_file,
+                },
+            },
+        },
+    }
+
+    with open(output_path, "w") as f:
+        # Simple YAML generation without pyyaml dependency
+        f.write(f"vendor: {config['vendor']}\n")
+        f.write(f"endpoint: {config['endpoint']}\n")
+        f.write(f"model: {config['model']}\n\n")
+
+        if "knight" in config:
+            k = config["knight"]
+            f.write("knight:\n")
+            f.write(f"  enabled: {str(k['enabled']).lower()}\n")
+            f.write(f"  trust_level: {k['trust_level']}\n")
+            f.write(f"  model: {k['model']}\n")
+            f.write(f"  idle_delay_sec: {k['idle_delay_sec']}\n")
+            f.write("  capabilities:\n")
+            for cap in k["capabilities"]:
+                f.write(f"    - {cap}\n")
+            f.write("\n")
+
+        im = config["im"]
+        f.write("im:\n")
+        f.write(f"  enabled: {str(im['enabled']).lower()}\n")
+        f.write("  adapters:\n")
+        f.write("    dummy:\n")
+        f.write(f"      enabled: true\n")
+        f.write(f"      platform: dummy\n")
+        f.write("      extra:\n")
+        for k, v in im["adapters"]["dummy"]["extra"].items():
+            if isinstance(v, str):
+                f.write(f'        {k}: "{v}"\n')
+            else:
+                f.write(f"        {k}: {v}\n")
+
+
+# ---------------------------------------------------------------------------
+# CSV helpers
+# ---------------------------------------------------------------------------
+
+CSV_FIELDS = [
+    "run_id", "phase", "mode", "task_id", "task_type",
+    "success", "timed_out", "elapsed_sec", "tool_calls",
+    "tool_errors", "ask_user_count", "knight_reports",
+    "user_messages", "rounds", "rework_count",
+]
+
+
+def write_csv_header(path: str):
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        w.writeheader()
+
+
+def append_csv_row(path: str, result: dict):
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        w.writerow({k: result.get(k, "") for k in CSV_FIELDS})
+
+
+# ---------------------------------------------------------------------------
+# Run modes
+# ---------------------------------------------------------------------------
+
+def run_single_mode(
+    mode: str,
+    tasks: list[dict],
+    llm: LLMClient | None,
+    output_dir: str,
+    run_id: str,
+    auto: bool = False,
+    working_dir: str | None = None,
+) -> list[dict]:
+    """Run evaluation in a single mode (baseline or knight).
+
+    If auto=True, starts/stops daemon automatically.
+    Returns list of result dicts.
+    """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = str(out_dir / f"{mode}.csv")
+    log_dir = str(out_dir / "logs" / mode)
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+    proc = None
+    base_url = ""
+    shutdown_token = ""
+
+    if auto:
+        # Generate temp config
+        port_file = str(out_dir / f".{mode}-port")
+        metrics_path = str(out_dir / f"{mode}-metrics.json")
+        config_path = str(out_dir / f"{mode}-config.yaml")
+        generate_config(config_path, mode, port_file, metrics_path)
+
+        # Start daemon
+        proc = start_daemon(config_path, port_file, working_dir or os.getcwd())
+        base_url, shutdown_token = read_port_file(port_file)
+        print(f"[eval] Daemon started: {base_url}")
+
+        # Wait for healthz
+        if not wait_for_healthz(base_url):
+            print(f"[eval] ERROR: healthz failed", file=sys.stderr)
+            stop_daemon(proc, base_url, shutdown_token)
+            sys.exit(1)
+    else:
+        # Connect to existing daemon
+        # base_url should be set by caller
+        pass
+
+    print(f"[eval] Running {len(tasks)} tasks in {mode} mode")
+
+    write_csv_header(csv_path)
+    results = []
+
+    for task in tasks:
+        log_file = f"{log_dir}/{run_id}_{task['id']}.ndjson"
+        result = run_task(base_url, task, llm, log_file)
+        result["run_id"] = run_id
+        result["phase"] = mode
+        result["mode"] = mode
+        results.append(result)
+        append_csv_row(csv_path, result)
+
+    # Write scorecard
+    score_path = str(out_dir / f"{mode}.scorecard.md")
+    score = compute_knight_score(results, results)
+    write_scorecard(score_path, results, score, mode)
+
+    # Shutdown daemon if we started it
+    if auto and proc:
+        print(f"[eval] Shutting down daemon...")
+        stop_daemon(proc, base_url, shutdown_token)
+        print(f"[eval] Daemon stopped")
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -410,43 +687,26 @@ def write_scorecard(path: str, results: list[dict], score: dict, mode: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Knight evaluation orchestrator")
-    parser.add_argument("--base-url", help="Dummy adapter base URL (e.g. http://127.0.0.1:12345)")
+    parser.add_argument("--base-url", help="Dummy adapter base URL")
     parser.add_argument("--port-file", help="Path to dummy adapter port file")
-    parser.add_argument("--output", required=True, help="Output CSV file path")
-    parser.add_argument("--log-dir", help="Directory for SSE event logs")
-    parser.add_argument("--mode", default="knight", help="Eval mode: baseline or knight")
-    parser.add_argument("--run-id", default=time.strftime("%Y%m%d-%H%M%S"), help="Run identifier")
-    parser.add_argument("--tasks", help="Comma-separated task IDs to run (default: all)")
+    parser.add_argument("--output", required=True, help="Output directory for CSVs and scorecards")
+    parser.add_argument("--mode", default="knight", choices=["baseline", "knight"],
+                        help="Eval mode")
+    parser.add_argument("--ab", action="store_true",
+                        help="Run A/B comparison (baseline then knight)")
+    parser.add_argument("--auto", action="store_true",
+                        help="Auto-start/stop ggcode daemon")
+    parser.add_argument("--run-id", default=time.strftime("%Y%m%d-%H%M%S"),
+                        help="Run identifier")
+    parser.add_argument("--tasks", help="Comma-separated task IDs (default: all)")
     parser.add_argument("--llm-model", default="glm-5-turbo", help="LLM model for prompt gen")
     parser.add_argument("--llm-base-url", help="LLM API base URL")
     parser.add_argument("--no-llm", action="store_true", help="Skip LLM, use raw descriptions")
     parser.add_argument("--timeout", type=float, default=600, help="Per-task timeout in seconds")
     args = parser.parse_args()
 
-    # Resolve base URL
-    if args.base_url:
-        base_url = args.base_url.rstrip("/")
-    elif args.port_file:
-        base_url, _ = read_port_file(args.port_file)
-    else:
-        parser.error("Either --base-url or --port-file is required")
-
-    print(f"[eval] Connecting to {base_url}")
-
-    # Wait for healthz
-    if not wait_for_healthz(base_url):
-        print(f"[eval] ERROR: {base_url}/healthz not responding", file=sys.stderr)
-        sys.exit(1)
-    print("[eval] Dummy adapter is ready")
-
-    # Setup LLM client
-    if args.no_llm:
-        llm = None
-    else:
-        llm = LLMClient(
-            base_url=args.llm_base_url,
-            model=args.llm_model,
-        )
+    if not args.auto and not args.base_url and not args.port_file:
+        parser.error("Either --auto, --base-url, or --port-file is required")
 
     # Select tasks
     if args.tasks:
@@ -455,57 +715,113 @@ def main():
     else:
         tasks = TASKS
 
-    print(f"[eval] Running {len(tasks)} tasks in {args.mode} mode")
+    # Setup LLM client
+    llm = None if args.no_llm else LLMClient(
+        base_url=args.llm_base_url,
+        model=args.llm_model,
+    )
 
-    # Setup output
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    working_dir = os.getcwd()
 
-    log_dir = args.log_dir or str(output_path.parent)
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    if args.ab:
+        # A/B comparison: run baseline then knight
+        print(f"\n{'#'*60}")
+        print(f"[eval] A/B Evaluation — {len(tasks)} tasks x 2 modes")
+        print(f"{'#'*60}")
 
-    # Write CSV header
-    csv_fields = [
-        "run_id", "phase", "mode", "task_id", "task_type",
-        "success", "timed_out", "elapsed_sec", "tool_calls",
-        "tool_errors", "ask_user_count", "knight_reports",
-        "user_messages", "rounds", "rework_count",
-    ]
-    with open(output_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=csv_fields)
-        w.writeheader()
+        baseline_results = run_single_mode(
+            "baseline", tasks, llm, args.output, args.run_id,
+            auto=args.auto, working_dir=working_dir,
+        )
 
-    # Run tasks
-    results = []
-    for task in tasks:
-        log_file = f"{log_dir}/{args.run_id}_{task['id']}.ndjson"
-        result = run_task(base_url, task, llm, log_file)
-        result["run_id"] = args.run_id
-        result["phase"] = args.mode
-        result["mode"] = args.mode
-        results.append(result)
+        print(f"\n[eval] Baseline complete. Starting Knight mode...")
+        time.sleep(2)
 
-        # Append to CSV
-        with open(output_path, "a", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=csv_fields)
-            w.writerow({k: result.get(k, "") for k in csv_fields})
+        knight_results = run_single_mode(
+            "knight", tasks, llm, args.output, args.run_id,
+            auto=args.auto, working_dir=working_dir,
+        )
 
-    # Write scorecard
-    score_path = output_path.with_suffix(".scorecard.md")
-    score = compute_knight_score(results, results)  # self-compare for single run
-    write_scorecard(str(score_path), results, score, args.mode)
+        # Compute comparative scorecard
+        score = compute_knight_score(baseline_results, knight_results)
+        score_path = str(Path(args.output) / "ab-comparison.scorecard.md")
 
-    print(f"\n[eval] Complete: {len(results)} tasks")
-    print(f"[eval] Results: {output_path}")
-    print(f"[eval] Scorecard: {score_path}")
+        with open(score_path, "w") as f:
+            f.write("# Knight A/B Comparison\n\n")
+            f.write(f"**Date:** {time.strftime('%Y-%m-%d %H:%M')}\n")
+            f.write(f"**Tasks:** {len(tasks)}\n\n")
 
-    # Summary
-    successes = sum(1 for r in results if r.get("success"))
-    total_tools = sum(r.get("tool_calls", 0) for r in results)
-    total_time = sum(r.get("elapsed_sec", 0) for r in results)
-    print(f"[eval] Success rate: {successes}/{len(results)} ({100*successes//len(results)}%)")
-    print(f"[eval] Total tool calls: {total_tools}")
-    print(f"[eval] Total elapsed: {total_time:.1f}s")
+            f.write("## Knight Score\n\n")
+            for k, v in score.items():
+                f.write(f"- **{k}:** {v}\n")
+
+            f.write("\n## Head-to-Head\n\n")
+            f.write("| Task | B.Success | B.Tools | B.Time | K.Success | K.Tools | K.Time | Delta |\n")
+            f.write("|------|-----------|---------|--------|-----------|---------|--------|-------|\n")
+            b_map = {r["task_id"]: r for r in baseline_results}
+            k_map = {r["task_id"]: r for r in knight_results}
+            for tid in [t["id"] for t in tasks]:
+                b = b_map.get(tid, {})
+                k = k_map.get(tid, {})
+                b_s = "PASS" if b.get("success") else "FAIL"
+                k_s = "PASS" if k.get("success") else "FAIL"
+                delta = ""
+                if b.get("tool_calls") and k.get("tool_calls"):
+                    d = b["tool_calls"] - k["tool_calls"]
+                    delta = f"{d:+d} tools"
+                f.write(
+                    f"| {tid} | {b_s} | {b.get('tool_calls', 0)} | "
+                    f"{b.get('elapsed_sec', 0):.1f}s | {k_s} | "
+                    f"{k.get('tool_calls', 0)} | {k.get('elapsed_sec', 0):.1f}s | {delta} |\n"
+                )
+
+        print(f"\n[eval] A/B comparison saved to {score_path}")
+        print(f"[eval] Knight Score: {score.get('knight_score', 0):.4f}")
+
+    elif args.auto:
+        # Auto mode: start daemon, run, stop
+        run_single_mode(
+            args.mode, tasks, llm, args.output, args.run_id,
+            auto=True, working_dir=working_dir,
+        )
+
+    else:
+        # Manual mode: connect to existing daemon
+        if args.base_url:
+            base_url = args.base_url.rstrip("/")
+        elif args.port_file:
+            base_url, _ = read_port_file(args.port_file)
+        else:
+            parser.error("Either --base-url or --port-file is required")
+
+        print(f"[eval] Connecting to {base_url}")
+        if not wait_for_healthz(base_url):
+            print(f"[eval] ERROR: healthz failed", file=sys.stderr)
+            sys.exit(1)
+
+        out_dir = Path(args.output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = str(out_dir / f"{args.mode}.csv")
+        log_dir = str(out_dir / "logs" / args.mode)
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+        write_csv_header(csv_path)
+        results = []
+
+        for task in tasks:
+            log_file = f"{log_dir}/{args.run_id}_{task['id']}.ndjson"
+            result = run_task(base_url, task, llm, log_file)
+            result["run_id"] = args.run_id
+            result["phase"] = args.mode
+            result["mode"] = args.mode
+            results.append(result)
+            append_csv_row(csv_path, result)
+
+        score_path = str(out_dir / f"{args.mode}.scorecard.md")
+        score = compute_knight_score(results, results)
+        write_scorecard(score_path, results, score, args.mode)
+
+    print(f"\n[eval] Evaluation complete!")
 
 
 if __name__ == "__main__":
