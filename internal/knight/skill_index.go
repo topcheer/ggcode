@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -45,6 +46,7 @@ type SkillIndex struct {
 	projectDir     string // .ggcode/skills/
 	projectStaging string // .ggcode/skills-staging/
 
+	mu        sync.RWMutex
 	cache     []*SkillEntry
 	cacheTime time.Time
 	cacheTTL  time.Duration
@@ -66,15 +68,21 @@ func NewSkillIndex(homeDir, projectDir string) *SkillIndex {
 
 // Invalidate clears the cache, forcing a fresh scan on next access.
 func (si *SkillIndex) Invalidate() {
+	si.mu.Lock()
+	defer si.mu.Unlock()
 	si.cache = nil
 	si.cacheTime = time.Time{}
 }
 
 // Scan returns all discovered skills (active + staging), using cache when fresh.
 func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
+	si.mu.RLock()
 	if si.cache != nil && time.Since(si.cacheTime) < si.cacheTTL {
-		return si.cache, nil
+		cached := si.cache
+		si.mu.RUnlock()
+		return cached, nil
 	}
+	si.mu.RUnlock()
 
 	var entries []*SkillEntry
 
@@ -95,8 +103,10 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 	entries = append(entries, projectStaging...)
 
 	// Cache result
+	si.mu.Lock()
 	si.cache = entries
 	si.cacheTime = time.Now()
+	si.mu.Unlock()
 
 	return entries, nil
 }

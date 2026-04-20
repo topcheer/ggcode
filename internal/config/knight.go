@@ -1,5 +1,7 @@
 package config
 
+import "gopkg.in/yaml.v3"
+
 // KnightConfig holds configuration for the Knight background agent.
 type KnightConfig struct {
 	// Enabled controls whether Knight runs in daemon mode.
@@ -27,6 +29,8 @@ type KnightConfig struct {
 	// IdleDelaySec is how long to wait after the last user interaction
 	// before Knight starts idle tasks. Default: 300 (5 minutes).
 	IdleDelaySec int `yaml:"idle_delay_sec,omitempty"`
+
+	dailyTokenBudgetSet bool `yaml:"-"`
 }
 
 // DefaultKnightConfig returns the default Knight configuration.
@@ -42,14 +46,42 @@ func DefaultKnightConfig() KnightConfig {
 			"regression_testing",
 			"doc_sync",
 		},
-		IdleDelaySec: 300,
+		IdleDelaySec:        300,
+		dailyTokenBudgetSet: true,
 	}
+}
+
+// UnmarshalYAML keeps track of whether daily_token_budget was explicitly set so
+// runtime defaults can distinguish "unset" from "set to 0 (unlimited)".
+func (kc *KnightConfig) UnmarshalYAML(value *yaml.Node) error {
+	type rawKnightConfig KnightConfig
+	var decoded rawKnightConfig
+	if err := value.Decode(&decoded); err != nil {
+		return err
+	}
+	*kc = KnightConfig(decoded)
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		if value.Content[i].Value == "daily_token_budget" {
+			kc.dailyTokenBudgetSet = true
+			break
+		}
+	}
+	return nil
+}
+
+// HasExplicitDailyTokenBudget reports whether daily_token_budget was explicitly
+// configured, including an explicit 0 to disable budget enforcement.
+func (kc KnightConfig) HasExplicitDailyTokenBudget() bool {
+	return kc.dailyTokenBudgetSet
 }
 
 // Knight returns the Knight configuration, applying defaults for zero values.
 func (c *Config) Knight() KnightConfig {
 	kc := c.KnightConfig
-	if kc.DailyTokenBudget == 0 {
+	if kc.DailyTokenBudget < 0 {
+		kc.DailyTokenBudget = 5_000_000
+	}
+	if kc.DailyTokenBudget == 0 && !kc.HasExplicitDailyTokenBudget() {
 		kc.DailyTokenBudget = 5_000_000
 	}
 	if kc.TrustLevel == "" {

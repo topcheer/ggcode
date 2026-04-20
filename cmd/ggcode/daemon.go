@@ -204,9 +204,18 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		OnSkillUsed: func(name string) {
 			if knightAgent != nil {
 				knightAgent.RecordSkillUse(name)
-				// Default effectiveness score of 3 (neutral) on each use.
-				// Real user feedback scoring can be added later.
-				knightAgent.RecordSkillEffectiveness(name, 3)
+			}
+		},
+		OnSkillCompleted: func(event tool.SkillExecutionEvent) {
+			if knightAgent == nil {
+				return
+			}
+			if event.Err != nil || event.Result.IsError {
+				knightAgent.RecordSkillEffectiveness(event.Name, 1)
+				return
+			}
+			if event.Mode == tool.SkillExecutionModeFork {
+				knightAgent.RecordSkillEffectiveness(event.Name, 4)
 			}
 		},
 	})

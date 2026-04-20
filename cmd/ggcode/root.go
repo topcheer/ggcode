@@ -19,6 +19,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -399,12 +400,37 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
 	}
+	var knightAgent *knight.Knight
+	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
+		a := agent.NewAgent(prov, registry, systemPrompt, maxTurns)
+		if onUsage != nil {
+			a.SetUsageHandler(onUsage)
+		}
+		return a, nil
+	}
 	_ = registry.Register(tool.SkillTool{
 		Skills:       commandMgr,
 		Runtime:      mcpMgr,
 		Provider:     prov,
 		Tools:        registry,
 		AgentFactory: skillAgentFactory,
+		OnSkillUsed: func(name string) {
+			if knightAgent != nil {
+				knightAgent.RecordSkillUse(name)
+			}
+		},
+		OnSkillCompleted: func(event tool.SkillExecutionEvent) {
+			if knightAgent == nil {
+				return
+			}
+			if event.Err != nil || event.Result.IsError {
+				knightAgent.RecordSkillEffectiveness(event.Name, 1)
+				return
+			}
+			if event.Mode == tool.SkillExecutionModeFork {
+				knightAgent.RecordSkillEffectiveness(event.Name, 4)
+			}
+		},
 	})
 	// Detect git status
 	gitStatus := detectGitStatus(workingDir)
@@ -465,6 +491,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		resumeID = selectedID
 	}
+	homeDir, _ := os.UserHomeDir()
+	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
+	knightAgent.SetFactory(knightFactory)
+	if cfg.Knight().Enabled {
+		if err := knightAgent.Start(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
+		} else {
+			defer knightAgent.Stop()
+		}
+	}
 
 	// Build MCP info for TUI
 	mcpInfos := toTuiMCPInfos(mcpMgr.Snapshot())
@@ -519,6 +555,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetProjectMemoryLoader(projectMemoryLoader)
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
+	repl.SetKnight(knightAgent)
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
 	}

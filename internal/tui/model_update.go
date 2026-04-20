@@ -856,6 +856,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case knightTaskResultMsg:
+		m.loading = false
+		m.spinner.Stop()
+		m.cancelFunc = nil
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		if msg.Err != nil {
+			m.ensureOutputEndsWithNewline()
+			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Knight task failed: %v", msg.Err)))
+			m.output.WriteString("\n")
+			return m, nil
+		}
+		m.ensureOutputEndsWithNewline()
+		m.output.WriteString(fmt.Sprintf("🌙 Knight task completed: %s\n", msg.Goal))
+		m.output.WriteString(strings.TrimSpace(msg.Result.Output))
+		m.output.WriteString("\n")
+		m.syncConversationViewport()
+		m.viewport.GotoBottom()
+		return m, nil
+
 	case harnessContextSuggestionsMsg:
 		state := m.harnessContextPrompt
 		if state == nil || state.mode != harnessContextPromptInit {

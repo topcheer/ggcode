@@ -151,6 +151,22 @@ func (k *Knight) RecordSkillEffectiveness(name string, score int) {
 	}
 }
 
+// SkillUsage returns runtime usage stats for a skill.
+func (k *Knight) SkillUsage(name string) (count int, lastUsed time.Time, avgScore float64) {
+	if k.usage == nil {
+		return 0, time.Time{}, 0
+	}
+	return k.usage.GetUsage(name)
+}
+
+// SkillFeedback returns runtime feedback stats for a skill.
+func (k *Knight) SkillFeedback(name string) (avgScore float64, samples int) {
+	if k.usage == nil {
+		return 0, 0
+	}
+	return k.usage.GetFeedback(name)
+}
+
 // Index returns the skill index for external access.
 func (k *Knight) Index() *SkillIndex {
 	return k.index
@@ -166,6 +182,9 @@ func (k *Knight) Status() string {
 	}
 	used := k.budget.Used()
 	limit := k.budget.DailyLimit()
+	if limit == 0 {
+		return fmt.Sprintf("running (tokens: %dK / unlimited)", used/1000)
+	}
 	return fmt.Sprintf("running (tokens: %dK / %dM)", used/1000, limit/1_000_000)
 }
 
@@ -213,6 +232,36 @@ func (k *Knight) PerformSkillValidation(ctx context.Context) ([]ValidationResult
 	return results, nil
 }
 
+// RunAdhocTask executes a user-directed Knight task using the configured agent factory.
+func (k *Knight) RunAdhocTask(ctx context.Context, goal string) (TaskResult, error) {
+	goal = strings.TrimSpace(goal)
+	if goal == "" {
+		return TaskResult{}, fmt.Errorf("knight: empty task goal")
+	}
+	factory := k.getFactory()
+	if factory == nil {
+		return TaskResult{}, fmt.Errorf("knight: task runner unavailable")
+	}
+
+	prompt := fmt.Sprintf(`Complete the following user-directed Knight task for the current project.
+
+Task: %s
+
+Requirements:
+- Use available tools as needed
+- Prefer safe, reversible actions
+- If you modify files, validate with the repository's existing checks when practical
+- End with a concise summary of what you changed, what remains, and any important risk`, goal)
+
+	result := k.RunTask(ctx, "manual-task", prompt, factory)
+	if result.Error != nil {
+		return result, result.Error
+	}
+	summary := formatKnightTaskOutput(result.Output)
+	k.emitReport(fmt.Sprintf("🌙 Knight manual task completed: %s\n%s", goal, summary))
+	return result, nil
+}
+
 // PromoteStaging promotes a staging skill to active after validation.
 func (k *Knight) PromoteStaging(skillName string) error {
 	staging, err := k.index.StagingSkills()
@@ -238,7 +287,7 @@ func (k *Knight) PromoteStaging(skillName string) error {
 				return err
 			}
 			k.index.Invalidate()
-			delete(k.notifiedStaging, s.Name)
+			k.clearStagingNotification(s.Name)
 			return nil
 		}
 	}
@@ -258,7 +307,7 @@ func (k *Knight) RejectStaging(skillName string) error {
 				return err
 			}
 			k.index.Invalidate()
-			delete(k.notifiedStaging, s.Name)
+			k.clearStagingNotification(s.Name)
 			return nil
 		}
 	}
@@ -378,12 +427,11 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			debug.Log("knight", "auto-promoting skill %s", s.Name)
 			k.promoter.Promote(s)
 			k.index.Invalidate()
-			delete(k.notifiedStaging, s.Name)
+			k.clearStagingNotification(s.Name)
 			k.emitReport(fmt.Sprintf("✅ Skill auto-promoted: %s (%s)", s.Name, s.Meta.Description))
 		} else {
 			// For "staged" trust level, notify user once per skill
-			if !k.notifiedStaging[s.Name] {
-				k.notifiedStaging[s.Name] = true
+			if k.markStagingNotified(s.Name) {
 				k.emitReport(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
 					s.Name, s.Meta.Description, s.Name, s.Name))
 			}
@@ -475,20 +523,23 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 
 		// Freshness check: is the skill stale?
 		if k.usage.IsStale(skill.Name, 30*24*time.Hour) {
+			if k.shouldSuppressStaleNotice(skill.Name) {
+				continue
+			}
 			count, lastUsed, _ := k.usage.GetUsage(skill.Name)
 			debug.Log("knight", "skill %s may be stale: used=%d last=%v", skill.Name, count, lastUsed)
 			if count == 0 {
 				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' has never been used. Consider removing it.", skill.Name))
 			} else {
-				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' not used in 30+ days (last: %s). /knight freeze %s to keep or let it expire.", skill.Name, lastUsed.Format("2006-01-02"), skill.Name))
+				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' not used in 30+ days (last: %s). /knight rate %s 5 if it is still valuable, or let it fade out.", skill.Name, lastUsed.Format("2006-01-02"), skill.Name))
 			}
 		}
 
 		// Effectiveness check: low average score?
-		_, _, avgScore := k.usage.GetUsage(skill.Name)
-		if avgScore > 0 && avgScore < 3.0 {
+		avgScore, samples, shouldWarn := k.shouldWarnLowEffectiveness(skill.Name)
+		if shouldWarn {
 			debug.Log("knight", "skill %s has low effectiveness: %.1f/5", skill.Name, avgScore)
-			k.emitReport(fmt.Sprintf("📉 Skill '%s' effectiveness: %.1f/5. Consider updating or removing.", skill.Name, avgScore))
+			k.emitReport(fmt.Sprintf("📉 Skill '%s' effectiveness: %.1f/5 across %d signals. Consider updating or removing.", skill.Name, avgScore, samples))
 		}
 	}
 }
@@ -496,8 +547,43 @@ func (k *Knight) validateAllSkills(ctx context.Context) {
 // nightlyMaintenance runs deep maintenance tasks.
 func (k *Knight) nightlyMaintenance(ctx context.Context) {
 	debug.Log("knight", "running nightly maintenance")
-	k.emitReport("Knight nightly maintenance started")
-	// TODO: clean old snapshots, compress changelog, check test coverage
+	factory := k.getFactory()
+	if factory == nil {
+		k.emitReport("Knight nightly maintenance skipped: no task runner configured")
+		return
+	}
+
+	var sections []string
+	if k.hasCapability("regression_testing") {
+		if section := k.runMaintenanceTask(ctx, "nightly-regression-audit", `Inspect the project health in read-only mode.
+
+Prefer the repository's existing verification command if available (for example make verify-ci); otherwise use the most CI-aligned build/test/vet/gofmt checks already present in the repo.
+
+Do not edit files. Produce a concise report with:
+1. What command(s) you ran
+2. Whether the project is healthy
+3. The most important failing area, if any
+4. The next concrete remediation step if something is broken`); section != "" {
+			sections = append(sections, "🧪 Regression audit\n"+section)
+		}
+	}
+	if k.hasCapability("doc_sync") {
+		if section := k.runMaintenanceTask(ctx, "nightly-doc-audit", `Inspect project-facing documentation in read-only mode.
+
+Focus on README, GGCODE.md, COPILOT.md, release/process docs, and obvious command references. Look for mismatches between docs and the current codebase or commands.
+
+Do not edit files. Produce a concise report with:
+1. Whether docs look aligned overall
+2. The top mismatch, if any
+3. The exact document(s) that should be updated next`); section != "" {
+			sections = append(sections, "📝 Documentation audit\n"+section)
+		}
+	}
+	if len(sections) == 0 {
+		k.emitReport("Knight nightly maintenance had no enabled maintenance tasks")
+		return
+	}
+	k.emitReport("🌙 Knight nightly maintenance\n\n" + strings.Join(sections, "\n\n"))
 }
 
 // emitReport sends a Knight report via IM if an emitter is configured.
@@ -512,6 +598,55 @@ func (k *Knight) emitReport(report string) {
 		return
 	}
 	em.EmitKnightReport(report)
+}
+
+func (k *Knight) markStagingNotified(name string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.notifiedStaging[name] {
+		return false
+	}
+	k.notifiedStaging[name] = true
+	return true
+}
+
+func (k *Knight) clearStagingNotification(name string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	delete(k.notifiedStaging, name)
+}
+
+func (k *Knight) shouldSuppressStaleNotice(name string) bool {
+	avg, samples := k.SkillFeedback(name)
+	return samples >= 2 && avg >= 4.0
+}
+
+func (k *Knight) shouldWarnLowEffectiveness(name string) (avg float64, samples int, shouldWarn bool) {
+	avg, samples = k.SkillFeedback(name)
+	return avg, samples, samples >= 2 && avg < 3.0
+}
+
+func (k *Knight) runMaintenanceTask(ctx context.Context, taskName, prompt string) string {
+	factory := k.getFactory()
+	if factory == nil {
+		return ""
+	}
+	result := k.RunTask(ctx, taskName, prompt, factory)
+	if result.Error != nil {
+		return fmt.Sprintf("task failed: %v", result.Error)
+	}
+	return formatKnightTaskOutput(result.Output)
+}
+
+func formatKnightTaskOutput(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return "task completed without a report"
+	}
+	if len(output) > 1500 {
+		output = strings.TrimSpace(output[:1500]) + "\n…"
+	}
+	return output
 }
 
 func (k *Knight) shouldStageCandidate(c SkillCandidate) bool {

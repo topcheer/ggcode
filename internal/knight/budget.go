@@ -36,7 +36,7 @@ type usageRecord struct {
 
 // NewBudget creates a Budget tracker. Data is stored under dir/knight/.
 func NewBudget(dir string, cfg config.KnightConfig) *Budget {
-	if cfg.DailyTokenBudget <= 0 {
+	if cfg.DailyTokenBudget < 0 || (cfg.DailyTokenBudget == 0 && !cfg.HasExplicitDailyTokenBudget()) {
 		cfg.DailyTokenBudget = 5_000_000
 	}
 	return &Budget{
@@ -60,6 +60,9 @@ func (b *Budget) CanSpend() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ensureLoaded()
+	if b.daily == 0 {
+		return true
+	}
 	return b.todayUsed < b.daily
 }
 
@@ -68,6 +71,9 @@ func (b *Budget) Remaining() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.ensureLoaded()
+	if b.daily == 0 {
+		return 0
+	}
 	return b.daily - b.todayUsed
 }
 

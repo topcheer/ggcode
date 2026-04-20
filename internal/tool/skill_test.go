@@ -61,6 +61,7 @@ func (r fakeRunner) RunStream(ctx context.Context, prompt string, onEvent func(p
 }
 
 func TestSkillToolExecute(t *testing.T) {
+	var callback SkillExecutionEvent
 	tool := SkillTool{
 		Skills: stubSkillLookup{
 			"deploy": {
@@ -69,6 +70,9 @@ func TestSkillToolExecute(t *testing.T) {
 				Description: "Deploy the current build",
 				Enabled:     true,
 			},
+		},
+		OnSkillCompleted: func(event SkillExecutionEvent) {
+			callback = event
 		},
 	}
 	input, err := json.Marshal(map[string]string{
@@ -88,6 +92,9 @@ func TestSkillToolExecute(t *testing.T) {
 	}
 	if result.Content == "" {
 		t.Fatal("expected expanded skill content")
+	}
+	if callback.Name != "deploy" || callback.Mode != SkillExecutionModeInline || callback.Result.IsError {
+		t.Fatalf("unexpected callback: %+v", callback)
 	}
 }
 
@@ -115,6 +122,7 @@ func TestSkillToolExecuteRejectsModelDisabledSkill(t *testing.T) {
 
 func TestSkillToolExecuteForkedSkill(t *testing.T) {
 	registry := NewRegistry()
+	var callback SkillExecutionEvent
 	tool := SkillTool{
 		Skills: stubSkillLookup{
 			"deploy": {
@@ -130,6 +138,9 @@ func TestSkillToolExecuteForkedSkill(t *testing.T) {
 		AgentFactory: func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
 			return fakeRunner{output: "forked result"}
 		},
+		OnSkillCompleted: func(event SkillExecutionEvent) {
+			callback = event
+		},
 	}
 	input := json.RawMessage(`{"skill":"deploy","args":"prod"}`)
 
@@ -142,6 +153,9 @@ func TestSkillToolExecuteForkedSkill(t *testing.T) {
 	}
 	if result.Content != "forked result" {
 		t.Fatalf("result.Content = %q", result.Content)
+	}
+	if callback.Name != "deploy" || callback.Mode != SkillExecutionModeFork || callback.Result.IsError {
+		t.Fatalf("unexpected callback: %+v", callback)
 	}
 }
 

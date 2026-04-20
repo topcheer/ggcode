@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/harness"
+	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/update"
@@ -116,6 +117,12 @@ type agentAskUserMsg struct {
 type agentInterruptMsg struct {
 	RunID int
 	Text  string
+}
+
+type knightTaskResultMsg struct {
+	Goal   string
+	Result knight.TaskResult
+	Err    error
 }
 
 // setProgramMsg is sent via program.Send so the model copy inside Bubble Tea's

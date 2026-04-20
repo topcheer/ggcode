@@ -238,10 +238,6 @@ func (m Model) renderSidebar() string {
 		return tracker
 	}
 	vendor, _, model := m.currentSelection()
-	activity := m.sidebarActivity()
-	if count := m.pendingSubmissionCount(); count > 0 {
-		activity = fmt.Sprintf("%s • %s", activity, m.t("queued.count", count))
-	}
 
 	body := strings.Join([]string{
 		"",
@@ -251,7 +247,6 @@ func (m Model) renderSidebar() string {
 		m.renderSidebarDetailRow(m.t("label.model"), vendor+"/"+model, m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.branch"), firstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
-		m.renderSidebarDetailRow(m.t("label.activity"), activity, m.sidebarWidth()-4),
 		"",
 		m.renderSidebarModeSection(),
 		m.renderSidebarUpdateSection(),
