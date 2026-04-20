@@ -128,6 +128,13 @@ func (k *Knight) SetFactory(f AgentFactory) {
 	k.factory = f
 }
 
+// getFactory returns the current agent factory under lock protection.
+func (k *Knight) getFactory() AgentFactory {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.factory
+}
+
 // RecordSkillUse increments the usage counter for a skill.
 // Called from the skill tool when a Knight-managed skill is loaded.
 func (k *Knight) RecordSkillUse(name string) {
@@ -395,9 +402,9 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 	// Process candidates: high-score ones get LLM refinement + staging
 	var reported []SkillCandidate
 	for _, c := range result.SkillCandidates {
-		if c.Score >= 1.0 && k.factory != nil {
+		if c.Score >= 1.0 && k.getFactory() != nil {
 			// High-value candidate: use LLM to generate a proper skill
-			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.factory)
+			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.getFactory())
 			if genErr != nil {
 				debug.Log("knight", "LLM skill generation failed for %s: %v", c.Name, genErr)
 				reported = append(reported, c)

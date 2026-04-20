@@ -183,6 +183,14 @@ func (m *Manager) CurrentBindings() []ChannelBinding {
 	return out
 }
 
+// HasActiveBindings returns true if there is at least one active channel binding.
+// Lighter than ListBindings — no allocation or copying.
+func (m *Manager) HasActiveBindings() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.currentBindings) > 0
+}
+
 func (m *Manager) ListBindings() ([]ChannelBinding, error) {
 	m.mu.RLock()
 	store := m.bindingStore
