@@ -189,7 +189,13 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 	switch t.Skill {
 	case SkillFileSearch, SkillGitOps, SkillCommandExec:
-		result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[0])
+		// If agent is available, use agent for all skills (smarter routing).
+		// Fall back to direct tool execution only if no agent.
+		if h.agent != nil {
+			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
+		} else {
+			result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[0])
+		}
 	case SkillCodeEdit, SkillCodeReview, SkillFullTask:
 		result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
 	default:
@@ -271,10 +277,13 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 		return "", fmt.Errorf("no agent available for skill %s", skill)
 	}
 
-	prompt := buildAgentPrompt(skill, text)
-
 	// Create a restricted agent for A2A tasks.
-	a := agent.NewAgent(h.agent.Provider(), h.agent.ToolRegistry(), h.agent.SystemPrompt(), perm.MaxIterations)
+	// Iteration limit is controlled by the task timeout, not max iterations.
+	// Only enforce MaxIterations if it's explicitly set (> 0).
+	maxIter := perm.MaxIterations
+	a := agent.NewAgent(h.agent.Provider(), h.agent.ToolRegistry(), h.agent.SystemPrompt(), maxIter)
+
+	prompt := buildAgentPrompt(skill, text)
 
 	var buf strings.Builder
 	err := a.RunStream(ctx, prompt, func(event provider.StreamEvent) {
@@ -391,11 +400,11 @@ type SkillPermission struct {
 }
 
 var skillPermissions = map[string]*SkillPermission{
-	SkillFileSearch:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "glob"}, ReadOnly: true, MaxIterations: 3},
-	SkillGitOps:      {AllowedTools: []string{"git_status", "git_diff", "git_log"}, ReadOnly: true, MaxIterations: 3},
-	SkillCommandExec: {AllowedTools: []string{"run_command"}, ReadOnly: false, MaxIterations: 1},
-	SkillCodeEdit:    {AllowedTools: []string{"read_file", "write_file", "edit_file", "search_files"}, ReadOnly: false, MaxIterations: 5},
-	SkillCodeReview:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "git_diff"}, ReadOnly: true, MaxIterations: 5},
+	SkillFileSearch:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "glob"}, ReadOnly: true, MaxIterations: 0},
+	SkillGitOps:      {AllowedTools: []string{"git_status", "git_diff", "git_log"}, ReadOnly: true, MaxIterations: 0},
+	SkillCommandExec: {AllowedTools: []string{"run_command"}, ReadOnly: false, MaxIterations: 0},
+	SkillCodeEdit:    {AllowedTools: []string{"read_file", "write_file", "edit_file", "search_files"}, ReadOnly: false, MaxIterations: 0},
+	SkillCodeReview:  {AllowedTools: []string{"read_file", "list_directory", "search_files", "git_diff"}, ReadOnly: true, MaxIterations: 0},
 	SkillFullTask:    {AllowedTools: nil, ReadOnly: false, MaxIterations: 0}, // nil = all tools, 0 = unlimited
 }
 

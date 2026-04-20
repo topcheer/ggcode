@@ -2566,8 +2566,9 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				if s.Meta.Frozen {
 					status = "🔒"
 				}
-				used, _, _ := m.knight.SkillUsage(s.Name)
-				avg, samples := m.knight.SkillFeedback(s.Name)
+				ref := knight.FormatSkillRefForDisplay(s.Scope, s.Name)
+				used, _, _ := m.knight.SkillUsage(ref)
+				avg, samples := m.knight.SkillFeedback(ref)
 				feedback := "n/a"
 				if samples > 0 {
 					feedback = fmt.Sprintf("%.1f/5 (%d)", avg, samples)
@@ -2586,12 +2587,14 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 			m.output.WriteString("Usage: /knight rate <skill-name> <1-5>\n")
 			return nil
 		}
-		if _, err := m.knight.FindActiveSkill(name); err != nil {
+		entry, err := m.knight.FindActiveSkill(name)
+		if err != nil {
 			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
 			return nil
 		}
-		m.knight.RecordSkillEffectiveness(name, score)
-		avg, samples := m.knight.SkillFeedback(name)
+		ref := knight.FormatSkillRefForDisplay(entry.Scope, entry.Name)
+		m.knight.RecordSkillEffectiveness(ref, score)
+		avg, samples := m.knight.SkillFeedback(ref)
 		m.output.WriteString(fmt.Sprintf("⭐ Rated skill '%s' %d/5 (avg: %.1f/5 over %d signals)\n", name, score, avg, samples))
 	default:
 		m.output.WriteString("Knight commands: status, budget, review [name], run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills\n")

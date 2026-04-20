@@ -416,9 +416,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		Provider:     prov,
 		Tools:        registry,
 		AgentFactory: skillAgentFactory,
-		OnSkillUsed: func(name string) {
+		OnSkillUsed: func(ref string) {
 			if knightAgent != nil {
-				knightAgent.RecordSkillUse(name)
+				knightAgent.RecordSkillUse(ref)
 			}
 		},
 		OnSkillCompleted: func(event tool.SkillExecutionEvent) {
@@ -426,12 +426,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				return
 			}
 			if event.Err != nil || event.Result.IsError {
-				knightAgent.RecordSkillEffectiveness(event.Name, 1)
+				knightAgent.RecordSkillEffectiveness(event.Ref, 1)
 				return
 			}
 			if event.Mode == tool.SkillExecutionModeFork {
-				knightAgent.RecordSkillEffectiveness(event.Name, 4)
+				knightAgent.RecordSkillEffectiveness(event.Ref, 4)
+				return
 			}
+			knightAgent.RecordSkillEffectiveness(event.Ref, 3)
 		},
 	})
 	// Detect git status

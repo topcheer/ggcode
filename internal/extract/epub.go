@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sort"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -81,7 +80,6 @@ func findOPFPath(r *zip.Reader) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("read container.xml: %w", err)
 			}
-			// Simple extraction: find rootfile full-path attribute
 			decoder := xml.NewDecoder(strings.NewReader(string(data)))
 			for {
 				token, err := decoder.Token()
@@ -106,15 +104,8 @@ func findOPFPath(r *zip.Reader) (string, error) {
 	return "", fmt.Errorf("EPUB missing META-INF/container.xml or rootfile")
 }
 
-// spineItem holds a spine item with its linear order.
-type spineItem struct {
-	idref string
-	order int
-}
-
 // parseOPFSpine reads the OPF file and returns content document paths in spine order.
 func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
-	// Read the OPF file
 	var opfData []byte
 	for _, f := range r.File {
 		if f.Name == opfPath {
@@ -134,11 +125,10 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 		return nil, fmt.Errorf("OPF file not found: %s", opfPath)
 	}
 
-	// Parse manifest: id → href
+	// Parse manifest: id -> href
 	manifest := make(map[string]string)
 	// Parse spine: ordered list of idrefs
-	var spineItems []spineItem
-	spineOrder := 0
+	var spineIDRefs []string
 
 	decoder := xml.NewDecoder(strings.NewReader(string(opfData)))
 	for {
@@ -161,7 +151,6 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 					}
 				}
 				if id != "" && href != "" {
-					// URL decode the href
 					if decoded, err := url.QueryUnescape(href); err == nil {
 						href = decoded
 					}
@@ -175,27 +164,19 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 					}
 				}
 				if idref != "" {
-					spineItems = append(spineItems, spineItem{idref: idref, order: spineOrder})
-					spineOrder++
+					spineIDRefs = append(spineIDRefs, idref)
 				}
 			}
 		}
 	}
 
-	// Resolve spine items to paths
-	result := make([]string, 0, len(spineItems))
-	for _, si := range spineItems {
-		if href, ok := manifest[si.idref]; ok {
+	// Resolve spine idrefs to paths
+	result := make([]string, 0, len(spineIDRefs))
+	for _, idref := range spineIDRefs {
+		if href, ok := manifest[idref]; ok {
 			result = append(result, href)
 		}
 	}
-
-	// Sort by order (they should already be in order, but be safe)
-	sort.Slice(result, func(i, j int) bool {
-		return spineItems[i].order < spineItems[j].order
-	})
-
-	_ = manifest // use manifest for lookups above
 	return result, nil
 }
 
@@ -246,7 +227,6 @@ func extractHTMLFromZip(r *zip.Reader, path string) (string, error) {
 func extractHTMLText(htmlContent string) string {
 	doc, err := html.Parse(strings.NewReader(htmlContent))
 	if err != nil {
-		// Fallback: strip tags naively
 		return stripTags(htmlContent)
 	}
 
@@ -262,7 +242,6 @@ func extractHTMLText(htmlContent string) string {
 				buf.WriteString(text)
 			}
 		} else if n.Type == html.ElementNode {
-			// Skip script, style, head
 			switch n.Data {
 			case "script", "style", "head", "meta", "link":
 				return
@@ -270,7 +249,6 @@ func extractHTMLText(htmlContent string) string {
 			for c := n.FirstChild; c != nil; c = c.NextSibling {
 				extract(c)
 			}
-			// Block elements get a newline
 			switch n.Data {
 			case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
 				"li", "tr", "blockquote", "section", "article":
@@ -280,7 +258,9 @@ func extractHTMLText(htmlContent string) string {
 			}
 		}
 	}
-	extract(doc)
+	for c := doc.FirstChild; c != nil; c = c.NextSibling {
+		extract(c)
+	}
 	return strings.TrimSpace(buf.String())
 }
 
