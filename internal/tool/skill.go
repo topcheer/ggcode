@@ -22,13 +22,29 @@ type skillUsageRecorder interface {
 	RecordUsage(name string)
 }
 
+type SkillExecutionMode string
+
+const (
+	SkillExecutionModeInline SkillExecutionMode = "inline"
+	SkillExecutionModeFork   SkillExecutionMode = "fork"
+	SkillExecutionModeMCP    SkillExecutionMode = "mcp"
+)
+
+type SkillExecutionEvent struct {
+	Name   string
+	Mode   SkillExecutionMode
+	Result Result
+	Err    error
+}
+
 type SkillTool struct {
-	Skills       SkillLookup
-	Runtime      MCPRuntime
-	Provider     provider.Provider
-	Tools        *Registry
-	AgentFactory subagent.AgentFactory
-	OnSkillUsed  func(name string) // optional callback when a skill is loaded by the agent
+	Skills           SkillLookup
+	Runtime          MCPRuntime
+	Provider         provider.Provider
+	Tools            *Registry
+	AgentFactory     subagent.AgentFactory
+	OnSkillUsed      func(name string)               // optional callback when a skill is loaded by the agent
+	OnSkillCompleted func(event SkillExecutionEvent) // optional callback when execution finishes
 }
 
 func (t SkillTool) Name() string { return "skill" }
@@ -88,17 +104,22 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	if cmd.LoadedFrom == commands.LoadedFromMCP && t.Runtime != nil {
 		result, _ := t.executeMCPPromptSkill(ctx, cmd.Name, strings.TrimSpace(args.Args))
+		t.notifySkillCompleted(cmd.Name, SkillExecutionModeMCP, result, nil)
 		return result, nil
 	}
 	if strings.EqualFold(strings.TrimSpace(cmd.Context), "fork") {
-		return t.executeForkedSkill(ctx, cmd, strings.TrimSpace(args.Args))
+		result, err := t.executeForkedSkill(ctx, cmd, strings.TrimSpace(args.Args))
+		t.notifySkillCompleted(cmd.Name, SkillExecutionModeFork, result, err)
+		return result, err
 	}
 	workDir, _ := os.Getwd()
 	content := cmd.Expand(map[string]string{
 		"DIR":  workDir,
 		"ARGS": strings.TrimSpace(args.Args),
 	})
-	return Result{Content: strings.TrimSpace(content)}, nil
+	result := Result{Content: strings.TrimSpace(content)}
+	t.notifySkillCompleted(cmd.Name, SkillExecutionModeInline, result, nil)
+	return result, nil
 }
 
 func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command, args string) (Result, error) {
@@ -219,4 +240,16 @@ func parseMCPPromptArgs(raw string) (map[string]interface{}, error) {
 		return obj, nil
 	}
 	return map[string]interface{}{"input": raw}, nil
+}
+
+func (t SkillTool) notifySkillCompleted(name string, mode SkillExecutionMode, result Result, err error) {
+	if t.OnSkillCompleted == nil {
+		return
+	}
+	t.OnSkillCompleted(SkillExecutionEvent{
+		Name:   name,
+		Mode:   mode,
+		Result: result,
+		Err:    err,
+	})
 }

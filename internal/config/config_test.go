@@ -8,6 +8,36 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 )
 
+func TestLoad_KnightDailyBudgetZeroDisablesBudgetChecking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: glm-5-turbo
+knight:
+  daily_token_budget: 0
+vendors:
+  zai:
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	t.Setenv("ZAI_API_KEY", "test-key")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.Knight().DailyTokenBudget; got != 0 {
+		t.Fatalf("expected explicit daily_token_budget=0 to survive defaults, got %d", got)
+	}
+}
+
 func TestBuildSystemPrompt(t *testing.T) {
 	tests := []struct {
 		name       string

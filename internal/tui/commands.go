@@ -2389,7 +2389,7 @@ func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-func (m Model) handleKnightCommand(parts []string) tea.Cmd {
+func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	if m.knight == nil {
 		m.output.WriteString("Knight is not available (only in daemon mode)\n")
 		return nil
@@ -2409,6 +2409,31 @@ func (m Model) handleKnightCommand(parts []string) tea.Cmd {
 			m.output.WriteString("\nStaging skills:\n")
 			for _, s := range staging {
 				m.output.WriteString(fmt.Sprintf("  • %s (%s): %s\n", s.Name, s.Scope, s.Meta.Description))
+			}
+		}
+	case "run":
+		if len(parts) < 3 {
+			m.output.WriteString("Usage: /knight run <task>\n")
+			return nil
+		}
+		goal := strings.TrimSpace(strings.Join(parts[2:], " "))
+		if goal == "" {
+			m.output.WriteString("Usage: /knight run <task>\n")
+			return nil
+		}
+		m.output.WriteString(fmt.Sprintf("🌙 Knight running: %s\n", goal))
+		m.loading = true
+		m.spinner.Start("Knight task")
+		m.statusActivity = "Knight task"
+		m.statusToolName = "knight"
+		m.statusToolArg = truncateStr(goal, 80)
+		m.statusToolCount = 1
+		return func() tea.Msg {
+			result, err := m.knight.RunAdhocTask(context.Background(), goal)
+			return knightTaskResultMsg{
+				Goal:   goal,
+				Result: result,
+				Err:    err,
 			}
 		}
 	case "approve":
@@ -2444,11 +2469,43 @@ func (m Model) handleKnightCommand(parts []string) tea.Cmd {
 				if s.Meta.Frozen {
 					status = "🔒"
 				}
-				m.output.WriteString(fmt.Sprintf("  %s %s (%s): %s [used: %d]\n", status, s.Name, s.Scope, s.Meta.Description, s.Meta.UsageCount))
+				used, _, _ := m.knight.SkillUsage(s.Name)
+				avg, samples := m.knight.SkillFeedback(s.Name)
+				feedback := "n/a"
+				if samples > 0 {
+					feedback = fmt.Sprintf("%.1f/5 (%d)", avg, samples)
+				}
+				m.output.WriteString(fmt.Sprintf("  %s %s (%s): %s [used: %d, feedback: %s]\n", status, s.Name, s.Scope, s.Meta.Description, used, feedback))
 			}
 		}
+	case "rate":
+		if len(parts) < 4 {
+			m.output.WriteString("Usage: /knight rate <skill-name> <1-5>\n")
+			return nil
+		}
+		name := parts[2]
+		score, err := strconv.Atoi(parts[3])
+		if err != nil || score < 1 || score > 5 {
+			m.output.WriteString("Usage: /knight rate <skill-name> <1-5>\n")
+			return nil
+		}
+		active, _ := m.knight.Index().ActiveSkills()
+		found := false
+		for _, s := range active {
+			if s.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.output.WriteString(fmt.Sprintf("Active skill '%s' not found\n", name))
+			return nil
+		}
+		m.knight.RecordSkillEffectiveness(name, score)
+		avg, samples := m.knight.SkillFeedback(name)
+		m.output.WriteString(fmt.Sprintf("⭐ Rated skill '%s' %d/5 (avg: %.1f/5 over %d signals)\n", name, score, avg, samples))
 	default:
-		m.output.WriteString("Knight commands: status, approve <name>, reject <name>, skills\n")
+		m.output.WriteString("Knight commands: status, run <task>, approve <name>, reject <name>, rate <name> <1-5>, skills\n")
 	}
 	return nil
 }

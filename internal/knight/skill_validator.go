@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -36,6 +38,10 @@ func ValidateSkill(entry *SkillEntry) ValidationResult {
 
 // checkFormat verifies required frontmatter fields are present.
 func (r *ValidationResult) checkFormat(entry *SkillEntry) {
+	if entry == nil {
+		r.Errors = append(r.Errors, "skill entry is nil")
+		return
+	}
 	m := entry.Meta
 
 	if m.Name == "" {
@@ -46,9 +52,25 @@ func (r *ValidationResult) checkFormat(entry *SkillEntry) {
 	}
 	if m.Scope == "" {
 		r.Warnings = append(r.Warnings, "scope not set, defaulting to project")
+	} else if m.Scope != "global" && m.Scope != "project" {
+		r.Errors = append(r.Errors, fmt.Sprintf("invalid scope %q (expected global or project)", m.Scope))
+	}
+	if entry.Name != "" && m.Name != "" && entry.Name != m.Name {
+		r.Errors = append(r.Errors, fmt.Sprintf("frontmatter name %q does not match skill name %q", m.Name, entry.Name))
+	}
+	if entry.Scope != "" && m.Scope != "" && entry.Scope != m.Scope {
+		r.Errors = append(r.Errors, fmt.Sprintf("frontmatter scope %q does not match indexed scope %q", m.Scope, entry.Scope))
+	}
+	if shouldCheckActiveSkillDir(entry.Path, entry.Staging) && entry.Name != "" {
+		dirName := filepath.Base(filepath.Dir(entry.Path))
+		if dirName != entry.Name {
+			r.Errors = append(r.Errors, fmt.Sprintf("active skill directory %q does not match skill name %q", dirName, entry.Name))
+		}
 	}
 	if m.CreatedBy == "" {
 		r.Warnings = append(r.Warnings, "created_by not set")
+	} else if !isAllowedCreatedBy(m.CreatedBy) {
+		r.Warnings = append(r.Warnings, fmt.Sprintf("created_by %q is unusual (expected user, knight, or agent)", m.CreatedBy))
 	}
 }
 
@@ -70,13 +92,21 @@ func (r *ValidationResult) checkContentQuality(entry *SkillEntry) {
 		return
 	}
 	content := string(data)
+	body := strings.TrimSpace(content)
+	if bodyStart := splitFrontmatter(content); bodyStart >= 0 {
+		body = strings.TrimSpace(content[bodyStart:])
+	}
+	if body == "" {
+		r.Errors = append(r.Errors, "skill body is empty")
+		return
+	}
 
 	// Check for minimum content length
-	lines := strings.Split(content, "\n")
+	lines := strings.Split(body, "\n")
 	contentLines := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "---") && !strings.HasPrefix(trimmed, "#") {
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			contentLines++
 		}
 	}
@@ -94,6 +124,20 @@ func (r *ValidationResult) checkContentQuality(entry *SkillEntry) {
 	}
 	if !hasHeading {
 		r.Warnings = append(r.Warnings, "skill should have at least one markdown heading")
+	}
+	if !hasSection(lines, "## Steps") {
+		r.Errors = append(r.Errors, "missing required '## Steps' section")
+	} else if !hasActionableSteps(lines) {
+		r.Errors = append(r.Errors, "steps section does not contain actionable list items")
+	}
+	if !hasSection(lines, "## When to Use") {
+		r.Warnings = append(r.Warnings, "skill should document '## When to Use'")
+	}
+	if !strings.Contains(strings.ToLower(body), "when not to use") {
+		r.Warnings = append(r.Warnings, "skill should explain when not to use it")
+	}
+	if hasUnresolvedMarkers(body) {
+		r.Warnings = append(r.Warnings, "skill contains TODOs or unresolved placeholders")
 	}
 }
 
@@ -125,4 +169,52 @@ func CheckDuplicate(entry *SkillEntry, existing []*SkillEntry) bool {
 // readSkillContent reads the full content of a skill file.
 func readSkillContent(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+func shouldCheckActiveSkillDir(path string, staging bool) bool {
+	if staging {
+		return false
+	}
+	clean := filepath.ToSlash(path)
+	return strings.Contains(clean, "/.ggcode/skills/") && strings.HasSuffix(clean, "/SKILL.md")
+}
+
+func isAllowedCreatedBy(createdBy string) bool {
+	switch strings.ToLower(strings.TrimSpace(createdBy)) {
+	case "user", "knight", "agent":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasSection(lines []string, heading string) bool {
+	want := strings.ToLower(strings.TrimSpace(heading))
+	for _, line := range lines {
+		if strings.ToLower(strings.TrimSpace(line)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasActionableSteps(lines []string) bool {
+	inSteps := false
+	stepPattern := regexp.MustCompile(`^\s*(?:[-*]|\d+\.)\s+\S+`)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			inSteps = strings.EqualFold(trimmed, "## Steps")
+			continue
+		}
+		if inSteps && stepPattern.MatchString(trimmed) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUnresolvedMarkers(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "todo") || strings.Contains(body, "{{") || strings.Contains(body, "}}")
 }

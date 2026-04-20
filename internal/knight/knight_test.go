@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +13,28 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
+
+type stubKnightRunner struct {
+	output string
+	err    error
+}
+
+func (r stubKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+	if strings.TrimSpace(r.output) != "" {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: r.output})
+	}
+	return r.err
+}
+
+type stubKnightEmitter struct {
+	reports []string
+}
+
+func (e *stubKnightEmitter) EmitKnightReport(report string) {
+	e.reports = append(e.reports, report)
+}
+
+func (e *stubKnightEmitter) HasTargets() bool { return true }
 
 func TestBudgetRecordAndCheck(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "knight-budget-*")
@@ -63,6 +87,46 @@ func TestBudgetExhaustion(t *testing.T) {
 	// The check is done before starting tasks
 	if b.Remaining() >= 0 {
 		// Remaining might be negative, that's ok — CanSpend checks against used < daily
+	}
+}
+
+func TestBudgetExplicitZeroDisablesLimit(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "ggcode.yaml")
+	t.Setenv("ZAI_API_KEY", "test-key")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: glm-5-turbo
+knight:
+  daily_token_budget: 0
+vendors:
+  zai:
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	b := NewBudget(dir, loaded.Knight())
+	b.EnsureDir()
+	if err := b.Record("unlimited", 5_000_000, 5_000_000); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	if !b.CanSpend() {
+		t.Fatal("expected unlimited budget to keep allowing spends")
+	}
+	if rem := b.Remaining(); rem != 0 {
+		t.Fatalf("expected unlimited budget remaining sentinel 0, got %d", rem)
 	}
 }
 
@@ -244,6 +308,78 @@ func TestSkillValidatorMissingFields(t *testing.T) {
 	}
 	if len(result.Errors) < 2 {
 		t.Errorf("expected at least 2 errors, got %d: %v", len(result.Errors), result.Errors)
+	}
+}
+
+func TestSkillValidatorRejectsMissingStepsSection(t *testing.T) {
+	dir := t.TempDir()
+	skillPath := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(`---
+name: incomplete-skill
+description: Missing steps
+scope: project
+created_by: knight
+---
+# Incomplete Skill
+
+## When to Use
+Use this sometimes.
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result := ValidateSkill(&SkillEntry{
+		Name: "incomplete-skill",
+		Meta: SkillMeta{
+			Name:        "incomplete-skill",
+			Description: "Missing steps",
+			Scope:       "project",
+			CreatedBy:   "knight",
+		},
+		Path: skillPath,
+	})
+	if result.Valid {
+		t.Fatal("expected invalid result when steps section is missing")
+	}
+}
+
+func TestSkillValidatorRejectsScopeMismatch(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".ggcode", "skills", "scope-mismatch")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(`---
+name: scope-mismatch
+description: Wrong scope metadata
+scope: global
+created_by: knight
+---
+# Scope Mismatch
+
+## When to Use
+Use when checking validation.
+
+## Steps
+1. Run the thing
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result := ValidateSkill(&SkillEntry{
+		Name: "scope-mismatch",
+		Meta: SkillMeta{
+			Name:        "scope-mismatch",
+			Description: "Wrong scope metadata",
+			Scope:       "global",
+			CreatedBy:   "knight",
+		},
+		Path:  skillPath,
+		Scope: "project",
+	})
+	if result.Valid {
+		t.Fatal("expected invalid result when scope metadata mismatches index scope")
 	}
 }
 
@@ -474,6 +610,10 @@ func TestUsageTrackerEffectiveness(t *testing.T) {
 	if avg != 4.0 {
 		t.Fatalf("expected avg_score=4.0, got %f", avg)
 	}
+	feedbackAvg, samples := ut.GetFeedback("test-skill")
+	if feedbackAvg != 4.0 || samples != 3 {
+		t.Fatalf("expected feedback avg=4.0 samples=3, got avg=%f samples=%d", feedbackAvg, samples)
+	}
 }
 
 func TestUsageTrackerStale(t *testing.T) {
@@ -570,5 +710,95 @@ func TestSkillIndexCache(t *testing.T) {
 	entries3, _ := idx.Scan()
 	if len(entries3) != 2 {
 		t.Fatalf("after invalidate, expected 2 entries, got %d", len(entries3))
+	}
+}
+
+func TestSkillIndexConcurrentScanAndInvalidate(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-cache-race-*")
+	defer os.RemoveAll(dir)
+
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillDir := filepath.Join(homeDir, ".ggcode", "skills", "test")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: test\ndescription: test\n---\n# Test"), 0644)
+
+	idx := NewSkillIndex(homeDir, projDir)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := idx.Scan(); err != nil {
+				t.Errorf("Scan returned error: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			idx.Invalidate()
+		}()
+	}
+	wg.Wait()
+}
+
+func TestKnightFeedbackPolicyHelpers(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	if err := k.usage.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir() error = %v", err)
+	}
+
+	k.RecordSkillEffectiveness("great-skill", 5)
+	k.RecordSkillEffectiveness("great-skill", 4)
+	if !k.shouldSuppressStaleNotice("great-skill") {
+		t.Fatal("expected strong positive feedback to suppress stale notice")
+	}
+
+	k.RecordSkillEffectiveness("rough-skill", 1)
+	k.RecordSkillEffectiveness("rough-skill", 2)
+	avg, samples, warn := k.shouldWarnLowEffectiveness("rough-skill")
+	if !warn || avg != 1.5 || samples != 2 {
+		t.Fatalf("expected low-effectiveness warning, got warn=%v avg=%f samples=%d", warn, avg, samples)
+	}
+
+	k.RecordSkillEffectiveness("noisy-skill", 1)
+	if _, _, warn := k.shouldWarnLowEffectiveness("noisy-skill"); warn {
+		t.Fatal("expected single signal not to trigger low-effectiveness warning")
+	}
+}
+
+func TestKnightNightlyMaintenanceRunsRealAuditTasks(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	k := New(config.KnightConfig{
+		Enabled:      true,
+		Capabilities: []string{"regression_testing", "doc_sync"},
+	}, homeDir, projDir, nil)
+	emitter := &stubKnightEmitter{}
+	k.SetEmitter(emitter)
+
+	call := 0
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		call++
+		if call == 1 {
+			return stubKnightRunner{output: "verify-ci passed and the project looks healthy."}, nil
+		}
+		return stubKnightRunner{output: "README command examples still match the codebase."}, nil
+	})
+
+	k.nightlyMaintenance(context.Background())
+
+	if len(emitter.reports) != 1 {
+		t.Fatalf("expected one maintenance report, got %d", len(emitter.reports))
+	}
+	report := emitter.reports[0]
+	if !contains(report, "Regression audit") || !contains(report, "Documentation audit") {
+		t.Fatalf("expected both maintenance sections in report, got %q", report)
+	}
+	if !contains(report, "verify-ci passed") || !contains(report, "README command examples") {
+		t.Fatalf("expected task outputs in maintenance report, got %q", report)
 	}
 }

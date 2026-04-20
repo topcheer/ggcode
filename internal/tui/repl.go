@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -96,6 +97,10 @@ func (r *REPL) SetIMManager(mgr *im.Manager) {
 
 func (r *REPL) SetAutoMemory(am *memory.AutoMemory) {
 	r.model.SetAutoMemory(am)
+}
+
+func (r *REPL) SetKnight(k *knight.Knight) {
+	r.model.SetKnight(k)
 }
 
 // SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt
