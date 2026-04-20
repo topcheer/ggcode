@@ -1323,9 +1323,21 @@ func composerDisplayValue(value string, cursor int) string {
 // composerWrappedLines wraps plain text to the given width, then applies the
 // cursor reverse style at the correct position. This avoids ANSI escape codes
 // being split across line boundaries during word wrapping.
+// NOTE: Unlike wrapConversationText, this function preserves trailing spaces
+// because the composer input field needs accurate cursor positioning.
 func composerWrappedLines(value string, cursor, width int) []string {
-	// Wrap the plain text first (no ANSI codes yet)
-	lines := wrapConversationText(value, width)
+	if width <= 0 {
+		return []string{composerDisplayValue(value, cursor)}
+	}
+
+	// Wrap plain text preserving trailing spaces (no TrimRight).
+	var lines []string
+	for _, raw := range strings.Split(value, "\n") {
+		wrapped := wordwrap.String(raw, width)
+		for _, candidate := range strings.Split(wrapped, "\n") {
+			lines = append(lines, candidate)
+		}
+	}
 	if len(lines) == 0 {
 		return lines
 	}
