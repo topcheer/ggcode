@@ -38,6 +38,37 @@ vendors:
 	}
 }
 
+func TestResolveKnightEndpointFallsBackToActiveSelection(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "cn-coding-openai"
+	cfg.Model = "glm-5-turbo"
+
+	resolved, err := cfg.ResolveKnightEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveKnightEndpoint() error = %v", err)
+	}
+	if resolved.VendorID != "zai" || resolved.EndpointID != "cn-coding-openai" || resolved.Model != "glm-5-turbo" {
+		t.Fatalf("unexpected knight fallback resolution: %+v", resolved)
+	}
+}
+
+func TestResolveKnightEndpointAllowsPartialOverride(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "cn-coding-openai"
+	cfg.Model = "glm-5-turbo"
+	cfg.KnightConfig = KnightConfig{Model: "glm-5-air"}
+
+	resolved, err := cfg.ResolveKnightEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveKnightEndpoint() error = %v", err)
+	}
+	if resolved.VendorID != "zai" || resolved.EndpointID != "cn-coding-openai" || resolved.Model != "glm-5-air" {
+		t.Fatalf("unexpected knight partial override resolution: %+v", resolved)
+	}
+}
+
 func TestBuildSystemPrompt(t *testing.T) {
 	tests := []struct {
 		name       string

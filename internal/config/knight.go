@@ -7,6 +7,12 @@ type KnightConfig struct {
 	// Enabled controls whether Knight runs in daemon mode.
 	Enabled bool `yaml:"enabled,omitempty"`
 
+	// Vendor/Endpoint/Model optionally override the main agent LLM selection.
+	// Any empty field falls back to the main active selection.
+	Vendor   string `yaml:"vendor,omitempty"`
+	Endpoint string `yaml:"endpoint,omitempty"`
+	Model    string `yaml:"model,omitempty"`
+
 	// TrustLevel controls Knight's autonomy for skill management.
 	// "readonly" — Knight only analyzes, never writes anything
 	// "staged"   — Knight writes to staging, user approves promotion (default)
@@ -100,4 +106,26 @@ func (c *Config) Knight() KnightConfig {
 		}
 	}
 	return kc
+}
+
+// ResolveKnightEndpoint resolves Knight's optional dedicated provider selection.
+// Any missing vendor/endpoint/model field falls back to the main active selection.
+func (c *Config) ResolveKnightEndpoint() (*ResolvedEndpoint, error) {
+	if c == nil {
+		return nil, nil
+	}
+	kc := c.Knight()
+	vendor := kc.Vendor
+	if vendor == "" {
+		vendor = c.Vendor
+	}
+	endpoint := kc.Endpoint
+	if endpoint == "" {
+		endpoint = c.Endpoint
+	}
+	model := kc.Model
+	if model == "" {
+		model = c.Model
+	}
+	return c.ResolveEndpointSelection(vendor, endpoint, model)
 }

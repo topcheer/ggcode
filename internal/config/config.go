@@ -920,11 +920,16 @@ func shouldApplyFirstLaunchAnthropicBootstrap(raw map[string]interface{}) bool {
 
 // ResolveActiveEndpoint resolves the selected vendor + endpoint into runtime settings.
 func (c *Config) ResolveActiveEndpoint() (*ResolvedEndpoint, error) {
-	return c.ResolveEndpoint(c.Vendor, c.Endpoint)
+	return c.ResolveEndpointSelection(c.Vendor, c.Endpoint, c.Model)
 }
 
 // ResolveEndpoint resolves the given vendor + endpoint into runtime settings.
 func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, error) {
+	return c.ResolveEndpointSelection(vendor, endpoint, "")
+}
+
+// ResolveEndpointSelection resolves the given vendor + endpoint + optional explicit model.
+func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*ResolvedEndpoint, error) {
 	if c == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -936,10 +941,7 @@ func (c *Config) ResolveEndpoint(vendor, endpoint string) (*ResolvedEndpoint, er
 	if !ok {
 		return nil, fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
 	}
-	model := ""
-	if c.Vendor == vendor && c.Endpoint == endpoint {
-		model = strings.TrimSpace(c.Model)
-	}
+	model = strings.TrimSpace(model)
 	if model == "" {
 		model = strings.TrimSpace(ep.SelectedModel)
 	}

@@ -3,6 +3,7 @@ package knight
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -894,8 +895,9 @@ Use for builds.
 	}
 
 	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
-	k.RecordSkillUse("build-flow")
-	k.RecordSkillEffectiveness("build-flow", 5)
+	ref := "project:build-flow"
+	k.RecordSkillUse(ref)
+	k.RecordSkillEffectiveness(ref, 5)
 
 	meta, err := parseSkillFile(skillPath)
 	if err != nil {
@@ -1007,8 +1009,8 @@ Use for builds and test validation.
 Do not use this for unrelated tasks.
 `}, nil
 	})
-	k.RecordSkillEffectiveness("build-flow", 1)
-	k.RecordSkillEffectiveness("build-flow", 2)
+	k.RecordSkillEffectiveness("project:build-flow", 1)
+	k.RecordSkillEffectiveness("project:build-flow", 2)
 
 	k.validateAllSkills(context.Background())
 
@@ -1143,17 +1145,121 @@ Use for builds.
 	}
 }
 
-func TestUsageTrackerScopedKeyFallsBackToLegacyName(t *testing.T) {
+func TestUsageTrackerScopedKeyDoesNotReadBareNameData(t *testing.T) {
 	ut := NewUsageTracker(filepath.Join(t.TempDir(), "usage.json"))
 	ut.RecordUse("build-flow")
 	ut.RecordEffectiveness("build-flow", 4)
 
 	count, _, avg := ut.GetUsage("project:build-flow")
-	if count != 1 || avg != 4 {
-		t.Fatalf("expected legacy fallback usage, got count=%d avg=%f", count, avg)
+	if count != 0 || avg != 0 {
+		t.Fatalf("expected scoped stats to stay isolated, got count=%d avg=%f", count, avg)
 	}
 	feedbackAvg, samples := ut.GetFeedback("project:build-flow")
-	if feedbackAvg != 4 || samples != 1 {
-		t.Fatalf("expected legacy fallback feedback, got avg=%f samples=%d", feedbackAvg, samples)
+	if feedbackAvg != 0 || samples != 0 {
+		t.Fatalf("expected scoped feedback to stay isolated, got avg=%f samples=%d", feedbackAvg, samples)
+	}
+}
+
+func TestCandidateQueuePersistsDeferredCandidates(t *testing.T) {
+	queue := NewCandidateQueue(filepath.Join(t.TempDir(), "queue.json"))
+	if err := queue.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir() error = %v", err)
+	}
+	candidate := SkillCandidate{Name: "build-flow", Scope: "project", Score: 4.2, EvidenceCount: 3}
+	if err := queue.Upsert(candidate); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	items, err := queue.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "build-flow" {
+		t.Fatalf("expected persisted candidate, got %+v", items)
+	}
+	if err := queue.Remove(candidate); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	items, err = queue.List()
+	if err != nil {
+		t.Fatalf("List() after remove error = %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected empty queue after remove, got %+v", items)
+	}
+}
+
+func TestMergeSkillCandidatesPrefersFreshHigherSignal(t *testing.T) {
+	queued := []SkillCandidate{{Name: "build-flow", Scope: "project", Score: 3.5, EvidenceCount: 2}}
+	fresh := []SkillCandidate{{Name: "build-flow", Scope: "project", Score: 4.8, EvidenceCount: 4}}
+	items := mergeSkillCandidates(queued, fresh)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 merged candidate, got %+v", items)
+	}
+	if items[0].Score != 4.8 || items[0].EvidenceCount != 4 {
+		t.Fatalf("expected fresher candidate to win, got %+v", items[0])
+	}
+}
+
+func TestAnalyzeRecentSessionsProcessesDeferredQueueWithoutStore(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	if err := os.MkdirAll(filepath.Join(homeDir, ".ggcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(home) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(projDir, ".ggcode"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(project) error = %v", err)
+	}
+	cfg := config.DefaultKnightConfig()
+	cfg.Enabled = true
+	k := New(cfg, homeDir, projDir, nil)
+	if err := k.queue.EnsureDir(); err != nil {
+		t.Fatalf("queue.EnsureDir() error = %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := k.queue.Upsert(SkillCandidate{
+			Name:          fmt.Sprintf("build-flow-%d", i),
+			Scope:         "project",
+			Description:   "Build flow",
+			Score:         4.0 - float64(i)*0.1,
+			EvidenceCount: 3,
+			Reason:        "deferred",
+		}); err != nil {
+			t.Fatalf("queue.Upsert(%d) error = %v", i, err)
+		}
+	}
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return stubKnightRunner{output: `---
+name: generated-skill
+description: "Generated skill"
+scope: project
+created_by: knight
+---
+# Generated Skill
+
+## When to Use
+Use it.
+
+## Steps
+1. Do the thing
+`}, nil
+	})
+
+	if err := k.analyzeRecentSessions(context.Background()); err != nil {
+		t.Fatalf("analyzeRecentSessions() error = %v", err)
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		t.Fatalf("StagingSkills() error = %v", err)
+	}
+	if len(staging) != knightMaxGeneratedSkills {
+		t.Fatalf("expected %d staged skills, got %d", knightMaxGeneratedSkills, len(staging))
+	}
+	remaining, err := k.queue.List()
+	if err != nil {
+		t.Fatalf("queue.List() error = %v", err)
+	}
+	if len(remaining) != 1 {
+		t.Fatalf("expected 1 deferred candidate to remain queued, got %+v", remaining)
 	}
 }

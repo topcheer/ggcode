@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -75,9 +74,6 @@ func (ut *UsageTracker) GetUsage(name string) (count int, lastUsed time.Time, av
 
 	entry, ok := ut.data[name]
 	if !ok {
-		if legacy, ok := ut.data[legacySkillUsageKey(name)]; ok {
-			return legacy.UsageCount, legacy.LastUsed, legacy.avgScore()
-		}
 		return 0, time.Time{}, 0
 	}
 	return entry.UsageCount, entry.LastUsed, entry.avgScore()
@@ -91,9 +87,6 @@ func (ut *UsageTracker) GetFeedback(name string) (avgScore float64, samples int)
 
 	entry, ok := ut.data[name]
 	if !ok {
-		if legacy, ok := ut.data[legacySkillUsageKey(name)]; ok {
-			return legacy.avgScore(), len(legacy.Effectiveness)
-		}
 		return 0, 0
 	}
 	return entry.avgScore(), len(entry.Effectiveness)
@@ -106,11 +99,7 @@ func (ut *UsageTracker) Snapshot(name string) (skillUsage, bool) {
 
 	entry, ok := ut.data[name]
 	if !ok {
-		legacy, legacyOK := ut.data[legacySkillUsageKey(name)]
-		if !legacyOK {
-			return skillUsage{}, false
-		}
-		return *legacy, true
+		return skillUsage{}, false
 	}
 	return *entry, true
 }
@@ -123,12 +112,6 @@ func (ut *UsageTracker) IsStale(name string, threshold time.Duration) bool {
 
 	entry, ok := ut.data[name]
 	if !ok {
-		if legacy, legacyOK := ut.data[legacySkillUsageKey(name)]; legacyOK {
-			if legacy.UsageCount == 0 {
-				return true
-			}
-			return time.Since(legacy.LastUsed) > threshold
-		}
 		return true // never used = stale
 	}
 	if entry.UsageCount == 0 {
@@ -216,12 +199,4 @@ func (ut *UsageTracker) saveLocked() {
 		ut.dirty = false
 		ut.lastWrite = time.Now()
 	}
-}
-
-func legacySkillUsageKey(name string) string {
-	name = strings.TrimSpace(name)
-	if idx := strings.Index(name, ":"); idx >= 0 && idx+1 < len(name) {
-		return strings.TrimSpace(name[idx+1:])
-	}
-	return name
 }
