@@ -1501,9 +1501,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	keyMsg, isKeyPress := msg.(tea.KeyPressMsg)
 	if !isKeyPress {
-		// Only KeyPressMsg should reach the textinput. Other message types
-		// (BackgroundColorMsg, ModeReportMsg, spinnerMsg, etc.) are not keyboard input.
-		return m, spinnerCmd
+		// Non-keyboard messages still need to reach the textinput so its
+		// virtual cursor can process blink scheduling messages
+		// (cursor.initialBlinkMsg / cursor.BlinkMsg). Without this the
+		// composer cursor never blinks and, depending on the cursor's
+		// initial IsBlinked state, may not be visible at all.
+		// textinput.Update ignores message types it doesn't handle, so this
+		// forward is safe — the input value is only mutated on
+		// KeyPressMsg/PasteMsg, which take dedicated branches earlier in
+		// this Update function.
+		var fwdCmd tea.Cmd
+		m.input, fwdCmd = m.input.Update(msg)
+		return m, combineCmds(spinnerCmd, fwdCmd)
 	}
 	var cmd tea.Cmd
 	// During startup input drain, suppress all keyboard input.

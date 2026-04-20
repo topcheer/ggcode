@@ -111,7 +111,15 @@ func (m Model) conversationViewport() ViewportModel {
 	vp := m.viewport
 	panelHeight := m.conversationPanelHeight()
 	vp.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
-	vp.SetContent(m.renderOutput())
+	content := m.renderOutput()
+	// In narrow mode (no sidebar), prepend a borderless logo at the top of
+	// the conversation content so it scrolls with the messages.
+	if m.narrowMode() {
+		logoWidth := m.conversationInnerWidth()
+		logo := renderHeaderLogo(logoWidth, m.t("header.terminal_native"))
+		content = logo + "\n\n" + content
+	}
+	vp.SetContent(content)
 	return vp
 }
 
@@ -1255,7 +1263,13 @@ func (m Model) renderComposerPanel() string {
 }
 
 func (m Model) renderComposerInput() string {
-	return lipgloss.NewStyle().Bold(true).Render(m.input.View())
+	// Do NOT wrap m.input.View() in another lipgloss style: textinput.View()
+	// already contains its virtual-cursor ANSI escapes, and re-rendering them
+	// inside a bold/style wrapper makes lipgloss v2 mangle the trailing
+	// reverse-space cursor used at end-of-line — typing a space after text
+	// would then look like the cursor never moved. Bold styling for the
+	// composer text/prompt is applied directly on the textinput Styles.
+	return m.input.View()
 }
 
 func composerNeedsWrap(value string, width int) bool {
@@ -1465,7 +1479,13 @@ func (m Model) sidebarEnabled() bool {
 }
 
 func (m Model) topHeaderEnabled() bool {
-	return m.sidebarVisible && !m.sidebarEnabled()
+	// No longer show the two-box header; logo is embedded in conversation.
+	return false
+}
+
+// narrowMode returns true when the sidebar cannot fit and we're in the main view.
+func (m Model) narrowMode() bool {
+	return !m.sidebarEnabled()
 }
 
 func (m Model) sidebarAvailableByWidth() bool {
