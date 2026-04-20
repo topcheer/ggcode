@@ -24,7 +24,7 @@ func (m *Model) promptExitConfirm() {
 }
 
 func (m *Model) queuePendingSubmission(text string) {
-	count := m.enqueuePendingSubmission(text)
+	count := m.pending.enqueue(text)
 	debug.Log("tui", "queuePendingSubmission: count=%d text=%s", count, truncateStr(text, 100))
 	if count == 0 {
 		return
@@ -40,34 +40,16 @@ func (m *Model) queuePendingSubmission(text string) {
 	}
 }
 
-func (m *Model) enqueuePendingSubmission(text string) int {
-	m.pendingMutex().Lock()
-	defer m.pendingMutex().Unlock()
-	m.pendingSubmissions = append(m.pendingSubmissions, text)
-	return len(m.pendingSubmissions)
-}
-
 func (m *Model) pendingSubmissionCount() int {
-	m.pendingMutex().Lock()
-	defer m.pendingMutex().Unlock()
-	return len(m.pendingSubmissions)
+	return m.pending.count()
 }
 
 func (m *Model) clearPendingSubmissions() {
-	m.pendingMutex().Lock()
-	defer m.pendingMutex().Unlock()
-	m.pendingSubmissions = nil
+	m.pending.clear()
 }
 
 func (m *Model) pendingSubmissionSnapshot() []string {
-	m.pendingMutex().Lock()
-	defer m.pendingMutex().Unlock()
-	if len(m.pendingSubmissions) == 0 {
-		return nil
-	}
-	out := make([]string, len(m.pendingSubmissions))
-	copy(out, m.pendingSubmissions)
-	return out
+	return m.pending.snapshot()
 }
 
 func (m *Model) cancelActiveRun() {
@@ -102,20 +84,15 @@ func (m *Model) cancelActiveRun() {
 }
 
 func (m *Model) consumePendingSubmission() string {
-	m.pendingMutex().Lock()
-	defer m.pendingMutex().Unlock()
-	joined := strings.TrimSpace(strings.Join(m.pendingSubmissions, "\n\n"))
-	m.pendingSubmissions = nil
-	return joined
+	return m.pending.consume()
 }
 
 func (m *Model) restorePendingInput() {
-	m.pendingMutex().Lock()
-	pending := strings.TrimSpace(strings.Join(m.pendingSubmissions, "\n\n"))
+	pending := m.pending.consume()
+	pending = strings.TrimSpace(pending)
 	draft := strings.TrimSpace(m.input.Value())
 	switch {
 	case pending == "":
-		m.pendingMutex().Unlock()
 		return
 	case draft == "":
 		m.input.SetValue(pending)
@@ -125,8 +102,6 @@ func (m *Model) restorePendingInput() {
 		m.input.SetValue(pending + "\n\n" + draft)
 	}
 	m.input.CursorEnd()
-	m.pendingSubmissions = nil
-	m.pendingMutex().Unlock()
 }
 
 func (m *Model) drainPendingInterrupt(runID int) string {
@@ -141,18 +116,51 @@ func (m *Model) drainPendingInterrupt(runID int) string {
 	return text
 }
 
-func (m *Model) pendingMutex() *sync.Mutex {
-	if m.pendingMu == nil {
-		m.pendingMu = &sync.Mutex{}
-	}
-	return m.pendingMu
-}
-
 func (m *Model) sessionMutex() *sync.Mutex {
 	if m.sessionMu == nil {
 		m.sessionMu = &sync.Mutex{}
 	}
 	return m.sessionMu
+}
+
+// --- pendingQueue methods (pointer-reachable, safe across Model copies) ---
+
+func (q *pendingQueue) enqueue(text string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = append(q.items, text)
+	return len(q.items)
+}
+
+func (q *pendingQueue) count() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.items)
+}
+
+func (q *pendingQueue) clear() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = nil
+}
+
+func (q *pendingQueue) snapshot() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return nil
+	}
+	out := make([]string, len(q.items))
+	copy(out, q.items)
+	return out
+}
+
+func (q *pendingQueue) consume() string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	joined := strings.TrimSpace(strings.Join(q.items, "\n\n"))
+	q.items = nil
+	return joined
 }
 
 func stripImagePlaceholder(value, placeholder string) string {
