@@ -161,6 +161,9 @@ func (r *Registry) instancesPath() string {
 func (r *Registry) load() ([]InstanceInfo, error) {
 	data, err := os.ReadFile(r.instancesPath())
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // no instances registered yet
+		}
 		return nil, err
 	}
 	var instances []InstanceInfo
