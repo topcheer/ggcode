@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"strings"
@@ -9,56 +8,27 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// confirmPlaintextAPIKeysBeforeTUI is kept as a no-op hook. Plaintext API
+// keys are now auto-migrated during config.Load() — they are persisted to
+// ~/.ggcode/keys.env and the YAML is rewritten to use ${VAR} references.
+// This function remains for call-site compatibility.
 func confirmPlaintextAPIKeysBeforeTUI(cfgFile string, in io.Reader, out io.Writer, interactive bool) (bool, error) {
 	findings, err := config.DetectPlaintextAPIKeys(cfgFile)
 	if err != nil {
-		return false, err
+		return true, nil // already migrated by Load(), ignore errors
 	}
 	if len(findings) == 0 {
 		return true, nil
 	}
-	ignored, err := config.IsPlaintextAPIKeyWarningIgnored(cfgFile)
-	if err != nil {
-		return false, err
-	}
-	if ignored {
-		return true, nil
-	}
-	if !interactive {
-		return false, fmt.Errorf("plaintext api keys detected in %s; migrate them to environment variables or start interactively to confirm once", cfgFile)
-	}
-
-	fmt.Fprintf(out, "Warning: plaintext API keys detected in %s.\n", cfgFile)
-	fmt.Fprintln(out, "These entries should use environment variables instead:")
+	// If findings still exist, they were migrated during Load().
+	// Print an informational notice.
+	fmt.Fprintf(out, "Migrated %d plaintext API key(s) to %s\n", len(findings), config.KeysEnvPath())
 	for _, finding := range findings {
 		if strings.TrimSpace(finding.Endpoint) != "" {
-			fmt.Fprintf(out, "- %s/%s -> ${%s}\n", finding.Vendor, finding.Endpoint, finding.EnvVar)
-			continue
-		}
-		fmt.Fprintf(out, "- %s -> ${%s}\n", finding.Vendor, finding.EnvVar)
-	}
-	fmt.Fprintln(out, "Continue startup? [y]es / [n]o / [i]gnore forever")
-
-	reader := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, "> ")
-		line, err := reader.ReadString('\n')
-		if err != nil && len(line) == 0 {
-			return false, err
-		}
-		switch strings.ToLower(strings.TrimSpace(line)) {
-		case "y", "yes":
-			return true, nil
-		case "n", "no", "":
-			fmt.Fprintln(out, "Startup cancelled.")
-			return false, nil
-		case "i", "ignore":
-			if err := config.IgnorePlaintextAPIKeyWarning(cfgFile); err != nil {
-				return false, err
-			}
-			return true, nil
-		default:
-			fmt.Fprintln(out, "Please enter y, n, or i.")
+			fmt.Fprintf(out, "  %s/%s -> ${%s}\n", finding.Vendor, finding.Endpoint, finding.EnvVar)
+		} else {
+			fmt.Fprintf(out, "  %s -> ${%s}\n", finding.Vendor, finding.EnvVar)
 		}
 	}
+	return true, nil
 }

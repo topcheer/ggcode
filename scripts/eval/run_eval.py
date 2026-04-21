@@ -590,82 +590,12 @@ def generate_config(
     port_file: str,
     metrics_path: str,
 ):
-    """Generate a ggcode config YAML for the given mode.
+    """Generate a minimal ggcode config YAML for the given mode.
 
-    Uses the embedded default config as base (so vendor/system_prompt/vendors
-    are all present), then patches in dummy adapter and optional knight settings.
-    The minimal config approach fails because ggcode's daemon needs the full
-    vendor registry and system_prompt to initialize properly.
+    Only overrides vendor/endpoint/model/im — ggcode daemon merges these with
+    its built-in defaults (vendor registry, system_prompt, etc.).
+    All paths MUST be absolute so the daemon can find them regardless of cwd.
     """
-    # Try to load a reference config from a previous successful run.
-    # Fallback to the embedded minimal default.
-    ref_paths = [
-        Path("/tmp/knight-teamclaw-smoke3/baseline-config.yaml"),
-    ]
-    base_yaml = None
-    for rp in ref_paths:
-        if rp.exists():
-            base_yaml = rp.read_text()
-            break
-
-    if base_yaml:
-        # Patch the existing config: update port_file, metrics_path, and knight settings
-        import re
-
-        # Sanitize hardcoded API keys — replace literal keys with ${VENDOR_API_KEY} env vars
-        # This prevents leaking keys in generated configs
-        env_var_map = {
-            "AIzaSyDhtwWBmkqTrWPkwHiYtZ4ixDm9R2giIMQ": "${GOOGLE_API_KEY}",
-            "sk-6h3rg0rAnwBoG60Ei2j8SgXkZILd7RPj9AnwCB6cYf2IP1xV": "${MOONSHOT_API_KEY}",
-            "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": "${OPENROUTER_API_KEY}",
-            "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": "${NVIDIA_API_KEY}",
-            "38dfc49f4bde4b17a5d5b8a612687d87.3axFVc9M6KDD59Rn": "${ZAI_API_KEY}",
-            "31c52998b0ed4b5b873fae684573cbfa.1kPfC0iWOMMxs2tE": "${ZAI_API_KEY}",
-        }
-        for literal_key, env_ref in env_var_map.items():
-            base_yaml = base_yaml.replace(literal_key, env_ref)
-
-        # Update port_file and metrics_path (absolute paths, no quotes needed)
-        base_yaml = re.sub(
-            r'port_file:.*',
-            f'port_file: {port_file}',
-            base_yaml,
-        )
-        base_yaml = re.sub(
-            r'metrics_path:.*',
-            f'metrics_path: {metrics_path}',
-            base_yaml,
-        )
-
-        # Remove any existing knight section and add if needed
-        base_yaml = re.sub(r'\nknight:.*?(?=\n[a-z]|\n\n|\Z)', '', base_yaml, flags=re.DOTALL)
-
-        if mode == "knight":
-            knight_block = (
-                "\nknight:\n"
-                "  enabled: true\n"
-                "  trust_level: staged\n"
-                "  model: glm-5-air\n"
-                "  idle_delay_sec: 60\n"
-                "  capabilities:\n"
-                "    - skill_creation\n"
-                "    - skill_validation\n"
-                "    - regression_testing\n"
-                "    - doc_sync\n"
-            )
-            # Insert knight block after the model line
-            base_yaml = re.sub(
-                r'(model:.*\n)',
-                r'\1' + knight_block + "\n",
-                base_yaml,
-                count=1,
-            )
-
-        with open(output_path, "w") as f:
-            f.write(base_yaml)
-        return
-
-    # Fallback: minimal config (works for projects with existing .ggcode config)
     config = {
         "vendor": "zai",
         "endpoint": "cn-coding-openai",
@@ -703,7 +633,6 @@ def generate_config(
     }
 
     with open(output_path, "w") as f:
-        # Simple YAML generation without pyyaml dependency
         f.write(f"vendor: {config['vendor']}\n")
         f.write(f"endpoint: {config['endpoint']}\n")
         f.write(f"model: {config['model']}\n\n")

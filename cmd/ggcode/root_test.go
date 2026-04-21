@@ -126,10 +126,11 @@ vendors:
 		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() error = %v", err)
 	}
 	if !proceed {
-		t.Fatal("expected startup to continue after yes")
+		t.Fatal("expected startup to continue after migration")
 	}
-	if !strings.Contains(out.String(), "plaintext API keys detected") {
-		t.Fatalf("expected warning output, got %q", out.String())
+	// The function now prints a migration notice instead of prompting.
+	if !strings.Contains(out.String(), "Migrated") {
+		t.Fatalf("expected migration output, got %q", out.String())
 	}
 }
 
@@ -155,18 +156,17 @@ vendors:
 		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() error = %v", err)
 	}
 	if !proceed {
-		t.Fatal("expected ignore forever to continue startup")
+		t.Fatal("expected migration to continue startup")
 	}
+	// The second call still detects plaintext (migration happens in Load(),
+	// not in this function). But it always returns true to allow startup.
 	var second bytes.Buffer
 	proceed, err = confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader("n\n"), &second, true)
 	if err != nil {
 		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() second call error = %v", err)
 	}
 	if !proceed {
-		t.Fatal("expected ignored config not to prompt again")
-	}
-	if second.Len() != 0 {
-		t.Fatalf("expected ignored config to skip prompt, got %q", second.String())
+		t.Fatal("expected second call to continue (always allows startup)")
 	}
 }
 
@@ -185,12 +185,13 @@ vendors:
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	var out bytes.Buffer
+	// Auto-migration always succeeds — the function no longer blocks startup.
 	proceed, err := confirmPlaintextAPIKeysBeforeTUI(path, strings.NewReader(""), &out, false)
-	if err == nil {
-		t.Fatal("expected non-interactive plaintext warning to error")
+	if err != nil {
+		t.Fatalf("confirmPlaintextAPIKeysBeforeTUI() unexpected error = %v", err)
 	}
-	if proceed {
-		t.Fatal("expected non-interactive plaintext warning to block startup")
+	if !proceed {
+		t.Fatal("expected auto-migration to allow startup in non-interactive mode")
 	}
 }
 

@@ -667,6 +667,32 @@ func Load(path string) (*Config, error) {
 		applyFirstLaunchAnthropicBootstrap(cfg)
 	}
 
+	// Auto-migrate plaintext API keys to environment variable references.
+	// This sets os.Setenv for the current process and writes ~/.ggcode/keys.env
+	// for future sessions, then rewrites the YAML to use ${VAR} references.
+	migrated, migrateErr := MigratePlaintextAPIKeys(path)
+	if migrateErr != nil {
+		debug.Log("config", "MigratePlaintextAPIKeys error: %v", migrateErr)
+	}
+	if len(migrated) > 0 {
+		for _, m := range migrated {
+			if m.Endpoint != "" {
+				debug.Log("config", "migrated plaintext api_key: %s/%s -> ${%s}", m.Vendor, m.Endpoint, m.EnvVar)
+			} else {
+				debug.Log("config", "migrated plaintext api_key: %s -> ${%s}", m.Vendor, m.EnvVar)
+			}
+		}
+		// Reload the config file after migration rewrote it.
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("re-reading migrated config %s: %w", path, err)
+		}
+		raw = map[string]interface{}{}
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return nil, fmt.Errorf("parsing migrated config %s: %w", path, err)
+		}
+	}
+
 	// Expand env vars
 	lookup = runtimeEnvLookup(raw)
 	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)

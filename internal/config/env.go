@@ -105,6 +105,21 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 		}
 		env[name] = value
 	}
+
+	// Load ~/.ggcode/keys.env — these take precedence over shell rc files
+	// but not over the current process environment (already loaded above).
+	if err := loadKeysEnvInto(func(key, val string) error {
+		if _, exists := env[key]; !exists {
+			env[key] = val
+		}
+		return nil
+	}); err == nil {
+		// Also set into process env so subsequent lookups work.
+		for name, value := range env {
+			os.Setenv(name, value)
+		}
+	}
+
 	needed := referencedEnvVars(raw)
 	if len(needed) == 0 && raw == nil {
 		for _, name := range defaultRuntimeEnvNames() {

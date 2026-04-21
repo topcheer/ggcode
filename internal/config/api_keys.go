@@ -273,3 +273,167 @@ func normalizeWarningConfigPath(path string) string {
 	}
 	return filepath.Clean(path)
 }
+
+// MigratePlaintextAPIKeys detects plaintext API keys in the config file,
+// sets them as environment variables for the current process, persists them
+// to ~/.ggcode/keys.env for future sessions, and rewrites the YAML to use
+// ${VAR} references. Returns the list of migrated keys so callers can log
+// the migration. If no plaintext keys are found, it returns an empty slice
+// and nil error without touching any file.
+func MigratePlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
+	raw, err := loadRawConfigMap(path)
+	if err != nil {
+		return nil, err
+	}
+	if raw == nil || len(raw) == 0 {
+		return nil, nil
+	}
+
+	findings := detectPlaintextAPIKeysFromRaw(raw)
+	if len(findings) == 0 {
+		return nil, nil
+	}
+
+	// Collect key=value pairs for keys.env.
+	envEntries := make(map[string]string)
+
+	vendors, _ := raw["vendors"].(map[string]interface{})
+	for _, f := range findings {
+		vendorMap, ok := vendors[f.Vendor].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if f.Endpoint == "" {
+			// Vendor-level key
+			value, ok := stringValue(vendorMap["api_key"])
+			if !ok || !isPlaintextAPIKeyValue(value) {
+				continue
+			}
+			os.Setenv(f.EnvVar, value)
+			envEntries[f.EnvVar] = value
+			vendorMap["api_key"] = "${" + f.EnvVar + "}"
+		} else {
+			// Endpoint-level key
+			endpoints, _ := vendorMap["endpoints"].(map[string]interface{})
+			epMap, ok := endpoints[f.Endpoint].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			value, ok := stringValue(epMap["api_key"])
+			if !ok || !isPlaintextAPIKeyValue(value) {
+				continue
+			}
+			os.Setenv(f.EnvVar, value)
+			envEntries[f.EnvVar] = value
+			epMap["api_key"] = "${" + f.EnvVar + "}"
+			endpoints[f.Endpoint] = epMap
+		}
+		vendors[f.Vendor] = vendorMap
+	}
+	raw["vendors"] = vendors
+
+	// Persist to ~/.ggcode/keys.env (merge with existing entries).
+	if err := writeKeysEnv(envEntries); err != nil {
+		return nil, fmt.Errorf("writing keys.env: %w", err)
+	}
+
+	// Rewrite the config YAML with ${VAR} references.
+	updated, err := yaml.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling migrated config: %w", err)
+	}
+	if err := os.WriteFile(path, updated, 0600); err != nil {
+		return nil, fmt.Errorf("writing migrated config %s: %w", path, err)
+	}
+	// Force exact permissions (os.WriteFile respects umask).
+	_ = os.Chmod(path, 0600)
+
+	return findings, nil
+}
+
+// KeysEnvPath returns the path to the managed env file for API keys.
+func KeysEnvPath() string {
+	if keysEnvPathOverride != "" {
+		return keysEnvPathOverride
+	}
+	return filepath.Join(ConfigDir(), "keys.env")
+}
+
+// keysEnvPathOverride is set by tests to redirect keys.env to a temp directory.
+var keysEnvPathOverride string
+
+// LoadKeysEnv loads API keys from ~/.ggcode/keys.env into the current
+// process environment. Keys that are already set in the environment take
+// precedence and are not overwritten.
+func LoadKeysEnv() error {
+	return loadKeysEnvInto(os.Setenv)
+}
+
+func loadKeysEnvInto(setenv func(string, string) error) error {
+	path := KeysEnvPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reading keys.env: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		name, value, ok := parseEnvAssignment(line)
+		if !ok {
+			continue
+		}
+		// Do not overwrite existing env vars — user's shell env takes precedence.
+		if _, exists := os.LookupEnv(name); exists {
+			continue
+		}
+		_ = setenv(name, value)
+	}
+	return nil
+}
+
+func writeKeysEnv(newEntries map[string]string) error {
+	path := KeysEnvPath()
+
+	// Load existing entries first so we merge rather than overwrite.
+	existing := make(map[string]string)
+	if data, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			name, value, ok := parseEnvAssignment(line)
+			if ok {
+				existing[name] = value
+			}
+		}
+	}
+
+	// Merge new entries.
+	for k, v := range newEntries {
+		existing[k] = v
+	}
+
+	// Write deterministic output (sorted by key).
+	keys := make([]string, 0, len(existing))
+	for k := range existing {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("# Managed by ggcode — DO NOT EDIT manually.\n")
+	b.WriteString("# Use ggcode config to change API keys.\n")
+	for _, k := range keys {
+		// Use single quotes to avoid shell expansion issues.
+		fmt.Fprintf(&b, "export %s='%s'\n", k, existing[k])
+	}
+
+	if err := os.MkdirAll(ConfigDir(), 0755); err != nil {
+		return fmt.Errorf("creating config directory: %w", err)
+	}
+	// 0600: only owner can read/write — these are secrets.
+	if err := os.WriteFile(path, []byte(b.String()), 0600); err != nil {
+		return fmt.Errorf("writing keys.env: %w", err)
+	}
+	// Force exact permissions (os.WriteFile respects umask).
+	_ = os.Chmod(path, 0600)
+	return nil
+}
