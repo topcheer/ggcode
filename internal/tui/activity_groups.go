@@ -206,6 +206,7 @@ func (m Model) renderSubAgentActivities() string {
 		rows = append(rows, fmt.Sprintf(" 🤖 %s %s", statusIcon, task))
 		rows = append(rows, fmt.Sprintf("    %s • %d tools", localizeSubAgentStatus(m.currentLanguage(), sa.Status), sa.ToolCallCount))
 		rows = append(rows, fmt.Sprintf("    %s", truncateString(m.subAgentActivitySummary(sa), m.conversationInnerWidth()-8)))
+		rows = append(rows, fmt.Sprintf("    %s %s", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("• /agent"), sa.ID))
 	}
 	return strings.Join(rows, "\n")
 }

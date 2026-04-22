@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -133,9 +134,9 @@ func (m *Model) handleQuestionnaireResult(status string) tea.Cmd {
 	// This gives IM users visibility into what was answered via TUI.
 	m.emitIMQuestionnaireSummary(qs.request, response)
 
-	go func() {
+	safego.Go("tui.askUser.respond", func() {
 		qs.response <- response
-	}()
+	})
 	return nil
 }
 

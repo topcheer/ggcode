@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/version"
 	"runtime"
@@ -158,7 +159,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/im",
 		"/skills", "/sessions", "/mcp", "/agents", "/agent",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
-		"/help", "/?", "/fullscreen":
+		"/help", "/?", "/swarm":
 		return true
 	// Harness: only the bare command (opens panel) is safe
 	case "/harness":
@@ -503,8 +504,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handlePluginsCommand()
 		case "/image":
 			return m.handleImageCommand(parts)
-		case "/fullscreen":
-			return m.handleFullscreenCommand()
 		case "/mcp":
 			return m.handleMCPCommand()
 		case "/skills":
@@ -528,6 +527,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleAgentsCommand(parts)
 		case "/agent":
 			return m.handleAgentDetailCommand(parts)
+		case "/swarm":
+			return m.handleSwarmCommand(parts)
 		case "/compact":
 			return m.handleCompactCommand()
 		case "/todo":
@@ -1207,10 +1208,10 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 			return harnessRunResultMsg{Summary: summary, Err: err}
 		}
 	}
-	go func() {
+	safego.Go("tui.commands.harnessRun", func() {
 		summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
 		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
-	}()
+	})
 	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
 }
 
@@ -1263,10 +1264,10 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 			return harnessRunResultMsg{Summary: summary, Err: err}
 		}
 	}
-	go func() {
+	safego.Go("tui.commands.harnessRerun", func() {
 		summary, err := executeHarnessRerun(ctx, project, cfg, task.ID, opts)
 		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
-	}()
+	})
 	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
 }
 
@@ -1882,9 +1883,9 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 	if pa == nil || pa.Response == nil {
 		return nil
 	}
-	go func() {
+	safego.Go("tui.commands.approvalRespond", func() {
 		pa.Response <- d
-	}()
+	})
 	return nil
 }
 
@@ -1902,9 +1903,9 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 		}
 	}
 	if pa != nil && pa.Response != nil {
-		go func() {
+		safego.Go("tui.commands.approvalAlwaysAllow", func() {
 			pa.Response <- permission.Allow
-		}()
+		})
 	}
 	return nil
 }
@@ -1915,9 +1916,9 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 	if pd == nil || pd.Response == nil {
 		return nil
 	}
-	go func() {
+	safego.Go("tui.commands.diffConfirm", func() {
 		pd.Response <- approved
-	}()
+	})
 	if !approved {
 		m.output.WriteString(m.styles.error.Render(m.t("approval.rejected")))
 	}
@@ -1930,9 +1931,9 @@ func (m *Model) handleHarnessCheckpointConfirm(approved bool) tea.Cmd {
 	if pc == nil || pc.Response == nil {
 		return nil
 	}
-	go func() {
+	safego.Go("tui.commands.harnessCheckpoint", func() {
 		pc.Response <- approved
-	}()
+	})
 	if !approved {
 		m.output.WriteString(m.styles.error.Render(m.t("command.harness_cancelled")))
 	}
@@ -2097,6 +2098,9 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 
 func (m *Model) handleCompactCommand() tea.Cmd {
 	return func() tea.Msg {
+		// Cancel any background pre-compact so the manual /compact owns the
+		// summarize call and we don't double-compact.
+		m.agent.CancelPreCompact()
 		cm := m.agent.ContextManager()
 		if cm == nil {
 			return streamMsg(m.t("compact.unavailable"))
@@ -2344,15 +2348,12 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 	}
 }
 
-func (m *Model) handleFullscreenCommand() tea.Cmd {
-	m.fullscreen = !m.fullscreen
-	state := "off"
-	if m.fullscreen {
-		state = m.t("fullscreen.on")
-	} else {
-		state = m.t("fullscreen.off")
+func (m *Model) handleSwarmCommand(parts []string) tea.Cmd {
+	if m.swarmMgr == nil {
+		m.output.WriteString(m.styles.error.Render("Swarm is not available"))
+		return nil
 	}
-	m.output.WriteString(m.t("fullscreen.state", state))
+	m.openSwarmPanel()
 	return nil
 }
 
@@ -2383,14 +2384,7 @@ func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 		m.output.WriteString(m.styles.error.Render(m.t("agent.not_found", parts[1])))
 		return nil
 	}
-	m.output.WriteString(m.t("agent.title", sa.ID, sa.Status, sa.Task))
-	if sa.Result != "" {
-		m.output.WriteString(m.t("agent.result", sa.Result))
-	}
-	if sa.Error != nil {
-		m.output.WriteString(m.t("agent.error", sa.Error))
-	}
-	m.output.WriteString("\n")
+	m.openAgentDetailPanel(sa.ID)
 	return nil
 }
 

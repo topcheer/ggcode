@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/session"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 func (m *Model) appendUserMessage(text string) {
@@ -58,8 +61,14 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		go func() {
+		safego.Go("tui.startAgent.run", func() {
 			defer func() {
+				// Kick off background pre-compact during the user's idle time
+				// before notifying the TUI the run is done. If tokens are
+				// below threshold this is a cheap no-op.
+				if m.agent != nil {
+					m.agent.StartPreCompact()
+				}
 				if m.program != nil {
 					m.program.Send(agentDoneMsg{RunID: runID})
 				}
@@ -69,7 +78,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 			if err := m.runAgentSubmission(ctx, runID, text, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}
-		}()
+		})
 
 		return nil
 	}
@@ -91,8 +100,11 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		go func() {
+		safego.Go("tui.startAgentWithExpand.run", func() {
 			defer func() {
+				if m.agent != nil {
+					m.agent.StartPreCompact()
+				}
 				if m.program != nil {
 					m.program.Send(agentDoneMsg{RunID: runID})
 				}
@@ -110,7 +122,7 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 			if err := m.runAgentSubmission(ctx, runID, expandedMsg, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}
-		}()
+		})
 
 		return nil
 	}
@@ -147,18 +159,106 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 	return err
 }
 
+// streamBatchInterval controls how often accumulated stream text is flushed
+// to the TUI event loop.  80ms balances responsiveness vs. event-loop load.
+const streamBatchInterval = 80 * time.Millisecond
+
 func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []provider.ContentBlock) (bool, error) {
 	streamErrSent := false
 	writingStatusSent := false
 	round := agentIMRoundState{}
+
+	// Stream batching: accumulate text chunks AND tool events, then flush
+	// periodically instead of sending one program.Send per event.
+	// This prevents event-loop saturation that stalls the spinner tick chain
+	// and makes the TUI appear frozen — especially during burst tool calls.
+	var batchMu sync.Mutex
+	var batchBuf strings.Builder
+	var toolBatchStatus []agentStatusMsg
+	var toolBatchTools []agentToolStatusMsg
+	batchDone := make(chan struct{})
+	// closeBatchDone guarantees the batchDone channel is closed exactly once.
+	// Without this, the StreamEventDone handler and the post-stream cleanup
+	// can race (e.g. if a provider emits Done twice on retry, or if the
+	// stream returns an error immediately after Done) and the second
+	// close(chan) panics, killing the entire TUI process.
+	var batchDoneOnce sync.Once
+	closeBatchDone := func() {
+		batchDoneOnce.Do(func() { close(batchDone) })
+	}
+
+	// flushBatch sends whatever has accumulated (text + tool events).
+	// It is panic-protected because it calls into bubbletea's program.Send,
+	// which can block / panic if the program is in a degraded state.
+	flushBatch := func() {
+		defer safego.Recover("tui.streamBatch.flush")
+		batchMu.Lock()
+		text := batchBuf.String()
+		batchBuf.Reset()
+		status := toolBatchStatus
+		tools := toolBatchTools
+		toolBatchStatus = nil
+		toolBatchTools = nil
+		batchMu.Unlock()
+
+		if m.program == nil {
+			return
+		}
+		// Send text first (if any)
+		if text != "" {
+			m.program.Send(agentStreamMsg{RunID: runID, Text: text})
+		}
+		// Send all batched tool events in a single message
+		if len(status) > 0 || len(tools) > 0 {
+			m.program.Send(agentToolBatchMsg{
+				RunID:      runID,
+				StatusMsgs: status,
+				ToolMsgs:   tools,
+			})
+		}
+	}
+
+	// Background ticker that periodically flushes accumulated events.
+	// Wrapped in safego so that any panic inside flushBatch (or in any of
+	// the tea messages it constructs) is contained to this goroutine and
+	// does not crash the TUI process.
+	safego.Go("tui.streamBatch.ticker", func() {
+		ticker := time.NewTicker(streamBatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				flushBatch()
+			case <-batchDone:
+				// Final flush before exit.
+				flushBatch()
+				return
+			case <-ctx.Done():
+				flushBatch()
+				return
+			}
+		}
+	})
+
 	err := m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+		// Protect the entire stream callback against panics. The callback
+		// runs on the provider's stream-reading goroutine; an unrecovered
+		// panic here would terminate the read goroutine (best case) or
+		// crash the whole process (worst case). Recovering keeps the TUI
+		// alive and lets the higher-level error handling surface a sane
+		// error to the user.
+		defer safego.Recover("tui.streamCallback")
 		if m.program == nil {
 			return
 		}
 		switch event.Type {
 		case provider.StreamEventText:
+			// Always append to round state immediately (not throttled).
 			round.AppendText(event.Text)
-			m.program.Send(agentStreamMsg{RunID: runID, Text: event.Text})
+			// Accumulate for batched TUI delivery.
+			batchMu.Lock()
+			batchBuf.WriteString(event.Text)
+			batchMu.Unlock()
 			if !writingStatusSent {
 				writingStatusSent = true
 				m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
@@ -166,12 +266,15 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				}})
 			}
 		case provider.StreamEventToolCallDone:
+			// Flush any pending text before tool events to keep output ordering correct.
+			flushBatch()
 			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if event.Tool.Name == "ask_user" {
 				round.SetAskUser(m.formatIMAskUserPrompt(string(event.Tool.Arguments)))
 			}
 			if isSubAgentLifecycleTool(event.Tool.Name) {
+				// Sub-agent lifecycle tools are low-frequency; send directly.
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 					ToolID:   event.Tool.ID,
 					ToolName: event.Tool.Name,
@@ -183,12 +286,14 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				return
 			}
 			round.ToolCalls++
-			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
+			// Accumulate tool events for batched delivery.
+			batchMu.Lock()
+			toolBatchStatus = append(toolBatchStatus, agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: present.Activity,
 				ToolName: present.DisplayName,
 				ToolArg:  present.Detail,
 			}})
-			m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
+			toolBatchTools = append(toolBatchTools, agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 				ToolID:      event.Tool.ID,
 				ToolName:    event.Tool.Name,
 				DisplayName: present.DisplayName,
@@ -198,10 +303,14 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				RawArgs:     string(event.Tool.Arguments),
 				Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 			}})
+			batchMu.Unlock()
 		case provider.StreamEventToolResult:
+			// Flush any pending text before tool results.
+			flushBatch()
 			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if isSubAgentLifecycleTool(event.Tool.Name) {
+				// Sub-agent lifecycle tools are low-frequency; send directly.
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 					ToolID:   event.Tool.ID,
 					ToolName: event.Tool.Name,
@@ -230,12 +339,14 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 					Detail:   present.Detail,
 				},
 			})
-			m.program.Send(agentStatusMsg{RunID: runID, statusMsg: statusMsg{
+			// Accumulate tool result events for batched delivery.
+			batchMu.Lock()
+			toolBatchStatus = append(toolBatchStatus, agentStatusMsg{RunID: runID, statusMsg: statusMsg{
 				Activity: m.t("status.thinking"),
 				ToolName: present.DisplayName,
 				ToolArg:  present.Detail,
 			}})
-			m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
+			toolBatchTools = append(toolBatchTools, agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
 				ToolID:      event.Tool.ID,
 				ToolName:    event.Tool.Name,
 				DisplayName: present.DisplayName,
@@ -247,12 +358,20 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 				IsError:     event.IsError,
 			}})
+			batchMu.Unlock()
 		case provider.StreamEventError:
 			if !errors.Is(event.Error, context.Canceled) {
 				streamErrSent = true
 				m.program.Send(agentErrMsg{RunID: runID, Err: event.Error})
 			}
 		case provider.StreamEventDone:
+			// Flush any remaining text/tool events synchronously before
+			// processing the Done event. This is critical for multi-round
+			// agent loops: each round ends with a Done event, and subsequent
+			// rounds may contain pure text with no tool calls. Without this
+			// flush, the text would remain stuck in batchBuf because the
+			// ticker goroutine exits after the first closeBatchDone().
+			flushBatch()
 			writingStatusSent = false
 			switch {
 			case round.AskUserText != "":
@@ -269,6 +388,12 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			round.Reset()
 		}
 	})
+
+	// Ensure batch goroutine is stopped if RunStreamWithContent returns
+	// without sending StreamEventDone (e.g. on error). Idempotent thanks to
+	// closeBatchDone's sync.Once guard.
+	closeBatchDone()
+
 	if err != nil && !errors.Is(err, context.Canceled) && !streamErrSent {
 		return false, err
 	}

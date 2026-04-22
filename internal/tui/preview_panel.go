@@ -188,7 +188,7 @@ func (m Model) renderPreviewPanel() string {
 		meta += "  •  " + scroll
 	}
 	title := lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true).Render(previewText(m.currentLanguage(), "title"))
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(previewText(m.currentLanguage(), "hint_fullscreen"))
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(previewText(m.currentLanguage(), "hint"))
 	content := strings.Join([]string{
 		title,
 		truncateDisplayWidth(meta, max(12, m.previewContentWidth())),
@@ -303,8 +303,6 @@ func previewText(lang Language, key string) string {
 			return "定位行:"
 		case "hint":
 			return "Esc 关闭 • 点击其它路径可切换预览"
-		case "hint_fullscreen":
-			return "Esc 关闭 • 鼠标滚轮 / ↑↓ / PgUp / PgDn 滚动"
 		case "binary":
 			return "二进制文件不支持预览"
 		}
@@ -318,8 +316,6 @@ func previewText(lang Language, key string) string {
 			return "line:"
 		case "hint":
 			return "Esc closes • click another path to switch preview"
-		case "hint_fullscreen":
-			return "Esc closes • mouse wheel / ↑↓ / PgUp / PgDn scroll"
 		case "binary":
 			return "Binary files cannot be previewed"
 		}

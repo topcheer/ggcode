@@ -669,20 +669,10 @@ func TestCloseActivePanel_PreviewPanel(t *testing.T) {
 	// previewPanel is managed via the file browser; it's not in closeActivePanel's
 	// switch. Verify that setting it without other panels returns false.
 	m.previewPanel = &previewPanelState{}
-	// previewPanel is not handled by closeActivePanel — it has its own close path
-	// via the fullscreen file browser. This test documents that behavior.
+	// previewPanel is not handled by closeActivePanel — it has its own close path.
+	// This test documents that behavior.
 	if m.closeActivePanel() {
 		t.Error("expected false: previewPanel is not closed by closeActivePanel")
-	}
-}
-
-func TestCloseActivePanel_Fullscreen(t *testing.T) {
-	m := newTestModel()
-	// fullscreen mode is not closed by closeActivePanel either; it has its own
-	// keybinding path. This test documents the actual behavior.
-	m.fullscreen = true
-	if m.closeActivePanel() {
-		t.Error("expected false: fullscreen is not closed by closeActivePanel")
 	}
 }
 

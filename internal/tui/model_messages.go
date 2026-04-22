@@ -91,6 +91,14 @@ type agentToolStatusMsg struct {
 	ToolStatusMsg
 }
 
+// agentToolBatchMsg delivers a batch of tool status + status bar updates
+// in a single message, reducing event-loop saturation from burst tool events.
+type agentToolBatchMsg struct {
+	RunID      int
+	StatusMsgs []agentStatusMsg
+	ToolMsgs   []agentToolStatusMsg
+}
+
 type agentStatusMsg struct {
 	RunID int
 	statusMsg

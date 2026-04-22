@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
@@ -21,8 +22,11 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/task"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/update"
 )
@@ -125,8 +129,8 @@ func (r *REPL) SetAutoMemoryFiles(files []string) {
 // SetCheckpointManager wires the checkpoint manager into the agent and REPL.
 func (r *REPL) SetCheckpointManager(m *checkpoint.Manager) {
 	r.agent.SetCheckpointManager(m)
-	r.agent.SetDiffConfirm(func(filePath, diffText string) bool {
-		return r.requestDiffConfirm(filePath, diffText)
+	r.agent.SetDiffConfirm(func(ctx context.Context, filePath, diffText string) bool {
+		return r.requestDiffConfirm(ctx, filePath, diffText)
 	})
 }
 
@@ -160,6 +164,143 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	})
 }
 
+// SetTaskManager wires the task manager and registers task tools.
+func (r *REPL) SetTaskManager(mgr *task.Manager, tools *tool.Registry) {
+	tools.Register(tool.TaskCreateTool{Manager: mgr})
+	tools.Register(tool.TaskGetTool{Manager: mgr})
+	tools.Register(tool.TaskListTool{Manager: mgr})
+	tools.Register(tool.TaskUpdateTool{Manager: mgr})
+	tools.Register(tool.TaskStopTool{Manager: mgr})
+}
+
+// SetTaskOutputTool registers the task_output tool for reading sub-agent results.
+func (r *REPL) SetTaskOutputTool(mgr *subagent.Manager, tools *tool.Registry) {
+	tools.Register(tool.TaskOutputTool{Provider: mgr})
+}
+
+// SetCronScheduler wires the cron scheduler and registers cron tools.
+func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
+	s.SetEnqueue(func(prompt string) {
+		if r.program != nil {
+			r.program.Send(cronPromptMsg{Prompt: prompt})
+		}
+	})
+	tools.Register(tool.CronCreateTool{Scheduler: s})
+	tools.Register(tool.CronDeleteTool{Scheduler: s})
+	tools.Register(tool.CronListTool{Scheduler: s})
+}
+
+// SetPlanModeTools registers plan mode tools with a mode switcher that
+// updates both the Model's mode and the ConfigPolicy.
+func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
+	switcher := replModeSwitcher{model: &r.model}
+	tools.Register(tool.EnterPlanModeTool{Switcher: switcher})
+	tools.Register(tool.ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode})
+}
+
+// SetConfigTool registers the config tool backed by the current config.
+func (r *REPL) SetConfigTool(tools *tool.Registry) {
+	access := &replConfigAccess{model: &r.model}
+	tools.Register(tool.ConfigTool{Access: access})
+}
+
+// SetSendMessageTool registers the send_message tool for agent communication.
+func (r *REPL) SetSendMessageTool(mgr *subagent.Manager, tools *tool.Registry) {
+	tools.Register(tool.SendMessageTool{Manager: mgr})
+}
+
+// SetSwarmManager wires the swarm manager and registers swarm tools.
+func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
+	r.model.swarmMgr = mgr
+
+	tools.Register(tool.TeamCreateTool{Manager: mgr})
+	tools.Register(tool.TeamDeleteTool{Manager: mgr})
+	tools.Register(tool.TeammateSpawnTool{Manager: mgr})
+	tools.Register(tool.TeammateListTool{Manager: mgr})
+	tools.Register(tool.TeammateShutdownTool{Manager: mgr})
+	tools.Register(tool.SwarmTaskCreateTool{Manager: mgr})
+	tools.Register(tool.SwarmTaskListTool{Manager: mgr})
+	tools.Register(tool.SwarmTaskClaimTool{Manager: mgr})
+	tools.Register(tool.SwarmTaskCompleteTool{Manager: mgr})
+
+	// Re-register send_message with SwarmMgr so it can route to swarm teammates.
+	tools.Register(tool.SendMessageTool{Manager: r.model.subAgentMgr, SwarmMgr: mgr})
+
+	// Notify TUI on swarm state changes.
+	mgr.SetOnUpdate(func(ev swarm.Event) {
+		if r.program != nil {
+			r.program.Send(subAgentUpdateMsg{}) // reuse existing update message
+		}
+	})
+}
+
+// replModeSwitcher implements tool.ModeSwitcher by delegating to the TUI Model.
+type replModeSwitcher struct {
+	model *Model
+}
+
+func (s replModeSwitcher) SetMode(mode permission.PermissionMode) {
+	// ConfigPolicy.SetMode is thread-safe (has its own mutex)
+	if cp, ok := s.model.policy.(*permission.ConfigPolicy); ok {
+		cp.SetMode(mode)
+	}
+	// Update Model.mode via program.Send for thread safety
+	if s.model.program != nil {
+		s.model.program.Send(modeChangeMsg{Mode: mode})
+	}
+}
+
+// modeChangeMsg is sent to update the Model's mode from a goroutine.
+type modeChangeMsg struct {
+	Mode permission.PermissionMode
+}
+
+// replConfigAccess implements tool.ConfigAccess backed by the TUI Model's config.
+type replConfigAccess struct {
+	model *Model
+}
+
+func (a *replConfigAccess) Get(key string) (string, bool) {
+	if a.model.config == nil {
+		return "", false
+	}
+	switch key {
+	case "vendor":
+		return a.model.config.Vendor, true
+	case "endpoint":
+		return a.model.config.Endpoint, true
+	case "model":
+		return a.model.config.Model, true
+	case "language":
+		return a.model.config.Language, true
+	case "max_iterations":
+		return fmt.Sprintf("%d", a.model.config.MaxIterations), true
+	case "default_mode":
+		return a.model.config.DefaultMode, true
+	default:
+		return "", false
+	}
+}
+
+func (a *replConfigAccess) Set(key, value string) error {
+	// V1: read-only config tool; writing is not yet supported
+	return fmt.Errorf("setting %q is not supported in V1 (use /config command)", key)
+}
+
+func (a *replConfigAccess) List() map[string]string {
+	if a.model.config == nil {
+		return nil
+	}
+	return map[string]string{
+		"vendor":         a.model.config.Vendor,
+		"endpoint":       a.model.config.Endpoint,
+		"model":          a.model.config.Model,
+		"language":       a.model.config.Language,
+		"max_iterations": fmt.Sprintf("%d", a.model.config.MaxIterations),
+		"default_mode":   a.model.config.DefaultMode,
+	}
+}
+
 func (r *REPL) SetAskUserTool(tools *tool.Registry) {
 	tl, ok := tools.Get("ask_user")
 	if !ok {
@@ -175,7 +316,9 @@ func (r *REPL) SetAskUserTool(tools *tool.Registry) {
 }
 
 // requestDiffConfirm sends a diff confirmation request to the TUI and waits for response.
-func (r *REPL) requestDiffConfirm(filePath, diffText string) bool {
+// Honors ctx so the agent goroutine doesn't leak if the TUI shuts down or the
+// run is cancelled while a confirmation prompt is in flight.
+func (r *REPL) requestDiffConfirm(ctx context.Context, filePath, diffText string) bool {
 	if r.program == nil {
 		// Non-interactive (pipe) mode: auto-approve
 		return true
@@ -186,7 +329,12 @@ func (r *REPL) requestDiffConfirm(filePath, diffText string) bool {
 		DiffText: diffText,
 		Response: resp,
 	})
-	return <-resp
+	select {
+	case ok := <-resp:
+		return ok
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (r *REPL) requestAskUser(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
@@ -206,6 +354,16 @@ func (r *REPL) requestAskUser(ctx context.Context, req tool.AskUserRequest) (too
 	}
 }
 
+// Program returns the underlying tea.Program for external callers that need to send messages.
+func (r *REPL) Program() *tea.Program {
+	return r.program
+}
+
+// cronPromptMsg is sent when a cron job fires, injecting a prompt into the conversation.
+type cronPromptMsg struct {
+	Prompt string
+}
+
 // Run starts the REPL event loop.
 func (r *REPL) Run() error {
 	debug.Log("repl", "Run() START resumeID=%q", r.resumeID)
@@ -219,9 +377,32 @@ func (r *REPL) Run() error {
 	}
 	r.primeInitialWindowSize(term.GetSize)
 
+	// TTY hygiene: drain any pending stdin bytes (e.g. terminal probe responses
+	// from the previous shell, paste residue) before bubbletea grabs the TTY.
+	// Also enable bubbletea v2's internal trace log so we can see readLoop /
+	// cancelReader activity in the next debug bundle.
+	enableBubbleteaTrace()
+	drainStdinResidual()
+
 	r.program = tea.NewProgram(r.model)
 	debug.Log("repl", "program created stdin_is_term=%v stdout_is_term=%v",
 		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()))
+
+	// Watchdog that detects if bubbletea's raw mode is silently lost
+	// (readLoop dead → terminal echoes typed bytes → looks like a frozen UI).
+	// Detection only — we log loudly so the next bug report has a smoking gun.
+	watchdogCtx, watchdogCancel := context.WithCancel(context.Background())
+	stopWatchdog := startTTYWatchdog(watchdogCtx)
+	stopStdoutMonitor := startStdoutHealthMonitor(watchdogCtx, func(msg interface{}) {
+		if r.program != nil {
+			r.program.Send(msg)
+		}
+	})
+	defer func() {
+		stopWatchdog()
+		stopStdoutMonitor()
+		watchdogCancel()
+	}()
 	if r.mcpMgr != nil {
 		r.mcpMgr.SetOnUpdate(func(servers []plugin.MCPServerInfo) {
 			if r.program != nil {
@@ -233,7 +414,7 @@ func (r *REPL) Run() error {
 	if r.commandMgr != nil {
 		stop := make(chan struct{})
 		defer close(stop)
-		go func() {
+		safego.Go("tui.repl.commandReload", func() {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -246,11 +427,14 @@ func (r *REPL) Run() error {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	// Wire the agent's approval handler into the TUI via channel bridge.
-	r.agent.SetApprovalHandler(func(toolName string, input string) permission.Decision {
+	// Honors ctx — if the TUI exits or the run is cancelled while waiting
+	// for the user's decision, the agent goroutine returns Deny instead of
+	// blocking forever on <-resp.
+	r.agent.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
 		if r.program == nil {
 			return permission.Deny
 		}
@@ -260,13 +444,28 @@ func (r *REPL) Run() error {
 			Input:    input,
 			Response: resp,
 		})
-		return <-resp
+		select {
+		case d := <-resp:
+			return d
+		case <-ctx.Done():
+			return permission.Deny
+		}
 	})
 
-	// Wire checkpoint handler — persist compacted state after summarize
+	// Wire checkpoint handler — persist compacted state after summarize.
+	// Acquires the model's sessionMutex while reading m.session and calling
+	// AppendCheckpoint (which mutates ses.UpdatedAt and rewrites the index)
+	// because the TUI thread also mutates the same session under that mutex
+	// (see appendUserMessage in submit.go).
 	r.agent.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
+		if r.store == nil {
+			return
+		}
+		mu := r.model.sessionMutex()
+		mu.Lock()
+		defer mu.Unlock()
 		ses := r.model.Session()
-		if ses == nil || r.store == nil {
+		if ses == nil {
 			return
 		}
 		if err := r.store.AppendCheckpoint(ses, messages, tokenCount); err != nil {
@@ -291,7 +490,7 @@ func (r *REPL) Run() error {
 	if r.model.config != nil {
 		modelName = r.model.config.Model
 	}
-	go func() {
+	safego.Go("tui.repl.startupMsg", func() {
 		// Wait for Bubble Tea to complete initialization (raw mode, alt screen,
 		// mouse mode, renderer start, readLoop start) before sending any messages.
 		// Too short and messages arrive before the event loop is ready.
@@ -299,17 +498,18 @@ func (r *REPL) Run() error {
 		r.program.Send(setProgramMsg{Program: r.program})
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
 		if r.projectMemoryLoader != nil {
-			go func(loader func() (string, []string, error)) {
+			loader := r.projectMemoryLoader
+			safego.Go("tui.repl.projectMemory", func() {
 				content, files, err := loader()
 				if r.program != nil {
 					r.program.Send(projectMemoryLoadedMsg{Content: content, Files: files, Err: err})
 				}
-			}(r.projectMemoryLoader)
+			})
 		}
 		if r.mcpMgr != nil {
 			r.mcpMgr.StartBackground(context.Background())
 		}
-	}()
+	})
 
 	_, err := r.program.Run()
 	debug.Log("repl", "program.Run() returned err=%v", err)

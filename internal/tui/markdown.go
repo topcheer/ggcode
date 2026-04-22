@@ -11,6 +11,8 @@ import (
 	glamourstyles "charm.land/glamour/v2/styles"
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 var (
@@ -74,11 +76,11 @@ func prewarmMarkdownRenderers(widths ...int) {
 		if len(warmWidths) == 0 {
 			return
 		}
-		go func() {
+		safego.Go("tui.markdown.warmRenderer", func() {
 			for _, width := range warmWidths {
 				_ = rendererForWidth(width)
 			}
-		}()
+		})
 	})
 }
 

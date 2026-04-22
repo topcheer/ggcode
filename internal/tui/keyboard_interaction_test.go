@@ -923,18 +923,6 @@ func TestScenario_UserRunsHelpCommand(t *testing.T) {
 	}
 }
 
-func TestScenario_UserRunsFullscreenToggle(t *testing.T) {
-	m := newTestModel()
-	_ = m.handleCommand("/fullscreen")
-	if !m.fullscreen {
-		t.Error("expected fullscreen=true after /fullscreen")
-	}
-	_ = m.handleCommand("/fullscreen")
-	if m.fullscreen {
-		t.Error("expected fullscreen=false after second /fullscreen")
-	}
-}
-
 func TestScenario_UserRunsModeCommand(t *testing.T) {
 	m := newTestModel()
 	_ = m.handleCommand("/mode auto")
@@ -1091,7 +1079,7 @@ func TestScenario_UserOpensFileBrowser(t *testing.T) {
 
 func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 	safeCommands := []string{
-		"/help", "/model", "/provider", "/lang en", "/fullscreen",
+		"/help", "/model", "/provider", "/lang en",
 		"/mcp", "/skills", "/sessions", "/agents",
 		"/status", "/config", "/memory", "/todo", "/plugins",
 		"/checkpoints", "/?", "/impersonate", "/qq", "/telegram",

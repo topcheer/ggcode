@@ -15,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -51,6 +52,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
+		m.lastMouseAt = time.Now()
 		if startupInputSuppressionActive(m.startedAt) {
 			return m, nil
 		}
@@ -83,6 +85,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		m.lastMouseAt = time.Now()
 		if startupInputSuppressionActive(m.startedAt) {
 			debug.Log("tui", "startup gate dropping mouse event age=%s", time.Since(m.startedAt))
 			return m, nil
@@ -193,6 +196,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			debug.Log("tui", "KEYPRESS dropped (input drain) key=%q text=%q", msg.String(), msg.Text)
 			return m, nil
 		}
+		// Mouse SGR fragments (split across read boundaries inside the
+		// bubbletea parser) can leak through as standalone single-char
+		// KeyPressMsg events whose text consists solely of digits/`;`/`<`/
+		// `M`/`m`. Drop these for a short window after any mouse activity.
+		if !m.lastMouseAt.IsZero() && time.Since(m.lastMouseAt) < 200*time.Millisecond &&
+			msg.Mod == 0 && isMouseFragmentChar(msg.Text) {
+			debug.Log("tui", "KEYPRESS dropped (mouse fragment) text=%q since_mouse=%s", msg.Text, time.Since(m.lastMouseAt))
+			return m, nil
+		}
 		if shouldIgnoreTerminalProbeKey(msg) {
 			debug.Log("tui", "ignoring terminal probe key=%q text=%q mod=%v", msg.String(), msg.Text, msg.Mod)
 			return m, nil
@@ -279,6 +291,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSkillsPanelKey(msg)
 		}
 
+		if m.swarmPanel != nil {
+			return m.handleSwarmPanelKey(msg)
+		}
+
 		if m.inspectorPanel != nil {
 			return m.handleInspectorPanelKey(msg)
 		}
@@ -289,6 +305,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.harnessPanel != nil {
 			return m.handleHarnessPanelKey(msg)
+		}
+
+		if m.agentDetailPanel != nil {
+			return m.handleAgentDetailPanelKey(msg)
 		}
 
 		if m.pendingPairingChallenge() != nil {
@@ -618,6 +638,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.submitText(prompt, false)
+
+	case displaySleepMsg:
+		// stdout is dead (display sleep / terminal closed).
+		// The stdoutDeadFlag is already set by the health monitor.
+		// No action needed here — the renderer checks IsStdoutDead().
+		return m, nil
+
+	case displayWakeMsg:
+		// stdout recovered — force a full redraw to refresh stale content.
+		return m, nil
 
 	case agentStreamMsg:
 		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
@@ -1029,13 +1059,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AskUserMsg:
 		if m.pendingQuestionnaire != nil {
 			if msg.Response != nil {
-				go func() {
+				safego.Go("tui.model.cancelAskUser", func() {
 					msg.Response <- toolpkg.AskUserResponse{
 						Status:        toolpkg.AskUserStatusCancelled,
 						Title:         msg.Request.Title,
 						QuestionCount: len(msg.Request.Questions),
 					}
-				}()
+				})
 			}
 			return m, nil
 		}
@@ -1062,6 +1092,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.viewport.AutoFollow() {
 			m.viewport.GotoBottom()
 		}
+		return m, nil
+
+	case modeChangeMsg:
+		m.mode = msg.Mode
+		return m, nil
+
+	case cronPromptMsg:
+		m.queuePendingSubmission(msg.Prompt)
 		return m, nil
 
 	case skillsChangedMsg:
@@ -1104,6 +1142,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamPrefixWritten = false
 			// Reset stream buffer position for next text chunk
 			m.streamStartPos = m.output.Len()
+		}
+		m.syncConversationViewport()
+		if m.viewport.AutoFollow() {
+			m.viewport.GotoBottom()
+		}
+		return m, spinnerCmd
+
+	case agentToolBatchMsg:
+		// Batched tool events — process all accumulated status + tool updates
+		// in a single Update cycle instead of one message per event.
+		// This prevents event-loop saturation from burst tool call/results.
+		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
+			return m, nil
+		}
+		// Apply the last status message (only the latest matters for the status bar).
+		if len(msg.StatusMsgs) > 0 {
+			last := msg.StatusMsgs[len(msg.StatusMsgs)-1]
+			m.statusActivity = last.Activity
+			m.statusToolName = last.ToolName
+			m.statusToolArg = last.ToolArg
+			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
+		}
+		// Apply all tool status updates sequentially.
+		for _, ts := range msg.ToolMsgs {
+			m.updateActiveMCPTools(ts.ToolStatusMsg)
+			if ts.Running {
+				if !isSubAgentLifecycleTool(ts.ToolName) {
+					m.statusToolCount++
+				}
+				m.startToolActivity(ts.ToolStatusMsg)
+				if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
+					m.renderStreamBuffer(true)
+					m.streamStartPos = m.output.Len()
+				}
+				startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
+				spinnerCmd = combineCmds(spinnerCmd, startCmd)
+			} else {
+				m.finishToolActivity(ts.ToolStatusMsg)
+				ts.ToolStatusMsg.Elapsed = m.spinner.Elapsed()
+				m.spinner.Stop()
+				spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
+				m.streamPrefixWritten = false
+				m.streamStartPos = m.output.Len()
+			}
 		}
 		m.syncConversationViewport()
 		if m.viewport.AutoFollow() {
@@ -1531,6 +1613,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
 		debug.Log("tui", "CATCHALL ignored key text=%q", keyMsg.Text)
+		return m, spinnerCmd
+	}
+	if !m.lastMouseAt.IsZero() && time.Since(m.lastMouseAt) < 200*time.Millisecond &&
+		keyMsg.Mod == 0 && isMouseFragmentChar(keyMsg.Text) {
+		debug.Log("tui", "CATCHALL dropped (mouse fragment) text=%q", keyMsg.Text)
 		return m, spinnerCmd
 	}
 

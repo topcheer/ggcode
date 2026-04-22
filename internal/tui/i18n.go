@@ -171,8 +171,6 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.plugins")
 	case "/image":
 		return tr(lang, "slash.image")
-	case "/fullscreen":
-		return tr(lang, "slash.fullscreen")
 	case "/mode":
 		return tr(lang, "slash.mode")
 	case "/init":
@@ -1174,12 +1172,6 @@ func enCatalog(key string) string {
 		return "Send a message to include the image, or /image to attach another.\n\n"
 	case "image.clipboard_failed":
 		return "pasting image from clipboard failed: %v"
-	case "fullscreen.state":
-		return "Fullscreen: %s\n\n"
-	case "fullscreen.on":
-		return "on"
-	case "fullscreen.off":
-		return "off"
 	case "agents.unavailable":
 		return "Sub-agent manager not configured.\n\n"
 	case "agents.none":
@@ -1232,10 +1224,6 @@ func enCatalog(key string) string {
 		return "List loaded plugins"
 	case "slash.image":
 		return "Attach an image"
-	case "slash.fullscreen":
-		return "Toggle fullscreen"
-	case "slash.mode":
-		return "Set permission mode"
 	case "slash.init":
 		return "Generate project GGCODE.md"
 	case "slash.harness":
@@ -1415,7 +1403,6 @@ func enCatalog(key string) string {
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
   /image <path>      Attach an image file
-  /fullscreen        Toggle fullscreen mode
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
   /init              Generate GGCODE.md from the current project
   /harness ...       Run harness control-plane commands
@@ -2431,14 +2418,6 @@ func zhCatalog(key string) string {
 		return "发送一条消息即可携带这张图片，或继续用 /image 再附加一张。\n\n"
 	case "image.clipboard_failed":
 		return "从剪贴板粘贴图片失败：%v"
-	case "fullscreen.state":
-		return "全屏：%s\n\n"
-	case "fullscreen.on":
-		return "开启"
-	case "fullscreen.off":
-		return "关闭"
-	case "agents.unavailable":
-		return "子 Agent 管理器未配置。\n\n"
 	case "agents.none":
 		return "还没有创建子 Agent。\n用法：LLM 可以使用 spawn_agent 工具创建子 Agent。\n\n"
 	case "agents.title":
@@ -2489,10 +2468,6 @@ func zhCatalog(key string) string {
 		return "列出已加载插件"
 	case "slash.image":
 		return "附加图片"
-	case "slash.fullscreen":
-		return "切换全屏"
-	case "slash.mode":
-		return "设置权限模式"
 	case "slash.init":
 		return "生成项目 GGCODE.md"
 	case "slash.harness":
@@ -2672,7 +2647,6 @@ func zhCatalog(key string) string {
   /allow <tool>      永久允许某个工具
   /plugins           列出已加载插件及其工具
   /image <path>      附加图片文件
-  /fullscreen        切换全屏模式
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
   /init              基于当前项目生成 GGCODE.md
   /harness ...       运行 harness 控制面命令
