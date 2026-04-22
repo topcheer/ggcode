@@ -27,11 +27,16 @@ type RunCommand struct {
 	JobManager *CommandJobManager
 }
 
-// autoBackgroundDelay is how long a blocking command runs before being
-// automatically moved to a background job. This prevents GUI apps, dev
-// servers, and other long-lived processes from blocking the agent loop
-// for the full 30-minute timeout.
+// autoBackgroundDelay is how long a dev-server-like command runs before
+// being automatically moved to a background job.
 const autoBackgroundDelay = 15 * time.Second
+
+// stalledCommandDelay is how long a normal (non-dev-server) command runs
+// before being automatically moved to a background job. This prevents
+// unexpectedly slow commands from blocking the agent loop for the full
+// 30-minute timeout. The model can then decide to wait_command, check
+// output, or continue with other work.
+const stalledCommandDelay = 120 * time.Second
 
 // guiCommands are commands that launch GUI applications and should return
 // immediately rather than waiting for process exit.
@@ -237,12 +242,17 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", cmd.Process.Pid)}, nil
 	}
 
-	// For potentially long-running commands, start the process and race
-	// between completion and auto-background delay.
-	shouldAutoBackground := isDevServerCommand(args.Command) && t.JobManager != nil
-
-	if shouldAutoBackground {
-		return t.executeWithAutoBackground(timeoutCtx, cmd, args.Command, &stdout, &stderr)
+	// For non-GUI commands, start the process and race between
+	// completion and auto-background delay. This prevents slow commands
+	// from blocking the agent loop.
+	// - Dev server commands: 15s threshold (known long-running)
+	// - Other commands: 120s threshold (stalled detection)
+	if t.JobManager != nil {
+		delay := stalledCommandDelay
+		if isDevServerCommand(args.Command) {
+			delay = autoBackgroundDelay
+		}
+		return t.executeWithAutoBackground(timeoutCtx, cmd, args.Command, &stdout, &stderr, delay)
 	}
 
 	err = cmd.Run()
@@ -282,10 +292,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 }
 
 // executeWithAutoBackground starts a command and races between command
-// completion and the autoBackgroundDelay. If the command finishes quickly,
+// completion and the given delay. If the command finishes quickly,
 // its output is returned directly. If it runs longer than the delay, it is
 // automatically converted to a background job and the job ID is returned.
-func (t RunCommand) executeWithAutoBackground(ctx context.Context, cmd *exec.Cmd, command string, stdout, stderr *bytes.Buffer) (Result, error) {
+func (t RunCommand) executeWithAutoBackground(ctx context.Context, cmd *exec.Cmd, command string, stdout, stderr *bytes.Buffer, delay time.Duration) (Result, error) {
 	if err := cmd.Start(); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to start command: %v", err)}, nil
 	}
@@ -319,7 +329,7 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cmd *exec.Cmd
 		}
 		return Result{Content: sb.String()}, nil
 
-	case <-time.After(autoBackgroundDelay):
+	case <-time.After(delay):
 		// Command is still running — auto-background it.
 		if t.JobManager == nil {
 			// No job manager available; wait for completion (old behavior).
@@ -345,7 +355,7 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cmd *exec.Cmd
 		jobID := t.JobManager.AutoBackground(cmd, command, stdout.String(), stderr.String())
 		return Result{Content: fmt.Sprintf(
 			"Command is still running after %v. Automatically moved to background (job %s).\nUse `read_command_output` to check progress or `stop_command` to stop it.",
-			autoBackgroundDelay, jobID,
+			delay, jobID,
 		)}, nil
 	}
 }
