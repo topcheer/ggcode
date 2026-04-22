@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // UsageTracker tracks skill usage for Knight's lifecycle management.
@@ -195,7 +197,7 @@ func (ut *UsageTracker) saveLocked() {
 	if err != nil {
 		return
 	}
-	if err := os.WriteFile(ut.path, data, 0600); err == nil {
+	if err := util.AtomicWriteFile(ut.path, data, 0600); err == nil {
 		ut.dirty = false
 		ut.lastWrite = time.Now()
 	}

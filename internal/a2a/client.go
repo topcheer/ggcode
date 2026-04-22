@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Client is an A2A protocol client that sends tasks to remote agents.
@@ -125,11 +127,11 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 	}
 
 	ch := make(chan JSONRPCResponse, 32)
-	go func() {
+	safego.Go("a2a.client.streamRead", func() {
 		defer close(ch)
 		defer resp.Body.Close()
 		decodeSSE(resp.Body, ch)
-	}()
+	})
 
 	return ch, nil
 }
@@ -199,11 +201,11 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 	}
 
 	ch := make(chan JSONRPCResponse, 32)
-	go func() {
+	safego.Go("a2a.client.resubscribeRead", func() {
 		defer close(ch)
 		defer resp.Body.Close()
 		decodeSSE(resp.Body, ch)
-	}()
+	})
 
 	return ch, nil
 }
@@ -262,17 +264,48 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 }
 
 // decodeSSE reads Server-Sent Events from a reader and sends them on ch.
+// Handles multi-line data fields per SSE spec: consecutive "data:" lines are
+// joined with "\n" before parsing.
 func decodeSSE(r io.Reader, ch chan<- JSONRPCResponse) {
 	scanner := bufio.NewScanner(r)
+	var dataBuf strings.Builder
+
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+
+		// Blank line = event boundary. Flush accumulated data.
+		if line == "" {
+			if dataBuf.Len() > 0 {
+				data := dataBuf.String()
+				dataBuf.Reset()
+				var resp JSONRPCResponse
+				if json.Unmarshal([]byte(data), &resp) == nil {
+					ch <- resp
+				}
+			}
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "" {
+
+		// Comment lines (starting with ":") are ignored per SSE spec.
+		if strings.HasPrefix(line, ":") {
 			continue
 		}
+
+		// Accumulate data lines.
+		if strings.HasPrefix(line, "data: ") {
+			dataBuf.WriteString(strings.TrimPrefix(line, "data: "))
+			dataBuf.WriteByte('\n')
+		} else if strings.HasPrefix(line, "data:") {
+			// "data:" without space (also valid per spec).
+			dataBuf.WriteString(strings.TrimPrefix(line, "data:"))
+			dataBuf.WriteByte('\n')
+		}
+		// Other SSE fields (event:, id:, retry:) are silently ignored.
+	}
+
+	// Flush any remaining data at EOF.
+	if dataBuf.Len() > 0 {
+		data := strings.TrimRight(dataBuf.String(), "\n")
 		var resp JSONRPCResponse
 		if json.Unmarshal([]byte(data), &resp) == nil {
 			ch <- resp

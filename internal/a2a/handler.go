@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -120,6 +121,10 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 
 	// Check concurrency limit.
 	h.mu.Lock()
+
+	// Prune old completed tasks.
+	h.cleanupExpiredTasksLocked()
+
 	active := 0
 	for _, t := range h.tasks {
 		if !t.Status.IsTerminal() {
@@ -138,6 +143,7 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 		Skill:     skill,
 		History:   []Message{input},
 		CreatedAt: time.Now(),
+		done:      make(chan struct{}),
 	}
 	h.tasks[task.ID] = task
 	h.mu.Unlock()
@@ -151,7 +157,8 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	// Execute asynchronously.
 	go h.execute(taskCtx, task, perm)
 
-	return task, nil
+	snap := task.Snapshot()
+	return &snap, nil
 }
 
 // continueTask resumes an existing task that is in input-required state.
@@ -170,6 +177,14 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	// Append the new user message to history.
 	task.History = append(task.History, input)
 
+	// Transition to working state while still holding the lock,
+	// preventing CancelTask from racing between the check and goroutine start.
+	task.Status = TaskStatus{State: TaskStateWorking}
+	task.UpdatedAt = time.Now()
+	// Re-create the done channel since it was closed when the previous
+	// execution reached input-required (a pseudo-terminal state).
+	task.done = make(chan struct{})
+
 	// Re-create the cancel context for the resumed execution.
 	taskCtx, cancel := context.WithTimeout(context.Background(), h.timeout)
 	h.cancels[taskID] = cancel
@@ -183,7 +198,8 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	// Resume execution.
 	go h.execute(taskCtx, task, perm)
 
-	return task, nil
+	snap := task.Snapshot()
+	return &snap, nil
 }
 
 func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermission) {
@@ -317,15 +333,37 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 			}},
 		})
 	}
+	if state.IsTerminal() && t.done != nil {
+		close(t.done)
+		t.done = nil
+	}
 	debug.Log("a2a", "task %s → %s", t.ID, state)
 }
 
 // GetTask returns a task by ID.
+// GetTask returns a snapshot of the current state of a task.
 func (h *TaskHandler) GetTask(id string) (*Task, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	t, ok := h.tasks[id]
-	return t, ok
+	if !ok {
+		return nil, false
+	}
+	snap := t.Snapshot()
+	return &snap, true
+}
+
+// GetTaskDone returns the notification channel for a task.
+// The channel is closed when the task reaches a terminal state.
+// Returns nil if the task doesn't exist.
+func (h *TaskHandler) GetTaskDone(id string) <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	t, ok := h.tasks[id]
+	if !ok {
+		return nil
+	}
+	return t.done
 }
 
 // CancelTask cancels a running task by canceling its context.
@@ -501,6 +539,24 @@ func buildAgentPrompt(skill string, text string) string {
 	}
 }
 
+// maxCompletedAge is the maximum time to keep terminal tasks in memory.
+const maxCompletedAge = 30 * time.Minute
+
+// cleanupExpiredTasksLocked removes terminal tasks older than maxCompletedAge.
+// Must be called with h.mu held.
+func (h *TaskHandler) cleanupExpiredTasksLocked() {
+	now := time.Now()
+	for id, t := range h.tasks {
+		if t.Status.IsTerminal() && now.Sub(t.UpdatedAt) > maxCompletedAge {
+			delete(h.tasks, id)
+			delete(h.cancels, id)
+		}
+	}
+}
+
+var taskSeq uint64
+
 func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	n := atomic.AddUint64(&taskSeq, 1)
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), n)
 }

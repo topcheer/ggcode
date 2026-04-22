@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,7 +69,7 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	updated := updateTimestamps(string(content), time.Now())
 
 	// Write to active location
-	if err := os.WriteFile(targetPath, []byte(updated), 0644); err != nil {
+	if err := util.AtomicWriteFile(targetPath, []byte(updated), 0644); err != nil {
 		return fmt.Errorf("write active skill: %w", err)
 	}
 
@@ -130,7 +131,7 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 		return fmt.Errorf("read snapshot: %w", err)
 	}
 	restored := updateTimestamps(string(data), time.Now())
-	if err := os.WriteFile(entry.Path, []byte(restored), 0644); err != nil {
+	if err := util.AtomicWriteFile(entry.Path, []byte(restored), 0644); err != nil {
 		return fmt.Errorf("write restored skill: %w", err)
 	}
 	p.appendChangelog("rollback", entry.Name, entry.Scope, latest)
@@ -155,7 +156,7 @@ func (p *Promoter) WriteStaging(name, scope, content string) (string, error) {
 	filename := fmt.Sprintf("knight-%s-%s.md", time.Now().Format("20060102"), name)
 	path := filepath.Join(stagingDir, filename)
 
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := util.AtomicWriteFile(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write staging skill: %w", err)
 	}
 
@@ -195,7 +196,7 @@ func (p *Promoter) createSnapshot(name, activePath string) error {
 	}
 
 	snapPath := filepath.Join(snapDir, name+"."+time.Now().Format("20060102-150405")+".md")
-	return os.WriteFile(snapPath, data, 0644)
+	return util.AtomicWriteFile(snapPath, data, 0644)
 }
 
 // changelogEntry is one record in the skills changelog.

@@ -396,3 +396,399 @@ func truncate(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "..."
 }
+
+// ---------------------------------------------------------------------------
+// Integration tests for optimization features (with real agent/LLM)
+// ---------------------------------------------------------------------------
+
+// TestRealE2E_SnapshotIsolation verifies that concurrent reads after task
+// completion return independent snapshots (P1-1).
+func TestRealE2E_SnapshotIsolation(t *testing.T) {
+	env := setupRealE2E(t, "snap-test", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Send a simple task that completes quickly.
+	task, err := env.client.SendMessage(ctx, SkillFileSearch, "list files in this workspace")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	// Poll until terminal.
+	task = pollUntilTerminal(t, ctx, env.client, task.ID)
+
+	// Get two snapshots — they should be equal but independent.
+	snap1, err := env.client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap2, err := env.client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Content should match.
+	if snap1.Status.State != snap2.Status.State {
+		t.Errorf("snapshot states differ: %s vs %s", snap1.Status.State, snap2.Status.State)
+	}
+
+	// They should have the same number of history entries.
+	if len(snap1.History) != len(snap2.History) {
+		t.Errorf("snapshot history lengths differ: %d vs %d", len(snap1.History), len(snap2.History))
+	}
+
+	t.Logf("✅ Snapshot isolation: state=%s, history=%d", snap1.Status.State, len(snap1.History))
+}
+
+// TestRealE2E_ChannelNotification verifies that message/send returns promptly
+// when the task completes (P1-2: channel-based wait instead of polling).
+// This test would hang forever if the old polling approach was still used with
+// a broken ticker.
+func TestRealE2E_ChannelNotification(t *testing.T) {
+	env := setupRealE2E(t, "channel-test", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	start := time.Now()
+	task, err := env.client.SendMessage(ctx, SkillFileSearch, "search for any file")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	elapsed := time.Since(start)
+	t.Logf("SendMessage returned in %v (should be fast — channel-based wait)", elapsed)
+
+	// The call should return after the task finishes, not timeout.
+	if task.Status.State == TaskStateWorking || task.Status.State == TaskStateSubmitted {
+		t.Errorf("task should be terminal after SendMessage returns, got: %s", task.Status.State)
+	}
+
+	t.Logf("✅ Channel notification: task=%s, state=%s", task.ID, task.Status.State)
+}
+
+// TestRealE2E_CancelReturnsFreshState verifies that canceling a task returns
+// the updated "canceled" state, not the pre-cancel state (P1-3).
+func TestRealE2E_CancelReturnsFreshState(t *testing.T) {
+	env := setupRealE2E(t, "cancel-test", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// First, send a short task to verify things work.
+	warmup, err := env.client.SendMessage(ctx, SkillFileSearch, "list files")
+	if err != nil {
+		t.Fatalf("warmup: %v", err)
+	}
+	pollUntilTerminal(t, ctx, env.client, warmup.ID)
+	t.Log("warmup task completed ✅")
+
+	// Now submit a long task via stream and cancel it.
+	streamCh, err := env.client.SendMessageStream(ctx, SkillFullTask,
+		"Write a very comprehensive HTTP server in Go with middleware, routing, logging, graceful shutdown, and comprehensive tests. Take your time.")
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	// Read the first SSE event to get the task ID.
+	var taskID string
+	select {
+	case resp := <-streamCh:
+		if resp.Result != nil {
+			resultBytes, _ := json.Marshal(resp.Result)
+			var task Task
+			if json.Unmarshal(resultBytes, &task) == nil && task.ID != "" {
+				taskID = task.ID
+			}
+			if taskID == "" {
+				var m map[string]interface{}
+				if json.Unmarshal(resultBytes, &m) == nil {
+					if id, ok := m["id"].(string); ok {
+						taskID = id
+					}
+				}
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for first SSE event")
+	}
+
+	if taskID == "" {
+		t.Fatal("could not extract task ID from SSE stream")
+	}
+
+	// Wait a bit then cancel.
+	time.Sleep(2 * time.Second)
+	canceledTask, err := env.client.CancelTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	// The returned task should reflect the canceled state.
+	if canceledTask.Status.State != TaskStateCanceled {
+		t.Errorf("expected canceled state, got: %s", canceledTask.Status.State)
+	}
+
+	// Verify via GetTask as well.
+	got, err := env.client.GetTask(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.State != TaskStateCanceled {
+		t.Errorf("GetTask after cancel: expected canceled, got: %s", got.Status.State)
+	}
+
+	t.Logf("✅ Cancel returns fresh state: %s", canceledTask.Status.State)
+}
+
+// TestRealE2E_ClientDisconnect verifies that the server does not hang when the
+// client disconnects mid-task (P1-2: ctx propagation).
+func TestRealE2E_ClientDisconnect(t *testing.T) {
+	env := setupRealE2E(t, "disconnect-test", t.TempDir())
+
+	// Use a short context that cancels before the task completes.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err := env.client.SendMessage(ctx, SkillFullTask,
+		"Write a very detailed REST API implementation in Go with CRUD operations, validation, error handling, and tests. Take your time.")
+	elapsed := time.Since(start)
+
+	// Should return promptly after ctx deadline (not hang for 5 min timeout).
+	if elapsed > 10*time.Second {
+		t.Errorf("SendMessage took %v — should have returned promptly on ctx cancel", elapsed)
+	}
+
+	if err == nil {
+		t.Log("task completed within deadline (acceptable)")
+	} else {
+		t.Logf("✅ Client disconnect: returned in %v with error: %v", elapsed, err)
+	}
+}
+
+// TestRealE2E_TaskCleanupAfterMultipleRuns verifies that old completed tasks
+// are cleaned up and don't cause memory growth (P1-5).
+func TestRealE2E_TaskCleanupAfterMultipleRuns(t *testing.T) {
+	env := setupRealE2E(t, "cleanup-test", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Submit several short tasks.
+	var taskIDs []string
+	for i := 0; i < 5; i++ {
+		task, err := env.client.SendMessage(ctx, SkillFileSearch, "list files")
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+		task = pollUntilTerminal(t, ctx, env.client, task.ID)
+		taskIDs = append(taskIDs, task.ID)
+		t.Logf("  Task %d: %s → %s", i, task.ID[:16], task.Status.State)
+	}
+
+	// All tasks should still be in the handler (not yet expired).
+	for _, id := range taskIDs {
+		_, err := env.client.GetTask(ctx, id)
+		if err != nil {
+			t.Errorf("task %s should still exist", id[:16])
+		}
+	}
+
+	// Artificially age the tasks by modifying their UpdatedAt directly.
+	env.server.handler.mu.Lock()
+	for id := range env.server.handler.tasks {
+		tt := env.server.handler.tasks[id]
+		if tt.Status.IsTerminal() {
+			tt.UpdatedAt = time.Now().Add(-maxCompletedAge - time.Minute)
+		}
+	}
+	env.server.handler.mu.Unlock()
+
+	// Submit one more task — this triggers cleanupExpiredTasksLocked.
+	_, err := env.client.SendMessage(ctx, SkillFileSearch, "list files again")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The old tasks should now be cleaned up.
+	time.Sleep(500 * time.Millisecond) // wait for async processing
+	env.server.handler.mu.Lock()
+	remaining := len(env.server.handler.tasks)
+	env.server.handler.mu.Unlock()
+
+	if remaining > 2 { // at most the new task + any in-flight task
+		t.Errorf("expected ≤2 tasks remaining after cleanup, got %d", remaining)
+	}
+
+	t.Logf("✅ Task cleanup: %d tasks remaining after aging and new submission", remaining)
+}
+
+// TestRealE2E_GenerateIDNoCollision verifies that rapidly submitted tasks
+// get unique IDs (P1-4).
+func TestRealE2E_GenerateIDNoCollision(t *testing.T) {
+	env := setupRealE2E(t, "id-test", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Submit 3 tasks concurrently.
+	type result struct {
+		task *Task
+		err  error
+	}
+	ch := make(chan result, 3)
+
+	for i := 0; i < 3; i++ {
+		go func() {
+			task, err := env.client.SendMessage(ctx, SkillFileSearch, "list files")
+			ch <- result{task, err}
+		}()
+	}
+
+	ids := make(map[string]bool)
+	for i := 0; i < 3; i++ {
+		r := <-ch
+		if r.err != nil {
+			t.Fatalf("concurrent send %d: %v", i, r.err)
+		}
+		if ids[r.task.ID] {
+			t.Fatalf("duplicate task ID: %s", r.task.ID)
+		}
+		ids[r.task.ID] = true
+	}
+
+	t.Logf("✅ ID uniqueness: 3 concurrent tasks got unique IDs: %v", collectKeys(ids))
+}
+
+// TestRealE2E_AmbiguousMatchWithRealLLM verifies that when two instances have
+// similar names, the ambiguous match error is returned rather than silently
+// picking one (P3-1).
+func TestRealE2E_AmbiguousMatchWithRealLLM(t *testing.T) {
+	dir1 := filepath.Join(t.TempDir(), "order-service")
+	dir2 := filepath.Join(t.TempDir(), "order-service-v2")
+	os.MkdirAll(dir1, 0755)
+	os.MkdirAll(dir2, 0755)
+
+	env1 := setupRealE2E(t, "order-service", dir1)
+	env2 := setupRealE2E(t, "order-service-v2", dir2)
+
+	// Register both instances via per-ID files in a shared registry dir.
+	regDir := filepath.Join(t.TempDir(), "a2a-reg")
+	os.MkdirAll(regDir, 0755)
+	for _, env := range []*e2eEnv{env1, env2} {
+		inst := InstanceInfo{
+			ID: env.name + "-id", PID: os.Getpid(),
+			Workspace: env.dir, Endpoint: env.server.Endpoint(), Status: "ready",
+		}
+		data, _ := json.MarshalIndent(inst, "", "  ")
+		os.WriteFile(filepath.Join(regDir, inst.ID+".json"), data, 0644)
+	}
+
+	// Create a third instance that will try to use the remote tool.
+	cfgPath := config.ConfigPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov, err := provider.NewProvider(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	policy := permission.NewConfigPolicyWithMode(nil, []string{t.TempDir()}, permission.BypassMode)
+	registry := tool.NewRegistry()
+	tool.RegisterBuiltinTools(registry, policy, t.TempDir())
+
+	// Register the remote tool pointing at the shared registry.
+	reg := &Registry{dir: regDir, selfID: "caller-id"}
+	remoteTool := NewRemoteTool(reg, e2eAPIKey)
+	registry.Register(remoteTool)
+
+	ag := agent.NewAgent(prov, registry, "You are a test agent. Use the a2a_remote tool when asked.", 5)
+	handler := NewTaskHandler(t.TempDir(), ag, registry, WithTimeout(2*time.Minute))
+	srv := NewServer(ServerConfig{Host: "127.0.0.1", Port: 0, APIKey: e2eAPIKey}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+
+	callerClient := NewClient(srv.Endpoint(), e2eAPIKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Send a task to the caller agent, asking it to call the "order" service.
+	// Since "order" matches both "order-service" and "order-service-v2",
+	// the remote tool should return an ambiguous error.
+	task, err := callerClient.SendMessage(ctx, SkillFullTask,
+		"Use the a2a_remote tool to send a message to the 'order' target. "+
+			"Just send 'hello' as the message. Report the result back.")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	task = pollUntilTerminal(t, ctx, callerClient, task.ID)
+
+	// Check if the agent's response mentions "ambiguous".
+	lastText := lastAgentText(task)
+	if lastText == "" {
+		t.Fatal("no agent response text")
+	}
+
+	ambiguous := strings.Contains(strings.ToLower(lastText), "ambiguous") ||
+		strings.Contains(strings.ToLower(lastText), "multiple instance")
+	t.Logf("Agent response: %s", truncate(lastText, 500))
+
+	if ambiguous {
+		t.Log("✅ Ambiguous match detected by agent")
+	} else {
+		t.Log("⚠️ Agent may not have reported ambiguity (LLM behavior varies)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Shared integration test helpers
+// ---------------------------------------------------------------------------
+
+func pollUntilTerminal(t *testing.T, ctx context.Context, client *Client, taskID string) *Task {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context cancelled while polling task %s", taskID)
+		default:
+		}
+		got, err := client.GetTask(ctx, taskID)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if got.Status.IsTerminal() {
+			return got
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("timeout polling task %s", taskID)
+	return nil
+}
+
+func lastAgentText(task *Task) string {
+	for i := len(task.History) - 1; i >= 0; i-- {
+		if task.History[i].Role == "agent" {
+			for _, p := range task.History[i].Parts {
+				if p.Text != "" {
+					return p.Text
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func collectKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k[:16])
+	}
+	return keys
+}

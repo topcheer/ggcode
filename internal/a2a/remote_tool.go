@@ -146,21 +146,34 @@ func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("discover failed: %v", err)
 	}
+	if len(instances) == 0 {
+		return nil, fmt.Errorf("no ggcode instances found")
+	}
 
 	target = strings.ToLower(target)
+	var matches []InstanceInfo
 	for _, inst := range instances {
 		name := strings.ToLower(filepath.Base(inst.Workspace))
 		if name == target || strings.Contains(name, target) {
-			return &inst, nil
+			matches = append(matches, inst)
 		}
 	}
 
-	// List available instances in error message.
-	var names []string
-	for _, inst := range instances {
-		names = append(names, filepath.Base(inst.Workspace))
+	if len(matches) == 0 {
+		var names []string
+		for _, inst := range instances {
+			names = append(names, filepath.Base(inst.Workspace))
+		}
+		return nil, fmt.Errorf("no instance matching %q found. Available: %s", target, strings.Join(names, ", "))
 	}
-	return nil, fmt.Errorf("no instance matching %q found. Available: %s", target, strings.Join(names, ", "))
+	if len(matches) > 1 {
+		var names []string
+		for _, inst := range matches {
+			names = append(names, filepath.Base(inst.Workspace))
+		}
+		return nil, fmt.Errorf("ambiguous match for %q: multiple instances (%s). Specify a more precise workspace name.", target, strings.Join(names, ", "))
+	}
+	return &matches[0], nil
 }
 
 // discover returns cached instances or refreshes from registry if stale (>10s).

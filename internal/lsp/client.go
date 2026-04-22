@@ -157,6 +157,107 @@ func References(ctx context.Context, workspace, path string, pos Position) ([]Lo
 	})
 }
 
+// Implementation finds implementations of the symbol at pos using textDocument/implementation.
+func Implementation(ctx context.Context, workspace, path string, pos Position) ([]Location, error) {
+	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]Location, error) {
+		call := func() ([]Location, error) {
+			var raw json.RawMessage
+			if err := session.client.call(ctx, "textDocument/implementation", map[string]any{
+				"textDocument": map[string]any{"uri": docURI},
+				"position":     toLSPPosition(pos),
+			}, &raw); err != nil {
+				return nil, err
+			}
+			return parseLocations(raw), nil
+		}
+		return retryEmptySliceResult(ctx, session, call)
+	})
+}
+
+// CallHierarchyItem represents a call hierarchy item returned by the LSP server.
+type CallHierarchyItem struct {
+	Name   string
+	Kind   int
+	Detail string
+	Path   string
+	Range  Range
+	// raw fields preserved for follow-up incoming/outgoing calls
+	rawURI   string
+	rawRange rawRange
+}
+
+type rawCallHierarchyItem struct {
+	Name           string   `json:"name"`
+	Kind           int      `json:"kind"`
+	Detail         string   `json:"detail"`
+	URI            string   `json:"uri"`
+	Range          rawRange `json:"range"`
+	SelectionRange rawRange `json:"selectionRange"`
+}
+
+// CallHierarchyCall represents a caller or callee in the call hierarchy.
+type CallHierarchyCall struct {
+	From       CallHierarchyItem
+	To         CallHierarchyItem // only populated for outgoing calls
+	FromRanges []Range
+}
+
+// PrepareCallHierarchy prepares call hierarchy items for the symbol at pos.
+func PrepareCallHierarchy(ctx context.Context, workspace, path string, pos Position) ([]CallHierarchyItem, error) {
+	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]CallHierarchyItem, error) {
+		call := func() ([]CallHierarchyItem, error) {
+			var raw json.RawMessage
+			if err := session.client.call(ctx, "textDocument/prepareCallHierarchy", map[string]any{
+				"textDocument": map[string]any{"uri": docURI},
+				"position":     toLSPPosition(pos),
+			}, &raw); err != nil {
+				return nil, err
+			}
+			return parseCallHierarchyItems(raw), nil
+		}
+		return retryCallHierarchyItems(ctx, session, call)
+	})
+}
+
+// IncomingCalls returns callers of the given call hierarchy item.
+// Uses item.Path to re-acquire the LSP session for the file's language.
+func IncomingCalls(ctx context.Context, workspace string, item CallHierarchyItem) ([]CallHierarchyCall, error) {
+	return withOpenDocument(ctx, workspace, item.Path, func(ctx context.Context, session *sessionClient, _ string) ([]CallHierarchyCall, error) {
+		var raw json.RawMessage
+		if err := session.client.call(ctx, "callHierarchy/incomingCalls", map[string]any{
+			"item": map[string]any{
+				"name":           item.Name,
+				"kind":           item.Kind,
+				"uri":            item.rawURI,
+				"range":          item.rawRange,
+				"selectionRange": item.rawRange,
+			},
+		}, &raw); err != nil {
+			return nil, err
+		}
+		return parseCallHierarchyCalls(raw, true), nil
+	})
+}
+
+// OutgoingCalls returns callees of the given call hierarchy item.
+func OutgoingCalls(ctx context.Context, workspace string, item CallHierarchyItem) ([]CallHierarchyCall, error) {
+	return withOpenDocument(ctx, workspace, item.Path, func(ctx context.Context, session *sessionClient, _ string) ([]CallHierarchyCall, error) {
+		var raw json.RawMessage
+		if err := session.client.call(ctx, "callHierarchy/outgoingCalls", map[string]any{
+			"item": map[string]any{
+				"name":           item.Name,
+				"kind":           item.Kind,
+				"uri":            item.rawURI,
+				"range":          item.rawRange,
+				"selectionRange": item.rawRange,
+			},
+		}, &raw); err != nil {
+			return nil, err
+		}
+		return parseCallHierarchyCalls(raw, false), nil
+	})
+}
+
 func DocumentSymbols(ctx context.Context, workspace, path string) ([]Symbol, error) {
 	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]Symbol, error) {
 		call := func() ([]Symbol, error) {
@@ -241,6 +342,110 @@ func retryEmptySliceResult[T any](ctx context.Context, session *sessionClient, c
 	return result, nil
 }
 
+func retryCallHierarchyItems(ctx context.Context, session *sessionClient, call func() ([]CallHierarchyItem, error)) ([]CallHierarchyItem, error) {
+	result, err := call()
+	if err != nil || len(result) > 0 || !session.shouldRetryEmptyResults() {
+		return result, err
+	}
+	for i := 0; i < csharpWarmupRetryAttempts; i++ {
+		if err := sleepWithContext(ctx, csharpWarmupRetryDelay); err != nil {
+			return result, nil
+		}
+		next, err := call()
+		if err != nil {
+			return nil, err
+		}
+		if len(next) > 0 {
+			return next, nil
+		}
+	}
+	return result, nil
+}
+
+func parseCallHierarchyItems(raw json.RawMessage) []CallHierarchyItem {
+	var items []rawCallHierarchyItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil
+	}
+	out := make([]CallHierarchyItem, 0, len(items))
+	for _, item := range items {
+		path := uriToPath(item.URI)
+		out = append(out, CallHierarchyItem{
+			Name:   item.Name,
+			Kind:   item.Kind,
+			Detail: item.Detail,
+			Path:   path,
+			Range: Range{
+				Start: Position{Line: item.Range.Start.Line + 1, Character: item.Range.Start.Character + 1},
+				End:   Position{Line: item.Range.End.Line + 1, Character: item.Range.End.Character + 1},
+			},
+			rawURI:   item.URI,
+			rawRange: item.Range,
+		})
+	}
+	return out
+}
+
+func parseCallHierarchyCalls(raw json.RawMessage, incoming bool) []CallHierarchyCall {
+	var rawCalls []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawCalls); err != nil {
+		return nil
+	}
+	var out []CallHierarchyCall
+	for _, rc := range rawCalls {
+		itemKey := "from"
+		if !incoming {
+			itemKey = "to"
+		}
+		itemRaw, ok := rc[itemKey]
+		if !ok {
+			continue
+		}
+		var rawItem rawCallHierarchyItem
+		if err := json.Unmarshal(itemRaw, &rawItem); err != nil {
+			continue
+		}
+		item := CallHierarchyItem{
+			Name:   rawItem.Name,
+			Kind:   rawItem.Kind,
+			Detail: rawItem.Detail,
+			Path:   uriToPath(rawItem.URI),
+			Range: Range{
+				Start: Position{Line: rawItem.Range.Start.Line + 1, Character: rawItem.Range.Start.Character + 1},
+				End:   Position{Line: rawItem.Range.End.Line + 1, Character: rawItem.Range.End.Character + 1},
+			},
+			rawURI:   rawItem.URI,
+			rawRange: rawItem.Range,
+		}
+		call := CallHierarchyCall{FromRanges: parseFromRanges(rc["fromRanges"])}
+		if incoming {
+			call.From = item
+		} else {
+			call.To = item
+		}
+		out = append(out, call)
+	}
+	return out
+}
+
+func parseFromRanges(raw json.RawMessage) []Range {
+	if raw == nil {
+		return nil
+	}
+	var ranges []rawRange
+	if err := json.Unmarshal(raw, &ranges); err != nil {
+		return nil
+	}
+	out := make([]Range, 0, len(ranges))
+	for _, r := range ranges {
+		out = append(out, Range{
+			Start: Position{Line: r.Start.Line + 1, Character: r.Start.Character + 1},
+			End:   Position{Line: r.End.Line + 1, Character: r.End.Character + 1},
+		})
+	}
+	return out
+}
+
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -300,9 +505,11 @@ func startClient(ctx context.Context, workspace string, resolved ResolvedServer)
 				"workspaceFolders": true,
 			},
 			"textDocument": map[string]any{
-				"hover":      map[string]any{},
-				"definition": map[string]any{},
-				"references": map[string]any{},
+				"hover":          map[string]any{},
+				"definition":     map[string]any{},
+				"references":     map[string]any{},
+				"implementation": map[string]any{},
+				"callHierarchy":  map[string]any{},
 				"codeAction": map[string]any{
 					"dynamicRegistration": false,
 					"dataSupport":         true,

@@ -70,8 +70,19 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				return Ask, nil
 			}
 		}
-		// Check sandbox for file tools (still protect workspace boundary)
-		if isFileTool(toolName) {
+		// Check sandbox for file tools (still protect workspace boundary).
+		// In bypass/autopilot, any *write* outside the writable sandbox is
+		// downgraded to Ask, regardless of whether the path is on the small
+		// "sensitive" allow-list. Without this, ~/.aws/credentials,
+		// ~/.docker/config.json, /etc/**, and arbitrary user files outside
+		// the workspace get silently overwritten on a prompt-injected tool
+		// call. See locks.md S5.
+		if isWriteFileTool(toolName) {
+			path, _ := extractFilePath(input)
+			if path != "" && !p.sandbox.Allowed(path) {
+				return Ask, nil
+			}
+		} else if isFileTool(toolName) {
 			path, _ := extractFilePath(input)
 			if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
 				return Ask, nil
@@ -79,7 +90,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		return Allow, nil
 	case PlanMode:
-		// Plan mode: read-only tools allowed, everything else denied
+		// Plan mode: mode control tools + read-only tools allowed, everything else denied
+		if isModeControlTool(toolName) {
+			return Allow, nil
+		}
 		if IsReadOnlyTool(toolName) {
 			// Still check sandbox for read tools
 			if isFileTool(toolName) {
@@ -222,6 +236,20 @@ func isReadOnlyFileTool(name string) bool {
 		return true
 	}
 	return false
+}
+
+// isWriteFileTool returns true for file tools that mutate disk (used for
+// extra sandbox enforcement in bypass/autopilot modes).
+func isWriteFileTool(name string) bool {
+	switch name {
+	case "write_file", "edit_file":
+		return true
+	}
+	return false
+}
+
+func isModeControlTool(name string) bool {
+	return name == "enter_plan_mode" || name == "exit_plan_mode"
 }
 
 func isCommandTool(name string) bool {

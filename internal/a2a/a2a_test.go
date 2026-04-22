@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -779,7 +780,7 @@ func TestRequestInput(t *testing.T) {
 
 	// Manually set to working for the test.
 	handler.mu.Lock()
-	task.Status = TaskStatus{State: TaskStateWorking}
+	handler.tasks[task.ID].Status = TaskStatus{State: TaskStateWorking}
 	handler.mu.Unlock()
 
 	// Request input.
@@ -810,9 +811,14 @@ func TestContinueTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Put task into input-required state.
+	// Put task into input-required state directly on the internal task.
 	handler.mu.Lock()
-	task.Status = TaskStatus{State: TaskStateInputRequired}
+	internal := handler.tasks[task.ID]
+	internal.Status = TaskStatus{State: TaskStateInputRequired}
+	// Re-open done channel since it was closed by the execute goroutine.
+	if internal.done == nil {
+		internal.done = make(chan struct{})
+	}
 	handler.mu.Unlock()
 
 	// Continue with user response.
@@ -877,7 +883,7 @@ func TestRequestInputRejectsNonWorking(t *testing.T) {
 
 	// Force to completed state.
 	handler.mu.Lock()
-	task.Status = TaskStatus{State: TaskStateCompleted}
+	handler.tasks[task.ID].Status = TaskStatus{State: TaskStateCompleted}
 	handler.mu.Unlock()
 
 	err := handler.RequestInput(task.ID, "question?")
@@ -947,16 +953,14 @@ func (r *stringReader) Read(p []byte) (n int, err error) {
 // ---------------------------------------------------------------------------
 
 func TestRemoteToolName(t *testing.T) {
-	reg, _ := NewRegistry()
-	remote := NewRemoteTool(reg, "key")
+	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
 	if remote.Name() != "a2a_remote" {
 		t.Errorf("expected a2a_remote, got %s", remote.Name())
 	}
 }
 
 func TestRemoteToolParameters(t *testing.T) {
-	reg, _ := NewRegistry()
-	remote := NewRemoteTool(reg, "key")
+	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
 	params := remote.Parameters()
 	var schema map[string]interface{}
 	if err := json.Unmarshal(params, &schema); err != nil {
@@ -971,7 +975,7 @@ func TestRemoteToolParameters(t *testing.T) {
 }
 
 func TestRemoteToolListInstances(t *testing.T) {
-	reg, _ := NewRegistry()
+	reg := &Registry{dir: t.TempDir()}
 	remote := NewRemoteTool(reg, "key")
 
 	// No instances → friendly message.
@@ -988,8 +992,7 @@ func TestRemoteToolListInstances(t *testing.T) {
 }
 
 func TestRemoteToolInvalidInput(t *testing.T) {
-	reg, _ := NewRegistry()
-	remote := NewRemoteTool(reg, "key")
+	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
 
 	result, err := remote.Execute(context.Background(), json.RawMessage(`{invalid}`))
 	if err != nil {
@@ -1001,8 +1004,7 @@ func TestRemoteToolInvalidInput(t *testing.T) {
 }
 
 func TestRemoteToolTargetNotFound(t *testing.T) {
-	reg, _ := NewRegistry()
-	remote := NewRemoteTool(reg, "key")
+	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
 
 	result, err := remote.Execute(context.Background(), json.RawMessage(`{"target":"nonexistent","skill":"full-task","message":"test"}`))
 	if err != nil {
@@ -1011,14 +1013,13 @@ func TestRemoteToolTargetNotFound(t *testing.T) {
 	if !result.IsError {
 		t.Error("expected error for nonexistent target")
 	}
-	if !containsStr(result.Content, "no instance matching") {
+	if !containsStr(result.Content, "no ggcode instances found") && !containsStr(result.Content, "no instance matching") {
 		t.Errorf("unexpected error: %s", result.Content)
 	}
 }
 
 func TestRemoteToolCacheRefresh(t *testing.T) {
-	reg, _ := NewRegistry()
-	remote := NewRemoteTool(reg, "key")
+	remote := NewRemoteTool(&Registry{dir: t.TempDir()}, "key")
 
 	// Initially empty.
 	instances, err := remote.discover()
@@ -1065,10 +1066,9 @@ func TestRemoteToolE2E(t *testing.T) {
 		Endpoint:  srv1.Endpoint(),
 		Status:    "ready",
 	}
-	instances := []InstanceInfo{inst}
-	data, _ := json.MarshalIndent(instances, "", "  ")
-	regPath := reg.instancesPath()
-	os.WriteFile(regPath, data, 0644)
+	data, _ := json.MarshalIndent(inst, "", "  ")
+	instPath := filepath.Join(reg.dir, inst.ID+".json")
+	os.WriteFile(instPath, data, 0644)
 
 	remote := NewRemoteTool(reg, "")
 
@@ -1091,5 +1091,346 @@ func TestRemoteToolE2E(t *testing.T) {
 	}
 	if !containsStr(result.Content, "Task sent to order-service") {
 		t.Errorf("expected task sent message, got: %s", result.Content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for optimization changes (snapshot, channel notification, cleanup, etc.)
+// ---------------------------------------------------------------------------
+
+func TestGetTaskReturnsSnapshot(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// GetTask returns a snapshot — mutating it should not affect internal state.
+	snap, ok := handler.GetTask(task.ID)
+	if !ok {
+		t.Fatal("task not found")
+	}
+	snap.Status = TaskStatus{State: TaskStateFailed}
+
+	// Internal task should be unchanged.
+	internal := handler.tasks[task.ID]
+	if internal.Status.State == TaskStateFailed {
+		t.Error("mutating snapshot affected internal task state")
+	}
+}
+
+func TestSnapshotDeepCopiesSlices(t *testing.T) {
+	now := time.Now()
+	orig := &Task{
+		ID:     "test-1",
+		Status: TaskStatus{State: TaskStateCompleted},
+		History: []Message{
+			{Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}}},
+		},
+		Artifacts: []Artifact{
+			{ArtifactID: "a1", Parts: []Part{{Kind: "text", Text: "artifact"}}},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+		done:      make(chan struct{}),
+	}
+	close(orig.done)
+
+	snap := orig.Snapshot()
+
+	// Mutate snapshot's slices.
+	snap.History[0].Parts[0].Text = "mutated"
+	snap.Artifacts[0].Parts[0].Text = "mutated2"
+
+	// Original should be unchanged.
+	if orig.History[0].Parts[0].Text != "hello" {
+		t.Error("snapshot History was not deep copied")
+	}
+	if orig.Artifacts[0].Parts[0].Text != "artifact" {
+		t.Error("snapshot Artifacts was not deep copied")
+	}
+
+	// done channel should not be copied.
+	if snap.done != nil {
+		t.Error("done channel should not be in snapshot")
+	}
+}
+
+func TestGenerateIDUniqueness(t *testing.T) {
+	ids := make(map[string]bool)
+	for i := 0; i < 1000; i++ {
+		id := generateID()
+		if ids[id] {
+			t.Fatalf("duplicate ID generated: %s", id)
+		}
+		ids[id] = true
+	}
+}
+
+func TestDoneChannelClosedOnTerminal(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the done channel.
+	done := handler.GetTaskDone(task.ID)
+	if done == nil {
+		t.Fatal("done channel should exist for new task")
+	}
+
+	// Put task into terminal state.
+	handler.mu.Lock()
+	it := handler.tasks[task.ID]
+	it.Status = TaskStatus{State: TaskStateCompleted}
+	it.UpdatedAt = time.Now()
+	if it.done != nil {
+		close(it.done)
+		it.done = nil
+	}
+	handler.mu.Unlock()
+
+	// done channel should be closed.
+	select {
+	case <-done:
+		// OK
+	default:
+		t.Error("done channel should be closed after terminal state")
+	}
+
+	// GetTaskDone should return nil after terminal.
+	done2 := handler.GetTaskDone(task.ID)
+	if done2 != nil {
+		t.Error("GetTaskDone should return nil for terminal task")
+	}
+}
+
+func TestCleanupExpiredTasks(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+
+	// Create a task and force it to completed with old timestamp.
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler.mu.Lock()
+	internal := handler.tasks[task.ID]
+	internal.Status = TaskStatus{State: TaskStateCompleted}
+	internal.UpdatedAt = time.Now().Add(-maxCompletedAge - time.Minute)
+	handler.mu.Unlock()
+
+	// Create another fresh task.
+	task2, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello2"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger cleanup by calling Handle (which calls cleanupExpiredTasksLocked).
+	_, err = handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello3"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Old task should be cleaned up.
+	_, ok := handler.GetTask(task.ID)
+	if ok {
+		t.Error("old completed task should have been cleaned up")
+	}
+
+	// Fresh task should still exist.
+	_, ok = handler.GetTask(task2.ID)
+	if !ok {
+		t.Error("fresh task should still exist")
+	}
+}
+
+func TestClientDisconnectCancelsWait(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil, WithTimeout(30*time.Second))
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	client := NewClient(srv.Endpoint(), "")
+
+	// Create a context that we cancel early.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel quickly — the server-side handler won't complete in time.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	// This should not block forever — it should return when ctx is cancelled.
+	_, err := client.SendMessage(ctx, SkillFullTask, "test")
+	// Context cancelled should result in an error (context cancelled or EOF).
+	if err == nil {
+		// The task might have completed before the cancel took effect.
+		// That's OK — the important thing is it didn't hang.
+		t.Log("task completed before cancel (acceptable)")
+	}
+}
+
+func TestSSEMultiLineData(t *testing.T) {
+	input := "data: {\"jsonrpc\":\"2.0\"\ndata: ,\"result\":{\"status\":\"ok\"}}\n\n"
+	ch := make(chan JSONRPCResponse, 1)
+	decodeSSE(strings.NewReader(input), ch)
+
+	select {
+	case resp := <-ch:
+		if resp.Result == nil {
+			t.Error("expected result in SSE response")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for SSE event")
+	}
+}
+
+func TestSSECommentLines(t *testing.T) {
+	input := ": this is a comment\ndata: {\"jsonrpc\":\"2.0\",\"id\":1}\n\n"
+	ch := make(chan JSONRPCResponse, 1)
+	decodeSSE(strings.NewReader(input), ch)
+
+	select {
+	case resp := <-ch:
+		if resp.ID == nil {
+			t.Error("expected id in SSE response")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for SSE event")
+	}
+}
+
+func TestPerPIDRegistryFiles(t *testing.T) {
+	dir := t.TempDir()
+	reg := &Registry{dir: dir}
+
+	// Register instance A.
+	instA := InstanceInfo{
+		ID: "inst-a", PID: os.Getpid(),
+		Workspace: "/project-a", Endpoint: "http://localhost:9001", Status: "ready",
+	}
+	if err := reg.Register(instA); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify file exists.
+	if _, err := os.Stat(filepath.Join(dir, "inst-a.json")); err != nil {
+		t.Fatalf("per-PID file not created: %v", err)
+	}
+
+	// Register instance B.
+	regB := &Registry{dir: dir}
+	instB := InstanceInfo{
+		ID: "inst-b", PID: os.Getpid(),
+		Workspace: "/project-b", Endpoint: "http://localhost:9002", Status: "ready",
+	}
+	if err := regB.Register(instB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Discover from a third registry (simulates a different process).
+	regC := &Registry{dir: dir, selfID: "inst-c"}
+	discovered, err := regC.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovered) != 2 {
+		t.Fatalf("expected 2 discovered instances, got %d", len(discovered))
+	}
+
+	// Unregister A.
+	if err := reg.Unregister(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Discover should now return 1 (B only).
+	discovered, err = regC.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovered) != 1 {
+		t.Fatalf("expected 1 discovered instance after unregister, got %d", len(discovered))
+	}
+	if discovered[0].ID != "inst-b" {
+		t.Errorf("expected inst-b, got %s", discovered[0].ID)
+	}
+}
+
+func TestRegistryConcurrentRegister(t *testing.T) {
+	dir := t.TempDir()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			reg := &Registry{dir: dir}
+			inst := InstanceInfo{
+				ID: fmt.Sprintf("inst-%d", i), PID: os.Getpid(),
+				Workspace: fmt.Sprintf("/project-%d", i),
+				Endpoint:  fmt.Sprintf("http://localhost:%d", 9000+i),
+				Status:    "ready",
+			}
+			if err := reg.Register(inst); err != nil {
+				t.Errorf("register %d failed: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// All 10 instances should be discoverable.
+	reg := &Registry{dir: dir, selfID: "self"}
+	discovered, err := reg.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovered) != 10 {
+		t.Errorf("expected 10 discovered instances, got %d", len(discovered))
+	}
+}
+
+func TestAmbiguousMatchError(t *testing.T) {
+	dir := t.TempDir()
+	remote := NewRemoteTool(&Registry{dir: dir, selfID: "self"}, "")
+
+	// Register two instances with similar names using separate registry objects
+	// (simulating separate processes).
+	reg1 := &Registry{dir: dir}
+	reg1.Register(InstanceInfo{
+		ID: "order-1", PID: os.Getpid(),
+		Workspace: "/order-service-v1", Endpoint: "http://localhost:9001", Status: "ready",
+	})
+	reg2 := &Registry{dir: dir}
+	reg2.Register(InstanceInfo{
+		ID: "order-2", PID: os.Getpid(),
+		Workspace: "/order-service-v2", Endpoint: "http://localhost:9002", Status: "ready",
+	})
+
+	// "order" should match both → ambiguous error.
+	result, err := remote.Execute(context.Background(), json.RawMessage(
+		`{"target":"order","skill":"full-task","message":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error for ambiguous match")
+	}
+	if !containsStr(result.Content, "ambiguous") {
+		t.Errorf("expected ambiguous error, got: %s", result.Content)
 	}
 }

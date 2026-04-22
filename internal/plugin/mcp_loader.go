@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -132,7 +133,7 @@ func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDe
 		err       error
 	}
 	done := make(chan result, 1)
-	go func() {
+	safego.Go("plugin.mcp.discover", func() {
 		initResult, err := client.Initialize(ctx)
 		if err != nil {
 			debug.Log("mcp-discover", "initialize_failed error=%v", err)
@@ -152,7 +153,7 @@ func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDe
 			prompts:   listPromptNames(client.ListPrompts(ctx)),
 			resources: listResourceNames(client.ListResources(ctx)),
 		}
-	}()
+	})
 	select {
 	case <-ctx.Done():
 		client.Abort()
@@ -423,10 +424,11 @@ func (m *MCPManager) ConnectAll(ctx context.Context) []string {
 			continue
 		}
 		wg.Add(1)
-		go func(plugin *MCPPlugin) {
+		pl := plugin
+		safego.Go("plugin.mcp.connect", func() {
 			defer wg.Done()
-			m.connectOne(ctx, plugin)
-		}(plugin)
+			m.connectOne(ctx, pl)
+		})
 	}
 	wg.Wait()
 	m.mu.RLock()
@@ -507,14 +509,15 @@ func (m *MCPManager) Disconnect(name string) bool {
 		if plugin.Name() != name {
 			continue
 		}
-		go func(p *MCPPlugin) {
+		p := plugin
+		safego.Go("plugin.mcp.unregister", func() {
 			toolNames := p.Info().ToolNames
 			for _, toolName := range toolNames {
 				m.registry.Unregister(toolName)
 			}
 			_ = p.Close()
 			m.emitUpdate()
-		}(plugin)
+		})
 		return true
 	}
 	return false

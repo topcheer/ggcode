@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
@@ -104,12 +105,12 @@ func (s *Server) Start() error {
 	// Update the card URL with the actual port.
 	s.card.URL = fmt.Sprintf("http://%s", ln.Addr().String())
 
-	go func() {
+	safego.Go("a2a.server.serve", func() {
 		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			debug.Log("a2a", "server error: %v", err)
 		}
 		close(s.done)
-	}()
+	})
 
 	debug.Log("a2a", "server listening on %s (card: %s/.well-known/agent.json)",
 		ln.Addr().String(), s.card.URL)
@@ -158,6 +159,9 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cap body to prevent OOM via huge Content-Length. 4 MiB is enough for
+	// even very large JSON-RPC payloads with embedded artifacts.
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeRPCError(w, nil, ErrParseError)
@@ -192,7 +196,7 @@ func (s *Server) authenticate(r *http.Request) bool {
 func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
 	switch req.Method {
 	case "message/send":
-		s.handleMessageSend(w, req)
+		s.handleMessageSend(w, r, req)
 	case "message/stream":
 		s.handleMessageStream(w, r, req)
 	case "tasks/get":
@@ -210,14 +214,14 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 // JSON-RPC method handlers
 // ---------------------------------------------------------------------------
 
-func (s *Server) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest) {
+func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
 	var params SendMessageParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		writeRPCError(w, req.ID, ErrInvalidParams)
 		return
 	}
 
-	task, err := s.handler.Handle(context.Background(), params.Skill, params.Message, params.TaskID)
+	task, err := s.handler.Handle(r.Context(), params.Skill, params.Message, params.TaskID)
 	if err != nil {
 		writeRPCError(w, req.ID, &JSONRPCError{
 			Code:    -32000,
@@ -226,34 +230,33 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest) {
 		return
 	}
 
-	// For message/send, wait for completion (with timeout from handler config).
+	// Wait for task to reach a terminal state using notification channel.
+	done := s.handler.GetTaskDone(task.ID)
+	if done == nil {
+		// Task already terminal (e.g., immediate rejection).
+		t, _ := s.handler.GetTask(task.ID)
+		writeRPCResult(w, req.ID, t)
+		return
+	}
+
 	timeout := s.handler.Timeout()
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	deadline := time.After(timeout)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			t, ok := s.handler.GetTask(task.ID)
-			if !ok {
-				writeRPCError(w, req.ID, ErrTaskNotFound)
-				return
-			}
-			if t.Status.IsTerminal() {
-				writeRPCResult(w, req.ID, t)
-				return
-			}
-		case <-deadline:
-			writeRPCError(w, req.ID, &JSONRPCError{
-				Code:    -32060,
-				Message: "task timed out",
-			})
-			return
-		}
+	select {
+	case <-done:
+		t, _ := s.handler.GetTask(task.ID)
+		writeRPCResult(w, req.ID, t)
+	case <-timer.C:
+		writeRPCError(w, req.ID, &JSONRPCError{
+			Code:    -32060,
+			Message: "task timed out",
+		})
+	case <-r.Context().Done():
+		// Client disconnected — let the task continue in background.
 	}
 }
 
@@ -264,7 +267,7 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 
-	task, err := s.handler.Handle(context.Background(), params.Skill, params.Message, params.TaskID)
+	task, err := s.handler.Handle(r.Context(), params.Skill, params.Message, params.TaskID)
 	if err != nil {
 		writeRPCError(w, req.ID, &JSONRPCError{
 			Code:    -32000,
@@ -292,24 +295,32 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 		"kind":   "task",
 	})
 
-	// Poll for completion.
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		<-ticker.C
-		t, ok := s.handler.GetTask(task.ID)
-		if !ok {
-			s.sendSSE(w, flusher, req.ID, map[string]interface{}{
-				"error": "task not found",
-			})
-			return
-		}
+	// Wait for task to reach terminal state.
+	timeout := s.handler.Timeout()
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	done := s.handler.GetTaskDone(task.ID)
+	if done == nil {
+		// Already terminal.
+		t, _ := s.handler.GetTask(task.ID)
+		s.sendSSE(w, flusher, req.ID, t)
+		return
+	}
 
-		if t.Status.IsTerminal() {
-			// Send final event with full task.
-			s.sendSSE(w, flusher, req.ID, t)
-			return
-		}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		t, _ := s.handler.GetTask(task.ID)
+		s.sendSSE(w, flusher, req.ID, t)
+	case <-timer.C:
+		s.sendSSE(w, flusher, req.ID, map[string]interface{}{
+			"error": "task timed out",
+		})
+	case <-r.Context().Done():
+		// Client disconnected.
 	}
 }
 
@@ -336,8 +347,8 @@ func (s *Server) handleTaskCancel(w http.ResponseWriter, req *JSONRPCRequest) {
 		return
 	}
 
-	task, ok := s.handler.GetTask(params.ID)
-	if !ok {
+	// Existence check.
+	if _, ok := s.handler.GetTask(params.ID); !ok {
 		writeRPCError(w, req.ID, ErrTaskNotFound)
 		return
 	}
@@ -350,7 +361,9 @@ func (s *Server) handleTaskCancel(w http.ResponseWriter, req *JSONRPCRequest) {
 		return
 	}
 
-	writeRPCResult(w, req.ID, task)
+	// Fetch fresh snapshot AFTER cancellation.
+	result, _ := s.handler.GetTask(params.ID)
+	writeRPCResult(w, req.ID, result)
 }
 
 func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
@@ -388,23 +401,30 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 	// Send current state immediately.
 	s.sendSSE(w, flusher, req.ID, task)
 
-	// Poll until terminal.
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		<-ticker.C
-		t, ok := s.handler.GetTask(params.ID)
-		if !ok {
-			s.sendSSE(w, flusher, req.ID, map[string]interface{}{
-				"error": "task not found",
-			})
-			return
-		}
+	// Wait for terminal state using notification channel.
+	done := s.handler.GetTaskDone(params.ID)
+	if done == nil {
+		// Already terminal.
+		return
+	}
 
-		if t.Status.IsTerminal() {
-			s.sendSSE(w, flusher, req.ID, t)
-			return
-		}
+	timeout := s.handler.Timeout()
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		t, _ := s.handler.GetTask(params.ID)
+		s.sendSSE(w, flusher, req.ID, t)
+	case <-timer.C:
+		s.sendSSE(w, flusher, req.ID, map[string]interface{}{
+			"error": "task timed out",
+		})
+	case <-r.Context().Done():
+		// Client disconnected.
 	}
 }
 

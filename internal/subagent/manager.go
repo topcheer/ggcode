@@ -9,6 +9,28 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// AgentEventType identifies the kind of event recorded during sub-agent execution.
+type AgentEventType int
+
+const (
+	AgentEventText       AgentEventType = iota // LLM text output
+	AgentEventToolCall                         // tool invocation started
+	AgentEventToolResult                       // tool execution result
+	AgentEventError                            // error encountered
+)
+
+// AgentEvent is a single recorded event from a sub-agent's execution.
+type AgentEvent struct {
+	Type     AgentEventType
+	Text     string // AgentEventText / AgentEventError
+	ToolName string // AgentEventToolCall / AgentEventToolResult
+	ToolArgs string // AgentEventToolCall
+	Result   string // AgentEventToolResult
+	IsError  bool   // AgentEventToolResult / AgentEventError
+}
+
+const maxAgentEvents = 200
+
 // Status represents the lifecycle state of a sub-agent.
 type Status string
 
@@ -19,6 +41,13 @@ const (
 	StatusFailed    Status = "failed"
 	StatusCancelled Status = "cancelled"
 )
+
+// AgentMessage represents a message sent to a sub-agent.
+type AgentMessage struct {
+	From    string
+	Message string
+	Summary string
+}
 
 // SubAgent represents a spawned child agent.
 type SubAgent struct {
@@ -37,6 +66,8 @@ type SubAgent struct {
 	CreatedAt       time.Time
 	StartedAt       time.Time
 	EndedAt         time.Time
+	Mailbox         chan AgentMessage
+	events          []AgentEvent
 	cancel          context.CancelFunc
 	mu              sync.Mutex
 }
@@ -57,6 +88,31 @@ type Snapshot struct {
 	CreatedAt       time.Time
 	StartedAt       time.Time
 	EndedAt         time.Time
+	Events          []AgentEvent
+}
+
+// RecordEvent appends an event to the sub-agent's event log.
+// This is the exported version for external callers (e.g., tests).
+func (s *SubAgent) RecordEvent(ev AgentEvent) {
+	s.appendEvent(ev)
+}
+
+func (s *SubAgent) appendEvent(ev AgentEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.events) >= maxAgentEvents {
+		s.events = s.events[1:]
+	}
+	s.events = append(s.events, ev)
+}
+
+// Events returns a copy of the recorded events.
+func (s *SubAgent) Events() []AgentEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AgentEvent, len(s.events))
+	copy(out, s.events)
+	return out
 }
 
 func (s *SubAgent) IncrementToolCalls() {
@@ -69,6 +125,12 @@ func (s *SubAgent) setStatus(st Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Status = st
+}
+
+func (s *SubAgent) getStatus() Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Status
 }
 
 func (s *SubAgent) setActivity(phase, toolName, args string) {
@@ -103,6 +165,7 @@ func (s *SubAgent) snapshot() Snapshot {
 		CreatedAt:       s.CreatedAt,
 		StartedAt:       s.StartedAt,
 		EndedAt:         s.EndedAt,
+		Events:          append([]AgentEvent(nil), s.events...),
 	}
 	if s.Error != nil {
 		snap.Error = s.Error.Error()
@@ -120,6 +183,11 @@ type Manager struct {
 	onUpdate   func(*SubAgent)
 	onComplete func(*SubAgent)
 	nextID     int
+	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
+	// per-call/per-submit ctx so that sub-agents survive the parent agent
+	// turn that spawned them. It is cancelled by Shutdown(). See locks.md S6.
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
 }
 
 // NewManager creates a Manager with the given config.
@@ -132,11 +200,31 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
+	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Manager{
 		agents:     make(map[string]*SubAgent),
 		sem:        make(chan struct{}, max),
 		timeout:    timeout,
 		showOutput: cfg.ShowOutput,
+		rootCtx:    rootCtx,
+		rootCancel: rootCancel,
+	}
+}
+
+// RootContext returns the manager's lifecycle context. spawn_agent uses this
+// (instead of the per-tool-call ctx) so that sub-agents are not cancelled the
+// moment the parent agent's current turn ends.
+func (m *Manager) RootContext() context.Context {
+	if m.rootCtx == nil {
+		return context.Background()
+	}
+	return m.rootCtx
+}
+
+// Shutdown cancels every running sub-agent. Call once during app shutdown.
+func (m *Manager) Shutdown() {
+	if m.rootCancel != nil {
+		m.rootCancel()
 	}
 }
 
@@ -155,6 +243,7 @@ func (m *Manager) Spawn(task, displayTask string, tools []string, ctx context.Co
 		Status:       StatusPending,
 		CurrentPhase: "pending",
 		CreatedAt:    time.Now(),
+		Mailbox:      make(chan AgentMessage, 16),
 	}
 
 	m.mu.Lock()
@@ -170,6 +259,26 @@ func (m *Manager) Get(id string) (*SubAgent, bool) {
 	defer m.mu.Unlock()
 	sa, ok := m.agents[id]
 	return sa, ok
+}
+
+// GetOutput returns the result of a completed (or in-progress) sub-agent.
+// Returns (result, true) if the agent exists, ("", false) otherwise.
+func (m *Manager) GetTaskOutput(id string) (string, bool) {
+	sa, ok := m.Get(id)
+	if !ok {
+		return "", false
+	}
+	snap := sa.snapshot()
+	if snap.Result != "" {
+		return snap.Result, true
+	}
+	if snap.ProgressSummary != "" {
+		return "[in progress] " + snap.ProgressSummary, true
+	}
+	if snap.Status == "running" {
+		return "[running, no output yet]", true
+	}
+	return "", true
 }
 
 // List returns all sub-agents.
@@ -199,7 +308,7 @@ func (m *Manager) RunningCount() int {
 	defer m.mu.Unlock()
 	count := 0
 	for _, sa := range m.agents {
-		if sa.Status == StatusRunning {
+		if sa.getStatus() == StatusRunning {
 			count++
 		}
 	}
@@ -308,6 +417,40 @@ func (m *Manager) Notify(id string) {
 // SetOnComplete sets a callback invoked when any sub-agent completes.
 func (m *Manager) SetOnComplete(fn func(*SubAgent)) {
 	m.onComplete = fn
+}
+
+// SendToAgent sends a message to a specific sub-agent's mailbox.
+func (m *Manager) SendToAgent(id string, msg AgentMessage) error {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("sub-agent %q not found", id)
+	}
+	select {
+	case sa.Mailbox <- msg:
+		return nil
+	default:
+		return fmt.Errorf("sub-agent %q mailbox is full", id)
+	}
+}
+
+// Broadcast sends a message to all running sub-agents.
+func (m *Manager) Broadcast(msg AgentMessage) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var sent []string
+	for _, sa := range m.agents {
+		if sa.getStatus() == StatusRunning {
+			select {
+			case sa.Mailbox <- msg:
+				sent = append(sent, sa.ID)
+			default:
+				// mailbox full, skip
+			}
+		}
+	}
+	return sent
 }
 
 // SetOnUpdate sets a callback invoked when any sub-agent activity changes.

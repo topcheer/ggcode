@@ -22,6 +22,7 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Client connects to an MCP server via stdio transport.
@@ -151,7 +152,7 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		JSONRPC: "2.0",
 		Method:  "notifications/initialized",
 	}
-	if err := c.sendNotification(notif); err != nil {
+	if err := c.sendNotification(ctx, notif); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: initialized notification: %w", c.name, err)
 	}
 
@@ -226,6 +227,10 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 
 // Close terminates the server process.
 func (c *Client) Close() error {
+	// Abort transports first (without holding c.mu) so any in-flight
+	// sendRequest/sendNotification holding the lock can unwind quickly.
+	c.Abort()
+
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -243,13 +248,12 @@ func (c *Client) Close() error {
 	if oauthHandler != nil {
 		oauthHandler.Close()
 	}
-	c.Abort()
 	if (transport == "stdio" || transport == "") && cmd != nil {
 		done := make(chan struct{})
-		go func() {
+		safego.Go("mcp.client.waitProcess", func() {
 			_ = cmd.Wait()
 			close(done)
-		}()
+		})
 		select {
 		case <-done:
 		case <-time.After(3 * time.Second):
@@ -319,13 +323,13 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	return nil
 }
 
-func (c *Client) sendNotification(notif Notification) error {
+func (c *Client) sendNotification(ctx context.Context, notif Notification) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
-	_, err := c.send(notif, context.Background())
+	_, err := c.send(notif, ctx)
 	return err
 }
 
@@ -356,10 +360,10 @@ func (c *Client) readResponseWithCancel(ctx context.Context) (*Response, error) 
 		err  error
 	}
 	done := make(chan result, 1)
-	go func() {
+	safego.Go("mcp.client.readResponse", func() {
 		resp, err := c.readResponse(ctx)
 		done <- result{resp: resp, err: err}
-	}()
+	})
 	select {
 	case res := <-done:
 		if err := ctx.Err(); err != nil {
