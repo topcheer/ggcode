@@ -28,6 +28,9 @@ func (t ListAgentsTool) Parameters() json.RawMessage {
 }
 
 func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	if t.Manager == nil {
+		return Result{IsError: true, Content: "list_agents: sub-agent manager not available"}, nil
+	}
 	agents := t.Manager.List()
 	if len(agents) == 0 {
 		return Result{Content: "No sub-agents have been spawned."}, nil

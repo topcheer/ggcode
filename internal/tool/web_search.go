@@ -31,6 +31,16 @@ func (t WebSearch) Parameters() json.RawMessage {
 			"max_results": {
 				"type": "integer",
 				"description": "Maximum number of results (default 5, max 10)"
+			},
+			"allowed_domains": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Only include results from these domains"
+			},
+			"blocked_domains": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Never include results from these domains"
 			}
 		},
 		"required": ["query"]
@@ -39,8 +49,10 @@ func (t WebSearch) Parameters() json.RawMessage {
 
 func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		Query      string `json:"query"`
-		MaxResults int    `json:"max_results"`
+		Query          string   `json:"query"`
+		MaxResults     int      `json:"max_results"`
+		AllowedDomains []string `json:"allowed_domains"`
+		BlockedDomains []string `json:"blocked_domains"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -75,7 +87,25 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: fmt.Sprintf("read body failed: %v", err)}, nil
 	}
 
-	results := parseDDGResults(string(body), args.MaxResults)
+	// Fetch more results when domain filtering is active to compensate for filtered-out entries
+	fetchLimit := args.MaxResults
+	if len(args.AllowedDomains) > 0 || len(args.BlockedDomains) > 0 {
+		fetchLimit = args.MaxResults * 3
+		if fetchLimit > 30 {
+			fetchLimit = 30
+		}
+	}
+
+	results := parseDDGResults(string(body), fetchLimit)
+
+	// Apply domain filtering
+	results = filterByDomain(results, args.AllowedDomains, args.BlockedDomains)
+
+	// Trim to requested max after filtering
+	if len(results) > args.MaxResults {
+		results = results[:args.MaxResults]
+	}
+
 	if len(results) == 0 {
 		return Result{Content: "No results found."}, nil
 	}
@@ -85,6 +115,46 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		sb.WriteString(fmt.Sprintf("%d. %s\n   URL: %s\n   %s\n\n", i+1, r.Title, r.URL, r.Snippet))
 	}
 	return Result{Content: sb.String()}, nil
+}
+
+// filterByDomain applies allowed_domains and blocked_domains filters.
+func filterByDomain(results []searchResult, allowedDomains, blockedDomains []string) []searchResult {
+	if len(allowedDomains) == 0 && len(blockedDomains) == 0 {
+		return results
+	}
+
+	allowedSet := make(map[string]bool, len(allowedDomains))
+	for _, d := range allowedDomains {
+		allowedSet[strings.ToLower(d)] = true
+	}
+	blockedSet := make(map[string]bool, len(blockedDomains))
+	for _, d := range blockedDomains {
+		blockedSet[strings.ToLower(d)] = true
+	}
+
+	var filtered []searchResult
+	for _, r := range results {
+		host := domainFromURL(r.URL)
+		hostLower := strings.ToLower(host)
+
+		if len(blockedSet) > 0 && blockedSet[hostLower] {
+			continue
+		}
+		if len(allowedSet) > 0 && !allowedSet[hostLower] {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+// domainFromURL extracts the hostname from a URL string.
+func domainFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 type searchResult struct {

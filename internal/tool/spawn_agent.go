@@ -39,6 +39,15 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 			"context": {
 				"type": "string",
 				"description": "Optional additional context for the sub-agent"
+			},
+			"model": {
+				"type": "string",
+				"enum": ["sonnet", "opus", "haiku"],
+				"description": "Optional model override for the sub-agent"
+			},
+			"subagent_type": {
+				"type": "string",
+				"description": "Optional type of specialized agent (e.g., 'Explore', 'Plan')"
 			}
 		},
 		"required": ["task"]
@@ -46,10 +55,15 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 }
 
 func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	if t.Manager == nil {
+		return Result{IsError: true, Content: "spawn_agent: sub-agent manager not available"}, nil
+	}
 	var args struct {
-		Task    string   `json:"task"`
-		Tools   []string `json:"tools"`
-		Context string   `json:"context"`
+		Task         string   `json:"task"`
+		Tools        []string `json:"tools"`
+		Context      string   `json:"context"`
+		Model        string   `json:"model"`
+		SubagentType string   `json:"subagent_type"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -77,8 +91,18 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	// Capture for goroutine closure
 	tools := t.Tools
 
+	// Use the manager's lifecycle ctx, NOT the per-tool-call ctx, otherwise
+	// the moment the parent agent's current turn ends (defer cancel() on the
+	// submit ctx) every spawned sub-agent is cancelled mid-stream and any
+	// half-applied tool side effect is left in place. See locks.md S6.
+	runCtx := t.Manager.RootContext()
+
+	// Capture model and subagent_type for the runner config
+	model := args.Model
+	subagentType := args.SubagentType
+
 	// Launch the sub-agent in a goroutine
-	go subagent.Run(ctx, subagent.RunnerConfig{
+	go subagent.Run(runCtx, subagent.RunnerConfig{
 		Provider:     t.Provider,
 		AllTools:     allToolInfo,
 		Task:         args.Task,
@@ -86,6 +110,8 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		Manager:      t.Manager,
 		SubAgentID:   id,
 		AgentFactory: t.AgentFactory,
+		Model:        model,
+		AgentType:    subagentType,
 		BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 			subReg := NewRegistry()
 			if len(allowedTools) == 0 {

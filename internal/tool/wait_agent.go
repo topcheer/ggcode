@@ -38,6 +38,9 @@ func (t WaitAgentTool) Parameters() json.RawMessage {
 }
 
 func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	if t.Manager == nil {
+		return Result{IsError: true, Content: "wait_agent: sub-agent manager not available"}, nil
+	}
 	var args struct {
 		AgentID     string `json:"agent_id"`
 		WaitSeconds int    `json:"wait_seconds"`

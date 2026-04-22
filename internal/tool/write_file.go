@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 )
 
 // WriteFile implements the write_file tool.
@@ -48,7 +47,7 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
-	if err := os.WriteFile(args.Path, []byte(args.Content), 0644); err != nil {
+	if err := atomicWriteFile(args.Path, []byte(args.Content), 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 
