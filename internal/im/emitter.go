@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -45,7 +46,7 @@ func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapt
 		return
 	}
 	s.once.Do(func() {
-		go func() {
+		safego.Go("im.emitter.dispatch", func() {
 			for item := range s.ch {
 				var err error
 				if item.excludeAdapter != "" {
@@ -57,7 +58,7 @@ func (s *imEmitterState) enqueue(mgr *Manager, event OutboundEvent, excludeAdapt
 					debug.Log("emitter", "emit im kind=%s failed: %v", item.event.Kind, err)
 				}
 			}
-		}()
+		})
 	})
 	select {
 	case s.ch <- queuedIMEvent{mgr: mgr, event: event, excludeAdapter: excludeAdapter}:

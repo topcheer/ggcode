@@ -288,6 +288,19 @@ func TestDummyAdapter_IntegrationFlow(t *testing.T) {
 		t.Fatalf("POST /send status=%d, want 200", w.Code)
 	}
 
+	// Wait for the async HandleInbound goroutine to submit the message.
+	// The HTTP handler spawns a goroutine via safego.Go, so we need to
+	// give it time to complete.
+	for i := 0; i < 50; i++ {
+		submitMu.Lock()
+		count := len(submitted)
+		submitMu.Unlock()
+		if count >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	// Verify message was submitted to bridge
 	submitMu.Lock()
 	if len(submitted) != 1 {

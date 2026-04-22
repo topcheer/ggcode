@@ -27,6 +27,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -52,6 +53,17 @@ type feishuAdapter struct {
 	tokenExpire time.Time
 	httpServer  *http.Server
 	stt         imstt.Transcriber
+
+	// seenEvents deduplicates Feishu webhook redeliveries (Feishu retries up
+	// to 3x if the webhook does not respond within ~3s; we may legitimately
+	// take longer than that to respond, so dedup by event_id+message_id is
+	// required to avoid running the same agent turn 2-3x). See locks.md S1.
+	seenMu     sync.Mutex
+	seenEvents map[string]time.Time
+	// seenNonces deduplicates (timestamp,nonce) pairs presented to
+	// verifySignature, defeating brute replay even within the freshness
+	// window. See locks.md S2.
+	seenNonces map[string]time.Time
 }
 
 func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*feishuAdapter, error) {
@@ -88,6 +100,8 @@ func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 		verifyToken: verifyToken,
 		domain:      domain,
 		webhookPort: webhookPort,
+		seenEvents:  make(map[string]time.Time),
+		seenNonces:  make(map[string]time.Time),
 	}
 	adapter.stt = buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveFeishuSTTConfig)
 	return adapter, nil
@@ -173,11 +187,11 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 
 	// SDK Start() blocks forever via select{}, run in goroutine
 	errCh := make(chan error, 1)
-	go func() {
+	safego.Go("im.feishu.wsStart", func() {
 		if err := cli.Start(ctx); err != nil {
 			errCh <- err
 		}
-	}()
+	})
 
 	select {
 	case <-ctx.Done():
@@ -352,18 +366,18 @@ func (a *feishuAdapter) startWebhookServer(ctx context.Context) {
 	a.httpServer = server
 	a.mu.Unlock()
 
-	go func() {
+	safego.Go("im.feishu.webhookServe", func() {
 		debug.Log("feishu", "adapter=%s webhook listening on :%d", a.name, a.webhookPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			debug.Log("feishu", "adapter=%s webhook server error: %v", a.name, err)
 		}
-	}()
-	go func() {
+	})
+	safego.Go("im.feishu.webhookShutdown", func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
-	}()
+	})
 }
 
 func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
@@ -371,9 +385,12 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Cap body size to prevent OOM DoS via Content-Length: 5G style attacks.
+	// 1 MiB is generous for Feishu event envelopes (typical size is <10 KiB).
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "read body error", http.StatusBadRequest)
+		http.Error(w, "read body error", http.StatusRequestEntityTooLarge)
 		return
 	}
 	defer r.Body.Close()
@@ -386,6 +403,20 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		if !a.verifySignature(timestamp, nonce, string(bodyBytes), signature) {
 			debug.Log("feishu", "adapter=%s webhook signature verification failed", a.name)
 			http.Error(w, "signature mismatch", http.StatusUnauthorized)
+			return
+		}
+		// Reject stale or replayed requests. Feishu sends timestamp as a
+		// unix-second string. ±5min window matches Feishu's documented
+		// recommendation; combined with nonce LRU this defeats replay even
+		// when the original signature is captured.
+		if !a.acceptTimestamp(timestamp) {
+			debug.Log("feishu", "adapter=%s webhook stale timestamp=%s", a.name, timestamp)
+			http.Error(w, "stale request", http.StatusUnauthorized)
+			return
+		}
+		if !a.acceptNonce(timestamp, nonce) {
+			debug.Log("feishu", "adapter=%s webhook replayed nonce=%s", a.name, nonce)
+			http.Error(w, "replayed request", http.StatusUnauthorized)
 			return
 		}
 	}
@@ -411,13 +442,40 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if header == nil {
 		return
 	}
+	// Dedup by event_id (preferred) or message_id. Feishu retries up to 3x
+	// when the webhook does not reply 200 within ~3s; agent runs commonly
+	// exceed that, so without dedup the same message triggers 2-3 parallel
+	// agent turns and 2-3x the side effects.
+	eventID, _ := header["event_id"].(string)
+	dedupKey := eventID
+	if dedupKey == "" {
+		if event, ok := payload["event"].(map[string]any); ok {
+			if message, ok := event["message"].(map[string]any); ok {
+				if mid, ok := message["message_id"].(string); ok {
+					dedupKey = mid
+				}
+			}
+		}
+	}
+	if dedupKey != "" && a.seenEvent(dedupKey) {
+		debug.Log("feishu", "adapter=%s duplicate webhook event=%s suppressed", a.name, dedupKey)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	eventType, _ := header["event_type"].(string)
 	if eventType == "im.message.receive_v1" {
 		event, _ := payload["event"].(map[string]any)
 		if event != nil {
-			a.handleMessageEvent(r.Context(), event)
+			// Reply 200 immediately so Feishu does not retry; process the
+			// event in a detached goroutine. Use background ctx because the
+			// HTTP request ctx is cancelled the moment we return.
+			w.WriteHeader(http.StatusOK)
+			go a.handleMessageEvent(context.Background(), event)
+			return
 		}
 	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (a *feishuAdapter) verifySignature(timestamp, nonce, body, signature string) bool {
@@ -425,6 +483,74 @@ func (a *feishuAdapter) verifySignature(timestamp, nonce, body, signature string
 	mac.Write([]byte(timestamp + nonce + a.encryptKey + body))
 	expected := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(signature), []byte(expected))
+}
+
+// acceptTimestamp returns true if the request timestamp (unix seconds) is
+// within ±5 minutes of now.
+func (a *feishuAdapter) acceptTimestamp(timestamp string) bool {
+	if timestamp == "" {
+		return false
+	}
+	ts, err := parseUnixSeconds(timestamp)
+	if err != nil {
+		return false
+	}
+	delta := time.Since(ts)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= 5*time.Minute
+}
+
+// acceptNonce records (timestamp,nonce) and returns false if the pair was
+// already seen within the freshness window.
+func (a *feishuAdapter) acceptNonce(timestamp, nonce string) bool {
+	if nonce == "" {
+		// Feishu does include a nonce on real requests; an empty nonce is
+		// suspicious but we don't want to break legitimate clients that omit
+		// it. Skip the check rather than reject outright.
+		return true
+	}
+	key := timestamp + "|" + nonce
+	a.seenMu.Lock()
+	defer a.seenMu.Unlock()
+	now := time.Now()
+	for k, t := range a.seenNonces {
+		if now.Sub(t) > 10*time.Minute {
+			delete(a.seenNonces, k)
+		}
+	}
+	if _, ok := a.seenNonces[key]; ok {
+		return false
+	}
+	a.seenNonces[key] = now
+	return true
+}
+
+// seenEvent records the event id and returns true if it was already processed.
+func (a *feishuAdapter) seenEvent(eventID string) bool {
+	a.seenMu.Lock()
+	defer a.seenMu.Unlock()
+	now := time.Now()
+	for id, t := range a.seenEvents {
+		if now.Sub(t) > 10*time.Minute {
+			delete(a.seenEvents, id)
+		}
+	}
+	if _, ok := a.seenEvents[eventID]; ok {
+		return true
+	}
+	a.seenEvents[eventID] = now
+	return false
+}
+
+func parseUnixSeconds(ts string) (time.Time, error) {
+	var sec int64
+	_, err := fmt.Sscanf(ts, "%d", &sec)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(sec, 0), nil
 }
 
 func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string]any) {

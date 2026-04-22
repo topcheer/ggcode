@@ -15,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 var (
@@ -535,7 +536,9 @@ func fanOutSend(ctx context.Context, targets []emitTarget, event OutboundEvent) 
 	)
 	for _, t := range targets {
 		wg.Add(1)
-		go func(binding ChannelBinding, sink Sink) {
+		binding := t.binding
+		sink := t.sink
+		safego.Go("im.runtime.fanOut", func() {
 			defer wg.Done()
 			// Check if context is already cancelled before sending
 			select {
@@ -548,7 +551,7 @@ func fanOutSend(ctx context.Context, targets []emitTarget, event OutboundEvent) 
 				errs = append(errs, fmt.Errorf("%s: %w", binding.Adapter, err))
 				errsMu.Unlock()
 			}
-		}(t.binding, t.sink)
+		})
 	}
 	wg.Wait()
 	if len(errs) > 0 {

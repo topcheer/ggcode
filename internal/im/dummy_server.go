@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // httpServer provides the HTTP endpoints for the dummy adapter.
@@ -21,8 +22,6 @@ type httpServer struct {
 	adapter       *dummyAdapter
 	sseBroker     *sseBroker
 	shutdownToken string
-
-	mu sync.Mutex // serializes /send requests
 }
 
 type sseBroker struct {
@@ -203,29 +202,29 @@ func (s *httpServer) start(ctx context.Context, listenAddr, portFile string) {
 
 	debug.Log("dummy", "HTTP server listening on %s", listener.Addr())
 
-	go func() {
+	safego.Go("im.dummy.shutdown", func() {
 		<-ctx.Done()
 		srv.Close()
 		listener.Close()
-	}()
+	})
 
-	go func() {
+	safego.Go("im.dummy.serve", func() {
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			debug.Log("dummy", "server error: %v", err)
 		}
-	}()
+	})
 }
 
 // handleSend processes POST /send requests.
+// Returns immediately and runs HandleInbound in a background goroutine
+// to avoid blocking the HTTP handler while the agent processes the message.
+// This prevents deadlock when the agent triggers ask_user and the SSE
+// consumer tries to reply via another /send request.
 func (s *httpServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	// Serialize: only one message at a time
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	var req struct {
 		Text            string `json:"text"`
@@ -263,16 +262,20 @@ func (s *httpServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	// Track user message count
 	s.adapter.metrics.UserMessages++
 
-	// Submit through the manager
-	ctx := r.Context()
-	if err := s.adapter.manager.HandleInbound(ctx, msg); err != nil {
-		debug.Log("dummy", "HandleInbound error: %v", err)
-	}
-
+	// Respond immediately so the caller (eval SSE consumer) can proceed
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":     "ok",
 		"message_id": msgID,
+	})
+
+	// Submit through the manager in background to avoid blocking HTTP handler.
+	// Use a fresh context detached from the HTTP request lifetime.
+	safego.Go("im.dummy.handleInbound", func() {
+		ctx := context.Background()
+		if err := s.adapter.manager.HandleInbound(ctx, msg); err != nil {
+			debug.Log("dummy", "HandleInbound error: %v", err)
+		}
 	})
 }
 
