@@ -45,6 +45,13 @@ func Init() {
 	})
 }
 
+// Active reports whether the debug logger is currently writing to a sink.
+func Active() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	return logger != nil
+}
+
 // Log writes a formatted message with a package tag.
 // Format: [HH:MM:SS.mmm] [pkg] message
 func Log(pkg, format string, args ...interface{}) {

@@ -8,13 +8,40 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/util"
 	"gopkg.in/yaml.v3"
 )
+
+// configFileLocks serializes read-modify-write operations against a given
+// config file path. Multiple goroutines (TUI Bubble Tea cmds, agent loop,
+// OAuth refresh, IM bindings) can call Save*/Add*/Remove* concurrently;
+// without this lock the read-modify-write sequence races and can drop
+// fields, and a crash mid-write can truncate the YAML.
+var (
+	configFileLocksMu sync.Mutex
+	configFileLocks   = map[string]*sync.Mutex{}
+)
+
+func lockConfigFile(path string) func() {
+	if path == "" {
+		return func() {}
+	}
+	configFileLocksMu.Lock()
+	mu, ok := configFileLocks[path]
+	if !ok {
+		mu = &sync.Mutex{}
+		configFileLocks[path] = mu
+	}
+	configFileLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
 
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
@@ -157,6 +184,7 @@ type Config struct {
 	SubAgents     SubAgentConfig            `yaml:"subagents"`
 	Impersonation ImpersonationConfig       `yaml:"impersonation,omitempty"`
 	KnightConfig  KnightConfig              `yaml:"knight,omitempty"`
+	Swarm         SwarmConfig               `yaml:"swarm,omitempty"`
 	A2A           A2AConfig                 `yaml:"a2a,omitempty"`
 	FilePath      string                    `yaml:"-"`
 	FirstRun      bool                      `yaml:"-"`
@@ -222,6 +250,13 @@ type SubAgentConfig struct {
 	MaxConcurrent int           `yaml:"max_concurrent"`
 	Timeout       time.Duration `yaml:"timeout"`
 	ShowOutput    bool          `yaml:"show_output"`
+}
+
+// SwarmConfig holds swarm/team multi-agent configuration.
+type SwarmConfig struct {
+	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 5
+	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`       // default: 30m
+	InboxSize           int           `yaml:"inbox_size"`             // default: 32
 }
 
 // A2AConfig holds A2A protocol server configuration.
@@ -1250,6 +1285,8 @@ func (c *Config) Save() error {
 	if strings.TrimSpace(c.FilePath) == "" {
 		return fmt.Errorf("config file path is empty")
 	}
+	unlock := lockConfigFile(c.FilePath)
+	defer unlock()
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -1260,7 +1297,7 @@ func (c *Config) Save() error {
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	return os.WriteFile(c.FilePath, data, 0644)
+	return util.AtomicWriteFile(c.FilePath, data, 0644)
 }
 
 func (c *Config) SaveLanguagePreference(lang string) error {
@@ -1274,6 +1311,8 @@ func (c *Config) SaveLanguagePreference(lang string) error {
 	if lang == "" {
 		return fmt.Errorf("language must not be empty")
 	}
+	unlock := lockConfigFile(c.FilePath)
+	defer unlock()
 
 	raw := map[string]interface{}{}
 	data, err := os.ReadFile(c.FilePath)
@@ -1295,7 +1334,7 @@ func (c *Config) SaveLanguagePreference(lang string) error {
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
 		return err
 	}
 	c.Language = lang
@@ -1311,6 +1350,8 @@ func (c *Config) SaveImpersonation(imp ImpersonationConfig) error {
 	if strings.TrimSpace(c.FilePath) == "" {
 		return fmt.Errorf("config file path is empty")
 	}
+	unlock := lockConfigFile(c.FilePath)
+	defer unlock()
 
 	raw := map[string]interface{}{}
 	data, err := os.ReadFile(c.FilePath)
@@ -1347,7 +1388,7 @@ func (c *Config) SaveImpersonation(imp ImpersonationConfig) error {
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
 		return err
 	}
 	c.Impersonation = imp
@@ -1368,6 +1409,8 @@ func (c *Config) SaveSidebarPreference(visible bool) error {
 	if strings.TrimSpace(c.FilePath) == "" {
 		return fmt.Errorf("config file path is empty")
 	}
+	unlock := lockConfigFile(c.FilePath)
+	defer unlock()
 
 	raw := map[string]interface{}{}
 	data, err := os.ReadFile(c.FilePath)
@@ -1394,7 +1437,7 @@ func (c *Config) SaveSidebarPreference(visible bool) error {
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
 		return err
 	}
 	c.UI.SidebarVisible = boolPtr(visible)
@@ -1415,6 +1458,8 @@ func (c *Config) SaveDefaultModePreference(mode string) error {
 	default:
 		return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", mode)
 	}
+	unlock := lockConfigFile(c.FilePath)
+	defer unlock()
 
 	raw := map[string]interface{}{}
 	data, err := os.ReadFile(c.FilePath)
@@ -1436,7 +1481,7 @@ func (c *Config) SaveDefaultModePreference(mode string) error {
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	if err := os.WriteFile(c.FilePath, updated, 0644); err != nil {
+	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
 		return err
 	}
 	c.DefaultMode = mode

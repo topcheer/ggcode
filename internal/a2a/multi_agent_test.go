@@ -42,11 +42,10 @@ type agentNode struct {
 }
 
 type testCluster struct {
-	t       *testing.T
-	nodes   []*agentNode
-	regDir  string
-	regFile string
-	cfg     *config.Config
+	t      *testing.T
+	nodes  []*agentNode
+	regDir string
+	cfg    *config.Config
 }
 
 func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster {
@@ -61,7 +60,7 @@ func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster 
 	regDir := filepath.Join(t.TempDir(), "a2a-reg")
 	os.MkdirAll(regDir, 0755)
 
-	c := &testCluster{t: t, regDir: regDir, regFile: filepath.Join(regDir, "instances.json"), cfg: cfg}
+	c := &testCluster{t: t, regDir: regDir, cfg: cfg}
 
 	for _, spec := range specs {
 		name := spec.Name
@@ -120,16 +119,15 @@ func newCluster(t *testing.T, specs []struct{ Name, Role string }) *testCluster 
 		c.nodes = append(c.nodes, &agentNode{name: name, dir: dir, server: srv, client: NewClient(srv.Endpoint(), mAPIKey)})
 	}
 
-	// Register all instances.
-	var instances []InstanceInfo
+	// Register all instances via per-ID files.
 	for _, n := range c.nodes {
-		instances = append(instances, InstanceInfo{
+		inst := InstanceInfo{
 			ID: n.name + "-id", PID: os.Getpid(),
 			Workspace: n.dir, Endpoint: n.server.Endpoint(), Status: "ready",
-		})
+		}
+		data, _ := json.MarshalIndent(inst, "", "  ")
+		os.WriteFile(filepath.Join(c.regDir, inst.ID+".json"), data, 0644)
 	}
-	data, _ := json.MarshalIndent(instances, "", "  ")
-	os.WriteFile(c.regFile, data, 0644)
 
 	return c
 }

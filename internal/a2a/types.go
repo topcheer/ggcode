@@ -145,10 +145,85 @@ type Task struct {
 	Artifacts []Artifact `json:"artifacts,omitempty"`
 	CreatedAt time.Time  `json:"createdAt"`
 	UpdatedAt time.Time  `json:"updatedAt"`
+
+	// done is closed when the task reaches a terminal state (completed, failed, canceled, rejected).
+	// Not serialized — used for in-process notification only.
+	done chan struct{} `json:"-"`
 }
 
 // Kind returns the A2A object type.
 func (t *Task) Kind() string { return "task" }
+
+// Snapshot returns a deep copy of the task safe for external consumption.
+// The done channel is not copied.
+func (t *Task) Snapshot() Task {
+	cp := Task{
+		ID:        t.ID,
+		ContextID: t.ContextID,
+		Status:    t.Status,
+		Skill:     t.Skill,
+		CreatedAt: t.CreatedAt,
+		UpdatedAt: t.UpdatedAt,
+	}
+	if t.History != nil {
+		cp.History = make([]Message, len(t.History))
+		for i, m := range t.History {
+			cp.History[i] = m.snapshot()
+		}
+	}
+	if t.Artifacts != nil {
+		cp.Artifacts = make([]Artifact, len(t.Artifacts))
+		for i, a := range t.Artifacts {
+			cp.Artifacts[i] = a.snapshot()
+		}
+	}
+	return cp
+}
+
+func (m Message) snapshot() Message {
+	cp := Message{
+		Role:      m.Role,
+		MessageID: m.MessageID,
+	}
+	if m.Parts != nil {
+		cp.Parts = make([]Part, len(m.Parts))
+		for i, p := range m.Parts {
+			cp.Parts[i] = p.snapshot()
+		}
+	}
+	return cp
+}
+
+func (p Part) snapshot() Part {
+	cp := Part{
+		Kind: p.Kind,
+		Text: p.Text,
+	}
+	if p.File != nil {
+		f := *p.File
+		cp.File = &f
+	}
+	if p.Data != nil {
+		cp.Data = make(json.RawMessage, len(p.Data))
+		copy(cp.Data, p.Data)
+	}
+	return cp
+}
+
+func (a Artifact) snapshot() Artifact {
+	cp := Artifact{
+		ArtifactID: a.ArtifactID,
+		Append:     a.Append,
+		LastChunk:  a.LastChunk,
+	}
+	if a.Parts != nil {
+		cp.Parts = make([]Part, len(a.Parts))
+		for i, p := range a.Parts {
+			cp.Parts[i] = p.snapshot()
+		}
+	}
+	return cp
+}
 
 // Message carries conversation content within a task.
 type Message struct {

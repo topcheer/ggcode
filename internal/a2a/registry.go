@@ -41,6 +41,7 @@ func NewRegistry() (*Registry, error) {
 }
 
 // Register adds this instance to the registry.
+// Writes a per-PID file — no cross-process read-modify-write contention.
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -48,24 +49,7 @@ func (r *Registry) Register(info InstanceInfo) error {
 	r.selfID = info.ID
 	r.selfInfo = &info
 
-	instances, err := r.load()
-	if err != nil {
-		instances = nil // start fresh if corrupted
-	}
-
-	// Remove stale entries (PID no longer alive).
-	instances = pruneDead(instances)
-
-	// Remove any existing entry for our ID (restart case).
-	for i, inst := range instances {
-		if inst.ID == info.ID || inst.PID == info.PID {
-			instances = append(instances[:i], instances[i+1:]...)
-			break
-		}
-	}
-
-	instances = append(instances, info)
-	return r.save(instances)
+	return r.writeInstanceFile(info)
 }
 
 // Unregister removes this instance from the registry.
@@ -73,19 +57,7 @@ func (r *Registry) Unregister() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	instances, err := r.load()
-	if err != nil {
-		return nil // nothing to remove
-	}
-
-	for i, inst := range instances {
-		if inst.ID == r.selfID {
-			instances = append(instances[:i], instances[i+1:]...)
-			break
-		}
-	}
-
-	return r.save(instances)
+	return os.Remove(r.instanceFilePath(r.selfID))
 }
 
 // Discover returns all running instances (excluding self).
@@ -93,16 +65,18 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	instances, err := r.load()
+	instances, err := r.loadAll()
 	if err != nil {
 		return nil, err
 	}
 
-	instances = pruneDead(instances)
-
-	// Exclude self.
+	// Prune dead PIDs and remove their files.
 	var others []InstanceInfo
 	for _, inst := range instances {
+		if !isPIDAlive(inst.PID) {
+			os.Remove(r.instanceFilePath(inst.ID))
+			continue
+		}
 		if inst.ID != r.selfID {
 			others = append(others, inst)
 		}
@@ -137,59 +111,54 @@ func (r *Registry) UpdateStatus(status string) error {
 
 	if r.selfInfo != nil {
 		r.selfInfo.Status = status
+		return r.writeInstanceFile(*r.selfInfo)
 	}
-
-	instances, err := r.load()
-	if err != nil {
-		return nil
-	}
-
-	for i, inst := range instances {
-		if inst.ID == r.selfID {
-			instances[i].Status = status
-			break
-		}
-	}
-
-	return r.save(instances)
+	return nil
 }
 
-func (r *Registry) instancesPath() string {
-	return filepath.Join(r.dir, "instances.json")
+func (r *Registry) instancesDir() string {
+	return r.dir
 }
 
-func (r *Registry) load() ([]InstanceInfo, error) {
-	data, err := os.ReadFile(r.instancesPath())
+func (r *Registry) instanceFilePath(id string) string {
+	return filepath.Join(r.dir, id+".json")
+}
+
+// loadAll reads all per-instance files from the registry directory.
+func (r *Registry) loadAll() ([]InstanceInfo, error) {
+	entries, err := os.ReadDir(r.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // no instances registered yet
+			return nil, nil
 		}
 		return nil, err
 	}
+
 	var instances []InstanceInfo
-	if err := json.Unmarshal(data, &instances); err != nil {
-		return nil, err
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(r.dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue // skip unreadable files
+		}
+		var inst InstanceInfo
+		if err := json.Unmarshal(data, &inst); err != nil {
+			continue // skip corrupted files
+		}
+		instances = append(instances, inst)
 	}
 	return instances, nil
 }
 
-func (r *Registry) save(instances []InstanceInfo) error {
-	data, err := json.MarshalIndent(instances, "", "  ")
+func (r *Registry) writeInstanceFile(info InstanceInfo) error {
+	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.instancesPath(), data, 0644)
-}
-
-// pruneDead removes entries whose PIDs are no longer running.
-func pruneDead(instances []InstanceInfo) []InstanceInfo {
-	var alive []InstanceInfo
-	for _, inst := range instances {
-		if isPIDAlive(inst.PID) {
-			alive = append(alive, inst)
-		}
-	}
-	return alive
+	return os.WriteFile(r.instanceFilePath(info.ID), data, 0644)
 }
 
 // isPIDAlive checks if a process with the given PID exists.

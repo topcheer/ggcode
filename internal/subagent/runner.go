@@ -33,6 +33,8 @@ type RunnerConfig struct {
 	SubAgentID   string
 	AgentFactory AgentFactory
 	BuildToolSet func(allowedTools []string, allTools []ToolInfo) interface{} // returns opaque tool set for agent
+	Model        string                                                       // optional model override (e.g., "sonnet", "opus", "haiku")
+	AgentType    string                                                       // optional agent type hint (e.g., "Explore", "Plan")
 }
 
 // Run starts the sub-agent in a goroutine, running a complete agentic loop.
@@ -72,8 +74,13 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	}
 
 	// Create independent agent with its own context manager
+	rolePrefix := "You are a sub-agent."
+	if cfg.AgentType != "" {
+		rolePrefix = fmt.Sprintf("You are a %s sub-agent.", cfg.AgentType)
+	}
 	systemPrompt := fmt.Sprintf(
-		"You are a sub-agent. Complete the following task independently:\n%s\n\nProvide a concise result. Do not spawn further agents.",
+		"%s Complete the following task independently:\n%s\n\nProvide a concise result. Do not spawn further agents.",
+		rolePrefix,
 		cfg.Task,
 	)
 	if cfg.AgentFactory == nil {
@@ -91,6 +98,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			output.WriteString(event.Text)
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("writing", "", "")
+				sa.appendEvent(AgentEvent{Type: AgentEventText, Text: truncateStr(event.Text, 500)})
 			}
 			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventToolCallDone:
@@ -98,6 +106,11 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
 				sa.setActivity("tool", event.Tool.Name, string(event.Tool.Arguments))
+				sa.appendEvent(AgentEvent{
+					Type:     AgentEventToolCall,
+					ToolName: event.Tool.Name,
+					ToolArgs: truncateStr(string(event.Tool.Arguments), 300),
+				})
 			}
 			lastToolName = event.Tool.Name
 			cfg.Manager.Notify(cfg.SubAgentID)
@@ -107,10 +120,23 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			} else {
 				cfg.Manager.Notify(cfg.SubAgentID)
 			}
+			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+				sa.appendEvent(AgentEvent{
+					Type:     AgentEventToolResult,
+					ToolName: lastToolName,
+					Result:   truncateStr(event.Result, 500),
+					IsError:  event.IsError,
+				})
+			}
 		case provider.StreamEventError:
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("failed", "", "")
+				sa.appendEvent(AgentEvent{
+					Type:    AgentEventError,
+					Text:    fmt.Sprintf("%v", event.Error),
+					IsError: true,
+				})
 			}
 			cfg.Manager.Notify(cfg.SubAgentID)
 		}
@@ -223,4 +249,11 @@ func compactProgressSummary(result string) string {
 		return ""
 	}
 	return strings.Join(parts, " • ")
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

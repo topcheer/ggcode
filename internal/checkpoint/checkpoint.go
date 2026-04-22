@@ -4,9 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Checkpoint represents a saved file state before a tool edit.
@@ -69,7 +70,7 @@ func (m *Manager) Undo() (*Checkpoint, error) {
 
 	cp := &m.checkpoints[len(m.checkpoints)-1]
 
-	if err := os.WriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
+	if err := util.AtomicWriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 
@@ -97,7 +98,7 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 
 	cp := &m.checkpoints[idx]
 
-	if err := os.WriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
+	if err := util.AtomicWriteFile(cp.FilePath, []byte(cp.OldContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write file: %w", err)
 	}
 

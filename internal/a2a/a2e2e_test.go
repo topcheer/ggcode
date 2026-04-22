@@ -72,22 +72,21 @@ func newTestCluster(t *testing.T) *testCluster {
 	return c
 }
 
-// registerAll writes all instances into the shared registry file,
+// registerAll writes each instance into its own per-ID file,
 // simulating each process having registered on startup.
 func (c *testCluster) registerAll() {
 	c.t.Helper()
-	var instances []InstanceInfo
 	for _, n := range c.instances {
-		instances = append(instances, InstanceInfo{
+		inst := InstanceInfo{
 			ID:        n.name + "-id",
 			PID:       os.Getpid(),
 			Workspace: "/tmp/test-a2a/" + n.name,
 			Endpoint:  n.server.Endpoint(),
 			Status:    "ready",
-		})
+		}
+		data, _ := json.MarshalIndent(inst, "", "  ")
+		os.WriteFile(filepath.Join(c.regDir, inst.ID+".json"), data, 0644)
 	}
-	data, _ := json.MarshalIndent(instances, "", "  ")
-	os.WriteFile(filepath.Join(c.regDir, "instances.json"), data, 0644)
 }
 
 func (c *testCluster) node(name string) *testNode {
@@ -237,20 +236,16 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 	}
 	defer srvD.Stop()
 
-	// D registers itself.
-	regPath := filepath.Join(c.regDir, "instances.json")
-	data, _ := os.ReadFile(regPath)
-	var instances []InstanceInfo
-	json.Unmarshal(data, &instances)
-	instances = append(instances, InstanceInfo{
+	// D registers itself via per-ID file.
+	newInst := InstanceInfo{
 		ID:        "notification-service-id",
 		PID:       os.Getpid(),
 		Workspace: "/tmp/test-a2a/notification-service",
 		Endpoint:  srvD.Endpoint(),
 		Status:    "ready",
-	})
-	newData, _ := json.MarshalIndent(instances, "", "  ")
-	os.WriteFile(regPath, newData, 0644)
+	}
+	instData, _ := json.MarshalIndent(newInst, "", "  ")
+	os.WriteFile(filepath.Join(c.regDir, newInst.ID+".json"), instData, 0644)
 
 	// A's cache is stale (10s TTL). Force refresh.
 	nodeA.remote.RefreshCache()
@@ -291,20 +286,9 @@ func TestCluster_InstanceGone(t *testing.T) {
 	}
 	t.Logf("Before: A sees order-service ✅")
 
-	// Stop order-service's server and remove it from registry.
+	// Stop order-service's server and remove its per-ID file.
 	c.node("order-service").server.Stop()
-	regPath := filepath.Join(c.regDir, "instances.json")
-	data, _ := os.ReadFile(regPath)
-	var instances []InstanceInfo
-	json.Unmarshal(data, &instances)
-	var filtered []InstanceInfo
-	for _, inst := range instances {
-		if inst.ID != "order-service-id" {
-			filtered = append(filtered, inst)
-		}
-	}
-	newData, _ := json.MarshalIndent(filtered, "", "  ")
-	os.WriteFile(regPath, newData, 0644)
+	os.Remove(filepath.Join(c.regDir, "order-service-id.json"))
 
 	// Refresh and verify.
 	nodeA.remote.RefreshCache()

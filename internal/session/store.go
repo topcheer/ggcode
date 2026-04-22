@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -71,6 +73,12 @@ type indexEntry struct {
 // JSONLStore implements Store using JSONL files.
 type JSONLStore struct {
 	dir string // ~/.ggcode/sessions/
+	// mu serializes all on-disk mutations (Save, Append*, EnsureMeta, Delete,
+	// and the load/modify/save index sequence). Without this, concurrent
+	// O_APPEND writers can interleave inside a single JSONL line (>4KB writes
+	// are not atomic) and the index load/modify/save races silently lose
+	// updates from the loser. See locks.md S3.
+	mu sync.Mutex
 }
 
 // NewJSONLStore creates a store rooted at dir (creates dir if needed).
@@ -206,6 +214,8 @@ func (s *JSONLStore) sessionPath(id string) string {
 
 // Save writes the full session as a JSONL file (atomic).
 func (s *JSONLStore) Save(ses *Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	ses.UpdatedAt = time.Now()
 
 	tmp := s.sessionPath(ses.ID) + ".tmp"
@@ -373,6 +383,8 @@ func (s *JSONLStore) Load(id string) (*Session, error) {
 
 // List returns all sessions sorted by UpdatedAt descending (uses index for speed).
 func (s *JSONLStore) List() ([]*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	idx, err := s.loadIndex()
 	if err != nil {
 		return nil, err
@@ -469,6 +481,8 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 
 // Delete removes a session file and its index entry.
 func (s *JSONLStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := s.sessionPath(id)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
@@ -559,18 +573,12 @@ func (s *JSONLStore) CleanupOlderThan(before time.Time) (int, error) {
 // AppendMessage atomically appends a single message to the session's JSONL file.
 // This is more efficient than Save() for incremental updates.
 func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
-	enc.SetEscapeHTML(false)
 	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
-	if err := enc.Encode(rec); err != nil {
+	if err := appendRecordLine(path, rec); err != nil {
 		return err
 	}
 
@@ -601,6 +609,8 @@ func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 
 // EnsureMeta writes the meta record if the session file doesn't exist yet.
 func (s *JSONLStore) EnsureMeta(ses *Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 	if _, err := os.Stat(path); err == nil {
 		return nil // already exists
@@ -688,16 +698,9 @@ func (s *JSONLStore) Dir() string {
 // The checkpoint captures the compacted messages state after a summarize operation,
 // so that future --resume operations can skip re-compacting old history.
 func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider.Message, tokenCount int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
-	enc.SetEscapeHTML(false)
 
 	// Shallow copy to avoid slice aliasing with the caller's slice.
 	// JSON serialization below breaks any interior reference sharing.
@@ -710,10 +713,31 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider
 		CheckpointMessages: msgs,
 		CheckpointTokens:   tokenCount,
 	}
-	if err := enc.Encode(rec); err != nil {
+	if err := appendRecordLine(path, rec); err != nil {
 		return fmt.Errorf("encoding checkpoint: %w", err)
 	}
 
 	ses.UpdatedAt = time.Now()
 	return s.updateIndex(ses)
+}
+
+// appendRecordLine encodes rec to a single buffer then writes it in one
+// os.File.Write call. Combined with the store mutex, this guarantees no JSONL
+// line interleaving even for records larger than PIPE_BUF.
+func appendRecordLine(path string, rec jsonlRecord) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(rec); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
