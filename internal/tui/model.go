@@ -162,18 +162,19 @@ type Model struct {
 	activeMCPTools  map[string]ToolStatusMsg
 
 	// Slash command autocomplete
-	autoCompleteItems     []string
-	autoCompleteIndex     int
-	autoCompleteActive    bool
-	autoCompleteKind      string // "slash" or "mention"
-	autoCompleteWorkDir   string // working directory for mention completion
-	startedAt             time.Time
-	inputDrainUntil       time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
-	inputReady            bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
-	lastMouseAt           time.Time // timestamp of most recent MouseMsg/MouseWheelMsg; used to suppress mouse-SGR fragments mis-parsed as keys
-	startupBannerVisible  bool
-	lastResizeAt          time.Time
-	sidebarVisible        bool
+	autoCompleteItems    []string
+	autoCompleteIndex    int
+	autoCompleteActive   bool
+	autoCompleteKind     string // "slash" or "mention"
+	autoCompleteWorkDir  string // working directory for mention completion
+	startedAt            time.Time
+	inputDrainUntil      time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
+	inputReady           bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
+	lastMouseAt          time.Time // timestamp of most recent MouseMsg/MouseWheelMsg; used to suppress mouse-SGR fragments mis-parsed as keys
+	startupBannerVisible bool
+	lastResizeAt         time.Time
+	sidebarVisible       bool
+
 	exitConfirmPending    bool
 	pending               *pendingQueue
 	sessionMu             *sync.Mutex
