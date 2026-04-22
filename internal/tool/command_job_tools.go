@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 type StartCommandTool struct {
@@ -45,6 +47,24 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	if t.Manager == nil {
 		return Result{IsError: true, Content: "command job manager is unavailable"}, nil
 	}
+
+	// === Safety gate (Allow/Ask/Block) ===
+	gate := NewCommandGate()
+	gateResult := gate.Check(args.Command)
+	if gateResult.IsBlocked() {
+		return Result{IsError: true, Content: gateResult.Reason}, nil
+	}
+	if gateResult.NeedsConfirmation() {
+		// In job tools, we can't prompt the user, so treat Ask as Block.
+		return Result{IsError: true, Content: "Command requires confirmation: " + gateResult.Reason}, nil
+	}
+	if len(gateResult.Warnings) > 0 {
+		debug.Log("command-gate", "warnings: %v", gateResult.Warnings)
+	}
+	if gateResult.CleanedCmd != "" {
+		args.Command = gateResult.CleanedCmd
+	}
+
 	snap, err := t.Manager.Start(ctx, args.Command, secondsToDuration(args.Timeout, defaultCommandTimeout))
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil

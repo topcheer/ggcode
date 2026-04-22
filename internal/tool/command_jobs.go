@@ -209,6 +209,45 @@ func (m *CommandJobManager) Write(id, input string, appendNewline bool) (Command
 	return m.snapshot(job), nil
 }
 
+// AutoBackground adopts an already-running command process into a background
+// job. The caller loses ownership of cmd — the job manager will Wait for it
+// and capture output. initialStdout/initialStderr is output already captured
+// before the migration.
+func (m *CommandJobManager) AutoBackground(cmd *exec.Cmd, command string, initialStdout, initialStderr string) string {
+	ctx := context.Background()
+	cancel := func() {
+		configureCommandCancellation(cmd)
+		_ = cmd.Process.Kill()
+	}
+
+	job := m.newJob(command, defaultCommandTimeout, cancel)
+
+	// Seed the job with output already captured.
+	if initialStdout != "" {
+		job.appendOutput(initialStdout)
+	}
+	if initialStderr != "" {
+		job.appendOutput(initialStderr)
+	}
+
+	go m.waitForAutoBackgroundedJob(ctx, cmd, job)
+	return job.ID
+}
+
+func (m *CommandJobManager) waitForAutoBackgroundedJob(ctx context.Context, cmd *exec.Cmd, job *CommandJob) {
+	defer close(job.done)
+	err := cmd.Wait()
+	if ctx.Err() != nil {
+		job.finish(CommandJobCancelled, "context canceled")
+		return
+	}
+	if err != nil {
+		job.finish(CommandJobFailed, err.Error())
+		return
+	}
+	job.finish(CommandJobCompleted, "")
+}
+
 func (m *CommandJobManager) newJob(command string, timeout time.Duration, cancel context.CancelFunc) *CommandJob {
 	m.mu.Lock()
 	defer m.mu.Unlock()
