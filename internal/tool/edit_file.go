@@ -34,6 +34,10 @@ func (t EditFile) Parameters() json.RawMessage {
 			"new_text": {
 				"type": "string",
 				"description": "Replacement text"
+			},
+			"replace_all": {
+				"type": "boolean",
+				"description": "Replace all occurrences of old_text (default false)"
 			}
 		},
 		"required": ["file_path", "old_text", "new_text"]
@@ -42,9 +46,10 @@ func (t EditFile) Parameters() json.RawMessage {
 
 func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		FilePath string `json:"file_path"`
-		OldText  string `json:"old_text"`
-		NewText  string `json:"new_text"`
+		FilePath   string `json:"file_path"`
+		OldText    string `json:"old_text"`
+		NewText    string `json:"new_text"`
+		ReplaceAll bool   `json:"replace_all"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -66,18 +71,26 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 
 	count := strings.Count(content, args.OldText)
-	if count > 1 {
-		return Result{IsError: true, Content: fmt.Sprintf("old_text found %d times in file — must be unique", count)}, nil
+	if !args.ReplaceAll && count > 1 {
+		return Result{IsError: true, Content: fmt.Sprintf("old_text found %d times in file — must be unique (use replace_all to replace all occurrences)", count)}, nil
 	}
 
-	newContent := strings.Replace(content, args.OldText, args.NewText, 1)
+	var newContent string
+	if args.ReplaceAll {
+		newContent = strings.ReplaceAll(content, args.OldText, args.NewText)
+	} else {
+		newContent = strings.Replace(content, args.OldText, args.NewText, 1)
+	}
 
-	if err := os.WriteFile(args.FilePath, []byte(newContent), 0644); err != nil {
+	if err := atomicWriteFile(args.FilePath, []byte(newContent), 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing file: %v", err)}, nil
 	}
 
 	// Build a summary
 	oldLines := strings.Count(args.OldText, "\n") + 1
 	newLines := strings.Count(args.NewText, "\n") + 1
+	if args.ReplaceAll {
+		return Result{Content: fmt.Sprintf("Replaced %d occurrence(s) in %s: %d lines -> %d lines", count, args.FilePath, oldLines, newLines)}, nil
+	}
 	return Result{Content: fmt.Sprintf("Replaced 1 occurrence in %s: %d lines -> %d lines", args.FilePath, oldLines, newLines)}, nil
 }

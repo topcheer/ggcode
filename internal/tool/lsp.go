@@ -56,6 +56,14 @@ type lspRenameTool struct {
 	applyEdits   func(context.Context, string, string, lsp.Position, string) (string, error)
 }
 
+type lspCallHierarchyTool struct {
+	name         string
+	description  string
+	workingDir   string
+	sandboxCheck AllowedPathChecker
+	exec         func(context.Context, string, string) (string, error)
+}
+
 const lspToolTimeout = 30 * time.Second
 
 func (t lspPathTool) Name() string                  { return t.name }
@@ -68,6 +76,8 @@ func (t lspWorkspaceQueryTool) Name() string        { return t.name }
 func (t lspWorkspaceQueryTool) Description() string { return t.description }
 func (t lspRenameTool) Name() string                { return t.name }
 func (t lspRenameTool) Description() string         { return t.description }
+func (t lspCallHierarchyTool) Name() string         { return t.name }
+func (t lspCallHierarchyTool) Description() string  { return t.description }
 
 func (t lspPathTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the source file"}},"required":["path"]}`)
@@ -87,6 +97,10 @@ func (t lspWorkspaceQueryTool) Parameters() json.RawMessage {
 
 func (t lspRenameTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the source file"},"line":{"type":"integer","description":"1-based line number"},"character":{"type":"integer","description":"1-based character number"},"new_name":{"type":"string","description":"Replacement symbol name"}},"required":["path","line","character","new_name"]}`)
+}
+
+func (t lspCallHierarchyTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"item":{"type":"string","description":"JSON-encoded call hierarchy item from a previous lsp_prepare_call_hierarchy result"}},"required":["item"]}`)
 }
 
 func (t lspPathTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -191,6 +205,25 @@ func (t lspRenameTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
 	out, err := t.applyEdits(ctx, t.workingDir, path, lsp.Position{Line: args.Line, Character: args.Character}, args.NewName)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	return Result{Content: out}, nil
+}
+
+func (t lspCallHierarchyTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
+	var args struct {
+		Item string `json:"item"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+	if args.Item == "" {
+		return Result{IsError: true, Content: "item is required"}, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
+	defer cancel()
+	out, err := t.exec(ctx, t.workingDir, args.Item)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -500,6 +533,115 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 				return applyLSPFileEdits(edits, writeSandbox)
 			},
 		},
+		lspPositionTool{
+			name:         "lsp_implementation",
+			description:  "Find implementations of an interface or abstract method at a specific file position using a locally installed LSP server.",
+			workingDir:   workingDir,
+			sandboxCheck: readSandbox,
+			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
+				locations, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.Location, error) {
+					return lsp.Implementation(ctx, workspace, path, candidate)
+				}, func(result []lsp.Location) bool {
+					return len(result) > 0
+				})
+				if err != nil {
+					return "", err
+				}
+				if len(locations) == 0 {
+					return "No implementations found.", nil
+				}
+				lines := make([]string, 0, len(locations))
+				for _, loc := range locations {
+					lines = append(lines, fmt.Sprintf("%s:%d:%d", loc.Path, loc.Range.Start.Line, loc.Range.Start.Character))
+				}
+				return strings.Join(lines, "\n"), nil
+			},
+		},
+		lspPositionTool{
+			name:         "lsp_prepare_call_hierarchy",
+			description:  "Prepare call hierarchy items for the symbol at a specific file position using a locally installed LSP server. Returns items that can be used with lsp_incoming_calls and lsp_outgoing_calls.",
+			workingDir:   workingDir,
+			sandboxCheck: readSandbox,
+			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
+				items, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.CallHierarchyItem, error) {
+					return lsp.PrepareCallHierarchy(ctx, workspace, path, candidate)
+				}, func(result []lsp.CallHierarchyItem) bool {
+					return len(result) > 0
+				})
+				if err != nil {
+					return "", err
+				}
+				if len(items) == 0 {
+					return "No call hierarchy items found.", nil
+				}
+				out := make([]string, 0, len(items))
+				for _, item := range items {
+					entry := fmt.Sprintf("%s:%d:%d %s", item.Path, item.Range.Start.Line, item.Range.Start.Character, item.Name)
+					if item.Detail != "" {
+						entry += " — " + item.Detail
+					}
+					data, _ := json.Marshal(item)
+					out = append(out, entry+"\n"+string(data))
+				}
+				return strings.Join(out, "\n\n"), nil
+			},
+		},
+		lspCallHierarchyTool{
+			name:         "lsp_incoming_calls",
+			description:  "Get incoming calls (callers) for a call hierarchy item. The item JSON must come from a previous lsp_prepare_call_hierarchy result.",
+			workingDir:   workingDir,
+			sandboxCheck: readSandbox,
+			exec: func(ctx context.Context, workspace, itemJSON string) (string, error) {
+				var item lsp.CallHierarchyItem
+				if err := json.Unmarshal([]byte(itemJSON), &item); err != nil {
+					return "", fmt.Errorf("invalid call hierarchy item JSON: %w", err)
+				}
+				calls, err := lsp.IncomingCalls(ctx, workspace, item)
+				if err != nil {
+					return "", err
+				}
+				if len(calls) == 0 {
+					return "No incoming calls found.", nil
+				}
+				out := make([]string, 0, len(calls))
+				for _, call := range calls {
+					entry := fmt.Sprintf("%s:%d:%d %s", call.From.Path, call.From.Range.Start.Line, call.From.Range.Start.Character, call.From.Name)
+					if call.From.Detail != "" {
+						entry += " — " + call.From.Detail
+					}
+					out = append(out, entry)
+				}
+				return strings.Join(out, "\n"), nil
+			},
+		},
+		lspCallHierarchyTool{
+			name:         "lsp_outgoing_calls",
+			description:  "Get outgoing calls (callees) for a call hierarchy item. The item JSON must come from a previous lsp_prepare_call_hierarchy result.",
+			workingDir:   workingDir,
+			sandboxCheck: readSandbox,
+			exec: func(ctx context.Context, workspace, itemJSON string) (string, error) {
+				var item lsp.CallHierarchyItem
+				if err := json.Unmarshal([]byte(itemJSON), &item); err != nil {
+					return "", fmt.Errorf("invalid call hierarchy item JSON: %w", err)
+				}
+				calls, err := lsp.OutgoingCalls(ctx, workspace, item)
+				if err != nil {
+					return "", err
+				}
+				if len(calls) == 0 {
+					return "No outgoing calls found.", nil
+				}
+				out := make([]string, 0, len(calls))
+				for _, call := range calls {
+					entry := fmt.Sprintf("%s:%d:%d %s", call.To.Path, call.To.Range.Start.Line, call.To.Range.Start.Character, call.To.Name)
+					if call.To.Detail != "" {
+						entry += " — " + call.To.Detail
+					}
+					out = append(out, entry)
+				}
+				return strings.Join(out, "\n"), nil
+			},
+		},
 	}
 }
 
@@ -520,7 +662,7 @@ func applyLSPFileEdits(edits []lsp.FileEdit, sandboxCheck AllowedPathChecker) (s
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", fileEdit.Path, err)
 		}
-		if err := os.WriteFile(fileEdit.Path, []byte(next), 0o644); err != nil {
+		if err := atomicWriteFile(fileEdit.Path, []byte(next), 0o644); err != nil {
 			return "", err
 		}
 		summaries = append(summaries, fmt.Sprintf("%s (%d edits)", fileEdit.Path, count))

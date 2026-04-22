@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // SearchFiles implements the search_files tool (grep-like content search).
@@ -214,7 +216,7 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go func() {
+		safego.Go("tool.search.worker", func() {
 			defer wg.Done()
 			for path := range fileQueue {
 				if maxReached.Load() {
@@ -240,7 +242,7 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

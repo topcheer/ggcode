@@ -41,6 +41,10 @@ func (t WebFetch) Parameters() json.RawMessage {
 			"url": {
 				"type": "string",
 				"description": "The URL to fetch"
+			},
+			"prompt": {
+				"type": "string",
+				"description": "A prompt to apply to the fetched content for extraction or analysis"
 			}
 		},
 		"required": ["url"]
@@ -49,7 +53,8 @@ func (t WebFetch) Parameters() json.RawMessage {
 
 func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		URL string `json:"url"`
+		URL    string `json:"url"`
+		Prompt string `json:"prompt"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -76,7 +81,12 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	if !t.AllowPrivate {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
+		var transport *http.Transport
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = dt.Clone()
+		} else {
+			transport = &http.Transport{}
+		}
 		origDial := transport.DialContext
 		transport.DialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
@@ -120,6 +130,11 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	text := stripHTML(string(body))
 	if len(text) > 50000 {
 		text = text[:50000] + "\n... [truncated]"
+	}
+
+	// When a prompt is provided, prepend it so the LLM can process accordingly
+	if args.Prompt != "" {
+		text = fmt.Sprintf("Prompt: %s\n\n---\n\n%s", args.Prompt, text)
 	}
 
 	return Result{Content: text}, nil
