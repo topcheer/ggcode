@@ -206,8 +206,8 @@ func TestAgentDetailPanelRenderEmptyEvents(t *testing.T) {
 	id := mgr.Spawn("task", "task", nil, nil)
 	m.openAgentDetailPanel(id)
 	rendered := m.renderAgentDetailPanel()
-	if !strings.Contains(rendered, "No events") {
-		t.Fatalf("expected 'No events' message, got:\n%s", rendered)
+	if !strings.Contains(rendered, "Waiting for events") {
+		t.Fatalf("expected 'Waiting for events' message, got:\n%s", rendered)
 	}
 }
 
