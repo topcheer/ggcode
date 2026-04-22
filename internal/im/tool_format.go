@@ -131,6 +131,16 @@ func formatToolCallText(tc *ToolCallInfo) string {
 			duration = tc.Detail
 		}
 		return fmt.Sprintf("⏳ Sleep for %s", duration)
+	case "cron_create":
+		cronExpr := extractArgValue(args, "cron")
+		if cronExpr == "" {
+			cronExpr = tc.Detail
+		}
+		return fmt.Sprintf("⏰ Schedule: `%s`", cronExpr)
+	case "cron_delete":
+		return "⏰ Delete cron job"
+	case "cron_list":
+		return "⏰ List cron jobs"
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
@@ -431,6 +441,12 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMSaveMemoryResult(tr)
 	case "sleep":
 		return true, formatIMSleepResult(tr)
+	case "cron_create":
+		return true, formatIMCronCreateResult(tr)
+	case "cron_delete":
+		return true, formatIMCronDeleteResult(tr)
+	case "cron_list":
+		return true, formatIMCronListResult(tr)
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
@@ -646,6 +662,44 @@ func formatIMSleepResult(tr *ToolResultInfo) string {
 	// Suppress successful sleep results — the ToolCall event already
 	// told the user "⏳ Sleep for Xs", no need to repeat.
 	return ""
+}
+
+// formatIMCronCreateResult renders cron_create result.
+func formatIMCronCreateResult(tr *ToolResultInfo) string {
+	if tr.IsError {
+		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	// Result is JSON: {"ID":"cron-1","CronExpr":"*/5 * * * *",...}
+	var job struct {
+		ID        string `json:"ID"`
+		CronExpr  string `json:"CronExpr"`
+		Prompt    string `json:"Prompt"`
+		Recurring bool   `json:"Recurring"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(tr.Result)), &job); err != nil {
+		return "⏰ Cron job created"
+	}
+	return fmt.Sprintf("⏰ Cron job created: `%s` → %q", job.CronExpr, truncateStr(job.Prompt, 50))
+}
+
+// formatIMCronDeleteResult renders cron_delete result.
+func formatIMCronDeleteResult(tr *ToolResultInfo) string {
+	if tr.IsError {
+		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	return "⏰ Cron job deleted"
+}
+
+// formatIMCronListResult renders cron_list result.
+func formatIMCronListResult(tr *ToolResultInfo) string {
+	if tr.IsError {
+		return fmt.Sprintf("⏰ Cron\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	output := strings.TrimSpace(tr.Result)
+	if output == "" || strings.Contains(output, "No scheduled jobs") {
+		return "⏰ No scheduled cron jobs"
+	}
+	return fmt.Sprintf("⏰\n```\n%s\n```", output)
 }
 
 // formatSleepDuration parses sleep tool args and returns a human-readable duration.
