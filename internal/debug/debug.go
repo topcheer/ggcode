@@ -158,6 +158,11 @@ var Categories = []Category{
 		Description: "Goroutine panic recovery",
 		Tags:        []string{"safego"},
 	},
+	{
+		Name: "bubbletea", EnvSuffix: "BUBBLETEA",
+		Description: "Bubble Tea framework internal trace (TEA_TRACE), controlled independently via GGCODE_DEBUG_BUBBLETEA",
+		Tags:        []string{}, // not routed through debug.Log; bubbletea writes directly
+	},
 }
 
 // tagToCategory maps each debug.Log tag to its category name.
