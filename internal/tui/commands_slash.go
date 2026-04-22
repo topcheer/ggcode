@@ -132,9 +132,9 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 		present := describeTool(m.currentLanguage(), pa.ToolName, pa.Input)
 		toolLine := formatToolInline(present.DisplayName, present.Detail)
 		if m.currentLanguage() == LangZhCN {
-			m.output.WriteString(fmt.Sprintf("\u2713 已总是允许：%s\n\n", toolLine))
+			m.dualWriteSystem(fmt.Sprintf("\u2713 已总是允许：%s\n\n", toolLine))
 		} else {
-			m.output.WriteString(fmt.Sprintf("\u2713 Always allow: %s\n\n", toolLine))
+			m.dualWriteSystem(fmt.Sprintf("\u2713 Always allow: %s\n\n", toolLine))
 		}
 	}
 	if pa != nil && pa.Response != nil {
@@ -155,7 +155,7 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 		pd.Response <- approved
 	})
 	if !approved {
-		m.output.WriteString(m.styles.error.Render(m.t("approval.rejected")))
+		m.dualWriteSystem(m.styles.error.Render(m.t("approval.rejected")))
 	}
 	return nil
 }
@@ -170,7 +170,7 @@ func (m *Model) handleHarnessCheckpointConfirm(approved bool) tea.Cmd {
 		pc.Response <- approved
 	})
 	if !approved {
-		m.output.WriteString(m.styles.error.Render(m.t("command.harness_cancelled")))
+		m.dualWriteSystem(m.styles.error.Render(m.t("command.harness_cancelled")))
 	}
 	return nil
 }
@@ -213,7 +213,7 @@ func (m *Model) handleModeCommand(parts []string) tea.Cmd {
 		}
 		m.persistModePreference()
 	} else {
-		m.output.WriteString(m.t("mode.current", m.mode))
+		m.dualWriteSystem(m.t("mode.current", m.mode))
 	}
 	return nil
 }
@@ -223,8 +223,8 @@ func (m *Model) persistModePreference() {
 		return
 	}
 	if err := m.config.SaveDefaultModePreference(m.mode.String()); err != nil {
-		m.output.WriteString(m.styles.error.Render(m.t("mode.persist_failed", err)))
-		m.output.WriteString("\n\n")
+		m.dualWriteSystem(m.styles.error.Render(m.t("mode.persist_failed", err)))
+		m.dualWriteSystem("\n\n")
 	}
 }
 
@@ -236,7 +236,7 @@ func (m *Model) handleLangCommand(parts []string) tea.Cmd {
 	raw := strings.TrimSpace(parts[1])
 	lang := normalizeLanguage(raw)
 	if lang == LangEnglish && !strings.EqualFold(raw, "en") && !strings.EqualFold(raw, "english") {
-		m.output.WriteString(m.styles.error.Render(m.t("lang.invalid", raw, supportedLanguageUsage(m.currentLanguage()))))
+		m.dualWriteSystem(m.styles.error.Render(m.t("lang.invalid", raw, supportedLanguageUsage(m.currentLanguage()))))
 		return nil
 	}
 	m.applyLanguageChange(lang)
@@ -267,11 +267,11 @@ func (m *Model) applyLanguageChange(lang Language) {
 	m.setLanguage(string(lang))
 	if m.config != nil {
 		if err := m.config.SaveLanguagePreference(string(m.currentLanguage())); err != nil {
-			m.output.WriteString(m.styles.error.Render(err.Error() + "\n"))
+			m.dualWriteSystem(m.styles.error.Render(err.Error() + "\n"))
 			return
 		}
 	}
-	m.output.WriteString(m.t("lang.switch", m.languageLabel()))
+	m.dualWriteSystem(m.t("lang.switch", m.languageLabel()))
 }
 
 func (m *Model) handleUndoCommand() tea.Cmd {
@@ -317,14 +317,14 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 		m.openInspectorPanel(inspectorPanelMemory)
 	case "clear":
 		if m.autoMem == nil {
-			m.output.WriteString(m.styles.prompt.Render(m.t("memory.auto_unavailable")))
+			m.dualWriteSystem(m.styles.prompt.Render(m.t("memory.auto_unavailable")))
 			return nil
 		}
 		if err := m.autoMem.Clear(); err != nil {
-			m.output.WriteString(m.styles.error.Render(m.t("memory.clear_failed", err)))
+			m.dualWriteSystem(m.styles.error.Render(m.t("memory.clear_failed", err)))
 			return nil
 		}
-		m.output.WriteString(m.styles.assistant.Render(m.t("memory.cleared")))
+		m.dualWriteSystem(m.styles.assistant.Render(m.t("memory.cleared")))
 	default:
 		m.openInspectorPanel(inspectorPanelMemory)
 	}
@@ -358,7 +358,7 @@ func (m *Model) handleTodoCommand(parts []string) tea.Cmd {
 		}
 		m.todoSnapshot = nil
 		m.activeTodo = nil
-		m.output.WriteString(m.styles.assistant.Render(m.t("todo.cleared")))
+		m.dualWriteSystem(m.styles.assistant.Render(m.t("todo.cleared")))
 		return nil
 	}
 	m.openInspectorPanel(inspectorPanelTodos)
@@ -409,55 +409,55 @@ func (m *Model) handleBugCommand() tea.Cmd {
 func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "set" {
 		if len(parts) < 4 {
-			m.output.WriteString(m.styles.error.Render(m.t("config.usage")))
+			m.dualWriteSystem(m.styles.error.Render(m.t("config.usage")))
 			return nil
 		}
 		key := parts[2]
 		value := parts[3]
 		if m.config == nil {
-			m.output.WriteString(m.styles.error.Render(m.t("config.not_loaded")))
+			m.dualWriteSystem(m.styles.error.Render(m.t("config.not_loaded")))
 			return nil
 		}
 		switch key {
 		case "model":
 			if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, value); err != nil {
-				m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+				m.dualWriteSystem(m.styles.error.Render(m.t("command.model_failed", err)))
 				return nil
 			}
 			if err := m.reloadActiveProvider(); err != nil {
-				m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+				m.dualWriteSystem(m.styles.error.Render(m.t("command.model_failed", err)))
 				return nil
 			}
-			m.output.WriteString(m.t("config.model_set", value))
+			m.dualWriteSystem(m.t("config.model_set", value))
 		case "vendor":
 			endpoints := m.config.EndpointNames(value)
 			if len(endpoints) == 0 {
-				m.output.WriteString(m.styles.error.Render(m.t("command.provider_unknown", value, m.vendorNames())))
+				m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_unknown", value, m.vendorNames())))
 				return nil
 			}
 			if err := m.config.SetActiveSelection(value, endpoints[0], ""); err != nil {
-				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_failed", err)))
 				return nil
 			}
 			if err := m.reloadActiveProvider(); err != nil {
-				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_failed", err)))
 				return nil
 			}
-			m.output.WriteString(m.t("config.provider_set", value))
+			m.dualWriteSystem(m.t("config.provider_set", value))
 		case "endpoint":
 			if err := m.config.SetActiveSelection(m.config.Vendor, value, ""); err != nil {
-				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_failed", err)))
 				return nil
 			}
 			if err := m.reloadActiveProvider(); err != nil {
-				m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+				m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_failed", err)))
 				return nil
 			}
-			m.output.WriteString(m.t("config.provider_set", value))
+			m.dualWriteSystem(m.t("config.provider_set", value))
 		case "language":
 			m.applyLanguageChange(normalizeLanguage(value))
 		default:
-			m.output.WriteString(m.styles.error.Render(m.t("config.unknown_key", key)))
+			m.dualWriteSystem(m.styles.error.Render(m.t("config.unknown_key", key)))
 		}
 		return nil
 	}
@@ -531,7 +531,7 @@ func (m *Model) handlePluginsCommand() tea.Cmd {
 
 func (m *Model) handleMCPCommand() tea.Cmd {
 	if len(m.mcpServers) == 0 {
-		m.output.WriteString(m.styles.prompt.Render(m.t("mcp.none")))
+		m.dualWriteSystem(m.styles.prompt.Render(m.t("mcp.none")))
 		return nil
 	}
 	m.openMCPPanel()
@@ -545,8 +545,8 @@ func (m *Model) handleQQCommand() tea.Cmd {
 
 func (m *Model) handleImageCommand(parts []string) tea.Cmd {
 	if len(parts) < 2 {
-		m.output.WriteString(m.styles.error.Render(m.t("image.usage")))
-		m.output.WriteString(m.styles.prompt.Render(m.t("image.formats")))
+		m.dualWriteSystem(m.styles.error.Render(m.t("image.usage")))
+		m.dualWriteSystem(m.styles.prompt.Render(m.t("image.formats")))
 		return nil
 	}
 	path := parts[1]
@@ -585,7 +585,7 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 
 func (m *Model) handleSwarmCommand(parts []string) tea.Cmd {
 	if m.swarmMgr == nil {
-		m.output.WriteString(m.styles.error.Render("Swarm is not available"))
+		m.dualWriteSystem(m.styles.error.Render("Swarm is not available"))
 		return nil
 	}
 	m.openSwarmPanel()
@@ -599,7 +599,7 @@ func (m *Model) handleAgentsCommand(parts []string) tea.Cmd {
 
 func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 	if m.subAgentMgr == nil {
-		m.output.WriteString(m.styles.error.Render(m.t("agents.unavailable")))
+		m.dualWriteSystem(m.styles.error.Render(m.t("agents.unavailable")))
 		return nil
 	}
 	if len(parts) < 2 {
@@ -608,15 +608,15 @@ func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 	}
 	if parts[1] == "cancel" && len(parts) >= 3 {
 		if m.subAgentMgr.Cancel(parts[2]) {
-			m.output.WriteString(m.t("agent.cancelled", parts[2]))
+			m.dualWriteSystem(m.t("agent.cancelled", parts[2]))
 		} else {
-			m.output.WriteString(m.styles.error.Render(m.t("agent.cancel_failed", parts[2])))
+			m.dualWriteSystem(m.styles.error.Render(m.t("agent.cancel_failed", parts[2])))
 		}
 		return nil
 	}
 	sa, ok := m.subAgentMgr.Get(parts[1])
 	if !ok {
-		m.output.WriteString(m.styles.error.Render(m.t("agent.not_found", parts[1])))
+		m.dualWriteSystem(m.styles.error.Render(m.t("agent.not_found", parts[1])))
 		return nil
 	}
 	m.openAgentDetailPanel(sa.ID)
@@ -625,7 +625,7 @@ func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
 
 func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	if m.knight == nil {
-		m.output.WriteString("Knight is not available (only in daemon mode)\n")
+		m.dualWriteSystem("Knight is not available (only in daemon mode)\n")
 		return nil
 	}
 
@@ -636,32 +636,32 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 
 	switch subcmd {
 	case "status", "":
-		m.output.WriteString(fmt.Sprintf("🌙 Knight: %s\n", m.knight.Status()))
+		m.dualWriteSystem(fmt.Sprintf("🌙 Knight: %s\n", m.knight.Status()))
 		used, remaining, limit := m.knight.BudgetStatus()
 		if limit == 0 {
-			m.output.WriteString(fmt.Sprintf("Budget: %d tokens used / unlimited\n", used))
+			m.dualWriteSystem(fmt.Sprintf("Budget: %d tokens used / unlimited\n", used))
 		} else {
-			m.output.WriteString(fmt.Sprintf("Budget: %d used / %d remaining / %d total\n", used, remaining, limit))
+			m.dualWriteSystem(fmt.Sprintf("Budget: %d used / %d remaining / %d total\n", used, remaining, limit))
 		}
 		// Show staging skills
 		staging, _ := m.knight.Index().StagingSkills()
 		if len(staging) > 0 {
-			m.output.WriteString("\nStaging skills:\n")
+			m.dualWriteSystem("\nStaging skills:\n")
 			for _, s := range staging {
-				m.output.WriteString(fmt.Sprintf("  • %s (%s): %s\n", s.Name, s.Scope, s.Meta.Description))
+				m.dualWriteSystem(fmt.Sprintf("  • %s (%s): %s\n", s.Name, s.Scope, s.Meta.Description))
 			}
 		}
 	case "budget":
 		used, remaining, limit := m.knight.BudgetStatus()
 		if limit == 0 {
-			m.output.WriteString(fmt.Sprintf("Knight budget: %d tokens used / unlimited\n", used))
+			m.dualWriteSystem(fmt.Sprintf("Knight budget: %d tokens used / unlimited\n", used))
 		} else {
-			m.output.WriteString(fmt.Sprintf("Knight budget: %d used / %d remaining / %d total\n", used, remaining, limit))
+			m.dualWriteSystem(fmt.Sprintf("Knight budget: %d used / %d remaining / %d total\n", used, remaining, limit))
 		}
 	case "review":
 		staging, _ := m.knight.Index().StagingSkills()
 		if len(staging) == 0 {
-			m.output.WriteString("No staging skills\n")
+			m.dualWriteSystem("No staging skills\n")
 			return nil
 		}
 		if len(parts) >= 3 {
@@ -671,51 +671,51 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				result := knight.ValidateSkill(s)
 				content, err := os.ReadFile(s.Path)
 				if err != nil {
-					m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+					m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 					return nil
 				}
-				m.output.WriteString(fmt.Sprintf("Reviewing staging skill '%s' (%s)\n", s.Name, s.Scope))
-				m.output.WriteString(fmt.Sprintf("Validation: valid=%v warnings=%d errors=%d\n", result.Valid, len(result.Warnings), len(result.Errors)))
+				m.dualWriteSystem(fmt.Sprintf("Reviewing staging skill '%s' (%s)\n", s.Name, s.Scope))
+				m.dualWriteSystem(fmt.Sprintf("Validation: valid=%v warnings=%d errors=%d\n", result.Valid, len(result.Warnings), len(result.Errors)))
 				if len(result.Warnings) > 0 {
-					m.output.WriteString("Warnings:\n")
+					m.dualWriteSystem("Warnings:\n")
 					for _, warning := range result.Warnings {
-						m.output.WriteString(fmt.Sprintf("  - %s\n", warning))
+						m.dualWriteSystem(fmt.Sprintf("  - %s\n", warning))
 					}
 				}
 				if len(result.Errors) > 0 {
-					m.output.WriteString("Errors:\n")
+					m.dualWriteSystem("Errors:\n")
 					for _, issue := range result.Errors {
-						m.output.WriteString(fmt.Sprintf("  - %s\n", issue))
+						m.dualWriteSystem(fmt.Sprintf("  - %s\n", issue))
 					}
 				}
-				m.output.WriteString("\n")
-				m.output.WriteString(strings.TrimSpace(string(content)))
-				m.output.WriteString("\n")
+				m.dualWriteSystem("\n")
+				m.dualWriteSystem(strings.TrimSpace(string(content)))
+				m.dualWriteSystem("\n")
 				return nil
 			}
-			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+			m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 			return nil
 		}
-		m.output.WriteString(fmt.Sprintf("Staging skills (%d):\n", len(staging)))
+		m.dualWriteSystem(fmt.Sprintf("Staging skills (%d):\n", len(staging)))
 		for _, s := range staging {
 			result := knight.ValidateSkill(s)
 			status := "valid"
 			if !result.Valid {
 				status = "invalid"
 			}
-			m.output.WriteString(fmt.Sprintf("  • %s (%s): %s [%s, warnings=%d, errors=%d]\n", s.Name, s.Scope, s.Meta.Description, status, len(result.Warnings), len(result.Errors)))
+			m.dualWriteSystem(fmt.Sprintf("  • %s (%s): %s [%s, warnings=%d, errors=%d]\n", s.Name, s.Scope, s.Meta.Description, status, len(result.Warnings), len(result.Errors)))
 		}
 	case "run":
 		if len(parts) < 3 {
-			m.output.WriteString("Usage: /knight run <task>\n")
+			m.dualWriteSystem("Usage: /knight run <task>\n")
 			return nil
 		}
 		goal := strings.TrimSpace(strings.Join(parts[2:], " "))
 		if goal == "" {
-			m.output.WriteString("Usage: /knight run <task>\n")
+			m.dualWriteSystem("Usage: /knight run <task>\n")
 			return nil
 		}
-		m.output.WriteString(fmt.Sprintf("🌙 Knight running: %s\n", goal))
+		m.dualWriteSystem(fmt.Sprintf("🌙 Knight running: %s\n", goal))
 		m.loading = true
 		m.spinner.Start("Knight task")
 		m.statusActivity = "Knight task"
@@ -732,65 +732,65 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		}
 	case "approve":
 		if len(parts) < 3 {
-			m.output.WriteString("Usage: /knight approve <skill-name>\n")
+			m.dualWriteSystem("Usage: /knight approve <skill-name>\n")
 			return nil
 		}
 		name := parts[2]
 		if err := m.knight.PromoteStaging(name); err != nil {
-			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+			m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 		} else {
-			m.output.WriteString(fmt.Sprintf("✅ Skill '%s' promoted\n", name))
+			m.dualWriteSystem(fmt.Sprintf("✅ Skill '%s' promoted\n", name))
 		}
 	case "reject":
 		if len(parts) < 3 {
-			m.output.WriteString("Usage: /knight reject <skill-name>\n")
+			m.dualWriteSystem("Usage: /knight reject <skill-name>\n")
 			return nil
 		}
 		name := parts[2]
 		if err := m.knight.RejectStaging(name); err != nil {
-			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+			m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 		} else {
-			m.output.WriteString(fmt.Sprintf("❌ Skill '%s' rejected\n", name))
+			m.dualWriteSystem(fmt.Sprintf("❌ Skill '%s' rejected\n", name))
 		}
 	case "freeze":
 		if len(parts) < 3 {
-			m.output.WriteString("Usage: /knight freeze <skill-name>\n")
+			m.dualWriteSystem("Usage: /knight freeze <skill-name>\n")
 			return nil
 		}
 		name := parts[2]
 		if err := m.knight.SetSkillFrozen(name, true); err != nil {
-			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+			m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 		} else {
-			m.output.WriteString(fmt.Sprintf("🔒 Skill '%s' frozen\n", name))
+			m.dualWriteSystem(fmt.Sprintf("🔒 Skill '%s' frozen\n", name))
 		}
 	case "unfreeze":
 		if len(parts) < 3 {
-			m.output.WriteString("Usage: /knight unfreeze <skill-name>\n")
+			m.dualWriteSystem("Usage: /knight unfreeze <skill-name>\n")
 			return nil
 		}
 		name := parts[2]
 		if err := m.knight.SetSkillFrozen(name, false); err != nil {
-			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+			m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 		} else {
-			m.output.WriteString(fmt.Sprintf("🔓 Skill '%s' unfrozen\n", name))
+			m.dualWriteSystem(fmt.Sprintf("🔓 Skill '%s' unfrozen\n", name))
 		}
 	case "rollback":
 		if len(parts) < 3 {
-			m.output.WriteString("Usage: /knight rollback <skill-name>\n")
+			m.dualWriteSystem("Usage: /knight rollback <skill-name>\n")
 			return nil
 		}
 		name := parts[2]
 		if err := m.knight.RollbackSkill(name); err != nil {
-			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+			m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 		} else {
-			m.output.WriteString(fmt.Sprintf("↩️ Skill '%s' rolled back\n", name))
+			m.dualWriteSystem(fmt.Sprintf("↩️ Skill '%s' rolled back\n", name))
 		}
 	case "skills":
 		active, _ := m.knight.Index().ActiveSkills()
 		if len(active) == 0 {
-			m.output.WriteString("No active skills\n")
+			m.dualWriteSystem("No active skills\n")
 		} else {
-			m.output.WriteString(fmt.Sprintf("Active skills (%d):\n", len(active)))
+			m.dualWriteSystem(fmt.Sprintf("Active skills (%d):\n", len(active)))
 			for _, s := range active {
 				status := "✓"
 				if s.Meta.Frozen {
@@ -803,31 +803,31 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				if samples > 0 {
 					feedback = fmt.Sprintf("%.1f/5 (%d)", avg, samples)
 				}
-				m.output.WriteString(fmt.Sprintf("  %s %s (%s): %s [used: %d, feedback: %s]\n", status, s.Name, s.Scope, s.Meta.Description, used, feedback))
+				m.dualWriteSystem(fmt.Sprintf("  %s %s (%s): %s [used: %d, feedback: %s]\n", status, s.Name, s.Scope, s.Meta.Description, used, feedback))
 			}
 		}
 	case "rate":
 		if len(parts) < 4 {
-			m.output.WriteString("Usage: /knight rate <skill-name> <1-5>\n")
+			m.dualWriteSystem("Usage: /knight rate <skill-name> <1-5>\n")
 			return nil
 		}
 		name := parts[2]
 		score, err := strconv.Atoi(parts[3])
 		if err != nil || score < 1 || score > 5 {
-			m.output.WriteString("Usage: /knight rate <skill-name> <1-5>\n")
+			m.dualWriteSystem("Usage: /knight rate <skill-name> <1-5>\n")
 			return nil
 		}
 		entry, err := m.knight.FindActiveSkill(name)
 		if err != nil {
-			m.output.WriteString(fmt.Sprintf("Error: %v\n", err))
+			m.dualWriteSystem(fmt.Sprintf("Error: %v\n", err))
 			return nil
 		}
 		ref := knight.FormatSkillRefForDisplay(entry.Scope, entry.Name)
 		m.knight.RecordSkillEffectiveness(ref, score)
 		avg, samples := m.knight.SkillFeedback(ref)
-		m.output.WriteString(fmt.Sprintf("⭐ Rated skill '%s' %d/5 (avg: %.1f/5 over %d signals)\n", name, score, avg, samples))
+		m.dualWriteSystem(fmt.Sprintf("⭐ Rated skill '%s' %d/5 (avg: %.1f/5 over %d signals)\n", name, score, avg, samples))
 	default:
-		m.output.WriteString("Knight commands: status, budget, review [name], run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills\n")
+		m.dualWriteSystem("Knight commands: status, budget, review [name], run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills\n")
 	}
 	return nil
 }

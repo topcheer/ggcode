@@ -168,26 +168,26 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			m.resetConversationView()
 			return nil
 		case "/help", "/?":
-			m.output.WriteString(m.styles.assistant.Render(m.helpText()))
-			m.output.WriteString("\n\n")
+			m.dualWriteSystem(m.styles.assistant.Render(m.helpText()))
+			m.dualWriteSystem("\n\n")
 			return nil
 		case "/model":
 			if len(parts) > 1 {
 				if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, parts[1]); err == nil {
 					if err := m.reloadActiveProvider(); err == nil {
-						m.output.WriteString(m.t("command.model_switched", parts[1], m.config.Vendor))
+						m.dualWriteSystem(m.t("command.model_switched", parts[1], m.config.Vendor))
 					} else {
-						m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+						m.dualWriteSystem(m.styles.error.Render(m.t("command.model_failed", err)))
 					}
 				} else {
-					m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+					m.dualWriteSystem(m.styles.error.Render(m.t("command.model_failed", err)))
 				}
 			} else {
 				resolved, err := m.config.ResolveActiveEndpoint()
 				if err != nil {
-					m.output.WriteString(m.styles.error.Render(m.t("command.model_failed", err)))
+					m.dualWriteSystem(m.styles.error.Render(m.t("command.model_failed", err)))
 				} else {
-					m.output.WriteString(m.t("command.model_current", resolved.Model, resolved.VendorName, strings.Join(uniqueStrings(append([]string(nil), resolved.Models...)), ", ")))
+					m.dualWriteSystem(m.t("command.model_current", resolved.Model, resolved.VendorName, strings.Join(uniqueStrings(append([]string(nil), resolved.Models...)), ", ")))
 				}
 				return m.openModelPanel()
 			}
@@ -200,7 +200,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 				newVendor := parts[1]
 				endpoints := m.config.EndpointNames(newVendor)
 				if len(endpoints) == 0 {
-					m.output.WriteString(m.styles.error.Render(m.t("command.provider_unknown", newVendor, m.vendorNames())))
+					m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_unknown", newVendor, m.vendorNames())))
 					return nil
 				}
 				endpoint := endpoints[0]
@@ -209,16 +209,16 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 				}
 				if err := m.config.SetActiveSelection(newVendor, endpoint, ""); err == nil {
 					if err := m.reloadActiveProvider(); err == nil {
-						m.output.WriteString(m.t("command.provider_switched", newVendor, m.config.Model))
+						m.dualWriteSystem(m.t("command.provider_switched", newVendor, m.config.Model))
 					} else {
-						m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+						m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_failed", err)))
 					}
 				} else {
-					m.output.WriteString(m.styles.error.Render(m.t("command.provider_failed", err)))
+					m.dualWriteSystem(m.styles.error.Render(m.t("command.provider_failed", err)))
 				}
 			} else {
 				if summary := m.providerCommandSummary(); summary != "" {
-					m.output.WriteString(summary)
+					m.dualWriteSystem(summary)
 				}
 				m.openProviderPanel()
 			}
@@ -250,10 +250,10 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			if len(parts) > 1 {
 				if m.policy != nil {
 					m.policy.SetOverride(parts[1], permission.Allow)
-					m.output.WriteString(m.t("command.allow_set", parts[1]))
+					m.dualWriteSystem(m.t("command.allow_set", parts[1]))
 				}
 			} else {
-				m.output.WriteString(m.t("command.usage.allow"))
+				m.dualWriteSystem(m.t("command.usage.allow"))
 			}
 			return nil
 		case "/sessions":
@@ -319,7 +319,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
 				if custom, ok := m.customCmds[cmdName]; ok {
 					if !custom.UserInvocable {
-						m.output.WriteString(m.styles.error.Render(m.t("command.skill_agent_only", custom.SlashName())))
+						m.dualWriteSystem(m.styles.error.Render(m.t("command.skill_agent_only", custom.SlashName())))
 						return nil
 					}
 					if m.commandMgr != nil {
@@ -330,9 +330,9 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 						"ARGS": strings.TrimSpace(strings.TrimPrefix(text, parts[0])),
 					}
 					expanded := custom.Expand(vars)
-					m.output.WriteString(m.styles.user.Render(m.t("command.custom", cmdName)))
-					m.output.WriteString(expanded)
-					m.output.WriteString("\n\n")
+					m.dualWriteSystem(m.styles.user.Render(m.t("command.custom", cmdName)))
+					m.dualWriteSystem(expanded)
+					m.dualWriteSystem("\n\n")
 					m.loading = true
 					// Reset status bar state
 					m.statusActivity = m.t("status.thinking")
@@ -343,8 +343,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(expanded))
 				}
 			}
-			m.output.WriteString(m.styles.error.Render(m.t("command.unknown", text)))
-			m.output.WriteString(m.styles.prompt.Render(m.t("command.help_hint")))
+			m.dualWriteSystem(m.styles.error.Render(m.t("command.unknown", text)))
+			m.dualWriteSystem(m.styles.prompt.Render(m.t("command.help_hint")))
 			return nil
 		}
 	}
@@ -355,8 +355,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
 	m.ensureOutputHasBlankLine()
-	m.output.WriteString(m.renderConversationUserEntry("❯ ", displayText))
-	m.output.WriteString("\n")
+	m.dualWriteSystem(m.renderConversationUserEntry("❯ ", displayText))
+	m.dualWriteSystem("\n")
 
 	// ChatEntries: user message
 	m.chatEntries.Append(ChatEntry{
@@ -387,7 +387,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	workDir, _ := os.Getwd()
 	targetPath, _, err := memory.ResolveProjectMemoryInitTarget(workDir)
 	if err != nil {
-		m.output.WriteString(m.styles.error.Render(m.t("init.resolve_failed", err)))
+		m.dualWriteSystem(m.styles.error.Render(m.t("init.resolve_failed", err)))
 		return nil
 	}
 	existed := false
@@ -396,14 +396,14 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	}
 	content, err := memory.GenerateProjectMemory(filepath.Dir(targetPath))
 	if err != nil {
-		m.output.WriteString(m.styles.error.Render(m.t("init.generate_failed", err)))
+		m.dualWriteSystem(m.styles.error.Render(m.t("init.generate_failed", err)))
 		return nil
 	}
 	prompt := buildInitPrompt(targetPath, existed, content)
 
 	m.ensureOutputHasBlankLine()
-	m.output.WriteString(m.styles.user.Render("❯ /init"))
-	m.output.WriteString("\n")
+	m.dualWriteSystem(m.styles.user.Render("❯ /init"))
+	m.dualWriteSystem("\n")
 	m.chatEntries.Append(ChatEntry{Role: "user", RawText: "/init", Prefix: "❯ "})
 	m.appendUserMessage("/init")
 

@@ -12,7 +12,7 @@ func (m *Model) ensureOutputEndsWithNewline() {
 	if strings.HasSuffix(m.output.String(), "\n") {
 		return
 	}
-	m.output.WriteString("\n")
+	m.dualWriteSystem("\n")
 }
 
 func (m *Model) ensureOutputHasBlankLine() {
@@ -23,9 +23,9 @@ func (m *Model) ensureOutputHasBlankLine() {
 	case strings.HasSuffix(m.output.String(), "\n\n"):
 		return
 	case strings.HasSuffix(m.output.String(), "\n"):
-		m.output.WriteString("\n")
+		m.dualWriteSystem("\n")
 	default:
-		m.output.WriteString("\n\n")
+		m.dualWriteSystem("\n\n")
 	}
 }
 
@@ -46,7 +46,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if !m.streamPrefixWritten {
 		m.ensureOutputHasBlankLine()
 		m.streamStartPos = m.output.Len()
-		m.output.WriteString(assistantBulletStyle.Render("● "))
+		m.dualWriteSystem(assistantBulletStyle.Render("● "))
 		m.streamPrefixWritten = true
 
 		// New: start a streaming assistant entry in chatEntries
@@ -108,10 +108,10 @@ func (m *Model) appendStreamStatusLine(text string) {
 	default:
 		m.ensureOutputEndsWithNewline()
 	}
-	m.output.WriteString(compactionBulletStyle.Render("● "))
-	m.output.WriteString(text)
+	m.dualWriteSystem(compactionBulletStyle.Render("● "))
+	m.dualWriteSystem(text)
 	if !strings.HasSuffix(text, "\n") {
-		m.output.WriteString("\n")
+		m.dualWriteSystem("\n")
 	}
 	m.chatEntries.Append(ChatEntry{
 		Role:    "compaction",
@@ -134,16 +134,16 @@ func (m *Model) rewriteActiveStreamOutput(renderMarkdown bool) {
 		return
 	}
 	m.output.Truncate(m.streamStartPos)
-	m.output.WriteString(assistantBulletStyle.Render("● "))
+	m.dualWriteSystem(assistantBulletStyle.Render("● "))
 	rendered := m.streamBuffer.String()
 	if renderMarkdown {
 		rendered = m.renderCurrentStreamMarkdown()
 	}
 	if rendered != "" {
-		m.output.WriteString(rendered)
+		m.dualWriteSystem(rendered)
 	}
 	if m.harnessRunLiveTail != "" {
-		m.output.WriteString(m.harnessRunLiveTail)
+		m.dualWriteSystem(m.harnessRunLiveTail)
 	}
 }
 
