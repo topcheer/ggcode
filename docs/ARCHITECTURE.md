@@ -133,8 +133,7 @@ internal/
     spinner.go           # Tool execution spinner
     diff.go              # Diff display formatting
     markdown.go          # Markdown rendering with glamour
-    preview_panel.go     # Fullscreen file preview, markdown rendering, syntax highlighting
-    fullscreen.go        # Legacy fullscreen wrapper model
+    preview_panel.go     # File preview, markdown rendering, syntax highlighting
     app.go               # Minimal package marker
   util/                  # Shared utilities
     truncate.go          # String truncation
