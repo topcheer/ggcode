@@ -6,87 +6,230 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
 
 const (
-	defaultLogPath      = "/tmp/ggcode-debug.log"
 	defaultLogDir       = "/tmp/ggcode-debug"
 	defaultMaxLogSize   = 50 * 1024 * 1024
 	defaultMaxLogFiles  = 3
 	defaultAsyncBufSize = 1024
+	envKey              = "GGCODE_DEBUG"
 )
+
+// categoryMap maps debug.Log tag strings to log file categories.
+// Tags not in this map go to the main debug log file.
+var categoryMap = map[string]string{
+	// agent
+	"agent":      "agent",
+	"precompact": "agent",
+	"ctx":        "agent",
+	// provider
+	"openai":       "provider",
+	"anthropic":    "provider",
+	"gemini":       "provider",
+	"provider":     "provider",
+	"adaptive_cap": "provider",
+	// IM
+	"qq":         "im",
+	"tg":         "im",
+	"discord":    "im",
+	"slack":      "im",
+	"dingtalk":   "im",
+	"feishu":     "im",
+	"pc_adapter": "im",
+	"pc_relay":   "im",
+	"stt":        "im",
+	"emitter":    "im",
+	// other subsystems
+	"knight": "knight",
+	"swarm":  "swarm",
+	"tui":    "tui",
+	"mcp":    "mcp",
+	"plugin": "mcp",
+}
+
+// knownCategories is the set of all category names used in categoryMap.
+var knownCategories = func() map[string]bool {
+	m := make(map[string]bool)
+	for _, cat := range categoryMap {
+		m[cat] = true
+	}
+	return m
+}()
 
 var (
-	logger  *log.Logger
-	logSink *asyncFileSink
-	once    sync.Once
-	mu      sync.RWMutex
-
-	logPath            = defaultLogPath
-	maxLogSize   int64 = defaultMaxLogSize
-	maxLogFiles        = defaultMaxLogFiles
-	asyncBufSize       = defaultAsyncBufSize
+	mu        sync.RWMutex
+	enabled   bool
+	once      sync.Once
+	sinks     map[string]*asyncFileSink // category → sink (nil = use mainSink)
+	mainSink  *asyncFileSink            // writes all logs (compat)
+	loggers   map[string]*log.Logger    // category → logger
+	tagFilter map[string]bool           // nil = all tags allowed; non-nil = only these tags
 )
 
-// Init opens the debug log file. Safe to call multiple times.
+// Init initializes the debug logging system based on the GGCODE_DEBUG
+// environment variable. If the variable is unset or empty, no log files are
+// created and all Log/Logf calls are no-ops.
+//
+// Supported values:
+//
+//	GGCODE_DEBUG=1          — enable all categories
+//	GGCODE_DEBUG=true       — enable all categories
+//	GGCODE_DEBUG=all        — enable all categories
+//	GGCODE_DEBUG=agent      — enable only the "agent" category
+//	GGCODE_DEBUG=agent,im   — enable only "agent" and "im" categories
+//
+// Safe to call multiple times; only the first call takes effect.
 func Init() {
 	once.Do(func() {
-		basePath, compatPath := resolveLogPaths(logPath, os.Getpid())
-		sink, err := newAsyncFileSink(basePath, compatPath, maxLogSize, maxLogFiles, asyncBufSize)
+		val := os.Getenv(envKey)
+		if val == "" {
+			return
+		}
+
+		// Parse tag filter
+		filter := parseTagFilter(val)
+
+		pid := os.Getpid()
+
+		// Create main sink (writes everything, for backward compat)
+		mainPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid))
+		main, err := newAsyncFileSink(mainPath, "", defaultMaxLogSize, defaultMaxLogFiles, defaultAsyncBufSize)
 		if err != nil {
 			return
 		}
+
+		sinkMap := make(map[string]*asyncFileSink)
+		loggerMap := make(map[string]*log.Logger)
+
+		// Create per-category sinks
+		for cat := range knownCategories {
+			// If filter is active, skip categories not in the filter
+			if filter != nil && !filter[cat] {
+				continue
+			}
+			catPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-%s-%d.log", cat, pid))
+			sink, err := newAsyncFileSink(catPath, "", defaultMaxLogSize, defaultMaxLogFiles, defaultAsyncBufSize)
+			if err != nil {
+				continue
+			}
+			sinkMap[cat] = sink
+			loggerMap[cat] = log.New(sink, "", log.Lmicroseconds)
+		}
+
 		mu.Lock()
-		logSink = sink
-		logger = log.New(sink, "", log.Lmicroseconds)
+		enabled = true
+		mainSink = main
+		sinks = sinkMap
+		loggers = loggerMap
+		tagFilter = filter
 		mu.Unlock()
 	})
 }
 
-// Active reports whether the debug logger is currently writing to a sink.
+// parseTagFilter parses the GGCODE_DEBUG value into a tag filter set.
+// Returns nil if all tags should be logged.
+func parseTagFilter(val string) map[string]bool {
+	val = strings.TrimSpace(strings.ToLower(val))
+	if val == "" || val == "1" || val == "true" || val == "all" {
+		return nil // log everything
+	}
+	filter := make(map[string]bool)
+	for _, part := range strings.Split(val, ",") {
+		p := strings.TrimSpace(part)
+		if p != "" {
+			filter[p] = true
+		}
+	}
+	if len(filter) == 0 {
+		return nil
+	}
+	return filter
+}
+
+// Active reports whether the debug logger is enabled.
 func Active() bool {
 	mu.RLock()
 	defer mu.RUnlock()
-	return logger != nil
+	return enabled
 }
 
-// Log writes a formatted message with a package tag.
+// Log writes a formatted message with a package tag to the appropriate
+// category-specific log file and the main log file.
 // Format: [HH:MM:SS.mmm] [pkg] message
 func Log(pkg, format string, args ...interface{}) {
 	mu.RLock()
-	l := logger
-	mu.RUnlock()
-	if l == nil {
+	if !enabled {
+		mu.RUnlock()
 		return
 	}
-	l.Printf("[%s] "+format, append([]interface{}{pkg}, args...)...)
+	cat := categoryMap[pkg]
+	sink := sinks[cat]
+	l := loggers[cat]
+	ms := mainSink
+	filt := tagFilter
+	mu.RUnlock()
+
+	// Apply tag filter
+	if filt != nil {
+		if cat == "" || !filt[cat] {
+			return
+		}
+	}
+
+	msg := fmt.Sprintf("[%s] "+format+"\n", append([]interface{}{pkg}, args...)...)
+
+	// Write to category-specific file
+	if l != nil {
+		l.Print(msg)
+	}
+
+	// Write to main file
+	if ms != nil && sink != ms {
+		_, _ = ms.Write([]byte(msg))
+	}
 }
 
 // Logf writes a raw formatted message (no package tag).
 func Logf(format string, args ...interface{}) {
 	mu.RLock()
-	l := logger
-	mu.RUnlock()
-	if l == nil {
+	if !enabled {
+		mu.RUnlock()
 		return
 	}
-	l.Printf(format, args...)
+	ms := mainSink
+	mu.RUnlock()
+
+	if ms != nil {
+		msg := fmt.Sprintf(format+"\n", args...)
+		_, _ = ms.Write([]byte(msg))
+	}
 }
 
 // Close flushes, closes, and removes all debug log files for the current process.
 func Close() {
 	mu.Lock()
-	sink := logSink
-	logSink = nil
-	logger = nil
+	enabled = false
+	catSinks := sinks
+	sinks = nil
+	loggers = nil
+	ms := mainSink
+	mainSink = nil
+	tagFilter = nil
 	mu.Unlock()
 
-	if sink != nil {
-		sink.Close()
+	for _, s := range catSinks {
+		s.Close()
+	}
+	if ms != nil {
+		ms.Close()
 	}
 }
+
+// --- async file sink (unchanged internals) ---
 
 type asyncFileSink struct {
 	basePath   string
@@ -252,10 +395,11 @@ func (s *asyncFileSink) cleanup() {
 }
 
 func resolveLogPaths(requestedPath string, pid int) (basePath, compatPath string) {
-	if requestedPath != defaultLogPath {
+	compatDefault := "/tmp/ggcode-debug.log"
+	if requestedPath != compatDefault {
 		return requestedPath, ""
 	}
-	return filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid)), defaultLogPath
+	return filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid)), compatDefault
 }
 
 func (s *asyncFileSink) refreshCompatPath() {
@@ -284,4 +428,40 @@ func (s *asyncFileSink) cleanupCompatPath() {
 
 func samePath(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// EnableForTest forces the debug system on for the given categories.
+// If categories is empty, all categories are enabled.
+func EnableForTest(t interface{ Cleanup(func()) }, categories ...string) {
+	Close()
+	mu.Lock()
+	once = sync.Once{}
+	enabled = false
+	mainSink = nil
+	sinks = nil
+	loggers = nil
+	tagFilter = nil
+	mu.Unlock()
+
+	// Set env so Init() will activate
+	if len(categories) == 0 {
+		os.Setenv(envKey, "1")
+	} else {
+		os.Setenv(envKey, strings.Join(categories, ","))
+	}
+
+	t.Cleanup(func() {
+		Close()
+		mu.Lock()
+		once = sync.Once{}
+		enabled = false
+		mainSink = nil
+		sinks = nil
+		loggers = nil
+		tagFilter = nil
+		mu.Unlock()
+		os.Unsetenv(envKey)
+	})
+
+	Init()
 }
