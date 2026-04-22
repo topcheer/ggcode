@@ -104,10 +104,10 @@ func (m *Model) flushGroupedActivitiesToOutput() {
 		return
 	}
 	if m.output.Len() > 0 && !strings.HasSuffix(m.output.String(), "\n") {
-		m.output.WriteString("\n")
+		m.dualWriteSystem("\n")
 	}
-	m.output.WriteString(grouped)
-	m.output.WriteString("\n")
+	m.dualWriteSystem(grouped)
+	m.dualWriteSystem("\n")
 	m.resetActivityGroups()
 }
 
