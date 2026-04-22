@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -43,6 +44,7 @@ type Teammate struct {
 	Color       string // TUI display color (ANSI code or empty)
 	Status      TeammateStatus
 	CurrentTask string
+	LastResult  string // most recent task output (truncated)
 	Inbox       chan MailMessage
 	CreatedAt   time.Time
 	StartedAt   time.Time
@@ -71,6 +73,18 @@ func (t *Teammate) setCurrentTask(task string) {
 	t.CurrentTask = task
 }
 
+func (t *Teammate) setLastResult(result string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.LastResult = result
+}
+
+func (t *Teammate) getResults() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.LastResult
+}
+
 // TeammateSnapshot is a read-only copy of a Teammate for external consumption.
 type TeammateSnapshot struct {
 	ID          string
@@ -78,6 +92,7 @@ type TeammateSnapshot struct {
 	Color       string
 	Status      TeammateStatus
 	CurrentTask string
+	LastResult  string // most recent task output (truncated)
 	CreatedAt   time.Time
 	StartedAt   time.Time
 	EndedAt     time.Time
@@ -92,6 +107,7 @@ func (t *Teammate) snapshot() TeammateSnapshot {
 		Color:       t.Color,
 		Status:      t.Status,
 		CurrentTask: t.CurrentTask,
+		LastResult:  t.LastResult,
 		CreatedAt:   t.CreatedAt,
 		StartedAt:   t.StartedAt,
 		EndedAt:     t.EndedAt,
@@ -128,6 +144,7 @@ func (t *Team) snapshot() TeamSnapshot {
 	for _, m := range t.Teammates {
 		mates = append(mates, m.snapshot())
 	}
+	sort.Slice(mates, func(i, j int) bool { return mates[i].ID < mates[j].ID })
 
 	taskCount := 0
 	if t.Tasks != nil {

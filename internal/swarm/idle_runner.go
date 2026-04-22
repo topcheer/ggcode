@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/task"
 )
@@ -124,6 +125,10 @@ func handleMessage(
 		msg.ReplyTo <- TaskResult{Output: result}
 	}
 
+	tm.setLastResult(result)
+
+	debug.Log("swarm", "teammate %s setLastResult len=%d", tm.ID, len(result))
+
 	tm.setStatus(TeammateIdle)
 	tm.setCurrentTask("")
 
@@ -212,6 +217,8 @@ func tryClaimPendingTask(
 		completed := task.StatusCompleted
 		tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
 
+		tm.setLastResult(result)
+
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
 
@@ -277,6 +284,7 @@ func executeTask(
 		case provider.StreamEventText:
 			output.WriteString(event.Text)
 		case provider.StreamEventToolCallDone:
+			debug.Log("swarm", "teammate %s tool call done", tm.ID)
 			if onEvent != nil {
 				onEvent(Event{
 					Type:         "teammate_working",
@@ -292,6 +300,7 @@ func executeTask(
 	})
 
 	if err != nil {
+		debug.Log("swarm", "teammate %s RunStream error: %v output_len=%d", tm.ID, err, output.Len())
 		if subCtx.Err() == context.DeadlineExceeded {
 			output.WriteString("\n[timeout: task exceeded time limit]")
 		} else if subCtx.Err() == context.Canceled {
@@ -301,6 +310,7 @@ func executeTask(
 		}
 	}
 
+	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
 	return output.String()
 }
 

@@ -236,3 +236,85 @@ func (t TeammateShutdownTool) Execute(_ context.Context, input json.RawMessage) 
 	}
 	return Result{Content: fmt.Sprintf("Teammate %s in team %s shut down.\n", args.TeammateID, args.TeamID)}, nil
 }
+
+// ————————————————————————————————————————
+// TeammateResults — collect task outputs from teammates
+// ————————————————————————————————————————
+
+type TeammateResultsTool struct {
+	Manager *swarm.Manager
+}
+
+func (t TeammateResultsTool) Name() string { return "teammate_results" }
+func (t TeammateResultsTool) Description() string {
+	return "Collect task results from teammates in a team. " +
+		"Returns the most recent output from each teammate that has completed a task. " +
+		"Use this after teammates finish their work to gather and review outputs."
+}
+func (t TeammateResultsTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"team_id": {"type": "string", "description": "Team ID"},
+				"teammate_id": {"type": "string", "description": "Optional: get result for a specific teammate only"}
+			},
+			"required": ["team_id"]
+		}`)
+}
+func (t TeammateResultsTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
+	if t.Manager == nil {
+		return Result{IsError: true, Content: "teammate_results: swarm manager not available"}, nil
+	}
+	var args struct {
+		TeamID     string `json:"team_id"`
+		TeammateID string `json:"teammate_id"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
+	}
+
+	// Single teammate result
+	if args.TeammateID != "" {
+		result, ok := t.Manager.GetTeammateResult(args.TeamID, args.TeammateID)
+		if !ok {
+			return Result{Content: fmt.Sprintf("No result available for teammate %s.\n", args.TeammateID)}, nil
+		}
+		return Result{Content: fmt.Sprintf("Result from %s:\n%s\n", args.TeammateID, result)}, nil
+	}
+
+	// All teammate results
+	results := t.Manager.GetTeamResults(args.TeamID)
+	if len(results) == 0 {
+		return Result{Content: "No results available from any teammate yet.\n"}, nil
+	}
+
+	// Get team info for names
+	team, ok := t.Manager.GetTeam(args.TeamID)
+	if !ok {
+		return Result{IsError: true, Content: fmt.Sprintf("team %q not found", args.TeamID)}, nil
+	}
+
+	// Build name lookup
+	names := make(map[string]string)
+	for _, tm := range team.Teammates {
+		names[tm.ID] = tm.Name
+	}
+
+	// Sort by teammate ID for stable output
+	ids := make([]string, 0, len(results))
+	for id := range results {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Results from %d teammate(s):\n\n", len(ids)))
+	for _, id := range ids {
+		name := names[id]
+		if name == "" {
+			name = id
+		}
+		fmt.Fprintf(&sb, "─── %s (%s) ───\n%s\n\n", name, id, results[id])
+	}
+	return Result{Content: sb.String()}, nil
+}

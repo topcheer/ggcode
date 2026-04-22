@@ -55,7 +55,7 @@ func (t SleepTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	select {
 	case <-timer.C:
-		return Result{Content: fmt.Sprintf("Slept for %s", d)}, nil
+		return Result{Content: fmt.Sprintf("Sleep for %s ... Done", d)}, nil
 	case <-ctx.Done():
 		return Result{Content: fmt.Sprintf("Sleep interrupted after context cancellation")}, ctx.Err()
 	}

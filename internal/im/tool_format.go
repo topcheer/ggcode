@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (a *tgAdapter) outboundText(event OutboundEvent) string {
@@ -124,6 +125,12 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return fmt.Sprintf("📋 %s", imLabel(lang, "update_todos"))
 	case "skill":
 		return fmt.Sprintf("🔧 %s: `%s`", imLabel(lang, "load_skill"), tc.Detail)
+	case "sleep":
+		duration := formatSleepDuration(args)
+		if duration == "" {
+			duration = tc.Detail
+		}
+		return fmt.Sprintf("⏳ Sleep for %s", duration)
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
@@ -422,6 +429,8 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMSkillResult(tr)
 	case "save_memory":
 		return true, formatIMSaveMemoryResult(tr)
+	case "sleep":
+		return true, formatIMSleepResult(tr)
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
@@ -626,6 +635,34 @@ func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
 		return fmt.Sprintf("💾 %s", imLabel(lang, "memory_saved"))
 	}
 	return fmt.Sprintf("💾\n```\n%s\n```", output)
+}
+
+// formatIMSleepResult renders sleep result — suppressed on success
+// because the user already saw "⏳ Sleep for Xs" at ToolCall time.
+func formatIMSleepResult(tr *ToolResultInfo) string {
+	if tr.IsError {
+		return fmt.Sprintf("⏳ Sleep\n```\n%s\n```", strings.TrimSpace(tr.Result))
+	}
+	// Suppress successful sleep results — the ToolCall event already
+	// told the user "⏳ Sleep for Xs", no need to repeat.
+	return ""
+}
+
+// formatSleepDuration parses sleep tool args and returns a human-readable duration.
+// e.g. {"seconds":5,"milliseconds":500} → "5.5s"
+func formatSleepDuration(args string) string {
+	var a struct {
+		Seconds      int `json:"seconds"`
+		Milliseconds int `json:"milliseconds"`
+	}
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return ""
+	}
+	d := time.Duration(a.Seconds)*time.Second + time.Duration(a.Milliseconds)*time.Millisecond
+	if d <= 0 {
+		return "0s"
+	}
+	return d.String()
 }
 
 // formatIMErrorResult formats error results for any tool.

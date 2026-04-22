@@ -228,6 +228,19 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if !isDaemonSkippedTool(toolName) {
 				round.ToolCalls++
 			}
+			// Sleep tool is special: emit the duration immediately
+			// so the user sees it before the tool blocks. The result
+			// is suppressed in formatSpecialIMToolResult.
+			if toolName == "sleep" {
+				b.emitter.EmitEvent(OutboundEvent{
+					Kind: OutboundEventToolCall,
+					ToolCall: &ToolCallInfo{
+						ToolName: "sleep",
+						Args:     string(event.Tool.Arguments),
+						Detail:   formatSleepDuration(string(event.Tool.Arguments)),
+					},
+				})
+			}
 			// Do NOT emit intermediate status to IM — only final results
 			// via OutboundEventToolResult (mirrors terminal follow behavior).
 			b.emitter.TriggerTyping()
