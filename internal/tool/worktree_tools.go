@@ -83,7 +83,10 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("error creating worktree: %s", strings.TrimSpace(string(out)))}, nil
 	}
 
-	return Result{Content: fmt.Sprintf("Created worktree at %s (branch: %s)", worktreePath, branchName)}, nil
+	return Result{
+		Content:             fmt.Sprintf("Created worktree at %s (branch: %s). All subsequent tool calls will use this directory.", worktreePath, branchName),
+		SuggestedWorkingDir: worktreePath,
+	}, nil
 }
 
 // ExitWorktree exits and optionally removes a git worktree.
@@ -144,8 +147,14 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "not currently inside a worktree created by enter_worktree"}, nil
 	}
 
+	// Find the main repo root so we can suggest switching back
+	mainRepoRoot, _ := findGitRootFromWorktree(worktreePath)
+
 	if args.Action == "keep" {
-		return Result{Content: fmt.Sprintf("Worktree at %s kept intact. Switch back to the main working directory to continue.", worktreePath)}, nil
+		return Result{
+			Content:             fmt.Sprintf("Worktree at %s kept intact.", worktreePath),
+			SuggestedWorkingDir: mainRepoRoot,
+		}, nil
 	}
 
 	// action == "remove"
@@ -170,11 +179,10 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	// Remove the worktree
 	rmCmd := exec.CommandContext(ctx, "git", "worktree", "remove", "--force", worktreePath)
-	rmCmd.Dir = filepath.Dir(filepath.Dir(worktreePath)) // back to git root
-	// We need the actual git root, not the worktree's git dir
-	actualGitRoot, _ := findGitRootFromWorktree(worktreePath)
-	if actualGitRoot != "" {
-		rmCmd.Dir = actualGitRoot
+	if mainRepoRoot != "" {
+		rmCmd.Dir = mainRepoRoot
+	} else {
+		rmCmd.Dir = filepath.Dir(filepath.Dir(worktreePath))
 	}
 	rmCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 	if rmOut, err := rmCmd.CombinedOutput(); err != nil {
@@ -184,12 +192,15 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	// Optionally delete the branch
 	if branchName != "" && branchName != "main" && branchName != "master" {
 		delCmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
-		delCmd.Dir = actualGitRoot
+		delCmd.Dir = mainRepoRoot
 		delCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 		_ = delCmd.Run() // best effort
 	}
 
-	return Result{Content: fmt.Sprintf("Removed worktree %s", worktreePath)}, nil
+	return Result{
+		Content:             fmt.Sprintf("Removed worktree %s", worktreePath),
+		SuggestedWorkingDir: mainRepoRoot,
+	}, nil
 }
 
 // isWorktreeNameChar returns true for characters allowed in worktree names.

@@ -75,6 +75,13 @@ func TestEnterWorktree_Execute(t *testing.T) {
 	if !strings.Contains(result.Content, ".ggcode/worktrees") {
 		t.Errorf("expected .ggcode/worktrees path: %s", result.Content)
 	}
+	// Verify SuggestedWorkingDir is set to the worktree path
+	if result.SuggestedWorkingDir == "" {
+		t.Error("SuggestedWorkingDir should be set")
+	}
+	if !strings.Contains(result.SuggestedWorkingDir, "test-branch") {
+		t.Errorf("SuggestedWorkingDir = %q, should contain test-branch", result.SuggestedWorkingDir)
+	}
 
 	// Verify the worktree directory actually exists
 	gitRoot := dir
@@ -310,6 +317,30 @@ func TestIsInsideWorktree_RegularDir(t *testing.T) {
 	_ = path
 }
 
+func TestIsInsideWorktree_InsideWorktree(t *testing.T) {
+	dir := initTestGitRepo(t)
+
+	enterTool := EnterWorktree{WorkingDir: dir}
+	result, _ := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"wt-inside"}`))
+	if result.IsError {
+		t.Fatalf("create worktree failed: %s", result.Content)
+	}
+
+	wtPath := dir + "/.ggcode/worktrees/wt-inside"
+	isWT, detectedPath, err := isInsideWorktree(wtPath)
+	if err != nil {
+		t.Fatalf("isInsideWorktree error: %v", err)
+	}
+	if !isWT {
+		t.Error("should detect worktree directory")
+	}
+	if detectedPath != wtPath {
+		t.Errorf("path = %q, want %q", detectedPath, wtPath)
+	}
+
+	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
+}
+
 // --- Round-trip: create then remove ---
 
 func TestWorktreeRoundTrip(t *testing.T) {
@@ -342,6 +373,10 @@ func TestWorktreeRoundTrip(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("exit failed: %s", result.Content)
 	}
+	// Verify SuggestedWorkingDir points back to main repo
+	if result.SuggestedWorkingDir == "" {
+		t.Error("SuggestedWorkingDir should be set after remove")
+	}
 
 	// Verify worktree is gone
 	cmd := exec.Command("git", "worktree", "list")
@@ -349,5 +384,52 @@ func TestWorktreeRoundTrip(t *testing.T) {
 	out, _ := cmd.CombinedOutput()
 	if strings.Contains(string(out), "roundtrip-test") {
 		t.Errorf("worktree should be removed: %s", string(out))
+	}
+}
+
+func TestWorktreeRoundTrip_KeepAction(t *testing.T) {
+	dir := initTestGitRepo(t)
+
+	enterTool := EnterWorktree{WorkingDir: dir}
+
+	// Create
+	result, _ := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"keep-test"}`))
+	if result.IsError {
+		t.Fatalf("create failed: %s", result.Content)
+	}
+
+	wtPath := dir + "/.ggcode/worktrees/keep-test"
+
+	// Exit with keep — should NOT remove
+	exitTool := ExitWorktree{WorkingDir: wtPath}
+	result, err := exitTool.Execute(context.Background(), json.RawMessage(`{"action":"keep"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exit keep failed: %s", result.Content)
+	}
+	// Verify SuggestedWorkingDir points back to main repo
+	if result.SuggestedWorkingDir == "" {
+		t.Error("SuggestedWorkingDir should be set to main repo root")
+	}
+
+	// Verify worktree still exists
+	cmd := exec.Command("git", "worktree", "list")
+	cmd.Dir = dir
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "keep-test") {
+		t.Errorf("worktree should still exist after keep: %s", string(out))
+	}
+
+	// Clean up
+	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
+}
+
+func TestFindGitRootFromWorktree_NotWorktree(t *testing.T) {
+	dir := t.TempDir()
+	_, err := findGitRootFromWorktree(dir)
+	if err == nil {
+		t.Error("expected error for non-worktree directory")
 	}
 }
