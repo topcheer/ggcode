@@ -262,7 +262,8 @@ func findGitRootFromWorktree(worktreePath string) (string, error) {
 	}
 	// Content is like: gitdir: /path/to/main-repo/.git/worktrees/wt-name
 	gitdir := strings.TrimSpace(strings.TrimPrefix(string(data), "gitdir: "))
-	// The main repo root is 2 levels up from the gitdir
-	gitDir := filepath.Dir(filepath.Dir(gitdir))
+	// gitdir points to .git/worktrees/<name>, so we need 3 levels up:
+	// .git/worktrees/<name> → .git/worktrees → .git → main repo root
+	gitDir := filepath.Dir(filepath.Dir(filepath.Dir(gitdir)))
 	return gitDir, nil
 }
