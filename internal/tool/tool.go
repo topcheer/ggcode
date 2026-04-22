@@ -16,6 +16,11 @@ type Result struct {
 	Content string        `json:"content"`
 	IsError bool          `json:"is_error"`
 	Images  []ResultImage `json:"images,omitempty"`
+	// SuggestedWorkingDir is an optional hint from a tool that the agent's
+	// working directory should change. When non-empty, the agent loop will
+	// update its WorkingDir to this value so subsequent tool calls (e.g.
+	// run_command, read_file) operate in the new directory automatically.
+	SuggestedWorkingDir string `json:"suggested_working_dir,omitempty"`
 }
 
 // ResultImage carries a single image within a tool Result.

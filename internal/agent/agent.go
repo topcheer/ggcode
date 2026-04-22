@@ -484,6 +484,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, truncateStr(result.Content, 200), len(result.Images))
+
+			// If the tool suggests a working directory change, apply it.
+			if result.SuggestedWorkingDir != "" && !result.IsError {
+				a.mu.Lock()
+				oldDir := a.workingDir
+				a.workingDir = result.SuggestedWorkingDir
+				a.mu.Unlock()
+				debug.Log("agent", "working dir changed: %s -> %s (suggested by %s)", oldDir, result.SuggestedWorkingDir, tc.Name)
+			}
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
 				for i, ri := range result.Images {
