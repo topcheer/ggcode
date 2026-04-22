@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 )
 
 const (
@@ -221,6 +222,9 @@ var (
 // See the Categories variable for the full list.
 func Init() {
 	once.Do(func() {
+		// Always clean up stale log files from crashed/killed previous instances.
+		cleanupStaleLogs()
+
 		// Check per-category env vars first
 		perCategoryEnvs := scanPerCategoryEnvs()
 
@@ -405,8 +409,64 @@ func Close() {
 	cleanupBubbleteaTrace()
 }
 
-// cleanupBubbleteaTrace removes the ggcode-bubbletea-{pid}.log file
-// that was created by enableBubbleteaTrace() in the tui package.
+// cleanupStaleLogs removes log files belonging to processes that no longer exist.
+// This handles the case where ggcode was killed with SIGKILL and couldn't clean up.
+func cleanupStaleLogs() {
+	entries, err := os.ReadDir(defaultLogDir)
+	if err != nil {
+		return // directory doesn't exist yet, nothing to clean
+	}
+	selfPid := os.Getpid()
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		pid := extractPidFromLogName(name)
+		if pid <= 0 {
+			continue
+		}
+		if pid == selfPid {
+			continue // don't clean up our own files
+		}
+		// On Unix, FindProcess always succeeds. Use signal 0 to check liveness.
+		proc, _ := os.FindProcess(pid)
+		if proc.Signal(syscall.Signal(0)) != nil {
+			// Process doesn't exist — remove its log files
+			_ = os.Remove(filepath.Join(defaultLogDir, name))
+		}
+	}
+}
+
+// extractPidFromLogName parses "ggcode-xxx-12345.log" or "ggcode-xxx-12345.log.1"
+// and returns the pid (12345). Returns 0 if the name doesn't match.
+func extractPidFromLogName(name string) int {
+	// Match pattern: ggcode-*-{pid}.log[.N]
+	if !strings.HasPrefix(name, "ggcode-") {
+		return 0
+	}
+	base := name
+	// Strip rotation suffix
+	if idx := strings.LastIndex(base, ".log"); idx >= 0 {
+		base = base[:idx]
+	}
+	// Find last hyphen before the pid number
+	lastDash := strings.LastIndex(base, "-")
+	if lastDash < 0 {
+		return 0
+	}
+	pidStr := base[lastDash+1:]
+	pid := 0
+	for _, c := range pidStr {
+		if c >= '0' && c <= '9' {
+			pid = pid*10 + int(c-'0')
+		} else {
+			return 0
+		}
+	}
+	return pid
+}
+
 func cleanupBubbleteaTrace() {
 	pid := os.Getpid()
 	path := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-bubbletea-%d.log", pid))
