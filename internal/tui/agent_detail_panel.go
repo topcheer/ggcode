@@ -14,6 +14,8 @@ import (
 type agentDetailPanelState struct {
 	agentID string
 	scrollY int
+	// track last known event count for auto-scroll
+	lastEventCount int
 }
 
 // openAgentDetailPanel opens the detail panel for a specific sub-agent.
@@ -42,13 +44,30 @@ func (m *Model) renderAgentDetailPanel() string {
 	events := sa.Events()
 	snap, _ := m.subAgentMgr.Snapshot(m.agentDetailPanel.agentID)
 
-	var b strings.Builder
+	width := m.boxInnerWidth(m.mainColumnWidth())
+	innerWidth := max(20, width-4) // box padding
 
-	// Header
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render(
-		fmt.Sprintf("Sub-Agent %s  •  %s", snap.ID, snap.Task),
+	// Auto-scroll: if new events arrived, scroll to bottom
+	panel := m.agentDetailPanel
+	if len(events) > panel.lastEventCount {
+		panel.scrollY = 99999
+		panel.lastEventCount = len(events)
+	}
+
+	// --- Render header ---
+	var header strings.Builder
+	header.WriteString(lipgloss.NewStyle().Bold(true).Render(
+		fmt.Sprintf("Agent %s", snap.ID),
 	))
-	b.WriteString("\n")
+	if snap.Task != "" {
+		taskPreview := snap.Task
+		// Truncate task to fit on one line
+		taskPreview = truncateString(taskPreview, innerWidth-lipgloss.Width(header.String())-5)
+		header.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+			fmt.Sprintf("  •  %s", taskPreview),
+		))
+	}
+	header.WriteString("\n")
 
 	statusStyle := lipgloss.NewStyle()
 	switch snap.Status {
@@ -61,16 +80,117 @@ func (m *Model) renderAgentDetailPanel() string {
 	default:
 		statusStyle = statusStyle.Foreground(lipgloss.Color("8"))
 	}
-	b.WriteString(statusStyle.Render(string(snap.Status)))
-	if snap.ToolCallCount > 0 {
-		b.WriteString(fmt.Sprintf("  •  %d tools", snap.ToolCallCount))
-	}
-	b.WriteString("\n\n")
 
-	// Event list
+	statusLine := statusStyle.Render(string(snap.Status))
+	if snap.ToolCallCount > 0 {
+		statusLine += fmt.Sprintf("  •  %d tools", snap.ToolCallCount)
+	}
+	if snap.ProgressSummary != "" {
+		summary := truncateString(snap.ProgressSummary, innerWidth-lipgloss.Width(statusLine)-5)
+		statusLine += lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+			fmt.Sprintf("  •  %s", summary),
+		)
+	}
+	header.WriteString(statusLine)
+	header.WriteString("\n")
+
+	// Body height — use total terminal height minus header/footer overhead.
+	// Do NOT call conversationPanelHeight() — that triggers infinite recursion
+	// via renderContextPanel → renderAgentDetailPanel.
+	overhead := 8 // status bar(2) + action bar(1) + box border(2) + header(~2) + footer(1)
+	bodyHeight := m.height - overhead
+	if bodyHeight < 5 {
+		bodyHeight = 5
+	}
+
+	// --- Render event body ---
+	bodyContent := m.renderAgentDetailEvents(events, innerWidth, bodyHeight)
+
+	// --- Apply scroll ---
+	bodyLines := strings.Split(bodyContent, "\n")
+	totalLines := len(bodyLines)
+
+	// Clamp scrollY
+	maxScroll := totalLines - bodyHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if panel.scrollY > maxScroll {
+		panel.scrollY = maxScroll
+	}
+
+	// Window the visible lines
+	visibleFrom := panel.scrollY
+	visibleTo := visibleFrom + bodyHeight
+	if visibleTo > totalLines {
+		visibleTo = totalLines
+	}
+	visibleBody := strings.Join(bodyLines[visibleFrom:visibleTo], "\n")
+
+	// Pad if not enough lines
+	visibleCount := visibleTo - visibleFrom
+	for i := visibleCount; i < bodyHeight; i++ {
+		visibleBody += "\n"
+	}
+
+	// --- Assemble full panel ---
+	var full strings.Builder
+	full.WriteString(header.String())
+	full.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+		strings.Repeat("─", innerWidth),
+	))
+	full.WriteString("\n")
+	full.WriteString(visibleBody)
+	full.WriteString("\n")
+
+	// Footer
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	hints := "esc close  •  ↑↓/jk scroll  •  g top  •  G bottom"
+	if snap.Status == subagent.StatusRunning {
+		hints = "⏳ " + hints
+	}
+	scrollInfo := ""
+	if totalLines > bodyHeight {
+		scrollInfo = fmt.Sprintf("  [%d/%d]", visibleFrom+1, totalLines)
+	}
+	full.WriteString(hintStyle.Render(hints + scrollInfo))
+
+	return m.renderContextBox("/agent "+snap.ID, full.String(), lipgloss.Color("12"))
+}
+
+// renderAgentDetailEvents renders the event list as styled lines.
+func (m *Model) renderAgentDetailEvents(events []subagent.AgentEvent, width, maxLines int) string {
+	if len(events) == 0 {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("Waiting for events...")
+	}
+
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	toolStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	resultStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+
+	var lines []string
+	lineCount := 0
+
+	// Accumulate text events for markdown batch rendering
+	var textBuf strings.Builder
+
+	flushText := func() {
+		text := strings.TrimRight(textBuf.String(), "\n")
+		textBuf.Reset()
+		if text == "" {
+			return
+		}
+		// Render markdown
+		rendered := trimLeadingRenderedSpacing(RenderMarkdownWidth(text, max(20, width-2)))
+		for _, line := range strings.Split(rendered, "\n") {
+			if lineCount >= maxLines*3 { // allow overflow for scroll
+				return
+			}
+			lines = append(lines, line)
+			lineCount++
+		}
+	}
 
 	for _, ev := range events {
 		switch ev.Type {
@@ -79,67 +199,73 @@ func (m *Model) renderAgentDetailPanel() string {
 			if text == "" {
 				continue
 			}
-			text = strings.TrimRight(text, "\n")
-			if text == "" {
-				continue
-			}
-			b.WriteString(dimStyle.Render(text))
-			b.WriteString("\n")
+			textBuf.WriteString(text)
 
 		case subagent.AgentEventToolCall:
-			b.WriteString(toolStyle.Render("● "))
-			b.WriteString(ev.ToolName)
+			flushText()
+			// Tool call header
+			toolLine := toolStyle.Render("● ") + ev.ToolName
+			lines = append(lines, toolLine)
+			lineCount++
+
+			// Args preview — pretty format JSON if possible
 			if ev.ToolArgs != "" {
 				argsPreview := ev.ToolArgs
-				if len(argsPreview) > 120 {
-					argsPreview = argsPreview[:120] + "..."
+				if len(argsPreview) > 300 {
+					argsPreview = argsPreview[:300] + "…"
 				}
 				argsPreview = strings.ReplaceAll(argsPreview, "\n", " ")
-				b.WriteString("\n  │ ")
-				b.WriteString(dimStyle.Render(argsPreview))
+				// Indent and wrap
+				argLines := wrapHarnessPanelText(dimStyle.Render("  │ "+argsPreview), max(20, width-4), 3)
+				for _, al := range argLines {
+					lines = append(lines, al)
+					lineCount++
+				}
 			}
-			b.WriteString("\n")
 
 		case subagent.AgentEventToolResult:
+			flushText()
 			prefix := "  └ "
 			if ev.IsError {
-				b.WriteString(errorStyle.Render(prefix + "error"))
+				resultLine := errorStyle.Render(prefix+"error") + ": "
 				if ev.Result != "" {
 					resultPreview := ev.Result
-					if len(resultPreview) > 200 {
-						resultPreview = resultPreview[:200] + "..."
+					if len(resultPreview) > 300 {
+						resultPreview = resultPreview[:300] + "…"
 					}
-					b.WriteString(": ")
-					b.WriteString(errorStyle.Render(resultPreview))
+					resultLine += errorStyle.Render(strings.ReplaceAll(resultPreview, "\n", " "))
 				}
+				lines = append(lines, resultLine)
+				lineCount++
 			} else {
-				b.WriteString(dimStyle.Render(prefix + "done"))
+				resultLine := resultStyle.Render(prefix + "✓ done")
 				if ev.Result != "" {
 					resultPreview := ev.Result
-					if len(resultPreview) > 200 {
-						resultPreview = resultPreview[:200] + "..."
+					if len(resultPreview) > 300 {
+						resultPreview = resultPreview[:300] + "…"
 					}
-					resultPreview = strings.ReplaceAll(resultPreview, "\n", " ")
-					b.WriteString(dimStyle.Render(": " + resultPreview))
+					resultLine += dimStyle.Render(": " + strings.ReplaceAll(resultPreview, "\n", " "))
 				}
+				lines = append(lines, resultLine)
+				lineCount++
 			}
-			b.WriteString("\n")
 
 		case subagent.AgentEventError:
-			b.WriteString(errorStyle.Render("✗ " + ev.Text))
-			b.WriteString("\n")
+			flushText()
+			lines = append(lines, errorStyle.Render("✗ "+ev.Text))
+			lineCount++
 		}
 	}
+	flushText()
 
-	if len(events) == 0 {
-		b.WriteString(dimStyle.Render("No events recorded yet..."))
-	}
-
-	return b.String()
+	return strings.Join(lines, "\n")
 }
 
 // handleAgentDetailPanelKey handles key events when the agent detail panel is open.
 func (m *Model) handleAgentDetailPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.agentDetailPanel == nil {
+		return *m, nil
+	}
 	switch msg.String() {
 	case "esc", "q":
 		m.closeAgentDetailPanel()
