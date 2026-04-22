@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -98,14 +99,14 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 	go c.HeartbeatLoop(heartbeatCtx)
 
 	// Start ReadLoop in background — it will signal readyCh on provider_ready
-	go func() {
+	safego.Go("im.pcRelay.readLoop", func() {
 		c.ReadLoop(ctx)
 		heartbeatCancel()
 		// Clean up conn on exit
 		c.mu.Lock()
 		c.conn = nil
 		c.mu.Unlock()
-	}()
+	})
 
 	// Wait for provider_ready
 	debug.Log("pc", "relay websocket connected, waiting for provider_ready")

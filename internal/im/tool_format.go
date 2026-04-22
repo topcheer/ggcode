@@ -357,17 +357,13 @@ func formatToolResultText(tr *ToolResultInfo) string {
 		return special
 	}
 
-	// Default: icon + prettified tool name
-	icon := "✓"
-	if tr.IsError {
-		icon = "✗"
-	}
+	// Default: prettified tool name
 	pretty := prettifyToolName(tr.ToolName)
 	output := strings.TrimSpace(tr.Result)
 	if output != "" {
-		return fmt.Sprintf("%s 🔧 %s\n```\n%s\n```", icon, pretty, output)
+		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 	}
-	return fmt.Sprintf("%s 🔧 %s", icon, pretty)
+	return fmt.Sprintf("🔧 %s", pretty)
 }
 
 // formatSpecialIMToolResult returns (handled, formatted) for special tool types.
@@ -440,11 +436,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 
 // formatIMAskUserResult renders ask_user result.
 func formatIMAskUserResult(tr *ToolResultInfo) string {
-	icon := "✓"
-	if tr.IsError {
-		icon = "✗"
-	}
-	return fmt.Sprintf("%s 💬 %s", icon, imLabel(toolLang(tr.Lang), "reply_received"))
+	return fmt.Sprintf("💬 %s", imLabel(toolLang(tr.Lang), "reply_received"))
 }
 
 // --- Background command tools ---
@@ -454,12 +446,12 @@ func formatIMStartCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ ⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
+		return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ ⚡ %s", imLabel(lang, "bg_command_started"))
+		return fmt.Sprintf("⚡ %s", imLabel(lang, "bg_command_started"))
 	}
-	return fmt.Sprintf("✓ ⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
+	return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
 }
 
 // formatIMStopCommandResult renders stop_command result.
@@ -467,12 +459,12 @@ func formatIMStopCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🛑 %s\n```\n%s\n```", imLabel(lang, "stop_command"), output)
+		return fmt.Sprintf("🛑 %s\n```\n%s\n```", imLabel(lang, "stop_command"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🛑 %s", imLabel(lang, "command_stopped"))
+		return fmt.Sprintf("🛑 %s", imLabel(lang, "command_stopped"))
 	}
-	return fmt.Sprintf("✓ 🛑\n```\n%s\n```", output)
+	return fmt.Sprintf("🛑\n```\n%s\n```", output)
 }
 
 // formatIMReadCmdOutputResult renders read_command_output result.
@@ -480,12 +472,12 @@ func formatIMReadCmdOutputResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 📄 %s\n```\n%s\n```", imLabel(lang, "read_output"), output)
+		return fmt.Sprintf("📄 %s\n```\n%s\n```", imLabel(lang, "read_output"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 📄 (%s)", imLabel(lang, "no_new_output"))
+		return fmt.Sprintf("📄 (%s)", imLabel(lang, "no_new_output"))
 	}
-	return fmt.Sprintf("✓ 📄\n```\n%s\n```", output)
+	return fmt.Sprintf("📄\n```\n%s\n```", output)
 }
 
 // formatIMWaitCommandResult renders wait_command result.
@@ -493,12 +485,12 @@ func formatIMWaitCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ ⏳ %s\n```\n%s\n```", imLabel(lang, "wait_command"), output)
+		return fmt.Sprintf("⏳ %s\n```\n%s\n```", imLabel(lang, "wait_command"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ ⏳ %s", imLabel(lang, "command_done"))
+		return fmt.Sprintf("⏳ %s", imLabel(lang, "command_done"))
 	}
-	return fmt.Sprintf("✓ ⏳\n```\n%s\n```", output)
+	return fmt.Sprintf("⏳\n```\n%s\n```", output)
 }
 
 // formatIMWriteCmdInputResult renders write_command_input result.
@@ -506,12 +498,12 @@ func formatIMWriteCmdInputResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ ⌨️ %s\n```\n%s\n```", imLabel(lang, "send_input"), output)
+		return fmt.Sprintf("⌨️ %s\n```\n%s\n```", imLabel(lang, "send_input"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ ⌨️ %s", imLabel(lang, "input_sent"))
+		return fmt.Sprintf("⌨️ %s", imLabel(lang, "input_sent"))
 	}
-	return fmt.Sprintf("✓ ⌨️\n```\n%s\n```", output)
+	return fmt.Sprintf("⌨️\n```\n%s\n```", output)
 }
 
 // formatIMListCommandsResult renders list_commands result.
@@ -519,12 +511,12 @@ func formatIMListCommandsResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 📋 %s\n```\n%s\n```", imLabel(lang, "active_commands"), output)
+		return fmt.Sprintf("📋 %s\n```\n%s\n```", imLabel(lang, "active_commands"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 📋 %s", imLabel(lang, "no_active_commands"))
+		return fmt.Sprintf("📋 %s", imLabel(lang, "no_active_commands"))
 	}
-	return fmt.Sprintf("✓ 📋\n```\n%s\n```", output)
+	return fmt.Sprintf("📋\n```\n%s\n```", output)
 }
 
 // --- Agent tools ---
@@ -534,12 +526,12 @@ func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task"), output)
+		return fmt.Sprintf("🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🤖 %s", imLabel(lang, "sub_task_started"))
+		return fmt.Sprintf("🤖 %s", imLabel(lang, "sub_task_started"))
 	}
-	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+	return fmt.Sprintf("🤖\n```\n%s\n```", output)
 }
 
 // formatIMWaitAgentResult renders wait_agent result.
@@ -547,12 +539,12 @@ func formatIMWaitAgentResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task"), output)
+		return fmt.Sprintf("🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🤖 %s", imLabel(lang, "sub_task_done"))
+		return fmt.Sprintf("🤖 %s", imLabel(lang, "sub_task_done"))
 	}
-	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+	return fmt.Sprintf("🤖\n```\n%s\n```", output)
 }
 
 // formatIMListAgentsResult renders list_agents result.
@@ -560,12 +552,12 @@ func formatIMListAgentsResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task_list"), output)
+		return fmt.Sprintf("🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task_list"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🤖 %s", imLabel(lang, "no_active_agents"))
+		return fmt.Sprintf("🤖 %s", imLabel(lang, "no_active_agents"))
 	}
-	return fmt.Sprintf("✓ 🤖\n```\n%s\n```", output)
+	return fmt.Sprintf("🤖\n```\n%s\n```", output)
 }
 
 // --- MCP internal tools ---
@@ -575,24 +567,24 @@ func formatIMMCPCapabilitiesResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🔗 %s\n```\n%s\n```", imLabel(lang, "mcp_service"), output)
+		return fmt.Sprintf("🔗 %s\n```\n%s\n```", imLabel(lang, "mcp_service"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🔗 %s", imLabel(lang, "mcp_service_list"))
+		return fmt.Sprintf("🔗 %s", imLabel(lang, "mcp_service_list"))
 	}
-	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+	return fmt.Sprintf("🔗\n```\n%s\n```", output)
 }
 
 // formatIMMCPPromptResult renders get_mcp_prompt result.
 func formatIMMCPPromptResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🔗 MCP Prompt\n```\n%s\n```", output)
+		return fmt.Sprintf("🔗 MCP Prompt\n```\n%s\n```", output)
 	}
 	if output == "" {
-		return "✓ 🔗 MCP Prompt"
+		return "🔗 MCP Prompt"
 	}
-	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+	return fmt.Sprintf("🔗\n```\n%s\n```", output)
 }
 
 // formatIMMCPResourceResult renders read_mcp_resource result.
@@ -600,12 +592,12 @@ func formatIMMCPResourceResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🔗 %s\n```\n%s\n```", imLabel(lang, "resource_read"), output)
+		return fmt.Sprintf("🔗 %s\n```\n%s\n```", imLabel(lang, "resource_read"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🔗 %s", imLabel(lang, "resource_content"))
+		return fmt.Sprintf("🔗 %s", imLabel(lang, "resource_content"))
 	}
-	return fmt.Sprintf("✓ 🔗\n```\n%s\n```", output)
+	return fmt.Sprintf("🔗\n```\n%s\n```", output)
 }
 
 // --- Productivity tools ---
@@ -615,12 +607,12 @@ func formatIMSkillResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🔧 %s\n```\n%s\n```", imLabel(lang, "skill_load"), output)
+		return fmt.Sprintf("🔧 %s\n```\n%s\n```", imLabel(lang, "skill_load"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🔧 %s", imLabel(lang, "skill_loaded"))
+		return fmt.Sprintf("🔧 %s", imLabel(lang, "skill_loaded"))
 	}
-	return fmt.Sprintf("✓ 🔧\n```\n%s\n```", output)
+	return fmt.Sprintf("🔧\n```\n%s\n```", output)
 }
 
 // formatIMSaveMemoryResult renders save_memory result.
@@ -628,12 +620,12 @@ func formatIMSaveMemoryResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 💾 %s\n```\n%s\n```", imLabel(lang, "memory_save"), output)
+		return fmt.Sprintf("💾 %s\n```\n%s\n```", imLabel(lang, "memory_save"), output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 💾 %s", imLabel(lang, "memory_saved"))
+		return fmt.Sprintf("💾 %s", imLabel(lang, "memory_saved"))
 	}
-	return fmt.Sprintf("✓ 💾\n```\n%s\n```", output)
+	return fmt.Sprintf("💾\n```\n%s\n```", output)
 }
 
 // formatIMErrorResult formats error results for any tool.
@@ -641,9 +633,9 @@ func formatIMErrorResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
 	output := strings.TrimSpace(tr.Result)
 	if output != "" {
-		return fmt.Sprintf("✗ 🔧 %s\n```\n%s\n```", pretty, output)
+		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 	}
-	return fmt.Sprintf("✗ 🔧 %s", pretty)
+	return fmt.Sprintf("🔧 %s", pretty)
 }
 
 // formatIMCommandResult renders command execution with full output.
@@ -655,23 +647,18 @@ func formatIMCommandResult(tr *ToolResultInfo) string {
 		cmd = tr.Detail
 	}
 
-	icon := "✓"
-	if tr.IsError {
-		icon = "✗"
-	}
-
 	output := strings.TrimSpace(tr.Result)
 	if output == "" {
 		if cmd == "" {
-			return icon
+			return ""
 		}
-		return fmt.Sprintf("%s\n```bash\n%s\n```\n```\n(%s)\n```", icon, cmd, imLabel(lang, "no_output"))
+		return fmt.Sprintf("```bash\n%s\n```\n```\n(%s)\n```", cmd, imLabel(lang, "no_output"))
 	}
 
 	if cmd == "" {
-		return fmt.Sprintf("%s\n```\n%s\n```", icon, output)
+		return fmt.Sprintf("```\n%s\n```", output)
 	}
-	return fmt.Sprintf("%s\n```bash\n%s\n```\n```\n%s\n```", icon, cmd, output)
+	return fmt.Sprintf("```bash\n%s\n```\n```\n%s\n```", cmd, output)
 }
 
 // formatIMTodoResult renders todo_write as a visual checklist.
@@ -685,11 +672,11 @@ func formatIMTodoResult(tr *ToolResultInfo) string {
 		} `json:"todos"`
 	}
 	if err := json.Unmarshal([]byte(tr.Args), &args); err != nil || len(args.Todos) == 0 {
-		return fmt.Sprintf("✓ 📋 %s", imLabel(lang, "update_todos"))
+		return fmt.Sprintf("📋 %s", imLabel(lang, "update_todos"))
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("✓ 📋 %s:\n", imLabel(lang, "todos")))
+	sb.WriteString(fmt.Sprintf("📋 %s:\n", imLabel(lang, "todos")))
 	for _, t := range args.Todos {
 		icon := "○"
 		if t.Status == "done" {
@@ -715,16 +702,16 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("✗ %s %s\n```\n%s\n```", icon, baseName, output)
+			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, output)
 		}
-		return fmt.Sprintf("✗ %s Read\n```\n%s\n```", icon, output)
+		return fmt.Sprintf("%s Read\n```\n%s\n```", icon, output)
 	}
 
 	if output == "" {
 		if path == "" {
-			return fmt.Sprintf("✓ %s Read", icon)
+			return fmt.Sprintf("%s Read", icon)
 		}
-		return fmt.Sprintf("✓ %s %s", icon, baseName)
+		return fmt.Sprintf("%s %s", icon, baseName)
 	}
 
 	firstLine := firstLineOf(output)
@@ -746,9 +733,9 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 			label = format
 		}
 		if summary != "" {
-			return fmt.Sprintf("✓ %s %s (%s)", icon, baseName, summary)
+			return fmt.Sprintf("%s %s (%s)", icon, baseName, summary)
 		}
-		return fmt.Sprintf("✓ %s %s", icon, baseName)
+		return fmt.Sprintf("%s %s", icon, baseName)
 	}
 
 	// Archive: "[Archive: zip format, 15 files]"
@@ -764,26 +751,26 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 			}
 		}
 		if truncTotal > 0 {
-			return fmt.Sprintf("✓ %s %s (%d %s, %s %d)", icon, baseName, truncTotal, imLabel(lang, "files"), imLabel(lang, "showing_first"), truncShown)
+			return fmt.Sprintf("%s %s (%d %s, %s %d)", icon, baseName, truncTotal, imLabel(lang, "files"), imLabel(lang, "showing_first"), truncShown)
 		}
 		if fileCount > 0 {
-			return fmt.Sprintf("✓ %s %s (%d %s)", icon, baseName, fileCount, imLabel(lang, "files"))
+			return fmt.Sprintf("%s %s (%d %s)", icon, baseName, fileCount, imLabel(lang, "files"))
 		}
-		return fmt.Sprintf("✓ %s %s", icon, baseName)
+		return fmt.Sprintf("%s %s", icon, baseName)
 	}
 
 	// Plain text or unknown: show file name + range hint if applicable
 	rangeHint := imFormatReadRange(lang, tr.Args)
 	if path == "" {
 		if rangeHint != "" {
-			return fmt.Sprintf("✓ %s Read %s", icon, rangeHint)
+			return fmt.Sprintf("%s Read %s", icon, rangeHint)
 		}
-		return fmt.Sprintf("✓ %s Read", icon)
+		return fmt.Sprintf("%s Read", icon)
 	}
 	if rangeHint != "" {
-		return fmt.Sprintf("✓ %s %s %s", icon, baseName, rangeHint)
+		return fmt.Sprintf("%s %s %s", icon, baseName, rangeHint)
 	}
-	return fmt.Sprintf("✓ %s %s", icon, baseName)
+	return fmt.Sprintf("%s %s", icon, baseName)
 }
 
 // formatIMListDirResult renders list_directory result with full output in code block.
@@ -795,20 +782,20 @@ func formatIMListDirResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("✗ 📂 %s\n```\n%s\n```", path, output)
+			return fmt.Sprintf("📂 %s\n```\n%s\n```", path, output)
 		}
-		return fmt.Sprintf("✗ 📂 List\n```\n%s\n```", output)
+		return fmt.Sprintf("📂 List\n```\n%s\n```", output)
 	}
 	if output == "" {
 		if path != "" {
-			return fmt.Sprintf("✓ 📂 %s", path)
+			return fmt.Sprintf("📂 %s", path)
 		}
-		return "✓ 📂 List"
+		return "📂 List"
 	}
 	if path != "" {
-		return fmt.Sprintf("✓ 📂 %s\n```\n%s\n```", path, output)
+		return fmt.Sprintf("📂 %s\n```\n%s\n```", path, output)
 	}
-	return fmt.Sprintf("✓ 📂\n```\n%s\n```", output)
+	return fmt.Sprintf("📂\n```\n%s\n```", output)
 }
 
 // formatIMGlobResult renders glob result with full output in code block.
@@ -821,20 +808,20 @@ func formatIMGlobResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
 		if pattern != "" {
-			return fmt.Sprintf("✗ 🔍 `%s`\n```\n%s\n```", pattern, output)
+			return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
 		}
-		return fmt.Sprintf("✗ 🔍 Glob\n```\n%s\n```", output)
+		return fmt.Sprintf("🔍 Glob\n```\n%s\n```", output)
 	}
 	if output == "" {
 		if pattern != "" {
-			return fmt.Sprintf("✓ 🔍 `%s`: %s", pattern, imLabel(lang, "no_matches"))
+			return fmt.Sprintf("🔍 `%s`: %s", pattern, imLabel(lang, "no_matches"))
 		}
-		return "✓ 🔍 Glob"
+		return "🔍 Glob"
 	}
 	if pattern != "" {
-		return fmt.Sprintf("✓ 🔍 `%s`\n```\n%s\n```", pattern, output)
+		return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
 	}
-	return fmt.Sprintf("✓ 🔍\n```\n%s\n```", output)
+	return fmt.Sprintf("🔍\n```\n%s\n```", output)
 }
 
 // formatIMEditResult renders edit_file result — show emoji icon + path.
@@ -845,14 +832,14 @@ func formatIMEditResult(tr *ToolResultInfo) string {
 	}
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("✗ ✏️ %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+			return fmt.Sprintf("✏️ %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
 		}
-		return fmt.Sprintf("✗ ✏️ Edit\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("✏️ Edit\n```\n%s\n```", strings.TrimSpace(tr.Result))
 	}
 	if path == "" {
-		return "✓ ✏️ Edit"
+		return "✏️ Edit"
 	}
-	return fmt.Sprintf("✓ ✏️ %s", path)
+	return fmt.Sprintf("✏️ %s", path)
 }
 
 // formatIMWriteResult renders write_file result.
@@ -863,14 +850,14 @@ func formatIMWriteResult(tr *ToolResultInfo) string {
 	}
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("✗ 📝 %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+			return fmt.Sprintf("📝 %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
 		}
-		return fmt.Sprintf("✗ 📝 Write\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("📝 Write\n```\n%s\n```", strings.TrimSpace(tr.Result))
 	}
 	if path == "" {
-		return "✓ 📝 Write"
+		return "📝 Write"
 	}
-	return fmt.Sprintf("✓ 📝 %s", path)
+	return fmt.Sprintf("📝 %s", path)
 }
 
 // formatIMSearchResult renders search/grep result with full output in code block.
@@ -883,32 +870,32 @@ func formatIMSearchResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
 		if pattern != "" {
-			return fmt.Sprintf("✗ 🔍 `%s`\n```\n%s\n```", pattern, output)
+			return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
 		}
-		return fmt.Sprintf("✗ 🔍 Search\n```\n%s\n```", output)
+		return fmt.Sprintf("🔍 Search\n```\n%s\n```", output)
 	}
 	if output == "" {
 		if pattern != "" {
-			return fmt.Sprintf("✓ 🔍 `%s`: 0 %s", pattern, imLabel(lang, "results"))
+			return fmt.Sprintf("🔍 `%s`: 0 %s", pattern, imLabel(lang, "results"))
 		}
-		return "✓ 🔍 Search"
+		return "🔍 Search"
 	}
 	if pattern != "" {
-		return fmt.Sprintf("✓ 🔍 `%s`\n```\n%s\n```", pattern, output)
+		return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
 	}
-	return fmt.Sprintf("✓ 🔍\n```\n%s\n```", output)
+	return fmt.Sprintf("🔍\n```\n%s\n```", output)
 }
 
 // formatIMWebResult renders web fetch/search result with full output in code block.
 func formatIMWebResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🌐\n```\n%s\n```", output)
+		return fmt.Sprintf("🌐\n```\n%s\n```", output)
 	}
 	if output == "" {
-		return "✓ 🌐 Web"
+		return "🌐 Web"
 	}
-	return fmt.Sprintf("✓ 🌐\n```\n%s\n```", output)
+	return fmt.Sprintf("🌐\n```\n%s\n```", output)
 }
 
 // formatIMGitResult renders git tool results with full output in code block.
@@ -916,12 +903,12 @@ func formatIMGitResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
-		return fmt.Sprintf("✗ 🔧 %s\n```\n%s\n```", pretty, output)
+		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 	}
 	if output == "" {
-		return fmt.Sprintf("✓ 🔧 %s", pretty)
+		return fmt.Sprintf("🔧 %s", pretty)
 	}
-	return fmt.Sprintf("✓ 🔧 %s\n```\n%s\n```", pretty, output)
+	return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 }
 
 // formatIMMCPToolResult renders MCP tool results with full output in code block.
@@ -930,14 +917,9 @@ func formatIMMCPToolResult(tr *ToolResultInfo) string {
 	argSummary := summarizeMCPArgs(tr.Args, 50)
 	output := strings.TrimSpace(tr.Result)
 
-	icon := "✓"
-	if tr.IsError {
-		icon = "✗"
-	}
-
-	header := icon + " 🔧 " + pretty
+	header := "🔧 " + pretty
 	if argSummary != "" {
-		header = fmt.Sprintf("%s 🔧 %s(%s)", icon, pretty, argSummary)
+		header = fmt.Sprintf("🔧 %s(%s)", pretty, argSummary)
 	}
 
 	if output == "" {
