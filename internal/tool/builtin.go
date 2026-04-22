@@ -23,10 +23,22 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Search
 		SearchFiles{SandboxCheck: sandboxFor("search_files")},
+		Grep{SandboxCheck: sandboxFor("grep")},
 		Glob{SandboxCheck: sandboxFor("glob")},
 	}
 	tools = append(tools, NewLSPTools(workingDir, sandboxFor("read_file"), sandboxFor("edit_file"))...)
 	tools = append(tools,
+
+		// Multi-edit and notebook
+		MultiEditFile{SandboxCheck: sandboxFor("multi_edit_file")},
+		NotebookEdit{SandboxCheck: sandboxFor("notebook_edit")},
+
+		// Sleep
+		SleepTool{},
+
+		// Worktree
+		EnterWorktree{WorkingDir: workingDir},
+		ExitWorktree{WorkingDir: workingDir},
 
 		// Execution
 		RunCommand{WorkingDir: workingDir},
