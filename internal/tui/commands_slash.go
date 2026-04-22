@@ -456,6 +456,33 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 			m.dualWriteSystem(m.t("config.provider_set", value))
 		case "language":
 			m.applyLanguageChange(normalizeLanguage(value))
+		case "apikey":
+			vendorScoped := len(parts) > 4 && (parts[4] == "--vendor" || parts[4] == "-v")
+			apiKeyValue := value
+			if m.config.Vendor == "" {
+				m.dualWriteSystem(m.styles.error.Render("No active vendor. Use /config set vendor <name> first."))
+				return nil
+			}
+			if err := m.config.SetEndpointAPIKey(m.config.Vendor, m.config.Endpoint, apiKeyValue, vendorScoped); err != nil {
+				m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Failed to set API key: %s", err)))
+				return nil
+			}
+			if err := m.config.Save(); err != nil {
+				m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Failed to save config: %s", err)))
+				return nil
+			}
+			scope := "endpoint " + m.config.Endpoint
+			if vendorScoped {
+				scope = "vendor " + m.config.Vendor
+			}
+			masked := "****"
+			if len(apiKeyValue) > 8 {
+				masked = apiKeyValue[:4] + strings.Repeat("*", len(apiKeyValue)-8) + apiKeyValue[len(apiKeyValue)-4:]
+			}
+			m.dualWriteSystem(m.styles.assistant.Render(fmt.Sprintf("\u2713 API key set for %s: %s", scope, masked)))
+			if err := m.reloadActiveProvider(); err != nil {
+				m.dualWriteSystem(m.styles.assistant.Render(fmt.Sprintf("Provider reload: %s", err)))
+			}
 		default:
 			m.dualWriteSystem(m.styles.error.Render(m.t("config.unknown_key", key)))
 		}
