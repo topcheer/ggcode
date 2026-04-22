@@ -1128,3 +1128,140 @@ func searchString(s, sub string) bool {
 	}
 	return false
 }
+
+func testConfigWithVendor() *Config {
+	cfg := DefaultConfig()
+	cfg.Vendors = map[string]VendorConfig{
+		"zai": {
+			DisplayName: "Z.ai",
+			APIKey:      "${ZAI_API_KEY}",
+			Endpoints: map[string]EndpointConfig{
+				"cn-coding-openai": {
+					Protocol: "openai",
+					BaseURL:  "https://open.bigmodel.cn/api/paas/v4",
+					APIKey:   "${ZAI_API_KEY}",
+				},
+			},
+		},
+	}
+	return cfg
+}
+
+func TestAddEndpoint(t *testing.T) {
+	cfg := testConfigWithVendor()
+	if err := cfg.AddEndpoint("zai", "my-custom", "openai", "https://api.example.com/v1", "sk-test-key"); err != nil {
+		t.Fatal(err)
+	}
+	ep, ok := cfg.Vendors["zai"].Endpoints["my-custom"]
+	if !ok {
+		t.Fatal("endpoint not created")
+	}
+	if ep.Protocol != "openai" {
+		t.Errorf("expected protocol=openai, got %s", ep.Protocol)
+	}
+	if ep.BaseURL != "https://api.example.com/v1" {
+		t.Errorf("unexpected base_url: %s", ep.BaseURL)
+	}
+	// API key should be stored as env reference
+	if ep.APIKey == "" {
+		t.Error("expected non-empty api_key")
+	}
+}
+
+func TestAddEndpointWithoutAPIKey(t *testing.T) {
+	cfg := testConfigWithVendor()
+	if err := cfg.AddEndpoint("zai", "no-key", "anthropic", "https://api.anthropic.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	ep := cfg.Vendors["zai"].Endpoints["no-key"]
+	if ep.APIKey != "" {
+		t.Errorf("expected empty api_key, got %s", ep.APIKey)
+	}
+}
+
+func TestAddEndpointInvalidVendor(t *testing.T) {
+	cfg := testConfigWithVendor()
+	err := cfg.AddEndpoint("nonexistent", "ep", "openai", "https://example.com", "")
+	if err == nil {
+		t.Error("expected error for nonexistent vendor")
+	}
+}
+
+func TestAddEndpointWithEnvRef(t *testing.T) {
+	cfg := testConfigWithVendor()
+	if err := cfg.AddEndpoint("zai", "envref", "openai", "https://example.com", "${MY_KEY}"); err != nil {
+		t.Fatal(err)
+	}
+	ep := cfg.Vendors["zai"].Endpoints["envref"]
+	if ep.APIKey != "${MY_KEY}" {
+		t.Errorf("expected env ref to pass through, got %s", ep.APIKey)
+	}
+}
+
+func TestRemoveEndpoint(t *testing.T) {
+	cfg := testConfigWithVendor()
+	// Add then remove
+	cfg.AddEndpoint("zai", "temp", "openai", "https://example.com", "sk-test")
+	if _, ok := cfg.Vendors["zai"].Endpoints["temp"]; !ok {
+		t.Fatal("endpoint not created")
+	}
+	if err := cfg.RemoveEndpoint("zai", "temp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Vendors["zai"].Endpoints["temp"]; ok {
+		t.Error("endpoint should be removed")
+	}
+}
+
+func TestRemoveEndpointNonExistent(t *testing.T) {
+	cfg := testConfigWithVendor()
+	err := cfg.RemoveEndpoint("zai", "nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent endpoint")
+	}
+}
+
+func TestEndpointAPIKeyFallbackToVendor(t *testing.T) {
+	cfg := testConfigWithVendor()
+	// Set vendor-level key
+	vc := cfg.Vendors["zai"]
+	vc.APIKey = "${ZAI_API_KEY}"
+	// Create endpoint without key
+	vc.Endpoints["fallback-ep"] = EndpointConfig{Protocol: "openai", BaseURL: "https://example.com"}
+	cfg.Vendors["zai"] = vc
+
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "fallback-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "${ZAI_API_KEY}" {
+		t.Errorf("expected vendor fallback key, got %s", resolved.APIKey)
+	}
+}
+
+func TestEndpointAPIKeyOverridesVendor(t *testing.T) {
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.APIKey = "${ZAI_API_KEY}"
+	// Create endpoint WITH its own key
+	vc.Endpoints["override-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+		APIKey:   "${ENDPOINT_OVERRIDDEN_KEY}",
+	}
+	cfg.Vendors["zai"] = vc
+
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "override-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "${ENDPOINT_OVERRIDDEN_KEY}" {
+		t.Errorf("expected endpoint-specific key, got %s", resolved.APIKey)
+	}
+}
