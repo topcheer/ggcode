@@ -810,6 +810,12 @@ func enCatalog(key string) string {
 		return "Accept"
 	case "approval.reject":
 		return "Reject"
+	case "approval.execute_plan":
+		return "Execute plan"
+	case "plan.confirm_execute":
+		return "Execute this plan?"
+	case "plan.empty":
+		return "(empty plan)"
 	case "exit.confirm":
 		return "Press Ctrl-C again to exit.\n\n"
 	case "interrupted":
@@ -2056,6 +2062,12 @@ func zhCatalog(key string) string {
 		return "接受"
 	case "approval.reject":
 		return "拒绝"
+	case "approval.execute_plan":
+		return "执行方案"
+	case "plan.confirm_execute":
+		return "是否执行此方案？"
+	case "plan.empty":
+		return "(空方案)"
 	case "exit.confirm":
 		return "再按一次 Ctrl-C 退出。\n\n"
 	case "interrupted":
