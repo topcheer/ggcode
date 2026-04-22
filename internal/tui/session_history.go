@@ -77,7 +77,9 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 				m.renderConversationAssistantMarkdown(body)
 				textParts = nil
 			}
-			m.output.WriteString(m.renderConversationToolCall(block))
+			renderedCall := m.renderConversationToolCall(block)
+			m.output.WriteString(renderedCall)
+			m.chatEntries.Append(ChatEntry{Role: "tool", RawText: renderedCall})
 			if block.ToolID != "" {
 				toolCalls[block.ToolID] = resumedToolCall{
 					Presentation: describeTool(m.currentLanguage(), block.ToolName, string(block.Input)),
