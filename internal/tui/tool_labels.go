@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/util"
@@ -92,6 +93,18 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		return toolPresentationFor(lang, "ask", displayToolTarget(askUserToolTarget(args)))
 	case "git_diff", "git_status", "git_log":
 		return toolPresentationFor(lang, "inspect", displayToolTarget(strings.ReplaceAll(toolName, "_", " ")))
+	case "sleep":
+		sec, _ := strconv.Atoi(argString(args, "seconds"))
+		ms, _ := strconv.Atoi(argString(args, "milliseconds"))
+		d := time.Duration(sec)*time.Second + time.Duration(ms)*time.Millisecond
+		if d <= 0 {
+			d = 0
+		}
+		return toolPresentation{
+			DisplayName: "Sleep",
+			Detail:      d.String(),
+			Activity:    "Sleep for " + d.String(),
+		}
 	default:
 		pretty := prettifyToolName(toolName)
 		return toolPresentation{
