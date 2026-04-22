@@ -721,6 +721,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeToolActivityGroup()
 		m.flushGroupedActivitiesToOutput()
 		m.cancelFunc = nil
+		// Finalize streaming assistant entry in chatEntries
+		if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
+			last.Streaming = false
+		}
 		wasCanceled := m.runCanceled
 		wasFailed := m.runFailed
 		m.runCanceled = false

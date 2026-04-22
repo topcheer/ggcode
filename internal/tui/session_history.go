@@ -15,6 +15,7 @@ type resumedToolCall struct {
 
 func (m *Model) rebuildConversationFromMessages(messages []provider.Message) {
 	m.output.Reset()
+	m.chatEntries.Reset()
 	m.streamBuffer = nil
 	m.streamPrefixWritten = false
 	toolCalls := make(map[string]resumedToolCall)

@@ -154,6 +154,24 @@ func (m Model) conversationPanelHeight() int {
 
 func (m Model) renderOutput() string {
 	var sb strings.Builder
+
+	// Try structured rendering from chatEntries first.
+	// Fall back to legacy output buffer when chatEntries is empty (e.g. initial state).
+	width := m.conversationInnerWidth()
+	if rendered := m.chatEntries.Render(width); rendered != "" {
+		sb.WriteString(rendered)
+		liveActivities := m.renderLiveActivities()
+		if liveActivities != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(liveActivities)
+		}
+		sb.WriteString("\n\n")
+		return sb.String()
+	}
+
+	// Legacy path — used when chatEntries is empty (initial empty state, etc.)
 	output := m.output.String()
 	if output == "" && !m.loading && m.pendingApproval == nil && m.pendingDiffConfirm == nil && m.pendingHarnessCheckpointConfirm == nil {
 		sb.WriteString(m.styles.assistant.Render(m.t("empty.ask")))
