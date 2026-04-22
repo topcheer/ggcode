@@ -38,8 +38,8 @@ func (m *Model) scheduleUpdateCheckCmd() tea.Cmd {
 
 func (m *Model) handleUpdateCommand() tea.Cmd {
 	if m.updateSvc == nil {
-		m.output.WriteString(m.styles.error.Render(m.t("update.unavailable")))
-		m.output.WriteString("\n\n")
+		m.dualWriteSystem(m.styles.error.Render(m.t("update.unavailable")))
+		m.dualWriteSystem("\n\n")
 		return nil
 	}
 	m.loading = true
@@ -111,17 +111,17 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 	m.resetActivityGroups()
 	if msg.Err != nil {
 		if errors.Is(msg.Err, update.ErrAlreadyUpToDate) {
-			m.output.WriteString(m.t("update.up_to_date"))
-			m.output.WriteString("\n\n")
+			m.dualWriteSystem(m.t("update.up_to_date"))
+			m.dualWriteSystem("\n\n")
 			return m, nil
 		}
-		m.output.WriteString(m.styles.error.Render(m.t("update.failed", msg.Err)))
-		m.output.WriteString("\n\n")
+		m.dualWriteSystem(m.styles.error.Render(m.t("update.failed", msg.Err)))
+		m.dualWriteSystem("\n\n")
 		return m, nil
 	}
 	if err := m.updateSvc.LaunchHelper(msg.Prepared); err != nil {
-		m.output.WriteString(m.styles.error.Render(m.t("update.restart_failed", err)))
-		m.output.WriteString("\n\n")
+		m.dualWriteSystem(m.styles.error.Render(m.t("update.restart_failed", err)))
+		m.dualWriteSystem("\n\n")
 		return m, nil
 	}
 	m.quitting = true

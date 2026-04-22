@@ -662,10 +662,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.ensureOutputEndsWithNewline()
-		m.output.WriteString(m.renderConversationUserEntry("❯ ", msg.Text))
-		m.output.WriteString("\n")
-		m.output.WriteString(m.styles.prompt.Render(m.t("interrupt.delivered")))
-		m.output.WriteString("\n")
+		m.dualWriteSystem(m.renderConversationUserEntry("❯ ", msg.Text))
+		m.dualWriteSystem("\n")
+		m.dualWriteSystem(m.styles.prompt.Render(m.t("interrupt.delivered")))
+		m.dualWriteSystem("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil
@@ -701,7 +701,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if finalIMText != "" {
 			m.emitIMText(finalIMText)
 		}
-		m.output.WriteString("\n")
+		m.dualWriteSystem("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
@@ -738,7 +738,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.renderStreamBuffer(true)
 			m.streamBuffer = nil
 		}
-		m.output.WriteString("\n")
+		m.dualWriteSystem("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
@@ -769,8 +769,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if text := strings.TrimSpace(msg.ErrText); text != "" {
 				m.ensureOutputEndsWithNewline()
-				m.output.WriteString(m.styles.error.Render(text))
-				m.output.WriteString("\n")
+				m.dualWriteSystem(m.styles.error.Render(text))
+				m.dualWriteSystem("\n")
 			}
 		}
 		if !wasCanceled && (hadShellOutput || strings.TrimSpace(msg.ErrText) != "") {
@@ -796,7 +796,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
 		}
-		m.output.WriteString(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.err) + "\n\n"))
+		m.dualWriteSystem(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.err) + "\n\n"))
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil
@@ -817,7 +817,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
 		}
-		m.output.WriteString(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.Err) + "\n\n"))
+		m.dualWriteSystem(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.Err) + "\n\n"))
 		m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
@@ -866,8 +866,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.pendingSubmissionCount() > 0 {
 				m.restorePendingInput()
 			}
-			m.output.WriteString(m.styles.error.Render(msg.Err.Error()))
-			m.output.WriteString("\n")
+			m.dualWriteSystem(m.styles.error.Render(msg.Err.Error()))
+			m.dualWriteSystem("\n")
 			m.syncConversationViewport()
 			m.viewport.GotoBottom()
 			return m, nil
@@ -879,11 +879,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renderStreamBuffer(true)
 		m.ensureOutputHasBlankLine()
 		if msg.Summary != nil && msg.Summary.Task != nil && msg.Summary.Task.Status == harness.TaskFailed {
-			m.output.WriteString(m.styles.error.Render(rendered))
+			m.dualWriteSystem(m.styles.error.Render(rendered))
 		} else {
-			m.output.WriteString(m.styles.assistant.Render(rendered))
+			m.dualWriteSystem(m.styles.assistant.Render(rendered))
 		}
-		m.output.WriteString("\n")
+		m.dualWriteSystem("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
@@ -901,16 +901,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolCount = 0
 		if msg.Err != nil {
 			m.ensureOutputEndsWithNewline()
-			m.output.WriteString(m.styles.error.Render(fmt.Sprintf("Knight task failed: %v", msg.Err)))
-			m.output.WriteString("\n")
+			m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Knight task failed: %v", msg.Err)))
+			m.dualWriteSystem("\n")
 			m.syncConversationViewport()
 			m.viewport.GotoBottom()
 			return m, nil
 		}
 		m.ensureOutputEndsWithNewline()
-		m.output.WriteString(fmt.Sprintf("🌙 Knight task completed: %s\n", msg.Goal))
-		m.output.WriteString(strings.TrimSpace(msg.Result.Output))
-		m.output.WriteString("\n")
+		m.dualWriteSystem(fmt.Sprintf("🌙 Knight task completed: %s\n", msg.Goal))
+		m.dualWriteSystem(strings.TrimSpace(msg.Result.Output))
+		m.dualWriteSystem("\n")
 		m.syncConversationViewport()
 		m.viewport.GotoBottom()
 		return m, nil
@@ -961,11 +961,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if state != nil && strings.TrimSpace(state.commandText) != "" {
 				commandText = strings.TrimSpace(state.commandText)
 			}
-			m.output.WriteString(m.renderConversationUserEntry("❯ ", commandText))
-			m.output.WriteString("\n")
+			m.dualWriteSystem(m.renderConversationUserEntry("❯ ", commandText))
+			m.dualWriteSystem("\n")
 			m.appendUserMessage(commandText)
-			m.output.WriteString(m.styles.assistant.Render(formatHarnessInitResult(msg.Result)))
-			m.output.WriteString("\n")
+			m.dualWriteSystem(m.styles.assistant.Render(formatHarnessInitResult(msg.Result)))
+			m.dualWriteSystem("\n")
 			m.syncConversationViewport()
 			m.viewport.GotoBottom()
 			if panel := m.harnessPanel; panel != nil {
