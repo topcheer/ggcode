@@ -1763,3 +1763,63 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 		cfg.Vendors[vendorName] = cfgVC
 	}
 }
+
+// AddEndpoint creates a new endpoint under the given vendor. If the endpoint
+// already exists it is updated. The endpoint name is sanitized for use as a
+// YAML map key (lowercase, no spaces).
+func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q is not configured", vendor)
+	}
+	if endpointName == "" {
+		return fmt.Errorf("endpoint name cannot be empty")
+	}
+	if protocol == "" {
+		protocol = "openai"
+	}
+
+	ep := EndpointConfig{
+		Protocol: protocol,
+		BaseURL:  strings.TrimSpace(baseURL),
+	}
+
+	// Handle API key: plaintext → env ref + os.Setenv, or pass through ${VAR}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" {
+		if _, isRef := envReferenceVarName(apiKey); isRef {
+			ep.APIKey = apiKey
+		} else {
+			envVarName := preferredEndpointAPIKeyEnvVar(vendor, endpointName)
+			os.Setenv(envVarName, apiKey)
+			ep.APIKey = "${" + envVarName + "}"
+		}
+	}
+
+	if vc.Endpoints == nil {
+		vc.Endpoints = make(map[string]EndpointConfig)
+	}
+	vc.Endpoints[endpointName] = ep
+	c.Vendors[vendor] = vc
+	return nil
+}
+
+// RemoveEndpoint removes an endpoint from the given vendor.
+func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q is not configured", vendor)
+	}
+	if _, ok := vc.Endpoints[endpoint]; !ok {
+		return fmt.Errorf("endpoint %q does not exist under vendor %q", endpoint, vendor)
+	}
+	delete(vc.Endpoints, endpoint)
+	c.Vendors[vendor] = vc
+	return nil
+}

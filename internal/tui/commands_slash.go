@@ -407,6 +407,14 @@ func (m *Model) handleBugCommand() tea.Cmd {
 }
 
 func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
+	if len(parts) > 1 {
+		switch strings.ToLower(parts[1]) {
+		case "add-endpoint":
+			return m.handleConfigAddEndpoint(parts[2:])
+		case "remove-endpoint":
+			return m.handleConfigRemoveEndpoint(parts[2:])
+		}
+	}
 	if len(parts) > 1 && strings.ToLower(parts[1]) == "set" {
 		if len(parts) < 4 {
 			m.dualWriteSystem(m.styles.error.Render(m.t("config.usage")))
@@ -856,5 +864,90 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	default:
 		m.dualWriteSystem("Knight commands: status, budget, review [name], run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills\n")
 	}
+	return nil
+}
+
+func (m *Model) handleConfigAddEndpoint(args []string) tea.Cmd {
+	if m.config == nil {
+		m.dualWriteSystem(m.styles.error.Render(m.t("config.not_loaded")))
+		return nil
+	}
+	// Usage: /config add-endpoint <name> <base_url> [--protocol openai] [--apikey sk-xxx]
+	if len(args) < 2 {
+		m.dualWriteSystem(m.styles.error.Render("Usage: /config add-endpoint <name> <base_url> [--protocol openai] [--apikey sk-xxx]"))
+		return nil
+	}
+	name := args[0]
+	baseURL := args[1]
+	protocol := "openai"
+	apiKey := ""
+
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--protocol", "-p":
+			i++
+			if i < len(args) {
+				protocol = args[i]
+			}
+		case "--apikey", "-k":
+			i++
+			if i < len(args) {
+				apiKey = args[i]
+			}
+		}
+	}
+
+	vendor := m.config.Vendor
+	if vendor == "" {
+		m.dualWriteSystem(m.styles.error.Render("No active vendor. Use /config set vendor <name> first."))
+		return nil
+	}
+
+	if err := m.config.AddEndpoint(vendor, name, protocol, baseURL, apiKey); err != nil {
+		m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Failed to add endpoint: %s", err)))
+		return nil
+	}
+	if err := m.config.Save(); err != nil {
+		m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Failed to save config: %s", err)))
+		return nil
+	}
+
+	msg := fmt.Sprintf("\u2713 Added endpoint %q to vendor %q (protocol=%s, base_url=%s)", name, vendor, protocol, baseURL)
+	if apiKey != "" {
+		masked := "****"
+		if len(apiKey) > 8 {
+			masked = apiKey[:4] + strings.Repeat("*", len(apiKey)-8) + apiKey[len(apiKey)-4:]
+		}
+		msg += fmt.Sprintf(", apikey=%s", masked)
+	}
+	m.dualWriteSystem(m.styles.assistant.Render(msg))
+	m.dualWriteSystem(m.styles.assistant.Render(fmt.Sprintf("Use /config set endpoint %s to activate it.", name)))
+	return nil
+}
+
+func (m *Model) handleConfigRemoveEndpoint(args []string) tea.Cmd {
+	if m.config == nil {
+		m.dualWriteSystem(m.styles.error.Render(m.t("config.not_loaded")))
+		return nil
+	}
+	if len(args) < 1 {
+		m.dualWriteSystem(m.styles.error.Render("Usage: /config remove-endpoint <name>"))
+		return nil
+	}
+	name := args[0]
+	vendor := m.config.Vendor
+	if vendor == "" {
+		m.dualWriteSystem(m.styles.error.Render("No active vendor."))
+		return nil
+	}
+	if err := m.config.RemoveEndpoint(vendor, name); err != nil {
+		m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Failed to remove endpoint: %s", err)))
+		return nil
+	}
+	if err := m.config.Save(); err != nil {
+		m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Failed to save config: %s", err)))
+		return nil
+	}
+	m.dualWriteSystem(m.styles.assistant.Render(fmt.Sprintf("\u2713 Removed endpoint %q from vendor %q", name, vendor)))
 	return nil
 }

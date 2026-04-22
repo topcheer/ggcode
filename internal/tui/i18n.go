@@ -1113,7 +1113,7 @@ func enCatalog(key string) string {
 	case "bug.hint":
 		return "\nPlease include this information when reporting a bug.\n\n"
 	case "config.usage":
-		return "Usage: /config set <key> <value>\n\nKeys: model, vendor, endpoint, language, apikey [--vendor]\n\n"
+		return "Usage: /config set <key> <value>\n\nKeys: model, vendor, endpoint, language, apikey [--vendor]\n\nEndpoints: /config add-endpoint <name> <base_url> [--protocol openai] [--apikey sk-xxx]\n          /config remove-endpoint <name>\n\n"
 	case "config.not_loaded":
 		return "Config not loaded.\n\n"
 	case "config.model_set":
@@ -2365,7 +2365,7 @@ func zhCatalog(key string) string {
 	case "bug.hint":
 		return "\n报告 bug 时请附带这些信息。\n\n"
 	case "config.usage":
-		return "用法：/config set <key> <value>\n\n可设置：model, vendor, endpoint, language, apikey [--vendor]\n\n"
+		return "用法：/config set <key> <value>\n\n可设置：model, vendor, endpoint, language, apikey [--vendor]\n\n端点管理：/config add-endpoint <名称> <base_url> [--protocol openai] [--apikey sk-xxx]\n          /config remove-endpoint <名称>\n\n"
 	case "config.not_loaded":
 		return "配置未加载。\n\n"
 	case "config.model_set":
