@@ -1,0 +1,44 @@
+{
+  "id": "ggcode",
+  "name": "ggcode",
+  "version": "1.1.44",
+  "description": "An open-source AI coding agent with multi-model support, A2A protocol, and extensible tool system",
+  "repository": "https://github.com/topcheer/ggcode",
+  "authors": ["topcheer"],
+  "license": "MIT",
+  "icon": "icon.svg",
+  "distribution": {
+    "binary": {
+      "darwin-aarch64": {
+        "archive": "https://github.com/topcheer/ggcode/releases/latest/download/ggcode-darwin-arm64.tar.gz",
+        "cmd": "./ggcode",
+        "args": ["acp"]
+      },
+      "darwin-x86_64": {
+        "archive": "https://github.com/topcheer/ggcode/releases/latest/download/ggcode-darwin-amd64.tar.gz",
+        "cmd": "./ggcode",
+        "args": ["acp"]
+      },
+      "linux-aarch64": {
+        "archive": "https://github.com/topcheer/ggcode/releases/latest/download/ggcode-linux-arm64.tar.gz",
+        "cmd": "./ggcode",
+        "args": ["acp"]
+      },
+      "linux-x86_64": {
+        "archive": "https://github.com/topcheer/ggcode/releases/latest/download/ggcode-linux-amd64.tar.gz",
+        "cmd": "./ggcode",
+        "args": ["acp"]
+      },
+      "windows-aarch64": {
+        "archive": "https://github.com/topcheer/ggcode/releases/latest/download/ggcode-windows-arm64.zip",
+        "cmd": "./ggcode.exe",
+        "args": ["acp"]
+      },
+      "windows-x86_64": {
+        "archive": "https://github.com/topcheer/ggcode/releases/latest/download/ggcode-windows-amd64.zip",
+        "cmd": "./ggcode.exe",
+        "args": ["acp"]
+      }
+    }
+  }
+}
