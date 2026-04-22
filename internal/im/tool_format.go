@@ -141,6 +141,15 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return "⏰ Delete cron job"
 	case "cron_list":
 		return "⏰ List cron jobs"
+	case "enter_worktree":
+		name := extractArgValue(args, "name")
+		if name == "" {
+			name = "new worktree"
+		}
+		return fmt.Sprintf("🌿 Enter worktree: %s", name)
+	case "exit_worktree":
+		action := extractArgValue(args, "action")
+		return fmt.Sprintf("🌿 Exit worktree (%s)", action)
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
@@ -447,6 +456,10 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMCronDeleteResult(tr)
 	case "cron_list":
 		return true, formatIMCronListResult(tr)
+	case "enter_worktree":
+		return true, formatIMWorktreeResult("🌿", tr)
+	case "exit_worktree":
+		return true, formatIMWorktreeResult("🌿", tr)
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
@@ -700,6 +713,18 @@ func formatIMCronListResult(tr *ToolResultInfo) string {
 		return "⏰ No scheduled cron jobs"
 	}
 	return fmt.Sprintf("⏰\n```\n%s\n```", output)
+}
+
+// formatIMWorktreeResult renders enter_worktree/exit_worktree results.
+func formatIMWorktreeResult(icon string, tr *ToolResultInfo) string {
+	if tr.IsError {
+		return fmt.Sprintf("%s Worktree\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
+	}
+	output := strings.TrimSpace(tr.Result)
+	if output == "" {
+		return fmt.Sprintf("%s Worktree", icon)
+	}
+	return fmt.Sprintf("%s %s", icon, output)
 }
 
 // formatSleepDuration parses sleep tool args and returns a human-readable duration.

@@ -116,6 +116,20 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		return toolPresentationFor(lang, "delete", "cron job")
 	case "cron_list":
 		return toolPresentationFor(lang, "inspect", "cron jobs")
+	case "enter_worktree":
+		name := argString(args, "name")
+		return toolPresentation{
+			DisplayName: "Enter Worktree",
+			Detail:      name,
+			Activity:    "Create worktree",
+		}
+	case "exit_worktree":
+		action := argString(args, "action")
+		return toolPresentation{
+			DisplayName: "Exit Worktree",
+			Detail:      action,
+			Activity:    "Exit worktree (" + action + ")",
+		}
 	default:
 		pretty := prettifyToolName(toolName)
 		return toolPresentation{

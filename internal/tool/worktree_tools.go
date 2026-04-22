@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // EnterWorktree creates a new git worktree for isolated work.
@@ -19,7 +21,10 @@ func (t EnterWorktree) Name() string { return "enter_worktree" }
 
 func (t EnterWorktree) Description() string {
 	return "Create an isolated git worktree. Returns the path to the new worktree directory. " +
-		"Use this when the user explicitly asks to work in a worktree."
+		"Use this when the user explicitly asks to work in a worktree, or when you need to test changes " +
+		"without affecting the current working directory. The worktree is created under .ggcode/worktrees/ " +
+		"with a new branch from HEAD. After creation, use the returned path as the working_dir for file " +
+		"and command operations to work inside the worktree."
 }
 
 func (t EnterWorktree) Parameters() json.RawMessage {
@@ -45,7 +50,7 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	name := args.Name
 	if name == "" {
 		// Generate a random-ish name
-		name = fmt.Sprintf("wt-%d", os.Getpid())
+		name = fmt.Sprintf("wt-%s-%04d", time.Now().Format("20060102"), rand.Intn(10000))
 	}
 
 	// Sanitize name: only allow safe characters
@@ -90,7 +95,10 @@ func (t ExitWorktree) Name() string { return "exit_worktree" }
 
 func (t ExitWorktree) Description() string {
 	return "Exit and optionally remove a git worktree. " +
-		"Use this when the user asks to exit a worktree session."
+		"Use this when the user asks to exit a worktree session. " +
+		"'keep' leaves the worktree directory and branch intact for later use. " +
+		"'remove' deletes the worktree directory and its branch. " +
+		"If there are uncommitted changes, you must set discard_changes=true or the removal will be rejected."
 }
 
 func (t ExitWorktree) Parameters() json.RawMessage {
