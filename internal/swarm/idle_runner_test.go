@@ -540,3 +540,97 @@ func (a *blockingAgent) RunStream(ctx context.Context, _ string, onEvent func(pr
 		return ctx.Err()
 	}
 }
+
+func TestIdleRunner_SkipsAssignedToOtherTeammate(t *testing.T) {
+	agent := &countingAgent{}
+	tm := &Teammate{
+		ID:     "tm-1",
+		Name:   "worker",
+		Status: TeammateIdle,
+		Inbox:  make(chan MailMessage, 16),
+	}
+
+	taskMgr := task.NewManager()
+	team := &Team{
+		ID:        "team-1",
+		Name:      "test",
+		LeaderID:  "leader",
+		Teammates: map[string]*Teammate{"tm-1": tm},
+		Tasks:     taskMgr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tm.ctx = ctx
+
+	mgr := newTestManager()
+	mgr.mu.Lock()
+	mgr.teams["team-1"] = team
+	mgr.mu.Unlock()
+
+	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
+
+	// Create a task assigned to a DIFFERENT teammate.
+	taskMgr.Create("Assigned task", "For someone else", "", map[string]string{"assignee": "tm-2"})
+
+	// Wait for a few poll cycles.
+	time.Sleep(300 * time.Millisecond)
+
+	// The agent should NOT have been called — task is assigned to tm-2.
+	if agent.getCalls() != 0 {
+		t.Errorf("expected 0 agent calls (task assigned to other teammate), got %d", agent.getCalls())
+	}
+
+	// Task should still be pending.
+	tasks := taskMgr.List()
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Status != task.StatusPending {
+		t.Errorf("task should still be pending, got %s", tasks[0].Status)
+	}
+}
+
+func TestIdleRunner_ClaimsUnassignedTask(t *testing.T) {
+	agent := &countingAgent{}
+	tm := &Teammate{
+		ID:     "tm-1",
+		Name:   "worker",
+		Status: TeammateIdle,
+		Inbox:  make(chan MailMessage, 16),
+	}
+
+	taskMgr := task.NewManager()
+	team := &Team{
+		ID:        "team-1",
+		Name:      "test",
+		LeaderID:  "leader",
+		Teammates: map[string]*Teammate{"tm-1": tm},
+		Tasks:     taskMgr,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tm.ctx = ctx
+
+	mgr := newTestManager()
+	mgr.mu.Lock()
+	mgr.teams["team-1"] = team
+	mgr.mu.Unlock()
+
+	go runTeammateLoop(ctx, tm, team, agent, mgr, nil, 30*time.Minute)
+
+	// Create a task with NO assignee (up for grabs).
+	taskMgr.Create("Open task", "Anyone can do this", "", nil)
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Should have been claimed and completed by tm-1.
+	if agent.getCalls() != 1 {
+		t.Errorf("expected 1 agent call, got %d", agent.getCalls())
+	}
+	tasks := taskMgr.List()
+	if tasks[0].Status != task.StatusCompleted {
+		t.Errorf("task should be completed, got %s", tasks[0].Status)
+	}
+}

@@ -63,8 +63,37 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 	}
 
 	created := tm.Create(args.Subject, args.Description, "", metadata)
+
+	// If an assignee is specified, push the task directly into their inbox
+	// for immediate execution (bypasses the polling delay).
+	if args.Assignee != "" {
+		prompt := formatTaskPrompt(created)
+		err := t.Manager.SendToTeammate(args.TeamID, args.Assignee, swarm.MailMessage{
+			From:    "leader",
+			Content: prompt,
+			Type:    "task",
+		})
+		if err != nil {
+			// Assignee inbox full or not found — task stays on board,
+			// poller will pick it up later. Log but don't fail.
+			out, _ := json.Marshal(created)
+			return Result{Content: string(out) + fmt.Sprintf("\nWarning: could not deliver to %q: %v (task stays on board for polling)\n", args.Assignee, err)}, nil
+		}
+	}
+
 	out, _ := json.Marshal(created)
 	return Result{Content: string(out) + "\n"}, nil
+}
+
+// formatTaskPrompt builds the agent prompt from a task for inbox delivery.
+func formatTaskPrompt(tk task.Task) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Task: %s\n", tk.Subject))
+	if tk.Description != "" {
+		sb.WriteString(fmt.Sprintf("Description: %s\n", tk.Description))
+	}
+	sb.WriteString("\nComplete this task now. Use swarm_task_complete when done.")
+	return sb.String()
 }
 
 // ————————————————————————————————————————

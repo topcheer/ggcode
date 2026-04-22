@@ -170,6 +170,11 @@ func tryClaimPendingTask(
 		if tk.Status != pending {
 			continue
 		}
+		// Skip tasks assigned to a specific teammate that isn't us.
+		// Those are delivered directly to the assignee's inbox by swarm_task_create.
+		if assignee, ok := tk.Metadata["assignee"]; ok && assignee != "" && assignee != tm.ID {
+			continue
+		}
 
 		// Atomically claim: only succeeds if status is still pending.
 		owner := tm.ID
