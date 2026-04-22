@@ -255,7 +255,6 @@ ggcode
 | `/bug` | 报告 bug |
 | `/init` | 为当前项目生成 `GGCODE.md` |
 | `/harness` | 打开 harness 面板，支持 `init/check/monitor/queue/tasks/run/run-queued/review/promote/release/gc/doctor`；`queue` 和 `run` 使用当前输入草稿，直接输入 `/harness ...` 命令同样有效 |
-| `/fullscreen` | 切换全屏模式 |
 | `/exit`、`/quit` | 退出 ggcode |
 
 ## 非交互和脚本化使用
