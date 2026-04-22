@@ -27,6 +27,9 @@ type PermissionPolicy interface {
 	// Check returns the decision for a tool call.
 	Check(toolName string, input json.RawMessage) (Decision, error)
 
+	// Mode returns the current permission mode.
+	Mode() PermissionMode
+
 	// IsDangerous returns true if the command/operation is inherently dangerous,
 	// regardless of the tool-level policy. Used for run_command specifically.
 	IsDangerous(command string) bool
