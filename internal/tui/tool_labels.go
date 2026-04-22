@@ -105,6 +105,17 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Detail:      d.String(),
 			Activity:    "Sleep for " + d.String(),
 		}
+	case "cron_create":
+		cronExpr := argString(args, "cron")
+		return toolPresentation{
+			DisplayName: "Schedule",
+			Detail:      cronExpr,
+			Activity:    "Schedule " + cronExpr,
+		}
+	case "cron_delete":
+		return toolPresentationFor(lang, "delete", "cron job")
+	case "cron_list":
+		return toolPresentationFor(lang, "inspect", "cron jobs")
 	default:
 		pretty := prettifyToolName(toolName)
 		return toolPresentation{
