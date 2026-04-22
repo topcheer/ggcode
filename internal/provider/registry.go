@@ -12,24 +12,36 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		return nil, fmt.Errorf("resolved endpoint is nil")
 	}
 
+	// One adaptive max-output-tokens cap per (vendor, baseURL, model). Shared
+	// across reconstructions of the same logical endpoint so learned bounds
+	// survive provider swaps.
+	cap := AdaptiveCapFor(resolved.VendorID, resolved.BaseURL, resolved.Model, resolved.MaxTokens)
+
 	switch resolved.Protocol {
 	case "anthropic":
-		return NewAnthropicProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL), nil
+		p := NewAnthropicProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+		p.SetAdaptiveCap(cap)
+		return p, nil
 
 	case "openai":
-		return NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL), nil
+		p := NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+		p.SetAdaptiveCap(cap)
+		return p, nil
 
 	case "copilot":
 		if err := validateCopilotResolved(resolved.BaseURL, resolved.APIKey); err != nil {
 			return nil, err
 		}
-		return NewCopilotProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL), nil
+		p := NewCopilotProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+		p.SetAdaptiveCap(cap)
+		return p, nil
 
 	case "gemini":
 		prov, err := NewGeminiProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		if err != nil {
 			return nil, fmt.Errorf("creating gemini provider: %w", err)
 		}
+		prov.SetAdaptiveCap(cap)
 		return prov, nil
 
 	default:

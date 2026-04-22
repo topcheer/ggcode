@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 
 	"google.golang.org/genai"
 )
@@ -17,7 +18,20 @@ type GeminiProvider struct {
 	client    *genai.Client
 	model     string
 	maxTokens int
+	cap       *adaptiveCap
 	transport *headerInjectingTransport // kept for runtime header updates
+}
+
+// SetAdaptiveCap installs the adaptive max-output-tokens cap.
+func (p *GeminiProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
+
+func (p *GeminiProvider) effectiveMaxTokens() int {
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			return v
+		}
+	}
+	return p.maxTokens
 }
 
 // NewGeminiProvider creates a new Gemini provider.
@@ -73,8 +87,8 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
-	if p.maxTokens > 0 {
-		config.MaxOutputTokens = int32(p.maxTokens)
+	if v := p.effectiveMaxTokens(); v > 0 {
+		config.MaxOutputTokens = int32(v)
 	}
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
@@ -93,7 +107,13 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 		return callErr
 	}, providerRetryAttempts)
 	if err != nil {
+		if rejected, parsed := maxTokensRejection(err); rejected {
+			p.cap.OnRejected(parsed)
+		}
 		return nil, fmt.Errorf("gemini chat: %w", err)
+	}
+	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
+		p.cap.OnTruncated()
 	}
 
 	content, usage := p.convertResponse(resp)
@@ -109,8 +129,8 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
-	if p.maxTokens > 0 {
-		config.MaxOutputTokens = int32(p.maxTokens)
+	if v := p.effectiveMaxTokens(); v > 0 {
+		config.MaxOutputTokens = int32(v)
 	}
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
@@ -124,7 +144,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	ch := make(chan StreamEvent, 64)
 
-	go func() {
+	safego.Go("provider.gemini.streamRead", func() {
 		defer close(ch)
 
 		var usage TokenUsage
@@ -134,6 +154,9 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			retry := false
 			for resp, err := range iter {
 				if err != nil {
+					if rejected, parsed := maxTokensRejection(err); rejected {
+						p.cap.OnRejected(parsed)
+					}
 					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
 						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
 							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
@@ -149,6 +172,9 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				// Check finish reason for truncation / policy errors.
 				if len(resp.Candidates) > 0 {
 					if finishErr := geminiFinishReasonError(resp.Candidates[0].FinishReason); finishErr != nil {
+						if resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
+							p.cap.OnTruncated()
+						}
 						ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
 						return
 					}
@@ -194,7 +220,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage}
 			return
 		}
-	}()
+	})
 
 	return ch, nil
 }

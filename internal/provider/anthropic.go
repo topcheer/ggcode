@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -17,6 +18,19 @@ type AnthropicProvider struct {
 	client    anthropic.Client
 	model     string
 	maxTokens int
+	cap       *adaptiveCap
+}
+
+// SetAdaptiveCap installs the adaptive max-output-tokens cap.
+func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
+
+func (p *AnthropicProvider) effectiveMaxTokens() int {
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			return v
+		}
+	}
+	return p.maxTokens
 }
 
 // NewAnthropicProvider creates a new Anthropic provider.
@@ -71,7 +85,13 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 
 	resp, err := p.client.Messages.New(ctx, params)
 	if err != nil {
+		if rejected, parsed := maxTokensRejection(err); rejected {
+			p.cap.OnRejected(parsed)
+		}
 		return nil, err
+	}
+	if string(resp.StopReason) == "max_tokens" {
+		p.cap.OnTruncated()
 	}
 
 	msg := convertAnthropicResponse(resp.Content)
@@ -92,7 +112,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 	ch := make(chan StreamEvent, 64)
 
-	go func() {
+	safego.Go("provider.anthropic.streamRead", func() {
 		defer close(ch)
 
 		var usage *TokenUsage
@@ -165,6 +185,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						if stopReason := string(event.Delta.StopReason); stopReason != "" {
 							debug.Log("anthropic", "stop_reason=%s", stopReason)
 							if stopErr := anthropicStopReasonError(stopReason); stopErr != nil {
+								if stopReason == "max_tokens" {
+									p.cap.OnTruncated()
+								}
 								ch <- StreamEvent{Type: StreamEventError, Error: stopErr}
 								return
 							}
@@ -177,6 +200,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 				if err := stream.Err(); err != nil {
 					debug.Log("anthropic", "Stream ERROR: %v", err)
+					if rejected, parsed := maxTokensRejection(err); rejected {
+						p.cap.OnRejected(parsed)
+					}
 					// Retry if no content has been emitted yet and the error is retryable.
 					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
 						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
@@ -210,7 +236,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			}
 		}
 		ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
-	}()
+	})
 
 	return ch, nil
 }
@@ -298,7 +324,7 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 	}
 	params := anthropic.MessageNewParams{
 		Model:     p.model,
-		MaxTokens: int64(p.maxTokens),
+		MaxTokens: int64(p.effectiveMaxTokens()),
 		Messages:  msgParams,
 	}
 

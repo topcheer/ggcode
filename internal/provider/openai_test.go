@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -254,4 +256,58 @@ func TestRetryWithBackoffCtxHonorsRetryAfter(t *testing.T) {
 	if len(slept) != 2 || slept[0] != 2*time.Second || slept[1] != 2*time.Second {
 		t.Fatalf("expected retry-after sleeps [2s 2s], got %+v", slept)
 	}
+}
+
+func TestHeaderInjectingTransportConcurrentUpdate(t *testing.T) {
+	// Regression test: UpdateHeaders and RoundTrip must be safe for concurrent use.
+	base := http.DefaultTransport
+	tr := &headerInjectingTransport{
+		base:    base,
+		headers: http.Header{"X-Test": []string{"v1"}},
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Writer goroutine: continuously update headers.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				h := make(http.Header)
+				h.Set("X-Test", fmt.Sprintf("v%d", i))
+				tr.UpdateHeaders(h)
+				i++
+			}
+		}
+	}()
+
+	// Reader goroutines: continuously read headers via RoundTrip.
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					req, _ := http.NewRequestWithContext(context.Background(), "GET", "http://127.0.0.1:1", nil)
+					// RoundTrip will fail to connect but that's fine — we just
+					// need to exercise the header-reading path.
+					_, _ = tr.RoundTrip(req)
+				}
+			}
+		}()
+	}
+
+	// Let the goroutines hammer it for 100ms.
+	time.Sleep(100 * time.Millisecond)
+	close(stop)
+	wg.Wait()
 }

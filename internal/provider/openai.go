@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 
 	"github.com/sashabaranov/go-openai"
@@ -25,30 +27,50 @@ type OpenAIProvider struct {
 	client    *openai.Client
 	model     string
 	maxTokens int
+	cap       *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
 	name      string
 	transport *headerInjectingTransport // kept for runtime header updates
+}
+
+// SetAdaptiveCap installs (or replaces) the adaptive max-output-tokens cap.
+// Used by NewProvider to share learned state across reconstructions.
+func (p *OpenAIProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
+
+// effectiveMaxTokens returns the value to send on the next request.
+// Priority: adaptive cap > static maxTokens > 0 (omit).
+func (p *OpenAIProvider) effectiveMaxTokens() int {
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			return v
+		}
+	}
+	return p.maxTokens
 }
 
 // headerInjectingTransport wraps an http.RoundTripper to inject custom headers
 // that mimic the claude-cli client identity.
 type headerInjectingTransport struct {
 	base    http.RoundTripper
+	mu      sync.RWMutex
 	headers http.Header
 }
 
 func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.RLock()
 	for k, vals := range t.headers {
 		for _, v := range vals {
 			req.Header.Set(k, v)
 		}
 	}
+	t.mu.RUnlock()
 	return t.base.RoundTrip(req)
 }
 
-// UpdateHeaders replaces the injected headers. Safe for concurrent use because
-// RoundTrip only reads the reference and we swap it atomically.
+// UpdateHeaders replaces the injected headers. Safe for concurrent use with RoundTrip.
 func (t *headerInjectingTransport) UpdateHeaders(newHeaders http.Header) {
+	t.mu.Lock()
 	t.headers = newHeaders
+	t.mu.Unlock()
 }
 
 // claudeCLIHeaders returns the set of HTTP headers that mimic the official
@@ -132,8 +154,8 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 			IncludeUsage: true,
 		},
 	}
-	if p.maxTokens > 0 {
-		req.MaxCompletionTokens = p.maxTokens
+	if v := p.effectiveMaxTokens(); v > 0 {
+		req.MaxCompletionTokens = v
 	}
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
@@ -147,6 +169,9 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		return callErr
 	}, providerRetryAttempts)
 	if err != nil {
+		if rejected, parsed := maxTokensRejection(err); rejected {
+			p.cap.OnRejected(parsed)
+		}
 		return nil, fmt.Errorf("openai chat: %w", err)
 	}
 
@@ -175,8 +200,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		Model:    p.model,
 		Messages: chatMsgs,
 	}
-	if p.maxTokens > 0 {
-		req.MaxCompletionTokens = p.maxTokens
+	if v := p.effectiveMaxTokens(); v > 0 {
+		req.MaxCompletionTokens = v
 	}
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
@@ -192,7 +217,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	ch := make(chan StreamEvent, 64)
 
-	go func() {
+	safego.Go("provider.openai.streamRead", func() {
 		defer close(ch)
 
 		var usage *TokenUsage
@@ -211,6 +236,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				return sErr
 			}, providerRetryAttempts)
 			if err != nil {
+				if rejected, parsed := maxTokensRejection(err); rejected {
+					p.cap.OnRejected(parsed)
+				}
 				if isRetryable(err) && attempt < providerRetryAttempts-1 {
 					if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
 						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
@@ -226,15 +254,43 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			toolCalls := make(map[int]*ToolCallDelta)
 			emitted := false
 			retry := false
+			normalEnd := false
 
 			func() {
 				defer localStreamer.Close()
+				defer func() {
+					// Flush any tool_calls that accumulated but never received
+					// a chunk with a non-empty finish_reason. Some
+					// OpenAI-compatible backends (LiteLLM, vLLM, ZAI compat,
+					// some Azure deployments) terminate the SSE without ever
+					// emitting finish_reason; without this flush the agent
+					// silently drops the tool call and hangs in "thinking".
+					// See locks.md S7. Only flush on a clean EOF — never on
+					// retry (would double-execute) or hard error (broken
+					// conversation, can't trust the partial args).
+					if !normalEnd || retry {
+						return
+					}
+					for idx, tc := range toolCalls {
+						if tc.Name == "" && len(tc.Arguments) == 0 {
+							continue
+						}
+						debug.Log("openai", "flush residual tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
+						outputChars += len(tc.Name) + len(tc.Arguments)
+						emitted = true
+						ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
+						delete(toolCalls, idx)
+					}
+				}()
 				for {
 					resp, recvErr := localStreamer.Recv()
 					if recvErr != nil {
 						// Stream ended normally
 						if errors.Is(recvErr, io.EOF) || recvErr == context.Canceled || recvErr == context.DeadlineExceeded {
 							debug.Log("openai", "Stream ended normally: %v", recvErr)
+							if errors.Is(recvErr, io.EOF) {
+								normalEnd = true
+							}
 							return
 						}
 						debug.Log("openai", "Stream ERROR: %v", recvErr)
@@ -309,6 +365,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							delete(toolCalls, idx)
 						}
 						if finishErr := finishReasonError(finishReason); finishErr != nil {
+							if isLengthFinishReason(finishReason) {
+								p.cap.OnTruncated()
+							}
 							ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
 							return
 						}
@@ -333,7 +392,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
 			return
 		}
-	}()
+	})
 
 	return ch, nil
 }
@@ -374,6 +433,14 @@ func estimateTokensFromChars(chars int) int {
 		return 1
 	}
 	return estimate
+}
+
+func isLengthFinishReason(finishReason string) bool {
+	switch strings.ToLower(strings.TrimSpace(finishReason)) {
+	case "length", "max_tokens", "max_output_tokens":
+		return true
+	}
+	return false
 }
 
 func finishReasonError(finishReason string) error {
