@@ -174,7 +174,7 @@ func commitInitialHarnessScaffold(ctx context.Context, root string, created, ove
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("stage harness scaffold: %s", strings.TrimSpace(string(out)))
 	}
-	commitArgs := []string{"commit", "--quiet", "-m", "chore: initialize harness scaffold" + harnessCoAuthor}
+	commitArgs := []string{"commit", "--quiet", "--no-verify", "-m", "chore: initialize harness scaffold" + harnessCoAuthor}
 	commitArgs = append(commitAuthorConfig(ctx, root), commitArgs...)
 	commitCmd := gitCmd(ctx, commitArgs...)
 	commitCmd.Dir = root

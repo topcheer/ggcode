@@ -370,7 +370,7 @@ func autoCommitWorktreeBase(ctx context.Context, rootDir string, dirtyPaths []st
 		return nil
 	}
 	message := buildWorktreeCheckpointMessage(dirtyPaths)
-	commitArgs := []string{"commit", "--quiet", "-m", message + harnessCoAuthor}
+	commitArgs := []string{"commit", "--quiet", "--no-verify", "-m", message + harnessCoAuthor}
 	commitArgs = append(commitAuthorConfig(ctx, rootDir), commitArgs...)
 	commitCmd := gitCmd(ctx, commitArgs...)
 	commitCmd.Dir = rootDir

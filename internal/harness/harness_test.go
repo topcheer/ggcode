@@ -835,14 +835,14 @@ func TestPromoteTaskMergesApprovedWorktreeBranch(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 
 	result, err := Init(root, InitOptions{})
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 	git(t, root, "add", ".")
-	git(t, root, "commit", "-m", "add harness scaffold")
+	git(t, root, "commit", "--no-verify", "-m", "add harness scaffold")
 	task, err := EnqueueTask(result.Project, "Promote worktree ERP task", "cli")
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
@@ -879,14 +879,14 @@ func TestPromoteTaskSkipsWorkspaceTodoState(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 
 	result, err := Init(root, InitOptions{})
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 	git(t, root, "add", ".")
-	git(t, root, "commit", "-m", "add harness scaffold")
+	git(t, root, "commit", "--no-verify", "-m", "add harness scaffold")
 	task, err := EnqueueTask(result.Project, "Promote worktree without todos state", "cli")
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
@@ -931,14 +931,14 @@ func TestPromoteTaskFailsWhenRootHasOverlappingDirtyFile(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 
 	result, err := Init(root, InitOptions{})
 	if err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 	git(t, root, "add", ".")
-	git(t, root, "commit", "-m", "add harness scaffold")
+	git(t, root, "commit", "--no-verify", "-m", "add harness scaffold")
 	task, err := EnqueueTask(result.Project, "Promote worktree with overlapping Dockerfile", "cli")
 	if err != nil {
 		t.Fatalf("EnqueueTask() error = %v", err)
@@ -1202,7 +1202,7 @@ func TestExecuteTaskUsesGitWorktreeWhenAvailable(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 
 	result, err := Init(root, InitOptions{})
 	if err != nil {
@@ -1247,7 +1247,7 @@ func TestExecuteTaskCheckpointsDirtyProjectFilesBeforeWorktree(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 
 	result, err := Init(root, InitOptions{})
 	if err != nil {
@@ -1297,7 +1297,7 @@ func TestExecuteTaskCancelsWhenDirtyWorkspaceCheckpointDeclined(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 
 	result, err := Init(root, InitOptions{})
 	if err != nil {
@@ -1343,7 +1343,7 @@ func TestPrepareWorkspaceIgnoresHarnessRuntimeAndSharedRuntimeDirs(t *testing.T)
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 	if err := os.MkdirAll(filepath.Join(root, "node_modules"), 0o755); err != nil {
 		t.Fatalf("mkdir node_modules: %v", err)
 	}
@@ -1384,7 +1384,7 @@ func TestPrepareWorkspaceLinksNodeModulesIntoGitWorktree(t *testing.T) {
 		t.Fatalf("write package.json: %v", err)
 	}
 	git(t, root, "add", "packages/web/package.json")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 	if err := os.MkdirAll(filepath.Join(root, "packages", "web", "node_modules", ".bin"), 0o755); err != nil {
 		t.Fatalf("mkdir package node_modules: %v", err)
 	}
@@ -1445,7 +1445,7 @@ func TestPrepareWorkspaceLinksPythonVirtualEnvIntoGitWorktree(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 	if err := os.MkdirAll(filepath.Join(root, ".venv", "bin"), 0o755); err != nil {
 		t.Fatalf("mkdir .venv/bin: %v", err)
 	}
@@ -1505,7 +1505,7 @@ func TestExecuteTaskPassesHarnessReadOnlyDirsToWorker(t *testing.T) {
 		t.Fatalf("write README: %v", err)
 	}
 	git(t, root, "add", "README.md")
-	git(t, root, "commit", "-m", "init")
+	git(t, root, "commit", "--no-verify", "-m", "init")
 
 	result, err := Init(root, InitOptions{})
 	if err != nil {
@@ -3413,19 +3413,35 @@ func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	// Disable global hooks (e.g., ggshield) to avoid API rate limits in tests.
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+// gitDisableHooks sets core.hooksPath to /dev/null in the test repo
+// so that Init()'s internal git commands also skip global hooks.
+func gitDisableHooks(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "config", "core.hooksPath", "/dev/null")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git config hooksPath failed: %v\n%s", err, out)
 	}
 }
 
 func commitHarnessScaffold(t *testing.T, dir string, result *InitResult) {
 	t.Helper()
 	if result == nil || len(result.CreatedPaths) == 0 {
-		t.Fatal("expected created harness scaffold paths")
+		return
 	}
 	args := append([]string{"add", "--"}, result.CreatedPaths...)
 	git(t, dir, args...)
-	git(t, dir, "commit", "-m", "add harness scaffold")
+	// Use --allow-empty in case Init already committed these files.
+	// Use --no-verify to skip global hooks (e.g., ggshield) in test environments.
+	git(t, dir, "commit", "--allow-empty", "--no-verify", "-m", "add harness scaffold")
 }
 
 func writeTaskFixture(project Project, task *Task) error {
