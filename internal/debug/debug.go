@@ -400,6 +400,25 @@ func Close() {
 	if ms != nil {
 		ms.Close()
 	}
+
+	// Clean up bubbletea trace log if we created it via TEA_TRACE.
+	cleanupBubbleteaTrace()
+}
+
+// cleanupBubbleteaTrace removes the ggcode-bubbletea-{pid}.log file
+// that was created by enableBubbleteaTrace() in the tui package.
+func cleanupBubbleteaTrace() {
+	pid := os.Getpid()
+	path := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-bubbletea-%d.log", pid))
+	// Only remove if TEA_TRACE points at our file (not user-set).
+	if te := os.Getenv("TEA_TRACE"); te == path {
+		_ = os.Remove(path)
+		// Also remove rotated copies
+		matches, _ := filepath.Glob(path + ".*")
+		for _, m := range matches {
+			_ = os.Remove(m)
+		}
+	}
 }
 
 // --- async file sink ---
