@@ -19,6 +19,7 @@ If you want a terminal-native coding workflow that feels like a product, not a d
 - **Recover quickly** — undo file changes with checkpoints instead of manually repairing bad edits
 - **Scale up when needed** — use first-class LSP, MCP tools, skills, plugins, memory, background commands, and sub-agents
 - **Fit daily usage** — bilingual UI, resumable sessions, queueing while the agent is busy, local shell mode, and shell-friendly install flows
+- **Use inside your IDE** — ACP (Agent Client Protocol) support lets you run ggcode as an AI agent in JetBrains IDEs, Zed, and other ACP-compatible editors (see [docs/acp.md](docs/acp.md))
 
 ## Installation
 
@@ -174,7 +175,6 @@ Find why startup feels slow in the TUI
 ### 4. Use the built-in workflow features
 
 - **`Ctrl+C`** cancels the active run
-- **`Ctrl+F`** opens the fullscreen project file browser with tree navigation, filename filtering, and a live preview pane
 - If the agent is busy, you can keep typing — new prompts are **queued**
 - Type **`$`** or **`!`** on an empty composer to enter **local shell mode**; press **`Esc`** to leave it when idle
 - **`/undo`** reverts the last file edit
@@ -192,7 +192,7 @@ Find why startup feels slow in the TUI
 From the product point of view, ggcode is more than “chat with a model”:
 
 - **Code understanding** — read files, search the repo, inspect git status and diffs
-- **Fast project browsing** — open the fullscreen file browser to expand folders, filter by filename, and preview Markdown / source files without leaving the TUI
+- **Fast project browsing** — expand folders, filter by filename, and preview Markdown / source files without leaving the TUI
 - **Semantic code navigation** — use first-class local LSP servers like `gopls`, `rust-analyzer`, `clangd`, `sourcekit-lsp`, `lua-language-server`, Python servers, and config-language servers for YAML / JSON / Dockerfile / shell files for hover, definition, references, symbols, workspace symbols, diagnostics, code actions, rename, and in-app installation from `/status`
 - **Code changes** — create files, edit targeted regions, and checkpoint edits for undo
 - **Command execution** — run foreground commands or long-running background jobs
@@ -266,7 +266,6 @@ either a normal release base URL or a full-URL proxy prefix.
 | `/bug` | Report a bug |
 | `/init` | Generate `GGCODE.md` for the current project |
 | `/harness` | Open the harness panel for `init/check/monitor/queue/tasks/run/run-queued/review/promote/release/gc/doctor`; `queue` and `run` use the current input draft, and typed `/harness ...` commands still work |
-| `/fullscreen` | Toggle fullscreen mode |
 | `/exit`, `/quit` | Exit ggcode |
 
 ## Non-interactive and scripted usage

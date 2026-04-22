@@ -13,6 +13,8 @@ npm/*.tgz
 coverage.out
 internal/im/*.html
 internal/im/*_screenshot.png
+internal/swarm/*_e2e_test.go
+test_config.yaml
 
 # IDE / tools
 .zread/
