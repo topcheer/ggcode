@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -25,6 +26,10 @@ type RunCommand struct {
 	WorkingDir string
 	// JobManager is used to auto-background long-running commands.
 	JobManager *CommandJobManager
+	// Policy provides the current permission mode. When set and the mode
+	// is Bypass or Autopilot, "Ask" gate results are automatically downgraded
+	// to Allow (with a warning log) instead of blocking execution.
+	Policy permission.PermissionPolicy
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -157,6 +162,16 @@ func (t RunCommand) Parameters() json.RawMessage {
 	}`)
 }
 
+// isBypassMode returns true when the permission policy allows
+// automatic execution of Ask-level commands (Bypass or Autopilot).
+func (t RunCommand) isBypassMode() bool {
+	if t.Policy == nil {
+		return false
+	}
+	m := t.Policy.Mode()
+	return m == permission.BypassMode || m == permission.AutopilotMode
+}
+
 func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
 		Command     string `json:"command"`
@@ -180,10 +195,17 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		return Result{IsError: true, Content: gateResult.Reason}, nil
 	}
 	if gateResult.NeedsConfirmation() {
-		debug.Log("run_command", "ASK: %s", gateResult.Reason)
-		// Return as error with special prefix — the caller (agent loop)
-		// will interpret this as "needs user permission" and prompt.
-		return Result{IsError: true, Content: "⚠️ " + gateResult.Reason}, nil
+		// In Bypass/Autopilot mode, Ask is automatically downgraded to Allow.
+		// These modes assume the user trusts the agent — the command is
+		// still logged as a warning for audit purposes.
+		if t.isBypassMode() {
+			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
+		} else {
+			debug.Log("run_command", "ASK: %s", gateResult.Reason)
+			// Return as error with special prefix — the caller (agent loop)
+			// will interpret this as "needs user permission" and prompt.
+			return Result{IsError: true, Content: "⚠️ " + gateResult.Reason}, nil
+		}
 	}
 	if len(gateResult.Warnings) > 0 {
 		for _, w := range gateResult.Warnings {

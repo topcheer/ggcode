@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
 )
 
 type StartCommandTool struct {
 	Manager *CommandJobManager
+	Policy  permission.PermissionPolicy
 }
 
 func (t StartCommandTool) Name() string { return "start_command" }
@@ -36,6 +38,16 @@ func (t StartCommandTool) Parameters() json.RawMessage {
 	}`)
 }
 
+// isBypassMode returns true when the permission policy allows
+// automatic execution of Ask-level commands (Bypass or Autopilot).
+func (t StartCommandTool) isBypassMode() bool {
+	if t.Policy == nil {
+		return false
+	}
+	m := t.Policy.Mode()
+	return m == permission.BypassMode || m == permission.AutopilotMode
+}
+
 func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
 		Command string `json:"command"`
@@ -55,8 +67,12 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		return Result{IsError: true, Content: gateResult.Reason}, nil
 	}
 	if gateResult.NeedsConfirmation() {
-		// In job tools, we can't prompt the user, so treat Ask as Block.
-		return Result{IsError: true, Content: "Command requires confirmation: " + gateResult.Reason}, nil
+		if t.isBypassMode() {
+			debug.Log("command-gate", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
+		} else {
+			// In non-bypass mode, treat Ask as Block for background jobs.
+			return Result{IsError: true, Content: "Command requires confirmation: " + gateResult.Reason}, nil
+		}
 	}
 	if len(gateResult.Warnings) > 0 {
 		debug.Log("command-gate", "warnings: %v", gateResult.Warnings)

@@ -41,8 +41,8 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		ExitWorktree{WorkingDir: workingDir},
 
 		// Execution
-		RunCommand{WorkingDir: workingDir},
-		StartCommandTool{Manager: jobManager},
+		RunCommand{WorkingDir: workingDir, Policy: policy},
+		StartCommandTool{Manager: jobManager, Policy: policy},
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
 		StopCommandTool{Manager: jobManager},

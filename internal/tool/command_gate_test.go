@@ -1,8 +1,12 @@
 package tool
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/permission"
 )
 
 // ============================================================================
@@ -472,3 +476,80 @@ func BenchmarkCommandGateCheck(b *testing.B) {
 		}
 	}
 }
+
+// ============================================================================
+// Bypass mode — Ask rules should be downgraded to Allow by RunCommand
+// ============================================================================
+
+func TestRunCommand_BypassMode_AllowsSafeCommands(t *testing.T) {
+	rc := RunCommand{Policy: newBypassPolicy()}
+	result, err := rc.Execute(context.Background(), json.RawMessage(
+		`{"command":"echo hello"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Errorf("safe command should succeed: %s", result.Content)
+	}
+}
+
+func TestRunCommand_SupervisedMode_BlocksAskCommands(t *testing.T) {
+	rc := RunCommand{Policy: newSupervisedPolicy()}
+	result, err := rc.Execute(context.Background(), json.RawMessage(
+		`{"command":"sudo echo hello"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("in supervised mode, sudo should be blocked")
+	}
+	if !strings.Contains(result.Content, "requires confirmation") {
+		t.Errorf("expected confirmation message, got: %s", result.Content)
+	}
+}
+
+func TestRunCommand_BypassMode_StillBlocksCatastrophic(t *testing.T) {
+	rc := RunCommand{Policy: newBypassPolicy()}
+	result, err := rc.Execute(context.Background(), json.RawMessage(
+		`{"command":"rm -rf /"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("catastrophic commands should be blocked even in bypass mode")
+	}
+}
+
+func TestRunCommand_NilPolicy_BlocksAskCommands(t *testing.T) {
+	rc := RunCommand{}
+	result, err := rc.Execute(context.Background(), json.RawMessage(
+		`{"command":"sudo echo hello"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("nil policy should default to blocking Ask commands")
+	}
+}
+
+// mock policies for testing
+
+type mockPolicy struct {
+	mode permission.PermissionMode
+}
+
+func (m *mockPolicy) Check(toolName string, input json.RawMessage) (permission.Decision, error) {
+	return permission.Allow, nil
+}
+func (m *mockPolicy) Mode() permission.PermissionMode                           { return m.mode }
+func (m *mockPolicy) IsDangerous(command string) bool                           { return false }
+func (m *mockPolicy) AllowedPath(path string) bool                              { return true }
+func (m *mockPolicy) AllowedPathForTool(toolName, path string) bool             { return true }
+func (m *mockPolicy) SetOverride(toolName string, decision permission.Decision) {}
+
+func newBypassPolicy() *mockPolicy     { return &mockPolicy{mode: permission.BypassMode} }
+func newSupervisedPolicy() *mockPolicy { return &mockPolicy{mode: permission.SupervisedMode} }
