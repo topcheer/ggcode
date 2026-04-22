@@ -211,9 +211,21 @@ func (m *Model) appendStreamChunk(chunk string) {
 		m.streamStartPos = m.output.Len()
 		m.output.WriteString(assistantBulletStyle.Render("● "))
 		m.streamPrefixWritten = true
+
+		// New: start a streaming assistant entry in chatEntries
+		m.chatEntries.Append(ChatEntry{
+			Role:      "assistant",
+			Prefix:    "● ",
+			Streaming: true,
+		})
 	}
 	if m.streamBuffer != nil {
 		m.streamBuffer.WriteString(chunk)
+	}
+	// Update the last chatEntry's raw text from streamBuffer
+	if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
+		last.RawText = m.streamBuffer.String()
+		last.Invalidate()
 	}
 	m.rewriteActiveStreamOutput(true)
 	m.trimOutput()
@@ -248,6 +260,10 @@ func (m *Model) appendStreamStatusLine(text string) {
 	m.harnessRunLiveTail = ""
 	m.streamPrefixWritten = false
 	m.streamStartPos = -1
+	// Finalize streaming assistant entry before adding compaction line
+	if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
+		last.Streaming = false
+	}
 	switch {
 	case m.output == nil || m.output.Len() == 0:
 	case strings.HasSuffix(m.output.String(), "\n\n"):
@@ -260,6 +276,10 @@ func (m *Model) appendStreamStatusLine(text string) {
 	if !strings.HasSuffix(text, "\n") {
 		m.output.WriteString("\n")
 	}
+	m.chatEntries.Append(ChatEntry{
+		Role:    "compaction",
+		RawText: compactionBulletStyle.Render("● ") + text,
+	})
 	m.trimOutput()
 	m.syncConversationViewport()
 	m.viewport.GotoBottom()
@@ -587,6 +607,13 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.output.WriteString(m.renderConversationUserEntry("❯ ", displayText))
 	m.output.WriteString("\n")
 
+	// ChatEntries: user message
+	m.chatEntries.Append(ChatEntry{
+		Role:    "user",
+		RawText: displayText,
+		Prefix:  "❯ ",
+	})
+
 	// Save original user message to session
 	m.appendUserMessage(text)
 
@@ -626,6 +653,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.styles.user.Render("❯ /init"))
 	m.output.WriteString("\n")
+	m.chatEntries.Append(ChatEntry{Role: "user", RawText: "/init", Prefix: "❯ "})
 	m.appendUserMessage("/init")
 
 	m.streamBuffer = &bytes.Buffer{}
@@ -1172,6 +1200,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	}
 	m.output.WriteString(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
 	m.output.WriteString("\n")
+	m.chatEntries.Append(ChatEntry{Role: "user", RawText: strings.TrimSpace(commandText), Prefix: "❯ "})
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_run_start")))
@@ -1228,6 +1257,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	}
 	m.output.WriteString(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
 	m.output.WriteString("\n")
+	m.chatEntries.Append(ChatEntry{Role: "user", RawText: strings.TrimSpace(commandText), Prefix: "❯ "})
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.ensureOutputHasBlankLine()
 	m.output.WriteString(m.styles.assistant.Render(m.t("command.harness_rerun_start")))
@@ -1789,6 +1819,7 @@ Bootstrap snapshot collected locally to help you start, but you must verify and 
 
 func (m *Model) resetConversationView() {
 	m.output.Reset()
+	m.chatEntries.Reset()
 	m.streamBuffer = nil
 	m.streamStartPos = 0
 	m.streamPrefixWritten = false

@@ -27,6 +27,7 @@ func (m *Model) handleResize(width, height int) {
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
 	prewarmMarkdownRenderers(m.previewContentWidth(), m.fileBrowserPreviewWidth())
+	m.chatEntries.InvalidateAll()
 	m.syncPreviewViewport(false)
 	m.syncFileBrowser(false)
 }

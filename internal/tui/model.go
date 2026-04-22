@@ -65,6 +65,7 @@ const startupInputGateWindow = 500 * time.Millisecond
 type Model struct {
 	input                           textinput.Model
 	output                          *bytes.Buffer
+	chatEntries                     *ChatEntryList // structured conversation entries for deferred rendering
 	shellMode                       bool
 	loading                         bool
 	quitting                        bool
@@ -348,6 +349,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	return Model{
 		input:                ti,
 		output:               &bytes.Buffer{},
+		chatEntries:          NewChatEntryList(),
 		styles:               s,
 		agent:                a,
 		language:             LangEnglish,
