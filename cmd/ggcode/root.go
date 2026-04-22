@@ -19,6 +19,7 @@ import (
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
@@ -27,8 +28,11 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/task"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui"
 	"github.com/topcheer/ggcode/internal/update"
@@ -151,6 +155,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newMCPCmd(&cfgFile))
 	cmd.AddCommand(newIMCmd(&cfgFile))
 	cmd.AddCommand(newDaemonCmd(&cfgFile))
+	cmd.AddCommand(newACPCommand(&cfgFile))
 	configureHelpRendering(cmd)
 
 	return cmd
@@ -471,6 +476,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Setup sub-agent manager
 	subMgr := subagent.NewManager(cfg.SubAgents)
+	defer subMgr.Shutdown()
 
 	// Setup agent
 	maxIter := cfg.MaxIterations
@@ -588,6 +594,32 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
 	repl.SetKnight(knightAgent)
+
+	// Register task, cron, plan mode, config, and send_message tools
+	taskMgr := task.NewManager()
+	repl.SetTaskManager(taskMgr, registry)
+
+	cronScheduler := cron.NewScheduler(nil) // enqueue callback wired by SetCronScheduler
+	repl.SetCronScheduler(cronScheduler, registry)
+	repl.SetPlanModeTools(registry)
+	repl.SetConfigTool(registry)
+	repl.SetSendMessageTool(subMgr, registry)
+	repl.SetTaskOutputTool(subMgr, registry)
+
+	// Register swarm tools
+	swarmAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
+		reg, _ := tools.(*tool.Registry)
+		if reg == nil {
+			reg = registry // fallback to the main registry
+		}
+		return agent.NewAgent(prov, reg, systemPrompt, maxTurns)
+	}
+	swarmToolBuilder := func(_ []string) interface{} {
+		return registry // all teammates share the same tool registry
+	}
+	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
+	repl.SetSwarmManager(swarmMgr, registry)
+
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
 	}
@@ -657,13 +689,13 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	_ = reg.Register(remoteTool)
 
 	// Periodically refresh the remote instance cache so new instances are discovered.
-	go func() {
+	safego.Go("root.a2a.refreshCache", func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			remoteTool.RefreshCache()
 		}
-	}()
+	})
 
 	debug.Log("root", "A2A server started at %s", srv.Endpoint())
 	return srv, a2aReg, nil
@@ -714,20 +746,20 @@ func loadStartupAssets(
 	var wg sync.WaitGroup
 	wg.Add(3)
 
-	go func() {
+	safego.Go("root.startup.projectMem", func() {
 		defer wg.Done()
 		projectMem, projectFiles, _ = memory.LoadProjectMemory(workingDir)
-	}()
+	})
 
-	go func() {
+	safego.Go("root.startup.autoMem", func() {
 		defer wg.Done()
 		autoContent, autoFiles, _ = autoMem.LoadAll()
-	}()
+	})
 
-	go func() {
+	safego.Go("root.startup.commands", func() {
 		defer wg.Done()
 		commandMgr = commands.NewManager(workingDir)
-	}()
+	})
 
 	wg.Wait()
 
@@ -751,15 +783,15 @@ func loadInteractiveStartupAssets(
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	go func() {
+	safego.Go("root.interactive.autoMem", func() {
 		defer wg.Done()
 		autoContent, autoFiles, _ = autoMem.LoadAll()
-	}()
+	})
 
-	go func() {
+	safego.Go("root.interactive.commands", func() {
 		defer wg.Done()
 		commandMgr = commands.NewManager(workingDir)
-	}()
+	})
 
 	wg.Wait()
 
