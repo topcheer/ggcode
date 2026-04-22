@@ -1042,7 +1042,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Agent is requesting approval
 		m.pendingApproval = &msg
-		m.approvalOptions = defaultApprovalOptions()
+		if msg.ToolName == "exit_plan_mode" {
+			m.approvalOptions = planApprovalOptions()
+		} else {
+			m.approvalOptions = defaultApprovalOptions()
+		}
 		m.approvalCursor = 0
 		return m, nil
 

@@ -25,3 +25,15 @@ func diffConfirmOptionsFor(lang Language) []approvalOption {
 		{label: tr(lang, "approval.reject"), shortcut: "n", decision: permission.Deny},
 	}
 }
+
+// planApprovalOptions returns the options for plan execution confirmation.
+func planApprovalOptions() []approvalOption {
+	return planApprovalOptionsFor(LangEnglish)
+}
+
+func planApprovalOptionsFor(lang Language) []approvalOption {
+	return []approvalOption{
+		{label: tr(lang, "approval.execute_plan"), shortcut: "y", decision: permission.Allow},
+		{label: tr(lang, "approval.reject"), shortcut: "n", decision: permission.Deny},
+	}
+}

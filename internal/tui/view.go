@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"os"
@@ -1070,6 +1071,27 @@ func (m Model) renderContextPanel() string {
 	case m.pendingQuestionnaire != nil:
 		return m.renderQuestionnairePanel()
 	case m.pendingApproval != nil:
+		// Plan confirmation: extract and render the plan content for user review
+		if m.pendingApproval.ToolName == "exit_plan_mode" {
+			planContent := ""
+			var planArgs struct {
+				Plan string `json:"plan"`
+				Mode string `json:"mode"`
+			}
+			if err := json.Unmarshal([]byte(m.pendingApproval.Input), &planArgs); err == nil {
+				planContent = strings.TrimSpace(planArgs.Plan)
+			}
+			if planContent == "" {
+				planContent = m.t("plan.empty")
+			}
+			body := fmt.Sprintf(" %s\n\n%s\n\n%s\n%s",
+				m.t("plan.confirm_execute"),
+				truncateLines(planContent, 20),
+				m.renderApprovalOptions(m.approvalOptions, m.approvalCursor),
+				lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
+			)
+			return m.renderContextBox(m.t("plan.confirm_execute"), body, lipgloss.Color("39"))
+		}
 		title := m.t("panel.approval_required")
 		accent := lipgloss.Color("11")
 		if m.mode == permission.BypassMode || m.mode == permission.AutopilotMode {
