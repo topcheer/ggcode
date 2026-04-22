@@ -18,16 +18,14 @@ import (
 // enableBubbleteaTrace points bubbletea v2 at a per-pid log file by setting
 // TEA_TRACE before tea.NewProgram is constructed. Bubbletea reads this env
 // var inside NewProgram and, if set, attaches a logger that records cancel-
-// reader/readLoop activity. We only enable it when the user has opted into
-// our own debug logger (GGCODE_DEBUG=1 or similar — debug.Init was called).
+// reader/readLoop activity. Controlled by GGCODE_DEBUG_BUBBLETEA env var.
 func enableBubbleteaTrace() {
 	// If user already set TEA_TRACE, respect it.
 	if existing, ok := os.LookupEnv("TEA_TRACE"); ok && existing != "" {
 		return
 	}
-	// Only enable if our debug log is active (avoid creating files for users
-	// who never opted in).
-	if !debug.Active() {
+	// Only enable if GGCODE_DEBUG_BUBBLETEA is explicitly set.
+	if v := os.Getenv("GGCODE_DEBUG_BUBBLETEA"); v == "" {
 		return
 	}
 	dir := "/tmp/ggcode-debug"
