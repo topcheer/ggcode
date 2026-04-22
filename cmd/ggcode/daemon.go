@@ -26,6 +26,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -262,7 +263,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	ag.SetSupportsVision(resolved.SupportsVision)
 
 	// Approval handler: auto-approve in daemon mode
-	ag.SetApprovalHandler(func(toolName string, input string) permission.Decision {
+	ag.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
 		switch mode {
 		case permission.BypassMode:
 			return permission.Allow
@@ -376,7 +377,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	// Sub-agent manager
-	_ = subagent.NewManager(cfg.SubAgents)
+	subMgr := subagent.NewManager(cfg.SubAgents)
+	defer subMgr.Shutdown()
 
 	// Set bridge on manager
 	imMgr.SetBridge(bridge)
@@ -442,7 +444,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	if commandMgr != nil {
 		stop := make(chan struct{})
 		defer close(stop)
-		go func() {
+		safego.Go("daemon.cmd.commandReload", func() {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			for {
@@ -453,7 +455,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	// --- Follow mode setup ---
@@ -556,7 +558,7 @@ func readKeyboard(ch chan<- byte) func() {
 		return func() {}
 	}
 
-	go func() {
+	safego.Go("daemon.keyboard.read", func() {
 		defer close(ch)
 		buf := make([]byte, 1)
 		for {
@@ -566,7 +568,7 @@ func readKeyboard(ch chan<- byte) func() {
 			}
 			ch <- buf[0]
 		}
-	}()
+	})
 
 	return func() {
 		term.Restore(int(os.Stdin.Fd()), oldState)
