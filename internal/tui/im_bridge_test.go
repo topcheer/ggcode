@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,14 +24,23 @@ func TestBuildRemoteInboundPromptDedupesVoiceTranscript(t *testing.T) {
 
 type tuiTestSink struct {
 	name   string
+	mu     sync.Mutex
 	events []im.OutboundEvent
 }
 
 func (s *tuiTestSink) Name() string { return s.name }
 
 func (s *tuiTestSink) Send(_ context.Context, _ im.ChannelBinding, event im.OutboundEvent) error {
+	s.mu.Lock()
 	s.events = append(s.events, event)
+	s.mu.Unlock()
 	return nil
+}
+
+func (s *tuiTestSink) Events() []im.OutboundEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]im.OutboundEvent(nil), s.events...)
 }
 
 func TestRemoteInboundProviderCommandEmitsSummary(t *testing.T) {
@@ -74,13 +84,14 @@ func TestRemoteInboundProviderCommandEmitsSummary(t *testing.T) {
 		_ = cmd()
 	}
 	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) && len(sink.events) == 0 {
+	for time.Now().Before(deadline) && len(sink.Events()) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(sink.events) == 0 {
+	events := sink.Events()
+	if len(events) == 0 {
 		t.Fatal("expected remote /provider to emit at least one IM event")
 	}
-	if got := sink.events[len(sink.events)-1].Text; got == "" {
-		t.Fatalf("expected provider summary text, got %#v", sink.events[len(sink.events)-1])
+	if got := events[len(events)-1].Text; got == "" {
+		t.Fatalf("expected provider summary text, got %#v", events[len(events)-1])
 	}
 }

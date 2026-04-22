@@ -184,8 +184,8 @@ var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
-	"/image", "/fullscreen", "/mode", "/init", "/harness", "/exit", "/quit", "/agents", "/agent",
-	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/lang", "/skills",
+	"/image", "/mode", "/init", "/harness", "/exit", "/quit", "/agents", "/agent",
+	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/lang", "/skills", "/swarm",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -217,7 +217,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/allow":       "Always allow a tool",
 	"/plugins":     "List loaded plugins",
 	"/image":       "Attach an image",
-	"/fullscreen":  "Toggle fullscreen",
 	"/mode":        "Set agent mode",
 	"/init":        "Create GGCODE.md",
 	"/harness":     "Run harness workflow commands",
@@ -234,6 +233,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/update":      "Update ggcode to the latest release",
 	"/lang":        "Switch interface language",
 	"/skills":      "Browse available skills",
+	"/swarm":       "Show swarm teams and teammates",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.

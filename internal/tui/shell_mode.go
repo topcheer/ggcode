@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -123,7 +124,7 @@ func (m *Model) startShellCommand(command string) tea.Cmd {
 	runID := m.activeShellRunID
 
 	return func() tea.Msg {
-		go func() {
+		safego.Go("tui.shell.runCommand", func() {
 			defer cancel()
 			workDir, _ := os.Getwd()
 			manager := toolpkg.NewCommandJobManager(workDir)
@@ -164,7 +165,7 @@ func (m *Model) startShellCommand(command string) tea.Cmd {
 					return
 				}
 			}
-		}()
+		})
 		return nil
 	}
 }

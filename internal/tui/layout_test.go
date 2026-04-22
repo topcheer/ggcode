@@ -1599,7 +1599,9 @@ func TestRenderOutputShowsSubAgentAsIndependentState(t *testing.T) {
 	if !strings.Contains(output, "Reading docs/spec.md") {
 		t.Fatalf("expected friendly subagent activity summary, got %q", output)
 	}
-	if strings.Contains(output, "spawn_agent") || strings.Contains(output, "wait_agent") || strings.Contains(output, id) {
+	// spawn_agent/wait_agent internal tool names must stay hidden,
+	// but the /agent prefix + ID is intentionally shown as a user-visible label.
+	if strings.Contains(output, "spawn_agent") || strings.Contains(output, "wait_agent") {
 		t.Fatalf("expected subagent lifecycle internals to stay hidden, got %q", output)
 	}
 }

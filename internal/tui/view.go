@@ -10,7 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/topcheer/ggcode/internal/commands"
@@ -25,21 +24,13 @@ var (
 
 func (m Model) View() tea.View {
 	if m.quitting {
-		v := tea.NewView("")
-		v.AltScreen = true
-		return v
+		return tea.NewView("")
 	}
 	if m.fileBrowser != nil {
-		v := tea.NewView(m.renderFileBrowser())
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
+		return tea.NewView(m.renderFileBrowser())
 	}
 	if m.previewPanel != nil {
-		v := tea.NewView(m.renderPreviewPanel())
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
+		return tea.NewView(m.renderPreviewPanel())
 	}
 	header := ""
 	if m.topHeaderEnabled() {
@@ -61,8 +52,8 @@ func (m Model) View() tea.View {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
-	if availableHeight < 3 {
-		availableHeight = 3
+	if availableHeight < 8 {
+		availableHeight = 8
 	}
 
 	conversation := m.renderConversationPanel(availableHeight)
@@ -86,45 +77,17 @@ func (m Model) View() tea.View {
 	}
 	sections = append(sections, composer)
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
-
-	// Clamp left column to terminal height so the composer is never pushed
-	// off-screen (e.g. when the minimum availableHeight + other rows would
-	// otherwise exceed viewHeight).
-	maxH := m.viewHeight()
-	if maxH > 0 {
-		left = lipgloss.NewStyle().MaxHeight(maxH).Render(left)
-	}
-
 	right := m.renderAuxColumn()
-	// Mouse mode: disable capture in the main chat so the host terminal can
-	// do native text selection AND clickable URLs/file paths. Mouse-wheel
-	// scroll in the chat viewport is sacrificed for selection; PgUp/PgDn
-	// keyboard scrolling remains available. File browser / preview panels
-	// keep CellMotion in their own View() paths.
-	mainMouseMode := tea.MouseModeNone
-	// 1-col left gutter to balance the right margin for visual symmetry.
-	// MUST be applied to every row of the multi-line output, not just the
-	// first line — naively prepending " " only shifts the first row and
-	// leaves all subsequent rows starting at column 0, which is the bug
-	// users reported as "header aligned but everything below is offset".
-	addLeftGutter := func(s string) string {
-		const gutter = " "
-		lines := strings.Split(s, "\n")
-		for i, line := range lines {
-			lines[i] = gutter + line
-		}
-		return strings.Join(lines, "\n")
-	}
 	if right == "" {
-		v := tea.NewView(addLeftGutter(left))
+		v := tea.NewView(left)
 		v.AltScreen = true
-		v.MouseMode = mainMouseMode
+		v.MouseMode = tea.MouseModeCellMotion
 		return v
 	}
-	result := addLeftGutter(lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right))
+	result := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	v := tea.NewView(result)
 	v.AltScreen = true
-	v.MouseMode = mainMouseMode
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -147,23 +110,14 @@ func conversationInnerHeight(panelHeight int) int {
 func (m Model) conversationViewport() ViewportModel {
 	vp := m.viewport
 	panelHeight := m.conversationPanelHeight()
-	innerWidth := m.conversationInnerWidth()
-	vp.SetSize(innerWidth, conversationInnerHeight(panelHeight))
+	vp.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
 	content := m.renderOutput()
 	// In narrow mode (no sidebar), prepend a borderless logo at the top of
 	// the conversation content so it scrolls with the messages.
 	if m.narrowMode() {
-		logo := renderHeaderLogo(innerWidth, m.t("header.terminal_native"))
+		logoWidth := m.conversationInnerWidth()
+		logo := renderHeaderLogo(logoWidth, m.t("header.terminal_native"))
 		content = logo + "\n\n" + content
-	}
-	// Re-wrap content to the current inner width. Pieces of the output were
-	// wrapped at write-time using the width that was active then, so when
-	// the layout changes (e.g. sidebar toggled with ctrl+r, terminal
-	// resized) older lines can overflow into the sidebar. ansi.Wrap is
-	// ANSI-aware, preserves styling, and combines word-wrap with hard-wrap
-	// for long unbreakable tokens like URLs/paths.
-	if innerWidth > 0 {
-		content = ansi.Wrap(content, innerWidth, "")
 	}
 	vp.SetContent(content)
 	return vp
@@ -190,8 +144,8 @@ func (m Model) conversationPanelHeight() int {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
-	if availableHeight < 3 {
-		availableHeight = 3
+	if availableHeight < 8 {
+		availableHeight = 8
 	}
 
 	return availableHeight
@@ -307,6 +261,7 @@ func (m Model) renderSidebar() string {
 		"",
 		m.renderSidebarIMSection(),
 		"",
+		m.renderSwarmSidebar(),
 		m.renderSidebarMCPSection(),
 	}, "\n")
 
@@ -1096,6 +1051,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:
 		return m.renderSkillsPanel()
+	case m.swarmPanel != nil:
+		return m.renderSwarmPanel()
 	case m.inspectorPanel != nil:
 		return m.renderInspectorPanel()
 	case m.harnessContextPrompt != nil:
@@ -1104,6 +1061,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderHarnessPanel()
 	case m.impersonatePanel != nil:
 		return m.renderImpersonatePanel()
+	case m.agentDetailPanel != nil:
+		return m.renderAgentDetailPanel()
 	case m.providerPanel != nil:
 		return m.renderProviderPanel()
 	case m.pendingPairingChallenge() != nil:
@@ -1508,27 +1467,20 @@ func (m Model) sidebarWidth() int {
 	return 40
 }
 
-func (m Model) terminalRightMargin() int {
-	return 1
-}
-
-// terminalLeftMargin reserves a single column on the left so the rendered
-// frame is visually symmetric with the right margin.
 func (m Model) terminalLeftMargin() int {
 	return 1
 }
 
-// boxInnerWidth returns the value to pass to lipgloss.Style.Width when you
-// want the resulting bordered/padded block to span exactly totalWidth columns.
-// In lipgloss v2, Style.Width sets the BLOCK width (border + padding + content
-// included), so the correct value is simply totalWidth itself. (The historical
-// "-2" here under-sized every bordered panel by two columns, leaving a gap on
-// the right of the screen.)
+func (m Model) terminalRightMargin() int {
+	return 1
+}
+
 func (m Model) boxInnerWidth(totalWidth int) int {
-	if totalWidth < 1 {
+	innerWidth := totalWidth - 2
+	if innerWidth < 1 {
 		return 1
 	}
-	return totalWidth
+	return innerWidth
 }
 
 func (m Model) sidebarEnabled() bool {

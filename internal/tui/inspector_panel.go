@@ -660,7 +660,6 @@ func (m Model) inspectorStatusItems() []inspectorPanelItem {
 				"",
 				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "version"), version.Display()),
 				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "mode"), m.mode),
-				fmt.Sprintf("%s: %t", inspectorText(m.currentLanguage(), "fullscreen"), m.fullscreen),
 				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "language"), m.languageLabel()),
 			}, "\n"),
 		},
@@ -1142,8 +1141,6 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "版本"
 		case "mode":
 			msg = "模式"
-		case "fullscreen":
-			msg = "全屏"
 		case "agents":
 			msg = "子 Agent"
 		case "running":
@@ -1303,8 +1300,6 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "Version"
 		case "mode":
 			msg = "Mode"
-		case "fullscreen":
-			msg = "Fullscreen"
 		case "agents":
 			msg = "Agents"
 		case "running":

@@ -20,7 +20,6 @@ func enCommandModule() map[string]string {
 		"slash.allow":                           "Always allow a tool",
 		"slash.plugins":                         "List loaded plugins",
 		"slash.image":                           "Attach an image",
-		"slash.fullscreen":                      "Toggle fullscreen",
 		"slash.mode":                            "Set permission mode",
 		"slash.init":                            "Generate project GGCODE.md",
 		"slash.harness":                         "Run harness workflow commands",
@@ -109,7 +108,6 @@ func enCommandModule() map[string]string {
   /allow <tool>      Always allow a specific tool
   /plugins           List loaded plugins and their tools
   /image <path>      Attach an image file
-  /fullscreen        Toggle fullscreen mode
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
   /init              Generate GGCODE.md from the current project
   /harness ...       Run harness control-plane commands
@@ -160,7 +158,6 @@ func zhCommandModule() map[string]string {
 		"slash.allow":                           "永久允许某个工具",
 		"slash.plugins":                         "列出已加载插件",
 		"slash.image":                           "附加图片",
-		"slash.fullscreen":                      "切换全屏",
 		"slash.mode":                            "设置权限模式",
 		"slash.init":                            "生成项目 GGCODE.md",
 		"slash.harness":                         "运行 harness 工作流命令",
@@ -249,7 +246,6 @@ func zhCommandModule() map[string]string {
   /allow <tool>      永久允许某个工具
   /plugins           列出已加载插件及其工具
   /image <path>      附加图片文件
-  /fullscreen        切换全屏模式
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
   /init              基于当前项目生成 GGCODE.md
   /harness ...       运行 harness 控制面命令

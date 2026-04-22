@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/util"
@@ -104,7 +105,6 @@ type Model struct {
 	pendingDiffConfirm              *DiffConfirmMsg
 	pendingQuestionnaire            *questionnaireState
 	pendingHarnessCheckpointConfirm *HarnessCheckpointConfirmMsg
-	fullscreen                      bool
 	modelPanel                      *modelPanelState
 	providerPanel                   *providerPanelState
 	qqPanel                         *qqPanelState
@@ -119,11 +119,14 @@ type Model struct {
 	pendingDeviceCodes              []deviceCodeInfo
 	skillsPanel                     *skillsPanelState
 	inspectorPanel                  *inspectorPanelState
+	swarmPanel                      *swarmPanelState
+	swarmMgr                        *swarm.Manager
 	previewPanel                    *previewPanelState
 	fileBrowser                     *fileBrowserState
 	harnessPanel                    *harnessPanelState
 	harnessContextPrompt            *harnessContextPromptState
 	impersonatePanel                *impersonatePanelState
+	agentDetailPanel                *agentDetailPanelState
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -167,6 +170,7 @@ type Model struct {
 	startedAt             time.Time
 	inputDrainUntil       time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
 	inputReady            bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
+	lastMouseAt           time.Time // timestamp of most recent MouseMsg/MouseWheelMsg; used to suppress mouse-SGR fragments mis-parsed as keys
 	startupBannerVisible  bool
 	lastResizeAt          time.Time
 	sidebarVisible        bool
@@ -500,6 +504,10 @@ func (m *Model) closeActivePanel() bool {
 		m.closeHarnessPanel()
 	case m.impersonatePanel != nil:
 		m.closeImpersonatePanel()
+	case m.agentDetailPanel != nil:
+		m.closeAgentDetailPanel()
+	case m.swarmPanel != nil:
+		m.closeSwarmPanel()
 	case len(m.langOptions) > 0:
 		m.langOptions = nil
 	default:

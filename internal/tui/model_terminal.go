@@ -141,6 +141,29 @@ func shouldIgnoreTerminalProbeKey(msg tea.KeyPressMsg) bool {
 	return false
 }
 
+// isMouseFragmentChar reports whether a single character could be part of a
+// fragment of an SGR mouse sequence (ESC [ < Cb ; Cx ; Cy {M|m}). When such
+// sequences are split across read boundaries inside bubbletea v2's parser,
+// the trailing bytes can leak through as individual single-character
+// KeyPressMsg events with no modifier. Real human typing during/right after a
+// mouse interaction is unlikely, so suppressing these is safe.
+func isMouseFragmentChar(text string) bool {
+	if len(text) == 0 {
+		return false
+	}
+	for _, r := range text {
+		switch r {
+		case '<', '>', 'M', 'm', ';':
+			// Always part of SGR mouse alphabet
+		default:
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (m *Model) sanitizeTerminalResponseInput() {
 	value := m.input.Value()
 	if value == "" {
