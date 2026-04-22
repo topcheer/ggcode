@@ -49,6 +49,9 @@ func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFac
 	if cfg.InboxSize <= 0 {
 		cfg.InboxSize = 32
 	}
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = 1 * time.Second
+	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Manager{
 		teams:        make(map[string]*Team),
@@ -211,7 +214,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	}
 
 	// Start idle loop in a goroutine
-	go runTeammateLoop(ctx, tm, team, agent, m.emit, m.cfg.TeammateTimeout)
+	go runTeammateLoop(ctx, tm, team, agent, m, m.emit, m.cfg.TeammateTimeout)
 
 	m.emit(Event{
 		Type:         "teammate_spawned",
@@ -319,6 +322,20 @@ func (m *Manager) EnsureTaskManager(teamID string) (*task.Manager, error) {
 		team.Tasks = task.NewManager()
 	}
 	return team.Tasks, nil
+}
+
+// GetTaskManager returns the team's task manager without creating one.
+// Returns nil if the team has no task board yet.
+func (m *Manager) GetTaskManager(teamID string) *task.Manager {
+	m.mu.Lock()
+	team, ok := m.teams[teamID]
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	team.mu.RLock()
+	defer team.mu.RUnlock()
+	return team.Tasks
 }
 
 // SetOnUpdate sets the callback for swarm state changes (used by TUI).
