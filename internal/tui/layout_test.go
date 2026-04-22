@@ -558,8 +558,8 @@ func TestWideLayoutLeavesRightMarginForSidebarBorder(t *testing.T) {
 		t.Fatalf("expected composed width %d, got %d", m.viewWidth()-m.terminalLeftMargin()-m.terminalRightMargin(), total)
 	}
 
-	if margin := m.terminalRightMargin(); margin != 1 {
-		t.Fatalf("expected sidebar outer margin 1, got %d", margin)
+	if margin := m.terminalRightMargin(); margin != 0 {
+		t.Fatalf("expected sidebar right margin 0, got %d", margin)
 	}
 }
 

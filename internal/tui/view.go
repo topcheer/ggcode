@@ -1490,18 +1490,15 @@ func (m Model) sidebarWidth() int {
 }
 
 func (m Model) terminalLeftMargin() int {
-	return 1
+	return 0
 }
 
 func (m Model) terminalRightMargin() int {
-	return 1
+	return 0
 }
 
 func (m Model) boxInnerWidth(totalWidth int) int {
-	innerWidth := totalWidth - 2
-	if innerWidth < 1 {
-		return 1
-	}
+	innerWidth := totalWidth
 	return innerWidth
 }
 
