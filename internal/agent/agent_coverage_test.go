@@ -77,7 +77,7 @@ func TestAgent_ApprovalHandler_AskApproved(t *testing.T) {
 	}
 	a := NewAgent(&mockProvider{}, registry, "", 1)
 
-	a.SetApprovalHandler(func(toolName string, input string) permission.Decision {
+	a.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
 		return permission.Allow
 	})
 	a.SetPermissionPolicy(&askAlwaysPolicy{})
@@ -102,7 +102,7 @@ func TestAgent_ApprovalHandler_AskDenied(t *testing.T) {
 	}
 	a := NewAgent(&mockProvider{}, registry, "", 1)
 
-	a.SetApprovalHandler(func(toolName string, input string) permission.Decision {
+	a.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
 		return permission.Deny
 	})
 	a.SetPermissionPolicy(&askAlwaysPolicy{})
@@ -195,7 +195,7 @@ func TestAgent_SetDiffConfirm(t *testing.T) {
 	a.tools = registry
 
 	var capturedPath, capturedDiff string
-	a.SetDiffConfirm(func(filePath, diffText string) bool {
+	a.SetDiffConfirm(func(_ context.Context, filePath, diffText string) bool {
 		capturedPath = filePath
 		capturedDiff = diffText
 		return true
@@ -564,7 +564,7 @@ func TestExecuteFileTool_DiffConfirmCancelled(t *testing.T) {
 	}
 
 	a := NewAgent(&mockProvider{}, registry, "", 1)
-	a.SetDiffConfirm(func(filePath, diffText string) bool {
+	a.SetDiffConfirm(func(_ context.Context, filePath, diffText string) bool {
 		return false // user rejects
 	})
 
@@ -595,7 +595,7 @@ func TestExecuteFileTool_EditFileNoChanges(t *testing.T) {
 	a := NewAgent(&mockProvider{}, registry, "", 1)
 	// Set up a diff confirm that should NOT be called since content is same
 	diffConfirmCalled := false
-	a.SetDiffConfirm(func(filePath, diffText string) bool {
+	a.SetDiffConfirm(func(_ context.Context, filePath, diffText string) bool {
 		diffConfirmCalled = true
 		return true
 	})

@@ -21,8 +21,16 @@ import (
 )
 
 // DiffConfirmFunc is called before a file write to request user confirmation.
-// It receives the file path and unified diff string, and returns true if approved.
-type DiffConfirmFunc func(filePath, diffText string) bool
+// It receives a context, the file path and unified diff string, and returns
+// true if approved. Implementations MUST honor ctx.Done() so the agent
+// goroutine doesn't leak when the TUI shuts down while a confirmation is in
+// flight.
+type DiffConfirmFunc func(ctx context.Context, filePath, diffText string) bool
+
+// ApprovalFunc is called when a tool requires interactive approval. It MUST
+// honor ctx.Done() to avoid a goroutine leak if the TUI exits while a
+// permission prompt is awaiting user input.
+type ApprovalFunc func(ctx context.Context, toolName string, input string) permission.Decision
 
 type interruptionHandler func() string
 
@@ -35,7 +43,7 @@ type Agent struct {
 	contextManager ctxpkg.ContextManager
 	maxIter        int
 	policy         permission.PermissionPolicy
-	onApproval     func(toolName string, input string) permission.Decision
+	onApproval     ApprovalFunc
 	onUsage        func(usage provider.TokenUsage)
 	onCheckpoint   func(messages []provider.Message, tokenCount int)
 	hookConfig     hooks.HookConfig
@@ -45,6 +53,7 @@ type Agent struct {
 	onInterrupt    interruptionHandler
 	projectMemory  map[string]struct{}
 	supportsVision bool
+	precompact     *precompactState
 	mu             sync.RWMutex
 }
 
@@ -99,8 +108,9 @@ func (a *Agent) SetUsageHandler(fn func(usage provider.TokenUsage)) {
 }
 
 // SetApprovalHandler sets a callback for interactive approval (Ask → Deny by default).
-// If nil, Ask decisions are treated as Deny.
-func (a *Agent) SetApprovalHandler(fn func(toolName string, input string) permission.Decision) {
+// If nil, Ask decisions are treated as Deny. The callback receives the per-run
+// context so it can abort cleanly if the agent is cancelled while waiting.
+func (a *Agent) SetApprovalHandler(fn ApprovalFunc) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onApproval = fn
@@ -122,6 +132,10 @@ func (a *Agent) PermissionPolicy() permission.PermissionPolicy {
 
 // SetContextManager replaces the default context manager.
 func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
+	// Cancel any in-flight pre-compact that targets the OLD context manager
+	// before we swap. Otherwise the goroutine keeps mutating a manager that
+	// is no longer attached to this agent.
+	a.CancelPreCompact()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.contextManager = cm
@@ -304,6 +318,7 @@ func (a *Agent) syncContextManagerTodoPathLocked() {
 
 // Clear resets the conversation (keeps system prompt).
 func (a *Agent) Clear() {
+	a.CancelPreCompact()
 	a.contextManager.Clear()
 }
 
@@ -322,6 +337,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Role:    "user",
 		Content: content,
 	})
+
+	// If a background pre-compact is in flight, drain it (or fail-fast on
+	// cancellation). When it succeeded, maybeAutoCompact below will see
+	// tokens<threshold and become a no-op, eliminating the inline 2-30s
+	// summarize stall on the user's critical path.
+	a.waitForPreCompact(ctx)
 
 	transientCompactWarned := false
 	if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {

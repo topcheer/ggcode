@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	runtimedebug "runtime/debug"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
@@ -40,7 +41,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 			}
 		case permission.Ask:
 			if onApproval != nil {
-				resp := onApproval(tc.Name, string(tc.Arguments))
+				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
 					return tool.Result{
 						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
@@ -94,11 +95,11 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return a.executeFileTool(ctx, t, tc, env)
 	}
 
-	// Execute the actual tool
+	// Execute the actual tool (with panic recovery)
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
-	result, err := t.Execute(ctx, tc.Arguments)
+	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
 	}
@@ -110,6 +111,23 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 
 	return result
+}
+
+// safeExecute calls t.Execute with panic recovery. If the tool panics
+// (e.g. nil pointer dereference from an unset dependency), it returns
+// an error result instead of crashing the entire application.
+func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessage) (result tool.Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			debug.Log("agent", "PANIC recovered in tool %s: %v\n%s", t.Name(), r, runtimedebug.Stack())
+			result = tool.Result{
+				Content: fmt.Sprintf("tool %s panicked: %v — this is a bug, please report it", t.Name(), r),
+				IsError: true,
+			}
+			err = nil
+		}
+	}()
+	return t.Execute(ctx, args)
 }
 
 // executeFileTool handles edit_file and write_file with diff preview and checkpointing.
@@ -128,7 +146,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// Show diff and ask for confirmation if diffConfirm is set
 	if diffFn != nil && diff.HasChanges(oldContent, newContent) {
 		diffText := diff.UnifiedDiff(oldContent, newContent, 3)
-		if !diffFn(filePath, diffText) {
+		if !diffFn(ctx, filePath, diffText) {
 			return tool.Result{Content: fmt.Sprintf("File write to %s cancelled by user.", filePath), IsError: true}
 		}
 	}
@@ -142,8 +160,8 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		return tool.Result{Content: preResult.Output, IsError: true}
 	}
 
-	// Execute the actual tool
-	result, err := t.Execute(ctx, tc.Arguments)
+	// Execute the actual tool (with panic recovery)
+	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	if err != nil {
 		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
 	}
