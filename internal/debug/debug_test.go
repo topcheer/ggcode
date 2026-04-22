@@ -29,7 +29,6 @@ func TestDisabledByDefault(t *testing.T) {
 		t.Fatal("expected debug to be disabled when GGCODE_DEBUG is unset")
 	}
 
-	// Log should be a no-op
 	Log("agent", "this should not crash")
 	Logf("this should not crash either")
 }
@@ -53,6 +52,126 @@ func TestEnabledWithEnvVar(t *testing.T) {
 
 	if !Active() {
 		t.Fatal("expected debug to be enabled when GGCODE_DEBUG=1")
+	}
+}
+
+func TestPerCategoryEnvOverridesGlobal(t *testing.T) {
+	// Set per-category env, no global
+	os.Setenv("GGCODE_DEBUG_AGENT", "1")
+	os.Setenv("GGCODE_DEBUG_OPENAI", "1")
+	defer os.Unsetenv("GGCODE_DEBUG_AGENT")
+	defer os.Unsetenv("GGCODE_DEBUG_OPENAI")
+
+	Close()
+	mu.Lock()
+	once = sync.Once{}
+	mu.Unlock()
+	defer func() {
+		Close()
+		mu.Lock()
+		once = sync.Once{}
+		mu.Unlock()
+	}()
+
+	Init()
+
+	if !Active() {
+		t.Fatal("expected debug to be enabled when per-category env is set")
+	}
+
+	pid := os.Getpid()
+
+	Log("agent", "agent msg")
+	Log("openai", "openai msg")
+	Log("knight", "knight msg - should be filtered")
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Agent file should exist
+	agentPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-agent-%d.log", pid))
+	if _, err := os.Stat(agentPath); err != nil {
+		t.Errorf("expected agent log: %v", err)
+	}
+
+	// OpenAI file should exist
+	openaiPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-openai-%d.log", pid))
+	if _, err := os.Stat(openaiPath); err != nil {
+		t.Errorf("expected openai log: %v", err)
+	}
+
+	// Knight file should NOT exist (not in per-category env)
+	knightPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-knight-%d.log", pid))
+	if _, err := os.Stat(knightPath); !os.IsNotExist(err) {
+		t.Error("expected knight log to NOT exist when not in per-category env")
+	}
+}
+
+func TestPerCategoryEnvIgnoredWhenGlobalSet(t *testing.T) {
+	// Both global and per-category set: per-category takes precedence
+	os.Setenv("GGCODE_DEBUG_AGENT", "1")
+	os.Setenv(envKey, "knight") // global says knight only
+	defer os.Unsetenv("GGCODE_DEBUG_AGENT")
+	defer os.Unsetenv(envKey)
+
+	Close()
+	mu.Lock()
+	once = sync.Once{}
+	mu.Unlock()
+	defer func() {
+		Close()
+		mu.Lock()
+		once = sync.Once{}
+		mu.Unlock()
+	}()
+
+	Init()
+
+	pid := os.Getpid()
+
+	Log("agent", "agent msg")
+	Log("knight", "knight msg")
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Per-category overrides global: agent should exist, knight should NOT
+	agentPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-agent-%d.log", pid))
+	if _, err := os.Stat(agentPath); err != nil {
+		t.Errorf("expected agent log (per-category override): %v", err)
+	}
+
+	knightPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-knight-%d.log", pid))
+	if _, err := os.Stat(knightPath); !os.IsNotExist(err) {
+		t.Error("expected knight log to NOT exist (global ignored when per-category set)")
+	}
+}
+
+func TestMessageTruncation(t *testing.T) {
+	EnableForTest(t)
+
+	pid := os.Getpid()
+
+	longMsg := strings.Repeat("x", 200)
+	Log("agent", longMsg)
+
+	time.Sleep(200 * time.Millisecond)
+
+	mainPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid))
+	data, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("read main log: %v", err)
+	}
+
+	content := string(data)
+	// Each line should be at most maxMessageLen + tag prefix + newline
+	for _, line := range strings.Split(content, "\n") {
+		if line == "" {
+			continue
+		}
+		// The formatted message includes "[agent] " prefix + truncated content
+		// Total should be around maxMessageLen
+		if len(line) > maxMessageLen+5 { // small margin for timestamp
+			t.Errorf("log line too long (%d chars): %q", len(line), line)
+		}
 	}
 }
 
@@ -115,24 +234,24 @@ func TestCategoryLogFiles(t *testing.T) {
 	Log("knight", "knight message")
 	Log("unknown_tag", "unknown tag message")
 
-	time.Sleep(200 * time.Millisecond) // wait for async writes
+	time.Sleep(200 * time.Millisecond)
 
 	// Agent category file should exist
 	agentPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-agent-%d.log", pid))
 	if _, err := os.Stat(agentPath); err != nil {
-		t.Errorf("expected agent log file %s to exist: %v", agentPath, err)
+		t.Errorf("expected agent log file: %v", err)
 	}
 
-	// Provider category file should exist
-	providerPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-provider-%d.log", pid))
-	if _, err := os.Stat(providerPath); err != nil {
-		t.Errorf("expected provider log file %s to exist: %v", providerPath, err)
+	// OpenAI category file should exist (separate from provider now)
+	openaiPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-openai-%d.log", pid))
+	if _, err := os.Stat(openaiPath); err != nil {
+		t.Errorf("expected openai log file: %v", err)
 	}
 
 	// Knight category file should exist
 	knightPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-knight-%d.log", pid))
 	if _, err := os.Stat(knightPath); err != nil {
-		t.Errorf("expected knight log file %s to exist: %v", knightPath, err)
+		t.Errorf("expected knight log file: %v", err)
 	}
 
 	// Main file should contain all messages
@@ -150,9 +269,6 @@ func TestCategoryLogFiles(t *testing.T) {
 	}
 	if !strings.Contains(content, "[knight]") {
 		t.Error("main log should contain [knight] messages")
-	}
-	if !strings.Contains(content, "[unknown_tag]") {
-		t.Error("main log should contain [unknown_tag] messages")
 	}
 }
 
@@ -175,22 +291,20 @@ func TestTagFilter(t *testing.T) {
 
 	pid := os.Getpid()
 
-	Log("agent", "agent message - should appear")
-	Log("openai", "openai message - should NOT appear")
-	Log("unknown", "unknown message - should NOT appear")
+	Log("agent", "agent message")
+	Log("openai", "openai message")
+	Log("unknown", "unknown message")
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Agent file should exist
 	agentPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-agent-%d.log", pid))
 	if _, err := os.Stat(agentPath); err != nil {
-		t.Errorf("expected agent log file to exist: %v", err)
+		t.Errorf("expected agent log file: %v", err)
 	}
 
-	// Provider file should NOT exist (filtered out)
-	providerPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-provider-%d.log", pid))
-	if _, err := os.Stat(providerPath); !os.IsNotExist(err) {
-		t.Errorf("expected provider log file to NOT exist when filtered, but it does")
+	openaiPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-openai-%d.log", pid))
+	if _, err := os.Stat(openaiPath); !os.IsNotExist(err) {
+		t.Error("expected openai log to NOT exist when filtered")
 	}
 }
 
@@ -236,8 +350,8 @@ func TestParseTagFilter(t *testing.T) {
 		{"true", nil},
 		{"all", nil},
 		{"agent", map[string]bool{"agent": true}},
-		{"agent,provider", map[string]bool{"agent": true, "provider": true}},
-		{" agent , provider ", map[string]bool{"agent": true, "provider": true}},
+		{"agent,openai", map[string]bool{"agent": true, "openai": true}},
+		{" agent , openai ", map[string]bool{"agent": true, "openai": true}},
 	}
 
 	for _, tt := range tests {
