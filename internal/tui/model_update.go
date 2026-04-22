@@ -221,6 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.config != nil {
 				_ = m.config.SaveSidebarPreference(m.sidebarVisible)
 			}
+			m.chatEntries.InvalidateAll()
 			return m, nil
 		}
 		if msg.String() == "ctrl+f" {
