@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
@@ -87,7 +88,7 @@ func executeTaskViaWorker(ctx context.Context, project Project, cfg *Config, tas
 	}
 
 	done := make(chan workerRunResult, 1)
-	go func() {
+	safego.Go("harness.worker.run", func() {
 		result, err := runner.Run(workerCtx, req)
 		if err != nil {
 			mgr.UpdateProgress(workerID, fmt.Sprintf("worker failed: %v", err))
@@ -98,7 +99,7 @@ func executeTaskViaWorker(ctx context.Context, project Project, cfg *Config, tas
 		mgr.UpdateProgress(workerID, summarizeWorkerResult(result))
 		mgr.Complete(workerID, result.Output, nil)
 		done <- workerRunResult{result: result}
-	}()
+	})
 
 	for {
 		snap, err := subagent.WaitForSnapshot(ctx, mgr, workerID, 200*time.Millisecond)

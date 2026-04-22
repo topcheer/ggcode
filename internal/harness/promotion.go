@@ -135,7 +135,7 @@ func ensurePromotionCommit(ctx context.Context, task *Task) error {
 		return nil
 	}
 	message := fmt.Sprintf("harness promote %s: %s", task.ID, truncatePromotionMessage(task.Goal))
-	commitCmd := gitCmd(ctx, "commit", "-m", message+harnessCoAuthor)
+	commitCmd := gitCmd(ctx, "commit", "--no-verify", "-m", message+harnessCoAuthor)
 	commitCmd.Dir = task.WorkspacePath
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("commit promotion changes for %s: %s", task.ID, strings.TrimSpace(string(out)))
