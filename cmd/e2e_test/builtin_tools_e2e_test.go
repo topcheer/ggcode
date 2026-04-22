@@ -22,6 +22,12 @@ import (
 type noopModeSwitcher struct{}
 
 func (n *noopModeSwitcher) SetMode(mode permission.PermissionMode) {}
+func (n *noopModeSwitcher) RememberMode(currentMode permission.PermissionMode) permission.PermissionMode {
+	return currentMode
+}
+func (n *noopModeSwitcher) RestoreMode(fallback permission.PermissionMode) permission.PermissionMode {
+	return fallback
+}
 
 // e2eBuiltinToolRegistry creates a registry with file tools + task/plan/cron built-in tools.
 func e2eBuiltinToolRegistry(t *testing.T, dir string) *tool.Registry {

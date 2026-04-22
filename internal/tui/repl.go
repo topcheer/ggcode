@@ -191,9 +191,10 @@ func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 }
 
 // SetPlanModeTools registers plan mode tools with a mode switcher that
-// updates both the Model's mode and the ConfigPolicy.
+// updates both the Model's mode and the ConfigPolicy. The switcher
+// remembers the previous mode so exit_plan_mode can restore it.
 func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
-	switcher := replModeSwitcher{model: &r.model}
+	switcher := &replModeSwitcher{model: &r.model}
 	tools.Register(tool.EnterPlanModeTool{Switcher: switcher})
 	tools.Register(tool.ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode})
 }
@@ -218,6 +219,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	tools.Register(tool.TeammateSpawnTool{Manager: mgr})
 	tools.Register(tool.TeammateListTool{Manager: mgr})
 	tools.Register(tool.TeammateShutdownTool{Manager: mgr})
+	tools.Register(tool.TeammateResultsTool{Manager: mgr})
 	tools.Register(tool.SwarmTaskCreateTool{Manager: mgr})
 	tools.Register(tool.SwarmTaskListTool{Manager: mgr})
 	tools.Register(tool.SwarmTaskClaimTool{Manager: mgr})
@@ -236,10 +238,11 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 
 // replModeSwitcher implements tool.ModeSwitcher by delegating to the TUI Model.
 type replModeSwitcher struct {
-	model *Model
+	model        *Model
+	previousMode permission.PermissionMode
 }
 
-func (s replModeSwitcher) SetMode(mode permission.PermissionMode) {
+func (s *replModeSwitcher) SetMode(mode permission.PermissionMode) {
 	// ConfigPolicy.SetMode is thread-safe (has its own mutex)
 	if cp, ok := s.model.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(mode)
@@ -248,6 +251,24 @@ func (s replModeSwitcher) SetMode(mode permission.PermissionMode) {
 	if s.model.program != nil {
 		s.model.program.Send(modeChangeMsg{Mode: mode})
 	}
+}
+
+// RememberMode saves the current mode as "previous" and returns what was saved.
+// This is called by enter_plan_mode to remember the mode before switching.
+func (s *replModeSwitcher) RememberMode(currentMode permission.PermissionMode) permission.PermissionMode {
+	// The current actual mode comes from the policy, not the argument.
+	// The argument is the NEW mode we're about to switch to.
+	actualCurrent := s.model.mode
+	s.previousMode = actualCurrent
+	return actualCurrent
+}
+
+// RestoreMode returns the remembered mode, or the given fallback.
+func (s *replModeSwitcher) RestoreMode(fallback permission.PermissionMode) permission.PermissionMode {
+	if s.previousMode != permission.SupervisedMode && s.previousMode != permission.PlanMode {
+		return s.previousMode
+	}
+	return fallback
 }
 
 // modeChangeMsg is sent to update the Model's mode from a goroutine.

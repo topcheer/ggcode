@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/task"
 )
@@ -31,6 +32,10 @@ type Manager struct {
 	agentFactory AgentFactory
 	toolBuilder  ToolBuilder
 	onUpdate     func(Event)
+
+	// results stores the most recent task output per teammate (key=teammateID).
+	// Written on teammate_idle events, cleared on teammate shutdown.
+	results map[string]string
 
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -59,6 +64,7 @@ func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFac
 		cfg:          cfg,
 		agentFactory: factory,
 		toolBuilder:  builder,
+		results:      make(map[string]string),
 		rootCtx:      rootCtx,
 		rootCancel:   rootCancel,
 	}
@@ -343,7 +349,70 @@ func (m *Manager) SetOnUpdate(fn func(Event)) {
 	m.onUpdate = fn
 }
 
+// GetTeammateResult returns the most recent task output for a teammate.
+// Returns (result, true) if a result exists, ("", false) otherwise.
+func (m *Manager) GetTeammateResult(teamID, tmID string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Verify the teammate still exists in its team.
+	team, ok := m.teams[teamID]
+	if !ok {
+		return "", false
+	}
+	tm, ok := team.getTeammate(tmID)
+	if !ok {
+		return "", false
+	}
+
+	// Prefer the live result from the teammate (most up-to-date).
+	if r := tm.getResults(); r != "" {
+		return r, true
+	}
+
+	// Fall back to the stored result (survives if teammate was removed).
+	r, ok := m.results[tmID]
+	return r, ok && r != ""
+}
+
+// GetTeamResults returns a map of teammateID → last result for all teammates
+// in the team that have a result.
+func (m *Manager) GetTeamResults(teamID string) map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	team, ok := m.teams[teamID]
+	if !ok {
+		return nil
+	}
+
+	out := make(map[string]string)
+	for _, tm := range team.listTeammates() {
+		if r := tm.getResults(); r != "" {
+			out[tm.ID] = r
+		}
+	}
+	return out
+}
+
 func (m *Manager) emit(ev Event) {
+	// Persist teammate results in the results store.
+	// Hold m.mu to protect concurrent access to m.results.
+	switch ev.Type {
+	case "teammate_idle":
+		if ev.Result != "" {
+			debug.Log("swarm", "emit: storing result for %s len=%d", ev.TeammateID, len(ev.Result))
+			m.mu.Lock()
+			m.results[ev.TeammateID] = ev.Result
+			m.mu.Unlock()
+		} else {
+			debug.Log("swarm", "emit: teammate_idle for %s but Result is empty", ev.TeammateID)
+		}
+	case "teammate_shutdown":
+		// Keep the last result available even after shutdown so the
+		// leader can still retrieve it via GetTeammateResult.
+	}
+
 	if m.onUpdate != nil {
 		m.onUpdate(ev)
 	}

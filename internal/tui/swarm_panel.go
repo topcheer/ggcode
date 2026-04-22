@@ -133,7 +133,13 @@ func (m *Model) renderSwarmSidebar() string {
 		if len(team.Teammates) == 0 {
 			continue
 		}
-		for _, tm := range team.Teammates {
+		sorted := make([]swarm.TeammateSnapshot, len(team.Teammates))
+		copy(sorted, team.Teammates)
+		// Defensive sort — snapshot already sorts by ID, but sidebar should
+		// never flicker even if that changes.
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+
+		for _, tm := range sorted {
 			icon := "○"
 			if tm.Status == swarm.TeammateWorking {
 				icon = "●"
@@ -148,6 +154,8 @@ func (m *Model) renderSwarmSidebar() string {
 					task = string(runes[:17]) + "..."
 				}
 				status = task
+			} else if tm.Status == swarm.TeammateIdle && tm.LastResult != "" {
+				status = "idle ✓"
 			}
 			rows = append(rows, m.renderSidebarDetailRow(label, status, width))
 		}
