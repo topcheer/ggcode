@@ -138,7 +138,12 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 		remaining = 10
 	}
 	if len(paramStr) > remaining {
-		paramStr = paramStr[:remaining-1] + "…"
+		// For file paths, truncate the head (keep filename visible)
+		if strings.Contains(paramStr, "/") {
+			paramStr = "…" + paramStr[len(paramStr)-remaining+1:]
+		} else {
+			paramStr = paramStr[:remaining-1] + "…"
+		}
 	}
 
 	return prefix + paramStr
@@ -148,6 +153,7 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 const ToolBodyMaxLines = 10
 
 // FormatBody renders tool body content with optional truncation.
+// For long output, shows the last maxLines lines (users care about the end).
 // Returns the formatted body and whether it was truncated.
 func FormatBody(content string, width int, maxLines int) (string, bool) {
 	if content == "" {
@@ -155,20 +161,17 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 	}
 
 	lines := strings.Split(content, "\n")
+	// Remove trailing empty line from trailing newline
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
 	truncated := false
 	if len(lines) > maxLines {
 		truncated = true
 		hidden := len(lines) - maxLines
-		lines = lines[:maxLines]
-		lines = append(lines, fmt.Sprintf("  … %d more lines", hidden))
-	}
-
-	// Pad each line
-	for i, line := range lines {
-		if len(line) < width {
-			// No-op — keep as is
-			_ = i
-		}
+		lines = lines[len(lines)-maxLines:]
+		lines = append([]string{fmt.Sprintf("  … %d more lines", hidden)}, lines...)
 	}
 
 	return strings.Join(lines, "\n"), truncated
