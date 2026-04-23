@@ -1123,6 +1123,56 @@ func (m *Manager) UnmuteAll() (int, error) {
 	return count, nil
 }
 
+// DisableAll disables all active (non-muted, non-disabled) bindings.
+func (m *Manager) DisableAll() (int, error) {
+	m.mu.Lock()
+	count := 0
+	var names []string
+	for name, binding := range m.currentBindings {
+		cp := *binding
+		m.disabledBindings[name] = &cp
+		delete(m.currentBindings, name)
+		m.stopAdapter(name)
+		names = append(names, name)
+		count++
+	}
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	debug.Log("im", "DisableAll: disabled %d adapters: %v", count, names)
+	return count, nil
+}
+
+// EnableAll re-enables all disabled bindings.
+func (m *Manager) EnableAll() (int, error) {
+	m.mu.Lock()
+	var toRestart []string
+	count := 0
+	for name, binding := range m.disabledBindings {
+		copy := *binding
+		m.currentBindings[name] = &copy
+		delete(m.disabledBindings, name)
+		toRestart = append(toRestart, name)
+		count++
+	}
+	onRestart := m.onRestart
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	for _, name := range toRestart {
+		if onRestart != nil {
+			if err := onRestart(name); err != nil {
+				debug.Log("im", "enable-all restart adapter %s: %v", name, err)
+			}
+		}
+	}
+	return count, nil
+}
+
 // MutedBindings returns a snapshot of currently muted bindings.
 func (m *Manager) MutedBindings() []ChannelBinding {
 	m.mu.RLock()
