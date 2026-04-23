@@ -74,7 +74,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 	m.rewriteActiveStreamOutput(true)
 	m.trimOutput()
 	m.syncConversationViewport()
-	m.viewport.GotoBottom()
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) localizedStreamStatus(chunk string) (string, bool) {
@@ -128,7 +128,7 @@ func (m *Model) appendStreamStatusLine(text string) {
 	})
 	m.trimOutput()
 	m.syncConversationViewport()
-	m.viewport.GotoBottom()
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) renderCurrentStreamMarkdown() string {

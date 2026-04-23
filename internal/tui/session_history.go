@@ -25,7 +25,7 @@ func (m *Model) rebuildConversationFromMessages(messages []provider.Message) {
 		m.renderConversationMessage(msg, toolCalls)
 	}
 	m.syncConversationViewport()
-	m.viewport.GotoBottom()
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) renderConversationMessage(msg provider.Message, toolCalls map[string]resumedToolCall) {

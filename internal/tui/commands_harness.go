@@ -39,7 +39,7 @@ func (m *Model) renderHarnessLiveTail(text string) {
 	m.rewriteActiveStreamOutput(true)
 	m.trimOutput()
 	m.syncConversationViewport()
-	m.viewport.GotoBottom()
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) appendHarnessLogChunk(chunk string) {
@@ -638,7 +638,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_run_start")))
 	m.dualWriteSystem("\n")
 	m.syncConversationViewport()
-	m.viewport.GotoBottom()
+	m.chatListScrollToBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
@@ -696,7 +696,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_rerun_start")))
 	m.dualWriteSystem("\n")
 	m.syncConversationViewport()
-	m.viewport.GotoBottom()
+	m.chatListScrollToBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
