@@ -53,6 +53,7 @@ type Styles struct {
 
 	// Tool body
 	ToolBody lipgloss.Style
+	BashBody lipgloss.Style // command output with subtle background
 
 	// System message
 	SystemPrefix string
@@ -79,6 +80,7 @@ func DefaultStyles() Styles {
 		AssistantStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("81")),
 		ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
 		ToolBody:        lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
+		BashBody:        lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("235")),
 		SystemPrefix:    "○ ",
 		SystemStyle:     lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		ErrorStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
