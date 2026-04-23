@@ -476,6 +476,8 @@ func sidebarIMAdapterLabel(state im.AdapterState) string {
 	switch {
 	case state.Healthy:
 		icon = "✓"
+	case strings.TrimSpace(state.Status) == "muted":
+		icon = "○"
 	case strings.TrimSpace(state.LastError) == "":
 		icon = "…"
 	}
