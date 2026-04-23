@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	charm "charm.land/glamour/v2"
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -51,12 +52,8 @@ type ToolFormatter func(toolName, rawArgs string) string
 
 // ANSI color codes
 const (
-	ansiCyanBold  = "\033[1;36m"
-	ansiGreenBold = "\033[1;32m"
 	ansiDim       = "\033[2m"
 	ansiReset     = "\033[0m"
-	ansiDimYellow = "\033[2;33m"
-	ansiRedBold   = "\033[1;31m"
 	ansiClearLine = "\033[2K\r"
 	// In raw terminal mode, \n only moves cursor down without returning to
 	// column 0. We must use \r\n for proper line breaks.
@@ -138,6 +135,8 @@ type TerminalFollowDisplay struct {
 	formatTool ToolFormatter
 	lang       Lang
 	workDir    string // project working directory, for path relativization
+	styles     chat.Styles
+	termWidth  int
 	mu         sync.Mutex
 	roundBuf   strings.Builder
 }
@@ -151,15 +150,17 @@ func NewTerminalFollowDisplay(out *os.File, lang Lang, workDir string, formatToo
 		lang:       lang,
 		workDir:    workDir,
 		formatTool: formatTool,
+		styles:     chat.DefaultStyles(),
+		termWidth:  80,
 	}
 }
 
-// OnUserMessage displays a user message with cyan header.
+// OnUserMessage displays a user message.
 func (d *TerminalFollowDisplay) OnUserMessage(text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	text = truncateForTerminal(d.relativizePaths(text), 200)
-	fmt.Fprintf(d.out, "%s[%s]%s %s"+nl, ansiCyanBold, Tr(d.lang, "follow.user"), ansiReset, text)
+	fmt.Fprintf(d.out, "%s%s%s"+nl, d.styles.UserPrefix, text, ansiReset)
 }
 
 // OnToolStatus is a no-op — we only display final results via OnToolResult.
@@ -167,7 +168,7 @@ func (d *TerminalFollowDisplay) OnToolStatus(toolName, rawArgs string) {
 	// intentionally not displayed
 }
 
-// OnToolResult displays the tool call result.
+// OnToolResult displays the tool call result using chat.Styles for consistent rendering.
 func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, isError bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -177,27 +178,27 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 	result = d.relativizePaths(result)
 
 	// Special formatting for certain tool types
-	special := formatSpecialToolResult(d.lang, toolName, rawArgs, result, isError)
+	special := d.formatSpecialToolResult(toolName, rawArgs, result, isError)
 	if special != "" {
 		fmt.Fprint(d.out, special+nl)
 		return
 	}
 
-	// Default: show icon + tool name + abbreviated result
-	icon := "  ✓"
-	resultColor := ansiDim
+	// Default: use chat.Styles for consistent header rendering
+	status := chat.StatusSuccess
 	if isError {
-		icon = "  ✗"
-		resultColor = ansiRedBold
+		status = chat.StatusError
 	}
-
 	pretty := prettifyToolName(toolName)
-	resultPreview := summarizeToolResult(result, 120)
-	if resultPreview != "" {
-		fmt.Fprintf(d.out, "%s%s %s%s"+nl, resultColor, icon, pretty, ansiReset)
-		fmt.Fprintf(d.out, "%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 120), ansiReset)
-	} else {
-		fmt.Fprintf(d.out, "%s%s %s%s"+nl, resultColor, icon, pretty, ansiReset)
+	header := d.styles.ToolHeader(status, pretty, d.termWidth)
+	fmt.Fprint(d.out, header+nl)
+
+	// Body preview
+	if result != "" {
+		resultPreview := summarizeToolResult(result, 120)
+		if resultPreview != "" {
+			fmt.Fprintf(d.out, "%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 120), ansiReset)
+		}
 	}
 }
 
@@ -218,7 +219,8 @@ func (d *TerminalFollowDisplay) OnRoundDone() {
 
 	if text != "" {
 		displayText := renderMarkdown(d.relativizePaths(text))
-		fmt.Fprintf(d.out, "%s[%s]%s"+nl, ansiGreenBold, Tr(d.lang, "follow.assistant"), ansiReset)
+		fmt.Fprintf(d.out, "%s", d.styles.AssistantPrefix)
+		fmt.Fprint(d.out, nl)
 		fmt.Fprint(d.out, displayText+nl)
 	}
 }
@@ -244,26 +246,26 @@ func (d *TerminalFollowDisplay) relativizePaths(text string) string {
 
 // formatSpecialToolResult returns a specially formatted output for certain tool types.
 // Returns empty string if no special formatting applies.
-func formatSpecialToolResult(lang Lang, toolName, rawArgs, result string, isError bool) string {
+func (d *TerminalFollowDisplay) formatSpecialToolResult(toolName, rawArgs, result string, isError bool) string {
 	if isError {
 		return ""
 	}
 
 	switch toolName {
 	case "todo_write":
-		return formatTodoResult(lang, rawArgs)
+		return formatTodoResult(d.lang, rawArgs)
 	case "run_command", "bash", "powershell", "start_command":
-		return formatCommandResult(lang, rawArgs, result, isError)
+		return formatCommandResult(d.lang, rawArgs, result, isError)
 	default:
 		// Check for MCP-style tool names (contain underscores or dots)
 		if strings.Contains(toolName, "_") || strings.Contains(toolName, ".") {
-			return formatMCPToolResult(lang, toolName, rawArgs, result, isError)
+			return formatMCPToolResult(d.lang, toolName, rawArgs, result, isError)
 		}
 		return ""
 	}
 }
 
-// formatTodoResult renders todo_write as a markdown checklist.
+// formatTodoResult renders todo_write using chat.TodoTask styling.
 func formatTodoResult(lang Lang, rawArgs string) string {
 	var args struct {
 		Todos []struct {
@@ -276,23 +278,38 @@ func formatTodoResult(lang Lang, rawArgs string) string {
 		return ""
 	}
 
-	var sb strings.Builder
-	sb.WriteString(ansiDimYellow)
-	sb.WriteString(Tr(lang, "follow.todos_header") + nl)
+	styles := chat.DefaultStyles()
+	done, total := 0, len(args.Todos)
 	for _, t := range args.Todos {
-		icon := "○"
 		if t.Status == "done" {
-			icon = "●"
-		} else if t.Status == "in_progress" {
-			icon = "◐"
+			done++
 		}
-		sb.WriteString(fmt.Sprintf("    %s %s%s"+nl, icon, t.Content, ansiReset+ansiDimYellow))
 	}
-	sb.WriteString(ansiReset)
+
+	// Header: ⏳ To-Do  done/total
+	header := styles.ToolHeader(chat.StatusRunning, "To-Do", 80, fmt.Sprintf("%d/%d", done, total))
+	var sb strings.Builder
+	sb.WriteString(header)
+	sb.WriteString(nl)
+
+	// Task list using chat-style icons
+	for _, t := range args.Todos {
+		var icon string
+		switch t.Status {
+		case "done":
+			icon = "✓"
+		case "in_progress":
+			icon = "→"
+		default:
+			icon = "○"
+		}
+		sb.WriteString(fmt.Sprintf("%s    %s %s%s"+nl, ansiDim, icon, t.Content, ansiReset))
+	}
+
 	return sb.String()
 }
 
-// formatCommandResult renders command execution with output summary.
+// formatCommandResult renders command execution using chat.Styles.
 func formatCommandResult(lang Lang, rawArgs, result string, isError bool) string {
 	var args struct {
 		Command string `json:"command"`
@@ -309,57 +326,44 @@ func formatCommandResult(lang Lang, rawArgs, result string, isError bool) string
 		return ""
 	}
 
-	icon := "  ✓"
-	resultColor := ansiDim
+	styles := chat.DefaultStyles()
+	status := chat.StatusSuccess
 	if isError {
-		icon = "  ✗"
-		resultColor = ansiRedBold
+		status = chat.StatusError
 	}
+	header := styles.ToolHeader(status, "Bash", 80, cmdPreview)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s%s $ %s%s"+nl, resultColor, icon, cmdPreview, ansiReset))
+	sb.WriteString(header + nl)
 
 	// Show output preview
 	output := strings.TrimSpace(result)
 	if output != "" {
-		lines := strings.Split(output, "\n")
-		maxLines := 5
-		if len(lines) > maxLines {
-			for _, line := range lines[:maxLines] {
-				sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
-			}
-			sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, Tr(lang, "follow.more_lines", len(lines)-maxLines), ansiReset))
-		} else {
-			for _, line := range lines {
-				sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
-			}
+		body, truncated := chat.FormatBody(output, 76, 5)
+		_ = truncated
+		for _, line := range strings.Split(body, "\n") {
+			sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
 		}
 	}
 
 	return sb.String()
 }
 
-// formatMCPToolResult renders MCP tool calls with name, args summary, and result.
+// formatMCPToolResult renders MCP tool calls using chat.Styles.
 func formatMCPToolResult(lang Lang, toolName, rawArgs, result string, isError bool) string {
-	_ = lang // MCP tool result formatting is language-independent for now
-	icon := "  ✓"
-	resultColor := ansiDim
+	_ = lang
+	styles := chat.DefaultStyles()
+	status := chat.StatusSuccess
 	if isError {
-		icon = "  ✗"
-		resultColor = ansiRedBold
+		status = chat.StatusError
 	}
-
 	pretty := prettifyToolName(toolName)
-
-	// Try to extract a brief arg summary
 	argSummary := summarizeMCPArgs(rawArgs, 50)
 
+	header := styles.ToolHeader(status, pretty, 80, argSummary)
+
 	var sb strings.Builder
-	if argSummary != "" {
-		sb.WriteString(fmt.Sprintf("%s%s %s(%s)%s"+nl, resultColor, icon, pretty, argSummary, ansiReset))
-	} else {
-		sb.WriteString(fmt.Sprintf("%s%s %s%s"+nl, resultColor, icon, pretty, ansiReset))
-	}
+	sb.WriteString(header + nl)
 
 	// Result preview
 	resultPreview := summarizeToolResult(result, 80)
