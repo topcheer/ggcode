@@ -35,6 +35,7 @@ type qqBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Muted            bool
 }
 
 type qqBindResultMsg struct {
@@ -99,7 +100,9 @@ func (m Model) renderQQPanel() string {
 		body = append(body, m.renderProviderList(m.qqBindingLabels(entries), selected, true))
 		entry := entries[selected]
 		status := m.t("panel.qq.entry.available")
-		if entry.OccupiedBy != "" {
+		if entry.Muted {
+			status = m.t("panel.qq.entry.muted")
+		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.qq.entry.bound")
 		}
 		body = append(body,
@@ -391,6 +394,7 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     qqStatePtr(adapterStates[name]),
+			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
 	return entries

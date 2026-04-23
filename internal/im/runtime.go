@@ -51,14 +51,6 @@ type Manager struct {
 	// but the persistent binding is retained so EnableBinding can restore it.
 	disabledBindings map[string]*ChannelBinding // adapter name -> binding
 
-	// mutedBindings stores adapters muted for this process only.
-	// Like disabledBindings, the binding is moved out of currentBindings
-	// so the connection is dropped and inbound/outbound messages stop.
-	// Unlike disabledBindings, this is purely in-memory and not persisted.
-	// Cleared on restart — useful when multiple ggcode instances share the
-	// same directory to avoid all receiving inbound messages simultaneously.
-	mutedBindings map[string]*ChannelBinding // adapter name -> binding
-
 	// adapterCancels stores per-adapter cancel functions so that
 	// mute/disable can stop the adapter's goroutine and drop its connection.
 	adapterCancels map[string]context.CancelFunc
@@ -92,7 +84,6 @@ func NewManager() *Manager {
 		pairingStates:    make(map[string]PairingChannelState),
 		seenMessages:     make(map[string]time.Time),
 		disabledBindings: make(map[string]*ChannelBinding),
-		mutedBindings:    make(map[string]*ChannelBinding),
 		adapterCancels:   make(map[string]context.CancelFunc),
 	}
 }
@@ -174,7 +165,6 @@ func (m *Manager) UnbindSession() {
 	m.session = nil
 	m.currentBindings = make(map[string]*ChannelBinding)
 	m.disabledBindings = make(map[string]*ChannelBinding)
-	m.mutedBindings = make(map[string]*ChannelBinding)
 	m.adapterCancels = make(map[string]context.CancelFunc)
 	m.pendingPairing = nil
 	snapshot, cb := m.snapshotAndCallbackLocked()
@@ -353,7 +343,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	sessionBound := m.session != nil
 
 	// Check mute: silently drop inbound for muted adapters.
-	if _, muted := m.mutedBindings[msg.Envelope.Adapter]; muted {
+	if b, ok := m.currentBindings[msg.Envelope.Adapter]; ok && b.Muted {
 		m.mu.Unlock()
 		return nil
 	}
@@ -421,7 +411,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 		return PairingResult{}, ErrNoSessionBound
 	}
 	// Silently ignore pairing for muted adapters
-	if _, muted := m.mutedBindings[msg.Envelope.Adapter]; muted {
+	if b, ok := m.currentBindings[msg.Envelope.Adapter]; ok && b.Muted {
 		m.mu.Unlock()
 		return PairingResult{}, nil
 	}
@@ -802,10 +792,13 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 	sort.Slice(snapshot.DisabledBindings, func(i, j int) bool {
 		return snapshot.DisabledBindings[i].Adapter < snapshot.DisabledBindings[j].Adapter
 	})
-	snapshot.MutedBindings = make([]ChannelBinding, 0, len(m.mutedBindings))
-	for _, b := range m.mutedBindings {
-		snapshot.MutedBindings = append(snapshot.MutedBindings, *b)
+	var mutedBindings []ChannelBinding
+	for _, b := range m.currentBindings {
+		if b.Muted {
+			mutedBindings = append(mutedBindings, *b)
+		}
 	}
+	snapshot.MutedBindings = mutedBindings
 	sort.Slice(snapshot.MutedBindings, func(i, j int) bool {
 		return snapshot.MutedBindings[i].Adapter < snapshot.MutedBindings[j].Adapter
 	})
@@ -1014,10 +1007,9 @@ func (m *Manager) IsBindingDisabled(adapterName string) bool {
 
 // --- Mute (in-memory, not persisted) ---
 
-// MuteBinding mutes an adapter for this process only. Like DisableBinding,
-// the binding is moved out of currentBindings so the connection drops and
-// inbound/outbound messages stop. Unlike DisableBinding, this is not persisted
-// and is cleared on restart.
+// MuteBinding mutes an adapter for this process only. The binding stays in
+// currentBindings (so the UI still shows it as bound) but is marked Muted.
+// The connection is dropped so inbound/outbound messages stop.
 func (m *Manager) MuteBinding(adapterName string) error {
 	m.mu.Lock()
 	binding, ok := m.currentBindings[adapterName]
@@ -1025,9 +1017,11 @@ func (m *Manager) MuteBinding(adapterName string) error {
 		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
-	copy := *binding
-	m.mutedBindings[adapterName] = &copy
-	delete(m.currentBindings, adapterName)
+	if binding.Muted {
+		m.mu.Unlock()
+		return ErrNoChannelBound
+	}
+	binding.Muted = true
 	m.stopAdapter(adapterName)
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -1037,24 +1031,21 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	return nil
 }
 
-// UnmuteBinding unmutes a previously muted adapter for this process.
+// UnmuteBinding unmutes a previously muted adapter and restarts it.
 func (m *Manager) UnmuteBinding(adapterName string) error {
 	m.mu.Lock()
-	binding, ok := m.mutedBindings[adapterName]
-	if !ok {
+	binding, ok := m.currentBindings[adapterName]
+	if !ok || !binding.Muted {
 		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
-	copy := *binding
-	m.currentBindings[adapterName] = &copy
-	delete(m.mutedBindings, adapterName)
+	binding.Muted = false
 	onRestart := m.onRestart
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
 	}
-	// Restart the adapter so it reconnects to the platform.
 	if onRestart != nil {
 		if err := onRestart(adapterName); err != nil {
 			debug.Log("im", "unmute restart adapter %s: %v", adapterName, err)
@@ -1069,10 +1060,11 @@ func (m *Manager) MuteAll() (int, error) {
 	m.mu.Lock()
 	count := 0
 	for name, binding := range m.currentBindings {
-		copy := *binding
-		m.mutedBindings[name] = &copy
+		if binding.Muted {
+			continue
+		}
+		binding.Muted = true
 		m.stopAdapter(name)
-		delete(m.currentBindings, name)
 		count++
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
@@ -1089,10 +1081,11 @@ func (m *Manager) UnmuteAll() (int, error) {
 	m.mu.Lock()
 	var toRestart []string
 	count := 0
-	for name, binding := range m.mutedBindings {
-		copy := *binding
-		m.currentBindings[name] = &copy
-		delete(m.mutedBindings, name)
+	for name, binding := range m.currentBindings {
+		if !binding.Muted {
+			continue
+		}
+		binding.Muted = false
 		toRestart = append(toRestart, name)
 		count++
 	}
@@ -1116,9 +1109,11 @@ func (m *Manager) UnmuteAll() (int, error) {
 func (m *Manager) MutedBindings() []ChannelBinding {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]ChannelBinding, 0, len(m.mutedBindings))
-	for _, b := range m.mutedBindings {
-		out = append(out, *b)
+	var out []ChannelBinding
+	for _, b := range m.currentBindings {
+		if b.Muted {
+			out = append(out, *b)
+		}
 	}
 	return out
 }
@@ -1127,8 +1122,8 @@ func (m *Manager) MutedBindings() []ChannelBinding {
 func (m *Manager) IsBindingMuted(adapterName string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, ok := m.mutedBindings[adapterName]
-	return ok
+	b, ok := m.currentBindings[adapterName]
+	return ok && b.Muted
 }
 
 func (m *Manager) ClearChannel(workspace string) error {

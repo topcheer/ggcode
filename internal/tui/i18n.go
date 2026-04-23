@@ -1300,6 +1300,8 @@ func enCatalog(key string) string {
 		return "Available"
 	case "panel.qq.entry.bound":
 		return "Bound"
+	case "panel.qq.entry.muted":
+		return "Muted"
 	case "panel.qq.details":
 		return "Details"
 	case "panel.qq.status":
@@ -2550,6 +2552,8 @@ func zhCatalog(key string) string {
 		return "可用"
 	case "panel.qq.entry.bound":
 		return "已绑定"
+	case "panel.qq.entry.muted":
+		return "已静音"
 	case "panel.qq.details":
 		return "详情"
 	case "panel.qq.status":

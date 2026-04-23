@@ -34,10 +34,13 @@ func TestMuteUnmuteBinding(t *testing.T) {
 		t.Fatalf("MuteBinding: %v", err)
 	}
 
-	// Verify it's removed from currentBindings
+	// Verify binding stays in currentBindings but is marked muted
 	bindings := mgr.CurrentBindings()
-	if len(bindings) != 0 {
-		t.Fatalf("expected 0 active bindings after mute, got %d", len(bindings))
+	if len(bindings) != 1 {
+		t.Fatalf("expected 1 binding after mute (stays in currentBindings), got %d", len(bindings))
+	}
+	if !bindings[0].Muted {
+		t.Fatal("expected binding to be marked Muted")
 	}
 
 	// Verify it's muted
@@ -134,9 +137,15 @@ func TestMuteAllUnmuteAll(t *testing.T) {
 		t.Fatalf("expected 3 muted, got %d", count)
 	}
 
-	// Verify all are muted
-	if len(mgr.CurrentBindings()) != 0 {
-		t.Fatal("expected 0 active bindings after MuteAll")
+	// Verify all bindings are still present but muted
+	allBindings := mgr.CurrentBindings()
+	if len(allBindings) != 3 {
+		t.Fatalf("expected 3 bindings after MuteAll (stays in currentBindings), got %d", len(allBindings))
+	}
+	for _, b := range allBindings {
+		if !b.Muted {
+			t.Fatalf("expected binding %s to be muted", b.Adapter)
+		}
 	}
 	if len(mgr.MutedBindings()) != 3 {
 		t.Fatalf("expected 3 muted bindings, got %d", len(mgr.MutedBindings()))
@@ -209,9 +218,13 @@ func TestMuteAndDisableAreIndependent(t *testing.T) {
 		t.Fatalf("DisableBinding: %v", err)
 	}
 
-	// Verify no active bindings
-	if len(mgr.CurrentBindings()) != 0 {
-		t.Fatal("expected 0 active bindings")
+	// Verify qq-bot-1 still in currentBindings (muted), tg-bot-1 moved out (disabled)
+	allBindings := mgr.CurrentBindings()
+	if len(allBindings) != 1 {
+		t.Fatalf("expected 1 binding after mute+disable, got %d", len(allBindings))
+	}
+	if allBindings[0].Adapter != "qq-bot-1" || !allBindings[0].Muted {
+		t.Fatal("expected qq-bot-1 to be muted in currentBindings")
 	}
 
 	// Verify muted and disabled are tracked separately
