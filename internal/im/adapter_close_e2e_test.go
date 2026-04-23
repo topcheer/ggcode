@@ -2,8 +2,10 @@ package im
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -251,6 +253,114 @@ func TestMuteAllPhysicallyDropsAllConnections(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatalf("server %d: connection NOT physically closed after MuteAll", i)
 		}
+	}
+}
+
+// TestMutePreventsReconnect simulates the full run-loop lifecycle:
+// adapter connects → ws server records connection count → manager mutes
+// → adapter's Close() drops the ws → run loop sees ctx.Err() and exits
+// → server should see exactly 1 connection, not 2 (no reconnect).
+func TestMutePreventsReconnect(t *testing.T) {
+	var (
+		mu             sync.Mutex
+		connectCount   int
+		connected      = make(chan struct{})
+		disconnectChan = make(chan error, 2) // buffer for potential reconnect
+	)
+
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		mu.Lock()
+		connectCount++
+		count := connectCount
+		mu.Unlock()
+		if count == 1 {
+			close(connected)
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				select {
+				case disconnectChan <- err:
+				default:
+				}
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+	wsURL := "ws" + srv.URL[4:]
+
+	// Create adapter with a real context (like startConfiguredAdapter does)
+	_, adapterCancel := context.WithCancel(context.Background())
+
+	adapter := &qqAdapter{
+		name:      "test-qq",
+		manager:   NewManager(),
+		appID:     "fake-app-id",
+		appSecret: "fake-app-secret",
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					// Redirect gateway URL requests to our test WS server
+					return net.Dial("tcp", strings.TrimPrefix(wsURL, "ws://"))
+				},
+			},
+		},
+	}
+
+	// Manually connect (simulating what connectAndServe does)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	adapter.mu.Lock()
+	adapter.ws = conn
+	adapter.connected = true
+	adapter.mu.Unlock()
+
+	// Wait for server to see the connection
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not see initial connection")
+	}
+
+	// Register with Manager (like startConfiguredAdapter does)
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/tmp",
+		Platform:  PlatformQQ,
+		Adapter:   "test-qq",
+		ChannelID: "ch-1",
+	})
+	mgr.RegisterSink(adapter)
+	mgr.RegisterAdapterCancel("test-qq", adapterCancel)
+
+	// Mute — this should cancel + close
+	if err := mgr.MuteBinding("test-qq"); err != nil {
+		t.Fatalf("MuteBinding: %v", err)
+	}
+
+	// Wait for server to see the disconnect
+	select {
+	case <-disconnectChan:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout: server did not see disconnect")
+	}
+
+	// Wait a bit to see if the adapter reconnects
+	time.Sleep(500 * time.Millisecond)
+
+	mu.Lock()
+	count := connectCount
+	mu.Unlock()
+	if count != 1 {
+		t.Fatalf("expected exactly 1 connection (no reconnect), got %d", count)
 	}
 }
 

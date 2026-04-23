@@ -251,19 +251,21 @@ func (m *Manager) RegisterAdapterCancel(adapterName string, cancel context.Cance
 
 // stopAdapter cancels an adapter's context and unregisters its sink.
 func (m *Manager) stopAdapter(adapterName string) {
-	// Physically close the adapter's network connection.
+	// 1. Cancel the adapter's context FIRST so the run loop exits and
+	//    won't reconnect. Cancel alone doesn't interrupt a blocking
+	//    ReadMessage, so we also need step 2.
+	if cancel, ok := m.adapterCancels[adapterName]; ok && cancel != nil {
+		cancel()
+		delete(m.adapterCancels, adapterName)
+	}
+	// 2. Physically close the connection to unblock any in-flight reads.
 	if sink, ok := m.sinks[adapterName]; ok {
 		if closer, ok := sink.(Closer); ok {
 			_ = closer.Close()
 		}
 	}
-	// Cancel the adapter's context to stop its run loop.
-	if cancel, ok := m.adapterCancels[adapterName]; ok && cancel != nil {
-		cancel()
-		delete(m.adapterCancels, adapterName)
-	}
 	delete(m.sinks, adapterName)
-	// Mark adapter state as disconnected so the UI reflects the real state.
+	// 3. Mark adapter state as disconnected so the UI reflects the real state.
 	if state, ok := m.adapters[adapterName]; ok {
 		state.Healthy = false
 		state.Status = "disconnected"
@@ -390,6 +392,11 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 	if m.session == nil {
 		m.mu.Unlock()
 		return PairingResult{}, ErrNoSessionBound
+	}
+	// Silently ignore pairing for muted adapters
+	if _, muted := m.mutedBindings[msg.Envelope.Adapter]; muted {
+		m.mu.Unlock()
+		return PairingResult{}, nil
 	}
 	if msg.Envelope.ReceivedAt.IsZero() {
 		msg.Envelope.ReceivedAt = time.Now()
