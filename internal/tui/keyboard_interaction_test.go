@@ -1403,3 +1403,23 @@ func TestComposerHeightRespectsSetValue(t *testing.T) {
 		t.Errorf("expected height=1 after clear, got %d", m.input.Height())
 	}
 }
+
+func TestPasteSetsCorrectHeight(t *testing.T) {
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("hello")
+	m.input.SetHeight(1)
+
+	// Paste multi-line text
+	model, _ := m.Update(tea.PasteMsg{Content: "line1\nline2\nline3"})
+	m = model.(Model)
+
+	val := m.input.Value()
+	if !strings.Contains(val, "line1") {
+		t.Errorf("pasted content should be in input, got %q", val)
+	}
+	lines := strings.Count(val, "\n") + 1
+	if m.input.Height() < lines {
+		t.Errorf("expected height >= %d after pasting %d lines, got %d", lines, lines, m.input.Height())
+	}
+}
