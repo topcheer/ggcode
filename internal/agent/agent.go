@@ -473,13 +473,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		// Execute tool calls and build tool_result message
 		var toolResults []provider.ContentBlock
+		// Defer project memory injection until after all tools execute,
+		// so every tool_call gets a matching tool_result.
+		var deferredMemoryContent string
+		var deferredMemoryFiles []string
+		var deferredMemoryTarget string
+
 		for _, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if a.maybeInjectProjectMemoryForTool(tc, toolResults) {
-				toolResults = nil
-				break
+			// Check for project memory but defer injection
+			if mc, mf, mt := a.pendingProjectMemoryForTool(tc); len(mf) > 0 && strings.TrimSpace(mc) != "" {
+				if deferredMemoryContent == "" {
+					deferredMemoryContent = mc
+					deferredMemoryFiles = mf
+					deferredMemoryTarget = mt
+				}
 			}
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
@@ -513,10 +523,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if a.injectToolResultsAndInterruptions(toolResults) {
-				toolResults = nil
-				break
-			}
 		}
 
 		if err := ctx.Err(); err != nil {
@@ -530,6 +536,27 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			Role:    "user", // Anthropic uses user role for tool results
 			Content: toolResults,
 		})
+
+		// Inject deferred project memory after all tool results are submitted.
+		if deferredMemoryContent != "" {
+			targetLabel := deferredMemoryTarget
+			if targetLabel == "" {
+				targetLabel = "the pending path"
+			}
+			a.contextManager.Add(provider.Message{
+				Role:    "system",
+				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + deferredMemoryContent}},
+			})
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: fmt.Sprintf("Additional project memory now applies to %s. Review that guidance first, then continue the task with the updated constraints.", targetLabel),
+				}},
+			})
+			a.SetProjectMemoryFiles(deferredMemoryFiles)
+			debug.Log("agent", "injected deferred path-scoped project memory for %s (%d files)", targetLabel, len(deferredMemoryFiles))
+		}
 	}
 
 	if a.maxIter > 0 {
@@ -557,38 +584,6 @@ func (a *Agent) injectPendingInterruptions() bool {
 		return false
 	}
 	debug.Log("agent", "injecting mid-run user guidance")
-	a.contextManager.Add(provider.Message{
-		Role: "user",
-		Content: []provider.ContentBlock{{
-			Type: "text",
-			Text: fmt.Sprintf("New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue.\n\n%s", text),
-		}},
-	})
-	return true
-}
-
-// injectToolResultsAndInterruptions flushes accumulated tool results and checks
-// for a pending interruption. If an interruption arrived, it injects both the
-// results and the guidance, then returns true to signal a replan.
-func (a *Agent) injectToolResultsAndInterruptions(toolResults []provider.ContentBlock) bool {
-	if len(toolResults) == 0 {
-		return a.injectPendingInterruptions()
-	}
-	a.mu.RLock()
-	fn := a.onInterrupt
-	a.mu.RUnlock()
-	if fn == nil {
-		return false
-	}
-	text := strings.TrimSpace(fn())
-	if text == "" {
-		return false
-	}
-	debug.Log("agent", "interrupt received after tool result; replanning before remaining tool calls")
-	a.contextManager.Add(provider.Message{
-		Role:    "user",
-		Content: toolResults,
-	})
 	a.contextManager.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{{

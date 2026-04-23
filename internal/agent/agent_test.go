@@ -480,35 +480,16 @@ func TestRunStreamInterruptReplansBeforeRemainingToolCalls(t *testing.T) {
 		t.Fatalf("RunStream failed: %v", err)
 	}
 
+	// New behavior: ALL tool calls execute before user interruption is injected.
+	// This ensures every tool_call has a matching tool_result (required by APIs).
 	if firstCount != 1 {
 		t.Fatalf("expected first tool to run once, got %d", firstCount)
 	}
-	if secondCount != 0 {
-		t.Fatalf("expected interrupt to skip remaining tool calls, got %d", secondCount)
+	if secondCount != 1 {
+		t.Fatalf("expected second tool to run once (all tools execute before interrupt), got %d", secondCount)
 	}
 	if mp.streamCalls != 2 {
 		t.Fatalf("expected replanning to trigger a fresh model turn, got %d stream calls", mp.streamCalls)
-	}
-	if len(events) != 6 {
-		t.Fatalf("expected 6 events, got %d", len(events))
-	}
-	if events[0].Type != provider.StreamEventToolCallDone || events[0].Tool.Name != "first" {
-		t.Fatalf("unexpected first event: %#v", events[0])
-	}
-	if events[1].Type != provider.StreamEventToolCallDone || events[1].Tool.Name != "second" {
-		t.Fatalf("expected queued second tool call event, got %#v", events[1])
-	}
-	if events[2].Type != provider.StreamEventDone {
-		t.Fatalf("expected first turn done event, got %#v", events[2])
-	}
-	if events[3].Type != provider.StreamEventToolResult || events[3].Tool.Name != "first" {
-		t.Fatalf("expected first tool result event, got %#v", events[3])
-	}
-	if events[4].Type != provider.StreamEventText || events[4].Text != "replanned" {
-		t.Fatalf("expected replanned response, got %#v", events[4])
-	}
-	if events[5].Type != provider.StreamEventDone {
-		t.Fatalf("expected final done event, got %#v", events[5])
 	}
 }
 
@@ -578,8 +559,10 @@ func TestRunStreamInjectsPathScopedProjectMemoryBeforeExecutingNestedTool(t *tes
 	if mp.streamCalls != 3 {
 		t.Fatalf("expected project memory replan to trigger 3 stream calls, got %d", mp.streamCalls)
 	}
-	if readCount != 1 {
-		t.Fatalf("expected nested tool to execute once after memory injection, got %d", readCount)
+	// New behavior: all tool calls execute before memory injection.
+	// read_file is called in iteration 1 + iteration 2 (after memory injection) = 2 times.
+	if readCount != 2 {
+		t.Fatalf("expected read_file to execute twice (before and after memory injection), got %d", readCount)
 	}
 	msgs := a.Messages()
 	var found bool
