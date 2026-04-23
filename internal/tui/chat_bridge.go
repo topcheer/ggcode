@@ -266,42 +266,6 @@ func (m *Model) chatEnsureAssistant() {
 	m.chatList.Append(chat.NewAssistantItem(id, m.chatStyles))
 }
 
-// bridgeDualWrite writes to both old chatEntries and new chatList.
-// Only user and assistant roles are written to chatList — tool items are
-// managed separately by chatStartTool/chatFinishTool, and system/tool
-// role entries here are old grouped-activity output that should not
-// appear as separate items in chatList.
-func (m *Model) bridgeDualWrite(entry ChatEntry) {
-	// Old path
-	if entry.Prefix != "" && (entry.Role == "user" || entry.Role == "assistant") {
-		m.output.WriteString(m.renderConversationUserEntry(entry.Prefix, entry.RawText))
-		m.output.WriteString("\n")
-	} else if entry.Role == "assistant" {
-		// Pure markdown, no prefix
-	} else {
-		m.output.WriteString(entry.RawText)
-	}
-	m.chatEntries.Append(entry)
-
-	// New path — only for semantic message types
-	if m.chatList == nil {
-		return
-	}
-	switch entry.Role {
-	case "user":
-		m.chatWriteUser(nextChatID(), entry.RawText)
-	case "assistant":
-		if entry.Streaming {
-			m.chatEnsureAssistant()
-			m.chatUpdateAssistantText(m.currentAssistantID(), entry.RawText)
-		} else {
-			m.chatUpdateAssistantText(m.currentAssistantID(), entry.RawText)
-			m.chatFinishAssistant(m.currentAssistantID())
-		}
-		// "system", "tool", "compaction" — NOT written to chatList
-	}
-}
-
 // bridgeDualWriteSystem writes to legacy output + old chatEntries only.
 // System/compaction/status lines are NOT added to chatList — they are
 // rendering noise that would pollute the conversation view.
