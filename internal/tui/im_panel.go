@@ -198,18 +198,22 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.selected = (panel.selected + 1) % len(entries)
 		}
 		panel.message = ""
-	case "d", "D":
+	case "d":
 		if len(entries) == 0 {
 			panel.message = m.t("panel.im.message.no_channel")
 			return *m, nil
 		}
 		return *m, m.disableIMChannel(entries[clampIMSelection(panel.selected, len(entries))])
-	case "e", "E":
+	case "D":
+		return *m, m.disableAllIMChannels()
+	case "e":
 		if len(entries) == 0 {
 			panel.message = m.t("panel.im.message.no_channel")
 			return *m, nil
 		}
 		return *m, m.enableIMChannel(entries[clampIMSelection(panel.selected, len(entries))])
+	case "E":
+		return *m, m.enableAllIMChannels()
 	case "m":
 		if len(entries) == 0 {
 			panel.message = m.t("panel.im.message.no_channel")
@@ -303,6 +307,32 @@ func (m *Model) unmuteAllIMChannels() tea.Cmd {
 			return imPanelResultMsg{err: err}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.unmute_all", count)}
+	}
+}
+
+func (m *Model) disableAllIMChannels() tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imPanelResultMsg{err: fmt.Errorf("%s", m.t("panel.im.message.no_runtime"))}
+		}
+		count, err := m.imManager.DisableAll()
+		if err != nil {
+			return imPanelResultMsg{err: err}
+		}
+		return imPanelResultMsg{message: m.t("panel.im.message.disable_all", count)}
+	}
+}
+
+func (m *Model) enableAllIMChannels() tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imPanelResultMsg{err: fmt.Errorf("%s", m.t("panel.im.message.no_runtime"))}
+		}
+		count, err := m.imManager.EnableAll()
+		if err != nil {
+			return imPanelResultMsg{err: err}
+		}
+		return imPanelResultMsg{message: m.t("panel.im.message.enable_all", count)}
 	}
 }
 
