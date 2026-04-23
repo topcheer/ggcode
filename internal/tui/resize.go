@@ -95,9 +95,15 @@ func (m *Model) syncConversationViewport() {
 	panelHeight := m.conversationPanelHeight()
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
-	m.viewport.SetSize(innerW, innerH)
-	m.viewport.SetContent(m.renderOutput())
+
+	// Update chatList (primary render path when items exist)
 	if m.chatList != nil {
 		m.chatList.SetSize(innerW, innerH)
+	}
+
+	// Only update legacy viewport when chatList is empty (fallback)
+	if m.chatList == nil || m.chatList.Len() == 0 {
+		m.viewport.SetSize(innerW, innerH)
+		m.viewport.SetContent(m.renderOutput())
 	}
 }
