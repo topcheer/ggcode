@@ -181,3 +181,30 @@ func TestDiscordPanelNoEntriesShowsMessage(t *testing.T) {
 		t.Fatal("expected error message for no bot")
 	}
 }
+
+func TestDiscordBindingLabelsMutedActiveAvailable(t *testing.T) {
+	m := NewModel(nil, nil)
+	entries := []discordBindingEntry{
+		{Adapter: "a", Muted: true},
+		{Adapter: "b", OccupiedBy: "/ws", Muted: false},
+		{Adapter: "c", OccupiedBy: "/other", Muted: false},
+		{Adapter: "d", Muted: false},
+	}
+	m.session = &session.Session{Workspace: "/ws"}
+	labels := m.discordBindingLabels(entries)
+	if len(labels) != 4 {
+		t.Fatalf("expected 4 labels, got %d", len(labels))
+	}
+	if !strings.Contains(labels[0], "Muted") {
+		t.Fatalf("expected muted, got %s", labels[0])
+	}
+	if !strings.Contains(labels[1], "Active") {
+		t.Fatalf("expected active, got %s", labels[1])
+	}
+	if !strings.Contains(labels[2], "Bound: /other") {
+		t.Fatalf("expected bound_other, got %s", labels[2])
+	}
+	if !strings.Contains(labels[3], "Available") {
+		t.Fatalf("expected available, got %s", labels[3])
+	}
+}
