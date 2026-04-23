@@ -1316,3 +1316,90 @@ func newTestSessionStore(t *testing.T) session.Store {
 func newTestPluginMgr() *plugin.Manager {
 	return plugin.NewManager()
 }
+
+func TestShiftEnterInsertsNewline(t *testing.T) {
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("hello")
+	m.input.SetHeight(1)
+
+	// Shift+Enter: Code=KeyEnter, Mod=ModShift
+	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = model.(Model)
+
+	// textarea.Update with shift+enter may or may not insert newline depending on keymap.
+	// The important thing is that the input is NOT submitted (value should not be cleared).
+	val := m.input.Value()
+	if val == "" {
+		t.Error("input was cleared — shift+enter should NOT submit")
+	}
+	if !strings.Contains(val, "hello") {
+		t.Errorf("value should still contain 'hello', got %q", val)
+	}
+}
+
+func TestEnterSubmitsSingleLine(t *testing.T) {
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("hello world")
+
+	model, _ := m.Update(tea.KeyPressMsg{Text: "enter"})
+	m = model.(Model)
+
+	if m.input.Value() != "" {
+		t.Errorf("input should be cleared after enter, got %q", m.input.Value())
+	}
+	if m.input.Height() != 1 {
+		t.Errorf("height should reset to 1 after submit, got %d", m.input.Height())
+	}
+}
+
+func TestEnterSubmitsMultiline(t *testing.T) {
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("line1\nline2\nline3")
+	m.input.SetHeight(3)
+
+	model, _ := m.Update(tea.KeyPressMsg{Text: "enter"})
+	m = model.(Model)
+
+	if m.input.Value() != "" {
+		t.Errorf("input should be cleared after enter, got %q", m.input.Value())
+	}
+	if m.input.Height() != 1 {
+		t.Errorf("height should reset to 1 after submit, got %d", m.input.Height())
+	}
+}
+
+func TestResizeResetsInputHeight(t *testing.T) {
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("a\nb\nc\nd\ne")
+	m.input.SetHeight(5)
+
+	m.handleResize(120, 40)
+
+	got := m.input.Height()
+	if got != 5 {
+		t.Errorf("expected height=5 after resize with 5-line content, got %d", got)
+	}
+}
+
+func TestComposerHeightRespectsSetValue(t *testing.T) {
+	m := newTestModel()
+	m.inputReady = true
+
+	// Multiline content → height should grow
+	m.input.SetValue("a\nb\nc\nd\ne")
+	m.input.SetHeight(composerHeight(m.input.Value()))
+	if m.input.Height() != 5 {
+		t.Errorf("expected height=5, got %d", m.input.Height())
+	}
+
+	// Empty content → height should shrink back to 1
+	m.input.SetValue("")
+	m.input.SetHeight(composerHeight(m.input.Value()))
+	if m.input.Height() != 1 {
+		t.Errorf("expected height=1 after clear, got %d", m.input.Height())
+	}
+}

@@ -574,6 +574,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.submitText(text, true)
+		case "shift+enter":
+			// Shift+Enter inserts newline into textarea.
+			// We manually splice the newline at the cursor position
+			// because textarea.Update(shift+enter) is not bound to insert newline.
+			val := m.input.Value()
+			cursor := inputCursor(&m.input)
+			if cursor < 0 {
+				cursor = 0
+			}
+			if cursor > len(val) {
+				cursor = len(val)
+			}
+			newVal := val[:cursor] + "\n" + val[cursor:]
+			m.input.SetValue(newVal)
+			m.input.SetHeight(composerHeight(newVal))
+			m.updateAutoComplete()
+			return m, nil
 		}
 
 	case streamMsg:
