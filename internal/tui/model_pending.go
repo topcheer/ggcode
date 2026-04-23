@@ -13,7 +13,7 @@ func (m *Model) resetExitConfirm() {
 
 func (m *Model) promptExitConfirm() {
 	m.input.SetValue("")
-	m.input.SetHeight(composerHeight(m.input.Value()))
+	m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	m.exitConfirmPending = true
 	m.ensureOutputHasBlankLine()
 	m.dualWriteSystem(m.styles.prompt.Render(m.t("exit.confirm")))
@@ -97,13 +97,13 @@ func (m *Model) restorePendingInput() {
 		return
 	case draft == "":
 		m.input.SetValue(pending)
-		m.input.SetHeight(composerHeight(m.input.Value()))
+		m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	case draft == pending:
 		m.input.SetValue(draft)
-		m.input.SetHeight(composerHeight(m.input.Value()))
+		m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	default:
 		m.input.SetValue(pending + "\n\n" + draft)
-		m.input.SetHeight(composerHeight(m.input.Value()))
+		m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	}
 	composerCursorEnd(&m.input)
 }
@@ -197,10 +197,10 @@ func (m *Model) setComposerImagePlaceholder(msg imageAttachedMsg) {
 	draft = strings.TrimSpace(draft)
 	if draft == "" {
 		m.input.SetValue(msg.placeholder + " ")
-		m.input.SetHeight(composerHeight(m.input.Value()))
+		m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	} else {
 		m.input.SetValue(msg.placeholder + " " + draft)
-		m.input.SetHeight(composerHeight(m.input.Value()))
+		m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	}
 	composerCursorEnd(&m.input)
 }
