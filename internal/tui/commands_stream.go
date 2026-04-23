@@ -56,6 +56,9 @@ func (m *Model) appendStreamChunk(chunk string) {
 			Prefix:    "● ",
 			Streaming: true,
 		})
+
+		// New path: start streaming assistant in chatList
+		m.chatStartAssistant(assistantStreamingID)
 	}
 	if m.streamBuffer != nil {
 		m.streamBuffer.WriteString(chunk)
@@ -65,6 +68,8 @@ func (m *Model) appendStreamChunk(chunk string) {
 		last.RawText = m.streamBuffer.String()
 		last.Invalidate()
 	}
+	// New path: update chatList assistant text
+	m.chatUpdateAssistantText(assistantStreamingID, m.streamBuffer.String())
 	m.rewriteActiveStreamOutput(true)
 	m.trimOutput()
 	m.syncConversationViewport()
@@ -102,6 +107,8 @@ func (m *Model) appendStreamStatusLine(text string) {
 	if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
 		last.Streaming = false
 	}
+	// New path: finish streaming assistant in chatList
+	m.chatFinishAssistant(assistantStreamingID)
 	switch {
 	case m.output == nil || m.output.Len() == 0:
 	case strings.HasSuffix(m.output.String(), "\n\n"):

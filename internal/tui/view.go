@@ -155,9 +155,27 @@ func (m Model) conversationPanelHeight() int {
 func (m Model) renderOutput() string {
 	var sb strings.Builder
 
-	// Try structured rendering from chatEntries first.
-	// Fall back to legacy output buffer when chatEntries is empty (e.g. initial state).
 	width := m.conversationInnerWidth()
+
+	// Try new chatList first.
+	if m.chatList != nil && m.chatList.Len() > 0 {
+		m.chatList.SetSize(width, 9999) // render all items; viewport handles visible area
+		rendered := m.chatList.Render()
+		if rendered != "" {
+			sb.WriteString(rendered)
+		}
+		liveActivities := m.renderLiveActivities()
+		if liveActivities != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(liveActivities)
+		}
+		sb.WriteString("\n\n")
+		return sb.String()
+	}
+
+	// Fallback: old chatEntries path (used during migration)
 	if rendered := m.chatEntries.Render(width); rendered != "" {
 		sb.WriteString(rendered)
 		liveActivities := m.renderLiveActivities()
