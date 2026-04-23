@@ -719,6 +719,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushGroupedActivitiesToOutput()
 		m.cancelFunc = nil
 		m.streamPrefixWritten = false
+		// Finalize streaming assistant in chatList
+		m.chatFinishAssistant(m.currentAssistantID())
 		wasCanceled := m.runCanceled
 		wasFailed := m.runFailed
 		m.runCanceled = false
