@@ -629,6 +629,9 @@ func (m *Model) SetConfig(cfg *config.Config) {
 	if cfg != nil {
 		m.setLanguage(cfg.Language)
 		m.sidebarVisible = cfg.SidebarVisible()
+		// Config is now available — re-register onRestart callback if IM manager
+		// was set before config (SetIMManager is called before SetConfig).
+		m.refreshIMRuntimeHooks()
 		if resolved, err := cfg.ResolveActiveEndpoint(); err == nil && m.activeVendor == "" && m.activeEndpoint == "" && m.activeModel == "" {
 			m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 		}
