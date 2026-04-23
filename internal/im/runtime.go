@@ -292,6 +292,16 @@ func (m *Manager) stopAdapter(adapterName string) {
 	debug.Log("im", "stopAdapter: done for %s", adapterName)
 }
 
+// persistBinding saves a binding to the store, stripping the Muted flag
+// since Muted is an in-memory-only state that must not be persisted.
+func (m *Manager) persistBinding(b ChannelBinding) error {
+	if m.bindingStore == nil {
+		return nil
+	}
+	b.Muted = false
+	return m.bindingStore.Save(b)
+}
+
 func (m *Manager) GenerateShareLink(ctx context.Context, adapter, callbackData string) (string, error) {
 	m.mu.RLock()
 	sink := m.sinks[strings.TrimSpace(adapter)]
@@ -369,7 +379,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		binding.ChannelID = strings.TrimSpace(msg.Envelope.ChannelID)
 		changed = true
 		if m.bindingStore != nil {
-			if err := m.bindingStore.Save(*binding); err != nil {
+			if err := m.persistBinding(*binding); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -386,7 +396,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		binding.PassiveReplyStartedAt = time.Time{}
 		changed = true
 		if m.bindingStore != nil {
-			if err := m.bindingStore.Save(*binding); err != nil {
+			if err := m.persistBinding(*binding); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -915,7 +925,7 @@ func (m *Manager) ClearChannelByAdapter(adapterName string) error {
 			b.LastInboundAt = time.Time{}
 			b.PassiveReplyCount = 0
 			b.PassiveReplyStartedAt = time.Time{}
-			if err := m.bindingStore.Save(b); err != nil {
+			if err := m.persistBinding(b); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -1158,7 +1168,7 @@ func (m *Manager) ClearChannel(workspace string) error {
 		bindings[i].PassiveReplyCount = 0
 		bindings[i].PassiveReplyStartedAt = time.Time{}
 		if m.bindingStore != nil {
-			if err := m.bindingStore.Save(bindings[i]); err != nil {
+			if err := m.persistBinding(bindings[i]); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -1195,7 +1205,7 @@ func (m *Manager) ClearReplyWindow(workspace string) error {
 			b.PassiveReplyStartedAt = time.Time{}
 			found = true
 			if m.bindingStore != nil {
-				if err := m.bindingStore.Save(*b); err != nil {
+				if err := m.persistBinding(*b); err != nil {
 					m.mu.Unlock()
 					return err
 				}
@@ -1246,7 +1256,7 @@ func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Ti
 		}
 		b.PassiveReplyCount++
 		if m.bindingStore != nil {
-			if err := m.bindingStore.Save(*b); err != nil {
+			if err := m.persistBinding(*b); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -1284,7 +1294,7 @@ func (m *Manager) RecordOutboundMessage(workspace, adapter, messageID string) er
 	}
 	b.LastOutboundMessageID = messageID
 	if m.bindingStore != nil {
-		if err := m.bindingStore.Save(*b); err != nil {
+		if err := m.persistBinding(*b); err != nil {
 			m.mu.Unlock()
 			return err
 		}
@@ -1335,6 +1345,7 @@ func (m *Manager) reloadBindingLocked() error {
 	}
 	for i := range bindings {
 		copy := bindings[i]
+		copy.Muted = false // Muted is in-memory only, never restored from store
 		m.currentBindings[copy.Adapter] = &copy
 	}
 	return nil
@@ -1361,7 +1372,7 @@ func (m *Manager) bindChannelLocked(binding ChannelBinding) (ChannelBinding, err
 				}
 			}
 		}
-		if err := m.bindingStore.Save(binding); err != nil {
+		if err := m.persistBinding(binding); err != nil {
 			return ChannelBinding{}, err
 		}
 	}
