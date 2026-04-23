@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -54,6 +55,8 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 			if text := strings.TrimSpace(strings.Join(textParts, "\n\n")); text != "" {
 				m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
 				m.output.WriteString("\n")
+				// New path: add user item to chatList
+				m.chatWriteUser(nextChatID(), text)
 				textParts = nil
 			}
 			m.output.WriteString(m.renderConversationToolResult(block, toolCalls))
@@ -62,6 +65,8 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 	if text := strings.TrimSpace(strings.Join(textParts, "\n\n")); text != "" {
 		m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
 		m.output.WriteString("\n")
+		// New path: add user item to chatList
+		m.chatWriteUser(nextChatID(), text)
 	}
 }
 
@@ -81,7 +86,13 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 			renderedCall := m.renderConversationToolCall(block)
 			m.output.WriteString(renderedCall)
 			m.chatEntries.Append(ChatEntry{Role: "tool", RawText: renderedCall})
-			m.chatWriteSystem(nextSystemID(), renderedCall)
+			// New path: create tool item from structured data
+			toolID := block.ToolID
+			if toolID == "" {
+				toolID = nextChatID()
+			}
+			item := chat.NewToolItem(toolID, block.ToolName, chat.StatusSuccess, string(block.Input), m.chatStyles)
+			m.chatList.Append(item)
 			if block.ToolID != "" {
 				toolCalls[block.ToolID] = resumedToolCall{
 					Presentation: describeTool(m.currentLanguage(), block.ToolName, string(block.Input)),
@@ -95,6 +106,11 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 	}
 	if body := strings.TrimSpace(strings.Join(textParts, "\n\n")); body != "" {
 		m.renderConversationAssistantMarkdown(body)
+		// New path: add assistant item to chatList
+		a := chat.NewAssistantItem(nextChatID(), m.chatStyles)
+		a.SetText(body)
+		a.SetFinished()
+		m.chatList.Append(a)
 	}
 }
 

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/topcheer/ggcode/internal/chat"
 )
@@ -79,6 +78,9 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	input := ts.RawArgs
 	if input == "" {
 		input = ts.Args
+	}
+	if input == "" && ts.Detail != "" {
+		input = fmt.Sprintf(`{"path":"%s"}`, ts.Detail)
 	}
 	item := chat.NewToolItem(id, ts.ToolName, chat.StatusRunning, input, m.chatStyles)
 	m.chatList.Append(item)
@@ -206,8 +208,10 @@ func nextSystemID() string {
 const assistantStreamingID = "assistant-streaming"
 
 // bridgeDualWrite writes to both old chatEntries and new chatList.
-// Call this during migration where dualWrite was previously used.
-// Once migration is complete, this function and all chatEntries code can be removed.
+// Only user and assistant roles are written to chatList — tool items are
+// managed separately by chatStartTool/chatFinishTool, and system/tool
+// role entries here are old grouped-activity output that should not
+// appear as separate items in chatList.
 func (m *Model) bridgeDualWrite(entry ChatEntry) {
 	// Old path
 	if entry.Prefix != "" && (entry.Role == "user" || entry.Role == "assistant") {
@@ -220,7 +224,7 @@ func (m *Model) bridgeDualWrite(entry ChatEntry) {
 	}
 	m.chatEntries.Append(entry)
 
-	// New path — also write to chatList
+	// New path — only for semantic message types
 	if m.chatList == nil {
 		return
 	}
@@ -237,16 +241,16 @@ func (m *Model) bridgeDualWrite(entry ChatEntry) {
 			m.chatUpdateAssistantText(assistantStreamingID, entry.RawText)
 			m.chatFinishAssistant(assistantStreamingID)
 		}
-	case "system":
-		m.chatWriteSystem(nextSystemID(), strings.TrimSpace(entry.RawText))
-	case "tool":
-		m.chatWriteSystem(nextSystemID(), strings.TrimSpace(entry.RawText))
+		// "system", "tool", "compaction" — NOT written to chatList
 	}
 }
 
-// bridgeDualWriteSystem writes a pre-rendered system string to all paths.
+// bridgeDualWriteSystem writes to legacy output + old chatEntries only.
+// System/compaction/status lines are NOT added to chatList — they are
+// rendering noise that would pollute the conversation view.
+// Only semantic messages (user, assistant, tool, todo) go into chatList.
 func (m *Model) bridgeDualWriteSystem(text string) {
 	m.output.WriteString(text)
 	m.chatEntries.Append(ChatEntry{Role: "system", RawText: text})
-	m.chatWriteSystem(nextSystemID(), text)
+	// Intentionally NOT writing to chatList
 }

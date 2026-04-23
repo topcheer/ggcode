@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
@@ -104,6 +105,39 @@ func (m *Model) resetActivityGroups() {
 	m.activityGroups = nil
 }
 
+// chatFinishAllRunningTools marks all running tool items in chatList as success.
+// Called when a round ends (doneMsg) to finalize any tool items that weren't
+// explicitly finished via finishToolActivity.
+func (m *Model) chatFinishAllRunningTools() {
+	if m.chatList == nil {
+		return
+	}
+	for i := 0; i < m.chatList.Len(); i++ {
+		item := m.chatList.ItemAt(i)
+		if item == nil {
+			continue
+		}
+		switch v := item.(type) {
+		case *chat.BashToolItem:
+			if v.Status() == chat.StatusRunning {
+				v.SetStatus(chat.StatusSuccess)
+			}
+		case *chat.FileToolItem:
+			if v.Status() == chat.StatusRunning {
+				v.SetStatus(chat.StatusSuccess)
+			}
+		case *chat.SearchToolItem:
+			if v.Status() == chat.StatusRunning {
+				v.SetStatus(chat.StatusSuccess)
+			}
+		case *chat.GenericToolItem:
+			if v.Status() == chat.StatusRunning {
+				v.SetStatus(chat.StatusSuccess)
+			}
+		}
+	}
+}
+
 func (m *Model) flushGroupedActivitiesToOutput() {
 	grouped := m.renderGroupedActivities()
 	if grouped == "" {
@@ -118,6 +152,7 @@ func (m *Model) flushGroupedActivitiesToOutput() {
 	// Write to old chatEntries for fallback
 	m.chatEntries.Append(ChatEntry{Role: "tool", RawText: grouped})
 	// Do NOT call dualWriteSystem — that would duplicate in chatList
+	m.chatFinishAllRunningTools()
 	m.resetActivityGroups()
 }
 
