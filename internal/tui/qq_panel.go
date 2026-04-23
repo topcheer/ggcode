@@ -61,6 +61,7 @@ func (m Model) renderQQPanel() string {
 	}
 	entries := m.qqBindingEntries()
 	currentBindings := currentQQBindings(m.imManager)
+	currentWS := m.currentWorkspacePath()
 	boundCount := 0
 	for _, entry := range entries {
 		if strings.TrimSpace(entry.OccupiedBy) != "" {
@@ -69,10 +70,7 @@ func (m Model) renderQQPanel() string {
 	}
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.directory")),
-		fmt.Sprintf(" %s", firstNonEmptyQQ(m.currentWorkspacePath(), m.t("panel.qq.none"))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.runtime")),
-		fmt.Sprintf(" %s", m.qqRuntimeStatus()),
+		fmt.Sprintf(" %s", firstNonEmptyQQ(currentWS, m.t("panel.qq.none"))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.bots")),
 		fmt.Sprintf(" %s", m.t("panel.qq.created", len(entries))),
@@ -85,8 +83,12 @@ func (m Model) renderQQPanel() string {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.qq.none")))
 	} else {
 		for _, current := range currentBindings {
+			status := "active"
+			if current.Muted {
+				status = "muted"
+			}
 			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.qq.adapter", current.Adapter)),
+				fmt.Sprintf(" %s (%s)", current.Adapter, status),
 				fmt.Sprintf(" %s", m.t("panel.qq.target", firstNonEmptyQQ(current.TargetID, m.t("panel.qq.default")))),
 				fmt.Sprintf(" %s", m.t("panel.qq.channel", firstNonEmptyQQ(current.ChannelID, m.t("panel.qq.none")))),
 			)
@@ -99,11 +101,17 @@ func (m Model) renderQQPanel() string {
 		selected := clampQQSelection(panel.selected, len(entries))
 		body = append(body, m.renderProviderList(m.qqBindingLabels(entries), selected, true))
 		entry := entries[selected]
-		status := m.t("panel.qq.entry.available")
-		if entry.Muted {
+		currentWS := m.currentWorkspacePath()
+		var status string
+		switch {
+		case entry.Muted:
 			status = m.t("panel.qq.entry.muted")
-		} else if entry.OccupiedBy != "" {
-			status = m.t("panel.qq.entry.bound")
+		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
+			status = m.t("panel.qq.entry.active")
+		case entry.OccupiedBy != "":
+			status = m.t("panel.qq.entry.bound_other", entry.OccupiedBy)
+		default:
+			status = m.t("panel.qq.entry.available")
 		}
 		body = append(body,
 			"",
@@ -401,14 +409,21 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 }
 
 func (m Model) qqBindingLabels(entries []qqBindingEntry) []string {
+	currentWS := m.currentWorkspacePath()
 	labels := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		status := m.t("panel.qq.entry.available")
-		if entry.OccupiedBy != "" {
-			status = m.t("panel.qq.entry.bound")
+		var status string
+		switch {
+		case entry.Muted:
+			status = m.t("panel.qq.entry.muted")
+		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
+			status = m.t("panel.qq.entry.active")
+		case entry.OccupiedBy != "":
+			status = m.t("panel.qq.entry.bound_other", entry.OccupiedBy)
+		default:
+			status = m.t("panel.qq.entry.available")
 		}
-		label := fmt.Sprintf("%s · %s", entry.Adapter, status)
-		labels = append(labels, label)
+		labels = append(labels, fmt.Sprintf("%s · %s", entry.Adapter, status))
 	}
 	return labels
 }
