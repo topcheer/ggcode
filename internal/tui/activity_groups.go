@@ -15,6 +15,9 @@ const maxActivityGroups = 4
 const maxVisibleGroupItems = 5
 
 func (m *Model) startToolActivity(ts ToolStatusMsg) {
+	// New path: add tool item to chatList
+	m.chatStartTool(ts)
+
 	if isSubAgentLifecycleTool(ts.ToolName) {
 		return
 	}
@@ -45,6 +48,9 @@ func (m *Model) startToolActivity(ts ToolStatusMsg) {
 }
 
 func (m *Model) finishToolActivity(ts ToolStatusMsg) {
+	// New path: update tool item in chatList
+	m.chatFinishTool(ts)
+
 	if isSubAgentLifecycleTool(ts.ToolName) {
 		return
 	}
@@ -104,10 +110,14 @@ func (m *Model) flushGroupedActivitiesToOutput() {
 		return
 	}
 	if m.output.Len() > 0 && !strings.HasSuffix(m.output.String(), "\n") {
-		m.dualWriteSystem("\n")
+		m.output.WriteString("\n")
 	}
-	m.dualWriteSystem(grouped)
-	m.dualWriteSystem("\n")
+	// Write to legacy output only — chatList already has individual tool items
+	m.output.WriteString(grouped)
+	m.output.WriteString("\n")
+	// Write to old chatEntries for fallback
+	m.chatEntries.Append(ChatEntry{Role: "tool", RawText: grouped})
+	// Do NOT call dualWriteSystem — that would duplicate in chatList
 	m.resetActivityGroups()
 }
 
@@ -671,6 +681,9 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 		}
 		return "Synced todo state"
 	}
+	// New path: update TodoToolItem in chatList
+	m.chatUpdateTodoItem(todos)
+
 	return summarizeTodoChanges(m.currentLanguage(), changes)
 }
 

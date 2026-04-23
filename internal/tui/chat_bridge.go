@@ -60,6 +60,132 @@ func (m *Model) chatReset() {
 	}
 }
 
+// chatStartTool adds a running tool item to chatList, or updates an existing one.
+func (m *Model) chatStartTool(ts ToolStatusMsg) {
+	if m.chatList == nil || isSubAgentLifecycleTool(ts.ToolName) {
+		return
+	}
+	id := ts.ToolID
+	if id == "" {
+		id = nextChatID()
+	}
+	existing := m.chatList.FindByID(id)
+	if existing != nil {
+		// Already tracked — just update status
+		m.chatUpdateToolStatus(id, chat.StatusRunning)
+		return
+	}
+	// Create a new tool item based on the tool name
+	input := ts.RawArgs
+	if input == "" {
+		input = ts.Args
+	}
+	item := chat.NewToolItem(id, ts.ToolName, chat.StatusRunning, input, m.chatStyles)
+	m.chatList.Append(item)
+}
+
+// chatFinishTool marks a tool item as finished with result.
+func (m *Model) chatFinishTool(ts ToolStatusMsg) {
+	if m.chatList == nil || isSubAgentLifecycleTool(ts.ToolName) {
+		return
+	}
+	id := ts.ToolID
+	if id == "" {
+		return
+	}
+
+	status := chat.StatusSuccess
+	if ts.IsError {
+		status = chat.StatusError
+	}
+
+	existing := m.chatList.FindByID(id)
+	if existing == nil {
+		// Not tracked yet — create a finished item
+		input := ts.RawArgs
+		if input == "" {
+			input = ts.Args
+		}
+		item := chat.NewToolItem(id, ts.ToolName, status, input, m.chatStyles)
+		// Set result on the appropriate type
+		m.setToolResult(item, ts.Result)
+		m.chatList.Append(item)
+		return
+	}
+
+	// Update existing item
+	m.chatUpdateToolStatus(id, status)
+	m.setToolResult(existing, ts.Result)
+}
+
+// chatUpdateToolStatus updates the status of a tool item.
+func (m *Model) chatUpdateToolStatus(id string, status chat.ToolStatus) {
+	if m.chatList == nil {
+		return
+	}
+	item := m.chatList.FindByID(id)
+	if item == nil {
+		return
+	}
+	switch v := item.(type) {
+	case *chat.BaseToolItem:
+		v.SetStatus(status)
+	case *chat.BashToolItem:
+		v.SetStatus(status)
+	case *chat.FileToolItem:
+		v.SetStatus(status)
+	case *chat.SearchToolItem:
+		v.SetStatus(status)
+	case *chat.GenericToolItem:
+		v.SetStatus(status)
+	}
+}
+
+// setToolResult sets the result on the appropriate tool item type.
+func (m *Model) setToolResult(item chat.Item, result string) {
+	switch v := item.(type) {
+	case *chat.BaseToolItem:
+		v.SetResult(result, false)
+	case *chat.BashToolItem:
+		v.SetResult(result, false)
+	case *chat.FileToolItem:
+		v.SetResult(result, false)
+	case *chat.SearchToolItem:
+		v.SetResult(result, false)
+	case *chat.GenericToolItem:
+		v.SetResult(result, false)
+	}
+}
+
+// todoToolItemID is the fixed ID for the persistent todo list in chatList.
+const todoToolItemID = "todo-list"
+
+// chatUpdateTodoItem updates or creates the TodoToolItem in chatList.
+func (m *Model) chatUpdateTodoItem(todos []todoStateItem) {
+	if m.chatList == nil || len(todos) == 0 {
+		return
+	}
+	tasks := make([]chat.TodoTask, len(todos))
+	for i, td := range todos {
+		tasks[i] = chat.TodoTask{
+			ID:      td.ID,
+			Content: td.Content,
+			Status:  td.Status,
+		}
+	}
+
+	existing := m.chatList.FindByID(todoToolItemID)
+	if existing != nil {
+		if todo, ok := existing.(*chat.TodoToolItem); ok {
+			todo.SetTasks(tasks)
+			return
+		}
+	}
+	// Create new
+	item := chat.NewTodoToolItem(todoToolItemID, tasks, m.chatStyles)
+	m.chatList.Append(item)
+}
+
 // nextChatID generates a unique ID for chat items.
 var chatIDCounter int64
 
