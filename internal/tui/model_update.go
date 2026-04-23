@@ -223,6 +223,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.config.SaveSidebarPreference(m.sidebarVisible)
 			}
 			m.chatEntries.InvalidateAll()
+			m.relayoutAfterSidebarChange()
 			return m, nil
 		}
 		if msg.String() == "ctrl+f" {
@@ -589,7 +590,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			newVal := val[:cursor] + "\n" + val[cursor:]
 			m.input.SetValue(newVal)
-			m.input.SetHeight(composerHeight(newVal))
+			m.input.SetHeight(composerWrappedHeight(newVal, m.input.Width()))
 			m.updateAutoComplete()
 			return m, nil
 		}
@@ -1675,7 +1676,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	newValue := m.input.Value()
 	if oldValue != newValue {
-		m.input.SetHeight(composerHeight(newValue))
+		m.input.SetHeight(composerWrappedHeight(newValue, m.input.Width()))
 		debug.Log("tui", "CATCHALL input changed old=%q new=%q", truncateStr(oldValue, 80), truncateStr(newValue, 80))
 	}
 
