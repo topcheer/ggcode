@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
@@ -66,6 +67,8 @@ type Model struct {
 	input                           textarea.Model
 	output                          *bytes.Buffer
 	chatEntries                     *ChatEntryList // structured conversation entries for deferred rendering
+	chatList                        *chat.List     // new virtual-scrolling list (replaces chatEntries + viewport)
+	chatStyles                      chat.Styles
 	shellMode                       bool
 	loading                         bool
 	quitting                        bool
@@ -367,6 +370,8 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		input:                ta,
 		output:               &bytes.Buffer{},
 		chatEntries:          NewChatEntryList(),
+		chatList:             chat.NewList(80, 20),
+		chatStyles:           chat.DefaultStyles(),
 		styles:               s,
 		agent:                a,
 		language:             LangEnglish,

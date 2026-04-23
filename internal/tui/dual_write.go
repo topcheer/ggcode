@@ -2,10 +2,8 @@ package tui
 
 import "fmt"
 
-// dualWrite appends to both the legacy output buffer and the new chatEntries list.
-// This is the migration bridge: all callers that previously only wrote to
-// m.output should use this instead. Once the migration is complete,
-// m.output can be removed.
+// dualWrite appends to both the legacy output buffer and the new chatEntries list
+// AND the new chatList. This is the migration bridge.
 func (m *Model) dualWrite(entry ChatEntry) {
 	// Write rendered content to legacy output buffer
 	if entry.Prefix != "" && (entry.Role == "user" || entry.Role == "assistant") {
@@ -17,19 +15,20 @@ func (m *Model) dualWrite(entry ChatEntry) {
 		m.output.WriteString(entry.RawText)
 	}
 	m.chatEntries.Append(entry)
+
+	// Also write to new chatList
+	m.bridgeDualWrite(entry)
 }
 
-// dualWriteSystem writes a pre-rendered system/tool string to both paths.
+// dualWriteSystem writes a pre-rendered system/tool string to all paths.
 func (m *Model) dualWriteSystem(text string) {
-	m.output.WriteString(text)
-	m.chatEntries.Append(ChatEntry{Role: "system", RawText: text})
+	m.bridgeDualWriteSystem(text)
 }
 
-// sysf writes a formatted system line to both output paths.
+// sysf writes a formatted system line to all output paths.
 // Equivalent to m.output.WriteString(fmt.Sprintf(format, args...))
 // but also records in chatEntries for deferred rendering.
 func (m *Model) sysf(format string, args ...interface{}) {
 	text := fmt.Sprintf(format, args...)
-	m.output.WriteString(text)
-	m.chatEntries.Append(ChatEntry{Role: "system", RawText: text})
+	m.bridgeDualWriteSystem(text)
 }

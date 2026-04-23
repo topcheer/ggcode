@@ -1,0 +1,126 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/topcheer/ggcode/internal/chat"
+)
+
+// chatWrite appends an item to the new chatList.
+func (m *Model) chatWrite(item chat.Item) {
+	if m.chatList != nil {
+		m.chatList.Append(item)
+	}
+}
+
+// chatWriteUser appends a user message to chatList.
+func (m *Model) chatWriteUser(id, text string) {
+	m.chatWrite(chat.NewUserItem(id, text, m.chatStyles))
+}
+
+// chatWriteSystem appends a system/status message to chatList.
+func (m *Model) chatWriteSystem(id, text string) {
+	m.chatWrite(chat.NewSystemItem(id, text, m.chatStyles))
+}
+
+// chatStartAssistant creates a streaming assistant entry in chatList.
+func (m *Model) chatStartAssistant(id string) {
+	m.chatWrite(chat.NewAssistantItem(id, m.chatStyles))
+}
+
+// chatUpdateAssistantText updates the streaming assistant text.
+func (m *Model) chatUpdateAssistantText(id, text string) {
+	if m.chatList == nil {
+		return
+	}
+	if item := m.chatList.FindByID(id); item != nil {
+		if a, ok := item.(*chat.AssistantItem); ok {
+			a.SetText(text)
+		}
+	}
+}
+
+// chatFinishAssistant marks the assistant as done streaming.
+func (m *Model) chatFinishAssistant(id string) {
+	if m.chatList == nil {
+		return
+	}
+	if item := m.chatList.FindByID(id); item != nil {
+		if a, ok := item.(*chat.AssistantItem); ok {
+			a.SetFinished()
+		}
+	}
+}
+
+// chatReset clears the chatList.
+func (m *Model) chatReset() {
+	if m.chatList != nil {
+		m.chatList.SetItems(nil)
+	}
+}
+
+// nextChatID generates a unique ID for chat items.
+var chatIDCounter int64
+
+func nextChatID() string {
+	chatIDCounter++
+	return fmt.Sprintf("chat-%d", chatIDCounter)
+}
+
+// nextSystemID generates a unique ID for system messages.
+var sysIDCounter int64
+
+func nextSystemID() string {
+	sysIDCounter++
+	return fmt.Sprintf("sys-%d", sysIDCounter)
+}
+
+// assistantStreamingID is the fixed ID for the current streaming assistant.
+const assistantStreamingID = "assistant-streaming"
+
+// bridgeDualWrite writes to both old chatEntries and new chatList.
+// Call this during migration where dualWrite was previously used.
+// Once migration is complete, this function and all chatEntries code can be removed.
+func (m *Model) bridgeDualWrite(entry ChatEntry) {
+	// Old path
+	if entry.Prefix != "" && (entry.Role == "user" || entry.Role == "assistant") {
+		m.output.WriteString(m.renderConversationUserEntry(entry.Prefix, entry.RawText))
+		m.output.WriteString("\n")
+	} else if entry.Role == "assistant" {
+		// Pure markdown, no prefix
+	} else {
+		m.output.WriteString(entry.RawText)
+	}
+	m.chatEntries.Append(entry)
+
+	// New path — also write to chatList
+	if m.chatList == nil {
+		return
+	}
+	switch entry.Role {
+	case "user":
+		m.chatWriteUser(nextChatID(), entry.RawText)
+	case "assistant":
+		if entry.Streaming {
+			if m.chatList.FindByID(assistantStreamingID) == nil {
+				m.chatStartAssistant(assistantStreamingID)
+			}
+			m.chatUpdateAssistantText(assistantStreamingID, entry.RawText)
+		} else {
+			m.chatUpdateAssistantText(assistantStreamingID, entry.RawText)
+			m.chatFinishAssistant(assistantStreamingID)
+		}
+	case "system":
+		m.chatWriteSystem(nextSystemID(), strings.TrimSpace(entry.RawText))
+	case "tool":
+		m.chatWriteSystem(nextSystemID(), strings.TrimSpace(entry.RawText))
+	}
+}
+
+// bridgeDualWriteSystem writes a pre-rendered system string to all paths.
+func (m *Model) bridgeDualWriteSystem(text string) {
+	m.output.WriteString(text)
+	m.chatEntries.Append(ChatEntry{Role: "system", RawText: text})
+	m.chatWriteSystem(nextSystemID(), text)
+}
