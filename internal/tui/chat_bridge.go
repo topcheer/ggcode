@@ -138,33 +138,15 @@ func (m *Model) chatUpdateToolStatus(id string, status chat.ToolStatus) {
 	if item == nil {
 		return
 	}
-	switch v := item.(type) {
-	case *chat.BaseToolItem:
-		v.SetStatus(status)
-	case *chat.BashToolItem:
-		v.SetStatus(status)
-	case *chat.FileToolItem:
-		v.SetStatus(status)
-	case *chat.SearchToolItem:
-		v.SetStatus(status)
-	case *chat.GenericToolItem:
-		v.SetStatus(status)
+	if setter, ok := item.(interface{ SetStatus(chat.ToolStatus) }); ok {
+		setter.SetStatus(status)
 	}
 }
 
 // setToolResult sets the result on the appropriate tool item type.
 func (m *Model) setToolResult(item chat.Item, result string) {
-	switch v := item.(type) {
-	case *chat.BaseToolItem:
-		v.SetResult(result, false)
-	case *chat.BashToolItem:
-		v.SetResult(result, false)
-	case *chat.FileToolItem:
-		v.SetResult(result, false)
-	case *chat.SearchToolItem:
-		v.SetResult(result, false)
-	case *chat.GenericToolItem:
-		v.SetResult(result, false)
+	if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
+		setter.SetResult(result, false)
 	}
 }
 

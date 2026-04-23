@@ -60,6 +60,17 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 				textParts = nil
 			}
 			m.output.WriteString(m.renderConversationToolResult(block, toolCalls))
+			// Update the corresponding chatList tool item with the result
+			if block.ToolID != "" && m.chatList != nil {
+				if item := m.chatList.FindByID(block.ToolID); item != nil {
+					status := chat.StatusSuccess
+					if block.IsError {
+						status = chat.StatusError
+					}
+					m.chatUpdateToolStatus(block.ToolID, status)
+					m.setToolResult(item, block.Output)
+				}
+			}
 		}
 	}
 	if text := strings.TrimSpace(strings.Join(textParts, "\n\n")); text != "" {
