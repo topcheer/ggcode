@@ -193,6 +193,12 @@ func NewSystemItem(id, text string, styles Styles) *SystemItem {
 
 func (s *SystemItem) ID() string { return s.id }
 
+// AppendText appends more text to this system item (for merging consecutive writes).
+func (s *SystemItem) AppendText(text string) {
+	s.text += text
+	s.Invalidate()
+}
+
 func (s *SystemItem) Render(width int) string {
 	if cached, _, ok := s.GetCached(width); ok {
 		return cached

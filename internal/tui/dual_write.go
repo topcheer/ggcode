@@ -11,11 +11,24 @@ import (
 func (m *Model) dualWriteSystem(text string) {
 	// Legacy path
 	m.bridgeDualWriteSystem(text)
-	// Also add to chatList as a system item
-	if m.chatList != nil && strings.TrimSpace(text) != "" {
-		item := chat.NewSystemItem(nextChatID(), stripAnsiForChat(text), m.chatStyles)
-		m.chatList.Append(item)
+	// Also add to chatList — merge with last SystemItem if possible
+	if m.chatList == nil {
+		return
 	}
+	clean := stripAnsiForChat(text)
+	if strings.TrimSpace(clean) == "" {
+		return
+	}
+	// Try to merge with the last system item to avoid fragmentation
+	lastIdx := m.chatList.Len() - 1
+	if lastIdx >= 0 {
+		if si, ok := m.chatList.ItemAt(lastIdx).(*chat.SystemItem); ok {
+			si.AppendText(clean)
+			return
+		}
+	}
+	item := chat.NewSystemItem(nextChatID(), clean, m.chatStyles)
+	m.chatList.Append(item)
 }
 
 // sysf writes a formatted system line to all output paths.
