@@ -168,11 +168,18 @@ func (l *List) AtBottom() bool {
 
 // Render produces the visible portion of the list as a single string.
 // Only items within the viewport are rendered.
+// When follow is active, scroll position is re-synced automatically.
 func (l *List) Render() string {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+
+	// Re-sync scroll when follow is active — item content may have changed
+	// since last scroll calculation (e.g. streaming text updates).
+	if l.follow {
+		l.scrollToEndLocked()
+	}
 
 	if len(l.items) == 0 || l.height <= 0 || l.width <= 0 {
+		l.mu.Unlock()
 		return ""
 	}
 
@@ -220,7 +227,9 @@ func (l *List) Render() string {
 	}
 
 	l.dirty = false
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+	l.mu.Unlock()
+	return result
 }
 
 // scrollToEndLocked moves the viewport to show the last items.

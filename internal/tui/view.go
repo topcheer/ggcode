@@ -881,11 +881,6 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 	if m.chatList != nil && m.chatList.Len() > 0 {
 		// chatList manages its own virtual scroll — no viewport middleman
 		m.chatList.SetSize(innerW, innerH)
-		// Re-sync scroll position when follow is active — item content
-		// may have grown since last scroll calculation (streaming text).
-		if m.chatList.Follow() {
-			m.chatList.ScrollToEnd()
-		}
 		content = m.chatList.Render()
 	} else {
 		// Legacy path: viewport + renderOutput
