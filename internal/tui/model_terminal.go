@@ -185,7 +185,6 @@ func (m *Model) sanitizeTerminalResponseInput() {
 	}
 	debug.Log("tui", "sanitize input changed value=%q cleaned=%q", truncateStr(value, 120), truncateStr(cleaned, 120))
 	m.input.SetValue(cleaned)
-	m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	composerCursorEnd(&m.input)
 }
 

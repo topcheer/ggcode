@@ -653,7 +653,7 @@ func TestComposerPanelHeightDoesNotShrinkWhenInputWraps(t *testing.T) {
 	}
 }
 
-func TestComposerPanelMultilineDraftRendersSinglePrompt(t *testing.T) {
+func TestComposerPanelMultilineDraftRendersPromptsPerLine(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
 	m.input.SetValue("first line\nsecond line\nthird line")
@@ -661,8 +661,10 @@ func TestComposerPanelMultilineDraftRendersSinglePrompt(t *testing.T) {
 
 	rendered := m.renderComposerPanel()
 
-	if got := strings.Count(rendered, m.input.Prompt); got != 1 {
-		t.Fatalf("expected a single composer prompt, got %d in %q", got, rendered)
+	// With DynamicHeight, the textarea renders a prompt per visible line.
+	// Three logical lines should produce at least 3 prompts.
+	if got := strings.Count(rendered, m.input.Prompt); got < 3 {
+		t.Fatalf("expected at least 3 composer prompts for 3 lines, got %d in %q", got, rendered)
 	}
 	for _, line := range strings.Split(rendered, "\n") {
 		if lipgloss.Width(line) > m.mainColumnWidth() {

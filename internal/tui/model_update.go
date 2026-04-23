@@ -186,7 +186,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 		return m, cmd
 
 	case tea.KeyPressMsg:
@@ -540,8 +539,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.shellMode && !m.loading {
 				m.setShellMode(false)
-				m.input.SetValue("")
-				m.input.SetHeight(1)
+				m.input.Reset()
 				return m, nil
 			}
 		case "enter":
@@ -550,8 +548,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.resetExitConfirm()
 			text := strings.TrimSpace(m.input.Value())
-			m.input.SetValue("")
-			m.input.SetHeight(1)
+			m.input.Reset()
 			if text == "" {
 				return m, nil
 			}
@@ -590,7 +587,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			newVal := val[:cursor] + "\n" + val[cursor:]
 			m.input.SetValue(newVal)
-			m.input.SetHeight(composerWrappedHeight(newVal, m.input.Width()))
 			m.updateAutoComplete()
 			return m, nil
 		}
@@ -1544,8 +1540,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// set programmatically by callers (e.g. IM tests).
 		if val := m.input.Value(); val != "" && looksLikeStartupGarbage(val) {
 			debug.Log("tui", "clearing pre-drain input garbage: %q", truncateStr(val, 80))
-			m.input.SetValue("")
-			m.input.SetHeight(1)
+			m.input.Reset()
 		}
 		// Start the input drain window. Terminal responses (OSC 11 color
 		// query, CPR, Kitty mode report, mouse-mode/altscreen ACKs) arrive
@@ -1676,7 +1671,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	newValue := m.input.Value()
 	if oldValue != newValue {
-		m.input.SetHeight(composerWrappedHeight(newValue, m.input.Width()))
 		debug.Log("tui", "CATCHALL input changed old=%q new=%q", truncateStr(oldValue, 80), truncateStr(newValue, 80))
 	}
 
@@ -1688,8 +1682,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// inspecting the accumulated value for distinctive patterns.
 	if oldValue != newValue && looksLikeTerminalResponseInput(newValue) {
 		debug.Log("tui", "CATCHALL terminal response detected in input, clearing: %q", truncateStr(newValue, 80))
-		m.input.SetValue("")
-		m.input.SetHeight(1)
+		m.input.Reset()
 	}
 
 	// Update autocomplete state based on current input

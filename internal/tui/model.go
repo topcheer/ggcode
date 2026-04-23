@@ -311,6 +311,11 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ta.SetWidth(74)
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
+	// DynamicHeight lets the textarea auto-grow/shrink based on content,
+	// accounting for soft word-wrapping. MinHeight/MaxHeight bound the range.
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
+	ta.MaxHeight = 10
 	// Single-line mode: Enter submits, Shift+Enter inserts newline.
 	// Show min 1 line, expand up to 10 lines for multiline input.
 	taStyles := textarea.DefaultStyles(true)

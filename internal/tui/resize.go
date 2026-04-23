@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/textarea"
-	"github.com/mattn/go-runewidth"
 )
 
 // handleResize updates viewport and input dimensions on window size changes.
@@ -27,7 +26,6 @@ func (m *Model) handleResize(width, height int) {
 		inputWidth = m.mainColumnWidth()
 	}
 	m.input.SetWidth(inputWidth)
-	m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 	m.syncQuestionnaireInputWidth()
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
@@ -38,7 +36,7 @@ func (m *Model) handleResize(width, height int) {
 }
 
 // composerHeight returns the textarea height based on the number of lines
-// in the input value. Min 1, max 10.
+// in the input value. Min 1, max 10. Used only in tests.
 func composerHeight(value string) int {
 	lines := strings.Count(value, "\n") + 1
 	if lines < 1 {
@@ -50,39 +48,6 @@ func composerHeight(value string) int {
 	return lines
 }
 
-// composerWrappedHeight calculates the actual number of rendered lines
-// accounting for word-wrapping at the given textarea width.
-func composerWrappedHeight(value string, width int) int {
-	if width <= 0 {
-		width = 1
-	}
-	totalLines := 0
-	for _, line := range strings.Split(value, "\n") {
-		if len(line) == 0 {
-			totalLines++
-			continue
-		}
-		// Use runewidth for correct CJK character width calculation.
-		lineWidth := runewidth.StringWidth(line)
-		if lineWidth == 0 {
-			totalLines++
-			continue
-		}
-		wrapped := (lineWidth + width - 1) / width
-		if wrapped < 1 {
-			wrapped = 1
-		}
-		totalLines += wrapped
-	}
-	if totalLines < 1 {
-		totalLines = 1
-	}
-	if totalLines > 10 {
-		totalLines = 10
-	}
-	return totalLines
-}
-
 // relayoutAfterSidebarChange re-computes input and viewport widths when the
 // sidebar is toggled without a window resize event.
 func (m *Model) relayoutAfterSidebarChange() {
@@ -91,7 +56,6 @@ func (m *Model) relayoutAfterSidebarChange() {
 		inputWidth = m.mainColumnWidth()
 	}
 	m.input.SetWidth(inputWidth)
-	m.input.SetHeight(composerWrappedHeight(m.input.Value(), inputWidth))
 	m.viewport.SetSize(m.mainColumnWidth(), m.calcViewportHeight())
 }
 
