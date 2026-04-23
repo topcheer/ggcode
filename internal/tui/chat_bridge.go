@@ -59,7 +59,16 @@ func (m *Model) chatReset() {
 	}
 }
 
-// chatStartTool adds a running tool item to chatList, or updates an existing one.
+// chatListScrollToBottom scrolls conversation to bottom.
+// chatList path or viewport path — one or the other, no bridge.
+func (m *Model) chatListScrollToBottom() {
+	if m.chatList != nil && m.chatList.Len() > 0 {
+		m.chatList.ScrollToEnd()
+	} else {
+		m.viewport.GotoBottom()
+	}
+}
+
 func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	if m.chatList == nil || isSubAgentLifecycleTool(ts.ToolName) {
 		return

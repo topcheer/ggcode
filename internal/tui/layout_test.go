@@ -1461,13 +1461,12 @@ func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
 	}
 	m.closeToolActivityGroup()
 
-	output := m.renderOutput()
-
-	// With chatList, each tool is an individual item (no folding/capping).
-	// Verify all 7 tool items appear.
+	// chatList renders via renderConversationPanel, not renderOutput.
+	// Use View() to get the actual rendered output.
+	view := m.View().Content
 	for i := 1; i <= 7; i++ {
-		if !strings.Contains(output, fmt.Sprintf("step-%d.md", i)) {
-			t.Fatalf("expected step-%d.md to be visible in output", i)
+		if !strings.Contains(view, fmt.Sprintf("step-%d.md", i)) {
+			t.Fatalf("expected step-%d.md to be visible in view", i)
 		}
 	}
 }
