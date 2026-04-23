@@ -70,7 +70,27 @@ func (m *Model) chatListScrollToBottom() {
 }
 
 func (m *Model) chatStartTool(ts ToolStatusMsg) {
-	if m.chatList == nil || isSubAgentLifecycleTool(ts.ToolName) {
+	if m.chatList == nil {
+		return
+	}
+
+	// spawn_agent → create AgentToolItem
+	if ts.ToolName == "spawn_agent" {
+		id := ts.ToolID
+		if id == "" {
+			id = nextChatID()
+		}
+		taskDisplay := ts.Detail
+		if taskDisplay == "" {
+			taskDisplay = ts.Args
+		}
+		item := chat.NewAgentToolItem(id, taskDisplay, chat.StatusRunning, m.chatStyles)
+		m.chatWrite(item)
+		return
+	}
+
+	// wait_agent / list_agents → update spawn_agent status
+	if isSubAgentLifecycleTool(ts.ToolName) {
 		return
 	}
 	id := ts.ToolID
@@ -97,7 +117,30 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 
 // chatFinishTool marks a tool item as finished with result.
 func (m *Model) chatFinishTool(ts ToolStatusMsg) {
-	if m.chatList == nil || isSubAgentLifecycleTool(ts.ToolName) {
+	if m.chatList == nil {
+		return
+	}
+
+	// spawn_agent finish → mark AgentToolItem as done
+	if ts.ToolName == "spawn_agent" {
+		id := ts.ToolID
+		if id == "" {
+			return
+		}
+		item := m.chatList.FindByID(id)
+		if item == nil {
+			return
+		}
+		status := chat.StatusSuccess
+		if ts.IsError {
+			status = chat.StatusError
+		}
+		m.chatUpdateToolStatus(id, status)
+		m.setToolResult(item, ts.Result)
+		return
+	}
+
+	if isSubAgentLifecycleTool(ts.ToolName) {
 		return
 	}
 	id := ts.ToolID

@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/tree"
 )
 
 // BaseToolItem provides shared rendering logic for all tool items.
@@ -488,43 +491,24 @@ func (a *AgentToolItem) Render(width int) string {
 	}
 	header := a.styles.ToolHeader(a.status, "Agent", width, taskDisplay)
 
-	var sb strings.Builder
-	sb.WriteString(header)
+	if len(a.nestedItems) == 0 {
+		rendered := header
+		a.SetCached(rendered, width, measureHeight(rendered))
+		return rendered
+	}
 
-	// Nested tools with tree lines
+	// Build tree with nested tool calls
 	innerWidth := width - 4
-	for i, item := range a.nestedItems {
-		content := item.Render(innerWidth)
-		lines := strings.Split(content, "\n")
-		for j, line := range lines {
-			sb.WriteString("\n  ")
-			if i < len(a.nestedItems)-1 {
-				if j == 0 {
-					sb.WriteString("├ ")
-				} else {
-					sb.WriteString("│ ")
-				}
-			} else {
-				if j == 0 {
-					sb.WriteString("└ ")
-				} else {
-					sb.WriteString("  ")
-				}
-			}
-			sb.WriteString(line)
-		}
+	t := tree.Root(header)
+	for _, item := range a.nestedItems {
+		t.Child(item.Render(innerWidth))
 	}
 
-	// Result summary
-	if a.result != "" && a.status != StatusPending && a.status != StatusRunning {
-		resultDisplay := a.result
-		if len(resultDisplay) > width-12 {
-			resultDisplay = resultDisplay[:width-13] + "…"
-		}
-		sb.WriteString(fmt.Sprintf("\n  %s", resultDisplay))
-	}
+	// Style the tree with rounded enumerator
+	enumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	t.EnumeratorStyle(enumStyle)
 
-	rendered := sb.String()
+	rendered := t.String()
 	a.SetCached(rendered, width, measureHeight(rendered))
 	return rendered
 }
