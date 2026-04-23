@@ -1461,12 +1461,15 @@ func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
 	}
 	m.closeToolActivityGroup()
 
-	// chatList renders via renderConversationPanel, not renderOutput.
-	// Use View() to get the actual rendered output.
-	view := m.View().Content
-	for i := 1; i <= 7; i++ {
-		if !strings.Contains(view, fmt.Sprintf("step-%d.md", i)) {
-			t.Fatalf("expected step-%d.md to be visible in view", i)
+	// Verify chatList has all 7 tool items with correct params
+	if m.chatList == nil || m.chatList.Len() != 7 {
+		t.Fatalf("expected 7 chatList items, got %d", m.chatList.Len())
+	}
+	for i := 0; i < 7; i++ {
+		item := m.chatList.ItemAt(i)
+		rendered := item.Render(m.conversationInnerWidth())
+		if !strings.Contains(rendered, fmt.Sprintf("step-%d.md", i+1)) {
+			t.Errorf("item %d: expected step-%d.md in render, got: %q", i, i+1, rendered)
 		}
 	}
 }

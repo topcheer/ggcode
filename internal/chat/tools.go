@@ -139,6 +139,43 @@ type BashToolItem struct {
 }
 
 // NewBashToolItem creates a new bash tool item.
+// PrettifyToolName converts internal tool names to display names.
+// e.g. "run_command" → "Bash", "read_file" → "Read", "search_files" → "Grep"
+func PrettifyToolName(name string) string {
+	m := map[string]string{
+		"run_command":        "Bash",
+		"bash":               "Bash",
+		"start_command":      "Bash",
+		"read_file":          "Read",
+		"view":               "Read",
+		"write_file":         "Write",
+		"edit_file":          "Edit",
+		"multiEdit":          "Edit",
+		"multi_edit_file":    "Edit",
+		"search_files":       "Grep",
+		"find":               "Glob",
+		"glob":               "Glob",
+		"todo_write":         "To-Do",
+		"lsp_definition":     "Definition",
+		"lsp_references":     "References",
+		"lsp_hover":          "Hover",
+		"lsp_diagnostics":    "Diagnostics",
+		"lsp_implementation": "Implementation",
+		"lsp_rename":         "Rename",
+		"web_search":         "Search",
+		"web_fetch":          "Fetch",
+		"task_dispatch":      "Agent",
+	}
+	if pretty, ok := m[name]; ok {
+		return pretty
+	}
+	// Fallback: capitalize first letter
+	if len(name) > 0 {
+		return strings.ToUpper(name[:1]) + name[1:]
+	}
+	return name
+}
+
 func NewBashToolItem(id, command string, status ToolStatus, styles Styles) *BashToolItem {
 	b := NewBaseToolItem(id, "Bash", status, "", styles)
 	result := &BashToolItem{BaseToolItem: *b, command: command}
@@ -227,8 +264,10 @@ func NewGenericToolItem(id, toolName string, status ToolStatus, input string, st
 
 // NewToolItem creates the appropriate tool item type based on tool name.
 func NewToolItem(id, toolName string, status ToolStatus, input string, styles Styles) Item {
+	pretty := PrettifyToolName(toolName)
+
 	switch {
-	case toolName == "bash" || toolName == "Bash":
+	case toolName == "bash" || toolName == "Bash" || toolName == "run_command":
 		var cmd string
 		var m map[string]string
 		if json.Unmarshal([]byte(input), &m) == nil {
@@ -236,48 +275,48 @@ func NewToolItem(id, toolName string, status ToolStatus, input string, styles St
 		}
 		return NewBashToolItem(id, cmd, status, styles)
 
-	case toolName == "read" || toolName == "Read" || toolName == "view" || toolName == "View":
+	case toolName == "read" || toolName == "Read" || toolName == "view" || toolName == "View" || toolName == "read_file":
 		var path string
 		var m map[string]string
 		if json.Unmarshal([]byte(input), &m) == nil {
 			path = m["path"]
 		}
-		return NewFileToolItem(id, "Read", path, status, styles)
+		return NewFileToolItem(id, pretty, path, status, styles)
 
-	case toolName == "write" || toolName == "Write":
+	case toolName == "write" || toolName == "Write" || toolName == "write_file":
 		var path string
 		var m map[string]string
 		if json.Unmarshal([]byte(input), &m) == nil {
 			path = m["path"]
 		}
-		return NewFileToolItem(id, "Write", path, status, styles)
+		return NewFileToolItem(id, pretty, path, status, styles)
 
-	case toolName == "edit" || toolName == "Edit" || toolName == "multiEdit" || toolName == "MultiEdit":
+	case toolName == "edit" || toolName == "Edit" || toolName == "multiEdit" || toolName == "MultiEdit" || toolName == "edit_file":
 		var path string
 		var m map[string]string
 		if json.Unmarshal([]byte(input), &m) == nil {
 			path = m["path"]
 		}
-		return NewFileToolItem(id, "Edit", path, status, styles)
+		return NewFileToolItem(id, pretty, path, status, styles)
 
-	case toolName == "grep" || toolName == "Grep":
+	case toolName == "grep" || toolName == "Grep" || toolName == "search_files":
 		var pattern string
 		var m map[string]string
 		if json.Unmarshal([]byte(input), &m) == nil {
 			pattern = m["pattern"]
 		}
-		return NewSearchToolItem(id, "Grep", pattern, status, styles)
+		return NewSearchToolItem(id, pretty, pattern, status, styles)
 
-	case toolName == "glob" || toolName == "Glob":
+	case toolName == "glob" || toolName == "Glob" || toolName == "find":
 		var pattern string
 		var m map[string]string
 		if json.Unmarshal([]byte(input), &m) == nil {
 			pattern = m["pattern"]
 		}
-		return NewSearchToolItem(id, "Glob", pattern, status, styles)
+		return NewSearchToolItem(id, pretty, pattern, status, styles)
 
 	default:
-		return NewGenericToolItem(id, toolName, status, input, styles)
+		return NewGenericToolItem(id, pretty, status, input, styles)
 	}
 }
 
