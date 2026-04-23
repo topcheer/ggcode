@@ -136,6 +136,18 @@ func (a *feishuAdapter) Start(ctx context.Context) {
 	go a.run(ctx)
 }
 
+func (a *feishuAdapter) Close() error {
+	a.mu.Lock()
+	srv := a.httpServer
+	a.httpServer = nil
+	a.connected = false
+	a.mu.Unlock()
+	if srv != nil {
+		return srv.Close()
+	}
+	return nil
+}
+
 func (a *feishuAdapter) run(ctx context.Context) {
 	// Initial token fetch (needed for sending messages regardless of transport)
 	if err := a.refreshToken(ctx); err != nil {

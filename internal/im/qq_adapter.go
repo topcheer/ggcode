@@ -103,6 +103,19 @@ func (a *qqAdapter) Start(ctx context.Context) {
 	go a.run(ctx)
 }
 
+// Close physically closes the websocket connection.
+func (a *qqAdapter) Close() error {
+	a.mu.Lock()
+	ws := a.ws
+	a.ws = nil
+	a.connected = false
+	a.mu.Unlock()
+	if ws != nil {
+		return ws.Close()
+	}
+	return nil
+}
+
 func resolveQQCredentials(adapterCfg config.IMAdapterConfig) (appID, appSecret, source string) {
 	configAppID := strings.TrimSpace(stringValue(adapterCfg.Extra, "appid", "app_id"))
 	configSecret := strings.TrimSpace(stringValue(adapterCfg.Extra, "appsecret", "app_secret", "client_secret"))

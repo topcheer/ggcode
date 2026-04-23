@@ -501,6 +501,81 @@ func TestStopAdapterIdempotent(t *testing.T) {
 	mgr.mu.Unlock()
 }
 
+func TestMuteBindingCallsClose(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "ch-1",
+	})
+
+	// Register a sink that tracks Close calls
+	sink := &dummySink{name: "qq-bot-1"}
+	mgr.RegisterSink(sink)
+
+	// Mute should call Close
+	_ = mgr.MuteBinding("qq-bot-1")
+	if !sink.closed {
+		t.Fatal("expected Close() to be called on mute")
+	}
+}
+
+func TestDisableBindingCallsClose(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "ch-1",
+	})
+
+	sink := &dummySink{name: "qq-bot-1"}
+	mgr.RegisterSink(sink)
+
+	_ = mgr.DisableBinding("qq-bot-1")
+	if !sink.closed {
+		t.Fatal("expected Close() to be called on disable")
+	}
+}
+
+func TestMuteAllCallsClose(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformQQ, Adapter: "qq", ChannelID: "1"})
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformTelegram, Adapter: "tg", ChannelID: "2"})
+
+	qqSink := &dummySink{name: "qq"}
+	tgSink := &dummySink{name: "tg"}
+	mgr.RegisterSink(qqSink)
+	mgr.RegisterSink(tgSink)
+
+	count, _ := mgr.MuteAll()
+	if count != 2 {
+		t.Fatalf("expected 2 muted, got %d", count)
+	}
+	if !qqSink.closed {
+		t.Fatal("expected qq Close() to be called")
+	}
+	if !tgSink.closed {
+		t.Fatal("expected tg Close() to be called")
+	}
+}
+
 func TestMuteBindingSetsDisconnected(t *testing.T) {
 	mgr := NewManager()
 	mgr.BindSession(SessionBinding{
@@ -619,10 +694,15 @@ func TestMuteAllSetsDisconnected(t *testing.T) {
 
 // dummySink is a minimal Sink for testing
 type dummySink struct {
-	name string
+	name   string
+	closed bool
 }
 
 func (d *dummySink) Name() string { return d.name }
 func (d *dummySink) Send(_ context.Context, _ ChannelBinding, _ OutboundEvent) error {
+	return nil
+}
+func (d *dummySink) Close() error {
+	d.closed = true
 	return nil
 }

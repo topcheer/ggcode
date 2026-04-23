@@ -160,6 +160,9 @@ func (a *pcAdapter) Start(ctx context.Context) {
 	a.publishState(false, "disconnected", "")
 }
 
+// Close is a no-op for PC adapter — it uses lazy connections.
+func (a *pcAdapter) Close() error { return nil }
+
 func (a *pcAdapter) saveSessionsToStore() {
 	if a.sessionStore == nil {
 		return

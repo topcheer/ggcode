@@ -95,6 +95,10 @@ func (a *tgAdapter) Start(ctx context.Context) {
 	go a.run(ctx)
 }
 
+// Close is a no-op for the Telegram adapter which uses HTTP long-polling.
+// The polling loop exits via context cancellation.
+func (a *tgAdapter) Close() error { return nil }
+
 func (a *tgAdapter) run(ctx context.Context) {
 	backoffs := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second}
 	attempt := 0

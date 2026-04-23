@@ -243,6 +243,13 @@ type TypingIndicator interface {
 	TriggerTyping(ctx context.Context, binding ChannelBinding) error
 }
 
+// Closer is an optional interface that adapters implement to close
+// their underlying network connections. Called by Manager when an
+// adapter is muted or disabled to physically disconnect.
+type Closer interface {
+	Close() error
+}
+
 // LastMessageID returns the most recent message ID for typing reaction targeting:
 // prefers the user's inbound message, falls back to the bot's last outbound message.
 func LastMessageID(b ChannelBinding) string {
