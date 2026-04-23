@@ -623,3 +623,52 @@ func TestIMEmitterPreservesStatusThenTextOrder(t *testing.T) {
 		t.Fatalf("unexpected second IM event: %#v", events)
 	}
 }
+
+func TestSetConfigAfterSetIMManagerRegistersOnRestart(t *testing.T) {
+	mgr := im.NewManager()
+	m := NewModel(nil, nil)
+
+	// Simulate real init order: SetIMManager first, SetConfig second
+	m.SetIMManager(mgr)
+
+	// Now bind and mute a channel
+	mgr.BindSession(im.SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+	mgr.SetBindingStore(&stubBSForInitOrder{})
+	_, _ = mgr.BindChannel(im.ChannelBinding{Workspace: "/tmp", Platform: im.PlatformQQ, Adapter: "test-qq", ChannelID: "ch-1"})
+	if err := mgr.MuteBinding("test-qq"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before SetConfig, unmute should succeed but not restart (onRestart is nil)
+	if err := mgr.UnmuteBinding("test-qq"); err != nil {
+		t.Fatal(err)
+	}
+
+	// After SetConfig, onRestart should be registered
+	m.SetConfig(&config.Config{
+		IM: config.IMConfig{
+			Adapters: map[string]config.IMAdapterConfig{
+				"test-qq": {Enabled: true, Platform: "qq"},
+			},
+		},
+	})
+
+	// Mute again, then unmute — onRestart should now be called
+	if err := mgr.MuteBinding("test-qq"); err != nil {
+		t.Fatal(err)
+	}
+	// UnmuteBinding will call onRestart which calls StartNamedAdapter.
+	// StartNamedAdapter needs adapters config — it should not return "not configured".
+	err := mgr.UnmuteBinding("test-qq")
+	if err != nil {
+		t.Fatalf("expected unmute with onRestart to succeed, got: %v", err)
+	}
+}
+
+type stubBSForInitOrder struct{}
+
+func (s *stubBSForInitOrder) Save(_ im.ChannelBinding) error                        { return nil }
+func (s *stubBSForInitOrder) Delete(_, _ string) error                              { return nil }
+func (s *stubBSForInitOrder) List() ([]im.ChannelBinding, error)                    { return nil, nil }
+func (s *stubBSForInitOrder) ListByWorkspace(_ string) ([]im.ChannelBinding, error) { return nil, nil }
+func (s *stubBSForInitOrder) ListByAdapter(_ string) ([]im.ChannelBinding, error)   { return nil, nil }

@@ -92,6 +92,7 @@ func NewManager() *Manager {
 // restart a previously stopped adapter. The caller (TUI/daemon) provides
 // this because it has access to the IM config needed to start adapters.
 func (m *Manager) SetOnRestart(fn func(adapterName string) error) {
+	debug.Log("im", "SetOnRestart: callback registered")
 	m.mu.Lock()
 	m.onRestart = fn
 	m.mu.Unlock()
