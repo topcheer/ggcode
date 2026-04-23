@@ -13,7 +13,6 @@ import (
 	"charm.land/lipgloss/v2/compat"
 	"github.com/muesli/reflow/wordwrap"
 
-	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -153,34 +152,14 @@ func (m Model) conversationPanelHeight() int {
 	return availableHeight
 }
 
-// hasChatMessages returns true if chatList has user or assistant messages,
-// meaning it should be used as the primary render path.
-func (m Model) hasChatMessages() bool {
-	if m.chatList == nil || m.chatList.Len() == 0 {
-		return false
-	}
-	// Check if any items are user or assistant messages
-	for i := 0; i < m.chatList.Len(); i++ {
-		item := m.chatList.ItemAt(i)
-		if item == nil {
-			continue
-		}
-		switch item.(type) {
-		case *chat.UserItem, *chat.AssistantItem:
-			return true
-		}
-	}
-	return false
-}
-
 func (m Model) renderOutput() string {
 	var sb strings.Builder
 
 	width := m.conversationInnerWidth()
 
-	// Try new chatList when it has user or assistant messages.
-	// Tool-only lists still fall through to old path during migration.
-	if m.chatList != nil && m.hasChatMessages() {
+	// Use chatList as primary render path.
+	// Falls back to legacy chatEntries only if chatList is nil or empty.
+	if m.chatList != nil && m.chatList.Len() > 0 {
 		m.chatList.SetSize(width, 9999) // render all items; viewport handles visible area
 		rendered := m.chatList.Render()
 		if rendered != "" {

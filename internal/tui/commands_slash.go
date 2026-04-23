@@ -24,6 +24,7 @@ import (
 func (m *Model) resetConversationView() {
 	m.output.Reset()
 	m.chatEntries.Reset()
+	m.chatReset()
 	m.streamBuffer = nil
 	m.streamStartPos = 0
 	m.streamPrefixWritten = false
