@@ -268,11 +268,22 @@ vendors:
 	if len(findings) != 2 {
 		t.Fatalf("expected 2 plaintext findings, got %#v", findings)
 	}
-	if findings[0].Vendor != "anthropic" || findings[0].Endpoint != "api" || findings[0].EnvVar != "ANTHROPIC_API_API_KEY" {
-		t.Fatalf("unexpected endpoint finding %#v", findings[0])
+	// Check that both expected findings exist (order not guaranteed)
+	foundAnthropic := false
+	foundZai := false
+	for _, f := range findings {
+		if f.Vendor == "anthropic" && f.Endpoint == "api" && f.Section == "vendor" && f.EnvVar == "ANTHROPIC_API_API_KEY" {
+			foundAnthropic = true
+		}
+		if f.Vendor == "zai" && f.Section == "vendor" && f.EnvVar == "ZAI_API_KEY" {
+			foundZai = true
+		}
 	}
-	if findings[1].Vendor != "zai" || findings[1].EnvVar != "ZAI_API_KEY" {
-		t.Fatalf("unexpected vendor finding %#v", findings[1])
+	if !foundAnthropic {
+		t.Fatalf("missing anthropic endpoint finding in %#v", findings)
+	}
+	if !foundZai {
+		t.Fatalf("missing zai vendor finding in %#v", findings)
 	}
 }
 

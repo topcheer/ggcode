@@ -712,10 +712,17 @@ func Load(path string) (*Config, error) {
 	}
 	if len(migrated) > 0 {
 		for _, m := range migrated {
-			if m.Endpoint != "" {
-				debug.Log("config", "migrated plaintext api_key: %s/%s -> ${%s}", m.Vendor, m.Endpoint, m.EnvVar)
-			} else {
-				debug.Log("config", "migrated plaintext api_key: %s -> ${%s}", m.Vendor, m.EnvVar)
+			switch m.Section {
+			case "vendor":
+				if m.Endpoint != "" {
+					debug.Log("config", "migrated plaintext api_key: %s/%s -> ${%s}", m.Vendor, m.Endpoint, m.EnvVar)
+				} else {
+					debug.Log("config", "migrated plaintext api_key: %s -> ${%s}", m.Vendor, m.EnvVar)
+				}
+			case "im", "mcp_env", "mcp_headers":
+				debug.Log("config", "migrated plaintext secret: %s -> ${%s}", m.KeyPath, m.EnvVar)
+			default:
+				debug.Log("config", "migrated plaintext: %s -> ${%s}", m.KeyPath, m.EnvVar)
 			}
 		}
 		// Reload the config file after migration rewrote it.

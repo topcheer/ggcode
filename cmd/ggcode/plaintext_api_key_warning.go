@@ -24,10 +24,14 @@ func confirmPlaintextAPIKeysBeforeTUI(cfgFile string, in io.Reader, out io.Write
 	// Print an informational notice.
 	fmt.Fprintf(out, "Migrated %d plaintext API key(s) to %s\n", len(findings), config.KeysEnvPath())
 	for _, finding := range findings {
-		if strings.TrimSpace(finding.Endpoint) != "" {
-			fmt.Fprintf(out, "  %s/%s -> ${%s}\n", finding.Vendor, finding.Endpoint, finding.EnvVar)
+		if finding.Section == "vendor" {
+			if strings.TrimSpace(finding.Endpoint) != "" {
+				fmt.Fprintf(out, "  %s/%s -> ${%s}\n", finding.Vendor, finding.Endpoint, finding.EnvVar)
+			} else {
+				fmt.Fprintf(out, "  %s -> ${%s}\n", finding.Vendor, finding.EnvVar)
+			}
 		} else {
-			fmt.Fprintf(out, "  %s -> ${%s}\n", finding.Vendor, finding.EnvVar)
+			fmt.Fprintf(out, "  %s -> ${%s}\n", finding.KeyPath, finding.EnvVar)
 		}
 	}
 	return true, nil
