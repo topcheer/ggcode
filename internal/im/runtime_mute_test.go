@@ -815,3 +815,147 @@ func TestUnmuteNoRestartWhenNoCallback(t *testing.T) {
 		t.Fatalf("UnmuteBinding: %v", err)
 	}
 }
+
+// --- persistBinding / reload tests ---
+
+func TestPersistBindingStripsMuted(t *testing.T) {
+	var saved ChannelBinding
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+	mgr.SetBindingStore(&stubBindingStoreForMute{
+		save: func(b ChannelBinding) error {
+			saved = b
+			return nil
+		},
+	})
+
+	b, err := mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformQQ, Adapter: "qq-1", ChannelID: "ch-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mute it
+	if err := mgr.MuteBinding("qq-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually trigger persistBinding — should strip Muted
+	b.Muted = true
+	if err := mgr.persistBinding(b); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Muted {
+		t.Fatal("persistBinding should strip Muted flag before saving")
+	}
+}
+
+func TestReloadBindingClearsMuted(t *testing.T) {
+	// Simulate a store that returns a binding with Muted=true (e.g. corrupted data)
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+	mgr.SetBindingStore(&stubBindingStoreForMute{
+		listByWorkspace: func(ws string) ([]ChannelBinding, error) {
+			return []ChannelBinding{{
+				Workspace: "/tmp",
+				Platform:  PlatformQQ,
+				Adapter:   "qq-1",
+				ChannelID: "ch-1",
+				Muted:     true, // Should be cleared on reload
+			}}, nil
+		},
+	})
+
+	// Reload bindings
+	if err := mgr.SetBindingStore(mgr.bindingStore); err != nil {
+		t.Fatal(err)
+	}
+
+	bindings := mgr.CurrentBindings()
+	if len(bindings) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(bindings))
+	}
+	if bindings[0].Muted {
+		t.Fatal("reloadBindingLocked should clear Muted flag")
+	}
+}
+
+func TestHandleInboundDropsMuted(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformQQ, Adapter: "qq-1", ChannelID: "ch-1"})
+
+	bridge := &trackingBridge{}
+	mgr.SetBridge(bridge)
+
+	if err := mgr.MuteBinding("qq-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := mgr.HandleInbound(context.Background(), InboundMessage{
+		Envelope: Envelope{Adapter: "qq-1", ChannelID: "ch-1", MessageID: "msg-1"},
+		Text:     "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound: %v", err)
+	}
+	if bridge.calls != 0 {
+		t.Fatal("HandleInbound should drop messages for muted adapters")
+	}
+}
+
+// trackingBridge records how many times SubmitInboundMessage is called.
+type trackingBridge struct{ calls int }
+
+func (b *trackingBridge) SubmitInboundMessage(_ context.Context, _ InboundMessage) error {
+	b.calls++
+	return nil
+}
+
+func TestHandlePairingInboundDropsMuted(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformQQ, Adapter: "qq-1", ChannelID: "ch-1"})
+
+	if err := mgr.MuteBinding("qq-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := mgr.HandlePairingInbound(InboundMessage{
+		Envelope: Envelope{Adapter: "qq-1", ChannelID: "ch-1"},
+		Text:     "pair",
+	})
+	if err != nil {
+		t.Fatalf("HandlePairingInbound: %v", err)
+	}
+	// Should return empty result (silently ignored).
+	if result.Bound {
+		t.Fatal("HandlePairingInbound should silently ignore muted adapters")
+	}
+}
+
+// --- stub stores ---
+
+type stubBindingStoreForMute struct {
+	save            func(ChannelBinding) error
+	listByWorkspace func(string) ([]ChannelBinding, error)
+}
+
+func (s *stubBindingStoreForMute) Save(b ChannelBinding) error {
+	if s.save != nil {
+		return s.save(b)
+	}
+	return nil
+}
+func (s *stubBindingStoreForMute) Delete(string, string) error { return nil }
+func (s *stubBindingStoreForMute) List() ([]ChannelBinding, error) {
+	return nil, nil
+}
+func (s *stubBindingStoreForMute) ListByWorkspace(ws string) ([]ChannelBinding, error) {
+	if s.listByWorkspace != nil {
+		return s.listByWorkspace(ws)
+	}
+	return nil, nil
+}
+func (s *stubBindingStoreForMute) ListByAdapter(string) ([]ChannelBinding, error) {
+	return nil, nil
+}

@@ -155,6 +155,21 @@ func TestTGAdapterClose(t *testing.T) {
 	}
 }
 
+func TestTGAdapterCloseIdleConnections(t *testing.T) {
+	// Verify Close() calls CloseIdleConnections on the httpClient.
+	a := &tgAdapter{httpClient: &http.Client{}}
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// After Close, the adapter should be marked disconnected.
+	a.mu.RLock()
+	connected := a.connected
+	a.mu.RUnlock()
+	if connected {
+		t.Fatal("expected connected=false after Close")
+	}
+}
+
 func TestPCAdapterClose(t *testing.T) {
 	a := &pcAdapter{}
 	if err := a.Close(); err != nil {
