@@ -83,6 +83,26 @@ func composerWrappedHeight(value string, width int) int {
 	return totalLines
 }
 
+// relayoutAfterSidebarChange re-computes input and viewport widths when the
+// sidebar is toggled without a window resize event.
+func (m *Model) relayoutAfterSidebarChange() {
+	inputWidth := m.mainColumnWidth() - 6
+	if inputWidth < 20 {
+		inputWidth = m.mainColumnWidth()
+	}
+	m.input.SetWidth(inputWidth)
+	m.input.SetHeight(composerWrappedHeight(m.input.Value(), inputWidth))
+	m.viewport.SetSize(m.mainColumnWidth(), m.calcViewportHeight())
+}
+
+func (m *Model) calcViewportHeight() int {
+	h := m.height - 5
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
 // composerCursorEnd moves the cursor to the very end of the textarea value.
 func composerCursorEnd(ta *textarea.Model) {
 	val := ta.Value()
