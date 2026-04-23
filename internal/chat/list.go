@@ -93,6 +93,13 @@ func (l *List) Len() int {
 	return len(l.items)
 }
 
+// Height returns the viewport height.
+func (l *List) Height() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.height
+}
+
 // SetSize updates the viewport dimensions.
 func (l *List) SetSize(width, height int) {
 	l.mu.Lock()
@@ -112,7 +119,7 @@ func (l *List) SetFollow(f bool) {
 	l.mu.Unlock()
 }
 
-// Follow returns whether auto-scroll is enabled.
+// Follow returns whether auto-scroll is active.
 func (l *List) Follow() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -225,19 +232,45 @@ func (l *List) scrollToEndLocked() {
 		return
 	}
 
-	// Walk backward from the end to find which item starts the last page
+	// Walk backward from the end to fill the viewport height.
 	remaining := l.height
 	idx := len(l.items) - 1
 	for idx >= 0 {
-		h := l.items[idx].Height(l.width) + 1 // +1 for gap
-		if remaining-h < 0 {
+		itemH := l.items[idx].Height(l.width)
+		// +1 for gap between items (except the last)
+		totalH := itemH
+		if idx < len(l.items)-1 {
+			totalH++
+		}
+		if remaining-totalH < 0 {
 			break
 		}
-		remaining -= h
+		remaining -= totalH
 		idx--
 	}
-	l.offsetIdx = idx + 1
-	l.offsetLine = 0
+
+	if idx < 0 {
+		// All items fit in viewport — start from beginning
+		l.offsetIdx = 0
+		l.offsetLine = 0
+		l.dirty = true
+		return
+	}
+
+	// Item at idx doesn't fully fit — use offsetLine to skip top lines.
+	l.offsetIdx = idx
+	itemH := l.items[idx].Height(l.width)
+	if idx < len(l.items)-1 {
+		// Items after idx consume some viewport lines; skip enough
+		// from this item to show the remaining space.
+		l.offsetLine = itemH - remaining
+	} else {
+		// Single item taller than viewport — show last page of it.
+		l.offsetLine = itemH - l.height
+	}
+	if l.offsetLine < 0 {
+		l.offsetLine = 0
+	}
 	l.dirty = true
 }
 

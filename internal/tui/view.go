@@ -154,23 +154,12 @@ func (m Model) conversationPanelHeight() int {
 
 func (m Model) renderOutput() string {
 	var sb strings.Builder
-
 	width := m.conversationInnerWidth()
 
-	// Use chatList as primary render path.
-	// Falls back to legacy chatEntries only if chatList is nil or empty.
-	if m.chatList != nil && m.chatList.Len() > 0 {
-		m.chatList.SetSize(width, 9999) // render all items; viewport handles visible area
-		rendered := m.chatList.Render()
-		if rendered != "" {
-			sb.WriteString(rendered)
-		}
-		// Don't render live activities here — chatList tool items show their own status
-		sb.WriteString("\n\n")
-		return sb.String()
-	}
+	// chatList content is rendered directly by renderConversationPanel.
+	// This function only provides content for the legacy viewport path.
 
-	// Fallback: old chatEntries path (used during migration)
+	// Legacy chatEntries path
 	if rendered := m.chatEntries.Render(width); rendered != "" {
 		sb.WriteString(rendered)
 		liveActivities := m.renderLiveActivities()
@@ -885,8 +874,25 @@ func resolveGitDir(start string) (string, error) {
 }
 
 func (m Model) renderConversationPanel(panelHeight int) string {
-	vp := m.conversationViewport()
-	content := vp.View().Content
+	innerW := m.conversationInnerWidth()
+	innerH := conversationInnerHeight(panelHeight)
+
+	var content string
+	if m.chatList != nil && m.chatList.Len() > 0 {
+		// chatList manages its own virtual scroll — no viewport middleman
+		m.chatList.SetSize(innerW, innerH)
+		// Re-sync scroll position when follow is active — item content
+		// may have grown since last scroll calculation (streaming text).
+		if m.chatList.Follow() {
+			m.chatList.ScrollToEnd()
+		}
+		content = m.chatList.Render()
+	} else {
+		// Legacy path: viewport + renderOutput
+		vp := m.conversationViewport()
+		content = vp.View().Content
+	}
+
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

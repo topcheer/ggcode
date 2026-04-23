@@ -93,6 +93,11 @@ func inputCursor(ta *textarea.Model) int {
 
 func (m *Model) syncConversationViewport() {
 	panelHeight := m.conversationPanelHeight()
-	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
+	innerW := m.conversationInnerWidth()
+	innerH := conversationInnerHeight(panelHeight)
+	m.viewport.SetSize(innerW, innerH)
 	m.viewport.SetContent(m.renderOutput())
+	if m.chatList != nil {
+		m.chatList.SetSize(innerW, innerH)
+	}
 }
