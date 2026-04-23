@@ -325,22 +325,15 @@ func (m Model) imChannelEntries() []imChannelEntry {
 	}
 	allBindings := make(map[string]bindingInfo)
 
-	// Add active bindings for current workspace
+	// Add active bindings for current workspace (may include muted ones)
 	for _, b := range snapshot.CurrentBindings {
-		allBindings[b.Adapter] = bindingInfo{binding: b, disabled: false}
+		allBindings[b.Adapter] = bindingInfo{binding: b, disabled: false, muted: b.Muted}
 	}
 
 	// Add disabled bindings
 	for _, b := range snapshot.DisabledBindings {
 		if _, exists := allBindings[b.Adapter]; !exists {
 			allBindings[b.Adapter] = bindingInfo{binding: b, disabled: true}
-		}
-	}
-
-	// Add muted bindings (in-memory, not persisted)
-	for _, b := range snapshot.MutedBindings {
-		if _, exists := allBindings[b.Adapter]; !exists {
-			allBindings[b.Adapter] = bindingInfo{binding: b, muted: true}
 		}
 	}
 

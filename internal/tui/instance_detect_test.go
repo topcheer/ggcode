@@ -100,9 +100,12 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 	// manually trigger it again to test auto-mute
 	m.detectAndAutoMute()
 
-	// Should have auto-muted all channels
-	if len(mgr.CurrentBindings()) != 0 {
-		t.Fatalf("expected 0 active (all muted), got %d", len(mgr.CurrentBindings()))
+	// Should have auto-muted all channels — bindings stay but are marked Muted
+	all := mgr.CurrentBindings()
+	for _, b := range all {
+		if !b.Muted {
+			t.Fatalf("expected binding %s to be muted", b.Adapter)
+		}
 	}
 	muted := mgr.MutedBindings()
 	if len(muted) != 2 {

@@ -167,6 +167,7 @@ type ChannelBinding struct {
 	PassiveReplyCount     int
 	PassiveReplyStartedAt time.Time
 	BoundAt               time.Time
+	Muted                 bool
 }
 
 type AdapterDescriptor struct {

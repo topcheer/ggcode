@@ -414,11 +414,17 @@ func (m Model) sidebarIMSnapshot() (im.StatusSnapshot, bool) {
 
 func (m Model) sidebarIMAdapters() []im.AdapterState {
 	statesByName := make(map[string]im.AdapterState)
+	mutedAdapters := make(map[string]bool)
 	var currentBindings []im.ChannelBinding
 	if snapshot, ok := m.sidebarIMSnapshot(); ok {
 		currentBindings = snapshot.CurrentBindings
 		for _, state := range snapshot.Adapters {
 			statesByName[state.Name] = state
+		}
+		for _, b := range currentBindings {
+			if b.Muted {
+				mutedAdapters[b.Adapter] = true
+			}
 		}
 	}
 	if len(currentBindings) == 0 {
@@ -433,13 +439,21 @@ func (m Model) sidebarIMAdapters() []im.AdapterState {
 		}
 		seen[name] = true
 		if state, ok := statesByName[name]; ok {
+			if mutedAdapters[name] {
+				state.Status = "muted"
+				state.Healthy = false
+			}
 			result = append(result, state)
 		} else if m.config != nil {
 			if adapter, ok := m.config.IM.Adapters[name]; ok && adapter.Enabled {
+				status := m.t("im.status.not_started")
+				if mutedAdapters[name] {
+					status = "muted"
+				}
 				result = append(result, im.AdapterState{
 					Name:     name,
 					Platform: im.Platform(strings.TrimSpace(adapter.Platform)),
-					Status:   m.t("im.status.not_started"),
+					Status:   status,
 				})
 			}
 		}
