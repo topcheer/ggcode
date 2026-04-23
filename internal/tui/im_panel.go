@@ -149,6 +149,30 @@ func (m Model) renderIMPanel() string {
 	// Batch actions
 	body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.batch")))
 
+	// Instances section
+	if m.instanceDetect != nil {
+		instances := m.instanceDetect.ListInstances()
+		if len(instances) > 0 {
+			body = append(body, "", lipgloss.NewStyle().Bold(true).Render(
+				m.t("panel.im.instances", len(instances))))
+			selfUUID := m.instanceDetect.Info().UUID
+			for _, inst := range instances {
+				line := fmt.Sprintf("  PID %d", inst.PID)
+				line += fmt.Sprintf("  %s", inst.StartedAt.Format("15:04:05"))
+				if inst.UUID == selfUUID {
+					if m.instanceDetect.IsPrimary() {
+						line += "  ✓ primary (this instance)"
+					} else {
+						line += "  ○ muted (this instance)"
+					}
+				} else {
+					line += "  ✓ running"
+				}
+				body = append(body, line)
+			}
+		}
+	}
+
 	if panel.message != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
 	}

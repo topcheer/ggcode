@@ -540,6 +540,9 @@ func (r *REPL) Run() error {
 	if r.imManager != nil {
 		r.imManager.UnbindSession()
 	}
+	if r.model.instanceDetect != nil {
+		r.model.instanceDetect.Unregister()
+	}
 	if err == nil && r.store != nil && r.model.session != nil {
 		// Save session on clean exit
 		r.model.session.Messages = r.agent.Messages()

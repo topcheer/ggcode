@@ -84,6 +84,7 @@ type Model struct {
 	sessionStore                    session.Store
 	imManager                       *im.Manager
 	imEmitter                       *im.IMEmitter
+	instanceDetect                  *im.InstanceDetect
 	mcpServers                      []MCPInfo
 	config                          *config.Config
 	language                        Language
@@ -427,6 +428,40 @@ func (m *Model) SetIMManager(mgr *im.Manager) {
 	}
 	m.refreshIMRuntimeHooks()
 	m.bindIMSession()
+	m.detectAndAutoMute()
+}
+
+// detectAndAutoMute registers this instance and auto-mutes IM channels
+// if another instance was already running in the same directory.
+func (m *Model) detectAndAutoMute() {
+	if m.imManager == nil {
+		return
+	}
+	session := m.session
+	if session == nil {
+		return
+	}
+
+	detect := im.NewInstanceDetect(session.Workspace)
+	m.instanceDetect = detect
+
+	others, err := detect.Register()
+	if err != nil {
+		return
+	}
+
+	if len(others) == 0 {
+		// We're the only instance — nothing to do
+		return
+	}
+
+	// Other instances exist — auto-mute all active channels
+	count, _ := m.imManager.MuteAll()
+	if count > 0 {
+		primary := others[0] // oldest
+		msg := m.t("panel.im.message.auto_mute", count, primary.PID, primary.StartedAt.Format("15:04"))
+		m.sysf("%s", msg)
+	}
 }
 
 func (m *Model) refreshIMRuntimeHooks() {
