@@ -3,6 +3,8 @@ package chat
 import (
 	"fmt"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 )
 
 // UserItem renders a user message with a prefix icon.
@@ -32,8 +34,7 @@ func (u *UserItem) Render(width int) string {
 		return cached
 	}
 
-	// Render: prefix + text (word-wrapped to width)
-	prefixWidth := len(u.prefix)
+	prefixWidth := lipgloss.Width(u.styles.UserStyle.Render(u.prefix))
 	contentWidth := width - prefixWidth
 	if contentWidth < 10 {
 		contentWidth = 10
@@ -43,7 +44,7 @@ func (u *UserItem) Render(width int) string {
 	var sb strings.Builder
 	for i, line := range lines {
 		if i == 0 {
-			sb.WriteString(u.prefix)
+			sb.WriteString(u.styles.UserStyle.Render(u.prefix))
 		} else {
 			sb.WriteString(strings.Repeat(" ", prefixWidth))
 		}
@@ -137,7 +138,7 @@ func (a *AssistantItem) Render(width int) string {
 		return cached
 	}
 
-	prefixWidth := len(a.prefix)
+	prefixWidth := lipgloss.Width(a.styles.AssistantStyle.Render(a.prefix))
 	contentWidth := width - prefixWidth
 	if contentWidth < 10 {
 		contentWidth = 10
@@ -147,7 +148,7 @@ func (a *AssistantItem) Render(width int) string {
 	var sb strings.Builder
 	for i, line := range lines {
 		if i == 0 {
-			sb.WriteString(a.prefix)
+			sb.WriteString(a.styles.AssistantStyle.Render(a.prefix))
 		} else {
 			sb.WriteString(strings.Repeat(" ", prefixWidth))
 		}

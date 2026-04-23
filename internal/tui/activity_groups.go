@@ -112,28 +112,17 @@ func (m *Model) chatFinishAllRunningTools() {
 	if m.chatList == nil {
 		return
 	}
+	type statusAccessor interface {
+		Status() chat.ToolStatus
+		SetStatus(chat.ToolStatus)
+	}
 	for i := 0; i < m.chatList.Len(); i++ {
 		item := m.chatList.ItemAt(i)
 		if item == nil {
 			continue
 		}
-		switch v := item.(type) {
-		case *chat.BashToolItem:
-			if v.Status() == chat.StatusRunning {
-				v.SetStatus(chat.StatusSuccess)
-			}
-		case *chat.FileToolItem:
-			if v.Status() == chat.StatusRunning {
-				v.SetStatus(chat.StatusSuccess)
-			}
-		case *chat.SearchToolItem:
-			if v.Status() == chat.StatusRunning {
-				v.SetStatus(chat.StatusSuccess)
-			}
-		case *chat.GenericToolItem:
-			if v.Status() == chat.StatusRunning {
-				v.SetStatus(chat.StatusSuccess)
-			}
+		if sa, ok := item.(statusAccessor); ok && sa.Status() == chat.StatusRunning {
+			sa.SetStatus(chat.StatusSuccess)
 		}
 	}
 }

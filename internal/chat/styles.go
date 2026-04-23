@@ -41,10 +41,12 @@ type Styles struct {
 	// User message
 	UserPrefix string
 	UserIcon   string
+	UserStyle  lipgloss.Style
 
 	// Assistant message
 	AssistantPrefix string
 	AssistantIcon   string
+	AssistantStyle  lipgloss.Style
 
 	// Tool status icons
 	ToolPending  string
@@ -78,8 +80,10 @@ func DefaultStyles() Styles {
 	return Styles{
 		UserPrefix:      "❯ ",
 		UserIcon:        "❯",
+		UserStyle:       lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true),
 		AssistantPrefix: "● ",
 		AssistantIcon:   "●",
+		AssistantStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("81")),
 		ToolPending:     "⏳",
 		ToolRunning:     "⏳",
 		ToolSuccess:     "✓",

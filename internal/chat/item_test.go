@@ -76,8 +76,9 @@ func TestUserItemRender(t *testing.T) {
 	if !strings.Contains(rendered, "hello world") {
 		t.Fatalf("expected content in render, got: %s", rendered)
 	}
-	if !strings.HasPrefix(rendered, styles.UserPrefix) {
-		t.Fatalf("expected prefix %q, got: %s", styles.UserPrefix, rendered)
+	// Prefix is now styled with ANSI — check for the icon character
+	if !strings.Contains(rendered, "❯") {
+		t.Fatalf("expected ❯ icon in render, got: %s", rendered)
 	}
 }
 
