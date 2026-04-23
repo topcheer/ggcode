@@ -58,6 +58,10 @@ type Manager struct {
 	// Cleared on restart — useful when multiple ggcode instances share the
 	// same directory to avoid all receiving inbound messages simultaneously.
 	mutedBindings map[string]*ChannelBinding // adapter name -> binding
+
+	// adapterCancels stores per-adapter cancel functions so that
+	// mute/disable can stop the adapter's goroutine and drop its connection.
+	adapterCancels map[string]context.CancelFunc
 }
 
 type pendingApproval struct {
@@ -84,6 +88,7 @@ func NewManager() *Manager {
 		seenMessages:     make(map[string]time.Time),
 		disabledBindings: make(map[string]*ChannelBinding),
 		mutedBindings:    make(map[string]*ChannelBinding),
+		adapterCancels:   make(map[string]context.CancelFunc),
 	}
 }
 
@@ -156,6 +161,7 @@ func (m *Manager) UnbindSession() {
 	m.currentBindings = make(map[string]*ChannelBinding)
 	m.disabledBindings = make(map[string]*ChannelBinding)
 	m.mutedBindings = make(map[string]*ChannelBinding)
+	m.adapterCancels = make(map[string]context.CancelFunc)
 	m.pendingPairing = nil
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -232,6 +238,24 @@ func (m *Manager) UnregisterSink(name string) {
 	m.mu.Lock()
 	delete(m.sinks, name)
 	m.mu.Unlock()
+}
+
+// RegisterAdapterCancel registers a cancel function for an adapter.
+// When the adapter is muted or disabled, the cancel is called to stop
+// its goroutine and drop the connection.
+func (m *Manager) RegisterAdapterCancel(adapterName string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	m.adapterCancels[adapterName] = cancel
+	m.mu.Unlock()
+}
+
+// stopAdapter cancels an adapter's context and unregisters its sink.
+func (m *Manager) stopAdapter(adapterName string) {
+	if cancel, ok := m.adapterCancels[adapterName]; ok && cancel != nil {
+		cancel()
+		delete(m.adapterCancels, adapterName)
+	}
+	delete(m.sinks, adapterName)
 }
 
 func (m *Manager) GenerateShareLink(ctx context.Context, adapter, callbackData string) (string, error) {
@@ -882,9 +906,10 @@ func (m *Manager) DisableBinding(adapterName string) error {
 		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
-	copy := *binding
-	m.disabledBindings[adapterName] = &copy
+	cp := *binding
+	m.disabledBindings[adapterName] = &cp
 	delete(m.currentBindings, adapterName)
+	m.stopAdapter(adapterName)
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
@@ -948,6 +973,7 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	copy := *binding
 	m.mutedBindings[adapterName] = &copy
 	delete(m.currentBindings, adapterName)
+	m.stopAdapter(adapterName)
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
@@ -983,6 +1009,7 @@ func (m *Manager) MuteAll() (int, error) {
 	for name, binding := range m.currentBindings {
 		copy := *binding
 		m.mutedBindings[name] = &copy
+		m.stopAdapter(name)
 		delete(m.currentBindings, name)
 		count++
 	}
