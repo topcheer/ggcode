@@ -62,6 +62,11 @@ type Manager struct {
 	// adapterCancels stores per-adapter cancel functions so that
 	// mute/disable can stop the adapter's goroutine and drop its connection.
 	adapterCancels map[string]context.CancelFunc
+
+	// onRestart is called by UnmuteBinding/EnableBinding to restart an
+	// adapter after it was previously stopped. Set by the TUI/daemon layer
+	// which has access to the IM config.
+	onRestart func(adapterName string) error
 }
 
 type pendingApproval struct {
@@ -90,6 +95,15 @@ func NewManager() *Manager {
 		mutedBindings:    make(map[string]*ChannelBinding),
 		adapterCancels:   make(map[string]context.CancelFunc),
 	}
+}
+
+// SetOnRestart sets a callback invoked by UnmuteBinding/EnableBinding to
+// restart a previously stopped adapter. The caller (TUI/daemon) provides
+// this because it has access to the IM config needed to start adapters.
+func (m *Manager) SetOnRestart(fn func(adapterName string) error) {
+	m.mu.Lock()
+	m.onRestart = fn
+	m.mu.Unlock()
 }
 
 func (m *Manager) SetBindingStore(store BindingStore) error {
@@ -965,10 +979,16 @@ func (m *Manager) EnableBinding(adapterName string) error {
 	copy := *binding
 	m.currentBindings[adapterName] = &copy
 	delete(m.disabledBindings, adapterName)
+	onRestart := m.onRestart
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	if onRestart != nil {
+		if err := onRestart(adapterName); err != nil {
+			debug.Log("im", "enable restart adapter %s: %v", adapterName, err)
+		}
 	}
 	return nil
 }
@@ -1028,10 +1048,17 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 	copy := *binding
 	m.currentBindings[adapterName] = &copy
 	delete(m.mutedBindings, adapterName)
+	onRestart := m.onRestart
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	// Restart the adapter so it reconnects to the platform.
+	if onRestart != nil {
+		if err := onRestart(adapterName); err != nil {
+			debug.Log("im", "unmute restart adapter %s: %v", adapterName, err)
+		}
 	}
 	return nil
 }
@@ -1060,17 +1087,27 @@ func (m *Manager) MuteAll() (int, error) {
 // Returns the number of adapters that were unmuted.
 func (m *Manager) UnmuteAll() (int, error) {
 	m.mu.Lock()
+	var toRestart []string
 	count := 0
 	for name, binding := range m.mutedBindings {
 		copy := *binding
 		m.currentBindings[name] = &copy
 		delete(m.mutedBindings, name)
+		toRestart = append(toRestart, name)
 		count++
 	}
+	onRestart := m.onRestart
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	for _, name := range toRestart {
+		if onRestart != nil {
+			if err := onRestart(name); err != nil {
+				debug.Log("im", "unmute-all restart adapter %s: %v", name, err)
+			}
+		}
 	}
 	return count, nil
 }
