@@ -68,6 +68,55 @@ func TestIMPanelEnableNoRuntime(t *testing.T) {
 	}
 }
 
+func TestIMPanelMuteNoRuntime(t *testing.T) {
+	m := Model{}
+	m.openIMPanel()
+	updated, _ := m.handleIMPanelKey(tea.KeyPressMsg{Text: "m"})
+	if updated.imPanel == nil {
+		t.Fatal("imPanel should still be open")
+	}
+	if updated.imPanel.message == "" {
+		t.Fatal("message should be set when no channels")
+	}
+}
+
+func TestIMPanelUnmuteNoRuntime(t *testing.T) {
+	m := Model{}
+	m.openIMPanel()
+	updated, _ := m.handleIMPanelKey(tea.KeyPressMsg{Text: "u"})
+	if updated.imPanel == nil {
+		t.Fatal("imPanel should still be open")
+	}
+	if updated.imPanel.message == "" {
+		t.Fatal("message should be set when no channels")
+	}
+}
+
+func TestIMPanelMuteAllNoRuntime(t *testing.T) {
+	m := Model{}
+	m.openIMPanel()
+	updated, cmd := m.handleIMPanelKey(tea.KeyPressMsg{Text: "M"})
+	if updated.imPanel == nil {
+		t.Fatal("imPanel should still be open")
+	}
+	// MuteAll returns a command even without runtime
+	if cmd == nil {
+		t.Fatal("expected a command for MuteAll")
+	}
+}
+
+func TestIMPanelUnmuteAllNoRuntime(t *testing.T) {
+	m := Model{}
+	m.openIMPanel()
+	updated, cmd := m.handleIMPanelKey(tea.KeyPressMsg{Text: "U"})
+	if updated.imPanel == nil {
+		t.Fatal("imPanel should still be open")
+	}
+	if cmd == nil {
+		t.Fatal("expected a command for UnmuteAll")
+	}
+}
+
 func TestClampIMSelection(t *testing.T) {
 	tests := []struct {
 		selected, total, want int

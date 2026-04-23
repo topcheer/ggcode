@@ -283,6 +283,13 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 
 	bridge := m.bridge
 	sessionBound := m.session != nil
+
+	// Check mute: silently drop inbound for muted adapters.
+	if _, muted := m.mutedBindings[msg.Envelope.Adapter]; muted {
+		m.mu.Unlock()
+		return nil
+	}
+
 	binding := m.currentBindings[msg.Envelope.Adapter]
 	changed := false
 	if !sessionBound {
