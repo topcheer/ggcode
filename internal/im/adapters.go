@@ -93,61 +93,69 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 	if !adapterCfg.Enabled {
 		return nil
 	}
+	// Create a child context so Manager can cancel this adapter individually.
+	adapterCtx, adapterCancel := context.WithCancel(ctx)
+	mgr.RegisterAdapterCancel(name, adapterCancel)
+
+	start := func(adapter startableSink) {
+		mgr.RegisterSink(adapter)
+		adapter.Start(adapterCtx)
+	}
+
 	switch Platform(strings.TrimSpace(adapterCfg.Platform)) {
 	case PlatformQQ:
 		adapter, err := newQQAdapter(name, cfg, adapterCfg, mgr)
 		if err != nil {
+			adapterCancel()
 			return err
 		}
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	case PlatformTelegram:
 		adapter, err := newTGAdapter(name, cfg, adapterCfg, mgr)
 		if err != nil {
+			adapterCancel()
 			return err
 		}
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	case PlatformPrivateClaw:
 		sessionStore := newDefaultPCSessionStore()
 		adapter, err := newPCAdapter(name, cfg, adapterCfg, mgr, sessionStore)
 		if err != nil {
+			adapterCancel()
 			return err
 		}
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	case PlatformDiscord:
 		adapter, err := newDiscordAdapter(name, cfg, adapterCfg, mgr)
 		if err != nil {
+			adapterCancel()
 			return err
 		}
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	case PlatformFeishu:
 		adapter, err := newFeishuAdapter(name, cfg, adapterCfg, mgr)
 		if err != nil {
+			adapterCancel()
 			return err
 		}
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	case PlatformDingTalk:
 		adapter, err := newDingTalkAdapter(name, cfg, adapterCfg, mgr)
 		if err != nil {
+			adapterCancel()
 			return err
 		}
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	case PlatformSlack:
 		adapter, err := newSlackAdapter(name, cfg, adapterCfg, mgr)
 		if err != nil {
+			adapterCancel()
 			return err
 		}
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	case PlatformDummy:
 		adapter := newDummyAdapter(name, cfg, adapterCfg, mgr)
-		mgr.RegisterSink(adapter)
-		adapter.Start(ctx)
+		start(adapter)
 	}
 	return nil
 }
@@ -200,7 +208,9 @@ func startPCAdapter(ctx context.Context, cfg config.IMConfig, mgr *Manager) {
 		debug.Log("pc", "auto-start failed: %v", err)
 		return
 	}
+	adapterCtx, adapterCancel := context.WithCancel(ctx)
+	mgr.RegisterAdapterCancel("_pc_builtin", adapterCancel)
 	mgr.RegisterSink(adapter)
-	adapter.Start(ctx)
+	adapter.Start(adapterCtx)
 	debug.Log("pc", "auto-started _pc_builtin, sinks=%d", len(mgr.Snapshot().Adapters))
 }
