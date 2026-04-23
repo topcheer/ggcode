@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/debug"
+
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -31,11 +33,12 @@ type DaemonBridge struct {
 	sess     *session.Session
 	language string
 
-	mu         sync.Mutex
-	cancelFunc context.CancelFunc
-	pendingAsk *pendingAskUser
-	followSink daemon.FollowSink
-	onActivity func()
+	mu                   sync.Mutex
+	cancelFunc           context.CancelFunc
+	pendingAsk           *pendingAskUser
+	pendingInterruptions []string
+	followSink           daemon.FollowSink
+	onActivity           func()
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -116,25 +119,71 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		b.followSink.OnUserMessage(text)
 	}
 
-	// Cancel previous run if active
+	// If an agent run is already active, inject as interruption instead of
+	// cancelling the running stream. The agent's main loop will pick up the
+	// message after the current tool call / LLM round finishes.
 	b.mu.Lock()
-	if b.cancelFunc != nil {
-		b.cancelFunc()
+	activeCancel := b.cancelFunc
+	b.mu.Unlock()
+
+	if activeCancel != nil {
+		debug.Log("daemon-bridge", "agent running, queuing interruption: %s", truncateStr(text, 80))
+		b.mu.Lock()
+		b.pendingInterruptions = append(b.pendingInterruptions, text)
+		b.mu.Unlock()
+		return nil
 	}
+
+	// No active run — start a new one.
 	ctx2, cancel := context.WithCancel(ctx)
+
+	// Set up interruption handler so mid-run IM messages get injected
+	// into the agent's conversation instead of cancelling the stream.
+	b.mu.Lock()
+	b.pendingInterruptions = b.pendingInterruptions[:0] // clear stale
+	b.agent.SetInterruptionHandler(func() string {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if len(b.pendingInterruptions) == 0 {
+			return ""
+		}
+		msg := b.pendingInterruptions[0]
+		b.pendingInterruptions = b.pendingInterruptions[1:]
+		return msg
+	})
 	b.cancelFunc = cancel
 	b.mu.Unlock()
 
-	// Run agent in this goroutine (blocks until done)
-	err := b.runAgentStream(ctx2, content)
+	// Run agent (may loop if interruptions arrived mid-run).
+	for {
+		err := b.runAgentStream(ctx2, content)
+
+		if err != nil && !errors.Is(err, context.Canceled) {
+			b.emitter.EmitText(provider.UserFacingError(err))
+		}
+
+		// Check if more messages arrived during the run.
+		b.mu.Lock()
+		var nextText string
+		if len(b.pendingInterruptions) > 0 {
+			nextText = b.pendingInterruptions[0]
+			b.pendingInterruptions = b.pendingInterruptions[1:]
+		}
+		b.mu.Unlock()
+
+		if nextText == "" {
+			break
+		}
+
+		debug.Log("daemon-bridge", "draining queued message for next round: %s", truncateStr(nextText, 80))
+		content = []provider.ContentBlock{{Type: "text", Text: nextText}}
+	}
 
 	b.mu.Lock()
 	b.cancelFunc = nil
+	b.agent.SetInterruptionHandler(nil)
 	b.mu.Unlock()
 
-	if err != nil && !errors.Is(err, context.Canceled) {
-		b.emitter.EmitText(provider.UserFacingError(err))
-	}
 	return nil
 }
 
@@ -206,6 +255,20 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 // StreamEventDone (not per-token), tool status is emitted as it happens.
 func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.ContentBlock) error {
 	round := &daemonRoundState{}
+
+	// Set up interruption handler so mid-run IM messages get injected
+	// into the agent's context instead of cancelling the stream.
+	b.agent.SetInterruptionHandler(func() string {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if len(b.pendingInterruptions) == 0 {
+			return ""
+		}
+		msg := b.pendingInterruptions[0]
+		b.pendingInterruptions = b.pendingInterruptions[1:]
+		return msg
+	})
+	defer b.agent.SetInterruptionHandler(nil)
 
 	// Save user message to session
 	b.appendUserMessage(content)
