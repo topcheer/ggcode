@@ -251,18 +251,30 @@ func (m *Manager) RegisterAdapterCancel(adapterName string, cancel context.Cance
 
 // stopAdapter cancels an adapter's context and unregisters its sink.
 func (m *Manager) stopAdapter(adapterName string) {
+	debug.Log("im", "stopAdapter: name=%s", adapterName)
+
 	// 1. Cancel the adapter's context FIRST so the run loop exits and
 	//    won't reconnect. Cancel alone doesn't interrupt a blocking
 	//    ReadMessage, so we also need step 2.
 	if cancel, ok := m.adapterCancels[adapterName]; ok && cancel != nil {
+		debug.Log("im", "stopAdapter: cancelling context for %s", adapterName)
 		cancel()
 		delete(m.adapterCancels, adapterName)
+	} else {
+		debug.Log("im", "stopAdapter: no cancel func for %s", adapterName)
 	}
 	// 2. Physically close the connection to unblock any in-flight reads.
 	if sink, ok := m.sinks[adapterName]; ok {
 		if closer, ok := sink.(Closer); ok {
-			_ = closer.Close()
+			debug.Log("im", "stopAdapter: calling Close() on %s", adapterName)
+			if err := closer.Close(); err != nil {
+				debug.Log("im", "stopAdapter: Close() error for %s: %v", adapterName, err)
+			}
+		} else {
+			debug.Log("im", "stopAdapter: %s does not implement Closer", adapterName)
 		}
+	} else {
+		debug.Log("im", "stopAdapter: no sink registered for %s", adapterName)
 	}
 	delete(m.sinks, adapterName)
 	// 3. Mark adapter state as disconnected so the UI reflects the real state.
@@ -273,6 +285,7 @@ func (m *Manager) stopAdapter(adapterName string) {
 		state.UpdatedAt = time.Now()
 		m.adapters[adapterName] = state
 	}
+	debug.Log("im", "stopAdapter: done for %s", adapterName)
 }
 
 func (m *Manager) GenerateShareLink(ctx context.Context, adapter, callbackData string) (string, error) {

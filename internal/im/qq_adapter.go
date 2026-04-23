@@ -110,6 +110,7 @@ func (a *qqAdapter) Close() error {
 	a.ws = nil
 	a.connected = false
 	a.mu.Unlock()
+	debug.Log("qq", "adapter=%s Close() called, ws=%v", a.name, ws != nil)
 	if ws != nil {
 		return ws.Close()
 	}
