@@ -185,7 +185,8 @@ func (m *Model) sanitizeTerminalResponseInput() {
 	}
 	debug.Log("tui", "sanitize input changed value=%q cleaned=%q", truncateStr(value, 120), truncateStr(cleaned, 120))
 	m.input.SetValue(cleaned)
-	m.input.CursorEnd()
+	m.input.SetHeight(composerHeight(m.input.Value()))
+	composerCursorEnd(&m.input)
 }
 
 // terminalResponsePattern matches terminal response fragments that leak into

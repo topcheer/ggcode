@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
-
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -260,9 +258,7 @@ func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command
 
 // DetectSlashCommand returns true if the cursor is at a slash command position.
 // It returns the command fragment after "/" for completion.
-func DetectSlashCommand(ti textinput.Model) (active bool, prefix string) {
-	value := ti.Value()
-	cursor := ti.Position()
+func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 	if cursor < 1 {
 		return false, ""
 	}
@@ -289,9 +285,7 @@ func DetectSlashCommand(ti textinput.Model) (active bool, prefix string) {
 
 // DetectMention returns true if the cursor is immediately after a "@" with a path fragment.
 // It returns the path fragment after "@" for completion.
-func DetectMention(ti textinput.Model) (active bool, prefix string) {
-	value := ti.Value()
-	cursor := ti.Position()
+func DetectMention(value string, cursor int) (active bool, prefix string) {
 	// Find "@" before cursor
 	for i := cursor - 1; i >= 0; i-- {
 		if value[i] == '@' {
