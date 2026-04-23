@@ -165,13 +165,7 @@ func (m Model) renderOutput() string {
 		if rendered != "" {
 			sb.WriteString(rendered)
 		}
-		liveActivities := m.renderLiveActivities()
-		if liveActivities != "" {
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(liveActivities)
-		}
+		// Don't render live activities here — chatList tool items show their own status
 		sb.WriteString("\n\n")
 		return sb.String()
 	}
