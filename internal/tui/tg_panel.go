@@ -75,8 +75,12 @@ func (m Model) renderTGPanel() string {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.tg.none")))
 	} else {
 		for _, current := range currentBindings {
+			status := "active"
+			if current.Muted {
+				status = "muted"
+			}
 			body = append(body,
-				fmt.Sprintf(" %s", m.t("panel.tg.adapter", current.Adapter)),
+				fmt.Sprintf(" %s (%s)", current.Adapter, status),
 				fmt.Sprintf(" %s", m.t("panel.tg.target", firstNonEmptyTG(current.TargetID, m.t("panel.tg.default")))),
 				fmt.Sprintf(" %s", m.t("panel.tg.channel", firstNonEmptyTG(current.ChannelID, m.t("panel.tg.none")))),
 			)
@@ -89,9 +93,17 @@ func (m Model) renderTGPanel() string {
 		selected := clampTGSelection(panel.selected, len(entries))
 		body = append(body, m.renderProviderList(m.tgBindingLabels(entries), selected, true))
 		entry := entries[selected]
-		status := m.t("panel.tg.entry.available")
-		if entry.OccupiedBy != "" {
-			status = m.t("panel.tg.entry.bound")
+		currentWS := m.currentWorkspacePath()
+		var status string
+		switch {
+		case entry.Muted:
+			status = m.t("panel.tg.entry.muted")
+		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
+			status = m.t("panel.tg.entry.active")
+		case entry.OccupiedBy != "":
+			status = m.t("panel.tg.entry.bound_other", entry.OccupiedBy)
+		default:
+			status = m.t("panel.tg.entry.available")
 		}
 		body = append(body,
 			"",
