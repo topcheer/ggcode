@@ -186,7 +186,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		m.input.SetHeight(composerHeight(m.input.Value()))
+		m.input.SetHeight(composerWrappedHeight(m.input.Value(), m.input.Width()))
 		return m, cmd
 
 	case tea.KeyPressMsg:
