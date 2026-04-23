@@ -50,6 +50,14 @@ type Manager struct {
 	// The binding is moved out of currentBindings so Emit/HandleInbound skip it,
 	// but the persistent binding is retained so EnableBinding can restore it.
 	disabledBindings map[string]*ChannelBinding // adapter name -> binding
+
+	// mutedBindings stores adapters muted for this process only.
+	// Like disabledBindings, the binding is moved out of currentBindings
+	// so the connection is dropped and inbound/outbound messages stop.
+	// Unlike disabledBindings, this is purely in-memory and not persisted.
+	// Cleared on restart — useful when multiple ggcode instances share the
+	// same directory to avoid all receiving inbound messages simultaneously.
+	mutedBindings map[string]*ChannelBinding // adapter name -> binding
 }
 
 type pendingApproval struct {
@@ -75,6 +83,7 @@ func NewManager() *Manager {
 		pairingStates:    make(map[string]PairingChannelState),
 		seenMessages:     make(map[string]time.Time),
 		disabledBindings: make(map[string]*ChannelBinding),
+		mutedBindings:    make(map[string]*ChannelBinding),
 	}
 }
 
@@ -146,6 +155,7 @@ func (m *Manager) UnbindSession() {
 	m.session = nil
 	m.currentBindings = make(map[string]*ChannelBinding)
 	m.disabledBindings = make(map[string]*ChannelBinding)
+	m.mutedBindings = make(map[string]*ChannelBinding)
 	m.pendingPairing = nil
 	snapshot, cb := m.snapshotAndCallbackLocked()
 	m.mu.Unlock()
@@ -712,6 +722,13 @@ func (m *Manager) snapshotLocked() StatusSnapshot {
 	sort.Slice(snapshot.DisabledBindings, func(i, j int) bool {
 		return snapshot.DisabledBindings[i].Adapter < snapshot.DisabledBindings[j].Adapter
 	})
+	snapshot.MutedBindings = make([]ChannelBinding, 0, len(m.mutedBindings))
+	for _, b := range m.mutedBindings {
+		snapshot.MutedBindings = append(snapshot.MutedBindings, *b)
+	}
+	sort.Slice(snapshot.MutedBindings, func(i, j int) bool {
+		return snapshot.MutedBindings[i].Adapter < snapshot.MutedBindings[j].Adapter
+	})
 	snapshot.PendingApprovals = make([]ApprovalState, 0, len(m.approvals))
 	for _, approval := range m.approvals {
 		snapshot.PendingApprovals = append(snapshot.PendingApprovals, approval.state)
@@ -905,6 +922,106 @@ func (m *Manager) IsBindingDisabled(adapterName string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	_, ok := m.disabledBindings[adapterName]
+	return ok
+}
+
+// --- Mute (in-memory, not persisted) ---
+
+// MuteBinding mutes an adapter for this process only. Like DisableBinding,
+// the binding is moved out of currentBindings so the connection drops and
+// inbound/outbound messages stop. Unlike DisableBinding, this is not persisted
+// and is cleared on restart.
+func (m *Manager) MuteBinding(adapterName string) error {
+	m.mu.Lock()
+	binding, ok := m.currentBindings[adapterName]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNoChannelBound
+	}
+	copy := *binding
+	m.mutedBindings[adapterName] = &copy
+	delete(m.currentBindings, adapterName)
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
+// UnmuteBinding unmutes a previously muted adapter for this process.
+func (m *Manager) UnmuteBinding(adapterName string) error {
+	m.mu.Lock()
+	binding, ok := m.mutedBindings[adapterName]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNoChannelBound
+	}
+	copy := *binding
+	m.currentBindings[adapterName] = &copy
+	delete(m.mutedBindings, adapterName)
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
+// MuteAll mutes all currently active bindings for this process.
+// Returns the number of adapters that were muted.
+func (m *Manager) MuteAll() (int, error) {
+	m.mu.Lock()
+	count := 0
+	for name, binding := range m.currentBindings {
+		copy := *binding
+		m.mutedBindings[name] = &copy
+		delete(m.currentBindings, name)
+		count++
+	}
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return count, nil
+}
+
+// UnmuteAll unmutes all muted bindings for this process.
+// Returns the number of adapters that were unmuted.
+func (m *Manager) UnmuteAll() (int, error) {
+	m.mu.Lock()
+	count := 0
+	for name, binding := range m.mutedBindings {
+		copy := *binding
+		m.currentBindings[name] = &copy
+		delete(m.mutedBindings, name)
+		count++
+	}
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return count, nil
+}
+
+// MutedBindings returns a snapshot of currently muted bindings.
+func (m *Manager) MutedBindings() []ChannelBinding {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]ChannelBinding, 0, len(m.mutedBindings))
+	for _, b := range m.mutedBindings {
+		out = append(out, *b)
+	}
+	return out
+}
+
+// IsBindingMuted returns true if the given adapter's binding is currently muted.
+func (m *Manager) IsBindingMuted(adapterName string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.mutedBindings[adapterName]
 	return ok
 }
 

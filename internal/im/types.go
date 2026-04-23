@@ -218,6 +218,7 @@ type StatusSnapshot struct {
 	ActiveSession    *SessionBinding
 	CurrentBindings  []ChannelBinding
 	DisabledBindings []ChannelBinding
+	MutedBindings    []ChannelBinding
 	PendingPairing   *PairingChallenge
 	Adapters         []AdapterState
 	PendingApprovals []ApprovalState
