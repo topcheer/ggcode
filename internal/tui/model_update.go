@@ -539,6 +539,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.shellMode && !m.loading {
 				m.setShellMode(false)
 				m.input.SetValue("")
+				m.input.SetHeight(1)
 				return m, nil
 			}
 		case "enter":
@@ -548,6 +549,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetExitConfirm()
 			text := strings.TrimSpace(m.input.Value())
 			m.input.SetValue("")
+			m.input.SetHeight(1)
 			if text == "" {
 				return m, nil
 			}
@@ -1524,6 +1526,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if val := m.input.Value(); val != "" && looksLikeStartupGarbage(val) {
 			debug.Log("tui", "clearing pre-drain input garbage: %q", truncateStr(val, 80))
 			m.input.SetValue("")
+			m.input.SetHeight(1)
 		}
 		// Start the input drain window. Terminal responses (OSC 11 color
 		// query, CPR, Kitty mode report, mouse-mode/altscreen ACKs) arrive
@@ -1666,6 +1669,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if oldValue != newValue && looksLikeTerminalResponseInput(newValue) {
 		debug.Log("tui", "CATCHALL terminal response detected in input, clearing: %q", truncateStr(newValue, 80))
 		m.input.SetValue("")
+		m.input.SetHeight(1)
 	}
 
 	// Update autocomplete state based on current input

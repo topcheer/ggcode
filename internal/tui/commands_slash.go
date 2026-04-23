@@ -179,6 +179,7 @@ func (m Model) handleHistoryUp() (tea.Model, tea.Cmd) {
 	if m.historyIdx > 0 {
 		m.historyIdx--
 		m.input.SetValue(m.history[m.historyIdx])
+		m.input.SetHeight(composerHeight(m.input.Value()))
 	}
 	return m, nil
 }
@@ -187,9 +188,11 @@ func (m Model) handleHistoryDown() (tea.Model, tea.Cmd) {
 	if m.historyIdx < len(m.history)-1 {
 		m.historyIdx++
 		m.input.SetValue(m.history[m.historyIdx])
+		m.input.SetHeight(composerHeight(m.input.Value()))
 	} else {
 		m.historyIdx = len(m.history)
 		m.input.SetValue("")
+		m.input.SetHeight(composerHeight(m.input.Value()))
 	}
 	return m, nil
 }

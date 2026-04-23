@@ -113,7 +113,7 @@ func TestDetectMention(t *testing.T) {
 	ti.SetValue("fix @internal/")
 	ti.SetCursor(len(ti.Value()))
 
-	active, prefix := DetectMention(ti)
+	active, prefix := DetectMention(ti.Value(), ti.Position())
 	if !active {
 		t.Error("expected mention to be detected")
 	}
@@ -123,7 +123,7 @@ func TestDetectMention(t *testing.T) {
 
 	ti.SetValue("plain text")
 	ti.SetCursor(len(ti.Value()))
-	active, _ = DetectMention(ti)
+	active, _ = DetectMention(ti.Value(), ti.Position())
 	if active {
 		t.Error("expected no mention detection")
 	}

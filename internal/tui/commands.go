@@ -15,7 +15,7 @@ import (
 
 func (m *Model) updateAutoComplete() {
 	// Check for slash command
-	if active, prefix := DetectSlashCommand(m.input); active {
+	if active, prefix := DetectSlashCommand(m.input.Value(), inputCursor(&m.input)); active {
 		m.refreshCommands()
 		matches := CompleteSlashCommand("/"+prefix, m.customCmds)
 		if len(matches) > 0 {
@@ -31,7 +31,7 @@ func (m *Model) updateAutoComplete() {
 	}
 
 	// Check for @mention
-	if active, prefix := DetectMention(m.input); active {
+	if active, prefix := DetectMention(m.input.Value(), inputCursor(&m.input)); active {
 		workDir, _ := os.Getwd()
 		matches := CompleteMention(prefix, workDir)
 		if len(matches) > 0 {
@@ -58,7 +58,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 	selected := m.autoCompleteItems[m.autoCompleteIndex]
 
 	value := m.input.Value()
-	cursor := m.input.Position()
+	cursor := inputCursor(&m.input)
 
 	var replacement string
 	if m.autoCompleteKind == "slash" {

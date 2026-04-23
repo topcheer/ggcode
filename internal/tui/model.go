@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -63,7 +63,7 @@ const startupInputGateWindow = 500 * time.Millisecond
 
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
-	input                           textinput.Model
+	input                           textarea.Model
 	output                          *bytes.Buffer
 	chatEntries                     *ChatEntryList // structured conversation entries for deferred rendering
 	shellMode                       bool
@@ -303,23 +303,22 @@ type languageOption struct {
 // defaultApprovalOptions returns the standard approval options.
 // streamMsg wraps a string from the agent goroutine.
 func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
-	ti := textinput.New()
-	ti.Prompt = "❯ "
-	ti.Placeholder = tr(LangEnglish, "input.placeholder")
-	ti.Focus()
-	ti.SetWidth(74)
-	// Apply bold to the input's own Text style so the composer text is rendered
-	// as bold without wrapping textinput.View() in an outer lipgloss style.
-	// Wrapping the View string (which already contains the virtual-cursor ANSI
-	// sequences) caused lipgloss v2 to re-encode/trim the trailing reverse-space
-	// the textinput uses for its end-of-line cursor, making the cursor look
-	// stuck on the previous character whenever the user typed a trailing space.
-	tiStyles := ti.Styles()
-	tiStyles.Focused.Text = tiStyles.Focused.Text.Bold(true)
-	tiStyles.Focused.Prompt = tiStyles.Focused.Prompt.Bold(true)
-	tiStyles.Blurred.Text = tiStyles.Blurred.Text.Bold(true)
-	tiStyles.Blurred.Prompt = tiStyles.Blurred.Prompt.Bold(true)
-	ti.SetStyles(tiStyles)
+	ta := textarea.New()
+	ta.Prompt = "❯ "
+	ta.Placeholder = tr(LangEnglish, "input.placeholder")
+	ta.Focus()
+	ta.SetWidth(74)
+	ta.SetHeight(1)
+	// Single-line mode: Enter submits, Shift+Enter inserts newline.
+	// Show min 1 line, expand up to 10 lines for multiline input.
+	taStyles := textarea.DefaultStyles(true)
+	ta.SetStyles(taStyles)
+	taStyles.Focused.Text = taStyles.Focused.Text.Bold(true)
+	taStyles.Focused.Prompt = taStyles.Focused.Prompt.Bold(true)
+	taStyles.Focused.Placeholder = taStyles.Focused.Placeholder.Bold(true)
+	taStyles.Blurred.Text = taStyles.Blurred.Text.Bold(true)
+	taStyles.Blurred.Prompt = taStyles.Blurred.Prompt.Bold(true)
+	ta.SetStyles(taStyles)
 
 	s := styles{
 		user:      lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true),
@@ -347,7 +346,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	}
 
 	return Model{
-		input:                ti,
+		input:                ta,
 		output:               &bytes.Buffer{},
 		chatEntries:          NewChatEntryList(),
 		styles:               s,
@@ -379,7 +378,7 @@ func policyMode(policy permission.PermissionPolicy) permission.PermissionMode {
 
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		func() tea.Msg { return textinput.Blink() },
+		func() tea.Msg { return textarea.Blink() },
 		func() tea.Msg { return tea.RequestWindowSize() },
 	}
 	if m.updateSvc != nil {

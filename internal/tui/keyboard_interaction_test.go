@@ -1249,20 +1249,20 @@ func TestScenario_CursorPositionAfterSpaces(t *testing.T) {
 		m = updated.(Model)
 	}
 
-	if m.input.Position() != 6 {
-		t.Errorf("expected cursor at position 6, got %d", m.input.Position())
+	if inputCursor(&m.input) != 6 {
+		t.Errorf("expected cursor at position 6, got %d", inputCursor(&m.input))
 	}
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	m = updated.(Model)
-	if m.input.Position() != 5 {
-		t.Errorf("expected cursor at position 5 after left, got %d", m.input.Position())
+	if inputCursor(&m.input) != 5 {
+		t.Errorf("expected cursor at position 5 after left, got %d", inputCursor(&m.input))
 	}
 
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	m = updated.(Model)
-	if m.input.Position() != 4 {
-		t.Errorf("expected cursor at position 4 after 2nd left, got %d", m.input.Position())
+	if inputCursor(&m.input) != 4 {
+		t.Errorf("expected cursor at position 4 after 2nd left, got %d", inputCursor(&m.input))
 	}
 
 	if m.input.Value() != "ab  cd" {
