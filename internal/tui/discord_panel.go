@@ -31,6 +31,7 @@ type discordBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Muted            bool
 }
 
 type discordBindResultMsg struct {
@@ -340,20 +341,28 @@ func (m Model) discordBindingEntries() []discordBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     discordStatePtr(adapterStates[name]),
+			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
 	return entries
 }
 
 func (m Model) discordBindingLabels(entries []discordBindingEntry) []string {
+	currentWS := m.currentWorkspacePath()
 	labels := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		status := m.t("panel.discord.entry.available")
-		if entry.OccupiedBy != "" {
-			status = m.t("panel.discord.entry.bound")
+		var status string
+		switch {
+		case entry.Muted:
+			status = m.t("panel.discord.entry.muted")
+		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
+			status = m.t("panel.discord.entry.active")
+		case entry.OccupiedBy != "":
+			status = m.t("panel.discord.entry.bound_other", entry.OccupiedBy)
+		default:
+			status = m.t("panel.discord.entry.available")
 		}
-		label := fmt.Sprintf("%s · %s", entry.Adapter, status)
-		labels = append(labels, label)
+		labels = append(labels, fmt.Sprintf("%s · %s", entry.Adapter, status))
 	}
 	return labels
 }

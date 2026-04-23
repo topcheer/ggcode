@@ -31,6 +31,7 @@ type slackBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Muted            bool
 }
 
 type slackBindResultMsg struct {
@@ -342,20 +343,28 @@ func (m Model) slackBindingEntries() []slackBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     slackStatePtr(adapterStates[name]),
+			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
 	return entries
 }
 
 func (m Model) slackBindingLabels(entries []slackBindingEntry) []string {
+	currentWS := m.currentWorkspacePath()
 	labels := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		status := m.t("panel.slack.entry.available")
-		if entry.OccupiedBy != "" {
-			status = m.t("panel.slack.entry.bound")
+		var status string
+		switch {
+		case entry.Muted:
+			status = m.t("panel.slack.entry.muted")
+		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
+			status = m.t("panel.slack.entry.active")
+		case entry.OccupiedBy != "":
+			status = m.t("panel.slack.entry.bound_other", entry.OccupiedBy)
+		default:
+			status = m.t("panel.slack.entry.available")
 		}
-		label := fmt.Sprintf("%s · %s", entry.Adapter, status)
-		labels = append(labels, label)
+		labels = append(labels, fmt.Sprintf("%s · %s", entry.Adapter, status))
 	}
 	return labels
 }

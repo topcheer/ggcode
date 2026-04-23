@@ -31,6 +31,7 @@ type feishuBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Muted            bool
 }
 
 type feishuBindResultMsg struct {
@@ -338,20 +339,28 @@ func (m Model) feishuBindingEntries() []feishuBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     feishuStatePtr(adapterStates[name]),
+			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
 	return entries
 }
 
 func (m Model) feishuBindingLabels(entries []feishuBindingEntry) []string {
+	currentWS := m.currentWorkspacePath()
 	labels := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		status := m.t("panel.feishu.entry.available")
-		if entry.OccupiedBy != "" {
-			status = m.t("panel.feishu.entry.bound")
+		var status string
+		switch {
+		case entry.Muted:
+			status = m.t("panel.feishu.entry.muted")
+		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
+			status = m.t("panel.feishu.entry.active")
+		case entry.OccupiedBy != "":
+			status = m.t("panel.feishu.entry.bound_other", entry.OccupiedBy)
+		default:
+			status = m.t("panel.feishu.entry.available")
 		}
-		label := fmt.Sprintf("%s · %s", entry.Adapter, status)
-		labels = append(labels, label)
+		labels = append(labels, fmt.Sprintf("%s · %s", entry.Adapter, status))
 	}
 	return labels
 }
