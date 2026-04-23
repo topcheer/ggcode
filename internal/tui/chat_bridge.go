@@ -204,8 +204,33 @@ func nextSystemID() string {
 	return fmt.Sprintf("sys-%d", sysIDCounter)
 }
 
-// assistantStreamingID is the fixed ID for the current streaming assistant.
-const assistantStreamingID = "assistant-streaming"
+// assistantCounter generates unique IDs for each assistant turn.
+var assistantCounter int64
+
+// currentAssistantID returns the ID of the current streaming assistant item,
+// creating a new one if needed. Each call to nextAssistantID advances to a
+// fresh ID for a new turn.
+func (m *Model) currentAssistantID() string {
+	return fmt.Sprintf("assistant-%d", assistantCounter)
+}
+
+func (m *Model) nextAssistantID() string {
+	assistantCounter++
+	return fmt.Sprintf("assistant-%d", assistantCounter)
+}
+
+// chatEnsureAssistant creates a new streaming assistant item if one doesn't
+// exist for the current turn, or starts a fresh one.
+func (m *Model) chatEnsureAssistant() {
+	id := m.currentAssistantID()
+	if m.chatList == nil {
+		return
+	}
+	if m.chatList.FindByID(id) != nil {
+		return
+	}
+	m.chatList.Append(chat.NewAssistantItem(id, m.chatStyles))
+}
 
 // bridgeDualWrite writes to both old chatEntries and new chatList.
 // Only user and assistant roles are written to chatList — tool items are
@@ -233,13 +258,11 @@ func (m *Model) bridgeDualWrite(entry ChatEntry) {
 		m.chatWriteUser(nextChatID(), entry.RawText)
 	case "assistant":
 		if entry.Streaming {
-			if m.chatList.FindByID(assistantStreamingID) == nil {
-				m.chatStartAssistant(assistantStreamingID)
-			}
-			m.chatUpdateAssistantText(assistantStreamingID, entry.RawText)
+			m.chatEnsureAssistant()
+			m.chatUpdateAssistantText(m.currentAssistantID(), entry.RawText)
 		} else {
-			m.chatUpdateAssistantText(assistantStreamingID, entry.RawText)
-			m.chatFinishAssistant(assistantStreamingID)
+			m.chatUpdateAssistantText(m.currentAssistantID(), entry.RawText)
+			m.chatFinishAssistant(m.currentAssistantID())
 		}
 		// "system", "tool", "compaction" — NOT written to chatList
 	}
