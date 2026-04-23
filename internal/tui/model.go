@@ -309,9 +309,21 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	ta.Focus()
 	ta.SetWidth(74)
 	ta.SetHeight(1)
+	ta.ShowLineNumbers = false
 	// Single-line mode: Enter submits, Shift+Enter inserts newline.
 	// Show min 1 line, expand up to 10 lines for multiline input.
 	taStyles := textarea.DefaultStyles(true)
+	// Clear all background colors — composer sits inside its own styled box.
+	taStyles.Focused.Base = lipgloss.NewStyle()
+	taStyles.Focused.CursorLine = lipgloss.NewStyle()
+	taStyles.Focused.EndOfBuffer = lipgloss.NewStyle()
+	taStyles.Focused.LineNumber = lipgloss.NewStyle()
+	taStyles.Focused.CursorLineNumber = lipgloss.NewStyle()
+	taStyles.Blurred.Base = lipgloss.NewStyle()
+	taStyles.Blurred.CursorLine = lipgloss.NewStyle()
+	taStyles.Blurred.EndOfBuffer = lipgloss.NewStyle()
+	taStyles.Blurred.LineNumber = lipgloss.NewStyle()
+	taStyles.Blurred.CursorLineNumber = lipgloss.NewStyle()
 	ta.SetStyles(taStyles)
 	taStyles.Focused.Text = taStyles.Focused.Text.Bold(true)
 	taStyles.Focused.Prompt = taStyles.Focused.Prompt.Bold(true)
