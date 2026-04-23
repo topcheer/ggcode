@@ -24,6 +24,7 @@ type imChannelEntry struct {
 	Status    string
 	LastError string
 	Disabled  bool
+	Muted     bool
 	Bound     bool // has a ChannelID
 }
 
@@ -64,19 +65,24 @@ func (m Model) renderIMPanel() string {
 	)
 
 	// Channels summary
-	enabledCount := 0
+	activeCount := 0
 	disabledCount := 0
+	mutedCount := 0
 	for _, e := range entries {
-		if e.Disabled {
+		switch {
+		case e.Disabled:
 			disabledCount++
-		} else {
-			enabledCount++
+		case e.Muted:
+			mutedCount++
+		default:
+			activeCount++
 		}
 	}
 	body = append(body,
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.channels")),
 		fmt.Sprintf("  %s", m.t("panel.im.total", len(entries))),
-		fmt.Sprintf("  %s", m.t("panel.im.enabled_count", enabledCount)),
+		fmt.Sprintf("  %s", m.t("panel.im.active_count", activeCount)),
+		fmt.Sprintf("  %s", m.t("panel.im.muted_count", mutedCount)),
 		fmt.Sprintf("  %s", m.t("panel.im.disabled_count", disabledCount)),
 		"",
 	)
@@ -94,9 +100,11 @@ func (m Model) renderIMPanel() string {
 		body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.details")))
 
 		// Status
-		statusLabel := m.t("panel.im.status.enabled")
+		statusLabel := m.t("panel.im.status.active")
 		if entry.Disabled {
 			statusLabel = m.t("panel.im.status.disabled")
+		} else if entry.Muted {
+			statusLabel = m.t("panel.im.status.muted")
 		}
 		healthLabel := m.t("panel.im.health.healthy")
 		if !entry.Healthy {
@@ -127,14 +135,19 @@ func (m Model) renderIMPanel() string {
 	if len(entries) > 0 {
 		selected := clampIMSelection(panel.selected, len(entries))
 		entry := entries[selected]
-		if entry.Disabled {
+		switch {
+		case entry.Disabled:
 			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.disabled")))
-		} else {
-			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.enabled")))
+		case entry.Muted:
+			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.muted")))
+		default:
+			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.active")))
 		}
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.empty")))
 	}
+	// Batch actions
+	body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  "+m.t("panel.im.hints.batch")))
 
 	if panel.message != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
@@ -173,6 +186,22 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 		return *m, m.enableIMChannel(entries[clampIMSelection(panel.selected, len(entries))])
+	case "m":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.im.message.no_channel")
+			return *m, nil
+		}
+		return *m, m.muteIMChannel(entries[clampIMSelection(panel.selected, len(entries))])
+	case "u":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.im.message.no_channel")
+			return *m, nil
+		}
+		return *m, m.unmuteIMChannel(entries[clampIMSelection(panel.selected, len(entries))])
+	case "M":
+		return *m, m.muteAllIMChannels()
+	case "U":
+		return *m, m.unmuteAllIMChannels()
 	case "esc":
 		m.closeIMPanel()
 	}
@@ -203,6 +232,56 @@ func (m *Model) enableIMChannel(entry imChannelEntry) tea.Cmd {
 	}
 }
 
+func (m *Model) muteIMChannel(entry imChannelEntry) tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imPanelResultMsg{err: fmt.Errorf("%s", m.t("panel.im.message.no_runtime"))}
+		}
+		if err := m.imManager.MuteBinding(entry.Adapter); err != nil {
+			return imPanelResultMsg{err: err}
+		}
+		return imPanelResultMsg{message: m.t("panel.im.message.muted", entry.Adapter)}
+	}
+}
+
+func (m *Model) unmuteIMChannel(entry imChannelEntry) tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imPanelResultMsg{err: fmt.Errorf("%s", m.t("panel.im.message.no_runtime"))}
+		}
+		if err := m.imManager.UnmuteBinding(entry.Adapter); err != nil {
+			return imPanelResultMsg{err: err}
+		}
+		return imPanelResultMsg{message: m.t("panel.im.message.unmuted", entry.Adapter)}
+	}
+}
+
+func (m *Model) muteAllIMChannels() tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imPanelResultMsg{err: fmt.Errorf("%s", m.t("panel.im.message.no_runtime"))}
+		}
+		count, err := m.imManager.MuteAll()
+		if err != nil {
+			return imPanelResultMsg{err: err}
+		}
+		return imPanelResultMsg{message: m.t("panel.im.message.mute_all", count)}
+	}
+}
+
+func (m *Model) unmuteAllIMChannels() tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imPanelResultMsg{err: fmt.Errorf("%s", m.t("panel.im.message.no_runtime"))}
+		}
+		count, err := m.imManager.UnmuteAll()
+		if err != nil {
+			return imPanelResultMsg{err: err}
+		}
+		return imPanelResultMsg{message: m.t("panel.im.message.unmute_all", count)}
+	}
+}
+
 func (m Model) imChannelEntries() []imChannelEntry {
 	if m.imManager == nil {
 		return nil
@@ -218,6 +297,7 @@ func (m Model) imChannelEntries() []imChannelEntry {
 	type bindingInfo struct {
 		binding  im.ChannelBinding
 		disabled bool
+		muted    bool
 	}
 	allBindings := make(map[string]bindingInfo)
 
@@ -230,6 +310,13 @@ func (m Model) imChannelEntries() []imChannelEntry {
 	for _, b := range snapshot.DisabledBindings {
 		if _, exists := allBindings[b.Adapter]; !exists {
 			allBindings[b.Adapter] = bindingInfo{binding: b, disabled: true}
+		}
+	}
+
+	// Add muted bindings (in-memory, not persisted)
+	for _, b := range snapshot.MutedBindings {
+		if _, exists := allBindings[b.Adapter]; !exists {
+			allBindings[b.Adapter] = bindingInfo{binding: b, muted: true}
 		}
 	}
 
@@ -253,6 +340,7 @@ func (m Model) imChannelEntries() []imChannelEntry {
 			Status:    state.Status,
 			LastError: state.LastError,
 			Disabled:  info.disabled,
+			Muted:     info.muted,
 			Bound:     strings.TrimSpace(info.binding.ChannelID) != "",
 		})
 	}
@@ -263,9 +351,11 @@ func (m Model) imChannelEntries() []imChannelEntry {
 func (m Model) imChannelLabels(entries []imChannelEntry) []string {
 	labels := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		status := m.t("panel.im.label.enabled")
+		status := m.t("panel.im.label.active")
 		if entry.Disabled {
 			status = m.t("panel.im.label.disabled")
+		} else if entry.Muted {
+			status = m.t("panel.im.label.muted")
 		}
 		if !entry.Bound && !entry.Disabled {
 			status = m.t("panel.im.label.waiting")
