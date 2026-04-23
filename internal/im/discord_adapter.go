@@ -82,6 +82,18 @@ func (a *discordAdapter) Start(ctx context.Context) {
 	go a.run(ctx)
 }
 
+func (a *discordAdapter) Close() error {
+	a.mu.Lock()
+	ws := a.ws
+	a.ws = nil
+	a.connected = false
+	a.mu.Unlock()
+	if ws != nil {
+		return ws.Close()
+	}
+	return nil
+}
+
 func (a *discordAdapter) run(ctx context.Context) {
 	backoffs := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second}
 	attempt := 0

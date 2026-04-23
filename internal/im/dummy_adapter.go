@@ -66,6 +66,9 @@ func (a *dummyAdapter) Start(ctx context.Context) {
 	}
 }
 
+// Close is a no-op for the dummy adapter.
+func (a *dummyAdapter) Close() error { return nil }
+
 // autoBind creates a ChannelBinding for the dummy adapter.
 func (a *dummyAdapter) autoBind() error {
 	session := a.manager.ActiveSession()

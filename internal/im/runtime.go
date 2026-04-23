@@ -251,6 +251,13 @@ func (m *Manager) RegisterAdapterCancel(adapterName string, cancel context.Cance
 
 // stopAdapter cancels an adapter's context and unregisters its sink.
 func (m *Manager) stopAdapter(adapterName string) {
+	// Physically close the adapter's network connection.
+	if sink, ok := m.sinks[adapterName]; ok {
+		if closer, ok := sink.(Closer); ok {
+			_ = closer.Close()
+		}
+	}
+	// Cancel the adapter's context to stop its run loop.
 	if cancel, ok := m.adapterCancels[adapterName]; ok && cancel != nil {
 		cancel()
 		delete(m.adapterCancels, adapterName)
