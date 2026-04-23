@@ -112,7 +112,9 @@ func (a *qqAdapter) Close() error {
 	a.mu.Unlock()
 	debug.Log("qq", "adapter=%s Close() called, ws=%v", a.name, ws != nil)
 	if ws != nil {
-		return ws.Close()
+		err := ws.Close()
+		debug.Log("qq", "adapter=%s ws.Close() returned: %v", a.name, err)
+		return err
 	}
 	return nil
 }
@@ -129,18 +131,23 @@ func resolveQQCredentials(adapterCfg config.IMAdapterConfig) (appID, appSecret, 
 func (a *qqAdapter) run(ctx context.Context) {
 	backoffs := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second}
 	attempt := 0
+	debug.Log("qq", "adapter=%s run loop started", a.name)
 	for {
 		if ctx.Err() != nil {
+			debug.Log("qq", "adapter=%s run loop exiting: ctx.Err=%v", a.name, ctx.Err())
 			a.publishState(false, "stopped", "")
 			return
 		}
+		debug.Log("qq", "adapter=%s run loop attempt=%d connecting", a.name, attempt)
 		if err := a.connectAndServe(ctx); err != nil {
 			a.publishState(false, "error", err.Error())
 		}
 		delay := backoffs[min(attempt, len(backoffs)-1)]
 		attempt++
+		debug.Log("qq", "adapter=%s connectAndServe returned, backing off %s (ctx.Err=%v)", a.name, delay, ctx.Err())
 		select {
 		case <-ctx.Done():
+			debug.Log("qq", "adapter=%s run loop exiting during backoff: ctx.Err=%v", a.name, ctx.Err())
 			a.publishState(false, "stopped", "")
 			return
 		case <-time.After(delay):
