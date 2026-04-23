@@ -743,6 +743,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
 			last.Streaming = false
 		}
+		m.chatFinishAssistant(assistantStreamingID)
 		wasCanceled := m.runCanceled
 		wasFailed := m.runFailed
 		m.runCanceled = false

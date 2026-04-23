@@ -16,6 +16,7 @@ type resumedToolCall struct {
 func (m *Model) rebuildConversationFromMessages(messages []provider.Message) {
 	m.output.Reset()
 	m.chatEntries.Reset()
+	m.chatReset()
 	m.streamBuffer = nil
 	m.streamPrefixWritten = false
 	toolCalls := make(map[string]resumedToolCall)
@@ -80,6 +81,7 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 			renderedCall := m.renderConversationToolCall(block)
 			m.output.WriteString(renderedCall)
 			m.chatEntries.Append(ChatEntry{Role: "tool", RawText: renderedCall})
+			m.chatWriteSystem(nextSystemID(), renderedCall)
 			if block.ToolID != "" {
 				toolCalls[block.ToolID] = resumedToolCall{
 					Presentation: describeTool(m.currentLanguage(), block.ToolName, string(block.Input)),

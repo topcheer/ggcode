@@ -364,6 +364,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		RawText: displayText,
 		Prefix:  "❯ ",
 	})
+	m.chatWriteUser(nextChatID(), displayText)
 
 	// Save original user message to session
 	m.appendUserMessage(text)
@@ -405,6 +406,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	m.dualWriteSystem(m.styles.user.Render("❯ /init"))
 	m.dualWriteSystem("\n")
 	m.chatEntries.Append(ChatEntry{Role: "user", RawText: "/init", Prefix: "❯ "})
+	m.chatWriteUser(nextChatID(), "/init")
 	m.appendUserMessage("/init")
 
 	m.streamBuffer = &bytes.Buffer{}
