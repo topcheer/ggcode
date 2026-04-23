@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -207,4 +208,241 @@ func findSubstr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestLooksLikeSecretField(t *testing.T) {
+	cases := []struct {
+		key      string
+		expected bool
+	}{
+		{"appsecret", true},
+		{"app_secret", true},
+		{"bot_token", true},
+		{"token", true},
+		{"password", true},
+		{"credential", true},
+		{"Authorization", false}, // no match — "authorization" doesn't contain secret/token/password/credential
+		{"appid", false},
+		{"app_id", false},
+		{"display_name", false},
+		{"base_url", false},
+		{"SecretKey", true}, // case-insensitive
+	}
+	for _, tc := range cases {
+		got := looksLikeSecretField(tc.key)
+		if got != tc.expected {
+			t.Errorf("looksLikeSecretField(%q) = %v, want %v", tc.key, got, tc.expected)
+		}
+	}
+}
+
+func TestDetectPlaintextIMSecrets(t *testing.T) {
+	yaml := `
+vendors:
+  zai:
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn:
+        protocol: openai
+        base_url: https://example.com
+im:
+  adapters:
+    qq-bot:
+      extra:
+        appid: "123456"
+        appsecret: plaintext-qq-secret
+    discord-bot:
+      extra:
+        token: plaintext-discord-token
+        display_name: MyBot
+`
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.yaml")
+	os.WriteFile(path, []byte(yaml), 0600)
+
+	findings, err := DetectPlaintextAPIKeys(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imFindings []APIKeyFinding
+	for _, f := range findings {
+		if f.Section == "im" {
+			imFindings = append(imFindings, f)
+		}
+	}
+	if len(imFindings) != 2 {
+		t.Fatalf("expected 2 IM findings, got %d: %+v", len(imFindings), imFindings)
+	}
+	// Check that appid was NOT flagged
+	for _, f := range imFindings {
+		if strings.Contains(f.KeyPath, "appid") {
+			t.Errorf("appid should not be flagged as secret: %s", f.KeyPath)
+		}
+	}
+	// Check that display_name was NOT flagged
+	for _, f := range imFindings {
+		if strings.Contains(f.KeyPath, "display_name") {
+			t.Errorf("display_name should not be flagged as secret: %s", f.KeyPath)
+		}
+	}
+}
+
+func TestDetectPlaintextMCPSecrets(t *testing.T) {
+	yaml := `
+vendors:
+  zai:
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn:
+        protocol: openai
+        base_url: https://example.com
+mcp_servers:
+  - name: my-server
+    type: stdio
+    env:
+      API_KEY: plaintext-mcp-key
+      HARMLESS_VAR: ${ALREADY_A_REF}
+    headers:
+      Authorization: "Bearer plaintext-bearer-token"
+  - name: clean-server
+    type: http
+    url: https://example.com/mcp
+`
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.yaml")
+	os.WriteFile(path, []byte(yaml), 0600)
+
+	findings, err := DetectPlaintextAPIKeys(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mcpFindings []APIKeyFinding
+	for _, f := range findings {
+		if f.Section == "mcp_env" || f.Section == "mcp_headers" {
+			mcpFindings = append(mcpFindings, f)
+		}
+	}
+	if len(mcpFindings) != 2 {
+		t.Fatalf("expected 2 MCP findings, got %d: %+v", len(mcpFindings), mcpFindings)
+	}
+	// Verify env var names are prefixed with GGCODE_MCP_
+	for _, f := range mcpFindings {
+		if !strings.HasPrefix(f.EnvVar, "GGCODE_MCP_") {
+			t.Errorf("expected MCP env var to start with GGCODE_MCP_, got %s", f.EnvVar)
+		}
+	}
+}
+
+func TestMigrateIMSecrets(t *testing.T) {
+	yaml := `
+vendors:
+  zai:
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn:
+        protocol: openai
+        base_url: https://example.com
+im:
+  adapters:
+    qq-bot:
+      extra:
+        appid: "123456"
+        appsecret: plaintext-qq-secret
+`
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.yaml")
+	os.WriteFile(path, []byte(yaml), 0600)
+
+	findings, err := MigratePlaintextAPIKeys(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imFindings []APIKeyFinding
+	for _, f := range findings {
+		if f.Section == "im" {
+			imFindings = append(imFindings, f)
+		}
+	}
+	if len(imFindings) != 1 {
+		t.Fatalf("expected 1 IM migration, got %d", len(imFindings))
+	}
+
+	// Read back the migrated config
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := string(data)
+	if !strings.Contains(migrated, "${GGCODE_IM_QQ_BOT_APPSECRET}") {
+		t.Errorf("expected env ref in migrated config, got:\n%s", migrated)
+	}
+	if strings.Contains(migrated, "plaintext-qq-secret") {
+		t.Error("plaintext secret should be removed from config")
+	}
+	// appid should be untouched
+	if !strings.Contains(migrated, `"123456"`) {
+		t.Error("appid should be untouched")
+	}
+
+	// Check keys.env
+	keysEnv := filepath.Join(tmp, "keys.env")
+	keysEnvPathOverride = keysEnv
+	defer func() { keysEnvPathOverride = "" }()
+	// The keys.env was written to default path, not our override, so check env var
+	val := os.Getenv("GGCODE_IM_QQ_BOT_APPSECRET")
+	if val != "plaintext-qq-secret" {
+		t.Errorf("expected os.Getenv to return migrated value, got %q", val)
+	}
+}
+
+func TestMigrateMCPSecrets(t *testing.T) {
+	yaml := `
+vendors:
+  zai:
+    api_key: ${ZAI_API_KEY}
+    endpoints:
+      cn:
+        protocol: openai
+        base_url: https://example.com
+mcp_servers:
+  - name: my-server
+    type: stdio
+    env:
+      API_KEY: plaintext-mcp-key
+    headers:
+      Authorization: "Bearer plaintext-bearer"
+`
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "config.yaml")
+	os.WriteFile(path, []byte(yaml), 0600)
+
+	findings, err := MigratePlaintextAPIKeys(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mcpFindings []APIKeyFinding
+	for _, f := range findings {
+		if f.Section == "mcp_env" || f.Section == "mcp_headers" {
+			mcpFindings = append(mcpFindings, f)
+		}
+	}
+	if len(mcpFindings) != 2 {
+		t.Fatalf("expected 2 MCP migrations, got %d", len(mcpFindings))
+	}
+
+	// Read back migrated config
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := string(data)
+	if strings.Contains(migrated, "plaintext-mcp-key") {
+		t.Error("plaintext mcp key should be removed")
+	}
+	if strings.Contains(migrated, "plaintext-bearer") {
+		t.Error("plaintext bearer should be removed")
+	}
+	if !strings.Contains(migrated, "${GGCODE_MCP_MY_SERVER_API_KEY}") {
+		t.Errorf("expected MCP env ref in migrated config, got:\n%s", migrated)
+	}
 }

@@ -13,8 +13,10 @@ import (
 )
 
 type APIKeyFinding struct {
-	Vendor   string
-	Endpoint string
+	Vendor   string // vendor name (for section="vendor")
+	Endpoint string // endpoint name (for section="vendor")
+	Section  string // "vendor", "im", "mcp_env", "mcp_headers"
+	KeyPath  string // dot-separated path for non-vendor findings (e.g. "im.adapters.ggcode.extra.token")
 	EnvVar   string
 }
 
@@ -81,8 +83,9 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 		}
 		if value, ok := stringValue(vendorMap["api_key"]); ok && isPlaintextAPIKeyValue(value) {
 			findings = append(findings, APIKeyFinding{
-				Vendor: vendorID,
-				EnvVar: preferredVendorAPIKeyEnvVar(vendorID),
+				Vendor:  vendorID,
+				Section: "vendor",
+				EnvVar:  preferredVendorAPIKeyEnvVar(vendorID),
 			})
 		}
 		endpoints, _ := vendorMap["endpoints"].(map[string]interface{})
@@ -95,18 +98,113 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 				findings = append(findings, APIKeyFinding{
 					Vendor:   vendorID,
 					Endpoint: endpointID,
+					Section:  "vendor",
 					EnvVar:   preferredEndpointAPIKeyEnvVar(vendorID, endpointID),
 				})
 			}
 		}
 	}
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Vendor != findings[j].Vendor {
-			return findings[i].Vendor < findings[j].Vendor
+	// --- Scan IM adapters: extra fields matching secret/token/password/credential ---
+	im, _ := raw["im"].(map[string]interface{})
+	adapters, _ := im["adapters"].(map[string]interface{})
+	for adapterName, adapterValue := range adapters {
+		adapterMap, ok := adapterValue.(map[string]interface{})
+		if !ok {
+			continue
 		}
-		return findings[i].Endpoint < findings[j].Endpoint
+		extra, _ := adapterMap["extra"].(map[string]interface{})
+		for key, val := range extra {
+			s, ok := val.(string)
+			if !ok || !isPlaintextAPIKeyValue(s) {
+				continue
+			}
+			if !looksLikeSecretField(key) {
+				continue
+			}
+			keyPath := "im.adapters." + adapterName + ".extra." + key
+			envVar := secretFieldEnvVar(adapterName, key)
+			findings = append(findings, APIKeyFinding{
+				Section: "im",
+				KeyPath: keyPath,
+				EnvVar:  envVar,
+			})
+		}
+	}
+
+	// --- Scan MCP servers: env block (all values are secrets) ---
+	mcpServers, _ := raw["mcp_servers"].([]interface{})
+	for i, srvVal := range mcpServers {
+		srv, ok := srvVal.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		srvName, _ := srv["name"].(string)
+		if srvName == "" {
+			srvName = fmt.Sprintf("mcp_%d", i)
+		}
+		// env block: all string values are secrets
+		env, _ := srv["env"].(map[string]interface{})
+		for key, val := range env {
+			s, ok := val.(string)
+			if !ok || !isPlaintextAPIKeyValue(s) {
+				continue
+			}
+			keyPath := fmt.Sprintf("mcp_servers[%s].env.%s", srvName, key)
+			envVar := mcpEnvVar(srvName, key)
+			findings = append(findings, APIKeyFinding{
+				Section: "mcp_env",
+				KeyPath: keyPath,
+				EnvVar:  envVar,
+			})
+		}
+		// headers block: all string values are secrets
+		headers, _ := srv["headers"].(map[string]interface{})
+		for key, val := range headers {
+			s, ok := val.(string)
+			if !ok || !isPlaintextAPIKeyValue(s) {
+				continue
+			}
+			keyPath := fmt.Sprintf("mcp_servers[%s].headers.%s", srvName, key)
+			envVar := mcpHeaderEnvVar(srvName, key)
+			findings = append(findings, APIKeyFinding{
+				Section: "mcp_headers",
+				KeyPath: keyPath,
+				EnvVar:  envVar,
+			})
+		}
+	}
+
+	sort.Slice(findings, func(i, j int) bool {
+		return findings[i].KeyPath < findings[j].KeyPath
 	})
 	return findings
+}
+
+// looksLikeSecretField returns true if the key name suggests it holds a secret.
+// Matches: secret, token, password, credential (case-insensitive, as substring).
+func looksLikeSecretField(key string) bool {
+	lower := strings.ToLower(key)
+	for _, pattern := range []string{"secret", "token", "password", "credential"} {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// secretFieldEnvVar builds an env var name for an IM adapter secret field.
+func secretFieldEnvVar(adapterName, key string) string {
+	return "GGCODE_IM_" + sanitizeEnvVarSegment(adapterName) + "_" + sanitizeEnvVarSegment(key)
+}
+
+// mcpEnvVar builds an env var name for an MCP server env entry.
+func mcpEnvVar(srvName, key string) string {
+	return "GGCODE_MCP_" + sanitizeEnvVarSegment(srvName) + "_" + sanitizeEnvVarSegment(key)
+}
+
+// mcpHeaderEnvVar builds an env var name for an MCP server header entry.
+func mcpHeaderEnvVar(srvName, key string) string {
+	return "GGCODE_MCP_" + sanitizeEnvVarSegment(srvName) + "_HEADER_" + sanitizeEnvVarSegment(key)
 }
 
 func preferredVendorAPIKeyEnvVar(vendor string) string {
@@ -297,40 +395,16 @@ func MigratePlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
 	// Collect key=value pairs for keys.env.
 	envEntries := make(map[string]string)
 
-	vendors, _ := raw["vendors"].(map[string]interface{})
 	for _, f := range findings {
-		vendorMap, ok := vendors[f.Vendor].(map[string]interface{})
-		if !ok {
-			continue
+		switch f.Section {
+		case "vendor":
+			migrateVendorFinding(raw, f, envEntries)
+		case "im":
+			migrateIMFinding(raw, f, envEntries)
+		case "mcp_env", "mcp_headers":
+			migrateMCPFinding(raw, f, envEntries)
 		}
-		if f.Endpoint == "" {
-			// Vendor-level key
-			value, ok := stringValue(vendorMap["api_key"])
-			if !ok || !isPlaintextAPIKeyValue(value) {
-				continue
-			}
-			os.Setenv(f.EnvVar, value)
-			envEntries[f.EnvVar] = value
-			vendorMap["api_key"] = "${" + f.EnvVar + "}"
-		} else {
-			// Endpoint-level key
-			endpoints, _ := vendorMap["endpoints"].(map[string]interface{})
-			epMap, ok := endpoints[f.Endpoint].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			value, ok := stringValue(epMap["api_key"])
-			if !ok || !isPlaintextAPIKeyValue(value) {
-				continue
-			}
-			os.Setenv(f.EnvVar, value)
-			envEntries[f.EnvVar] = value
-			epMap["api_key"] = "${" + f.EnvVar + "}"
-			endpoints[f.Endpoint] = epMap
-		}
-		vendors[f.Vendor] = vendorMap
 	}
-	raw["vendors"] = vendors
 
 	// Persist to ~/.ggcode/keys.env (merge with existing entries).
 	if err := writeKeysEnv(envEntries); err != nil {
@@ -436,4 +510,131 @@ func writeKeysEnv(newEntries map[string]string) error {
 	// Force exact permissions (os.WriteFile respects umask).
 	_ = os.Chmod(path, 0600)
 	return nil
+}
+
+// migrateVendorFinding handles migration for vendors.{name}.api_key and
+// vendors.{name}.endpoints.{ep}.api_key.
+func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
+	vendors, ok := raw["vendors"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	vendorMap, ok := vendors[f.Vendor].(map[string]interface{})
+	if !ok {
+		return
+	}
+	if f.Endpoint == "" {
+		value, ok := stringValue(vendorMap["api_key"])
+		if !ok || !isPlaintextAPIKeyValue(value) {
+			return
+		}
+		os.Setenv(f.EnvVar, value)
+		envEntries[f.EnvVar] = value
+		vendorMap["api_key"] = "${" + f.EnvVar + "}"
+	} else {
+		endpoints, _ := vendorMap["endpoints"].(map[string]interface{})
+		epMap, ok := endpoints[f.Endpoint].(map[string]interface{})
+		if !ok {
+			return
+		}
+		value, ok := stringValue(epMap["api_key"])
+		if !ok || !isPlaintextAPIKeyValue(value) {
+			return
+		}
+		os.Setenv(f.EnvVar, value)
+		envEntries[f.EnvVar] = value
+		epMap["api_key"] = "${" + f.EnvVar + "}"
+		endpoints[f.Endpoint] = epMap
+	}
+	vendors[f.Vendor] = vendorMap
+}
+
+// migrateIMFinding handles migration for im.adapters.{name}.extra.{field}.
+func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
+	im, _ := raw["im"].(map[string]interface{})
+	adapters, _ := im["adapters"].(map[string]interface{})
+	// KeyPath format: "im.adapters.{adapterName}.extra.{key}"
+	parts := strings.SplitN(f.KeyPath, ".", 5)
+	if len(parts) < 5 {
+		return
+	}
+	adapterName := parts[2]
+	keyName := parts[4]
+	adapterMap, ok := adapters[adapterName].(map[string]interface{})
+	if !ok {
+		return
+	}
+	extra, _ := adapterMap["extra"].(map[string]interface{})
+	value, ok := stringValue(extra[keyName])
+	if !ok || !isPlaintextAPIKeyValue(value) {
+		return
+	}
+	os.Setenv(f.EnvVar, value)
+	envEntries[f.EnvVar] = value
+	extra[keyName] = "${" + f.EnvVar + "}"
+	adapterMap["extra"] = extra
+	adapters[adapterName] = adapterMap
+}
+
+// migrateMCPFinding handles migration for mcp_servers[].env.* and mcp_servers[].headers.*.
+func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries map[string]string) {
+	mcpServers, _ := raw["mcp_servers"].([]interface{})
+	// KeyPath format: "mcp_servers[{srvName}].env.{key}" or "mcp_servers[{srvName}].headers.{key}"
+	// Extract server name between [ and ]
+	start := strings.Index(f.KeyPath, "[")
+	end := strings.Index(f.KeyPath, "]")
+	if start < 0 || end < 0 || end <= start+1 {
+		return
+	}
+	srvName := f.KeyPath[start+1 : end]
+	// Determine if env or headers
+	isHeader := strings.Contains(f.KeyPath, ".headers.")
+	var keyName string
+	if isHeader {
+		parts := strings.SplitN(f.KeyPath, ".headers.", 2)
+		if len(parts) < 2 {
+			return
+		}
+		keyName = parts[1]
+	} else {
+		parts := strings.SplitN(f.KeyPath, ".env.", 2)
+		if len(parts) < 2 {
+			return
+		}
+		keyName = parts[1]
+	}
+
+	for i, srvVal := range mcpServers {
+		srv, ok := srvVal.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := srv["name"].(string)
+		if name != srvName {
+			continue
+		}
+		if isHeader {
+			headers, _ := srv["headers"].(map[string]interface{})
+			value, ok := stringValue(headers[keyName])
+			if !ok || !isPlaintextAPIKeyValue(value) {
+				return
+			}
+			os.Setenv(f.EnvVar, value)
+			envEntries[f.EnvVar] = value
+			headers[keyName] = "${" + f.EnvVar + "}"
+			srv["headers"] = headers
+		} else {
+			env, _ := srv["env"].(map[string]interface{})
+			value, ok := stringValue(env[keyName])
+			if !ok || !isPlaintextAPIKeyValue(value) {
+				return
+			}
+			os.Setenv(f.EnvVar, value)
+			envEntries[f.EnvVar] = value
+			env[keyName] = "${" + f.EnvVar + "}"
+			srv["env"] = env
+		}
+		mcpServers[i] = srv
+		break
+	}
 }
