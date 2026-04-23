@@ -501,6 +501,122 @@ func TestStopAdapterIdempotent(t *testing.T) {
 	mgr.mu.Unlock()
 }
 
+func TestMuteBindingSetsDisconnected(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "ch-1",
+	})
+
+	// Simulate adapter publishing healthy state
+	mgr.PublishAdapterState(AdapterState{
+		Name:    "qq-bot-1",
+		Healthy: true,
+		Status:  "connected",
+	})
+
+	// Verify it's healthy
+	snapshot := mgr.Snapshot()
+	var state AdapterState
+	for _, a := range snapshot.Adapters {
+		if a.Name == "qq-bot-1" {
+			state = a
+		}
+	}
+	if !state.Healthy {
+		t.Fatal("should be healthy before mute")
+	}
+
+	// Mute it
+	_ = mgr.MuteBinding("qq-bot-1")
+
+	// Verify adapter state is now disconnected
+	snapshot = mgr.Snapshot()
+	for _, a := range snapshot.Adapters {
+		if a.Name == "qq-bot-1" {
+			if a.Healthy {
+				t.Fatal("should NOT be healthy after mute")
+			}
+			if a.Status != "disconnected" {
+				t.Fatalf("expected status 'disconnected', got %q", a.Status)
+			}
+		}
+	}
+}
+
+func TestDisableBindingSetsDisconnected(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "ch-1",
+	})
+
+	mgr.PublishAdapterState(AdapterState{
+		Name:    "qq-bot-1",
+		Healthy: true,
+		Status:  "connected",
+	})
+
+	_ = mgr.DisableBinding("qq-bot-1")
+
+	snapshot := mgr.Snapshot()
+	for _, a := range snapshot.Adapters {
+		if a.Name == "qq-bot-1" {
+			if a.Healthy {
+				t.Fatal("should NOT be healthy after disable")
+			}
+			if a.Status != "disconnected" {
+				t.Fatalf("expected status 'disconnected', got %q", a.Status)
+			}
+		}
+	}
+}
+
+func TestMuteAllSetsDisconnected(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformQQ, Adapter: "qq", ChannelID: "1"})
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformTelegram, Adapter: "tg", ChannelID: "2"})
+
+	mgr.PublishAdapterState(AdapterState{Name: "qq", Healthy: true, Status: "connected"})
+	mgr.PublishAdapterState(AdapterState{Name: "tg", Healthy: true, Status: "connected"})
+
+	count, _ := mgr.MuteAll()
+	if count != 2 {
+		t.Fatalf("expected 2 muted, got %d", count)
+	}
+
+	snapshot := mgr.Snapshot()
+	for _, a := range snapshot.Adapters {
+		if a.Name == "qq" || a.Name == "tg" {
+			if a.Healthy {
+				t.Fatalf("%s should NOT be healthy after MuteAll", a.Name)
+			}
+			if a.Status != "disconnected" {
+				t.Fatalf("%s expected 'disconnected', got %q", a.Name, a.Status)
+			}
+		}
+	}
+}
+
 // dummySink is a minimal Sink for testing
 type dummySink struct {
 	name string

@@ -256,6 +256,14 @@ func (m *Manager) stopAdapter(adapterName string) {
 		delete(m.adapterCancels, adapterName)
 	}
 	delete(m.sinks, adapterName)
+	// Mark adapter state as disconnected so the UI reflects the real state.
+	if state, ok := m.adapters[adapterName]; ok {
+		state.Healthy = false
+		state.Status = "disconnected"
+		state.LastError = ""
+		state.UpdatedAt = time.Now()
+		m.adapters[adapterName] = state
+	}
 }
 
 func (m *Manager) GenerateShareLink(ctx context.Context, adapter, callbackData string) (string, error) {
