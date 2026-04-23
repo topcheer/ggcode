@@ -189,6 +189,18 @@ func (t *BashToolItem) RenderParams() string {
 	return t.command
 }
 
+// RenderBody uses BashBody style for command output.
+func (t *BashToolItem) RenderBody(width int) string {
+	if t.result == "" {
+		return ""
+	}
+	if t.isError {
+		return t.styles.ErrorStyle.Render(t.result)
+	}
+	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
+	return t.styles.BashBody.Render(body)
+}
+
 func (t *BashToolItem) Render(width int) string {
 	if cached, _, ok := t.GetCached(width); ok {
 		return cached
