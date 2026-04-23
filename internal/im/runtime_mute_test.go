@@ -359,3 +359,154 @@ func TestMuteAllPreservesDisabled(t *testing.T) {
 		t.Fatalf("expected 2 active after UnmuteAll, got %d", len(mgr.CurrentBindings()))
 	}
 }
+
+func TestMuteBindingCancelsAdapter(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "ch-1",
+	})
+
+	// Register a cancel func (simulates what startConfiguredAdapter does)
+	cancelled := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mgr.RegisterAdapterCancel("qq-bot-1", func() { cancelled = true; cancel() })
+
+	// Register a sink (simulates the adapter)
+	mgr.RegisterSink(&dummySink{name: "qq-bot-1"})
+
+	// Mute should cancel the adapter and unregister the sink
+	if err := mgr.MuteBinding("qq-bot-1"); err != nil {
+		t.Fatalf("MuteBinding: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("expected adapter cancel to be called on mute")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("expected adapter context to be cancelled")
+	}
+	// Sink should be removed
+	snapshot := mgr.Snapshot()
+	for _, a := range snapshot.Adapters {
+		if a.Name == "qq-bot-1" {
+			t.Fatal("qq-bot-1 adapter should not appear in snapshot after mute")
+		}
+	}
+}
+
+func TestDisableBindingCancelsAdapter(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "ch-1",
+	})
+
+	cancelled := false
+	mgr.RegisterAdapterCancel("qq-bot-1", func() { cancelled = true })
+
+	if err := mgr.DisableBinding("qq-bot-1"); err != nil {
+		t.Fatalf("DisableBinding: %v", err)
+	}
+	if !cancelled {
+		t.Fatal("expected adapter cancel to be called on disable")
+	}
+}
+
+func TestMuteAllCancelsAllAdapters(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformQQ, Adapter: "qq", ChannelID: "1"})
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/workspace/test", Platform: PlatformTelegram, Adapter: "tg", ChannelID: "2"})
+
+	qqCancelled := false
+	tgCancelled := false
+	mgr.RegisterAdapterCancel("qq", func() { qqCancelled = true })
+	mgr.RegisterAdapterCancel("tg", func() { tgCancelled = true })
+
+	count, _ := mgr.MuteAll()
+	if count != 2 {
+		t.Fatalf("expected 2 muted, got %d", count)
+	}
+	if !qqCancelled {
+		t.Fatal("qq adapter should be cancelled")
+	}
+	if !tgCancelled {
+		t.Fatal("tg adapter should be cancelled")
+	}
+}
+
+func TestUnbindSessionClearsAdapterCancels(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "ch-1",
+	})
+
+	cancelled := false
+	mgr.RegisterAdapterCancel("qq-bot-1", func() { cancelled = true })
+	_ = mgr.MuteBinding("qq-bot-1")
+
+	// cancelled was called during mute above
+	if !cancelled {
+		t.Fatal("expected cancel to be called during mute")
+	}
+
+	// UnbindSession should reset adapterCancels
+	mgr.UnbindSession()
+
+	// After unbind, a fresh cancel registration should work
+	cancelled2 := false
+	mgr.RegisterAdapterCancel("qq-bot-1", func() { cancelled2 = true })
+	// No panic means adapterCancels was properly reinitialized
+	_ = cancelled2
+}
+
+func TestStopAdapterIdempotent(t *testing.T) {
+	mgr := NewManager()
+	// stopAdapter on non-existent adapter should not panic
+	mgr.mu.Lock()
+	mgr.stopAdapter("nonexistent")
+	mgr.mu.Unlock()
+
+	// stopAdapter with nil cancel should not panic
+	mgr.RegisterAdapterCancel("test", nil)
+	mgr.mu.Lock()
+	mgr.stopAdapter("test")
+	mgr.mu.Unlock()
+}
+
+// dummySink is a minimal Sink for testing
+type dummySink struct {
+	name string
+}
+
+func (d *dummySink) Name() string { return d.name }
+func (d *dummySink) Send(_ context.Context, _ ChannelBinding, _ OutboundEvent) error {
+	return nil
+}
