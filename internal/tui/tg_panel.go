@@ -31,6 +31,7 @@ type tgBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Muted            bool
 }
 
 type tgBindResultMsg struct {
@@ -62,9 +63,6 @@ func (m Model) renderTGPanel() string {
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.tg.directory")),
 		fmt.Sprintf(" %s", firstNonEmptyTG(m.currentWorkspacePath(), m.t("panel.tg.none"))),
-		"",
-		lipgloss.NewStyle().Bold(true).Render(m.t("panel.tg.runtime")),
-		fmt.Sprintf(" %s", m.tgRuntimeStatus()),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.tg.bots")),
 		fmt.Sprintf(" %s", m.t("panel.tg.created", len(entries))),

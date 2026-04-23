@@ -96,7 +96,7 @@ func TestQQPanelRenderLocalizesToChinese(t *testing.T) {
 	m.openQQPanel()
 
 	rendered := m.renderQQPanel()
-	if !strings.Contains(rendered, "目录") || !strings.Contains(rendered, "QQ 机器人") || !strings.Contains(rendered, "运行时") {
+	if !strings.Contains(rendered, "目录") || !strings.Contains(rendered, "QQ 机器人") || !strings.Contains(rendered, "当前绑定") {
 		t.Fatalf("expected localized qq panel, got:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "j/k 移动") || !strings.Contains(rendered, "绑定渠道") {
@@ -214,9 +214,6 @@ func TestQQPanelRenderShowsBotCountsAndBindingStatus(t *testing.T) {
 	rendered := m.renderQQPanel()
 	if !strings.Contains(rendered, "Created: 2") || !strings.Contains(rendered, "Available: 2") {
 		t.Fatalf("expected bot counts in /qq panel, got:\n%s", rendered)
-	}
-	if !strings.Contains(rendered, "disabled (set im.enabled: true and restart ggcode)") {
-		t.Fatalf("expected runtime status in /qq panel, got:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "Bound Directory: (none)") {
 		t.Fatalf("expected binding status in /qq panel, got:\n%s", rendered)
