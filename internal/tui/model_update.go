@@ -186,6 +186,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
+		m.input.SetHeight(composerHeight(m.input.Value()))
 		return m, cmd
 
 	case tea.KeyPressMsg:
@@ -1674,6 +1675,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	newValue := m.input.Value()
 	if oldValue != newValue {
+		m.input.SetHeight(composerHeight(newValue))
 		debug.Log("tui", "CATCHALL input changed old=%q new=%q", truncateStr(oldValue, 80), truncateStr(newValue, 80))
 	}
 
