@@ -43,7 +43,7 @@ func (m *Model) resetConversationView() {
 	m.runFailed = false
 	m.spinner.Stop()
 	m.viewport.SetContent("")
-	m.viewport.GotoBottom()
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) listSessions() tea.Cmd {

@@ -113,7 +113,7 @@ func (m *Model) appendShellChunk(chunk string) {
 	m.trimOutput()
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
-		m.viewport.GotoBottom()
+		m.chatListScrollToBottom()
 	}
 }
 

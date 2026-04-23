@@ -19,7 +19,7 @@ func (m *Model) promptExitConfirm() {
 	m.dualWriteSystem("\n")
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
-		m.viewport.GotoBottom()
+		m.chatListScrollToBottom()
 	}
 }
 
@@ -36,7 +36,7 @@ func (m *Model) queuePendingSubmission(text string) {
 	m.dualWriteSystem("\n")
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
-		m.viewport.GotoBottom()
+		m.chatListScrollToBottom()
 	}
 }
 
@@ -79,7 +79,7 @@ func (m *Model) cancelActiveRun() {
 	m.dualWriteSystem("\n" + m.t("interrupted"))
 	m.syncConversationViewport()
 	if m.viewport.AutoFollow() {
-		m.viewport.GotoBottom()
+		m.chatListScrollToBottom()
 	}
 }
 
