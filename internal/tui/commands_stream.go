@@ -46,10 +46,11 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if !m.streamPrefixWritten {
 		m.ensureOutputHasBlankLine()
 		m.streamStartPos = m.output.Len()
-		m.dualWriteSystem(assistantBulletStyle.Render("● "))
+		// Write prefix to legacy output only; chatEntries gets its own
+		// streaming assistant entry below with the prefix baked in.
+		m.output.WriteString(assistantBulletStyle.Render("● "))
 		m.streamPrefixWritten = true
 
-		// New: start a streaming assistant entry in chatEntries
 		m.chatEntries.Append(ChatEntry{
 			Role:      "assistant",
 			Prefix:    "● ",
@@ -133,17 +134,21 @@ func (m *Model) rewriteActiveStreamOutput(renderMarkdown bool) {
 	if !m.streamPrefixWritten || m.streamStartPos < 0 || m.streamStartPos > m.output.Len() {
 		return
 	}
+	// Only update the legacy output buffer.
+	// The chatEntries streaming entry is updated separately in appendStreamChunk
+	// (line ~63: last.RawText = m.streamBuffer.String()).
+	// Do NOT call dualWriteSystem here — it would append duplicate entries.
 	m.output.Truncate(m.streamStartPos)
-	m.dualWriteSystem(assistantBulletStyle.Render("● "))
+	m.output.WriteString(assistantBulletStyle.Render("● "))
 	rendered := m.streamBuffer.String()
 	if renderMarkdown {
 		rendered = m.renderCurrentStreamMarkdown()
 	}
 	if rendered != "" {
-		m.dualWriteSystem(rendered)
+		m.output.WriteString(rendered)
 	}
 	if m.harnessRunLiveTail != "" {
-		m.dualWriteSystem(m.harnessRunLiveTail)
+		m.output.WriteString(m.harnessRunLiveTail)
 	}
 }
 
