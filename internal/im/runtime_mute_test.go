@@ -706,3 +706,99 @@ func (d *dummySink) Close() error {
 	d.closed = true
 	return nil
 }
+
+// --- onRestart tests ---
+
+func TestUnmuteBindingRestartsAdapter(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/tmp", Platform: PlatformQQ, Adapter: "test-qq", ChannelID: "ch-1",
+	})
+
+	var restarted []string
+	mgr.SetOnRestart(func(name string) error {
+		restarted = append(restarted, name)
+		return nil
+	})
+
+	if err := mgr.MuteBinding("test-qq"); err != nil {
+		t.Fatalf("MuteBinding: %v", err)
+	}
+	if err := mgr.UnmuteBinding("test-qq"); err != nil {
+		t.Fatalf("UnmuteBinding: %v", err)
+	}
+
+	if len(restarted) != 1 || restarted[0] != "test-qq" {
+		t.Fatalf("expected onRestart called with test-qq, got %v", restarted)
+	}
+}
+
+func TestEnableBindingRestartsAdapter(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/tmp", Platform: PlatformQQ, Adapter: "test-qq", ChannelID: "ch-1",
+	})
+
+	var restarted []string
+	mgr.SetOnRestart(func(name string) error {
+		restarted = append(restarted, name)
+		return nil
+	})
+
+	if err := mgr.DisableBinding("test-qq"); err != nil {
+		t.Fatalf("DisableBinding: %v", err)
+	}
+	if err := mgr.EnableBinding("test-qq"); err != nil {
+		t.Fatalf("EnableBinding: %v", err)
+	}
+
+	if len(restarted) != 1 || restarted[0] != "test-qq" {
+		t.Fatalf("expected onRestart called with test-qq, got %v", restarted)
+	}
+}
+
+func TestUnmuteAllRestartsAllAdapters(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformQQ, Adapter: "qq-1", ChannelID: "ch-1"})
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformQQ, Adapter: "qq-2", ChannelID: "ch-2"})
+
+	var restarted []string
+	mgr.SetOnRestart(func(name string) error {
+		restarted = append(restarted, name)
+		return nil
+	})
+
+	count, _ := mgr.MuteAll()
+	if count != 2 {
+		t.Fatalf("expected 2 muted, got %d", count)
+	}
+
+	count, _ = mgr.UnmuteAll()
+	if count != 2 {
+		t.Fatalf("expected 2 unmuted, got %d", count)
+	}
+	if len(restarted) != 2 {
+		t.Fatalf("expected 2 restarts, got %d", len(restarted))
+	}
+}
+
+func TestUnmuteNoRestartWhenNoCallback(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformQQ, Adapter: "test-qq", ChannelID: "ch-1"})
+
+	if err := mgr.MuteBinding("test-qq"); err != nil {
+		t.Fatalf("MuteBinding: %v", err)
+	}
+	// No onRestart set — should not panic
+	if err := mgr.UnmuteBinding("test-qq"); err != nil {
+		t.Fatalf("UnmuteBinding: %v", err)
+	}
+}

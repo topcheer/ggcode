@@ -473,6 +473,14 @@ func (m *Model) refreshIMRuntimeHooks() {
 			m.program.Send(imRuntimeUpdatedMsg{})
 		}
 	})
+	// Set up restart callback so UnmuteBinding/EnableBinding can reconnect adapters.
+	if m.config != nil {
+		cfg := m.config
+		mgr := m.imManager
+		m.imManager.SetOnRestart(func(adapterName string) error {
+			return im.StartNamedAdapter(context.Background(), cfg.IM, adapterName, mgr)
+		})
+	}
 }
 
 func (m *Model) bindIMSession() {

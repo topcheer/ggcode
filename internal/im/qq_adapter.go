@@ -463,6 +463,10 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 }
 
 func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, payload map[string]any) {
+	// Exit immediately if the adapter has been stopped (muted/disabled).
+	if ctx.Err() != nil {
+		return
+	}
 	msgID := strings.TrimSpace(stringFromAny(payload["id"]))
 	if msgID == "" || a.seenMessage(msgID) {
 		return
@@ -498,6 +502,11 @@ func (a *qqAdapter) handleMessageEvent(ctx context.Context, eventType string, pa
 		},
 		Text:        text,
 		Attachments: attachments,
+	}
+	// Re-check ctx before making manager calls — the adapter may have been
+	// muted between the goroutine start and now.
+	if ctx.Err() != nil {
+		return
 	}
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
