@@ -318,6 +318,13 @@ func (m *Manager) GenerateShareLink(ctx context.Context, adapter, callbackData s
 
 func (m *Manager) PublishAdapterState(state AdapterState) {
 	m.mu.Lock()
+	// Ignore state updates from muted adapters — the adapter goroutine may
+	// still publish one final error during shutdown; we don't want it
+	// overwriting the "disconnected" state set by stopAdapter.
+	if b, ok := m.currentBindings[state.Name]; ok && b.Muted {
+		m.mu.Unlock()
+		return
+	}
 	if state.UpdatedAt.IsZero() {
 		state.UpdatedAt = time.Now()
 	}

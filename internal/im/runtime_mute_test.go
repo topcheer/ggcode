@@ -959,3 +959,45 @@ func (s *stubBindingStoreForMute) ListByWorkspace(ws string) ([]ChannelBinding, 
 func (s *stubBindingStoreForMute) ListByAdapter(string) ([]ChannelBinding, error) {
 	return nil, nil
 }
+
+func TestPublishAdapterStateIgnoredWhenMuted(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp"})
+	_, _ = mgr.BindChannel(ChannelBinding{Workspace: "/tmp", Platform: PlatformTelegram, Adapter: "tg-1", ChannelID: "ch-1"})
+
+	// Simulate adapter publishing its initial state
+	mgr.PublishAdapterState(AdapterState{
+		Name:     "tg-1",
+		Platform: PlatformTelegram,
+		Healthy:  true,
+		Status:   "connected",
+	})
+
+	if err := mgr.MuteBinding("tg-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// State should be "disconnected" (set by stopAdapter)
+	state := mgr.adapters["tg-1"]
+	if state.Status != "disconnected" {
+		t.Fatalf("expected status 'disconnected' after mute, got '%s'", state.Status)
+	}
+
+	// Simulate the old goroutine publishing a late error (like 409)
+	mgr.PublishAdapterState(AdapterState{
+		Name:      "tg-1",
+		Platform:  PlatformTelegram,
+		Healthy:   false,
+		Status:    "error",
+		LastError: "poll updates: Telegram API [409]",
+	})
+
+	// State should remain "disconnected", not overwritten to "error"
+	state = mgr.adapters["tg-1"]
+	if state.Status != "disconnected" {
+		t.Fatalf("expected status 'disconnected' after late publishState, got '%s'", state.Status)
+	}
+	if state.LastError != "" {
+		t.Fatalf("expected no last error, got '%s'", state.LastError)
+	}
+}
