@@ -48,13 +48,6 @@ type Styles struct {
 	AssistantIcon   string
 	AssistantStyle  lipgloss.Style
 
-	// Tool status icons
-	ToolPending  string
-	ToolRunning  string
-	ToolSuccess  string
-	ToolError    string
-	ToolCanceled string
-
 	// Tool name rendering
 	ToolName lipgloss.Style
 
@@ -84,11 +77,6 @@ func DefaultStyles() Styles {
 		AssistantPrefix: "● ",
 		AssistantIcon:   "●",
 		AssistantStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("81")),
-		ToolPending:     "⏳",
-		ToolRunning:     "⏳",
-		ToolSuccess:     "✓",
-		ToolError:       "✗",
-		ToolCanceled:    "⊘",
 		ToolName:        lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
 		ToolBody:        lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
 		SystemPrefix:    "○ ",
@@ -103,32 +91,32 @@ func DefaultStyles() Styles {
 func (s Styles) ToolIcon(status ToolStatus) string {
 	switch status {
 	case StatusPending:
-		return s.ToolPending
+		return "⏳"
 	case StatusRunning:
-		return s.ToolRunning
+		return "⏳"
 	case StatusSuccess:
-		return s.ToolSuccess
+		return "✓"
 	case StatusError:
-		return s.ToolError
+		return "✗"
 	case StatusCanceled:
-		return s.ToolCanceled
+		return "⊘"
 	default:
 		return "?"
 	}
 }
 
-// ToolIconStyle returns a styled icon for a given tool status.
+// ToolIconStyle returns a styled icon for the given tool status.
 func (s Styles) ToolIconStyle(status ToolStatus) string {
 	icon := s.ToolIcon(status)
 	switch status {
 	case StatusSuccess:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render(icon)
 	case StatusError:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(icon)
 	case StatusPending, StatusRunning:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(icon)
 	case StatusCanceled:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(icon)
 	default:
 		return icon
 	}
