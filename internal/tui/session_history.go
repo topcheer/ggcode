@@ -87,11 +87,17 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 			if toolID == "" {
 				toolID = nextChatID()
 			}
-			item := chat.NewToolItem(toolID, block.ToolName, chat.StatusSuccess, string(block.Input), m.chatStyles)
+			present := describeTool(m.currentLanguage(), block.ToolName, string(block.Input))
+			item := chat.NewToolItem(toolID, chat.ToolContext{
+				ToolName:    block.ToolName,
+				DisplayName: present.DisplayName,
+				Detail:      present.Detail,
+				RawArgs:     string(block.Input),
+			}, chat.StatusSuccess, m.chatStyles)
 			m.chatList.Append(item)
 			if block.ToolID != "" {
 				toolCalls[block.ToolID] = resumedToolCall{
-					Presentation: describeTool(m.currentLanguage(), block.ToolName, string(block.Input)),
+					Presentation: present,
 					ToolName:     block.ToolName,
 					RawArgs:      string(block.Input),
 				}

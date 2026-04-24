@@ -18,6 +18,14 @@ var (
 	cache = map[int]*glamour.TermRenderer{}
 )
 
+// Warmup pre-initializes the glamour markdown renderer so the first real
+// render is fast. Call this during startup (before the TUI event loop)
+// to avoid blocking the first View() call with parser/renderer init.
+func Warmup() {
+	_ = Renderer(80)
+	_ = Renderer(120)
+}
+
 // Renderer returns a cached glamour.TermRenderer for the given wrap width.
 func Renderer(wrap int) *glamour.TermRenderer {
 	if wrap <= 0 {
@@ -51,7 +59,9 @@ func Render(text string, wrap int) string {
 	if err != nil {
 		return text
 	}
-	return strings.TrimRight(out, " \t\n")
+	// Glamour adds leading/trailing newlines; trim both so the first
+	// line of rendered content lines up with the prefix icon.
+	return strings.TrimRight(strings.TrimLeft(out, " \t\n"), " \t\n")
 }
 
 // StyleConfig returns the glamour style config adapted for dark/light terminal.

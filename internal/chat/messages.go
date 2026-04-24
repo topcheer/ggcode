@@ -2,6 +2,7 @@ package chat
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 
@@ -75,20 +76,32 @@ func wrapLines(text string, width int) []string {
 			result = append(result, "")
 			continue
 		}
-		// Simple character-based wrapping
-		for len(paragraph) > 0 {
-			if len(paragraph) <= width {
+		// Visual-width-aware wrapping
+		for paragraph != "" {
+			if lipgloss.Width(paragraph) <= width {
 				result = append(result, paragraph)
 				break
 			}
-			// Find last space before width
-			cut := width
-			spaceIdx := strings.LastIndex(paragraph[:cut], " ")
-			if spaceIdx > 0 {
-				cut = spaceIdx
+			// Walk runes forward to find the longest prefix that fits
+			runes := []rune(paragraph)
+			cut := 0
+			for cut < len(runes) && lipgloss.Width(string(runes[:cut+1])) <= width {
+				cut++
 			}
-			result = append(result, paragraph[:cut])
-			paragraph = strings.TrimLeft(paragraph[cut:], " ")
+			if cut == 0 {
+				// Single wide character wider than width — emit it anyway
+				cut = 1
+			}
+			// Try to break at a space for cleaner wrapping
+			chunk := string(runes[:cut])
+			if spaceIdx := strings.LastIndex(chunk, " "); spaceIdx > 0 {
+				// Convert byte index to rune index for safe slicing
+				runeIdx := utf8.RuneCountInString(chunk[:spaceIdx])
+				chunk = string(runes[:runeIdx])
+				cut = runeIdx
+			}
+			result = append(result, chunk)
+			paragraph = strings.TrimLeft(string(runes[cut:]), " ")
 		}
 	}
 	if len(result) == 0 {

@@ -66,15 +66,41 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			argString(args, "cmd"),
 		)))
 	case "write_command_input":
-		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
-			argString(args, "job_id"),
+		// The input text being sent to the process is the most important detail
+		inputText := argString(args, "input")
+		jobID := argString(args, "job_id")
+		if inputText != "" {
+			// Truncate long input for display
+			if len(inputText) > 60 {
+				inputText = inputText[:57] + "…"
+			}
+			detail := fmt.Sprintf("→ %s", inputText)
+			if jobID != "" {
+				shortID := shortenJobID(jobID)
+				detail = fmt.Sprintf("[%s] → %s", shortID, inputText)
+			}
+			return toolPresentationFor(lang, "input", detail)
+		}
+		return toolPresentationFor(lang, "input", displayToolTarget(firstNonEmpty(
+			jobID,
 			"background command",
 		)))
-	case "read_command_output", "wait_command", "stop_command", "list_commands":
-		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
-			argString(args, "job_id"),
-			"background command",
-		)))
+	case "read_command_output":
+		jobID := argString(args, "job_id")
+		return toolPresentationFor(lang, "output", displayToolTarget(shortenJobID(jobID)))
+	case "wait_command":
+		jobID := argString(args, "job_id")
+		waitSec := argString(args, "wait_seconds")
+		detail := shortenJobID(jobID)
+		if waitSec != "" {
+			detail = fmt.Sprintf("%s (%ss)", detail, waitSec)
+		}
+		return toolPresentationFor(lang, "wait", displayToolTarget(detail))
+	case "stop_command":
+		jobID := argString(args, "job_id")
+		return toolPresentationFor(lang, "stop", displayToolTarget(shortenJobID(jobID)))
+	case "list_commands":
+		return toolPresentationFor(lang, "list_jobs", "")
 	case "web_fetch":
 		return toolPresentationFor(lang, "fetch", displayToolTarget(argString(args, "url")))
 	case "web_search":
@@ -130,7 +156,96 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Detail:      action,
 			Activity:    "Exit worktree (" + action + ")",
 		}
+	case "save_memory":
+		key := argString(args, "key")
+		content := argString(args, "content")
+		detail := key
+		if content != "" && len(content) > 40 {
+			content = content[:37] + "…"
+		}
+		if content != "" {
+			detail = key + ": " + content
+		}
+		return toolPresentation{
+			DisplayName: "Memory",
+			Detail:      detail,
+			Activity:    "Saving memory " + key,
+		}
+	case "config":
+		setting := argString(args, "setting")
+		value := argString(args, "value")
+		detail := setting
+		if value != "" {
+			detail = setting + " = " + value
+		}
+		return toolPresentation{
+			DisplayName: "Config",
+			Detail:      detail,
+			Activity:    "Updating config " + setting,
+		}
+	case "send_message":
+		to := argString(args, "to")
+		msg := argString(args, "message")
+		detail := to
+		if msg != "" {
+			if len(msg) > 40 {
+				msg = msg[:37] + "…"
+			}
+			detail = to + ": " + msg
+		}
+		return toolPresentation{
+			DisplayName: "Message",
+			Detail:      detail,
+			Activity:    "Sending message to " + to,
+		}
+	case "enter_plan_mode":
+		return toolPresentation{
+			DisplayName: "Plan Mode",
+			Detail:      "",
+			Activity:    "Entering plan mode",
+		}
+	case "exit_plan_mode":
+		return toolPresentation{
+			DisplayName: "Plan Mode",
+			Detail:      "",
+			Activity:    "Exiting plan mode",
+		}
+	case "task_create", "task_update", "task_get", "task_list", "task_stop", "task_output":
+		return toolPresentationFor(lang, "task", displayToolTarget(firstNonEmpty(
+			argString(args, "subject"),
+			argString(args, "description"),
+			argString(args, "taskId"),
+		)))
+	case "list_agents", "wait_agent":
+		agentID := argString(args, "agent_id")
+		return toolPresentation{
+			DisplayName: "Agent",
+			Detail:      shortenJobID(agentID),
+			Activity:    "Managing agent " + shortenJobID(agentID),
+		}
+	case "team_create", "team_delete":
+		return toolPresentation{
+			DisplayName: "Team",
+			Detail:      argString(args, "name"),
+			Activity:    "Managing team",
+		}
+	case "teammate_spawn", "teammate_list", "teammate_shutdown", "teammate_results":
+		return toolPresentation{
+			DisplayName: "Swarm",
+			Detail:      displayToolTarget(firstNonEmpty(argString(args, "name"), argString(args, "teammate_id"))),
+			Activity:    "Managing swarm teammate",
+		}
+	case "swarm_task_create", "swarm_task_claim", "swarm_task_complete", "swarm_task_list":
+		return toolPresentation{
+			DisplayName: "Swarm Task",
+			Detail:      displayToolTarget(firstNonEmpty(argString(args, "subject"), argString(args, "task_id"))),
+			Activity:    "Managing swarm task",
+		}
 	default:
+		// LSP tools share a common pattern: show file:line
+		if strings.HasPrefix(toolName, "lsp_") {
+			return lspToolPresentation(lang, toolName, args, fileTarget)
+		}
 		pretty := prettifyToolName(toolName)
 		return toolPresentation{
 			DisplayName: pretty,
@@ -197,8 +312,28 @@ func commandToolPresentation(lang Language, rawCommand string) (toolPresentation
 		return toolPresentation{}, false
 	}
 	title := displayToolTarget(preview.Title)
+	// Build detail from command lines (showing script preview alongside the title)
+	var detailParts []string
+	for _, line := range preview.CommandLines {
+		part := compactSingleLine(strings.TrimRight(line, " \t"))
+		if len(part) > 50 {
+			part = part[:47] + "…"
+		}
+		detailParts = append(detailParts, part)
+	}
+	// Show at most 2 command lines in detail to avoid header bloat
+	maxDetailLines := 2
+	if len(detailParts) > maxDetailLines {
+		hidden := len(detailParts) - maxDetailLines + preview.CommandHiddenLineCount
+		detailParts = detailParts[:maxDetailLines]
+		detailParts = append(detailParts, fmt.Sprintf("+%d more", hidden))
+	} else if preview.CommandHiddenLineCount > 0 {
+		detailParts = append(detailParts, fmt.Sprintf("+%d more", preview.CommandHiddenLineCount))
+	}
+	detail := strings.Join(detailParts, "; ")
 	return toolPresentation{
 		DisplayName: title,
+		Detail:      detail,
 		Activity:    localizedCommandActivity(lang, title),
 	}, true
 }
@@ -235,6 +370,16 @@ func localizedToolLabel(lang Language, action string) string {
 			return "提问"
 		case "inspect":
 			return "检查"
+		case "input":
+			return "输入"
+		case "output":
+			return "读取输出"
+		case "wait":
+			return "等待"
+		case "stop":
+			return "停止"
+		case "list_jobs":
+			return "后台任务"
 		}
 	default:
 		switch action {
@@ -266,6 +411,16 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Ask"
 		case "inspect":
 			return "Inspect"
+		case "input":
+			return "Input"
+		case "output":
+			return "Read Output"
+		case "wait":
+			return "Wait"
+		case "stop":
+			return "Stop"
+		case "list_jobs":
+			return "List Jobs"
 		}
 	}
 	return localizedGenericToolName(lang, action)
@@ -304,6 +459,16 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "等待用户输入"
 			case "inspect":
 				return "检查中..."
+			case "input":
+				return "发送输入"
+			case "output":
+				return "读取输出"
+			case "wait":
+				return "等待命令"
+			case "stop":
+				return "停止命令"
+			case "list_jobs":
+				return "列出后台任务"
 			}
 		default:
 			switch action {
@@ -335,6 +500,16 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Waiting for user input"
 			case "inspect":
 				return "Inspecting..."
+			case "input":
+				return "Sending input"
+			case "output":
+				return "Reading output"
+			case "wait":
+				return "Waiting for command"
+			case "stop":
+				return "Stopping command"
+			case "list_jobs":
+				return "Listing background jobs"
 			}
 		}
 	}
@@ -522,6 +697,92 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func shortenJobID(id string) string {
+	if id == "" {
+		return ""
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// lspToolPresentation creates a presentation for LSP tools showing file:line.
+func lspToolPresentation(lang Language, toolName string, args map[string]any, fileTarget string) toolPresentation {
+	// Map LSP tool names to short action labels
+	var action string
+	switch toolName {
+	case "lsp_hover":
+		action = "hover"
+	case "lsp_definition":
+		action = "definition"
+	case "lsp_references":
+		action = "references"
+	case "lsp_symbols":
+		action = "symbols"
+	case "lsp_workspace_symbols":
+		action = "workspace symbols"
+	case "lsp_diagnostics":
+		action = "diagnostics"
+	case "lsp_code_actions":
+		action = "code actions"
+	case "lsp_rename":
+		action = "rename"
+	case "lsp_implementation":
+		action = "implementation"
+	case "lsp_prepare_call_hierarchy":
+		action = "call hierarchy"
+	case "lsp_incoming_calls":
+		action = "incoming calls"
+	case "lsp_outgoing_calls":
+		action = "outgoing calls"
+	default:
+		action = strings.TrimPrefix(toolName, "lsp_")
+	}
+
+	// Build detail: "file:line" or just "file"
+	detail := fileTarget
+	if detail == "" {
+		detail = displayToolFileTarget(argString(args, "path"))
+	}
+	line := argString(args, "line")
+	if line != "" && detail != "" {
+		detail = detail + ":" + line
+	}
+
+	// For rename, include the new name
+	if toolName == "lsp_rename" {
+		newName := argString(args, "new_name")
+		if newName != "" {
+			detail = fmt.Sprintf("%s → %s", detail, newName)
+		}
+	}
+
+	displayName := "LSP"
+	switch lang {
+	case LangZhCN:
+		activity := "LSP " + action
+		if detail != "" {
+			activity = "LSP " + action + " " + detail
+		}
+		return toolPresentation{
+			DisplayName: displayName,
+			Detail:      detail,
+			Activity:    activity,
+		}
+	default:
+		activity := "LSP " + action
+		if detail != "" {
+			activity = "LSP " + action + " " + detail
+		}
+		return toolPresentation{
+			DisplayName: displayName,
+			Detail:      detail,
+			Activity:    activity,
+		}
+	}
 }
 
 func displayToolTarget(value string) string {

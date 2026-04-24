@@ -59,6 +59,10 @@ type Manager struct {
 	// adapter after it was previously stopped. Set by the TUI/daemon layer
 	// which has access to the IM config.
 	onRestart func(adapterName string) error
+
+	// instanceDetect tracks this process's registration in .ggcode/instances/
+	// for multi-instance detection. Set via RegisterInstance.
+	instanceDetect *InstanceDetect
 }
 
 type pendingApproval struct {
@@ -96,6 +100,84 @@ func (m *Manager) SetOnRestart(fn func(adapterName string) error) {
 	m.mu.Lock()
 	m.onRestart = fn
 	m.mu.Unlock()
+}
+
+// RegisterInstance creates an InstanceDetect for the given workspace, registers
+// this process as a running instance, and stores it on the Manager.
+// If other instances are already running in the same workspace, this instance
+// is auto-muted (non-primary). Returns the detector and any other live instances.
+func (m *Manager) RegisterInstance(workspace string) (*InstanceDetect, []InstanceInfo, error) {
+	detect := NewInstanceDetect(workspace)
+	others, err := detect.Register()
+	if err != nil {
+		return nil, nil, fmt.Errorf("register instance: %w", err)
+	}
+
+	m.mu.Lock()
+	m.instanceDetect = detect
+	m.mu.Unlock()
+
+	// Sync HasActiveChannels based on current bindings
+	m.syncInstanceActiveChannels()
+
+	if len(others) > 0 {
+		count, _ := m.MuteAll()
+		if count > 0 {
+			debug.Log("im", "auto-muted %d channel(s), primary PID=%d started=%s",
+				count, others[0].PID, others[0].StartedAt.Format("15:04:05"))
+		}
+	}
+
+	return detect, others, nil
+}
+
+// UnregisterInstance removes this process's instance registration (PID file).
+// Call on graceful shutdown.
+func (m *Manager) UnregisterInstance() {
+	m.mu.Lock()
+	d := m.instanceDetect
+	m.instanceDetect = nil
+	m.mu.Unlock()
+	if d != nil {
+		d.Unregister()
+	}
+}
+
+// InstanceDetect returns the instance detector (nil if not registered).
+func (m *Manager) InstanceDetect() *InstanceDetect {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.instanceDetect
+}
+
+// IsPrimary returns true if this instance is the oldest running instance
+// in the workspace (or no detector is set).
+func (m *Manager) IsPrimary() bool {
+	m.mu.RLock()
+	d := m.instanceDetect
+	m.mu.RUnlock()
+	if d == nil {
+		return true
+	}
+	return d.IsPrimary()
+}
+
+// syncInstanceActiveChannels updates the HasActiveChannels flag in the
+// instance PID file based on current non-muted bindings with valid channel IDs.
+func (m *Manager) syncInstanceActiveChannels() {
+	m.mu.Lock()
+	d := m.instanceDetect
+	hasActive := false
+	for _, b := range m.currentBindings {
+		if !b.Muted && strings.TrimSpace(b.ChannelID) != "" {
+			hasActive = true
+			break
+		}
+	}
+	m.mu.Unlock()
+	if d != nil {
+		_ = d.UpdateHasActiveChannels(hasActive)
+	}
 }
 
 func (m *Manager) SetBindingStore(store BindingStore) error {
@@ -845,6 +927,7 @@ func (m *Manager) BindChannel(binding ChannelBinding) (ChannelBinding, error) {
 	if cb != nil {
 		cb(snapshot)
 	}
+	m.syncInstanceActiveChannels()
 	return bound, nil
 }
 
@@ -879,6 +962,7 @@ func (m *Manager) UnbindChannel(workspace string) error {
 	if cb != nil {
 		cb(snapshot)
 	}
+	m.syncInstanceActiveChannels()
 	return nil
 }
 
@@ -911,6 +995,7 @@ func (m *Manager) UnbindAdapter(adapterName string) error {
 	if cb != nil {
 		cb(snapshot)
 	}
+	m.syncInstanceActiveChannels()
 	return nil
 }
 
@@ -975,6 +1060,7 @@ func (m *Manager) DisableBinding(adapterName string) error {
 	if cb != nil {
 		cb(snapshot)
 	}
+	m.syncInstanceActiveChannels()
 	return nil
 }
 
@@ -1001,6 +1087,7 @@ func (m *Manager) EnableBinding(adapterName string) error {
 			debug.Log("im", "enable restart adapter %s: %v", adapterName, err)
 		}
 	}
+	m.syncInstanceActiveChannels()
 	return nil
 }
 
@@ -1046,6 +1133,7 @@ func (m *Manager) MuteBinding(adapterName string) error {
 	if cb != nil {
 		cb(snapshot)
 	}
+	m.syncInstanceActiveChannels()
 	return nil
 }
 
@@ -1069,6 +1157,7 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 			debug.Log("im", "unmute restart adapter %s: %v", adapterName, err)
 		}
 	}
+	m.syncInstanceActiveChannels()
 	return nil
 }
 
@@ -1090,6 +1179,7 @@ func (m *Manager) MuteAll() (int, error) {
 	if cb != nil {
 		cb(snapshot)
 	}
+	m.syncInstanceActiveChannels()
 	return count, nil
 }
 
@@ -1120,6 +1210,7 @@ func (m *Manager) UnmuteAll() (int, error) {
 			}
 		}
 	}
+	m.syncInstanceActiveChannels()
 	return count, nil
 }
 

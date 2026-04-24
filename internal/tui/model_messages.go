@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"regexp"
-
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/harness"
@@ -58,8 +56,6 @@ type projectMemoryLoadedMsg struct {
 type subAgentUpdateMsg struct{}
 
 type skillsChangedMsg struct{}
-
-var ansiChunkPattern = regexp.MustCompile(`\[[0-9;?<>=]*[A-Za-z~]|\[<\d+(?:;\d+){0,2}[A-Za-zmM]`)
 
 // toolStatusMsg wraps a tool status update.
 type toolStatusMsg ToolStatusMsg

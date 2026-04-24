@@ -252,46 +252,7 @@ func (l *List) scrollToEndLocked() {
 		l.offsetLine = 0
 		return
 	}
-
-	// Walk backward from the end to fill the viewport height.
-	remaining := l.height
-	idx := len(l.items) - 1
-	for idx >= 0 {
-		itemH := l.items[idx].Height(l.width)
-		// +1 for gap between items (except the last)
-		totalH := itemH
-		if idx < len(l.items)-1 {
-			totalH++
-		}
-		if remaining-totalH < 0 {
-			break
-		}
-		remaining -= totalH
-		idx--
-	}
-
-	if idx < 0 {
-		// All items fit in viewport — start from beginning
-		l.offsetIdx = 0
-		l.offsetLine = 0
-		l.dirty = true
-		return
-	}
-
-	// Item at idx doesn't fully fit — use offsetLine to skip top lines.
-	l.offsetIdx = idx
-	itemH := l.items[idx].Height(l.width)
-	if idx < len(l.items)-1 {
-		// Items after idx consume some viewport lines; skip enough
-		// from this item to show the remaining space.
-		l.offsetLine = itemH - remaining
-	} else {
-		// Single item taller than viewport — show last page of it.
-		l.offsetLine = itemH - l.height
-	}
-	if l.offsetLine < 0 {
-		l.offsetLine = 0
-	}
+	l.offsetIdx, l.offsetLine = l.calcEndPositionLocked()
 	l.dirty = true
 }
 
@@ -315,6 +276,10 @@ func (l *List) scrollByLocked(n int) {
 				n = 0
 			}
 		}
+		// Clamp: prevent scrolling past the point where the last item
+		// would be at the bottom of the viewport. Without this, rapid
+		// scrolling produces blank space below all content.
+		l.clampMaxScrollLocked()
 	} else if n < 0 {
 		// Scroll up
 		n = -n
@@ -334,4 +299,62 @@ func (l *List) scrollByLocked(n int) {
 		}
 	}
 	l.dirty = true
+}
+
+// clampMaxScrollLocked ensures the scroll position doesn't go past the
+// "end" position — i.e. the last item must be at least partially visible
+// at the bottom of the viewport. This prevents blank space below content.
+// It uses the same backward-walk as scrollToEndLocked but as a maximum bound.
+// Caller must hold the lock.
+func (l *List) clampMaxScrollLocked() {
+	if len(l.items) == 0 || l.height <= 0 {
+		return
+	}
+
+	// Calculate the maximum scroll position (same as scrollToEndLocked).
+	maxIdx, maxLine := l.calcEndPositionLocked()
+
+	// Compare current position with max position.
+	// Positions are compared as (offsetIdx, offsetLine) tuples.
+	if l.offsetIdx > maxIdx || (l.offsetIdx == maxIdx && l.offsetLine > maxLine) {
+		l.offsetIdx = maxIdx
+		l.offsetLine = maxLine
+	}
+}
+
+// calcEndPositionLocked returns the (offsetIdx, offsetLine) that places
+// the last item at the bottom of the viewport. Caller must hold the lock.
+func (l *List) calcEndPositionLocked() (idx, line int) {
+	if len(l.items) == 0 {
+		return 0, 0
+	}
+	remaining := l.height
+	idx = len(l.items) - 1
+	for idx >= 0 {
+		itemH := l.items[idx].Height(l.width)
+		totalH := itemH
+		if idx < len(l.items)-1 {
+			totalH++
+		}
+		if remaining-totalH < 0 {
+			break
+		}
+		remaining -= totalH
+		idx--
+	}
+
+	if idx < 0 {
+		return 0, 0
+	}
+
+	itemH := l.items[idx].Height(l.width)
+	if idx < len(l.items)-1 {
+		line = itemH - remaining
+	} else {
+		line = itemH - l.height
+	}
+	if line < 0 {
+		line = 0
+	}
+	return idx, line
 }

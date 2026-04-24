@@ -137,16 +137,63 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 	if remaining < 10 {
 		remaining = 10
 	}
-	if len(paramStr) > remaining {
+
+	paramWidth := lipgloss.Width(paramStr)
+	if paramWidth > remaining {
 		// For file paths, truncate the head (keep filename visible)
 		if strings.Contains(paramStr, "/") {
-			paramStr = "…" + paramStr[len(paramStr)-remaining+1:]
+			paramStr = "…" + truncateHeadByWidth(paramStr, remaining-1)
 		} else {
-			paramStr = paramStr[:remaining-1] + "…"
+			paramStr = truncateTailByWidth(paramStr, remaining-1) + "…"
 		}
 	}
 
 	return prefix + paramStr
+}
+
+// truncateTailByWidth truncates a string from the tail so that its visual
+// width (measured by lipgloss.Width) does not exceed maxW. The result is
+// safe for multi-byte runes and strips any partial ANSI sequences.
+func truncateTailByWidth(s string, maxW int) string {
+	if lipgloss.Width(s) <= maxW {
+		return s
+	}
+	// Remove trailing runes until width fits
+	runes := []rune(s)
+	// Strip ANSI-aware: work on rune level; lipgloss.Width handles ANSI internally
+	for len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+		if lipgloss.Width(string(runes)) <= maxW {
+			return strings.TrimRight(string(runes), "\x1b")
+		}
+	}
+	return ""
+}
+
+// truncateHeadByWidth truncates a string from the head so that its visual
+// width does not exceed maxW, keeping the tail (useful for file paths where
+// the filename is at the end).
+func truncateHeadByWidth(s string, maxW int) string {
+	if lipgloss.Width(s) <= maxW {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 {
+		runes = runes[1:]
+		if lipgloss.Width(string(runes)) <= maxW {
+			// Skip leading partial ANSI escape
+			result := string(runes)
+			if idx := strings.Index(result, "\x1b["); idx > 0 {
+				// Check if there's a broken escape at the start
+				if end := strings.Index(result[idx:], "m"); end != -1 {
+					return result
+				}
+				return result[:idx] + result[idx:]
+			}
+			return result
+		}
+	}
+	return ""
 }
 
 // ToolBodyMaxLines is the maximum number of body lines shown before truncation.
@@ -160,19 +207,46 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 		return "", false
 	}
 
-	lines := strings.Split(content, "\n")
-	// Remove trailing empty line from trailing newline
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	// Split into lines, then wrap each line that exceeds visual width.
+	var wrapped []string
+	for _, line := range strings.Split(content, "\n") {
+		if line == "" {
+			wrapped = append(wrapped, "")
+			continue
+		}
+		if lipgloss.Width(line) <= width {
+			wrapped = append(wrapped, line)
+			continue
+		}
+		// Visual-width-aware wrapping
+		runes := []rune(line)
+		for len(runes) > 0 {
+			cut := 0
+			for cut < len(runes) && lipgloss.Width(string(runes[:cut+1])) <= width {
+				cut++
+			}
+			if cut == 0 {
+				cut = 1
+			}
+			// Prefer breaking at a space
+			chunk := string(runes[:cut])
+			if spaceIdx := strings.LastIndex(chunk, " "); spaceIdx > 0 {
+				wrapped = append(wrapped, string(runes[:spaceIdx]))
+				runes = []rune(strings.TrimLeft(string(runes[spaceIdx:]), " "))
+			} else {
+				wrapped = append(wrapped, chunk)
+				runes = runes[cut:]
+			}
+		}
 	}
 
 	truncated := false
-	if len(lines) > maxLines {
+	if len(wrapped) > maxLines {
 		truncated = true
-		hidden := len(lines) - maxLines
-		lines = lines[len(lines)-maxLines:]
-		lines = append([]string{fmt.Sprintf("  … %d more lines", hidden)}, lines...)
+		hidden := len(wrapped) - maxLines
+		wrapped = wrapped[len(wrapped)-maxLines:]
+		wrapped = append([]string{fmt.Sprintf("  … %d more lines", hidden)}, wrapped...)
 	}
 
-	return strings.Join(lines, "\n"), truncated
+	return strings.Join(wrapped, "\n"), truncated
 }

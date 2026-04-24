@@ -270,6 +270,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			flushBatch()
 			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
+			debug.Log("tool-header", "[ToolCallDone] tool=%s DisplayName=%q Detail=%q", event.Tool.Name, present.DisplayName, present.Detail)
 			if event.Tool.Name == "ask_user" {
 				round.SetAskUser(m.formatIMAskUserPrompt(string(event.Tool.Arguments)))
 			}
@@ -309,6 +310,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			flushBatch()
 			writingStatusSent = false
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
+			debug.Log("tool-header", "[ToolResult] tool=%s DisplayName=%q Detail=%q", event.Tool.Name, present.DisplayName, present.Detail)
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				// Sub-agent lifecycle tools are low-frequency; send directly.
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{

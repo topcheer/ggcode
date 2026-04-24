@@ -1302,3 +1302,67 @@ func TestEndpointAPIKeyUnresolvableFallsBackToVendor(t *testing.T) {
 		t.Errorf("expected vendor fallback key, got %s", resolved.APIKey)
 	}
 }
+
+func TestMergeDefaultEndpoints_AddsMissingEndpoint(t *testing.T) {
+	cfg := DefaultConfig()
+	// Remove one endpoint to simulate a config file that predates the addition.
+	delete(cfg.Vendors["zai"].Endpoints, "global-api-openai")
+
+	mergeDefaultEndpoints(cfg, DefaultConfig())
+
+	ep, ok := cfg.Vendors["zai"].Endpoints["global-api-openai"]
+	if !ok {
+		t.Fatal("expected global-api-openai to be added back")
+	}
+	if ep.BaseURL != "https://api.z.ai/api/paas/v4" {
+		t.Fatalf("expected correct base_url, got %s", ep.BaseURL)
+	}
+}
+
+func TestMergeDefaultEndpoints_FixesPlaceholderURL(t *testing.T) {
+	cfg := DefaultConfig()
+	vc := cfg.Vendors["zai"]
+	// Simulate a config file that has the endpoint name but with a placeholder URL.
+	vc.Endpoints["global-api-openai"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://your-global-api-endpoint.example.com/v1",
+		Models:   []string{"glm-5-turbo", "custom-model"},
+	}
+	cfg.Vendors["zai"] = vc
+
+	mergeDefaultEndpoints(cfg, DefaultConfig())
+
+	ep := cfg.Vendors["zai"].Endpoints["global-api-openai"]
+	if ep.BaseURL != "https://api.z.ai/api/paas/v4" {
+		t.Fatalf("expected placeholder to be fixed, got %s", ep.BaseURL)
+	}
+	// User customizations should be preserved.
+	found := false
+	for _, m := range ep.Models {
+		if m == "custom-model" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected user model customizations to be preserved")
+	}
+}
+
+func TestMergeDefaultEndpoints_PreservesRealURL(t *testing.T) {
+	cfg := DefaultConfig()
+	vc := cfg.Vendors["zai"]
+	// User has a custom real URL — should NOT be overwritten.
+	vc.Endpoints["global-api-openai"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://my-custom-proxy.example.com/v1",
+		Models:   []string{"glm-5-turbo"},
+	}
+	cfg.Vendors["zai"] = vc
+
+	mergeDefaultEndpoints(cfg, DefaultConfig())
+
+	ep := cfg.Vendors["zai"].Endpoints["global-api-openai"]
+	if ep.BaseURL != "https://my-custom-proxy.example.com/v1" {
+		t.Fatalf("expected custom URL to be preserved, got %s", ep.BaseURL)
+	}
+}

@@ -353,6 +353,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
 	m.chatWriteUser(nextChatID(), displayText)
+	m.chatListScrollToBottom()
 
 	// Save original user message to session
 	m.appendUserMessage(text)

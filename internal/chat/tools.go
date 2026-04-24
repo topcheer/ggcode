@@ -185,8 +185,8 @@ func PrettifyToolName(name string) string {
 	return name
 }
 
-func NewBashToolItem(id, command string, status ToolStatus, styles Styles) *BashToolItem {
-	b := NewBaseToolItem(id, "Bash", status, "", styles)
+func NewBashToolItem(id, displayName, command string, status ToolStatus, styles Styles) *BashToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
 	result := &BashToolItem{BaseToolItem: *b, command: command}
 	return result
 }
@@ -224,12 +224,12 @@ type FileToolItem struct {
 }
 
 // NewFileToolItem creates a new file operation tool item.
-func NewFileToolItem(id, toolType, filePath string, status ToolStatus, styles Styles) *FileToolItem {
-	b := NewBaseToolItem(id, toolType, status, "", styles)
+func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles) *FileToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
 	return &FileToolItem{
 		BaseToolItem: *b,
 		filePath:     filePath,
-		toolType:     toolType,
+		toolType:     displayName,
 	}
 }
 
@@ -253,8 +253,8 @@ type SearchToolItem struct {
 }
 
 // NewSearchToolItem creates a new search tool item.
-func NewSearchToolItem(id, toolName, pattern string, status ToolStatus, styles Styles) *SearchToolItem {
-	b := NewBaseToolItem(id, toolName, status, "", styles)
+func NewSearchToolItem(id, displayName, pattern string, status ToolStatus, styles Styles) *SearchToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
 	return &SearchToolItem{BaseToolItem: *b, pattern: pattern}
 }
 
@@ -271,15 +271,167 @@ func (t *SearchToolItem) Render(width int) string {
 	return rendered
 }
 
+// --- ListToolItem (list_directory) ---
+
+// ListToolItem renders directory listing operations.
+type ListToolItem struct {
+	BaseToolItem
+	path string
+}
+
+func newListToolItem(id, displayName, path string, status ToolStatus, styles Styles) *ListToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
+	return &ListToolItem{BaseToolItem: *b, path: path}
+}
+
+func (t *ListToolItem) RenderParams() string { return t.path }
+
+func (t *ListToolItem) Render(width int) string {
+	if cached, _, ok := t.GetCached(width); ok {
+		return cached
+	}
+	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
+	t.SetCached(rendered, width, measureHeight(rendered))
+	return rendered
+}
+
+// --- WebToolItem (web_fetch, web_search) ---
+
+// WebToolItem renders web fetch/search operations.
+type WebToolItem struct {
+	BaseToolItem
+	url string // or query
+}
+
+func newWebToolItem(id, displayName, url string, status ToolStatus, styles Styles) *WebToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
+	return &WebToolItem{BaseToolItem: *b, url: url}
+}
+
+func (t *WebToolItem) RenderParams() string { return t.url }
+
+func (t *WebToolItem) Render(width int) string {
+	if cached, _, ok := t.GetCached(width); ok {
+		return cached
+	}
+	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
+	t.SetCached(rendered, width, measureHeight(rendered))
+	return rendered
+}
+
+// --- GitToolItem (git_status, git_diff, git_log) ---
+
+// GitToolItem renders git operations with command-output body.
+type GitToolItem struct {
+	BaseToolItem
+	subCmd string // "status", "diff", "log"
+}
+
+func newGitToolItem(id, displayName, subCmd string, status ToolStatus, styles Styles) *GitToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
+	return &GitToolItem{BaseToolItem: *b, subCmd: subCmd}
+}
+
+func (t *GitToolItem) RenderParams() string { return t.subCmd }
+
+// RenderBody uses BashBody style for git output (same dark background).
+func (t *GitToolItem) RenderBody(width int) string {
+	if t.result == "" {
+		return ""
+	}
+	if t.isError {
+		return t.styles.ErrorStyle.Render(t.result)
+	}
+	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
+	return t.styles.BashBody.Render(body)
+}
+
+func (t *GitToolItem) Render(width int) string {
+	if cached, _, ok := t.GetCached(width); ok {
+		return cached
+	}
+	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
+	t.SetCached(rendered, width, measureHeight(rendered))
+	return rendered
+}
+
+// --- CmdToolItem (background command management) ---
+
+// CmdToolItem renders background command lifecycle operations.
+// The detail string comes pre-formatted from describeTool, e.g.:
+//   - start_command: "go build ./..."
+//   - write_command_input: "[abc12345] → y\n" (input text, most important)
+//   - read_command_output: "abc12345"
+//   - wait_command: "abc12345 (30s)"
+//   - stop_command: "abc12345"
+//   - list_commands: "" (no params)
+type CmdToolItem struct {
+	BaseToolItem
+	detail string // pre-formatted from describeTool
+}
+
+func newCmdToolItem(id, displayName, detail string, status ToolStatus, styles Styles) *CmdToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
+	return &CmdToolItem{BaseToolItem: *b, detail: detail}
+}
+
+func (t *CmdToolItem) RenderParams() string { return t.detail }
+
+// RenderBody uses BashBody style for command output.
+func (t *CmdToolItem) RenderBody(width int) string {
+	if t.result == "" {
+		return ""
+	}
+	if t.isError {
+		return t.styles.ErrorStyle.Render(t.result)
+	}
+	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
+	return t.styles.BashBody.Render(body)
+}
+
+func (t *CmdToolItem) Render(width int) string {
+	if cached, _, ok := t.GetCached(width); ok {
+		return cached
+	}
+	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
+	t.SetCached(rendered, width, measureHeight(rendered))
+	return rendered
+}
+
+// --- LspToolItem (language server protocol) ---
+
+// LspToolItem renders LSP operations (hover, definition, references, etc.)
+type LspToolItem struct {
+	BaseToolItem
+	location string // "file:line" or "file"
+}
+
+func newLspToolItem(id, displayName, location string, status ToolStatus, styles Styles) *LspToolItem {
+	b := NewBaseToolItem(id, displayName, status, "", styles)
+	return &LspToolItem{BaseToolItem: *b, location: location}
+}
+
+func (t *LspToolItem) RenderParams() string { return t.location }
+
+func (t *LspToolItem) Render(width int) string {
+	if cached, _, ok := t.GetCached(width); ok {
+		return cached
+	}
+	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
+	t.SetCached(rendered, width, measureHeight(rendered))
+	return rendered
+}
+
 // GenericToolItem is a fallback for unrecognized tools.
 type GenericToolItem struct {
 	BaseToolItem
 }
 
 // NewGenericToolItem creates a generic tool item.
-func NewGenericToolItem(id, toolName string, status ToolStatus, input string, styles Styles) *GenericToolItem {
+func NewGenericToolItem(id, displayName string, status ToolStatus, detail string, styles Styles) *GenericToolItem {
+	b := NewBaseToolItem(id, displayName, status, detail, styles)
 	return &GenericToolItem{
-		BaseToolItem: *NewBaseToolItem(id, toolName, status, input, styles),
+		BaseToolItem: *b,
 	}
 }
 
@@ -306,36 +458,90 @@ func parseToolInputArgAny(input string, keys ...string) string {
 	return ""
 }
 
-func NewToolItem(id, toolName string, status ToolStatus, input string, styles Styles) Item {
-	pretty := PrettifyToolName(toolName)
+// ToolContext carries pre-resolved display information from the caller
+// (typically describeTool in the TUI layer). It is the primary data source
+// for tool rendering — the caller is responsible for extracting the right
+// detail from rawArgs, so NewToolItem no longer needs to do JSON parsing.
+type ToolContext struct {
+	ToolName    string // original tool name, e.g. "run_command"
+	DisplayName string // prettified name, e.g. "Bash"
+	Detail      string // extracted detail, e.g. "go build ./..."
+	RawArgs     string // raw JSON input (for body rendering / fallback)
+}
 
-	switch {
-	case toolName == "bash" || toolName == "Bash" || toolName == "run_command":
-		cmd := parseToolInputArg(input, "command")
-		return NewBashToolItem(id, cmd, status, styles)
+// toolCategory classifies a tool for rendering purposes.
+type toolCategory int
 
-	case toolName == "read" || toolName == "Read" || toolName == "view" || toolName == "View" || toolName == "read_file":
-		path := parseToolInputArgAny(input, "path", "file_path")
-		return NewFileToolItem(id, pretty, path, status, styles)
+const (
+	catBash    toolCategory = iota // command execution
+	catFile                        // file read/write/edit
+	catSearch                      // grep/glob/find
+	catList                        // list_directory
+	catWeb                         // web_fetch/web_search
+	catGit                         // git_*
+	catCmd                         // background command management
+	catLSP                         // language server protocol tools
+	catGeneric                     // everything else
+)
 
-	case toolName == "write" || toolName == "Write" || toolName == "write_file":
-		path := parseToolInputArgAny(input, "path", "file_path")
-		return NewFileToolItem(id, pretty, path, status, styles)
-
-	case toolName == "edit" || toolName == "Edit" || toolName == "multiEdit" || toolName == "MultiEdit" || toolName == "edit_file":
-		path := parseToolInputArgAny(input, "path", "file_path")
-		return NewFileToolItem(id, pretty, path, status, styles)
-
-	case toolName == "grep" || toolName == "Grep" || toolName == "search_files":
-		pattern := parseToolInputArg(input, "pattern")
-		return NewSearchToolItem(id, pretty, pattern, status, styles)
-
-	case toolName == "glob" || toolName == "Glob" || toolName == "find":
-		pattern := parseToolInputArg(input, "pattern")
-		return NewSearchToolItem(id, pretty, pattern, status, styles)
-
+// classifyTool returns the rendering category for a tool name.
+func classifyTool(name string) toolCategory {
+	switch name {
+	case "run_command", "bash", "Bash":
+		return catBash
+	case "read_file", "Read", "view", "View",
+		"write_file", "Write",
+		"edit_file", "Edit", "multiEdit", "MultiEdit",
+		"multi_edit_file", "notebook_edit":
+		return catFile
+	case "search_files", "grep", "Grep", "glob", "Glob", "find":
+		return catSearch
+	case "list_directory":
+		return catList
+	case "web_fetch", "web_search":
+		return catWeb
+	case "git_status", "git_diff", "git_log":
+		return catGit
+	case "start_command", "read_command_output", "wait_command",
+		"stop_command", "write_command_input", "list_commands":
+		return catCmd
 	default:
-		return NewGenericToolItem(id, pretty, status, input, styles)
+		// LSP tools (lsp_hover, lsp_definition, etc.)
+		if strings.HasPrefix(name, "lsp_") {
+			return catLSP
+		}
+		return catGeneric
+	}
+}
+
+// NewToolItem creates the appropriate tool item type based on the ToolContext.
+// The caller (chatStartTool) is responsible for filling Detail from describeTool;
+// NewToolItem uses it directly instead of re-parsing RawArgs.
+func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) Item {
+	displayName := ctx.DisplayName
+	if displayName == "" {
+		displayName = PrettifyToolName(ctx.ToolName)
+	}
+
+	switch classifyTool(ctx.ToolName) {
+	case catBash:
+		return NewBashToolItem(id, displayName, ctx.Detail, status, styles)
+	case catFile:
+		return NewFileToolItem(id, displayName, ctx.Detail, status, styles)
+	case catSearch:
+		return NewSearchToolItem(id, displayName, ctx.Detail, status, styles)
+	case catList:
+		return newListToolItem(id, displayName, ctx.Detail, status, styles)
+	case catWeb:
+		return newWebToolItem(id, displayName, ctx.Detail, status, styles)
+	case catGit:
+		return newGitToolItem(id, displayName, ctx.Detail, status, styles)
+	case catCmd:
+		return newCmdToolItem(id, displayName, ctx.Detail, status, styles)
+	case catLSP:
+		return newLspToolItem(id, displayName, ctx.Detail, status, styles)
+	default:
+		return NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
 	}
 }
 

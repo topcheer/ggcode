@@ -45,18 +45,31 @@ vendors:
       global-coding-openai:
         display_name: 国外 Coding Plan
         protocol: openai
-        base_url: https://your-global-coding-endpoint.example.com/v1
+        base_url: https://api.z.ai/api/coding/paas/v4
         default_model: glm-5-turbo
-        max_tokens: 8192
-        models: [glm-5-turbo, glm-5-plus]
+        selected_model: glm-5-turbo
+        context_window: 200000
+        max_tokens: 128000
+        models: [glm-5, glm-5-turbo, glm-5.1, glm-4.7, glm-4.7-flashx, glm-4.6, glm-4.5-air]
         tags: [coding, global]
+      global-coding-anthropic:
+        display_name: 国外 Coding Plan (Anthropic)
+        protocol: anthropic
+        base_url: https://api.z.ai/api/anthropic
+        default_model: glm-5-turbo
+        selected_model: glm-5-turbo
+        context_window: 200000
+        max_tokens: 128000
+        models: [glm-5, glm-5-turbo, glm-5.1, glm-4.7, glm-4.7-flashx, glm-4.6, glm-4.5-air]
+        tags: [coding, global, anthropic]
       global-api-openai:
         display_name: 国外普通 API
         protocol: openai
-        base_url: https://your-global-api-endpoint.example.com/v1
+        base_url: https://api.z.ai/api/paas/v4
         default_model: glm-4.5-air
+        selected_model: glm-4.5-air
         max_tokens: 8192
-        models: [glm-4.5-air, glm-4.5]
+        models: [glm-5, glm-5-turbo, glm-5.1, glm-4.7, glm-4.7-flashx, glm-4.6, glm-4.5-air]
         tags: [api, global]
   anthropic:
     display_name: Anthropic

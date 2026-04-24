@@ -1212,11 +1212,7 @@ func (m Model) renderComposerPanel() string {
 	hints := []string{
 		m.t("hint.mode") + " " + m.renderModeBadge(),
 		m.t("hint.enter_send"),
-		m.t("hint.ctrlv_image"),
-		m.t("hint.ctrlr_sidebar"),
 		m.t("hint.help"),
-		m.t("hint.add_context"),
-		m.t("hint.scroll"),
 	}
 	if !m.autoCompleteActive {
 		hints = append(hints, m.t("hint.shift_tab_mode"))
