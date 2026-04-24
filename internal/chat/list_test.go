@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -271,7 +272,8 @@ func TestUserItemHeightMatchesRenderLines(t *testing.T) {
 }
 
 func TestListRenderProducesExactHeightLines(t *testing.T) {
-	// Verify that Render() produces exactly l.height lines (no more, no less).
+	// Verify that Render() produces exactly l.height lines AND the last
+	// item's content is visible when scrolled to the end.
 	styles := DefaultStyles()
 	width := 60
 	height := 10
@@ -279,14 +281,16 @@ func TestListRenderProducesExactHeightLines(t *testing.T) {
 	l := NewList(width, height)
 	l.SetFollow(true)
 
-	// Add items that together are taller than the viewport
 	for i := 0; i < 20; i++ {
-		l.Append(NewSystemItem("s", "line "+strings.Repeat("x", 30), styles))
+		l.Append(NewSystemItem(fmt.Sprintf("s%d", i), "line"+fmt.Sprintf(" item%d", i), styles))
 	}
 
 	rendered := l.Render()
 	renderedLines := strings.Split(rendered, "\n")
 	if len(renderedLines) != height {
-		t.Errorf("expected exactly %d lines, got %d", height, len(renderedLines))
+		t.Errorf("expected exactly %d lines, got %d\nRendered:\n%s", height, len(renderedLines), rendered)
+	}
+	if !strings.Contains(rendered, "item19") {
+		t.Errorf("last item should be visible at scroll end.\nRendered:\n%s", rendered)
 	}
 }
