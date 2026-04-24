@@ -3,6 +3,7 @@ package chat
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 )
@@ -231,8 +232,9 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 			// Prefer breaking at a space
 			chunk := string(runes[:cut])
 			if spaceIdx := strings.LastIndex(chunk, " "); spaceIdx > 0 {
-				wrapped = append(wrapped, string(runes[:spaceIdx]))
-				runes = []rune(strings.TrimLeft(string(runes[spaceIdx:]), " "))
+				runeIdx := utf8.RuneCountInString(chunk[:spaceIdx])
+				wrapped = append(wrapped, string(runes[:runeIdx]))
+				runes = []rune(strings.TrimLeft(string(runes[runeIdx:]), " "))
 			} else {
 				wrapped = append(wrapped, chunk)
 				runes = runes[cut:]

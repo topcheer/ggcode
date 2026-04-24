@@ -1337,6 +1337,69 @@ func TestShiftEnterInsertsNewline(t *testing.T) {
 	}
 }
 
+func TestShiftEnterInsertsNewlineAtCursor(t *testing.T) {
+	m := newTestModel()
+	m.inputReady = true
+	m.input.SetValue("hello world")
+	// Move cursor to after "hello" (col 5, line 0)
+	m.input.SetCursorColumn(5)
+
+	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = model.(Model)
+
+	val := m.input.Value()
+	// The newline should be inserted at the cursor position, not at the end.
+	if !strings.Contains(val, "hello\n") {
+		t.Errorf("expected newline after 'hello', got %q", val)
+	}
+	if !strings.HasPrefix(val, "hello\n") {
+		t.Errorf("value should start with 'hello\\n', got %q", val)
+	}
+	// Cursor should be on the new line (row 1), not at the end of the text.
+	if m.input.Line() != 1 {
+		t.Errorf("cursor should be on line 1 after shift+enter, got line %d", m.input.Line())
+	}
+}
+
+func TestShiftEnterCJK(t *testing.T) {
+	// Regression test: old code used byte-based slicing (inputCursor returns
+	// byte offset from len()), which corrupted multi-byte CJK characters.
+	// InsertRune('\n') avoids this entirely.
+	m := newTestModel()
+	m.inputReady = true
+
+	// Simulate: user typed "测试测试，这是一个测试" (11 CJK runes = 33 bytes)
+	text := "测试测试，这是一个测试"
+	m.input.SetValue(text)
+
+	// Move cursor to after "测试测试" (col 4, each CJK rune = 1 col)
+	m.input.SetCursorColumn(4)
+
+	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = model.(Model)
+
+	val := m.input.Value()
+	lines := strings.Split(val, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), val)
+	}
+	// First line must be exactly "测试测试" — no missing/corrupted characters
+	if lines[0] != "测试测试" {
+		t.Errorf("first line should be '测试测试', got %q", lines[0])
+	}
+	// Second line must be exactly "，这是一个测试"
+	if lines[1] != "，这是一个测试" {
+		t.Errorf("second line should be '，这是一个测试', got %q", lines[1])
+	}
+	// Cursor should be at start of line 2
+	if m.input.Line() != 1 {
+		t.Errorf("cursor should be on line 1, got line %d", m.input.Line())
+	}
+	if m.input.Column() != 0 {
+		t.Errorf("cursor should be at col 0 on new line, got col %d", m.input.Column())
+	}
+}
+
 func TestEnterSubmitsSingleLine(t *testing.T) {
 	m := newTestModel()
 	m.inputReady = true

@@ -202,7 +202,7 @@ func (l *List) Render() string {
 
 	for needed > 0 && idx < len(l.items) {
 		content := l.items[idx].Render(l.width)
-		itemLines := strings.Split(content, "\n")
+		itemLines := splitVisualLines(content)
 
 		// Skip lines before the offset
 		if offset > 0 && offset < len(itemLines) {
@@ -357,4 +357,25 @@ func (l *List) calcEndPositionLocked() (idx, line int) {
 		line = 0
 	}
 	return idx, line
+}
+
+// splitVisualLines splits rendered content into visual lines, trimming the
+// trailing empty element that strings.Split produces from a trailing "\n".
+// This keeps the line count consistent with measureHeight, which subtracts 1
+// for a trailing newline. Without this, Height() and Render() disagree on the
+// number of lines, causing scroll-position miscalculation.
+func splitVisualLines(s string) []string {
+	lines := strings.Split(s, "\n")
+	// strings.Split("a\n", "\n") produces ["a", ""] — the trailing empty
+	// element has no visual presence. measureHeight also subtracts 1 for a
+	// trailing newline, so strip exactly one trailing empty element when the
+	// string ends with "\n".
+	if len(lines) > 0 && strings.HasSuffix(s, "\n") && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	// measureHeight("") returns 1 (an empty string is one visual line).
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
 }
