@@ -59,6 +59,36 @@ func (m *Model) chatReset() {
 	}
 }
 
+// chatListActive returns true when chatList has items and is the primary render path.
+// When active, legacy writes to m.output/chatEntries are skipped.
+func (m *Model) chatListActive() bool {
+	return m.chatList != nil && m.chatList.Len() > 0
+}
+
+// legacyWrite writes to m.output and chatEntries — the old rendering path.
+// Skipped when chatList is active (new path).
+func (m *Model) legacyWrite(text string) {
+	if m.chatListActive() {
+		return
+	}
+	m.output.WriteString(text)
+}
+
+func (m *Model) legacyWriteEntry(entry ChatEntry) {
+	if m.chatListActive() {
+		return
+	}
+	if entry.Prefix != "" && (entry.Role == "user" || entry.Role == "assistant") {
+		m.output.WriteString(m.renderConversationUserEntry(entry.Prefix, entry.RawText))
+		m.output.WriteString("\n")
+	} else if entry.Role == "assistant" {
+		// Pure markdown, no prefix
+	} else {
+		m.output.WriteString(entry.RawText)
+	}
+	m.chatEntries.Append(entry)
+}
+
 // chatListScrollToBottom scrolls conversation to bottom.
 // chatList path or viewport path — one or the other, no bridge.
 func (m *Model) chatListScrollToBottom() {
@@ -271,7 +301,9 @@ func (m *Model) chatEnsureAssistant() {
 // rendering noise that would pollute the conversation view.
 // Only semantic messages (user, assistant, tool, todo) go into chatList.
 func (m *Model) bridgeDualWriteSystem(text string) {
+	if m.chatListActive() {
+		return
+	}
 	m.output.WriteString(text)
 	m.chatEntries.Append(ChatEntry{Role: "system", RawText: text})
-	// Intentionally NOT writing to chatList
 }

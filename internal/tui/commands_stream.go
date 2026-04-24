@@ -45,31 +45,24 @@ func (m *Model) appendStreamChunk(chunk string) {
 	}
 	if !m.streamPrefixWritten {
 		m.ensureOutputHasBlankLine()
-		m.streamStartPos = m.output.Len()
-		// Write prefix to legacy output only; chatEntries gets its own
-		// streaming assistant entry below with the prefix baked in.
-		m.output.WriteString(assistantBulletStyle.Render("● "))
 		m.streamPrefixWritten = true
-
-		m.chatEntries.Append(ChatEntry{
-			Role:      "assistant",
-			Prefix:    "● ",
-			Streaming: true,
-		})
-
-		// New path: start streaming assistant in chatList
+		if !m.chatListActive() {
+			m.streamStartPos = m.output.Len()
+			m.output.WriteString(assistantBulletStyle.Render("● "))
+			m.chatEntries.Append(ChatEntry{Role: "assistant", Prefix: "● ", Streaming: true})
+		}
 		m.nextAssistantID()
 		m.chatEnsureAssistant()
 	}
 	if m.streamBuffer != nil {
 		m.streamBuffer.WriteString(chunk)
 	}
-	// Update the last chatEntry's raw text from streamBuffer
-	if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
-		last.RawText = m.streamBuffer.String()
-		last.Invalidate()
+	if !m.chatListActive() {
+		if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
+			last.RawText = m.streamBuffer.String()
+			last.Invalidate()
+		}
 	}
-	// New path: update chatList assistant text
 	m.chatUpdateAssistantText(m.currentAssistantID(), m.streamBuffer.String())
 	m.rewriteActiveStreamOutput(true)
 	m.trimOutput()
@@ -117,15 +110,22 @@ func (m *Model) appendStreamStatusLine(text string) {
 	default:
 		m.ensureOutputEndsWithNewline()
 	}
-	m.dualWriteSystem(compactionBulletStyle.Render("● "))
-	m.dualWriteSystem(text)
-	if !strings.HasSuffix(text, "\n") {
-		m.dualWriteSystem("\n")
+	if m.chatListActive() {
+		// chatList: write as SystemItem (renders with ○ prefix)
+		statusText := strings.TrimSuffix(text, "\n")
+		m.chatWriteSystem(nextChatID(), statusText)
+	} else {
+		// Legacy: write with ● bullet
+		m.output.WriteString(compactionBulletStyle.Render("● "))
+		m.output.WriteString(text)
+		if !strings.HasSuffix(text, "\n") {
+			m.output.WriteString("\n")
+		}
+		m.chatEntries.Append(ChatEntry{
+			Role:    "compaction",
+			RawText: compactionBulletStyle.Render("● ") + text,
+		})
 	}
-	m.chatEntries.Append(ChatEntry{
-		Role:    "compaction",
-		RawText: compactionBulletStyle.Render("● ") + text,
-	})
 	m.trimOutput()
 	m.syncConversationViewport()
 	m.chatListScrollToBottom()
@@ -139,13 +139,12 @@ func (m *Model) renderCurrentStreamMarkdown() string {
 }
 
 func (m *Model) rewriteActiveStreamOutput(renderMarkdown bool) {
+	if m.chatListActive() {
+		return
+	}
 	if !m.streamPrefixWritten || m.streamStartPos < 0 || m.streamStartPos > m.output.Len() {
 		return
 	}
-	// Only update the legacy output buffer.
-	// The chatEntries streaming entry is updated separately in appendStreamChunk
-	// (line ~63: last.RawText = m.streamBuffer.String()).
-	// Do NOT call dualWriteSystem here — it would append duplicate entries.
 	m.output.Truncate(m.streamStartPos)
 	m.output.WriteString(assistantBulletStyle.Render("● "))
 	rendered := m.streamBuffer.String()
