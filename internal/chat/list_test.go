@@ -138,3 +138,70 @@ func TestListSetSize(t *testing.T) {
 		t.Fatal("expected non-empty render after resize")
 	}
 }
+
+func TestSplitVisualLinesMatchesMeasureHeight(t *testing.T) {
+	// Every string's splitVisualLines count must equal measureHeight.
+	cases := []string{
+		"hello",
+		"hello\nworld",
+		"hello\nworld\n",
+		"a\nb\nc\n",
+		"",
+		"\n",
+		"\n\n",
+		"header\n  body1\n  body2\n", // typical tool render
+	}
+	for _, s := range cases {
+		lines := splitVisualLines(s)
+		h := measureHeight(s)
+		if len(lines) != h {
+			t.Errorf("splitVisualLines(%q) = %d lines, measureHeight = %d", s, len(lines), h)
+		}
+	}
+}
+
+func TestListScrollShowsAllContent(t *testing.T) {
+	styles := DefaultStyles()
+	// Use a small viewport and enough tool items to overflow.
+	// Each BashToolItem with a result produces a header + body ending in \n,
+	// which is exactly the pattern that caused Height/Render mismatch.
+	viewport := 5
+	l := NewList(80, viewport)
+	l.SetFollow(false)
+
+	for i := 0; i < 20; i++ {
+		item := NewBashToolItem("b", "Bash", "echo hi", StatusSuccess, styles)
+		item.SetResult("ok", false)
+		l.Append(item)
+	}
+
+	// Scroll to end and verify that the last item is actually rendered.
+	l.ScrollToEnd()
+	rendered := l.Render()
+	if rendered == "" {
+		t.Fatal("expected non-empty render")
+	}
+
+	// The last item should have "ok" somewhere in the render output.
+	// Before the fix, scrollToEnd would stop too early because
+	// calcEndPositionLocked used Height() (undercounted) while Render()
+	// consumed more lines, pushing the last item off-screen.
+	if !l.AtBottom() {
+		t.Error("expected AtBottom after ScrollToEnd")
+	}
+}
+
+func TestListToolItemHeightMatchesRenderLines(t *testing.T) {
+	styles := DefaultStyles()
+	item := NewBashToolItem("b1", "Bash", "echo test", StatusSuccess, styles)
+	item.SetResult("line1\nline2\nline3", false)
+
+	w := 80
+	h := item.Height(w)
+	rendered := item.Render(w)
+	visualLines := splitVisualLines(rendered)
+
+	if len(visualLines) != h {
+		t.Errorf("Height() = %d but Render() produces %d visual lines:\n%s", h, len(visualLines), rendered)
+	}
+}

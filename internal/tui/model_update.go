@@ -555,18 +555,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.submitText(text, true)
 		case "shift+enter":
 			// Shift+Enter inserts newline into textarea.
-			// We manually splice the newline at the cursor position
-			// because textarea.Update(shift+enter) is not bound to insert newline.
-			val := m.input.Value()
-			cursor := inputCursor(&m.input)
-			if cursor < 0 {
-				cursor = 0
-			}
-			if cursor > len(val) {
-				cursor = len(val)
-			}
-			newVal := val[:cursor] + "\n" + val[cursor:]
-			m.input.SetValue(newVal)
+			// Use InsertRune('\n') instead of manual string splicing + SetValue
+			// so that the textarea's internal cursor/row/col state stays correct.
+			// SetValue resets the cursor to the end, causing visual glitches.
+			m.input.InsertRune('\n')
 			m.updateAutoComplete()
 			return m, nil
 		}
