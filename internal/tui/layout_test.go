@@ -1730,12 +1730,8 @@ func TestDoneMsgPersistsGroupedActivitiesInOutput(t *testing.T) {
 	next, _ := m.Update(doneMsg{})
 	m = next.(Model)
 
-	output := m.renderOutput()
-	// With chatList as primary path, tool calls render as individual items.
-	// Accept either new format (tool items) or old format (grouped activities).
-	hasNew := strings.Contains(output, "read_file") || strings.Contains(output, "Read")
-	hasOld := strings.Contains(output, "Exploring project context") && strings.Contains(output, "Read README.md")
-	if !hasNew && !hasOld {
+	output := stripAnsi(renderedOutput(&m))
+	if !strings.Contains(output, "Read") {
 		t.Fatalf("expected tool activity to appear in output, got %q", output)
 	}
 }
