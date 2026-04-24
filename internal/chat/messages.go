@@ -148,7 +148,7 @@ func (a *AssistantItem) SetFinished() {
 }
 
 func (a *AssistantItem) Render(width int) string {
-	if cached, _, ok := a.GetCached(width); ok && !a.streaming {
+	if cached, _, ok := a.GetCached(width); ok {
 		return cached
 	}
 
@@ -177,14 +177,13 @@ func (a *AssistantItem) Render(width int) string {
 	}
 
 	result := sb.String()
-	if !a.streaming {
-		a.SetCached(result, width, measureHeight(result))
-	}
+	// Always cache — Invalidate() is called by SetText() when content changes.
+	a.SetCached(result, width, measureHeight(result))
 	return result
 }
 
 func (a *AssistantItem) Height(width int) int {
-	if _, h, ok := a.GetCached(width); ok && !a.streaming {
+	if _, h, ok := a.GetCached(width); ok {
 		return h
 	}
 	return measureHeight(a.Render(width))
