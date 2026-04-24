@@ -62,7 +62,6 @@ func (m *Model) appendStreamStatusLine(text string) {
 	}
 	m.harnessRunLiveTail = ""
 	m.streamPrefixWritten = false
-	m.streamStartPos = -1
 	m.chatFinishAssistant(m.currentAssistantID())
 	m.chatWriteSystem(nextChatID(), strings.TrimSuffix(text, "\n"))
 	m.chatListScrollToBottom()

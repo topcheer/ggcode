@@ -896,7 +896,7 @@ func TestScenario_UserRunsQuitCommand(t *testing.T) {
 
 func TestScenario_UserRunsClearCommand(t *testing.T) {
 	m := newTestModel()
-	m.output.WriteString("some existing content\nmore content\n")
+	m.chatWriteSystem(nextSystemID(), "some existing content\nmore content")
 	m.loading = true
 
 	cmd := m.handleCommand("/clear")

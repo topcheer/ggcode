@@ -362,7 +362,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 
 	m.streamBuffer = &bytes.Buffer{}
 	m.shellBuffer = nil
-	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	m.loading = true
 	// Reset status bar state
@@ -398,7 +397,6 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	m.appendUserMessage("/init")
 
 	m.streamBuffer = &bytes.Buffer{}
-	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	m.loading = true
 	m.statusActivity = m.t("init.collecting")

@@ -119,9 +119,6 @@ func TestChatListNoDuplicateUserMessages(t *testing.T) {
 	m.handleResize(120, 40)
 
 	// Simulate what handleCommand does
-	m.output.WriteString(m.renderConversationUserEntry("❯ ", "hello"))
-	m.output.WriteString("\n")
-	m.chatEntries.Append(ChatEntry{Role: "user", RawText: "hello", Prefix: "❯ "})
 	m.chatWriteUser(nextChatID(), "hello")
 
 	// Should only have 1 user item

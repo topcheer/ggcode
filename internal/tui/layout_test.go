@@ -1159,7 +1159,7 @@ func TestMouseClickDoesNotOpenPreviewPanelForVisibleFileToken(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(140, 36)
-	m.output.WriteString("● See internal/tui/model.go:3 for details\n")
+	m.chatWriteSystem(nextSystemID(), "● See internal/tui/model.go:3 for details\n")
 	m.syncConversationViewport()
 	next, cmd := m.Update(tea.MouseClickMsg{
 		X:      18,
@@ -1181,7 +1181,7 @@ func TestConversationViewportDoesNotUnderlinePaths(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(120, 30)
-	m.output.WriteString("● model.go:3\n")
+	m.chatWriteSystem(nextSystemID(), "● model.go:3\n")
 
 	view := m.renderConversationPanel(12)
 	if strings.Contains(view, "\x1b[4;") || strings.Contains(view, "\x1b[4m") {
@@ -2898,7 +2898,7 @@ func TestDoneMsgAutoSubmitsMergedPendingInput(t *testing.T) {
 func TestNextUserMessageStartsOnFreshLineAfterPartialOutput(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
-	m.output.WriteString("partial tool output")
+	m.chatWriteSystem(nextSystemID(), "partial tool output")
 
 	m.handleCommand("follow-up")
 
@@ -2911,7 +2911,7 @@ func TestNextUserMessageStartsOnFreshLineAfterPartialOutput(t *testing.T) {
 func TestStreamReplyStartsAfterBlankLine(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
-	m.output.WriteString("previous block\n")
+	m.chatWriteSystem(nextSystemID(), "previous block\n")
 
 	model, _ := m.Update(streamMsg("next reply"))
 	m = model.(Model)
@@ -3114,7 +3114,7 @@ func TestExitConfirmationClearsOnOtherKey(t *testing.T) {
 func TestExitConfirmStartsOnFreshLine(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
-	m.output.WriteString("partial line")
+	m.chatWriteSystem(nextSystemID(), "partial line")
 
 	m.promptExitConfirm()
 
@@ -3157,7 +3157,7 @@ func TestRenderOutputWithContent(t *testing.T) {
 
 func TestResetConversationViewClearsTransientState(t *testing.T) {
 	m := newTestModel()
-	m.output.WriteString("Hello")
+	m.chatWriteSystem(nextSystemID(), "Hello")
 	m.loading = true
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamBuffer.WriteString("partial")

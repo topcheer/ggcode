@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -173,12 +172,8 @@ func TestIMPanelNoInstancesWhenNoDetect(t *testing.T) {
 }
 
 func testModelWithIMManager(mgr *im.Manager, workspace string) *Model {
-	m := &Model{
-		language:    LangEnglish,
-		output:      &bytes.Buffer{},
-		chatEntries: NewChatEntryList(),
-	}
+	m := newTestModel()
 	m.SetSession(&session.Session{ID: "test-session", Workspace: workspace}, nil)
 	m.SetIMManager(mgr)
-	return m
+	return &m
 }

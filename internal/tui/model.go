@@ -65,9 +65,7 @@ const startupInputGateWindow = 500 * time.Millisecond
 // Model is the main Bubble Tea model for the REPL.
 type Model struct {
 	input                           textarea.Model
-	output                          *bytes.Buffer
-	chatEntries                     *ChatEntryList // structured conversation entries for deferred rendering
-	chatList                        *chat.List     // new virtual-scrolling list (replaces chatEntries + viewport)
+	chatList                        *chat.List // virtual-scrolling conversation list
 	chatStyles                      chat.Styles
 	shellMode                       bool
 	loading                         bool
@@ -150,7 +148,6 @@ type Model struct {
 
 	streamBuffer        *bytes.Buffer
 	shellBuffer         *bytes.Buffer
-	streamStartPos      int
 	streamPrefixWritten bool
 	harnessRunRemainder string
 	harnessRunLiveTail  string
@@ -368,8 +365,6 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 
 	return Model{
 		input:                ta,
-		output:               &bytes.Buffer{},
-		chatEntries:          NewChatEntryList(),
 		chatList:             chat.NewList(80, 20),
 		chatStyles:           chat.DefaultStyles(),
 		styles:               s,
