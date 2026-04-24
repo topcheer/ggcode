@@ -117,7 +117,7 @@ var Categories = []Category{
 	{
 		Name: "tui", EnvSuffix: "TUI",
 		Description: "TUI model updates, repl, completion, submit",
-		Tags:        []string{"tui", "repl", "completion", "command-gate"},
+		Tags:        []string{"tui", "repl", "completion", "command-gate", "layout"},
 	},
 	{
 		Name: "mcp", EnvSuffix: "MCP",
