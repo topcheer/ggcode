@@ -10,7 +10,6 @@ import (
 	"charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
 	"github.com/charmbracelet/x/term"
-	"github.com/muesli/termenv"
 )
 
 var (
@@ -65,12 +64,43 @@ func Render(text string, wrap int) string {
 }
 
 // StyleConfig returns the glamour style config adapted for dark/light terminal.
+// Uses COLORFGBG environment variable instead of termenv.HasDarkBackground()
+// to avoid blocking terminal queries (OSC 11) that deadlock the Bubble Tea
+// event loop on the first render. See: termenv.HasDarkBackground →
+// BackgroundColor → termStatusReport → waitForData blocks forever because
+// Bubble Tea's input reader consumes the response before termenv can read it.
 func StyleConfig() ansi.StyleConfig {
 	if !term.IsTerminal(os.Stdout.Fd()) {
 		return glamourstyles.NoTTYStyleConfig
 	}
-	dark := termenv.HasDarkBackground()
+	dark := hasDarkBackground()
 	return StyleConfigForDarkMode(dark)
+}
+
+// hasDarkBackground detects dark background via COLORFGBG env var only.
+// This is safe to call from the Bubble Tea event loop because it does not
+// perform blocking terminal I/O (no OSC 11 query).
+func hasDarkBackground() bool {
+	fgbg := os.Getenv("COLORFGBG")
+	if fgbg == "" {
+		// Default to dark — most terminal users use dark themes.
+		return true
+	}
+	parts := strings.Split(fgbg, ";")
+	if len(parts) < 2 {
+		return true
+	}
+	bg := parts[len(parts)-1]
+	// Common dark background values: 0=black, 8=dark gray, etc.
+	// Light backgrounds are typically 15, 231, or 7 (white/light gray).
+	switch bg {
+	case "0", "8", "16", "232", "233", "234", "235", "236", "237", "238", "239":
+		return true
+	case "7", "15", "231", "255", "254", "253":
+		return false
+	default:
+		return true
+	}
 }
 
 func StyleConfigForDarkMode(dark bool) ansi.StyleConfig {
