@@ -113,157 +113,129 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 	case "check":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		report, err := harness.CheckProject(context.Background(), project, cfg, harness.CheckOptions{RunCommands: true})
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		rendered := harness.FormatCheckReport(report)
 		if report.Passed {
-			m.dualWriteSystem(m.styles.assistant.Render(rendered))
+			m.chatWriteSystem(nextSystemID(), rendered)
 		} else {
-			m.dualWriteSystem(m.styles.error.Render(rendered))
+			m.chatWriteSystem(nextSystemID(), rendered)
 		}
-		m.dualWriteSystem("\n")
 		return nil
 	case "doctor":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		report, err := harness.Doctor(project, cfg)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(harness.FormatDoctorReport(report)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), harness.FormatDoctorReport(report))
 		return nil
 	case "monitor":
 		project, _, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		report, err := harness.BuildMonitorReport(project, harness.MonitorOptions{})
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(harness.FormatMonitorReport(report)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), harness.FormatMonitorReport(report))
 		return nil
 	case "gc":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		report, err := harness.RunGC(project, cfg, time.Now().UTC())
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(harness.FormatGCReport(report)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), harness.FormatGCReport(report))
 		return nil
 	case "contexts":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		report, err := harness.BuildContextReport(project, cfg)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(harness.FormatContextReport(report)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), harness.FormatContextReport(report))
 		return nil
 	case "inbox":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		if len(parts) == 2 {
 			inbox, err := harness.BuildOwnerInbox(project, cfg)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatOwnerInbox(inbox)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatOwnerInbox(inbox))
 			return nil
 		}
 		if len(parts) < 4 {
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 			return nil
 		}
 		switch parts[2] {
 		case "promote":
 			tasks, err := harness.PromoteApprovedTasksForOwner(context.Background(), project, cfg, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_owner_promoted", len(tasks), parts[3])))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_owner_promoted", len(tasks), parts[3]))
 			return nil
 		case "retry":
 			summary, err := harness.RetryFailedTasksForOwner(context.Background(), project, cfg, parts[3], harness.BinaryRunner{})
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatQueueSummary(summary)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatQueueSummary(summary))
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 		return nil
 	case "review":
 		project, _, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		if len(parts) == 2 {
 			tasks, err := harness.ListReviewableTasks(project)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReviewList(tasks)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReviewList(tasks))
 			return nil
 		}
 		if len(parts) < 4 {
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 			return nil
 		}
 		note := strings.TrimSpace(strings.Join(parts[4:], " "))
@@ -271,212 +243,172 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 		case "approve":
 			task, err := harness.ApproveTaskReview(project, parts[3], note)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_review_approved", task.ID)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_review_approved", task.ID))
 			return nil
 		case "reject":
 			task, err := harness.RejectTaskReview(project, parts[3], note)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_review_rejected", task.ID)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_review_rejected", task.ID))
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 		return nil
 	case "promote":
 		project, _, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		if len(parts) == 2 {
 			tasks, err := harness.ListPromotableTasks(project)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatPromotionList(tasks)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatPromotionList(tasks))
 			return nil
 		}
 		if len(parts) < 4 || parts[2] != "apply" {
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 			return nil
 		}
 		note := strings.TrimSpace(strings.Join(parts[4:], " "))
 		if parts[3] == "all" {
 			tasks, err := harness.PromoteApprovedTasks(context.Background(), project, note)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_promoted_many", len(tasks))))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_promoted_many", len(tasks)))
 			return nil
 		}
 		task, err := harness.PromoteTask(context.Background(), project, parts[3], note)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_promoted_one", task.ID)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_promoted_one", task.ID))
 		return nil
 	case "release":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		if len(parts) == 2 {
 			plan, err := harness.BuildReleasePlan(project, cfg)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleasePlan(plan)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleasePlan(plan))
 			return nil
 		}
 		switch parts[2] {
 		case "waves":
 			if len(parts) < 4 {
-				m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 				return nil
 			}
 			waves, err := harness.BuildReleaseWavePlan(project, cfg, harness.ReleasePlanOptions{}, parts[3])
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWavePlan(waves)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWavePlan(waves))
 			return nil
 		case "apply":
 			if len(parts) >= 5 && parts[3] == "waves" {
 				waves, err := harness.BuildReleaseWavePlan(project, cfg, harness.ReleasePlanOptions{}, parts[4])
 				if err != nil {
-					m.dualWriteSystem(m.styles.error.Render(err.Error()))
-					m.dualWriteSystem("\n")
+					m.chatWriteSystem(nextSystemID(), err.Error())
 					return nil
 				}
 				waves, err = harness.ApplyReleaseWavePlan(project, waves, "", "")
 				if err != nil {
-					m.dualWriteSystem(m.styles.error.Render(err.Error()))
-					m.dualWriteSystem("\n")
+					m.chatWriteSystem(nextSystemID(), err.Error())
 					return nil
 				}
-				m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWavePlan(waves)))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWavePlan(waves))
 				return nil
 			}
 			plan, err := harness.BuildReleasePlan(project, cfg)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
 			plan, err = harness.ApplyReleasePlan(project, plan, "")
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleasePlan(plan)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleasePlan(plan))
 			return nil
 		case "rollouts":
 			rollouts, err := harness.ListReleaseWaveRollouts(project)
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWaveRollouts(rollouts)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWaveRollouts(rollouts))
 			return nil
 		case "advance":
 			if len(parts) < 4 {
-				m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 				return nil
 			}
 			rollout, err := harness.AdvanceReleaseWaveRollout(project, parts[3])
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWavePlan(rollout))
 			return nil
 		case "pause":
 			if len(parts) < 4 {
-				m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 				return nil
 			}
 			rollout, err := harness.PauseReleaseWaveRollout(project, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWavePlan(rollout))
 			return nil
 		case "resume":
 			if len(parts) < 4 {
-				m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 				return nil
 			}
 			rollout, err := harness.ResumeReleaseWaveRollout(project, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWavePlan(rollout))
 			return nil
 		case "abort":
 			if len(parts) < 4 {
-				m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 				return nil
 			}
 			rollout, err := harness.AbortReleaseWaveRollout(project, parts[3], strings.TrimSpace(strings.Join(parts[4:], " ")))
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWavePlan(rollout))
 			return nil
 		case "approve", "reject":
 			if len(parts) < 4 {
-				m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 				return nil
 			}
 			waveOrder := 0
@@ -498,64 +430,52 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 				rollout, err = harness.RejectReleaseWaveGate(project, parts[3], waveOrder, note)
 			}
 			if err != nil {
-				m.dualWriteSystem(m.styles.error.Render(err.Error()))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), err.Error())
 				return nil
 			}
-			m.dualWriteSystem(m.styles.assistant.Render(harness.FormatReleaseWavePlan(rollout)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), harness.FormatReleaseWavePlan(rollout))
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 		return nil
 	case "queue":
 		if len(parts) < 3 {
-			m.dualWriteSystem(m.styles.error.Render(m.t("command.harness_queue_usage")))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_queue_usage"))
 			return nil
 		}
 		project, _, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		task, err := harness.EnqueueTask(project, strings.TrimSpace(strings.Join(parts[2:], " ")), "tui")
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_task_queued_detail", task.ID, task.Goal)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_task_queued_detail", task.ID, task.Goal))
 		return nil
 	case "tasks":
 		project, _, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		tasks, err := harness.ListTasks(project)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		if len(tasks) == 0 {
-			m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_tasks_empty")))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_tasks_empty"))
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(harness.FormatTaskList(tasks)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), harness.FormatTaskList(tasks))
 		return nil
 	case "run-queued":
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		opts := harness.QueueRunOptions{}
@@ -572,48 +492,40 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 		opts.ConfirmDirtyWorkspace = m.newHarnessCheckpointConfirmer()
 		queueSummary, err := harness.RunQueuedTasks(context.Background(), project, cfg, nil, opts)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
-		m.dualWriteSystem(m.styles.assistant.Render(harness.FormatQueueSummary(queueSummary)))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), harness.FormatQueueSummary(queueSummary))
 		return nil
 	case "run":
 		if len(parts) < 3 {
-			m.dualWriteSystem(m.styles.error.Render(m.t("command.harness_run_usage")))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_run_usage"))
 			return nil
 		}
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		return m.beginHarnessRunPrompt(strings.Join(parts, " "), strings.TrimSpace(strings.Join(parts[2:], " ")), project, cfg, false)
 	case "rerun":
 		if len(parts) != 3 {
-			m.dualWriteSystem(m.styles.error.Render(m.t("command.harness_rerun_usage")))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), m.t("command.harness_rerun_usage"))
 			return nil
 		}
 		project, cfg, err := loadHarnessForTUI(workDir)
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		task, err := harness.LoadTask(project, parts[2])
 		if err != nil {
-			m.dualWriteSystem(m.styles.error.Render(err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), err.Error())
 			return nil
 		}
 		return m.runTrackedHarnessRerun(strings.Join(parts, " "), project, cfg, task)
 	default:
-		m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_usage")))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 		return nil
 	}
 }
@@ -621,14 +533,12 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.Project, cfg *harness.Config, opts harness.RunTaskOptions) tea.Cmd {
 	goal = strings.TrimSpace(goal)
 	if goal == "" {
-		m.dualWriteSystem(m.styles.error.Render(m.t("command.harness_run_usage")))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_run_usage"))
 		return nil
 	}
 	m.chatWriteUser(nextChatID(), strings.TrimSpace(commandText))
 	m.appendUserMessage(strings.TrimSpace(commandText))
-	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_run_start")))
-	m.dualWriteSystem("\n")
+	m.chatWriteSystem(nextSystemID(), m.t("command.harness_run_start"))
 	m.chatListScrollToBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -668,19 +578,16 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 
 func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Project, cfg *harness.Config, task *harness.Task) tea.Cmd {
 	if task == nil {
-		m.dualWriteSystem(m.styles.error.Render(m.t("command.harness_rerun_usage")))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_rerun_usage"))
 		return nil
 	}
 	if task.Status != harness.TaskFailed {
-		m.dualWriteSystem(m.styles.error.Render(m.t("command.harness_rerun_invalid_status", task.ID, localizeHarnessTaskStatus(m.currentLanguage(), task.Status))))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("command.harness_rerun_invalid_status", task.ID, localizeHarnessTaskStatus(m.currentLanguage(), task.Status)))
 		return nil
 	}
 	m.chatWriteUser(nextChatID(), strings.TrimSpace(commandText))
 	m.appendUserMessage(strings.TrimSpace(commandText))
-	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_rerun_start")))
-	m.dualWriteSystem("\n")
+	m.chatWriteSystem(nextSystemID(), m.t("command.harness_rerun_start"))
 	m.chatListScrollToBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())

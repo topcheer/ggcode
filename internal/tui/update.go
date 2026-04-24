@@ -38,8 +38,7 @@ func (m *Model) scheduleUpdateCheckCmd() tea.Cmd {
 
 func (m *Model) handleUpdateCommand() tea.Cmd {
 	if m.updateSvc == nil {
-		m.dualWriteSystem(m.styles.error.Render(m.t("update.unavailable")))
-		m.dualWriteSystem("\n\n")
+		m.chatWriteSystem(nextSystemID(), m.t("update.unavailable"))
 		return nil
 	}
 	m.loading = true
@@ -111,17 +110,14 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 	m.resetActivityGroups()
 	if msg.Err != nil {
 		if errors.Is(msg.Err, update.ErrAlreadyUpToDate) {
-			m.dualWriteSystem(m.t("update.up_to_date"))
-			m.dualWriteSystem("\n\n")
+			m.chatWriteSystem(nextSystemID(), m.t("update.up_to_date"))
 			return m, nil
 		}
-		m.dualWriteSystem(m.styles.error.Render(m.t("update.failed", msg.Err)))
-		m.dualWriteSystem("\n\n")
+		m.chatWriteSystem(nextSystemID(), m.t("update.failed", msg.Err))
 		return m, nil
 	}
 	if err := m.updateSvc.LaunchHelper(msg.Prepared); err != nil {
-		m.dualWriteSystem(m.styles.error.Render(m.t("update.restart_failed", err)))
-		m.dualWriteSystem("\n\n")
+		m.chatWriteSystem(nextSystemID(), m.t("update.restart_failed", err))
 		return m, nil
 	}
 	m.quitting = true
