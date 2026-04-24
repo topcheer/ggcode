@@ -94,9 +94,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.inputReady {
 			return m, spinnerCmd
 		}
-		if m.loading {
-			return m, spinnerCmd
-		}
+		// Paste is allowed while loading — the agent loop supports
+		// interleaving user messages mid-run.
 		// Forward paste to active panel inputs.
 		if m.providerPanel != nil {
 			if m.providerPanel.editingField != "" {
@@ -463,10 +462,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.promptExitConfirm()
 			return m, nil
 		case "ctrl+v":
-			if !m.loading {
-				return m, m.handleClipboardPaste()
-			}
-			return m, nil
+			// Clipboard image paste — allowed while loading so users can
+			// attach images for interleaved messages during agent runs.
+			return m, m.handleClipboardPaste()
 		case "ctrl+d":
 			m.quitting = true
 			return m, tea.Quit

@@ -1188,13 +1188,16 @@ func TestScenario_PasteBlockedWhenNotReady(t *testing.T) {
 	}
 }
 
-func TestScenario_PasteBlockedWhenLoading(t *testing.T) {
+func TestScenario_PasteAllowedWhenLoading(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 
-	_, cmd := m.Update(tea.PasteMsg{Content: "pasted text"})
-	if cmd != nil {
-		t.Error("expected nil cmd when loading")
+	updated, cmd := m.Update(tea.PasteMsg{Content: "pasted text"})
+	if cmd == nil {
+		t.Error("expected non-nil cmd when loading — paste should be allowed for interleaved messages")
+	}
+	if updated.(Model).input.Value() != "pasted text" {
+		t.Errorf("expected input to contain pasted text, got %q", updated.(Model).input.Value())
 	}
 }
 
