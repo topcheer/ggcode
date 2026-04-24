@@ -90,13 +90,11 @@ func inputCursor(ta *textarea.Model) int {
 	return pos
 }
 
+// syncConversationViewport updates chatList dimensions to match the
+// current conversation panel size. Called after content changes that
+// may affect layout.
 func (m *Model) syncConversationViewport() {
-	panelHeight := m.conversationPanelHeight()
-	innerW := m.conversationInnerWidth()
-	innerH := conversationInnerHeight(panelHeight)
-
-	// Update chatList (primary render path when items exist)
 	if m.chatList != nil {
-		m.chatList.SetSize(innerW, innerH)
+		m.chatList.SetSize(m.conversationInnerWidth(), conversationInnerHeight(m.conversationPanelHeight()))
 	}
 }

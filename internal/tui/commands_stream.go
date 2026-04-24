@@ -5,10 +5,6 @@ import (
 	"strings"
 )
 
-func (m *Model) ensureOutputEndsWithNewline() {}
-
-func (m *Model) ensureOutputHasBlankLine() {}
-
 func (m *Model) appendStreamChunk(chunk string) {
 	if chunk == "" {
 		return
@@ -24,7 +20,6 @@ func (m *Model) appendStreamChunk(chunk string) {
 		m.streamBuffer = &bytes.Buffer{}
 	}
 	if !m.streamPrefixWritten {
-		m.ensureOutputHasBlankLine()
 		m.streamPrefixWritten = true
 		m.nextAssistantID()
 		m.chatEnsureAssistant()
@@ -65,13 +60,6 @@ func (m *Model) appendStreamStatusLine(text string) {
 	m.chatFinishAssistant(m.currentAssistantID())
 	m.chatWriteSystem(nextChatID(), strings.TrimSuffix(text, "\n"))
 	m.chatListScrollToBottom()
-}
-
-func (m *Model) renderCurrentStreamMarkdown() string {
-	if m.streamBuffer == nil || m.streamBuffer.Len() == 0 {
-		return ""
-	}
-	return trimLeadingRenderedSpacing(RenderMarkdownWidth(m.streamBuffer.String(), max(20, m.conversationInnerWidth()-2)))
 }
 
 func (m *Model) renderStreamBuffer(renderMarkdown bool) {

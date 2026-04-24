@@ -354,7 +354,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	if m.pendingImage != nil {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
-	m.ensureOutputHasBlankLine()
 	m.chatWriteUser(nextChatID(), displayText)
 
 	// Save original user message to session
@@ -392,7 +391,6 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	}
 	prompt := buildInitPrompt(targetPath, existed, content)
 
-	m.ensureOutputHasBlankLine()
 	m.chatWriteUser(nextChatID(), "/init")
 	m.appendUserMessage("/init")
 

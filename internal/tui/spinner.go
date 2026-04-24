@@ -138,12 +138,6 @@ type ToolStatusMsg struct {
 	Elapsed     time.Duration
 }
 
-// assistantBulletStyle renders the ● prefix for assistant text/status lines.
-var assistantBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-
-// compactionBulletStyle renders the ● prefix for compaction status lines.
-var compactionBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-
 // toolBulletStyle renders the ● prefix for tool call lines.
 var toolBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 

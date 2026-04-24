@@ -83,7 +83,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatList.ScrollDown(3)
 			}
 		} else {
-			m.syncConversationViewport()
 			if msg.Button == tea.MouseWheelUp {
 				m.viewport.ScrollUp(3)
 			} else {
@@ -510,7 +509,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.chatList != nil && m.chatList.Len() > 0 {
 				m.chatList.ScrollUp(m.chatList.Height() / 2)
 			} else {
-				m.syncConversationViewport()
 				m.viewport.ScrollUp(m.viewport.VisibleLineCount() / 2)
 			}
 			return m, nil
@@ -518,7 +516,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.chatList != nil && m.chatList.Len() > 0 {
 				m.chatList.ScrollDown(m.chatList.Height() / 2)
 			} else {
-				m.syncConversationViewport()
 				m.viewport.ScrollDown(m.viewport.VisibleLineCount() / 2)
 			}
 			return m, nil
@@ -693,12 +690,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.RunID != m.activeAgentRunID {
 			return m, nil
 		}
-		m.ensureOutputEndsWithNewline()
 		m.dualWriteSystem(m.renderConversationUserEntry("❯ ", msg.Text))
 		m.dualWriteSystem("\n")
 		m.dualWriteSystem(m.styles.prompt.Render(m.t("interrupt.delivered")))
 		m.dualWriteSystem("\n")
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -736,7 +731,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.emitIMText(finalIMText)
 		}
 		m.dualWriteSystem("\n")
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
@@ -770,7 +764,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamBuffer = nil
 		}
 		m.dualWriteSystem("\n")
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
@@ -799,18 +792,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.restorePendingInput()
 			}
 			if text := strings.TrimSpace(msg.ErrText); text != "" {
-				m.ensureOutputEndsWithNewline()
 				m.dualWriteSystem(m.styles.error.Render(text))
 				m.dualWriteSystem("\n")
 			}
 		}
 		if !wasCanceled && (hadShellOutput || strings.TrimSpace(msg.ErrText) != "") {
-			m.ensureOutputHasBlankLine()
 		}
 		if msg.Status == toolpkg.CommandJobCompleted && m.pendingSubmissionCount() > 0 && !wasCanceled && !wasFailed {
 			return m, m.submitShellCommand(m.consumePendingSubmission(), false)
 		}
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -828,7 +818,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.restorePendingInput()
 		}
 		m.dualWriteSystem(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.err) + "\n\n"))
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -850,7 +839,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.dualWriteSystem(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.Err) + "\n\n"))
 		m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -899,7 +887,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.dualWriteSystem(m.styles.error.Render(msg.Err.Error()))
 			m.dualWriteSystem("\n")
-			m.syncConversationViewport()
 			m.chatListScrollToBottom()
 			return m, nil
 		}
@@ -908,14 +895,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			rendered = trimHarnessRunOutputSection(rendered)
 		}
 		m.renderStreamBuffer(true)
-		m.ensureOutputHasBlankLine()
 		if msg.Summary != nil && msg.Summary.Task != nil && msg.Summary.Task.Status == harness.TaskFailed {
 			m.dualWriteSystem(m.styles.error.Render(rendered))
 		} else {
 			m.dualWriteSystem(m.styles.assistant.Render(rendered))
 		}
 		m.dualWriteSystem("\n")
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
@@ -931,18 +916,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolArg = ""
 		m.statusToolCount = 0
 		if msg.Err != nil {
-			m.ensureOutputEndsWithNewline()
 			m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Knight task failed: %v", msg.Err)))
 			m.dualWriteSystem("\n")
-			m.syncConversationViewport()
 			m.chatListScrollToBottom()
 			return m, nil
 		}
-		m.ensureOutputEndsWithNewline()
 		m.dualWriteSystem(fmt.Sprintf("🌙 Knight task completed: %s\n", msg.Goal))
 		m.dualWriteSystem(strings.TrimSpace(msg.Result.Output))
 		m.dualWriteSystem("\n")
-		m.syncConversationViewport()
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -997,7 +978,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendUserMessage(commandText)
 			m.dualWriteSystem(m.styles.assistant.Render(formatHarnessInitResult(msg.Result)))
 			m.dualWriteSystem("\n")
-			m.syncConversationViewport()
 			m.chatListScrollToBottom()
 			if panel := m.harnessPanel; panel != nil {
 				panel.message = fmt.Sprintf("Initialized harness in %s", msg.Result.Project.RootDir)
@@ -1124,7 +1104,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case subAgentUpdateMsg:
-		m.syncConversationViewport()
 		if m.viewport.AutoFollow() {
 			m.chatListScrollToBottom()
 		}
@@ -1177,7 +1156,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamPrefixWritten = false
 			// Reset stream buffer position for next text chunk
 		}
-		m.syncConversationViewport()
 		if m.viewport.AutoFollow() {
 			m.chatListScrollToBottom()
 		}
@@ -1219,7 +1197,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.streamPrefixWritten = false
 			}
 		}
-		m.syncConversationViewport()
 		if m.viewport.AutoFollow() {
 			m.chatListScrollToBottom()
 		}
@@ -1248,7 +1225,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 			m.streamPrefixWritten = false
 		}
-		m.syncConversationViewport()
 		if m.viewport.AutoFollow() {
 			m.chatListScrollToBottom()
 		}
