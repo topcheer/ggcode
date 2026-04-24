@@ -652,7 +652,6 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.harnessRunRemainder = ""
 	m.harnessRunLiveTail = ""
 	m.streamBuffer = &bytes.Buffer{}
-	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	opts.ConfirmDirtyWorkspace = m.newHarnessCheckpointConfirmer()
 	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
@@ -707,7 +706,6 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.harnessRunRemainder = ""
 	m.harnessRunLiveTail = ""
 	m.streamBuffer = &bytes.Buffer{}
-	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	opts := harness.RunTaskOptions{ConfirmDirtyWorkspace: m.newHarnessCheckpointConfirmer()}
 	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))

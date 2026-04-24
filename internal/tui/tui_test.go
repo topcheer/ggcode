@@ -2368,7 +2368,6 @@ func TestHarnessRunResultDoesNotRedumpStreamedOutput(t *testing.T) {
 	m.harnessRunLogOffset = 7
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamBuffer.WriteString("working")
-	m.streamStartPos = -1
 	m.streamPrefixWritten = true
 
 	next, cmd := m.Update(harnessRunResultMsg{
@@ -2387,7 +2386,7 @@ func TestHarnessRunResultDoesNotRedumpStreamedOutput(t *testing.T) {
 	}
 	updated := next.(Model)
 	// Verify harness result output exists (content checks are legacy-specific)
-	if !strings.Contains(stripAnsi(renderedOutput(&updated)), "completed") && !strings.Contains(updated.output.String(), "completed") {
+	if !strings.Contains(stripAnsi(renderedOutput(&updated)), "completed") {
 		t.Fatalf("expected harness result in output, got %q", stripAnsi(renderedOutput(&updated)))
 	}
 }
@@ -2965,28 +2964,28 @@ func TestHarnessReleaseRolloutControls(t *testing.T) {
 	if !strings.Contains(renderedOutput(&m), "gate=rejected") || !strings.Contains(renderedOutput(&m), "waiting for policy") {
 		t.Fatalf("expected rejected gate output, got %q", renderedOutput(&m))
 	}
-	m.output.Reset()
+	m.chatReset()
 	if cmd := m.handleCommand("/harness release approve rollout-controls-tui 2 policy approved"); cmd != nil {
 		t.Fatal("expected /harness release approve to complete inline")
 	}
 	if !strings.Contains(renderedOutput(&m), "gate=approved") || !strings.Contains(renderedOutput(&m), "policy approved") {
 		t.Fatalf("expected approved gate output, got %q", renderedOutput(&m))
 	}
-	m.output.Reset()
+	m.chatReset()
 	if cmd := m.handleCommand("/harness release pause rollout-controls-tui waiting for signoff"); cmd != nil {
 		t.Fatal("expected /harness release pause to complete inline")
 	}
 	if !strings.Contains(renderedOutput(&m), "status=paused") || !strings.Contains(renderedOutput(&m), "waiting for signoff") {
 		t.Fatalf("expected paused rollout output, got %q", renderedOutput(&m))
 	}
-	m.output.Reset()
+	m.chatReset()
 	if cmd := m.handleCommand("/harness release resume rollout-controls-tui signoff received"); cmd != nil {
 		t.Fatal("expected /harness release resume to complete inline")
 	}
 	if !strings.Contains(renderedOutput(&m), "status=active") || !strings.Contains(renderedOutput(&m), "signoff received") {
 		t.Fatalf("expected resumed rollout output, got %q", renderedOutput(&m))
 	}
-	m.output.Reset()
+	m.chatReset()
 	if cmd := m.handleCommand("/harness release abort rollout-controls-tui freeze window"); cmd != nil {
 		t.Fatal("expected /harness release abort to complete inline")
 	}

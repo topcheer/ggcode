@@ -27,7 +27,6 @@ func TestResumeSessionRebuildsConversationOutput(t *testing.T) {
 
 	m := NewModel(agent.NewAgent(nil, nil, "", 0), nil)
 	m.SetSession(session.NewSession("zai", "cn-coding-openai", "glm-5-turbo"), store)
-	m.output.WriteString("stale output")
 
 	cmd := m.resumeSession(ses.ID)
 	if cmd == nil {
