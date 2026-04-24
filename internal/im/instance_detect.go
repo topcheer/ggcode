@@ -104,6 +104,13 @@ func (d *InstanceDetect) Info() InstanceInfo {
 	return d.info
 }
 
+// IsRegistered returns whether Register() has been called successfully.
+func (d *InstanceDetect) IsRegistered() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.registered
+}
+
 // IsPrimary checks if this instance is the oldest among all running instances
 // in the same directory. Must be called after Register().
 func (d *InstanceDetect) IsPrimary() bool {

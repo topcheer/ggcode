@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/chat"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // chatWrite appends an item to chatList.
@@ -97,14 +98,14 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		return
 	}
 	// Create a new tool item based on the tool name
-	input := ts.RawArgs
-	if input == "" {
-		input = ts.Args
+	ctx := chat.ToolContext{
+		ToolName:    ts.ToolName,
+		DisplayName: ts.DisplayName,
+		Detail:      ts.Detail,
+		RawArgs:     ts.RawArgs,
 	}
-	if input == "" && ts.Detail != "" {
-		input = fmt.Sprintf(`{"path":"%s"}`, ts.Detail)
-	}
-	item := chat.NewToolItem(id, ts.ToolName, chat.StatusRunning, input, m.chatStyles)
+	debug.Log("tool-header", "chatStartTool tool=%s DisplayName=%q Detail=%q RawArgs_len=%d", ts.ToolName, ts.DisplayName, ts.Detail, len(ts.RawArgs))
+	item := chat.NewToolItem(id, ctx, chat.StatusRunning, m.chatStyles)
 	m.chatList.Append(item)
 }
 
@@ -149,11 +150,14 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	existing := m.chatList.FindByID(id)
 	if existing == nil {
 		// Not tracked yet — create a finished item
-		input := ts.RawArgs
-		if input == "" {
-			input = ts.Args
+		ctx := chat.ToolContext{
+			ToolName:    ts.ToolName,
+			DisplayName: ts.DisplayName,
+			Detail:      ts.Detail,
+			RawArgs:     ts.RawArgs,
 		}
-		item := chat.NewToolItem(id, ts.ToolName, status, input, m.chatStyles)
+		debug.Log("tool-header", "chatFinishTool CREATE tool=%s DisplayName=%q Detail=%q", ts.ToolName, ts.DisplayName, ts.Detail)
+		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
 		// Set result on the appropriate type
 		m.setToolResult(item, ts.Result)
 		m.chatList.Append(item)

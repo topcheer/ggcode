@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -52,10 +51,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
-		m.lastMouseAt = time.Now()
-		if startupInputSuppressionActive(m.startedAt) {
-			return m, nil
-		}
 		// Route mouse wheel to the active panel's viewport if one is open.
 		// MouseWheelMsg implements the MouseMsg interface, so it must appear
 		// BEFORE case tea.MouseMsg in this type switch to be matched here.
@@ -86,11 +81,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		m.lastMouseAt = time.Now()
-		if startupInputSuppressionActive(m.startedAt) {
-			debug.Log("tui", "startup gate dropping mouse event age=%s", time.Since(m.startedAt))
-			return m, nil
-		}
 		if m.fileBrowser != nil {
 			return m.handleFileBrowserMouse(msg)
 		}
@@ -197,20 +187,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			debug.Log("tui", "KEYPRESS dropped (input drain) key=%q text=%q", msg.String(), msg.Text)
 			return m, nil
 		}
-		// Mouse SGR fragments (split across read boundaries inside the
-		// bubbletea parser) can leak through as standalone single-char
-		// KeyPressMsg events whose text consists solely of digits/`;`/`<`/
-		// `M`/`m`. Drop these for a short window after any mouse activity.
-		if !m.lastMouseAt.IsZero() && time.Since(m.lastMouseAt) < 200*time.Millisecond &&
-			msg.Mod == 0 && isMouseFragmentChar(msg.Text) {
-			debug.Log("tui", "KEYPRESS dropped (mouse fragment) text=%q since_mouse=%s", msg.Text, time.Since(m.lastMouseAt))
-			return m, nil
-		}
-		if shouldIgnoreTerminalProbeKey(msg) {
-			debug.Log("tui", "ignoring terminal probe key=%q text=%q mod=%v", msg.String(), msg.Text, msg.Mod)
-			return m, nil
-		}
-		if m.startupBannerVisible && !shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
+		if m.startupBannerVisible {
 			m.startupBannerVisible = false
 		}
 		if msg.String() != "ctrl+c" {
@@ -552,6 +529,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := strings.TrimSpace(m.input.Value())
 			m.input.Reset()
 			if text == "" {
+				m.chatListScrollToBottom()
 				return m, nil
 			}
 			if m.shellMode {
@@ -1588,52 +1566,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		debug.Log("tui", "CATCHALL dropped (not ready) key=%q text=%q", keyMsg.String(), keyMsg.Text)
 		return m, spinnerCmd
 	}
-	if shouldIgnoreInputUpdate(msg, m.startedAt, m.lastResizeAt) {
-		debug.Log("tui", "CATCHALL ignored key text=%q", keyMsg.Text)
-		return m, spinnerCmd
-	}
-	if !m.lastMouseAt.IsZero() && time.Since(m.lastMouseAt) < 200*time.Millisecond &&
-		keyMsg.Mod == 0 && isMouseFragmentChar(keyMsg.Text) {
-		debug.Log("tui", "CATCHALL dropped (mouse fragment) text=%q", keyMsg.Text)
-		return m, spinnerCmd
-	}
 
-	// During the startup window, terminal CSI/OSC responses arrive as
-	// misparsed KeyPressMsg events. These are always multi-character or
-	// carry modifiers. Real human typing is always a single printable
-	// character with no modifiers (IME uses PasteMsg instead).
-	// Filter aggressively during startup to prevent garbage in textinput.
-	if startupInputSuppressionActive(m.startedAt) {
-		if len(keyMsg.Text) != 1 || keyMsg.Mod != 0 || !unicode.IsPrint(rune(keyMsg.Text[0])) {
-			debug.Log("tui", "CATCHALL startup gate dropped key=%q text=%q mod=%v", keyMsg.String(), keyMsg.Text, keyMsg.Mod)
-			return m, spinnerCmd
-		}
-	}
-
-	if len(keyMsg.Text) > 1 && looksLikeTerminalResponse(keyMsg.Text) {
-		// Human keyboard input produces at most 1 character per KeyPressMsg
-		// (IME compositions use PasteMsg instead). Multi-character Text
-		// containing terminal response patterns is a misparse from
-		// EscTimeout-truncated terminal responses.
-		debug.Log("tui", "CATCHALL ignored terminal fragment text=%q", truncateStr(keyMsg.Text, 60))
-		return m, spinnerCmd
-	}
 	oldValue := m.input.Value()
 	m.input, cmd = m.input.Update(msg)
 	newValue := m.input.Value()
 	if oldValue != newValue {
 		debug.Log("tui", "CATCHALL input changed old=%q new=%q", truncateStr(oldValue, 80), truncateStr(newValue, 80))
-	}
-
-	// Post-update terminal response cleanup: after textinput processes the
-	// key, check if the accumulated value looks like a terminal response that
-	// leaked through as individual single-character KeyPressMsg events.
-	// Terminal responses (OSC 11, CSI CPR, DECRPM, etc.) arrive character by
-	// character, each indistinguishable from normal typing. We detect them by
-	// inspecting the accumulated value for distinctive patterns.
-	if oldValue != newValue && looksLikeTerminalResponseInput(newValue) {
-		debug.Log("tui", "CATCHALL terminal response detected in input, clearing: %q", truncateStr(newValue, 80))
-		m.input.Reset()
 	}
 
 	// Update autocomplete state based on current input

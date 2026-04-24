@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 func TestCachedItem(t *testing.T) {
@@ -69,6 +71,64 @@ func TestWrapLines(t *testing.T) {
 	}
 }
 
+func TestWrapLinesMultibyte(t *testing.T) {
+	t.Run("pure CJK no panic", func(t *testing.T) {
+		// Pure Chinese text, each rune is ~2 cells wide.
+		// Small width forces multiple wraps — must not panic.
+		text := "你好世界这是一段用于测试多字节文字换行的中文文本内容"
+		lines := wrapLines(text, 10)
+		if len(lines) < 2 {
+			t.Errorf("expected multiple lines for long CJK text, got %d: %v", len(lines), lines)
+		}
+		for _, l := range lines {
+			if w := lipgloss.Width(l); w > 12 { // allow a little slack for a single wide char overshoot
+				t.Errorf("line too wide (width=%d): %q", w, l)
+			}
+		}
+	})
+
+	t.Run("CJK with spaces no panic", func(t *testing.T) {
+		// The exact pattern that caused the original panic:
+		// multi-byte chars + spaces + small width → byte index used as rune index.
+		text := "你好 世界 测试 多字节 文本 换行 功能 是否 正常 工作"
+		lines := wrapLines(text, 10)
+		if len(lines) < 2 {
+			t.Errorf("expected multiple lines, got %d: %v", len(lines), lines)
+		}
+		for _, l := range lines {
+			if w := lipgloss.Width(l); w > 12 {
+				t.Errorf("line too wide (width=%d): %q", w, l)
+			}
+		}
+	})
+
+	t.Run("mixed ASCII and CJK", func(t *testing.T) {
+		text := "Hello 你好 World 世界 Test 测试 a b c d e f g h i j k"
+		lines := wrapLines(text, 14)
+		if len(lines) < 2 {
+			t.Errorf("expected wrapping, got %d lines: %v", len(lines), lines)
+		}
+	})
+
+	t.Run("very narrow width with CJK", func(t *testing.T) {
+		// Width so small that even a single CJK char (2 cells) exceeds it
+		text := "你好世界"
+		lines := wrapLines(text, 1)
+		// Each character should be emitted on its own line
+		if len(lines) != 4 {
+			t.Errorf("expected 4 lines for 4 CJK chars at width 1, got %d: %v", len(lines), lines)
+		}
+	})
+
+	t.Run("emoji wide characters", func(t *testing.T) {
+		text := "🎉🎊🎈🎁🎀🎊🎉 balloon party time is here"
+		lines := wrapLines(text, 12)
+		if len(lines) < 2 {
+			t.Errorf("expected wrapping, got %d lines: %v", len(lines), lines)
+		}
+	})
+}
+
 func TestUserItemRender(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewUserItem("u1", "hello world", styles)
@@ -114,17 +174,62 @@ func TestToolHeader(t *testing.T) {
 
 func TestToolHeaderTruncation(t *testing.T) {
 	styles := DefaultStyles()
-	longParam := strings.Repeat("x", 200)
-	header := styles.ToolHeader(StatusSuccess, "Bash", 40, longParam)
-	// Allow ANSI escape codes overhead — just check the visible portion isn't too wide
-	if strings.Contains(header, strings.Repeat("x", 100)) {
-		t.Fatalf("header should be truncated: %s", header)
-	}
+
+	t.Run("long command truncated with ellipsis", func(t *testing.T) {
+		longCmd := strings.Repeat("x", 200)
+		header := styles.ToolHeader(StatusSuccess, "Bash", 80, longCmd)
+		if w := lipgloss.Width(header); w > 80 {
+			t.Fatalf("header width %d exceeds 80", w)
+		}
+		clean := stripTestAnsi(header)
+		if !strings.HasSuffix(clean, "…") {
+			t.Fatalf("long command should end with …, got: %q", clean)
+		}
+	})
+
+	t.Run("long path truncated from head", func(t *testing.T) {
+		longPath := "/very/long/path/to/some/deeply/nested/directory/structure/with/many/components/file.go"
+		header := styles.ToolHeader(StatusSuccess, "Read", 80, longPath)
+		if w := lipgloss.Width(header); w > 80 {
+			t.Fatalf("header width %d exceeds 80", w)
+		}
+		clean := stripTestAnsi(header)
+		if !strings.Contains(clean, "file.go") {
+			t.Fatalf("should keep filename, got: %q", clean)
+		}
+	})
+
+	t.Run("short params not truncated", func(t *testing.T) {
+		header := styles.ToolHeader(StatusSuccess, "Bash", 80, "go test ./...")
+		clean := stripTestAnsi(header)
+		if !strings.Contains(clean, "go test ./...") {
+			t.Fatalf("short param should be preserved, got: %q", clean)
+		}
+	})
+
+	t.Run("CJK characters truncated correctly", func(t *testing.T) {
+		cjk := strings.Repeat("你好世界", 20) // 80 CJK chars, each ~2 cells wide
+		header := styles.ToolHeader(StatusSuccess, "Tool", 60, cjk)
+		if w := lipgloss.Width(header); w > 60 {
+			t.Fatalf("CJK header width %d exceeds 60", w)
+		}
+	})
+
+	t.Run("narrow width still renders", func(t *testing.T) {
+		header := styles.ToolHeader(StatusSuccess, "Bash", 30, "go build ./...")
+		if w := lipgloss.Width(header); w > 30 {
+			t.Fatalf("narrow header width %d exceeds 30", w)
+		}
+		clean := stripTestAnsi(header)
+		if !strings.Contains(clean, "Bash") {
+			t.Fatalf("should contain tool name, got: %q", clean)
+		}
+	})
 }
 
 func TestBashToolItem(t *testing.T) {
 	styles := DefaultStyles()
-	item := NewBashToolItem("t1", "go test ./...", StatusRunning, styles)
+	item := NewBashToolItem("t1", "Bash", "go test ./...", StatusRunning, styles)
 	rendered := item.Render(80)
 	if !strings.Contains(rendered, "Bash") {
 		t.Fatalf("expected Bash in render: %s", rendered)
@@ -174,7 +279,7 @@ func TestTodoToolItem(t *testing.T) {
 func TestAgentToolItem(t *testing.T) {
 	styles := DefaultStyles()
 	agent := NewAgentToolItem("a1", "implement auth", StatusRunning, styles)
-	bash := NewBashToolItem("a1-b1", "go test ./auth", StatusSuccess, styles)
+	bash := NewBashToolItem("a1-b1", "Bash", "go test ./auth", StatusSuccess, styles)
 	bash.SetResult("PASS", false)
 	agent.AppendNested(bash)
 
@@ -218,19 +323,27 @@ func TestNewToolItem(t *testing.T) {
 	styles := DefaultStyles()
 	tests := []struct {
 		toolName string
-		input    string
 		wantType string
 	}{
-		{"bash", `{"command":"ls"}`, "*chat.BashToolItem"},
-		{"read", `{"path":"main.go"}`, "*chat.FileToolItem"},
-		{"write", `{"path":"out.go"}`, "*chat.FileToolItem"},
-		{"edit", `{"path":"model.go"}`, "*chat.FileToolItem"},
-		{"grep", `{"pattern":"TODO"}`, "*chat.SearchToolItem"},
-		{"glob", `{"pattern":"*.go"}`, "*chat.SearchToolItem"},
-		{"unknown", `{}`, "*chat.GenericToolItem"},
+		{"bash", "*chat.BashToolItem"},
+		{"run_command", "*chat.BashToolItem"},
+		{"read_file", "*chat.FileToolItem"},
+		{"write_file", "*chat.FileToolItem"},
+		{"edit_file", "*chat.FileToolItem"},
+		{"search_files", "*chat.SearchToolItem"},
+		{"glob", "*chat.SearchToolItem"},
+		{"list_directory", "*chat.ListToolItem"},
+		{"web_fetch", "*chat.WebToolItem"},
+		{"web_search", "*chat.WebToolItem"},
+		{"git_status", "*chat.GitToolItem"},
+		{"git_diff", "*chat.GitToolItem"},
+		{"start_command", "*chat.CmdToolItem"},
+		{"read_command_output", "*chat.CmdToolItem"},
+		{"unknown", "*chat.GenericToolItem"},
 	}
 	for _, tt := range tests {
-		item := NewToolItem("id1", tt.toolName, StatusPending, tt.input, styles)
+		ctx := ToolContext{ToolName: tt.toolName, RawArgs: "{}"}
+		item := NewToolItem("id1", ctx, StatusPending, styles)
 		typeName := fmtTypeName(item)
 		if typeName != tt.wantType {
 			t.Errorf("NewToolItem(%q) = %s, want %s", tt.toolName, typeName, tt.wantType)
@@ -244,50 +357,187 @@ func fmtTypeName(v interface{}) string {
 	return s
 }
 
-func TestNewToolItemExtractsParamsFromMixedJSON(t *testing.T) {
+func TestNewToolItemDetailFlowsToRender(t *testing.T) {
 	styles := DefaultStyles()
 
 	tests := []struct {
 		name      string
 		toolName  string
-		input     string
-		wantKey   string
+		detail    string
+		wantType  string
 		wantParam string
 	}{
-		{"bash with timeout", "run_command", `{"command":"ls -la","timeout":30}`, "BashToolItem", "ls -la"},
-		{"read with offset", "read_file", `{"path":"/tmp/test.go","offset":1,"limit":50}`, "FileToolItem", "/tmp/test.go"},
-		{"edit with file_path", "edit_file", `{"file_path":"/tmp/test.go","old_text":"foo","new_text":"bar"}`, "FileToolItem", "/tmp/test.go"},
-		{"write with path", "write_file", `{"path":"/tmp/out.go","content":"package main\n"}`, "FileToolItem", "/tmp/out.go"},
-		{"search with pattern", "search_files", `{"pattern":"TODO","path":"src","type":"go"}`, "SearchToolItem", "TODO"},
-		{"glob with pattern", "glob", `{"pattern":"**/*.go","directory":"."}`, "SearchToolItem", "**/*.go"},
+		{"bash command", "run_command", "ls -la", "BashToolItem", "ls -la"},
+		{"read file", "read_file", "/tmp/test.go", "FileToolItem", "/tmp/test.go"},
+		{"edit file", "edit_file", "/tmp/test.go", "FileToolItem", "/tmp/test.go"},
+		{"write file", "write_file", "/tmp/out.go", "FileToolItem", "/tmp/out.go"},
+		{"search pattern", "search_files", "TODO", "SearchToolItem", "TODO"},
+		{"glob pattern", "glob", "**/*.go", "SearchToolItem", "**/*.go"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			item := NewToolItem("test-id", tt.toolName, StatusRunning, tt.input, styles)
+			ctx := ToolContext{
+				ToolName:    tt.toolName,
+				DisplayName: PrettifyToolName(tt.toolName),
+				Detail:      tt.detail,
+				RawArgs:     "{}",
+			}
+			item := NewToolItem("test-id", ctx, StatusRunning, styles)
 			if item == nil {
 				t.Fatal("expected non-nil item")
 			}
 
 			typeName := fmt.Sprintf("%T", item)
-			if !strings.Contains(typeName, tt.wantKey) {
-				t.Errorf("expected type to contain %q, got %T", tt.wantKey, item)
+			if !strings.Contains(typeName, tt.wantType) {
+				t.Errorf("expected type to contain %q, got %T", tt.wantType, item)
 			}
 
 			rendered := item.Render(80)
 			// Strip ANSI for comparison
-			clean := rendered
-			for strings.Contains(clean, "\x1b[") {
-				idx := strings.Index(clean, "\x1b[")
-				end := strings.Index(clean[idx:], "m")
-				if end == -1 {
-					break
-				}
-				clean = clean[:idx] + clean[idx+end+1:]
-			}
+			clean := stripTestAnsi(rendered)
 			if !strings.Contains(clean, tt.wantParam) {
-				t.Errorf("expected render to contain %q, got:\n%s", tt.wantParam, rendered)
+				t.Errorf("expected render to contain %q, got:\n%s", tt.wantParam, clean)
 			}
 		})
+	}
+}
+
+func TestAssistantItemPrefixOnSameLine(t *testing.T) {
+	styles := DefaultStyles()
+	item := NewAssistantItem("a1", styles)
+	item.SetText("Hello, this is a test.")
+
+	rendered := item.Render(80)
+
+	// The prefix icon and the first line of text must be on the same line.
+	// Before the fix, glamour added a leading newline, so the prefix
+	// ended up alone on the first line with the text on the next line.
+	firstLine := strings.SplitN(rendered, "\n", 2)[0]
+
+	// First line must contain both the prefix and some text content
+	prefix := styles.AssistantPrefix
+	if !strings.Contains(firstLine, prefix) {
+		t.Fatalf("first line should contain prefix %q, got: %q", prefix, firstLine)
+	}
+	// Strip ANSI to check for actual text content
+	clean := stripTestAnsi(firstLine)
+	if !strings.Contains(clean, "Hello") {
+		t.Fatalf("first line should contain text content, got:\n%q\nfull render:\n%s", clean, rendered)
+	}
+}
+
+func TestAssistantItemMarkdownPrefixAlignment(t *testing.T) {
+	styles := DefaultStyles()
+	item := NewAssistantItem("a2", styles)
+	item.SetText("# Title\n\nParagraph text here.")
+
+	rendered := item.Render(80)
+	lines := strings.Split(rendered, "\n")
+
+	prefix := styles.AssistantPrefix
+	prefixWidth := lipgloss.Width(styles.AssistantStyle.Render(prefix))
+
+	// Every continuation line (after the first) should be indented by prefixWidth
+	for i, line := range lines {
+		if i == 0 {
+			continue // first line has the prefix icon
+		}
+		// Skip empty lines (they're fine)
+		clean := stripTestAnsi(line)
+		if clean == "" {
+			continue
+		}
+		// Count leading spaces
+		leading := countLeadingSpaces(line)
+		if leading < prefixWidth {
+			t.Errorf("line %d: expected at least %d leading spaces, got %d (line: %q)",
+				i+1, prefixWidth, leading, clean)
+		}
+	}
+}
+
+func countLeadingSpaces(s string) int {
+	// Skip ANSI escape sequences
+	n := 0
+	inEscape := false
+	for _, c := range s {
+		if c == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if c == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		if c == ' ' {
+			n++
+		} else {
+			break
+		}
+	}
+	return n
+}
+
+func stripTestAnsi(s string) string {
+	var result strings.Builder
+	inEscape := false
+	for _, c := range s {
+		if c == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if c == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		result.WriteRune(c)
+	}
+	return result.String()
+}
+
+func TestToolHeaderShowsParams(t *testing.T) {
+	styles := DefaultStyles()
+
+	// BashToolItem — should show command in header
+	bash := NewBashToolItem("t1", "Bash", "go build ./...", StatusSuccess, styles)
+	bash.SetResult("ok", false)
+	rendered := bash.Render(80)
+	firstLine := strings.SplitN(rendered, "\n", 2)[0]
+	clean := stripTestAnsi(firstLine)
+	if !strings.Contains(clean, "go build") {
+		t.Fatalf("BashToolItem first line should contain command, got: %q", clean)
+	}
+	if !strings.Contains(clean, "Bash") {
+		t.Fatalf("BashToolItem first line should contain 'Bash', got: %q", clean)
+	}
+
+	// FileToolItem — should show path in header
+	file := NewFileToolItem("t2", "Read", "internal/config/config.go", StatusSuccess, styles)
+	rendered2 := file.Render(80)
+	firstLine2 := strings.SplitN(rendered2, "\n", 2)[0]
+	clean2 := stripTestAnsi(firstLine2)
+	if !strings.Contains(clean2, "config.go") {
+		t.Fatalf("FileToolItem first line should contain file path, got: %q", clean2)
+	}
+
+	// Generic tool — should show query/pattern or fallback to truncated input
+	generic := NewGenericToolItem("t3", "SomeTool", StatusRunning, `target: fix the bug, scope: full`, styles)
+	rendered3 := generic.Render(80)
+	firstLine3 := strings.SplitN(rendered3, "\n", 2)[0]
+	clean3 := stripTestAnsi(firstLine3)
+	if clean3 == "" {
+		t.Fatal("generic tool should have non-empty first line")
+	}
+	// Should at least show the tool name and detail
+	if !strings.Contains(clean3, "SomeTool") {
+		t.Fatalf("generic tool first line should contain tool name, got: %q", clean3)
+	}
+	if !strings.Contains(clean3, "fix the bug") {
+		t.Fatalf("generic tool first line should contain detail, got: %q", clean3)
 	}
 }

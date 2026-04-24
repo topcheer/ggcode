@@ -286,16 +286,60 @@ func TestFormatToolStatus_WaitCommandShowsCompactProgress(t *testing.T) {
 	}
 }
 
-func TestDescribeToolWriteCommandInputUsesJobID(t *testing.T) {
+func TestDescribeToolWriteCommandInputShowsInputText(t *testing.T) {
+	// write_command_input should show the input text being sent, not just job_id
 	present := describeTool(LangEnglish, "write_command_input", `{"job_id":"cmd-7","input":"y"}`)
-	if present.DisplayName != "Run" {
-		t.Fatalf("expected run display name, got %q", present.DisplayName)
+	if present.DisplayName != "Input" {
+		t.Fatalf("expected Input display name, got %q", present.DisplayName)
 	}
-	if present.Detail != "cmd-7" {
-		t.Fatalf("expected job id detail, got %q", present.Detail)
+	// Detail should show job_id + input text
+	if !strings.Contains(present.Detail, "→ y") {
+		t.Fatalf("expected detail to contain input text '→ y', got %q", present.Detail)
 	}
-	if present.Activity != "Running cmd-7" {
-		t.Fatalf("expected job id activity, got %q", present.Activity)
+	if !strings.Contains(present.Detail, "cmd-7") {
+		t.Fatalf("expected detail to contain job_id, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolWriteCommandInputLongTextTruncated(t *testing.T) {
+	longInput := strings.Repeat("x", 100)
+	present := describeTool(LangEnglish, "write_command_input", fmt.Sprintf(`{"job_id":"abc","input":"%s"}`, longInput))
+	if !strings.Contains(present.Detail, "…") {
+		t.Fatalf("expected long input to be truncated, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolReadCommandOutputShowsJobID(t *testing.T) {
+	present := describeTool(LangEnglish, "read_command_output", `{"job_id":"cmd-12345678"}`)
+	if present.DisplayName != "Read Output" {
+		t.Fatalf("expected 'Read Output' display name, got %q", present.DisplayName)
+	}
+	if present.Detail != "cmd-1234" {
+		t.Fatalf("expected shortened job_id, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolWaitCommandShowsDuration(t *testing.T) {
+	present := describeTool(LangEnglish, "wait_command", `{"job_id":"cmd-99","wait_seconds":"10"}`)
+	if present.DisplayName != "Wait" {
+		t.Fatalf("expected 'Wait' display name, got %q", present.DisplayName)
+	}
+	if !strings.Contains(present.Detail, "10s") {
+		t.Fatalf("expected duration in detail, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolStopCommandShowsJobID(t *testing.T) {
+	present := describeTool(LangEnglish, "stop_command", `{"job_id":"cmd-42"}`)
+	if present.DisplayName != "Stop" {
+		t.Fatalf("expected 'Stop' display name, got %q", present.DisplayName)
+	}
+}
+
+func TestDescribeToolListCommandsNoParams(t *testing.T) {
+	present := describeTool(LangEnglish, "list_commands", `{}`)
+	if present.DisplayName != "List Jobs" {
+		t.Fatalf("expected 'List Jobs' display name, got %q", present.DisplayName)
 	}
 }
 
@@ -394,8 +438,9 @@ func TestDescribeToolRunCommandUsesLeadingCommentAsTitle(t *testing.T) {
 	if present.DisplayName != "Stage the fix" {
 		t.Fatalf("expected command title from comment, got %q", present.DisplayName)
 	}
-	if present.Detail != "" {
-		t.Fatalf("expected command title to replace raw command detail, got %q", present.Detail)
+	// Detail now includes the remaining command lines after the title comment
+	if !strings.Contains(present.Detail, "git add") {
+		t.Fatalf("expected detail to contain command lines, got %q", present.Detail)
 	}
 	if present.Activity != "Running Stage the fix" {
 		t.Fatalf("expected activity to use comment title, got %q", present.Activity)
@@ -2983,5 +3028,100 @@ func TestHarnessReleaseRolloutControls(t *testing.T) {
 	}
 	if !strings.Contains(renderedOutput(&m), "status=aborted") || !strings.Contains(renderedOutput(&m), "freeze window") {
 		t.Fatalf("expected aborted rollout output, got %q", renderedOutput(&m))
+	}
+}
+
+func TestDescribeToolLSPShowsFileLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		rawArgs  string
+		wantSub  string // substring expected in Detail
+	}{
+		{"hover shows file:line", "lsp_hover", `{"path":"main.go","line":42,"character":5}`, "main.go:42"},
+		{"definition shows file:line", "lsp_definition", `{"path":"model.go","line":10,"character":3}`, "model.go:10"},
+		{"references shows file:line", "lsp_references", `{"path":"config.go","line":100,"character":1}`, "config.go:100"},
+		{"rename shows new_name", "lsp_rename", `{"path":"main.go","line":5,"character":1,"new_name":"newFunc"}`, "newFunc"},
+		{"diagnostics shows file", "lsp_diagnostics", `{"path":"main.go"}`, "main.go"},
+		{"symbols shows file", "lsp_symbols", `{"path":"tools.go"}`, "tools.go"},
+		{"incoming_calls", "lsp_incoming_calls", `{"path":"a.go","line":1,"character":1}`, "a.go:1"},
+		{"outgoing_calls", "lsp_outgoing_calls", `{"path":"b.go","line":2,"character":1}`, "b.go:2"},
+		{"implementation", "lsp_implementation", `{"path":"iface.go","line":3,"character":1}`, "iface.go:3"},
+		{"workspace_symbols no line", "lsp_workspace_symbols", `{"query":"MyStruct"}`, ""},
+		{"code_actions shows file:line", "lsp_code_actions", `{"path":"x.go","line":7,"character":1}`, "x.go:7"},
+		{"call_hierarchy", "lsp_prepare_call_hierarchy", `{"path":"y.go","line":10,"character":5}`, "y.go:10"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			present := describeTool(LangEnglish, tt.toolName, tt.rawArgs)
+			if present.DisplayName != "LSP" {
+				t.Errorf("expected DisplayName=LSP, got %q", present.DisplayName)
+			}
+			if tt.wantSub != "" && !strings.Contains(present.Detail, tt.wantSub) {
+				t.Errorf("expected Detail to contain %q, got %q", tt.wantSub, present.Detail)
+			}
+			if present.Activity == "" {
+				t.Error("expected non-empty Activity")
+			}
+		})
+	}
+}
+
+func TestDescribeToolSleepShowsDuration(t *testing.T) {
+	tests := []struct {
+		rawArgs string
+		want    string
+	}{
+		{`{"seconds":5}`, "5s"},
+		{`{"seconds":60}`, "1m0s"},
+		{`{"milliseconds":500}`, "500ms"},
+		{`{"seconds":1,"milliseconds":500}`, "1.5s"},
+	}
+	for _, tt := range tests {
+		present := describeTool(LangEnglish, "sleep", tt.rawArgs)
+		if present.Detail != tt.want {
+			t.Errorf("sleep(%s): expected Detail=%q, got %q", tt.rawArgs, tt.want, present.Detail)
+		}
+	}
+}
+
+func TestDescribeToolSaveMemoryShowsKey(t *testing.T) {
+	present := describeTool(LangEnglish, "save_memory", `{"key":"go-pattern","content":"use context.WithCancel"}`)
+	if !strings.Contains(present.DisplayName, "Memory") {
+		t.Errorf("expected DisplayName containing 'Memory', got %q", present.DisplayName)
+	}
+	if !strings.Contains(present.Detail, "go-pattern") {
+		t.Errorf("expected Detail containing key, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolConfigShowsSetting(t *testing.T) {
+	present := describeTool(LangEnglish, "config", `{"setting":"default_mode","value":"auto"}`)
+	if !strings.Contains(present.Detail, "default_mode") {
+		t.Errorf("expected Detail containing setting name, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolCronShowsExpression(t *testing.T) {
+	present := describeTool(LangEnglish, "cron_create", `{"cron":"*/5 * * * *","prompt":"check status"}`)
+	if present.DisplayName != "Schedule" {
+		t.Errorf("expected DisplayName=Schedule, got %q", present.DisplayName)
+	}
+	if !strings.Contains(present.Detail, "*/5") {
+		t.Errorf("expected Detail with cron expression, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolEnterWorktreeShowsName(t *testing.T) {
+	present := describeTool(LangEnglish, "enter_worktree", `{"name":"feature-x"}`)
+	if present.Detail != "feature-x" {
+		t.Errorf("expected Detail=feature-x, got %q", present.Detail)
+	}
+}
+
+func TestDescribeToolExitWorktreeShowsAction(t *testing.T) {
+	present := describeTool(LangEnglish, "exit_worktree", `{"action":"remove"}`)
+	if !strings.Contains(present.Detail, "remove") {
+		t.Errorf("expected Detail with action, got %q", present.Detail)
 	}
 }

@@ -1802,12 +1802,34 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 			cfgVC.Endpoints = map[string]EndpointConfig{}
 		}
 		for epName, defaultEP := range defaultVC.Endpoints {
-			if _, exists := cfgVC.Endpoints[epName]; !exists {
+			cfgEP, exists := cfgVC.Endpoints[epName]
+			if !exists {
+				// Endpoint missing from config — add the built-in default.
 				cfgVC.Endpoints[epName] = defaultEP
+			} else if isPlaceholderBaseURL(cfgEP.BaseURL) {
+				// Endpoint exists but has a placeholder base_url — patch it
+				// with the correct built-in URL while preserving user overrides
+				// for other fields (models, tags, selected_model, etc.).
+				cfgEP.BaseURL = defaultEP.BaseURL
+				if cfgEP.Protocol == "" {
+					cfgEP.Protocol = defaultEP.Protocol
+				}
+				if cfgEP.DefaultModel == "" {
+					cfgEP.DefaultModel = defaultEP.DefaultModel
+				}
+				cfgVC.Endpoints[epName] = cfgEP
 			}
 		}
 		cfg.Vendors[vendorName] = cfgVC
 	}
+}
+
+// isPlaceholderBaseURL returns true if the URL looks like a template placeholder
+// rather than a real endpoint (e.g. "https://your-global-api-endpoint.example.com/v1").
+// We look for the "your-" prefix pattern which is used in all our placeholder URLs,
+// so that legitimate example.com domains (used by some proxies) are not clobbered.
+func isPlaceholderBaseURL(u string) bool {
+	return strings.Contains(u, "your-") && strings.Contains(u, "example.com")
 }
 
 // AddEndpoint creates a new endpoint under the given vendor. If the endpoint

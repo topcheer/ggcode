@@ -75,71 +75,6 @@ func TestLooksLikeStartupGarbage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// shouldIgnoreInputUpdate
-// ---------------------------------------------------------------------------
-
-func TestShouldIgnoreInputUpdate(t *testing.T) {
-	now := time.Now()
-
-	tests := []struct {
-		name string
-		msg  tea.Msg
-		want bool
-	}{
-		{"non-keypress msg ignored", "some_string", false},
-		{"normal text not ignored", tea.KeyPressMsg{Text: "hello"}, false},
-		{"empty text not ignored", tea.KeyPressMsg{Text: ""}, false},
-		{"ESC in text triggers ignore", tea.KeyPressMsg{Text: "abc\x1bdef"}, true},
-		{"control char triggers ignore", tea.KeyPressMsg{Text: "abc\x01def"}, true},
-		{"tab char triggers ignore", tea.KeyPressMsg{Text: "abc\tdef"}, true},
-		{"newline triggers ignore", tea.KeyPressMsg{Text: "abc\ndef"}, true},
-		{"clean text passes", tea.KeyPressMsg{Text: "go test ./..."}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shouldIgnoreInputUpdate(tt.msg, now, now)
-			if got != tt.want {
-				t.Errorf("shouldIgnoreInputUpdate() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// shouldIgnoreTerminalProbeKey
-// ---------------------------------------------------------------------------
-
-func TestShouldIgnoreTerminalProbeKey(t *testing.T) {
-	tests := []struct {
-		name string
-		msg  tea.KeyPressMsg
-		want bool
-	}{
-		{"single printable char passes", tea.KeyPressMsg{Text: "a", Mod: 0}, false},
-		{"ESC in text ignored", tea.KeyPressMsg{Text: "abc\x1b"}, true},
-		{"control char ignored", tea.KeyPressMsg{Text: "a\x01b"}, true},
-		{"Alt+] is OSC response", tea.KeyPressMsg{Text: "]", Mod: tea.ModAlt}, true},
-		{"Alt+\\ is CSI fragment", tea.KeyPressMsg{Text: "\\", Mod: tea.ModAlt}, true},
-		{"Alt+short text passes", tea.KeyPressMsg{Text: "ab", Mod: tea.ModAlt}, false},
-		{"Alt+long text ignored", tea.KeyPressMsg{Text: "abcdef", Mod: tea.ModAlt}, true},
-		{"CSI-like fragment ignored", tea.KeyPressMsg{Text: "1;1R"}, true},
-		{"OSC rgb ignored", tea.KeyPressMsg{Text: "11;rgb:0000/0000/0000"}, true},
-		{"SGR mouse ignored", tea.KeyPressMsg{Text: "<0;93;43m"}, true},
-		{"normal word passes", tea.KeyPressMsg{Text: "hello"}, false},
-		{"normal short text passes", tea.KeyPressMsg{Text: "go"}, false},
-		{"semicolon without pattern passes", tea.KeyPressMsg{Text: "a;b"}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shouldIgnoreTerminalProbeKey(tt.msg)
-			if got != tt.want {
-				t.Errorf("shouldIgnoreTerminalProbeKey(%+v) = %v, want %v", tt.msg, got, tt.want)
-			}
-		})
-	}
-}
 
 // ---------------------------------------------------------------------------
 // startupInputSuppressionActive
@@ -691,32 +626,3 @@ func TestSessionMutexLazyInit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// sanitizeTerminalResponseInput
-// ---------------------------------------------------------------------------
-
-func TestSanitizeTerminalResponseInput_CleanValue(t *testing.T) {
-	m := newTestModel()
-	m.input.SetValue("hello world")
-	m.sanitizeTerminalResponseInput()
-	if m.input.Value() != "hello world" {
-		t.Fatalf("expected unchanged, got %q", m.input.Value())
-	}
-}
-
-func TestSanitizeTerminalResponseInput_StripsESC(t *testing.T) {
-	m := newTestModel()
-	m.input.SetValue("clean\x1b[31m")
-	m.sanitizeTerminalResponseInput()
-	if strings.Contains(m.input.Value(), "\x1b") {
-		t.Fatalf("expected ESC stripped, got %q", m.input.Value())
-	}
-}
-
-func TestSanitizeTerminalResponseInput_Empty(t *testing.T) {
-	m := newTestModel()
-	m.input.SetValue("")
-	m.sanitizeTerminalResponseInput()
-	if m.input.Value() != "" {
-		t.Fatalf("expected empty, got %q", m.input.Value())
-	}
-}

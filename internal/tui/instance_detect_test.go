@@ -16,25 +16,18 @@ import (
 func TestDetectAndAutoMute_SingleInstance(t *testing.T) {
 	dir := t.TempDir()
 	mgr := im.NewManager()
-	m := testModelWithIMManager(mgr, dir)
-
-	// Single instance — should not mute anything
-	// Need to bind a channel first
-	mgr.BindSession(im.SessionBinding{
-		SessionID: "test-session",
-		Workspace: dir,
+	mgr.SetBindingStore(&stubBindingStore{
+		bindings: []im.ChannelBinding{
+			{Workspace: dir, Platform: im.PlatformQQ, Adapter: "qq-bot-1", ChannelID: "ch-1"},
+		},
 	})
-	_, err := mgr.BindChannel(im.ChannelBinding{
-		Workspace: dir,
-		Platform:  im.PlatformQQ,
-		Adapter:   "qq-bot-1",
-		ChannelID: "ch-1",
-	})
-	if err != nil {
-		t.Fatalf("BindChannel: %v", err)
-	}
 
-	// Should have 1 active binding
+	// Simulate startup: SetIMManager first, then SetSession
+	m := newTestModel()
+	m.SetIMManager(mgr)
+	m.SetSession(&session.Session{ID: "test-session", Workspace: dir}, nil)
+
+	// Should have 1 active binding, NOT muted (we're the only instance)
 	if len(mgr.CurrentBindings()) != 1 {
 		t.Fatalf("expected 1 active binding, got %d", len(mgr.CurrentBindings()))
 	}
@@ -74,30 +67,19 @@ func TestDetectAndAutoMute_SecondInstance(t *testing.T) {
 	os.WriteFile(filepath.Join(instancesDir, fmt.Sprintf("%d-older-uu.json", fakePID)), olderData, 0o644)
 
 	mgr := im.NewManager()
-	m := testModelWithIMManager(mgr, dir)
-
-	// Bind channels
-	mgr.BindSession(im.SessionBinding{
-		SessionID: "test-session",
-		Workspace: dir,
-	})
-	_, _ = mgr.BindChannel(im.ChannelBinding{
-		Workspace: dir,
-		Platform:  im.PlatformQQ,
-		Adapter:   "qq-bot-1",
-		ChannelID: "ch-1",
-	})
-	_, _ = mgr.BindChannel(im.ChannelBinding{
-		Workspace: dir,
-		Platform:  im.PlatformTelegram,
-		Adapter:   "tg-bot-1",
-		ChannelID: "ch-2",
+	// Use a binding store so bindings survive BindSession reload
+	mgr.SetBindingStore(&stubBindingStore{
+		bindings: []im.ChannelBinding{
+			{Workspace: dir, Platform: im.PlatformQQ, Adapter: "qq-bot-1", ChannelID: "ch-1"},
+			{Workspace: dir, Platform: im.PlatformTelegram, Adapter: "tg-bot-1", ChannelID: "ch-2"},
+		},
 	})
 
-	// detectAndAutoMute was called during SetIMManager
-	// But the channels were bound after SetIMManager, so we need to
-	// manually trigger it again to test auto-mute
-	m.detectAndAutoMute()
+	// Simulate startup: SetIMManager first (detectAndAutoMute skipped — no session),
+	// then SetSession (triggers detectAndAutoMute with session workspace)
+	m := newTestModel()
+	m.SetIMManager(mgr)
+	m.SetSession(&session.Session{ID: "test-session", Workspace: dir}, nil)
 
 	// Should have auto-muted all channels — bindings stay but are marked Muted
 	all := mgr.CurrentBindings()
@@ -176,4 +158,50 @@ func testModelWithIMManager(mgr *im.Manager, workspace string) *Model {
 	m.SetSession(&session.Session{ID: "test-session", Workspace: workspace}, nil)
 	m.SetIMManager(mgr)
 	return &m
+}
+
+// stubBindingStore is a minimal in-memory BindingStore for testing.
+type stubBindingStore struct {
+	bindings []im.ChannelBinding
+}
+
+func (s *stubBindingStore) Save(b im.ChannelBinding) error {
+	for i, existing := range s.bindings {
+		if existing.Workspace == b.Workspace && existing.Adapter == b.Adapter {
+			s.bindings[i] = b
+			return nil
+		}
+	}
+	s.bindings = append(s.bindings, b)
+	return nil
+}
+func (s *stubBindingStore) Delete(workspace, adapter string) error {
+	for i, b := range s.bindings {
+		if b.Workspace == workspace && b.Adapter == adapter {
+			s.bindings = append(s.bindings[:i], s.bindings[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+func (s *stubBindingStore) List() ([]im.ChannelBinding, error) {
+	return append([]im.ChannelBinding{}, s.bindings...), nil
+}
+func (s *stubBindingStore) ListByWorkspace(ws string) ([]im.ChannelBinding, error) {
+	var result []im.ChannelBinding
+	for _, b := range s.bindings {
+		if b.Workspace == ws {
+			result = append(result, b)
+		}
+	}
+	return result, nil
+}
+func (s *stubBindingStore) ListByAdapter(adapter string) ([]im.ChannelBinding, error) {
+	var result []im.ChannelBinding
+	for _, b := range s.bindings {
+		if b.Adapter == adapter {
+			result = append(result, b)
+		}
+	}
+	return result, nil
 }

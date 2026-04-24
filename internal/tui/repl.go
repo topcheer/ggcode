@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/knight"
+	"github.com/topcheer/ggcode/internal/markdown"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
@@ -404,6 +405,10 @@ func (r *REPL) Run() error {
 	// cancelReader activity in the next debug bundle.
 	enableBubbleteaTrace()
 	drainStdinResidual()
+
+	// Pre-initialize the glamour markdown renderer so the first LLM response
+	// doesn't freeze the TUI while glamour initializes its parser/highlighter.
+	markdown.Warmup()
 
 	r.program = tea.NewProgram(r.model)
 	debug.Log("repl", "program created stdin_is_term=%v stdout_is_term=%v",

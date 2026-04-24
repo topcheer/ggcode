@@ -172,7 +172,6 @@ type Model struct {
 	startedAt            time.Time
 	inputDrainUntil      time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
 	inputReady           bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded
-	lastMouseAt          time.Time // timestamp of most recent MouseMsg/MouseWheelMsg; used to suppress mouse-SGR fragments mis-parsed as keys
 	startupBannerVisible bool
 	lastResizeAt         time.Time
 	sidebarVisible       bool
@@ -415,6 +414,11 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
 	m.bindIMSession()
+	// Register this instance for multi-instance detection and auto-mute
+	// if another instance is already running in the same workspace.
+	// This must happen here (not just in SetIMManager) because the session
+	// workspace is needed for the instance directory path.
+	m.detectAndAutoMute()
 }
 
 func (m *Model) Session() *session.Session {
@@ -442,21 +446,22 @@ func (m *Model) detectAndAutoMute() {
 	if m.imManager == nil {
 		return
 	}
+	// Already registered via Manager? Skip.
+	if d := m.imManager.InstanceDetect(); d != nil && d.IsRegistered() {
+		return
+	}
 	session := m.session
 	if session == nil {
 		return
 	}
 
-	detect := im.NewInstanceDetect(session.Workspace)
-	m.instanceDetect = detect
-
-	others, err := detect.Register()
+	detect, others, err := m.imManager.RegisterInstance(session.Workspace)
 	if err != nil {
 		return
 	}
+	m.instanceDetect = detect
 
 	if len(others) == 0 {
-		// We're the only instance — nothing to do
 		return
 	}
 

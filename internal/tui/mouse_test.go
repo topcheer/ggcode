@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -66,25 +65,6 @@ func TestMouseWheelDownAtBottomEnablesAutoFollow(t *testing.T) {
 	}
 	if !m.chatList.AtBottom() {
 		t.Fatal("expected to be at bottom")
-	}
-}
-
-func TestMouseWheelIgnoredDuringStartupGate(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 40)
-	m.startedAt = time.Now() // activate startup gate
-
-	for i := 0; i < 50; i++ {
-		m.chatWriteSystem(nextSystemID(), "line")
-	}
-	m.chatListScrollToBottom()
-	initialY := m.chatList.YOffset()
-
-	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 10})
-	m2 := model.(Model)
-
-	if m2.chatList.YOffset() != initialY {
-		t.Errorf("mouse wheel should be suppressed during startup gate, YOffset changed from %d to %d", initialY, m2.chatList.YOffset())
 	}
 }
 
@@ -306,42 +286,6 @@ func TestMouseMsgWithAltIsIgnored(t *testing.T) {
 	m2 := model.(Model)
 	_ = m2.View() // should not panic
 }
-
-func TestMouseMsgDuringStartupGateIsDropped(t *testing.T) {
-	m := newTestModel()
-	m.startedAt = time.Now() // activate startup gate
-
-	dir := t.TempDir()
-	m.toggleFileBrowser()
-	if m.fileBrowser == nil {
-		t.Skip("file browser not available")
-	}
-	m.fileBrowser.rootPath = dir
-	longFile := createTestFile(t, dir, "test.txt", strings.Repeat("line\n", 50))
-	m.fileBrowser.selectedPath = longFile
-	m.syncFileBrowser(true)
-
-	if m.fileBrowser.preview == nil {
-		t.Fatal("expected preview")
-	}
-	m.fileBrowser.preview.viewport.GotoBottom()
-	initialY := m.fileBrowser.preview.viewport.YOffset()
-
-	clickUp := tea.MouseClickMsg{Button: tea.MouseWheelUp, X: 10, Y: 10}
-	model, _ := m.Update(clickUp)
-	m2 := model.(Model)
-
-	if m2.fileBrowser != nil && m2.fileBrowser.preview != nil {
-		if m2.fileBrowser.preview.viewport.YOffset() != initialY {
-			t.Errorf("mouse during startup gate should be dropped, YOffset changed from %d to %d",
-				initialY, m2.fileBrowser.preview.viewport.YOffset())
-		}
-	}
-}
-
-// ============================================================
-// View() configuration
-// ============================================================
 
 func TestViewSetsMouseModeCellMotion(t *testing.T) {
 	m := newTestModel()
