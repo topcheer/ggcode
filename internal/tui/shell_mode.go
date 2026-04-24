@@ -79,8 +79,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		m.history = append(m.history, "$ "+command)
 		m.historyIdx = len(m.history)
 	}
-	m.dualWriteSystem(m.renderConversationUserEntry("$ ", command))
-	m.dualWriteSystem("\n")
+	m.chatWriteUser(nextChatID(), "$ "+command)
 	m.appendUserMessage("$ " + command)
 	m.loading = true
 	m.runCanceled = false

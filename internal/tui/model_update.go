@@ -680,8 +680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.RunID != m.activeAgentRunID {
 			return m, nil
 		}
-		m.dualWriteSystem(m.renderConversationUserEntry("❯ ", msg.Text))
-		m.dualWriteSystem("\n")
+		m.chatWriteUser(nextChatID(), msg.Text)
 		m.dualWriteSystem(m.styles.prompt.Render(m.t("interrupt.delivered")))
 		m.dualWriteSystem("\n")
 		m.chatListScrollToBottom()
@@ -963,8 +962,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if state != nil && strings.TrimSpace(state.commandText) != "" {
 				commandText = strings.TrimSpace(state.commandText)
 			}
-			m.dualWriteSystem(m.renderConversationUserEntry("❯ ", commandText))
-			m.dualWriteSystem("\n")
+			m.chatWriteUser(nextChatID(), commandText)
 			m.appendUserMessage(commandText)
 			m.dualWriteSystem(m.styles.assistant.Render(formatHarnessInitResult(msg.Result)))
 			m.dualWriteSystem("\n")

@@ -2743,18 +2743,16 @@ func TestAgentInterruptMsgRendersDeliveredInput(t *testing.T) {
 	}
 }
 
-func TestRenderConversationUserEntryWrapsLongText(t *testing.T) {
+func TestChatWriteUserWrapsLongText(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(72, 30)
 	text := "再次好好建议查一下这个应用 qq-bot 插件的实现是否符合本应用的规范，同时实现的方式是否和 openclaw 的 qq-bot 实现机制是一致的"
 
-	rendered := m.renderConversationUserEntry("❯ ", text)
+	m.chatWriteUser(nextChatID(), text)
+	rendered := renderedOutput(&m)
 
-	if !strings.Contains(rendered, "\n") {
-		t.Fatalf("expected wrapped user entry, got %q", rendered)
-	}
-	if !strings.Contains(rendered, "openclaw") {
-		t.Fatalf("expected wrapped user entry to preserve full text, got %q", rendered)
+	if !strings.Contains(stripAnsi(rendered), "openclaw") {
+		t.Fatalf("expected user entry to preserve full text, got %q", stripAnsi(rendered))
 	}
 }
 

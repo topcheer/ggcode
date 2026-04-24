@@ -625,8 +625,6 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 		m.dualWriteSystem("\n")
 		return nil
 	}
-	m.dualWriteSystem(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
-	m.dualWriteSystem("\n")
 	m.chatWriteUser(nextChatID(), strings.TrimSpace(commandText))
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_run_start")))
@@ -679,8 +677,6 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 		m.dualWriteSystem("\n")
 		return nil
 	}
-	m.dualWriteSystem(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
-	m.dualWriteSystem("\n")
 	m.chatWriteUser(nextChatID(), strings.TrimSpace(commandText))
 	m.appendUserMessage(strings.TrimSpace(commandText))
 	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_rerun_start")))
