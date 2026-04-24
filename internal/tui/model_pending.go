@@ -14,8 +14,7 @@ func (m *Model) resetExitConfirm() {
 func (m *Model) promptExitConfirm() {
 	m.input.SetValue("")
 	m.exitConfirmPending = true
-	m.dualWriteSystem(m.styles.prompt.Render(m.t("exit.confirm")))
-	m.dualWriteSystem("\n")
+	m.chatWriteSystem(nextSystemID(), m.t("exit.confirm"))
 	m.chatListScrollToBottom()
 }
 
@@ -67,7 +66,7 @@ func (m *Model) cancelActiveRun() {
 		m.restorePendingInput()
 	}
 	debug.Log("tui", "cancelling active loop")
-	m.dualWriteSystem("\n" + m.t("interrupted"))
+	m.chatWriteSystem(nextSystemID(), m.t("interrupted"))
 	m.chatListScrollToBottom()
 }
 

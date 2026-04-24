@@ -465,7 +465,7 @@ func (m *Model) detectAndAutoMute() {
 	if count > 0 {
 		primary := others[0] // oldest
 		msg := m.t("panel.im.message.auto_mute", count, primary.PID, primary.StartedAt.Format("15:04"))
-		m.sysf("%s", msg)
+		m.chatWriteSystem(nextSystemID(), msg)
 	}
 }
 

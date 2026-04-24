@@ -681,8 +681,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.chatWriteUser(nextChatID(), msg.Text)
-		m.dualWriteSystem(m.styles.prompt.Render(m.t("interrupt.delivered")))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), m.t("interrupt.delivered"))
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -719,7 +718,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if finalIMText != "" {
 			m.emitIMText(finalIMText)
 		}
-		m.dualWriteSystem("\n")
 		m.chatListScrollToBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
@@ -752,7 +750,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.renderStreamBuffer(true)
 			m.streamBuffer = nil
 		}
-		m.dualWriteSystem("\n")
 		m.chatListScrollToBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
@@ -781,8 +778,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.restorePendingInput()
 			}
 			if text := strings.TrimSpace(msg.ErrText); text != "" {
-				m.dualWriteSystem(m.styles.error.Render(text))
-				m.dualWriteSystem("\n")
+				m.chatWriteSystem(nextSystemID(), text)
 			}
 		}
 		if !wasCanceled && (hadShellOutput || strings.TrimSpace(msg.ErrText) != "") {
@@ -806,7 +802,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
 		}
-		m.dualWriteSystem(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.err) + "\n\n"))
+		m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.err))
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -826,7 +822,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
 		}
-		m.dualWriteSystem(m.styles.error.Render(formatUserFacingError(m.currentLanguage(), msg.Err) + "\n\n"))
+		m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.Err))
 		m.emitIMText(formatUserFacingError(m.currentLanguage(), msg.Err))
 		m.chatListScrollToBottom()
 		return m, nil
@@ -874,8 +870,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.pendingSubmissionCount() > 0 {
 				m.restorePendingInput()
 			}
-			m.dualWriteSystem(m.styles.error.Render(msg.Err.Error()))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), msg.Err.Error())
 			m.chatListScrollToBottom()
 			return m, nil
 		}
@@ -885,11 +880,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.renderStreamBuffer(true)
 		if msg.Summary != nil && msg.Summary.Task != nil && msg.Summary.Task.Status == harness.TaskFailed {
-			m.dualWriteSystem(m.styles.error.Render(rendered))
+			m.chatWriteSystem(nextSystemID(), rendered)
 		} else {
-			m.dualWriteSystem(m.styles.assistant.Render(rendered))
+			m.chatWriteSystem(nextSystemID(), rendered)
 		}
-		m.dualWriteSystem("\n")
 		m.chatListScrollToBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
@@ -905,14 +899,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolArg = ""
 		m.statusToolCount = 0
 		if msg.Err != nil {
-			m.dualWriteSystem(m.styles.error.Render(fmt.Sprintf("Knight task failed: %v", msg.Err)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Knight task failed: %v", msg.Err))
 			m.chatListScrollToBottom()
 			return m, nil
 		}
-		m.dualWriteSystem(fmt.Sprintf("🌙 Knight task completed: %s\n", msg.Goal))
-		m.dualWriteSystem(strings.TrimSpace(msg.Result.Output))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight task completed: %s", msg.Goal))
+		m.chatWriteSystem(nextSystemID(), strings.TrimSpace(msg.Result.Output))
 		m.chatListScrollToBottom()
 		return m, nil
 
@@ -964,8 +956,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.chatWriteUser(nextChatID(), commandText)
 			m.appendUserMessage(commandText)
-			m.dualWriteSystem(m.styles.assistant.Render(formatHarnessInitResult(msg.Result)))
-			m.dualWriteSystem("\n")
+			m.chatWriteSystem(nextSystemID(), formatHarnessInitResult(msg.Result))
 			m.chatListScrollToBottom()
 			if panel := m.harnessPanel; panel != nil {
 				panel.message = fmt.Sprintf("Initialized harness in %s", msg.Result.Project.RootDir)

@@ -99,8 +99,8 @@ func TestChatListSystemMessages(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 
-	// Write a system message via dualWriteSystem
-	m.dualWriteSystem("Model switched to gpt-4o")
+	// Write a system message via chatWriteSystem
+	m.chatWriteSystem(nextSystemID(), "Model switched to gpt-4o")
 
 	if m.chatList.Len() != 1 {
 		t.Fatalf("expected 1 system item, got %d", m.chatList.Len())

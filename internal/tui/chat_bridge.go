@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/chat"
 )
@@ -256,4 +257,24 @@ func (m *Model) chatEnsureAssistant() {
 		return
 	}
 	m.chatList.Append(chat.NewAssistantItem(id, m.chatStyles))
+}
+
+// stripAnsiForChat removes ANSI escape codes from text.
+func stripAnsiForChat(s string) string {
+	var result strings.Builder
+	inEscape := false
+	for _, c := range s {
+		if c == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if c == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		result.WriteRune(c)
+	}
+	return result.String()
 }

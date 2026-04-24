@@ -572,7 +572,7 @@ func (r *REPL) createSession() {
 	ses := session.NewSession(vendor, endpoint, model)
 	if err := r.store.Save(ses); err == nil {
 		r.model.SetSession(ses, r.store)
-		r.model.dualWriteSystem(r.model.t("session.new", ses.ID))
+		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.new", ses.ID))
 	}
 }
 
@@ -580,8 +580,8 @@ func (r *REPL) createSession() {
 func (r *REPL) loadSession(id string) {
 	ses, err := r.store.Load(id)
 	if err != nil {
-		r.model.dualWriteSystem(r.model.t("session.resume_failed", id, err))
-		r.model.dualWriteSystem(r.model.t("session.resume_fallback"))
+		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume_failed", id, err))
+		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume_fallback"))
 		r.createSession()
 		return
 	}
@@ -594,5 +594,5 @@ func (r *REPL) loadSession(id string) {
 	if title == "" {
 		title = r.model.t("session.untitled")
 	}
-	r.model.dualWriteSystem(r.model.t("session.resume", ses.ID, title, len(ses.Messages)))
+	r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume", ses.ID, title, len(ses.Messages)))
 }

@@ -71,8 +71,7 @@ func shellStatusActivity(lang Language) string {
 func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	command = strings.TrimSpace(command)
 	if command == "" {
-		m.dualWriteSystem(m.styles.error.Render("Shell command is empty."))
-		m.dualWriteSystem("\n")
+		m.chatWriteSystem(nextSystemID(), "Shell command is empty.")
 		return nil
 	}
 	if addToHistory {
@@ -106,7 +105,7 @@ func (m *Model) appendShellChunk(chunk string) {
 	if m.shellBuffer.Len() == 0 {
 	}
 	m.shellBuffer.WriteString(chunk)
-	m.dualWriteSystem(chunk)
+	m.chatWriteSystem(nextSystemID(), strings.TrimRight(chunk, "\n"))
 	m.chatListScrollToBottom()
 }
 
