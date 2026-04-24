@@ -27,8 +27,6 @@ func (m *Model) handleResize(width, height int) {
 	}
 	m.input.SetWidth(inputWidth)
 	m.syncQuestionnaireInputWidth()
-	panelHeight := m.conversationPanelHeight()
-	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
 	prewarmMarkdownRenderers(m.previewContentWidth(), m.fileBrowserPreviewWidth())
 	// chatList items cache by width — will re-render automatically on next Render()
 	m.syncPreviewViewport(false)

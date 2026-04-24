@@ -1094,9 +1094,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case subAgentUpdateMsg:
-		if m.viewport.AutoFollow() {
-			m.chatListScrollToBottom()
-		}
+		m.chatListScrollToBottom()
 		return m, nil
 
 	case modeChangeMsg:
@@ -1146,9 +1144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamPrefixWritten = false
 			// Reset stream buffer position for next text chunk
 		}
-		if m.viewport.AutoFollow() {
-			m.chatListScrollToBottom()
-		}
+		m.chatListScrollToBottom()
 		return m, spinnerCmd
 
 	case agentToolBatchMsg:
@@ -1187,9 +1183,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.streamPrefixWritten = false
 			}
 		}
-		if m.viewport.AutoFollow() {
-			m.chatListScrollToBottom()
-		}
+		m.chatListScrollToBottom()
 		return m, spinnerCmd
 
 	case agentToolStatusMsg:
@@ -1215,9 +1209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 			m.streamPrefixWritten = false
 		}
-		if m.viewport.AutoFollow() {
-			m.chatListScrollToBottom()
-		}
+		m.chatListScrollToBottom()
 		return m, spinnerCmd
 
 	case mcpServersMsg:
