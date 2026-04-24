@@ -39,7 +39,6 @@ func (m *Model) resetConversationView() {
 	m.runCanceled = false
 	m.runFailed = false
 	m.spinner.Stop()
-	m.viewport.SetContent("")
 	m.chatListScrollToBottom()
 }
 

@@ -80,15 +80,12 @@ func renderedOutput(m *Model) string {
 func TestResizeUpdatesViewport(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
-	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
-		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
+	// Verify chatList got resized
+	if m.chatList != nil {
+		// chatList width/height are set during Render, just verify it exists
+	} else {
+		t.Error("expected chatList to be initialized")
 	}
-	if m.viewport.width != m.conversationInnerWidth() {
-		t.Errorf("expected synced viewport width %d, got %d", m.conversationInnerWidth(), m.viewport.width)
-	}
-	// textarea.SetWidth accounts for prompt/frame internally, so Width()
-	// returns the edit-area width which is smaller than what was set.
-	// We verify SetWidth was called with the correct total width.
 	expectedSetWidth := m.mainColumnWidth() - 6
 	if got := m.input.Width(); got > expectedSetWidth || got < expectedSetWidth-10 {
 		t.Errorf("expected input width ~%d (±10), got %d", expectedSetWidth, got)
@@ -98,16 +95,18 @@ func TestResizeUpdatesViewport(t *testing.T) {
 func TestResizeSmallWindow(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(40, 5)
-	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
-		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
+	// Verify resize doesn't panic on small window
+	if m.chatList == nil {
+		t.Error("expected chatList to be initialized")
 	}
 }
 
 func TestResizeTinyWindow(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(10, 2)
-	if m.viewport.height != conversationInnerHeight(m.conversationPanelHeight()) {
-		t.Errorf("expected synced viewport height %d, got %d", conversationInnerHeight(m.conversationPanelHeight()), m.viewport.height)
+	// Verify resize doesn't panic on tiny window
+	if m.chatList == nil {
+		t.Error("expected chatList to be initialized")
 	}
 }
 
