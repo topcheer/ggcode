@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/topcheer/ggcode/internal/markdown"
 )
 
 // UserItem renders a user message with a prefix icon.
@@ -144,7 +146,11 @@ func (a *AssistantItem) Render(width int) string {
 		contentWidth = 10
 	}
 
-	lines := wrapLines(a.text, contentWidth)
+	// Render markdown to ANSI
+	rendered := markdown.Render(a.text, contentWidth)
+
+	// Indent all lines after the first with the prefix width
+	lines := strings.Split(rendered, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
 		if i == 0 {
@@ -158,11 +164,11 @@ func (a *AssistantItem) Render(width int) string {
 		}
 	}
 
-	rendered := sb.String()
+	result := sb.String()
 	if !a.streaming {
-		a.SetCached(rendered, width, measureHeight(rendered))
+		a.SetCached(result, width, measureHeight(result))
 	}
-	return rendered
+	return result
 }
 
 func (a *AssistantItem) Height(width int) int {

@@ -20,6 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/markdown"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -1743,14 +1744,14 @@ func TestTrimLeadingRenderedSpacing(t *testing.T) {
 
 func TestNormalizeTerminalMarkdownAnnotatesBareCodeFencesAsText(t *testing.T) {
 	input := "## Tree\n\n```\nroot/\n├── child\n└── leaf\n```\n"
-	normalized := normalizeTerminalMarkdown(input)
+	normalized := markdown.Normalize(input)
 	if !strings.Contains(normalized, "```text\nroot/") {
 		t.Fatalf("expected bare markdown fence to be annotated as text, got %q", normalized)
 	}
 }
 
 func TestMarkdownStyleConfigUsesCalmerCodeColors(t *testing.T) {
-	dark := markdownStyleConfigForDarkMode(true)
+	dark := markdown.StyleConfigForDarkMode(true)
 	if dark.Code.BackgroundColor != nil {
 		t.Fatalf("expected dark markdown inline code to avoid background fills, got %#v", dark.Code.BackgroundColor)
 	}
@@ -1761,7 +1762,7 @@ func TestMarkdownStyleConfigUsesCalmerCodeColors(t *testing.T) {
 		t.Fatalf("expected dark markdown punctuation to use the calmer text color, got %#v", dark.CodeBlock.Chroma)
 	}
 
-	light := markdownStyleConfigForDarkMode(false)
+	light := markdown.StyleConfigForDarkMode(false)
 	if light.Code.BackgroundColor != nil {
 		t.Fatalf("expected light markdown inline code to avoid background fills, got %#v", light.Code.BackgroundColor)
 	}
