@@ -239,6 +239,13 @@ func (l *List) Render() string {
 	}
 
 	l.dirty = false
+
+	// Pad with empty lines so the output is always exactly l.height lines.
+	// This prevents lipgloss from expanding or contracting the container.
+	for len(lines) < l.height {
+		lines = append(lines, "")
+	}
+
 	result := strings.Join(lines, "\n")
 	l.mu.Unlock()
 	return result
@@ -328,13 +335,20 @@ func (l *List) calcEndPositionLocked() (idx, line int) {
 	if len(l.items) == 0 {
 		return 0, 0
 	}
+
+	// Strategy: compute total content height from each candidate start
+	// position and find the one that fills exactly l.height lines with
+	// the last item's last line at the bottom.
+
+	// Walk backward from the last item, accumulating height (including
+	// 1-line gaps between items) until we exceed l.height.
 	remaining := l.height
 	idx = len(l.items) - 1
 	for idx >= 0 {
 		itemH := l.items[idx].Height(l.width)
 		totalH := itemH
 		if idx < len(l.items)-1 {
-			totalH++
+			totalH++ // gap line
 		}
 		if remaining-totalH < 0 {
 			break
@@ -349,7 +363,16 @@ func (l *List) calcEndPositionLocked() (idx, line int) {
 
 	itemH := l.items[idx].Height(l.width)
 	if idx < len(l.items)-1 {
-		line = itemH - remaining
+		// remaining is the space left after fitting items [idx+1..last].
+		// We need to fit: visible_from_idx + gap(1) + items_below = l.height.
+		// So visible_from_idx = remaining - 1(gap).
+		// If remaining <= 1, there's no room for item content, only the gap
+		// (or less). In that case skip the item entirely.
+		if remaining <= 1 {
+			return idx + 1, 0
+		}
+		visible := remaining - 1
+		line = itemH - visible
 	} else {
 		line = itemH - l.height
 	}
