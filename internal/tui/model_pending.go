@@ -14,13 +14,9 @@ func (m *Model) resetExitConfirm() {
 func (m *Model) promptExitConfirm() {
 	m.input.SetValue("")
 	m.exitConfirmPending = true
-	m.ensureOutputHasBlankLine()
 	m.dualWriteSystem(m.styles.prompt.Render(m.t("exit.confirm")))
 	m.dualWriteSystem("\n")
-	m.syncConversationViewport()
-	if m.viewport.AutoFollow() {
-		m.chatListScrollToBottom()
-	}
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) queuePendingSubmission(text string) {
@@ -31,13 +27,9 @@ func (m *Model) queuePendingSubmission(text string) {
 	}
 	// Render the user's input in the conversation view so it looks like a
 	// normal submission, rather than showing a "[queued N pending]" hint.
-	m.ensureOutputHasBlankLine()
 	m.dualWriteSystem(m.renderConversationUserEntry("❯ ", text))
 	m.dualWriteSystem("\n")
-	m.syncConversationViewport()
-	if m.viewport.AutoFollow() {
-		m.chatListScrollToBottom()
-	}
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) pendingSubmissionCount() int {
@@ -77,10 +69,7 @@ func (m *Model) cancelActiveRun() {
 	}
 	debug.Log("tui", "cancelling active loop")
 	m.dualWriteSystem("\n" + m.t("interrupted"))
-	m.syncConversationViewport()
-	if m.viewport.AutoFollow() {
-		m.chatListScrollToBottom()
-	}
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) consumePendingSubmission() string {

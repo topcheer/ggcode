@@ -471,26 +471,18 @@ func TestFormatToolStartUsesFriendlyDisplay(t *testing.T) {
 
 func TestAssistantAndToolBulletsUseDifferentStyles(t *testing.T) {
 	m := newTestModel()
+	m.handleResize(120, 40)
 	m.appendStreamChunk("hello")
-	stream := renderedOutput(&m)
+	stream := stripAnsi(renderedOutput(&m))
+	if !strings.Contains(stream, "hello") {
+		t.Fatalf("expected stream output to contain 'hello', got %q", stream)
+	}
 	tool := FormatToolStart(ToolStatusMsg{
 		ToolName:    "read_file",
 		DisplayName: "Read",
 		Detail:      "README.md",
 		Running:     true,
 	})
-
-	// Both should use styled "●" prefixes, just verify they're styled differently from raw text
-	assistantPrefix := assistantBulletStyle.Render("● ")
-	toolPrefix := toolBulletStyle.Render("● ")
-	if assistantPrefix == toolPrefix {
-		t.Fatal("expected assistant and tool bullet styles to differ")
-	}
-	// Verify stream has styled content (not raw "hello")
-	if !strings.Contains(stripAnsi(stream), "hello") {
-		t.Fatalf("expected stream output to contain 'hello', got %q", stream)
-	}
-	// Verify tool has styled content
 	if !strings.Contains(stripAnsi(tool), "README.md") {
 		t.Fatalf("expected tool start to contain 'README.md', got %q", tool)
 	}

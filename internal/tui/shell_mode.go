@@ -79,7 +79,6 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		m.history = append(m.history, "$ "+command)
 		m.historyIdx = len(m.history)
 	}
-	m.ensureOutputHasBlankLine()
 	m.dualWriteSystem(m.renderConversationUserEntry("$ ", command))
 	m.dualWriteSystem("\n")
 	m.appendUserMessage("$ " + command)
@@ -106,7 +105,6 @@ func (m *Model) appendShellChunk(chunk string) {
 		m.shellBuffer = &bytes.Buffer{}
 	}
 	if m.shellBuffer.Len() == 0 {
-		m.ensureOutputEndsWithNewline()
 	}
 	m.shellBuffer.WriteString(chunk)
 	m.dualWriteSystem(chunk)
