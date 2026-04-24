@@ -1257,7 +1257,8 @@ func TestEndpointAPIKeyOverridesVendor(t *testing.T) {
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]
 	vc.APIKey = "${ZAI_API_KEY}"
-	// Create endpoint WITH its own key
+	// Create endpoint WITH its own key that resolves successfully
+	t.Setenv("ENDPOINT_OVERRIDDEN_KEY", "sk-endpoint-override-value")
 	vc.Endpoints["override-ep"] = EndpointConfig{
 		Protocol: "openai",
 		BaseURL:  "https://example.com",
@@ -1274,5 +1275,30 @@ func TestEndpointAPIKeyOverridesVendor(t *testing.T) {
 	}
 	if resolved.APIKey != "${ENDPOINT_OVERRIDDEN_KEY}" {
 		t.Errorf("expected endpoint-specific key, got %s", resolved.APIKey)
+	}
+}
+
+func TestEndpointAPIKeyUnresolvableFallsBackToVendor(t *testing.T) {
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.APIKey = "${ZAI_API_KEY}"
+	// Create endpoint with an unresolvable key (env var not set)
+	vc.Endpoints["broken-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+		APIKey:   "${NONEXISTENT_ENDPOINT_KEY}",
+	}
+	cfg.Vendors["zai"] = vc
+
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "broken-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should fall back to vendor key since endpoint key is unresolvable
+	if resolved.APIKey != "${ZAI_API_KEY}" {
+		t.Errorf("expected vendor fallback key, got %s", resolved.APIKey)
 	}
 }

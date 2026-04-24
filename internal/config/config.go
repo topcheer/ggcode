@@ -1020,10 +1020,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if model == "" {
 		return nil, fmt.Errorf("endpoint %q for vendor %q has no active model", endpoint, vendor)
 	}
-	apiKey := strings.TrimSpace(ep.APIKey)
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(vc.APIKey)
-	}
+	// Resolve API key: endpoint key first, but if it's an unresolvable ${VAR}
+	// reference (env var not set), fall back to vendor key.
+	apiKey := resolveEffectiveAPIKeyRef(ep.APIKey, vc.APIKey)
 	authType := strings.TrimSpace(ep.AuthType)
 	if authType == "" {
 		authType = "api_key"
@@ -1217,6 +1216,12 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	// Set the actual value in the current process environment so it works
 	// immediately for the current session.
 	os.Setenv(envVarName, apiKey)
+
+	// Persist to keys.env so the key survives restarts.
+	if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+		// Non-fatal: the key works for this session via os.Setenv above.
+		debug.Log("config", "failed to persist %s to keys.env: %v", envVarName, err)
+	}
 
 	ref := "${" + envVarName + "}"
 	if vendorScoped {
@@ -1623,6 +1628,40 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// resolveEffectiveAPIKeyRef returns the raw API key reference string.
+// Endpoint key takes priority, but if it's an unresolvable ${VAR} reference
+// (the environment variable is not set), falls back to the vendor key.
+// The returned value may still contain ${VAR} references — expansion is the
+// caller's responsibility.
+func resolveEffectiveAPIKeyRef(epKey, vcKey string) string {
+	epKey = strings.TrimSpace(epKey)
+	vcKey = strings.TrimSpace(vcKey)
+
+	// If endpoint key is empty, use vendor key directly
+	if epKey == "" {
+		return vcKey
+	}
+
+	// If endpoint key is not a ${VAR} reference, use it directly
+	if !envReferencePattern.MatchString(epKey) {
+		return epKey
+	}
+
+	// Endpoint key is a ${VAR} reference — check if it resolves
+	expanded := ExpandEnv(epKey)
+	if expanded != epKey {
+		// Resolved successfully (env var exists)
+		return epKey
+	}
+
+	// Unresolvable ${VAR} — fall back to vendor key if available
+	if vcKey != "" {
+		return vcKey
+	}
+
+	return epKey
 }
 
 func firstNonEmpty(values ...string) string {
