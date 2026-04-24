@@ -62,7 +62,7 @@ Do not use this for unrelated tasks.
 		t.Fatal("expected rate command to complete synchronously")
 	}
 
-	output := m.output.String()
+	output := renderedOutput(&m)
 	if !strings.Contains(output, "Rated skill 'build-flow' 5/5") {
 		t.Fatalf("expected rating confirmation, got %q", output)
 	}
@@ -116,7 +116,7 @@ Do not use this for unrelated tasks.
 		t.Fatal("expected skills command to complete synchronously")
 	}
 
-	output := m.output.String()
+	output := renderedOutput(&m)
 	if !strings.Contains(output, "feedback: 4.0/5 (1)") {
 		t.Fatalf("expected runtime feedback in skills output, got %q", output)
 	}
@@ -151,7 +151,7 @@ func TestKnightRunCommandExecutesTask(t *testing.T) {
 		t.Fatal("expected no follow-up command after knight task result")
 	}
 	next := updated.(Model)
-	output := next.output.String()
+	output := renderedOutput(&next)
 	if !strings.Contains(output, "Knight task completed: add tests") {
 		t.Fatalf("expected task completion header, got %q", output)
 	}
@@ -201,8 +201,8 @@ Do not use this for unrelated tasks.
 	if cmd := m.handleKnightCommand([]string{"/knight", "freeze", "build-flow"}); cmd != nil {
 		t.Fatal("expected freeze command to complete synchronously")
 	}
-	if !strings.Contains(m.output.String(), "frozen") {
-		t.Fatalf("expected freeze confirmation, got %q", m.output.String())
+	if !strings.Contains(renderedOutput(&m), "frozen") {
+		t.Fatalf("expected freeze confirmation, got %q", renderedOutput(&m))
 	}
 	data, err := os.ReadFile(skillPath)
 	if err != nil {
@@ -307,8 +307,8 @@ func TestKnightBudgetCommandShowsUsage(t *testing.T) {
 	if cmd := m.handleKnightCommand([]string{"/knight", "budget"}); cmd != nil {
 		t.Fatal("expected budget command to complete synchronously")
 	}
-	if !strings.Contains(m.output.String(), "Knight budget:") {
-		t.Fatalf("expected budget output, got %q", m.output.String())
+	if !strings.Contains(renderedOutput(&m), "Knight budget:") {
+		t.Fatalf("expected budget output, got %q", renderedOutput(&m))
 	}
 }
 
@@ -352,8 +352,8 @@ Do not use this for unrelated tasks.
 	if cmd := m.handleKnightCommand([]string{"/knight", "review"}); cmd != nil {
 		t.Fatal("expected review command to complete synchronously")
 	}
-	if !strings.Contains(m.output.String(), "Staging skills (1):") || !strings.Contains(m.output.String(), "build-flow") {
-		t.Fatalf("expected staging summary, got %q", m.output.String())
+	if !strings.Contains(renderedOutput(&m), "Staging skills (1):") || !strings.Contains(renderedOutput(&m), "build-flow") {
+		t.Fatalf("expected staging summary, got %q", renderedOutput(&m))
 	}
 }
 
@@ -402,7 +402,7 @@ Use this globally.
 	if cmd := m.handleKnightCommand([]string{"/knight", "rate", "build-flow", "5"}); cmd != nil {
 		t.Fatal("expected rate command to complete synchronously")
 	}
-	if !strings.Contains(m.output.String(), "multiple active skills") {
-		t.Fatalf("expected ambiguous-skill error, got %q", m.output.String())
+	if !strings.Contains(renderedOutput(&m), "multiple active skills") {
+		t.Fatalf("expected ambiguous-skill error, got %q", renderedOutput(&m))
 	}
 }

@@ -355,18 +355,11 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
 	m.ensureOutputHasBlankLine()
-
-	// Legacy path only — chatList gets its own UserItem below
-	m.output.WriteString(m.renderConversationUserEntry("❯ ", displayText))
-	m.output.WriteString("\n")
-
-	// ChatEntries: user message
-	m.chatEntries.Append(ChatEntry{
-		Role:    "user",
-		RawText: displayText,
-		Prefix:  "❯ ",
-	})
-	// New path: add user item to chatList (single source of truth for new render)
+	if !m.chatListActive() {
+		m.output.WriteString(m.renderConversationUserEntry("❯ ", displayText))
+		m.output.WriteString("\n")
+		m.chatEntries.Append(ChatEntry{Role: "user", RawText: displayText, Prefix: "❯ "})
+	}
 	m.chatWriteUser(nextChatID(), displayText)
 
 	// Save original user message to session
@@ -406,10 +399,11 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	prompt := buildInitPrompt(targetPath, existed, content)
 
 	m.ensureOutputHasBlankLine()
-	// Legacy path only — chatList gets its own UserItem below
-	m.output.WriteString(m.styles.user.Render("❯ /init"))
-	m.output.WriteString("\n")
-	m.chatEntries.Append(ChatEntry{Role: "user", RawText: "/init", Prefix: "❯ "})
+	if !m.chatListActive() {
+		m.output.WriteString(m.styles.user.Render("❯ /init"))
+		m.output.WriteString("\n")
+		m.chatEntries.Append(ChatEntry{Role: "user", RawText: "/init", Prefix: "❯ "})
+	}
 	m.chatWriteUser(nextChatID(), "/init")
 	m.appendUserMessage("/init")
 

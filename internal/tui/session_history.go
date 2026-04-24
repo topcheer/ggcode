@@ -53,13 +53,16 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 			textParts = append(textParts, "_[image omitted]_")
 		case "tool_result":
 			if text := strings.TrimSpace(strings.Join(textParts, "\n\n")); text != "" {
-				m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
-				m.output.WriteString("\n")
-				// New path: add user item to chatList
+				if !m.chatListActive() {
+					m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
+					m.output.WriteString("\n")
+				}
 				m.chatWriteUser(nextChatID(), text)
 				textParts = nil
 			}
-			m.output.WriteString(m.renderConversationToolResult(block, toolCalls))
+			if !m.chatListActive() {
+				m.output.WriteString(m.renderConversationToolResult(block, toolCalls))
+			}
 			// Update the corresponding chatList tool item with the result
 			if block.ToolID != "" && m.chatList != nil {
 				if item := m.chatList.FindByID(block.ToolID); item != nil {
@@ -74,9 +77,10 @@ func (m *Model) renderConversationUserBlocks(blocks []provider.ContentBlock, too
 		}
 	}
 	if text := strings.TrimSpace(strings.Join(textParts, "\n\n")); text != "" {
-		m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
-		m.output.WriteString("\n")
-		// New path: add user item to chatList
+		if !m.chatListActive() {
+			m.output.WriteString(m.renderConversationUserEntry("❯ ", text))
+			m.output.WriteString("\n")
+		}
 		m.chatWriteUser(nextChatID(), text)
 	}
 }
@@ -92,12 +96,19 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 		case "tool_use":
 			if body := strings.TrimSpace(strings.Join(textParts, "\n\n")); body != "" {
 				m.renderConversationAssistantMarkdown(body)
+				// Also create assistant item in chatList for the text before this tool_use
+				if m.chatList != nil {
+					a := chat.NewAssistantItem(nextChatID(), m.chatStyles)
+					a.SetText(body)
+					m.chatList.Append(a)
+				}
 				textParts = nil
 			}
 			renderedCall := m.renderConversationToolCall(block)
-			m.output.WriteString(renderedCall)
-			m.chatEntries.Append(ChatEntry{Role: "tool", RawText: renderedCall})
-			// New path: create tool item from structured data
+			if !m.chatListActive() {
+				m.output.WriteString(renderedCall)
+				m.chatEntries.Append(ChatEntry{Role: "tool", RawText: renderedCall})
+			}
 			toolID := block.ToolID
 			if toolID == "" {
 				toolID = nextChatID()
@@ -117,15 +128,20 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 	}
 	if body := strings.TrimSpace(strings.Join(textParts, "\n\n")); body != "" {
 		m.renderConversationAssistantMarkdown(body)
-		// New path: add assistant item to chatList
-		a := chat.NewAssistantItem(nextChatID(), m.chatStyles)
-		a.SetText(body)
-		a.SetFinished()
-		m.chatList.Append(a)
+		// Also create assistant item in chatList
+		if m.chatList != nil {
+			a := chat.NewAssistantItem(nextChatID(), m.chatStyles)
+			a.SetText(body)
+			a.SetFinished()
+			m.chatList.Append(a)
+		}
 	}
 }
 
 func (m *Model) renderConversationAssistantMarkdown(body string) {
+	if m.chatListActive() {
+		return
+	}
 	rendered := trimLeadingRenderedSpacing(RenderMarkdownWidth(body, max(20, m.conversationInnerWidth()-2)))
 	m.output.WriteString(assistantBulletStyle.Render("● "))
 	m.output.WriteString(rendered)
