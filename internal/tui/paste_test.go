@@ -220,15 +220,15 @@ func TestPasteFallsToMainInput(t *testing.T) {
 
 // --- Loading state blocks paste ---
 
-func TestPasteBlockedWhenLoading(t *testing.T) {
+func TestPasteAllowedWhenLoading(t *testing.T) {
 	m := setupModelForPaste()
 	m.loading = true
 
-	updated, _ := m.Update(tea.PasteMsg{Content: "should-be-ignored"})
+	updated, _ := m.Update(tea.PasteMsg{Content: "pasted-while-loading"})
 	m = updated.(Model)
 
-	if strings.Contains(m.input.Value(), "should-be-ignored") {
-		t.Fatal("expected paste to be blocked during loading")
+	if !strings.Contains(m.input.Value(), "pasted-while-loading") {
+		t.Fatal("expected paste to be allowed during loading for interleaved messages")
 	}
 }
 
