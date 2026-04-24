@@ -827,6 +827,12 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 		content = m.chatList.Render()
 	}
 
+	contentLines := lipgloss.Height(content)
+	if contentLines > innerH {
+		debug.Log("layout", "OVERFLOW: contentLines=%d > innerH=%d panelH=%d items=%d",
+			contentLines, innerH, panelHeight, m.chatList.Len())
+	}
+
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -834,6 +840,7 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 		Padding(0, 1).
 		Width(width).
 		Height(panelHeight).
+		MaxHeight(panelHeight).
 		Render(content)
 }
 
