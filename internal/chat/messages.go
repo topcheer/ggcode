@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -209,7 +208,27 @@ func (s *SystemItem) Render(width int) string {
 	if cached, _, ok := s.GetCached(width); ok {
 		return cached
 	}
-	rendered := s.styles.SystemStyle.Render(fmt.Sprintf("%s%s", s.styles.SystemPrefix, s.text))
+
+	prefix := s.styles.SystemPrefix
+	prefixWidth := lipgloss.Width(prefix)
+
+	// System messages preserve their own line breaks.
+	// Prepend prefix to first line, indent continuation lines.
+	textLines := strings.Split(s.text, "\n")
+	var sb strings.Builder
+	for i, line := range textLines {
+		if i == 0 {
+			sb.WriteString(s.styles.SystemStyle.Render(prefix))
+		} else {
+			sb.WriteString(strings.Repeat(" ", prefixWidth))
+		}
+		sb.WriteString(s.styles.SystemStyle.Render(line))
+		if i < len(textLines)-1 {
+			sb.WriteString("\n")
+		}
+	}
+
+	rendered := sb.String()
 	s.SetCached(rendered, width, measureHeight(rendered))
 	return rendered
 }
