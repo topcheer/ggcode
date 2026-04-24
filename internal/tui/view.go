@@ -14,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
 )
@@ -53,9 +54,21 @@ func (m Model) View() tea.View {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
+	// SUSPECT: manual height adjustment (-2) to prevent content overflow.
+	// The exact root cause is unclear — likely a rounding or border/padding
+	// mismatch between the calculated and actual rendered heights.
+	// Revisit if the conversation panel clips or leaves excessive gap.
+	availableHeight -= 2
+
 	if availableHeight < 8 {
 		availableHeight = 8
 	}
+
+	debug.Log("layout", "vh=%d h=%d s=%d c=%d a=%d sb=%d d=%d",
+		m.viewHeight(),
+		lipgloss.Height(header), lipgloss.Height(startupBanner), lipgloss.Height(composer),
+		lipgloss.Height(actionPanel), lipgloss.Height(statusBar), lipgloss.Height(deviceBanner))
+	debug.Log("layout", "avail=%d", availableHeight)
 
 	conversation := m.renderConversationPanel(availableHeight)
 
@@ -129,6 +142,10 @@ func (m Model) conversationPanelHeight() int {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
+
+	// SUSPECT: same manual -2 as in View() — see the comment there.
+	availableHeight -= 2
+
 	if availableHeight < 8 {
 		availableHeight = 8
 	}
@@ -797,6 +814,9 @@ func resolveGitDir(start string) (string, error) {
 func (m Model) renderConversationPanel(panelHeight int) string {
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
+
+	debug.Log("layout", "panel ph=%d iw=%d ih=%d n=%d",
+		panelHeight, innerW, innerH, m.chatList.Len())
 
 	if m.chatList != nil {
 		m.chatList.SetSize(innerW, innerH)

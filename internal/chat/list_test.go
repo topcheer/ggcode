@@ -205,3 +205,88 @@ func TestListToolItemHeightMatchesRenderLines(t *testing.T) {
 		t.Errorf("Height() = %d but Render() produces %d visual lines:\n%s", h, len(visualLines), rendered)
 	}
 }
+
+func TestListShrinkViewportShowsLastItem(t *testing.T) {
+	// Simulates: user sends a multi-line message, then the viewport shrinks
+	// because a status bar appears. The last line of the message must still
+	// be visible.
+	styles := DefaultStyles()
+	width := 60
+
+	// Start with a large viewport (no status bar)
+	l := NewList(width, 20)
+	l.SetFollow(true)
+
+	// Fill with enough content to require scrolling
+	for i := 0; i < 15; i++ {
+		l.Append(NewSystemItem("s", "filler line "+strings.Repeat("x", 20), styles))
+	}
+
+	// Append a multi-line user message (the one the user just sent)
+	userMsg := "this isa test,这是一个测试\n阿萨德发顺丰"
+	l.Append(NewUserItem("user1", userMsg, styles))
+
+	// Render at original size — last line should be visible
+	rendered := l.Render()
+	if !strings.Contains(rendered, "阿萨德发顺丰") {
+		t.Errorf("at size 20, last line should be visible.\nRendered:\n%s", rendered)
+	}
+
+	// Now shrink viewport by 2 (simulates status bar appearing)
+	l.SetSize(width, 18)
+
+	// Re-render — last line must STILL be visible
+	rendered = l.Render()
+	if !strings.Contains(rendered, "阿萨德发顺丰") {
+		// Show what IS visible
+		lines := strings.Split(rendered, "\n")
+		t.Errorf("at size 18, last line '阿萨德发顺丰' should be visible but isn't.\nVisible lines (%d):\n%s",
+			len(lines), rendered)
+	}
+}
+
+func TestUserItemHeightMatchesRenderLines(t *testing.T) {
+	styles := DefaultStyles()
+	cases := []string{
+		"hello",
+		"this isa test,这是一个测试\n阿萨德发顺丰",
+		"line1\nline2\nline3",
+		"很长的中文文本用来测试在窄宽度下是否会自动换行并正确计算高度",
+		"short\n" + strings.Repeat("这是一个比较长的行用来测试换行", 5),
+	}
+	for _, text := range cases {
+		item := NewUserItem("u1", text, styles)
+		for _, w := range []int{20, 40, 60, 80} {
+			h := item.Height(w)
+			rendered := item.Render(w)
+			visualLines := splitVisualLines(rendered)
+			if len(visualLines) != h {
+				t.Errorf("UserItem(%q) at width %d: Height()=%d but Render() has %d visual lines.\nRendered:\n%s",
+					text[:min(len(text), 30)], w, h, len(visualLines), rendered)
+			}
+			// Reset cache for next width
+			item.Invalidate()
+		}
+	}
+}
+
+func TestListRenderProducesExactHeightLines(t *testing.T) {
+	// Verify that Render() produces exactly l.height lines (no more, no less).
+	styles := DefaultStyles()
+	width := 60
+	height := 10
+
+	l := NewList(width, height)
+	l.SetFollow(true)
+
+	// Add items that together are taller than the viewport
+	for i := 0; i < 20; i++ {
+		l.Append(NewSystemItem("s", "line "+strings.Repeat("x", 30), styles))
+	}
+
+	rendered := l.Render()
+	renderedLines := strings.Split(rendered, "\n")
+	if len(renderedLines) != height {
+		t.Errorf("expected exactly %d lines, got %d", height, len(renderedLines))
+	}
+}
