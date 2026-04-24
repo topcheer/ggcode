@@ -27,8 +27,7 @@ func (m *Model) queuePendingSubmission(text string) {
 	}
 	// Render the user's input in the conversation view so it looks like a
 	// normal submission, rather than showing a "[queued N pending]" hint.
-	m.dualWriteSystem(m.renderConversationUserEntry("❯ ", text))
-	m.dualWriteSystem("\n")
+	m.chatWriteUser(nextChatID(), text)
 	m.chatListScrollToBottom()
 }
 
