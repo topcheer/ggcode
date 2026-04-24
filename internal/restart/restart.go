@@ -109,7 +109,7 @@ sleep 0.3
 cd "$WORK_DIR" 2>/dev/null || true
 
 # 4. Launch new process — exec replaces this script
-echo "[ggcode restart] starting $BINARY ${ARGS[*]}"
+echo "[ggcode restart] starting $BINARY ${ARGS[*]:-}"
 exec "$BINARY" "${ARGS[@]}"
 `
 

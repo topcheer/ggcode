@@ -23,10 +23,12 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/lsp"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/update"
 )
 
 func TestRenderMarkdown(t *testing.T) {
@@ -597,6 +599,92 @@ func TestUpdateCommandWithoutServiceShowsUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(renderedOutput(&m), "Update is unavailable") {
 		t.Fatalf("expected unavailable message, got %q", renderedOutput(&m))
+	}
+}
+
+func TestRestartCommandTriggersQuit(t *testing.T) {
+	m := newTestModel()
+
+	cmd := m.handleCommand("/restart")
+	if cmd == nil {
+		t.Fatal("expected /restart to return a tea.Cmd (tea.Quit)")
+	}
+	if !m.quitting {
+		t.Fatal("expected /restart to set m.quitting = true")
+	}
+}
+
+func TestRestartCommandWritesSystemMessage(t *testing.T) {
+	m := newTestModel()
+
+	m.handleCommand("/restart")
+	output := renderedOutput(&m)
+	if !strings.Contains(output, "Restarting ggcode") {
+		t.Fatalf("expected restart system message in output, got %q", output)
+	}
+}
+
+func TestRestartCommandPreservesSessionInArgs(t *testing.T) {
+	m := newTestModel()
+	// Set up a fake session so buildRestartArgs includes --resume.
+	m.session = &session.Session{ID: "test-session-42"}
+
+	args := m.buildRestartArgs()
+	found := false
+	for i, a := range args {
+		if a == "--resume" && i+1 < len(args) && args[i+1] == "test-session-42" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected --resume test-session-42 in args, got %v", args)
+	}
+}
+
+func TestRestartCommandPreservesBypassMode(t *testing.T) {
+	m := newTestModel()
+	m.mode = permission.BypassMode
+
+	args := m.buildRestartArgs()
+	found := false
+	for _, a := range args {
+		if a == "--bypass" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected --bypass in args when mode is BypassMode")
+	}
+}
+
+func TestRestartCommandNoBypassInOtherModes(t *testing.T) {
+	m := newTestModel()
+	m.mode = permission.SupervisedMode
+
+	args := m.buildRestartArgs()
+	for _, a := range args {
+		if a == "--bypass" {
+			t.Error("did not expect --bypass in SupervisedMode")
+		}
+	}
+}
+
+func TestRestartCommandPreservesConfigPath(t *testing.T) {
+	m := newTestModel()
+	m.updateSvc = &update.Service{ConfigPath: "/tmp/custom-gg.yaml"}
+
+	args := m.buildRestartArgs()
+	found := false
+	for i, a := range args {
+		if a == "--config" && i+1 < len(args) && args[i+1] == "/tmp/custom-gg.yaml" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected --config /tmp/custom-gg.yaml in args, got %v", args)
 	}
 }
 
