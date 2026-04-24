@@ -26,6 +26,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -544,6 +545,13 @@ loop:
 					bridge.SetFollowSink(nil)
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.follow_off"))
 				}
+			case 'r': // restart
+				fmt.Fprintf(os.Stderr, "%s\r\n", "[ggcode restart] initiating self-restart...")
+				if err := daemonRestart(cfgFile, workingDir, ses.ID, bypass); err != nil {
+					fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %s\r\n", err)
+				} else {
+					break loop
+				}
 			}
 		}
 	}
@@ -648,4 +656,34 @@ func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
 		return ""
 	}
 	return filtered[idx-1].ID
+}
+
+// daemonRestart launches a restart helper script and returns nil on success.
+// The caller should break out of the main loop so the daemon can exit,
+// allowing the helper to start a fresh daemon process.
+func daemonRestart(cfgFile, workDir, sessionID string, bypass bool) error {
+	binary, err := restart.ResolveBinary()
+	if err != nil {
+		return fmt.Errorf("resolve binary: %w", err)
+	}
+
+	var args []string
+	if cfgFile != "" {
+		args = append(args, "--config", cfgFile)
+	}
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+	}
+	args = append(args, "daemon", "--follow")
+	if bypass {
+		args = append(args, "--bypass")
+	}
+
+	req := restart.Request{
+		Binary:  binary,
+		Args:    args,
+		WorkDir: workDir,
+		PID:     os.Getpid(),
+	}
+	return restart.Launch(req)
 }
