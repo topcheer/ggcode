@@ -927,7 +927,17 @@ func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConf
 		}
 		return true
 	}
-	return providerHasUsableAPIKey(firstNonEmptyValue(ep.APIKey, vc.APIKey))
+	return providerHasUsableAPIKey(resolveAPIKey(ep.APIKey, vc.APIKey))
+}
+
+// resolveAPIKey picks the effective API key: endpoint key first,
+// but falls back to vendor key if the endpoint key is an unresolvable ${VAR} reference.
+func resolveAPIKey(epKey, vcKey string) string {
+	key := firstNonEmptyValue(epKey, vcKey)
+	if !providerHasUsableAPIKey(key) && vcKey != "" {
+		key = vcKey
+	}
+	return key
 }
 
 func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) string {
@@ -943,7 +953,10 @@ func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.Endpo
 		}
 		return m.t("panel.provider.auth.not_connected")
 	}
-	if providerHasUsableAPIKey(firstNonEmptyValue(ep.APIKey, vc.APIKey)) {
+	// Try endpoint key first; if it's an unresolvable ${VAR} reference,
+	// fall back to vendor key — the user may have set only the vendor key.
+	key := resolveAPIKey(ep.APIKey, vc.APIKey)
+	if providerHasUsableAPIKey(key) {
 		return m.t("panel.provider.api_key.configured")
 	}
 	return m.t("panel.provider.api_key.missing")
