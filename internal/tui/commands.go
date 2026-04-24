@@ -355,11 +355,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
 	m.ensureOutputHasBlankLine()
-	if !m.chatListActive() {
-		m.output.WriteString(m.renderConversationUserEntry("❯ ", displayText))
-		m.output.WriteString("\n")
-		m.chatEntries.Append(ChatEntry{Role: "user", RawText: displayText, Prefix: "❯ "})
-	}
 	m.chatWriteUser(nextChatID(), displayText)
 
 	// Save original user message to session
@@ -367,7 +362,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 
 	m.streamBuffer = &bytes.Buffer{}
 	m.shellBuffer = nil
-	m.streamStartPos = m.output.Len()
+	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	m.loading = true
 	// Reset status bar state
@@ -399,16 +394,11 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	prompt := buildInitPrompt(targetPath, existed, content)
 
 	m.ensureOutputHasBlankLine()
-	if !m.chatListActive() {
-		m.output.WriteString(m.styles.user.Render("❯ /init"))
-		m.output.WriteString("\n")
-		m.chatEntries.Append(ChatEntry{Role: "user", RawText: "/init", Prefix: "❯ "})
-	}
 	m.chatWriteUser(nextChatID(), "/init")
 	m.appendUserMessage("/init")
 
 	m.streamBuffer = &bytes.Buffer{}
-	m.streamStartPos = m.output.Len()
+	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	m.loading = true
 	m.statusActivity = m.t("init.collecting")

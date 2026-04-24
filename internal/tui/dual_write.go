@@ -7,11 +7,8 @@ import (
 	"github.com/topcheer/ggcode/internal/chat"
 )
 
-// dualWriteSystem writes a pre-rendered system/tool string to all paths.
+// dualWriteSystem writes a pre-rendered system/tool string to chatList.
 func (m *Model) dualWriteSystem(text string) {
-	// Legacy path
-	m.bridgeDualWriteSystem(text)
-	// Also add to chatList — merge with last SystemItem if possible
 	if m.chatList == nil {
 		return
 	}
@@ -31,7 +28,7 @@ func (m *Model) dualWriteSystem(text string) {
 	m.chatList.Append(item)
 }
 
-// sysf writes a formatted system line to all output paths.
+// sysf writes a formatted system line to chatList.
 func (m *Model) sysf(format string, args ...interface{}) {
 	text := fmt.Sprintf(format, args...)
 	m.dualWriteSystem(text)

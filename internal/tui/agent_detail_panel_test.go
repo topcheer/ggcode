@@ -287,7 +287,7 @@ func TestAgentCommandNotFoundShowsError(t *testing.T) {
 	if m.agentDetailPanel != nil {
 		t.Fatal("expected no panel for missing agent")
 	}
-	output := m.output.String()
+	output := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(output, "sa-999") {
 		t.Fatalf("expected error message with agent ID, got: %s", output)
 	}
@@ -305,7 +305,7 @@ func TestAgentCommandCancelStillWorks(t *testing.T) {
 	if m.agentDetailPanel != nil {
 		t.Fatal("expected cancel to not open panel")
 	}
-	output := m.output.String()
+	output := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(output, id) {
 		t.Fatalf("expected cancel output with agent ID, got: %s", output)
 	}

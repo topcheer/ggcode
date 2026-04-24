@@ -6,7 +6,7 @@ import (
 	"github.com/topcheer/ggcode/internal/chat"
 )
 
-// chatWrite appends an item to the new chatList.
+// chatWrite appends an item to chatList.
 func (m *Model) chatWrite(item chat.Item) {
 	if m.chatList != nil {
 		m.chatList.Append(item)
@@ -21,11 +21,6 @@ func (m *Model) chatWriteUser(id, text string) {
 // chatWriteSystem appends a system/status message to chatList.
 func (m *Model) chatWriteSystem(id, text string) {
 	m.chatWrite(chat.NewSystemItem(id, text, m.chatStyles))
-}
-
-// chatStartAssistant creates a streaming assistant entry in chatList.
-func (m *Model) chatStartAssistant(id string) {
-	m.chatWrite(chat.NewAssistantItem(id, m.chatStyles))
 }
 
 // chatUpdateAssistantText updates the streaming assistant text.
@@ -59,43 +54,10 @@ func (m *Model) chatReset() {
 	}
 }
 
-// chatListActive returns true when chatList has items and is the primary render path.
-// When active, legacy writes to m.output/chatEntries are skipped.
-func (m *Model) chatListActive() bool {
-	return m.chatList != nil && m.chatList.Len() > 0
-}
-
-// legacyWrite writes to m.output and chatEntries — the old rendering path.
-// Skipped when chatList is active (new path).
-func (m *Model) legacyWrite(text string) {
-	if m.chatListActive() {
-		return
-	}
-	m.output.WriteString(text)
-}
-
-func (m *Model) legacyWriteEntry(entry ChatEntry) {
-	if m.chatListActive() {
-		return
-	}
-	if entry.Prefix != "" && (entry.Role == "user" || entry.Role == "assistant") {
-		m.output.WriteString(m.renderConversationUserEntry(entry.Prefix, entry.RawText))
-		m.output.WriteString("\n")
-	} else if entry.Role == "assistant" {
-		// Pure markdown, no prefix
-	} else {
-		m.output.WriteString(entry.RawText)
-	}
-	m.chatEntries.Append(entry)
-}
-
 // chatListScrollToBottom scrolls conversation to bottom.
-// chatList path or viewport path — one or the other, no bridge.
 func (m *Model) chatListScrollToBottom() {
-	if m.chatList != nil && m.chatList.Len() > 0 {
+	if m.chatList != nil {
 		m.chatList.ScrollToEnd()
-	} else {
-		m.viewport.GotoBottom()
 	}
 }
 
@@ -294,16 +256,4 @@ func (m *Model) chatEnsureAssistant() {
 		return
 	}
 	m.chatList.Append(chat.NewAssistantItem(id, m.chatStyles))
-}
-
-// bridgeDualWriteSystem writes to legacy output + old chatEntries only.
-// System/compaction/status lines are NOT added to chatList — they are
-// rendering noise that would pollute the conversation view.
-// Only semantic messages (user, assistant, tool, todo) go into chatList.
-func (m *Model) bridgeDualWriteSystem(text string) {
-	if m.chatListActive() {
-		return
-	}
-	m.output.WriteString(text)
-	m.chatEntries.Append(ChatEntry{Role: "system", RawText: text})
 }

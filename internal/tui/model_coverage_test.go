@@ -313,49 +313,6 @@ func TestVendorNames_WithConfig(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// trimOutput
-// ---------------------------------------------------------------------------
-
-func TestTrimOutput_NoTrimNeeded(t *testing.T) {
-	m := newTestModel()
-	// Write less than maxOutputLines lines
-	for i := 0; i < 100; i++ {
-		m.output.WriteString("line\n")
-	}
-	originalLen := m.output.Len()
-	m.trimOutput()
-	if m.output.Len() != originalLen {
-		t.Errorf("expected output unchanged (%d bytes), got %d", originalLen, m.output.Len())
-	}
-}
-
-func TestTrimOutput_TrimsWhenOverLimit(t *testing.T) {
-	m := newTestModel()
-	// Write more than maxOutputLines lines
-	for i := 0; i < maxOutputLines+1000; i++ {
-		m.output.WriteString("this is a line of content\n")
-	}
-	originalLen := m.output.Len()
-	m.trimOutput()
-	if m.output.Len() >= originalLen {
-		t.Errorf("expected output to shrink (%d → smaller), stayed at %d", originalLen, m.output.Len())
-	}
-	// Should still have content (not emptied)
-	if m.output.Len() == 0 {
-		t.Error("expected some content to remain after trim")
-	}
-}
-
-func TestTrimOutput_EmptyBuffer(t *testing.T) {
-	m := newTestModel()
-	// Empty buffer → no crash
-	m.trimOutput()
-	if m.output.Len() != 0 {
-		t.Errorf("expected empty buffer to stay empty, got %d bytes", m.output.Len())
-	}
-}
-
-// ---------------------------------------------------------------------------
 // setActiveRuntimeSelection
 // ---------------------------------------------------------------------------
 

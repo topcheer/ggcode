@@ -132,16 +132,6 @@ func (m *Model) flushGroupedActivitiesToOutput() {
 	if grouped == "" {
 		return
 	}
-	// Skip legacy output when chatList is active — individual tool items already there
-	if !m.chatListActive() {
-		if m.output.Len() > 0 && !strings.HasSuffix(m.output.String(), "\n") {
-			m.output.WriteString("\n")
-		}
-		m.output.WriteString(grouped)
-		m.output.WriteString("\n")
-		m.chatEntries.Append(ChatEntry{Role: "tool", RawText: grouped})
-	}
-	// Do NOT call dualWriteSystem — that would duplicate in chatList
 	m.chatFinishAllRunningTools()
 	m.resetActivityGroups()
 }
