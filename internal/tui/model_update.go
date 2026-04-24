@@ -82,12 +82,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.chatList.ScrollDown(3)
 			}
-		} else {
-			if msg.Button == tea.MouseWheelUp {
-				m.viewport.ScrollUp(3)
-			} else {
-				m.viewport.ScrollDown(3)
-			}
 		}
 		return m, nil
 
@@ -506,17 +500,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.handleModeSwitch()
 		case "pgup":
-			if m.chatList != nil && m.chatList.Len() > 0 {
+			if m.chatList != nil {
 				m.chatList.ScrollUp(m.chatList.Height() / 2)
-			} else {
-				m.viewport.ScrollUp(m.viewport.VisibleLineCount() / 2)
 			}
 			return m, nil
 		case "pgdown":
-			if m.chatList != nil && m.chatList.Len() > 0 {
+			if m.chatList != nil {
 				m.chatList.ScrollDown(m.chatList.Height() / 2)
-			} else {
-				m.viewport.ScrollDown(m.viewport.VisibleLineCount() / 2)
 			}
 			return m, nil
 		case "up":
