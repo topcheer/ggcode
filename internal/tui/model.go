@@ -698,28 +698,6 @@ func truncateStr(s string, max int) string {
 	return util.Truncate(s, max)
 }
 
-func (m *Model) trimOutput() {
-	data := m.output.Bytes()
-	lines := bytes.Count(data, []byte("\n"))
-	if lines > maxOutputLines {
-		target := lines * 20 / 100
-		cut := 0
-		count := 0
-		for i, b := range data {
-			if b == '\n' {
-				count++
-				if count == target {
-					cut = i + 1
-					break
-				}
-			}
-		}
-		if cut > 0 {
-			m.output.Next(cut)
-		}
-	}
-}
-
 // imageAttachedMsg is sent when an image is successfully loaded.
 type imageAttachedMsg struct {
 	placeholder string

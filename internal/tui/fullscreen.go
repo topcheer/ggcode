@@ -40,9 +40,12 @@ func (f *FullscreenModel) Inner() *Model {
 	return &f.inner
 }
 
-// syncViewport copies the inner model's output to the viewport.
+// syncViewport copies the inner model's chatList content to the viewport.
 func (f *FullscreenModel) syncViewport() {
-	content := f.inner.renderOutput()
+	content := ""
+	if f.inner.chatList != nil && f.inner.chatList.Len() > 0 {
+		content = f.inner.chatList.Render()
+	}
 	f.viewport.SetContent(content)
 }
 
@@ -165,5 +168,8 @@ func (f FullscreenModel) renderStatusBar() string {
 // RenderContent renders the inner model output content (for viewport).
 // This is exposed so the inner model can be used independently.
 func (f *FullscreenModel) RenderContent() string {
-	return f.inner.renderOutput()
+	if f.inner.chatList != nil && f.inner.chatList.Len() > 0 {
+		return f.inner.chatList.Render()
+	}
+	return ""
 }

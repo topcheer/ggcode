@@ -229,7 +229,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.config != nil {
 				_ = m.config.SaveSidebarPreference(m.sidebarVisible)
 			}
-			m.chatEntries.InvalidateAll()
 			m.relayoutAfterSidebarChange()
 			return m, nil
 		}
@@ -757,10 +756,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closeToolActivityGroup()
 		m.flushGroupedActivitiesToOutput()
 		m.cancelFunc = nil
-		// Finalize streaming assistant entry in chatEntries
-		if last := m.chatEntries.LastMatching("assistant"); last != nil && last.Streaming {
-			last.Streaming = false
-		}
 		m.chatFinishAssistant(m.currentAssistantID())
 		wasCanceled := m.runCanceled
 		wasFailed := m.runFailed
@@ -1083,11 +1078,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Agent is requesting approval
 		m.pendingApproval = &msg
-		if msg.ToolName == "exit_plan_mode" {
-			m.approvalOptions = planApprovalOptions()
-		} else {
-			m.approvalOptions = defaultApprovalOptions()
-		}
+		m.approvalOptions = defaultApprovalOptions()
 		m.approvalCursor = 0
 		return m, nil
 
@@ -1174,7 +1165,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.startToolActivity(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer(true)
-				m.streamStartPos = m.output.Len()
+				m.streamStartPos = -1
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
@@ -1186,7 +1177,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Reset stream prefix so next text block gets ●
 			m.streamPrefixWritten = false
 			// Reset stream buffer position for next text chunk
-			m.streamStartPos = m.output.Len()
+			m.streamStartPos = -1
 		}
 		m.syncConversationViewport()
 		if m.viewport.AutoFollow() {
@@ -1219,7 +1210,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startToolActivity(ts.ToolStatusMsg)
 				if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 					m.renderStreamBuffer(true)
-					m.streamStartPos = m.output.Len()
+					m.streamStartPos = -1
 				}
 				startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
 				spinnerCmd = combineCmds(spinnerCmd, startCmd)
@@ -1229,7 +1220,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.spinner.Stop()
 				spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 				m.streamPrefixWritten = false
-				m.streamStartPos = m.output.Len()
+				m.streamStartPos = -1
 			}
 		}
 		m.syncConversationViewport()
@@ -1251,7 +1242,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.startToolActivity(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer(true)
-				m.streamStartPos = m.output.Len()
+				m.streamStartPos = -1
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
@@ -1261,7 +1252,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinner.Stop()
 			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 			m.streamPrefixWritten = false
-			m.streamStartPos = m.output.Len()
+			m.streamStartPos = -1
 		}
 		m.syncConversationViewport()
 		if m.viewport.AutoFollow() {

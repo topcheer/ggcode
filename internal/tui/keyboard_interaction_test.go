@@ -291,24 +291,23 @@ func TestScenario_EnterAppliesAutocomplete(t *testing.T) {
 func TestScenario_UserScrollsWithPageKeys(t *testing.T) {
 	m := newTestModel()
 	for i := 0; i < 200; i++ {
-		m.output.WriteString("line content that fills the viewport for scrolling test\n")
+		m.chatWriteSystem(nextSystemID(), "line content that fills the viewport for scrolling test")
 	}
 	m.handleResize(120, 40)
-	m.syncConversationViewport()
-	m.viewport.GotoBottom()
-	bottomY := m.viewport.YOffset()
+	m.chatListScrollToBottom()
+	bottomY := m.chatList.YOffset()
 
 	updated, _ := m.Update(tea.KeyPressMsg{Text: "pgup"})
 	m = updated.(Model)
-	if m.viewport.YOffset() >= bottomY {
-		t.Errorf("expected viewport scrolled up, before=%d after=%d", bottomY, m.viewport.YOffset())
+	if m.chatList.YOffset() >= bottomY {
+		t.Errorf("expected chatList scrolled up, before=%d after=%d", bottomY, m.chatList.YOffset())
 	}
-	afterPgUp := m.viewport.YOffset()
+	afterPgUp := m.chatList.YOffset()
 
 	updated, _ = m.Update(tea.KeyPressMsg{Text: "pgdown"})
 	m = updated.(Model)
-	if m.viewport.YOffset() <= afterPgUp {
-		t.Errorf("expected viewport scrolled down, before=%d after=%d", afterPgUp, m.viewport.YOffset())
+	if m.chatList.YOffset() <= afterPgUp {
+		t.Errorf("expected chatList scrolled down, before=%d after=%d", afterPgUp, m.chatList.YOffset())
 	}
 }
 

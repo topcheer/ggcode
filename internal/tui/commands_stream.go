@@ -5,29 +5,9 @@ import (
 	"strings"
 )
 
-func (m *Model) ensureOutputEndsWithNewline() {
-	if m.output == nil || m.output.Len() == 0 {
-		return
-	}
-	if strings.HasSuffix(m.output.String(), "\n") {
-		return
-	}
-	m.dualWriteSystem("\n")
-}
+func (m *Model) ensureOutputEndsWithNewline() {}
 
-func (m *Model) ensureOutputHasBlankLine() {
-	if m.output == nil || m.output.Len() == 0 {
-		return
-	}
-	switch {
-	case strings.HasSuffix(m.output.String(), "\n\n"):
-		return
-	case strings.HasSuffix(m.output.String(), "\n"):
-		m.dualWriteSystem("\n")
-	default:
-		m.dualWriteSystem("\n\n")
-	}
-}
+func (m *Model) ensureOutputHasBlankLine() {}
 
 func (m *Model) appendStreamChunk(chunk string) {
 	if chunk == "" {

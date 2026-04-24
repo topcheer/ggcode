@@ -627,13 +627,10 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	}
 	m.dualWriteSystem(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
 	m.dualWriteSystem("\n")
-	m.chatEntries.Append(ChatEntry{Role: "user", RawText: strings.TrimSpace(commandText), Prefix: "❯ "})
 	m.chatWriteUser(nextChatID(), strings.TrimSpace(commandText))
 	m.appendUserMessage(strings.TrimSpace(commandText))
-	m.ensureOutputHasBlankLine()
 	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_run_start")))
 	m.dualWriteSystem("\n")
-	m.syncConversationViewport()
 	m.chatListScrollToBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -655,7 +652,7 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.harnessRunRemainder = ""
 	m.harnessRunLiveTail = ""
 	m.streamBuffer = &bytes.Buffer{}
-	m.streamStartPos = m.output.Len()
+	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	opts.ConfirmDirtyWorkspace = m.newHarnessCheckpointConfirmer()
 	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
@@ -685,13 +682,10 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	}
 	m.dualWriteSystem(m.renderConversationUserEntry("❯ ", strings.TrimSpace(commandText)))
 	m.dualWriteSystem("\n")
-	m.chatEntries.Append(ChatEntry{Role: "user", RawText: strings.TrimSpace(commandText), Prefix: "❯ "})
 	m.chatWriteUser(nextChatID(), strings.TrimSpace(commandText))
 	m.appendUserMessage(strings.TrimSpace(commandText))
-	m.ensureOutputHasBlankLine()
 	m.dualWriteSystem(m.styles.assistant.Render(m.t("command.harness_rerun_start")))
 	m.dualWriteSystem("\n")
-	m.syncConversationViewport()
 	m.chatListScrollToBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -713,7 +707,7 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.harnessRunRemainder = ""
 	m.harnessRunLiveTail = ""
 	m.streamBuffer = &bytes.Buffer{}
-	m.streamStartPos = m.output.Len()
+	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	opts := harness.RunTaskOptions{ConfirmDirtyWorkspace: m.newHarnessCheckpointConfirmer()}
 	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
