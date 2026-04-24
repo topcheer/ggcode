@@ -136,11 +136,6 @@ func (m Model) conversationPanelHeight() int {
 	return availableHeight
 }
 
-func streamingBulletFrame(frame int) string {
-	frames := []string{"●", "◉", "○", "◉"}
-	return frames[frame%len(frames)]
-}
-
 func (m Model) renderHeader() string {
 	logoWidth := 44
 	if m.viewWidth() >= 120 {
