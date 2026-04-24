@@ -68,11 +68,17 @@ func (t *BaseToolItem) RenderParams() string {
 		if path, ok := m["path"].(string); ok && path != "" {
 			return path
 		}
+		if fp, ok := m["file_path"].(string); ok && fp != "" {
+			return fp
+		}
 		if cmd, ok := m["command"].(string); ok && cmd != "" {
 			return cmd
 		}
 		if query, ok := m["query"].(string); ok && query != "" {
 			return query
+		}
+		if pattern, ok := m["pattern"].(string); ok && pattern != "" {
+			return pattern
 		}
 	}
 	// Fallback: first N chars of input
@@ -278,56 +284,54 @@ func NewGenericToolItem(id, toolName string, status ToolStatus, input string, st
 }
 
 // NewToolItem creates the appropriate tool item type based on tool name.
+// parseToolInputArg extracts a single string argument from raw JSON input.
+// Uses map[string]any to correctly handle mixed-type JSON objects
+// (e.g. {"command":"ls","timeout":30} where timeout is a number).
+func parseToolInputArg(input, key string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(input), &m) != nil {
+		return ""
+	}
+	v, _ := m[key].(string)
+	return v
+}
+
+// parseToolInputArgAny tries multiple keys and returns the first non-empty match.
+func parseToolInputArgAny(input string, keys ...string) string {
+	for _, key := range keys {
+		if v := parseToolInputArg(input, key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func NewToolItem(id, toolName string, status ToolStatus, input string, styles Styles) Item {
 	pretty := PrettifyToolName(toolName)
 
 	switch {
 	case toolName == "bash" || toolName == "Bash" || toolName == "run_command":
-		var cmd string
-		var m map[string]string
-		if json.Unmarshal([]byte(input), &m) == nil {
-			cmd = m["command"]
-		}
+		cmd := parseToolInputArg(input, "command")
 		return NewBashToolItem(id, cmd, status, styles)
 
 	case toolName == "read" || toolName == "Read" || toolName == "view" || toolName == "View" || toolName == "read_file":
-		var path string
-		var m map[string]string
-		if json.Unmarshal([]byte(input), &m) == nil {
-			path = m["path"]
-		}
+		path := parseToolInputArgAny(input, "path", "file_path")
 		return NewFileToolItem(id, pretty, path, status, styles)
 
 	case toolName == "write" || toolName == "Write" || toolName == "write_file":
-		var path string
-		var m map[string]string
-		if json.Unmarshal([]byte(input), &m) == nil {
-			path = m["path"]
-		}
+		path := parseToolInputArgAny(input, "path", "file_path")
 		return NewFileToolItem(id, pretty, path, status, styles)
 
 	case toolName == "edit" || toolName == "Edit" || toolName == "multiEdit" || toolName == "MultiEdit" || toolName == "edit_file":
-		var path string
-		var m map[string]string
-		if json.Unmarshal([]byte(input), &m) == nil {
-			path = m["path"]
-		}
+		path := parseToolInputArgAny(input, "path", "file_path")
 		return NewFileToolItem(id, pretty, path, status, styles)
 
 	case toolName == "grep" || toolName == "Grep" || toolName == "search_files":
-		var pattern string
-		var m map[string]string
-		if json.Unmarshal([]byte(input), &m) == nil {
-			pattern = m["pattern"]
-		}
+		pattern := parseToolInputArg(input, "pattern")
 		return NewSearchToolItem(id, pretty, pattern, status, styles)
 
 	case toolName == "glob" || toolName == "Glob" || toolName == "find":
-		var pattern string
-		var m map[string]string
-		if json.Unmarshal([]byte(input), &m) == nil {
-			pattern = m["pattern"]
-		}
+		pattern := parseToolInputArg(input, "pattern")
 		return NewSearchToolItem(id, pretty, pattern, status, styles)
 
 	default:

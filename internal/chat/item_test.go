@@ -243,3 +243,51 @@ func fmtTypeName(v interface{}) string {
 	// Remove "chat." prefix for comparison
 	return s
 }
+
+func TestNewToolItemExtractsParamsFromMixedJSON(t *testing.T) {
+	styles := DefaultStyles()
+
+	tests := []struct {
+		name      string
+		toolName  string
+		input     string
+		wantKey   string
+		wantParam string
+	}{
+		{"bash with timeout", "run_command", `{"command":"ls -la","timeout":30}`, "BashToolItem", "ls -la"},
+		{"read with offset", "read_file", `{"path":"/tmp/test.go","offset":1,"limit":50}`, "FileToolItem", "/tmp/test.go"},
+		{"edit with file_path", "edit_file", `{"file_path":"/tmp/test.go","old_text":"foo","new_text":"bar"}`, "FileToolItem", "/tmp/test.go"},
+		{"write with path", "write_file", `{"path":"/tmp/out.go","content":"package main\n"}`, "FileToolItem", "/tmp/out.go"},
+		{"search with pattern", "search_files", `{"pattern":"TODO","path":"src","type":"go"}`, "SearchToolItem", "TODO"},
+		{"glob with pattern", "glob", `{"pattern":"**/*.go","directory":"."}`, "SearchToolItem", "**/*.go"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := NewToolItem("test-id", tt.toolName, StatusRunning, tt.input, styles)
+			if item == nil {
+				t.Fatal("expected non-nil item")
+			}
+
+			typeName := fmt.Sprintf("%T", item)
+			if !strings.Contains(typeName, tt.wantKey) {
+				t.Errorf("expected type to contain %q, got %T", tt.wantKey, item)
+			}
+
+			rendered := item.Render(80)
+			// Strip ANSI for comparison
+			clean := rendered
+			for strings.Contains(clean, "\x1b[") {
+				idx := strings.Index(clean, "\x1b[")
+				end := strings.Index(clean[idx:], "m")
+				if end == -1 {
+					break
+				}
+				clean = clean[:idx] + clean[idx+end+1:]
+			}
+			if !strings.Contains(clean, tt.wantParam) {
+				t.Errorf("expected render to contain %q, got:\n%s", tt.wantParam, rendered)
+			}
+		})
+	}
+}
