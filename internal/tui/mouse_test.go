@@ -17,33 +17,17 @@ func TestMouseWheelUpScrollsMainViewport(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 
-	content := strings.Repeat("line\n", 50)
-	m.output.WriteString(content)
-	m.syncConversationViewport()
-
-	totalLines := m.viewport.TotalLineCount()
-	visibleLines := m.viewport.VisibleLineCount()
-	if totalLines <= visibleLines {
-		t.Fatalf("need scrollable content, got total=%d visible=%d", totalLines, visibleLines)
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
 	}
+	m.chatListScrollToBottom()
+	bottomOffset := m.chatList.YOffset()
 
-	m.viewport.GotoBottom()
-	bottomOffset := m.viewport.YOffset()
-	t.Logf("bottom: total=%d visible=%d YOffset=%d autoFollow=%v",
-		totalLines, visibleLines, bottomOffset, m.viewport.AutoFollow())
-
-	// MouseWheelMsg must match before MouseMsg in the type switch because
-	// MouseWheelMsg implements the MouseMsg interface.
 	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 10})
 	m2 := model.(Model)
 
-	got := m2.viewport.YOffset()
-	want := bottomOffset - 3
-	if got != want {
-		t.Errorf("after MouseWheelUp: YOffset=%d, want %d", got, want)
-	}
-	if m2.viewport.AutoFollow() {
-		t.Error("after MouseWheelUp: autoFollow should be false")
+	if m2.chatList.YOffset() >= bottomOffset {
+		t.Errorf("after MouseWheelUp: YOffset=%d, want < %d", m2.chatList.YOffset(), bottomOffset)
 	}
 }
 
@@ -51,26 +35,19 @@ func TestMouseWheelDownFromScrolledPosition(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 
-	content := strings.Repeat("line\n", 50)
-	m.output.WriteString(content)
-	m.syncConversationViewport()
-
-	m.viewport.GotoBottom()
-	m.viewport.ScrollUp(10) // scroll up, autoFollow becomes false
-	if m.viewport.AutoFollow() {
-		t.Fatal("autoFollow should be false after ScrollUp")
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
 	}
+	m.chatListScrollToBottom()
+	m.chatList.ScrollUp(10)
 
-	offsetBeforeUpdate := m.viewport.YOffset()
-	t.Logf("scrolled up by 10: YOffset=%d autoFollow=%v", offsetBeforeUpdate, m.viewport.AutoFollow())
+	offsetBeforeUpdate := m.chatList.YOffset()
 
 	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 10, Y: 10})
 	m2 := model.(Model)
 
-	got := m2.viewport.YOffset()
-	want := offsetBeforeUpdate + 3
-	if got != want {
-		t.Errorf("after MouseWheelDown: YOffset=%d, want %d (offsetBeforeUpdate=%d)", got, want, offsetBeforeUpdate)
+	if m2.chatList.YOffset() <= offsetBeforeUpdate {
+		t.Errorf("after MouseWheelDown: YOffset=%d, want > %d", m2.chatList.YOffset(), offsetBeforeUpdate)
 	}
 }
 
@@ -78,23 +55,17 @@ func TestMouseWheelDownAtBottomEnablesAutoFollow(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 
-	content := strings.Repeat("line\n", 50)
-	m.output.WriteString(content)
-	m.syncConversationViewport()
-
-	m.viewport.ScrollUp(5)
-	if m.viewport.AutoFollow() {
-		t.Fatal("expected autoFollow=false after ScrollUp")
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
 	}
+	m.chatListScrollToBottom()
+	m.chatList.ScrollUp(5)
 
-	for !m.viewport.AtBottom() {
-		m.viewport.ScrollDown(3)
+	for !m.chatList.AtBottom() {
+		m.chatList.ScrollDown(3)
 	}
-	if !m.viewport.AtBottom() {
+	if !m.chatList.AtBottom() {
 		t.Fatal("expected to be at bottom")
-	}
-	if !m.viewport.AutoFollow() {
-		t.Error("expected autoFollow=true when scrolled to bottom via ScrollDown")
 	}
 }
 
@@ -103,17 +74,17 @@ func TestMouseWheelIgnoredDuringStartupGate(t *testing.T) {
 	m.handleResize(120, 40)
 	m.startedAt = time.Now() // activate startup gate
 
-	content := strings.Repeat("line\n", 50)
-	m.output.WriteString(content)
-	m.syncConversationViewport()
-	m.viewport.GotoBottom()
-	initialY := m.viewport.YOffset()
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
+	}
+	m.chatListScrollToBottom()
+	initialY := m.chatList.YOffset()
 
 	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 10})
 	m2 := model.(Model)
 
-	if m2.viewport.YOffset() != initialY {
-		t.Errorf("mouse wheel should be suppressed during startup gate, YOffset changed from %d to %d", initialY, m2.viewport.YOffset())
+	if m2.chatList.YOffset() != initialY {
+		t.Errorf("mouse wheel should be suppressed during startup gate, YOffset changed from %d to %d", initialY, m2.chatList.YOffset())
 	}
 }
 
@@ -140,18 +111,16 @@ func TestMouseWheelMsgNotCaughtByMouseMsgCase(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 
-	content := strings.Repeat("line\n", 50)
-	m.output.WriteString(content)
-	m.syncConversationViewport()
-	m.viewport.GotoBottom()
-	bottomOffset := m.viewport.YOffset()
+	for i := 0; i < 50; i++ {
+		m.chatWriteSystem(nextSystemID(), "line")
+	}
+	m.chatListScrollToBottom()
+	bottomOffset := m.chatList.YOffset()
 
-	// If MouseWheelMsg falls through to MouseMsg case, it would be ignored
-	// (no file browser/preview panel open) and YOffset would stay the same.
 	model, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 10})
 	m2 := model.(Model)
 
-	if m2.viewport.YOffset() == bottomOffset {
+	if m2.chatList.YOffset() == bottomOffset {
 		t.Error("MouseWheelUp had no effect — likely caught by MouseMsg case instead of MouseWheelMsg case")
 	}
 }

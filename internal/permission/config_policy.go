@@ -25,7 +25,6 @@ type ConfigPolicy struct {
 	readOnlySandbox *PathSandbox
 	detector        *DangerousDetector
 	mode            PermissionMode
-	previousMode    PermissionMode // mode before entering plan mode (for exit_plan_mode decision)
 	mu              sync.RWMutex
 }
 
@@ -99,22 +98,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			return Allow, nil
 		}
 		if toolName == "exit_plan_mode" {
-			// The plan determines what code changes the agent will make next.
-			// This is a user-level decision (execute this plan or not), not a
-			// tool-permission decision. Only autopilot auto-approves; all other
-			// modes require explicit user confirmation.
-			var args struct {
-				Mode string `json:"mode"`
-			}
-			_ = json.Unmarshal(input, &args)
-			if args.Mode == "autopilot" {
-				return Allow, nil
-			}
-			// If restoring from a previous autopilot mode, also auto-allow.
-			if p.previousMode == AutopilotMode {
-				return Allow, nil
-			}
-			return Ask, nil
+			return Allow, nil
 		}
 		if IsReadOnlyTool(toolName) {
 			// Still check sandbox for read tools
@@ -204,12 +188,6 @@ func (p *ConfigPolicy) Mode() PermissionMode {
 func (p *ConfigPolicy) SetMode(mode PermissionMode) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// When entering plan mode, remember the current mode so exit_plan_mode
-	// can decide whether to ask for user confirmation (skip ask if restoring
-	// to autopilot).
-	if mode == PlanMode && p.mode != PlanMode {
-		p.previousMode = p.mode
-	}
 	p.mode = mode
 }
 

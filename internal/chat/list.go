@@ -166,6 +166,18 @@ func (l *List) AtBottom() bool {
 	return total <= l.height
 }
 
+// YOffset returns the current scroll position as a line offset from the top.
+func (l *List) YOffset() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	offset := 0
+	for i := 0; i < l.offsetIdx && i < len(l.items); i++ {
+		offset += l.items[i].Height(l.width)
+	}
+	offset += l.offsetLine
+	return offset
+}
+
 // Render produces the visible portion of the list as a single string.
 // Only items within the viewport are rendered.
 // When follow is active, scroll position is re-synced automatically.

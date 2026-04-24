@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
 	"image/color"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2/compat"
 	"github.com/muesli/reflow/wordwrap"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -108,22 +108,6 @@ func conversationInnerHeight(panelHeight int) int {
 	return innerHeight
 }
 
-func (m Model) conversationViewport() ViewportModel {
-	vp := m.viewport
-	panelHeight := m.conversationPanelHeight()
-	vp.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
-	content := m.renderOutput()
-	// In narrow mode (no sidebar), prepend a borderless logo at the top of
-	// the conversation content so it scrolls with the messages.
-	if m.narrowMode() {
-		logoWidth := m.conversationInnerWidth()
-		logo := renderHeaderLogo(logoWidth, m.t("header.terminal_native"))
-		content = logo + "\n\n" + content
-	}
-	vp.SetContent(content)
-	return vp
-}
-
 func (m Model) conversationPanelHeight() int {
 	header := ""
 	if m.topHeaderEnabled() {
@@ -150,64 +134,6 @@ func (m Model) conversationPanelHeight() int {
 	}
 
 	return availableHeight
-}
-
-func (m Model) renderOutput() string {
-	var sb strings.Builder
-	width := m.conversationInnerWidth()
-
-	// chatList content is rendered directly by renderConversationPanel.
-	// This function only provides content for the legacy viewport path.
-
-	// Legacy chatEntries path
-	if rendered := m.chatEntries.Render(width); rendered != "" {
-		sb.WriteString(rendered)
-		liveActivities := m.renderLiveActivities()
-		if liveActivities != "" {
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(liveActivities)
-		}
-		sb.WriteString("\n\n")
-		return sb.String()
-	}
-
-	// Legacy path — used when chatEntries is empty (initial empty state, etc.)
-	output := m.output.String()
-	if output == "" && !m.loading && m.pendingApproval == nil && m.pendingDiffConfirm == nil && m.pendingHarnessCheckpointConfirm == nil {
-		sb.WriteString(m.styles.assistant.Render(m.t("empty.ask")))
-		sb.WriteString("\n")
-		sb.WriteString(m.styles.prompt.Render(m.t("empty.tips")))
-		sb.WriteString("\n\n")
-		return sb.String()
-	}
-	output = m.decorateStreamingBullet(output)
-	output = strings.TrimRight(output, "\n")
-	if output != "" {
-		sb.WriteString(output)
-	}
-	liveActivities := m.renderLiveActivities()
-	if liveActivities != "" {
-		if sb.Len() > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString(liveActivities)
-	}
-	sb.WriteString("\n\n")
-	return sb.String()
-}
-
-func (m Model) decorateStreamingBullet(output string) string {
-	if !m.loading || !m.streamPrefixWritten || m.streamStartPos < 0 || m.streamStartPos >= len(output) {
-		return output
-	}
-	staticPrefix := assistantBulletStyle.Render("● ")
-	if !strings.HasPrefix(output[m.streamStartPos:], staticPrefix) {
-		return output
-	}
-	animatedPrefix := assistantBulletStyle.Render(streamingBulletFrame(m.spinner.CurrentFrame()) + " ")
-	return output[:m.streamStartPos] + animatedPrefix + output[m.streamStartPos+len(staticPrefix):]
 }
 
 func streamingBulletFrame(frame int) string {
@@ -877,15 +803,22 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
 
-	var content string
-	if m.chatList != nil && m.chatList.Len() > 0 {
-		// chatList manages its own virtual scroll — no viewport middleman
+	if m.chatList != nil {
 		m.chatList.SetSize(innerW, innerH)
-		content = m.chatList.Render()
 	} else {
-		// Legacy path: viewport + renderOutput
-		vp := m.conversationViewport()
-		content = vp.View().Content
+		m.chatList = chat.NewList(innerW, innerH)
+	}
+
+	var content string
+	if m.chatList.Len() == 0 {
+		var sb strings.Builder
+		sb.WriteString(m.styles.assistant.Render(m.t("empty.ask")))
+		sb.WriteString("\n")
+		sb.WriteString(m.styles.prompt.Render(m.t("empty.tips")))
+		sb.WriteString("\n\n")
+		content = sb.String()
+	} else {
+		content = m.chatList.Render()
 	}
 
 	width := m.boxInnerWidth(m.mainColumnWidth())
@@ -1119,27 +1052,6 @@ func (m Model) renderContextPanel() string {
 	case m.pendingQuestionnaire != nil:
 		return m.renderQuestionnairePanel()
 	case m.pendingApproval != nil:
-		// Plan confirmation: extract and render the plan content for user review
-		if m.pendingApproval.ToolName == "exit_plan_mode" {
-			planContent := ""
-			var planArgs struct {
-				Plan string `json:"plan"`
-				Mode string `json:"mode"`
-			}
-			if err := json.Unmarshal([]byte(m.pendingApproval.Input), &planArgs); err == nil {
-				planContent = strings.TrimSpace(planArgs.Plan)
-			}
-			if planContent == "" {
-				planContent = m.t("plan.empty")
-			}
-			body := fmt.Sprintf(" %s\n\n%s\n\n%s\n%s",
-				m.t("plan.confirm_execute"),
-				truncateLines(planContent, 20),
-				m.renderApprovalOptions(m.approvalOptions, m.approvalCursor),
-				lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n shortcuts"),
-			)
-			return m.renderContextBox(m.t("plan.confirm_execute"), body, lipgloss.Color("39"))
-		}
 		title := m.t("panel.approval_required")
 		accent := lipgloss.Color("11")
 		if m.mode == permission.BypassMode || m.mode == permission.AutopilotMode {

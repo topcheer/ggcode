@@ -110,11 +110,7 @@ func (m *Model) appendShellChunk(chunk string) {
 	}
 	m.shellBuffer.WriteString(chunk)
 	m.dualWriteSystem(chunk)
-	m.trimOutput()
-	m.syncConversationViewport()
-	if m.viewport.AutoFollow() {
-		m.chatListScrollToBottom()
-	}
+	m.chatListScrollToBottom()
 }
 
 func (m *Model) startShellCommand(command string) tea.Cmd {

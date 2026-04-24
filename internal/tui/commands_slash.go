@@ -22,11 +22,9 @@ import (
 )
 
 func (m *Model) resetConversationView() {
-	m.output.Reset()
-	m.chatEntries.Reset()
 	m.chatReset()
 	m.streamBuffer = nil
-	m.streamStartPos = 0
+	m.streamStartPos = -1
 	m.streamPrefixWritten = false
 	m.loading = false
 	m.statusActivity = ""
@@ -392,14 +390,20 @@ func (m *Model) handleBugCommand() tea.Cmd {
 			b.WriteString(m.t("bug.mcp", len(m.mcpServers)))
 		}
 
-		// Recent errors from output
-		output := m.output.String()
-		if idx := strings.LastIndex(output, "Error:"); idx >= 0 {
-			end := idx + 500
-			if end > len(output) {
-				end = len(output)
+		// Recent errors from chatList items
+		if m.chatList != nil {
+			for i := m.chatList.Len() - 1; i >= 0; i-- {
+				item := m.chatList.ItemAt(i)
+				text := stripAnsiForChat(item.Render(200))
+				if idx := strings.LastIndex(text, "Error:"); idx >= 0 {
+					end := idx + 500
+					if end > len(text) {
+						end = len(text)
+					}
+					b.WriteString(m.t("bug.last_error", text[idx:end]))
+					break
+				}
 			}
-			b.WriteString(m.t("bug.last_error", output[idx:end]))
 		}
 
 		b.WriteString(m.t("bug.hint"))

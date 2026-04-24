@@ -30,7 +30,6 @@ func (m *Model) handleResize(width, height int) {
 	panelHeight := m.conversationPanelHeight()
 	m.viewport.SetSize(m.conversationInnerWidth(), conversationInnerHeight(panelHeight))
 	prewarmMarkdownRenderers(m.previewContentWidth(), m.fileBrowserPreviewWidth())
-	m.chatEntries.InvalidateAll()
 	// chatList items cache by width — will re-render automatically on next Render()
 	m.syncPreviewViewport(false)
 	m.syncFileBrowser(false)
@@ -99,11 +98,5 @@ func (m *Model) syncConversationViewport() {
 	// Update chatList (primary render path when items exist)
 	if m.chatList != nil {
 		m.chatList.SetSize(innerW, innerH)
-	}
-
-	// Only update legacy viewport when chatList is empty (fallback)
-	if m.chatList == nil || m.chatList.Len() == 0 {
-		m.viewport.SetSize(innerW, innerH)
-		m.viewport.SetContent(m.renderOutput())
 	}
 }
