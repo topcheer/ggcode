@@ -54,12 +54,6 @@ func (m Model) View() tea.View {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
-	// SUSPECT: manual height adjustment (-2) to prevent content overflow.
-	// The exact root cause is unclear — likely a rounding or border/padding
-	// mismatch between the calculated and actual rendered heights.
-	// Revisit if the conversation panel clips or leaves excessive gap.
-	availableHeight -= 2
-
 	if availableHeight < 8 {
 		availableHeight = 8
 	}
@@ -142,9 +136,6 @@ func (m Model) conversationPanelHeight() int {
 	if deviceBanner != "" {
 		availableHeight -= lipgloss.Height(deviceBanner)
 	}
-
-	// SUSPECT: same manual -2 as in View() — see the comment there.
-	availableHeight -= 2
 
 	if availableHeight < 8 {
 		availableHeight = 8
