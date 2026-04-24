@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/version"
@@ -950,4 +951,55 @@ func (m *Model) handleConfigRemoveEndpoint(args []string) tea.Cmd {
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("\u2713 Removed endpoint %q from vendor %q", name, vendor))
 	return nil
+}
+
+func (m *Model) handleRestartCommand() tea.Cmd {
+	binary, err := restart.ResolveBinary()
+	if err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restart failed: %s", err))
+		return nil
+	}
+
+	args := m.buildRestartArgs()
+
+	m.chatWriteSystem(nextSystemID(), "Restarting ggcode...")
+
+	wd, _ := os.Getwd()
+	req := restart.Request{
+		Binary:  binary,
+		Args:    args,
+		WorkDir: wd,
+		PID:     os.Getpid(),
+	}
+
+	if err := restart.Launch(req); err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restart failed: %s", err))
+		return nil
+	}
+
+	m.quitting = true
+	return tea.Quit
+}
+
+// buildRestartArgs reconstructs the CLI arguments needed to relaunch ggcode
+// with the same configuration and resume the current session.
+func (m *Model) buildRestartArgs() []string {
+	var args []string
+
+	// Preserve config file from the update service.
+	if m.updateSvc != nil && m.updateSvc.ConfigPath != "" {
+		args = append(args, "--config", m.updateSvc.ConfigPath)
+	}
+
+	// Resume current session.
+	if m.session != nil && m.session.ID != "" {
+		args = append(args, "--resume", m.session.ID)
+	}
+
+	// Preserve bypass mode.
+	if m.mode == permission.BypassMode {
+		args = append(args, "--bypass")
+	}
+
+	return args
 }

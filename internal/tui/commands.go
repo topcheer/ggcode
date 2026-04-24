@@ -313,6 +313,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleKnightCommand(parts)
 		case "/update":
 			return m.handleUpdateCommand()
+		case "/restart":
+			return m.handleRestartCommand()
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {
