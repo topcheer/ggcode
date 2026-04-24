@@ -30,15 +30,11 @@ func (m *Model) renderHarnessLiveTail(text string) {
 		return
 	}
 	if !m.streamPrefixWritten {
-		m.ensureOutputHasBlankLine()
-		m.streamStartPos = m.output.Len()
-		m.dualWriteSystem(assistantBulletStyle.Render("● "))
 		m.streamPrefixWritten = true
+		m.nextAssistantID()
+		m.chatEnsureAssistant()
 	}
 	m.harnessRunLiveTail = text
-	m.rewriteActiveStreamOutput(true)
-	m.trimOutput()
-	m.syncConversationViewport()
 	m.chatListScrollToBottom()
 }
 

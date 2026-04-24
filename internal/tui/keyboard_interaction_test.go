@@ -46,7 +46,7 @@ func TestScenario_UserExitsWithCtrlCTwice(t *testing.T) {
 	if m.input.Value() != "" {
 		t.Error("step1: expected input cleared when exit prompt appears")
 	}
-	output := m.output.String()
+	output := stripAnsi(renderedOutput(&m))
 	if len(output) == 0 {
 		t.Error("step1: expected exit confirmation text in output")
 	}
@@ -384,7 +384,7 @@ func TestScenario_BusySafeCommandExecutesImmediately(t *testing.T) {
 	if m.pending.count() != 0 {
 		t.Errorf("expected 0 pending for busy-safe command, got %d", m.pending.count())
 	}
-	if m.output.Len() == 0 {
+	if len(stripAnsi(renderedOutput(&m))) == 0 {
 		t.Error("expected help text in output")
 	}
 }
@@ -611,7 +611,7 @@ func TestScenario_UserAlwaysAllowsTool(t *testing.T) {
 	if policy.GetDecision("run_command") != permission.Allow {
 		t.Error("expected run_command to be allowed after 'always allow'")
 	}
-	output := m.output.String()
+	output := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(output, "Always allow") && !strings.Contains(output, "已总是允许") {
 		t.Errorf("expected 'always allow' confirmation in output, got %q", output)
 	}
@@ -904,7 +904,7 @@ func TestScenario_UserRunsClearCommand(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd after /clear")
 	}
-	if m.output.Len() != 0 {
+	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Error("expected output buffer cleared")
 	}
 	if m.loading {
@@ -918,7 +918,7 @@ func TestScenario_UserRunsHelpCommand(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd after /help")
 	}
-	if m.output.Len() == 0 {
+	if len(stripAnsi(renderedOutput(&m))) == 0 {
 		t.Error("expected help text in output")
 	}
 }
@@ -948,9 +948,9 @@ func TestScenario_UserRunsAllowCommand(t *testing.T) {
 func TestScenario_AllowCommandWithoutArgShowsUsage(t *testing.T) {
 	m := newTestModel()
 	m.policy = permission.NewConfigPolicy(nil, nil)
-	before := m.output.Len()
+	before := len(stripAnsi(renderedOutput(&m)))
 	_ = m.handleCommand("/allow")
-	if m.output.Len() == before {
+	if len(stripAnsi(renderedOutput(&m))) == before {
 		t.Error("expected usage message when /allow has no arg")
 	}
 }
@@ -958,7 +958,7 @@ func TestScenario_AllowCommandWithoutArgShowsUsage(t *testing.T) {
 func TestScenario_UnknownCommandShowsError(t *testing.T) {
 	m := newTestModel()
 	_ = m.handleCommand("/nonexistent")
-	output := m.output.String()
+	output := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(output, "/nonexistent") {
 		t.Error("expected error message mentioning the unknown command")
 	}

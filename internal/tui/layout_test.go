@@ -56,15 +56,19 @@ func renderedOutput(m *Model) string {
 		w := m.conversationInnerWidth()
 		h := conversationInnerHeight(m.conversationPanelHeight())
 		if w < 80 {
-			w = 80 // minimum readable width for tests
+			w = 80
 		}
 		if h < 20 {
 			h = 20
 		}
 		m.chatList.SetSize(w, h)
-		return m.chatList.Render()
+		rendered := m.chatList.Render()
+		return rendered
 	}
-	return m.output.String()
+	if m.output != nil {
+		return m.output.String()
+	}
+	return ""
 }
 
 // --- Viewport / Resize tests ---
@@ -1969,8 +1973,14 @@ func TestSlashAutocompleteEnterExecutesCommand(t *testing.T) {
 	if len(m.history) != 1 || m.history[0] != "/help" {
 		t.Error("expected selected slash command to be added to history")
 	}
-	if !strings.Contains(renderedOutput(&m), "Available commands:") && !strings.Contains(m.output.String(), "Available commands:") {
-		t.Error("expected selected slash command to execute immediately")
+	// Verify help text was written to chatList
+	if m.chatList == nil || m.chatList.Len() == 0 {
+		t.Fatal("expected chatList to have help text")
+	}
+	item := m.chatList.ItemAt(0)
+	rendered := stripAnsi(item.Render(120))
+	if !strings.Contains(rendered, "Available commands:") {
+		t.Errorf("expected help text in chatList item, got %q", rendered[:min(100, len(rendered))])
 	}
 }
 
@@ -1992,7 +2002,7 @@ func TestMentionAutocompleteEnterOnlyCompletesInput(t *testing.T) {
 	if m.input.Value() != "@README.md " {
 		t.Errorf("expected mention completion in input, got %q", m.input.Value())
 	}
-	if m.output.Len() != 0 {
+	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Error("expected mention autocomplete not to execute a command")
 	}
 }
@@ -2006,7 +2016,7 @@ func TestModeSwitchDoesNotWriteToOutput(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected no command from mode switch")
 	}
-	if m.output.Len() != 0 {
+	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected mode switch not to write output, got %q", renderedOutput(&m))
 	}
 }
@@ -2018,7 +2028,7 @@ func TestModeCommandSetDoesNotWriteToOutput(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected no command from /mode set")
 	}
-	if m.output.Len() != 0 {
+	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected /mode set not to write output, got %q", renderedOutput(&m))
 	}
 }
@@ -2043,7 +2053,7 @@ func TestModeSwitchPersistsDefaultModePreference(t *testing.T) {
 	if loaded.DefaultMode != permission.PlanMode.String() {
 		t.Fatalf("expected persisted mode %q, got %q", permission.PlanMode.String(), loaded.DefaultMode)
 	}
-	if m.output.Len() != 0 {
+	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful mode persistence, got %q", renderedOutput(&m))
 	}
 }
@@ -2066,7 +2076,7 @@ func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	if loaded.DefaultMode != permission.AutoMode.String() {
 		t.Fatalf("expected persisted mode %q, got %q", permission.AutoMode.String(), loaded.DefaultMode)
 	}
-	if m.output.Len() != 0 {
+	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful /mode persistence, got %q", renderedOutput(&m))
 	}
 }
@@ -3183,7 +3193,7 @@ func TestResetConversationViewClearsTransientState(t *testing.T) {
 
 	m.resetConversationView()
 
-	if m.output.Len() != 0 {
+	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Error("expected output to be cleared")
 	}
 	if m.loading {
