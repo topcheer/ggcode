@@ -597,6 +597,20 @@ loop:
 					emitter.SetOutputMode("summary")
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.output_mode", "summary"))
 				}
+			case 'M': // mute all IM channels
+				if imMgr != nil {
+					count, err := imMgr.MuteAll()
+					if err == nil && count > 0 {
+						fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.mute_all", count))
+					}
+				}
+			case 'U': // unmute all IM channels
+				if imMgr != nil {
+					count, err := imMgr.UnmuteAll()
+					if err == nil && count > 0 {
+						fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.unmute_all", count))
+					}
+				}
 			case 'r': // restart
 				daemonRestartRequested = true
 				fmt.Fprintf(os.Stderr, "%s\r\n", "[ggcode restart] restarting...")
