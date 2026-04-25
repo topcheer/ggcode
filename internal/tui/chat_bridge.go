@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -229,6 +230,8 @@ func suppressToolResult(toolName, result string) string {
 	case "read_command_output":
 		// Only keep the actual output content, strip structured metadata
 		return extractRecentOutput(result)
+	case "ask_user":
+		return formatAskUserResult(result)
 	}
 	return result
 }
@@ -243,6 +246,49 @@ func extractRecentOutput(result string) string {
 	}
 	output := result[idx+len(marker):]
 	return strings.TrimSpace(output)
+}
+
+// formatAskUserResult converts the JSON ask_user response into a human-readable
+// format showing each question title and the user's answer.
+func formatAskUserResult(result string) string {
+	var resp struct {
+		Title   string `json:"title"`
+		Answers []struct {
+			Title           string   `json:"title"`
+			SelectedChoices []string `json:"selected_choices"`
+			FreeformText    string   `json:"freeform_text"`
+			Answered        bool     `json:"answered"`
+		} `json:"answers"`
+	}
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		return result
+	}
+
+	var b strings.Builder
+	for i, ans := range resp.Answers {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		// Question
+		q := ans.Title
+		if q == "" {
+			q = fmt.Sprintf("Question %d", i+1)
+		}
+		b.WriteString("Q: ")
+		b.WriteString(q)
+		b.WriteString("\n")
+		// Answer: selected choices first, then freeform text
+		var parts []string
+		for _, c := range ans.SelectedChoices {
+			parts = append(parts, c)
+		}
+		if ans.FreeformText != "" {
+			parts = append(parts, ans.FreeformText)
+		}
+		b.WriteString("A: ")
+		b.WriteString(strings.Join(parts, ", "))
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // todoToolItemID is the fixed ID for the persistent todo list in chatList.
