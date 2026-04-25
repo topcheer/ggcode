@@ -211,7 +211,6 @@ func (m Model) renderSidebar() string {
 		"",
 		m.renderSidebarIMSection(),
 		"",
-		m.renderSwarmSidebar(),
 		m.renderSidebarMCPSection(),
 	}, "\n")
 
@@ -1046,8 +1045,6 @@ func (m Model) renderContextPanel() string {
 		return m.renderMCPPanel()
 	case m.skillsPanel != nil:
 		return m.renderSkillsPanel()
-	case m.swarmPanel != nil:
-		return m.renderSwarmPanel()
 	case m.inspectorPanel != nil:
 		return m.renderInspectorPanel()
 	case m.harnessContextPrompt != nil:

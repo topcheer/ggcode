@@ -620,15 +620,6 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 	}
 }
 
-func (m *Model) handleSwarmCommand(parts []string) tea.Cmd {
-	if m.swarmMgr == nil {
-		m.chatWriteSystem(nextSystemID(), "Swarm is not available")
-		return nil
-	}
-	m.openSwarmPanel()
-	return nil
-}
-
 func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	if m.knight == nil {
 		m.chatWriteSystem(nextSystemID(), "Knight is not available (only in daemon mode)")

@@ -137,7 +137,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/im",
 		"/skills", "/sessions", "/mcp",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
-		"/help", "/?", "/swarm":
+		"/help", "/?":
 		return true
 	// Harness: only the bare command (opens panel) is safe
 	case "/harness":
@@ -293,8 +293,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleUndoCommand()
 		case "/checkpoints":
 			return m.handleCheckpointsCommand()
-		case "/swarm":
-			return m.handleSwarmCommand(parts)
 		case "/compact":
 			return m.handleCompactCommand()
 		case "/todo":

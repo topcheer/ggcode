@@ -269,10 +269,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSkillsPanelKey(msg)
 		}
 
-		if m.swarmPanel != nil {
-			return m.handleSwarmPanelKey(msg)
-		}
-
 		if m.inspectorPanel != nil {
 			return m.handleInspectorPanelKey(msg)
 		}
