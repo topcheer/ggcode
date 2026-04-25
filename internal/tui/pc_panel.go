@@ -23,6 +23,7 @@ type pcPanelState struct {
 	createMode  bool
 	createInput string
 	createGroup bool
+	editState   imAdapterEditState
 }
 
 type pcResultMsg struct {
@@ -129,8 +130,15 @@ func (m Model) renderPCPanel() string {
 		)
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
-			"  n:new  q:QR  r:renew  x:close  g:group  enter:bind  esc:close",
+			"  n:new  q:QR  r:renew  x:close  g:group  e:edit config  enter:bind  esc:close",
 		))
+	}
+
+	// Edit config section
+	if panel.editState.mode == imEditSelect {
+		body = append(body, "", m.renderIMEditSelect(&panel.editState))
+	} else if panel.editState.mode == imEditInput {
+		body = append(body, "", m.renderIMEditInput(&panel.editState))
 	}
 
 	if panel.message != "" {
@@ -185,6 +193,13 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
+	// Edit mode
+	if panel.editState.mode != imEditNone {
+		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
+		panel.editState = *newState
+		return *m, cmd
+	}
+
 	sessions := m.pcSessionEntries()
 
 	switch msg.String() {
@@ -226,6 +241,16 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 		return *m, m.pcBindSessionCmd(sessions[clampPCSelection(panel.selected, len(sessions))])
+	case "e", "E":
+		adapterName := m.pcAdapterName()
+		if adapterName == "" {
+			panel.message = "No PC adapter configured"
+			return *m, nil
+		}
+		edit := m.enterIMEditSelect(adapterName)
+		panel.editState = edit
+		panel.message = ""
+		return *m, nil
 	case "esc":
 		m.closePCPanel()
 	}

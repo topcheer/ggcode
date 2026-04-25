@@ -42,6 +42,11 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 		Short: "Run ggcode in daemon mode, controlled via IM",
 		Long:  "Run ggcode as a headless daemon. Messages from paired IM channels are forwarded to the agent, and responses are sent back via IM. Requires at least one IM channel bound to the current workspace.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Handle --resume-picker: set resumeID to trigger interactive picker
+			if picker, _ := cmd.Flags().GetBool("resume-picker"); picker {
+				resumeID = "picker"
+			}
+
 			resolvedCfg := *cfgFile
 			if resolvedCfg == "" {
 				r, err := resolveConfigFilePath()
@@ -78,10 +83,12 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops)")
 	cmd.Flags().BoolVar(&followFlag, "follow", false, "auto-enable follow mode")
 	cmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "start in background")
-	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
+	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID; use --resume-picker for interactive selection")
+	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
 	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
 	_ = cmd.Flags().MarkHidden("__daemonized")
 	cmd.MarkFlagsMutuallyExclusive("follow", "background")
+	cmd.MarkFlagsMutuallyExclusive("resume", "resume-picker")
 	return cmd
 }
 
@@ -337,7 +344,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Create or resume session
 	var ses *session.Session
-	if resumeID == "-" {
+	if resumeID == "-" || resumeID == "picker" {
 		// Interactive session selection
 		resumeID = pickSessionInteractive(store, lang)
 	}
@@ -388,8 +395,45 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	subMgr := subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
 
+	// Create follow display (always, so the pairing watcher can use it)
+	toolLang := im.ToolLangEn
+	if lang == daemon.LangZhCN {
+		toolLang = im.ToolLangZhCN
+	}
+	toolPresenter := &daemonToolPresenter{lang: toolLang}
+	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, lang, workingDir, toolPresenter)
+
 	// Set bridge on manager
 	imMgr.SetBridge(bridge)
+
+	// Track previous pairing state so we can notify follow display.
+	// When follow mode is off, pairing code is printed to stderr directly
+	// so the user can still see it even without follow mode.
+	var prevPairingChallenge *im.PairingChallenge
+	imMgr.SetOnUpdate(func(snap im.StatusSnapshot) {
+		current := snap.PendingPairing
+		wasPending := prevPairingChallenge != nil
+		isPending := current != nil
+
+		if isPending && !wasPending {
+			// New pairing challenge appeared — always show it
+			platformName := daemon.PlatformDisplayName(string(current.Platform))
+			kind := string(current.Kind)
+			followDisplay.OnPairingChallenge(platformName, current.ChannelID, current.Code, kind)
+		} else if !isPending && wasPending {
+			// Pairing resolved (accepted or rejected)
+			if followActive {
+				followDisplay.OnPairingResolved()
+			}
+		}
+
+		if current != nil {
+			cp := *current
+			prevPairingChallenge = &cp
+		} else {
+			prevPairingChallenge = nil
+		}
+	})
 
 	// Start adapters
 	if cfg.IM.Enabled {
@@ -480,12 +524,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	// --- Follow mode setup ---
-	toolLang := im.ToolLangEn
-	if lang == daemon.LangZhCN {
-		toolLang = im.ToolLangZhCN
-	}
-	toolPresenter := &daemonToolPresenter{lang: toolLang}
-	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, lang, workingDir, toolPresenter)
 	if followActive {
 		bridge.SetFollowSink(followDisplay)
 	}

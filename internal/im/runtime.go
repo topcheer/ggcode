@@ -375,6 +375,15 @@ func (m *Manager) stopAdapter(adapterName string) {
 	debug.Log("im", "stopAdapter: done for %s", adapterName)
 }
 
+// StopAdapter stops a running adapter by name. This is the public version
+// of stopAdapter, used for hot-reloading config changes without altering
+// binding state.
+func (m *Manager) StopAdapter(adapterName string) {
+	m.mu.Lock()
+	m.stopAdapter(adapterName)
+	m.mu.Unlock()
+}
+
 // persistBinding saves a binding to the store, stripping the Muted flag
 // since Muted is an in-memory-only state that must not be persisted.
 func (m *Manager) persistBinding(b ChannelBinding) error {

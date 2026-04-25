@@ -167,6 +167,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dingtalkPanel.createInput += msg.Content
 			return m, nil
 		}
+		// Forward paste to PC panel create-input.
+		if m.pcPanel != nil && m.pcPanel.createMode {
+			m.pcPanel.createInput += msg.Content
+			return m, nil
+		}
+		// Forward paste to IM adapter edit mode (shared editInput).
+		if m.qqPanel != nil && m.qqPanel.editState.mode == imEditInput {
+			m.qqPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.tgPanel != nil && m.tgPanel.editState.mode == imEditInput {
+			m.tgPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.discordPanel != nil && m.discordPanel.editState.mode == imEditInput {
+			m.discordPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.feishuPanel != nil && m.feishuPanel.editState.mode == imEditInput {
+			m.feishuPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.slackPanel != nil && m.slackPanel.editState.mode == imEditInput {
+			m.slackPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.dingtalkPanel != nil && m.dingtalkPanel.editState.mode == imEditInput {
+			m.dingtalkPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.pcPanel != nil && m.pcPanel.editState.mode == imEditInput {
+			m.pcPanel.editState.editInput += msg.Content
+			return m, nil
+		}
 		// Forward paste to questionnaire input if active.
 		if m.pendingQuestionnaire != nil && m.pendingQuestionnaire.activeQuestionAllowsFreeform() {
 			var cmd tea.Cmd
@@ -1255,6 +1289,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case imEditResultMsg:
+		// Dispatch to whichever panel is active
+		if m.qqPanel != nil && m.qqPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.qqPanel.editState, msg)
+		} else if m.tgPanel != nil && m.tgPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.tgPanel.editState, msg)
+		} else if m.discordPanel != nil && m.discordPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.discordPanel.editState, msg)
+		} else if m.feishuPanel != nil && m.feishuPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.feishuPanel.editState, msg)
+		} else if m.slackPanel != nil && m.slackPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.slackPanel.editState, msg)
+		} else if m.dingtalkPanel != nil && m.dingtalkPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.dingtalkPanel.editState, msg)
+		} else if m.pcPanel != nil && m.pcPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.pcPanel.editState, msg)
+		}
+		return m, nil
+
 	case providerModelsRefreshResultMsg:
 		if m.providerPanel != nil && m.providerPanel.refreshVendor == msg.vendor {
 			m.providerPanel.refreshing = false

@@ -21,6 +21,7 @@ type slackPanelState struct {
 	message     string
 	createMode  bool
 	createInput string
+	editState   imAdapterEditState
 }
 
 type slackBindingEntry struct {
@@ -121,6 +122,12 @@ func (m Model) renderSlackPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.slack.actions_hint")))
 	}
+	// Edit config section
+	if panel.editState.mode == imEditSelect {
+		body = append(body, "", m.renderIMEditSelect(&panel.editState))
+	} else if panel.editState.mode == imEditInput {
+		body = append(body, "", m.renderIMEditInput(&panel.editState))
+	}
 	if panel.message != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
 	}
@@ -131,6 +138,12 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.slackPanel
 	if panel == nil {
 		return *m, nil
+	}
+	// Edit mode takes priority
+	if panel.editState.mode != imEditNone {
+		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
+		panel.editState = *newState
+		return *m, cmd
 	}
 	entries := m.slackBindingEntries()
 	if panel.createMode {
@@ -189,6 +202,16 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""
+		panel.message = ""
+		return *m, nil
+	case "e", "E":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.slack.message.no_bot")
+			return *m, nil
+		}
+		entry := entries[clampSlackSelection(panel.selected, len(entries))]
+		edit := m.enterIMEditSelect(entry.Adapter)
+		panel.editState = edit
 		panel.message = ""
 		return *m, nil
 	case "esc":

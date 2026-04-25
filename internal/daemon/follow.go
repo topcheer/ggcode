@@ -26,6 +26,10 @@ type FollowSink interface {
 	OnRoundDone()
 	// OnError displays an error message.
 	OnError(err error)
+	// OnPairingChallenge displays an IM pairing code when a channel requests binding.
+	OnPairingChallenge(platform, channelID, code string, kind string)
+	// OnPairingResolved clears a previously displayed pairing challenge.
+	OnPairingResolved()
 	// Close cleans up the display.
 	Close()
 }
@@ -46,6 +50,26 @@ func ResolveLang(s string) Lang {
 	return LangEn
 }
 
+// PlatformDisplayName returns a human-readable name for an IM platform string.
+func PlatformDisplayName(platform string) string {
+	switch platform {
+	case "qq":
+		return "QQ"
+	case "feishu":
+		return "Feishu"
+	case "telegram":
+		return "Telegram"
+	case "discord":
+		return "Discord"
+	case "dingtalk":
+		return "DingTalk"
+	case "slack":
+		return "Slack"
+	default:
+		return "IM"
+	}
+}
+
 // ToolFormatter is a function that formats tool activity for display.
 // It takes a tool name and raw JSON args, and returns a human-readable status string.
 type ToolFormatter func(toolName, rawArgs string) string
@@ -61,6 +85,9 @@ const (
 	ansiDim       = "\033[2m"
 	ansiReset     = "\033[0m"
 	ansiClearLine = "\033[2K\r"
+	ansiBold      = "\033[1m"
+	ansiFgYellow  = "\033[33m"
+	ansiBgBlue    = "\033[44m"
 	// In raw terminal mode, \n only moves cursor down without returning to
 	// column 0. We must use \r\n for proper line breaks.
 	nl = "\r\n"
@@ -92,6 +119,12 @@ var catalogEn = map[string]string{
 	"follow.assistant":    "Assistant",
 	"follow.todos_header": "  📋 Todos:",
 	"follow.more_lines":   "... (%d more lines)",
+
+	"follow.pairing.bind":       "🔗 %s binding requested from channel %s",
+	"follow.pairing.rebind":     "🔗 %s rebind requested from channel %s",
+	"follow.pairing.code":       "   Enter this code in %s to complete binding:",
+	"follow.pairing.resolved":   "✅ Pairing resolved",
+	"follow.pairing.rejected":   "❌ Pairing rejected",
 }
 
 var catalogZhCN = map[string]string{
@@ -118,6 +151,12 @@ var catalogZhCN = map[string]string{
 	"follow.assistant":    "助手",
 	"follow.todos_header": "  📋 待办事项:",
 	"follow.more_lines":   "... (还有 %d 行)",
+
+	"follow.pairing.bind":       "🔗 %s 绑定请求来自渠道 %s",
+	"follow.pairing.rebind":     "🔗 %s 重新绑定请求来自渠道 %s",
+	"follow.pairing.code":       "   请在 %s 中输入以下绑定码完成绑定:",
+	"follow.pairing.resolved":   "✅ 绑定完成",
+	"follow.pairing.rejected":   "❌ 绑定已拒绝",
 }
 
 // Tr looks up a localized string by key. Falls back to English if key missing.
@@ -260,6 +299,31 @@ func (d *TerminalFollowDisplay) OnError(err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	fmt.Fprintf(d.out, "❌ %v"+nl, err)
+}
+
+// OnPairingChallenge displays an IM pairing code when a channel requests binding.
+func (d *TerminalFollowDisplay) OnPairingChallenge(platform, channelID, code string, kind string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	key := "follow.pairing.bind"
+	if kind == "rebind" {
+		key = "follow.pairing.rebind"
+	}
+	fmt.Fprint(d.out, Tr(d.lang, key, platform, channelID)+nl)
+	fmt.Fprint(d.out, Tr(d.lang, "follow.pairing.code", platform)+nl)
+
+	// Render the 4-digit code with prominent styling
+	codeDigits := strings.Join(strings.Split(code, ""), "   ")
+	codeBlock := ansiBold + ansiFgYellow + ansiBgBlue + "  " + codeDigits + "  " + ansiReset
+	fmt.Fprint(d.out, codeBlock+nl)
+}
+
+// OnPairingResolved clears a previously displayed pairing challenge.
+func (d *TerminalFollowDisplay) OnPairingResolved() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fmt.Fprint(d.out, Tr(d.lang, "follow.pairing.resolved")+nl)
 }
 
 // Close cleans up.

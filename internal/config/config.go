@@ -862,6 +862,22 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 		}
 		c.MCPServers[i] = mcp
 	}
+	// IM adapter env expansion: Extra and Env maps.
+	for adapterName, adapter := range c.IM.Adapters {
+		for key, val := range adapter.Extra {
+			if s, ok := val.(string); ok {
+				adapter.Extra[key] = ExpandEnvWithLookup(s, lookup)
+			}
+		}
+		for key, val := range adapter.Env {
+			adapter.Env[key] = ExpandEnvWithLookup(val, lookup)
+		}
+		c.IM.Adapters[adapterName] = adapter
+	}
+	// IM STT env expansion.
+	c.IM.STT.APIKey = ExpandEnvWithLookup(c.IM.STT.APIKey, lookup)
+	c.IM.STT.BaseURL = ExpandEnvWithLookup(c.IM.STT.BaseURL, lookup)
+	c.IM.STT.Model = ExpandEnvWithLookup(c.IM.STT.Model, lookup)
 	// A2A env expansion.
 	c.A2A.APIKey = ExpandEnvWithLookup(c.A2A.APIKey, lookup)
 	c.A2A.Host = ExpandEnvWithLookup(c.A2A.Host, lookup)
@@ -1311,7 +1327,20 @@ func (c *Config) Save() error {
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	return util.AtomicWriteFile(c.FilePath, data, 0644)
+	if err := util.AtomicWriteFile(c.FilePath, data, 0644); err != nil {
+		return err
+	}
+	// Re-migrate any plaintext secrets that yaml.Marshal produced.
+	// The in-memory config holds expanded values, so Save() writes
+	// plaintext secrets back into the YAML.  This call detects those,
+	// persists them to ~/.ggcode/keys.env, and rewrites the YAML with
+	// ${VAR} references — keeping keys.env and the config file in sync.
+	if migrated, migrateErr := MigratePlaintextAPIKeys(c.FilePath); migrateErr != nil {
+		debug.Log("config", "Save: post-save migration error: %v", migrateErr)
+	} else if len(migrated) > 0 {
+		debug.Log("config", "Save: re-migrated %d plaintext secret(s)", len(migrated))
+	}
+	return nil
 }
 
 func (c *Config) SaveLanguagePreference(lang string) error {
