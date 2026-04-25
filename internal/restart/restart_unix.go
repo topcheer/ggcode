@@ -13,10 +13,10 @@ import (
 
 func writePlatformScript(req Request) (string, error) {
 	td := templateData{
-		PID:            req.PID,
-		BinaryEscaped:  bashEscape(req.Binary),
-		WorkDirEscaped: bashEscape(req.WorkDir),
-		Args:           req.Args,
+		PID:     req.PID,
+		Binary:  bashEscape(req.Binary),
+		WorkDir: bashEscape(req.WorkDir),
+		Args:    req.Args,
 	}
 
 	var argParts []string

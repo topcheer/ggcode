@@ -70,6 +70,7 @@ type Model struct {
 	shellMode                       bool
 	loading                         bool
 	quitting                        bool
+	restartRequested                bool
 	width                           int
 	height                          int
 	styles                          styles

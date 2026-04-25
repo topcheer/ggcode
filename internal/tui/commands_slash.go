@@ -16,7 +16,6 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/version"
@@ -954,30 +953,9 @@ func (m *Model) handleConfigRemoveEndpoint(args []string) tea.Cmd {
 }
 
 func (m *Model) handleRestartCommand() tea.Cmd {
-	binary, err := restart.ResolveBinary()
-	if err != nil {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restart failed: %s", err))
-		return nil
-	}
-
-	args := m.buildRestartArgs()
-
 	m.chatWriteSystem(nextSystemID(), "Restarting ggcode...")
-
-	wd, _ := os.Getwd()
-	req := restart.Request{
-		Binary:  binary,
-		Args:    args,
-		WorkDir: wd,
-		PID:     os.Getpid(),
-	}
-
-	if err := restart.Launch(req); err != nil {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restart failed: %s", err))
-		return nil
-	}
-
 	m.quitting = true
+	m.restartRequested = true
 	return tea.Quit
 }
 
