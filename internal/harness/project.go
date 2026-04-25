@@ -195,7 +195,7 @@ func projectFromRoot(root string) Project {
 		ArchiveDir:   filepath.Join(stateDir, "archive"),
 		WorktreesDir: filepath.Join(stateDir, "worktrees"),
 		EventLogPath: filepath.Join(stateDir, "events.jsonl"),
-		SnapshotPath: filepath.Join(stateDir, "snapshot.db"),
+		SnapshotPath: filepath.Join(stateDir, "snapshots"),
 	}
 }
 

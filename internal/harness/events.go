@@ -2,15 +2,12 @@ package harness
 
 import (
 	"bufio"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -74,9 +71,10 @@ func recordTaskEvent(project Project, previous, current *Task) error {
 		Summary:        summarizeTaskEvent(previous, current),
 		Payload:        payload,
 	}
-	return persistHarnessEvent(project, event, func(tx *sql.Tx) error {
-		return upsertTaskSnapshot(tx, current)
-	})
+	if err := appendHarnessEvent(project, event); err != nil {
+		return err
+	}
+	return writeTaskSnapshot(project, current)
 }
 
 func recordReleasePlanEvent(project Project, previous, current *ReleasePlan) error {
@@ -112,39 +110,13 @@ func recordReleasePlanEvent(project Project, previous, current *ReleasePlan) err
 		Summary:        summarizeReleaseEvent(previous, current),
 		Payload:        payload,
 	}
-	return persistHarnessEvent(project, event, func(tx *sql.Tx) error {
-		return upsertReleasePlanSnapshot(tx, current)
-	})
-}
-
-func persistHarnessEvent(project Project, event harnessEvent, apply func(tx *sql.Tx) error) error {
 	if err := appendHarnessEvent(project, event); err != nil {
 		return err
 	}
-	db, err := openHarnessSnapshot(project)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin harness snapshot transaction: %w", err)
-	}
-	if err := insertHarnessEvent(tx, event); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if apply != nil {
-		if err := apply(tx); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit harness snapshot transaction: %w", err)
-	}
-	return nil
+	return writeReleasePlanSnapshot(project, current)
 }
+
+// --- Event log (JSONL) ---
 
 func appendHarnessEvent(project Project, event harnessEvent) error {
 	if err := os.MkdirAll(filepath.Dir(project.EventLogPath), 0o755); err != nil {
@@ -183,283 +155,69 @@ func bootstrapHarnessState(project Project) error {
 	if err := eventLog.Close(); err != nil {
 		return fmt.Errorf("close harness event log: %w", err)
 	}
-	db, err := openHarnessSnapshot(project)
-	if err != nil {
-		return err
+	// Create snapshot directories.
+	if err := os.MkdirAll(taskSnapshotDir(project), 0o755); err != nil {
+		return fmt.Errorf("create task snapshot dir: %w", err)
 	}
-	if err := db.Close(); err != nil {
-		return fmt.Errorf("close harness snapshot: %w", err)
-	}
-	return nil
-}
-
-func openHarnessSnapshot(project Project) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(project.SnapshotPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create harness snapshot dir: %w", err)
-	}
-	db, err := sql.Open("sqlite", project.SnapshotPath)
-	if err != nil {
-		return nil, fmt.Errorf("open harness snapshot: %w", err)
-	}
-	stmts := []string{
-		`PRAGMA busy_timeout = 5000;`,
-		`CREATE TABLE IF NOT EXISTS events (
-			id TEXT PRIMARY KEY,
-			kind TEXT NOT NULL,
-			entity_type TEXT NOT NULL,
-			entity_id TEXT NOT NULL,
-			task_id TEXT,
-			batch_id TEXT,
-			rollout_id TEXT,
-			wave_order INTEGER,
-			status TEXT,
-			previous_status TEXT,
-			gate_status TEXT,
-			recorded_at TEXT NOT NULL,
-			summary TEXT,
-			payload_json TEXT
-		);`,
-		`CREATE TABLE IF NOT EXISTS tasks (
-			task_id TEXT PRIMARY KEY,
-			goal TEXT NOT NULL,
-			status TEXT NOT NULL,
-			depends_on_json TEXT,
-			context_name TEXT,
-			context_path TEXT,
-			entry_point TEXT,
-			attempt INTEGER,
-			log_path TEXT,
-			workspace_path TEXT,
-			workspace_mode TEXT,
-			branch_name TEXT,
-			worker_id TEXT,
-			worker_status TEXT,
-			worker_phase TEXT,
-			worker_progress TEXT,
-			changed_files_json TEXT,
-			verification_status TEXT,
-			verification_report_path TEXT,
-			review_status TEXT,
-			review_notes TEXT,
-			reviewed_at TEXT,
-			promotion_status TEXT,
-			promotion_notes TEXT,
-			promoted_at TEXT,
-			release_batch_id TEXT,
-			release_notes TEXT,
-			released_at TEXT,
-			exit_code INTEGER,
-			error_text TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT
-		);`,
-		`CREATE TABLE IF NOT EXISTS release_plans (
-			batch_id TEXT PRIMARY KEY,
-			rollout_id TEXT,
-			group_by TEXT,
-			group_label TEXT,
-			wave_order INTEGER,
-			wave_status TEXT,
-			gate_status TEXT,
-			status_note TEXT,
-			gate_note TEXT,
-			activated_at TEXT,
-			gate_checked_at TEXT,
-			paused_at TEXT,
-			aborted_at TEXT,
-			completed_at TEXT,
-			generated_at TEXT NOT NULL,
-			environment TEXT,
-			owner_filter TEXT,
-			context_filter TEXT,
-			task_count INTEGER NOT NULL,
-			owners_json TEXT,
-			contexts_json TEXT,
-			report_path TEXT,
-			updated_at TEXT NOT NULL
-		);`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("prepare harness snapshot schema: %w", err)
-		}
-	}
-	return db, nil
-}
-
-func insertHarnessEvent(tx *sql.Tx, event harnessEvent) error {
-	_, err := tx.Exec(
-		`INSERT INTO events (
-			id, kind, entity_type, entity_id, task_id, batch_id, rollout_id, wave_order,
-			status, previous_status, gate_status, recorded_at, summary, payload_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID,
-		event.Kind,
-		event.EntityType,
-		event.EntityID,
-		nullableText(event.TaskID),
-		nullableText(event.BatchID),
-		nullableText(event.RolloutID),
-		event.WaveOrder,
-		nullableText(event.Status),
-		nullableText(event.PreviousStatus),
-		nullableText(event.GateStatus),
-		event.RecordedAt.UTC().Format(time.RFC3339Nano),
-		nullableText(event.Summary),
-		nullableText(string(event.Payload)),
-	)
-	if err != nil {
-		return fmt.Errorf("insert harness event: %w", err)
+	if err := os.MkdirAll(releaseSnapshotDir(project), 0o755); err != nil {
+		return fmt.Errorf("create release snapshot dir: %w", err)
 	}
 	return nil
 }
 
-func upsertTaskSnapshot(tx *sql.Tx, task *Task) error {
-	_, err := tx.Exec(
-		`INSERT INTO tasks (
-			task_id, goal, status, depends_on_json, context_name, context_path, entry_point, attempt,
-			log_path, workspace_path, workspace_mode, branch_name, worker_id, worker_status, worker_phase,
-			worker_progress, changed_files_json, verification_status, verification_report_path, review_status,
-			review_notes, reviewed_at, promotion_status, promotion_notes, promoted_at, release_batch_id,
-			release_notes, released_at, exit_code, error_text, created_at, updated_at, started_at, finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(task_id) DO UPDATE SET
-			goal = excluded.goal,
-			status = excluded.status,
-			depends_on_json = excluded.depends_on_json,
-			context_name = excluded.context_name,
-			context_path = excluded.context_path,
-			entry_point = excluded.entry_point,
-			attempt = excluded.attempt,
-			log_path = excluded.log_path,
-			workspace_path = excluded.workspace_path,
-			workspace_mode = excluded.workspace_mode,
-			branch_name = excluded.branch_name,
-			worker_id = excluded.worker_id,
-			worker_status = excluded.worker_status,
-			worker_phase = excluded.worker_phase,
-			worker_progress = excluded.worker_progress,
-			changed_files_json = excluded.changed_files_json,
-			verification_status = excluded.verification_status,
-			verification_report_path = excluded.verification_report_path,
-			review_status = excluded.review_status,
-			review_notes = excluded.review_notes,
-			reviewed_at = excluded.reviewed_at,
-			promotion_status = excluded.promotion_status,
-			promotion_notes = excluded.promotion_notes,
-			promoted_at = excluded.promoted_at,
-			release_batch_id = excluded.release_batch_id,
-			release_notes = excluded.release_notes,
-			released_at = excluded.released_at,
-			exit_code = excluded.exit_code,
-			error_text = excluded.error_text,
-			created_at = excluded.created_at,
-			updated_at = excluded.updated_at,
-			started_at = excluded.started_at,
-			finished_at = excluded.finished_at`,
-		task.ID,
-		task.Goal,
-		string(task.Status),
-		marshalSnapshotJSON(task.DependsOn),
-		nullableText(task.ContextName),
-		nullableText(task.ContextPath),
-		nullableText(task.EntryPoint),
-		task.Attempt,
-		nullableText(task.LogPath),
-		nullableText(task.WorkspacePath),
-		nullableText(task.WorkspaceMode),
-		nullableText(task.BranchName),
-		nullableText(task.WorkerID),
-		nullableText(task.WorkerStatus),
-		nullableText(task.WorkerPhase),
-		nullableText(task.WorkerProgress),
-		marshalSnapshotJSON(task.ChangedFiles),
-		nullableText(task.VerificationStatus),
-		nullableText(task.VerificationReportPath),
-		nullableText(task.ReviewStatus),
-		nullableText(task.ReviewNotes),
-		nullableTime(task.ReviewedAt),
-		nullableText(task.PromotionStatus),
-		nullableText(task.PromotionNotes),
-		nullableTime(task.PromotedAt),
-		nullableText(task.ReleaseBatchID),
-		nullableText(task.ReleaseNotes),
-		nullableTime(task.ReleasedAt),
-		task.ExitCode,
-		nullableText(task.Error),
-		task.CreatedAt.UTC().Format(time.RFC3339Nano),
-		task.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		nullableTime(task.StartedAt),
-		nullableTime(task.FinishedAt),
-	)
+// --- Snapshot paths ---
+
+func taskSnapshotDir(project Project) string {
+	return filepath.Join(project.StateDir, "snapshots", "tasks")
+}
+
+func releaseSnapshotDir(project Project) string {
+	return filepath.Join(project.StateDir, "snapshots", "releases")
+}
+
+func taskSnapshotPath(project Project, taskID string) string {
+	return filepath.Join(taskSnapshotDir(project), taskID+".json")
+}
+
+func releaseSnapshotPath(project Project, batchID string) string {
+	return filepath.Join(releaseSnapshotDir(project), batchID+".json")
+}
+
+// --- Snapshot writes ---
+
+func writeTaskSnapshot(project Project, task *Task) error {
+	dir := taskSnapshotDir(project)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create task snapshot dir: %w", err)
+	}
+	data, err := json.Marshal(task)
 	if err != nil {
-		return fmt.Errorf("upsert task snapshot: %w", err)
+		return fmt.Errorf("marshal task snapshot: %w", err)
+	}
+	path := taskSnapshotPath(project, task.ID)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write task snapshot %s: %w", task.ID, err)
 	}
 	return nil
 }
 
-func upsertReleasePlanSnapshot(tx *sql.Tx, plan *ReleasePlan) error {
-	_, err := tx.Exec(
-		`INSERT INTO release_plans (
-			batch_id, rollout_id, group_by, group_label, wave_order, wave_status, gate_status, status_note,
-			gate_note, activated_at, gate_checked_at, paused_at, aborted_at, completed_at, generated_at,
-			environment, owner_filter, context_filter, task_count, owners_json, contexts_json, report_path, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(batch_id) DO UPDATE SET
-			rollout_id = excluded.rollout_id,
-			group_by = excluded.group_by,
-			group_label = excluded.group_label,
-			wave_order = excluded.wave_order,
-			wave_status = excluded.wave_status,
-			gate_status = excluded.gate_status,
-			status_note = excluded.status_note,
-			gate_note = excluded.gate_note,
-			activated_at = excluded.activated_at,
-			gate_checked_at = excluded.gate_checked_at,
-			paused_at = excluded.paused_at,
-			aborted_at = excluded.aborted_at,
-			completed_at = excluded.completed_at,
-			generated_at = excluded.generated_at,
-			environment = excluded.environment,
-			owner_filter = excluded.owner_filter,
-			context_filter = excluded.context_filter,
-			task_count = excluded.task_count,
-			owners_json = excluded.owners_json,
-			contexts_json = excluded.contexts_json,
-			report_path = excluded.report_path,
-			updated_at = excluded.updated_at`,
-		plan.BatchID,
-		nullableText(plan.RolloutID),
-		nullableText(plan.GroupBy),
-		nullableText(plan.GroupLabel),
-		plan.WaveOrder,
-		nullableText(plan.WaveStatus),
-		nullableText(plan.GateStatus),
-		nullableText(plan.StatusNote),
-		nullableText(plan.GateNote),
-		nullableTime(plan.ActivatedAt),
-		nullableTime(plan.GateCheckedAt),
-		nullableTime(plan.PausedAt),
-		nullableTime(plan.AbortedAt),
-		nullableTime(plan.CompletedAt),
-		plan.GeneratedAt.UTC().Format(time.RFC3339Nano),
-		nullableText(plan.Environment),
-		nullableText(plan.OwnerFilter),
-		nullableText(plan.ContextFilter),
-		len(plan.Tasks),
-		marshalSnapshotJSON(plan.Owners),
-		marshalSnapshotJSON(plan.Contexts),
-		nullableText(plan.ReportPath),
-		releaseEventTime(plan).UTC().Format(time.RFC3339Nano),
-	)
+func writeReleasePlanSnapshot(project Project, plan *ReleasePlan) error {
+	dir := releaseSnapshotDir(project)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create release snapshot dir: %w", err)
+	}
+	data, err := json.Marshal(plan)
 	if err != nil {
-		return fmt.Errorf("upsert release snapshot: %w", err)
+		return fmt.Errorf("marshal release snapshot: %w", err)
+	}
+	path := releaseSnapshotPath(project, plan.BatchID)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write release snapshot %s: %w", plan.BatchID, err)
 	}
 	return nil
 }
+
+// --- Snapshot reads ---
 
 func loadTaskSnapshot(path string) (*Task, error) {
 	data, err := os.ReadFile(path)
@@ -491,6 +249,117 @@ func loadReleasePlanSnapshot(path string) (*ReleasePlan, error) {
 	plan.ReportPath = path
 	return &plan, nil
 }
+
+// loadAllTaskSnapshots reads all task snapshot JSON files from the project's
+// snapshot directory.
+func loadAllTaskSnapshots(project Project) ([]*Task, error) {
+	dir := taskSnapshotDir(project)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read task snapshot dir: %w", err)
+	}
+	var tasks []*Task
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		task, err := loadTaskSnapshot(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if task != nil {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks, nil
+}
+
+// loadAllReleasePlanSnapshots reads all release plan snapshot JSON files.
+func loadAllReleasePlanSnapshots(project Project) ([]*ReleasePlan, error) {
+	dir := releaseSnapshotDir(project)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read release snapshot dir: %w", err)
+	}
+	var plans []*ReleasePlan
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		plan, err := loadReleasePlanSnapshot(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if plan != nil {
+			plans = append(plans, plan)
+		}
+	}
+	return plans, nil
+}
+
+// loadRecentEventsFromJSONL reads the last N events from the event JSONL file.
+func loadRecentEventsFromJSONL(eventLogPath string, limit int) ([]*MonitorEvent, error) {
+	f, err := os.Open(eventLogPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open event log: %w", err)
+	}
+	defer f.Close()
+
+	// Read all events, then take the last N.
+	var all []*MonitorEvent
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var evt harnessEvent
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			continue // skip malformed lines
+		}
+		all = append(all, &MonitorEvent{
+			Kind:       evt.Kind,
+			EntityType: evt.EntityType,
+			EntityID:   evt.EntityID,
+			TaskID:     evt.TaskID,
+			BatchID:    evt.BatchID,
+			RolloutID:  evt.RolloutID,
+			WaveOrder:  evt.WaveOrder,
+			Status:     evt.Status,
+			GateStatus: evt.GateStatus,
+			Summary:    evt.Summary,
+			RecordedAt: evt.RecordedAt,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan event log: %w", err)
+	}
+
+	// Take last N in reverse.
+	if len(all) <= limit {
+		// Reverse in place.
+		for i, j := 0, len(all)-1; i < j; i, j = i+1, j-1 {
+			all[i], all[j] = all[j], all[i]
+		}
+		return all, nil
+	}
+	result := make([]*MonitorEvent, limit)
+	for i := 0; i < limit; i++ {
+		result[i] = all[len(all)-1-i]
+	}
+	return result, nil
+}
+
+// --- Event classification helpers ---
 
 func classifyTaskEvent(previous, current *Task) string {
 	switch {
@@ -590,28 +459,6 @@ func releaseGateStatusValue(plan *ReleasePlan) string {
 		return ""
 	}
 	return strings.TrimSpace(plan.GateStatus)
-}
-
-func marshalSnapshotJSON(v any) any {
-	data, err := json.Marshal(v)
-	if err != nil || string(data) == "null" {
-		return nil
-	}
-	return string(data)
-}
-
-func nullableText(text string) any {
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-	return text
-}
-
-func nullableTime(ts *time.Time) any {
-	if ts == nil {
-		return nil
-	}
-	return ts.UTC().Format(time.RFC3339Nano)
 }
 
 func timesEqual(left, right *time.Time) bool {
