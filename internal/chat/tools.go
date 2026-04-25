@@ -575,9 +575,9 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		switch ctx.ToolName {
 		case "save_memory", "team_create", "team_delete",
 			"teammate_spawn", "teammate_shutdown",
-			"swarm_task_claim", "swarm_task_complete":
+			"swarm_task_create", "swarm_task_claim", "swarm_task_complete":
 			item.suppressBody = true
-		case "cron_create", "swarm_task_create":
+		case "cron_create":
 			item.formatJSON = true
 		case "teammate_results":
 			item.markdownBody = true
