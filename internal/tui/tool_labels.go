@@ -329,6 +329,27 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Detail:      "",
 			Activity:    localizedToolActivity(lang, "swarm_task_list", ""),
 		}
+	case "list_mcp_capabilities":
+		server := argString(args, "server")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "list_mcp_capabilities"),
+			Detail:      server,
+			Activity:    localizedToolActivity(lang, "list_mcp_capabilities", ""),
+		}
+	case "get_mcp_prompt":
+		name := argString(args, "name")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "get_mcp_prompt"),
+			Detail:      name,
+			Activity:    localizedToolActivity(lang, "get_mcp_prompt", name),
+		}
+	case "read_mcp_resource":
+		uri := argString(args, "uri")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "read_mcp_resource"),
+			Detail:      uri,
+			Activity:    localizedToolActivity(lang, "read_mcp_resource", ""),
+		}
 	default:
 		// LSP tools share a common pattern: show file:line
 		if strings.HasPrefix(toolName, "lsp_") {
@@ -496,6 +517,12 @@ func localizedToolLabel(lang Language, action string) string {
 			return "完成任务"
 		case "swarm_task_list":
 			return "任务列表"
+		case "list_mcp_capabilities":
+			return "MCP 服务器"
+		case "get_mcp_prompt":
+			return "获取 MCP 提示"
+		case "read_mcp_resource":
+			return "读取 MCP 资源"
 		case "ask":
 			return "提问"
 		case "inspect":
@@ -599,6 +626,12 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Complete Task"
 		case "swarm_task_list":
 			return "Task List"
+		case "list_mcp_capabilities":
+			return "MCP Servers"
+		case "get_mcp_prompt":
+			return "Get MCP Prompt"
+		case "read_mcp_resource":
+			return "Read MCP Resource"
 		case "ask":
 			return "Ask"
 		case "inspect":
@@ -709,6 +742,12 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "完成任务中..."
 			case "swarm_task_list":
 				return "查看任务列表..."
+			case "list_mcp_capabilities":
+				return "查看 MCP 服务器..."
+			case "get_mcp_prompt":
+				return "获取 MCP 提示..."
+			case "read_mcp_resource":
+				return "读取 MCP 资源..."
 			case "ask":
 				return "等待用户输入"
 			case "inspect":
@@ -788,6 +827,12 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Completing task..."
 			case "swarm_task_list":
 				return "Listing tasks..."
+			case "list_mcp_capabilities":
+				return "Listing MCP servers..."
+			case "get_mcp_prompt":
+				return "Fetching MCP prompt..."
+			case "read_mcp_resource":
+				return "Reading MCP resource..."
 				return "Managing swarm task..."
 			case "ask":
 				return "Waiting for user input"
