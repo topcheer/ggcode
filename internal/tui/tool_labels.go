@@ -266,21 +266,21 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "team_create", "team_delete":
 		return toolPresentation{
-			DisplayName: "Team",
+			DisplayName: localizedToolLabel(lang, "team"),
 			Detail:      argString(args, "name"),
-			Activity:    "Managing team",
+			Activity:    localizedToolActivity(lang, "team", ""),
 		}
 	case "teammate_spawn", "teammate_list", "teammate_shutdown", "teammate_results":
 		return toolPresentation{
-			DisplayName: "Swarm",
+			DisplayName: localizedToolLabel(lang, "teammate"),
 			Detail:      displayToolTarget(firstNonEmpty(argString(args, "name"), argString(args, "teammate_id"))),
-			Activity:    "Managing swarm teammate",
+			Activity:    localizedToolActivity(lang, "teammate", ""),
 		}
 	case "swarm_task_create", "swarm_task_claim", "swarm_task_complete", "swarm_task_list":
 		return toolPresentation{
-			DisplayName: "Swarm Task",
+			DisplayName: localizedToolLabel(lang, "swarm_task"),
 			Detail:      displayToolTarget(firstNonEmpty(argString(args, "subject"), argString(args, "task_id"))),
-			Activity:    "Managing swarm task",
+			Activity:    localizedToolActivity(lang, "swarm_task", ""),
 		}
 	default:
 		// LSP tools share a common pattern: show file:line
@@ -429,6 +429,12 @@ func localizedToolLabel(lang Language, action string) string {
 			return "计划模式"
 		case "exit_plan":
 			return "退出计划"
+		case "team":
+			return "团队"
+		case "teammate":
+			return "队友"
+		case "swarm_task":
+			return "协作任务"
 		case "ask":
 			return "提问"
 		case "inspect":
@@ -512,6 +518,12 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Plan Mode"
 		case "exit_plan":
 			return "Exit Plan"
+		case "team":
+			return "Team"
+		case "teammate":
+			return "Teammate"
+		case "swarm_task":
+			return "Swarm Task"
 		case "ask":
 			return "Ask"
 		case "inspect":
@@ -602,6 +614,12 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "进入计划模式..."
 			case "exit_plan":
 				return "退出计划模式..."
+			case "team":
+				return "管理团队..."
+			case "teammate":
+				return "管理队友..."
+			case "swarm_task":
+				return "管理协作任务..."
 			case "ask":
 				return "等待用户输入"
 			case "inspect":
@@ -661,6 +679,12 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Entering plan mode..."
 			case "exit_plan":
 				return "Exiting plan mode..."
+			case "team":
+				return "Managing team..."
+			case "teammate":
+				return "Managing teammate..."
+			case "swarm_task":
+				return "Managing swarm task..."
 			case "ask":
 				return "Waiting for user input"
 			case "inspect":
