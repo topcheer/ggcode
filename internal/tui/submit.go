@@ -277,12 +277,13 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				// Sub-agent lifecycle tools are low-frequency; send directly.
 				present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
-					ToolID:   event.Tool.ID,
-					ToolName: event.Tool.Name,
-					Activity: m.t("status.thinking"),
-					Running:  true,
-					RawArgs:  string(event.Tool.Arguments),
-					Args:     truncateString(present.Detail, 100),
+					ToolID:      event.Tool.ID,
+					ToolName:    event.Tool.Name,
+					Activity:    m.t("status.thinking"),
+					Running:     true,
+					RawArgs:     string(event.Tool.Arguments),
+					Args:        truncateString(present.Detail, 100),
+					DisplayName: present.DisplayName,
 				}})
 				return
 			}
@@ -313,14 +314,15 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				// Sub-agent lifecycle tools are low-frequency; send directly.
 				m.program.Send(agentToolStatusMsg{RunID: runID, ToolStatusMsg: ToolStatusMsg{
-					ToolID:   event.Tool.ID,
-					ToolName: event.Tool.Name,
-					Activity: m.t("status.thinking"),
-					Running:  false,
-					Result:   event.Result,
-					RawArgs:  string(event.Tool.Arguments),
-					Args:     truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
-					IsError:  event.IsError,
+					ToolID:      event.Tool.ID,
+					ToolName:    event.Tool.Name,
+					Activity:    m.t("status.thinking"),
+					Running:     false,
+					Result:      event.Result,
+					RawArgs:     string(event.Tool.Arguments),
+					Args:        truncateString(present.Detail, 100),
+					IsError:     event.IsError,
+					DisplayName: present.DisplayName,
 				}})
 				m.program.Send(subAgentUpdateMsg{})
 				return
