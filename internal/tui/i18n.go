@@ -183,10 +183,6 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.skills")
 	case "/exit", "/quit":
 		return tr(lang, "slash.exit")
-	case "/agents":
-		return tr(lang, "slash.agents")
-	case "/agent":
-		return tr(lang, "slash.agent")
 	case "/compact":
 		return tr(lang, "slash.compact")
 	case "/todo":
@@ -1237,10 +1233,6 @@ func enCatalog(key string) string {
 		return "Browse available skills"
 	case "slash.exit":
 		return "Exit ggcode"
-	case "slash.agents":
-		return "List sub-agents"
-	case "slash.agent":
-		return "Sub-agent details"
 	case "slash.compact":
 		return "Compress conversation history"
 	case "slash.todo":
@@ -2489,10 +2481,6 @@ func zhCatalog(key string) string {
 		return "浏览可用 skills"
 	case "slash.exit":
 		return "退出 ggcode"
-	case "slash.agents":
-		return "列出子 Agent"
-	case "slash.agent":
-		return "查看子 Agent 详情"
 	case "slash.compact":
 		return "压缩对话历史"
 	case "slash.todo":
