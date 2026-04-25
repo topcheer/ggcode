@@ -244,6 +244,8 @@ func enCatalog(key string) string {
 		return "idle"
 	case "agents.running":
 		return "%d running"
+	case "cron.firing":
+		return "⏰ Cron job triggered"
 	case "activity.idle":
 		return "idle"
 	case "panel.conversation":
@@ -2421,6 +2423,8 @@ func zhCatalog(key string) string {
 		return "发送一条消息即可携带这张图片，或继续用 /image 再附加一张。\n\n"
 	case "image.clipboard_failed":
 		return "从剪贴板粘贴图片失败：%v"
+	case "cron.firing":
+		return "⏰ 定时任务触发"
 	case "agents.none":
 		return "还没有创建子 Agent。\n用法：LLM 可以使用 spawn_agent 工具创建子 Agent。\n\n"
 	case "agents.title":
