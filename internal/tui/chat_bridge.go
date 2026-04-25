@@ -185,11 +185,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 			RawArgs:     ts.RawArgs,
 		}
 		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
-		// Set result on the appropriate type (suppress body for web tools)
-		result := ts.Result
-		if ts.ToolName == "web_fetch" || ts.ToolName == "web_search" {
-			result = ""
-		}
+		result := suppressToolResult(ts.ToolName, ts.Result)
 		m.setToolResult(item, result)
 		m.chatList.Append(item)
 		return
@@ -197,11 +193,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 
 	// Update existing item
 	m.chatUpdateToolStatus(id, status)
-	// Suppress body for web tools — result is too large for inline display
-	result := ts.Result
-	if ts.ToolName == "web_fetch" || ts.ToolName == "web_search" {
-		result = ""
-	}
+	result := suppressToolResult(ts.ToolName, ts.Result)
 	m.setToolResult(existing, result)
 }
 
@@ -224,6 +216,18 @@ func (m *Model) setToolResult(item chat.Item, result string) {
 	if setter, ok := item.(interface{ SetResult(string, bool) }); ok {
 		setter.SetResult(result, false)
 	}
+}
+
+// suppressToolResult returns empty string for tools whose result body should
+// not be rendered inline in the TUI chat list.
+func suppressToolResult(toolName, result string) string {
+	switch toolName {
+	case "web_fetch", "web_search":
+		return ""
+	case "start_command", "stop_command", "list_commands":
+		return ""
+	}
+	return result
 }
 
 // todoToolItemID is the fixed ID for the persistent todo list in chatList.
