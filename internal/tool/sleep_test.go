@@ -44,7 +44,7 @@ func TestSleep_WithMilliseconds(t *testing.T) {
 func TestSleep_ExceedsMax(t *testing.T) {
 	s := SleepTool{}
 	input, _ := json.Marshal(map[string]interface{}{
-		"seconds": 120,
+		"seconds": 1900,
 	})
 	result, err := s.Execute(context.Background(), input)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestSleep_ContextCancellation(t *testing.T) {
 	defer cancel()
 
 	input, _ := json.Marshal(map[string]interface{}{
-		"seconds": 60,
+		"seconds": 120,
 	})
 	result, err := s.Execute(ctx, input)
 	if err == nil {

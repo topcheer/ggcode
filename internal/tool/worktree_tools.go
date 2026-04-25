@@ -17,6 +17,7 @@ type EnterWorktree struct {
 	WorkingDir string
 }
 
+func (t *EnterWorktree) SetWorkingDir(dir string) { t.WorkingDir = dir }
 func (t EnterWorktree) Name() string { return "enter_worktree" }
 
 func (t EnterWorktree) Description() string {
@@ -94,6 +95,7 @@ type ExitWorktree struct {
 	WorkingDir string
 }
 
+func (t *ExitWorktree) SetWorkingDir(dir string) { t.WorkingDir = dir }
 func (t ExitWorktree) Name() string { return "exit_worktree" }
 
 func (t ExitWorktree) Description() string {

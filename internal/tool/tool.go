@@ -37,6 +37,12 @@ type ResultImage struct {
 }
 
 // Tool is the interface every tool (built-in, MCP-adapted, or plugin) must implement.
+// WorkingDirSetter is an optional interface for tools that need to track the
+// agent's current working directory (e.g., worktree tools).
+type WorkingDirSetter interface {
+	SetWorkingDir(dir string)
+}
+
 type Tool interface {
 	// Name returns the unique tool identifier (e.g., "read_file").
 	Name() string
