@@ -95,6 +95,14 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return a.executeFileTool(ctx, t, tc, env)
 	}
 
+	// Sync working directory for tools that track it (e.g., worktree tools).
+	if setter, ok := t.(tool.WorkingDirSetter); ok {
+		a.mu.RLock()
+		wd := a.workingDir
+		a.mu.RUnlock()
+		setter.SetWorkingDir(wd)
+	}
+
 	// Execute the actual tool (with panic recovery)
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
