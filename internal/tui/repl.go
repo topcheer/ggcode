@@ -613,6 +613,7 @@ func (r *REPL) loadSession(id string) {
 	}
 	r.model.SetSession(ses, r.store)
 	r.model.rebuildConversationFromMessages(ses.Messages)
+	r.model.restoreHistoryFromMessages(ses.Messages)
 	title := ses.Title
 	if title == "" {
 		title = r.model.t("session.untitled")

@@ -24,6 +24,30 @@ func (m *Model) rebuildConversationFromMessages(messages []provider.Message) {
 	m.chatListScrollToBottom()
 }
 
+// restoreHistoryFromMessages extracts user text messages from a session
+// and populates the input history so the user can recall previous prompts
+// with ↑/↓ arrows after resuming a session.
+func (m *Model) restoreHistoryFromMessages(messages []provider.Message) {
+	m.history = m.history[:0]
+	for _, msg := range messages {
+		if msg.Role != "user" {
+			continue
+		}
+		var parts []string
+		for _, block := range msg.Content {
+			if block.Type == "text" {
+				if t := strings.TrimSpace(block.Text); t != "" {
+					parts = append(parts, t)
+				}
+			}
+		}
+		if text := strings.Join(parts, "\n\n"); text != "" {
+			m.history = append(m.history, text)
+		}
+	}
+	m.historyIdx = len(m.history)
+}
+
 func (m *Model) renderConversationMessage(msg provider.Message, toolCalls map[string]resumedToolCall) {
 	switch msg.Role {
 	case "system":
