@@ -310,6 +310,12 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.syncContextManagerTodoPathLocked()
 }
 
+func (a *Agent) WorkingDir() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.workingDir
+}
+
 func (a *Agent) syncContextManagerTodoPathLocked() {
 	if cm, ok := a.contextManager.(todoPathAwareContextManager); ok {
 		cm.SetTodoFilePath(tool.TodoFilePath(a.workingDir))

@@ -381,6 +381,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 
+	var ag *agent.Agent // declared early so closures can capture it
+
 	// Setup tools (after policy so sandbox checks can be wired)
 	workingDir, _ := os.Getwd()
 	registry := tool.NewRegistry()
@@ -411,11 +413,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		return memory.LoadProjectMemory(workingDir)
 	}
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
-		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+		a := agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+		a.SetWorkingDir(ag.WorkingDir())
+		return a
 	}
 	var knightAgent *knight.Knight
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
 		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
+			if ag != nil {
+				a.SetWorkingDir(ag.WorkingDir())
+			}
 		if onUsage != nil {
 			a.SetUsageHandler(onUsage)
 		}
@@ -482,7 +489,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Setup agent
 	maxIter := cfg.MaxIterations
-	ag := agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
 	}
@@ -614,7 +621,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if reg == nil {
 			reg = registry // fallback to the main registry
 		}
-		return agent.NewAgent(prov, reg, systemPrompt, maxTurns)
+		a := agent.NewAgent(prov, reg, systemPrompt, maxTurns)
+		a.SetWorkingDir(ag.WorkingDir())
+		return a
 	}
 	swarmToolBuilder := func(_ []string) interface{} {
 		return registry // all teammates share the same tool registry
