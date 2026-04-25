@@ -622,20 +622,6 @@ func (t *TodoToolItem) Render(width int) string {
 	var sb strings.Builder
 	sb.WriteString(header)
 
-	// Task list
-	for _, task := range t.tasks {
-		sb.WriteString("\n  ")
-		switch task.Status {
-		case "done":
-			sb.WriteString("✓ ")
-		case "in_progress":
-			sb.WriteString("→ ")
-		default:
-			sb.WriteString("○ ")
-		}
-		sb.WriteString(task.Content)
-	}
-
 	rendered := sb.String()
 	t.SetCached(rendered, width, measureHeight(rendered))
 	return rendered
