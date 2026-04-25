@@ -501,7 +501,9 @@ func classifyTool(name string) toolCategory {
 		return catList
 	case "web_fetch", "web_search":
 		return catWeb
-	case "git_status", "git_diff", "git_log":
+	case "git_status", "git_diff", "git_log", "git_show",
+		"git_blame", "git_branch_list", "git_remote",
+		"git_stash_list", "git_add", "git_commit", "git_stash":
 		return catGit
 	case "start_command", "read_command_output", "wait_command",
 		"stop_command", "write_command_input", "list_commands":
