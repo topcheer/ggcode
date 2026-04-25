@@ -224,10 +224,25 @@ func suppressToolResult(toolName, result string) string {
 	switch toolName {
 	case "web_fetch", "web_search":
 		return ""
-	case "start_command", "stop_command", "list_commands":
+	case "start_command", "stop_command":
 		return ""
+	case "read_command_output":
+		// Only keep the actual output content, strip structured metadata
+		return extractRecentOutput(result)
 	}
 	return result
+}
+
+// extractRecentOutput parses the structured read_command_output result
+// and returns only the "Recent output" content.
+func extractRecentOutput(result string) string {
+	marker := "Recent output:\n"
+	idx := strings.Index(result, marker)
+	if idx < 0 {
+		return ""
+	}
+	output := result[idx+len(marker):]
+	return strings.TrimSpace(output)
 }
 
 // todoToolItemID is the fixed ID for the persistent todo list in chatList.
