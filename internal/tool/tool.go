@@ -21,6 +21,10 @@ type Result struct {
 	// update its WorkingDir to this value so subsequent tool calls (e.g.
 	// run_command, read_file) operate in the new directory automatically.
 	SuggestedWorkingDir string `json:"suggested_working_dir,omitempty"`
+	// FollowUpMessages are additional messages injected after the tool_result.
+	// Used by inline skills to inject skill instructions as a user message,
+	// forcing the model to process and act on them.
+	FollowUpMessages []provider.Message `json:"follow_up_messages,omitempty"`
 }
 
 // ResultImage carries a single image within a tool Result.

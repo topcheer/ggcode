@@ -120,7 +120,21 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		"DIR":  workDir,
 		"ARGS": strings.TrimSpace(args.Args),
 	})
-	result := Result{Content: strings.TrimSpace(content)}
+	content = strings.TrimSpace(content)
+	// Return a brief confirmation + inject skill content as follow-up user message.
+	// This forces the model to process and act on the skill instructions,
+	// matching Claude Code's inline skill behavior.
+	result := Result{
+		Content: fmt.Sprintf("Skill %q loaded. Follow the instructions below to complete the task.", cmd.Name),
+		FollowUpMessages: []provider.Message{
+			{
+				Role: "user",
+				Content: []provider.ContentBlock{
+					{Type: "text", Text: content},
+				},
+			},
+		},
+	}
 	t.notifySkillCompleted(cmd, SkillExecutionModeInline, result, nil)
 	return result, nil
 }
@@ -219,7 +233,16 @@ func (t SkillTool) executeMCPPromptSkill(ctx context.Context, skillName, rawArgs
 		sb.WriteString("]\n")
 		sb.WriteString(firstNonEmptyString(msg.Text, msg.Raw))
 	}
-	return Result{Content: strings.TrimSpace(sb.String())}, true
+	content := strings.TrimSpace(sb.String())
+	return Result{
+		Content: fmt.Sprintf("MCP skill %q loaded. Follow the instructions below.", skillName),
+		FollowUpMessages: []provider.Message{
+			{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: content}},
+			},
+		},
+	}, true
 }
 
 func splitMCPSkillName(name string) (string, string, bool) {
