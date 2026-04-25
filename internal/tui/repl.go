@@ -626,7 +626,11 @@ func (r *REPL) execRestart() error {
 	args := r.model.buildRestartArgs()
 	execArgs := append([]string{binary}, args...)
 
-	debug.Log("restart", "exec binary=%s args=%v", binary, args)
+	sessionID := ""
+	if r.model.session != nil {
+		sessionID = r.model.session.ID
+	}
+	debug.Log("restart", "exec binary=%s session=%s args=%v", binary, sessionID, args)
 	fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s\n", strings.Join(execArgs, " "))
 
 	return syscall.Exec(binary, execArgs, os.Environ())
