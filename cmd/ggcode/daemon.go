@@ -671,10 +671,10 @@ func daemonRestart(cfgFile, workDir, sessionID string, bypass bool) error {
 	if cfgFile != "" {
 		args = append(args, "--config", cfgFile)
 	}
+	args = append(args, "daemon", "--follow")
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
 	}
-	args = append(args, "daemon", "--follow")
 	if bypass {
 		args = append(args, "--bypass")
 	}

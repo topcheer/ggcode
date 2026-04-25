@@ -63,11 +63,11 @@ func ResolveBinary() (string, error) {
 // --- Unix-only types and helpers (used by restart_unix.go) ---
 
 type templateData struct {
-	PID            int
-	BinaryEscaped  string
-	WorkDirEscaped string
-	Args           []string
-	ArgsBash       string
+	PID      int
+	Binary   string
+	WorkDir  string
+	Args     []string
+	ArgsBash string
 }
 
 const scriptTemplate = `#!/bin/bash
@@ -75,8 +75,8 @@ const scriptTemplate = `#!/bin/bash
 set -euo pipefail
 
 PARENT_PID={{.PID}}
-BINARY="{{.BinaryEscaped}}"
-WORK_DIR="{{.WorkDirEscaped}}"
+BINARY={{.Binary}}
+WORK_DIR={{.WorkDir}}
 {{- if .Args}}
 ARGS=({{.ArgsBash}})
 {{- else}}
@@ -102,10 +102,17 @@ done
 
 echo "[ggcode restart] process $PARENT_PID exited, checking for residuals..."
 
-# 2. Brief pause to let file descriptors / ttys release
-sleep 0.3
+# 2. Wait for parent's terminal cleanup (raw mode restore, etc.)
+# The kill -0 loop only waits for process exit; the terminal may still
+# be in raw mode for a brief moment after. Give it time to stty sane.
+sleep 0.5
 
-# 3. cd to original working directory
+# 3. Force terminal to sane state as a safety net
+if [ -t 0 ]; then
+    stty sane 2>/dev/null || true
+fi
+
+# 4. cd to original working directory
 cd "$WORK_DIR" 2>/dev/null || true
 
 # 4. Launch new process — exec replaces this script

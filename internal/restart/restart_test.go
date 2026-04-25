@@ -76,9 +76,21 @@ func TestWriteScriptBasicContent(t *testing.T) {
 		t.Error("script should contain PARENT_PID=12345")
 	}
 
-	// Verify binary path is embedded (bash-escaped).
+	// Verify binary path is embedded.
 	if !strings.Contains(s, tmpBin) {
 		t.Errorf("script should contain binary path %q", tmpBin)
+	}
+
+	// Verify BINARY= line does NOT have extra quoting (single quotes inside double).
+	// bashEscape wraps in single quotes, so line should be: BINARY='/path/to/bin'
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "BINARY=") {
+			// Should be BINARY='/path/...' NOT BINARY="'/path/...'"
+			if strings.Contains(line, `"'`) || strings.Contains(line, `'"`) {
+				t.Errorf("BINARY line has double-quoting issue: %s", line)
+			}
+			break
+		}
 	}
 
 	// Verify workdir is embedded.

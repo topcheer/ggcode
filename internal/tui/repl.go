@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -23,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/restart"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -553,6 +555,13 @@ func (r *REPL) Run() error {
 		r.model.session.Messages = r.agent.Messages()
 		_ = r.store.Save(r.model.session)
 	}
+
+	// Self-restart: exec the latest binary with the same flags.
+	// At this point Bubble Tea has already restored the terminal from raw mode.
+	if r.model.restartRequested {
+		return r.execRestart()
+	}
+
 	return err
 }
 
@@ -600,4 +609,21 @@ func (r *REPL) loadSession(id string) {
 		title = r.model.t("session.untitled")
 	}
 	r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume", ses.ID, title, len(ses.Messages)))
+}
+
+// execRestart replaces the current process with a fresh ggcode binary.
+// Called after program.Run() returns and the terminal has been restored.
+// Uses syscall.Exec to keep the same PID and terminal control.
+func (r *REPL) execRestart() error {
+	binary, err := restart.ResolveBinary()
+	if err != nil {
+		return fmt.Errorf("restart: resolve binary: %w", err)
+	}
+
+	args := r.model.buildRestartArgs()
+	execArgs := append([]string{binary}, args...)
+
+	fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s %v\n", binary, args)
+
+	return syscall.Exec(binary, execArgs, os.Environ())
 }
