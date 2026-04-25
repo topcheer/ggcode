@@ -1,3 +1,5 @@
+//go:build integration
+
 package e2e_test
 
 import (
@@ -20,6 +22,13 @@ import (
 
 // noopModeSwitcher is a no-op ModeSwitcher for tests.
 type noopModeSwitcher struct{}
+
+func skipE2E(t *testing.T) {
+	t.Helper()
+	if os.Getenv("ZAI_API_KEY") == "" && os.Getenv("GGCODE_ZAI_API_KEY") == "" {
+		t.Skip("skipping E2E test: no API key set")
+	}
+}
 
 func (n *noopModeSwitcher) SetMode(mode permission.PermissionMode) {}
 func (n *noopModeSwitcher) RememberMode(currentMode permission.PermissionMode) permission.PermissionMode {

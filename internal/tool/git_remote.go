@@ -8,7 +8,7 @@ import (
 )
 
 // GitRemote implements the git_remote tool.
-type GitRemote struct { WorkingDir string }
+type GitRemote struct{ WorkingDir string }
 
 func (t GitRemote) Name() string { return "git_remote" }
 

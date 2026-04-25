@@ -8,7 +8,7 @@ import (
 )
 
 // GitStash implements the git_stash tool for push/pop/apply/drop operations.
-type GitStash struct { WorkingDir string }
+type GitStash struct{ WorkingDir string }
 
 func (t GitStash) Name() string { return "git_stash" }
 

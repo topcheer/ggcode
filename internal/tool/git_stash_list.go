@@ -8,7 +8,7 @@ import (
 )
 
 // GitStashList implements the git_stash_list tool.
-type GitStashList struct { WorkingDir string }
+type GitStashList struct{ WorkingDir string }
 
 func (t GitStashList) Name() string { return "git_stash_list" }
 

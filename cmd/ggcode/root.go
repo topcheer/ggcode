@@ -420,9 +420,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var knightAgent *knight.Knight
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
 		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
-			if ag != nil {
-				a.SetWorkingDir(ag.WorkingDir())
-			}
+		if ag != nil {
+			a.SetWorkingDir(ag.WorkingDir())
+		}
 		if onUsage != nil {
 			a.SetUsageHandler(onUsage)
 		}

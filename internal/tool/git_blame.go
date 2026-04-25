@@ -8,7 +8,7 @@ import (
 )
 
 // GitBlame implements the git_blame tool.
-type GitBlame struct { WorkingDir string }
+type GitBlame struct{ WorkingDir string }
 
 func (t GitBlame) Name() string { return "git_blame" }
 

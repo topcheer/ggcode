@@ -8,7 +8,7 @@ import (
 )
 
 // GitStatus implements the git_status tool.
-type GitStatus struct { WorkingDir string }
+type GitStatus struct{ WorkingDir string }
 
 func (t GitStatus) Name() string { return "git_status" }
 

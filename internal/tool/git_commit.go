@@ -8,7 +8,7 @@ import (
 )
 
 // GitCommit implements the git_commit tool.
-type GitCommit struct { WorkingDir string }
+type GitCommit struct{ WorkingDir string }
 
 func (t GitCommit) Name() string { return "git_commit" }
 
