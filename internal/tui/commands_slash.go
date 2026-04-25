@@ -628,37 +628,6 @@ func (m *Model) handleSwarmCommand(parts []string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleAgentsCommand(parts []string) tea.Cmd {
-	m.openInspectorPanel(inspectorPanelAgents)
-	return nil
-}
-
-func (m *Model) handleAgentDetailCommand(parts []string) tea.Cmd {
-	if m.subAgentMgr == nil {
-		m.chatWriteSystem(nextSystemID(), m.t("agents.unavailable"))
-		return nil
-	}
-	if len(parts) < 2 {
-		m.openInspectorPanel(inspectorPanelAgents)
-		return nil
-	}
-	if parts[1] == "cancel" && len(parts) >= 3 {
-		if m.subAgentMgr.Cancel(parts[2]) {
-			m.chatWriteSystem(nextSystemID(), m.t("agent.cancelled", parts[2]))
-		} else {
-			m.chatWriteSystem(nextSystemID(), m.t("agent.cancel_failed", parts[2]))
-		}
-		return nil
-	}
-	sa, ok := m.subAgentMgr.Get(parts[1])
-	if !ok {
-		m.chatWriteSystem(nextSystemID(), m.t("agent.not_found", parts[1]))
-		return nil
-	}
-	m.openAgentDetailPanel(sa.ID)
-	return nil
-}
-
 func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	if m.knight == nil {
 		m.chatWriteSystem(nextSystemID(), "Knight is not available (only in daemon mode)")

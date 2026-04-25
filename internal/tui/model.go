@@ -130,7 +130,6 @@ type Model struct {
 	harnessPanel                    *harnessPanelState
 	harnessContextPrompt            *harnessContextPromptState
 	impersonatePanel                *impersonatePanelState
-	agentDetailPanel                *agentDetailPanelState
 
 	// Approval selection list
 	approvalOptions []approvalOption
@@ -551,8 +550,6 @@ func (m *Model) closeActivePanel() bool {
 		m.closeHarnessPanel()
 	case m.impersonatePanel != nil:
 		m.closeImpersonatePanel()
-	case m.agentDetailPanel != nil:
-		m.closeAgentDetailPanel()
 	case m.swarmPanel != nil:
 		m.closeSwarmPanel()
 	case len(m.langOptions) > 0:

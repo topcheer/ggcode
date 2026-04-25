@@ -285,10 +285,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleHarnessPanelKey(msg)
 		}
 
-		if m.agentDetailPanel != nil {
-			return m.handleAgentDetailPanelKey(msg)
-		}
-
 		if m.pendingPairingChallenge() != nil {
 			switch msg.String() {
 			case "esc":

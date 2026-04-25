@@ -1008,7 +1008,6 @@ func TestScenario_UserOpensInspectorPanels(t *testing.T) {
 		kind inspectorPanelKind
 	}{
 		{"/sessions", inspectorPanelSessions},
-		{"/agents", inspectorPanelAgents},
 		{"/checkpoints", inspectorPanelCheckpoints},
 		{"/memory", inspectorPanelMemory},
 		{"/todo", inspectorPanelTodos},
@@ -1079,11 +1078,11 @@ func TestScenario_UserOpensFileBrowser(t *testing.T) {
 func TestScenario_BusySafeCommandsExecuteImmediately(t *testing.T) {
 	safeCommands := []string{
 		"/help", "/model", "/provider", "/lang en",
-		"/mcp", "/skills", "/sessions", "/agents",
+		"/mcp", "/skills", "/sessions",
 		"/status", "/config", "/memory", "/todo", "/plugins",
 		"/checkpoints", "/?", "/impersonate", "/qq", "/telegram",
 		"/tg", "/pc", "/discord", "/feishu", "/slack", "/dingtalk",
-		"/im", "/agent", "/harness", "/harness panel",
+		"/im", "/harness", "/harness panel",
 	}
 	for _, cmd := range safeCommands {
 		if !shouldExecuteWhileBusy(cmd) {

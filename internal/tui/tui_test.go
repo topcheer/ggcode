@@ -47,7 +47,6 @@ func TestSlashCommandsOpenInspectorPanels(t *testing.T) {
 		{"/sessions", inspectorPanelSessions},
 		{"/resume", inspectorPanelSessions},
 		{"/export", inspectorPanelSessions},
-		{"/agents", inspectorPanelAgents},
 		{"/checkpoints", inspectorPanelCheckpoints},
 		{"/memory", inspectorPanelMemory},
 		{"/todo", inspectorPanelTodos},
