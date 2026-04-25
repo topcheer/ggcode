@@ -1,9 +1,10 @@
 package harness
 
 import (
-	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -15,7 +16,7 @@ type MonitorOptions struct {
 
 type MonitorReport struct {
 	GeneratedAt   time.Time
-	SnapshotPath  string
+	SnapshotDir   string
 	EventLogPath  string
 	TaskTotals    MonitorTaskTotals
 	RolloutTotals MonitorRolloutTotals
@@ -88,33 +89,33 @@ func BuildMonitorReport(project Project, opts MonitorOptions) (*MonitorReport, e
 		opts.FocusTasks = 6
 	}
 
-	db, err := openHarnessSnapshot(project)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
 	report := &MonitorReport{
 		GeneratedAt:  time.Now().UTC(),
-		SnapshotPath: project.SnapshotPath,
+		SnapshotDir:  filepath.Join(project.StateDir, "snapshots"),
 		EventLogPath: project.EventLogPath,
 	}
-	if err := loadMonitorTaskTotals(db, &report.TaskTotals); err != nil {
-		return nil, err
-	}
-	if err := loadMonitorRolloutTotals(db, &report.RolloutTotals); err != nil {
-		return nil, err
-	}
-	focusTasks, err := loadMonitorFocusTasks(db, opts.FocusTasks)
+
+	tasks, err := loadAllTaskSnapshots(project)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load task snapshots: %w", err)
 	}
+	aggregateTaskTotals(tasks, &report.TaskTotals)
+
+	focusTasks := selectFocusTasks(tasks, opts.FocusTasks)
 	report.FocusTasks = focusTasks
-	recentEvents, err := loadMonitorRecentEvents(db, opts.RecentEvents)
+
+	plans, err := loadAllReleasePlanSnapshots(project)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load release snapshots: %w", err)
+	}
+	aggregateRolloutTotals(plans, &report.RolloutTotals)
+
+	recentEvents, err := loadRecentEventsFromJSONL(project.EventLogPath, opts.RecentEvents)
+	if err != nil {
+		return nil, fmt.Errorf("load recent events: %w", err)
 	}
 	report.RecentEvents = recentEvents
+
 	return report, nil
 }
 
@@ -124,7 +125,7 @@ func FormatMonitorReport(report *MonitorReport) string {
 	}
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Harness monitor @ %s\n", report.GeneratedAt.Format(time.RFC3339)))
-	fmt.Fprintf(&b, "- snapshot: %s\n", monitorDisplayPath(report.SnapshotPath))
+	fmt.Fprintf(&b, "- snapshots: %s\n", monitorDisplayPath(report.SnapshotDir))
 	fmt.Fprintf(&b, "- events: %s\n", monitorDisplayPath(report.EventLogPath))
 	fmt.Fprintf(&b, "Tasks: total=%d queued=%d blocked=%d running=%d completed=%d failed=%d abandoned=%d\n",
 		report.TaskTotals.Total, report.TaskTotals.Queued, report.TaskTotals.Blocked, report.TaskTotals.Running,
@@ -189,192 +190,123 @@ func FormatMonitorReport(report *MonitorReport) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func loadMonitorTaskTotals(db *sql.DB, totals *MonitorTaskTotals) error {
-	if totals == nil {
-		return fmt.Errorf("missing monitor task totals")
-	}
-	return db.QueryRow(`
-		SELECT
-			COUNT(*),
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN review_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN status = ? AND review_status = ? AND COALESCE(promotion_status, '') != ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN released_at IS NOT NULL AND released_at != '' THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN worker_id IS NOT NULL AND worker_id != '' AND status = ? THEN 1 ELSE 0 END), 0)
-		FROM tasks`,
-		string(TaskQueued),
-		string(TaskBlocked),
-		string(TaskRunning),
-		string(TaskCompleted),
-		string(TaskFailed),
-		string(TaskAbandoned),
-		ReviewPending,
-		string(TaskCompleted),
-		ReviewApproved,
-		PromotionApplied,
-		string(TaskRunning),
-	).Scan(
-		&totals.Total,
-		&totals.Queued,
-		&totals.Blocked,
-		&totals.Running,
-		&totals.Completed,
-		&totals.Failed,
-		&totals.Abandoned,
-		&totals.ReviewPending,
-		&totals.PromotionReady,
-		&totals.Released,
-		&totals.ActiveWorkers,
-	)
-}
+// --- In-memory aggregation ---
 
-func loadMonitorRolloutTotals(db *sql.DB, totals *MonitorRolloutTotals) error {
-	if totals == nil {
-		return fmt.Errorf("missing monitor rollout totals")
-	}
-	return db.QueryRow(`
-		SELECT
-			COUNT(*),
-			COUNT(DISTINCT CASE WHEN rollout_id IS NOT NULL AND rollout_id != '' THEN rollout_id END),
-			COALESCE(SUM(CASE WHEN wave_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN wave_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN wave_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN wave_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN wave_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN gate_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN gate_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN gate_status = ? THEN 1 ELSE 0 END), 0)
-		FROM release_plans`,
-		ReleaseWavePlanned,
-		ReleaseWaveActive,
-		ReleaseWavePaused,
-		ReleaseWaveAborted,
-		ReleaseWaveCompleted,
-		ReleaseGatePending,
-		ReleaseGateApproved,
-		ReleaseGateRejected,
-	).Scan(
-		&totals.Batches,
-		&totals.Rollouts,
-		&totals.Planned,
-		&totals.Active,
-		&totals.Paused,
-		&totals.Aborted,
-		&totals.Completed,
-		&totals.GatesPending,
-		&totals.GatesApproved,
-		&totals.GatesRejected,
-	)
-}
-
-func loadMonitorFocusTasks(db *sql.DB, limit int) ([]*MonitorTask, error) {
-	rows, err := db.Query(`
-		SELECT task_id, goal, status, context_name, context_path, worker_id, worker_status, worker_phase,
-		       worker_progress, review_status, promotion_status, release_batch_id, updated_at
-		FROM tasks
-		ORDER BY
-			CASE status
-				WHEN 'running' THEN 0
-				WHEN 'blocked' THEN 1
-				WHEN 'failed' THEN 2
-				WHEN 'queued' THEN 3
-				ELSE 4
-			END,
-			updated_at DESC
-		LIMIT ?`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("query monitor focus tasks: %w", err)
-	}
-	defer rows.Close()
-	var tasks []*MonitorTask
-	for rows.Next() {
-		var task MonitorTask
-		var contextName, contextPath, workerID, workerStatus, workerPhase, workerProgress sql.NullString
-		var reviewStatus, promotionStatus, releaseBatchID sql.NullString
-		var updatedAt string
-		if err := rows.Scan(
-			&task.ID,
-			&task.Goal,
-			&task.Status,
-			&contextName,
-			&contextPath,
-			&workerID,
-			&workerStatus,
-			&workerPhase,
-			&workerProgress,
-			&reviewStatus,
-			&promotionStatus,
-			&releaseBatchID,
-			&updatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan monitor focus task: %w", err)
+func aggregateTaskTotals(tasks []*Task, totals *MonitorTaskTotals) {
+	totals.Total = len(tasks)
+	for _, t := range tasks {
+		switch t.Status {
+		case TaskQueued:
+			totals.Queued++
+		case TaskBlocked:
+			totals.Blocked++
+		case TaskRunning:
+			totals.Running++
+		case TaskCompleted:
+			totals.Completed++
+		case TaskFailed:
+			totals.Failed++
+		case TaskAbandoned:
+			totals.Abandoned++
 		}
-		task.ContextName = nullableStringValue(contextName)
-		task.ContextPath = nullableStringValue(contextPath)
-		task.WorkerID = nullableStringValue(workerID)
-		task.WorkerStatus = nullableStringValue(workerStatus)
-		task.WorkerPhase = nullableStringValue(workerPhase)
-		task.WorkerProgress = nullableStringValue(workerProgress)
-		task.ReviewStatus = nullableStringValue(reviewStatus)
-		task.PromotionStatus = nullableStringValue(promotionStatus)
-		task.ReleaseBatchID = nullableStringValue(releaseBatchID)
-		task.UpdatedAt = parseMonitorTime(updatedAt)
-		tasks = append(tasks, &task)
+		if t.ReviewStatus == ReviewPending {
+			totals.ReviewPending++
+		}
+		if t.Status == TaskCompleted && t.ReviewStatus == ReviewApproved && t.PromotionStatus != PromotionApplied {
+			totals.PromotionReady++
+		}
+		if t.ReleasedAt != nil {
+			totals.Released++
+		}
+		if t.WorkerID != "" && t.Status == TaskRunning {
+			totals.ActiveWorkers++
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate monitor focus tasks: %w", err)
-	}
-	return tasks, nil
 }
 
-func loadMonitorRecentEvents(db *sql.DB, limit int) ([]*MonitorEvent, error) {
-	rows, err := db.Query(`
-		SELECT kind, entity_type, entity_id, task_id, batch_id, rollout_id, wave_order, status, gate_status, summary, recorded_at
-		FROM events
-		ORDER BY recorded_at DESC
-		LIMIT ?`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("query monitor recent events: %w", err)
-	}
-	defer rows.Close()
-	var events []*MonitorEvent
-	for rows.Next() {
-		var event MonitorEvent
-		var taskID, batchID, rolloutID, status, gateStatus, summary sql.NullString
-		var recordedAt string
-		if err := rows.Scan(
-			&event.Kind,
-			&event.EntityType,
-			&event.EntityID,
-			&taskID,
-			&batchID,
-			&rolloutID,
-			&event.WaveOrder,
-			&status,
-			&gateStatus,
-			&summary,
-			&recordedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan monitor event: %w", err)
+func aggregateRolloutTotals(plans []*ReleasePlan, totals *MonitorRolloutTotals) {
+	seen := make(map[string]bool)
+	totals.Batches = len(plans)
+	for _, p := range plans {
+		if rid := strings.TrimSpace(p.RolloutID); rid != "" {
+			seen[rid] = true
 		}
-		event.TaskID = nullableStringValue(taskID)
-		event.BatchID = nullableStringValue(batchID)
-		event.RolloutID = nullableStringValue(rolloutID)
-		event.Status = nullableStringValue(status)
-		event.GateStatus = nullableStringValue(gateStatus)
-		event.Summary = nullableStringValue(summary)
-		event.RecordedAt = parseMonitorTime(recordedAt)
-		events = append(events, &event)
+		switch strings.TrimSpace(p.WaveStatus) {
+		case ReleaseWavePlanned:
+			totals.Planned++
+		case ReleaseWaveActive:
+			totals.Active++
+		case ReleaseWavePaused:
+			totals.Paused++
+		case ReleaseWaveAborted:
+			totals.Aborted++
+		case ReleaseWaveCompleted:
+			totals.Completed++
+		}
+		switch strings.TrimSpace(p.GateStatus) {
+		case ReleaseGatePending:
+			totals.GatesPending++
+		case ReleaseGateApproved:
+			totals.GatesApproved++
+		case ReleaseGateRejected:
+			totals.GatesRejected++
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate monitor recent events: %w", err)
+	totals.Rollouts = len(seen)
+}
+
+// selectFocusTasks returns the top N most relevant tasks sorted by status
+// priority (running > blocked > failed > queued > other) then by updated_at desc.
+func selectFocusTasks(tasks []*Task, limit int) []*MonitorTask {
+	statusPriority := map[TaskStatus]int{
+		TaskRunning:   0,
+		TaskBlocked:   1,
+		TaskFailed:    2,
+		TaskQueued:    3,
+		TaskCompleted: 4,
+		TaskAbandoned: 5,
 	}
-	return events, nil
+
+	sorted := make([]*Task, len(tasks))
+	copy(sorted, tasks)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		pi, oki := statusPriority[sorted[i].Status]
+		pj, okj := statusPriority[sorted[j].Status]
+		if !oki {
+			pi = 6
+		}
+		if !okj {
+			pj = 6
+		}
+		if pi != pj {
+			return pi < pj
+		}
+		return sorted[i].UpdatedAt.After(sorted[j].UpdatedAt)
+	})
+
+	if len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+
+	result := make([]*MonitorTask, len(sorted))
+	for i, t := range sorted {
+		result[i] = &MonitorTask{
+			ID:              t.ID,
+			Goal:            t.Goal,
+			Status:          string(t.Status),
+			ContextName:     t.ContextName,
+			ContextPath:     t.ContextPath,
+			WorkerID:        t.WorkerID,
+			WorkerStatus:    t.WorkerStatus,
+			WorkerPhase:     t.WorkerPhase,
+			WorkerProgress:  t.WorkerProgress,
+			ReviewStatus:    t.ReviewStatus,
+			PromotionStatus: t.PromotionStatus,
+			ReleaseBatchID:  t.ReleaseBatchID,
+			UpdatedAt:       t.UpdatedAt,
+		}
+	}
+	return result
 }
 
 func monitorDisplayPath(path string) string {
@@ -388,11 +320,32 @@ func monitorDisplayPath(path string) string {
 	return path
 }
 
-func nullableStringValue(value sql.NullString) string {
-	if !value.Valid {
-		return ""
+// firstNonEmptyText is already defined elsewhere in the package; avoid redeclaration.
+// The harness package already has this helper.
+
+// marshalSnapshotJSON is kept for backward compat — it now just returns the
+// JSON bytes directly since we no longer need SQL-compatible any values.
+// Deprecated: not needed anymore, kept only if other files reference it.
+func marshalSnapshotJSON(v any) any {
+	data, err := json.Marshal(v)
+	if err != nil || string(data) == "null" {
+		return nil
 	}
-	return strings.TrimSpace(value.String)
+	return string(data)
+}
+
+func nullableText(text string) any {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return text
+}
+
+func nullableTime(ts *time.Time) any {
+	if ts == nil {
+		return nil
+	}
+	return ts.UTC().Format(time.RFC3339Nano)
 }
 
 func parseMonitorTime(raw string) time.Time {
