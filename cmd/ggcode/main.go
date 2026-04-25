@@ -58,7 +58,8 @@ Flags:
 - -h, --help: help for ggcode
 - --output string: output file path (default: stdout)
 - -p, --prompt string: pipe mode: non-interactive execution with a prompt
-- --resume string: resume a previous session by ID, or open a picker with bare --resume
+- --resume string: resume a previous session by ID
+- --resume-picker: interactively select a session to resume
 
 Use "ggcode [command] --help" for more information about a command.
 `

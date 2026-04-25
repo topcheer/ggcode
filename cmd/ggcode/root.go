@@ -95,15 +95,17 @@ func NewRootCmd() *cobra.Command {
 				return nil
 			}
 
+			resumePicker, _ := cmd.Flags().GetBool("resume-picker")
+			if resumePicker {
+				return run(cfg, cfgFile, "picker", bypassFlag)
+			}
 			return run(cfg, cfgFile, resumeID, bypassFlag)
 		},
 	}
 
 	cmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
-	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID, or open a picker with bare --resume")
-	if flag := cmd.Flags().Lookup("resume"); flag != nil {
-		flag.NoOptDefVal = resumePickerFlagValue
-	}
+	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
+	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
 	cmd.Flags().StringVarP(&pipePrompt, "prompt", "p", "", "pipe mode: non-interactive execution with a prompt")
 	cmd.Flags().StringArrayVar(&allowedTools, "allowedTools", nil, "tools to allow in pipe mode (can be repeated)")
 	cmd.Flags().StringArrayVar(&allowedDirs, "allowedDir", nil, "override writable sandbox directory for pipe mode (can be repeated)")
@@ -498,7 +500,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if err != nil {
 		return fmt.Errorf("creating session store: %w", err)
 	}
-	if resumeID == resumePickerFlagValue {
+	if resumeID == "picker" {
 		selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
 		if err != nil {
 			return err

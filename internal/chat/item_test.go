@@ -541,3 +541,75 @@ func TestToolHeaderShowsParams(t *testing.T) {
 		t.Fatalf("generic tool first line should contain detail, got: %q", clean3)
 	}
 }
+
+// TestVisualWidthDoesNotExceedViewport verifies that every rendered line
+// (after adding prefix padding) does not exceed the available width.
+// If a line's visual width exceeds the viewport width, the terminal will
+// auto-wrap it, creating extra visual lines that measureHeight() doesn't
+// count — causing scroll-position miscalculation and content overflow.
+func TestVisualWidthDoesNotExceedViewport(t *testing.T) {
+	styles := DefaultStyles()
+
+	testTexts := []struct {
+		label string
+		text  string
+	}{
+		{"short ASCII", "hello world"},
+		{"long ASCII", strings.Repeat("this is a test sentence that should wrap. ", 10)},
+		{"short CJK", "你好世界"},
+		{"long CJK", strings.Repeat("这是一段用于测试中文文本换行的文字内容。", 15)},
+		{"mixed ASCII+CJK", "Hello 你好 World 世界 " + strings.Repeat("测试文本混合换行功能", 10)},
+		{"multiline", "line1\nline2\nline3\nline4"},
+		{"long multiline", strings.Repeat("这是一行很长的中文文本用于测试换行计算", 3) + "\n" + strings.Repeat("Another long English line for testing word wrapping behavior in terminal", 3)},
+		{"markdown headings", "# Title\n## Subtitle\n### Sub-subtitle\nSome body text here"},
+		{"markdown list", "- item one\n- item two\n- item three with a longer description that should wrap"},
+		{"markdown code", "```go\nfmt.Println(\"hello\")\n```"},
+	}
+
+	widths := []int{20, 30, 40, 60, 76, 80}
+
+	for _, tt := range testTexts {
+		t.Run(tt.label, func(t *testing.T) {
+			for _, w := range widths {
+				t.Run(fmt.Sprintf("width_%d", w), func(t *testing.T) {
+					testVisualWidthForItemType(t, styles, tt.text, w)
+				})
+			}
+		})
+	}
+}
+
+func testVisualWidthForItemType(t *testing.T, styles Styles, text string, width int) {
+	t.Helper()
+
+	itemTypes := []struct {
+		name string
+		item Item
+	}{
+		{"user", NewUserItem("u1", text, styles)},
+		{"assistant", func() *AssistantItem {
+			a := NewAssistantItem("a1", styles)
+			a.SetText(text)
+			return a
+		}()},
+		{"system", NewSystemItem("s1", text, styles)},
+	}
+
+	for _, it := range itemTypes {
+		t.Run(it.name, func(t *testing.T) {
+			rendered := it.item.Render(width)
+			lines := strings.Split(rendered, "\n")
+			for i, line := range lines {
+				visualW := lipgloss.Width(line)
+				if visualW > width {
+					clean := stripTestAnsi(line)
+					if len(clean) > 80 {
+						clean = clean[:80] + "…"
+					}
+					t.Errorf("%s line %d/%d: visual width %d exceeds maxWidth %d\n  clean: %q",
+						it.name, i+1, len(lines), visualW, width, clean)
+				}
+			}
+		})
+	}
+}

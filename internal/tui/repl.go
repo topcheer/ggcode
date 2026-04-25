@@ -561,6 +561,12 @@ func (r *REPL) Run() error {
 	// program.Run() returns the final model state, but r.model is a
 	// snapshot from before Run() — we must read from finalModel.
 	if m, ok := finalModel.(Model); ok && m.restartRequested {
+		sid := ""
+		if m.session != nil {
+			sid = m.session.ID
+		}
+		fmt.Fprintf(os.Stderr, "[ggcode restart] finalModel: restartRequested=%v sessionID=%q updateSvc=%v\n",
+			m.restartRequested, sid, m.updateSvc != nil)
 		r.model = m
 		return r.execRestart()
 	}
@@ -631,6 +637,7 @@ func (r *REPL) execRestart() error {
 		sessionID = r.model.session.ID
 	}
 	debug.Log("restart", "exec binary=%s session=%s args=%v", binary, sessionID, args)
+	fmt.Fprintf(os.Stderr, "[ggcode restart] sessionID=%q args=%v\n", sessionID, args)
 	fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s\n", strings.Join(execArgs, " "))
 
 	return syscall.Exec(binary, execArgs, os.Environ())
