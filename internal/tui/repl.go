@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -539,7 +540,7 @@ func (r *REPL) Run() error {
 		}
 	})
 
-	_, err := r.program.Run()
+	finalModel, err := r.program.Run()
 	debug.Log("repl", "program.Run() returned err=%v", err)
 	if errors.Is(err, tea.ErrInterrupted) {
 		err = nil
@@ -556,9 +557,11 @@ func (r *REPL) Run() error {
 		_ = r.store.Save(r.model.session)
 	}
 
-	// Self-restart: exec the latest binary with the same flags.
-	// At this point Bubble Tea has already restored the terminal from raw mode.
-	if r.model.restartRequested {
+	// Check if the final model requested a self-restart.
+	// program.Run() returns the final model state, but r.model is a
+	// snapshot from before Run() — we must read from finalModel.
+	if m, ok := finalModel.(Model); ok && m.restartRequested {
+		r.model = m
 		return r.execRestart()
 	}
 
@@ -623,7 +626,8 @@ func (r *REPL) execRestart() error {
 	args := r.model.buildRestartArgs()
 	execArgs := append([]string{binary}, args...)
 
-	fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s %v\n", binary, args)
+	debug.Log("restart", "exec binary=%s args=%v", binary, args)
+	fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s\n", strings.Join(execArgs, " "))
 
 	return syscall.Exec(binary, execArgs, os.Environ())
 }
