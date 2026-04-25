@@ -72,6 +72,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 
 	// Setup tools (after policy so sandbox checks can be wired)
+	var ag *agent.Agent
 	registry := tool.NewRegistry()
 	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		fmt.Fprintf(os.Stderr, "registering tools: %v\n", err)
@@ -103,7 +104,9 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
 	})
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
-		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+		a := agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+		a.SetWorkingDir(ag.WorkingDir())
+		return a
 	}
 	_ = registry.Register(tool.SkillTool{
 		Skills:       commandMgr,
@@ -136,7 +139,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	// Setup agent
 	maxIter := cfg.MaxIterations
-	ag := agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	ag.SetProjectMemoryFiles(projectMemFiles)
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)

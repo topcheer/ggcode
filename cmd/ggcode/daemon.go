@@ -157,6 +157,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
 
 	// Tools
+	var ag *agent.Agent
 	registry := tool.NewRegistry()
 	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		return err
@@ -184,7 +185,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return memory.LoadProjectMemory(workingDir)
 	}
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
-		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+		a := agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+		a.SetWorkingDir(ag.WorkingDir())
+		return a
 	}
 	// Knight agent (created later but referenced via closure)
 	var knightAgent *knight.Knight
@@ -193,6 +196,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// passed each time because it creates its own agent for analysis tasks.
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
 		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
+			if ag != nil {
+				a.SetWorkingDir(ag.WorkingDir())
+			}
 		if onUsage != nil {
 			a.SetUsageHandler(onUsage)
 		}
@@ -250,7 +256,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	// Agent
-	ag := agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
+	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
 	}
