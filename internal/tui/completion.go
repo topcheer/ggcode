@@ -183,7 +183,7 @@ var SlashCommands = []string{
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/mode", "/init", "/harness", "/exit", "/quit", "/agents", "/agent",
-	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/lang", "/skills", "/swarm",
+	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/swarm",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -229,6 +229,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/status":      "Show current status",
 	"/knight":      "Knight auto-evolution commands",
 	"/update":      "Update ggcode to the latest release",
+	"/restart":     "Restart ggcode (picks up latest binary)",
 	"/lang":        "Switch interface language",
 	"/skills":      "Browse available skills",
 	"/swarm":       "Show swarm teams and teammates",

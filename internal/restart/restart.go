@@ -110,7 +110,11 @@ cd "$WORK_DIR" 2>/dev/null || true
 
 # 4. Launch new process — exec replaces this script
 echo "[ggcode restart] starting $BINARY ${ARGS[*]:-}"
-exec "$BINARY" "${ARGS[@]}"
+if [ ${#ARGS[@]} -gt 0 ]; then
+    exec "$BINARY" "${ARGS[@]}"
+else
+    exec "$BINARY"
+fi
 `
 
 // bashEscape wraps a string in single quotes, escaping embedded single quotes.
