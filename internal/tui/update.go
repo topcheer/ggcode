@@ -46,7 +46,6 @@ func (m *Model) handleUpdateCommand() tea.Cmd {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 	return tea.Batch(
 		m.startLoadingSpinner(m.statusActivity),
 		func() tea.Msg {
@@ -107,7 +106,6 @@ func (m *Model) handlePreparedUpdate(msg updatePrepareResultMsg) (tea.Model, tea
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 	if msg.Err != nil {
 		if errors.Is(msg.Err, update.ErrAlreadyUpToDate) {
 			m.chatWriteSystem(nextSystemID(), m.t("update.up_to_date"))

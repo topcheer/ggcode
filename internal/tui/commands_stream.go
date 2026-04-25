@@ -14,8 +14,7 @@ func (m *Model) appendStreamChunk(chunk string) {
 		m.appendStreamStatusLine(localized)
 		return
 	}
-	m.closeToolActivityGroup()
-	m.flushGroupedActivitiesToOutput()
+	m.chatFinishAllRunningTools()
 	if m.streamBuffer == nil {
 		m.streamBuffer = &bytes.Buffer{}
 	}
@@ -46,8 +45,7 @@ func (m *Model) appendStreamStatusLine(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	m.closeToolActivityGroup()
-	m.flushGroupedActivitiesToOutput()
+	m.chatFinishAllRunningTools()
 	if m.streamBuffer == nil {
 		m.streamBuffer = &bytes.Buffer{}
 	}

@@ -30,7 +30,6 @@ func (m *Model) resetConversationView() {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 	m.autoCompleteActive = false
 	m.autoCompleteItems = nil
 	m.autoCompleteIndex = 0

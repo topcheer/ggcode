@@ -25,10 +25,7 @@ type commandPreview struct {
 	CommandHiddenLineCount int
 }
 
-type textPreview struct {
-	Lines           []string
-	HiddenLineCount int
-}
+const maxPreviewLines = 5
 
 func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	args := parseToolArgs(rawArgs)
@@ -847,30 +844,11 @@ func buildCommandPreview(rawCommand string) commandPreview {
 	}
 }
 
-func buildTextPreview(rawText string) textPreview {
-	lines := commandPreviewLines(rawText)
-	if len(lines) == 0 {
-		return textPreview{}
-	}
-	visible := lines
-	hidden := hiddenPreviewLineCount(len(lines))
-	if hidden > 0 {
-		visible = visible[:maxVisibleGroupItems]
-	}
-	for i, line := range visible {
-		visible[i] = compactSingleLine(strings.TrimRight(line, " \t"))
-	}
-	return textPreview{
-		Lines:           visible,
-		HiddenLineCount: hidden,
-	}
-}
-
 func hiddenPreviewLineCount(total int) int {
-	if total <= maxVisibleGroupItems {
+	if total <= maxPreviewLines {
 		return 0
 	}
-	return total - maxVisibleGroupItems
+	return total - maxPreviewLines
 }
 
 func commandPreviewLines(rawCommand string) []string {

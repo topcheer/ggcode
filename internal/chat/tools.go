@@ -186,7 +186,7 @@ func PrettifyToolName(name string) string {
 }
 
 func NewBashToolItem(id, displayName, command string, status ToolStatus, styles Styles) *BashToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, command, styles)
 	result := &BashToolItem{BaseToolItem: *b, command: command}
 	return result
 }
@@ -225,7 +225,7 @@ type FileToolItem struct {
 
 // NewFileToolItem creates a new file operation tool item.
 func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles) *FileToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, filePath, styles)
 	return &FileToolItem{
 		BaseToolItem: *b,
 		filePath:     filePath,
@@ -254,7 +254,7 @@ type SearchToolItem struct {
 
 // NewSearchToolItem creates a new search tool item.
 func NewSearchToolItem(id, displayName, pattern string, status ToolStatus, styles Styles) *SearchToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, pattern, styles)
 	return &SearchToolItem{BaseToolItem: *b, pattern: pattern}
 }
 
@@ -280,7 +280,7 @@ type ListToolItem struct {
 }
 
 func newListToolItem(id, displayName, path string, status ToolStatus, styles Styles) *ListToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, path, styles)
 	return &ListToolItem{BaseToolItem: *b, path: path}
 }
 
@@ -304,7 +304,7 @@ type WebToolItem struct {
 }
 
 func newWebToolItem(id, displayName, url string, status ToolStatus, styles Styles) *WebToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, url, styles)
 	return &WebToolItem{BaseToolItem: *b, url: url}
 }
 
@@ -328,7 +328,7 @@ type GitToolItem struct {
 }
 
 func newGitToolItem(id, displayName, subCmd string, status ToolStatus, styles Styles) *GitToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, subCmd, styles)
 	return &GitToolItem{BaseToolItem: *b, subCmd: subCmd}
 }
 
@@ -371,7 +371,7 @@ type CmdToolItem struct {
 }
 
 func newCmdToolItem(id, displayName, detail string, status ToolStatus, styles Styles) *CmdToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, detail, styles)
 	return &CmdToolItem{BaseToolItem: *b, detail: detail}
 }
 
@@ -407,7 +407,7 @@ type LspToolItem struct {
 }
 
 func newLspToolItem(id, displayName, location string, status ToolStatus, styles Styles) *LspToolItem {
-	b := NewBaseToolItem(id, displayName, status, "", styles)
+	b := NewBaseToolItem(id, displayName, status, location, styles)
 	return &LspToolItem{BaseToolItem: *b, location: location}
 }
 

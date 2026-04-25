@@ -339,7 +339,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.statusToolName = ""
 					m.statusToolArg = ""
 					m.statusToolCount = 0
-					m.resetActivityGroups()
 					return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(expanded))
 				}
 			}
@@ -369,7 +368,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 	// ExpandMentions runs asynchronously inside startAgentWithExpand to avoid blocking UI
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgentWithExpand(text))
 }
@@ -402,7 +400,6 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(prompt))
 }

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/chat"
-	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // chatWrite appends an item to chatList.
@@ -97,14 +96,25 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		m.chatUpdateToolStatus(id, chat.StatusRunning)
 		return
 	}
+	// Resolve display name and detail from describeTool when not provided.
+	displayName := ts.DisplayName
+	detail := ts.Detail
+	if displayName == "" || detail == "" {
+		present := describeTool(m.currentLanguage(), ts.ToolName, ts.RawArgs)
+		if displayName == "" {
+			displayName = present.DisplayName
+		}
+		if detail == "" {
+			detail = present.Detail
+		}
+	}
 	// Create a new tool item based on the tool name
 	ctx := chat.ToolContext{
 		ToolName:    ts.ToolName,
-		DisplayName: ts.DisplayName,
-		Detail:      ts.Detail,
+		DisplayName: displayName,
+		Detail:      detail,
 		RawArgs:     ts.RawArgs,
 	}
-	debug.Log("tool-header", "chatStartTool tool=%s DisplayName=%q Detail=%q RawArgs_len=%d", ts.ToolName, ts.DisplayName, ts.Detail, len(ts.RawArgs))
 	item := chat.NewToolItem(id, ctx, chat.StatusRunning, m.chatStyles)
 	m.chatList.Append(item)
 }
@@ -112,6 +122,12 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 // chatFinishTool marks a tool item as finished with result.
 func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	if m.chatList == nil {
+		return
+	}
+
+	// todo_write finish → apply todo state
+	if ts.ToolName == "todo_write" {
+		m.applyTodoWrite(ts)
 		return
 	}
 
@@ -150,13 +166,24 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	existing := m.chatList.FindByID(id)
 	if existing == nil {
 		// Not tracked yet — create a finished item
+		// Resolve display name and detail from describeTool when not provided.
+		displayName := ts.DisplayName
+		detail := ts.Detail
+		if displayName == "" || detail == "" {
+			present := describeTool(m.currentLanguage(), ts.ToolName, ts.RawArgs)
+			if displayName == "" {
+				displayName = present.DisplayName
+			}
+			if detail == "" {
+				detail = present.Detail
+			}
+		}
 		ctx := chat.ToolContext{
 			ToolName:    ts.ToolName,
-			DisplayName: ts.DisplayName,
-			Detail:      ts.Detail,
+			DisplayName: displayName,
+			Detail:      detail,
 			RawArgs:     ts.RawArgs,
 		}
-		debug.Log("tool-header", "chatFinishTool CREATE tool=%s DisplayName=%q Detail=%q", ts.ToolName, ts.DisplayName, ts.Detail)
 		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
 		// Set result on the appropriate type
 		m.setToolResult(item, ts.Result)

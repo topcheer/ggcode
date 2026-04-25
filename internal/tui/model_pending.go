@@ -61,7 +61,6 @@ func (m *Model) cancelActiveRun() {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 	if m.pendingSubmissionCount() > 0 {
 		m.restorePendingInput()
 	}

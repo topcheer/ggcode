@@ -665,8 +665,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.remoteInboundAdapter = "" // reset per-channel suppression after agent run
 		m.spinner.Stop()
-		m.closeToolActivityGroup()
-		m.flushGroupedActivitiesToOutput()
+		m.chatFinishAllRunningTools()
 		m.cancelFunc = nil
 		m.streamPrefixWritten = false
 		// Finalize streaming assistant in chatList
@@ -702,8 +701,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.remoteInboundAdapter = "" // reset per-channel suppression
 		m.spinner.Stop()
-		m.closeToolActivityGroup()
-		m.flushGroupedActivitiesToOutput()
+		m.chatFinishAllRunningTools()
 		m.cancelFunc = nil
 		m.chatFinishAssistant(m.currentAssistantID())
 		wasCanceled := m.runCanceled
@@ -764,8 +762,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runFailed = true
 		m.loading = false
 		m.spinner.Stop()
-		m.closeToolActivityGroup()
-		m.flushGroupedActivitiesToOutput()
+		m.chatFinishAllRunningTools()
 		m.cancelFunc = nil
 		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
@@ -784,8 +781,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runFailed = true
 		m.loading = false
 		m.spinner.Stop()
-		m.closeToolActivityGroup()
-		m.flushGroupedActivitiesToOutput()
+		m.chatFinishAllRunningTools()
 		m.cancelFunc = nil
 		if m.pendingSubmissionCount() > 0 {
 			m.restorePendingInput()
@@ -810,8 +806,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flushHarnessLogRemainder()
 		m.loading = false
 		m.spinner.Stop()
-		m.closeToolActivityGroup()
-		m.flushGroupedActivitiesToOutput()
+		m.chatFinishAllRunningTools()
 		m.cancelFunc = nil
 		wasCanceled := m.runCanceled
 		wasFailed := m.runFailed
@@ -1086,14 +1081,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !isSubAgentLifecycleTool(ts.ToolName) {
 				m.statusToolCount++
 			}
-			m.startToolActivity(ts)
+			m.chatStartTool(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer(true)
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
-			m.finishToolActivity(ts)
+			m.chatFinishTool(ts)
 			ts.Elapsed = m.spinner.Elapsed()
 			m.spinner.Stop()
 			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
@@ -1126,14 +1121,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !isSubAgentLifecycleTool(ts.ToolName) {
 					m.statusToolCount++
 				}
-				m.startToolActivity(ts.ToolStatusMsg)
+				m.chatStartTool(ts.ToolStatusMsg)
 				if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 					m.renderStreamBuffer(true)
 				}
 				startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
 				spinnerCmd = combineCmds(spinnerCmd, startCmd)
 			} else {
-				m.finishToolActivity(ts.ToolStatusMsg)
+				m.chatFinishTool(ts.ToolStatusMsg)
 				ts.ToolStatusMsg.Elapsed = m.spinner.Elapsed()
 				m.spinner.Stop()
 				spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
@@ -1153,14 +1148,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !isSubAgentLifecycleTool(ts.ToolName) {
 				m.statusToolCount++
 			}
-			m.startToolActivity(ts)
+			m.chatStartTool(ts)
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer(true)
 			}
 			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
-			m.finishToolActivity(ts)
+			m.chatFinishTool(ts)
 			ts.Elapsed = m.spinner.Elapsed()
 			m.spinner.Stop()
 			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))

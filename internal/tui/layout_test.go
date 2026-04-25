@@ -1404,11 +1404,10 @@ func TestRenderOutputShowsGroupedToolActivity(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 	m.loading = true
-	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
-	m.startToolActivity(ToolStatusMsg{ToolName: "search_files", DisplayName: "Search", Detail: "ContextManager", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "search_files", DisplayName: "Search", Detail: "ContextManager", Running: false, Result: "Found 4 matches"})
-	m.closeToolActivityGroup()
+	m.chatStartTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.chatFinishTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+	m.chatStartTool(ToolStatusMsg{ToolName: "search_files", DisplayName: "Search", Detail: "ContextManager", Running: true})
+	m.chatFinishTool(ToolStatusMsg{ToolName: "search_files", DisplayName: "Search", Detail: "ContextManager", Running: false, Result: "Found 4 matches"})
 
 	output := stripAnsi(renderedOutput(&m))
 	hasRead := strings.Contains(output, "Read")
@@ -1424,10 +1423,10 @@ func TestTodoWriteMovesTaskTrackingToSidebar(t *testing.T) {
 	m.loading = true
 	raw := `{"todos":[{"id":"todo-1","content":"Polish TUI activity flow","status":"in_progress"},{"id":"todo-2","content":"Refresh docs","status":"pending"}]}`
 
-	m.startToolActivity(ToolStatusMsg{ToolName: "todo_write", DisplayName: "Update todos", Running: true, RawArgs: raw})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "todo_write", DisplayName: "Update todos", Running: false, RawArgs: raw})
-	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "internal/tui/view.go", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "internal/tui/view.go", Running: false, Result: "line1\nline2"})
+	m.chatStartTool(ToolStatusMsg{ToolName: "todo_write", DisplayName: "Update todos", Running: true, RawArgs: raw})
+	m.chatFinishTool(ToolStatusMsg{ToolName: "todo_write", DisplayName: "Update todos", Running: false, RawArgs: raw})
+	m.chatStartTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "internal/tui/view.go", Running: true})
+	m.chatFinishTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "internal/tui/view.go", Running: false, Result: "line1\nline2"})
 
 	output := renderedOutput(&m)
 
@@ -1478,10 +1477,9 @@ func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
 	m.loading = true
 	for i := 1; i <= 7; i++ {
 		name := fmt.Sprintf("step-%d.md", i)
-		m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: name, Running: true})
-		m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: name, Running: false, Result: "line1\nline2"})
+		m.chatStartTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: name, Running: true})
+		m.chatFinishTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: name, Running: false, Result: "line1\nline2"})
 	}
-	m.closeToolActivityGroup()
 
 	// Verify chatList has all 7 tool items with correct params
 	if m.chatList == nil || m.chatList.Len() != 7 {
@@ -1493,109 +1491,6 @@ func TestRenderOutputCapsGroupedActivityToLatestFiveItems(t *testing.T) {
 		if !strings.Contains(rendered, fmt.Sprintf("step-%d.md", i+1)) {
 			t.Errorf("item %d: expected step-%d.md in render, got: %q", i, i+1, rendered)
 		}
-	}
-}
-
-func TestRenderGroupedActivitiesShowsCommandPreviewInsteadOfRawOutput(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 40)
-	m.loading = true
-
-	msg := ToolStatusMsg{
-		ToolName:    "run_command",
-		DisplayName: "Restart metro cleanly",
-		Running:     false,
-		RawArgs:     `{"command":"# Restart metro cleanly\ncd /tmp/app\nrm -rf .metro-cache\nnpm install\nnpm run start -- --reset-cache\nsleep 2\necho ready\n"}`,
-		Result:      "booting\nready\n",
-	}
-	m.startToolActivity(ToolStatusMsg{
-		ToolName:    "run_command",
-		DisplayName: "Restart metro cleanly",
-		Running:     true,
-		RawArgs:     msg.RawArgs,
-	})
-	m.finishToolActivity(msg)
-	m.closeToolActivityGroup()
-
-	output := stripAnsi(m.renderGroupedActivities())
-
-	if !strings.Contains(output, "• Restart metro cleanly") {
-		t.Fatalf("expected command title to render as the item header, got %q", output)
-	}
-	if !strings.Contains(output, "cd /tmp/app") || !strings.Contains(output, "npm run start -- --reset-cache") {
-		t.Fatalf("expected command preview lines to render, got %q", output)
-	}
-	if !strings.Contains(output, "booting") || !strings.Contains(output, "ready") {
-		t.Fatalf("expected command stdout preview to render, got %q", output)
-	}
-	if strings.Contains(output, "# Restart metro cleanly") {
-		t.Fatalf("expected title comment to be extracted from command preview, got %q", output)
-	}
-}
-
-func TestRenderGroupedActivitiesCommandWithoutCommentAvoidsDuplicateTitle(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 40)
-	m.loading = true
-
-	msg := ToolStatusMsg{
-		ToolName:    "run_command",
-		DisplayName: "Run",
-		Running:     false,
-		RawArgs:     `{"command":"git reset HEAD PR_DESCRIPTION.md .ggcode/todos.json 2>/dev/null\ngit status --short | head -5\n"}`,
-		Result:      "M README.md\nA internal/tui/view.go\n",
-	}
-	m.startToolActivity(ToolStatusMsg{
-		ToolName:    "run_command",
-		DisplayName: "Run",
-		Running:     true,
-		RawArgs:     msg.RawArgs,
-	})
-	m.finishToolActivity(msg)
-	m.closeToolActivityGroup()
-
-	output := m.renderGroupedActivities()
-
-	if strings.Contains(output, "Run git reset") || strings.Contains(output, "执行 git reset") {
-		t.Fatalf("expected command preview without duplicated title, got %q", output)
-	}
-	if !strings.Contains(output, "git reset HEAD PR_DESCRIPTION.md .ggcode/todos.json 2>/dev/null") {
-		t.Fatalf("expected first command line to render directly, got %q", output)
-	}
-	if !strings.Contains(output, "M README.md") {
-		t.Fatalf("expected output preview lines to render, got %q", output)
-	}
-}
-
-func TestRenderGroupedActivitiesCommandOutputAppendsHiddenCountToLastLine(t *testing.T) {
-	m := newTestModel()
-	m.setLanguage("zh-CN")
-	m.handleResize(120, 40)
-	m.loading = true
-
-	msg := ToolStatusMsg{
-		ToolName:    "run_command",
-		DisplayName: "Run",
-		Running:     false,
-		RawArgs:     `{"command":"echo one\necho two\n"}`,
-		Result:      "1\n2\n3\n4\n5\n6\n7\n",
-	}
-	m.startToolActivity(ToolStatusMsg{
-		ToolName:    "run_command",
-		DisplayName: "Run",
-		Running:     true,
-		RawArgs:     msg.RawArgs,
-	})
-	m.finishToolActivity(msg)
-	m.closeToolActivityGroup()
-
-	output := m.renderGroupedActivities()
-
-	if !strings.Contains(output, "5 … 还有 2 行输出") {
-		t.Fatalf("expected hidden output count to be appended to last visible line, got %q", output)
-	}
-	if strings.Contains(output, "\n      6") || strings.Contains(output, "\n      7") {
-		t.Fatalf("expected output preview to cap at five lines, got %q", output)
 	}
 }
 
@@ -1678,9 +1573,8 @@ func TestStatusBarStaysCompactWithoutGroupedActivities(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 	m.loading = true
-	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
-	m.closeToolActivityGroup()
+	m.chatStartTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.chatFinishTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
 
 	bar := m.renderStatusBar()
 
@@ -1709,8 +1603,8 @@ func TestRenderOutputDoesNotDuplicateLegacyToolLog(t *testing.T) {
 	m.handleResize(120, 40)
 	m.loading = true
 
-	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+	m.chatStartTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.chatFinishTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
 
 	output := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(output, "Read") {
@@ -1722,8 +1616,8 @@ func TestDoneMsgPersistsGroupedActivitiesInOutput(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(120, 40)
 	m.loading = true
-	m.startToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
-	m.finishToolActivity(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
+	m.chatStartTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: true})
+	m.chatFinishTool(ToolStatusMsg{ToolName: "read_file", DisplayName: "Read", Detail: "README.md", Running: false, Result: "line1\nline2"})
 
 	next, _ := m.Update(doneMsg{})
 	m = next.(Model)
@@ -2056,30 +1950,6 @@ func TestModeCommandPersistsDefaultModePreference(t *testing.T) {
 	}
 	if m.chatList != nil && m.chatList.Len() != 0 {
 		t.Errorf("expected no output on successful /mode persistence, got %q", renderedOutput(&m))
-	}
-}
-
-func TestFinishToolActivityMatchesParallelCompletionsByToolID(t *testing.T) {
-	m := newTestModel()
-
-	m.startToolActivity(ToolStatusMsg{ToolID: "tool-1", ToolName: "bash", DisplayName: "Run", Detail: "cmd-1", Running: true, RawArgs: `{"command":"echo first"}`})
-	m.startToolActivity(ToolStatusMsg{ToolID: "tool-2", ToolName: "bash", DisplayName: "Run", Detail: "cmd-2", Running: true, RawArgs: `{"command":"echo second"}`})
-
-	m.finishToolActivity(ToolStatusMsg{ToolID: "tool-1", ToolName: "bash", DisplayName: "Run", Detail: "cmd-1", Running: false, Result: "first output", RawArgs: `{"command":"echo first"}`})
-
-	if len(m.activityGroups) != 1 || len(m.activityGroups[0].Items) != 2 {
-		t.Fatalf("expected one activity group with two items, got %#v", m.activityGroups)
-	}
-	first := m.activityGroups[0].Items[0]
-	second := m.activityGroups[0].Items[1]
-	if first.Running {
-		t.Fatal("expected first tool item to be marked complete")
-	}
-	if len(first.OutputLines) == 0 || first.OutputLines[0] != "first output" {
-		t.Fatalf("expected first tool output to be attached to the matching item, got %#v", first.OutputLines)
-	}
-	if !second.Running {
-		t.Fatal("expected second tool item to remain running")
 	}
 }
 
@@ -2979,7 +2849,6 @@ func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	m.statusToolName = "npm run type-check"
 	m.statusToolArg = "type-check"
 	m.statusToolCount = 1
-	m.activityGroups = []toolActivityGroup{{Title: "Running checks", Active: true, Items: []toolActivityItem{{Summary: "Run npm run type-check", Running: true}}}}
 	m.spinner.Start("npm run type-check")
 
 	m.cancelActiveRun()
@@ -2992,9 +2861,6 @@ func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	}
 	if m.statusToolName != "" || m.statusToolArg != "" || m.statusToolCount != 0 {
 		t.Fatalf("expected tool status to clear, got %q / %q / %d", m.statusToolName, m.statusToolArg, m.statusToolCount)
-	}
-	if len(m.activityGroups) != 0 {
-		t.Fatalf("expected live activity groups to clear, got %#v", m.activityGroups)
 	}
 	if m.spinner.IsActive() {
 		t.Fatal("expected spinner to stop on cancel")
@@ -3038,9 +2904,6 @@ func TestCancelledRunIgnoresLateStatusAndToolUpdates(t *testing.T) {
 		t.Fatal("expected no cmd for ignored late tool update")
 	}
 	m = next.(Model)
-	if len(m.activityGroups) != 0 {
-		t.Fatalf("expected no activity groups after ignored late tool update, got %#v", m.activityGroups)
-	}
 }
 
 func TestAgentRunMessagesIgnoreStaleRunID(t *testing.T) {
@@ -3164,7 +3027,6 @@ func TestResetConversationViewClearsTransientState(t *testing.T) {
 	m.statusActivity = "Thinking..."
 	m.statusToolName = "read_file"
 	m.statusToolCount = 2
-	m.activityGroups = []toolActivityGroup{{Title: "Exploring project context", Active: true, Items: []toolActivityItem{{Summary: "Read README.md"}}}}
 	m.spinner.Start("read_file")
 
 	m.resetConversationView()
@@ -3180,9 +3042,6 @@ func TestResetConversationViewClearsTransientState(t *testing.T) {
 	}
 	if m.statusActivity != "" || m.statusToolName != "" || m.statusToolCount != 0 {
 		t.Error("expected status state to be reset")
-	}
-	if len(m.activityGroups) != 0 {
-		t.Error("expected grouped activity state to be reset")
 	}
 	if m.spinner.IsActive() {
 		t.Error("expected spinner to stop")
