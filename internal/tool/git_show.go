@@ -8,7 +8,7 @@ import (
 )
 
 // GitShow implements the git_show tool.
-type GitShow struct{}
+type GitShow struct { WorkingDir string }
 
 func (t GitShow) Name() string { return "git_show" }
 
@@ -68,7 +68,7 @@ func (t GitShow) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

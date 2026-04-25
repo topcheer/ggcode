@@ -8,7 +8,7 @@ import (
 )
 
 // GitRemote implements the git_remote tool.
-type GitRemote struct{}
+type GitRemote struct { WorkingDir string }
 
 func (t GitRemote) Name() string { return "git_remote" }
 
@@ -52,7 +52,7 @@ func (t GitRemote) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
