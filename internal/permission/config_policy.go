@@ -163,8 +163,19 @@ func (p *ConfigPolicy) AllowedPath(path string) bool {
 }
 
 // AllowedPathForTool returns true if the path is allowed for the specific tool.
+// In non-plan modes, if execution reaches here the permission layer has already
+// approved the tool call (either Allow directly or user approved an Ask), so
+// sandbox restrictions are lifted. In PlanMode, strict sandbox enforcement
+// applies since plan mode never writes outside the workspace.
 func (p *ConfigPolicy) AllowedPathForTool(toolName, path string) bool {
 	if p.sandbox.Allowed(path) {
+		return true
+	}
+	// Non-plan modes: permission layer already approved, allow execution
+	p.mu.RLock()
+	isPlan := p.mode == PlanMode
+	p.mu.RUnlock()
+	if !isPlan {
 		return true
 	}
 	return isReadOnlyFileTool(toolName) && p.readOnlySandbox != nil && p.readOnlySandbox.Allowed(path)
