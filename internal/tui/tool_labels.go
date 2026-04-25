@@ -782,11 +782,54 @@ func lspToolPresentation(lang Language, toolName string, args map[string]any, fi
 	}
 }
 
+// shortenPath renders a path in compact form.
+// For workspace-relative paths ≤ 30 chars: return as-is.
+// For longer or absolute paths: "/first10chars.../basename".
+func shortenPath(path string) string {
+	path = filepath.ToSlash(path)
+	if path == "" || path == "." || path == "/" {
+		return path
+	}
+	base := filepath.ToSlash(filepath.Base(path))
+	if base == "" || base == "." || base == "/" {
+		return path
+	}
+
+	// If not absolute, try as-is first (relative paths are already short)
+	if !filepath.IsAbs(path) && len(path) <= 30 {
+		return path
+	}
+
+	// Try to make it relative to cwd first
+	cwd, err := os.Getwd()
+	if err == nil && filepath.IsAbs(path) {
+		normCWD := normalizeDisplayPath(cwd)
+		normPath := normalizeDisplayPath(path)
+		if rel, relErr := filepath.Rel(normCWD, normPath); relErr == nil && !strings.HasPrefix(rel, "..") && rel != "." {
+			rel = filepath.ToSlash(rel)
+			if len(rel) <= 30 {
+				return rel
+			}
+		}
+	}
+
+	// Shorten: "first10chars.../basename"
+	dir := filepath.ToSlash(filepath.Dir(path))
+	if dir == "." || dir == "" {
+		return path
+	}
+	prefix := dir
+	if len(prefix) > 10 {
+		prefix = prefix[:10]
+	}
+	return prefix + ".../" + base
+}
+
 func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "./")
 	value = compactSingleLine(value)
-	return truncateString(value, 80)
+	return shortenPath(value)
 }
 
 func displayToolFileTarget(value string) string {
@@ -798,28 +841,7 @@ func displayToolFileTarget(value string) string {
 	if value == "" {
 		return ""
 	}
-
-	cwd, err := os.Getwd()
-	if err == nil {
-		if filepath.IsAbs(value) {
-			normCWD := normalizeDisplayPath(cwd)
-			normValue := normalizeDisplayPath(value)
-			if rel, relErr := filepath.Rel(normCWD, normValue); relErr == nil && !strings.HasPrefix(rel, "..") && rel != "." {
-				return displayToolTarget(filepath.ToSlash(rel))
-			}
-		} else if !strings.HasPrefix(value, "..") {
-			clean := filepath.Clean(value)
-			if clean != "." {
-				return displayToolTarget(filepath.ToSlash(clean))
-			}
-		}
-	}
-
-	base := filepath.Base(value)
-	if base == "." || base == string(filepath.Separator) {
-		base = value
-	}
-	return displayToolTarget(base)
+	return shortenPath(value)
 }
 
 func buildCommandPreview(rawCommand string) commandPreview {

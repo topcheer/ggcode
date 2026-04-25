@@ -2065,8 +2065,8 @@ func TestApprovalInputPreviewUsesBasename(t *testing.T) {
 	if strings.Contains(result, "/tmp/project/docs/spec.md") {
 		t.Error("expected approval preview to hide full path")
 	}
-	if !strings.Contains(result, `"path":"spec.md"`) {
-		t.Error("expected approval preview to show basename only")
+	if !strings.Contains(result, "spec.md") {
+		t.Error("expected approval preview to show filename")
 	}
 }
 
