@@ -199,6 +199,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.status")
 	case "/update":
 		return tr(lang, "slash.update")
+	case "/restart":
+		return tr(lang, "slash.restart")
 	case "/qq":
 		return tr(lang, "slash.qq")
 	case "/telegram", "/tg":
@@ -1425,6 +1427,7 @@ func enCatalog(key string) string {
   /config set <k> <v> Set a config value
   /status            Show current status
   /update            Update ggcode to the latest release
+  /restart           Restart ggcode (picks up latest binary)
   /exit, /quit       Exit ggcode
 
 Keyboard shortcuts:
@@ -2676,6 +2679,7 @@ func zhCatalog(key string) string {
   /config set <k> <v> 设置配置项
   /status            显示当前状态
   /update            升级到最新正式版本
+  /restart           重启 ggcode（使用最新二进制）
   /exit, /quit       退出 ggcode
 
 键盘快捷键：
