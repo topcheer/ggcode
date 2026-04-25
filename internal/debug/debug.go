@@ -17,7 +17,7 @@ const (
 	defaultMaxLogSize   = 50 * 1024 * 1024
 	defaultMaxLogFiles  = 3
 	defaultAsyncBufSize = 1024
-	maxMessageLen       = 50
+	maxMessageLen       = 150
 	envKey              = "GGCODE_DEBUG"
 )
 

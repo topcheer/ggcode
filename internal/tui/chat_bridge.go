@@ -185,15 +185,24 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 			RawArgs:     ts.RawArgs,
 		}
 		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
-		// Set result on the appropriate type
-		m.setToolResult(item, ts.Result)
+		// Set result on the appropriate type (suppress body for web tools)
+		result := ts.Result
+		if ts.ToolName == "web_fetch" || ts.ToolName == "web_search" {
+			result = ""
+		}
+		m.setToolResult(item, result)
 		m.chatList.Append(item)
 		return
 	}
 
 	// Update existing item
 	m.chatUpdateToolStatus(id, status)
-	m.setToolResult(existing, ts.Result)
+	// Suppress body for web tools — result is too large for inline display
+	result := ts.Result
+	if ts.ToolName == "web_fetch" || ts.ToolName == "web_search" {
+		result = ""
+	}
+	m.setToolResult(existing, result)
 }
 
 // chatUpdateToolStatus updates the status of a tool item.
