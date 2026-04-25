@@ -163,16 +163,16 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			d = 0
 		}
 		return toolPresentation{
-			DisplayName: "Sleep",
+			DisplayName: localizedToolLabel(lang, "sleep"),
 			Detail:      d.String(),
-			Activity:    "Sleep for " + d.String(),
+			Activity:    localizedToolActivity(lang, "sleep", d.String()),
 		}
 	case "cron_create":
 		cronExpr := argString(args, "cron")
 		return toolPresentation{
-			DisplayName: "Schedule",
+			DisplayName: localizedToolLabel(lang, "cron_create"),
 			Detail:      cronExpr,
-			Activity:    "Schedule " + cronExpr,
+			Activity:    localizedToolActivity(lang, "cron_create", cronExpr),
 		}
 	case "cron_delete":
 		return toolPresentationFor(lang, "delete", "cron job")
@@ -181,16 +181,16 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "enter_worktree":
 		name := argString(args, "name")
 		return toolPresentation{
-			DisplayName: "Enter Worktree",
+			DisplayName: localizedToolLabel(lang, "enter_worktree"),
 			Detail:      name,
-			Activity:    "Create worktree",
+			Activity:    localizedToolActivity(lang, "enter_worktree", name),
 		}
 	case "exit_worktree":
 		action := argString(args, "action")
 		return toolPresentation{
-			DisplayName: "Exit Worktree",
+			DisplayName: localizedToolLabel(lang, "exit_worktree"),
 			Detail:      action,
-			Activity:    "Exit worktree (" + action + ")",
+			Activity:    localizedToolActivity(lang, "exit_worktree", action),
 		}
 	case "save_memory":
 		key := argString(args, "key")
@@ -207,9 +207,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			detail = setting + " = " + value
 		}
 		return toolPresentation{
-			DisplayName: "Config",
+			DisplayName: localizedToolLabel(lang, "config"),
 			Detail:      detail,
-			Activity:    "Updating config " + setting,
+			Activity:    localizedToolActivity(lang, "config", detail),
 		}
 	case "send_message":
 		to := argString(args, "to")
@@ -222,21 +222,21 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			detail = to + ": " + msg
 		}
 		return toolPresentation{
-			DisplayName: "Message",
+			DisplayName: localizedToolLabel(lang, "send_message"),
 			Detail:      detail,
-			Activity:    "Sending message to " + to,
+			Activity:    localizedToolActivity(lang, "send_message", to),
 		}
 	case "enter_plan_mode":
 		return toolPresentation{
-			DisplayName: "Plan Mode",
+			DisplayName: localizedToolLabel(lang, "enter_plan"),
 			Detail:      "",
-			Activity:    "Entering plan mode",
+			Activity:    localizedToolActivity(lang, "enter_plan", ""),
 		}
 	case "exit_plan_mode":
 		return toolPresentation{
-			DisplayName: "Plan Mode",
+			DisplayName: localizedToolLabel(lang, "exit_plan"),
 			Detail:      "",
-			Activity:    "Exiting plan mode",
+			Activity:    localizedToolActivity(lang, "exit_plan", ""),
 		}
 	case "task_create", "task_update", "task_get", "task_list", "task_stop", "task_output":
 		return toolPresentationFor(lang, "task", displayToolTarget(firstNonEmpty(
@@ -413,6 +413,22 @@ func localizedToolLabel(lang Language, action string) string {
 			return "使用技能"
 		case "save_memory":
 			return "保存记忆"
+		case "sleep":
+			return "等待"
+		case "cron_create":
+			return "创建定时任务"
+		case "config":
+			return "配置"
+		case "enter_worktree":
+			return "进入工作树"
+		case "exit_worktree":
+			return "退出工作树"
+		case "send_message":
+			return "发送消息"
+		case "enter_plan":
+			return "计划模式"
+		case "exit_plan":
+			return "退出计划"
 		case "ask":
 			return "提问"
 		case "inspect":
@@ -480,6 +496,22 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Using Skill"
 		case "save_memory":
 			return "Save Memory"
+		case "sleep":
+			return "Sleep"
+		case "cron_create":
+			return "Schedule"
+		case "config":
+			return "Config"
+		case "enter_worktree":
+			return "Enter Worktree"
+		case "exit_worktree":
+			return "Exit Worktree"
+		case "send_message":
+			return "Message"
+		case "enter_plan":
+			return "Plan Mode"
+		case "exit_plan":
+			return "Exit Plan"
 		case "ask":
 			return "Ask"
 		case "inspect":
@@ -554,6 +586,22 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "加载技能"
 			case "save_memory":
 				return "保存记忆中..."
+			case "sleep":
+				return "等待中..."
+			case "cron_create":
+				return "创建定时任务..."
+			case "config":
+				return "更新配置..."
+			case "enter_worktree":
+				return "创建工作树..."
+			case "exit_worktree":
+				return "退出工作树..."
+			case "send_message":
+				return "发送消息..."
+			case "enter_plan":
+				return "进入计划模式..."
+			case "exit_plan":
+				return "退出计划模式..."
 			case "ask":
 				return "等待用户输入"
 			case "inspect":
@@ -597,6 +645,22 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Loading skill"
 			case "save_memory":
 				return "Saving memory..."
+			case "sleep":
+				return "Sleeping..."
+			case "cron_create":
+				return "Scheduling..."
+			case "config":
+				return "Updating config..."
+			case "enter_worktree":
+				return "Creating worktree..."
+			case "exit_worktree":
+				return "Exiting worktree..."
+			case "send_message":
+				return "Sending message..."
+			case "enter_plan":
+				return "Entering plan mode..."
+			case "exit_plan":
+				return "Exiting plan mode..."
 			case "ask":
 				return "Waiting for user input"
 			case "inspect":
