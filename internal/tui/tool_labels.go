@@ -264,23 +264,70 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Detail:      shortenJobID(agentID),
 			Activity:    toolLabelFor(lang, "wait_agent"),
 		}
-	case "team_create", "team_delete":
+	case "team_create":
+		name := argString(args, "name")
 		return toolPresentation{
-			DisplayName: localizedToolLabel(lang, "team"),
-			Detail:      argString(args, "name"),
-			Activity:    localizedToolActivity(lang, "team", ""),
+			DisplayName: localizedToolLabel(lang, "team_create"),
+			Detail:      name,
+			Activity:    localizedToolActivity(lang, "team_create", name),
 		}
-	case "teammate_spawn", "teammate_list", "teammate_shutdown", "teammate_results":
+	case "team_delete":
 		return toolPresentation{
-			DisplayName: localizedToolLabel(lang, "teammate"),
-			Detail:      displayToolTarget(firstNonEmpty(argString(args, "name"), argString(args, "teammate_id"))),
-			Activity:    localizedToolActivity(lang, "teammate", ""),
+			DisplayName: localizedToolLabel(lang, "team_delete"),
+			Detail:      argString(args, "team_id"),
+			Activity:    localizedToolActivity(lang, "team_delete", ""),
 		}
-	case "swarm_task_create", "swarm_task_claim", "swarm_task_complete", "swarm_task_list":
+	case "teammate_spawn":
+		name := argString(args, "name")
 		return toolPresentation{
-			DisplayName: localizedToolLabel(lang, "swarm_task"),
+			DisplayName: localizedToolLabel(lang, "teammate_spawn"),
+			Detail:      name,
+			Activity:    localizedToolActivity(lang, "teammate_spawn", name),
+		}
+	case "teammate_list":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "teammate_list"),
+			Detail:      argString(args, "team_id"),
+			Activity:    localizedToolActivity(lang, "teammate_list", ""),
+		}
+	case "teammate_shutdown":
+		id := argString(args, "teammate_id")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "teammate_shutdown"),
+			Detail:      id,
+			Activity:    localizedToolActivity(lang, "teammate_shutdown", id),
+		}
+	case "teammate_results":
+		id := argString(args, "teammate_id")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "teammate_results"),
+			Detail:      displayToolTarget(firstNonEmpty(id, argString(args, "team_id"))),
+			Activity:    localizedToolActivity(lang, "teammate_results", id),
+		}
+	case "swarm_task_create":
+		subject := argString(args, "subject")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "swarm_task_create"),
+			Detail:      subject,
+			Activity:    localizedToolActivity(lang, "swarm_task_create", subject),
+		}
+	case "swarm_task_claim":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "swarm_task_claim"),
 			Detail:      displayToolTarget(firstNonEmpty(argString(args, "subject"), argString(args, "task_id"))),
-			Activity:    localizedToolActivity(lang, "swarm_task", ""),
+			Activity:    localizedToolActivity(lang, "swarm_task_claim", ""),
+		}
+	case "swarm_task_complete":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "swarm_task_complete"),
+			Detail:      argString(args, "task_id"),
+			Activity:    localizedToolActivity(lang, "swarm_task_complete", ""),
+		}
+	case "swarm_task_list":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "swarm_task_list"),
+			Detail:      "",
+			Activity:    localizedToolActivity(lang, "swarm_task_list", ""),
 		}
 	default:
 		// LSP tools share a common pattern: show file:line
@@ -429,12 +476,26 @@ func localizedToolLabel(lang Language, action string) string {
 			return "计划模式"
 		case "exit_plan":
 			return "退出计划"
-		case "team":
-			return "团队"
-		case "teammate":
-			return "队友"
-		case "swarm_task":
-			return "协作任务"
+		case "team_create":
+			return "创建团队"
+		case "team_delete":
+			return "删除团队"
+		case "teammate_spawn":
+			return "添加成员"
+		case "teammate_list":
+			return "成员列表"
+		case "teammate_shutdown":
+			return "停止成员"
+		case "teammate_results":
+			return "成员结果"
+		case "swarm_task_create":
+			return "创建任务"
+		case "swarm_task_claim":
+			return "领取任务"
+		case "swarm_task_complete":
+			return "完成任务"
+		case "swarm_task_list":
+			return "任务列表"
 		case "ask":
 			return "提问"
 		case "inspect":
@@ -518,12 +579,26 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Plan Mode"
 		case "exit_plan":
 			return "Exit Plan"
-		case "team":
-			return "Team"
-		case "teammate":
-			return "Teammate"
-		case "swarm_task":
-			return "Swarm Task"
+		case "team_create":
+			return "Create Team"
+		case "team_delete":
+			return "Delete Team"
+		case "teammate_spawn":
+			return "Add Teammate"
+		case "teammate_list":
+			return "List Teammates"
+		case "teammate_shutdown":
+			return "Shutdown Teammate"
+		case "teammate_results":
+			return "Teammate Results"
+		case "swarm_task_create":
+			return "Create Task"
+		case "swarm_task_claim":
+			return "Claim Task"
+		case "swarm_task_complete":
+			return "Complete Task"
+		case "swarm_task_list":
+			return "Task List"
 		case "ask":
 			return "Ask"
 		case "inspect":
@@ -614,12 +689,26 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "进入计划模式..."
 			case "exit_plan":
 				return "退出计划模式..."
-			case "team":
-				return "管理团队..."
-			case "teammate":
-				return "管理队友..."
-			case "swarm_task":
-				return "管理协作任务..."
+			case "team_create":
+				return "创建团队中..."
+			case "team_delete":
+				return "删除团队中..."
+			case "teammate_spawn":
+				return "添加成员中..."
+			case "teammate_list":
+				return "查看成员列表..."
+			case "teammate_shutdown":
+				return "停止成员中..."
+			case "teammate_results":
+				return "获取成员结果..."
+			case "swarm_task_create":
+				return "创建任务中..."
+			case "swarm_task_claim":
+				return "领取任务中..."
+			case "swarm_task_complete":
+				return "完成任务中..."
+			case "swarm_task_list":
+				return "查看任务列表..."
 			case "ask":
 				return "等待用户输入"
 			case "inspect":
@@ -679,11 +768,26 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Entering plan mode..."
 			case "exit_plan":
 				return "Exiting plan mode..."
-			case "team":
-				return "Managing team..."
-			case "teammate":
-				return "Managing teammate..."
-			case "swarm_task":
+			case "team_create":
+				return "Creating team..."
+			case "team_delete":
+				return "Deleting team..."
+			case "teammate_spawn":
+				return "Adding teammate..."
+			case "teammate_list":
+				return "Listing teammates..."
+			case "teammate_shutdown":
+				return "Shutting down teammate..."
+			case "teammate_results":
+				return "Fetching results..."
+			case "swarm_task_create":
+				return "Creating task..."
+			case "swarm_task_claim":
+				return "Claiming task..."
+			case "swarm_task_complete":
+				return "Completing task..."
+			case "swarm_task_list":
+				return "Listing tasks..."
 				return "Managing swarm task..."
 			case "ask":
 				return "Waiting for user input"

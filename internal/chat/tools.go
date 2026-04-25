@@ -572,11 +572,15 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 			return NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
 		}
 		item := NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
-		if ctx.ToolName == "save_memory" {
+		switch ctx.ToolName {
+		case "save_memory", "team_create", "team_delete",
+			"teammate_spawn", "teammate_shutdown",
+			"swarm_task_claim", "swarm_task_complete":
 			item.suppressBody = true
-		}
-		if ctx.ToolName == "cron_create" {
+		case "cron_create", "swarm_task_create":
 			item.formatJSON = true
+		case "teammate_results":
+			item.markdownBody = true
 		}
 		return item
 	}
@@ -782,27 +786,50 @@ func formatJSONResult(raw string) string {
 		return raw
 	}
 
+	// Determine which keys to show based on what's present
+	keyOrder := []string{
+		// Cron
+		"ID", "CronExpr", "Recurring", "Prompt", "NextFire", "CreatedAt",
+		// Swarm task
+		"Subject", "Description", "Status", "Owner", "ActiveForm",
+	}
+	shown := make(map[string]bool)
 	var pairs []string
-	for _, key := range []string{"ID", "CronExpr", "Recurring", "Prompt", "NextFire", "CreatedAt"} {
+	for _, key := range keyOrder {
 		val, ok := data[key]
 		if !ok {
 			continue
 		}
 		label := prettifyJSONKey(key)
-		switch v := val.(type) {
-		case bool:
-			if v {
-				pairs = append(pairs, label+": Yes")
-			} else {
-				pairs = append(pairs, label+": No")
-			}
-		case string:
-			pairs = append(pairs, label+": "+v)
-		default:
-			pairs = append(pairs, label+": "+fmt.Sprintf("%v", v))
+		pairs = append(pairs, formatKVPair(label, val))
+		shown[key] = true
+	}
+	// Append any remaining keys not in the predefined order
+	for key, val := range data {
+		if shown[key] {
+			continue
 		}
+		label := prettifyJSONKey(key)
+		pairs = append(pairs, formatKVPair(label, val))
 	}
 	return strings.Join(pairs, "\n")
+}
+
+func formatKVPair(label string, val any) string {
+	switch v := val.(type) {
+	case bool:
+		if v {
+			return label + ": Yes"
+		}
+		return label + ": No"
+	case string:
+		if v == "" {
+			return label + ": -"
+		}
+		return label + ": " + v
+	default:
+		return label + ": " + fmt.Sprintf("%v", v)
+	}
 }
 
 func prettifyJSONKey(key string) string {
