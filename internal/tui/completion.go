@@ -182,7 +182,7 @@ var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
-	"/image", "/mode", "/init", "/harness", "/exit", "/quit", "/agents", "/agent",
+	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/swarm",
 }
 
@@ -220,8 +220,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/harness":     "Run harness workflow commands",
 	"/exit":        "Exit ggcode",
 	"/quit":        "Exit ggcode",
-	"/agents":      "List sub-agents",
-	"/agent":       "Sub-agent details",
 	"/compact":     "Compress conversation history",
 	"/todo":        "View/manage todo list",
 	"/bug":         "Report a bug",

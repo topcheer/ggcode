@@ -135,7 +135,7 @@ func shouldExecuteWhileBusy(text string) bool {
 	case "/lang", "/model", "/provider", "/impersonate",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/im",
-		"/skills", "/sessions", "/mcp", "/agents", "/agent",
+		"/skills", "/sessions", "/mcp",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
 		"/help", "/?", "/swarm":
 		return true
