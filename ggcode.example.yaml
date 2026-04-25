@@ -417,6 +417,13 @@ im:
     edit_interval_sec: 2.0      # seconds between edit updates
     buffer_threshold: 500       # characters before flushing
 
+  # Output mode: controls how tool results are delivered to IM channels.
+  # Can also be changed at runtime via IM panel (v/q/s keys) or daemon follow (v/q/s hotkeys).
+  #   verbose  — every tool result sent individually (default)
+  #   quiet    — aggregated tool summary at round end; errors sent immediately
+  #   summary  — only final LLM response text + tool count summary
+  output_mode: verbose
+
   # Speech-to-text for voice messages (optional)
   # stt:
   #   provider: openai

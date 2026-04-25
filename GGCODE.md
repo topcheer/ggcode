@@ -43,6 +43,7 @@ internal/              215 Go source files (~41.7k LOC non-test)
   agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
   im/                  IM gateway runtime, QQ/Telegram/Discord/Slack/DingTalk/Feishu adapters, pairing, channel bindings, per-channel echo suppression, and outbound routing
+  daemon/              Daemon mode: follow display, background forking, session picker, i18n labels
   tui/                 Bubble Tea TUI: views, panels, slash commands, i18n (en/zh-CN), fullscreen file browser + preview
   tool/                Built-in tools (file ops, search, commands, git, web, agents, productivity)
   harness/             Harness-engineering workflow engine (~6.2k LOC, 28 files — task management, worktrees, review, release)
@@ -50,6 +51,8 @@ internal/              215 Go source files (~41.7k LOC non-test)
   config/              YAML config loading, env expansion, API key handling, Anthropic bootstrap
   memory/              Project memory loading (GGCODE.md, AGENTS.md, etc.) + auto-memory persistence
   subagent/            Sub-agent spawning, tracking, coordination (manager + runner)
+  knight/              Knight background agent: autonomous code monitoring, daily token budget
+  a2a/                 Agent-to-Agent protocol: server, client, registry, multi-turn collaboration
   commands/            Slash command registry (bundled + loaded), usage formatting, skill templates
   context/             Conversation context window management and tokenization (imported as `ctxpkg`)
   session/             JSONL-backed session persistence (NOT SQLite — sessions stored as .jsonl files)
@@ -79,9 +82,12 @@ config/                MCP preset configuration (mcporter.json)
 - **Provider adapters** (`internal/provider/`): Each LLM provider (OpenAI, Anthropic, Gemini, Copilot) has a protocol-specific adapter. `registry.go` maps protocol names to adapters via `NewProvider()`. Supported protocols: `openai`, `anthropic`, `gemini`, `copilot`. All implement the `Provider` interface (Name, Chat, ChatStream, CountTokens). Retry logic handles transient failures.
 - **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`.
 - **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses SQLite for event storage.
-- **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces.
-- **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
+- **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces. Configurable output modes (verbose/quiet/summary) control tool result granularity.
+- **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, IM panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
 - **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances.
+- **Daemon mode** (`internal/daemon/` + `cmd/ggcode/daemon.go`): Headless agent with terminal follow display, background forking, keyboard shortcuts (v/q/s output mode, M/U mute, f follow toggle, r restart). Uses same tool label system as TUI.
+- **Knight** (`internal/knight/`): Background autonomous agent with daily token budget, activity-driven code monitoring.
+- **A2A** (`internal/a2a/`): Agent-to-Agent protocol server, client, and registry for multi-instance ggcode collaboration via MCP bridge.
 
 ## Configuration
 
@@ -100,6 +106,7 @@ Key concepts:
 - **`tool_permissions`**: Per-tool rules: `allow`, `ask`, `deny`
 - **`allowed_dirs`**: Directories the agent may access
 - **`max_iterations`**: Agent loop limit per user turn (0 = unlimited)
+- **`im.output_mode`**: IM tool result delivery granularity: `verbose` (default), `quiet`, `summary`
 - **API keys**: Use `${ENV_VAR}` syntax for env var expansion (e.g., `${ANTHROPIC_API_KEY}`)
 
 Legacy `provider`/`providers` config keys are rejected with an error at load time.
@@ -107,8 +114,9 @@ Legacy `provider`/`providers` config keys are rejected with an error at load tim
 ## CLI Modes
 
 - **Interactive TUI**: `ggcode` — launches the full Bubble Tea TUI
+- **Daemon mode**: `ggcode daemon` — headless agent with IM gateway; `--follow` for terminal follow display
 - **Pipe mode**: `ggcode -p "prompt"` — non-interactive, sends prompt and outputs response
-- **Resume**: `ggcode --resume <id>` — resume a previous session; `--resume` alone opens a picker
+- **Resume**: `ggcode --resume <id>` — resume a previous session; `--resume` alone or `--resume-picker` opens a picker
 - **Bypass**: `ggcode --bypass` — start in bypass permission mode
 - **Harness**: `ggcode harness <subcommand>` — manage harness-engineering workflows
 - **MCP**: `ggcode mcp <subcommand>` — MCP server management
