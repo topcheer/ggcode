@@ -120,11 +120,11 @@ var catalogEn = map[string]string{
 	"follow.todos_header": "  📋 Todos:",
 	"follow.more_lines":   "... (%d more lines)",
 
-	"follow.pairing.bind":       "🔗 %s binding requested from channel %s",
-	"follow.pairing.rebind":     "🔗 %s rebind requested from channel %s",
-	"follow.pairing.code":       "   Enter this code in %s to complete binding:",
-	"follow.pairing.resolved":   "✅ Pairing resolved",
-	"follow.pairing.rejected":   "❌ Pairing rejected",
+	"follow.pairing.bind":     "🔗 %s binding requested from channel %s",
+	"follow.pairing.rebind":   "🔗 %s rebind requested from channel %s",
+	"follow.pairing.code":     "   Enter this code in %s to complete binding:",
+	"follow.pairing.resolved": "✅ Pairing resolved",
+	"follow.pairing.rejected": "❌ Pairing rejected",
 }
 
 var catalogZhCN = map[string]string{
@@ -152,11 +152,11 @@ var catalogZhCN = map[string]string{
 	"follow.todos_header": "  📋 待办事项:",
 	"follow.more_lines":   "... (还有 %d 行)",
 
-	"follow.pairing.bind":       "🔗 %s 绑定请求来自渠道 %s",
-	"follow.pairing.rebind":     "🔗 %s 重新绑定请求来自渠道 %s",
-	"follow.pairing.code":       "   请在 %s 中输入以下绑定码完成绑定:",
-	"follow.pairing.resolved":   "✅ 绑定完成",
-	"follow.pairing.rejected":   "❌ 绑定已拒绝",
+	"follow.pairing.bind":     "🔗 %s 绑定请求来自渠道 %s",
+	"follow.pairing.rebind":   "🔗 %s 重新绑定请求来自渠道 %s",
+	"follow.pairing.code":     "   请在 %s 中输入以下绑定码完成绑定:",
+	"follow.pairing.resolved": "✅ 绑定完成",
+	"follow.pairing.rejected": "❌ 绑定已拒绝",
 }
 
 // Tr looks up a localized string by key. Falls back to English if key missing.
@@ -288,9 +288,10 @@ func (d *TerminalFollowDisplay) OnRoundDone() {
 
 	if text != "" {
 		displayText := renderMarkdown(d.relativizePaths(text))
-		fmt.Fprintf(d.out, "%s", d.styles.AssistantPrefix)
-		fmt.Fprint(d.out, nl)
-		fmt.Fprint(d.out, displayText+nl)
+		// Strip glamour's leading/trailing newlines so prefix and text
+		// start on the same line
+		displayText = strings.TrimRight(strings.TrimLeft(displayText, " \t\n"+string(rune(13))), " \t\n"+string(rune(13)))
+		fmt.Fprintf(d.out, "%s%s%s", d.styles.AssistantPrefix, displayText, nl)
 	}
 }
 
