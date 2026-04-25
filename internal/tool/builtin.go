@@ -49,10 +49,20 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		WriteCommandInputTool{Manager: jobManager},
 		ListCommandsTool{Manager: jobManager},
 
-		// Git
+		// Git (read-only)
 		GitStatus{},
 		GitDiff{},
 		GitLog{},
+		GitShow{},
+		GitBlame{},
+		GitBranchList{},
+		GitRemote{},
+		GitStashList{},
+
+		// Git (write — require approval)
+		GitAdd{},
+		GitCommit{},
+		GitStash{},
 
 		// Web
 		WebFetch{},

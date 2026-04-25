@@ -114,8 +114,47 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		return toolPresentationFor(lang, "skill", displayToolTarget(argString(args, "skill")))
 	case "ask_user":
 		return toolPresentationFor(lang, "ask", displayToolTarget(askUserToolTarget(args)))
-	case "git_diff", "git_status", "git_log":
-		return toolPresentationFor(lang, "inspect", displayToolTarget(strings.ReplaceAll(toolName, "_", " ")))
+	case "git_status":
+		return toolPresentationFor(lang, "inspect", displayToolFileTarget(argString(args, "path")))
+	case "git_diff":
+		detail := ""
+		if argString(args, "cached") == "true" {
+			detail = "--cached"
+		}
+		if f := argString(args, "file"); f != "" {
+			if detail != "" {
+				detail += " "
+			}
+			detail += displayToolFileTarget(f)
+		}
+		return toolPresentationFor(lang, "diff", detail)
+	case "git_log":
+		return toolPresentationFor(lang, "log", "")
+	case "git_show":
+		return toolPresentationFor(lang, "show", displayToolTarget(argString(args, "revision")))
+	case "git_blame":
+		return toolPresentationFor(lang, "blame", displayToolFileTarget(argString(args, "file")))
+	case "git_branch_list":
+		detail := ""
+		if argString(args, "remote") == "true" {
+			detail = "--remote"
+		}
+		return toolPresentationFor(lang, "branches", detail)
+	case "git_remote":
+		return toolPresentationFor(lang, "remote", "")
+	case "git_stash_list":
+		return toolPresentationFor(lang, "stash", "list")
+	case "git_add":
+		files := parseStringSlice(args, "files")
+		return toolPresentationFor(lang, "stage", displayToolFileTarget(strings.Join(files, ", ")))
+	case "git_commit":
+		return toolPresentationFor(lang, "commit", compactSingleLine(argString(args, "message")))
+	case "git_stash":
+		action := argString(args, "action")
+		if action == "" {
+			action = "push"
+		}
+		return toolPresentationFor(lang, "stash", action)
 	case "sleep":
 		sec, _ := strconv.Atoi(argString(args, "seconds"))
 		ms, _ := strconv.Atoi(argString(args, "milliseconds"))
@@ -377,6 +416,24 @@ func localizedToolLabel(lang Language, action string) string {
 			return "停止"
 		case "list_jobs":
 			return "后台任务"
+		case "diff":
+			return "差异"
+		case "log":
+			return "日志"
+		case "show":
+			return "查看"
+		case "blame":
+			return "溯源"
+		case "branches":
+			return "分支"
+		case "remote":
+			return "远程"
+		case "stash":
+			return "暂存"
+		case "stage":
+			return "暂存文件"
+		case "commit":
+			return "提交"
 		}
 	default:
 		switch action {
@@ -418,6 +475,24 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Stop"
 		case "list_jobs":
 			return "List Jobs"
+		case "diff":
+			return "Diff"
+		case "log":
+			return "Log"
+		case "show":
+			return "Show"
+		case "blame":
+			return "Blame"
+		case "branches":
+			return "Branches"
+		case "remote":
+			return "Remote"
+		case "stash":
+			return "Stash"
+		case "stage":
+			return "Stage"
+		case "commit":
+			return "Commit"
 		}
 	}
 	return localizedGenericToolName(lang, action)
@@ -663,6 +738,30 @@ func argString(args map[string]any, key string) string {
 		}
 		return string(b)
 	}
+}
+
+// parseStringSlice extracts a string array from parsed args.
+func parseStringSlice(args map[string]any, key string) []string {
+	if args == nil {
+		return nil
+	}
+	v, ok := args[key]
+	if !ok {
+		return nil
+	}
+	switch vv := v.(type) {
+	case []string:
+		return vv
+	case []any:
+		var result []string
+		for _, item := range vv {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 func rawArgString(args map[string]any, key string) string {
