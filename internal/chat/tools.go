@@ -22,6 +22,7 @@ type BaseToolItem struct {
 	result       string // result text (may contain error)
 	isError      bool
 	markdownBody bool // render result as markdown
+	suppressBody bool // hide body entirely (e.g., save_memory)
 	styles       Styles
 }
 
@@ -96,7 +97,7 @@ func (t *BaseToolItem) RenderParams() string {
 // RenderBody renders the tool output body.
 // Override in concrete types for specialized body rendering.
 func (t *BaseToolItem) RenderBody(width int) string {
-	if t.result == "" {
+	if t.result == "" || t.suppressBody {
 		return ""
 	}
 
@@ -564,7 +565,11 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		if ctx.ToolName == "wait_agent" {
 			return NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
 		}
-		return NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
+		item := NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
+		if ctx.ToolName == "save_memory" {
+			item.suppressBody = true
+		}
+		return item
 	}
 }
 

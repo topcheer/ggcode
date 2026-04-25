@@ -194,18 +194,10 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "save_memory":
 		key := argString(args, "key")
-		content := argString(args, "content")
-		detail := key
-		if content != "" && len(content) > 40 {
-			content = content[:37] + "…"
-		}
-		if content != "" {
-			detail = key + ": " + content
-		}
 		return toolPresentation{
-			DisplayName: "Memory",
-			Detail:      detail,
-			Activity:    "Saving memory " + key,
+			DisplayName: localizedToolLabel(lang, "save_memory"),
+			Detail:      key,
+			Activity:    localizedToolActivity(lang, "save_memory", key),
 		}
 	case "config":
 		setting := argString(args, "setting")
@@ -418,7 +410,9 @@ func localizedToolLabel(lang Language, action string) string {
 		case "task":
 			return "执行任务"
 		case "skill":
-			return "加载技能"
+			return "使用技能"
+		case "save_memory":
+			return "保存记忆"
 		case "ask":
 			return "提问"
 		case "inspect":
@@ -483,7 +477,9 @@ func localizedToolLabel(lang Language, action string) string {
 		case "task":
 			return "Run task"
 		case "skill":
-			return "Load skill"
+			return "Using Skill"
+		case "save_memory":
+			return "Save Memory"
 		case "ask":
 			return "Ask"
 		case "inspect":
@@ -556,6 +552,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "执行任务"
 			case "skill":
 				return "加载技能"
+			case "save_memory":
+				return "保存记忆中..."
 			case "ask":
 				return "等待用户输入"
 			case "inspect":
@@ -597,6 +595,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Running task"
 			case "skill":
 				return "Loading skill"
+			case "save_memory":
+				return "Saving memory..."
 			case "ask":
 				return "Waiting for user input"
 			case "inspect":
