@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	runtimedebug "runtime/debug"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -95,13 +96,8 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		return a.executeFileTool(ctx, t, tc, env)
 	}
 
-	// Sync working directory for tools that track it (e.g., worktree tools).
-	if setter, ok := t.(tool.WorkingDirSetter); ok {
-		a.mu.RLock()
-		wd := a.workingDir
-		a.mu.RUnlock()
-		setter.SetWorkingDir(wd)
-	}
+	// Sync working directory for tools that have a WorkingDir field.
+	syncToolWorkingDir(t, workDir)
 
 	// Execute the actual tool (with panic recovery)
 	if err := ctx.Err(); err != nil {
@@ -250,4 +246,25 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// syncToolWorkingDir uses reflection to set the WorkingDir field on tools
+// that have one. This ensures tools always use the agent's current working
+// directory, even after it changes (e.g., after enter_worktree).
+func syncToolWorkingDir(t tool.Tool, dir string) {
+	// Dereference pointer if needed
+	v := reflect.ValueOf(t)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	f := v.FieldByName("WorkingDir")
+	if f.IsValid() && f.CanSet() && f.Kind() == reflect.String {
+		f.SetString(dir)
+	}
 }
