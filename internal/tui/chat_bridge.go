@@ -87,6 +87,12 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	if isSubAgentLifecycleTool(ts.ToolName) {
 		return
 	}
+
+	// todo_write → skip creating a tool item; handled in chatFinishTool
+	if ts.ToolName == "todo_write" {
+		return
+	}
+
 	id := ts.ToolID
 	if id == "" {
 		id = nextChatID()
@@ -316,7 +322,7 @@ func (m *Model) chatUpdateTodoItem(todos []todoStateItem) {
 		}
 	}
 	// Create new
-	item := chat.NewTodoToolItem(todoToolItemID, tasks, m.chatStyles)
+	item := chat.NewTodoToolItem(todoToolItemID, tasks, m.chatStyles, string(m.currentLanguage()))
 	m.chatList.Append(item)
 }
 

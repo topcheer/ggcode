@@ -557,18 +557,20 @@ type TodoTask struct {
 
 // TodoToolItem renders a todo/task list.
 type TodoToolItem struct {
-	CachedItem
+		CachedItem
 	id     string
 	tasks  []TodoTask
 	styles Styles
+	lang   string
 }
 
 // NewTodoToolItem creates a new todo list tool item.
-func NewTodoToolItem(id string, tasks []TodoTask, styles Styles) *TodoToolItem {
+func NewTodoToolItem(id string, tasks []TodoTask, styles Styles, lang string) *TodoToolItem {
 	return &TodoToolItem{
 		id:     id,
 		tasks:  tasks,
 		styles: styles,
+		lang:   lang,
 	}
 }
 
@@ -607,7 +609,15 @@ func (t *TodoToolItem) Render(width int) string {
 		}
 	}
 
-	header := fmt.Sprintf("%s %s  %d/%d", t.styles.ToolIconStyle(StatusRunning), "To-Do", done, total)
+	icon := StatusSuccess
+	if done < total {
+		icon = StatusRunning
+	}
+	label := "Todo Progress Update"
+	if t.lang == "zh-CN" {
+		label = "更新待办事项"
+	}
+	header := t.styles.ToolHeader(icon, label, width)
 	if active != "" {
 		maxActive := width - len(header) - 5
 		if maxActive < 10 {
