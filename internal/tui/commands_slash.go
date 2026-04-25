@@ -83,6 +83,7 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 		}
 		m.SetSession(ses, m.sessionStore)
 		m.rebuildConversationFromMessages(ses.Messages)
+		m.restoreHistoryFromMessages(ses.Messages)
 		title := ses.Title
 		if title == "" {
 			title = m.t("session.untitled")

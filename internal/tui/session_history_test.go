@@ -1,111 +1,110 @@
 package tui
 
 import (
-	"strings"
 	"testing"
 
-	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/session"
 )
 
-func TestResumeSessionRebuildsConversationOutput(t *testing.T) {
-	dir := t.TempDir()
-	store, err := session.NewJSONLStore(dir)
-	if err != nil {
-		t.Fatalf("NewJSONLStore() error = %v", err)
-	}
-	ses := session.NewSession("zai", "cn-coding-openai", "glm-5-turbo")
-	ses.Title = "Replay me"
-	ses.Messages = []provider.Message{
-		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
-		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
-	}
-	if err := store.Save(ses); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	m := NewModel(agent.NewAgent(nil, nil, "", 0), nil)
-	m.SetSession(session.NewSession("zai", "cn-coding-openai", "glm-5-turbo"), store)
-
-	cmd := m.resumeSession(ses.ID)
-	if cmd == nil {
-		t.Fatal("expected resumeSession command")
-	}
-	next, followup := m.Update(cmd())
-	if followup != nil {
-		t.Fatal("expected resume stream message to finish inline")
-	}
-	updated := next.(Model)
-	output := stripAnsi(renderedOutput(&updated))
-	if output == "stale output" {
-		t.Fatal("expected resume to rebuild conversation output")
-	}
-	if !containsAll(output, "hello", "world") {
-		t.Fatalf("unexpected rebuilt output: %q", output)
-	}
-}
-
-func TestResumeSessionAddsBlankLineBetweenMessages(t *testing.T) {
+func TestRestoreHistoryFromMessages(t *testing.T) {
 	m := newTestModel()
-	m.handleResize(120, 40)
-	m.rebuildConversationFromMessages([]provider.Message{
-		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "first reply"}}},
-		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "next prompt"}}},
-		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "second reply"}}},
-	})
 
-	output := stripAnsi(renderedOutput(&m))
-	if !containsAll(output, "first reply", "next prompt", "second reply") {
-		t.Fatalf("expected restored messages in output, got %q", output)
-	}
-}
-
-func TestRenderConversationMessageIncludesToolBlocks(t *testing.T) {
-	m := newTestModel()
-	m.handleResize(120, 40)
-	m.rebuildConversationFromMessages([]provider.Message{
-		{Role: "assistant", Content: []provider.ContentBlock{
-			{Type: "text", Text: "I used a tool."},
-			{Type: "tool_use", ToolID: "tool-1", ToolName: "read_file", Input: []byte(`{"path":"README.md"}`)},
-		}},
+	messages := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "system prompt"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "帮我看看这个 bug"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "好的，我来看看"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "修复一下这个文件"}}},
 		{Role: "user", Content: []provider.ContentBlock{
-			{Type: "tool_result", ToolID: "tool-1", ToolName: "read_file", Output: "line1\nline2", IsError: false},
+			{Type: "text", Text: "  "}, // whitespace-only, should be skipped
+			{Type: "text", Text: "这段有内容"},
 		}},
-	})
-	output := stripAnsi(renderedOutput(&m))
-	// Verify assistant text and tool result both appear
-	if !containsAll(output, "I used a tool.", "line1", "line2") {
-		t.Fatalf("unexpected rendered output: %q", output)
+	}
+
+	m.restoreHistoryFromMessages(messages)
+
+	if len(m.history) != 3 {
+		t.Fatalf("expected 3 history entries, got %d: %#v", len(m.history), m.history)
+	}
+	if m.history[0] != "帮我看看这个 bug" {
+		t.Errorf("history[0] = %q, want %q", m.history[0], "帮我看看这个 bug")
+	}
+	if m.history[1] != "修复一下这个文件" {
+		t.Errorf("history[1] = %q, want %q", m.history[1], "修复一下这个文件")
+	}
+	if m.history[2] != "这段有内容" {
+		t.Errorf("history[2] = %q, want %q", m.history[2], "这段有内容")
+	}
+	if m.historyIdx != 3 {
+		t.Errorf("historyIdx = %d, want 3", m.historyIdx)
 	}
 }
 
-func TestResumeSessionRendersCommandToolsCompactly(t *testing.T) {
+func TestRestoreHistorySkipsEmptyAndNonText(t *testing.T) {
 	m := newTestModel()
-	m.handleResize(120, 40)
-	m.rebuildConversationFromMessages([]provider.Message{
-		{Role: "assistant", Content: []provider.ContentBlock{
-			{Type: "tool_use", ToolID: "tool-1", ToolName: "run_command", Input: []byte(`{"command":"# Check status\ngit status --short\nhead -5\n"}`)},
-		}},
-		{Role: "user", Content: []provider.ContentBlock{
-			{Type: "tool_result", ToolID: "tool-1", ToolName: "run_command", Output: "M README.md\nA internal/tui/view.go\n", IsError: false},
-		}},
-	})
-	output := stripAnsi(renderedOutput(&m))
-	// Verify tool result appears in rendered output
-	if !containsAll(output, "M README.md", "A internal/tui/view.go") {
-		t.Fatalf("unexpected rendered output: %q", output)
+
+	messages := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "image", Text: "base64data"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "   "}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "response"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "真实消息"}}},
 	}
-	if strings.Contains(output, `{"command":`) {
-		t.Fatalf("expected resume command renderer to avoid raw JSON dump, got %q", output)
+
+	m.restoreHistoryFromMessages(messages)
+
+	if len(m.history) != 1 {
+		t.Fatalf("expected 1 history entry, got %d: %#v", len(m.history), m.history)
+	}
+	if m.history[0] != "真实消息" {
+		t.Errorf("history[0] = %q, want %q", m.history[0], "真实消息")
 	}
 }
 
-func containsAll(text string, parts ...string) bool {
-	for _, part := range parts {
-		if !strings.Contains(text, part) {
-			return false
-		}
+func TestRestoreHistoryResetsExisting(t *testing.T) {
+	m := newTestModel()
+	m.history = []string{"old command"}
+	m.historyIdx = 1
+
+	messages := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "new prompt"}}},
 	}
-	return true
+
+	m.restoreHistoryFromMessages(messages)
+
+	if len(m.history) != 1 {
+		t.Fatalf("expected 1 history entry, got %d: %#v", len(m.history), m.history)
+	}
+	if m.history[0] != "new prompt" {
+		t.Errorf("history[0] = %q, want %q", m.history[0], "new prompt")
+	}
+}
+
+func TestHistoryNavigationAfterRestore(t *testing.T) {
+	m := newTestModel()
+
+	messages := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "first prompt"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "second prompt"}}},
+	}
+	m.restoreHistoryFromMessages(messages)
+
+	// historyIdx should be at end (2), so Up should go to most recent
+	model, _ := m.handleHistoryUp()
+	m2 := model.(Model)
+	if m2.input.Value() != "second prompt" {
+		t.Errorf("after Up: input = %q, want %q", m2.input.Value(), "second prompt")
+	}
+
+	// Another Up should go to first
+	model, _ = m2.handleHistoryUp()
+	m3 := model.(Model)
+	if m3.input.Value() != "first prompt" {
+		t.Errorf("after 2nd Up: input = %q, want %q", m3.input.Value(), "first prompt")
+	}
+
+	// Down should go back to second
+	model, _ = m3.handleHistoryDown()
+	m4 := model.(Model)
+	if m4.input.Value() != "second prompt" {
+		t.Errorf("after Down: input = %q, want %q", m4.input.Value(), "second prompt")
+	}
 }

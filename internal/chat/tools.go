@@ -582,7 +582,7 @@ type TodoTask struct {
 
 // TodoToolItem renders a todo/task list.
 type TodoToolItem struct {
-		CachedItem
+	CachedItem
 	id     string
 	tasks  []TodoTask
 	styles Styles
