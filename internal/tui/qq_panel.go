@@ -25,6 +25,7 @@ type qqPanelState struct {
 	shareAdapter string
 	shareLink    string
 	shareQRCode  string
+	editState    imAdapterEditState
 }
 
 type qqBindingEntry struct {
@@ -141,6 +142,12 @@ func (m Model) renderQQPanel() string {
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.qq.actions_hint")))
 	}
+	// Edit config section
+	if panel.editState.mode == imEditSelect {
+		body = append(body, "", m.renderIMEditSelect(&panel.editState))
+	} else if panel.editState.mode == imEditInput {
+		body = append(body, "", m.renderIMEditInput(&panel.editState))
+	}
 	if strings.TrimSpace(panel.shareLink) != "" {
 		body = append(body,
 			"",
@@ -163,6 +170,12 @@ func (m *Model) handleQQPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.qqPanel
 	if panel == nil {
 		return *m, nil
+	}
+	// Edit mode takes priority
+	if panel.editState.mode != imEditNone {
+		newState, cmd := m.handleIMEditKey(&panel.editState, msg)
+		panel.editState = *newState
+		return *m, cmd
 	}
 	entries := m.qqBindingEntries()
 	if panel.createMode {
@@ -226,6 +239,17 @@ func (m *Model) handleQQPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.createInput = ""
 		panel.message = ""
 		clearQQPanelShare(panel)
+		return *m, nil
+	case "e", "E":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.qq.message.no_bot")
+			return *m, nil
+		}
+		clearQQPanelShare(panel)
+		entry := entries[clampQQSelection(panel.selected, len(entries))]
+		edit := m.enterIMEditSelect(entry.Adapter)
+		panel.editState = edit
+		panel.message = ""
 		return *m, nil
 	case "esc":
 		m.closeQQPanel()

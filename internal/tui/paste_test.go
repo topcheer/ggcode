@@ -405,3 +405,65 @@ func TestQuestionnaireInputPaste(t *testing.T) {
 		t.Fatalf("expected questionnaire input to contain pasted text, got %q", m.pendingQuestionnaire.input.Value())
 	}
 }
+
+// --- IM adapter edit mode paste ---
+
+func TestQQPanelEditModePaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.openQQPanel()
+	m.qqPanel.editState = imAdapterEditState{
+		mode:        imEditInput,
+		adapterName: "test-qq",
+		editField:   "token",
+		editInput:   "old_",
+	}
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "pasted-secret-value"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.qqPanel.editState.editInput, "pasted-secret-value") {
+		t.Fatalf("expected QQ edit input to contain pasted text, got %q", m.qqPanel.editState.editInput)
+	}
+	if strings.Contains(m.input.Value(), "pasted-secret-value") {
+		t.Fatal("expected main input to NOT receive paste when QQ edit mode is active")
+	}
+}
+
+func TestTGPanelEditModePaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.openTGPanel()
+	m.tgPanel.editState = imAdapterEditState{
+		mode:        imEditInput,
+		adapterName: "test-tg",
+		editField:   "token",
+		editInput:   "",
+	}
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "123456:ABC"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.tgPanel.editState.editInput, "123456:ABC") {
+		t.Fatalf("expected TG edit input to contain pasted text, got %q", m.tgPanel.editState.editInput)
+	}
+	if strings.Contains(m.input.Value(), "123456:ABC") {
+		t.Fatal("expected main input to NOT receive paste when TG edit mode is active")
+	}
+}
+
+// --- PC panel create mode paste ---
+
+func TestPCPanelCreateModePaste(t *testing.T) {
+	m := setupModelForPaste()
+	m.openPCPanel()
+	m.pcPanel.createMode = true
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "session-label"})
+	m = updated.(Model)
+
+	if !strings.Contains(m.pcPanel.createInput, "session-label") {
+		t.Fatalf("expected PC panel create input to contain pasted text, got %q", m.pcPanel.createInput)
+	}
+	if strings.Contains(m.input.Value(), "session-label") {
+		t.Fatal("expected main input to NOT receive paste when PC panel create mode is active")
+	}
+}
