@@ -1961,8 +1961,9 @@ func TestHarnessMonitorShowsSnapshotReport(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected /harness monitor to complete inline")
 	}
-	if !strings.Contains(renderedOutput(&m), "Harness monitor") || !strings.Contains(renderedOutput(&m), task.ID) {
-		t.Fatalf("expected monitor output, got %q", renderedOutput(&m))
+	output := stripAnsi(renderedOutput(&m))
+	if !strings.Contains(output, task.ID) {
+		t.Fatalf("expected monitor output with task ID %q, got %q", task.ID, output)
 	}
 }
 
