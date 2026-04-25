@@ -9,7 +9,7 @@ import (
 )
 
 // GitLog implements the git_log tool.
-type GitLog struct { WorkingDir string }
+type GitLog struct{ WorkingDir string }
 
 func (t GitLog) Name() string { return "git_log" }
 

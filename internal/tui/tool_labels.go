@@ -833,7 +833,6 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Fetching MCP prompt..."
 			case "read_mcp_resource":
 				return "Reading MCP resource..."
-				return "Managing swarm task..."
 			case "ask":
 				return "Waiting for user input"
 			case "inspect":

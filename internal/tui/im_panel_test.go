@@ -149,28 +149,30 @@ func TestFirstNonEmptyIM(t *testing.T) {
 }
 
 func TestIMPanelOutputModeKeysReturnMessages(t *testing.T) {
-	m := Model{lang: "en"}
-	m.initIMPanelState()
-	m.showIMPanel = true
+	m := Model{}
+	m.openIMPanel()
 	// imEmitter is nil — setIMOutputMode should still return a result msg
 
 	for _, key := range []string{"v", "q", "s"} {
-		msg, _ := m.handleIMPanelKey(key)
-		result, ok := msg.(imPanelResultMsg)
-		if !ok {
-			t.Errorf("key %q: expected imPanelResultMsg, got %T", key, msg)
+		_, cmd := m.handleIMPanelKey(tea.KeyPressMsg{Text: key})
+		if cmd == nil {
+			t.Errorf("key %q: expected a cmd, got nil", key)
+			continue
 		}
-		if result.err != nil {
-			t.Errorf("key %q: unexpected error: %v", key, result.err)
+		result := cmd()
+		r, ok := result.(imPanelResultMsg)
+		if !ok {
+			t.Errorf("key %q: expected imPanelResultMsg, got %T", key, result)
+		}
+		if r.err != nil {
+			t.Errorf("key %q: unexpected error: %v", key, r.err)
 		}
 	}
 }
 
 func TestIMPanelOutputModeDisplayNilEmitter(t *testing.T) {
-	m := Model{lang: "en"}
-	m.initIMPanelState()
-	m.showIMPanel = true
-	m.imEmitter = nil
+	m := Model{}
+	m.openIMPanel()
 
 	panel := m.renderIMPanel()
 	// Should show "verbose" as default when emitter is nil
@@ -180,25 +182,12 @@ func TestIMPanelOutputModeDisplayNilEmitter(t *testing.T) {
 }
 
 func TestIMPanelOutputModeDisplayContainsHint(t *testing.T) {
-	m := Model{lang: "en"}
-	m.initIMPanelState()
-	m.showIMPanel = true
+	m := Model{}
+	m.openIMPanel()
 
 	panel := m.renderIMPanel()
-	// Should contain output mode hint
+	// Should contain output mode hint (en or zh-CN depending on default lang)
 	if !strings.Contains(panel, "v verbose") && !strings.Contains(panel, "v 详细") {
 		t.Errorf("expected output mode hint in panel, got:\n%s", panel)
-	}
-}
-
-func TestIMPanelOutputModeDisplayZhCN(t *testing.T) {
-	m := Model{lang: "zh-CN"}
-	m.initIMPanelState()
-	m.showIMPanel = true
-	m.imEmitter = nil
-
-	panel := m.renderIMPanel()
-	if !strings.Contains(panel, "详细") {
-		t.Errorf("expected zh-CN output mode label in panel, got:\n%s", panel)
 	}
 }

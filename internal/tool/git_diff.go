@@ -8,7 +8,7 @@ import (
 )
 
 // GitDiff implements the git_diff tool.
-type GitDiff struct { WorkingDir string }
+type GitDiff struct{ WorkingDir string }
 
 func (t GitDiff) Name() string { return "git_diff" }
 

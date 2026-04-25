@@ -8,7 +8,7 @@ import (
 )
 
 // GitBranchList implements the git_branch_list tool.
-type GitBranchList struct { WorkingDir string }
+type GitBranchList struct{ WorkingDir string }
 
 func (t GitBranchList) Name() string { return "git_branch_list" }
 

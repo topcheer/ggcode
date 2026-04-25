@@ -8,7 +8,7 @@ import (
 )
 
 // GitShow implements the git_show tool.
-type GitShow struct { WorkingDir string }
+type GitShow struct{ WorkingDir string }
 
 func (t GitShow) Name() string { return "git_show" }
 
