@@ -83,8 +83,26 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// wait_agent / list_agents → update spawn_agent status
-	if isSubAgentLifecycleTool(ts.ToolName) {
+	// wait_agent / list_agents → update spawn_agent status (old behavior, keep for now)
+	if ts.ToolName == "list_agents" {
+		return
+	}
+	if ts.ToolName == "wait_agent" {
+		// Create standalone tool item for wait_agent
+		id := ts.ToolID
+		if id == "" {
+			id = nextChatID()
+		}
+		present := describeTool(m.currentLanguage(), ts.ToolName, ts.RawArgs)
+		ctx := chat.ToolContext{
+			ToolName:    ts.ToolName,
+			DisplayName: present.DisplayName,
+			Detail:      present.Detail,
+			RawArgs:     ts.RawArgs,
+		}
+		status := chat.StatusRunning
+		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
+		m.chatList.Append(item)
 		return
 	}
 
@@ -157,7 +175,8 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		return
 	}
 
-	if isSubAgentLifecycleTool(ts.ToolName) {
+	// list_agents finish → skip (query only, no body needed)
+	if ts.ToolName == "list_agents" {
 		return
 	}
 	id := ts.ToolID
@@ -231,7 +250,7 @@ func suppressToolResult(toolName, result string) string {
 	switch toolName {
 	case "web_fetch", "web_search":
 		return ""
-	case "start_command", "stop_command", "todo_write":
+	case "start_command", "stop_command", "todo_write", "list_agents":
 		return ""
 	case "read_command_output":
 		// Only keep the actual output content, strip structured metadata
@@ -388,4 +407,15 @@ func stripAnsiForChat(s string) string {
 		result.WriteRune(c)
 	}
 	return result.String()
+}
+
+// extractAgentID parses the agent_id from wait_agent/list_agents raw args.
+func extractAgentID(rawArgs string) string {
+	var args struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return ""
+	}
+	return args.AgentID
 }

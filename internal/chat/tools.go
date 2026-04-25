@@ -7,19 +7,22 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/tree"
+
+	"github.com/topcheer/ggcode/internal/markdown"
 )
 
 // BaseToolItem provides shared rendering logic for all tool items.
 // Concrete tool types embed this and override RenderBody/RenderParams.
 type BaseToolItem struct {
 	CachedItem
-	id       string
-	toolName string
-	status   ToolStatus
-	input    string // raw JSON input
-	result   string // result text (may contain error)
-	isError  bool
-	styles   Styles
+	id           string
+	toolName     string
+	status       ToolStatus
+	input        string // raw JSON input
+	result       string // result text (may contain error)
+	isError      bool
+	markdownBody bool // render result as markdown
+	styles       Styles
 }
 
 // NewBaseToolItem creates a base tool item.
@@ -99,6 +102,11 @@ func (t *BaseToolItem) RenderBody(width int) string {
 
 	if t.isError {
 		return t.styles.ErrorStyle.Render(t.result)
+	}
+
+	if t.markdownBody {
+		rendered := markdown.Render(t.result, width)
+		return t.styles.ToolBody.Render(strings.TrimSuffix(rendered, "\n"))
 	}
 
 	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
@@ -436,6 +444,15 @@ func NewGenericToolItem(id, displayName string, status ToolStatus, detail string
 	}
 }
 
+// NewMarkdownToolItem creates a tool item that renders its result as markdown.
+func NewMarkdownToolItem(id, displayName string, status ToolStatus, detail string, styles Styles) *GenericToolItem {
+	b := NewBaseToolItem(id, displayName, status, detail, styles)
+	b.markdownBody = true
+	return &GenericToolItem{
+		BaseToolItem: *b,
+	}
+}
+
 // NewToolItem creates the appropriate tool item type based on tool name.
 // parseToolInputArg extracts a single string argument from raw JSON input.
 // Uses map[string]any to correctly handle mixed-type JSON objects
@@ -544,6 +561,9 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 	case catLSP:
 		return newLspToolItem(id, displayName, ctx.Detail, status, styles)
 	default:
+		if ctx.ToolName == "wait_agent" {
+			return NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
+		}
 		return NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
 	}
 }

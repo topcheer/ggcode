@@ -255,16 +255,22 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "spawn_agent":
 		task := argString(args, "task")
 		return toolPresentation{
-			DisplayName: "Agent",
+			DisplayName: toolLabelFor(lang, "spawn_agent"),
 			Detail:      compactSingleLine(task),
-			Activity:    "Spawning agent",
+			Activity:    toolLabelFor(lang, "spawn_agent"),
 		}
-	case "list_agents", "wait_agent":
+	case "list_agents":
+		return toolPresentation{
+			DisplayName: toolLabelFor(lang, "list_agents"),
+			Detail:      "",
+			Activity:    toolLabelFor(lang, "list_agents"),
+		}
+	case "wait_agent":
 		agentID := argString(args, "agent_id")
 		return toolPresentation{
-			DisplayName: "Agent",
+			DisplayName: toolLabelFor(lang, "wait_agent"),
 			Detail:      shortenJobID(agentID),
-			Activity:    "Managing agent " + shortenJobID(agentID),
+			Activity:    toolLabelFor(lang, "wait_agent"),
 		}
 	case "team_create", "team_delete":
 		return toolPresentation{
@@ -346,6 +352,10 @@ func toolPresentationFor(lang Language, action, target string) toolPresentation 
 		Detail:      target,
 		Activity:    localizedToolActivity(lang, action, target),
 	}
+}
+
+func toolLabelFor(lang Language, action string) string {
+	return localizedToolLabel(lang, action)
 }
 
 func commandToolPresentation(lang Language, rawCommand string) (toolPresentation, bool) {
@@ -441,6 +451,12 @@ func localizedToolLabel(lang Language, action string) string {
 			return "暂存文件"
 		case "commit":
 			return "提交"
+		case "spawn_agent":
+			return "启动子代理"
+		case "list_agents":
+			return "获取子代理列表"
+		case "wait_agent":
+			return "等待子代理结果"
 		}
 	default:
 		switch action {
@@ -500,6 +516,12 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Stage"
 		case "commit":
 			return "Commit"
+		case "spawn_agent":
+			return "Spawn Agent"
+		case "list_agents":
+			return "List Agents"
+		case "wait_agent":
+			return "Wait Agent"
 		}
 	}
 	return localizedGenericToolName(lang, action)
