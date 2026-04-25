@@ -37,11 +37,11 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		SleepTool{},
 
 		// Worktree
-		EnterWorktree{WorkingDir: workingDir},
-		ExitWorktree{WorkingDir: workingDir},
+		&EnterWorktree{WorkingDir: workingDir},
+		&ExitWorktree{WorkingDir: workingDir},
 
 		// Execution
-		RunCommand{WorkingDir: workingDir, Policy: policy},
+		&RunCommand{WorkingDir: workingDir, Policy: policy},
 		StartCommandTool{Manager: jobManager, Policy: policy},
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
