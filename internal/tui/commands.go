@@ -293,10 +293,6 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return m.handleUndoCommand()
 		case "/checkpoints":
 			return m.handleCheckpointsCommand()
-		case "/agents":
-			return m.handleAgentsCommand(parts)
-		case "/agent":
-			return m.handleAgentDetailCommand(parts)
 		case "/swarm":
 			return m.handleSwarmCommand(parts)
 		case "/compact":

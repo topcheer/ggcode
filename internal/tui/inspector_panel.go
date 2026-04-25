@@ -14,7 +14,6 @@ import (
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/lsp"
 	"github.com/topcheer/ggcode/internal/session"
-	"github.com/topcheer/ggcode/internal/subagent"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/version"
 )
@@ -23,7 +22,6 @@ type inspectorPanelKind string
 
 const (
 	inspectorPanelSessions    inspectorPanelKind = "sessions"
-	inspectorPanelAgents      inspectorPanelKind = "agents"
 	inspectorPanelCheckpoints inspectorPanelKind = "checkpoints"
 	inspectorPanelMemory      inspectorPanelKind = "memory"
 	inspectorPanelTodos       inspectorPanelKind = "todos"
@@ -179,9 +177,6 @@ func (m *Model) handleInspectorPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m.handleInspectorSessionExport(items)
 		}
 	case "x", "X":
-		if m.inspectorPanel.kind == inspectorPanelAgents {
-			return m.handleInspectorAgentCancel(items)
-		}
 	case "c", "C":
 		switch m.inspectorPanel.kind {
 		case inspectorPanelMemory:
@@ -306,22 +301,6 @@ func (m *Model) handleInspectorSessionExport(items []inspectorPanelItem) (Model,
 	return *m, m.exportSession(item.ID)
 }
 
-func (m *Model) handleInspectorAgentCancel(items []inspectorPanelItem) (Model, tea.Cmd) {
-	if m.inspectorPanel == nil || len(items) == 0 || m.subAgentMgr == nil {
-		return *m, nil
-	}
-	item := items[clampInspectorCursor(m.inspectorPanel.cursor, len(items))]
-	if item.ID == "" {
-		return *m, nil
-	}
-	if m.subAgentMgr.Cancel(item.ID) {
-		m.setInspectorMessage(inspectorText(m.currentLanguage(), "agent_cancelled", item.ID))
-	} else {
-		m.setInspectorMessage(inspectorText(m.currentLanguage(), "agent_cancel_failed", item.ID))
-	}
-	return *m, nil
-}
-
 func (m *Model) handleInspectorMemoryClear() (Model, tea.Cmd) {
 	if m.autoMem == nil {
 		m.setInspectorMessage(inspectorText(m.currentLanguage(), "memory_unavailable"))
@@ -351,8 +330,6 @@ func (m Model) inspectorPanelItems(kind inspectorPanelKind) []inspectorPanelItem
 	switch kind {
 	case inspectorPanelSessions:
 		return m.inspectorSessionItems()
-	case inspectorPanelAgents:
-		return m.inspectorAgentItems()
 	case inspectorPanelCheckpoints:
 		return m.inspectorCheckpointItems()
 	case inspectorPanelMemory:
@@ -444,68 +421,6 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 			Summary: strings.Join(summaryParts, " • "),
 			Detail:  strings.Join(detail, "\n"),
 		})
-	}
-	return items
-}
-
-func (m Model) inspectorAgentItems() []inspectorPanelItem {
-	if m.subAgentMgr == nil {
-		return nil
-	}
-	agents := m.subAgentMgr.List()
-	slices.SortStableFunc(agents, func(a, b *subagent.SubAgent) int {
-		switch {
-		case a == nil && b == nil:
-			return 0
-		case a == nil:
-			return 1
-		case b == nil:
-			return -1
-		case a.CreatedAt.Equal(b.CreatedAt):
-			return strings.Compare(a.ID, b.ID)
-		case a.CreatedAt.After(b.CreatedAt):
-			return -1
-		default:
-			return 1
-		}
-	})
-	items := make([]inspectorPanelItem, 0, len(agents))
-	for _, sa := range agents {
-		if sa == nil {
-			continue
-		}
-		snap, ok := m.subAgentMgr.Snapshot(sa.ID)
-		if !ok {
-			continue
-		}
-		title := firstNonEmpty(snap.DisplayTask, snap.Task)
-		if title == "" {
-			title = snap.ID
-		}
-		summary := fmt.Sprintf("%s • %s • %d tools", snap.ID, snap.Status, snap.ToolCallCount)
-		var detail []string
-		detail = append(detail, title, "")
-		detail = append(detail,
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "status"), snap.Status),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "created"), formatInspectorTime(snap.CreatedAt)),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "started"), formatInspectorTime(snap.StartedAt)),
-		)
-		if !snap.EndedAt.IsZero() {
-			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "ended"), formatInspectorTime(snap.EndedAt)))
-		}
-		if snap.CurrentPhase != "" {
-			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "phase"), snap.CurrentPhase))
-		}
-		if snap.ProgressSummary != "" {
-			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "progress"), snap.ProgressSummary))
-		}
-		if snap.Result != "" {
-			detail = append(detail, "", fmt.Sprintf("%s:\n%s", inspectorText(m.currentLanguage(), "result"), snap.Result))
-		}
-		if snap.Error != "" {
-			detail = append(detail, "", fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "error"), snap.Error))
-		}
-		items = append(items, inspectorPanelItem{ID: snap.ID, Title: title, Summary: summary, Detail: strings.Join(detail, "\n")})
 	}
 	return items
 }
@@ -856,8 +771,6 @@ func (m Model) inspectorPanelEmptyState() string {
 	switch m.inspectorPanel.kind {
 	case inspectorPanelSessions:
 		return inspectorText(m.currentLanguage(), "sessions_empty")
-	case inspectorPanelAgents:
-		return inspectorText(m.currentLanguage(), "agents_empty")
 	case inspectorPanelCheckpoints:
 		return inspectorText(m.currentLanguage(), "checkpoints_empty")
 	case inspectorPanelMemory:
@@ -877,8 +790,6 @@ func (m Model) inspectorPanelHints(kind inspectorPanelKind) string {
 	switch kind {
 	case inspectorPanelSessions:
 		return inspectorText(m.currentLanguage(), "hint_sessions")
-	case inspectorPanelAgents:
-		return inspectorText(m.currentLanguage(), "hint_agents")
 	case inspectorPanelCheckpoints:
 		return inspectorText(m.currentLanguage(), "hint_checkpoints")
 	case inspectorPanelMemory:
