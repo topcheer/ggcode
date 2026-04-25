@@ -196,9 +196,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// passed each time because it creates its own agent for analysis tasks.
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
 		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
-			if ag != nil {
-				a.SetWorkingDir(ag.WorkingDir())
-			}
+		if ag != nil {
+			a.SetWorkingDir(ag.WorkingDir())
+		}
 		if onUsage != nil {
 			a.SetUsageHandler(onUsage)
 		}
@@ -363,6 +363,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Create emitter and daemon bridge
 	emitter := im.NewIMEmitter(imMgr, string(lang), workingDir)
+	if cfg.IM.OutputMode != "" {
+		emitter.SetOutputMode(cfg.IM.OutputMode)
+	}
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
 
 	// Wire checkpoint handler — persist compacted state after summarize
@@ -481,18 +484,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	if lang == daemon.LangZhCN {
 		toolLang = im.ToolLangZhCN
 	}
-	toolFormatter := func(toolName, rawArgs string) string {
-		pres := im.DescribeTool(toolLang, toolName, rawArgs)
-		activity := pres.Activity
-		if activity == "" {
-			activity = im.FormatToolInline(pres.DisplayName, pres.Detail)
-		}
-		if activity == "" {
-			return ""
-		}
-		return im.LocalizeIMProgress(toolLang, activity)
-	}
-	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, lang, workingDir, toolFormatter)
+	toolPresenter := &daemonToolPresenter{lang: toolLang}
+	followDisplay := daemon.NewTerminalFollowDisplay(os.Stderr, lang, workingDir, toolPresenter)
 	if followActive {
 		bridge.SetFollowSink(followDisplay)
 	}
@@ -684,4 +677,14 @@ func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
 		return ""
 	}
 	return filtered[idx-1].ID
+}
+
+// daemonToolPresenter adapts the IM DescribeTool function to daemon.ToolPresenter.
+type daemonToolPresenter struct {
+	lang im.ToolLanguage
+}
+
+func (p *daemonToolPresenter) Present(toolName, rawArgs string) (displayName, detail, activity string) {
+	pres := im.DescribeTool(p.lang, toolName, rawArgs)
+	return pres.DisplayName, pres.Detail, pres.Activity
 }

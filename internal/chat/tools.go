@@ -21,9 +21,9 @@ type BaseToolItem struct {
 	input        string // raw JSON input
 	result       string // result text (may contain error)
 	isError      bool
-	markdownBody  bool // render result as markdown
-	suppressBody  bool // hide body entirely (e.g., save_memory)
-	formatJSON    bool // parse JSON result and render as formatted key-value pairs
+	markdownBody bool // render result as markdown
+	suppressBody bool // hide body entirely (e.g., save_memory)
+	formatJSON   bool // parse JSON result and render as formatted key-value pairs
 	styles       Styles
 }
 
@@ -112,7 +112,7 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	}
 
 	if t.formatJSON {
-		formatted := formatJSONResult(t.result)
+		formatted := FormatJSONResult(t.result)
 		return t.styles.ToolBody.Render(formatted)
 	}
 
@@ -163,6 +163,35 @@ type BashToolItem struct {
 }
 
 // NewBashToolItem creates a new bash tool item.
+// ToolBodyBehavior describes how a tool's result body should be rendered.
+type ToolBodyBehavior int
+
+const (
+	BodyDefault    ToolBodyBehavior = iota // show result as-is (truncated)
+	BodySuppress                           // hide body entirely
+	BodyFormatJSON                         // parse JSON and render as key-value pairs
+	BodyMarkdown                           // render result as markdown
+)
+
+// GetToolBodyBehavior returns the body rendering behavior for a given tool name.
+func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
+	switch toolName {
+	case "save_memory", "team_create", "team_delete",
+		"teammate_spawn", "teammate_shutdown",
+		"swarm_task_create", "swarm_task_claim", "swarm_task_complete",
+		"send_message", "config",
+		"enter_plan_mode", "exit_plan_mode",
+		"task_update", "task_stop":
+		return BodySuppress
+	case "cron_create", "task_create", "task_get":
+		return BodyFormatJSON
+	case "teammate_results", "wait_agent":
+		return BodyMarkdown
+	default:
+		return BodyDefault
+	}
+}
+
 // PrettifyToolName converts internal tool names to display names.
 // e.g. "run_command" → "Bash", "read_file" → "Read", "search_files" → "Grep"
 func PrettifyToolName(name string) string {
@@ -568,21 +597,16 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 	case catLSP:
 		return newLspToolItem(id, displayName, ctx.Detail, status, styles)
 	default:
-		if ctx.ToolName == "wait_agent" {
+		if GetToolBodyBehavior(ctx.ToolName) == BodyMarkdown {
 			return NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
 		}
 		item := NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
-		switch ctx.ToolName {
-		case "save_memory", "team_create", "team_delete",
-			"teammate_spawn", "teammate_shutdown",
-			"swarm_task_create", "swarm_task_claim", "swarm_task_complete",
-			"send_message", "config",
-			"enter_plan_mode", "exit_plan_mode",
-			"task_update", "task_stop":
+		switch GetToolBodyBehavior(ctx.ToolName) {
+		case BodySuppress:
 			item.suppressBody = true
-		case "cron_create", "task_create", "task_get":
+		case BodyFormatJSON:
 			item.formatJSON = true
-		case "teammate_results":
+		case BodyMarkdown:
 			item.markdownBody = true
 		}
 		return item
@@ -782,8 +806,8 @@ func (a *AgentToolItem) Height(width int) int {
 	return measureHeight(a.Render(width))
 }
 
-// formatJSONResult parses a JSON string and renders it as human-readable key-value pairs.
-func formatJSONResult(raw string) string {
+// FormatJSONResult parses a JSON string and renders it as human-readable key-value pairs.
+func FormatJSONResult(raw string) string {
 	var data map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &data); err != nil {
 		return raw

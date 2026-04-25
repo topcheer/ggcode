@@ -205,6 +205,7 @@ type IMConfig struct {
 	Enabled             bool                       `yaml:"enabled,omitempty"`
 	ActiveSessionPolicy string                     `yaml:"active_session_policy,omitempty"`
 	RequireLocalSession *bool                      `yaml:"require_local_session,omitempty"`
+	OutputMode          string                     `yaml:"output_mode,omitempty"` // verbose, quiet, summary (default: verbose)
 	Streaming           IMStreamingConfig          `yaml:"streaming,omitempty"`
 	STT                 IMSTTConfig                `yaml:"stt,omitempty"`
 	Adapters            map[string]IMAdapterConfig `yaml:"adapters,omitempty"`
