@@ -225,7 +225,7 @@ func suppressToolResult(toolName, result string) string {
 	switch toolName {
 	case "web_fetch", "web_search":
 		return ""
-	case "start_command", "stop_command":
+	case "start_command", "stop_command", "todo_write":
 		return ""
 	case "read_command_output":
 		// Only keep the actual output content, strip structured metadata
