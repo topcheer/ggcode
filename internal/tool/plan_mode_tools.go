@@ -69,7 +69,9 @@ func (t ExitPlanModeTool) Name() string { return "exit_plan_mode" }
 func (t ExitPlanModeTool) Description() string {
 	return "Exit plan mode and return to normal coding mode. Provide the plan content generated during exploration. " +
 		"Optionally specify which mode to return to (supervised, auto, bypass, autopilot). If not specified, " +
-		"restores the mode that was active before entering plan mode."
+		"restores the mode that was active before entering plan mode. " +
+		"After exiting, break the plan into structured tasks using task_create with dependencies (addBlocks/addBlockedBy) " +
+		"to track progress, then execute each task step by step."
 }
 func (t ExitPlanModeTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -110,5 +112,5 @@ func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Res
 
 	t.Switcher.SetMode(mode)
 
-	return Result{Content: fmt.Sprintf("Exited plan mode. Resumed in %s mode.\n\nPlan:\n%s\n", mode, args.Plan)}, nil
+	return Result{Content: fmt.Sprintf("Exited plan mode. Resumed in %s mode.\n\nPlan:\n%s\n\nUse task_create to break this plan into structured tasks with dependencies, then execute step by step.\n", mode, args.Plan)}, nil
 }
