@@ -30,6 +30,8 @@ func (t TaskCreateTool) Parameters() json.RawMessage {
 			"subject": {"type": "string", "description": "Brief actionable title for the task"},
 			"description": {"type": "string", "description": "Detailed requirements and context"},
 			"activeForm": {"type": "string", "description": "Present continuous form shown in spinner (e.g. 'Running tests')"},
+			"addBlocks": {"type": "array", "items": {"type": "string"}, "description": "Task IDs this task blocks (this task must finish before those can start)"},
+			"addBlockedBy": {"type": "array", "items": {"type": "string"}, "description": "Task IDs that block this task (those must finish before this can start)"},
 			"metadata": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Arbitrary key-value metadata"}
 		},
 		"required": ["subject"]
@@ -40,10 +42,12 @@ func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "task_create: task manager not available"}, nil
 	}
 	var args struct {
-		Subject     string            `json:"subject"`
-		Description string            `json:"description"`
-		ActiveForm  string            `json:"activeForm"`
-		Metadata    map[string]string `json:"metadata"`
+		Subject      string            `json:"subject"`
+		Description  string            `json:"description"`
+		ActiveForm   string            `json:"activeForm"`
+		Metadata     map[string]string `json:"metadata"`
+		AddBlocks    []string          `json:"addBlocks"`
+		AddBlockedBy []string          `json:"addBlockedBy"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -53,6 +57,15 @@ func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 	}
 
 	created := t.Manager.Create(args.Subject, args.Description, args.ActiveForm, args.Metadata)
+
+	// Apply dependency links if provided
+	if len(args.AddBlocks) > 0 || len(args.AddBlockedBy) > 0 {
+		t.Manager.Update(created.ID, task.UpdateOptions{
+			AddBlocks:    args.AddBlocks,
+			AddBlockedBy: args.AddBlockedBy,
+		})
+	}
+
 	out, _ := json.Marshal(created)
 	return Result{Content: string(out) + "\n"}, nil
 }

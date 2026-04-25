@@ -577,9 +577,10 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 			"teammate_spawn", "teammate_shutdown",
 			"swarm_task_create", "swarm_task_claim", "swarm_task_complete",
 			"send_message", "config",
-			"enter_plan_mode", "exit_plan_mode":
+			"enter_plan_mode", "exit_plan_mode",
+			"task_update", "task_stop":
 			item.suppressBody = true
-		case "cron_create":
+		case "cron_create", "task_create", "task_get":
 			item.formatJSON = true
 		case "teammate_results":
 			item.markdownBody = true
