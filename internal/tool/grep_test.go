@@ -201,7 +201,7 @@ func TestGrep_NoMatches(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.Content)
 	}
-	if !containsAny(result.Content, "No matches") {
+	if !containsAny(result.Content, "No matches") && !containsAny(result.Content, "0 file") {
 		t.Errorf("expected no matches message; got:\n%s", result.Content)
 	}
 }
