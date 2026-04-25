@@ -194,10 +194,22 @@ func TestConfigPolicy_ReadOnlySandboxAppliesOnlyToReadTools(t *testing.T) {
 	if !p.AllowedPathForTool("glob", "/tmp/project/.ggcode") {
 		t.Fatal("expected glob to allow read-only sandbox path")
 	}
-	if p.AllowedPathForTool("write_file", "/tmp/project/.ggcode/harness.yaml") {
-		t.Fatal("expected write_file to deny read-only sandbox path")
+	// In non-plan modes, AllowedPathForTool defers to the permission layer.
+	// If execution reaches here, the permission layer has already approved,
+	// so write_file is allowed even for read-only sandbox paths.
+	if !p.AllowedPathForTool("write_file", "/tmp/project/.ggcode/harness.yaml") {
+		t.Fatal("expected write_file to allow in non-plan mode after permission approval")
 	}
-	if p.AllowedPathForTool("edit_file", "/tmp/project/.ggcode/harness.yaml") {
-		t.Fatal("expected edit_file to deny read-only sandbox path")
+	if !p.AllowedPathForTool("edit_file", "/tmp/project/.ggcode/harness.yaml") {
+		t.Fatal("expected edit_file to allow in non-plan mode after permission approval")
+	}
+
+	// In PlanMode, strict sandbox enforcement applies — write tools are denied
+	pp := NewConfigPolicyWithModeAndReadOnlyDirs(nil, []string{"/tmp/worktree"}, []string{"/tmp/project/.ggcode"}, PlanMode)
+	if pp.AllowedPathForTool("write_file", "/tmp/project/.ggcode/harness.yaml") {
+		t.Fatal("expected write_file to deny read-only sandbox path in PlanMode")
+	}
+	if pp.AllowedPathForTool("edit_file", "/tmp/project/.ggcode/harness.yaml") {
+		t.Fatal("expected edit_file to deny read-only sandbox path in PlanMode")
 	}
 }
