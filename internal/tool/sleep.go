@@ -46,8 +46,8 @@ func (t SleepTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if d <= 0 {
 		return Result{Content: "Slept for 0s"}, nil
 	}
-	if d > 60*time.Second {
-		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %s exceeds maximum of 60s", d)}, nil
+	if d > 30*time.Minute {
+		return Result{IsError: true, Content: fmt.Sprintf("sleep duration %s exceeds maximum of 30m", d)}, nil
 	}
 
 	timer := time.NewTimer(d)

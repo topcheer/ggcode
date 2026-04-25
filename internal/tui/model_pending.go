@@ -30,6 +30,13 @@ func (m *Model) queuePendingSubmission(text string) {
 	m.chatListScrollToBottom()
 }
 
+// queuePendingSubmissionHidden enqueues text for LLM submission without
+// rendering it as a user message in the chat panel (e.g., cron triggers).
+func (m *Model) queuePendingSubmissionHidden(text string) {
+	count := m.pending.enqueue(text)
+	debug.Log("tui", "queuePendingSubmissionHidden: count=%d text=%s", count, truncateStr(text, 100))
+}
+
 func (m *Model) pendingSubmissionCount() int {
 	return m.pending.count()
 }

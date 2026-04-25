@@ -21,8 +21,9 @@ type BaseToolItem struct {
 	input        string // raw JSON input
 	result       string // result text (may contain error)
 	isError      bool
-	markdownBody bool // render result as markdown
-	suppressBody bool // hide body entirely (e.g., save_memory)
+	markdownBody  bool // render result as markdown
+	suppressBody  bool // hide body entirely (e.g., save_memory)
+	formatJSON    bool // parse JSON result and render as formatted key-value pairs
 	styles       Styles
 }
 
@@ -108,6 +109,11 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	if t.markdownBody {
 		rendered := markdown.Render(t.result, width)
 		return t.styles.ToolBody.Render(strings.TrimSuffix(rendered, "\n"))
+	}
+
+	if t.formatJSON {
+		formatted := formatJSONResult(t.result)
+		return t.styles.ToolBody.Render(formatted)
 	}
 
 	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
@@ -569,6 +575,9 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		if ctx.ToolName == "save_memory" {
 			item.suppressBody = true
 		}
+		if ctx.ToolName == "cron_create" {
+			item.formatJSON = true
+		}
 		return item
 	}
 }
@@ -764,4 +773,49 @@ func (a *AgentToolItem) Height(width int) int {
 		return h
 	}
 	return measureHeight(a.Render(width))
+}
+
+// formatJSONResult parses a JSON string and renders it as human-readable key-value pairs.
+func formatJSONResult(raw string) string {
+	var data map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &data); err != nil {
+		return raw
+	}
+
+	var pairs []string
+	for _, key := range []string{"ID", "CronExpr", "Recurring", "Prompt", "NextFire", "CreatedAt"} {
+		val, ok := data[key]
+		if !ok {
+			continue
+		}
+		label := prettifyJSONKey(key)
+		switch v := val.(type) {
+		case bool:
+			if v {
+				pairs = append(pairs, label+": Yes")
+			} else {
+				pairs = append(pairs, label+": No")
+			}
+		case string:
+			pairs = append(pairs, label+": "+v)
+		default:
+			pairs = append(pairs, label+": "+fmt.Sprintf("%v", v))
+		}
+	}
+	return strings.Join(pairs, "\n")
+}
+
+func prettifyJSONKey(key string) string {
+	switch key {
+	case "ID":
+		return "Job ID"
+	case "CronExpr":
+		return "Schedule"
+	case "NextFire":
+		return "Next Fire"
+	case "CreatedAt":
+		return "Created"
+	default:
+		return key
+	}
 }

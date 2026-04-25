@@ -1050,7 +1050,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case cronPromptMsg:
-		m.queuePendingSubmission(msg.Prompt)
+		m.queuePendingSubmissionHidden(msg.Prompt)
+		m.chatWriteSystem(nextSystemID(), m.t("cron.firing"))
 		return m, nil
 
 	case skillsChangedMsg:
