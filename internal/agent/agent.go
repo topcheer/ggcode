@@ -473,6 +473,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 		// Execute tool calls and build tool_result message
 		var toolResults []provider.ContentBlock
+		// Collect follow-up messages from tools (e.g., inline skills)
+		var followUpMessages []provider.Message
 		// Defer project memory injection until after all tools execute,
 		// so every tool_call gets a matching tool_result.
 		var deferredMemoryContent string
@@ -494,6 +496,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
 			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, truncateStr(result.Content, 200), len(result.Images))
+
+			// Collect follow-up messages from tools (e.g., inline skills).
+			if len(result.FollowUpMessages) > 0 {
+				followUpMessages = append(followUpMessages, result.FollowUpMessages...)
+			}
 
 			// If the tool suggests a working directory change, apply it.
 			if result.SuggestedWorkingDir != "" && !result.IsError {
@@ -536,6 +543,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			Role:    "user", // Anthropic uses user role for tool results
 			Content: toolResults,
 		})
+
+		// Inject follow-up messages from tools (e.g., inline skill instructions).
+		for _, msg := range followUpMessages {
+			debug.Log("agent", "Injecting follow-up message from tool: role=%s", msg.Role)
+			a.contextManager.Add(msg)
+		}
 
 		// Inject deferred project memory after all tool results are submitted.
 		if deferredMemoryContent != "" {
