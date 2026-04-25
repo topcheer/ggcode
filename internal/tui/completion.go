@@ -183,7 +183,7 @@ var SlashCommands = []string{
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
-	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/swarm",
+	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -230,7 +230,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/restart":     "Restart ggcode (picks up latest binary)",
 	"/lang":        "Switch interface language",
 	"/skills":      "Browse available skills",
-	"/swarm":       "Show swarm teams and teammates",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.

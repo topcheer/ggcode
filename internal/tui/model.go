@@ -123,7 +123,6 @@ type Model struct {
 	pendingDeviceCodes              []deviceCodeInfo
 	skillsPanel                     *skillsPanelState
 	inspectorPanel                  *inspectorPanelState
-	swarmPanel                      *swarmPanelState
 	swarmMgr                        *swarm.Manager
 	previewPanel                    *previewPanelState
 	fileBrowser                     *fileBrowserState
@@ -550,8 +549,7 @@ func (m *Model) closeActivePanel() bool {
 		m.closeHarnessPanel()
 	case m.impersonatePanel != nil:
 		m.closeImpersonatePanel()
-	case m.swarmPanel != nil:
-		m.closeSwarmPanel()
+
 	case len(m.langOptions) > 0:
 		m.langOptions = nil
 	default:
