@@ -158,7 +158,6 @@ type Model struct {
 	statusToolName  string // current executing tool name
 	statusToolArg   string // current tool argument summary (truncated)
 	statusToolCount int    // tool calls executed this iteration
-	activityGroups  []toolActivityGroup
 	todoSnapshot    map[string]todoStateItem
 	todoOrder       []string // preserves original insertion order from todo_write
 	activeTodo      *todoStateItem
@@ -210,26 +209,6 @@ type Model struct {
 type pendingQueue struct {
 	mu    sync.Mutex
 	items []string
-}
-
-type toolActivityGroup struct {
-	Title       string
-	Categories  []string
-	Items       []toolActivityItem
-	Active      bool
-	TodoID      string
-	TodoContent string
-}
-
-type toolActivityItem struct {
-	CallID                 string
-	Summary                string
-	Running                bool
-	CommandTitle           string
-	CommandLines           []string
-	CommandHiddenLineCount int
-	OutputLines            []string
-	OutputHiddenLineCount  int
 }
 
 // MCPInfo holds display info about a connected MCP server.

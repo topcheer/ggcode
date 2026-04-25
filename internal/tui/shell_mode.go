@@ -90,7 +90,6 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	m.streamBuffer = nil
 	m.shellBuffer = &bytes.Buffer{}
 	m.streamPrefixWritten = false
-	m.resetActivityGroups()
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startShellCommand(command))
 }
 

@@ -550,7 +550,6 @@ func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 	m.harnessRunProject = &project
 	m.harnessRunGoal = goal
 	m.harnessRunTaskID = ""
@@ -599,7 +598,6 @@ func (m *Model) runTrackedHarnessRerun(commandText string, project harness.Proje
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
-	m.resetActivityGroups()
 	m.harnessRunProject = &project
 	m.harnessRunGoal = task.Goal
 	m.harnessRunTaskID = task.ID

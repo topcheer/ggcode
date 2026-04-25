@@ -455,42 +455,6 @@ func TestCompactToolArgsPreviewHidesEmptyObject(t *testing.T) {
 	}
 }
 
-func TestFormatToolItemSummaryHidesTrivialArgsAndSummary(t *testing.T) {
-	got := formatToolItemSummary(LangEnglish, ToolStatusMsg{
-		ToolName:    "write_file",
-		DisplayName: "Write",
-		Args:        `{}`,
-		Result:      "Write",
-	})
-	if got != "Write" {
-		t.Fatalf("expected trivial tool summary to collapse to display name, got %q", got)
-	}
-}
-
-func TestFormatToolItemSummaryRunCommandShowsScriptPreview(t *testing.T) {
-	got := formatToolItemSummary(LangEnglish, ToolStatusMsg{
-		ToolName:    "run_command",
-		DisplayName: "Restart metro",
-		RawArgs:     `{"command":"# Restart metro\ncd /tmp/app\nrm -rf .metro-cache\nnpm install\nnpm run start -- --reset-cache\nsleep 2\necho ready\n"}`,
-		Result:      "booting\nready\n",
-	})
-	if !strings.Contains(got, "Restart metro") {
-		t.Fatalf("expected title in command summary, got %q", got)
-	}
-	if strings.Contains(got, "# Restart metro") {
-		t.Fatalf("expected title comment to be removed from script preview, got %q", got)
-	}
-	if !strings.Contains(got, "cd /tmp/app") || !strings.Contains(got, "npm run start -- --reset-cache") {
-		t.Fatalf("expected script preview lines, got %q", got)
-	}
-	if !strings.Contains(got, "… 1 more script line") {
-		t.Fatalf("expected hidden script line summary, got %q", got)
-	}
-	if !strings.Contains(got, "2 lines of output") {
-		t.Fatalf("expected output line summary, got %q", got)
-	}
-}
-
 func TestDescribeToolListDirectoryUsesWorkspaceRelativePath(t *testing.T) {
 	present := describeTool(LangEnglish, "list_directory", `{"path":"internal/context"}`)
 	if present.Detail != "internal/context" {
