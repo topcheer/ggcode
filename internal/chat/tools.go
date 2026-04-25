@@ -314,7 +314,8 @@ func (t *WebToolItem) Render(width int) string {
 	if cached, _, ok := t.GetCached(width); ok {
 		return cached
 	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
+	// WebToolItem: suppress body — only show header
+	rendered := t.renderCore(width, t.RenderParams(), "")
 	t.SetCached(rendered, width, measureHeight(rendered))
 	return rendered
 }

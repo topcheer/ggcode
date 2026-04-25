@@ -653,15 +653,15 @@ func argString(args map[string]any, key string) string {
 	}
 	switch vv := v.(type) {
 	case string:
-		return compactSingleLine(vv)
+		return vv
 	case float64:
-		return compactSingleLine(strconv.FormatFloat(vv, 'f', -1, 64))
+		return strconv.FormatFloat(vv, 'f', -1, 64)
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
 			return ""
 		}
-		return compactSingleLine(string(b))
+		return string(b)
 	}
 }
 
