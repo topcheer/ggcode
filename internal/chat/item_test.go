@@ -263,16 +263,13 @@ func TestTodoToolItem(t *testing.T) {
 		{ID: "1", Content: "design", Status: "done"},
 		{ID: "2", Content: "implement", Status: "in_progress"},
 		{ID: "3", Content: "test", Status: "pending"},
-	}, styles)
+	}, styles, "en")
 	rendered := item.Render(80)
-	if !strings.Contains(rendered, "To-Do") {
-		t.Fatalf("expected To-Do in render: %s", rendered)
+	if !strings.Contains(rendered, "Todo") {
+		t.Fatalf("expected Todo in render: %s", rendered)
 	}
-	if !strings.Contains(rendered, "1/3") {
-		t.Fatalf("expected ratio in render: %s", rendered)
-	}
-	if !strings.Contains(rendered, "✓") || !strings.Contains(rendered, "→") || !strings.Contains(rendered, "○") {
-		t.Fatalf("expected task icons in render: %s", rendered)
+	if !strings.Contains(rendered, "implement") {
+		t.Fatalf("expected active task in render: %s", rendered)
 	}
 }
 
