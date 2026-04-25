@@ -64,6 +64,29 @@ func (m Model) renderIMPanel() string {
 		"",
 	)
 
+	// Output mode
+	currentMode := "verbose"
+	if m.imEmitter != nil {
+		currentMode = m.imEmitter.OutputMode()
+	}
+	var modeDesc string
+	switch currentMode {
+	case "quiet":
+		modeDesc = m.t("panel.im.output_mode.quiet")
+	case "summary":
+		modeDesc = m.t("panel.im.output_mode.summary")
+	default:
+		modeDesc = m.t("panel.im.output_mode.verbose")
+	}
+	modeLabel := lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.output_mode"))
+	modeValue := lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(modeDesc)
+	body = append(body,
+		modeLabel,
+		fmt.Sprintf("  %s", modeValue),
+		fmt.Sprintf("  %s", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.im.output_mode.hint"))),
+		"",
+	)
+
 	// Channels summary
 	activeCount := 0
 	disabledCount := 0
@@ -226,6 +249,12 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 		return *m, m.unmuteIMChannel(entries[clampIMSelection(panel.selected, len(entries))])
+	case "v":
+		return *m, m.setIMOutputMode("verbose")
+	case "q":
+		return *m, m.setIMOutputMode("quiet")
+	case "s":
+		return *m, m.setIMOutputMode("summary")
 	case "M":
 		return *m, m.muteAllIMChannels()
 	case "U":
@@ -281,6 +310,15 @@ func (m *Model) unmuteIMChannel(entry imChannelEntry) tea.Cmd {
 			return imPanelResultMsg{err: err}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.unmuted", entry.Adapter)}
+	}
+}
+
+func (m *Model) setIMOutputMode(mode string) tea.Cmd {
+	return func() tea.Msg {
+		if m.imEmitter != nil {
+			m.imEmitter.SetOutputMode(mode)
+		}
+		return imPanelResultMsg{message: m.t("panel.im.output_mode.set", mode)}
 	}
 }
 
