@@ -195,18 +195,28 @@ vendors:
 	}
 }
 
-func TestResumeFlagWithoutValueUsesPickerMarker(t *testing.T) {
+func TestResumeFlagWithValueIsParsedCorrectly(t *testing.T) {
 	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"--resume"})
-	if err := cmd.ParseFlags([]string{"--resume"}); err != nil {
+	if err := cmd.ParseFlags([]string{"--resume", "session-abc"}); err != nil {
 		t.Fatalf("ParseFlags() error = %v", err)
 	}
 	flag := cmd.Flags().Lookup("resume")
 	if flag == nil {
 		t.Fatal("expected resume flag")
 	}
-	if flag.Value.String() != resumePickerFlagValue {
-		t.Fatalf("resume flag value = %q, want %q", flag.Value.String(), resumePickerFlagValue)
+	if flag.Value.String() != "session-abc" {
+		t.Fatalf("resume flag value = %q, want %q", flag.Value.String(), "session-abc")
+	}
+}
+
+func TestResumeFlagPickerKeywordTriggersPicker(t *testing.T) {
+	cmd := NewRootCmd()
+	if err := cmd.ParseFlags([]string{"--resume-picker"}); err != nil {
+		t.Fatalf("ParseFlags() error = %v", err)
+	}
+	pickerFlag, _ := cmd.Flags().GetBool("resume-picker")
+	if !pickerFlag {
+		t.Fatal("expected --resume-picker to be true")
 	}
 }
 

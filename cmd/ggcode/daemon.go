@@ -79,8 +79,6 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 	cmd.Flags().BoolVar(&followFlag, "follow", false, "auto-enable follow mode")
 	cmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "start in background")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID")
-	// Allow --resume without a value to trigger interactive session selection
-	cmd.Flags().Lookup("resume").NoOptDefVal = "-"
 	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
 	_ = cmd.Flags().MarkHidden("__daemonized")
 	cmd.MarkFlagsMutuallyExclusive("follow", "background")
@@ -519,6 +517,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Register PID file for cleanup
 	defer daemon.CleanupDaemon(workingDir)
 
+	var daemonRestartRequested bool
+
 	// Main loop
 loop:
 	for {
@@ -546,12 +546,9 @@ loop:
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.follow_off"))
 				}
 			case 'r': // restart
-				fmt.Fprintf(os.Stderr, "%s\r\n", "[ggcode restart] initiating self-restart...")
-				if err := daemonRestart(cfgFile, workingDir, ses.ID, bypass); err != nil {
-					fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %s\r\n", err)
-				} else {
-					break loop
-				}
+				daemonRestartRequested = true
+				fmt.Fprintf(os.Stderr, "%s\r\n", "[ggcode restart] restarting...")
+				break loop
 			}
 		}
 	}
@@ -559,6 +556,31 @@ loop:
 	// Restore terminal before printing further output
 	if restoreTerminal != nil {
 		restoreTerminal()
+	}
+
+	if daemonRestartRequested {
+		// Self-restart: replace this process with a fresh ggcode daemon.
+		binary, err := restart.ResolveBinary()
+		if err != nil {
+			return fmt.Errorf("restart: resolve binary: %w", err)
+		}
+		ses.Messages = ag.Messages()
+		_ = store.Save(ses)
+
+		var args []string
+		if cfgFile != "" {
+			args = append(args, "--config", cfgFile)
+		}
+		args = append(args, "daemon", "--follow")
+		if ses.ID != "" {
+			args = append(args, "--resume", ses.ID)
+		}
+		if bypass {
+			args = append(args, "--bypass")
+		}
+		execArgs := append([]string{binary}, args...)
+		fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s\n", strings.Join(execArgs, " "))
+		return syscall.Exec(binary, execArgs, os.Environ())
 	}
 
 	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\n")
@@ -656,34 +678,4 @@ func pickSessionInteractive(store session.Store, lang daemon.Lang) string {
 		return ""
 	}
 	return filtered[idx-1].ID
-}
-
-// daemonRestart launches a restart helper script and returns nil on success.
-// The caller should break out of the main loop so the daemon can exit,
-// allowing the helper to start a fresh daemon process.
-func daemonRestart(cfgFile, workDir, sessionID string, bypass bool) error {
-	binary, err := restart.ResolveBinary()
-	if err != nil {
-		return fmt.Errorf("resolve binary: %w", err)
-	}
-
-	var args []string
-	if cfgFile != "" {
-		args = append(args, "--config", cfgFile)
-	}
-	args = append(args, "daemon", "--follow")
-	if sessionID != "" {
-		args = append(args, "--resume", sessionID)
-	}
-	if bypass {
-		args = append(args, "--bypass")
-	}
-
-	req := restart.Request{
-		Binary:  binary,
-		Args:    args,
-		WorkDir: workDir,
-		PID:     os.Getpid(),
-	}
-	return restart.Launch(req)
 }

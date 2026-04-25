@@ -217,10 +217,17 @@ func (s *SystemItem) Render(width int) string {
 
 	prefix := s.styles.SystemPrefix
 	prefixWidth := lipgloss.Width(prefix)
+	contentWidth := width - prefixWidth
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
 
-	// System messages preserve their own line breaks.
-	// Prepend prefix to first line, indent continuation lines.
-	textLines := strings.Split(s.text, "\n")
+	// Wrap each paragraph to the available content width so that lines
+	// (including the leading prefix/indent) never exceed the viewport.
+	// Without this, long system messages overflow the terminal width,
+	// causing invisible auto-wrap lines that measureHeight() doesn't count
+	// and the virtual list renders too many items.
+	textLines := wrapLines(s.text, contentWidth)
 	var sb strings.Builder
 	for i, line := range textLines {
 		if i == 0 {
