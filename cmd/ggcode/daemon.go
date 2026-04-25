@@ -582,6 +582,21 @@ loop:
 					bridge.SetFollowSink(nil)
 					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.follow_off"))
 				}
+			case 'v': // IM output mode: verbose
+				if emitter != nil {
+					emitter.SetOutputMode("verbose")
+					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.output_mode", "verbose"))
+				}
+			case 'q': // IM output mode: quiet
+				if emitter != nil {
+					emitter.SetOutputMode("quiet")
+					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.output_mode", "quiet"))
+				}
+			case 's': // IM output mode: summary
+				if emitter != nil {
+					emitter.SetOutputMode("summary")
+					fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.output_mode", "summary"))
+				}
 			case 'r': // restart
 				daemonRestartRequested = true
 				fmt.Fprintf(os.Stderr, "%s\r\n", "[ggcode restart] restarting...")

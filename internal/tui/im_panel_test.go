@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -144,5 +145,60 @@ func TestFirstNonEmptyIM(t *testing.T) {
 	}
 	if got := firstNonEmptyIM("first", "second"); got != "first" {
 		t.Errorf("firstNonEmptyIM = %q, want %q", got, "first")
+	}
+}
+
+func TestIMPanelOutputModeKeysReturnMessages(t *testing.T) {
+	m := Model{lang: "en"}
+	m.initIMPanelState()
+	m.showIMPanel = true
+	// imEmitter is nil — setIMOutputMode should still return a result msg
+
+	for _, key := range []string{"v", "q", "s"} {
+		msg, _ := m.handleIMPanelKey(key)
+		result, ok := msg.(imPanelResultMsg)
+		if !ok {
+			t.Errorf("key %q: expected imPanelResultMsg, got %T", key, msg)
+		}
+		if result.err != nil {
+			t.Errorf("key %q: unexpected error: %v", key, result.err)
+		}
+	}
+}
+
+func TestIMPanelOutputModeDisplayNilEmitter(t *testing.T) {
+	m := Model{lang: "en"}
+	m.initIMPanelState()
+	m.showIMPanel = true
+	m.imEmitter = nil
+
+	panel := m.renderIMPanel()
+	// Should show "verbose" as default when emitter is nil
+	if !strings.Contains(panel, "verbose") {
+		t.Errorf("expected 'verbose' in panel output, got:\n%s", panel)
+	}
+}
+
+func TestIMPanelOutputModeDisplayContainsHint(t *testing.T) {
+	m := Model{lang: "en"}
+	m.initIMPanelState()
+	m.showIMPanel = true
+
+	panel := m.renderIMPanel()
+	// Should contain output mode hint
+	if !strings.Contains(panel, "v verbose") && !strings.Contains(panel, "v 详细") {
+		t.Errorf("expected output mode hint in panel, got:\n%s", panel)
+	}
+}
+
+func TestIMPanelOutputModeDisplayZhCN(t *testing.T) {
+	m := Model{lang: "zh-CN"}
+	m.initIMPanelState()
+	m.showIMPanel = true
+	m.imEmitter = nil
+
+	panel := m.renderIMPanel()
+	if !strings.Contains(panel, "详细") {
+		t.Errorf("expected zh-CN output mode label in panel, got:\n%s", panel)
 	}
 }
