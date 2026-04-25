@@ -252,6 +252,13 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			argString(args, "description"),
 			argString(args, "taskId"),
 		)))
+	case "spawn_agent":
+		task := argString(args, "task")
+		return toolPresentation{
+			DisplayName: "Agent",
+			Detail:      compactSingleLine(task),
+			Activity:    "Spawning agent",
+		}
 	case "list_agents", "wait_agent":
 		agentID := argString(args, "agent_id")
 		return toolPresentation{
