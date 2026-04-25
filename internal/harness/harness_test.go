@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -130,7 +129,7 @@ func TestInitCreatesHarnessScaffold(t *testing.T) {
 	for _, rel := range []string{
 		ConfigRelPath,
 		filepath.Join(StateRelDir, "events.jsonl"),
-		filepath.Join(StateRelDir, "snapshot.db"),
+		filepath.Join(StateRelDir, "snapshots", "tasks"),
 		"AGENTS.md",
 		filepath.Join("cmd", "AGENTS.md"),
 		filepath.Join("internal", "inventory", "AGENTS.md"),
@@ -2467,18 +2466,15 @@ func TestTaskEventsPersistToLogAndSnapshot(t *testing.T) {
 		t.Fatalf("unexpected task events: %+v", events)
 	}
 
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-	var status string
-	var logPath sql.NullString
-	if err := db.QueryRow(`SELECT status, log_path FROM tasks WHERE task_id = ?`, task.ID).Scan(&status, &logPath); err != nil {
-		t.Fatalf("query task snapshot: %v", err)
+	snapshot, err := loadTaskSnapshot(taskSnapshotPath(result.Project, task.ID))
+	if err != nil {
+		t.Fatalf("load task snapshot: %v", err)
 	}
-	if status != string(TaskCompleted) {
-		t.Fatalf("snapshot status = %q, want %q", status, TaskCompleted)
+	if snapshot.Status != TaskCompleted {
+		t.Fatalf("snapshot status = %q, want %q", snapshot.Status, TaskCompleted)
 	}
-	if !logPath.Valid || strings.TrimSpace(logPath.String) == "" {
-		t.Fatalf("expected task log path in snapshot, got %+v", logPath)
+	if strings.TrimSpace(snapshot.LogPath) == "" {
+		t.Fatalf("expected task log path in snapshot, got %q", snapshot.LogPath)
 	}
 }
 
@@ -2565,15 +2561,12 @@ func TestReleaseWaveEventsPersistToLogAndSnapshot(t *testing.T) {
 		t.Fatalf("unexpected rollout events: %+v", events)
 	}
 
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-	var waveStatus string
-	var gateStatus string
-	if err := db.QueryRow(`SELECT wave_status, gate_status FROM release_plans WHERE batch_id = ?`, secondBatchID).Scan(&waveStatus, &gateStatus); err != nil {
-		t.Fatalf("query release snapshot: %v", err)
+	snapshot, err := loadReleasePlanSnapshot(releaseSnapshotPath(result.Project, secondBatchID))
+	if err != nil {
+		t.Fatalf("load release snapshot: %v", err)
 	}
-	if waveStatus != ReleaseWaveActive || gateStatus != ReleaseGateApproved {
-		t.Fatalf("snapshot statuses = %q/%q, want %q/%q", waveStatus, gateStatus, ReleaseWaveActive, ReleaseGateApproved)
+	if snapshot.WaveStatus != ReleaseWaveActive || snapshot.GateStatus != ReleaseGateApproved {
+		t.Fatalf("snapshot statuses = %q/%q, want %q/%q", snapshot.WaveStatus, snapshot.GateStatus, ReleaseWaveActive, ReleaseGateApproved)
 	}
 }
 
@@ -3477,11 +3470,26 @@ func readHarnessEvents(t *testing.T, project Project) []harnessEvent {
 	return events
 }
 
-func openSnapshotDB(t *testing.T, project Project) *sql.DB {
+func loadTaskSnapshotByID(t *testing.T, project Project, taskID string) *Task {
 	t.Helper()
-	db, err := sql.Open("sqlite", project.SnapshotPath)
+	snap, err := loadTaskSnapshot(taskSnapshotPath(project, taskID))
 	if err != nil {
-		t.Fatalf("open snapshot db: %v", err)
+		t.Fatalf("load task snapshot %s: %v", taskID, err)
 	}
-	return db
+	if snap == nil {
+		t.Fatalf("task snapshot %s not found", taskID)
+	}
+	return snap
+}
+
+func loadReleaseSnapshotByBatchID(t *testing.T, project Project, batchID string) *ReleasePlan {
+	t.Helper()
+	snap, err := loadReleasePlanSnapshot(releaseSnapshotPath(project, batchID))
+	if err != nil {
+		t.Fatalf("load release snapshot %s: %v", batchID, err)
+	}
+	if snap == nil {
+		t.Fatalf("release snapshot %s not found", batchID)
+	}
+	return snap
 }

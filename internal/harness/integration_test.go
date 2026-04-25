@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"sort"
@@ -731,16 +730,9 @@ func TestSnapshotDBContainsCompletedTaskFields(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-
-	var status string
-	err = db.QueryRow(`SELECT status FROM tasks WHERE task_id = ?`, task.ID).Scan(&status)
-	if err != nil {
-		t.Fatalf("query snapshot: %v", err)
-	}
-	if status != string(TaskCompleted) {
-		t.Errorf("snapshot status = %q, want %q", status, TaskCompleted)
+	snap := loadTaskSnapshotByID(t, result.Project, task.ID)
+	if snap.Status != TaskCompleted {
+		t.Errorf("snapshot status = %q, want %q", snap.Status, TaskCompleted)
 	}
 }
 
@@ -1252,17 +1244,10 @@ func TestOpenSnapshotDBReturnsValidDB(t *testing.T) {
 	}
 	commitHarnessScaffold(t, root, result)
 
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-
-	// Verify tables exist
-	var name string
-	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'`).Scan(&name)
-	if err != nil {
-		t.Fatalf("tasks table not found: %v", err)
-	}
-	if name != "tasks" {
-		t.Errorf("table name = %q", name)
+	// Verify snapshot directory exists
+	dir := taskSnapshotDir(result.Project)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Fatalf("snapshot dir not found: %v", dir)
 	}
 }
 
@@ -1419,15 +1404,8 @@ func TestNullableFieldsInSnapshotDB(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-
-	var logPath, errText sql.NullString
-	err = db.QueryRow(`SELECT log_path, error_text FROM tasks WHERE task_id = ?`, task.ID).Scan(&logPath, &errText)
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if errText.Valid && errText.String != "" {
-		t.Errorf("expected null/empty error, got %q", errText.String)
+	snap := loadTaskSnapshotByID(t, result.Project, task.ID)
+	if snap.Error != "" {
+		t.Errorf("expected empty error, got %q", snap.Error)
 	}
 }

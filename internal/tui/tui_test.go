@@ -2355,7 +2355,7 @@ func TestHarnessPanelRunClosesPanelAndCreatesTrackedTask(t *testing.T) {
 		ArchiveDir:   filepath.Join(repoDir, ".ggcode", "harness", "archive"),
 		WorktreesDir: filepath.Join(repoDir, ".ggcode", "harness", "worktrees"),
 		EventLogPath: filepath.Join(repoDir, ".ggcode", "harness", "events.jsonl"),
-		SnapshotPath: filepath.Join(repoDir, ".ggcode", "harness", "snapshot.db"),
+		SnapshotPath: filepath.Join(repoDir, ".ggcode", "harness", "snapshots"),
 	})
 	if err != nil {
 		t.Fatalf("ListTasks() error = %v", err)
@@ -2895,7 +2895,7 @@ func TestHarnessMonitorPanelUsesCompactPaths(t *testing.T) {
 	if strings.Contains(panel, repoDir) {
 		t.Fatalf("expected monitor panel to avoid full repo path, got %q", panel)
 	}
-	if !strings.Contains(panel, "snapshot: .ggcode/harness/snapshot.db") {
+	if !strings.Contains(panel, "snapshot: .ggcode/harness/snapshots") {
 		t.Fatalf("expected monitor panel to show relative snapshot path, got %q", panel)
 	}
 	if !strings.Contains(panel, "events: .ggcode/harness/events.jsonl") {

@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -212,28 +211,21 @@ func TestE2EFullLifecycleInitToRelease(t *testing.T) {
 		}
 	}
 
-	// Step 10: Verify snapshot DB consistency
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-	var dbStatus, dbVerification, dbReview, dbPromotion, dbReleaseBatch string
-	err = db.QueryRow(`SELECT status, verification_status, review_status, promotion_status, release_batch_id FROM tasks WHERE task_id = ?`, task.ID).
-		Scan(&dbStatus, &dbVerification, &dbReview, &dbPromotion, &dbReleaseBatch)
-	if err != nil {
-		t.Fatalf("snapshot query: %v", err)
+	// Step 10: Verify JSON snapshot consistency
+	snap := loadTaskSnapshotByID(t, result.Project, task.ID)
+	if snap.Status != TaskCompleted {
+		t.Errorf("snapshot status = %q, want %q", snap.Status, TaskCompleted)
 	}
-	if dbStatus != string(TaskCompleted) {
-		t.Errorf("snapshot status = %q", dbStatus)
+	if snap.VerificationStatus != VerificationPassed {
+		t.Errorf("snapshot verification = %q, want %q", snap.VerificationStatus, VerificationPassed)
 	}
-	if dbVerification != VerificationPassed {
-		t.Errorf("snapshot verification = %q", dbVerification)
+	if snap.ReviewStatus != ReviewApproved {
+		t.Errorf("snapshot review = %q, want %q", snap.ReviewStatus, ReviewApproved)
 	}
-	if dbReview != ReviewApproved {
-		t.Errorf("snapshot review = %q", dbReview)
+	if snap.PromotionStatus != PromotionApplied {
+		t.Errorf("snapshot promotion = %q, want %q", snap.PromotionStatus, PromotionApplied)
 	}
-	if dbPromotion != PromotionApplied {
-		t.Errorf("snapshot promotion = %q", dbPromotion)
-	}
-	if dbReleaseBatch == "" {
+	if snap.ReleaseBatchID == "" {
 		t.Error("expected snapshot release_batch_id")
 	}
 }
@@ -439,27 +431,18 @@ func TestE2EConcurrentTaskExecution(t *testing.T) {
 		}
 	}
 
-	// Verify SQLite snapshot consistency
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-	rows, err := db.Query(`SELECT task_id, status FROM tasks ORDER BY task_id`)
+	// Verify JSON snapshot consistency
+	snapTasks, err := loadAllTaskSnapshots(result.Project)
 	if err != nil {
-		t.Fatalf("snapshot query: %v", err)
+		t.Fatalf("loadAllTaskSnapshots: %v", err)
 	}
-	defer rows.Close()
-	var snapCount int
-	for rows.Next() {
-		var id, status string
-		if err := rows.Scan(&id, &status); err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-		snapCount++
-		if status != string(TaskCompleted) {
-			t.Errorf("snapshot task %s status = %s", id, status)
-		}
+	if len(snapTasks) != 5 {
+		t.Errorf("snapshot count = %d, want 5", len(snapTasks))
 	}
-	if snapCount != 5 {
-		t.Errorf("snapshot count = %d, want 5", snapCount)
+	for _, s := range snapTasks {
+		if s.Status != TaskCompleted {
+			t.Errorf("snapshot task %s status = %q, want %q", s.ID, s.Status, TaskCompleted)
+		}
 	}
 
 	// Ensure git state is clean in project root
@@ -1370,45 +1353,30 @@ func TestE2ESnapshotDBConsistency(t *testing.T) {
 		ApproveTaskReview(result.Project, tasks[i].ID, "approved")
 	}
 
-	// Open snapshot DB
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-
-	// Verify task count
-	var count int
-	err := db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&count)
+	// Verify JSON snapshot task count
+	snapTasks, err := loadAllTaskSnapshots(result.Project)
 	if err != nil {
-		t.Fatalf("count tasks: %v", err)
+		t.Fatalf("loadAllTaskSnapshots: %v", err)
 	}
-	if count != 5 {
-		t.Errorf("snapshot count = %d, want 5", count)
+	if len(snapTasks) != 5 {
+		t.Errorf("snapshot count = %d, want 5", len(snapTasks))
 	}
 
 	// Verify rejected task
-	var rejectedStatus, rejectedReview string
-	err = db.QueryRow(`SELECT status, review_status FROM tasks WHERE task_id = ?`, tasks[2].ID).
-		Scan(&rejectedStatus, &rejectedReview)
-	if err != nil {
-		t.Fatalf("query rejected: %v", err)
+	rejectedSnap := loadTaskSnapshotByID(t, result.Project, tasks[2].ID)
+	if rejectedSnap.Status != TaskFailed {
+		t.Errorf("rejected status = %q, want %q", rejectedSnap.Status, TaskFailed)
 	}
-	if rejectedStatus != string(TaskFailed) {
-		t.Errorf("rejected status = %q", rejectedStatus)
-	}
-	if rejectedReview != ReviewRejected {
-		t.Errorf("rejected review = %q", rejectedReview)
+	if rejectedSnap.ReviewStatus != ReviewRejected {
+		t.Errorf("rejected review = %q, want %q", rejectedSnap.ReviewStatus, ReviewRejected)
 	}
 
 	// Verify approved tasks
-	rows, err := db.Query(`SELECT task_id, review_status FROM tasks WHERE review_status = ?`, ReviewApproved)
-	if err != nil {
-		t.Fatalf("query approved: %v", err)
-	}
-	defer rows.Close()
 	var approvedCount int
-	for rows.Next() {
-		var id, review string
-		rows.Scan(&id, &review)
-		approvedCount++
+	for _, s := range snapTasks {
+		if s.ReviewStatus == ReviewApproved {
+			approvedCount++
+		}
 	}
 	if approvedCount != 4 {
 		t.Errorf("approved count = %d, want 4", approvedCount)
@@ -1725,46 +1693,18 @@ func TestE2ENullableSQLFieldsComplete(t *testing.T) {
 		result: &RunResult{Output: "done"},
 	})
 
-	db := openSnapshotDB(t, result.Project)
-	defer db.Close()
-
-	// Query all nullable fields
-	var (
-		logPath      sql.NullString
-		errorText    sql.NullString
-		branchName   sql.NullString
-		workspace    sql.NullString
-		reviewNotes  sql.NullString
-		promoNotes   sql.NullString
-		reviewedAt   sql.NullString
-		promotedAt   sql.NullString
-		releasedAt   sql.NullString
-		releaseBatch sql.NullString
-		releaseNotes sql.NullString
-	)
-	err := db.QueryRow(`
-		SELECT log_path, error_text, branch_name, workspace_path,
-		       review_notes, promotion_notes, reviewed_at, promoted_at,
-		       released_at, release_batch_id, release_notes
-		FROM tasks WHERE task_id = ?`, task.ID).Scan(
-		&logPath, &errorText, &branchName, &workspace,
-		&reviewNotes, &promoNotes, &reviewedAt, &promotedAt,
-		&releasedAt, &releaseBatch, &releaseNotes,
-	)
-	if err != nil {
-		t.Fatalf("scan nullable fields: %v", err)
-	}
+	snap := loadTaskSnapshotByID(t, result.Project, task.ID)
 
 	// log_path should be set (we executed)
-	if !logPath.Valid || logPath.String == "" {
+	if snap.LogPath == "" {
 		t.Error("expected log_path to be set")
 	}
 	// error_text should be empty for a successful task
-	if errorText.Valid && errorText.String != "" {
-		t.Errorf("error_text = %q, want empty", errorText.String)
+	if snap.Error != "" {
+		t.Errorf("error = %q, want empty", snap.Error)
 	}
 	// release fields should be empty (not released)
-	if releaseBatch.Valid && releaseBatch.String != "" {
-		t.Errorf("release_batch = %q, want empty", releaseBatch.String)
+	if snap.ReleaseBatchID != "" {
+		t.Errorf("release_batch = %q, want empty", snap.ReleaseBatchID)
 	}
 }

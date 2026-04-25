@@ -1147,7 +1147,7 @@ func renderHarnessMonitorPreview(lang Language, project *harness.Project, report
 		root = project.RootDir
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n- %s: %s\n- %s: %s\n", tr(lang, "harness.monitor_title"), tr(lang, "harness.label.snapshot"), harnessPanelPathLabel(root, report.SnapshotPath), tr(lang, "harness.label.events"), harnessPanelPathLabel(root, report.EventLogPath))
+	fmt.Fprintf(&b, "%s\n- %s: %s\n- %s: %s\n", tr(lang, "harness.monitor_title"), tr(lang, "harness.label.snapshot"), harnessPanelPathLabel(root, report.SnapshotDir), tr(lang, "harness.label.events"), harnessPanelPathLabel(root, report.EventLogPath))
 	fmt.Fprintf(&b, "- %s: total=%d queued=%d running=%d blocked=%d failed=%d\n", tr(lang, "harness.label.tasks"),
 		report.TaskTotals.Total, report.TaskTotals.Queued, report.TaskTotals.Running, report.TaskTotals.Blocked, report.TaskTotals.Failed)
 	fmt.Fprintf(&b, "- %s: review_pending=%d promotion_ready=%d released=%d active_workers=%d\n", tr(lang, "harness.label.workflow"),
