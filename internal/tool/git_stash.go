@@ -8,7 +8,7 @@ import (
 )
 
 // GitStash implements the git_stash tool for push/pop/apply/drop operations.
-type GitStash struct{}
+type GitStash struct { WorkingDir string }
 
 func (t GitStash) Name() string { return "git_stash" }
 
@@ -84,7 +84,7 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

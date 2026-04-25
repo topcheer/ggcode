@@ -8,7 +8,9 @@ import (
 )
 
 // GitAdd implements the git_add tool.
-type GitAdd struct{}
+type GitAdd struct {
+	WorkingDir string
+}
 
 func (t GitAdd) Name() string { return "git_add" }
 
@@ -51,7 +53,7 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 	gitArgs = append(gitArgs, args.Files...)
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

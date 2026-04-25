@@ -50,19 +50,19 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		ListCommandsTool{Manager: jobManager},
 
 		// Git (read-only)
-		GitStatus{},
-		GitDiff{},
-		GitLog{},
-		GitShow{},
-		GitBlame{},
-		GitBranchList{},
-		GitRemote{},
-		GitStashList{},
+		&GitStatus{},
+		&GitDiff{},
+		&GitLog{},
+		&GitShow{},
+		&GitBlame{},
+		&GitBranchList{},
+		&GitRemote{},
+		&GitStashList{},
 
 		// Git (write — require approval)
-		GitAdd{},
-		GitCommit{},
-		GitStash{},
+		&GitAdd{},
+		&GitCommit{},
+		&GitStash{},
 
 		// Web
 		WebFetch{},

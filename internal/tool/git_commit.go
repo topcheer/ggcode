@@ -8,7 +8,7 @@ import (
 )
 
 // GitCommit implements the git_commit tool.
-type GitCommit struct{}
+type GitCommit struct { WorkingDir string }
 
 func (t GitCommit) Name() string { return "git_commit" }
 
@@ -60,7 +60,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

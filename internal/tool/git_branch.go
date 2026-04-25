@@ -8,7 +8,7 @@ import (
 )
 
 // GitBranchList implements the git_branch_list tool.
-type GitBranchList struct{}
+type GitBranchList struct { WorkingDir string }
 
 func (t GitBranchList) Name() string { return "git_branch_list" }
 
@@ -47,7 +47,7 @@ func (t GitBranchList) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

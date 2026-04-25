@@ -8,7 +8,7 @@ import (
 )
 
 // GitBlame implements the git_blame tool.
-type GitBlame struct{}
+type GitBlame struct { WorkingDir string }
 
 func (t GitBlame) Name() string { return "git_blame" }
 
@@ -57,7 +57,7 @@ func (t GitBlame) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 
 	cmd := gitCommand(ctx, "blame", "--date=short", revision, "--", args.File)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

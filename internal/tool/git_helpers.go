@@ -10,6 +10,17 @@ import (
 
 const coAuthorTrailer = "Co-Authored-By: ggcode <noreply@ggcode.dev>"
 
+// resolveDir returns the first non-empty path from the given values.
+// Used by git tools to fall back from explicit path arg to WorkingDir.
+func resolveDir(paths ...string) string {
+	for _, p := range paths {
+		if p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
 // gitCommand creates a git command with GIT_PAGER=cat to prevent pager hangs.
 func gitCommand(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)

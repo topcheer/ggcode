@@ -8,7 +8,7 @@ import (
 )
 
 // GitStatus implements the git_status tool.
-type GitStatus struct{}
+type GitStatus struct { WorkingDir string }
 
 func (t GitStatus) Name() string { return "git_status" }
 
@@ -37,7 +37,7 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	cmd := gitCommand(ctx, "status", "--porcelain")
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

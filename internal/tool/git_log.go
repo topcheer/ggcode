@@ -9,7 +9,7 @@ import (
 )
 
 // GitLog implements the git_log tool.
-type GitLog struct{}
+type GitLog struct { WorkingDir string }
 
 func (t GitLog) Name() string { return "git_log" }
 
@@ -47,7 +47,7 @@ func (t GitLog) Execute(ctx context.Context, input json.RawMessage) (Result, err
 	}
 
 	cmd := gitCommand(ctx, "log", "--oneline", "-"+strconv.Itoa(args.Count))
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 )
 
 // GitStashList implements the git_stash_list tool.
-type GitStashList struct{}
+type GitStashList struct { WorkingDir string }
 
 func (t GitStashList) Name() string { return "git_stash_list" }
 
@@ -37,7 +37,7 @@ func (t GitStashList) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 
 	cmd := gitCommand(ctx, "stash", "list")
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

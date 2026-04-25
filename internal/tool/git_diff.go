@@ -8,7 +8,7 @@ import (
 )
 
 // GitDiff implements the git_diff tool.
-type GitDiff struct{}
+type GitDiff struct { WorkingDir string }
 
 func (t GitDiff) Name() string { return "git_diff" }
 
@@ -55,7 +55,7 @@ func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	}
 
 	cmd := gitCommand(ctx, gitArgs...)
-	cmd.Dir = args.Path
+	cmd.Dir = resolveDir(args.Path, t.WorkingDir)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
