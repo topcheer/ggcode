@@ -50,7 +50,13 @@ func ResolveLang(s string) Lang {
 // It takes a tool name and raw JSON args, and returns a human-readable status string.
 type ToolFormatter func(toolName, rawArgs string) string
 
-// ANSI color codes
+// ToolPresenter returns a display presentation for a tool call.
+// Used by daemon follow to get the same labels as TUI.
+type ToolPresenter interface {
+	Present(toolName, rawArgs string) (displayName, detail, activity string)
+}
+
+// ANSIColors for consistent rendering
 const (
 	ansiDim       = "\033[2m"
 	ansiReset     = "\033[0m"
@@ -131,27 +137,25 @@ func Tr(lang Lang, key string, args ...any) string {
 
 // TerminalFollowDisplay renders agent activity to the terminal using ANSI codes.
 type TerminalFollowDisplay struct {
-	out        *os.File
-	formatTool ToolFormatter
-	lang       Lang
-	workDir    string // project working directory, for path relativization
-	styles     chat.Styles
-	termWidth  int
-	mu         sync.Mutex
-	roundBuf   strings.Builder
+	out       *os.File
+	presenter ToolPresenter
+	lang      Lang
+	workDir   string // project working directory, for path relativization
+	styles    chat.Styles
+	termWidth int
+	mu        sync.Mutex
+	roundBuf  strings.Builder
 }
 
 // NewTerminalFollowDisplay creates a new follow display writing to the given file.
-// The formatTool callback is used to format tool status strings; if nil, tool names
-// are displayed as-is.
-func NewTerminalFollowDisplay(out *os.File, lang Lang, workDir string, formatTool ToolFormatter) *TerminalFollowDisplay {
+func NewTerminalFollowDisplay(out *os.File, lang Lang, workDir string, presenter ToolPresenter) *TerminalFollowDisplay {
 	return &TerminalFollowDisplay{
-		out:        out,
-		lang:       lang,
-		workDir:    workDir,
-		formatTool: formatTool,
-		styles:     chat.DefaultStyles(),
-		termWidth:  80,
+		out:       out,
+		lang:      lang,
+		workDir:   workDir,
+		presenter: presenter,
+		styles:    chat.DefaultStyles(),
+		termWidth: 80,
 	}
 }
 
@@ -168,7 +172,7 @@ func (d *TerminalFollowDisplay) OnToolStatus(toolName, rawArgs string) {
 	// intentionally not displayed
 }
 
-// OnToolResult displays the tool call result using chat.Styles for consistent rendering.
+// OnToolResult displays the tool call result using the same label system as TUI.
 func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, isError bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -177,27 +181,53 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 	rawArgs = d.relativizePaths(rawArgs)
 	result = d.relativizePaths(result)
 
-	// Special formatting for certain tool types
-	special := d.formatSpecialToolResult(toolName, rawArgs, result, isError)
-	if special != "" {
-		fmt.Fprint(d.out, special+nl)
-		return
-	}
-
-	// Default: use chat.Styles for consistent header rendering
 	status := chat.StatusSuccess
 	if isError {
 		status = chat.StatusError
 	}
-	pretty := prettifyToolName(toolName)
-	header := d.styles.ToolHeader(status, pretty, d.termWidth)
+
+	// Get display name from tool label system (same as TUI)
+	var displayName, detail string
+	if d.presenter != nil {
+		displayName, detail, _ = d.presenter.Present(toolName, rawArgs)
+	}
+	if displayName == "" {
+		displayName = prettifyToolName(toolName)
+	}
+
+	// Render header
+	header := d.styles.ToolHeader(status, displayName, d.termWidth, detail)
 	fmt.Fprint(d.out, header+nl)
 
-	// Body preview
-	if result != "" {
-		resultPreview := summarizeToolResult(result, 120)
-		if resultPreview != "" {
-			fmt.Fprintf(d.out, "%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 120), ansiReset)
+	// Render body based on behavior
+	behavior := chat.GetToolBodyBehavior(toolName)
+	switch behavior {
+	case chat.BodySuppress:
+		// No body at all
+	case chat.BodyFormatJSON:
+		formatted := chat.FormatJSONResult(result)
+		if formatted != "" {
+			for _, line := range strings.Split(formatted, "\n") {
+				fmt.Fprintf(d.out, "%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset)
+			}
+		}
+	case chat.BodyMarkdown:
+		if result != "" {
+			rendered := renderMarkdown(result)
+			fmt.Fprint(d.out, rendered+nl)
+		}
+	default:
+		// Special formatting for certain tools
+		if special := d.formatSpecialBody(toolName, rawArgs, result, isError); special != "" {
+			fmt.Fprint(d.out, special)
+			return
+		}
+		// Default: body preview
+		if result != "" {
+			resultPreview := summarizeToolResult(result, 120)
+			if resultPreview != "" {
+				fmt.Fprintf(d.out, "%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 120), ansiReset)
+			}
 		}
 	}
 }
@@ -244,9 +274,9 @@ func (d *TerminalFollowDisplay) relativizePaths(text string) string {
 
 // --- Special tool result formatting ---
 
-// formatSpecialToolResult returns a specially formatted output for certain tool types.
+// formatSpecialBody returns specially formatted body output for certain tool types.
 // Returns empty string if no special formatting applies.
-func (d *TerminalFollowDisplay) formatSpecialToolResult(toolName, rawArgs, result string, isError bool) string {
+func (d *TerminalFollowDisplay) formatSpecialBody(toolName, rawArgs, result string, isError bool) string {
 	if isError {
 		return ""
 	}
@@ -255,11 +285,10 @@ func (d *TerminalFollowDisplay) formatSpecialToolResult(toolName, rawArgs, resul
 	case "todo_write":
 		return formatTodoResult(d.lang, rawArgs)
 	case "run_command", "bash", "powershell", "start_command":
-		return formatCommandResult(d.lang, rawArgs, result, isError)
+		return formatCommandBody(d.lang, rawArgs, result, isError)
 	default:
-		// Check for MCP-style tool names (contain underscores or dots)
 		if strings.Contains(toolName, "_") || strings.Contains(toolName, ".") {
-			return formatMCPToolResult(d.lang, toolName, rawArgs, result, isError)
+			return formatMCPToolBody(d.lang, toolName, rawArgs, result, isError)
 		}
 		return ""
 	}
@@ -309,69 +338,36 @@ func formatTodoResult(lang Lang, rawArgs string) string {
 	return sb.String()
 }
 
-// formatCommandResult renders command execution using chat.Styles.
-func formatCommandResult(lang Lang, rawArgs, result string, isError bool) string {
+// formatCommandBody renders command execution body (without header).
+func formatCommandBody(lang Lang, rawArgs, result string, isError bool) string {
 	var args struct {
 		Command string `json:"command"`
 	}
-	cmdPreview := ""
-	if err := json.Unmarshal([]byte(rawArgs), &args); err == nil && args.Command != "" {
-		cmdPreview = compactSingleLine(args.Command)
-		if len(cmdPreview) > 60 {
-			cmdPreview = cmdPreview[:57] + "..."
-		}
-	}
-
-	if cmdPreview == "" {
+	_ = rawArgs
+	output := strings.TrimSpace(result)
+	if output == "" {
 		return ""
 	}
 
-	styles := chat.DefaultStyles()
-	status := chat.StatusSuccess
-	if isError {
-		status = chat.StatusError
-	}
-	header := styles.ToolHeader(status, "Bash", 80, cmdPreview)
-
 	var sb strings.Builder
-	sb.WriteString(header + nl)
-
-	// Show output preview
-	output := strings.TrimSpace(result)
-	if output != "" {
-		body, truncated := chat.FormatBody(output, 76, 5)
-		_ = truncated
-		for _, line := range strings.Split(body, "\n") {
-			sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
-		}
+	body, _ := chat.FormatBody(output, 76, 5)
+	for _, line := range strings.Split(body, "\n") {
+		_ = args
+		sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset))
 	}
-
 	return sb.String()
 }
 
-// formatMCPToolResult renders MCP tool calls using chat.Styles.
-func formatMCPToolResult(lang Lang, toolName, rawArgs, result string, isError bool) string {
+// formatMCPToolBody renders MCP tool body (without header).
+func formatMCPToolBody(lang Lang, toolName, rawArgs, result string, isError bool) string {
 	_ = lang
-	styles := chat.DefaultStyles()
-	status := chat.StatusSuccess
-	if isError {
-		status = chat.StatusError
-	}
-	pretty := prettifyToolName(toolName)
-	argSummary := summarizeMCPArgs(rawArgs, 50)
-
-	header := styles.ToolHeader(status, pretty, 80, argSummary)
-
-	var sb strings.Builder
-	sb.WriteString(header + nl)
-
-	// Result preview
+	_ = toolName
+	_ = rawArgs
 	resultPreview := summarizeToolResult(result, 80)
-	if resultPreview != "" {
-		sb.WriteString(fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 80), ansiReset))
+	if resultPreview == "" {
+		return ""
 	}
-
-	return sb.String()
+	return fmt.Sprintf("%s    %s%s"+nl, ansiDim, truncateForTerminal(resultPreview, 80), ansiReset)
 }
 
 // --- Helper functions ---

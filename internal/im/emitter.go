@@ -23,6 +23,7 @@ type IMEmitter struct {
 	language   string // "zh-CN" or "en"
 	workDir    string // project working directory for path relativization
 	lastStatus string // dedup status messages
+	outputMode string // verbose, quiet, summary (default: verbose)
 }
 
 // imEmitterState manages a goroutine-based async event emission pipeline.
@@ -269,6 +270,25 @@ func (e *IMEmitter) Language() string {
 		return "en"
 	}
 	return e.language
+}
+
+// SetOutputMode sets the IM output mode: verbose, quiet, or summary.
+func (e *IMEmitter) SetOutputMode(mode string) {
+	if e == nil {
+		return
+	}
+	e.outputMode = mode
+}
+
+// OutputMode returns the current output mode.
+func (e *IMEmitter) OutputMode() string {
+	if e == nil {
+		return "verbose"
+	}
+	if e.outputMode == "" {
+		return "verbose"
+	}
+	return e.outputMode
 }
 
 // FormatAskUserPrompt formats an ask_user request as an IM-friendly prompt string.

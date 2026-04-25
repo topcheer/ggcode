@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -292,9 +293,9 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				round.ToolCalls++
 			}
 			// Sleep tool is special: emit the duration immediately
-			// so the user sees it before the tool blocks. The result
-			// is suppressed in formatSpecialIMToolResult.
-			if toolName == "sleep" {
+			// so the user sees it before the tool blocks.
+			// Only emit in verbose mode — quiet/summary aggregate it.
+			if toolName == "sleep" && b.emitter.OutputMode() == "verbose" {
 				b.emitter.EmitEvent(OutboundEvent{
 					Kind: OutboundEventToolCall,
 					ToolCall: &ToolCallInfo{
@@ -316,15 +317,34 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			} else {
 				round.ToolSuccesses++
 			}
-			b.emitter.EmitEvent(OutboundEvent{
-				Kind: OutboundEventToolResult,
-				ToolRes: &ToolResultInfo{
-					ToolName: event.Tool.Name,
-					Args:     string(event.Tool.Arguments),
-					Result:   event.Result,
-					IsError:  event.IsError,
-				},
-			})
+			toolInfo := ToolResultInfo{
+				ToolName: event.Tool.Name,
+				Args:     string(event.Tool.Arguments),
+				Result:   event.Result,
+				IsError:  event.IsError,
+				Lang:     b.language,
+			}
+
+			switch b.emitter.OutputMode() {
+			case "summary":
+				// Only buffer, never send individual tool results
+				round.pendingTools = append(round.pendingTools, toolInfo)
+			case "quiet":
+				// Buffer for aggregation; errors still sent immediately
+				if event.IsError {
+					b.emitter.EmitEvent(OutboundEvent{
+						Kind:    OutboundEventToolResult,
+						ToolRes: &toolInfo,
+					})
+				} else {
+					round.pendingTools = append(round.pendingTools, toolInfo)
+				}
+			default: // verbose
+				b.emitter.EmitEvent(OutboundEvent{
+					Kind:    OutboundEventToolResult,
+					ToolRes: &toolInfo,
+				})
+			}
 			b.emitter.TriggerTyping()
 			if b.followSink != nil {
 				b.followSink.OnToolResult(event.Tool.Name, string(event.Tool.Arguments), event.Result, event.IsError)
@@ -332,6 +352,18 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 
 		case provider.StreamEventDone:
 			text := round.Text()
+			mode := b.emitter.OutputMode()
+
+			// For quiet/summary modes, emit aggregated tool summary
+			if (mode == "quiet" || mode == "summary") && len(round.pendingTools) > 0 {
+				summary := formatToolSummary(b.language, round.pendingTools, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
+				if summary != "" {
+					b.emitter.EmitText(summary)
+				}
+			}
+
+			// In summary mode, only send the final LLM text
+			// In quiet/verbose mode, always send the text
 			if strings.TrimSpace(text) != "" {
 				b.emitter.EmitRoundSummary(text, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 			}
@@ -407,6 +439,8 @@ type daemonRoundState struct {
 	ToolSuccesses int
 	ToolFailures  int
 	AskUserText   string
+	// Buffered tool results for quiet/summary mode
+	pendingTools []ToolResultInfo
 }
 
 func (s *daemonRoundState) AppendText(t string)    { s.text.WriteString(t) }
@@ -419,6 +453,7 @@ func (s *daemonRoundState) Reset() {
 	s.ToolSuccesses = 0
 	s.ToolFailures = 0
 	s.AskUserText = ""
+	s.pendingTools = nil
 }
 
 // isDaemonSkippedTool returns true for sub-agent lifecycle tools that
@@ -495,4 +530,67 @@ func jsonMarshalArgs(v any) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// formatToolSummary renders an aggregated tool execution summary for quiet/summary IM modes.
+func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, failures int) string {
+	if len(tools) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	// Header line
+	if ToolLanguage(lang) == ToolLangZhCN {
+		sb.WriteString(fmt.Sprintf("⚙️ 执行了 %d 个工具调用", total))
+		if failures > 0 {
+			sb.WriteString(fmt.Sprintf("（%d 成功，%d 失败）", successes, failures))
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("⚙️ %d tool calls", total))
+		if failures > 0 {
+			sb.WriteString(fmt.Sprintf(" (%d ok, %d failed)", successes, failures))
+		}
+	}
+	sb.WriteString("\n")
+
+	// Aggregate tool names with counts
+	toolCounts := make(map[string]int)
+	for _, t := range tools {
+		name := formatIMToolDisplayName(t.ToolName)
+		toolCounts[name]++
+	}
+
+	// Sort by count descending
+	type kv struct {
+		name  string
+		count int
+	}
+	var sorted []kv
+	for k, v := range toolCounts {
+		sorted = append(sorted, kv{k, v})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].count > sorted[j].count
+	})
+
+	for _, item := range sorted {
+		if item.count == 1 {
+			sb.WriteString(fmt.Sprintf("  ✓ %s\n", item.name))
+		} else {
+			sb.WriteString(fmt.Sprintf("  ✓ %s ×%d\n", item.name, item.count))
+		}
+	}
+
+	return sb.String()
+}
+
+// formatIMToolDisplayName returns a short display name for a tool.
+func formatIMToolDisplayName(toolName string) string {
+	lang := ToolLanguage("")
+	pres := DescribeTool(lang, toolName, "")
+	if pres.DisplayName != "" {
+		return pres.DisplayName
+	}
+	return toolName
 }
