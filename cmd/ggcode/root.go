@@ -533,7 +533,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var a2aServer *a2a.Server
 	var a2aRegistry *a2a.Registry
 	var a2aTaskHandler *a2a.TaskHandler
-	if cfg.A2A.Enabled {
+		if !cfg.A2A.Disabled {
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server startup warning: %v\n", err)

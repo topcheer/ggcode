@@ -262,13 +262,14 @@ type SwarmConfig struct {
 }
 
 // A2AConfig holds A2A protocol server configuration.
+// A2A is enabled by default. Set disabled: true to turn it off.
 type A2AConfig struct {
-	Enabled     bool          `yaml:"enabled"`
-	Port        int           `yaml:"port"`         // 0 = auto-assign
-	Host        string        `yaml:"host"`         // default "127.0.0.1"
-	APIKey      string        `yaml:"api_key"`      // empty = no auth
-	MaxTasks    int           `yaml:"max_tasks"`    // concurrent task limit (default 5)
-	TaskTimeout string        `yaml:"task_timeout"` // per-task timeout (default "5m")
+	Disabled    bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
+	Port        int           `yaml:"port"`               // 0 = auto-assign
+	Host        string        `yaml:"host"`               // default "127.0.0.1"
+	APIKey      string        `yaml:"api_key"`            // empty = no auth
+	MaxTasks    int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
+	TaskTimeout string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
 	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
 }
 
@@ -970,7 +971,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("subagents.timeout must not be negative")
 	}
 	// A2A defaults and validation.
-	if c.A2A.Enabled {
+		if !c.A2A.Disabled {
 		if c.A2A.Port < 0 {
 			return fmt.Errorf("a2a.port must not be negative")
 		}
