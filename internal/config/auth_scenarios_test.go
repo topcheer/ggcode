@@ -299,3 +299,52 @@ func parseTestConfig(t *testing.T, yamlContent string) *Config {
 	}
 	return cfg
 }
+
+func TestHasAuth(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected bool
+	}{
+		{"no auth", "", false},
+		{"legacy api_key", "a2a:\n  api_key: key123\n", true},
+		{"auth.api_key", "a2a:\n  auth:\n    api_key: key123\n", true},
+		{"auth.api_keys", "a2a:\n  auth:\n    api_keys: [\"k1\", \"k2\"]\n", true},
+		{"oauth2", "a2a:\n  auth:\n    oauth2:\n      provider: github\n", true},
+		{"oidc", "a2a:\n  auth:\n    oidc:\n      provider: google\n", true},
+		{"mtls", "a2a:\n  auth:\n    mtls:\n      cert_file: test.pem\n", true},
+		{"empty api_key", "a2a:\n  api_key: \"\"\n  auth:\n    api_key: \"\"\n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := parseTestConfig(t, tt.yaml)
+			if got := cfg.A2A.HasAuth(); got != tt.expected {
+				t.Errorf("HasAuth() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestA2AHostDefault(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected string
+	}{
+		{"no auth → 127.0.0.1", "", "127.0.0.1"},
+		{"with api_key → 0.0.0.0", "a2a:\n  api_key: key\n", "0.0.0.0"},
+		{"with oauth2 → 0.0.0.0", "a2a:\n  auth:\n    oauth2:\n      provider: github\n", "0.0.0.0"},
+		{"explicit host override", "a2a:\n  host: 192.168.1.1\n  api_key: key\n", "192.168.1.1"},
+		{"empty explicit host with auth → 0.0.0.0", "a2a:\n  host: \"\"\n  api_key: key\n", "0.0.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := parseTestConfig(t, tt.yaml)
+			if cfg.A2A.Host != tt.expected {
+				t.Errorf("Host = %q, want %q", cfg.A2A.Host, tt.expected)
+			}
+		})
+	}
+}
