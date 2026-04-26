@@ -87,6 +87,15 @@ func (c *Client) SendMessage(ctx context.Context, skill, text string, existingTa
 	return &result, nil
 }
 
+// SendMessageWithConfig sends a message with full configuration options.
+func (c *Client) SendMessageWithConfig(ctx context.Context, params SendMessageParams) (*Task, error) {
+	var result Task
+	if err := c.rpc(ctx, "message/send", params, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // SendMessageStream sends a message and returns a channel of SSE events.
 func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-chan JSONRPCResponse, error) {
 	params := SendMessageParams{
@@ -176,6 +185,47 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) (*Task, error) {
 		return nil, err
 	}
 	return &result, nil
+}
+
+// GetExtendedAgentCard retrieves the authenticated extended agent card.
+func (c *Client) GetExtendedAgentCard(ctx context.Context) (json.RawMessage, error) {
+	var result json.RawMessage
+	if err := c.rpc(ctx, "agent/getExtendedCard", struct{}{}, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// SetPushConfig creates or updates a push notification config.
+func (c *Client) SetPushConfig(ctx context.Context, cfg PushNotificationConfig) (*PushNotificationConfig, error) {
+	var result PushNotificationConfig
+	if err := c.rpc(ctx, "tasks/pushNotificationConfig/set", cfg, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetPushConfig retrieves a push notification config by ID.
+func (c *Client) GetPushConfig(ctx context.Context, id string) (*PushNotificationConfig, error) {
+	var result PushNotificationConfig
+	if err := c.rpc(ctx, "tasks/pushNotificationConfig/get", map[string]string{"id": id}, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListPushConfigs returns all push notification configs.
+func (c *Client) ListPushConfigs(ctx context.Context) ([]PushNotificationConfig, error) {
+	var result []PushNotificationConfig
+	if err := c.rpc(ctx, "tasks/pushNotificationConfig/list", struct{}{}, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// DeletePushConfig removes a push notification config by ID.
+func (c *Client) DeletePushConfig(ctx context.Context, id string) error {
+	return c.rpc(ctx, "tasks/pushNotificationConfig/delete", map[string]string{"id": id}, nil)
 }
 
 // Resubscribe reconnects to a task's SSE stream. Use this when a previous

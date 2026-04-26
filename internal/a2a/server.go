@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -16,12 +17,15 @@ import (
 
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
 type Server struct {
-	handler *TaskHandler
-	card    AgentCard
-	apiKey  string
-	server  *http.Server
-	port    int
-	done    chan struct{}
+	handler      *TaskHandler
+	card         AgentCard
+	extendedCard json.RawMessage // optional extended agent card
+	apiKey       string
+	server       *http.Server
+	port         int
+	done         chan struct{}
+	pushConfigs  map[string]PushNotificationConfig // by ID
+	pushMu       sync.RWMutex
 }
 
 // ServerConfig holds A2A server configuration.
@@ -35,9 +39,10 @@ type ServerConfig struct {
 // NewServer creates a new A2A server.
 func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	s := &Server{
-		handler: handler,
-		apiKey:  cfg.APIKey,
-		done:    make(chan struct{}),
+		handler:     handler,
+		apiKey:      cfg.APIKey,
+		done:        make(chan struct{}),
+		pushConfigs: make(map[string]PushNotificationConfig),
 	}
 
 	// Build Agent Card.
@@ -219,6 +224,16 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 		s.handleTaskCancel(w, req)
 	case "tasks/resubscribe":
 		s.handleTaskResubscribe(w, r, req)
+	case "tasks/pushNotificationConfig/set":
+		s.handlePushConfigSet(w, req)
+	case "tasks/pushNotificationConfig/get":
+		s.handlePushConfigGet(w, req)
+	case "tasks/pushNotificationConfig/list":
+		s.handlePushConfigList(w, req)
+	case "tasks/pushNotificationConfig/delete":
+		s.handlePushConfigDelete(w, req)
+	case "agent/getExtendedCard":
+		s.handleGetExtendedCard(w, req)
 	default:
 		writeRPCError(w, req.ID, ErrMethodNotFound)
 	}
@@ -303,10 +318,10 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	w.Header().Set("Connection", "keep-alive")
 
 	// Send initial status.
-	s.sendSSE(w, flusher, req.ID, map[string]interface{}{
-		"id":     task.ID,
-		"status": map[string]string{"state": string(TaskStateWorking)},
-		"kind":   "task",
+	s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{
+		TaskID: task.ID,
+		Status: TaskStatus{State: TaskStateWorking, Timestamp: time.Now()},
+		Final:  false,
 	})
 
 	// Wait for task to reach terminal state.
@@ -318,7 +333,7 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	if done == nil {
 		// Already terminal.
 		t, _ := s.handler.GetTask(task.ID)
-		s.sendSSE(w, flusher, req.ID, t)
+		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 		return
 	}
 
@@ -328,7 +343,7 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	select {
 	case <-done:
 		t, _ := s.handler.GetTask(task.ID)
-		s.sendSSE(w, flusher, req.ID, t)
+		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
 		s.sendSSE(w, flusher, req.ID, map[string]interface{}{
 			"error": "task timed out",
@@ -435,7 +450,7 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("Connection", "keep-alive")
 
 	// Send current state immediately.
-	s.sendSSE(w, flusher, req.ID, task)
+	s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: task.ID, Status: task.Status, Final: task.Status.State.IsTerminal()})
 
 	// Wait for terminal state using notification channel.
 	done := s.handler.GetTaskDone(params.ID)
@@ -454,7 +469,7 @@ func (s *Server) handleTaskResubscribe(w http.ResponseWriter, r *http.Request, r
 	select {
 	case <-done:
 		t, _ := s.handler.GetTask(params.ID)
-		s.sendSSE(w, flusher, req.ID, t)
+		s.sendSSE(w, flusher, req.ID, TaskStatusUpdateEvent{TaskID: t.ID, Status: t.Status, Final: t.Status.State.IsTerminal()})
 	case <-timer.C:
 		s.sendSSE(w, flusher, req.ID, map[string]interface{}{
 			"error": "task timed out",
@@ -476,6 +491,90 @@ func (s *Server) sendSSE(w io.Writer, flusher http.Flusher, id json.RawMessage, 
 	})
 	fmt.Fprintf(w, "data: %s\n\n", payload)
 	flusher.Flush()
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Push Notification Config handlers
+// ---------------------------------------------------------------------------
+
+func (s *Server) handlePushConfigSet(w http.ResponseWriter, req *JSONRPCRequest) {
+	var cfg PushNotificationConfig
+	if err := json.Unmarshal(req.Params, &cfg); err != nil {
+		writeRPCError(w, req.ID, ErrInvalidParams)
+		return
+	}
+	if cfg.ID == "" {
+		cfg.ID = fmt.Sprintf("push-%d", time.Now().UnixNano())
+	}
+	s.pushMu.Lock()
+	s.pushConfigs[cfg.ID] = cfg
+	s.pushMu.Unlock()
+	writeRPCResult(w, req.ID, cfg)
+}
+
+func (s *Server) handlePushConfigGet(w http.ResponseWriter, req *JSONRPCRequest) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		writeRPCError(w, req.ID, ErrInvalidParams)
+		return
+	}
+	s.pushMu.RLock()
+	cfg, ok := s.pushConfigs[params.ID]
+	s.pushMu.RUnlock()
+	if !ok {
+		writeRPCError(w, req.ID, ErrTaskNotFound)
+		return
+	}
+	writeRPCResult(w, req.ID, cfg)
+}
+
+func (s *Server) handlePushConfigList(w http.ResponseWriter, req *JSONRPCRequest) {
+	s.pushMu.RLock()
+	configs := make([]PushNotificationConfig, 0, len(s.pushConfigs))
+	for _, cfg := range s.pushConfigs {
+		configs = append(configs, cfg)
+	}
+	s.pushMu.RUnlock()
+	writeRPCResult(w, req.ID, configs)
+}
+
+func (s *Server) handlePushConfigDelete(w http.ResponseWriter, req *JSONRPCRequest) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		writeRPCError(w, req.ID, ErrInvalidParams)
+		return
+	}
+	s.pushMu.Lock()
+	delete(s.pushConfigs, params.ID)
+	s.pushMu.Unlock()
+	writeRPCResult(w, req.ID, map[string]string{"status": "ok"})
+}
+
+// ---------------------------------------------------------------------------
+// Extended Agent Card handler
+// ---------------------------------------------------------------------------
+
+func (s *Server) handleGetExtendedCard(w http.ResponseWriter, req *JSONRPCRequest) {
+	if len(s.extendedCard) == 0 {
+		writeRPCError(w, req.ID, ErrExtendedCardNotConfigured)
+		return
+	}
+	var result interface{}
+	json.Unmarshal(s.extendedCard, &result)
+	writeRPCResult(w, req.ID, result)
+}
+
+// SetExtendedCard sets the optional extended agent card content.
+func (s *Server) SetExtendedCard(card json.RawMessage) {
+	s.extendedCard = card
+	if len(card) > 0 {
+		s.card.Capabilities.ExtendedAgentCard = true
+	}
 }
 
 // ---------------------------------------------------------------------------

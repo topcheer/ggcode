@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -363,14 +364,7 @@ func (h *TaskHandler) ListTasks(pageToken string, pageSize int) ([]Task, string)
 	for id := range h.tasks {
 		ids = append(ids, id)
 	}
-	// Sort by ID (IDs contain timestamps so this is chronological).
-	for i := 0; i < len(ids); i++ {
-		for j := i + 1; j < len(ids); j++ {
-			if ids[j] < ids[i] {
-				ids[i], ids[j] = ids[j], ids[i]
-			}
-		}
-	}
+	sort.Strings(ids)
 
 	start := 0
 	if pageToken != "" {
