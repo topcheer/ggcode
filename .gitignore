@@ -30,3 +30,4 @@ __pycache__/
 .claude/
 .tmp/
 a2a.test
+auth.test
