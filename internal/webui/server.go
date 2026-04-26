@@ -778,6 +778,7 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 			"task_timeout": a2a.TaskTimeout,
 			"auth": map[string]interface{}{
 				"has_api_key": strings.TrimSpace(a2a.Auth.APIKey) != "",
+				"api_keys":    a2a.Auth.APIKeys,
 				"oauth2":      sanitizeOAuth2(a2a.Auth.OAuth2),
 				"oidc":        sanitizeOIDC(a2a.Auth.OIDC),
 				"mtls":        sanitizeMTLS(a2a.Auth.MTLS),
@@ -792,13 +793,14 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 			MaxTasks    *int   `json:"max_tasks"`
 			TaskTimeout string `json:"task_timeout"`
 			Auth        *struct {
-				APIKey       string `json:"api_key"`
-				OAuth2       *config.A2AOAuth2Config `json:"oauth2"`
-				OAuth2Clear  bool   `json:"oauth2_clear"`
-				OIDC         *config.A2AOIDCConfig   `json:"oidc"`
-				OIDCClear    bool   `json:"oidc_clear"`
-				MTLS         *config.A2AMTLSConfig   `json:"mtls"`
-				MTLSClear    bool   `json:"mtls_clear"`
+				APIKey      string                  `json:"api_key"`
+				APIKeys     []string                `json:"api_keys"`
+				OAuth2      *config.A2AOAuth2Config `json:"oauth2"`
+				OAuth2Clear bool                    `json:"oauth2_clear"`
+				OIDC        *config.A2AOIDCConfig   `json:"oidc"`
+				OIDCClear   bool                    `json:"oidc_clear"`
+				MTLS        *config.A2AMTLSConfig   `json:"mtls"`
+				MTLSClear   bool                    `json:"mtls_clear"`
 			} `json:"auth"`
 		}
 		if err := readJSON(r, &req); err != nil {
@@ -825,6 +827,10 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 		if req.Auth != nil {
 			if req.Auth.APIKey != "" {
 				s.cfg.A2A.Auth.APIKey = req.Auth.APIKey
+			}
+			if req.Auth.APIKeys != nil {
+				// Replace entire list (empty slice = clear all)
+				s.cfg.A2A.Auth.APIKeys = req.Auth.APIKeys
 			}
 			if req.Auth.OAuth2Clear {
 				s.cfg.A2A.Auth.OAuth2 = nil
@@ -857,12 +863,12 @@ func sanitizeOAuth2(o *config.A2AOAuth2Config) interface{} {
 		return nil
 	}
 	return map[string]interface{}{
-		"provider":      o.Provider,
-		"client_id":     o.ClientID,
-		"has_secret":    strings.TrimSpace(o.ClientSecret) != "",
-		"issuer_url":    o.IssuerURL,
-		"scopes":        o.Scopes,
-		"flow":          o.Flow,
+		"provider":   o.Provider,
+		"client_id":  o.ClientID,
+		"has_secret": strings.TrimSpace(o.ClientSecret) != "",
+		"issuer_url": o.IssuerURL,
+		"scopes":     o.Scopes,
+		"flow":       o.Flow,
 	}
 }
 
@@ -871,12 +877,12 @@ func sanitizeOIDC(o *config.A2AOIDCConfig) interface{} {
 		return nil
 	}
 	return map[string]interface{}{
-		"provider":      o.Provider,
-		"client_id":     o.ClientID,
-		"has_secret":    strings.TrimSpace(o.ClientSecret) != "",
-		"issuer_url":    o.IssuerURL,
-		"scopes":        o.Scopes,
-		"flow":          o.Flow,
+		"provider":   o.Provider,
+		"client_id":  o.ClientID,
+		"has_secret": strings.TrimSpace(o.ClientSecret) != "",
+		"issuer_url": o.IssuerURL,
+		"scopes":     o.Scopes,
+		"flow":       o.Flow,
 	}
 }
 

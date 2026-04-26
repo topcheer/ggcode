@@ -110,6 +110,7 @@ Key concepts:
 - **`im.output_mode`**: IM tool result delivery granularity: `verbose` (default), `quiet`, `summary`
 - **`a2a.auth`**: A2A server authentication — multiple schemes can be enabled simultaneously:
   - **`a2a.auth.api_key`**: Shared secret (simplest)
+  - **`a2a.auth.api_keys`**: List of additional keys — any match authenticates. Supports `${ENV_VAR}` expansion per entry.
   - **`a2a.auth.oauth2`**: OAuth2 + PKCE or Device Flow (`provider`, `client_id`, `client_secret`, `issuer_url`, `flow`, `scopes`)
   - **`a2a.auth.oidc`**: OpenID Connect layer on OAuth2 (same fields + `openid` scope)
   - **`a2a.auth.mtls`**: Mutual TLS (`cert_file`, `key_file`, `ca_file`)

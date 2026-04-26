@@ -24,7 +24,7 @@ type Server struct {
 	handler        *TaskHandler
 	card           AgentCard
 	extendedCard   json.RawMessage // optional extended agent card
-	apiKey         string
+	apiKeys        []string
 	server         *http.Server
 	port           int
 	done           chan struct{}
@@ -37,17 +37,24 @@ type Server struct {
 
 // ServerConfig holds A2A server configuration.
 type ServerConfig struct {
-	Host     string // bind address (default "127.0.0.1")
-	Port     int    // 0 = auto-assign
-	APIKey   string // empty = no auth
-	Instance string // instance identifier
+	Host     string   // bind address (default "127.0.0.1")
+	Port     int      // 0 = auto-assign
+	APIKey   string   // single key (legacy, merged into APIKeys)
+	APIKeys  []string // multiple keys (any match authenticates)
+	Instance string   // instance identifier
 }
 
 // NewServer creates a new A2A server.
 func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
+	// Merge single APIKey into APIKeys for unified handling.
+	apiKeys := cfg.APIKeys
+	if cfg.APIKey != "" {
+		apiKeys = append(apiKeys, cfg.APIKey)
+	}
+
 	s := &Server{
 		handler:     handler,
-		apiKey:      cfg.APIKey,
+		apiKeys:     apiKeys,
 		done:        make(chan struct{}),
 		pushConfigs: make(map[string]PushNotificationConfig),
 	}
@@ -213,9 +220,14 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) authenticate(r *http.Request) bool {
 	// 1) API Key
-	if s.apiKey != "" {
+	if len(s.apiKeys) > 0 {
 		if provided := r.Header.Get("X-API-Key"); provided != "" {
-			return subtle.ConstantTimeCompare([]byte(provided), []byte(s.apiKey)) == 1
+			for _, key := range s.apiKeys {
+				if subtle.ConstantTimeCompare([]byte(provided), []byte(key)) == 1 {
+					return true
+				}
+			}
+			return false
 		}
 	}
 
@@ -239,7 +251,7 @@ func (s *Server) authenticate(r *http.Request) bool {
 	}
 
 	// 4) No auth configured at all → allow
-	if s.apiKey == "" && s.tokenValidator == nil && !s.mtlsEnabled {
+	if len(s.apiKeys) == 0 && s.tokenValidator == nil && !s.mtlsEnabled {
 		return true
 	}
 
@@ -682,7 +694,7 @@ func (s *Server) rebuildSecuritySchemes() {
 	schemes := map[string]Security{}
 	var security []map[string][]string
 
-	if s.apiKey != "" {
+	if len(s.apiKeys) > 0 {
 		schemes["apiKey"] = Security{
 			Type:        "apiKey",
 			Location:    "header",

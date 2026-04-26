@@ -1032,13 +1032,29 @@ function renderA2A() {
   // Auth methods
   html += `<h3 style="font-size:14px;margin:20px 0 8px;color:var(--accent)">Authentication</h3>`;
 
-  // API Key
+  // API Key(s)
+  const apiKeys = auth.api_keys || [];
+  const hasAnyKey = auth.has_api_key || apiKeys.length > 0;
   html += `<div class="card">
-    <div class="card-title"><span class="dot ${auth.has_api_key?'dot-green':'dot-yellow'}"></span>API Key ${auth.has_api_key?'<span class="badge badge-green">Set</span>':'<span class="badge badge-yellow">Not Set</span>'}</div>
-    <div class="form-group"><label>Shared Secret</label><input type="password" id="a2a-api-key" placeholder="${auth.has_api_key?'Leave empty to keep current':'Enter API key or ${ENV_VAR}'}"></div>
-    <div style="display:flex;gap:6px">
-      <button class="btn btn-sm btn-primary" onclick="saveA2AAPIKey()">Save Key</button>
-      ${auth.has_api_key?'<button class="btn btn-sm btn-danger" onclick="clearA2AAPIKey()">Clear Key</button>':''}
+    <div class="card-title"><span class="dot ${hasAnyKey?'dot-green':'dot-yellow'}"></span>API Keys ${auth.has_api_key?'<span class="badge badge-green">Primary Set</span>':''} ${apiKeys.length>0?'<span class="badge badge-green">'+apiKeys.length+' key'+(apiKeys.length>1?'s':'')+'</span>':'<span class="badge badge-yellow">No Additional Keys</span>'}</div>
+    <p style="color:var(--text2);font-size:12px;margin-bottom:10px">Clients authenticate with <code style="background:var(--surface2);padding:1px 4px;border-radius:3px">X-API-Key</code> header. Any matching key is accepted.</p>
+    <div class="form-group"><label>Primary Key</label><input type="password" id="a2a-api-key" placeholder="${auth.has_api_key?'Leave empty to keep current':'Enter API key or ${ENV_VAR}'}"></div>
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <button class="btn btn-sm btn-primary" onclick="saveA2AAPIKey()">Save Primary Key</button>
+      ${auth.has_api_key?'<button class="btn btn-sm btn-danger" onclick="clearA2AAPIKey()">Clear Primary</button>':''}
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <label style="font-size:12px;color:var(--text2)">Additional Keys</label>
+        <button class="btn btn-sm" onclick="addA2AKeyRow()">+ Add Key</button>
+      </div>
+      <div id="a2a-api-keys-list">
+        ${apiKeys.map((k,i) => `<div style="display:flex;gap:6px;margin-bottom:4px;align-items:center">
+          <input type="password" class="a2a-extra-key" data-idx="${i}" value="${esc(k)}" style="flex:1;font-family:var(--mono);font-size:12px" placeholder="key or ${ENV_VAR}">
+          <button class="btn btn-sm btn-danger" onclick="removeA2AKeyRow(${i})" style="min-width:auto;padding:2px 8px">×</button>
+        </div>`).join('')}
+      </div>
+      ${apiKeys.length > 0 || document.querySelectorAll('.a2a-extra-key').length > 0 ? '<button class="btn btn-sm btn-primary" onclick="saveA2AAPIKeys()" style="margin-top:6px">Save Additional Keys</button>' : ''}
     </div>
   </div>`;
 
@@ -1129,6 +1145,48 @@ async function clearA2AAPIKey() {
     toast('API key cleared');
     a2aData = await api('/api/a2a'); renderA2A();
   } catch(e) { toast(e.message, false); }
+}
+
+function addA2AKeyRow() {
+  const list = document.getElementById('a2a-api-keys-list');
+  const idx = list.children.length;
+  const div = document.createElement('div');
+  div.style = 'display:flex;gap:6px;margin-bottom:4px;align-items:center';
+  div.innerHTML = `<input type="text" class="a2a-extra-key" data-idx="${idx}" style="flex:1;font-family:var(--mono);font-size:12px" placeholder="key or ${ENV_VAR}">
+    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()" style="min-width:auto;padding:2px 8px">×</button>`;
+  list.appendChild(div);
+  // Ensure save button exists
+  let btn = list.parentElement.querySelector('button[onclick="saveA2AAPIKeys()"]');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.className = 'btn btn-sm btn-primary';
+    btn.style = 'margin-top:6px';
+    btn.textContent = 'Save Additional Keys';
+    btn.setAttribute('onclick', 'saveA2AAPIKeys()');
+    list.parentElement.appendChild(btn);
+  }
+}
+
+async function saveA2AAPIKeys() {
+  try {
+    const inputs = document.querySelectorAll('.a2a-extra-key');
+    const keys = [];
+    inputs.forEach(inp => { const v = inp.value.trim(); if (v) keys.push(v); });
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{api_keys: keys}})});
+    toast('Additional keys saved (' + keys.length + ')');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+function removeA2AKeyRow(idx) {
+  const inputs = document.querySelectorAll('.a2a-extra-key');
+  const keys = [];
+  inputs.forEach((inp, i) => { if (i !== idx) { const v = inp.value.trim(); if (v) keys.push(v); } });
+  // Save immediately after removing
+  api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{api_keys: keys}})}).then(() => {
+    toast('Key removed');
+    api('/api/a2a').then(d => { a2aData = d; renderA2A(); });
+  }).catch(e => toast(e.message, false));
 }
 
 async function saveA2AOAuth2() {
