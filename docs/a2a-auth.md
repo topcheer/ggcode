@@ -30,8 +30,11 @@ This document describes the authentication mechanisms supported by ggcode's A2A 
 # ggcode.yaml
 a2a:
   enabled: true
-  api_key: "${A2A_API_KEY}"  # from env var
+  auth:
+    api_key: "${A2A_API_KEY}"  # from env var (under auth: block)
 ```
+
+> **Note:** The legacy top-level `a2a.api_key` still works, but `a2a.auth.api_key` takes priority.
 
 ### When to use
 - ✅ Local development / testing
@@ -73,7 +76,9 @@ a2a:
       │ use Bearer token for A2A requests       │
 ```
 
-**Key point:** No `client_secret` needed. PKCE (Proof Key for Code Exchange) proves the token exchange is coming from the same client that started the flow.
+**Key point:** No `client_secret` needed for public clients. PKCE (Proof Key for Code Exchange) proves the token exchange is coming from the same client that started the flow. For confidential clients (GitHub OAuth Apps), `client_secret` is required.
+
+**Flow selection:** Set `flow: "pkce"` (default) or `flow: "device"` to explicitly choose the OAuth2 flow. If omitted, the system selects based on provider capabilities.
 
 ### Configuration
 
@@ -394,3 +399,72 @@ Is there a human in the loop?
 | Revocation | ❌ Manual | ✅ IdP | ✅ IdP | ✅ IdP | ✅ CRL/OCSP |
 | Setup complexity | ⭐ Minimal | ⭐⭐ Low | ⭐⭐ Low | ⭐⭐⭐ Medium | ⭐⭐⭐ Medium |
 | Production ready | ⚠️ Limited | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+
+---
+
+## Token Persistence & Cache
+
+OAuth2/OIDC tokens are automatically cached to disk so the agent doesn't need to re-authenticate on every restart.
+
+### Cache Location
+
+```
+~/.ggcode/oauth-tokens/
+  github-Ov23liq0EQyT.json     ← built-in GitHub client_id
+  github-my-own-app.json        ← user's own client_id
+  auth0-abc123def456.json       ← different provider
+```
+
+### Isolation Rules
+
+- **Cache key** = `{provider}-{clientID[:12]}` — first 12 chars of client ID
+- Same `client_id` + `provider` = shared token file (intentional — same OAuth App)
+- Different `client_id` = isolated cache (prevents multi-instance overwrites)
+- File permissions: `0600` (owner read/write only)
+
+### Lifecycle
+
+1. Client needs a token → checks cache first
+2. Cache hit + not expired → reuse (no user interaction)
+3. Cache miss or expired → initiate OAuth2 flow (PKCE or Device)
+4. Token received → save to cache with expiry
+5. Daemon restart → cache still valid → seamless
+
+> The token cache is purely client-side. Server auth state is config-driven — no server-side token persistence needed.
+
+---
+
+## Instance-Level Config Override
+
+Each ggcode workspace can override the global A2A config via `.ggcode/a2a.yaml`:
+
+```yaml
+# .ggcode/a2a.yaml — merges into global a2a config
+auth:
+  api_key: "project-specific-key"
+  oauth2:
+    provider: "github"
+    flow: "device"
+```
+
+This allows per-project auth settings while sharing the same global config. Fields are merged — instance values override global values.
+
+---
+
+## IM Slash Commands (Daemon Mode)
+
+When running in daemon mode with IM adapters, the following slash commands are available for adapter management:
+
+| Command | Description |
+|---------|-------------|
+| `/listim` | List all IM adapters with name, platform, status (online/muted/active) |
+| `/muteim <name>` | Mute a specific adapter by name. Cannot mute yourself — use `/muteself` instead |
+| `/muteall` | Mute all adapters **except** the one you're messaging from |
+| `/muteself` | Mute THIS adapter. You will stop receiving all replies. Use `/restart` from another adapter to recover |
+| `/restart` | Restart daemon — unmutes all adapters (mute is in-memory, not persisted) |
+| `/help` | Show available slash commands |
+
+**Important behaviors:**
+- Mute is **in-memory only** — not persisted to the binding store. Daemon restart recovers all adapters.
+- `/muteall` uses `MuteAllExcept(selfAdapter)` — the sender's adapter is never touched.
+- `/muteself` emits the warning message **before** muting (500ms delay ensures delivery).

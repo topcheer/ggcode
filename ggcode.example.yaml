@@ -531,10 +531,51 @@ plugins:
 
 # A2A protocol server — expose this ggcode instance as an A2A agent
 # so other ggcode instances (or any A2A client) can discover and collaborate.
+# Enabled by default on port 0 (auto-assign). Set disabled: true to opt out.
+#
 # a2a:
 #   enabled: true
 #   port: 0                    # 0 = auto-assign (recommended for multi-instance)
 #   host: "127.0.0.1"          # bind address ("0.0.0.0" for LAN access)
-#   api_key: ""                # optional API key (supports ${ENV_VAR} expansion)
 #   max_tasks: 5               # concurrent task limit
 #   task_timeout: "5m"         # per-task timeout
+#
+#   # Authentication — multiple schemes can be enabled simultaneously.
+#   # Server advertises enabled schemes in the agent card; clients auto-negotiate.
+#   auth:
+#     # --- API Key (simplest) ---
+#     api_key: "my-secret-key"   # shared secret (supports ${ENV_VAR} expansion)
+#
+#     # --- OAuth2 + PKCE / Device Flow ---
+#     # Use "provider" for built-in presets (github, google, auth0, azure)
+#     # or "issuer_url" for any custom OIDC-compliant IdP.
+#     oauth2:
+#       provider: "github"              # built-in preset — zero config
+#       # client_id: "my-app"           # override preset (optional)
+#       # client_secret: "xxx"          # required for confidential clients
+#       # flow: "pkce"                  # "pkce" (default) or "device"
+#       # scopes: "read:org"            # custom scopes (preset provides defaults)
+#       # issuer_url: "https://idp.example.com"  # custom IdP
+#
+#     # --- OpenID Connect (layer on OAuth2, adds ID token + userinfo) ---
+#     # oidc:
+#     #   provider: "google"
+#     #   client_id: "xxx"
+#     #   client_secret: "xxx"
+#
+#     # --- mTLS (mutual TLS — no tokens, strongest transport auth) ---
+#     # mtls:
+#     #   cert_file: ".ggcode/certs/server.pem"
+#     #   key_file: ".ggcode/certs/server.key"
+#     #   ca_file: ".ggcode/certs/ca.pem"
+#
+#   # Legacy top-level api_key still works (auth.api_key takes priority)
+#   # api_key: "legacy-key"
+#
+# Instance-level override: place .ggcode/a2a.yaml in the workspace root.
+# It merges into the global a2a config, allowing per-project auth settings.
+#
+# Token cache: OAuth2/OIDC tokens are cached per-client at
+#   ~/.ggcode/oauth-tokens/{provider}-{clientID}.json
+# with 0600 permissions. Cache is checked before prompting for re-auth.
+# Same client_id = shared token (intentional). Different client_id = isolated.

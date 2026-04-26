@@ -393,6 +393,7 @@ im:
 - **按频道绑定** — 将多个频道绑定到同一工作区；每个频道独立接收 agent 输出
 - **语音消息** — 可选的 STT 集成将语音消息转录为文本提示（配置 `im.stt`）
 - **启用/禁用频道** — 使用 `/im` 临时禁用绑定而不删除
+- **适配器管理** — 在 daemon 模式下，使用 `/listim`、`/muteim`、`/muteall`、`/muteself`、`/restart` 从 IM 中管理适配器
 
 ### 统一 IM 面板（`/im`）
 
@@ -402,6 +403,50 @@ im:
 - **禁用**频道（按 `d`）— 暂停该频道的 agent 输出
 - **启用**之前禁用的频道（按 `e`）
 - 使用 `j`/`k` 或方向键导航；按 `Esc` 关闭
+
+### Daemon 模式 IM 斜杠命令
+
+在 daemon 模式（`ggcode daemon`）下，IM 频道可通过斜杠命令管理适配器：
+
+| 命令 | 说明 |
+|------|------|
+| `/listim` | 列出所有 IM 适配器及其状态（在线/静音/活跃） |
+| `/muteim <名称>` | 静音指定适配器（不能静音自己 — 用 `/muteself`） |
+| `/muteall` | 静音所有适配器（你正在使用的除外） |
+| `/muteself` | 静音当前适配器（停止所有回复；从其他适配器用 `/restart` 恢复） |
+| `/restart` | 重启 daemon（解除所有静音 — 静音状态不持久化） |
+| `/help` | 显示可用命令 |
+
+## A2A（Agent-to-Agent）
+
+多个 ggcode 实例可以通过 A2A 协议互相发现、认证并跨实例调用工具。默认启用，端口自动分配。
+
+### 认证方式
+
+五种认证方案可单独或组合启用：
+
+| 方案 | 配置键 | 适用场景 |
+|------|--------|---------|
+| **API Key** | `a2a.auth.api_key` | 开发环境、可信网络 |
+| **OAuth2 + PKCE** | `a2a.auth.oauth2` | 需人工触发的 agent |
+| **Device Flow** | `a2a.auth.oauth2` + `flow: "device"` | 无头服务器、SSH |
+| **OpenID Connect** | `a2a.auth.oidc` | 企业 SSO |
+| **双向 TLS** | `a2a.auth.mtls` | 机器对机器、零信任网络 |
+
+```yaml
+# 最简：共享 API Key
+a2a:
+  auth:
+    api_key: "my-secret-key"
+
+# GitHub 零配置
+a2a:
+  auth:
+    oauth2:
+      provider: "github"
+```
+
+完整认证指南（所有方案、提供商预设、决策矩阵）见 [`docs/a2a-auth.md`](docs/a2a-auth.md)。
 
 ## 配置
 

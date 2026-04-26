@@ -404,6 +404,7 @@ im:
 - **Per-channel binding** — bind multiple channels to the same workspace; each channel sees agent output independently
 - **Voice messages** — optional STT integration transcribes voice messages into text prompts (configure `im.stt`)
 - **Enable/disable channels** — use `/im` to temporarily disable a binding without removing it
+- **Adapter management** — in daemon mode, use `/listim`, `/muteim`, `/muteall`, `/muteself`, `/restart` to manage adapters from IM
 
 ### Unified IM panel (`/im`)
 
@@ -413,6 +414,50 @@ Type `/im` in the TUI to open the unified IM panel. From there you can:
 - **Disable** a channel (press `d`) — pauses agent output to that channel
 - **Enable** a previously disabled channel (press `e`)
 - Navigate with `j`/`k` or arrow keys; press `Esc` to close
+
+### Daemon Mode IM Slash Commands
+
+When running in daemon mode (`ggcode daemon`), IM channels can manage adapters via slash commands:
+
+| Command | Description |
+|---------|-------------|
+| `/listim` | List all IM adapters with status (online/muted/active) |
+| `/muteim <name>` | Mute a specific adapter (not yourself — use `/muteself`) |
+| `/muteall` | Mute all adapters except the one you're messaging from |
+| `/muteself` | Mute THIS adapter (stops replies; use `/restart` from another adapter to recover) |
+| `/restart` | Restart daemon (unmutes all — mute is in-memory, not persisted) |
+| `/help` | Show available commands |
+
+## A2A (Agent-to-Agent)
+
+ggcode instances can discover each other, authenticate, and call tools across instances via the A2A protocol. Enabled by default on port 0 (auto-assign).
+
+### Authentication
+
+Five schemes can be enabled individually or combined:
+
+| Scheme | Config Key | Best For |
+|--------|-----------|----------|
+| **API Key** | `a2a.auth.api_key` | Development, trusted networks |
+| **OAuth2 + PKCE** | `a2a.auth.oauth2` | Human-driven agents |
+| **Device Flow** | `a2a.auth.oauth2` with `flow: "device"` | Headless servers, SSH |
+| **OpenID Connect** | `a2a.auth.oidc` | Enterprise SSO |
+| **Mutual TLS** | `a2a.auth.mtls` | Machine-to-machine, zero-trust |
+
+```yaml
+# Simplest: shared API key
+a2a:
+  auth:
+    api_key: "my-secret-key"
+
+# GitHub zero-config
+a2a:
+  auth:
+    oauth2:
+      provider: "github"
+```
+
+See [`docs/a2a-auth.md`](docs/a2a-auth.md) for the full authentication guide with all schemes, provider presets, and decision matrix.
 
 ## Configuration
 
