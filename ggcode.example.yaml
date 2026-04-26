@@ -536,12 +536,15 @@ plugins:
 # a2a:
 #   enabled: true
 #   port: 0                    # 0 = auto-assign (recommended for multi-instance)
-#   host: "127.0.0.1"          # bind address ("0.0.0.0" for LAN access)
+#   host: ""                   # auto: 0.0.0.0 when auth configured, 127.0.0.1 otherwise
 #   max_tasks: 5               # concurrent task limit
 #   task_timeout: "5m"         # per-task timeout
+#   lan_discovery: true        # enable mDNS broadcast for LAN discovery (requires auth)
 #
 #   # Authentication — multiple schemes can be enabled simultaneously.
 #   # Server advertises enabled schemes in the agent card; clients auto-negotiate.
+#   # When at least one auth method is configured, host defaults to 0.0.0.0 (LAN accessible).
+#   # Without auth, host defaults to 127.0.0.1 (localhost only) for safety.
 #   auth:
 #     # --- API Key (simplest) ---
 #     api_key: "my-secret-key"   # shared secret (supports ${ENV_VAR} expansion)

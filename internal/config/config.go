@@ -264,13 +264,24 @@ type SwarmConfig struct {
 // A2AConfig holds A2A protocol server configuration.
 // A2A is enabled by default. Set disabled: true to turn it off.
 type A2AConfig struct {
-	Disabled    bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
-	Port        int           `yaml:"port"`               // 0 = auto-assign
-	Host        string        `yaml:"host"`               // default "127.0.0.1"
-	APIKey      string        `yaml:"api_key"`            // empty = no auth
-	MaxTasks    int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
-	TaskTimeout string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
-	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
+	Disabled     bool          `yaml:"disabled,omitempty"` // true to disable (default: enabled)
+	Port         int           `yaml:"port"`               // 0 = auto-assign
+	Host         string        `yaml:"host"`               // default "0.0.0.0" (if auth configured) or "127.0.0.1"
+	APIKey       string        `yaml:"api_key"`            // empty = no auth
+	MaxTasks     int           `yaml:"max_tasks"`          // concurrent task limit (default 5)
+	TaskTimeout  string        `yaml:"task_timeout"`       // per-task timeout (default "5m")
+	LANDiscovery bool          `yaml:"lan_discovery"`      // enable mDNS broadcast for LAN discovery
+	Auth         A2AAuthConfig `yaml:"auth,omitempty"`
+}
+
+// HasAuth returns true if at least one authentication mechanism is configured.
+func (c A2AConfig) HasAuth() bool {
+	return strings.TrimSpace(c.Auth.APIKey) != "" ||
+		len(c.Auth.APIKeys) > 0 ||
+		c.Auth.OAuth2 != nil ||
+		c.Auth.OIDC != nil ||
+		c.Auth.MTLS != nil ||
+		strings.TrimSpace(c.APIKey) != "" // legacy
 }
 
 // A2AAuthConfig configures which authentication mechanisms the A2A server accepts.
@@ -1007,8 +1018,13 @@ func (c *Config) Validate() error {
 		if c.A2A.TaskTimeout == "" {
 			c.A2A.TaskTimeout = "5m"
 		}
+		// Host: 0.0.0.0 only when auth is configured; otherwise 127.0.0.1 for safety.
 		if c.A2A.Host == "" {
-			c.A2A.Host = "127.0.0.1"
+			if c.A2A.HasAuth() {
+				c.A2A.Host = "0.0.0.0"
+			} else {
+				c.A2A.Host = "127.0.0.1"
+			}
 		}
 	}
 	for _, dir := range c.AllowedDirs {
