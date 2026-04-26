@@ -2909,3 +2909,178 @@ func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
 	pem.Encode(&keyBuf, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
 	return certBuf.Bytes(), keyBuf.Bytes()
 }
+
+// ---------------------------------------------------------------------------
+// Client auto token acquisition
+// ---------------------------------------------------------------------------
+
+type mockTokenProvider struct {
+	token   string
+	refresh string
+	expiry  time.Time
+	err     error
+	called  bool
+}
+
+func (m *mockTokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	m.called = true
+	return m.token, m.refresh, m.expiry, m.err
+}
+
+func TestClientAutoTokenAcquisition(t *testing.T) {
+	// Server requiring bearer auth
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
+	srv.SetTokenValidator(tv)
+	srv.Start()
+	defer srv.Stop()
+
+	// Client with mock token provider
+	provider := &mockTokenProvider{
+		token:   "auto-acquired-token",
+		expiry:  time.Now().Add(time.Hour),
+		refresh: "refresh-123",
+	}
+
+	client := NewClient(srv.Endpoint(), "", WithTokenProvider(provider))
+	_, err := client.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	err = client.NegotiateAuth()
+	if err != nil {
+		t.Fatalf("negotiate: %v", err)
+	}
+
+	if !provider.called {
+		t.Error("token provider should have been called")
+	}
+	if client.authMethod != "bearer" {
+		t.Errorf("expected bearer, got %s", client.authMethod)
+	}
+	if client.bearerToken != "auto-acquired-token" {
+		t.Errorf("expected auto-acquired-token, got %s", client.bearerToken)
+	}
+}
+
+func TestClientNoTokenProviderFailsBearer(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
+	srv.SetTokenValidator(tv)
+	srv.Start()
+	defer srv.Stop()
+
+	client := NewClient(srv.Endpoint(), "")
+	_, err := client.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	err = client.NegotiateAuth()
+	if err == nil {
+		t.Fatal("expected error when no token provider and server requires bearer")
+	}
+}
+
+func TestClientExistingTokenSkipsProvider(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
+	srv.SetTokenValidator(tv)
+	srv.Start()
+	defer srv.Stop()
+
+	provider := &mockTokenProvider{}
+	client := NewClient(srv.Endpoint(), "",
+		WithBearerToken("pre-existing-token"),
+		WithTokenProvider(provider),
+	)
+	_, err := client.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	err = client.NegotiateAuth()
+	if err != nil {
+		t.Fatalf("negotiate: %v", err)
+	}
+
+	if provider.called {
+		t.Error("provider should NOT be called when existing token is present")
+	}
+}
+
+func TestClientTokenProviderError(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
+	srv.SetTokenValidator(tv)
+	srv.Start()
+	defer srv.Stop()
+
+	provider := &mockTokenProvider{err: fmt.Errorf("user cancelled")}
+	client := NewClient(srv.Endpoint(), "", WithTokenProvider(provider))
+	_, err := client.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	err = client.NegotiateAuth()
+	if err == nil {
+		t.Fatal("expected error when provider fails")
+	}
+}
+
+func TestClientServerMultiAuthDifferentClients(t *testing.T) {
+	// Server accepts both apiKey and bearer
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "shared-key"}, handler)
+	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
+	srv.SetTokenValidator(tv)
+	srv.Start()
+	defer srv.Stop()
+
+	// Client A uses apiKey
+	clientA := NewClient(srv.Endpoint(), "shared-key")
+	card, err := clientA.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("clientA discover: %v", err)
+	}
+	if err := clientA.NegotiateAuth(); err != nil {
+		t.Fatalf("clientA negotiate: %v", err)
+	}
+	if clientA.authMethod != "apiKey" {
+		t.Errorf("clientA expected apiKey, got %s", clientA.authMethod)
+	}
+
+	// Client B uses bearer token (via provider)
+	provider := &mockTokenProvider{
+		token:  "bearer-token-for-B",
+		expiry: time.Now().Add(time.Hour),
+	}
+	clientB := NewClient(srv.Endpoint(), "", WithTokenProvider(provider))
+	_, err = clientB.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("clientB discover: %v", err)
+	}
+	if err := clientB.NegotiateAuth(); err != nil {
+		t.Fatalf("clientB negotiate: %v", err)
+	}
+	if clientB.authMethod != "bearer" {
+		t.Errorf("clientB expected bearer, got %s", clientB.authMethod)
+	}
+
+	// Verify agent card advertises both schemes
+	if len(card.SecuritySchemes) != 2 {
+		t.Errorf("expected 2 schemes, got %d: %v", len(card.SecuritySchemes), card.SecuritySchemes)
+	}
+	if _, ok := card.SecuritySchemes["apiKey"]; !ok {
+		t.Error("missing apiKey scheme")
+	}
+	if _, ok := card.SecuritySchemes["bearer"]; !ok {
+		t.Error("missing bearer scheme")
+	}
+}
