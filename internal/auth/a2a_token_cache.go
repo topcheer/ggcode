@@ -123,3 +123,17 @@ func (tc *TokenCache) Delete(provider string) error {
 func (tc *TokenCache) path(provider string) string {
 	return filepath.Join(tc.dir, provider+".json")
 }
+
+// CacheKey generates a unique cache key from provider and clientID.
+// Different clientIDs for the same provider won't overwrite each other.
+func CacheKey(provider, clientID string) string {
+	if clientID == "" {
+		return provider
+	}
+	// Use first 8 chars of clientID to keep filename reasonable
+	suffix := clientID
+	if len(suffix) > 12 {
+		suffix = suffix[:12]
+	}
+	return provider + "-" + suffix
+}

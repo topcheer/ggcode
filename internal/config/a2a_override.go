@@ -48,6 +48,11 @@ func MergeA2AConfig(base *A2AConfig, override *A2AConfig) {
 	if override.TaskTimeout != "" {
 		base.TaskTimeout = override.TaskTimeout
 	}
+
+	// Auth overrides
+	if override.Auth.APIKey != "" {
+		base.Auth.APIKey = override.Auth.APIKey
+	}
 	if override.Auth.OAuth2 != nil {
 		base.Auth.OAuth2 = override.Auth.OAuth2
 	}

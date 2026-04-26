@@ -152,3 +152,55 @@ func TestTokenCacheFilePermissions(t *testing.T) {
 		t.Errorf("expected 0600, got %o", info.Mode().Perm())
 	}
 }
+
+func TestCacheKeyIsolation(t *testing.T) {
+	// Same provider, different clientIDs → different keys
+	key1 := CacheKey("github", "client-aaa")
+	key2 := CacheKey("github", "client-bbb")
+	if key1 == key2 {
+		t.Errorf("different clientIDs should produce different keys: %s == %s", key1, key2)
+	}
+	t.Logf("key1=%s key2=%s", key1, key2)
+
+	// Same provider, same clientID → same key
+	key3 := CacheKey("github", "client-aaa")
+	if key1 != key3 {
+		t.Errorf("same inputs should produce same key")
+	}
+
+	// No clientID → just provider name
+	key4 := CacheKey("github", "")
+	if key4 != "github" {
+		t.Errorf("expected 'github', got %s", key4)
+	}
+}
+
+func TestTokenCacheMultiClientIsolation(t *testing.T) {
+	dir := t.TempDir()
+	cache := NewTokenCache(dir)
+
+	// Instance A with client-aaa
+	tokenA := &PKCEToken{
+		AccessToken: "token-for-aaa",
+		Expiry:      time.Now().Add(time.Hour),
+	}
+	cache.Save(CacheKey("github", "client-aaa"), tokenA, "client-aaa")
+
+	// Instance B with client-bbb
+	tokenB := &PKCEToken{
+		AccessToken: "token-for-bbb",
+		Expiry:      time.Now().Add(time.Hour),
+	}
+	cache.Save(CacheKey("github", "client-bbb"), tokenB, "client-bbb")
+
+	// Load each — should get the right one
+	loadedA := cache.LoadValid(CacheKey("github", "client-aaa"))
+	if loadedA == nil || loadedA.AccessToken != "token-for-aaa" {
+		t.Errorf("expected token-for-aaa, got %v", loadedA)
+	}
+
+	loadedB := cache.LoadValid(CacheKey("github", "client-bbb"))
+	if loadedB == nil || loadedB.AccessToken != "token-for-bbb" {
+		t.Errorf("expected token-for-bbb, got %v", loadedB)
+	}
+}

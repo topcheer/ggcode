@@ -794,9 +794,11 @@ type PKCETokenProvider struct {
 
 // GetToken returns a cached token if valid, otherwise opens a browser for authorization.
 func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	cacheKey := CacheKey(p.Provider, p.Config.ClientID)
+
 	// Try cache first
-	if p.Cache != nil && p.Provider != "" {
-		if cached := p.Cache.LoadValid(p.Provider); cached != nil {
+	if p.Cache != nil && cacheKey != "" {
+		if cached := p.Cache.LoadValid(cacheKey); cached != nil {
 			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
 		}
 	}
@@ -807,8 +809,8 @@ func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.
 	}
 
 	// Save to cache
-	if p.Cache != nil && p.Provider != "" {
-		_ = p.Cache.Save(p.Provider, token, p.Config.ClientID)
+	if p.Cache != nil && cacheKey != "" {
+		_ = p.Cache.Save(cacheKey, token, p.Config.ClientID)
 	}
 
 	return token.AccessToken, token.RefreshToken, token.Expiry, nil
@@ -824,9 +826,11 @@ type DeviceFlowTokenProvider struct {
 
 // GetToken returns a cached token if valid, otherwise displays a device code.
 func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	cacheKey := CacheKey(p.Provider, p.Config.ClientID)
+
 	// Try cache first
-	if p.Cache != nil && p.Provider != "" {
-		if cached := p.Cache.LoadValid(p.Provider); cached != nil {
+	if p.Cache != nil && cacheKey != "" {
+		if cached := p.Cache.LoadValid(cacheKey); cached != nil {
 			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
 		}
 	}
@@ -837,8 +841,8 @@ func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string,
 	}
 
 	// Save to cache
-	if p.Cache != nil && p.Provider != "" {
-		_ = p.Cache.Save(p.Provider, token, p.Config.ClientID)
+	if p.Cache != nil && cacheKey != "" {
+		_ = p.Cache.Save(cacheKey, token, p.Config.ClientID)
 	}
 
 	return token.AccessToken, token.RefreshToken, token.Expiry, nil

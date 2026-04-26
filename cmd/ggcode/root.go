@@ -533,11 +533,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var a2aServer *a2a.Server
 	var a2aRegistry *a2a.Registry
 	var a2aTaskHandler *a2a.TaskHandler
-		if !cfg.A2A.Disabled {
-			// Apply instance-level A2A config override from .ggcode/a2a.yaml
-			if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
-				config.MergeA2AConfig(&cfg.A2A, a2aOverride)
-			}
+	if !cfg.A2A.Disabled {
+		// Apply instance-level A2A config override from .ggcode/a2a.yaml
+		if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
+			config.MergeA2AConfig(&cfg.A2A, a2aOverride)
+		}
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server startup warning: %v\n", err)
@@ -647,6 +647,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	return repl.Run()
 }
 
+// a2aAPIKey resolves the A2A API key from config.
+// Priority: A2A.Auth.APIKey (new) > A2A.APIKey (legacy).
+func a2aAPIKey(cfg *config.Config) string {
+	if cfg.A2A.Auth.APIKey != "" {
+		return cfg.A2A.Auth.APIKey
+	}
+	return cfg.A2A.APIKey
+}
+
 // startA2AServer starts the A2A HTTP server, registers this instance in the local
 // registry, discovers other running instances, and registers cross-instance MCP tools.
 func parseA2ATimeout(s string) time.Duration {
@@ -674,20 +683,21 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	srv := a2a.NewServer(a2a.ServerConfig{
 		Host:   cfg.A2A.Host,
 		Port:   cfg.A2A.Port,
-		APIKey: cfg.A2A.APIKey,
+		APIKey: a2aAPIKey(cfg),
 	}, handler)
 
 	// Wire OAuth2/OIDC token validation if configured
 	if cfg.A2A.Auth.OAuth2 != nil {
 		oc := cfg.A2A.Auth.OAuth2
+		_, _, clientID, _, _ := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		issuerURL := oc.IssuerURL
 		if issuerURL == "" && oc.Provider != "" {
 			if p := auth.ResolveProviderPreset(oc.Provider); p != nil {
 				issuerURL = p.TokenURL
 			}
 		}
-		if issuerURL != "" && oc.ClientID != "" {
-			tv, err := auth.NewTokenValidator(oc.ClientID, issuerURL)
+		if issuerURL != "" && clientID != "" {
+			tv, err := auth.NewTokenValidator(clientID, issuerURL)
 			if err != nil {
 				srv.Stop()
 				return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
@@ -697,14 +707,15 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	}
 	if cfg.A2A.Auth.OIDC != nil {
 		oc := cfg.A2A.Auth.OIDC
+		_, _, clientID, _, _ := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
 		issuerURL := oc.IssuerURL
 		if issuerURL == "" && oc.Provider != "" {
 			if p := auth.ResolveProviderPreset(oc.Provider); p != nil && p.OIDCDiscovery != "" {
 				issuerURL = p.OIDCDiscovery
 			}
 		}
-		if issuerURL != "" && oc.ClientID != "" {
-			tv, err := auth.NewTokenValidator(oc.ClientID, issuerURL)
+		if issuerURL != "" && clientID != "" {
+			tv, err := auth.NewTokenValidator(clientID, issuerURL)
 			if err != nil {
 				srv.Stop()
 				return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
