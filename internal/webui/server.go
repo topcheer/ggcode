@@ -144,6 +144,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/im/adapters/", s.handleIMAdapterDetail)
 	s.mux.HandleFunc("/api/general", s.handleGeneral)
 	s.mux.HandleFunc("/api/impersonate", s.handleImpersonate)
+	s.mux.HandleFunc("/api/a2a", s.handleA2A)
 	s.mux.HandleFunc("/api/restart", s.handleRestart)
 }
 
@@ -762,6 +763,134 @@ func (s *Server) handleImpersonate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GET/PUT /api/a2a — A2A protocol configuration
+func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		a2a := s.cfg.A2A
+		writeJSON(w, map[string]interface{}{
+			"disabled":     a2a.Disabled,
+			"port":         a2a.Port,
+			"host":         a2a.Host,
+			"max_tasks":    a2a.MaxTasks,
+			"task_timeout": a2a.TaskTimeout,
+			"auth": map[string]interface{}{
+				"has_api_key": strings.TrimSpace(a2a.Auth.APIKey) != "",
+				"oauth2":      sanitizeOAuth2(a2a.Auth.OAuth2),
+				"oidc":        sanitizeOIDC(a2a.Auth.OIDC),
+				"mtls":        sanitizeMTLS(a2a.Auth.MTLS),
+			},
+			"has_legacy_api_key": strings.TrimSpace(a2a.APIKey) != "",
+		})
+	case http.MethodPut:
+		var req struct {
+			Disabled    *bool  `json:"disabled"`
+			Port        *int   `json:"port"`
+			Host        string `json:"host"`
+			MaxTasks    *int   `json:"max_tasks"`
+			TaskTimeout string `json:"task_timeout"`
+			Auth        *struct {
+				APIKey       string `json:"api_key"`
+				OAuth2       *config.A2AOAuth2Config `json:"oauth2"`
+				OAuth2Clear  bool   `json:"oauth2_clear"`
+				OIDC         *config.A2AOIDCConfig   `json:"oidc"`
+				OIDCClear    bool   `json:"oidc_clear"`
+				MTLS         *config.A2AMTLSConfig   `json:"mtls"`
+				MTLSClear    bool   `json:"mtls_clear"`
+			} `json:"auth"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if req.Disabled != nil {
+			s.cfg.A2A.Disabled = *req.Disabled
+		}
+		if req.Port != nil {
+			s.cfg.A2A.Port = *req.Port
+		}
+		if req.Host != "" {
+			s.cfg.A2A.Host = req.Host
+		}
+		if req.MaxTasks != nil {
+			s.cfg.A2A.MaxTasks = *req.MaxTasks
+		}
+		if req.TaskTimeout != "" {
+			s.cfg.A2A.TaskTimeout = req.TaskTimeout
+		}
+		if req.Auth != nil {
+			if req.Auth.APIKey != "" {
+				s.cfg.A2A.Auth.APIKey = req.Auth.APIKey
+			}
+			if req.Auth.OAuth2Clear {
+				s.cfg.A2A.Auth.OAuth2 = nil
+			} else if req.Auth.OAuth2 != nil {
+				s.cfg.A2A.Auth.OAuth2 = req.Auth.OAuth2
+			}
+			if req.Auth.OIDCClear {
+				s.cfg.A2A.Auth.OIDC = nil
+			} else if req.Auth.OIDC != nil {
+				s.cfg.A2A.Auth.OIDC = req.Auth.OIDC
+			}
+			if req.Auth.MTLSClear {
+				s.cfg.A2A.Auth.MTLS = nil
+			} else if req.Auth.MTLS != nil {
+				s.cfg.A2A.Auth.MTLS = req.Auth.MTLS
+			}
+		}
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func sanitizeOAuth2(o *config.A2AOAuth2Config) interface{} {
+	if o == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"provider":      o.Provider,
+		"client_id":     o.ClientID,
+		"has_secret":    strings.TrimSpace(o.ClientSecret) != "",
+		"issuer_url":    o.IssuerURL,
+		"scopes":        o.Scopes,
+		"flow":          o.Flow,
+	}
+}
+
+func sanitizeOIDC(o *config.A2AOIDCConfig) interface{} {
+	if o == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"provider":      o.Provider,
+		"client_id":     o.ClientID,
+		"has_secret":    strings.TrimSpace(o.ClientSecret) != "",
+		"issuer_url":    o.IssuerURL,
+		"scopes":        o.Scopes,
+		"flow":          o.Flow,
+	}
+}
+
+func sanitizeMTLS(m *config.A2AMTLSConfig) interface{} {
+	if m == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"cert_file": m.CertFile,
+		"key_file":  m.KeyFile,
+		"ca_file":   m.CAFile,
+	}
+}
+
 // GET/PUT /api/general — general settings (language, mode, max_iterations, allowed_dirs)
 func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -866,5 +995,10 @@ func sanitizeConfigForAPI(cfg *config.Config) map[string]interface{} {
 		"im":             cfg.IM,
 		"mcp_servers":    cfg.MCPServers,
 		"vendors":        cfg.Vendors,
+		"a2a": map[string]interface{}{
+			"disabled": cfg.A2A.Disabled,
+			"port":     cfg.A2A.Port,
+			"host":     cfg.A2A.Host,
+		},
 	}
 }

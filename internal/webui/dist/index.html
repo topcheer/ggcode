@@ -118,6 +118,9 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       <div class="nav-item" data-page="general" onclick="showPage('general')">
         <span class="nav-icon">&#9881;</span><span>General</span>
       </div>
+      <div class="nav-item" data-page="a2a" onclick="showPage('a2a')">
+        <span class="nav-icon">&#128274;</span><span>A2A</span>
+      </div>
       <div class="nav-item" data-page="impersonate" onclick="showPage('impersonate')">
         <span class="nav-icon">&#128100;</span><span>Impersonate</span>
       </div>
@@ -277,6 +280,12 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       </div>
     </div>
 
+    <!-- A2A -->
+    <div class="page" id="page-a2a">
+      <div class="page-header"><h2>A2A Protocol</h2><p>Agent-to-Agent server configuration and authentication</p></div>
+      <div id="a2a-content"></div>
+    </div>
+
     <!-- General -->
     <div class="page" id="page-general">
       <div class="page-header"><h2>General</h2><p>Language, permissions, and other settings</p></div>
@@ -336,6 +345,7 @@ let config = {};
 let vendors = {};
 let mcpServers = []; // loaded from /api/mcp with runtime status
 let impersonateData = null; // loaded from /api/impersonate
+let a2aData = null; // loaded from /api/a2a
 
 // --- API helpers ---
 async function api(path, opts) {
@@ -389,6 +399,8 @@ async function loadAll() {
     await loadIMRuntime();
     renderIM();
     renderGeneral();
+    try { a2aData = await api('/api/a2a'); } catch(e) { a2aData = null; }
+    renderA2A();
     try { impersonateData = await api('/api/impersonate'); } catch(e) { impersonateData = null; }
     renderImpersonate();
     renderPrompt();
@@ -423,6 +435,7 @@ function renderOverview() {
         <tr><td>MCP Servers</td><td><span class="dot ${mcpCount > 0 ? 'dot-green' : 'dot-yellow'}"></span>${mcpCount > 0 ? 'Configured' : 'None'}</td><td>${mcpCount}</td></tr>
         <tr><td>IM Gateway</td><td><span class="dot ${imEnabled ? 'dot-green' : 'dot-yellow'}"></span>${imEnabled ? 'Enabled' : 'Disabled'}</td><td>${Object.keys(c.im?.adapters || {}).length} adapters</td></tr>
         <tr><td>Vendors</td><td><span class="dot dot-green"></span>Available</td><td>${vendors.length}</td></tr>
+        <tr><td>A2A</td><td>${a2aData ? (a2aData.disabled ? '<span class="dot dot-red"></span>Disabled' : '<span class="dot dot-green"></span>Enabled') : '<span class="dot dot-yellow"></span>N/A'}</td><td>${a2aData && !a2aData.disabled ? ':'+(a2aData.port||'auto') : ''}</td></tr>
         <tr><td>Impersonate</td><td>${impersonateData ? `<span class="dot dot-green"></span>${esc(impersonateData.presets?.find(p=>p.id===(impersonateData.current?.preset||'none'))?.display_name || 'None')}` : '<span class="dot dot-yellow"></span>N/A'}</td><td></td></tr>
       </table></div>
     </div>`;
@@ -977,6 +990,228 @@ async function unbindAdapter(name) {
     await api('/api/im/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adapter:name,action:'unbind'})});
     toast('Binding removed');
     await loadIMRuntime(); renderIM();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- A2A ---
+const a2aProviderPresets = ['github','google','auth0','azure'];
+
+function renderA2A() {
+  if (!a2aData) {
+    document.getElementById('a2a-content').innerHTML = '<div class="card"><p style="color:var(--text2)">A2A not available</p></div>';
+    return;
+  }
+  const d = a2aData;
+  const enabled = !d.disabled;
+  const auth = d.auth || {};
+
+  // Count enabled auth methods
+  let authCount = 0;
+  if (auth.has_api_key) authCount++;
+  if (auth.oauth2) authCount++;
+  if (auth.oidc) authCount++;
+  if (auth.mtls) authCount++;
+
+  let html = `<div class="card">
+    <div class="card-title">A2A Server <span class="badge ${enabled?'badge-green':'badge-red'}">${enabled?'Enabled':'Disabled'}</span>
+      ${authCount > 0 ? `<span class="badge badge-green" style="font-size:10px">${authCount} auth method${authCount>1?'s':''}</span>` : '<span class="badge badge-yellow" style="font-size:10px">No auth</span>'}
+    </div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:140px">Setting</th><th>Value</th></tr>
+      <tr><td>Status</td><td>${enabled?'<span class="dot dot-green"></span>Running':'<span class="dot dot-red"></span>Disabled'}</td></tr>
+      <tr><td>Host</td><td class="mono">${esc(d.host||'127.0.0.1')}</td></tr>
+      <tr><td>Port</td><td class="mono">${d.port===0?'auto-assign':d.port}</td></tr>
+      <tr><td>Max Tasks</td><td>${d.max_tasks||5}</td></tr>
+      <tr><td>Task Timeout</td><td class="mono">${esc(d.task_timeout||'5m')}</td></tr>
+    </table></div>
+    <div style="margin-top:12px;display:flex;gap:6px">
+      <button class="btn btn-sm ${enabled?'btn-danger':'btn-primary'}" onclick="toggleA2A()">${enabled?'Disable A2A':'Enable A2A'}</button>
+    </div>
+  </div>`;
+
+  // Auth methods
+  html += `<h3 style="font-size:14px;margin:20px 0 8px;color:var(--accent)">Authentication</h3>`;
+
+  // API Key
+  html += `<div class="card">
+    <div class="card-title"><span class="dot ${auth.has_api_key?'dot-green':'dot-yellow'}"></span>API Key ${auth.has_api_key?'<span class="badge badge-green">Set</span>':'<span class="badge badge-yellow">Not Set</span>'}</div>
+    <div class="form-group"><label>Shared Secret</label><input type="password" id="a2a-api-key" placeholder="${auth.has_api_key?'Leave empty to keep current':'Enter API key or ${ENV_VAR}'}"></div>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-sm btn-primary" onclick="saveA2AAPIKey()">Save Key</button>
+      ${auth.has_api_key?'<button class="btn btn-sm btn-danger" onclick="clearA2AAPIKey()">Clear Key</button>':''}
+    </div>
+  </div>`;
+
+  // OAuth2
+  const oauth2 = auth.oauth2;
+  html += `<div class="card">
+    <div class="card-title"><span class="dot ${oauth2?'dot-green':'dot-yellow'}"></span>OAuth2 ${oauth2?'<span class="badge badge-green">Configured</span>':'<span class="badge badge-yellow">Not Set</span>'}</div>
+    <div class="form-group"><label>Provider Preset</label><select id="a2a-oauth2-provider">
+      <option value="">Custom / None</option>
+      ${a2aProviderPresets.map(p => `<option value="${p}" ${oauth2?.provider===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
+    </select></div>
+    <div class="form-group"><label>Client ID</label><input id="a2a-oauth2-client-id" value="${esc(oauth2?.client_id||'')}" placeholder="OAuth2 client ID"></div>
+    <div class="form-group"><label>Client Secret</label><input type="password" id="a2a-oauth2-secret" placeholder="${oauth2?.has_secret?'Leave empty to keep current':'Optional for PKCE'}"></div>
+    <div class="form-group"><label>Issuer URL</label><input id="a2a-oauth2-issuer" value="${esc(oauth2?.issuer_url||'')}" placeholder="https://idp.example.com"></div>
+    <div class="form-group"><label>Scopes</label><input id="a2a-oauth2-scopes" value="${esc(oauth2?.scopes||'')}" placeholder="read:org user:email"></div>
+    <div class="form-group"><label>Flow</label><select id="a2a-oauth2-flow">
+      <option value="" ${!oauth2?.flow?'selected':''}>Auto</option>
+      <option value="pkce" ${oauth2?.flow==='pkce'?'selected':''}>PKCE</option>
+      <option value="device" ${oauth2?.flow==='device'?'selected':''}>Device Flow</option>
+    </select></div>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-sm btn-primary" onclick="saveA2AOAuth2()">Save OAuth2</button>
+      ${oauth2?'<button class="btn btn-sm btn-danger" onclick="clearA2AOAuth2()">Remove</button>':''}
+    </div>
+  </div>`;
+
+  // OIDC
+  const oidc = auth.oidc;
+  html += `<div class="card">
+    <div class="card-title"><span class="dot ${oidc?'dot-green':'dot-yellow'}"></span>OpenID Connect ${oidc?'<span class="badge badge-green">Configured</span>':'<span class="badge badge-yellow">Not Set</span>'}</div>
+    <div class="form-group"><label>Provider Preset</label><select id="a2a-oidc-provider">
+      <option value="">Custom / None</option>
+      ${a2aProviderPresets.map(p => `<option value="${p}" ${oidc?.provider===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
+    </select></div>
+    <div class="form-group"><label>Client ID</label><input id="a2a-oidc-client-id" value="${esc(oidc?.client_id||'')}" placeholder="OIDC client ID"></div>
+    <div class="form-group"><label>Client Secret</label><input type="password" id="a2a-oidc-secret" placeholder="${oidc?.has_secret?'Leave empty to keep current':'Optional'}"></div>
+    <div class="form-group"><label>Issuer URL</label><input id="a2a-oidc-issuer" value="${esc(oidc?.issuer_url||'')}" placeholder="https://idp.example.com (must have /.well-known/openid-configuration)"></div>
+    <div class="form-group"><label>Scopes</label><input id="a2a-oidc-scopes" value="${esc(oidc?.scopes||'')}" placeholder="openid profile email"></div>
+    <div class="form-group"><label>Flow</label><select id="a2a-oidc-flow">
+      <option value="" ${!oidc?.flow?'selected':''}>Auto</option>
+      <option value="pkce" ${oidc?.flow==='pkce'?'selected':''}>PKCE</option>
+      <option value="device" ${oidc?.flow==='device'?'selected':''}>Device Flow</option>
+    </select></div>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-sm btn-primary" onclick="saveA2AOIDC()">Save OIDC</button>
+      ${oidc?'<button class="btn btn-sm btn-danger" onclick="clearA2AOIDC()">Remove</button>':''}
+    </div>
+  </div>`;
+
+  // mTLS
+  const mtls = auth.mtls;
+  html += `<div class="card">
+    <div class="card-title"><span class="dot ${mtls?'dot-green':'dot-yellow'}"></span>Mutual TLS ${mtls?'<span class="badge badge-green">Configured</span>':'<span class="badge badge-yellow">Not Set</span>'}</div>
+    <div class="form-group"><label>Cert File</label><input id="a2a-mtls-cert" value="${esc(mtls?.cert_file||'')}" placeholder=".ggcode/certs/server.pem"></div>
+    <div class="form-group"><label>Key File</label><input id="a2a-mtls-key" value="${esc(mtls?.key_file||'')}" placeholder=".ggcode/certs/server.key"></div>
+    <div class="form-group"><label>CA File</label><input id="a2a-mtls-ca" value="${esc(mtls?.ca_file||'')}" placeholder=".ggcode/certs/ca.pem"></div>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-sm btn-primary" onclick="saveA2AMTLS()">Save mTLS</button>
+      ${mtls?'<button class="btn btn-sm btn-danger" onclick="clearA2AMTLS()">Remove</button>':''}
+    </div>
+  </div>`;
+
+  document.getElementById('a2a-content').innerHTML = html;
+}
+
+async function toggleA2A() {
+  try {
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled: a2aData.disabled ? false : true})});
+    toast(a2aData.disabled ? 'A2A enabled' : 'A2A disabled');
+    a2aData = await api('/api/a2a'); renderA2A(); renderOverview();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function saveA2AAPIKey() {
+  try {
+    const key = document.getElementById('a2a-api-key').value;
+    if (!key) { toast('Enter an API key', false); return; }
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{api_key: key}})});
+    toast('API key saved');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function clearA2AAPIKey() {
+  if (!confirm('Clear A2A API key?')) return;
+  try {
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{api_key: ' '}})});
+    toast('API key cleared');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function saveA2AOAuth2() {
+  try {
+    const provider = document.getElementById('a2a-oauth2-provider').value;
+    const clientId = document.getElementById('a2a-oauth2-client-id').value.trim();
+    const secret = document.getElementById('a2a-oauth2-secret').value;
+    const issuer = document.getElementById('a2a-oauth2-issuer').value.trim();
+    const scopes = document.getElementById('a2a-oauth2-scopes').value.trim();
+    const flow = document.getElementById('a2a-oauth2-flow').value;
+    const oauth2 = {};
+    if (provider) oauth2.provider = provider;
+    if (clientId) oauth2.client_id = clientId;
+    if (secret) oauth2.client_secret = secret;
+    if (issuer) oauth2.issuer_url = issuer;
+    if (scopes) oauth2.scopes = scopes;
+    if (flow) oauth2.flow = flow;
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{oauth2: oauth2}})});
+    toast('OAuth2 saved');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function clearA2AOAuth2() {
+  if (!confirm('Remove OAuth2 configuration?')) return;
+  try {
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{oauth2_clear: true}})});
+    toast('OAuth2 removed');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function saveA2AOIDC() {
+  try {
+    const provider = document.getElementById('a2a-oidc-provider').value;
+    const clientId = document.getElementById('a2a-oidc-client-id').value.trim();
+    const secret = document.getElementById('a2a-oidc-secret').value;
+    const issuer = document.getElementById('a2a-oidc-issuer').value.trim();
+    const scopes = document.getElementById('a2a-oidc-scopes').value.trim();
+    const flow = document.getElementById('a2a-oidc-flow').value;
+    const oidc = {};
+    if (provider) oidc.provider = provider;
+    if (clientId) oidc.client_id = clientId;
+    if (secret) oidc.client_secret = secret;
+    if (issuer) oidc.issuer_url = issuer;
+    if (scopes) oidc.scopes = scopes;
+    if (flow) oidc.flow = flow;
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{oidc: oidc}})});
+    toast('OIDC saved');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function clearA2AOIDC() {
+  if (!confirm('Remove OIDC configuration?')) return;
+  try {
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{oidc_clear: true}})});
+    toast('OIDC removed');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function saveA2AMTLS() {
+  try {
+    const cert = document.getElementById('a2a-mtls-cert').value.trim();
+    const key = document.getElementById('a2a-mtls-key').value.trim();
+    const ca = document.getElementById('a2a-mtls-ca').value.trim();
+    const mtls = {};
+    if (cert) mtls.cert_file = cert;
+    if (key) mtls.key_file = key;
+    if (ca) mtls.ca_file = ca;
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{mtls: mtls}})});
+    toast('mTLS saved');
+    a2aData = await api('/api/a2a'); renderA2A();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function clearA2AMTLS() {
+  if (!confirm('Remove mTLS configuration?')) return;
+  try {
+    await api('/api/a2a', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth:{mtls_clear: true}})});
+    toast('mTLS removed');
+    a2aData = await api('/api/a2a'); renderA2A();
   } catch(e) { toast(e.message, false); }
 }
 
