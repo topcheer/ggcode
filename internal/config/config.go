@@ -105,9 +105,9 @@ type MCPServerConfig struct {
 	Headers           map[string]string `yaml:"headers,omitempty"`
 	OAuthClientID     string            `yaml:"oauth_client_id,omitempty" json:"oauth_client_id,omitempty"`
 	OAuthClientSecret string            `yaml:"oauth_client_secret,omitempty" json:"oauth_client_secret,omitempty"`
-	Source            string            `yaml:"-"`
-	OriginPath        string            `yaml:"-"`
-	Migrated          bool              `yaml:"-"`
+	Source            string            `yaml:"-" json:"-"`
+	OriginPath        string            `yaml:"-" json:"-"`
+	Migrated          bool              `yaml:"-" json:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
@@ -166,28 +166,28 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 // Config is the top-level configuration.
 type Config struct {
-	Vendor        string                    `yaml:"vendor"`
-	Endpoint      string                    `yaml:"endpoint"`
-	Model         string                    `yaml:"model"`
-	Language      string                    `yaml:"language"`
-	UI            UIConfig                  `yaml:"ui,omitempty"`
-	IM            IMConfig                  `yaml:"im,omitempty"`
-	SystemPrompt  string                    `yaml:"system_prompt"`
-	Vendors       map[string]VendorConfig   `yaml:"vendors"`
-	AllowedDirs   []string                  `yaml:"allowed_dirs"`
-	MaxIterations int                       `yaml:"max_iterations"`
-	ToolPerms     map[string]ToolPermission `yaml:"tool_permissions"`
-	Plugins       []PluginConfigEntry       `yaml:"plugins"`
-	MCPServers    []MCPServerConfig         `yaml:"mcp_servers"`
-	Hooks         hooks.HookConfig          `yaml:"hooks"`
-	DefaultMode   string                    `yaml:"default_mode"`
-	SubAgents     SubAgentConfig            `yaml:"subagents"`
-	Impersonation ImpersonationConfig       `yaml:"impersonation,omitempty"`
-	KnightConfig  KnightConfig              `yaml:"knight,omitempty"`
-	Swarm         SwarmConfig               `yaml:"swarm,omitempty"`
-	A2A           A2AConfig                 `yaml:"a2a,omitempty"`
-	FilePath      string                    `yaml:"-"`
-	FirstRun      bool                      `yaml:"-"`
+	Vendor        string                    `yaml:"vendor" json:"vendor"`
+	Endpoint      string                    `yaml:"endpoint" json:"endpoint"`
+	Model         string                    `yaml:"model" json:"model"`
+	Language      string                    `yaml:"language" json:"language"`
+	UI            UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM            IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
+	SystemPrompt  string                    `yaml:"system_prompt" json:"system_prompt"`
+	Vendors       map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
+	AllowedDirs   []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations int                       `yaml:"max_iterations" json:"max_iterations"`
+	ToolPerms     map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins       []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
+	MCPServers    []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	Hooks         hooks.HookConfig          `yaml:"hooks" json:"hooks"`
+	DefaultMode   string                    `yaml:"default_mode" json:"default_mode"`
+	SubAgents     SubAgentConfig            `yaml:"subagents" json:"subagents"`
+	Impersonation ImpersonationConfig       `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
+	KnightConfig  KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
+	Swarm         SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	A2A           A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	FilePath      string                    `yaml:"-" json:"-"`
+	FirstRun      bool                      `yaml:"-" json:"-"`
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
@@ -202,48 +202,48 @@ type UIConfig struct {
 }
 
 type IMConfig struct {
-	Enabled             bool                       `yaml:"enabled,omitempty"`
-	ActiveSessionPolicy string                     `yaml:"active_session_policy,omitempty"`
-	RequireLocalSession *bool                      `yaml:"require_local_session,omitempty"`
-	OutputMode          string                     `yaml:"output_mode,omitempty"` // verbose, quiet, summary (default: verbose)
-	Streaming           IMStreamingConfig          `yaml:"streaming,omitempty"`
-	STT                 IMSTTConfig                `yaml:"stt,omitempty"`
-	Adapters            map[string]IMAdapterConfig `yaml:"adapters,omitempty"`
+	Enabled             bool                       `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	ActiveSessionPolicy string                     `yaml:"active_session_policy,omitempty" json:"active_session_policy,omitempty"`
+	RequireLocalSession *bool                      `yaml:"require_local_session,omitempty" json:"require_local_session,omitempty"`
+	OutputMode          string                     `yaml:"output_mode,omitempty" json:"output_mode,omitempty"` // verbose, quiet, summary (default: verbose)
+	Streaming           IMStreamingConfig          `yaml:"streaming,omitempty" json:"streaming,omitempty"`
+	STT                 IMSTTConfig                `yaml:"stt,omitempty" json:"stt,omitempty"`
+	Adapters            map[string]IMAdapterConfig `yaml:"adapters,omitempty" json:"adapters,omitempty"`
 }
 
 type IMStreamingConfig struct {
-	Enabled         bool    `yaml:"enabled,omitempty"`
-	Transport       string  `yaml:"transport,omitempty"`
-	EditIntervalSec float64 `yaml:"edit_interval_sec,omitempty"`
-	BufferThreshold int     `yaml:"buffer_threshold,omitempty"`
-	Cursor          string  `yaml:"cursor,omitempty"`
+	Enabled         bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Transport       string  `yaml:"transport,omitempty" json:"transport,omitempty"`
+	EditIntervalSec float64 `yaml:"edit_interval_sec,omitempty" json:"edit_interval_sec,omitempty"`
+	BufferThreshold int     `yaml:"buffer_threshold,omitempty" json:"buffer_threshold,omitempty"`
+	Cursor          string  `yaml:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 type IMSTTConfig struct {
-	Provider string `yaml:"provider,omitempty"`
-	BaseURL  string `yaml:"base_url,omitempty"`
-	APIKey   string `yaml:"api_key,omitempty"`
-	Model    string `yaml:"model,omitempty"`
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	BaseURL  string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	APIKey   string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
 }
 
 type IMAdapterConfig struct {
-	Enabled   bool                   `yaml:"enabled,omitempty"`
-	Platform  string                 `yaml:"platform,omitempty"`
-	Transport string                 `yaml:"transport,omitempty"`
-	Command   string                 `yaml:"command,omitempty"`
-	Args      []string               `yaml:"args,omitempty"`
-	Env       map[string]string      `yaml:"env,omitempty"`
-	AllowFrom []string               `yaml:"allow_from,omitempty"`
-	Targets   []IMTargetConfig       `yaml:"targets,omitempty"`
-	Extra     map[string]interface{} `yaml:"extra,omitempty"`
+	Enabled   bool                   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Platform  string                 `yaml:"platform,omitempty" json:"platform,omitempty"`
+	Transport string                 `yaml:"transport,omitempty" json:"transport,omitempty"`
+	Command   string                 `yaml:"command,omitempty" json:"command,omitempty"`
+	Args      []string               `yaml:"args,omitempty" json:"args,omitempty"`
+	Env       map[string]string      `yaml:"env,omitempty" json:"env,omitempty"`
+	AllowFrom []string               `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+	Targets   []IMTargetConfig       `yaml:"targets,omitempty" json:"targets,omitempty"`
+	Extra     map[string]interface{} `yaml:"extra,omitempty" json:"extra,omitempty"`
 }
 
 type IMTargetConfig struct {
-	ID       string            `yaml:"id,omitempty"`
-	Label    string            `yaml:"label,omitempty"`
-	Channel  string            `yaml:"channel,omitempty"`
-	Thread   string            `yaml:"thread,omitempty"`
-	Metadata map[string]string `yaml:"metadata,omitempty"`
+	ID       string            `yaml:"id,omitempty" json:"id,omitempty"`
+	Label    string            `yaml:"label,omitempty" json:"label,omitempty"`
+	Channel  string            `yaml:"channel,omitempty" json:"channel,omitempty"`
+	Thread   string            `yaml:"thread,omitempty" json:"thread,omitempty"`
+	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
 // SubAgentConfig holds sub-agent configuration.
