@@ -31,6 +31,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 func newDaemonCmd(cfgFile *string) *cobra.Command {
@@ -539,6 +540,17 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	} else {
 		fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.keys_minimal"))
 	}
+
+	// WebUI server
+	webuiSrv := webui.NewServer(cfg)
+	webuiAddr := "127.0.0.1:0" // auto port
+	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
+	if webuiErr == nil {
+		fmt.Fprintf(os.Stderr, "\x1b[34m⬡ WebUI:\x1b[0m \x1b[32mhttp://%s\x1b[0m\r\n", actualAddr)
+	} else {
+		fmt.Fprintf(os.Stderr, "WebUI start failed: %v\r\n", webuiErr)
+	}
+	defer webuiSrv.Close()
 
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
