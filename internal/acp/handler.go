@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"io"
 	"os"
 	"path/filepath"
@@ -83,7 +84,7 @@ func (h *Handler) Run(ctx context.Context) error {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			fmt.Fprintf(os.Stderr, "acp: error reading message: %v\n", err)
+			debug.Log("acp", "error reading message: %v", err)
 			continue
 		}
 
@@ -191,7 +192,7 @@ func (h *Handler) handleAuthenticate(params json.RawMessage) (interface{}, error
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 			defer cancel()
 			if err := authHandler.HandleAgentAuth(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "acp: device flow auth error: %v\n", err)
+				debug.Log("acp", "device flow auth error: %v", err)
 				return
 			}
 			h.authenticated = true
@@ -242,7 +243,7 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 	if len(sessionParams.MCPServers) > 0 {
 		mgr := NewMCPManager(h.toolRegistry)
 		if err := mgr.ConnectServers(context.Background(), sessionParams.MCPServers); err != nil {
-			fmt.Fprintf(os.Stderr, "acp: warning: MCP server connection errors: %v\n", err)
+			debug.Log("acp", "MCP server connection errors: %v", err)
 		}
 		session.mcpManager = mgr
 	}
@@ -288,7 +289,7 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 			h.sessionsMu.Unlock()
 		}()
 		if err := loop.ExecutePrompt(ctx, promptParams.Prompt); err != nil {
-			fmt.Fprintf(os.Stderr, "acp: agent loop error: %v\n", err)
+			debug.Log("acp", "agent loop error: %v", err)
 		}
 		// Persist session after prompt execution
 		h.sessionsMu.RLock()
@@ -298,12 +299,12 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 			sDir = h.sessionsDir
 		}
 		if saveErr := session.Save(sDir); saveErr != nil {
-			fmt.Fprintf(os.Stderr, "acp: warning: failed to save session: %v\n", saveErr)
+			debug.Log("acp", "failed to save session: %v", saveErr)
 		}
 		// Clean up MCP connections
 		if session.mcpManager != nil {
 			if err := session.mcpManager.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "acp: warning: MCP cleanup error: %v\n", err)
+				debug.Log("acp", "MCP cleanup error: %v", err)
 			}
 		}
 	})
@@ -406,7 +407,7 @@ func (h *Handler) handleSessionSetMode(params json.RawMessage) (interface{}, err
 		loop.SetMode(modeParams.Mode)
 	}
 
-	fmt.Fprintf(os.Stderr, "acp: session %s mode changed to %s\n", session.ID, modeParams.Mode)
+	debug.Log("acp", "session %s mode changed to %s", session.ID, modeParams.Mode)
 
 	return SessionSetModeResult{}, nil
 }

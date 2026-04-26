@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"os"
 	"path/filepath"
 	"time"
@@ -73,7 +74,7 @@ func NewAgentLoop(
 			Description: fmt.Sprintf("Execute tool: %s", toolName),
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "acp: permission request error: %v\n", err)
+			debug.Log("acp", "permission request error: %v", err)
 			return permission.Deny
 		}
 		if approved {
@@ -95,7 +96,7 @@ func NewAgentLoop(
 			Description: fmt.Sprintf("Write file: %s", filePath),
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "acp: diff permission error: %v\n", err)
+			debug.Log("acp", "diff permission error: %v", err)
 			return false
 		}
 		return approved
@@ -143,7 +144,7 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 	// Run agent and convert stream events to ACP notifications
 	onEvent := func(event provider.StreamEvent) {
 		if err := al.handleStreamEvent(event); err != nil {
-			fmt.Fprintf(os.Stderr, "acp: error handling stream event: %v\n", err)
+			debug.Log("acp", "error handling stream event: %v", err)
 		}
 		// Accumulate for persistence
 		switch event.Type {

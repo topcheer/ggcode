@@ -3,7 +3,7 @@ package acp
 import (
 	"context"
 	"fmt"
-	"os"
+	"github.com/topcheer/ggcode/internal/debug"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -32,7 +32,7 @@ func NewMCPManager(registry *tool.Registry) *MCPManager {
 func (m *MCPManager) ConnectServers(ctx context.Context, servers []MCPServer) error {
 	for _, srv := range servers {
 		if err := m.connectServer(ctx, srv); err != nil {
-			fmt.Fprintf(os.Stderr, "acp: warning: failed to connect MCP server %q: %v\n", srv.Name, err)
+			debug.Log("acp", "failed to connect MCP server %q: %v", srv.Name, err)
 			// Non-fatal: continue with other servers
 		}
 	}
@@ -57,13 +57,13 @@ func (m *MCPManager) connectServer(ctx context.Context, srv MCPServer) error {
 	// Discover tools
 	tools, err := client.ListTools(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "acp: warning: failed to list tools from %q: %v\n", srv.Name, err)
+		debug.Log("acp", "failed to list tools from %q: %v", srv.Name, err)
 		// Continue — server may not support tools
 	} else {
 		// Register tools via adapter
 		adapter := mcp.NewAdapter(srv.Name, client, tools)
 		if err := adapter.RegisterTools(m.registry); err != nil {
-			fmt.Fprintf(os.Stderr, "acp: warning: failed to register tools from %q: %v\n", srv.Name, err)
+			debug.Log("acp", "failed to register tools from %q: %v", srv.Name, err)
 		}
 		m.adapters = append(m.adapters, adapter)
 	}

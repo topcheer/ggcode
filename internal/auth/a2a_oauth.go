@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"io"
 	"math/big"
 	"net"
@@ -120,8 +121,8 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 	defer srv.Close()
 
 	// Open browser
-	fmt.Fprintf(os.Stderr, "\n🔐 Opening browser for A2A authentication...\n")
-	fmt.Fprintf(os.Stderr, "   If browser does not open, visit:\n   %s\n\n", authURL.String())
+	debug.Log("a2a.oauth", "opening browser for authentication")
+	debug.Log("a2a.oauth", "auth URL: %s", authURL.String())
 	openBrowser(authURL.String())
 
 	select {
@@ -260,13 +261,13 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 		return nil, fmt.Errorf("parse device response: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\n🔐 Device Authentication Required\n")
-	fmt.Fprintf(os.Stderr, "   Visit: %s\n", deviceResp.VerificationURI)
-	fmt.Fprintf(os.Stderr, "   Enter code: %s\n\n", deviceResp.UserCode)
+	debug.Log("a2a.oauth", "device authentication required")
+	debug.Log("a2a.oauth", "device visit: %s", deviceResp.VerificationURI)
+	debug.Log("a2a.oauth", "device code: %s", deviceResp.UserCode)
 
 	// Copy code to clipboard and open browser automatically
 	copyToClipboard(deviceResp.UserCode)
-	fmt.Fprintf(os.Stderr, "   ✅ Code copied to clipboard!\n")
+	debug.Log("a2a.oauth", "code copied to clipboard")
 	openBrowser(deviceResp.VerificationURI)
 
 	interval := time.Duration(deviceResp.Interval) * time.Second
