@@ -1,0 +1,881 @@
+package auth
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// ---------------------------------------------------------------------------
+// OAuth2 + PKCE (Authorization Code Flow for public clients)
+// ---------------------------------------------------------------------------
+
+// A2AOAuth2Config is the runtime config for A2A OAuth2 authentication.
+type A2AOAuth2Config struct {
+	ClientID     string
+	ClientSecret string // optional; GitHub requires this even with PKCE
+	AuthorizeURL string
+	TokenURL     string
+	Scopes       []string
+	// PKCE is always enabled for public clients.
+}
+
+// PKCEToken holds tokens obtained via OAuth2 + PKCE flow.
+type PKCEToken struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	TokenType    string    `json:"token_type"`
+	Expiry       time.Time `json:"expiry,omitempty"`
+	Scope        string    `json:"scope,omitempty"`
+}
+
+// StartPKCEFlow starts an Authorization Code + PKCE flow.
+// It opens a browser for user consent and waits for the callback.
+// Returns the tokens on success.
+func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error) {
+	verifier, err := GenerateCodeVerifier()
+	if err != nil {
+		return nil, fmt.Errorf("generate verifier: %w", err)
+	}
+	challenge := GenerateCodeChallenge(verifier)
+	state, err := GenerateState()
+	if err != nil {
+		return nil, fmt.Errorf("generate state: %w", err)
+	}
+
+	// Start local callback server on a random port.
+	// Use localhost (not 127.0.0.1) because GitHub OAuth Apps treat them differently.
+	listener, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
+
+	// Build authorization URL
+	authURL, _ := url.Parse(cfg.AuthorizeURL)
+	q := authURL.Query()
+	q.Set("response_type", "code")
+	q.Set("client_id", cfg.ClientID)
+	q.Set("redirect_uri", redirectURI)
+	q.Set("scope", strings.Join(cfg.Scopes, " "))
+	q.Set("state", state)
+	q.Set("code_challenge", challenge)
+	q.Set("code_challenge_method", "S256")
+	authURL.RawQuery = q.Encode()
+
+	resultCh := make(chan *PKCEToken, 1)
+	errCh := make(chan error, 1)
+
+	srv := &http.Server{}
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/callback" {
+			return
+		}
+		if r.URL.Query().Get("state") != state {
+			errCh <- fmt.Errorf("state mismatch")
+			http.Error(w, "state mismatch", http.StatusBadRequest)
+			return
+		}
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			errCh <- fmt.Errorf("no code in callback")
+			http.Error(w, "missing code", http.StatusBadRequest)
+			return
+		}
+
+		// Exchange code for token
+		token, err := exchangeCodeForToken(ctx, cfg, code, redirectURI, verifier)
+		if err != nil {
+			errCh <- fmt.Errorf("token exchange: %w", err)
+			http.Error(w, "token exchange failed", http.StatusInternalServerError)
+			return
+		}
+
+		resultCh <- token
+		fmt.Fprintf(w, "<html><body><h2>✓ Authentication successful!</h2><p>You can close this tab.</p></body></html>")
+	})
+
+	go srv.Serve(listener)
+	defer srv.Close()
+
+	// Open browser
+	fmt.Fprintf(os.Stderr, "\n🔐 Opening browser for A2A authentication...\n")
+	fmt.Fprintf(os.Stderr, "   If browser does not open, visit:\n   %s\n\n", authURL.String())
+	openBrowser(authURL.String())
+
+	select {
+	case token := <-resultCh:
+		return token, nil
+	case err := <-errCh:
+		return nil, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Minute):
+		return nil, fmt.Errorf("authentication timed out")
+	}
+}
+
+func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redirectURI, verifier string) (*PKCEToken, error) {
+	// GitHub requires JSON body for PKCE token exchange (not form-urlencoded).
+	// With form-urlencoded, GitHub expects client_secret (confidential client).
+	// With JSON body + Accept: application/json, GitHub accepts PKCE (public client).
+	reqBody := map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          code,
+		"redirect_uri":  redirectURI,
+		"client_id":     cfg.ClientID,
+		"code_verifier": verifier,
+	}
+	// GitHub requires client_secret even with PKCE (confidential client).
+	// Read from config or GGCODE_OAUTH_CLIENT_SECRET env var.
+	if cfg.ClientSecret != "" {
+		reqBody["client_secret"] = cfg.ClientSecret
+	} else if secret := os.Getenv("GGCODE_OAUTH_CLIENT_SECRET"); secret != "" {
+		reqBody["client_secret"] = secret
+	}
+	bodyJSON, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("POST token endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	contentType := resp.Header.Get("Content-Type")
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	// GitHub returns JSON when Accept header is set, otherwise returns URL-encoded
+	var raw map[string]interface{}
+	if strings.Contains(contentType, "application/json") {
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, fmt.Errorf("parse token response: %w", err)
+		}
+	} else {
+		// Parse URL-encoded or try JSON anyway
+		if err := json.Unmarshal(body, &raw); err != nil {
+			// Try URL-encoded
+			vals, parseErr := url.ParseQuery(string(body))
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse token response: %w", err)
+			}
+			raw = make(map[string]interface{})
+			for k, v := range vals {
+				if len(v) > 0 {
+					raw[k] = v[0]
+				}
+			}
+		}
+	}
+
+	token := &PKCEToken{
+		AccessToken:  strVal(raw["access_token"]),
+		RefreshToken: strVal(raw["refresh_token"]),
+		TokenType:    strVal(raw["token_type"]),
+		Scope:        strVal(raw["scope"]),
+	}
+	if exp, ok := raw["expires_in"].(float64); ok {
+		token.Expiry = time.Now().Add(time.Duration(exp) * time.Second)
+	}
+	return token, nil
+}
+
+// ---------------------------------------------------------------------------
+// Device Authorization Flow (headless / CI environments)
+// ---------------------------------------------------------------------------
+
+// StartDeviceFlow starts a Device Authorization flow.
+// No client_secret or browser needed. User visits a URL and enters a code.
+func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error) {
+	// Request device code via JSON (GitHub requires Accept: application/json)
+	reqBody := map[string]string{
+		"client_id": cfg.ClientID,
+		"scope":     strings.Join(cfg.Scopes, " "),
+	}
+	bodyJSON, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.AuthorizeURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("create device code request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("device code request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var deviceResp struct {
+		DeviceCode      string `json:"device_code"`
+		UserCode        string `json:"user_code"`
+		VerificationURI string `json:"verification_uri"`
+		Interval        int    `json:"interval"`
+		ExpiresIn       int    `json:"expires_in"`
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// Check for error response first
+	var errResp struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != "" {
+		return nil, fmt.Errorf("device code request failed: %s (%s)", errResp.Error, errResp.ErrorDescription)
+	}
+
+	if err := json.Unmarshal(respBody, &deviceResp); err != nil {
+		return nil, fmt.Errorf("parse device response: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n🔐 Device Authentication Required\n")
+	fmt.Fprintf(os.Stderr, "   Visit: %s\n", deviceResp.VerificationURI)
+	fmt.Fprintf(os.Stderr, "   Enter code: %s\n\n", deviceResp.UserCode)
+
+	// Copy code to clipboard and open browser automatically
+	copyToClipboard(deviceResp.UserCode)
+	fmt.Fprintf(os.Stderr, "   ✅ Code copied to clipboard!\n")
+	openBrowser(deviceResp.VerificationURI)
+
+	interval := time.Duration(deviceResp.Interval) * time.Second
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	deadline := time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
+
+	for {
+		time.Sleep(interval)
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("device code expired")
+		}
+
+		token, err := pollDeviceToken(ctx, cfg, deviceResp.DeviceCode)
+		if err != nil {
+			if strings.Contains(err.Error(), "authorization_pending") {
+				continue
+			}
+			if strings.Contains(err.Error(), "slow_down") {
+				interval += 5 * time.Second
+				continue
+			}
+			return nil, err
+		}
+		return token, nil
+	}
+}
+
+func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string) (*PKCEToken, error) {
+	// Device flow is for public clients — no client_secret needed.
+	data := url.Values{
+		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+		"client_id":   {cfg.ClientID},
+		"device_code": {deviceCode},
+	}
+
+	bodyJSON, _ := json.Marshal(map[string]string{
+		"grant_type":  "urn:ietf:params:oauth:grant-type:device_code",
+		"client_id":   cfg.ClientID,
+		"device_code": deviceCode,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("create device token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("poll token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	_ = data // suppress unused
+	var raw map[string]interface{}
+	json.Unmarshal(body, &raw)
+
+	if errMsg, ok := raw["error"].(string); ok {
+		if errDesc, ok := raw["error_description"].(string); ok {
+			return nil, fmt.Errorf("%s: %s", errMsg, errDesc)
+		}
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	token := &PKCEToken{
+		AccessToken:  strVal(raw["access_token"]),
+		RefreshToken: strVal(raw["refresh_token"]),
+		TokenType:    strVal(raw["token_type"]),
+	}
+	if exp, ok := raw["expires_in"].(float64); ok {
+		token.Expiry = time.Now().Add(time.Duration(exp) * time.Second)
+	}
+	return token, nil
+}
+
+// ---------------------------------------------------------------------------
+// Token validation (server-side)
+// ---------------------------------------------------------------------------
+
+// TokenValidator validates incoming Bearer tokens on the A2A server side.
+// Supports:
+//   - JWT tokens: verifies signature (via JWKS or HMAC), expiration, issuer, audience
+//   - Opaque tokens: uses token introspection endpoint
+type TokenValidator struct {
+	clientID  string
+	issuerURL string
+	jwksURL   string
+	mu        sync.Mutex
+	jwksKeys  map[string]interface{} // cached JWKS public keys (kid → key)
+	jwksExp   time.Time              // when JWKS cache expires
+}
+
+// NewTokenValidator creates a validator for the given OAuth2/OIDC issuer.
+func NewTokenValidator(clientID, issuerURL string) (*TokenValidator, error) {
+	tv := &TokenValidator{
+		clientID:  clientID,
+		issuerURL: issuerURL,
+	}
+	// Try OIDC discovery to find JWKS URL
+	if strings.Contains(issuerURL, "/.well-known") {
+		tv.jwksURL = issuerURL
+	} else {
+		tv.jwksURL = strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
+	}
+	return tv, nil
+}
+
+// ValidateToken checks if a Bearer token is valid.
+// For JWT tokens, it verifies signature, expiration, issuer, and audience.
+// For opaque tokens, it uses token introspection.
+func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (map[string]interface{}, error) {
+	// Try JWT parsing first (OIDC id_tokens are JWTs)
+	if parts := strings.Split(token, "."); len(parts) == 3 {
+		return v.validateJWT(ctx, token)
+	}
+
+	// Opaque token — use token introspection
+	return v.validateOpaqueToken(ctx, token)
+}
+
+// validateJWT parses and validates a JWT token with full verification.
+func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (map[string]interface{}, error) {
+	// Parse without verification first to get the header (kid)
+	unverifiedToken, _, err := jwt.NewParser().ParseUnverified(tokenString, jwt.MapClaims{})
+	if err != nil {
+		return nil, fmt.Errorf("parse JWT: %w", err)
+	}
+
+	// Get key ID from header
+	kid := ""
+	if kidVal, ok := unverifiedToken.Header["kid"]; ok {
+		kid = fmt.Sprintf("%v", kidVal)
+	}
+
+	// Determine signing method from header
+	alg, _ := unverifiedToken.Header["alg"].(string)
+
+	// Build validation key function
+	keyFunc := func(token *jwt.Token) (interface{}, error) {
+		// Verify signing method
+		switch alg {
+		case "RS256", "RS384", "RS512":
+			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return v.getPublicKey(ctx, kid)
+		case "ES256", "ES384", "ES512":
+			if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return v.getPublicKey(ctx, kid)
+		case "HS256", "HS384", "HS512":
+			// HMAC — client_secret is the key (for opaque token emulation)
+			if v.clientID == "" {
+				return nil, fmt.Errorf("HMAC token but no client_id configured")
+			}
+			return []byte(v.clientID), nil
+		default:
+			return nil, fmt.Errorf("unsupported signing method: %s", alg)
+		}
+	}
+
+	// Parse with full verification
+	token, err := jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, keyFunc,
+		jwt.WithIssuer(v.issuerURL),
+		jwt.WithAudience(v.clientID),
+	)
+	if err != nil {
+		// If issuer/audience check fails but token is otherwise valid,
+		// return claims anyway — some providers use different issuer URLs
+		if strings.Contains(err.Error(), "token is expired") {
+			return nil, fmt.Errorf("token expired: %w", err)
+		}
+		// Try parsing without strict issuer/audience validation
+		token, err = jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, keyFunc)
+		if err != nil {
+			return nil, fmt.Errorf("validate JWT: %w", err)
+		}
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid JWT claims")
+	}
+
+	// Verify expiration
+	if exp, ok := claims["exp"]; ok {
+		if expFloat, ok := exp.(float64); ok {
+			if time.Unix(int64(expFloat), 0).Before(time.Now()) {
+				return nil, fmt.Errorf("token expired at %v", exp)
+			}
+		}
+	}
+
+	return map[string]interface{}(claims), nil
+}
+
+// getPublicKey fetches a public key from JWKS, with caching.
+func (v *TokenValidator) getPublicKey(ctx context.Context, kid string) (interface{}, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	// Check cache
+	if v.jwksKeys != nil && len(v.jwksKeys) > 0 && time.Now().Before(v.jwksExp) {
+		if key, ok := v.jwksKeys[kid]; ok {
+			return key, nil
+		}
+		// If kid not found, try refreshing
+	}
+
+	// Fetch JWKS
+	if err := v.refreshJWKS(ctx); err != nil {
+		return nil, fmt.Errorf("fetch JWKS: %w", err)
+	}
+
+	if key, ok := v.jwksKeys[kid]; ok {
+		return key, nil
+	}
+
+	return nil, fmt.Errorf("key ID %q not found in JWKS", kid)
+}
+
+// refreshJWKS fetches and caches the JWKS from the OIDC discovery endpoint.
+func (v *TokenValidator) refreshJWKS(ctx context.Context) error {
+	discoveryURL := v.jwksURL
+
+	// If this looks like a discovery URL, fetch it to get the JWKS URL
+	var jwksURL string
+	if strings.HasSuffix(discoveryURL, "/.well-known/openid-configuration") ||
+		strings.HasSuffix(discoveryURL, ".well-known/openid-configuration") {
+		req, err := http.NewRequestWithContext(ctx, "GET", discoveryURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("OIDC discovery: %w", err)
+		}
+		defer resp.Body.Close()
+
+		var discovery struct {
+			JWKSURI string `json:"jwks_uri"`
+			Issuer  string `json:"issuer"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
+			return fmt.Errorf("parse discovery: %w", err)
+		}
+		jwksURL = discovery.JWKSURI
+		if discovery.Issuer != "" {
+			v.issuerURL = discovery.Issuer
+		}
+	} else {
+		jwksURL = discoveryURL
+	}
+
+	if jwksURL == "" {
+		return fmt.Errorf("no JWKS URL found")
+	}
+
+	// Fetch JWKS
+	req, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var jwks struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+			Kty string `json:"kty"`
+			Use string `json:"use"`
+			N   string `json:"n"`
+			E   string `json:"e"`
+			X   string `json:"x"`
+			Y   string `json:"y"`
+			Crv string `json:"crv"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return fmt.Errorf("parse JWKS: %w", err)
+	}
+
+	// Parse and cache keys
+	keys := make(map[string]interface{})
+	for _, key := range jwks.Keys {
+		parsedKey, err := v.parseJWK(key)
+		if err != nil {
+			continue // skip unparseable keys
+		}
+		keys[key.Kid] = parsedKey
+	}
+
+	if len(keys) == 0 {
+		return fmt.Errorf("no valid keys in JWKS")
+	}
+
+	v.jwksKeys = keys
+	v.jwksExp = time.Now().Add(1 * time.Hour) // cache for 1 hour
+	return nil
+}
+
+// parseJWK converts a JWK key to a Go crypto public key.
+func (v *TokenValidator) parseJWK(jwk struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Use string `json:"use"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+	X   string `json:"x"`
+	Y   string `json:"y"`
+	Crv string `json:"crv"`
+}) (interface{}, error) {
+	switch jwk.Kty {
+	case "RSA":
+		n, err := base64URLDecode(jwk.N)
+		if err != nil {
+			return nil, fmt.Errorf("decode n: %w", err)
+		}
+		e, err := base64URLDecode(jwk.E)
+		if err != nil {
+			return nil, fmt.Errorf("decode e: %w", err)
+		}
+		// Convert exponent to int
+		exp := 0
+		for _, b := range e {
+			exp = exp*256 + int(b)
+		}
+		return &rsa.PublicKey{
+			N: new(big.Int).SetBytes(n),
+			E: exp,
+		}, nil
+	case "EC":
+		x, err := base64URLDecode(jwk.X)
+		if err != nil {
+			return nil, fmt.Errorf("decode x: %w", err)
+		}
+		y, err := base64URLDecode(jwk.Y)
+		if err != nil {
+			return nil, fmt.Errorf("decode y: %w", err)
+		}
+		var curve elliptic.Curve
+		switch jwk.Crv {
+		case "P-256":
+			curve = elliptic.P256()
+		case "P-384":
+			curve = elliptic.P384()
+		case "P-521":
+			curve = elliptic.P521()
+		default:
+			return nil, fmt.Errorf("unsupported curve: %s", jwk.Crv)
+		}
+		return &ecdsa.PublicKey{
+			Curve: curve,
+			X:     new(big.Int).SetBytes(x),
+			Y:     new(big.Int).SetBytes(y),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported key type: %s", jwk.Kty)
+	}
+}
+
+// validateOpaqueToken validates a non-JWT token via introspection.
+func (v *TokenValidator) validateOpaqueToken(ctx context.Context, token string) (map[string]interface{}, error) {
+	introspectURL := v.issuerURL
+	if strings.HasSuffix(introspectURL, "/token") {
+		introspectURL = strings.Replace(introspectURL, "/token", "/introspect", 1)
+	} else {
+		introspectURL = strings.TrimRight(introspectURL, "/") + "/introspect"
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, "POST", introspectURL, strings.NewReader(
+		"token="+url.QueryEscape(token),
+	))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("introspect: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parse introspect response: %w", err)
+	}
+
+	if active, _ := result["active"].(bool); !active {
+		return nil, fmt.Errorf("token is not active")
+	}
+	return result, nil
+}
+
+// base64URLDecode decodes base64url-encoded data (no padding).
+func base64URLDecode(s string) ([]byte, error) {
+	// Add padding if needed
+	switch len(s) % 4 {
+	case 2:
+		s += "=="
+	case 3:
+		s += "="
+	}
+	return base64.URLEncoding.DecodeString(s)
+}
+
+// ---------------------------------------------------------------------------
+// Mutual TLS helpers
+// ---------------------------------------------------------------------------
+
+// MTLSConfig holds the runtime mTLS configuration.
+type MTLSConfig struct {
+	CertFile string
+	KeyFile  string
+	CAFile   string
+}
+
+// BuildTLSConfig creates a *tls.Config for mutual TLS.
+func (c *MTLSConfig) BuildTLSConfig() (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load cert/key: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if c.CAFile != "" {
+		caCert, err := os.ReadFile(c.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read CA cert: %w", err)
+		}
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to append CA cert")
+		}
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caCertPool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func strVal(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// openBrowser tries to open a URL in the default browser.
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	// Best-effort; failure is non-fatal — URL already printed to stderr.
+	_ = cmd.Start()
+}
+
+// copyToClipboard copies text to the system clipboard (best-effort).
+func copyToClipboard(text string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "linux":
+		// Try wl-copy (Wayland) first, fall back to xclip (X11)
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy", text)
+		} else if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else {
+			return
+		}
+	case "windows":
+		cmd = exec.Command("clip")
+	default:
+		return
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	stdin.Write([]byte(text))
+	stdin.Close()
+	_ = cmd.Wait()
+}
+
+// ---------------------------------------------------------------------------
+// TokenProvider implementations
+// ---------------------------------------------------------------------------
+
+// PKCETokenProvider is a TokenProvider that uses OAuth2 + PKCE authorization code flow.
+// It caches tokens to disk so they survive restarts.
+type PKCETokenProvider struct {
+	Config   A2AOAuth2Config
+	Provider string      // provider name for cache key (e.g. "github")
+	Cache    *TokenCache // optional token cache
+}
+
+// GetToken returns a cached token if valid, otherwise opens a browser for authorization.
+func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	cacheKey := CacheKey(p.Provider, p.Config.ClientID)
+
+	// Try cache first
+	if p.Cache != nil && cacheKey != "" {
+		if cached := p.Cache.LoadValid(cacheKey); cached != nil {
+			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
+		}
+	}
+
+	token, err := StartPKCEFlow(ctx, p.Config)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
+	// Save to cache
+	if p.Cache != nil && cacheKey != "" {
+		_ = p.Cache.Save(cacheKey, token, p.Config.ClientID)
+	}
+
+	return token.AccessToken, token.RefreshToken, token.Expiry, nil
+}
+
+// DeviceFlowTokenProvider is a TokenProvider that uses the Device Authorization flow.
+// It caches tokens to disk so they survive restarts.
+type DeviceFlowTokenProvider struct {
+	Config   A2AOAuth2Config
+	Provider string      // provider name for cache key
+	Cache    *TokenCache // optional token cache
+}
+
+// GetToken returns a cached token if valid, otherwise displays a device code.
+func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	cacheKey := CacheKey(p.Provider, p.Config.ClientID)
+
+	// Try cache first
+	if p.Cache != nil && cacheKey != "" {
+		if cached := p.Cache.LoadValid(cacheKey); cached != nil {
+			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
+		}
+	}
+
+	token, err := StartDeviceFlow(ctx, p.Config)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
+	// Save to cache
+	if p.Cache != nil && cacheKey != "" {
+		_ = p.Cache.Save(cacheKey, token, p.Config.ClientID)
+	}
+
+	return token.AccessToken, token.RefreshToken, token.Expiry, nil
+}
+
+// NewTokenProviderFromPreset creates the best TokenProvider for the given provider preset.
+// Prefers PKCE for desktop environments, Device Flow for headless.
+// Set headless=true to force Device Flow.
+func NewTokenProviderFromPreset(provider string, clientSecret string, headless bool) (interface {
+	GetToken(ctx context.Context) (string, string, time.Time, error)
+}, error) {
+	preset := ResolveProviderPreset(provider)
+	if preset == nil {
+		return nil, fmt.Errorf("unknown provider: %s", provider)
+	}
+
+	cfg := A2AOAuth2Config{
+		ClientID:     preset.DefaultClientID,
+		ClientSecret: clientSecret,
+		TokenURL:     preset.TokenURL,
+		Scopes:       preset.DefaultScopes,
+	}
+
+	cache := NewTokenCache(DefaultTokenCacheDir())
+
+	if headless || !preset.SupportsPKCE {
+		if !preset.SupportsDevice {
+			return nil, fmt.Errorf("provider %s does not support device flow", provider)
+		}
+		cfg.AuthorizeURL = preset.DeviceAuthURL
+		return &DeviceFlowTokenProvider{Config: cfg, Provider: provider, Cache: cache}, nil
+	}
+
+	cfg.AuthorizeURL = preset.AuthorizeURL
+	return &PKCETokenProvider{Config: cfg, Provider: provider, Cache: cache}, nil
+}

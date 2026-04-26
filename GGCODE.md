@@ -1,0 +1,267 @@
+> AI coding agent for the terminal. Go codebase with Bubble Tea TUI, multi-provider LLM support, MCP integration, and harness-engineering workflows.
+
+## Quick Reference
+
+| Item | Value |
+|------|-------|
+| Module | `github.com/topcheer/ggcode` |
+| Go version | 1.26.1 |
+| CLI framework | Cobra (`spf13/cobra`) |
+| TUI framework | Bubble Tea / Lip Gloss (`charmbracelet/bubbletea`, `charmbracelet/lipgloss`) |
+| Database | SQLite (`modernc.org/sqlite`, pure Go) — harness subsystem only; sessions use JSONL files |
+| License | MIT |
+| Build output | `bin/ggcode` |
+| Latest documented release | [`v1.1.46`](docs/releases/v1.1.46.md) |
+
+## Build & Validation
+
+```bash
+make build          # go build -o bin/ggcode ./cmd/ggcode
+make test           # go test ./...
+make lint           # go vet ./...
+make install        # go install github.com/topcheer/ggcode/cmd/ggcode
+make clean          # rm -rf bin/
+```
+
+CI (`.github/workflows/ci.yml`):
+- `CGO_ENABLED=0 go build -o /tmp/ggcode ./cmd/ggcode`
+- `go vet ./...`
+- `go test -tags=!integration ./...`
+- `gofmt -l .` must produce no output (separate `lint` job)
+
+Local CI-aligned verification lives in `scripts/dev/verify-ci.sh`; it mirrors the same build/vet/test
+chain and also clears provider integration-test env vars before running tests.
+
+Linter config (`.golangci.yml`): `gofmt`, `govet`, `errcheck`, `staticcheck`, `unused`. Test files excluded from `errcheck`/`govet`.
+
+## Project Layout
+
+```
+cmd/ggcode/            CLI entrypoint, root command, pipe mode, resume, harness/mcp subcommands
+cmd/ggcode-installer/  Standalone Go installer that downloads release binaries
+internal/              334 Go source files (~101k LOC non-test, ~69k LOC test)
+  agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
+  provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
+  im/                  IM gateway runtime, QQ/Telegram/Discord/Slack/DingTalk/Feishu adapters, pairing, channel bindings, per-channel echo suppression, outbound routing, daemon bridge with slash commands (/listim, /muteim, /muteall, /muteself, /restart)
+  daemon/              Daemon mode: follow display, background forking, session picker, i18n labels
+  tui/                 Bubble Tea TUI: views, panels, slash commands, i18n (en/zh-CN), fullscreen file browser + preview
+  tool/                Built-in tools (file ops, search, commands, git, web, agents, productivity)
+  harness/             Harness-engineering workflow engine (~6.2k LOC, 28 files — task management, worktrees, review, release)
+  mcp/                 MCP client: JSON-RPC, process management, install, migration, presets, OAuth 2.1 auth
+  config/              YAML config loading, env expansion, API key handling, Anthropic bootstrap, A2A auth config (api_key, oauth2, oidc, mtls)
+  memory/              Project memory loading (GGCODE.md, AGENTS.md, etc.) + auto-memory persistence
+  subagent/            Sub-agent spawning, tracking, coordination (manager + runner)
+  knight/              Knight background agent: autonomous code monitoring, daily token budget
+  a2a/                 Agent-to-Agent protocol: server (multi-auth), client (auto-negotiate), registry, MCP bridge, 5-instance mesh E2E test
+  commands/            Slash command registry (bundled + loaded), usage formatting, skill templates
+  context/             Conversation context window management and tokenization (imported as `ctxpkg`)
+  session/             JSONL-backed session persistence (NOT SQLite — sessions stored as .jsonl files)
+  checkpoint/          In-memory file checkpointing for undo/revert support
+  permission/          Permission modes + per-tool policy enforcement + sandbox + dangerous tool classification
+  plugin/              External tool plugins (command-based, MCP-based)
+  hooks/               Pre/post hooks runner
+  cost/                Token usage tracking (local TokenUsage type to avoid circular deps)
+  auth/                Full auth stack: GitHub Copilot token mgmt, OAuth2 PKCE/Device Flow, OIDC Discovery, JWT validation (HS256/RS256/ECDSA), JWKS polling, token introspection, token cache with per-client isolation
+  image/               Image processing, clipboard integration (platform-specific: darwin, linux, windows)
+  install/             Self-update and install logic
+  update/              Version checking and auto-update
+  debug/               Debug logging utilities
+  diff/                Diff formatting
+  version/             Build-time version/commit/date (injected via ldflags)
+  util/                Shell quoting, text truncation
+docs/                  Architecture docs, design notes, release notes, A2A auth guide, site content
+npm/                   npm wrapper package (installs GitHub Release binary)
+python/                Python wrapper (PyPI: ggcode)
+scripts/               Release scripts, site scripts
+config/                MCP preset configuration (mcporter.json)
+```
+
+## Architecture
+
+- **Agent loop** (`internal/agent/`): Central loop sends user messages to the LLM, executes tool calls, feeds results back. Split into focused files: `agent.go` (core struct, Run/RunStream), `agent_autopilot.go` (continuation), `agent_compact.go` (auto-compaction), `agent_memory.go` (memory helpers), `agent_tool.go` (tool execution, diff confirm, hooks).
+- **Provider adapters** (`internal/provider/`): Each LLM provider (OpenAI, Anthropic, Gemini, Copilot) has a protocol-specific adapter. `registry.go` maps protocol names to adapters via `NewProvider()`. Supported protocols: `openai`, `anthropic`, `gemini`, `copilot`. All implement the `Provider` interface (Name, Chat, ChatStream, CountTokens). Retry logic handles transient failures.
+- **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`.
+- **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses SQLite for event storage.
+- **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces. Configurable output modes (verbose/quiet/summary) control tool result granularity. Daemon bridge provides IM slash commands for adapter management (`/listim`, `/muteim <name>`, `/muteall`, `/muteself`, `/restart`, `/help`).
+- **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, IM panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
+- **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances.
+- **Daemon mode** (`internal/daemon/` + `cmd/ggcode/daemon.go`): Headless agent with terminal follow display, background forking, keyboard shortcuts (v/q/s output mode, M/U mute, f follow toggle, r restart). Uses same tool label system as TUI.
+- **Knight** (`internal/knight/`): Background autonomous agent with daily token budget, activity-driven code monitoring.
+- **A2A** (`internal/a2a/`): Agent-to-Agent protocol with multi-auth server (apiKey, OAuth2+PKCE, Device Flow, OIDC+JWKS, mTLS), auto-negotiating client, local registry with PID-based instance detection, MCP bridge for transparent cross-instance tool calls. Instance-level config override via `.ggcode/a2a.yaml`.
+- **Auth stack** (`internal/auth/`): Full authentication subsystem — OAuth2 PKCE and Device Flow flows, OIDC Discovery with JWKS key rotation, JWT validation (HS256/RS256/ECDSA), opaque token introspection, token cache with per-`{provider}-{clientID}` isolation (`~/.ggcode/oauth-tokens/`). Provider presets for GitHub, Google, Auth0, Azure.
+
+## Configuration
+
+Config file: `~/.ggcode/ggcode.yaml` or `--config <path>`. See `ggcode.example.yaml` for the full schema.
+
+Resolution order: `./ggcode.yaml` → `./.ggcode/ggcode.yaml` → `~/.ggcode/ggcode.yaml`. The `--config` flag overrides auto-detection.
+
+Key concepts:
+- **`vendor`**: Provider vendor name (e.g., `zai`, `anthropic`, `openai`, `google`, `deepseek`, `openrouter`, `groq`, `mistral`, `moonshot`, `kimi`, `minimax`, `ark`, `together`, `perplexity`, `github-copilot`)
+- **`endpoint`**: Named endpoint within a vendor (e.g., `cn-coding-openai`)
+- **`model`**: Active model override
+- **`default_mode`**: Permission mode at startup (`supervised`, `plan`, `auto`, `bypass`, `autopilot`)
+- **`vendors.<name>.endpoints.<name>.protocol`**: One of `openai`, `anthropic`, `gemini`, `copilot`
+- **`mcp_servers`**: List of MCP servers to start (command + args + env) or connect (URL + headers)
+- **`plugins`**: External command-based tools
+- **`tool_permissions`**: Per-tool rules: `allow`, `ask`, `deny`
+- **`allowed_dirs`**: Directories the agent may access
+- **`max_iterations`**: Agent loop limit per user turn (0 = unlimited)
+- **`im.output_mode`**: IM tool result delivery granularity: `verbose` (default), `quiet`, `summary`
+- **`a2a.auth`**: A2A server authentication — multiple schemes can be enabled simultaneously:
+  - **`a2a.auth.api_key`**: Shared secret (simplest)
+  - **`a2a.auth.oauth2`**: OAuth2 + PKCE or Device Flow (`provider`, `client_id`, `client_secret`, `issuer_url`, `flow`, `scopes`)
+  - **`a2a.auth.oidc`**: OpenID Connect layer on OAuth2 (same fields + `openid` scope)
+  - **`a2a.auth.mtls`**: Mutual TLS (`cert_file`, `key_file`, `ca_file`)
+- **`a2a.api_key`**: Legacy API key field (still works, `a2a.auth.api_key` takes priority)
+- **API keys**: Use `${ENV_VAR}` syntax for env var expansion (e.g., `${ANTHROPIC_API_KEY}`)
+
+Instance-level A2A override: `.ggcode/a2a.yaml` in workspace root.
+
+Legacy `provider`/`providers` config keys are rejected with an error at load time.
+
+### A2A Authentication Examples
+
+```yaml
+# Simplest: shared API key
+a2a:
+  auth:
+    api_key: "my-secret-key"
+
+# GitHub zero-config
+a2a:
+  auth:
+    oauth2:
+      provider: "github"
+
+# Custom IdP with Device Flow
+a2a:
+  auth:
+    oauth2:
+      issuer_url: "https://idp.example.com"
+      client_id: "ggcode-agent"
+      client_secret: "xxx"
+      flow: "device"
+
+# All auth methods
+a2a:
+  auth:
+    api_key: "shared-key"
+    oauth2:
+      provider: "github"
+      flow: "device"
+    oidc:
+      provider: "google"
+      client_id: "xxx"
+    mtls:
+      cert_file: ".ggcode/certs/server.pem"
+      key_file: ".ggcode/certs/server.key"
+      ca_file: ".ggcode/certs/ca.pem"
+```
+
+See [`docs/a2a-auth.md`](docs/a2a-auth.md) for the full authentication guide.
+
+### IM Slash Commands (Daemon Mode)
+
+Available in any IM channel connected to a ggcode daemon:
+
+| Command | Description |
+|---------|-------------|
+| `/listim` | List all IM adapters with status (online/muted/active) |
+| `/muteim <name>` | Mute a specific adapter (cannot mute yourself — use `/muteself`) |
+| `/muteall` | Mute all adapters except the one you're messaging from |
+| `/muteself` | Mute THIS adapter — stops all replies (use `/restart` from another adapter to recover) |
+| `/restart` | Restart daemon (unmutes all — mute is in-memory, not persisted) |
+| `/help` | Show available commands |
+
+## CLI Modes
+
+- **Interactive TUI**: `ggcode` — launches the full Bubble Tea TUI
+- **Daemon mode**: `ggcode daemon` — headless agent with IM gateway; `--follow` for terminal follow display
+- **Pipe mode**: `ggcode -p "prompt"` — non-interactive, sends prompt and outputs response
+- **Resume**: `ggcode --resume <id>` — resume a previous session; `--resume` alone or `--resume-picker` opens a picker
+- **Bypass**: `ggcode --bypass` — start in bypass permission mode
+- **Harness**: `ggcode harness <subcommand>` — manage harness-engineering workflows
+- **MCP**: `ggcode mcp <subcommand>` — MCP server management
+- **Completion**: `ggcode completion <shell>` — generate shell completions (bash/zsh/fish/powershell)
+
+## Runtime Permission Modes
+
+| Mode | Behavior |
+|------|----------|
+| `supervised` | Default. Respects per-tool rules, asks for unspecified tools |
+| `plan` | Read-only: allows `read_file`, `list_directory`, `search_files`; denies writes/commands |
+| `auto` | Allows safe operations, denies dangerous ones automatically |
+| `bypass` | Allows almost everything, warns on critical operations |
+| `autopilot` | Bypass permissions + automatically continues when model asks for input; escalates external blockers to `ask_user` |
+
+## Built-in Tools
+
+Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and `internal/tui/repl.go` (additional tools):
+
+**File operations** (6): `read_file`, `write_file`, `edit_file`, `list_directory`, `search_files`, `glob`
+**Execution** (7): `run_command`, `start_command`, `read_command_output`, `wait_command`, `stop_command`, `write_command_input`, `list_commands`
+**Git** (3): `git_status`, `git_diff`, `git_log`
+**Web** (2): `web_fetch`, `web_search`
+**Productivity** (3, in `builtin.go`): `ask_user`, `todo_write` (+ `save_memory` registered separately in `cmd/ggcode/root.go`)
+**Agent** (3, registered in `internal/tui/repl.go`): `spawn_agent`, `wait_agent`, `list_agents`
+**MCP** (3, registered in `cmd/ggcode/root.go`): `list_mcp_capabilities`, `get_mcp_prompt`, `read_mcp_resource`
+**Skill** (1, registered in `cmd/ggcode/root.go`): `skill`
+
+Plus dynamically registered MCP-adapted tools and external plugin tools.
+
+## Project Memory Files
+
+Loaded at startup by `internal/memory/project.go`:
+- `GGCODE.md` — primary project conventions (this file)
+- `AGENTS.md` — agent-specific instructions (used by TeamClaw)
+- `CLAUDE.md` — Claude-specific instructions
+- `COPILOT.md` — Copilot-specific instructions
+
+Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan subdirectories (only under project root with `.git` or existing memory files).
+
+## Coding Conventions
+
+- **Import alias**: `internal/context` is imported as `ctxpkg` to avoid shadowing the standard `context` package
+- **Circular dependency prevention**: `internal/cost/types.go` defines `TokenUsage` locally instead of importing from `internal/provider`. Session store stores cost as `[]byte` JSON (`CostJSON`) to avoid importing `internal/cost`
+- **Platform-specific files**: Use Go build tags for OS-specific code (e.g., `clipboard_darwin.go`, `clipboard_linux.go`, `clipboard_windows.go`, `run_command_unix.go` with `//go:build unix`, `run_command_other.go` with `//go:build !unix`)
+- **Integration tests**: Files like `internal/provider/integration_test.go` skip when API keys are not set (env vars: `ZAI_API_KEY`, `GGCODE_ZAI_API_KEY`). CI and `scripts/dev/verify-ci.sh` both run `go test -tags=!integration ./...`, and the shared verify script also clears those env vars locally to match CI behavior.
+- **A2A integration tests**: Tagged with `//go:build integration`. Run with `go test -tags=integration -run TestFiveInstanceMesh ./internal/a2a/`. Five instances with different auth methods verified in 0.22s.
+- **Error handling**: Follow standard Go error wrapping patterns (`fmt.Errorf("...: %w", err)`)
+- **TUI i18n**: All user-facing strings go through `internal/tui/i18n.go` (`en` / `zh-CN` catalogs)
+- **Provider interface**: All providers must implement `provider.Provider` (Name, Chat, ChatStream, CountTokens)
+- **Tool interface**: All tools must implement `tool.Tool` (Name, Description, Parameters, Execute)
+- **Plugin interface**: Plugins must implement `plugin.Plugin` (Name, Tools, Init)
+- **Commit style**: Conventional commits — `fix:`, `feat:`, `chore:`, `docs:`, `ci:`
+- **Config validation**: Legacy `provider`/`providers` keys are explicitly rejected; only `vendor`/`endpoint`/`vendors` schema is supported
+- **Session persistence**: JSONL format in `~/.ggcode/sessions/<id>.jsonl` with checkpoint support after summarize compaction
+- **SQLite usage**: Only used by `internal/harness/` for event/snapshot storage
+- **Token persistence**: OAuth2 tokens cached to `~/.ggcode/oauth-tokens/{provider}-{clientID}.json` with 0600 permissions; per-client isolation prevents overwrites between instances
+- **Mute is in-memory**: IM adapter mute state is not persisted to the binding store — daemon restart recovers all adapters
+
+## Release & Distribution
+
+- **GoReleaser** (`.goreleaser.yaml`): Builds for linux/darwin/windows on amd64/arm64 with `CGO_ENABLED=0`. Produces tar.gz, zip (Windows), and packages (deb, rpm, apk, ipk, archlinux). SBOMs included.
+- **Version info**: Injected at build time via `-X` ldflags into `internal/version` (Version, Commit, Date)
+- **npm** (`npm/`): Wrapper that installs the GitHub Release binary
+- **Python** (`python/`): PyPI package `ggcode`
+- **Release notes** (`docs/releases/`): Tag-specific Markdown files used directly as GitHub Release bodies
+
+## Common Gotchas
+
+- The large compiled binary (`ggcode`) in repo root is a build artifact — it's gitignored
+- `ggcode.yaml` (actual config) is gitignored; only `ggcode.example.yaml` is tracked
+- `.ggcode/` directory (runtime data) is gitignored
+- Integration tests require real API keys; the shared local verify script clears provider env vars before `go test -tags=!integration ./...` so local checks behave like CI
+- The `internal/tui/` package is the largest (~17.6k LOC, 47+ files) — changes here need careful TUI regression testing
+- Provider protocol adapters must handle both streaming and non-streaming responses
+- `modernc.org/sqlite` is a pure-Go SQLite implementation (no CGO needed), used only by harness
+- The `copilot` protocol uses GitHub's OAuth flow (not API key) — handled by `internal/auth/`
+- Agent tools (`spawn_agent`, `wait_agent`, `list_agents`) are defined in `internal/tool/` but registered in `internal/tui/repl.go`, not in `builtin.go`
+- `save_memory` and `skill` tools are registered at startup (in `cmd/ggcode/root.go`), not in `RegisterBuiltinTools`
+- `ask_user` and `todo_write` are in `builtin.go`; `save_memory` is separate (needs auto-memory reference)
+- `a2a.api_key` (legacy top-level) still works but `a2a.auth.api_key` takes priority — `a2aAPIKey()` helper resolves both
+- GitHub OAuth Apps are **confidential clients** — `client_secret` is required for token exchange even with PKCE; Device Flow does not need it
+- Token cache files use `{provider}-{clientID[:12]}` as filename — different clientIDs for the same provider won't overwrite each other
+- `/muteall` uses `MuteAllExcept(selfAdapter)` — sender's adapter is never muted
+- `/muteself` emits the warning message before muting (500ms delay) so the user actually receives it

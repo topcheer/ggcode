@@ -1,0 +1,34 @@
+/ggcode
+/bin/ggcode
+/ggcode.yaml
+.ggcode/
+python/dist/
+python/build/
+python/*.egg-info/
+python/**/__pycache__/
+npm/*.tgz
+/.site-build/
+
+# Test artifacts
+coverage.out
+internal/im/*.html
+internal/im/*_screenshot.png
+internal/swarm/*_e2e_test.go
+test_config.yaml
+
+# IDE / tools
+.zread/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+__pycache__/
+.claude/
+.tmp/
+a2a.test
+auth.test
+.ggcode/a2a.yaml

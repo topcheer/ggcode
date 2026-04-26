@@ -1,0 +1,397 @@
+package provider
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
+
+	"google.golang.org/genai"
+)
+
+// GeminiProvider implements Provider using the Google Generative AI API.
+type GeminiProvider struct {
+	client    *genai.Client
+	model     string
+	maxTokens int
+	cap       *adaptiveCap
+	transport *headerInjectingTransport // kept for runtime header updates
+}
+
+// SetAdaptiveCap installs the adaptive max-output-tokens cap.
+func (p *GeminiProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
+
+func (p *GeminiProvider) effectiveMaxTokens() int {
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			return v
+		}
+	}
+	return p.maxTokens
+}
+
+// NewGeminiProvider creates a new Gemini provider.
+func NewGeminiProvider(apiKey string, model string, maxTokens int) (*GeminiProvider, error) {
+	return NewGeminiProviderWithBaseURL(apiKey, model, maxTokens, "")
+}
+
+// NewGeminiProviderWithBaseURL creates a new Gemini provider with a custom base URL.
+func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) (*GeminiProvider, error) {
+	headers := BuildHeadersForProvider("gemini")
+	transport := &headerInjectingTransport{
+		base:    http.DefaultTransport,
+		headers: headers,
+	}
+	clientConfig := &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+		HTTPClient: &http.Client{
+			Transport: transport,
+		},
+	}
+	if trimmed := strings.TrimSpace(baseURL); trimmed != "" {
+		clientConfig.HTTPOptions.BaseURL = trimmed
+	}
+
+	client, err := genai.NewClient(context.Background(), clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("gemini client: %w", err)
+	}
+	debug.Log("provider", "GeminiProvider created: model=%s maxTokens=%d baseURL=%s", model, maxTokens, baseURL)
+	return &GeminiProvider{
+		client:    client,
+		model:     model,
+		maxTokens: maxTokens,
+		transport: transport,
+	}, nil
+}
+
+func (p *GeminiProvider) Name() string {
+	return "gemini"
+}
+
+// UpdateRuntimeHeaders updates the injected headers at runtime.
+func (p *GeminiProvider) UpdateRuntimeHeaders(headers http.Header) {
+	if p.transport != nil {
+		p.transport.UpdateHeaders(headers)
+	}
+}
+
+func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
+	contents, systemInstruction := p.convertMessages(messages)
+
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: systemInstruction,
+	}
+	if v := p.effectiveMaxTokens(); v > 0 {
+		config.MaxOutputTokens = int32(v)
+	}
+	if len(tools) > 0 {
+		config.Tools = p.convertTools(tools)
+	}
+	dumpRequestJSON("gemini", "Chat", struct {
+		Contents          []*genai.Content
+		SystemInstruction *genai.Content
+		MaxOutputTokens   int32
+		Tools             []*genai.Tool
+	}{contents, systemInstruction, config.MaxOutputTokens, config.Tools})
+
+	var resp *genai.GenerateContentResponse
+	err := retryWithBackoffCtx(ctx, func() error {
+		var callErr error
+		resp, callErr = p.client.Models.GenerateContent(ctx, p.model, contents, config)
+		return callErr
+	}, providerRetryAttempts)
+	if err != nil {
+		if rejected, parsed := maxTokensRejection(err); rejected {
+			p.cap.OnRejected(parsed)
+		}
+		return nil, fmt.Errorf("gemini chat: %w", err)
+	}
+	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
+		p.cap.OnTruncated()
+	}
+
+	content, usage := p.convertResponse(resp)
+	return &ChatResponse{
+		Message: Message{Role: "assistant", Content: content},
+		Usage:   usage,
+	}, nil
+}
+
+func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	contents, systemInstruction := p.convertMessages(messages)
+
+	config := &genai.GenerateContentConfig{
+		SystemInstruction: systemInstruction,
+	}
+	if v := p.effectiveMaxTokens(); v > 0 {
+		config.MaxOutputTokens = int32(v)
+	}
+	if len(tools) > 0 {
+		config.Tools = p.convertTools(tools)
+	}
+	dumpRequestJSON("gemini", "ChatStream", struct {
+		Contents          []*genai.Content
+		SystemInstruction *genai.Content
+		MaxOutputTokens   int32
+		Tools             []*genai.Tool
+	}{contents, systemInstruction, config.MaxOutputTokens, config.Tools})
+
+	ch := make(chan StreamEvent, 64)
+
+	safego.Go("provider.gemini.streamRead", func() {
+		defer close(ch)
+
+		var usage TokenUsage
+		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
+			emitted := false
+			retry := false
+			for resp, err := range iter {
+				if err != nil {
+					if rejected, parsed := maxTokensRejection(err); rejected {
+						p.cap.OnRejected(parsed)
+					}
+					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
+						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+							return
+						}
+						retry = true
+						break
+					}
+					ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %w", err)}
+					return
+				}
+
+				// Check finish reason for truncation / policy errors.
+				if len(resp.Candidates) > 0 {
+					if finishErr := geminiFinishReasonError(resp.Candidates[0].FinishReason); finishErr != nil {
+						if resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
+							p.cap.OnTruncated()
+						}
+						ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
+						return
+					}
+				}
+
+				// Extract usage metadata
+				if resp.UsageMetadata != nil {
+					usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
+					usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+				}
+
+				if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+					continue
+				}
+
+				for _, part := range resp.Candidates[0].Content.Parts {
+					if part.Text != "" && !part.Thought {
+						emitted = true
+						ch <- StreamEvent{Type: StreamEventText, Text: part.Text}
+					}
+					if part.FunctionCall != nil {
+						emitted = true
+						args, _ := json.Marshal(part.FunctionCall.Args)
+						id := part.FunctionCall.ID
+						if id == "" {
+							id = part.FunctionCall.Name
+						}
+						ch <- StreamEvent{
+							Type: StreamEventToolCallDone,
+							Tool: ToolCallDelta{
+								Index:     0,
+								ID:        id,
+								Name:      part.FunctionCall.Name,
+								Arguments: args,
+							},
+						}
+					}
+				}
+			}
+			if retry {
+				continue
+			}
+			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage}
+			return
+		}
+	})
+
+	return ch, nil
+}
+
+func (p *GeminiProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
+	total := 0
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			total += len(block.Text)
+		}
+	}
+	return total / 4, nil
+}
+
+func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, *genai.Content) {
+	var contents []*genai.Content
+	var systemParts []*genai.Part
+	toolNamesByID := make(map[string]string)
+
+	for _, m := range messages {
+		if m.Role == "system" {
+			for _, b := range m.Content {
+				if b.Type == "text" {
+					systemParts = append(systemParts, &genai.Part{Text: b.Text})
+				}
+			}
+			continue
+		}
+
+		role := m.Role
+		if role == "assistant" {
+			role = "model"
+		}
+
+		var parts []*genai.Part
+		for _, b := range m.Content {
+			switch b.Type {
+			case "text":
+				parts = append(parts, &genai.Part{Text: b.Text})
+			case "image":
+				// Gemini uses InlineData for inline images
+				parts = append(parts, &genai.Part{
+					InlineData: &genai.Blob{
+						MIMEType: b.ImageMIME,
+						Data:     []byte(b.ImageData),
+					},
+				})
+			case "tool_use":
+				if b.ToolID != "" && b.ToolName != "" {
+					toolNamesByID[b.ToolID] = b.ToolName
+				}
+				args, _ := normalizeToolInputValue(b.Input).(map[string]any)
+				if args == nil {
+					args = map[string]any{
+						"value": normalizeToolInputValue(b.Input),
+					}
+				}
+				parts = append(parts, &genai.Part{
+					FunctionCall: &genai.FunctionCall{
+						ID:   b.ToolID,
+						Name: b.ToolName,
+						Args: args,
+					},
+				})
+			case "tool_result":
+				name := strings.TrimSpace(b.ToolName)
+				if name == "" {
+					name = toolNamesByID[b.ToolID]
+				}
+				if name == "" {
+					name = "_ggcode_unknown_tool"
+				}
+				parts = append(parts, &genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						ID:   b.ToolID,
+						Name: name,
+						Response: map[string]any{
+							"output": b.Output,
+						},
+					},
+				})
+			}
+		}
+
+		contents = append(contents, &genai.Content{
+			Role:  role,
+			Parts: parts,
+		})
+	}
+
+	var systemInstruction *genai.Content
+	if len(systemParts) > 0 {
+		systemInstruction = &genai.Content{
+			Role:  "user",
+			Parts: systemParts,
+		}
+	}
+
+	return contents, systemInstruction
+}
+
+func (p *GeminiProvider) convertTools(tools []ToolDefinition) []*genai.Tool {
+	functionDecls := make([]*genai.FunctionDeclaration, len(tools))
+	for i, t := range tools {
+		fd := &genai.FunctionDeclaration{
+			Name:        t.Name,
+			Description: t.Description,
+		}
+		if len(t.Parameters) > 0 {
+			schema := &genai.Schema{}
+			if json.Unmarshal(t.Parameters, schema) == nil {
+				fd.Parameters = schema
+			}
+		}
+		functionDecls[i] = fd
+	}
+
+	return []*genai.Tool{
+		{
+			FunctionDeclarations: functionDecls,
+		},
+	}
+}
+
+func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([]ContentBlock, TokenUsage) {
+	var blocks []ContentBlock
+	var usage TokenUsage
+
+	if resp.UsageMetadata != nil {
+		usage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
+		usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+	}
+
+	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
+		for _, part := range resp.Candidates[0].Content.Parts {
+			if part.Text != "" && !part.Thought {
+				blocks = append(blocks, TextBlock(part.Text))
+			}
+			if part.FunctionCall != nil {
+				args, _ := json.Marshal(part.FunctionCall.Args)
+				id := part.FunctionCall.ID
+				if id == "" {
+					id = part.FunctionCall.Name
+				}
+				blocks = append(blocks, ToolUseBlock(id, part.FunctionCall.Name, args))
+			}
+		}
+	}
+
+	return blocks, usage
+}
+
+// geminiFinishReasonError returns an error for finish reasons that indicate
+// truncation or policy issues. Returns nil for normal completion.
+func geminiFinishReasonError(reason genai.FinishReason) error {
+	switch reason {
+	case "", genai.FinishReasonStop, genai.FinishReasonUnspecified:
+		return nil
+	case genai.FinishReasonMaxTokens:
+		return fmt.Errorf("gemini stream ended with FinishReason=MAX_TOKENS (output truncated)")
+	case genai.FinishReasonSafety:
+		return fmt.Errorf("gemini stream ended with FinishReason=SAFETY (content filtered)")
+	case genai.FinishReasonRecitation:
+		return fmt.Errorf("gemini stream ended with FinishReason=RECITATION (cited content blocked)")
+	case genai.FinishReasonProhibitedContent:
+		return fmt.Errorf("gemini stream ended with FinishReason=PROHIBITED_CONTENT")
+	case genai.FinishReasonBlocklist:
+		return fmt.Errorf("gemini stream ended with FinishReason=BLOCKLIST")
+	case genai.FinishReasonMalformedFunctionCall:
+		return fmt.Errorf("gemini stream ended with FinishReason=MALFORMED_FUNCTION_CALL")
+	default:
+		return fmt.Errorf("gemini stream ended with FinishReason=%s", reason)
+	}
+}

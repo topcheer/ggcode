@@ -1,0 +1,304 @@
+package a2a
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/topcheer/ggcode/internal/tool"
+)
+
+// MCPBridgeTools returns MCP-compatible tool definitions that wrap A2A client operations.
+// These tools are for external MCP clients (Claude, Cursor, Copilot, etc.) that don't
+// speak A2A natively. They let the MCP client discover and interact with this ggcode
+// instance as if it were a set of MCP tools.
+//
+// ggcode instances talking to each other should use A2A protocol directly,
+// NOT through MCP.
+func MCPBridgeTools(client *Client) []tool.Tool {
+	return []tool.Tool{
+		&a2aDiscoverTool{client: client},
+		&a2aSendTaskTool{client: client},
+		&a2aGetTaskTool{client: client},
+		&a2aListTasksTool{client: client},
+		&a2aCancelTaskTool{client: client},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// a2a_discover tool
+// ---------------------------------------------------------------------------
+
+type a2aDiscoverTool struct {
+	client *Client
+}
+
+func (t *a2aDiscoverTool) Name() string { return "a2a_discover" }
+
+func (t *a2aDiscoverTool) Description() string {
+	return "Discover a remote ggcode agent's capabilities. Fetches the Agent Card to see what skills are available. Use this before sending tasks."
+}
+
+func (t *a2aDiscoverTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {},
+		"required": []
+	}`)
+}
+
+func (t *a2aDiscoverTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	card, err := t.client.Discover(ctx)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("Discovery failed: %v", err), IsError: true}, nil
+	}
+
+	var skills []string
+	for _, s := range card.Skills {
+		skills = append(skills, fmt.Sprintf("  - %s (%s): %s", s.ID, s.Name, s.Description))
+	}
+
+	meta := ""
+	if card.Metadata != nil {
+		metaJSON, _ := json.MarshalIndent(card.Metadata, "  ", "  ")
+		meta = fmt.Sprintf("\nMetadata:\n  %s", string(metaJSON))
+	}
+
+	output := fmt.Sprintf("Agent: %s\nDescription: %s\nURL: %s\nStreaming: %v\nSkills:\n%s%s",
+		card.Name, card.Description, card.URL,
+		card.Capabilities.Streaming,
+		fmt.Sprintf("%v", skills), meta)
+
+	return tool.Result{Content: output}, nil
+}
+
+// ---------------------------------------------------------------------------
+// a2a_send_task tool
+// ---------------------------------------------------------------------------
+
+type a2aSendTaskTool struct {
+	client *Client
+}
+
+func (t *a2aSendTaskTool) Name() string { return "a2a_send_task" }
+
+func (t *a2aSendTaskTool) Description() string {
+	return "Send a task to a remote ggcode agent. The task runs asynchronously; use a2a_get_task to check status. Skills: code-edit, file-search, command-exec, git-ops, code-review, full-task."
+}
+
+func (t *a2aSendTaskTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"skill": {
+				"type": "string",
+				"description": "The skill to invoke: code-edit, file-search, command-exec, git-ops, code-review, or full-task",
+				"enum": ["code-edit", "file-search", "command-exec", "git-ops", "code-review", "full-task"]
+			},
+			"message": {
+				"type": "string",
+				"description": "The task description or instruction to send"
+			},
+			"task_id": {
+				"type": "string",
+				"description": "Optional existing task ID to continue a multi-turn conversation (input-required flow)"
+			}
+		},
+		"required": ["skill", "message"]
+	}`)
+}
+
+type sendTaskInput struct {
+	Skill   string `json:"skill"`
+	Message string `json:"message"`
+	TaskID  string `json:"task_id,omitempty"`
+}
+
+func (t *a2aSendTaskTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	var params sendTaskInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
+	}
+
+	var task *Task
+	var err error
+	if params.TaskID != "" {
+		task, err = t.client.SendMessage(ctx, params.Skill, params.Message, params.TaskID)
+	} else {
+		task, err = t.client.SendMessage(ctx, params.Skill, params.Message)
+	}
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("Task failed: %v", err), IsError: true}, nil
+	}
+
+	result := formatTaskResult(task)
+	return tool.Result{Content: result}, nil
+}
+
+// ---------------------------------------------------------------------------
+// a2a_get_task tool
+// ---------------------------------------------------------------------------
+
+type a2aGetTaskTool struct {
+	client *Client
+}
+
+func (t *a2aGetTaskTool) Name() string { return "a2a_get_task" }
+
+func (t *a2aGetTaskTool) Description() string {
+	return "Get the current status and results of a previously submitted A2A task."
+}
+
+func (t *a2aGetTaskTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"task_id": {
+				"type": "string",
+				"description": "The ID of the task to check"
+			}
+		},
+		"required": ["task_id"]
+	}`)
+}
+
+type getTaskInput struct {
+	TaskID string `json:"task_id"`
+}
+
+func (t *a2aGetTaskTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	var params getTaskInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
+	}
+
+	task, err := t.client.GetTask(ctx, params.TaskID)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("Get task failed: %v", err), IsError: true}, nil
+	}
+
+	return tool.Result{Content: formatTaskResult(task)}, nil
+}
+
+// ---------------------------------------------------------------------------
+// a2a_list_tasks tool
+// ---------------------------------------------------------------------------
+
+type a2aListTasksTool struct {
+	client *Client
+}
+
+func (t *a2aListTasksTool) Name() string { return "a2a_list_tasks" }
+
+func (t *a2aListTasksTool) Description() string {
+	return "List tasks on a remote ggcode agent with cursor pagination."
+}
+
+func (t *a2aListTasksTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"page_token": {
+					"type": "string",
+					"description": "Opaque cursor from a previous response"
+				},
+				"page_size": {
+					"type": "integer",
+					"description": "Max tasks per page (default 50, max 100)"
+				}
+			},
+			"required": []
+		}`)
+}
+
+func (t *a2aListTasksTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	var params struct {
+		PageToken string `json:"page_token"`
+		PageSize  int    `json:"page_size"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
+	}
+
+	result, err := t.client.ListTasks(ctx, params.PageToken, params.PageSize)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("List failed: %v", err), IsError: true}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Tasks (%d", len(result.Tasks)))
+	if result.NextToken != "" {
+		sb.WriteString(", more available")
+	}
+	sb.WriteString("):\n")
+	for _, t := range result.Tasks {
+		sb.WriteString(fmt.Sprintf("- %s [%s] skill=%s\n", t.ID, t.Status.State, t.Skill))
+	}
+	if result.NextToken != "" {
+		sb.WriteString(fmt.Sprintf("\nnext_page_token: %s", result.NextToken))
+	}
+	return tool.Result{Content: sb.String()}, nil
+}
+
+// ---------------------------------------------------------------------------
+// a2a_cancel_task tool
+// ---------------------------------------------------------------------------
+
+type a2aCancelTaskTool struct {
+	client *Client
+}
+
+func (t *a2aCancelTaskTool) Name() string { return "a2a_cancel_task" }
+
+func (t *a2aCancelTaskTool) Description() string {
+	return "Cancel a running A2A task on a remote ggcode agent."
+}
+
+func (t *a2aCancelTaskTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"task_id": {
+				"type": "string",
+				"description": "The ID of the task to cancel"
+			}
+		},
+		"required": ["task_id"]
+	}`)
+}
+
+func (t *a2aCancelTaskTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	var params getTaskInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
+	}
+
+	task, err := t.client.CancelTask(ctx, params.TaskID)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("Cancel failed: %v", err), IsError: true}, nil
+	}
+
+	return tool.Result{Content: fmt.Sprintf("Task %s canceled (state: %s)", task.ID, task.Status.State)}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func formatTaskResult(t *Task) string {
+	result := fmt.Sprintf("Task %s\nStatus: %s\nSkill: %s", t.ID, t.Status.State, t.Skill)
+
+	if len(t.Artifacts) > 0 {
+		result += "\n\nResults:"
+		for _, a := range t.Artifacts {
+			for _, p := range a.Parts {
+				if p.Kind == "text" && p.Text != "" {
+					result += "\n" + p.Text
+				}
+			}
+		}
+	}
+
+	return result
+}

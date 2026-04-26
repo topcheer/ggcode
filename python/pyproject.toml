@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ggcode"
+version = "1.1.46"
+description = "Thin Python wrapper that installs the ggcode GitHub Release binary"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "topcheer" }]
+
+[project.urls]
+Homepage = "https://github.com/topcheer/ggcode"
+Repository = "https://github.com/topcheer/ggcode.git"
+Issues = "https://github.com/topcheer/ggcode/issues"
+
+[project.scripts]
+ggcode = "ggcode_release_installer.cli:main"
+ggcode-bootstrap = "ggcode_release_installer.cli:bootstrap_main"
+
+[tool.setuptools]
+packages = ["ggcode_release_installer"]

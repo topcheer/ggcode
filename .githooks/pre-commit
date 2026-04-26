@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${GGCODE_SKIP_CI_HOOK:-0}" == "1" ]]; then
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+
+mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if ((${#staged_go_files[@]} > 0)); then
+  echo "[pre-commit] formatting staged Go files"
+  gofmt -w "${staged_go_files[@]}"
+  git add -- "${staged_go_files[@]}"
+fi
+
+echo "[pre-commit] running CI-aligned checks"
+exec ./scripts/dev/verify-ci.sh

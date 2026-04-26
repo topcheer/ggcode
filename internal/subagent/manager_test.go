@@ -1,0 +1,203 @@
+package subagent
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
+)
+
+func TestManagerSpawnAndGet(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{
+		MaxConcurrent: 3,
+		Timeout:       30 * time.Second,
+	})
+
+	id := mgr.Spawn("test task", "friendly test task", nil, context.Background())
+	if id == "" {
+		t.Fatal("expected non-empty ID")
+	}
+
+	sa, ok := mgr.Get(id)
+	if !ok {
+		t.Fatal("expected to find agent")
+	}
+	if sa.Task != "test task" {
+		t.Errorf("expected task 'test task', got %q", sa.Task)
+	}
+	if sa.DisplayTask != "friendly test task" {
+		t.Errorf("expected display task 'friendly test task', got %q", sa.DisplayTask)
+	}
+	if sa.Status != StatusPending {
+		t.Errorf("expected status pending, got %s", sa.Status)
+	}
+}
+
+func TestManagerList(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+
+	mgr.Spawn("task1", "task1", nil, context.Background())
+	mgr.Spawn("task2", "task2", nil, context.Background())
+
+	agents := mgr.List()
+	if len(agents) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(agents))
+	}
+}
+
+func TestManagerRunningCount(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+
+	id := mgr.Spawn("task1", "task1", nil, context.Background())
+	mgr.Complete(id, "done", nil)
+
+	id2 := mgr.Spawn("task2", "task2", nil, context.Background())
+	// Manually set to running
+	mgr.SetCancel(id2, func() {})
+
+	if mgr.RunningCount() != 1 {
+		t.Errorf("expected 1 running, got %d", mgr.RunningCount())
+	}
+}
+
+func TestManagerCancel(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	id := mgr.Spawn("task", "task", nil, ctx)
+
+	// Set the cancel func and mark as running manually
+	mgr.SetCancel(id, cancel)
+	sa, _ := mgr.Get(id)
+	sa.mu.Lock()
+	sa.Status = StatusRunning
+	sa.mu.Unlock()
+
+	if !mgr.Cancel(id) {
+		t.Fatal("expected cancel to succeed")
+	}
+
+	sa, _ = mgr.Get(id)
+	if sa.Status != StatusCancelled {
+		t.Errorf("expected cancelled, got %s", sa.Status)
+	}
+}
+
+func TestManagerConcurrentSpawn(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{
+		MaxConcurrent: 2,
+		Timeout:       5 * time.Second,
+	})
+
+	// Spawn all agents first
+	ids := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		ids[i] = mgr.Spawn("task", "task", nil, context.Background())
+	}
+	if len(mgr.List()) != 10 {
+		t.Fatalf("expected 10 agents after spawn, got %d", len(mgr.List()))
+	}
+
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			mgr.Complete(id, "", nil)
+		}(id)
+	}
+	wg.Wait()
+}
+
+func TestManagerDefaultConfig(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+	if mgr.Timeout() != 30*time.Minute {
+		t.Errorf("expected default timeout 30m, got %v", mgr.Timeout())
+	}
+}
+
+func TestManagerSnapshot(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+	id := mgr.Spawn("task body", "display task", []string{"wait_command"}, context.Background())
+	sa, ok := mgr.Get(id)
+	if !ok {
+		t.Fatal("expected spawned sub-agent")
+	}
+	sa.setProgressSummary("Job ID: cmd-1 • Status: running • Total lines: 10")
+	sa.IncrementToolCalls()
+	snap, ok := mgr.Snapshot(id)
+	if !ok {
+		t.Fatal("expected snapshot")
+	}
+	if snap.ID != id || snap.DisplayTask != "display task" || snap.ToolCallCount != 1 {
+		t.Fatalf("unexpected snapshot: %+v", snap)
+	}
+	if snap.ProgressSummary == "" {
+		t.Fatal("expected progress summary in snapshot")
+	}
+}
+
+func TestWaitForSnapshotReturnsRunningStateAfterTimeout(t *testing.T) {
+	mgr := NewManager(config.SubAgentConfig{})
+	id := mgr.Spawn("task", "task", nil, context.Background())
+	mgr.SetCancel(id, func() {})
+	sa, _ := mgr.Get(id)
+	sa.setActivity("tool", "wait_command", `{"job_id":"cmd-1"}`)
+	sa.setProgressSummary("Job ID: cmd-1 • Status: running • Total lines: 12")
+
+	snap, err := WaitForSnapshot(context.Background(), mgr, id, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("WaitForSnapshot() error = %v", err)
+	}
+	if snap.Status != StatusRunning {
+		t.Fatalf("expected running snapshot, got %s", snap.Status)
+	}
+	if snap.ProgressSummary == "" {
+		t.Fatal("expected progress summary")
+	}
+}
+
+func TestRunPanicRecoveryCompletesAgent(t *testing.T) {
+	// Verify that a panic inside Run() triggers Complete() so Wait() does not hang.
+	mgr := NewManager(config.SubAgentConfig{
+		MaxConcurrent: 1,
+		Timeout:       5 * time.Second,
+	})
+	id := mgr.Spawn("panic task", "panic task", nil, context.Background())
+
+	Run(context.Background(), RunnerConfig{
+		Provider:   nil,
+		Manager:    mgr,
+		SubAgentID: id,
+		AgentFactory: func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
+			panic("intentional test panic")
+		},
+	})
+
+	// Wait must return quickly with a failed status, not block forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	result, err := Wait(ctx, mgr, id)
+	if err == nil {
+		t.Fatal("expected error from panicked sub-agent, got nil")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Fatalf("expected panic error message, got: %v", err)
+	}
+	if result != "" {
+		t.Fatalf("expected empty result from panicked sub-agent, got: %q", result)
+	}
+
+	sa, ok := mgr.Get(id)
+	if !ok {
+		t.Fatal("sub-agent not found")
+	}
+	if sa.Status != StatusFailed {
+		t.Fatalf("expected status %s, got %s", StatusFailed, sa.Status)
+	}
+}

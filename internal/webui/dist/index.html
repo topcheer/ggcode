@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ggcode</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --border: #30363d;
+  --text: #e6edf3; --text2: #8b949e; --accent: #58a6ff; --accent2: #1f6feb;
+  --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #bc8cff;
+  --radius: 8px; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.5; }
+a { color: var(--accent); text-decoration: none; }
+
+/* Layout */
+.app { display: flex; height: 100vh; }
+.sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar-brand { padding: 20px 16px; border-bottom: 1px solid var(--border); }
+.sidebar-brand h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; }
+.sidebar-brand h1 span { color: var(--accent); }
+.sidebar-brand p { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.nav { padding: 8px; flex: 1; overflow-y: auto; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer; color: var(--text2); font-size: 13px; transition: all .15s; margin-bottom: 2px; }
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { background: var(--accent2); color: #fff; }
+.nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+
+.main { flex: 1; overflow-y: auto; }
+.page { display: none; padding: 32px 40px; max-width: 900px; }
+.page.active { display: block; }
+
+/* Header */
+.page-header { margin-bottom: 28px; }
+.page-header h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; }
+.page-header p { font-size: 13px; color: var(--text2); margin-top: 4px; }
+
+/* Cards */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+.card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.card-title .badge { font-size: 10px; padding: 2px 8px; border-radius: 99px; font-weight: 500; }
+.badge-green { background: rgba(63,185,80,.15); color: var(--green); }
+.badge-red { background: rgba(248,81,73,.15); color: var(--red); }
+.badge-yellow { background: rgba(210,153,34,.15); color: var(--yellow); }
+
+/* Form elements */
+.form-group { margin-bottom: 16px; }
+.form-group:last-child { margin-bottom: 0; }
+label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+input, select, textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 13px; font-family: var(--font); outline: none; transition: border-color .15s; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 80px; }
+select { cursor: pointer; }
+option { background: var(--surface); }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--surface2); color: var(--text); transition: all .15s; }
+.btn:hover { background: var(--border); }
+.btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.btn-primary:hover { background: var(--accent); border-color: var(--accent); }
+.btn-danger { color: var(--red); }
+.btn-danger:hover { background: rgba(248,81,73,.15); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+tr:hover td { background: var(--surface2); }
+td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+
+/* Status dots */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.dot-yellow { background: var(--yellow); }
+
+/* Toast */
+.toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: var(--radius); font-size: 13px; font-weight: 500; z-index: 999; opacity: 0; transform: translateY(10px); transition: all .3s; }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast-ok { background: rgba(63,185,80,.15); border: 1px solid var(--green); color: var(--green); }
+.toast-err { background: rgba(248,81,73,.15); border: 1px solid var(--red); color: var(--red); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { width: 56px; }
+  .sidebar-brand p, .nav-item span { display: none; }
+  .page { padding: 20px 16px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div class="sidebar-brand">
+      <h1><span>&#9670;</span> ggcode</h1>
+      <p>Configuration Panel</p>
+    </div>
+    <div class="nav">
+      <div class="nav-item active" data-page="overview" onclick="showPage('overview')">
+        <span class="nav-icon">&#9776;</span><span>Overview</span>
+      </div>
+      <div class="nav-item" data-page="model" onclick="showPage('model')">
+        <span class="nav-icon">&#9881;</span><span>Model</span>
+      </div>
+      <div class="nav-item" data-page="vendors" onclick="showPage('vendors')">
+        <span class="nav-icon">&#9881;</span><span>Vendors</span>
+      </div>
+      <div class="nav-item" data-page="mcp" onclick="showPage('mcp')">
+        <span class="nav-icon">&#9881;</span><span>MCP Servers</span>
+      </div>
+      <div class="nav-item" data-page="im" onclick="showPage('im')">
+        <span class="nav-icon">&#9881;</span><span>IM</span>
+      </div>
+      <div class="nav-item" data-page="general" onclick="showPage('general')">
+        <span class="nav-icon">&#9881;</span><span>General</span>
+      </div>
+      <div class="nav-item" data-page="impersonate" onclick="showPage('impersonate')">
+        <span class="nav-icon">&#128100;</span><span>Impersonate</span>
+      </div>
+      <div class="nav-item" data-page="prompt" onclick="showPage('prompt')">
+        <span class="nav-icon">&#9997;</span><span>System Prompt</span>
+      </div>
+      <div style="flex:1"></div>
+      <div style="padding:8px 4px">
+        <button class="btn btn-danger" style="width:100%" onclick="triggerRestart()">&#x21bb; Restart</button>
+      </div>
+    </div>
+  </div>
+  <div class="main">
+    <!-- Overview -->
+    <div class="page active" id="page-overview">
+      <div class="page-header"><h2>Overview</h2><p>Current configuration status</p></div>
+      <div id="overview-content"></div>
+    </div>
+
+    <!-- Model Selection -->
+    <div class="page" id="page-model">
+      <div class="page-header"><h2>Active Model</h2><p>Switch vendor, endpoint, and model</p></div>
+      <div class="card">
+        <div class="form-group">
+          <label>Vendor</label>
+          <select id="sel-vendor" onchange="onVendorChange()"></select>
+        </div>
+        <div class="form-group">
+          <label>Endpoint</label>
+          <select id="sel-endpoint" onchange="onEndpointChange()"></select>
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <select id="sel-model"></select>
+        </div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary" onclick="saveActive()">Apply</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">API Key</div>
+        <div class="form-group">
+          <label>Key</label>
+          <input type="password" id="inp-apikey" placeholder="sk-... or ${ENV_VAR}">
+        </div>
+        <button class="btn btn-primary" onclick="saveAPIKey()">Save Key</button>
+      </div>
+    </div>
+
+    <!-- Vendors -->
+    <div class="page" id="page-vendors">
+      <div class="page-header"><h2>Vendors</h2><p>All configured LLM providers</p></div>
+      <div id="vendors-content"></div>
+      <div class="card" style="margin-top:16px">
+        <button class="btn btn-primary" onclick="showVendorModal()">+ New Vendor</button>
+      </div>
+    </div>
+
+    <!-- Vendor Modal -->
+    <div id="vendor-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:500px;max-height:80vh;overflow-y:auto">
+        <h3 id="vendor-modal-title" style="margin-bottom:16px;font-size:16px"></h3>
+        <input type="hidden" id="v-edit-name">
+        <div class="form-group"><label>Vendor ID</label><input id="v-f-id" placeholder="my-vendor"></div>
+        <div class="form-group"><label>Display Name</label><input id="v-f-display" placeholder="My Vendor"></div>
+        <div class="form-group"><label>API Key (optional)</label><input id="v-f-apikey" type="password" placeholder="sk-... or ${ENV_VAR}"></div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" onclick="saveVendor()">Save</button>
+          <button class="btn" onclick="hideVendorModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Endpoint Modal -->
+    <div id="ep-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:500px;max-height:80vh;overflow-y:auto">
+        <h3 id="ep-modal-title" style="margin-bottom:16px;font-size:16px"></h3>
+        <input type="hidden" id="ep-vendor">
+        <input type="hidden" id="ep-edit-name">
+        <div class="form-group"><label>Endpoint Name</label><input id="ep-f-name" placeholder="my-endpoint"></div>
+        <div class="form-group"><label>Protocol</label><select id="ep-f-protocol">
+          <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option><option value="copilot">Copilot</option>
+        </select></div>
+        <div class="form-group"><label>Base URL</label><input id="ep-f-baseurl" placeholder="https://api.openai.com/v1"></div>
+        <div class="form-group"><label>API Key (optional, overrides vendor key)</label><input id="ep-f-apikey" type="password" placeholder="Leave empty to use vendor key"></div>
+        <div id="ep-apikey-current" style="display:none" class="form-group">
+          <label>Current Endpoint Key</label>
+          <div style="display:flex;gap:6px">
+            <code id="ep-apikey-masked" style="flex:1">•••</code>
+            <button class="btn btn-sm btn-danger" onclick="clearEndpointKey()">Clear Key</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" onclick="saveEndpoint()">Save</button>
+          <button class="btn" onclick="hideEpModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCP Servers -->
+    <div class="page" id="page-mcp">
+      <div class="page-header"><h2>MCP Servers</h2><p>Manage Model Context Protocol servers</p></div>
+      <div id="mcp-content"></div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Add MCP Server</div>
+        <div class="form-group"><label>Name</label><input id="mcp-name"></div>
+        <div class="form-group"><label>Type</label><select id="mcp-type" onchange="toggleMCPFields()">
+          <option value="stdio">stdio (local process)</option>
+          <option value="http">http (remote server)</option>
+        </select></div>
+        <div id="mcp-stdio-fields">
+          <div class="form-group"><label>Command</label><input id="mcp-command" placeholder="npx or command path"></div>
+          <div class="form-group"><label>Args (comma-separated)</label><input id="mcp-args" placeholder="-y, @modelcontextprotocol/server-filesystem"></div>
+        </div>
+        <div id="mcp-http-fields" style="display:none">
+          <div class="form-group"><label>URL</label><input id="mcp-url" placeholder="http://localhost:3000/mcp"></div>
+          <div class="form-group"><label>Headers (Name: Value per line)</label><textarea id="mcp-headers" rows="3" placeholder="Authorization: Bearer token123&#10;X-Custom: value"></textarea></div>
+        </div>
+        <div class="form-group"><label>Environment (KEY=VALUE per line)</label><textarea id="mcp-env" rows="3" placeholder="OPENAI_API_KEY=${OPENAI_API_KEY}&#10;NODE_ENV=production"></textarea></div>
+        <button class="btn btn-primary" onclick="addMCPServer()">Add Server</button>
+      </div>
+    </div>
+
+    <!-- IM -->
+    <div class="page" id="page-im">
+      <div class="page-header"><h2>IM Configuration</h2><p>Instant messaging gateway settings</p></div>
+      <div id="im-content"></div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Add Adapter</div>
+        <button class="btn btn-primary" onclick="showIMModal()">+ New Adapter</button>
+      </div>
+    </div>
+
+    <!-- IM Adapter Modal -->
+    <div id="im-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:500px;max-height:80vh;overflow-y:auto">
+        <h3 id="im-modal-title" style="margin-bottom:16px;font-size:16px"></h3>
+        <input type="hidden" id="im-edit-name">
+        <div class="form-group"><label>Name</label><input id="im-f-name" placeholder="my-adapter"></div>
+        <div class="form-group"><label>Platform</label><select id="im-f-platform">
+          <option value="qq">QQ</option><option value="telegram">Telegram</option><option value="discord">Discord</option>
+          <option value="slack">Slack</option><option value="dingtalk">DingTalk</option><option value="feishu">Feishu</option>
+          <option value="pc">PC Bridge</option><option value="other">Other</option>
+        </select></div>
+        <div class="form-group"><label>Enabled</label><select id="im-f-enabled"><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div class="form-group"><label>Transport</label><input id="im-f-transport" placeholder="onebot, webhook, polling..."></div>
+        <div class="form-group"><label>Command</label><input id="im-f-command" placeholder="Path to adapter binary"></div>
+        <div class="form-group"><label>Args (comma-separated)</label><input id="im-f-args" placeholder="arg1, arg2"></div>
+        <div class="form-group"><label>Environment (KEY=VALUE per line)</label><textarea id="im-f-env" rows="3" placeholder="API_KEY=${MY_API_KEY}"></textarea></div>
+        <div class="form-group"><label>Allow From (comma-separated)</label><input id="im-f-allowfrom" placeholder="user1, group1"></div>
+        <div class="form-group"><label>Targets (JSON)</label><textarea id="im-f-targets" rows="3" placeholder='[{"id":"chan1","label":"Channel 1"}]'></textarea></div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" onclick="saveIMAdapter()">Save</button>
+          <button class="btn" onclick="hideIMModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- General -->
+    <div class="page" id="page-general">
+      <div class="page-header"><h2>General</h2><p>Language, permissions, and other settings</p></div>
+      <div class="card">
+        <div class="form-group"><label>Language</label>
+          <select id="gen-language"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
+        </div>
+        <div class="form-group"><label>Default Mode</label>
+          <select id="gen-mode">
+            <option value="supervised">Supervised</option><option value="plan">Plan</option>
+            <option value="auto">Auto</option><option value="bypass">Bypass</option><option value="autopilot">Autopilot</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Max Iterations (0 = unlimited)</label>
+          <input type="number" id="gen-maxiter" value="0">
+        </div>
+        <div class="form-group"><label>Allowed Dirs (comma-separated)</label>
+          <input id="gen-dirs" placeholder=".">
+        </div>
+        <button class="btn btn-primary" onclick="saveGeneral()" style="margin-top:12px">Save</button>
+      </div>
+    </div>
+
+    <!-- Impersonate -->
+    <div class="page" id="page-impersonate">
+      <div class="page-header"><h2>Impersonate</h2><p>Switch LLM client identity for compatibility</p></div>
+      <div id="impersonate-content"></div>
+    </div>
+
+    <!-- System Prompt -->
+    <div class="page" id="page-prompt">
+      <div class="page-header">
+        <h2>System Prompt</h2>
+        <p>Instructions sent to the LLM at the start of every conversation</p>
+        <div style="margin-top:8px;display:flex;gap:6px">
+          <button class="btn btn-sm" id="prompt-mode-preview" onclick="setPromptMode('preview')">Preview</button>
+          <button class="btn btn-sm" id="prompt-mode-edit" onclick="setPromptMode('edit')">Edit</button>
+        </div>
+      </div>
+      <div id="prompt-preview" style="display:none"></div>
+      <div id="prompt-edit" style="display:none">
+        <textarea id="prompt-textarea" style="width:100%;min-height:400px;font-family:monospace;font-size:13px;padding:12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;resize:vertical" placeholder="Enter system prompt..."></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-primary" onclick="saveSystemPrompt()">Save</button>
+          <button class="btn" onclick="resetSystemPrompt()">Reset to Default</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// --- State ---
+let config = {};
+let vendors = {};
+let mcpServers = []; // loaded from /api/mcp with runtime status
+let impersonateData = null; // loaded from /api/impersonate
+
+// --- API helpers ---
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({error: res.statusText}));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+// --- Navigation ---
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  document.querySelector(`.nav-item[data-page="${id}"]`).classList.add('active');
+}
+
+// --- Toast ---
+function toast(msg, ok = true) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + (ok ? 'toast-ok' : 'toast-err') + ' show';
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// --- HTML escape ---
+function esc(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// --- MCP form toggle ---
+function toggleMCPFields() {
+  const typ = document.getElementById('mcp-type').value;
+  document.getElementById('mcp-stdio-fields').style.display = typ === 'stdio' ? '' : 'none';
+  document.getElementById('mcp-http-fields').style.display = typ === 'http' ? '' : 'none';
+}
+
+// --- Load ---
+async function loadAll() {
+  try {
+    config = await api('/api/config');
+    vendors = await api('/api/vendors');
+    try { mcpServers = await api('/api/mcp'); } catch(e) { mcpServers = []; }
+    renderOverview();
+    renderModel();
+    renderVendors();
+    renderMCP();
+    await loadIMRuntime();
+    renderIM();
+    renderGeneral();
+    try { impersonateData = await api('/api/impersonate'); } catch(e) { impersonateData = null; }
+    renderImpersonate();
+    renderPrompt();
+  } catch(e) {
+    toast('Failed to load: ' + e.message, false);
+  }
+}
+
+// --- Overview ---
+function renderOverview() {
+  const c = config;
+  const v = vendors.find(v => v.id === c.vendor);
+  const hasKey = v && v.has_api_key;
+  const mcpCount = mcpServers.length;
+  const imEnabled = c.im && c.im.enabled;
+  document.getElementById('overview-content').innerHTML = `
+    <div class="card">
+      <div class="card-title">Active Configuration <span class="badge ${hasKey ? 'badge-green' : 'badge-red'}">${hasKey ? 'API Key Set' : 'No API Key'}</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>Setting</th><th>Value</th></tr>
+        <tr><td>Vendor</td><td><span class="mono">${c.vendor}</span></td></tr>
+        <tr><td>Endpoint</td><td><span class="mono">${c.endpoint}</span></td></tr>
+        <tr><td>Model</td><td><span class="mono">${c.model}</span></td></tr>
+        <tr><td>Language</td><td>${c.language}</td></tr>
+        <tr><td>Mode</td><td><span class="mono">${c.default_mode || 'supervised'}</span></td></tr>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Services</div>
+      <div class="table-wrap"><table>
+        <tr><th>Service</th><th>Status</th><th>Count</th></tr>
+        <tr><td>MCP Servers</td><td><span class="dot ${mcpCount > 0 ? 'dot-green' : 'dot-yellow'}"></span>${mcpCount > 0 ? 'Configured' : 'None'}</td><td>${mcpCount}</td></tr>
+        <tr><td>IM Gateway</td><td><span class="dot ${imEnabled ? 'dot-green' : 'dot-yellow'}"></span>${imEnabled ? 'Enabled' : 'Disabled'}</td><td>${Object.keys(c.im?.adapters || {}).length} adapters</td></tr>
+        <tr><td>Vendors</td><td><span class="dot dot-green"></span>Available</td><td>${vendors.length}</td></tr>
+        <tr><td>Impersonate</td><td>${impersonateData ? `<span class="dot dot-green"></span>${esc(impersonateData.presets?.find(p=>p.id===(impersonateData.current?.preset||'none'))?.display_name || 'None')}` : '<span class="dot dot-yellow"></span>N/A'}</td><td></td></tr>
+      </table></div>
+    </div>`;
+}
+
+// --- Model Selection ---
+function renderModel() {
+  const sel = document.getElementById('sel-vendor');
+  sel.innerHTML = vendors.map(v => `<option value="${v.id}" ${v.id === config.vendor ? 'selected' : ''}>${v.display_name || v.id}</option>`).join('');
+  onVendorChange();
+}
+
+async function onVendorChange() {
+  const vendor = document.getElementById('sel-vendor').value;
+  const detail = await api('/api/vendors/' + vendor);
+  const sel = document.getElementById('sel-endpoint');
+  const eps = detail.endpoints || {};
+  sel.innerHTML = Object.keys(eps).map(k => `<option value="${k}" ${k === config.endpoint ? 'selected' : ''}>${eps[k].display_name || k}</option>`).join('');
+  onEndpointChange();
+}
+
+async function onEndpointChange() {
+  const vendor = document.getElementById('sel-vendor').value;
+  const endpoint = document.getElementById('sel-endpoint').value;
+  const detail = await api('/api/vendors/' + vendor);
+  const ep = (detail.endpoints || {})[endpoint];
+  if (!ep) return;
+  const sel = document.getElementById('sel-model');
+  const models = ep.models || [];
+  sel.innerHTML = models.map(m => `<option value="${m}" ${m === config.model ? 'selected' : ''}>${m}</option>`).join('');
+  if (models.length === 0) {
+    sel.innerHTML = `<option value="${config.model}">${config.model}</option>`;
+  }
+}
+
+async function saveActive() {
+  try {
+    const r = await api('/api/config/active', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        vendor: document.getElementById('sel-vendor').value,
+        endpoint: document.getElementById('sel-endpoint').value,
+        model: document.getElementById('sel-model').value,
+      })
+    });
+    config.vendor = r.vendor; config.endpoint = r.endpoint; config.model = r.model;
+    toast('Active model updated');
+    renderOverview();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function saveAPIKey() {
+  try {
+    await api(`/api/vendors/${config.vendor}/endpoints/${config.endpoint}/apikey`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ api_key: document.getElementById('inp-apikey').value, vendor_scoped: false })
+    });
+    document.getElementById('inp-apikey').value = '';
+    toast('API key saved');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- Vendors ---
+function renderVendors() {
+  const html = vendors.map(v => {
+    const eps = v.endpoint_ids || [];
+    return `<div class="card">
+      <div class="card-title">${esc(v.display_name||v.id)} <span class="badge ${v.has_api_key?'badge-green':'badge-red'}">${v.has_api_key?'Key Set':'No Key'}</span></div>
+      <div class="form-group" style="margin-bottom:4px"><label style="font-size:11px">ID</label><span class="mono" style="font-size:12px">${esc(v.id)}</span></div>
+      ${eps.length ? `<div style="margin:4px 0"><label style="font-size:11px;color:var(--text2)">Endpoints</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${eps.map(e => `<span class="badge badge-green">${esc(e)}</span>`).join('')}</div>
+      </div>` : '<p style="color:var(--text2);font-size:12px">No endpoints</p>'}
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="editVendor('${esc(v.id)}')">Edit Vendor</button>
+        <button class="btn btn-sm btn-primary" onclick="showEpModal('${esc(v.id)}')">+ Endpoint</button>
+        ${eps.map(e => `<button class="btn btn-sm" onclick="editEndpoint('${esc(v.id)}','${esc(e)}')">${esc(e)}</button>`).join('')}
+        <button class="btn btn-sm btn-danger" onclick="deleteVendor('${esc(v.id)}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('vendors-content').innerHTML = html;
+}
+
+function showVendorModal(editId) {
+  document.getElementById('vendor-modal').style.display = 'flex';
+  document.getElementById('vendor-modal-title').textContent = editId ? 'Edit Vendor: '+editId : 'New Vendor';
+  document.getElementById('v-edit-name').value = editId || '';
+  if (editId) {
+    const v = vendors.find(x => x.id === editId);
+    document.getElementById('v-f-id').value = editId;
+    document.getElementById('v-f-id').readOnly = true;
+    document.getElementById('v-f-display').value = v?.display_name || '';
+    document.getElementById('v-f-apikey').value = '';
+    document.getElementById('v-f-apikey').placeholder = v?.has_api_key ? 'Leave empty to keep current' : 'Leave empty for no key';
+  } else {
+    document.getElementById('v-f-id').value = '';
+    document.getElementById('v-f-id').readOnly = false;
+    document.getElementById('v-f-display').value = '';
+    document.getElementById('v-f-apikey').value = '';
+  }
+}
+function hideVendorModal() { document.getElementById('vendor-modal').style.display = 'none'; }
+function editVendor(id) { showVendorModal(id); }
+
+async function saveVendor() {
+  try {
+    const editId = document.getElementById('v-edit-name').value;
+    const id = editId || document.getElementById('v-f-id').value.trim();
+    if (!id) { toast('Vendor ID required', false); return; }
+    const display = document.getElementById('v-f-display').value.trim();
+    const apiKey = document.getElementById('v-f-apikey').value;
+    if (editId) {
+      await api('/api/vendors/'+encodeURIComponent(id), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({display_name: display, api_key: apiKey || '__unchanged__'})
+      });
+      toast('Vendor updated');
+    } else {
+      await api('/api/vendors', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name: id, display_name: display, api_key: apiKey})
+      });
+      toast('Vendor added');
+    }
+    hideVendorModal();
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function deleteVendor(id) {
+  if (!confirm('Delete vendor "'+id+'" and all its endpoints?')) return;
+  try {
+    await api('/api/vendors/'+encodeURIComponent(id), {method:'DELETE'});
+    toast('Vendor deleted');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+function showEpModal(vendorId, editName) {
+  document.getElementById('ep-modal').style.display = 'flex';
+  document.getElementById('ep-vendor').value = vendorId;
+  document.getElementById('ep-edit-name').value = editName || '';
+  document.getElementById('ep-modal-title').textContent = editName ? `Edit Endpoint: ${vendorId}/${editName}` : `New Endpoint for ${vendorId}`;
+  document.getElementById('ep-apikey-current').style.display = 'none';
+  if (editName) {
+    document.getElementById('ep-f-name').value = editName;
+    document.getElementById('ep-f-name').readOnly = true;
+    // Load current endpoint data
+    api('/api/vendors/'+encodeURIComponent(vendorId)).then(detail => {
+      const ep = detail.endpoints?.[editName];
+      if (ep) {
+        document.getElementById('ep-f-protocol').value = ep.protocol || 'openai';
+        document.getElementById('ep-f-baseurl').value = ep.base_url || '';
+        if (ep.has_api_key) {
+          document.getElementById('ep-apikey-current').style.display = '';
+          document.getElementById('ep-apikey-masked').textContent = '••••••••';
+        }
+      }
+    }).catch(()=>{});
+    document.getElementById('ep-f-apikey').value = '';
+    document.getElementById('ep-f-apikey').placeholder = 'Leave empty to keep current';
+  } else {
+    document.getElementById('ep-f-name').value = '';
+    document.getElementById('ep-f-name').readOnly = false;
+    document.getElementById('ep-f-protocol').value = 'openai';
+    document.getElementById('ep-f-baseurl').value = '';
+    document.getElementById('ep-f-apikey').value = '';
+    document.getElementById('ep-f-apikey').placeholder = 'Leave empty to use vendor key';
+  }
+}
+function hideEpModal() { document.getElementById('ep-modal').style.display = 'none'; }
+function editEndpoint(vendor, endpoint) { showEpModal(vendor, endpoint); }
+
+async function saveEndpoint() {
+  try {
+    const vendor = document.getElementById('ep-vendor').value;
+    const editName = document.getElementById('ep-edit-name').value;
+    const name = editName || document.getElementById('ep-f-name').value.trim();
+    if (!name) { toast('Endpoint name required', false); return; }
+    const protocol = document.getElementById('ep-f-protocol').value;
+    const baseUrl = document.getElementById('ep-f-baseurl').value.trim();
+    const apiKey = document.getElementById('ep-f-apikey').value;
+
+    if (editName) {
+      // Update existing endpoint config
+      await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(name), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({protocol, base_url: baseUrl})
+      });
+      // Set optional API key if provided
+      if (apiKey) {
+        await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(name)+'/apikey', {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({api_key: apiKey})
+        });
+      }
+      toast('Endpoint updated');
+    } else {
+      await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name, protocol, base_url: baseUrl, api_key: apiKey})
+      });
+      toast('Endpoint added');
+    }
+    hideEpModal();
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function clearEndpointKey() {
+  try {
+    const vendor = document.getElementById('ep-vendor').value;
+    const name = document.getElementById('ep-edit-name').value;
+    await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(name)+'/apikey', {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({api_key: ''})
+    });
+    document.getElementById('ep-apikey-current').style.display = 'none';
+    toast('Endpoint key cleared');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function deleteEndpoint(vendor, endpoint) {
+  if (!confirm('Delete endpoint "'+endpoint+'"?')) return;
+  try {
+    await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(endpoint), {method:'DELETE'});
+    toast('Endpoint deleted');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- MCP ---
+function renderMCP() {
+  const servers = mcpServers;
+  if (servers.length === 0) {
+    document.getElementById('mcp-content').innerHTML = '<div class="card"><p style="color:var(--text2)">No MCP servers configured.</p></div>';
+    return;
+  }
+  const html = servers.map(s => {
+    const rt = s.runtime;
+    let statusBadge;
+    if (rt) {
+      if (rt.disabled) statusBadge = '<span class="badge badge-red">Disabled</span>';
+      else if (rt.connected) statusBadge = '<span class="badge badge-green">Connected</span>';
+      else if (rt.pending) statusBadge = '<span class="badge badge-yellow">Pending</span>';
+      else if (rt.error) statusBadge = '<span class="badge badge-red">Error</span>';
+      else statusBadge = '<span class="badge badge-yellow">Idle</span>';
+    } else {
+      statusBadge = '<span class="badge badge-red">Not Running</span>';
+    }
+    const typ = s.type || (s.url ? 'http' : 'stdio');
+    const args = (s.args || []).map(a => `<code>${esc(a)}</code>`).join(' ');
+    const envKeys = Object.keys(s.env || {});
+    const envHtml = envKeys.length > 0
+      ? envKeys.map(k => `<div class="mono" style="margin:2px 0">${esc(k)}=${s.env[k].startsWith('$') ? '<span style="color:var(--text2)">•••</span>' : esc(s.env[k])}</div>`).join('')
+      : '';
+    const headerKeys = Object.keys(s.headers || {});
+    const headersHtml = headerKeys.length > 0
+      ? headerKeys.map(k => `<div class="mono" style="margin:2px 0">${esc(k)}: ${esc(s.headers[k])}</div>`).join('')
+      : '';
+    const toolsHtml = rt && rt.tools && rt.tools.length > 0
+      ? rt.tools.map(t => `<span class="badge badge-green" style="font-size:10px">${esc(t)}</span>`).join(' ')
+      : '';
+    return `<div class="card">
+      <div class="card-title">${esc(s.name)} ${statusBadge} <span class="badge badge-yellow" style="font-size:10px">${esc(typ)}</span></div>
+      <div class="table-wrap"><table>
+        <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+        ${s.command ? `<tr><td>Command</td><td class="mono">${esc(s.command)}</td></tr>` : ''}
+        ${args ? `<tr><td>Args</td><td>${args}</td></tr>` : ''}
+        ${envHtml ? `<tr><td>Environment</td><td>${envHtml}</td></tr>` : ''}
+        ${s.url ? `<tr><td>URL</td><td class="mono">${esc(s.url)}</td></tr>` : ''}
+        ${headersHtml ? `<tr><td>Headers</td><td>${headersHtml}</td></tr>` : ''}
+        ${rt && rt.error ? `<tr><td>Error</td><td style="color:var(--red)">${esc(rt.error)}</td></tr>` : ''}
+        ${toolsHtml ? `<tr><td>Tools</td><td style="display:flex;flex-wrap:wrap;gap:4px">${toolsHtml}</td></tr>` : ''}
+      </table></div>
+      <div style="margin-top:8px"><button class="btn btn-danger btn-sm" onclick="removeMCPServer('${esc(s.name)}')">Remove</button></div>
+    </div>`;
+  }).join('');
+  document.getElementById('mcp-content').innerHTML = html;
+}
+
+async function addMCPServer() {
+  try {
+    const name = document.getElementById('mcp-name').value.trim();
+    if (!name) { toast('Name is required', false); return; }
+    const typ = document.getElementById('mcp-type').value;
+    const server = { name, type: typ };
+    if (typ === 'stdio') {
+      const cmd = document.getElementById('mcp-command').value.trim();
+      if (!cmd) { toast('Command is required', false); return; }
+      server.command = cmd;
+      const argsStr = document.getElementById('mcp-args').value.trim();
+      server.args = argsStr ? argsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    } else {
+      const url = document.getElementById('mcp-url').value.trim();
+      if (!url) { toast('URL is required', false); return; }
+      server.url = url;
+      const hdrStr = document.getElementById('mcp-headers').value.trim();
+      if (hdrStr) {
+        server.headers = {};
+        hdrStr.split('\n').forEach(line => {
+          const idx = line.indexOf(':');
+          if (idx > 0) server.headers[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+        });
+      }
+    }
+    const envStr = document.getElementById('mcp-env').value.trim();
+    if (envStr) {
+      server.env = {};
+      envStr.split('\n').forEach(line => {
+        const idx = line.indexOf('=');
+        if (idx > 0) server.env[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+      });
+    }
+    await api('/api/mcp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(server) });
+    toast('MCP server added');
+    document.getElementById('mcp-name').value = '';
+    document.getElementById('mcp-command').value = '';
+    document.getElementById('mcp-args').value = '';
+    document.getElementById('mcp-url').value = '';
+    document.getElementById('mcp-headers').value = '';
+    document.getElementById('mcp-env').value = '';
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function removeMCPServer(name) {
+  try {
+    await api('/api/mcp/' + encodeURIComponent(name), { method: 'DELETE' });
+    toast('MCP server removed');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- IM ---
+let imRuntime = [];
+
+function renderIM() {
+  const im = config.im || {};
+  const adapters = im.adapters || {};
+  const rtMap = {};
+  imRuntime.forEach(r => rtMap[r.adapter] = r);
+
+  // Group CONFIG adapters by platform
+  const configGroups = {};
+  for (const [name, cfg] of Object.entries(adapters)) {
+    const platform = rtMap[name]?.platform || cfg.platform || 'other';
+    if (!configGroups[platform]) configGroups[platform] = [];
+    configGroups[platform].push({name, cfg, rt: rtMap[name], hasConfig: true});
+  }
+
+  // Find persisted-only adapters (no config, only runtime/persisted binding)
+  const persistedOnly = [];
+  for (const rt of imRuntime) {
+    if (!adapters[rt.adapter]) {
+      persistedOnly.push(rt);
+    }
+  }
+
+  const platformNames = {qq:'QQ',telegram:'Telegram',discord:'Discord',slack:'Slack',dingtalk:'DingTalk',feishu:'Feishu',pc:'PC Bridge',dummy:'Eval (Dummy)',other:'Other'};
+
+  let html = `<div class="card">
+    <div class="card-title">IM Gateway <span class="badge ${im.enabled?'badge-green':'badge-yellow'}">${im.enabled?'Enabled':'Disabled'}</span>
+      <span class="badge badge-yellow" style="font-size:10px">${esc(im.output_mode||'verbose')}</span></div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+      <tr><td>Streaming</td><td>${im.streaming?.enabled?'Enabled':'Disabled'}</td></tr>
+      <tr><td>Adapters</td><td>${Object.keys(adapters).length} configured</td></tr>
+    </table></div>
+  </div>`;
+
+  // Render config adapters grouped by platform
+  for (const [platform, items] of Object.entries(configGroups)) {
+    const pName = platformNames[platform] || platform;
+    html += `<h3 style="font-size:14px;margin:16px 0 8px;color:var(--accent)">${esc(pName)}</h3>`;
+    for (const item of items) {
+      html += renderIMAdapterCard(item.name, item.cfg, item.rt);
+    }
+  }
+
+  // Render persisted-only adapters (ghost adapters — binding exists but no config)
+  if (persistedOnly.length > 0) {
+    html += `<h3 style="font-size:14px;margin:16px 0 8px;color:var(--text2)">Persisted Bindings (no config)</h3>`;
+    for (const rt of persistedOnly) {
+      html += renderGhostAdapterCard(rt);
+    }
+  }
+
+  document.getElementById('im-content').innerHTML = html;
+}
+
+function renderIMAdapterCard(name, cfg, rt) {
+  const targets = cfg.targets || [];
+  let statusBadge, dotClass;
+  if (rt) {
+    if (rt.disabled) { statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red'; }
+    else if (rt.muted) { statusBadge='<span class="badge badge-yellow">Muted</span>'; dotClass='dot-yellow'; }
+    else if (rt.healthy) { statusBadge='<span class="badge badge-green">Active</span>'; dotClass='dot-green'; }
+    else { statusBadge='<span class="badge badge-red">Error</span>'; dotClass='dot-red'; }
+  } else if (cfg.enabled) {
+    statusBadge='<span class="badge badge-yellow">Configured</span>'; dotClass='dot-yellow';
+  } else {
+    statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red';
+  }
+  let actionBtns = '';
+  if (rt) {
+    if (rt.disabled) actionBtns+=`<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','enable')">Enable</button>`;
+    else {
+      actionBtns+=`<button class="btn btn-sm btn-danger" onclick="imAction('${esc(name)}','disable')">Disable</button>`;
+      actionBtns+= rt.muted
+        ? `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','unmute')">Unmute</button>`
+        : `<button class="btn btn-sm" onclick="imAction('${esc(name)}','mute')">Mute</button>`;
+    }
+  }
+  return `<div class="card">
+    <div class="card-title"><span class="dot ${dotClass}"></span>${esc(name)} ${statusBadge}</div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+      ${cfg.transport?`<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>`:''}
+      ${cfg.command?`<tr><td>Command</td><td class="mono">${esc(cfg.command)} ${(cfg.args||[]).map(a=>esc(a)).join(' ')}</td></tr>`:''}
+      ${targets.length?`<tr><td>Targets</td><td style="display:flex;flex-wrap:wrap;gap:4px">${targets.map(t=>`<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>`:''}
+      ${rt?.bound_dir?`<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>`:''}
+      ${rt?.channel_id?`<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>`:''}
+      ${rt&&rt.all_dirs&&rt.all_dirs.length>1?`<tr><td>All Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d=>`<span class="badge ${d===rt.bound_dir?'badge-green':'badge-yellow'}" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>`:''}
+      ${rt?.status?`<tr><td>Runtime</td><td class="mono">${esc(rt.status)}</td></tr>`:''}
+      ${rt?.last_error?`<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>`:''}
+      ${(cfg.allow_from||[]).length?`<tr><td>Allow From</td><td>${cfg.allow_from.map(a=>`<code>${esc(a)}</code>`).join(', ')}</td></tr>`:''}
+    </table></div>
+    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+      ${actionBtns}
+      <button class="btn btn-sm" onclick="editIMAdapter('${esc(name)}')">Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteIMAdapter('${esc(name)}')">Delete</button>
+    </div>
+  </div>`;
+}
+
+function renderGhostAdapterCard(rt) {
+  const pName = {qq:'QQ',telegram:'Telegram',discord:'Discord',slack:'Slack',dingtalk:'DingTalk',feishu:'Feishu',pc:'PC Bridge',dummy:'Eval (Dummy)'}[rt.platform] || rt.platform || 'Unknown';
+  return `<div class="card" style="opacity:.7;border-style:dashed">
+    <div class="card-title"><span class="dot dot-yellow"></span>${esc(rt.adapter)} <span class="badge badge-yellow">Binding Only</span> <span class="badge badge-yellow" style="font-size:10px">${esc(pName)}</span></div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+      ${rt.bound_dir?`<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>`:''}
+      ${rt.channel_id?`<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>`:''}
+      ${rt.all_dirs&&rt.all_dirs.length>0?`<tr><td>All Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d=>`<span class="badge badge-yellow" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>`:''}
+      ${rt.status?`<tr><td>Status</td><td class="mono">${esc(rt.status)}</td></tr>`:''}
+    </table></div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="btn btn-sm btn-danger" onclick="unbindAdapter('${esc(rt.adapter)}')">Remove Binding</button>
+    </div>
+  </div>`;
+}
+
+async function loadIMRuntime() {
+  try { imRuntime = await api('/api/im/status'); } catch(e) { imRuntime = []; }
+}
+
+async function imAction(adapter, action) {
+  try {
+    await api('/api/im/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adapter,action})});
+    toast(`${adapter}: ${action} OK`);
+    await loadIMRuntime(); renderIM();
+  } catch(e) { toast(e.message, false); }
+}
+
+function showIMModal(editName) {
+  const modal = document.getElementById('im-modal');
+  modal.style.display = 'flex';
+  document.getElementById('im-modal-title').textContent = editName ? 'Edit Adapter: '+editName : 'New Adapter';
+  document.getElementById('im-edit-name').value = editName || '';
+  if (editName) {
+    const cfg = (config.im?.adapters||{})[editName] || {};
+    document.getElementById('im-f-name').value = editName;
+    document.getElementById('im-f-name').readOnly = true;
+    document.getElementById('im-f-platform').value = cfg.platform || 'other';
+    document.getElementById('im-f-enabled').value = cfg.enabled !== false ? 'true' : 'false';
+    document.getElementById('im-f-transport').value = cfg.transport || '';
+    document.getElementById('im-f-command').value = cfg.command || '';
+    document.getElementById('im-f-args').value = (cfg.args||[]).join(', ');
+    document.getElementById('im-f-env').value = Object.entries(cfg.env||{}).map(([k,v])=>k+'='+v).join('\n');
+    document.getElementById('im-f-allowfrom').value = (cfg.allow_from||[]).join(', ');
+    document.getElementById('im-f-targets').value = JSON.stringify(cfg.targets||[], null, 2);
+  } else {
+    document.getElementById('im-f-name').value = '';
+    document.getElementById('im-f-name').readOnly = false;
+    document.getElementById('im-f-platform').value = 'qq';
+    document.getElementById('im-f-enabled').value = 'true';
+    document.getElementById('im-f-transport').value = '';
+    document.getElementById('im-f-command').value = '';
+    document.getElementById('im-f-args').value = '';
+    document.getElementById('im-f-env').value = '';
+    document.getElementById('im-f-allowfrom').value = '';
+    document.getElementById('im-f-targets').value = '[]';
+  }
+}
+
+function hideIMModal() { document.getElementById('im-modal').style.display = 'none'; }
+
+function editIMAdapter(name) { showIMModal(name); }
+
+async function saveIMAdapter() {
+  try {
+    const editName = document.getElementById('im-edit-name').value;
+    const name = editName || document.getElementById('im-f-name').value.trim();
+    if (!name) { toast('Name is required', false); return; }
+    const argsStr = document.getElementById('im-f-args').value.trim();
+    const args = argsStr ? argsStr.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    const envStr = document.getElementById('im-f-env').value.trim();
+    const env = {};
+    if (envStr) envStr.split('\n').forEach(l=>{const i=l.indexOf('=');if(i>0)env[l.substring(0,i).trim()]=l.substring(i+1).trim();});
+    const allowStr = document.getElementById('im-f-allowfrom').value.trim();
+    const allow_from = allowStr ? allowStr.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    let targets = [];
+    try { targets = JSON.parse(document.getElementById('im-f-targets').value || '[]'); } catch(e) {}
+    const adapter = {
+      enabled: document.getElementById('im-f-enabled').value === 'true',
+      platform: document.getElementById('im-f-platform').value,
+      transport: document.getElementById('im-f-transport').value.trim(),
+      command: document.getElementById('im-f-command').value.trim(),
+    };
+    if (args.length) adapter.args = args;
+    if (Object.keys(env).length) adapter.env = env;
+    if (allow_from.length) adapter.allow_from = allow_from;
+    if (targets.length) adapter.targets = targets;
+    await api('/api/im/adapters/'+encodeURIComponent(name), {
+      method: editName ? 'PUT' : 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(adapter)
+    });
+    toast(editName ? 'Adapter updated' : 'Adapter added');
+    hideIMModal();
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function deleteIMAdapter(name) {
+  if (!confirm('Delete adapter "'+name+'"?')) return;
+  try {
+    await api('/api/im/adapters/'+encodeURIComponent(name), {method:'DELETE'});
+    toast('Adapter deleted');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function unbindAdapter(name) {
+  if (!confirm('Remove persisted binding for "'+name+'"? The adapter config was already removed; this clears the leftover binding.')) return;
+  try {
+    await api('/api/im/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adapter:name,action:'unbind'})});
+    toast('Binding removed');
+    await loadIMRuntime(); renderIM();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- General ---
+function renderGeneral() {
+  document.getElementById('gen-language').value = config.language || 'en';
+  document.getElementById('gen-mode').value = config.default_mode || 'supervised';
+  document.getElementById('gen-maxiter').value = config.max_iterations || 0;
+  document.getElementById('gen-dirs').value = (config.allowed_dirs || []).join(', ');
+}
+
+async function saveGeneral() {
+  try {
+    await api('/api/general', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        language: document.getElementById('gen-language').value,
+        default_mode: document.getElementById('gen-mode').value,
+        max_iterations: parseInt(document.getElementById('gen-maxiter').value) || 0,
+        allowed_dirs: document.getElementById('gen-dirs').value.split(',').map(s => s.trim()).filter(Boolean),
+        system_prompt: config.system_prompt || '',
+      })
+    });
+    toast('General settings saved');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- Impersonate ---
+function renderImpersonate() {
+  if (!impersonateData) {
+    document.getElementById('impersonate-content').innerHTML = '<div class="card"><p>Not available</p></div>';
+    return;
+  }
+  const cur = impersonateData.current || {};
+  const presets = impersonateData.presets || [];
+  const currentPreset = cur.preset || 'none';
+  const customVersion = cur.custom_version || '';
+  const customHeaders = cur.custom_headers || {};
+
+  let html = `<div class="card">
+    <div class="card-title">Current Identity <span class="badge ${currentPreset!=='none'?'badge-green':'badge-yellow'}">${esc(presets.find(p=>p.id===currentPreset)?.display_name || currentPreset)}</span></div>
+    <div class="form-group"><label>Preset</label>
+      <select id="imp-preset" onchange="impPresetChanged()">
+        ${presets.map(p => `<option value="${esc(p.id)}" ${p.id===currentPreset?'selected':''}>${esc(p.display_name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label>Version</label>
+      <input id="imp-version" value="${esc(customVersion)}" placeholder="auto">
+    </div>
+  </div>`;
+
+  // Custom headers
+  const headerKeys = Object.keys(customHeaders);
+  html += `<div class="card" style="margin-top:12px">
+    <div class="card-title">Custom Headers <button class="btn btn-sm" onclick="addImpHeader()" style="margin-left:8px">+ Add</button></div>
+    <div id="imp-headers">
+      ${headerKeys.length === 0 ? '<p style="color:var(--text2);font-size:12px">No custom headers</p>' :
+        headerKeys.map((k,i) => `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+          <input class="imp-hk" value="${esc(k)}" style="flex:1" placeholder="Header name">
+          <input class="imp-hv" value="${esc(customHeaders[k])}" style="flex:2" placeholder="Header value">
+          <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">×</button>
+        </div>`).join('')}
+    </div>
+  </div>`;
+
+  html += `<button class="btn btn-primary" onclick="saveImpersonate()" style="margin-top:12px">Save & Apply</button>`;
+  document.getElementById('impersonate-content').innerHTML = html;
+}
+
+function impPresetChanged() {
+  const sel = document.getElementById('imp-preset').value;
+  const presets = impersonateData.presets || [];
+  const p = presets.find(x => x.id === sel);
+  if (p && !document.getElementById('imp-version').value) {
+    document.getElementById('imp-version').placeholder = p.default_version || 'auto';
+  }
+}
+
+function addImpHeader() {
+  const container = document.getElementById('imp-headers');
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+  div.innerHTML = `<input class="imp-hk" value="" style="flex:1" placeholder="Header name">
+    <input class="imp-hv" value="" style="flex:2" placeholder="Header value">
+    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">×</button>`;
+  container.appendChild(div);
+}
+
+async function saveImpersonate() {
+  try {
+    const preset = document.getElementById('imp-preset').value;
+    const version = document.getElementById('imp-version').value.trim();
+    const headers = {};
+    document.querySelectorAll('#imp-headers > div').forEach(row => {
+      const k = row.querySelector('.imp-hk')?.value.trim();
+      const v = row.querySelector('.imp-hv')?.value.trim();
+      if (k) headers[k] = v;
+    });
+    await api('/api/impersonate', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({preset, custom_version: version, custom_headers: headers})
+    });
+    toast('Impersonation updated');
+    impersonateData = await api('/api/impersonate');
+    renderImpersonate();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- System Prompt ---
+let promptMode = 'preview'; // 'preview' or 'edit'
+
+function renderPrompt() {
+  setPromptMode(promptMode);
+}
+
+function setPromptMode(mode) {
+  promptMode = mode;
+  const previewBtn = document.getElementById('prompt-mode-preview');
+  const editBtn = document.getElementById('prompt-mode-edit');
+  const previewDiv = document.getElementById('prompt-preview');
+  const editDiv = document.getElementById('prompt-edit');
+
+  if (mode === 'preview') {
+    previewBtn.classList.add('btn-primary');
+    previewBtn.classList.remove('btn');
+    editBtn.classList.remove('btn-primary');
+    editBtn.classList.add('btn');
+    previewDiv.style.display = '';
+    editDiv.style.display = 'none';
+    const text = config.system_prompt || '';
+    previewDiv.innerHTML = text ? renderMarkdown(text) : '<p style="color:var(--text2)">No system prompt configured. Click "Edit" to add one.</p>';
+  } else {
+    editBtn.classList.add('btn-primary');
+    editBtn.classList.remove('btn');
+    previewBtn.classList.remove('btn-primary');
+    previewBtn.classList.add('btn');
+    previewDiv.style.display = 'none';
+    editDiv.style.display = '';
+    document.getElementById('prompt-textarea').value = config.system_prompt || '';
+  }
+}
+
+// Lightweight markdown renderer (no external deps)
+function renderMarkdown(text) {
+  let html = esc(text);
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    return `<pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;margin:8px 0"><code>${code}</code></pre>`;
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg);padding:2px 6px;border-radius:3px;font-size:12px">$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h4 style="margin:12px 0 4px;font-size:14px">$1</h4>');
+  html = html.replace(/^## (.+)$/gm, '<h3 style="margin:16px 0 6px;font-size:15px">$1</h3>');
+  html = html.replace(/^# (.+)$/gm, '<h2 style="margin:20px 0 8px;font-size:16px">$1</h2>');
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px">$1</li>');
+  html = html.replace(/(<li[^>]*>.*<\/li>\n?)+/g, m => '<ul style="margin:4px 0;padding-left:0;list-style:disc inside">' + m + '</ul>');
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">');
+  // Line breaks → paragraphs
+  html = html.replace(/\n\n+/g, '</p><p style="margin:6px 0;line-height:1.6">');
+  html = html.replace(/\n/g, '<br>');
+  html = '<p style="margin:0;line-height:1.6">' + html + '</p>';
+  return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;max-height:600px;overflow-y:auto">${html}</div>`;
+}
+
+async function saveSystemPrompt() {
+  try {
+    const text = document.getElementById('prompt-textarea').value;
+    config.system_prompt = text;
+    await api('/api/general', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        language: config.language || 'en',
+        default_mode: config.default_mode || 'supervised',
+        max_iterations: config.max_iterations || 0,
+        allowed_dirs: config.allowed_dirs || [],
+        system_prompt: text,
+      })
+    });
+    toast('System prompt saved');
+    setPromptMode('preview');
+  } catch(e) { toast(e.message, false); }
+}
+
+async function resetSystemPrompt() {
+  if (!confirm('Reset system prompt to default?')) return;
+  try {
+    await api('/api/general', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        language: config.language || 'en',
+        default_mode: config.default_mode || 'supervised',
+        max_iterations: config.max_iterations || 0,
+        allowed_dirs: config.allowed_dirs || [],
+        system_prompt: '__reset__',
+      })
+    });
+    toast('System prompt reset');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- Init ---
+loadAll();
+
+async function triggerRestart() {
+  if (!confirm('Restart ggcode? This will close the WebUI and restart the daemon process.')) return;
+  try {
+    await api('/api/restart', {method: 'POST'});
+    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#666"><div style="text-align:center"><h2>Restarting...</h2><p>ggcode is restarting. This window will close in a moment.</p></div></div>';
+    setTimeout(() => window.close(), 3000);
+  } catch(e) {
+    // Server shut down before response — that's expected
+    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#666"><div style="text-align:center"><h2>Restarting...</h2><p>ggcode is restarting. This window will close in a moment.</p></div></div>';
+    setTimeout(() => window.close(), 3000);
+  }
+}
+</script>
+</body>
+</html>
