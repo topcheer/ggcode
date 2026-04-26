@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -27,6 +28,7 @@ import (
 // A2AOAuth2Config is the runtime config for A2A OAuth2 authentication.
 type A2AOAuth2Config struct {
 	ClientID     string
+	ClientSecret string // optional; GitHub requires this even with PKCE
 	AuthorizeURL string
 	TokenURL     string
 	Scopes       []string
@@ -56,13 +58,25 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 		return nil, fmt.Errorf("generate state: %w", err)
 	}
 
-	// Start local callback server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Start local callback server.
+	// Use localhost (not 127.0.0.1) because GitHub OAuth Apps treat them differently
+	// and the registered callback URL must match exactly.
+	// Port 8089 is the default; users can override via env var GGCODE_OAUTH_PORT.
+	oauthPort := os.Getenv("GGCODE_OAUTH_PORT")
+	if oauthPort == "" {
+		oauthPort = "8089"
+	}
+	listenAddr := "localhost:" + oauthPort
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		return nil, fmt.Errorf("listen: %w", err)
+		// Port might be in use; try a random port as fallback
+		listener, err = net.Listen("tcp", "localhost:0")
+		if err != nil {
+			return nil, fmt.Errorf("listen: %w", err)
+		}
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
 
 	// Build authorization URL
 	authURL, _ := url.Parse(cfg.AuthorizeURL)
@@ -129,27 +143,50 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 }
 
 func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redirectURI, verifier string) (*PKCEToken, error) {
-	data := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-		"client_id":     {cfg.ClientID},
-		"code_verifier": {verifier},
+	// GitHub requires JSON body for PKCE token exchange (not form-urlencoded).
+	// With form-urlencoded, GitHub expects client_secret (confidential client).
+	// With JSON body + Accept: application/json, GitHub accepts PKCE (public client).
+	reqBody := map[string]string{
+		"grant_type":    "authorization_code",
+		"code":          code,
+		"redirect_uri":  redirectURI,
+		"client_id":     cfg.ClientID,
+		"code_verifier": verifier,
 	}
+	// GitHub requires client_secret even with PKCE (confidential client).
+	// Read from config or GGCODE_OAUTH_CLIENT_SECRET env var.
+	if cfg.ClientSecret != "" {
+		reqBody["client_secret"] = cfg.ClientSecret
+	} else if secret := os.Getenv("GGCODE_OAUTH_CLIENT_SECRET"); secret != "" {
+		reqBody["client_secret"] = secret
+	}
+	bodyJSON, _ := json.Marshal(reqBody)
 
-	resp, err := http.PostForm(cfg.TokenURL, data)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("POST token endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	contentType := resp.Header.Get("Content-Type")
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Debug: log raw response for troubleshooting
+	fmt.Fprintf(os.Stderr, "  Token response (status %d, content-type: %s): %s\n",
+		resp.StatusCode, contentType, string(body))
+
 	// GitHub returns JSON when Accept header is set, otherwise returns URL-encoded
-	contentType := resp.Header.Get("Content-Type")
 	var raw map[string]interface{}
 	if strings.Contains(contentType, "application/json") {
 		if err := json.Unmarshal(body, &raw); err != nil {
@@ -191,13 +228,21 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 // StartDeviceFlow starts a Device Authorization flow.
 // No client_secret or browser needed. User visits a URL and enters a code.
 func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error) {
-	// Request device code
-	data := url.Values{
-		"client_id": {cfg.ClientID},
-		"scope":     {strings.Join(cfg.Scopes, " ")},
+	// Request device code via JSON (GitHub requires Accept: application/json)
+	reqBody := map[string]string{
+		"client_id": cfg.ClientID,
+		"scope":     strings.Join(cfg.Scopes, " "),
 	}
+	bodyJSON, _ := json.Marshal(reqBody)
 
-	resp, err := http.PostForm(cfg.AuthorizeURL, data) // AuthorizeURL = device_authorization_url for device flow
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.AuthorizeURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("create device code request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("device code request: %w", err)
 	}
@@ -210,13 +255,30 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 		Interval        int    `json:"interval"`
 		ExpiresIn       int    `json:"expires_in"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&deviceResp); err != nil {
+	respBody, _ := io.ReadAll(resp.Body)
+	fmt.Fprintf(os.Stderr, "  Device code response: %s\n", string(respBody))
+
+	// Check for error response first
+	var errResp struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	if json.Unmarshal(respBody, &errResp) == nil && errResp.Error != "" {
+		return nil, fmt.Errorf("device code request failed: %s (%s)", errResp.Error, errResp.ErrorDescription)
+	}
+
+	if err := json.Unmarshal(respBody, &deviceResp); err != nil {
 		return nil, fmt.Errorf("parse device response: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "\n🔐 Device Authentication Required\n")
 	fmt.Fprintf(os.Stderr, "   Visit: %s\n", deviceResp.VerificationURI)
 	fmt.Fprintf(os.Stderr, "   Enter code: %s\n\n", deviceResp.UserCode)
+
+	// Copy code to clipboard and open browser automatically
+	copyToClipboard(deviceResp.UserCode)
+	fmt.Fprintf(os.Stderr, "   ✅ Code copied to clipboard!\n")
+	openBrowser(deviceResp.VerificationURI)
 
 	interval := time.Duration(deviceResp.Interval) * time.Second
 	if interval < 5*time.Second {
@@ -246,26 +308,40 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 }
 
 func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string) (*PKCEToken, error) {
+	// Device flow is for public clients — no client_secret needed.
 	data := url.Values{
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"client_id":   {cfg.ClientID},
 		"device_code": {deviceCode},
 	}
 
-	resp, err := http.PostForm(cfg.TokenURL, data)
+	bodyJSON, _ := json.Marshal(map[string]string{
+		"grant_type":  "urn:ietf:params:oauth:grant-type:device_code",
+		"client_id":   cfg.ClientID,
+		"device_code": deviceCode,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("create device token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("poll token: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	_ = data // suppress unused
 	var raw map[string]interface{}
 	json.Unmarshal(body, &raw)
 
-	if errDesc, ok := raw["error_description"].(string); ok {
-		return nil, fmt.Errorf("%s", errDesc)
-	}
 	if errMsg, ok := raw["error"].(string); ok {
+		if errDesc, ok := raw["error_description"].(string); ok {
+			return nil, fmt.Errorf("%s: %s", errMsg, errDesc)
+		}
 		return nil, fmt.Errorf("%s", errMsg)
 	}
 
@@ -405,4 +481,37 @@ func openBrowser(url string) {
 	}
 	// Best-effort; failure is non-fatal — URL already printed to stderr.
 	_ = cmd.Start()
+}
+
+// copyToClipboard copies text to the system clipboard (best-effort).
+func copyToClipboard(text string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "linux":
+		// Try wl-copy (Wayland) first, fall back to xclip (X11)
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy", text)
+		} else if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else {
+			return
+		}
+	case "windows":
+		cmd = exec.Command("clip")
+	default:
+		return
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	stdin.Write([]byte(text))
+	stdin.Close()
+	_ = cmd.Wait()
 }
