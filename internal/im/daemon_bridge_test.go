@@ -193,3 +193,172 @@ func TestDaemonBridgeNoCancelStress(t *testing.T) {
 		t.Fatalf("expected 100 queued, got %d", count)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Slash command tests
+// ---------------------------------------------------------------------------
+
+func TestHandleSlashCommand_Help(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/help", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Help should list all new commands
+	// (We can't easily capture emitted text, but we verify no panic/error)
+}
+
+func TestHandleSlashCommand_Unknown(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/unknown", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleSlashCommand_MuteSelfNoAdapter(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/muteself", InboundMessage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleSlashCommand_MuteIMCannotMuteSelf(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/muteim telegram", testMsg("telegram"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleSlashCommand_MuteIMNoArg(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/muteim", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleSlashCommand_MuteAllNoBound(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/muteall", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleSlashCommand_RestartNoHook(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/restart", testMsg("tg"))
+	if err == nil {
+		t.Fatal("expected error when no restart hook")
+	}
+}
+
+func TestHandleSlashCommand_RestartWithHook(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	restarted := false
+	bridge.SetRestartHook(func() { restarted = true })
+
+	err := bridge.handleSlashCommand(context.Background(), "/restart", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if !restarted {
+		t.Error("expected restart hook to fire")
+	}
+}
+
+func TestHandleSlashCommand_MuteSelfWithAdapter(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	// MuteSelf with an adapter name but no binding — should not panic
+	err := bridge.handleSlashCommand(context.Background(), "/muteself", testMsg("telegram"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleListIMNoAdapters(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	err := bridge.handleSlashCommand(context.Background(), "/listim", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleListIMWithAdapters(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	// Add a binding so there's something to show
+	mgr.currentBindings["qq"] = &ChannelBinding{
+		Adapter:   "qq",
+		Platform:  PlatformQQ,
+		ChannelID: "test-channel",
+	}
+
+	err := bridge.handleSlashCommand(context.Background(), "/listim", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleListIMWithMutedAdapter(t *testing.T) {
+	mgr := NewManager()
+	emitter := NewIMEmitter(mgr, "en", t.TempDir())
+	bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+	mgr.currentBindings["qq"] = &ChannelBinding{
+		Adapter:   "qq",
+		Platform:  PlatformQQ,
+		ChannelID: "test-channel",
+		Muted:     true,
+	}
+
+	err := bridge.handleSlashCommand(context.Background(), "/listim", testMsg("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- test helpers ---
+
+func testMsg(adapter string) InboundMessage {
+	return InboundMessage{
+		Text:     "/test",
+		Envelope: Envelope{Adapter: adapter, Platform: PlatformTelegram},
+	}
+}
