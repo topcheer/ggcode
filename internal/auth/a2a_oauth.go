@@ -779,3 +779,65 @@ func copyToClipboard(text string) {
 	stdin.Close()
 	_ = cmd.Wait()
 }
+
+// ---------------------------------------------------------------------------
+// TokenProvider implementations
+// ---------------------------------------------------------------------------
+
+// PKCETokenProvider is a TokenProvider that uses OAuth2 + PKCE authorization code flow.
+type PKCETokenProvider struct {
+	Config A2AOAuth2Config
+}
+
+// GetToken opens a browser for user authorization and exchanges the code for a token.
+func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	token, err := StartPKCEFlow(ctx, p.Config)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	return token.AccessToken, token.RefreshToken, token.Expiry, nil
+}
+
+// DeviceFlowTokenProvider is a TokenProvider that uses the Device Authorization flow.
+type DeviceFlowTokenProvider struct {
+	Config A2AOAuth2Config
+}
+
+// GetToken displays a device code for user authorization and polls for the token.
+func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	token, err := StartDeviceFlow(ctx, p.Config)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	return token.AccessToken, token.RefreshToken, token.Expiry, nil
+}
+
+// NewTokenProviderFromPreset creates the best TokenProvider for the given provider preset.
+// Prefers PKCE for desktop environments, Device Flow for headless.
+// Set headless=true to force Device Flow.
+func NewTokenProviderFromPreset(provider string, clientSecret string, headless bool) (interface {
+	GetToken(ctx context.Context) (string, string, time.Time, error)
+}, error) {
+	preset := ResolveProviderPreset(provider)
+	if preset == nil {
+		return nil, fmt.Errorf("unknown provider: %s", provider)
+	}
+
+	cfg := A2AOAuth2Config{
+		ClientID:     preset.DefaultClientID,
+		ClientSecret: clientSecret,
+		TokenURL:     preset.TokenURL,
+		Scopes:       preset.DefaultScopes,
+	}
+
+	if headless || !preset.SupportsPKCE {
+		if !preset.SupportsDevice {
+			return nil, fmt.Errorf("provider %s does not support device flow", provider)
+		}
+		cfg.AuthorizeURL = preset.DeviceAuthURL
+		return &DeviceFlowTokenProvider{Config: cfg}, nil
+	}
+
+	cfg.AuthorizeURL = preset.AuthorizeURL
+	return &PKCETokenProvider{Config: cfg}, nil
+}

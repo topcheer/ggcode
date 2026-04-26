@@ -15,6 +15,12 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
+// TokenProvider obtains an OAuth2/OIDC access token interactively.
+// Implementations include PKCE flow, Device flow, or any custom mechanism.
+type TokenProvider interface {
+	GetToken(ctx context.Context) (accessToken, refreshToken string, expiry time.Time, err error)
+}
+
 // Client is an A2A protocol client that sends tasks to remote agents.
 type Client struct {
 	baseURL    string
@@ -23,10 +29,11 @@ type Client struct {
 	card       *AgentCard // cached agent card (nil until discovered)
 
 	// Negotiated auth state (populated after Discover or explicit config)
-	authMethod   string // "", "apiKey", "bearer", "mtls"
-	bearerToken  string // cached OAuth2 access token
-	refreshToken string // for token refresh
-	tokenExpiry  time.Time
+	authMethod    string // "", "apiKey", "bearer", "mtls"
+	bearerToken   string // cached OAuth2 access token
+	refreshToken  string // for token refresh
+	tokenExpiry   time.Time
+	tokenProvider TokenProvider // auto-acquire token when needed
 }
 
 // ClientOption configures a Client.
@@ -50,6 +57,15 @@ func WithMTLS(tlsConfig *tls.Config) ClientOption {
 			},
 		}
 		c.authMethod = "mtls"
+	}
+}
+
+// WithTokenProvider sets a token provider for automatic OAuth2 token acquisition.
+// When NegotiateAuth encounters a server requiring bearer auth and no token is
+// available, it calls the provider to obtain one (e.g., via PKCE or Device flow).
+func WithTokenProvider(p TokenProvider) ClientOption {
+	return func(c *Client) {
+		c.tokenProvider = p
 	}
 }
 
@@ -142,13 +158,11 @@ func (c *Client) NegotiateAuth() error {
 					return nil
 				}
 			case "http", "bearer":
-				if c.bearerToken != "" {
-					c.authMethod = "bearer"
+				if c.tryBearerToken() {
 					return nil
 				}
 			case "oauth2", "openIdConnect":
-				if c.bearerToken != "" {
-					c.authMethod = "bearer"
+				if c.tryBearerToken() {
 					return nil
 				}
 			case "mutualTLS":
@@ -166,6 +180,32 @@ func (c *Client) NegotiateAuth() error {
 
 	return fmt.Errorf("a2a: server requires authentication but client has no matching credential (schemes: %v)",
 		schemeNames(c.card.SecuritySchemes))
+}
+
+// tryBearerToken checks if we have a valid bearer token, or tries to obtain one.
+func (c *Client) tryBearerToken() bool {
+	// Already have a non-expired token
+	if c.bearerToken != "" && c.tokenExpiry.IsZero() || time.Now().Before(c.tokenExpiry) {
+		c.authMethod = "bearer"
+		return true
+	}
+
+	// Try to obtain a token via the configured provider
+	if c.tokenProvider != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		accessToken, refreshToken, expiry, err := c.tokenProvider.GetToken(ctx)
+		if err == nil && accessToken != "" {
+			c.bearerToken = accessToken
+			c.refreshToken = refreshToken
+			c.tokenExpiry = expiry
+			c.authMethod = "bearer"
+			return true
+		}
+	}
+
+	return false
 }
 
 // SetBearerToken updates the bearer token (e.g., after OAuth2 token refresh).
@@ -189,7 +229,7 @@ func (c *Client) AuthMethod() string { return c.authMethod }
 func (c *Client) setAuth(req *http.Request) {
 	switch c.authMethod {
 	case "apiKey":
-		c.setAuth(req)
+		req.Header.Set("X-API-Key", c.apiKey)
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
 		// mTLS is handled at TLS level, no headers needed
