@@ -1921,3 +1921,67 @@ func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 	c.Vendors[vendor] = vc
 	return nil
 }
+
+// AddVendor creates a new vendor with optional display name and API key.
+func (c *Config) AddVendor(name, displayName, apiKey string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if name == "" {
+		return fmt.Errorf("vendor name cannot be empty")
+	}
+	if _, ok := c.Vendors[name]; ok {
+		return fmt.Errorf("vendor %q already exists", name)
+	}
+	vc := VendorConfig{
+		DisplayName: displayName,
+		Endpoints:   make(map[string]EndpointConfig),
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey != "" {
+		if _, isRef := envReferenceVarName(apiKey); isRef {
+			vc.APIKey = apiKey
+		} else {
+			envVarName := preferredEndpointAPIKeyEnvVar(name, "default")
+			os.Setenv(envVarName, apiKey)
+			vc.APIKey = "${" + envVarName + "}"
+		}
+	}
+	c.Vendors[name] = vc
+	return nil
+}
+
+// RemoveVendor removes a vendor entirely.
+func (c *Config) RemoveVendor(name string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if _, ok := c.Vendors[name]; !ok {
+		return fmt.Errorf("vendor %q not found", name)
+	}
+	delete(c.Vendors, name)
+	return nil
+}
+
+// SetVendorAPIKey sets the vendor-level API key.
+func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
+	if c == nil {
+		return fmt.Errorf("config is nil")
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q not found", vendor)
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		vc.APIKey = ""
+	} else if _, isRef := envReferenceVarName(apiKey); isRef {
+		vc.APIKey = apiKey
+	} else {
+		envVarName := preferredEndpointAPIKeyEnvVar(vendor, "default")
+		os.Setenv(envVarName, apiKey)
+		vc.APIKey = "${" + envVarName + "}"
+	}
+	c.Vendors[vendor] = vc
+	return nil
+}
