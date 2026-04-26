@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/mdns"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 const (
@@ -69,11 +70,11 @@ func (m *mdnsService) start(info InstanceInfo) error {
 	// Try avahi-publish first (most reliable on Linux).
 	if runtime.GOOS == "linux" {
 		if err := m.startAvahi(name, port, txt); err == nil {
-			fmt.Fprintf(os.Stderr, "mDNS: registered via avahi-publish as %s\n", name)
+			debug.Log("a2a.mdns", "registered via avahi-publish as %s", name)
 			return nil
 		}
 		// Fall through to hashicorp/mdns
-		fmt.Fprintf(os.Stderr, "mDNS: avahi-publish not available (%v), falling back to hashicorp/mdns\n", err)
+		debug.Log("a2a.mdns", "avahi-publish not available (%v), falling back to hashicorp/mdns", err)
 	}
 
 	// Fallback: hashicorp/mdns server.
@@ -92,11 +93,10 @@ func (m *mdnsService) startAvahi(name string, port int, txt []string) error {
 	args = append(args, txt...)
 
 	cmd := exec.Command(avahiPath, args...)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	// Put avahi-publish in its own process group so we can kill it
-	// reliably even if the parent ggcode is killed with SIGKILL.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = nil // discard — writing to stderr corrupts TUI
+	cmd.Stderr = nil
+	// Put avahi-publish in its own process group (Unix only).
+	setProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("avahi-publish start: %w", err)
 	}
@@ -110,13 +110,13 @@ func (m *mdnsService) startAvahi(name string, port int, txt []string) error {
 		return fmt.Errorf("avahi-publish died immediately: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "mDNS: registered via avahi-publish as %s port=%d\n", name, port)
+	debug.Log("a2a.mdns", "registered via avahi-publish as %s port=%d", name, port)
 
 	// Monitor in background — if avahi-publish dies, we just lose registration silently.
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mDNS: avahi-publish exited: %v\n", err)
+			debug.Log("a2a.mdns", "avahi-publish exited: %v", err)
 		}
 	}()
 
@@ -156,8 +156,8 @@ func (m *mdnsService) startHashicorp(name string, port int, txt []string) error 
 // stop shuts down the mDNS server and/or avahi-publish subprocess.
 func (m *mdnsService) stop() {
 	if m.avahiCmd != nil && m.avahiCmd.Process != nil {
-		// Kill the entire process group (avahi-publish + children).
-		syscall.Kill(-m.avahiCmd.Process.Pid, syscall.SIGTERM)
+		// Kill the process group (Unix) or just the process (Windows).
+		killProcessGroup(m.avahiCmd.Process.Pid)
 		m.avahiCmd = nil
 	}
 	if m.mdnsServer != nil {
@@ -334,7 +334,7 @@ func (m *mdnsService) lookupHashicorp() []InstanceInfo {
 			params.Interface = iface
 		}
 		if err := mdns.Query(params); err != nil {
-			fmt.Fprintf(os.Stderr, "mDNS lookup error: %v\n", err)
+			debug.Log("a2a.mdns", "mDNS lookup error: %v", err)
 		}
 		close(entriesCh)
 		close(done)

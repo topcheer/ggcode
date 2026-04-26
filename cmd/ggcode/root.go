@@ -520,7 +520,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	knightAgent.SetFactory(knightFactory)
 	if cfg.Knight().Enabled {
 		if err := knightAgent.Start(context.Background()); err != nil {
-			fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
+			debug.Log("root", "Knight startup warning: %v", err)
 		} else {
 			defer knightAgent.Stop()
 		}
@@ -540,7 +540,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "A2A server startup warning: %v\n", err)
+			debug.Log("root", "A2A server startup warning: %v", err)
 		} else {
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg
@@ -796,10 +796,10 @@ func reportDiscoveredInstances(a2aReg *a2a.Registry) {
 		return
 	}
 	if len(others) > 0 {
-		fmt.Fprintf(os.Stderr, "🔗 A2A: discovered %d other ggcode instance(s):\n", len(others))
+		debug.Log("a2a", "discovered %d other ggcode instance(s)", len(others))
 		for _, inst := range others {
 			name := filepath.Base(inst.Workspace)
-			fmt.Fprintf(os.Stderr, "   - %s → %s\n", name, inst.Endpoint)
+			debug.Log("a2a", "  - %s → %s", name, inst.Endpoint)
 		}
 	} else {
 		debug.Log("a2a", "no other instances found")

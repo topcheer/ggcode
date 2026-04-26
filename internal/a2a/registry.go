@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // InstanceInfo describes a running ggcode instance for discovery.
@@ -76,7 +77,7 @@ func (r *Registry) Register(info InstanceInfo) error {
 	if r.mdnsSvc != nil {
 		if startErr := r.mdnsSvc.start(info); startErr != nil {
 			// mDNS failure is non-fatal — local discovery still works.
-			fmt.Fprintf(os.Stderr, "A2A mDNS registration warning: %v\n", startErr)
+			debug.Log("a2a.registry", "mDNS registration warning: %v", startErr)
 		}
 	}
 	return nil
