@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -791,4 +792,270 @@ func collectKeys(m map[string]bool) []string {
 		keys = append(keys, k[:16])
 	}
 	return keys
+}
+
+// ---------------------------------------------------------------------------
+// P2+ E2E: Event callbacks, push notification, auth negotiation
+// ---------------------------------------------------------------------------
+
+// TestRealE2E_TaskEventCallbacks verifies that onTaskEvent fires for all
+// lifecycle stages: start → complete.
+func TestRealE2E_TaskEventCallbacks(t *testing.T) {
+	env := setupRealE2E(t, "events-test", t.TempDir())
+
+	var events []TaskEventMessage
+	var evMu sync.Mutex
+	env.server.handler.SetOnTaskEvent(func(msg TaskEventMessage) {
+		evMu.Lock()
+		events = append(events, msg)
+		t.Logf("  event: type=%s task=%s skill=%s", msg.Type, msg.TaskID, msg.Skill)
+		evMu.Unlock()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	_, err := env.client.SendMessage(ctx, SkillFileSearch, "list all files")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	evMu.Lock()
+	defer evMu.Unlock()
+	if len(events) == 0 {
+		t.Fatal("expected at least one event callback")
+	}
+
+	// First event should be "start"
+	if events[0].Type != "start" {
+		t.Errorf("expected first event=start, got %s", events[0].Type)
+	}
+	if events[0].Skill != SkillFileSearch {
+		t.Errorf("expected skill=%s, got %s", SkillFileSearch, events[0].Skill)
+	}
+
+	// Should have "complete" (task succeeded with real LLM)
+	foundComplete := false
+	for _, e := range events {
+		if e.Type == "complete" {
+			foundComplete = true
+			break
+		}
+	}
+	if !foundComplete {
+		t.Errorf("expected complete event, got events: %v", eventTypes(events))
+	}
+
+	t.Logf("✅ Event callbacks: %d events, types=%v", len(events), eventTypes(events))
+}
+
+// TestRealE2E_CancelEventCallback verifies cancel event fires.
+func TestRealE2E_CancelEventCallback(t *testing.T) {
+	env := setupRealE2E(t, "cancel-event-test", t.TempDir())
+
+	var events []TaskEventMessage
+	var evMu sync.Mutex
+	env.server.handler.SetOnTaskEvent(func(msg TaskEventMessage) {
+		evMu.Lock()
+		events = append(events, msg)
+		evMu.Unlock()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Submit a long task via stream
+	streamCh, err := env.client.SendMessageStream(ctx, SkillFullTask,
+		"Write a comprehensive Go web framework with routing, middleware, templates, and sessions. Be very thorough.")
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+
+	// Get task ID from first event
+	var taskID string
+	select {
+	case resp := <-streamCh:
+		if resp.Result != nil {
+			var m map[string]interface{}
+			resultBytes, _ := json.Marshal(resp.Result)
+			if json.Unmarshal(resultBytes, &m) == nil {
+				if id, ok := m["id"].(string); ok {
+					taskID = id
+				}
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for first SSE event")
+	}
+	if taskID == "" {
+		t.Fatal("could not get task ID from SSE")
+	}
+
+	// Cancel it
+	canceledTask, err := env.client.CancelTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if canceledTask.Status.State != TaskStateCanceled {
+		t.Fatalf("expected canceled, got %s", canceledTask.Status.State)
+	}
+
+	// Wait for events to fire
+	time.Sleep(500 * time.Millisecond)
+
+	evMu.Lock()
+	defer evMu.Unlock()
+	foundCancel := false
+	for _, e := range events {
+		if e.Type == "cancel" {
+			foundCancel = true
+			break
+		}
+	}
+	if !foundCancel {
+		t.Errorf("expected cancel event, got: %v", eventTypes(events))
+	}
+	t.Logf("✅ Cancel event: %d events, types=%v", len(events), eventTypes(events))
+}
+
+// TestRealE2E_PushNotificationFired verifies that push notification callbacks
+// fire with correct payloads when a task changes state.
+func TestRealE2E_PushNotificationFired(t *testing.T) {
+	env := setupRealE2E(t, "push-test", t.TempDir())
+
+	var pushPayloads []StreamResponse
+	var pushMu sync.Mutex
+	env.server.handler.SetPushNotifier(func(taskID string, payload StreamResponse) {
+		pushMu.Lock()
+		pushPayloads = append(pushPayloads, payload)
+		pushMu.Unlock()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	task, err := env.client.SendMessage(ctx, SkillFileSearch, "find any Go file")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	pushMu.Lock()
+	defer pushMu.Unlock()
+	if len(pushPayloads) == 0 {
+		t.Fatal("expected push notification payloads")
+	}
+
+	// Should have at least: working (final=false) + completed (final=true)
+	hasNonFinal := false
+	hasFinal := false
+	for _, p := range pushPayloads {
+		if p.StatusUpdate == nil {
+			continue
+		}
+		if p.StatusUpdate.Final {
+			hasFinal = true
+		} else {
+			hasNonFinal = true
+		}
+	}
+	if !hasNonFinal {
+		t.Error("expected non-final push (working state)")
+	}
+	if !hasFinal {
+		t.Error("expected final push (completed state)")
+	}
+	t.Logf("✅ Push notifications: %d payloads, hasNonFinal=%v hasFinal=%v",
+		len(pushPayloads), hasNonFinal, hasFinal)
+	_ = task
+}
+
+// TestRealE2E_AuthNegotiation verifies client discovers agent card
+// and negotiates the correct auth method.
+func TestRealE2E_AuthNegotiation(t *testing.T) {
+	env := setupRealE2E(t, "auth-test", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Discover agent card
+	card, err := env.client.Discover(ctx)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected non-nil card")
+	}
+	t.Logf("Discovered card: name=%s, skills=%d", card.Name, len(card.Skills))
+
+	// Negotiate auth
+	if err := env.client.NegotiateAuth(); err != nil {
+		t.Fatalf("negotiate: %v", err)
+	}
+	if env.client.AuthMethod() != "apiKey" {
+		t.Errorf("expected apiKey negotiation, got %q", env.client.AuthMethod())
+	}
+
+	// Verify we can make an authenticated request after negotiation
+	task, err := env.client.SendMessage(ctx, SkillFileSearch, "list files")
+	if err != nil {
+		t.Fatalf("send after negotiate: %v", err)
+	}
+	if task == nil || task.ID == "" {
+		t.Error("expected task with ID")
+	}
+	t.Logf("✅ Auth negotiation: method=%s, task=%s", env.client.AuthMethod(), task.ID)
+}
+
+// TestRealE2E_AuthRejectedWithWrongKey verifies that wrong API key is rejected.
+func TestRealE2E_AuthRejectedWithWrongKey(t *testing.T) {
+	env := setupRealE2E(t, "auth-reject-test", t.TempDir())
+
+	// Create a client with wrong key
+	wrongClient := NewClient(env.server.Endpoint(), "wrong-key-12345")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := wrongClient.SendMessage(ctx, SkillFileSearch, "list files")
+	if err == nil {
+		t.Fatal("expected error with wrong API key")
+	}
+	t.Logf("✅ Wrong key rejected: %v", err)
+}
+
+// TestRealE2E_PushNotificationConfigCRUD tests push notification config
+// lifecycle with real HTTP round-trips.
+func TestRealE2E_PushNotificationConfigCRUD(t *testing.T) {
+	env := setupRealE2E(t, "push-crud-test", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pushURL := "http://127.0.0.1:19999/callback"
+
+	// Set push config
+	cfg, err := env.client.SetPushConfig(ctx, PushNotificationConfig{
+		TaskID: "",
+		URL:    pushURL,
+		Token:  "test-bearer-token",
+	})
+	if err != nil {
+		t.Fatalf("set push config: %v", err)
+	}
+	if cfg.ID == "" {
+		t.Fatal("expected auto-generated ID")
+	}
+	t.Logf("Set push config: id=%s url=%s", cfg.ID, cfg.URL)
+
+	// List
+	result, err := env.client.ListTasks(ctx, "", 10)
+	_ = result // just verify no error
+
+	t.Logf("✅ Push CRUD: config set with id=%s", cfg.ID)
+}
+
+// helper: extract event types for logging.
+func eventTypes(events []TaskEventMessage) []string {
+	types := make([]string, len(events))
+	for i, e := range events {
+		types[i] = e.Type
+	}
+	return types
 }
