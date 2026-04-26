@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // MCPStatusFunc returns runtime MCP server statuses. Keys are server names.
@@ -135,6 +136,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/im/adapters", s.handleIMAdapters)
 	s.mux.HandleFunc("/api/im/adapters/", s.handleIMAdapterDetail)
 	s.mux.HandleFunc("/api/general", s.handleGeneral)
+	s.mux.HandleFunc("/api/impersonate", s.handleImpersonate)
 }
 
 // --- Static SPA ---
@@ -680,6 +682,72 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]string{"status": "deleted", "adapter": name})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// GET/PUT /api/impersonate — read/update impersonation settings
+func (s *Server) handleImpersonate(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		imp := s.cfg.Impersonation
+		presets := make([]map[string]interface{}, 0)
+		for _, p := range provider.DefaultImpersonationPresets() {
+			presets = append(presets, map[string]interface{}{
+				"id":              p.ID,
+				"display_name":    p.DisplayName,
+				"default_version": p.DefaultVersion,
+				"extra_headers":   p.ExtraHeaders,
+			})
+		}
+		writeJSON(w, map[string]interface{}{
+			"current": map[string]interface{}{
+				"preset":         imp.Preset,
+				"custom_version": imp.CustomVersion,
+				"custom_headers": imp.CustomHeaders,
+			},
+			"presets": presets,
+		})
+
+	case http.MethodPut:
+		var req struct {
+			Preset        string            `json:"preset"`
+			CustomVersion string            `json:"custom_version"`
+			CustomHeaders map[string]string `json:"custom_headers"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Apply to runtime
+		var presetPtr *provider.ImpersonationPreset
+		if req.Preset != "" && req.Preset != "none" {
+			presetPtr = provider.FindPresetByID(req.Preset)
+			if presetPtr == nil {
+				writeError(w, http.StatusBadRequest, "unknown preset: "+req.Preset)
+				return
+			}
+		}
+		provider.SetActiveImpersonation(presetPtr, req.CustomVersion, req.CustomHeaders)
+
+		// Persist
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		impCfg := config.ImpersonationConfig{
+			Preset:        req.Preset,
+			CustomVersion: req.CustomVersion,
+			CustomHeaders: req.CustomHeaders,
+		}
+		if err := s.cfg.SaveImpersonation(impCfg); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.cfg.Impersonation = impCfg
+		writeJSON(w, map[string]string{"status": "ok"})
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
