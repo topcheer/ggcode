@@ -161,6 +161,51 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
     <div class="page" id="page-vendors">
       <div class="page-header"><h2>Vendors</h2><p>All configured LLM providers</p></div>
       <div id="vendors-content"></div>
+      <div class="card" style="margin-top:16px">
+        <button class="btn btn-primary" onclick="showVendorModal()">+ New Vendor</button>
+      </div>
+    </div>
+
+    <!-- Vendor Modal -->
+    <div id="vendor-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:500px;max-height:80vh;overflow-y:auto">
+        <h3 id="vendor-modal-title" style="margin-bottom:16px;font-size:16px"></h3>
+        <input type="hidden" id="v-edit-name">
+        <div class="form-group"><label>Vendor ID</label><input id="v-f-id" placeholder="my-vendor"></div>
+        <div class="form-group"><label>Display Name</label><input id="v-f-display" placeholder="My Vendor"></div>
+        <div class="form-group"><label>API Key (optional)</label><input id="v-f-apikey" type="password" placeholder="sk-... or ${ENV_VAR}"></div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" onclick="saveVendor()">Save</button>
+          <button class="btn" onclick="hideVendorModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Endpoint Modal -->
+    <div id="ep-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:500px;max-height:80vh;overflow-y:auto">
+        <h3 id="ep-modal-title" style="margin-bottom:16px;font-size:16px"></h3>
+        <input type="hidden" id="ep-vendor">
+        <input type="hidden" id="ep-edit-name">
+        <div class="form-group"><label>Endpoint Name</label><input id="ep-f-name" placeholder="my-endpoint"></div>
+        <div class="form-group"><label>Protocol</label><select id="ep-f-protocol">
+          <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option><option value="copilot">Copilot</option>
+        </select></div>
+        <div class="form-group"><label>Base URL</label><input id="ep-f-baseurl" placeholder="https://api.openai.com/v1"></div>
+        <div class="form-group"><label>API Key (optional, overrides vendor key)</label><input id="ep-f-apikey" type="password" placeholder="Leave empty to use vendor key"></div>
+        <div id="ep-apikey-current" style="display:none" class="form-group">
+          <label>Current Endpoint Key</label>
+          <div style="display:flex;gap:6px">
+            <code id="ep-apikey-masked" style="flex:1">•••</code>
+            <button class="btn btn-sm btn-danger" onclick="clearEndpointKey()">Clear Key</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" onclick="saveEndpoint()">Save</button>
+          <button class="btn" onclick="hideEpModal()">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <!-- MCP Servers -->
@@ -407,14 +452,169 @@ function renderVendors() {
   const html = vendors.map(v => {
     const eps = v.endpoint_ids || [];
     return `<div class="card">
-      <div class="card-title">${v.display_name || v.id} <span class="badge ${v.has_api_key ? 'badge-green' : 'badge-red'}">${v.has_api_key ? 'Key Set' : 'No Key'}</span></div>
-      <div class="form-group"><label>Vendor ID</label><input value="${v.id}" readonly style="opacity:.6"></div>
-      <div class="form-group"><label>Endpoints</label>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">${eps.map(e => `<span class="badge badge-green">${e}</span>`).join('')}</div>
+      <div class="card-title">${esc(v.display_name||v.id)} <span class="badge ${v.has_api_key?'badge-green':'badge-red'}">${v.has_api_key?'Key Set':'No Key'}</span></div>
+      <div class="form-group" style="margin-bottom:4px"><label style="font-size:11px">ID</label><span class="mono" style="font-size:12px">${esc(v.id)}</span></div>
+      ${eps.length ? `<div style="margin:4px 0"><label style="font-size:11px;color:var(--text2)">Endpoints</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${eps.map(e => `<span class="badge badge-green">${esc(e)}</span>`).join('')}</div>
+      </div>` : '<p style="color:var(--text2);font-size:12px">No endpoints</p>'}
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="editVendor('${esc(v.id)}')">Edit Vendor</button>
+        <button class="btn btn-sm btn-primary" onclick="showEpModal('${esc(v.id)}')">+ Endpoint</button>
+        ${eps.map(e => `<button class="btn btn-sm" onclick="editEndpoint('${esc(v.id)}','${esc(e)}')">${esc(e)}</button>`).join('')}
+        <button class="btn btn-sm btn-danger" onclick="deleteVendor('${esc(v.id)}')">Delete</button>
       </div>
     </div>`;
   }).join('');
   document.getElementById('vendors-content').innerHTML = html;
+}
+
+function showVendorModal(editId) {
+  document.getElementById('vendor-modal').style.display = 'flex';
+  document.getElementById('vendor-modal-title').textContent = editId ? 'Edit Vendor: '+editId : 'New Vendor';
+  document.getElementById('v-edit-name').value = editId || '';
+  if (editId) {
+    const v = vendors.find(x => x.id === editId);
+    document.getElementById('v-f-id').value = editId;
+    document.getElementById('v-f-id').readOnly = true;
+    document.getElementById('v-f-display').value = v?.display_name || '';
+    document.getElementById('v-f-apikey').value = '';
+    document.getElementById('v-f-apikey').placeholder = v?.has_api_key ? 'Leave empty to keep current' : 'Leave empty for no key';
+  } else {
+    document.getElementById('v-f-id').value = '';
+    document.getElementById('v-f-id').readOnly = false;
+    document.getElementById('v-f-display').value = '';
+    document.getElementById('v-f-apikey').value = '';
+  }
+}
+function hideVendorModal() { document.getElementById('vendor-modal').style.display = 'none'; }
+function editVendor(id) { showVendorModal(id); }
+
+async function saveVendor() {
+  try {
+    const editId = document.getElementById('v-edit-name').value;
+    const id = editId || document.getElementById('v-f-id').value.trim();
+    if (!id) { toast('Vendor ID required', false); return; }
+    const display = document.getElementById('v-f-display').value.trim();
+    const apiKey = document.getElementById('v-f-apikey').value;
+    if (editId) {
+      await api('/api/vendors/'+encodeURIComponent(id), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({display_name: display, api_key: apiKey || '__unchanged__'})
+      });
+      toast('Vendor updated');
+    } else {
+      await api('/api/vendors', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name: id, display_name: display, api_key: apiKey})
+      });
+      toast('Vendor added');
+    }
+    hideVendorModal();
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function deleteVendor(id) {
+  if (!confirm('Delete vendor "'+id+'" and all its endpoints?')) return;
+  try {
+    await api('/api/vendors/'+encodeURIComponent(id), {method:'DELETE'});
+    toast('Vendor deleted');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+function showEpModal(vendorId, editName) {
+  document.getElementById('ep-modal').style.display = 'flex';
+  document.getElementById('ep-vendor').value = vendorId;
+  document.getElementById('ep-edit-name').value = editName || '';
+  document.getElementById('ep-modal-title').textContent = editName ? `Edit Endpoint: ${vendorId}/${editName}` : `New Endpoint for ${vendorId}`;
+  document.getElementById('ep-apikey-current').style.display = 'none';
+  if (editName) {
+    document.getElementById('ep-f-name').value = editName;
+    document.getElementById('ep-f-name').readOnly = true;
+    // Load current endpoint data
+    api('/api/vendors/'+encodeURIComponent(vendorId)).then(detail => {
+      const ep = detail.endpoints?.[editName];
+      if (ep) {
+        document.getElementById('ep-f-protocol').value = ep.protocol || 'openai';
+        document.getElementById('ep-f-baseurl').value = ep.base_url || '';
+        if (ep.has_api_key) {
+          document.getElementById('ep-apikey-current').style.display = '';
+          document.getElementById('ep-apikey-masked').textContent = '••••••••';
+        }
+      }
+    }).catch(()=>{});
+    document.getElementById('ep-f-apikey').value = '';
+    document.getElementById('ep-f-apikey').placeholder = 'Leave empty to keep current';
+  } else {
+    document.getElementById('ep-f-name').value = '';
+    document.getElementById('ep-f-name').readOnly = false;
+    document.getElementById('ep-f-protocol').value = 'openai';
+    document.getElementById('ep-f-baseurl').value = '';
+    document.getElementById('ep-f-apikey').value = '';
+    document.getElementById('ep-f-apikey').placeholder = 'Leave empty to use vendor key';
+  }
+}
+function hideEpModal() { document.getElementById('ep-modal').style.display = 'none'; }
+function editEndpoint(vendor, endpoint) { showEpModal(vendor, endpoint); }
+
+async function saveEndpoint() {
+  try {
+    const vendor = document.getElementById('ep-vendor').value;
+    const editName = document.getElementById('ep-edit-name').value;
+    const name = editName || document.getElementById('ep-f-name').value.trim();
+    if (!name) { toast('Endpoint name required', false); return; }
+    const protocol = document.getElementById('ep-f-protocol').value;
+    const baseUrl = document.getElementById('ep-f-baseurl').value.trim();
+    const apiKey = document.getElementById('ep-f-apikey').value;
+
+    if (editName) {
+      // Update existing endpoint config
+      await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(name), {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({protocol, base_url: baseUrl})
+      });
+      // Set optional API key if provided
+      if (apiKey) {
+        await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(name)+'/apikey', {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({api_key: apiKey})
+        });
+      }
+      toast('Endpoint updated');
+    } else {
+      await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name, protocol, base_url: baseUrl, api_key: apiKey})
+      });
+      toast('Endpoint added');
+    }
+    hideEpModal();
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function clearEndpointKey() {
+  try {
+    const vendor = document.getElementById('ep-vendor').value;
+    const name = document.getElementById('ep-edit-name').value;
+    await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(name)+'/apikey', {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({api_key: ''})
+    });
+    document.getElementById('ep-apikey-current').style.display = 'none';
+    toast('Endpoint key cleared');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function deleteEndpoint(vendor, endpoint) {
+  if (!confirm('Delete endpoint "'+endpoint+'"?')) return;
+  try {
+    await api('/api/vendors/'+encodeURIComponent(vendor)+'/endpoints/'+encodeURIComponent(endpoint), {method:'DELETE'});
+    toast('Endpoint deleted');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
 }
 
 // --- MCP ---

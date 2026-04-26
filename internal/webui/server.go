@@ -213,76 +213,175 @@ func (s *Server) handleActiveSelection(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/vendors — list all vendor names
 func (s *Server) handleVendors(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+
+		type vendorSummary struct {
+			ID          string   `json:"id"`
+			DisplayName string   `json:"display_name"`
+			HasAPIKey   bool     `json:"has_api_key"`
+			EndpointIDs []string `json:"endpoint_ids"`
+		}
+
+		vendors := make([]vendorSummary, 0)
+		for _, name := range s.cfg.VendorNames() {
+			vc := s.cfg.Vendors[name]
+			epIDs := s.cfg.EndpointNames(name)
+			vendors = append(vendors, vendorSummary{
+				ID:          name,
+				DisplayName: vc.DisplayName,
+				HasAPIKey:   strings.TrimSpace(vc.APIKey) != "",
+				EndpointIDs: epIDs,
+			})
+		}
+		writeJSON(w, vendors)
+
+	case http.MethodPost:
+		var req struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+			APIKey      string `json:"api_key"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.cfg.AddVendor(req.Name, req.DisplayName, req.APIKey); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok", "vendor": req.Name})
+
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	type vendorSummary struct {
-		ID          string   `json:"id"`
-		DisplayName string   `json:"display_name"`
-		HasAPIKey   bool     `json:"has_api_key"`
-		EndpointIDs []string `json:"endpoint_ids"`
-	}
-
-	vendors := make([]vendorSummary, 0)
-	for _, name := range s.cfg.VendorNames() {
-		vc := s.cfg.Vendors[name]
-		epIDs := s.cfg.EndpointNames(name)
-		vendors = append(vendors, vendorSummary{
-			ID:          name,
-			DisplayName: vc.DisplayName,
-			HasAPIKey:   strings.TrimSpace(vc.APIKey) != "",
-			EndpointIDs: epIDs,
-		})
-	}
-	writeJSON(w, vendors)
 }
 
-// GET /api/vendors/{vendor} — vendor detail
+// GET/PUT/DELETE /api/vendors/{vendor}
 func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	vendor := strings.TrimPrefix(r.URL.Path, "/api/vendors/")
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
-	vc, ok := s.cfg.Vendors[vendor]
-	if !ok {
-		writeError(w, http.StatusNotFound, "vendor not found")
-		return
-	}
-	writeJSON(w, map[string]interface{}{
-		"id":           vendor,
-		"display_name": vc.DisplayName,
-		"has_api_key":  strings.TrimSpace(vc.APIKey) != "",
-		"endpoints":    vc.Endpoints,
-	})
-}
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		vc, ok := s.cfg.Vendors[vendor]
+		if !ok {
+			writeError(w, http.StatusNotFound, "vendor not found")
+			return
+		}
+		writeJSON(w, map[string]interface{}{
+			"id":           vendor,
+			"display_name": vc.DisplayName,
+			"has_api_key":  strings.TrimSpace(vc.APIKey) != "",
+			"endpoints":    vc.Endpoints,
+		})
 
-// GET /api/vendors/{vendor}/endpoints — list endpoints
-func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	case http.MethodPut:
+		var req struct {
+			DisplayName string `json:"display_name"`
+			APIKey      string `json:"api_key"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		vc, ok := s.cfg.Vendors[vendor]
+		if !ok {
+			writeError(w, http.StatusNotFound, "vendor not found")
+			return
+		}
+		if req.DisplayName != "" {
+			vc.DisplayName = req.DisplayName
+		}
+		// Update API key if provided (empty string = clear, "__unchanged__" = keep)
+		if req.APIKey != "__unchanged__" {
+			if err := s.cfg.SetVendorAPIKey(vendor, req.APIKey); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// Re-read after SetVendorAPIKey modified it
+			vc = s.cfg.Vendors[vendor]
+		}
+		s.cfg.Vendors[vendor] = vc
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+
+	case http.MethodDelete:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.cfg.RemoveVendor(vendor); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "deleted"})
+
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	vendor := r.PathValue("vendor")
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	vc, ok := s.cfg.Vendors[vendor]
-	if !ok {
-		writeError(w, http.StatusNotFound, "vendor not found")
-		return
-	}
-	writeJSON(w, vc.Endpoints)
 }
 
-// GET/PUT /api/vendors/{vendor}/endpoints/{endpoint}
+// GET/POST /api/vendors/{vendor}/endpoints
+func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
+	vendor := r.PathValue("vendor")
+
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		vc, ok := s.cfg.Vendors[vendor]
+		if !ok {
+			writeError(w, http.StatusNotFound, "vendor not found")
+			return
+		}
+		writeJSON(w, vc.Endpoints)
+
+	case http.MethodPost:
+		var req struct {
+			Name     string `json:"name"`
+			Protocol string `json:"protocol"`
+			BaseURL  string `json:"base_url"`
+			APIKey   string `json:"api_key"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.cfg.AddEndpoint(vendor, req.Name, req.Protocol, req.BaseURL, req.APIKey); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok", "endpoint": req.Name})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// GET/PUT/DELETE /api/vendors/{vendor}/endpoints/{endpoint}
 func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 	vendor := r.PathValue("vendor")
 	endpoint := r.PathValue("endpoint")
@@ -326,6 +425,19 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, ep)
+
+	case http.MethodDelete:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.cfg.RemoveEndpoint(vendor, endpoint); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "deleted"})
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
