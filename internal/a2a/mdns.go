@@ -1,13 +1,16 @@
 package a2a
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hashicorp/mdns"
@@ -22,8 +25,9 @@ const (
 // mdnsService manages mDNS registration (broadcasting self) and
 // discovery (finding peers on the LAN).
 type mdnsService struct {
-	server *mdns.Server
-	info   *InstanceInfo
+	mdnsServer *mdns.Server // hashicorp/mdns server (fallback / macOS)
+	avahiCmd   *exec.Cmd    // avahi-publish subprocess (Linux preferred)
+	info       *InstanceInfo
 }
 
 func newMDNSService() *mdnsService {
@@ -31,11 +35,16 @@ func newMDNSService() *mdnsService {
 }
 
 // start broadcasts this instance via mDNS.
+// On Linux: prefers avahi-publish (if available) for reliable registration.
+// Falls back to hashicorp/mdns on all platforms.
 func (m *mdnsService) start(info InstanceInfo) error {
 	m.info = &info
 
-	// Extract port from endpoint.
-	_, portStr, err := net.SplitHostPort(info.Endpoint)
+	// Extract port from endpoint (may include http:// scheme).
+	endpoint := info.Endpoint
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	_, portStr, err := net.SplitHostPort(endpoint)
 	if err != nil {
 		return fmt.Errorf("mDNS: parse endpoint %q: %w", info.Endpoint, err)
 	}
@@ -57,7 +66,63 @@ func (m *mdnsService) start(info InstanceInfo) error {
 		"started=" + info.StartedAt,
 	}
 
-	// Create the mDNS service definition.
+	// Try avahi-publish first (most reliable on Linux).
+	if runtime.GOOS == "linux" {
+		if err := m.startAvahi(name, port, txt); err == nil {
+			fmt.Fprintf(os.Stderr, "mDNS: registered via avahi-publish as %s\n", name)
+			return nil
+		}
+		// Fall through to hashicorp/mdns
+		fmt.Fprintf(os.Stderr, "mDNS: avahi-publish not available (%v), falling back to hashicorp/mdns\n", err)
+	}
+
+	// Fallback: hashicorp/mdns server.
+	return m.startHashicorp(name, port, txt)
+}
+
+// startAvahi registers the service using the avahi-publish command-line tool.
+// This is more reliable than hashicorp/mdns on Linux where avahi-daemon is common.
+func (m *mdnsService) startAvahi(name string, port int, txt []string) error {
+	avahiPath, err := exec.LookPath("avahi-publish")
+	if err != nil {
+		return fmt.Errorf("avahi-publish not found: %w", err)
+	}
+
+	args := []string{"-s", name, mDNSServiceType, strconv.Itoa(port)}
+	args = append(args, txt...)
+
+	cmd := exec.Command(avahiPath, args...)
+	cmd.Stdout = os.Stderr // pipe output to log
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("avahi-publish start: %w", err)
+	}
+	m.avahiCmd = cmd
+
+	// Give avahi-publish a moment to register, and check it didn't die immediately.
+	time.Sleep(500 * time.Millisecond)
+
+	// Check if the process is still alive.
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		return fmt.Errorf("avahi-publish died immediately: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "mDNS: registered via avahi-publish as %s port=%d\n", name, port)
+
+	// Monitor in background — if avahi-publish dies, we just lose registration silently.
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mDNS: avahi-publish exited: %v\n", err)
+		}
+	}()
+
+	return nil
+}
+
+// startHashicorp registers using the hashicorp/mdns Go library.
+// Works well on macOS, less reliable on Linux with multiple interfaces.
+func (m *mdnsService) startHashicorp(name string, port int, txt []string) error {
 	service, err := mdns.NewMDNSService(
 		name,            // instance
 		mDNSServiceType, // service type
@@ -71,39 +136,207 @@ func (m *mdnsService) start(info InstanceInfo) error {
 		return fmt.Errorf("mDNS service: %w", err)
 	}
 
-	// Create and start the mDNS server.
-	server, err := mdns.NewServer(&mdns.Config{Zone: service})
+	iface := PreferredInterface()
+	cfg := &mdns.Config{Zone: service}
+	if iface != nil {
+		cfg.Iface = iface
+	}
+	server, err := mdns.NewServer(cfg)
 	if err != nil {
 		return fmt.Errorf("mDNS server: %w", err)
 	}
-	m.server = server
+	m.mdnsServer = server
 
 	return nil
 }
 
-// stop shuts down the mDNS server.
+// stop shuts down the mDNS server and/or avahi-publish subprocess.
 func (m *mdnsService) stop() {
-	if m.server != nil {
-		m.server.Shutdown()
-		m.server = nil
+	if m.avahiCmd != nil && m.avahiCmd.Process != nil {
+		m.avahiCmd.Process.Signal(os.Interrupt)
+		// Don't wait — just let it die.
+		m.avahiCmd = nil
+	}
+	if m.mdnsServer != nil {
+		m.mdnsServer.Shutdown()
+		m.mdnsServer = nil
 	}
 }
 
 // lookup discovers other ggcode instances on the LAN via mDNS.
-// Returns instances found in the lookup window (typically 3 seconds).
+// Uses system tools (avahi-browse / dns-sd) for reliable discovery,
+// falling back to hashicorp/mdns if neither is available.
 func (m *mdnsService) lookup() []InstanceInfo {
+	// Try system tools first — they work with the system's mDNS daemon
+	// and are much more reliable than hashicorp/mdns on Linux.
+	if entries := m.lookupSystem(); entries != nil {
+		return m.filterSelf(entries)
+	}
+
+	// Fallback: hashicorp/mdns Go library (works on macOS, unreliable on Linux).
+	return m.filterSelf(m.lookupHashicorp())
+}
+
+// filterSelf removes entries matching our own instance ID.
+func (m *mdnsService) filterSelf(instances []InstanceInfo) []InstanceInfo {
+	selfID := ""
+	if m.info != nil {
+		selfID = m.info.ID
+	}
+	var result []InstanceInfo
+	for _, inst := range instances {
+		if inst.ID != selfID {
+			result = append(result, inst)
+		}
+	}
+	return result
+}
+
+// lookupSystem tries to discover instances using system mDNS tools.
+// Returns nil if no system tool is available (caller should fall back).
+func (m *mdnsService) lookupSystem() []InstanceInfo {
+	// Try avahi-browse (Linux).
+	if path, err := exec.LookPath("avahi-browse"); err == nil {
+		return m.lookupAvahi(path)
+	}
+	// Try dns-sd (macOS).
+	if path, err := exec.LookPath("dns-sd"); err == nil {
+		return m.lookupDNSSD(path)
+	}
+	return nil
+}
+
+// lookupAvahi uses avahi-browse -rpt to discover services.
+func (m *mdnsService) lookupAvahi(avahiBrowsePath string) []InstanceInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), mDNSLookupTime)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, avahiBrowsePath, "-rpt", "_ggcode._tcp")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	// avahi-browse -rpt output format (tab-separated):
+	// =;eth0;IPv4;order-service;_ggcode._tcp;local;beedeb.local;192.168.31.3;33129;["id=xxx" "workspace=/tmp/test"]
+	var instances []InstanceInfo
+	for _, line := range strings.Split(string(output), "\n") {
+		inst := parseAvahiLine(line)
+		if inst != nil {
+			instances = append(instances, *inst)
+		}
+	}
+	return instances
+}
+
+// parseAvahiLine parses a single avahi-browse -rpt output line.
+func parseAvahiLine(line string) *InstanceInfo {
+	fields := strings.Split(line, "\t")
+	// =;iface;proto;name;type;domain;host;ip;port;txt
+	if len(fields) < 10 || !strings.HasPrefix(fields[0], "=") {
+		return nil
+	}
+
+	ip := fields[7]
+	portStr := fields[8]
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port == 0 {
+		return nil
+	}
+
+	// Parse TXT field: ["key1=val1" "key2=val2"]
+	txtRaw := fields[9]
+	txtRaw = strings.TrimPrefix(txtRaw, "[")
+	txtRaw = strings.TrimSuffix(txtRaw, "]")
+	txtParts := strings.Split(txtRaw, `" "`)
+	txt := make(map[string]string, len(txtParts))
+	for _, p := range txtParts {
+		p = strings.Trim(p, `"`)
+		if idx := strings.IndexByte(p, '='); idx >= 0 {
+			txt[p[:idx]] = p[idx+1:]
+		}
+	}
+
+	endpoint := fmt.Sprintf("%s:%d", ip, port)
+	id := txt["id"]
+	if id == "" {
+		id = fmt.Sprintf("avahi-%s-%d", fields[3], port)
+	}
+
+	pid := 0
+	if p := txt["pid"]; p != "" {
+		pid, _ = strconv.Atoi(p)
+	}
+
+	return &InstanceInfo{
+		ID:           id,
+		PID:          pid,
+		Workspace:    txt["workspace"],
+		StartedAt:    txt["started"],
+		Endpoint:     endpoint,
+		AgentCardURL: endpoint + "/.well-known/agent.json",
+		Status:       txt["status"],
+	}
+}
+
+// lookupDNSSD uses macOS dns-sd to discover services.
+func (m *mdnsService) lookupDNSSD(dnsSDPath string) []InstanceInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), mDNSLookupTime)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, dnsSDPath, "-B", "_ggcode._tcp", "local.")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil
+	}
+
+	// dns-sd -B output:
+	// Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+	// 22:15:56.937  Add        2  23 local.               _ggcode._tcp.        order-service
+	var instances []InstanceInfo
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		// Look for "Add" lines
+		if len(fields) < 9 || fields[1] != "Add" {
+			continue
+		}
+		name := fields[len(fields)-1]
+		// We only get the name from -B; need -L to resolve.
+		// For now, use a simplified instance with just the name.
+		instances = append(instances, InstanceInfo{
+			ID:        fmt.Sprintf("dns-sd-%s", name),
+			Workspace: name,
+		})
+	}
+	return instances
+}
+
+// entryToInstance converts an mDNS ServiceEntry to InstanceInfo.
+// lookupHashicorp uses the hashicorp/mdns Go library for discovery.
+// Less reliable than system tools on Linux, but works on macOS.
+func (m *mdnsService) lookupHashicorp() []InstanceInfo {
 	entriesCh := make(chan *mdns.ServiceEntry, 16)
 
-	// Lookup is blocking — run with a timeout via goroutine + timer.
 	done := make(chan struct{})
 	go func() {
-		if err := mdns.Lookup(mDNSServiceType, entriesCh); err != nil {
-			log.Printf("mDNS lookup error: %v", err)
+		params := &mdns.QueryParam{
+			Service:             mDNSServiceType,
+			Domain:              mDNSDomain,
+			Timeout:             time.Duration(mDNSLookupTime),
+			Entries:             entriesCh,
+			WantUnicastResponse: false,
 		}
+		iface := PreferredInterface()
+		if iface != nil {
+			params.Interface = iface
+		}
+		if err := mdns.Query(params); err != nil {
+			fmt.Fprintf(os.Stderr, "mDNS lookup error: %v\n", err)
+		}
+		close(entriesCh)
 		close(done)
 	}()
 
-	// Wait up to mDNSLookupTime for entries.
 	timer := time.NewTimer(mDNSLookupTime)
 	defer timer.Stop()
 
@@ -123,27 +356,16 @@ collect:
 		}
 	}
 
-	selfID := ""
-	if m.info != nil {
-		selfID = m.info.ID
-	}
-
 	var instances []InstanceInfo
 	for _, entry := range entries {
 		inst := entryToInstance(entry)
-		if inst == nil {
-			continue
+		if inst != nil {
+			instances = append(instances, *inst)
 		}
-		// Exclude self.
-		if inst.ID == selfID {
-			continue
-		}
-		instances = append(instances, *inst)
 	}
 	return instances
 }
 
-// entryToInstance converts an mDNS ServiceEntry to InstanceInfo.
 func entryToInstance(entry *mdns.ServiceEntry) *InstanceInfo {
 	if entry == nil {
 		return nil
