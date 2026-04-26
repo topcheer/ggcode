@@ -16,6 +16,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -671,6 +672,45 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		Port:   cfg.A2A.Port,
 		APIKey: cfg.A2A.APIKey,
 	}, handler)
+
+	// Wire OAuth2/OIDC token validation if configured
+	if cfg.A2A.Auth.OAuth2 != nil {
+		oc := cfg.A2A.Auth.OAuth2
+		issuerURL := oc.IssuerURL
+		if issuerURL == "" && oc.Provider != "" {
+			if p := auth.ResolveProviderPreset(oc.Provider); p != nil {
+				issuerURL = p.TokenURL
+			}
+		}
+		if issuerURL != "" && oc.ClientID != "" {
+			tv, err := auth.NewTokenValidator(oc.ClientID, issuerURL)
+			if err != nil {
+				srv.Stop()
+				return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
+			}
+			srv.SetTokenValidator(tv)
+		}
+	}
+	if cfg.A2A.Auth.OIDC != nil {
+		oc := cfg.A2A.Auth.OIDC
+		issuerURL := oc.IssuerURL
+		if issuerURL == "" && oc.Provider != "" {
+			if p := auth.ResolveProviderPreset(oc.Provider); p != nil && p.OIDCDiscovery != "" {
+				issuerURL = p.OIDCDiscovery
+			}
+		}
+		if issuerURL != "" && oc.ClientID != "" {
+			tv, err := auth.NewTokenValidator(oc.ClientID, issuerURL)
+			if err != nil {
+				srv.Stop()
+				return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
+			}
+			srv.SetTokenValidator(tv)
+		}
+	}
+	if cfg.A2A.Auth.MTLS != nil {
+		srv.SetMTLSEnabled(true)
+	}
 
 	if err := srv.Start(); err != nil {
 		return nil, nil, nil, fmt.Errorf("a2a start: %w", err)
