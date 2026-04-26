@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ggcode</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --surface2: #21262d; --border: #30363d;
+  --text: #e6edf3; --text2: #8b949e; --accent: #58a6ff; --accent2: #1f6feb;
+  --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #bc8cff;
+  --radius: 8px; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.5; }
+a { color: var(--accent); text-decoration: none; }
+
+/* Layout */
+.app { display: flex; height: 100vh; }
+.sidebar { width: 240px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar-brand { padding: 20px 16px; border-bottom: 1px solid var(--border); }
+.sidebar-brand h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; }
+.sidebar-brand h1 span { color: var(--accent); }
+.sidebar-brand p { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.nav { padding: 8px; flex: 1; overflow-y: auto; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer; color: var(--text2); font-size: 13px; transition: all .15s; margin-bottom: 2px; }
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { background: var(--accent2); color: #fff; }
+.nav-icon { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+
+.main { flex: 1; overflow-y: auto; }
+.page { display: none; padding: 32px 40px; max-width: 900px; }
+.page.active { display: block; }
+
+/* Header */
+.page-header { margin-bottom: 28px; }
+.page-header h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; }
+.page-header p { font-size: 13px; color: var(--text2); margin-top: 4px; }
+
+/* Cards */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+.card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.card-title .badge { font-size: 10px; padding: 2px 8px; border-radius: 99px; font-weight: 500; }
+.badge-green { background: rgba(63,185,80,.15); color: var(--green); }
+.badge-red { background: rgba(248,81,73,.15); color: var(--red); }
+.badge-yellow { background: rgba(210,153,34,.15); color: var(--yellow); }
+
+/* Form elements */
+.form-group { margin-bottom: 16px; }
+.form-group:last-child { margin-bottom: 0; }
+label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+input, select, textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 13px; font-family: var(--font); outline: none; transition: border-color .15s; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 80px; }
+select { cursor: pointer; }
+option { background: var(--surface); }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--surface2); color: var(--text); transition: all .15s; }
+.btn:hover { background: var(--border); }
+.btn-primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.btn-primary:hover { background: var(--accent); border-color: var(--accent); }
+.btn-danger { color: var(--red); }
+.btn-danger:hover { background: rgba(248,81,73,.15); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+tr:hover td { background: var(--surface2); }
+td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+
+/* Status dots */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.dot-yellow { background: var(--yellow); }
+
+/* Toast */
+.toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: var(--radius); font-size: 13px; font-weight: 500; z-index: 999; opacity: 0; transform: translateY(10px); transition: all .3s; }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast-ok { background: rgba(63,185,80,.15); border: 1px solid var(--green); color: var(--green); }
+.toast-err { background: rgba(248,81,73,.15); border: 1px solid var(--red); color: var(--red); }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { width: 56px; }
+  .sidebar-brand p, .nav-item span { display: none; }
+  .page { padding: 20px 16px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div class="sidebar-brand">
+      <h1><span>&#9670;</span> ggcode</h1>
+      <p>Configuration Panel</p>
+    </div>
+    <div class="nav">
+      <div class="nav-item active" data-page="overview" onclick="showPage('overview')">
+        <span class="nav-icon">&#9776;</span><span>Overview</span>
+      </div>
+      <div class="nav-item" data-page="model" onclick="showPage('model')">
+        <span class="nav-icon">&#9881;</span><span>Model</span>
+      </div>
+      <div class="nav-item" data-page="vendors" onclick="showPage('vendors')">
+        <span class="nav-icon">&#9881;</span><span>Vendors</span>
+      </div>
+      <div class="nav-item" data-page="mcp" onclick="showPage('mcp')">
+        <span class="nav-icon">&#9881;</span><span>MCP Servers</span>
+      </div>
+      <div class="nav-item" data-page="im" onclick="showPage('im')">
+        <span class="nav-icon">&#9881;</span><span>IM</span>
+      </div>
+      <div class="nav-item" data-page="general" onclick="showPage('general')">
+        <span class="nav-icon">&#9881;</span><span>General</span>
+      </div>
+    </div>
+  </div>
+  <div class="main">
+    <!-- Overview -->
+    <div class="page active" id="page-overview">
+      <div class="page-header"><h2>Overview</h2><p>Current configuration status</p></div>
+      <div id="overview-content"></div>
+    </div>
+
+    <!-- Model Selection -->
+    <div class="page" id="page-model">
+      <div class="page-header"><h2>Active Model</h2><p>Switch vendor, endpoint, and model</p></div>
+      <div class="card">
+        <div class="form-group">
+          <label>Vendor</label>
+          <select id="sel-vendor" onchange="onVendorChange()"></select>
+        </div>
+        <div class="form-group">
+          <label>Endpoint</label>
+          <select id="sel-endpoint" onchange="onEndpointChange()"></select>
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <select id="sel-model"></select>
+        </div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary" onclick="saveActive()">Apply</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">API Key</div>
+        <div class="form-group">
+          <label>Key</label>
+          <input type="password" id="inp-apikey" placeholder="sk-... or ${ENV_VAR}">
+        </div>
+        <button class="btn btn-primary" onclick="saveAPIKey()">Save Key</button>
+      </div>
+    </div>
+
+    <!-- Vendors -->
+    <div class="page" id="page-vendors">
+      <div class="page-header"><h2>Vendors</h2><p>All configured LLM providers</p></div>
+      <div id="vendors-content"></div>
+    </div>
+
+    <!-- MCP Servers -->
+    <div class="page" id="page-mcp">
+      <div class="page-header"><h2>MCP Servers</h2><p>Manage Model Context Protocol servers</p></div>
+      <div id="mcp-content"></div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Add MCP Server</div>
+        <div class="form-group"><label>Name</label><input id="mcp-name"></div>
+        <div class="form-group"><label>Type</label><select id="mcp-type"><option value="stdio">stdio</option><option value="http">http</option></select></div>
+        <div class="form-group"><label>Command</label><input id="mcp-command" placeholder="npx or command path"></div>
+        <div class="form-group"><label>Args (comma-separated)</label><input id="mcp-args" placeholder="-y, @modelcontextprotocol/server-filesystem"></div>
+        <button class="btn btn-primary" onclick="addMCPServer()">Add Server</button>
+      </div>
+    </div>
+
+    <!-- IM -->
+    <div class="page" id="page-im">
+      <div class="page-header"><h2>IM Configuration</h2><p>Instant messaging gateway settings</p></div>
+      <div id="im-content"></div>
+    </div>
+
+    <!-- General -->
+    <div class="page" id="page-general">
+      <div class="page-header"><h2>General</h2><p>Language, permissions, and other settings</p></div>
+      <div class="card">
+        <div class="form-group"><label>Language</label>
+          <select id="gen-language"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
+        </div>
+        <div class="form-group"><label>Default Mode</label>
+          <select id="gen-mode">
+            <option value="supervised">Supervised</option><option value="plan">Plan</option>
+            <option value="auto">Auto</option><option value="bypass">Bypass</option><option value="autopilot">Autopilot</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Max Iterations (0 = unlimited)</label>
+          <input type="number" id="gen-maxiter" value="0">
+        </div>
+        <div class="form-group"><label>Allowed Dirs (comma-separated)</label>
+          <input id="gen-dirs" placeholder=".">
+        </div>
+        <button class="btn btn-primary" onclick="saveGeneral()" style="margin-top:12px">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// --- State ---
+let config = {};
+let vendors = {};
+
+// --- API helpers ---
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({error: res.statusText}));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+// --- Navigation ---
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  document.querySelector(`.nav-item[data-page="${id}"]`).classList.add('active');
+}
+
+// --- Toast ---
+function toast(msg, ok = true) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + (ok ? 'toast-ok' : 'toast-err') + ' show';
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// --- Load ---
+async function loadAll() {
+  try {
+    config = await api('/api/config');
+    vendors = await api('/api/vendors');
+    renderOverview();
+    renderModel();
+    renderVendors();
+    renderMCP();
+    renderIM();
+    renderGeneral();
+  } catch(e) {
+    toast('Failed to load: ' + e.message, false);
+  }
+}
+
+// --- Overview ---
+function renderOverview() {
+  const c = config;
+  const v = vendors.find(v => v.id === c.vendor);
+  const hasKey = v && v.has_api_key;
+  const mcpCount = (c.mcp_servers || []).length;
+  const imEnabled = c.im && c.im.enabled;
+  document.getElementById('overview-content').innerHTML = `
+    <div class="card">
+      <div class="card-title">Active Configuration <span class="badge ${hasKey ? 'badge-green' : 'badge-red'}">${hasKey ? 'API Key Set' : 'No API Key'}</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>Setting</th><th>Value</th></tr>
+        <tr><td>Vendor</td><td><span class="mono">${c.vendor}</span></td></tr>
+        <tr><td>Endpoint</td><td><span class="mono">${c.endpoint}</span></td></tr>
+        <tr><td>Model</td><td><span class="mono">${c.model}</span></td></tr>
+        <tr><td>Language</td><td>${c.language}</td></tr>
+        <tr><td>Mode</td><td><span class="mono">${c.default_mode || 'supervised'}</span></td></tr>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Services</div>
+      <div class="table-wrap"><table>
+        <tr><th>Service</th><th>Status</th><th>Count</th></tr>
+        <tr><td>MCP Servers</td><td><span class="dot ${mcpCount > 0 ? 'dot-green' : 'dot-yellow'}"></span>${mcpCount > 0 ? 'Configured' : 'None'}</td><td>${mcpCount}</td></tr>
+        <tr><td>IM Gateway</td><td><span class="dot ${imEnabled ? 'dot-green' : 'dot-yellow'}"></span>${imEnabled ? 'Enabled' : 'Disabled'}</td><td>${Object.keys(c.im?.adapters || {}).length} adapters</td></tr>
+        <tr><td>Vendors</td><td><span class="dot dot-green"></span>Available</td><td>${vendors.length}</td></tr>
+      </table></div>
+    </div>`;
+}
+
+// --- Model Selection ---
+function renderModel() {
+  const sel = document.getElementById('sel-vendor');
+  sel.innerHTML = vendors.map(v => `<option value="${v.id}" ${v.id === config.vendor ? 'selected' : ''}>${v.display_name || v.id}</option>`).join('');
+  onVendorChange();
+}
+
+async function onVendorChange() {
+  const vendor = document.getElementById('sel-vendor').value;
+  const detail = await api('/api/vendors/' + vendor);
+  const sel = document.getElementById('sel-endpoint');
+  const eps = detail.endpoints || {};
+  sel.innerHTML = Object.keys(eps).map(k => `<option value="${k}" ${k === config.endpoint ? 'selected' : ''}>${eps[k].display_name || k}</option>`).join('');
+  onEndpointChange();
+}
+
+async function onEndpointChange() {
+  const vendor = document.getElementById('sel-vendor').value;
+  const endpoint = document.getElementById('sel-endpoint').value;
+  const detail = await api('/api/vendors/' + vendor);
+  const ep = (detail.endpoints || {})[endpoint];
+  if (!ep) return;
+  const sel = document.getElementById('sel-model');
+  const models = ep.models || [];
+  sel.innerHTML = models.map(m => `<option value="${m}" ${m === config.model ? 'selected' : ''}>${m}</option>`).join('');
+  if (models.length === 0) {
+    sel.innerHTML = `<option value="${config.model}">${config.model}</option>`;
+  }
+}
+
+async function saveActive() {
+  try {
+    const r = await api('/api/config/active', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        vendor: document.getElementById('sel-vendor').value,
+        endpoint: document.getElementById('sel-endpoint').value,
+        model: document.getElementById('sel-model').value,
+      })
+    });
+    config.vendor = r.vendor; config.endpoint = r.endpoint; config.model = r.model;
+    toast('Active model updated');
+    renderOverview();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function saveAPIKey() {
+  try {
+    await api(`/api/vendors/${config.vendor}/endpoints/${config.endpoint}/apikey`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ api_key: document.getElementById('inp-apikey').value, vendor_scoped: false })
+    });
+    document.getElementById('inp-apikey').value = '';
+    toast('API key saved');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- Vendors ---
+function renderVendors() {
+  const html = vendors.map(v => {
+    const eps = v.endpoint_ids || [];
+    return `<div class="card">
+      <div class="card-title">${v.display_name || v.id} <span class="badge ${v.has_api_key ? 'badge-green' : 'badge-red'}">${v.has_api_key ? 'Key Set' : 'No Key'}</span></div>
+      <div class="form-group"><label>Vendor ID</label><input value="${v.id}" readonly style="opacity:.6"></div>
+      <div class="form-group"><label>Endpoints</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${eps.map(e => `<span class="badge badge-green">${e}</span>`).join('')}</div>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('vendors-content').innerHTML = html;
+}
+
+// --- MCP ---
+function renderMCP() {
+  const servers = config.mcp_servers || [];
+  if (servers.length === 0) {
+    document.getElementById('mcp-content').innerHTML = '<div class="card"><p style="color:var(--text2)">No MCP servers configured.</p></div>';
+    return;
+  }
+  const html = servers.map(s => `<div class="card">
+    <div class="card-title">${s.name} <span class="badge badge-green">${s.type || 'stdio'}</span></div>
+    <div class="table-wrap"><table>
+      <tr><th>Setting</th><th>Value</th></tr>
+      ${s.command ? `<tr><td>Command</td><td class="mono">${s.command} ${(s.args||[]).join(' ')}</td></tr>` : ''}
+      ${s.url ? `<tr><td>URL</td><td class="mono">${s.url}</td></tr>` : ''}
+    </table></div>
+    <div style="margin-top:8px"><button class="btn btn-danger btn-sm" onclick="removeMCPServer('${s.name}')">Remove</button></div>
+  </div>`).join('');
+  document.getElementById('mcp-content').innerHTML = html;
+}
+
+async function addMCPServer() {
+  try {
+    const name = document.getElementById('mcp-name').value.trim();
+    const typ = document.getElementById('mcp-type').value;
+    const cmd = document.getElementById('mcp-command').value.trim();
+    const argsStr = document.getElementById('mcp-args').value.trim();
+    const args = argsStr ? argsStr.split(',').map(s => s.trim()) : [];
+    const server = { name, type: typ };
+    if (typ === 'stdio') { server.command = cmd; server.args = args; }
+    else { server.url = cmd; }
+    await api('/api/mcp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(server) });
+    toast('MCP server added');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function removeMCPServer(name) {
+  try {
+    await api('/api/mcp/' + encodeURIComponent(name), { method: 'DELETE' });
+    toast('MCP server removed');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- IM ---
+function renderIM() {
+  const im = config.im || {};
+  const adapters = im.adapters || {};
+  const adapterNames = Object.keys(adapters);
+  document.getElementById('im-content').innerHTML = `
+    <div class="card">
+      <div class="card-title">IM Status <span class="badge ${im.enabled ? 'badge-green' : 'badge-yellow'}">${im.enabled ? 'Enabled' : 'Disabled'}</span></div>
+      <div class="table-wrap"><table>
+        <tr><th>Setting</th><th>Value</th></tr>
+        <tr><td>Output Mode</td><td class="mono">${im.output_mode || 'verbose'}</td></tr>
+        <tr><td>Streaming</td><td>${im.streaming?.enabled ? 'Enabled' : 'Disabled'}</td></tr>
+        <tr><td>Adapters</td><td>${adapterNames.length > 0 ? adapterNames.join(', ') : 'None'}</td></tr>
+      </table></div>
+    </div>
+    ${adapterNames.map(name => {
+      const a = adapters[name];
+      const targets = a.targets || [];
+      return `<div class="card">
+        <div class="card-title">${name} <span class="badge ${a.enabled ? 'badge-green' : 'badge-yellow'}">${a.platform || 'unknown'}</span></div>
+        <div class="table-wrap"><table>
+          <tr><th>Setting</th><th>Value</th></tr>
+          <tr><td>Transport</td><td class="mono">${a.transport || 'default'}</td></tr>
+          <tr><td>Targets</td><td>${targets.length} channel(s)</td></tr>
+        </table></div>
+      </div>`;
+    }).join('')}`;
+}
+
+// --- General ---
+function renderGeneral() {
+  document.getElementById('gen-language').value = config.language || 'en';
+  document.getElementById('gen-mode').value = config.default_mode || 'supervised';
+  document.getElementById('gen-maxiter').value = config.max_iterations || 0;
+  document.getElementById('gen-dirs').value = (config.allowed_dirs || []).join(', ');
+}
+
+async function saveGeneral() {
+  try {
+    await api('/api/general', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        language: document.getElementById('gen-language').value,
+        default_mode: document.getElementById('gen-mode').value,
+        max_iterations: parseInt(document.getElementById('gen-maxiter').value) || 0,
+        allowed_dirs: document.getElementById('gen-dirs').value.split(',').map(s => s.trim()).filter(Boolean),
+        system_prompt: config.system_prompt || '',
+      })
+    });
+    toast('General settings saved');
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- Init ---
+loadAll();
+</script>
+</body>
+</html>
