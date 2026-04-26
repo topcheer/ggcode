@@ -792,7 +792,11 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 			s.cfg.AllowedDirs = req.AllowedDirs
 		}
 		if req.SystemPrompt != "" {
-			s.cfg.SystemPrompt = req.SystemPrompt
+			if req.SystemPrompt == "__reset__" {
+				s.cfg.SystemPrompt = config.DefaultSystemPrompt
+			} else {
+				s.cfg.SystemPrompt = req.SystemPrompt
+			}
 		}
 		if err := s.cfg.Save(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())

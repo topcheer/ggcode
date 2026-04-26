@@ -121,6 +121,9 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       <div class="nav-item" data-page="impersonate" onclick="showPage('impersonate')">
         <span class="nav-icon">&#128100;</span><span>Impersonate</span>
       </div>
+      <div class="nav-item" data-page="prompt" onclick="showPage('prompt')">
+        <span class="nav-icon">&#9997;</span><span>System Prompt</span>
+      </div>
     </div>
   </div>
   <div class="main">
@@ -298,6 +301,26 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       <div class="page-header"><h2>Impersonate</h2><p>Switch LLM client identity for compatibility</p></div>
       <div id="impersonate-content"></div>
     </div>
+
+    <!-- System Prompt -->
+    <div class="page" id="page-prompt">
+      <div class="page-header">
+        <h2>System Prompt</h2>
+        <p>Instructions sent to the LLM at the start of every conversation</p>
+        <div style="margin-top:8px;display:flex;gap:6px">
+          <button class="btn btn-sm" id="prompt-mode-preview" onclick="setPromptMode('preview')">Preview</button>
+          <button class="btn btn-sm" id="prompt-mode-edit" onclick="setPromptMode('edit')">Edit</button>
+        </div>
+      </div>
+      <div id="prompt-preview" style="display:none"></div>
+      <div id="prompt-edit" style="display:none">
+        <textarea id="prompt-textarea" style="width:100%;min-height:400px;font-family:monospace;font-size:13px;padding:12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;resize:vertical" placeholder="Enter system prompt..."></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-primary" onclick="saveSystemPrompt()">Save</button>
+          <button class="btn" onclick="resetSystemPrompt()">Reset to Default</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -364,6 +387,7 @@ async function loadAll() {
     renderGeneral();
     try { impersonateData = await api('/api/impersonate'); } catch(e) { impersonateData = null; }
     renderImpersonate();
+    renderPrompt();
   } catch(e) {
     toast('Failed to load: ' + e.message, false);
   }
@@ -1057,6 +1081,108 @@ async function saveImpersonate() {
     toast('Impersonation updated');
     impersonateData = await api('/api/impersonate');
     renderImpersonate();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- System Prompt ---
+let promptMode = 'preview'; // 'preview' or 'edit'
+
+function renderPrompt() {
+  setPromptMode(promptMode);
+}
+
+function setPromptMode(mode) {
+  promptMode = mode;
+  const previewBtn = document.getElementById('prompt-mode-preview');
+  const editBtn = document.getElementById('prompt-mode-edit');
+  const previewDiv = document.getElementById('prompt-preview');
+  const editDiv = document.getElementById('prompt-edit');
+
+  if (mode === 'preview') {
+    previewBtn.classList.add('btn-primary');
+    previewBtn.classList.remove('btn');
+    editBtn.classList.remove('btn-primary');
+    editBtn.classList.add('btn');
+    previewDiv.style.display = '';
+    editDiv.style.display = 'none';
+    const text = config.system_prompt || '';
+    previewDiv.innerHTML = text ? renderMarkdown(text) : '<p style="color:var(--text2)">No system prompt configured. Click "Edit" to add one.</p>';
+  } else {
+    editBtn.classList.add('btn-primary');
+    editBtn.classList.remove('btn');
+    previewBtn.classList.remove('btn-primary');
+    previewBtn.classList.add('btn');
+    previewDiv.style.display = 'none';
+    editDiv.style.display = '';
+    document.getElementById('prompt-textarea').value = config.system_prompt || '';
+  }
+}
+
+// Lightweight markdown renderer (no external deps)
+function renderMarkdown(text) {
+  let html = esc(text);
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    return `<pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;margin:8px 0"><code>${code}</code></pre>`;
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg);padding:2px 6px;border-radius:3px;font-size:12px">$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h4 style="margin:12px 0 4px;font-size:14px">$1</h4>');
+  html = html.replace(/^## (.+)$/gm, '<h3 style="margin:16px 0 6px;font-size:15px">$1</h3>');
+  html = html.replace(/^# (.+)$/gm, '<h2 style="margin:20px 0 8px;font-size:16px">$1</h2>');
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px">$1</li>');
+  html = html.replace(/(<li[^>]*>.*<\/li>\n?)+/g, m => '<ul style="margin:4px 0;padding-left:0;list-style:disc inside">' + m + '</ul>');
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">');
+  // Line breaks → paragraphs
+  html = html.replace(/\n\n+/g, '</p><p style="margin:6px 0;line-height:1.6">');
+  html = html.replace(/\n/g, '<br>');
+  html = '<p style="margin:0;line-height:1.6">' + html + '</p>';
+  return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;max-height:600px;overflow-y:auto">${html}</div>`;
+}
+
+async function saveSystemPrompt() {
+  try {
+    const text = document.getElementById('prompt-textarea').value;
+    config.system_prompt = text;
+    await api('/api/general', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        language: config.language || 'en',
+        default_mode: config.default_mode || 'supervised',
+        max_iterations: config.max_iterations || 0,
+        allowed_dirs: config.allowed_dirs || [],
+        system_prompt: text,
+      })
+    });
+    toast('System prompt saved');
+    setPromptMode('preview');
+  } catch(e) { toast(e.message, false); }
+}
+
+async function resetSystemPrompt() {
+  if (!confirm('Reset system prompt to default?')) return;
+  try {
+    await api('/api/general', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        language: config.language || 'en',
+        default_mode: config.default_mode || 'supervised',
+        max_iterations: config.max_iterations || 0,
+        allowed_dirs: config.allowed_dirs || [],
+        system_prompt: '__reset__',
+      })
+    });
+    toast('System prompt reset');
+    loadAll();
   } catch(e) { toast(e.message, false); }
 }
 
