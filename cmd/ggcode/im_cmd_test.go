@@ -177,9 +177,9 @@ func TestIMConfigShowJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	// YAML may decode into struct fields with uppercase keys
-	if fmt.Sprintf("%v", result["Platform"]) != "qq" {
-		t.Errorf("Platform = %v, want qq (full result: %v)", result["Platform"], result)
+	// JSON tags produce lowercase keys
+	if fmt.Sprintf("%v", result["platform"]) != "qq" {
+		t.Errorf("platform = %v, want qq (full result: %v)", result["platform"], result)
 	}
 }
 
