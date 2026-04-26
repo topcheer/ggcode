@@ -53,7 +53,7 @@ func TestResolveProviderPresetUnknown(t *testing.T) {
 }
 
 func TestResolveA2AAuthWithPreset(t *testing.T) {
-	authURL, tokenURL, scopes, err := ResolveA2AAuth("github", "my-client-id", "", "")
+	authURL, tokenURL, clientID, scopes, err := ResolveA2AAuth("github", "my-client-id", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,13 +63,16 @@ func TestResolveA2AAuthWithPreset(t *testing.T) {
 	if tokenURL != "https://github.com/login/oauth/access_token" {
 		t.Errorf("unexpected token URL: %s", tokenURL)
 	}
+	if clientID != "my-client-id" {
+		t.Errorf("expected my-client-id (user override), got %s", clientID)
+	}
 	if scopes == "" {
 		t.Error("expected default scopes from preset")
 	}
 }
 
 func TestResolveA2AAuthCustom(t *testing.T) {
-	authURL, _, scopes, err := ResolveA2AAuth("", "my-client", "https://idp.example.com", "read write")
+	authURL, _, _, scopes, err := ResolveA2AAuth("", "my-client", "https://idp.example.com", "read write")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +85,7 @@ func TestResolveA2AAuthCustom(t *testing.T) {
 }
 
 func TestResolveA2AAuthEmpty(t *testing.T) {
-	authURL, _, _, err := ResolveA2AAuth("", "", "", "")
+	authURL, _, _, _, err := ResolveA2AAuth("", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,4 +123,42 @@ func TestProviderPresetContainsNoClientID(t *testing.T) {
 	}
 	// This test is a documentation assertion — presets only contain
 	// public endpoint URLs, never credentials
+}
+
+func TestResolveA2AAuthGitHubDefaultClientID(t *testing.T) {
+	// No client_id provided → should use GitHub preset default
+	authURL, _, clientID, scopes, err := ResolveA2AAuth("github", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientID != "Ov23liq0EQyT4VDz3ayn" {
+		t.Errorf("expected default GitHub client_id, got %q", clientID)
+	}
+	if authURL != "https://github.com/login/oauth/authorize" {
+		t.Errorf("unexpected auth URL: %s", authURL)
+	}
+	if scopes == "" {
+		t.Error("expected default scopes")
+	}
+}
+
+func TestResolveA2AAuthGitHubUserOverridesDefaultClientID(t *testing.T) {
+	// User provides client_id → overrides default
+	_, _, clientID, _, err := ResolveA2AAuth("github", "my-custom-id", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clientID != "my-custom-id" {
+		t.Errorf("expected user override, got %q", clientID)
+	}
+}
+
+func TestGitHubPresetHasDefaultClientID(t *testing.T) {
+	p := ResolveProviderPreset("github")
+	if p == nil {
+		t.Fatal("missing GitHub preset")
+	}
+	if p.DefaultClientID == "" {
+		t.Error("GitHub preset should have DefaultClientID")
+	}
 }

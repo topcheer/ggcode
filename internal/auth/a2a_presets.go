@@ -18,36 +18,41 @@ package auth
 
 // OAuth2ProviderPreset contains the public configuration for an OAuth2 provider.
 type OAuth2ProviderPreset struct {
-	Name           string   // display name
-	AuthorizeURL   string   // authorization endpoint
-	TokenURL       string   // token endpoint
-	DeviceAuthURL  string   // device authorization endpoint (empty if unsupported)
-	UserInfoURL    string   // userinfo endpoint (for OIDC)
-	OIDCDiscovery  string   // /.well-known/openid-configuration URL (empty if not OIDC)
-	DefaultScopes  []string // recommended scopes
-	SupportsPKCE   bool     // Authorization Code + PKCE
-	SupportsDevice bool     // Device Authorization Flow
+	Name            string   // display name
+	AuthorizeURL    string   // authorization endpoint
+	TokenURL        string   // token endpoint
+	DeviceAuthURL   string   // device authorization endpoint (empty if unsupported)
+	UserInfoURL     string   // userinfo endpoint (for OIDC)
+	OIDCDiscovery   string   // /.well-known/openid-configuration URL (empty if not OIDC)
+	DefaultScopes   []string // recommended scopes
+	DefaultClientID string   // pre-registered public client_id for zero-config experience
+	SupportsPKCE    bool     // Authorization Code + PKCE
+	SupportsDevice  bool     // Device Authorization Flow
 }
 
 // Built-in provider presets.
-// client_id is intentionally NOT included here — each ggcode installation
-// should register its own OAuth App with the provider and configure the
-// client_id in ggcode.yaml. This is because:
 //
+// GitHub has a DefaultClientID embedded because we registered a public OAuth App
+// specifically for ggcode (PKCE-only, no client_secret). This gives users a
+// zero-config experience: just set `provider: "github"` and it works.
+//
+// Other providers (Google, Auth0, Azure) require users to register their own
+// OAuth App because:
 //  1. Each OAuth App is bound to specific redirect URIs
-//  2. Each installation may have different domain/port
-//  3. Provider terms of service may prohibit shared client_ids
+//  2. Provider terms of service may prohibit shared client_ids
+//  3. Enterprise providers (Auth0, Azure) have per-tenant URLs
 //
-// The preset only provides endpoint URLs and recommended scopes.
+// Users can always override DefaultClientID by setting client_id in config.
 var ProviderPresets = map[string]OAuth2ProviderPreset{
 	"github": {
-		Name:           "GitHub",
-		AuthorizeURL:   "https://github.com/login/oauth/authorize",
-		TokenURL:       "https://github.com/login/oauth/access_token",
-		DeviceAuthURL:  "https://github.com/login/device/code",
-		DefaultScopes:  []string{"read:user", "user:email"},
-		SupportsPKCE:   true,
-		SupportsDevice: true,
+		Name:            "GitHub",
+		AuthorizeURL:    "https://github.com/login/oauth/authorize",
+		TokenURL:        "https://github.com/login/oauth/access_token",
+		DeviceAuthURL:   "https://github.com/login/device/code",
+		DefaultScopes:   []string{"read:user", "user:email"},
+		DefaultClientID: "Ov23liq0EQyT4VDz3ayn", // public client, PKCE only
+		SupportsPKCE:    true,
+		SupportsDevice:  true,
 	},
 	"google": {
 		Name:           "Google",
@@ -92,21 +97,22 @@ func ResolveProviderPreset(provider string) *OAuth2ProviderPreset {
 }
 
 // ResolveA2AAuth resolves the provider preset and merges with user config.
-// If provider is set, endpoint URLs come from the preset. User can override
-// client_id and scopes. If provider is empty, all fields must be set manually.
-func ResolveA2AAuth(provider, clientID, issuerURL, scopes string) (authorizeURL, tokenURL, resolvedScopes string, err error) {
+// If provider is set, endpoint URLs and DefaultClientID come from the preset.
+// User can override client_id and scopes. If provider is empty, all fields
+// must be set manually.
+func ResolveA2AAuth(provider, clientID, issuerURL, scopes string) (authorizeURL, tokenURL, resolvedClientID, resolvedScopes string, err error) {
 	if provider == "" {
 		// No preset — user must provide all fields
 		if clientID == "" || issuerURL == "" {
-			return "", "", "", nil // no auth configured
+			return "", "", "", "", nil // no auth configured
 		}
 		// issuerURL-based discovery would go here for full OIDC support
-		return issuerURL + "/authorize", issuerURL + "/token", scopes, nil
+		return issuerURL + "/authorize", issuerURL + "/token", clientID, scopes, nil
 	}
 
 	preset := ResolveProviderPreset(provider)
 	if preset == nil {
-		return "", "", "", nil // unknown provider, skip auth
+		return "", "", "", "", nil // unknown provider, skip auth
 	}
 
 	resolvedScopes = scopes
@@ -114,7 +120,13 @@ func ResolveA2AAuth(provider, clientID, issuerURL, scopes string) (authorizeURL,
 		resolvedScopes = stringsJoin(preset.DefaultScopes, " ")
 	}
 
-	return preset.AuthorizeURL, preset.TokenURL, resolvedScopes, nil
+	// Use user-provided client_id, or fall back to preset default
+	resolvedClientID = clientID
+	if resolvedClientID == "" {
+		resolvedClientID = preset.DefaultClientID
+	}
+
+	return preset.AuthorizeURL, preset.TokenURL, resolvedClientID, resolvedScopes, nil
 }
 
 func stringsJoin(ss []string, sep string) string {
