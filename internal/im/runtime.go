@@ -192,6 +192,19 @@ func (m *Manager) SetBindingStore(store BindingStore) error {
 	return err
 }
 
+// AllPersistedBindings returns all persisted bindings from the store,
+// including bindings for other workspaces not currently active.
+func (m *Manager) AllPersistedBindings() []ChannelBinding {
+	if m.bindingStore == nil {
+		return nil
+	}
+	all, err := m.bindingStore.List()
+	if err != nil {
+		return nil
+	}
+	return all
+}
+
 func (m *Manager) SetPairingStore(store PairingStateStore) error {
 	m.mu.Lock()
 	m.pairingStore = store

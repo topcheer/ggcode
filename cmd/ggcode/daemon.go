@@ -574,38 +574,58 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		for _, st := range snap.Adapters {
 			stateMap[st.Name] = st
 		}
+		// Persisted bindings: adapter -> all bound workspaces
+		type persistedInfo struct{ workspace, channel, targetID string }
+		persistedMap := map[string][]persistedInfo{}
+		for _, pb := range imMgr.AllPersistedBindings() {
+			persistedMap[pb.Adapter] = append(persistedMap[pb.Adapter], persistedInfo{pb.Workspace, pb.ChannelID, pb.TargetID})
+		}
+		allDirsMap := map[string][]string{}
+		for a, bs := range persistedMap {
+			ds := make([]string, 0, len(bs))
+			for _, b := range bs {
+				ds = append(ds, b.workspace)
+			}
+			allDirsMap[a] = ds
+		}
 		out := make([]webui.IMRuntimeStatus, 0)
 		seen := map[string]bool{}
 		for _, b := range snap.CurrentBindings {
 			st := stateMap[b.Adapter]
-			status := webui.IMRuntimeStatus{
-				Adapter:   b.Adapter,
-				Platform:  string(b.Platform),
-				Healthy:   st.Healthy,
-				Status:    st.Status,
-				BoundDir:  b.Workspace,
-				ChannelID: b.ChannelID,
-				Muted:     mutedSet[b.Adapter],
-				Disabled:  disabledSet[b.Adapter],
+			s := webui.IMRuntimeStatus{
+				Adapter: b.Adapter, Platform: string(b.Platform), Healthy: st.Healthy, Status: st.Status,
+				BoundDir: b.Workspace, ChannelID: b.ChannelID, TargetID: b.TargetID,
+				Muted: mutedSet[b.Adapter], Disabled: disabledSet[b.Adapter], AllDirs: allDirsMap[b.Adapter],
 			}
 			if st.LastError != "" {
-				status.LastError = st.LastError
+				s.LastError = st.LastError
 			}
-			out = append(out, status)
+			out = append(out, s)
 			seen[b.Adapter] = true
+		}
+		// Adapters with persisted bindings but no current runtime binding
+		for adapter, bs := range persistedMap {
+			if seen[adapter] {
+				continue
+			}
+			st := stateMap[adapter]
+			pb := bs[0]
+			s := webui.IMRuntimeStatus{
+				Adapter: adapter, Platform: string(st.Platform), Healthy: st.Healthy, Status: st.Status,
+				LastError: st.LastError, BoundDir: pb.workspace, ChannelID: pb.channel, TargetID: pb.targetID,
+				Muted: mutedSet[adapter], Disabled: disabledSet[adapter], AllDirs: allDirsMap[adapter],
+			}
+			out = append(out, s)
+			seen[adapter] = true
 		}
 		for name, st := range stateMap {
 			if seen[name] {
 				continue
 			}
 			out = append(out, webui.IMRuntimeStatus{
-				Adapter:   name,
-				Platform:  string(st.Platform),
-				Healthy:   st.Healthy,
-				Status:    st.Status,
-				LastError: st.LastError,
-				Muted:     mutedSet[name],
-				Disabled:  disabledSet[name],
+				Adapter: name, Platform: string(st.Platform), Healthy: st.Healthy,
+				Status: st.Status, LastError: st.LastError,
+				Muted: mutedSet[name], Disabled: disabledSet[name],
 			})
 		}
 		return out

@@ -29,15 +29,17 @@ type IMStatusFunc func() []IMRuntimeStatus
 
 // IMRuntimeStatus describes a running IM adapter's state.
 type IMRuntimeStatus struct {
-	Adapter   string `json:"adapter"`
-	Platform  string `json:"platform"`
-	Healthy   bool   `json:"healthy"`
-	Status    string `json:"status"`
-	LastError string `json:"last_error,omitempty"`
-	BoundDir  string `json:"bound_dir,omitempty"`
-	ChannelID string `json:"channel_id,omitempty"`
-	Muted     bool   `json:"muted"`
-	Disabled  bool   `json:"disabled"`
+	Adapter   string   `json:"adapter"`
+	Platform  string   `json:"platform"`
+	Healthy   bool     `json:"healthy"`
+	Status    string   `json:"status"`
+	LastError string   `json:"last_error,omitempty"`
+	BoundDir  string   `json:"bound_dir,omitempty"`
+	ChannelID string   `json:"channel_id,omitempty"`
+	TargetID  string   `json:"target_id,omitempty"`
+	Muted     bool     `json:"muted"`
+	Disabled  bool     `json:"disabled"`
+	AllDirs   []string `json:"all_dirs,omitempty"` // all persisted bound directories
 }
 
 // IMActionFunc performs an IM action (enable/disable/mute/unmute).
