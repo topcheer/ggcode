@@ -785,30 +785,62 @@ func copyToClipboard(text string) {
 // ---------------------------------------------------------------------------
 
 // PKCETokenProvider is a TokenProvider that uses OAuth2 + PKCE authorization code flow.
+// It caches tokens to disk so they survive restarts.
 type PKCETokenProvider struct {
-	Config A2AOAuth2Config
+	Config   A2AOAuth2Config
+	Provider string      // provider name for cache key (e.g. "github")
+	Cache    *TokenCache // optional token cache
 }
 
-// GetToken opens a browser for user authorization and exchanges the code for a token.
+// GetToken returns a cached token if valid, otherwise opens a browser for authorization.
 func (p *PKCETokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	// Try cache first
+	if p.Cache != nil && p.Provider != "" {
+		if cached := p.Cache.LoadValid(p.Provider); cached != nil {
+			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
+		}
+	}
+
 	token, err := StartPKCEFlow(ctx, p.Config)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
+
+	// Save to cache
+	if p.Cache != nil && p.Provider != "" {
+		_ = p.Cache.Save(p.Provider, token, p.Config.ClientID)
+	}
+
 	return token.AccessToken, token.RefreshToken, token.Expiry, nil
 }
 
 // DeviceFlowTokenProvider is a TokenProvider that uses the Device Authorization flow.
+// It caches tokens to disk so they survive restarts.
 type DeviceFlowTokenProvider struct {
-	Config A2AOAuth2Config
+	Config   A2AOAuth2Config
+	Provider string      // provider name for cache key
+	Cache    *TokenCache // optional token cache
 }
 
-// GetToken displays a device code for user authorization and polls for the token.
+// GetToken returns a cached token if valid, otherwise displays a device code.
 func (p *DeviceFlowTokenProvider) GetToken(ctx context.Context) (string, string, time.Time, error) {
+	// Try cache first
+	if p.Cache != nil && p.Provider != "" {
+		if cached := p.Cache.LoadValid(p.Provider); cached != nil {
+			return cached.AccessToken, cached.RefreshToken, cached.Expiry, nil
+		}
+	}
+
 	token, err := StartDeviceFlow(ctx, p.Config)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
+
+	// Save to cache
+	if p.Cache != nil && p.Provider != "" {
+		_ = p.Cache.Save(p.Provider, token, p.Config.ClientID)
+	}
+
 	return token.AccessToken, token.RefreshToken, token.Expiry, nil
 }
 
@@ -830,14 +862,16 @@ func NewTokenProviderFromPreset(provider string, clientSecret string, headless b
 		Scopes:       preset.DefaultScopes,
 	}
 
+	cache := NewTokenCache(DefaultTokenCacheDir())
+
 	if headless || !preset.SupportsPKCE {
 		if !preset.SupportsDevice {
 			return nil, fmt.Errorf("provider %s does not support device flow", provider)
 		}
 		cfg.AuthorizeURL = preset.DeviceAuthURL
-		return &DeviceFlowTokenProvider{Config: cfg}, nil
+		return &DeviceFlowTokenProvider{Config: cfg, Provider: provider, Cache: cache}, nil
 	}
 
 	cfg.AuthorizeURL = preset.AuthorizeURL
-	return &PKCETokenProvider{Config: cfg}, nil
+	return &PKCETokenProvider{Config: cfg, Provider: provider, Cache: cache}, nil
 }
