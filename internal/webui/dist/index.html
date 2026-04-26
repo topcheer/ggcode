@@ -191,6 +191,35 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
     <div class="page" id="page-im">
       <div class="page-header"><h2>IM Configuration</h2><p>Instant messaging gateway settings</p></div>
       <div id="im-content"></div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Add Adapter</div>
+        <button class="btn btn-primary" onclick="showIMModal()">+ New Adapter</button>
+      </div>
+    </div>
+
+    <!-- IM Adapter Modal -->
+    <div id="im-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:500px;max-height:80vh;overflow-y:auto">
+        <h3 id="im-modal-title" style="margin-bottom:16px;font-size:16px"></h3>
+        <input type="hidden" id="im-edit-name">
+        <div class="form-group"><label>Name</label><input id="im-f-name" placeholder="my-adapter"></div>
+        <div class="form-group"><label>Platform</label><select id="im-f-platform">
+          <option value="qq">QQ</option><option value="telegram">Telegram</option><option value="discord">Discord</option>
+          <option value="slack">Slack</option><option value="dingtalk">DingTalk</option><option value="feishu">Feishu</option>
+          <option value="pc">PC Bridge</option><option value="other">Other</option>
+        </select></div>
+        <div class="form-group"><label>Enabled</label><select id="im-f-enabled"><option value="true">Yes</option><option value="false">No</option></select></div>
+        <div class="form-group"><label>Transport</label><input id="im-f-transport" placeholder="onebot, webhook, polling..."></div>
+        <div class="form-group"><label>Command</label><input id="im-f-command" placeholder="Path to adapter binary"></div>
+        <div class="form-group"><label>Args (comma-separated)</label><input id="im-f-args" placeholder="arg1, arg2"></div>
+        <div class="form-group"><label>Environment (KEY=VALUE per line)</label><textarea id="im-f-env" rows="3" placeholder="API_KEY=${MY_API_KEY}"></textarea></div>
+        <div class="form-group"><label>Allow From (comma-separated)</label><input id="im-f-allowfrom" placeholder="user1, group1"></div>
+        <div class="form-group"><label>Targets (JSON)</label><textarea id="im-f-targets" rows="3" placeholder='[{"id":"chan1","label":"Channel 1"}]'></textarea></div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn btn-primary" onclick="saveIMAdapter()">Save</button>
+          <button class="btn" onclick="hideIMModal()">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <!-- General -->
@@ -500,88 +529,170 @@ function renderIM() {
   const rtMap = {};
   imRuntime.forEach(r => rtMap[r.adapter] = r);
 
-  // All adapter names from config (primary source)
+  // Group by platform
+  const groups = {};
   const allNames = Object.keys(adapters);
-  // Add runtime-only adapters not in config
   Object.keys(rtMap).forEach(n => { if (!adapters[n]) allNames.push(n); });
-
-  let adapterCards = '';
   for (const name of allNames) {
-    const rt = rtMap[name];
     const cfg = adapters[name] || {};
-    const targets = cfg.targets || [];
-
-    // Determine status
-    let statusBadge, dotClass;
-    if (rt) {
-      if (rt.disabled) { statusBadge = '<span class="badge badge-red">Disabled</span>'; dotClass = 'dot-red'; }
-      else if (rt.muted) { statusBadge = '<span class="badge badge-yellow">Muted</span>'; dotClass = 'dot-yellow'; }
-      else if (rt.healthy) { statusBadge = '<span class="badge badge-green">Active</span>'; dotClass = 'dot-green'; }
-      else { statusBadge = '<span class="badge badge-red">Error</span>'; dotClass = 'dot-red'; }
-    } else if (cfg.enabled) {
-      statusBadge = '<span class="badge badge-yellow">Configured</span>'; dotClass = 'dot-yellow';
-    } else {
-      statusBadge = '<span class="badge badge-red">Disabled</span>'; dotClass = 'dot-red';
-    }
-    const platform = rt?.platform || cfg.platform || 'unknown';
-
-    // Action buttons
-    let actionBtns = '';
-    if (rt) {
-      if (rt.disabled) actionBtns += `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','enable')">Enable</button> `;
-      else {
-        actionBtns += `<button class="btn btn-sm btn-danger" onclick="imAction('${esc(name)}','disable')">Disable</button> `;
-        if (rt.muted) actionBtns += `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','unmute')">Unmute</button> `;
-        else actionBtns += `<button class="btn btn-sm" onclick="imAction('${esc(name)}','mute')">Mute</button> `;
-      }
-    }
-
-    adapterCards += `<div class="card">
-      <div class="card-title"><span class="dot ${dotClass}"></span>${esc(name)} ${statusBadge} <span class="badge badge-yellow" style="font-size:10px">${esc(platform)}</span></div>
-      <div class="table-wrap"><table>
-        <tr><th style="width:120px">Setting</th><th>Value</th></tr>
-        ${cfg.transport ? `<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>` : ''}
-        ${cfg.command ? `<tr><td>Command</td><td class="mono">${esc(cfg.command)} ${(cfg.args||[]).map(a=>esc(a)).join(' ')}</td></tr>` : ''}
-        ${targets.length > 0 ? `<tr><td>Targets</td><td style="display:flex;flex-wrap:wrap;gap:4px">${targets.map(t => `<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>` : ''}
-        ${rt?.bound_dir ? `<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>` : ''}
-        ${rt?.channel_id ? `<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>` : ''}
-        ${rt && rt.all_dirs && rt.all_dirs.length > 0 ? `<tr><td>All Bound Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d => `<span class="badge ${d===rt.bound_dir?'badge-green':'badge-yellow'}" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>` : ''}
-        ${rt?.status ? `<tr><td>Runtime</td><td class="mono">${esc(rt.status)}</td></tr>` : ''}
-        ${rt?.last_error ? `<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>` : ''}
-        ${(cfg.allow_from||[]).length > 0 ? `<tr><td>Allow From</td><td>${cfg.allow_from.map(a => `<code>${esc(a)}</code>`).join(', ')}</td></tr>` : ''}
-      </table></div>
-      ${actionBtns ? `<div style="margin-top:8px;display:flex;gap:6px">${actionBtns}</div>` : ''}
-    </div>`;
+    const platform = rtMap[name]?.platform || cfg.platform || 'other';
+    if (!groups[platform]) groups[platform] = [];
+    groups[platform].push({name, cfg, rt: rtMap[name]});
   }
-  document.getElementById('im-content').innerHTML = `
-    <div class="card">
-      <div class="card-title">IM Gateway <span class="badge ${im.enabled ? 'badge-green' : 'badge-yellow'}">${im.enabled ? 'Enabled' : 'Disabled'}</span>
-        <span class="badge badge-yellow" style="font-size:10px">${esc(im.output_mode || 'verbose')}</span></div>
-      <div class="table-wrap"><table>
-        <tr><th style="width:120px">Setting</th><th>Value</th></tr>
-        <tr><td>Streaming</td><td>${im.streaming?.enabled ? 'Enabled' : 'Disabled'}</td></tr>
-        <tr><td>Adapters</td><td>${allNames.length} configured</td></tr>
-      </table></div>
-    </div>
-    ${adapterCards}`;
+
+  // Platform display names
+  const platformNames = {qq:'QQ',telegram:'Telegram',discord:'Discord',slack:'Slack',dingtalk:'DingTalk',feishu:'Feishu',pc:'PC Bridge',other:'Other'};
+
+  let html = `<div class="card">
+    <div class="card-title">IM Gateway <span class="badge ${im.enabled?'badge-green':'badge-yellow'}">${im.enabled?'Enabled':'Disabled'}</span>
+      <span class="badge badge-yellow" style="font-size:10px">${esc(im.output_mode||'verbose')}</span></div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+      <tr><td>Streaming</td><td>${im.streaming?.enabled?'Enabled':'Disabled'}</td></tr>
+      <tr><td>Adapters</td><td>${allNames.length} configured</td></tr>
+    </table></div>
+  </div>`;
+
+  for (const [platform, items] of Object.entries(groups)) {
+    const pName = platformNames[platform] || platform;
+    html += `<h3 style="font-size:14px;margin:16px 0 8px;color:var(--accent)">${esc(pName)}</h3>`;
+    for (const item of items) {
+      const {name, cfg, rt} = item;
+      const targets = cfg.targets || [];
+      let statusBadge, dotClass;
+      if (rt) {
+        if (rt.disabled) { statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red'; }
+        else if (rt.muted) { statusBadge='<span class="badge badge-yellow">Muted</span>'; dotClass='dot-yellow'; }
+        else if (rt.healthy) { statusBadge='<span class="badge badge-green">Active</span>'; dotClass='dot-green'; }
+        else { statusBadge='<span class="badge badge-red">Error</span>'; dotClass='dot-red'; }
+      } else if (cfg.enabled) {
+        statusBadge='<span class="badge badge-yellow">Configured</span>'; dotClass='dot-yellow';
+      } else {
+        statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red';
+      }
+      let actionBtns = '';
+      if (rt) {
+        if (rt.disabled) actionBtns+=`<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','enable')">Enable</button>`;
+        else {
+          actionBtns+=`<button class="btn btn-sm btn-danger" onclick="imAction('${esc(name)}','disable')">Disable</button>`;
+          actionBtns+= rt.muted
+            ? `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','unmute')">Unmute</button>`
+            : `<button class="btn btn-sm" onclick="imAction('${esc(name)}','mute')">Mute</button>`;
+        }
+      }
+      html += `<div class="card">
+        <div class="card-title"><span class="dot ${dotClass}"></span>${esc(name)} ${statusBadge}</div>
+        <div class="table-wrap"><table>
+          <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+          ${cfg.transport?`<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>`:''}
+          ${cfg.command?`<tr><td>Command</td><td class="mono">${esc(cfg.command)} ${(cfg.args||[]).map(a=>esc(a)).join(' ')}</td></tr>`:''}
+          ${targets.length?`<tr><td>Targets</td><td style="display:flex;flex-wrap:wrap;gap:4px">${targets.map(t=>`<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>`:''}
+          ${rt?.bound_dir?`<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>`:''}
+          ${rt?.channel_id?`<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>`:''}
+          ${rt&&rt.all_dirs&&rt.all_dirs.length>0?`<tr><td>All Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d=>`<span class="badge ${d===rt.bound_dir?'badge-green':'badge-yellow'}" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>`:''}
+          ${rt?.status?`<tr><td>Runtime</td><td class="mono">${esc(rt.status)}</td></tr>`:''}
+          ${rt?.last_error?`<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>`:''}
+          ${(cfg.allow_from||[]).length?`<tr><td>Allow From</td><td>${cfg.allow_from.map(a=>`<code>${esc(a)}</code>`).join(', ')}</td></tr>`:''}
+        </table></div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+          ${actionBtns}
+          <button class="btn btn-sm" onclick="editIMAdapter('${esc(name)}')">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteIMAdapter('${esc(name)}')">Delete</button>
+        </div>
+      </div>`;
+    }
+  }
+  document.getElementById('im-content').innerHTML = html;
 }
 
 async function loadIMRuntime() {
-  try {
-    imRuntime = await api('/api/im/status');
-  } catch(e) { imRuntime = []; }
+  try { imRuntime = await api('/api/im/status'); } catch(e) { imRuntime = []; }
 }
 
 async function imAction(adapter, action) {
   try {
-    await api('/api/im/action', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({adapter, action})
-    });
+    await api('/api/im/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adapter,action})});
     toast(`${adapter}: ${action} OK`);
-    await loadIMRuntime();
-    renderIM();
+    await loadIMRuntime(); renderIM();
+  } catch(e) { toast(e.message, false); }
+}
+
+function showIMModal(editName) {
+  const modal = document.getElementById('im-modal');
+  modal.style.display = 'flex';
+  document.getElementById('im-modal-title').textContent = editName ? 'Edit Adapter: '+editName : 'New Adapter';
+  document.getElementById('im-edit-name').value = editName || '';
+  if (editName) {
+    const cfg = (config.im?.adapters||{})[editName] || {};
+    document.getElementById('im-f-name').value = editName;
+    document.getElementById('im-f-name').readOnly = true;
+    document.getElementById('im-f-platform').value = cfg.platform || 'other';
+    document.getElementById('im-f-enabled').value = cfg.enabled !== false ? 'true' : 'false';
+    document.getElementById('im-f-transport').value = cfg.transport || '';
+    document.getElementById('im-f-command').value = cfg.command || '';
+    document.getElementById('im-f-args').value = (cfg.args||[]).join(', ');
+    document.getElementById('im-f-env').value = Object.entries(cfg.env||{}).map(([k,v])=>k+'='+v).join('\n');
+    document.getElementById('im-f-allowfrom').value = (cfg.allow_from||[]).join(', ');
+    document.getElementById('im-f-targets').value = JSON.stringify(cfg.targets||[], null, 2);
+  } else {
+    document.getElementById('im-f-name').value = '';
+    document.getElementById('im-f-name').readOnly = false;
+    document.getElementById('im-f-platform').value = 'qq';
+    document.getElementById('im-f-enabled').value = 'true';
+    document.getElementById('im-f-transport').value = '';
+    document.getElementById('im-f-command').value = '';
+    document.getElementById('im-f-args').value = '';
+    document.getElementById('im-f-env').value = '';
+    document.getElementById('im-f-allowfrom').value = '';
+    document.getElementById('im-f-targets').value = '[]';
+  }
+}
+
+function hideIMModal() { document.getElementById('im-modal').style.display = 'none'; }
+
+function editIMAdapter(name) { showIMModal(name); }
+
+async function saveIMAdapter() {
+  try {
+    const editName = document.getElementById('im-edit-name').value;
+    const name = editName || document.getElementById('im-f-name').value.trim();
+    if (!name) { toast('Name is required', false); return; }
+    const argsStr = document.getElementById('im-f-args').value.trim();
+    const args = argsStr ? argsStr.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    const envStr = document.getElementById('im-f-env').value.trim();
+    const env = {};
+    if (envStr) envStr.split('\n').forEach(l=>{const i=l.indexOf('=');if(i>0)env[l.substring(0,i).trim()]=l.substring(i+1).trim();});
+    const allowStr = document.getElementById('im-f-allowfrom').value.trim();
+    const allow_from = allowStr ? allowStr.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    let targets = [];
+    try { targets = JSON.parse(document.getElementById('im-f-targets').value || '[]'); } catch(e) {}
+    const adapter = {
+      enabled: document.getElementById('im-f-enabled').value === 'true',
+      platform: document.getElementById('im-f-platform').value,
+      transport: document.getElementById('im-f-transport').value.trim(),
+      command: document.getElementById('im-f-command').value.trim(),
+    };
+    if (args.length) adapter.args = args;
+    if (Object.keys(env).length) adapter.env = env;
+    if (allow_from.length) adapter.allow_from = allow_from;
+    if (targets.length) adapter.targets = targets;
+    await api('/api/im/adapters/'+encodeURIComponent(name), {
+      method: editName ? 'PUT' : 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(adapter)
+    });
+    toast(editName ? 'Adapter updated' : 'Adapter added');
+    hideIMModal();
+    loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function deleteIMAdapter(name) {
+  if (!confirm('Delete adapter "'+name+'"?')) return;
+  try {
+    await api('/api/im/adapters/'+encodeURIComponent(name), {method:'DELETE'});
+    toast('Adapter deleted');
+    loadAll();
   } catch(e) { toast(e.message, false); }
 }
 
