@@ -731,6 +731,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return imMgr.DisableBinding(adapter)
 		case "enable":
 			return imMgr.EnableBinding(adapter)
+		case "unbind":
+			for _, pb := range imMgr.AllPersistedBindings() {
+				if pb.Adapter == adapter {
+					return imMgr.DeleteBinding(adapter, pb.Workspace)
+				}
+			}
+			return fmt.Errorf("no persisted binding for adapter %q", adapter)
 		default:
 			return fmt.Errorf("unknown action: %s", action)
 		}

@@ -729,19 +729,23 @@ function renderIM() {
   const rtMap = {};
   imRuntime.forEach(r => rtMap[r.adapter] = r);
 
-  // Group by platform
-  const groups = {};
-  const allNames = Object.keys(adapters);
-  Object.keys(rtMap).forEach(n => { if (!adapters[n]) allNames.push(n); });
-  for (const name of allNames) {
-    const cfg = adapters[name] || {};
+  // Group CONFIG adapters by platform
+  const configGroups = {};
+  for (const [name, cfg] of Object.entries(adapters)) {
     const platform = rtMap[name]?.platform || cfg.platform || 'other';
-    if (!groups[platform]) groups[platform] = [];
-    groups[platform].push({name, cfg, rt: rtMap[name]});
+    if (!configGroups[platform]) configGroups[platform] = [];
+    configGroups[platform].push({name, cfg, rt: rtMap[name], hasConfig: true});
   }
 
-  // Platform display names
-  const platformNames = {qq:'QQ',telegram:'Telegram',discord:'Discord',slack:'Slack',dingtalk:'DingTalk',feishu:'Feishu',pc:'PC Bridge',other:'Other'};
+  // Find persisted-only adapters (no config, only runtime/persisted binding)
+  const persistedOnly = [];
+  for (const rt of imRuntime) {
+    if (!adapters[rt.adapter]) {
+      persistedOnly.push(rt);
+    }
+  }
+
+  const platformNames = {qq:'QQ',telegram:'Telegram',discord:'Discord',slack:'Slack',dingtalk:'DingTalk',feishu:'Feishu',pc:'PC Bridge',dummy:'Eval (Dummy)',other:'Other'};
 
   let html = `<div class="card">
     <div class="card-title">IM Gateway <span class="badge ${im.enabled?'badge-green':'badge-yellow'}">${im.enabled?'Enabled':'Disabled'}</span>
@@ -749,60 +753,90 @@ function renderIM() {
     <div class="table-wrap"><table>
       <tr><th style="width:120px">Setting</th><th>Value</th></tr>
       <tr><td>Streaming</td><td>${im.streaming?.enabled?'Enabled':'Disabled'}</td></tr>
-      <tr><td>Adapters</td><td>${allNames.length} configured</td></tr>
+      <tr><td>Adapters</td><td>${Object.keys(adapters).length} configured</td></tr>
     </table></div>
   </div>`;
 
-  for (const [platform, items] of Object.entries(groups)) {
+  // Render config adapters grouped by platform
+  for (const [platform, items] of Object.entries(configGroups)) {
     const pName = platformNames[platform] || platform;
     html += `<h3 style="font-size:14px;margin:16px 0 8px;color:var(--accent)">${esc(pName)}</h3>`;
     for (const item of items) {
-      const {name, cfg, rt} = item;
-      const targets = cfg.targets || [];
-      let statusBadge, dotClass;
-      if (rt) {
-        if (rt.disabled) { statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red'; }
-        else if (rt.muted) { statusBadge='<span class="badge badge-yellow">Muted</span>'; dotClass='dot-yellow'; }
-        else if (rt.healthy) { statusBadge='<span class="badge badge-green">Active</span>'; dotClass='dot-green'; }
-        else { statusBadge='<span class="badge badge-red">Error</span>'; dotClass='dot-red'; }
-      } else if (cfg.enabled) {
-        statusBadge='<span class="badge badge-yellow">Configured</span>'; dotClass='dot-yellow';
-      } else {
-        statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red';
-      }
-      let actionBtns = '';
-      if (rt) {
-        if (rt.disabled) actionBtns+=`<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','enable')">Enable</button>`;
-        else {
-          actionBtns+=`<button class="btn btn-sm btn-danger" onclick="imAction('${esc(name)}','disable')">Disable</button>`;
-          actionBtns+= rt.muted
-            ? `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','unmute')">Unmute</button>`
-            : `<button class="btn btn-sm" onclick="imAction('${esc(name)}','mute')">Mute</button>`;
-        }
-      }
-      html += `<div class="card">
-        <div class="card-title"><span class="dot ${dotClass}"></span>${esc(name)} ${statusBadge}</div>
-        <div class="table-wrap"><table>
-          <tr><th style="width:120px">Setting</th><th>Value</th></tr>
-          ${cfg.transport?`<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>`:''}
-          ${cfg.command?`<tr><td>Command</td><td class="mono">${esc(cfg.command)} ${(cfg.args||[]).map(a=>esc(a)).join(' ')}</td></tr>`:''}
-          ${targets.length?`<tr><td>Targets</td><td style="display:flex;flex-wrap:wrap;gap:4px">${targets.map(t=>`<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>`:''}
-          ${rt?.bound_dir?`<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>`:''}
-          ${rt?.channel_id?`<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>`:''}
-          ${rt&&rt.all_dirs&&rt.all_dirs.length>0?`<tr><td>All Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d=>`<span class="badge ${d===rt.bound_dir?'badge-green':'badge-yellow'}" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>`:''}
-          ${rt?.status?`<tr><td>Runtime</td><td class="mono">${esc(rt.status)}</td></tr>`:''}
-          ${rt?.last_error?`<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>`:''}
-          ${(cfg.allow_from||[]).length?`<tr><td>Allow From</td><td>${cfg.allow_from.map(a=>`<code>${esc(a)}</code>`).join(', ')}</td></tr>`:''}
-        </table></div>
-        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-          ${actionBtns}
-          <button class="btn btn-sm" onclick="editIMAdapter('${esc(name)}')">Edit</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteIMAdapter('${esc(name)}')">Delete</button>
-        </div>
-      </div>`;
+      html += renderIMAdapterCard(item.name, item.cfg, item.rt);
     }
   }
+
+  // Render persisted-only adapters (ghost adapters — binding exists but no config)
+  if (persistedOnly.length > 0) {
+    html += `<h3 style="font-size:14px;margin:16px 0 8px;color:var(--text2)">Persisted Bindings (no config)</h3>`;
+    for (const rt of persistedOnly) {
+      html += renderGhostAdapterCard(rt);
+    }
+  }
+
   document.getElementById('im-content').innerHTML = html;
+}
+
+function renderIMAdapterCard(name, cfg, rt) {
+  const targets = cfg.targets || [];
+  let statusBadge, dotClass;
+  if (rt) {
+    if (rt.disabled) { statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red'; }
+    else if (rt.muted) { statusBadge='<span class="badge badge-yellow">Muted</span>'; dotClass='dot-yellow'; }
+    else if (rt.healthy) { statusBadge='<span class="badge badge-green">Active</span>'; dotClass='dot-green'; }
+    else { statusBadge='<span class="badge badge-red">Error</span>'; dotClass='dot-red'; }
+  } else if (cfg.enabled) {
+    statusBadge='<span class="badge badge-yellow">Configured</span>'; dotClass='dot-yellow';
+  } else {
+    statusBadge='<span class="badge badge-red">Disabled</span>'; dotClass='dot-red';
+  }
+  let actionBtns = '';
+  if (rt) {
+    if (rt.disabled) actionBtns+=`<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','enable')">Enable</button>`;
+    else {
+      actionBtns+=`<button class="btn btn-sm btn-danger" onclick="imAction('${esc(name)}','disable')">Disable</button>`;
+      actionBtns+= rt.muted
+        ? `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','unmute')">Unmute</button>`
+        : `<button class="btn btn-sm" onclick="imAction('${esc(name)}','mute')">Mute</button>`;
+    }
+  }
+  return `<div class="card">
+    <div class="card-title"><span class="dot ${dotClass}"></span>${esc(name)} ${statusBadge}</div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+      ${cfg.transport?`<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>`:''}
+      ${cfg.command?`<tr><td>Command</td><td class="mono">${esc(cfg.command)} ${(cfg.args||[]).map(a=>esc(a)).join(' ')}</td></tr>`:''}
+      ${targets.length?`<tr><td>Targets</td><td style="display:flex;flex-wrap:wrap;gap:4px">${targets.map(t=>`<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>`:''}
+      ${rt?.bound_dir?`<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>`:''}
+      ${rt?.channel_id?`<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>`:''}
+      ${rt&&rt.all_dirs&&rt.all_dirs.length>1?`<tr><td>All Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d=>`<span class="badge ${d===rt.bound_dir?'badge-green':'badge-yellow'}" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>`:''}
+      ${rt?.status?`<tr><td>Runtime</td><td class="mono">${esc(rt.status)}</td></tr>`:''}
+      ${rt?.last_error?`<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>`:''}
+      ${(cfg.allow_from||[]).length?`<tr><td>Allow From</td><td>${cfg.allow_from.map(a=>`<code>${esc(a)}</code>`).join(', ')}</td></tr>`:''}
+    </table></div>
+    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+      ${actionBtns}
+      <button class="btn btn-sm" onclick="editIMAdapter('${esc(name)}')">Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteIMAdapter('${esc(name)}')">Delete</button>
+    </div>
+  </div>`;
+}
+
+function renderGhostAdapterCard(rt) {
+  const pName = {qq:'QQ',telegram:'Telegram',discord:'Discord',slack:'Slack',dingtalk:'DingTalk',feishu:'Feishu',pc:'PC Bridge',dummy:'Eval (Dummy)'}[rt.platform] || rt.platform || 'Unknown';
+  return `<div class="card" style="opacity:.7;border-style:dashed">
+    <div class="card-title"><span class="dot dot-yellow"></span>${esc(rt.adapter)} <span class="badge badge-yellow">Binding Only</span> <span class="badge badge-yellow" style="font-size:10px">${esc(pName)}</span></div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+      ${rt.bound_dir?`<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>`:''}
+      ${rt.channel_id?`<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>`:''}
+      ${rt.all_dirs&&rt.all_dirs.length>0?`<tr><td>All Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d=>`<span class="badge badge-yellow" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>`:''}
+      ${rt.status?`<tr><td>Status</td><td class="mono">${esc(rt.status)}</td></tr>`:''}
+    </table></div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button class="btn btn-sm btn-danger" onclick="unbindAdapter('${esc(rt.adapter)}')">Remove Binding</button>
+    </div>
+  </div>`;
 }
 
 async function loadIMRuntime() {
@@ -893,6 +927,15 @@ async function deleteIMAdapter(name) {
     await api('/api/im/adapters/'+encodeURIComponent(name), {method:'DELETE'});
     toast('Adapter deleted');
     loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+async function unbindAdapter(name) {
+  if (!confirm('Remove persisted binding for "'+name+'"? The adapter config was already removed; this clears the leftover binding.')) return;
+  try {
+    await api('/api/im/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adapter:name,action:'unbind'})});
+    toast('Binding removed');
+    await loadIMRuntime(); renderIM();
   } catch(e) { toast(e.message, false); }
 }
 

@@ -42,7 +42,7 @@ type IMRuntimeStatus struct {
 	AllDirs   []string `json:"all_dirs,omitempty"` // all persisted bound directories
 }
 
-// IMActionFunc performs an IM action (enable/disable/mute/unmute).
+// IMActionFunc performs an IM action (enable/disable/mute/unmute/unbind).
 type IMActionFunc func(adapter string, action string) error
 
 // Server provides a built-in WebUI for configuration and chat.

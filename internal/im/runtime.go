@@ -988,6 +988,27 @@ func (m *Manager) UnbindChannel(workspace string) error {
 	return nil
 }
 
+// DeleteBinding removes a specific persisted binding by adapter and workspace.
+func (m *Manager) DeleteBinding(adapter, workspace string) error {
+	m.mu.Lock()
+	if m.bindingStore == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no binding store")
+	}
+	workspace = normalizeWorkspace(workspace)
+	if err := m.bindingStore.Delete(workspace, adapter); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	delete(m.currentBindings, adapter)
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
 // UnbindAdapter removes the binding for whatever workspace has the given
 // adapter name. This is needed when unbinding from a panel where the current
 // session workspace may differ from the workspace that originally bound the
