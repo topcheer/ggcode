@@ -31,3 +31,4 @@ __pycache__/
 .tmp/
 a2a.test
 auth.test
+.ggcode/a2a.yaml
