@@ -40,6 +40,15 @@ func TestInteractive_GitHubPKCEFlow(t *testing.T) {
 		t.Skip("No default client_id for GitHub preset")
 	}
 
+	// GitHub requires client_secret even for PKCE (it's a confidential client).
+	// Set GGCODE_OAUTH_CLIENT_SECRET env var before running this test.
+	clientSecret := os.Getenv("GGCODE_OAUTH_CLIENT_SECRET")
+	if clientSecret == "" {
+		t.Skip("Set GGCODE_OAUTH_CLIENT_SECRET env var to run this test.\n" +
+			"  Get it from: https://github.com/settings/developers → your app → Client secrets → Generate")
+	}
+	cfg.ClientSecret = clientSecret
+
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Fprintf(os.Stderr, "═══════════════════════════════════════════════\n")
 	fmt.Fprintf(os.Stderr, "  GitHub OAuth2 + PKCE Interactive Test\n")
@@ -110,6 +119,8 @@ func TestInteractive_GitHubDeviceFlow(t *testing.T) {
 	if cfg.ClientID == "" {
 		t.Skip("No default client_id for GitHub preset")
 	}
+
+	// Device flow is for public clients — no client_secret needed.
 
 	fmt.Fprintf(os.Stderr, "\n")
 	fmt.Fprintf(os.Stderr, "═══════════════════════════════════════════════\n")
