@@ -437,7 +437,7 @@ function renderOverview() {
         <tr><td>MCP Servers</td><td><span class="dot ${mcpCount > 0 ? 'dot-green' : 'dot-yellow'}"></span>${mcpCount > 0 ? 'Configured' : 'None'}</td><td>${mcpCount}</td></tr>
         <tr><td>IM Gateway</td><td><span class="dot ${imEnabled ? 'dot-green' : 'dot-yellow'}"></span>${imEnabled ? 'Enabled' : 'Disabled'}</td><td>${Object.keys(c.im?.adapters || {}).length} adapters</td></tr>
         <tr><td>Vendors</td><td><span class="dot dot-green"></span>Available</td><td>${vendors.length}</td></tr>
-        <tr><td>A2A</td><td>${a2aData ? (a2aData.disabled ? '<span class="dot dot-red"></span>Disabled' : '<span class="dot dot-green"></span>Enabled'+(a2aInstances&&a2aInstances.length ? ' ('+a2aInstances.length+' peer'+(a2aInstances.length>1?'s':'')+')')) : '<span class="dot dot-yellow"></span>N/A'}</td><td>${a2aData && !a2aData.disabled ? ':'+(a2aData.port||'auto') : ''}</td></tr>
+        <tr><td>A2A</td><td>${a2aData ? (a2aData.disabled ? '<span class="dot dot-red"></span>Disabled' : '<span class="dot dot-green"></span>Enabled'+(a2aInstances&&a2aInstances.length ? ' ('+a2aInstances.length+' peer'+(a2aInstances.length>1?'s':'')+')' : '')) : '<span class="dot dot-yellow"></span>N/A'}</td><td>${a2aData && !a2aData.disabled ? ':'+(a2aData.port||'auto') : ''}</td></tr>
         <tr><td>Impersonate</td><td>${impersonateData ? `<span class="dot dot-green"></span>${esc(impersonateData.presets?.find(p=>p.id===(impersonateData.current?.preset||'none'))?.display_name || 'None')}` : '<span class="dot dot-yellow"></span>N/A'}</td><td></td></tr>
       </table></div>
     </div>`;
