@@ -45,25 +45,25 @@ func lockConfigFile(path string) func() {
 
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
-	DisplayName    string   `yaml:"display_name"`
-	Protocol       string   `yaml:"protocol"`
-	BaseURL        string   `yaml:"base_url"`
-	AuthType       string   `yaml:"auth_type,omitempty"`
-	APIKey         string   `yaml:"api_key,omitempty"`
-	ContextWindow  int      `yaml:"context_window,omitempty"`
-	MaxTokens      int      `yaml:"max_tokens"`
-	SupportsVision *bool    `yaml:"supports_vision,omitempty"`
-	DefaultModel   string   `yaml:"default_model,omitempty"`
-	SelectedModel  string   `yaml:"selected_model,omitempty"`
-	Models         []string `yaml:"models,omitempty"`
-	Tags           []string `yaml:"tags,omitempty"`
+	DisplayName    string   `yaml:"display_name" json:"display_name"`
+	Protocol       string   `yaml:"protocol" json:"protocol"`
+	BaseURL        string   `yaml:"base_url" json:"base_url"`
+	AuthType       string   `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
+	APIKey         string   `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	ContextWindow  int      `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens      int      `yaml:"max_tokens" json:"max_tokens"`
+	SupportsVision *bool    `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
+	DefaultModel   string   `yaml:"default_model,omitempty" json:"default_model,omitempty"`
+	SelectedModel  string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
+	Models         []string `yaml:"models,omitempty" json:"models,omitempty"`
+	Tags           []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 }
 
 // VendorConfig holds a real supplier plus its available endpoints.
 type VendorConfig struct {
-	DisplayName string                    `yaml:"display_name"`
-	APIKey      string                    `yaml:"api_key,omitempty"`
-	Endpoints   map[string]EndpointConfig `yaml:"endpoints"`
+	DisplayName string                    `yaml:"display_name" json:"display_name"`
+	APIKey      string                    `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	Endpoints   map[string]EndpointConfig `yaml:"endpoints" json:"endpoints"`
 }
 
 // ResolvedEndpoint is the runtime selection after config inheritance is applied.
@@ -96,13 +96,13 @@ const (
 
 // MCPServerConfig defines an MCP server to connect to.
 type MCPServerConfig struct {
-	Name              string            `yaml:"name"`
-	Type              string            `yaml:"type,omitempty"`
-	Command           string            `yaml:"command,omitempty"`
-	Args              []string          `yaml:"args,omitempty"`
-	Env               map[string]string `yaml:"env,omitempty"`
-	URL               string            `yaml:"url,omitempty"`
-	Headers           map[string]string `yaml:"headers,omitempty"`
+	Name              string            `yaml:"name" json:"name"`
+	Type              string            `yaml:"type,omitempty" json:"type,omitempty"`
+	Command           string            `yaml:"command,omitempty" json:"command,omitempty"`
+	Args              []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Env               map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	URL               string            `yaml:"url,omitempty" json:"url,omitempty"`
+	Headers           map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	OAuthClientID     string            `yaml:"oauth_client_id,omitempty" json:"oauth_client_id,omitempty"`
 	OAuthClientSecret string            `yaml:"oauth_client_secret,omitempty" json:"oauth_client_secret,omitempty"`
 	Source            string            `yaml:"-" json:"-"`
