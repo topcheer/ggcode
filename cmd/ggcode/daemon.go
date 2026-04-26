@@ -297,6 +297,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return fmt.Errorf("creating session store: %w", err)
 	}
 
+	var daemonRestartRequested bool
+
 	// IM Manager
 	imMgr := im.NewManager()
 	bindingsPath, err := im.DefaultBindingsPath()
@@ -569,6 +571,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
 	bridge.SetActivityHook(knightAgent.NotifyActivity)
+	bridge.SetRestartHook(func() {
+		daemonRestartRequested = true
+		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+	})
 	if cfg.Knight().Enabled {
 		// Create Knight emitter (reuse IM emitter)
 		knightAgent.SetEmitter(emitter)
@@ -742,7 +748,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("unknown action: %s", action)
 		}
 	})
-	var daemonRestartRequested bool
 	webuiSrv.SetRestartFn(func() {
 		daemonRestartRequested = true
 		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
