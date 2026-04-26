@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,17 +21,54 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	card       *AgentCard // cached agent card (nil until discovered)
+
+	// Negotiated auth state (populated after Discover or explicit config)
+	authMethod   string // "", "apiKey", "bearer", "mtls"
+	bearerToken  string // cached OAuth2 access token
+	refreshToken string // for token refresh
+	tokenExpiry  time.Time
+}
+
+// ClientOption configures a Client.
+type ClientOption func(*Client)
+
+// WithBearerToken sets a pre-obtained OAuth2/OIDC bearer token.
+func WithBearerToken(token string) ClientOption {
+	return func(c *Client) {
+		c.bearerToken = token
+		c.authMethod = "bearer"
+	}
+}
+
+// WithMTLS configures the client to use mutual TLS.
+func WithMTLS(tlsConfig *tls.Config) ClientOption {
+	return func(c *Client) {
+		c.httpClient = &http.Client{
+			Timeout: 15 * time.Minute,
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		}
+		c.authMethod = "mtls"
+	}
 }
 
 // NewClient creates a new A2A client targeting the given server URL.
-func NewClient(baseURL, apiKey string) *Client {
-	return &Client{
+func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
+	c := &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 15 * time.Minute, // must exceed coordinator handler timeout
+			Timeout: 15 * time.Minute,
 		},
 	}
+	if apiKey != "" && c.authMethod == "" {
+		c.authMethod = "apiKey"
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // Discover fetches and caches the remote agent's Agent Card.
@@ -62,6 +100,101 @@ func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
 
 // Card returns the cached agent card (nil if Discover hasn't been called).
 func (c *Client) Card() *AgentCard { return c.card }
+
+// NegotiateAuth reads the Agent Card's securitySchemes and prepares the
+// appropriate authentication mechanism.
+//
+// This must be called after Discover(). It checks what the server requires
+// and configures the client accordingly:
+//
+//   - If server declares no security → no auth needed
+//   - If server has apiKey scheme and client has apiKey → use API Key
+//   - If server has oauth2/openIdConnect scheme → use Bearer token
+//     (must be set via WithBearerToken or SetBearerToken before calling)
+//   - If server has mutualTLS scheme → use mTLS
+//     (must be configured via WithMTLS option)
+//
+// Returns an error if the server requires an auth mechanism the client
+// hasn't been configured for.
+func (c *Client) NegotiateAuth() error {
+	if c.card == nil {
+		return fmt.Errorf("a2a: NegotiateAuth called before Discover")
+	}
+
+	// No security requirements → nothing to do
+	if len(c.card.Security) == 0 && len(c.card.SecuritySchemes) == 0 {
+		c.authMethod = ""
+		return nil
+	}
+
+	// Try to match client capabilities with server requirements
+	for _, req := range c.card.Security {
+		for schemeName := range req {
+			scheme, ok := c.card.SecuritySchemes[schemeName]
+			if !ok {
+				continue
+			}
+
+			switch scheme.Type {
+			case "apiKey":
+				if c.apiKey != "" {
+					c.authMethod = "apiKey"
+					return nil
+				}
+			case "http", "bearer":
+				if c.bearerToken != "" {
+					c.authMethod = "bearer"
+					return nil
+				}
+			case "oauth2", "openIdConnect":
+				if c.bearerToken != "" {
+					c.authMethod = "bearer"
+					return nil
+				}
+			case "mutualTLS":
+				if c.authMethod == "mtls" {
+					return nil
+				}
+			}
+		}
+	}
+
+	// Also check if client already has a configured auth that might work
+	if c.authMethod != "" {
+		return nil
+	}
+
+	return fmt.Errorf("a2a: server requires authentication but client has no matching credential (schemes: %v)",
+		schemeNames(c.card.SecuritySchemes))
+}
+
+// SetBearerToken updates the bearer token (e.g., after OAuth2 token refresh).
+func (c *Client) SetBearerToken(token string) {
+	c.bearerToken = token
+	c.authMethod = "bearer"
+}
+
+// SetAPIKey updates the API key.
+func (c *Client) SetAPIKey(key string) {
+	c.apiKey = key
+	if c.authMethod == "" {
+		c.authMethod = "apiKey"
+	}
+}
+
+// AuthMethod returns the negotiated authentication method.
+func (c *Client) AuthMethod() string { return c.authMethod }
+
+// setAuth applies the negotiated auth to an outgoing HTTP request.
+func (c *Client) setAuth(req *http.Request) {
+	switch c.authMethod {
+	case "apiKey":
+		c.setAuth(req)
+	case "bearer":
+		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
+		// mTLS is handled at TLS level, no headers needed
+	}
+}
 
 // SendMessage sends a synchronous message and waits for task completion.
 // If existingTaskID is non-empty, continues an existing task (multi-turn).
@@ -121,9 +254,7 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-API-Key", c.apiKey)
-	}
+	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -246,9 +377,7 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-API-Key", c.apiKey)
-	}
+	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -301,9 +430,7 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 		return fmt.Errorf("a2a %s: %w", method, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("X-API-Key", c.apiKey)
-	}
+	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -383,4 +510,13 @@ func decodeSSE(r io.Reader, ch chan<- JSONRPCResponse) {
 			ch <- resp
 		}
 	}
+}
+
+// schemeNames extracts scheme type names for error messages.
+func schemeNames(schemes map[string]Security) []string {
+	names := make([]string, 0, len(schemes))
+	for _, s := range schemes {
+		names = append(names, s.Type)
+	}
+	return names
 }
