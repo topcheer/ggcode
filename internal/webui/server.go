@@ -84,13 +84,18 @@ func (s *Server) routes() {
 // --- Static SPA ---
 
 func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
-	// Serve embedded SPA
-	data, err := fs.ReadFile(spafs, "dist/index.html")
+	// All non-API routes serve the SPA index.html
+	data, err := fs.ReadFile(spafs, "index.html")
 	if err != nil {
-		http.Error(w, "SPA not found", http.StatusNotFound)
-		return
+		// Fallback: try reading from the raw embed FS
+		data, err = fs.ReadFile(spaFS, "dist/index.html")
+		if err != nil {
+			http.Error(w, "SPA not found: "+err.Error(), http.StatusNotFound)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(data)
 }
 

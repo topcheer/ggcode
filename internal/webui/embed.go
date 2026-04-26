@@ -5,7 +5,7 @@ import (
 	"io/fs"
 )
 
-//go:embed dist/*
+//go:embed all:dist
 var spaFS embed.FS
 
 // spafs is the embedded filesystem stripped of the "dist/" prefix.
