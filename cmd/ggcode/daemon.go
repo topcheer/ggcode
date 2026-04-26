@@ -465,6 +465,91 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	mcpMgr.StartBackground(context.Background())
 	defer mcpMgr.Close()
 
+	// MCP OAuth watcher for daemon follow mode
+	mcpMgr.SetURLOpener(func(url string) error {
+		fmt.Fprintf(os.Stderr, "\x1b[34m\u2b21 MCP OAuth:\x1b[0m opening browser %s\r\n", url)
+		return nil
+	})
+	mcpOAuthDone := make(chan string, 4)
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			pending := mcpMgr.PendingOAuth()
+			if pending == nil {
+				continue
+			}
+			mcpMgr.ClearPendingOAuth()
+			handler := pending.Handler
+			serverName := pending.ServerName
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if handler.SupportsDCR() {
+					_ = handler.RegisterClient(ctx)
+				}
+				// Try device flow first
+				if handler.SupportsDeviceFlow() {
+					scopes := handler.GetScopes()
+					if len(scopes) > 4 {
+						scopes = scopes[:4]
+					}
+					devResp, err := handler.StartDeviceFlow(ctx, scopes)
+					if err == nil {
+						fmt.Fprintf(os.Stderr, "\x1b[33m\u2b21 MCP OAuth: %s\x1b[0m\r\n", serverName)
+						fmt.Fprintf(os.Stderr, "\x1b[36m  Device Code: %s\x1b[0m\r\n", devResp.UserCode)
+						fmt.Fprintf(os.Stderr, "\x1b[36m  Visit: %s\x1b[0m\r\n", devResp.VerificationURI)
+						pollCtx, pollCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+						defer pollCancel()
+						tokenResp, pollErr := handler.PollDeviceToken(pollCtx)
+						if pollErr != nil {
+							fmt.Fprintf(os.Stderr, "\x1b[31m  MCP OAuth failed for %s: %v\x1b[0m\r\n", serverName, pollErr)
+							return
+						}
+						if saveErr := handler.SaveToken(tokenResp); saveErr != nil {
+							fmt.Fprintf(os.Stderr, "\x1b[31m  MCP OAuth save failed: %v\x1b[0m\r\n", saveErr)
+							return
+						}
+						fmt.Fprintf(os.Stderr, "\x1b[32m  MCP server %s authenticated \u2713\x1b[0m\r\n", serverName)
+						mcpOAuthDone <- serverName
+						return
+					}
+				}
+				// Browser flow fallback
+				authorizeURL, err := handler.StartAuthFlow(ctx)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\x1b[31m  MCP OAuth failed for %s: %v\x1b[0m\r\n", serverName, err)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "\x1b[33m\u2b21 MCP OAuth: %s\x1b[0m\r\n", serverName)
+				fmt.Fprintf(os.Stderr, "\x1b[36m  Visit: %s\x1b[0m\r\n", authorizeURL)
+				cbCtx, cbCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cbCancel()
+				code, cbErr := handler.WaitForCallback(cbCtx)
+				if cbErr != nil {
+					fmt.Fprintf(os.Stderr, "\x1b[31m  MCP OAuth failed for %s: %v\x1b[0m\r\n", serverName, cbErr)
+					return
+				}
+				tokenResp, exErr := handler.ExchangeCode(cbCtx, code)
+				if exErr != nil {
+					fmt.Fprintf(os.Stderr, "\x1b[31m  MCP OAuth exchange failed: %v\x1b[0m\r\n", exErr)
+					return
+				}
+				if saveErr := handler.SaveToken(tokenResp); saveErr != nil {
+					fmt.Fprintf(os.Stderr, "\x1b[31m  MCP OAuth save failed: %v\x1b[0m\r\n", saveErr)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "\x1b[32m  MCP server %s authenticated \u2713\x1b[0m\r\n", serverName)
+				mcpOAuthDone <- serverName
+			}()
+		}
+	}()
+	go func() {
+		for name := range mcpOAuthDone {
+			mcpMgr.Retry(name)
+		}
+	}()
+
 	// Load project memory synchronously (daemon mode has no TUI event loop)
 	if projectMemoryLoader != nil {
 		content, _, err := projectMemoryLoader()
