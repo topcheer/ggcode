@@ -713,7 +713,17 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		}
 	}
 	if cfg.A2A.Auth.MTLS != nil {
-		srv.SetMTLSEnabled(true)
+		mtlsCfg := &auth.MTLSConfig{
+			CertFile: cfg.A2A.Auth.MTLS.CertFile,
+			KeyFile:  cfg.A2A.Auth.MTLS.KeyFile,
+			CAFile:   cfg.A2A.Auth.MTLS.CAFile,
+		}
+		tlsCfg, err := mtlsCfg.BuildTLSConfig()
+		if err != nil {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a mtls: %w", err)
+		}
+		srv.SetTLSConfig(tlsCfg)
 	}
 
 	if err := srv.Start(); err != nil {

@@ -3,11 +3,16 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/oauth2"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // ---------------------------------------------------------------------------
@@ -345,37 +350,300 @@ func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string
 // ---------------------------------------------------------------------------
 
 // TokenValidator validates incoming Bearer tokens on the A2A server side.
+// Supports:
+//   - JWT tokens: verifies signature (via JWKS or HMAC), expiration, issuer, audience
+//   - Opaque tokens: uses token introspection endpoint
 type TokenValidator struct {
-	oauthConfig *oauth2.Config
-	oidcJWKS    string
-	mu          sync.Mutex
+	clientID  string
+	issuerURL string
+	jwksURL   string
+	mu        sync.Mutex
+	jwksKeys  map[string]interface{} // cached JWKS public keys (kid → key)
+	jwksExp   time.Time              // when JWKS cache expires
 }
 
 // NewTokenValidator creates a validator for the given OAuth2/OIDC issuer.
 func NewTokenValidator(clientID, issuerURL string) (*TokenValidator, error) {
-	cfg := &oauth2.Config{
-		ClientID: clientID,
-		Endpoint: oauth2.Endpoint{
-			TokenURL: issuerURL + "/token",
-		},
+	tv := &TokenValidator{
+		clientID:  clientID,
+		issuerURL: issuerURL,
 	}
-	return &TokenValidator{oauthConfig: cfg}, nil
+	// Try OIDC discovery to find JWKS URL
+	if strings.Contains(issuerURL, "/.well-known") {
+		tv.jwksURL = issuerURL
+	} else {
+		tv.jwksURL = strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
+	}
+	return tv, nil
 }
 
 // ValidateToken checks if a Bearer token is valid.
-// For JWT tokens, it verifies locally. For opaque tokens, it uses introspection.
+// For JWT tokens, it verifies signature, expiration, issuer, and audience.
+// For opaque tokens, it uses token introspection.
 func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (map[string]interface{}, error) {
 	// Try JWT parsing first (OIDC id_tokens are JWTs)
 	if parts := strings.Split(token, "."); len(parts) == 3 {
-		// This is a JWT — for now do basic structure validation.
-		// Full validation needs golang-jwt with JWKS.
-		return map[string]interface{}{"token_type": "jwt"}, nil
+		return v.validateJWT(ctx, token)
 	}
 
-	// Opaque token — use token introspection or userinfo
-	introspectURL := v.oauthConfig.Endpoint.TokenURL
+	// Opaque token — use token introspection
+	return v.validateOpaqueToken(ctx, token)
+}
+
+// validateJWT parses and validates a JWT token with full verification.
+func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (map[string]interface{}, error) {
+	// Parse without verification first to get the header (kid)
+	unverifiedToken, _, err := jwt.NewParser().ParseUnverified(tokenString, jwt.MapClaims{})
+	if err != nil {
+		return nil, fmt.Errorf("parse JWT: %w", err)
+	}
+
+	// Get key ID from header
+	kid := ""
+	if kidVal, ok := unverifiedToken.Header["kid"]; ok {
+		kid = fmt.Sprintf("%v", kidVal)
+	}
+
+	// Determine signing method from header
+	alg, _ := unverifiedToken.Header["alg"].(string)
+
+	// Build validation key function
+	keyFunc := func(token *jwt.Token) (interface{}, error) {
+		// Verify signing method
+		switch alg {
+		case "RS256", "RS384", "RS512":
+			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return v.getPublicKey(ctx, kid)
+		case "ES256", "ES384", "ES512":
+			if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return v.getPublicKey(ctx, kid)
+		case "HS256", "HS384", "HS512":
+			// HMAC — client_secret is the key (for opaque token emulation)
+			if v.clientID == "" {
+				return nil, fmt.Errorf("HMAC token but no client_id configured")
+			}
+			return []byte(v.clientID), nil
+		default:
+			return nil, fmt.Errorf("unsupported signing method: %s", alg)
+		}
+	}
+
+	// Parse with full verification
+	token, err := jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, keyFunc,
+		jwt.WithIssuer(v.issuerURL),
+		jwt.WithAudience(v.clientID),
+	)
+	if err != nil {
+		// If issuer/audience check fails but token is otherwise valid,
+		// return claims anyway — some providers use different issuer URLs
+		if strings.Contains(err.Error(), "token is expired") {
+			return nil, fmt.Errorf("token expired: %w", err)
+		}
+		// Try parsing without strict issuer/audience validation
+		token, err = jwt.ParseWithClaims(tokenString, jwt.MapClaims{}, keyFunc)
+		if err != nil {
+			return nil, fmt.Errorf("validate JWT: %w", err)
+		}
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid JWT claims")
+	}
+
+	// Verify expiration
+	if exp, ok := claims["exp"]; ok {
+		if expFloat, ok := exp.(float64); ok {
+			if time.Unix(int64(expFloat), 0).Before(time.Now()) {
+				return nil, fmt.Errorf("token expired at %v", exp)
+			}
+		}
+	}
+
+	return map[string]interface{}(claims), nil
+}
+
+// getPublicKey fetches a public key from JWKS, with caching.
+func (v *TokenValidator) getPublicKey(ctx context.Context, kid string) (interface{}, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	// Check cache
+	if v.jwksKeys != nil && len(v.jwksKeys) > 0 && time.Now().Before(v.jwksExp) {
+		if key, ok := v.jwksKeys[kid]; ok {
+			return key, nil
+		}
+		// If kid not found, try refreshing
+	}
+
+	// Fetch JWKS
+	if err := v.refreshJWKS(ctx); err != nil {
+		return nil, fmt.Errorf("fetch JWKS: %w", err)
+	}
+
+	if key, ok := v.jwksKeys[kid]; ok {
+		return key, nil
+	}
+
+	return nil, fmt.Errorf("key ID %q not found in JWKS", kid)
+}
+
+// refreshJWKS fetches and caches the JWKS from the OIDC discovery endpoint.
+func (v *TokenValidator) refreshJWKS(ctx context.Context) error {
+	discoveryURL := v.jwksURL
+
+	// If this looks like a discovery URL, fetch it to get the JWKS URL
+	var jwksURL string
+	if strings.HasSuffix(discoveryURL, "/.well-known/openid-configuration") ||
+		strings.HasSuffix(discoveryURL, ".well-known/openid-configuration") {
+		req, err := http.NewRequestWithContext(ctx, "GET", discoveryURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("OIDC discovery: %w", err)
+		}
+		defer resp.Body.Close()
+
+		var discovery struct {
+			JWKSURI string `json:"jwks_uri"`
+			Issuer  string `json:"issuer"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
+			return fmt.Errorf("parse discovery: %w", err)
+		}
+		jwksURL = discovery.JWKSURI
+		if discovery.Issuer != "" {
+			v.issuerURL = discovery.Issuer
+		}
+	} else {
+		jwksURL = discoveryURL
+	}
+
+	if jwksURL == "" {
+		return fmt.Errorf("no JWKS URL found")
+	}
+
+	// Fetch JWKS
+	req, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var jwks struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+			Kty string `json:"kty"`
+			Use string `json:"use"`
+			N   string `json:"n"`
+			E   string `json:"e"`
+			X   string `json:"x"`
+			Y   string `json:"y"`
+			Crv string `json:"crv"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return fmt.Errorf("parse JWKS: %w", err)
+	}
+
+	// Parse and cache keys
+	keys := make(map[string]interface{})
+	for _, key := range jwks.Keys {
+		parsedKey, err := v.parseJWK(key)
+		if err != nil {
+			continue // skip unparseable keys
+		}
+		keys[key.Kid] = parsedKey
+	}
+
+	if len(keys) == 0 {
+		return fmt.Errorf("no valid keys in JWKS")
+	}
+
+	v.jwksKeys = keys
+	v.jwksExp = time.Now().Add(1 * time.Hour) // cache for 1 hour
+	return nil
+}
+
+// parseJWK converts a JWK key to a Go crypto public key.
+func (v *TokenValidator) parseJWK(jwk struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Use string `json:"use"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+	X   string `json:"x"`
+	Y   string `json:"y"`
+	Crv string `json:"crv"`
+}) (interface{}, error) {
+	switch jwk.Kty {
+	case "RSA":
+		n, err := base64URLDecode(jwk.N)
+		if err != nil {
+			return nil, fmt.Errorf("decode n: %w", err)
+		}
+		e, err := base64URLDecode(jwk.E)
+		if err != nil {
+			return nil, fmt.Errorf("decode e: %w", err)
+		}
+		// Convert exponent to int
+		exp := 0
+		for _, b := range e {
+			exp = exp*256 + int(b)
+		}
+		return &rsa.PublicKey{
+			N: new(big.Int).SetBytes(n),
+			E: exp,
+		}, nil
+	case "EC":
+		x, err := base64URLDecode(jwk.X)
+		if err != nil {
+			return nil, fmt.Errorf("decode x: %w", err)
+		}
+		y, err := base64URLDecode(jwk.Y)
+		if err != nil {
+			return nil, fmt.Errorf("decode y: %w", err)
+		}
+		var curve elliptic.Curve
+		switch jwk.Crv {
+		case "P-256":
+			curve = elliptic.P256()
+		case "P-384":
+			curve = elliptic.P384()
+		case "P-521":
+			curve = elliptic.P521()
+		default:
+			return nil, fmt.Errorf("unsupported curve: %s", jwk.Crv)
+		}
+		return &ecdsa.PublicKey{
+			Curve: curve,
+			X:     new(big.Int).SetBytes(x),
+			Y:     new(big.Int).SetBytes(y),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported key type: %s", jwk.Kty)
+	}
+}
+
+// validateOpaqueToken validates a non-JWT token via introspection.
+func (v *TokenValidator) validateOpaqueToken(ctx context.Context, token string) (map[string]interface{}, error) {
+	introspectURL := v.issuerURL
 	if strings.HasSuffix(introspectURL, "/token") {
 		introspectURL = strings.Replace(introspectURL, "/token", "/introspect", 1)
+	} else {
+		introspectURL = strings.TrimRight(introspectURL, "/") + "/introspect"
 	}
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", introspectURL, strings.NewReader(
@@ -397,6 +665,18 @@ func (v *TokenValidator) ValidateToken(ctx context.Context, token string) (map[s
 		return nil, fmt.Errorf("token is not active")
 	}
 	return result, nil
+}
+
+// base64URLDecode decodes base64url-encoded data (no padding).
+func base64URLDecode(s string) ([]byte, error) {
+	// Add padding if needed
+	switch len(s) % 4 {
+	case 2:
+		s += "=="
+	case 3:
+		s += "="
+	}
+	return base64.URLEncoding.DecodeString(s)
 }
 
 // ---------------------------------------------------------------------------

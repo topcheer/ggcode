@@ -971,7 +971,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("subagents.timeout must not be negative")
 	}
 	// A2A defaults and validation.
-		if !c.A2A.Disabled {
+	if !c.A2A.Disabled {
 		if c.A2A.Port < 0 {
 			return fmt.Errorf("a2a.port must not be negative")
 		}
