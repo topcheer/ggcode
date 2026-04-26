@@ -132,6 +132,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/im", s.handleIM)
 	s.mux.HandleFunc("/api/im/status", s.handleIMStatus)
 	s.mux.HandleFunc("/api/im/action", s.handleIMAction)
+	s.mux.HandleFunc("/api/im/adapters", s.handleIMAdapters)
+	s.mux.HandleFunc("/api/im/adapters/", s.handleIMAdapterDetail)
 	s.mux.HandleFunc("/api/general", s.handleGeneral)
 }
 
@@ -504,6 +506,72 @@ func (s *Server) handleIMAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// GET /api/im/adapters — list all IM adapters
+func (s *Server) handleIMAdapters(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	writeJSON(w, s.cfg.IM.Adapters)
+}
+
+// GET/POST/PUT/DELETE /api/im/adapters/{name}
+func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/im/adapters/")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "adapter name required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		adapter, ok := s.cfg.IM.Adapters[name]
+		if !ok {
+			writeError(w, http.StatusNotFound, "adapter not found")
+			return
+		}
+		writeJSON(w, adapter)
+
+	case http.MethodPost, http.MethodPut:
+		var adapter config.IMAdapterConfig
+		if err := readJSON(r, &adapter); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.cfg.AddIMAdapter(name, adapter); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok", "adapter": name})
+
+	case http.MethodDelete:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.cfg.RemoveIMAdapter(name); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.cfg.Save(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"status": "deleted", "adapter": name})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // GET/PUT /api/general — general settings (language, mode, max_iterations, allowed_dirs)
