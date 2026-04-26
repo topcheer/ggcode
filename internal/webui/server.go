@@ -12,13 +12,31 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// MCPStatusFunc returns runtime MCP server statuses. Keys are server names.
+type MCPStatusFunc func() map[string]MCPRuntimeStatus
+
+// MCPRuntimeStatus describes a running MCP server's state.
+type MCPRuntimeStatus struct {
+	Connected bool     `json:"connected"`
+	Pending   bool     `json:"pending"`
+	Disabled  bool     `json:"disabled"`
+	Error     string   `json:"error,omitempty"`
+	Tools     []string `json:"tools,omitempty"`
+}
+
 // Server provides a built-in WebUI for configuration and chat.
 type Server struct {
-	cfg      *config.Config
-	mu       sync.RWMutex
-	addr     string
-	listener net.Listener
-	mux      *http.ServeMux
+	cfg         *config.Config
+	mcpStatusFn MCPStatusFunc
+	mu          sync.RWMutex
+	addr        string
+	listener    net.Listener
+	mux         *http.ServeMux
+}
+
+// SetMCPStatusFn sets the runtime MCP status provider.
+func (s *Server) SetMCPStatusFn(fn MCPStatusFunc) {
+	s.mcpStatusFn = fn
 }
 
 // NewServer creates a WebUI server bound to the given config.
@@ -76,6 +94,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints/{endpoint}", s.handleEndpointDetail)
 	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints/{endpoint}/apikey", s.handleAPIKey)
 	s.mux.HandleFunc("/api/mcp", s.handleMCP)
+	s.mux.HandleFunc("/api/mcp/status", s.handleMCPStatus)
 	s.mux.HandleFunc("/api/mcp/", s.handleMCPDetail)
 	s.mux.HandleFunc("/api/im", s.handleIM)
 	s.mux.HandleFunc("/api/general", s.handleGeneral)
@@ -312,8 +331,24 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.mu.RLock()
-		defer s.mu.RUnlock()
-		writeJSON(w, s.cfg.MCPServers)
+		cfg := s.cfg
+		s.mu.RUnlock()
+
+		// Merge config with runtime status
+		type mcpEntry struct {
+			config.MCPServerConfig
+			Runtime *MCPRuntimeStatus `json:"runtime,omitempty"`
+		}
+		entries := make([]mcpEntry, len(cfg.MCPServers))
+		statusMap := s.getRuntimeMCPStatus()
+		for i, srv := range cfg.MCPServers {
+			e := mcpEntry{MCPServerConfig: srv}
+			if st, ok := statusMap[srv.Name]; ok {
+				e.Runtime = &st
+			}
+			entries[i] = e
+		}
+		writeJSON(w, entries)
 
 	case http.MethodPost:
 		var server config.MCPServerConfig
@@ -333,6 +368,22 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) getRuntimeMCPStatus() map[string]MCPRuntimeStatus {
+	if s.mcpStatusFn == nil {
+		return nil
+	}
+	return s.mcpStatusFn()
+}
+
+// GET /api/mcp/status — runtime MCP status only
+func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, s.getRuntimeMCPStatus())
 }
 
 // DELETE /api/mcp/{name}

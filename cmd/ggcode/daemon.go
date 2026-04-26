@@ -543,6 +543,20 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// WebUI server
 	webuiSrv := webui.NewServer(cfg)
+	webuiSrv.SetMCPStatusFn(func() map[string]webui.MCPRuntimeStatus {
+		snapshot := mcpMgr.Snapshot()
+		m := make(map[string]webui.MCPRuntimeStatus, len(snapshot))
+		for _, info := range snapshot {
+			m[info.Name] = webui.MCPRuntimeStatus{
+				Connected: string(info.Status) == "connected",
+				Pending:   string(info.Status) == "pending",
+				Disabled:  info.Disabled,
+				Error:     info.Error,
+				Tools:     info.ToolNames,
+			}
+		}
+		return m
+	})
 	webuiAddr := "127.0.0.1:0" // auto port
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
 	if webuiErr == nil {
