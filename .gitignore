@@ -29,3 +29,4 @@ test_config.yaml
 __pycache__/
 .claude/
 .tmp/
+a2a.test
