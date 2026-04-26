@@ -546,6 +546,12 @@ plugins:
 #     # --- API Key (simplest) ---
 #     api_key: "my-secret-key"   # shared secret (supports ${ENV_VAR} expansion)
 #
+#     # --- Additional API Keys (multi-key support) ---
+#     api_keys:                  # list of additional keys; any match authenticates
+#       - "team-alpha-key"
+#       - "team-beta-key"
+#       - "${TEAM_GAMMA_KEY}"    # env var expansion supported
+#
 #     # --- OAuth2 + PKCE / Device Flow ---
 #     # Use "provider" for built-in presets (github, google, auth0, azure)
 #     # or "issuer_url" for any custom OIDC-compliant IdP.

@@ -280,6 +280,10 @@ type A2AAuthConfig struct {
 	// Empty = no API key auth.
 	APIKey string `yaml:"api_key,omitempty"`
 
+	// APIKeys allows multiple API keys for different clients/teams.
+	// Both api_key and api_keys are merged; any match authenticates.
+	APIKeys []string `yaml:"api_keys,omitempty"`
+
 	// OAuth2 + PKCE / Device Flow for human-interactive agents.
 	OAuth2 *A2AOAuth2Config `yaml:"oauth2,omitempty"`
 
@@ -945,6 +949,9 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 	c.IM.STT.Model = ExpandEnvWithLookup(c.IM.STT.Model, lookup)
 	// A2A env expansion.
 	c.A2A.APIKey = ExpandEnvWithLookup(c.A2A.APIKey, lookup)
+	for i, k := range c.A2A.Auth.APIKeys {
+		c.A2A.Auth.APIKeys[i] = ExpandEnvWithLookup(k, lookup)
+	}
 	c.A2A.Host = ExpandEnvWithLookup(c.A2A.Host, lookup)
 }
 
