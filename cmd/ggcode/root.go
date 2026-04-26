@@ -534,6 +534,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var a2aRegistry *a2a.Registry
 	var a2aTaskHandler *a2a.TaskHandler
 		if !cfg.A2A.Disabled {
+			// Apply instance-level A2A config override from .ggcode/a2a.yaml
+			if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
+				config.MergeA2AConfig(&cfg.A2A, a2aOverride)
+			}
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server startup warning: %v\n", err)
