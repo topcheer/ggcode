@@ -838,6 +838,7 @@ func sanitizeConfigForAPI(cfg *config.Config) map[string]interface{} {
 		"default_mode":   cfg.DefaultMode,
 		"max_iterations": cfg.MaxIterations,
 		"allowed_dirs":   cfg.AllowedDirs,
+		"system_prompt":  cfg.SystemPrompt,
 		"im":             cfg.IM,
 		"mcp_servers":    cfg.MCPServers,
 		"vendors":        cfg.Vendors,
