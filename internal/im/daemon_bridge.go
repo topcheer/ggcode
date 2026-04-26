@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 
@@ -40,6 +41,7 @@ type DaemonBridge struct {
 	pendingInterruptions []string
 	followSink           daemon.FollowSink
 	onActivity           func()
+	onRestart            func() // trigger daemon self-restart
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -67,6 +69,13 @@ func (b *DaemonBridge) SetFollowSink(sink daemon.FollowSink) {
 func (b *DaemonBridge) SetActivityHook(fn func()) {
 	b.mu.Lock()
 	b.onActivity = fn
+	b.mu.Unlock()
+}
+
+// SetRestartHook installs a callback to trigger daemon process restart.
+func (b *DaemonBridge) SetRestartHook(fn func()) {
+	b.mu.Lock()
+	b.onRestart = fn
 	b.mu.Unlock()
 }
 
@@ -98,6 +107,11 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 			b.mu.Unlock()
 			return nil
 		}
+	}
+
+	// Slash commands
+	if strings.HasPrefix(text, "/") {
+		return b.handleSlashCommand(ctx, text, msg)
 	}
 
 	// Normal agent submission
@@ -593,4 +607,34 @@ func formatIMToolDisplayName(toolName string) string {
 		return pres.DisplayName
 	}
 	return toolName
+}
+
+// handleSlashCommand processes IM slash commands.
+func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg InboundMessage) error {
+	parts := strings.Fields(text)
+	cmd := strings.ToLower(parts[0])
+
+	switch cmd {
+	case "/restart":
+		b.mu.Lock()
+		onRestart := b.onRestart
+		b.mu.Unlock()
+		if onRestart != nil {
+			b.emitter.EmitText("Restarting daemon...")
+			go func() {
+				time.Sleep(1 * time.Second)
+				onRestart()
+			}()
+			return nil
+		}
+		return fmt.Errorf("restart not available")
+
+	case "/help":
+		b.emitter.EmitText("Available commands:\n/restart - Restart daemon\n/help - Show this help")
+		return nil
+
+	default:
+		b.emitter.EmitText("Unknown command: " + cmd + ". Try /help")
+		return nil
+	}
 }
