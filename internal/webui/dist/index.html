@@ -284,6 +284,8 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
     <div class="page" id="page-a2a">
       <div class="page-header"><h2>A2A Protocol</h2><p>Agent-to-Agent server configuration and authentication</p></div>
       <div id="a2a-content"></div>
+      <h3 style="font-size:14px;margin:20px 0 8px;color:var(--accent)">Discovered Instances</h3>
+      <div id="a2a-instances"></div>
     </div>
 
     <!-- General -->
@@ -1118,6 +1120,42 @@ function renderA2A() {
   </div>`;
 
   document.getElementById('a2a-content').innerHTML = html;
+
+  // Load discovered instances
+  loadA2AInstances();
+}
+
+let a2aInstances = [];
+
+async function loadA2AInstances() {
+  try {
+    a2aInstances = await api('/api/a2a/discover');
+  } catch(e) { a2aInstances = []; }
+  renderA2AInstances();
+}
+
+function renderA2AInstances() {
+  const container = document.getElementById('a2a-instances');
+  if (!container) return;
+  if (!a2aInstances || a2aInstances.length === 0) {
+    container.innerHTML = '<div class="card"><p style="color:var(--text2)">No other ggcode instances discovered. Start ggcode in other workspaces to enable A2A collaboration.</p></div>';
+    return;
+  }
+  let html = `<div class="table-wrap"><table>
+    <tr><th>Name</th><th>Workspace</th><th>Endpoint</th><th>Status</th><th>Started</th></tr>`;
+  for (const inst of a2aInstances) {
+    const name = inst.workspace.split('/').pop();
+    const statusClass = inst.status === 'ready' ? 'dot-green' : inst.status === 'busy' ? 'dot-yellow' : 'dot-red';
+    html += `<tr>
+      <td><strong>${esc(name)}</strong></td>
+      <td class="mono" style="font-size:11px">${esc(inst.workspace)}</td>
+      <td class="mono" style="font-size:11px">${esc(inst.endpoint)}</td>
+      <td><span class="dot ${statusClass}"></span>${esc(inst.status)}</td>
+      <td style="font-size:11px;color:var(--text2)">${esc(inst.started_at || 'unknown')}</td>
+    </tr>`;
+  }
+  html += '</table></div>';
+  container.innerHTML = html;
 }
 
 async function toggleA2A() {

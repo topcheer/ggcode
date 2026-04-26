@@ -47,17 +47,30 @@ type IMRuntimeStatus struct {
 // IMActionFunc performs an IM action (enable/disable/mute/unmute/unbind).
 type IMActionFunc func(adapter string, action string) error
 
+// A2ADiscoverFunc returns discovered A2A instances (other running ggcode processes).
+type A2ADiscoverFunc func() []A2ADiscoveredInstance
+
+// A2ADiscoveredInstance describes a remote ggcode instance discovered via A2A.
+type A2ADiscoveredInstance struct {
+	ID        string `json:"id"`
+	Workspace string `json:"workspace"`
+	Endpoint  string `json:"endpoint"`
+	Status    string `json:"status"`
+	StartedAt string `json:"started_at"`
+}
+
 // Server provides a built-in WebUI for configuration and chat.
 type Server struct {
-	cfg         *config.Config
-	mcpStatusFn MCPStatusFunc
-	imStatusFn  IMStatusFunc
-	imActionFn  IMActionFunc
-	restartFn   func() // called when user triggers restart from WebUI
-	mu          sync.RWMutex
-	addr        string
-	listener    net.Listener
-	mux         *http.ServeMux
+	cfg           *config.Config
+	mcpStatusFn   MCPStatusFunc
+	imStatusFn    IMStatusFunc
+	imActionFn    IMActionFunc
+	restartFn     func()          // called when user triggers restart from WebUI
+	a2aDiscoverFn A2ADiscoverFunc // returns discovered A2A instances
+	mu            sync.RWMutex
+	addr          string
+	listener      net.Listener
+	mux           *http.ServeMux
 }
 
 // SetMCPStatusFn sets the runtime MCP status provider.
@@ -78,6 +91,11 @@ func (s *Server) SetIMActionFn(fn IMActionFunc) {
 // SetRestartFn sets the restart callback (triggers process self-restart).
 func (s *Server) SetRestartFn(fn func()) {
 	s.restartFn = fn
+}
+
+// SetA2ADiscoverFn sets the A2A instance discovery provider.
+func (s *Server) SetA2ADiscoverFn(fn A2ADiscoverFunc) {
+	s.a2aDiscoverFn = fn
 }
 
 // NewServer creates a WebUI server bound to the given config.
@@ -145,6 +163,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/general", s.handleGeneral)
 	s.mux.HandleFunc("/api/impersonate", s.handleImpersonate)
 	s.mux.HandleFunc("/api/a2a", s.handleA2A)
+	s.mux.HandleFunc("/api/a2a/discover", s.handleA2ADiscover)
 	s.mux.HandleFunc("/api/restart", s.handleRestart)
 }
 
@@ -856,6 +875,23 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// GET /api/a2a/discover — list discovered A2A instances
+func (s *Server) handleA2ADiscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.a2aDiscoverFn == nil {
+		writeJSON(w, []A2ADiscoveredInstance{})
+		return
+	}
+	instances := s.a2aDiscoverFn()
+	if instances == nil {
+		instances = []A2ADiscoveredInstance{}
+	}
+	writeJSON(w, instances)
 }
 
 func sanitizeOAuth2(o *config.A2AOAuth2Config) interface{} {
