@@ -3,6 +3,8 @@ package a2a
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -22,6 +24,10 @@ const (
 	mDNSDomain      = "local."
 	mDNSLookupTime  = 3 * time.Second
 )
+
+// silentLogger suppresses hashicorp/mdns library output that would
+// otherwise corrupt the TUI or daemon follow display.
+var silentLogger = log.New(io.Discard, "", 0)
 
 // mdnsService manages mDNS registration (broadcasting self) and
 // discovery (finding peers on the LAN).
@@ -328,6 +334,7 @@ func (m *mdnsService) lookupHashicorp() []InstanceInfo {
 			Timeout:             time.Duration(mDNSLookupTime),
 			Entries:             entriesCh,
 			WantUnicastResponse: false,
+			Logger:              silentLogger,
 		}
 		iface := PreferredInterface()
 		if iface != nil {
