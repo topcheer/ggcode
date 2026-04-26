@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -168,7 +169,7 @@ func ForkIntoBackground(cfgFile, workingDir, sessionID string, extraArgs ...stri
 	// Write PID file
 	if err := WritePIDFile(pidPath, process.Pid, sessionID, workingDir); err != nil {
 		// Non-fatal: the daemon is running but we couldn't record it
-		fmt.Fprintf(os.Stderr, "warning: could not write PID file: %v\n", err)
+		debug.Log("daemon", "could not write PID file: %v", err)
 	}
 
 	return process.Pid, nil

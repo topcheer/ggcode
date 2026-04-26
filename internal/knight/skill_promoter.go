@@ -3,6 +3,7 @@ package knight
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -55,7 +56,7 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	if _, err := os.Stat(targetPath); err == nil {
 		if snapErr := p.createSnapshot(entry.Name, targetPath); snapErr != nil {
 			// Non-fatal: log but continue
-			fmt.Fprintf(os.Stderr, "knight: snapshot warning: %v\n", snapErr)
+			debug.Log("knight", "snapshot warning: %v", snapErr)
 		}
 	}
 
@@ -76,7 +77,7 @@ func (p *Promoter) Promote(entry *SkillEntry) error {
 	// Remove staging file
 	if err := os.Remove(entry.Path); err != nil {
 		// Non-fatal
-		fmt.Fprintf(os.Stderr, "knight: remove staging: %v\n", err)
+		debug.Log("knight", "remove staging: %v", err)
 	}
 
 	// Write changelog entry
@@ -122,7 +123,7 @@ func (p *Promoter) Rollback(entry *SkillEntry) error {
 
 	if _, err := os.Stat(entry.Path); err == nil {
 		if snapErr := p.createSnapshot(entry.Name, entry.Path); snapErr != nil {
-			fmt.Fprintf(os.Stderr, "knight: rollback snapshot warning: %v\n", snapErr)
+			debug.Log("knight", "rollback snapshot warning: %v", snapErr)
 		}
 	}
 

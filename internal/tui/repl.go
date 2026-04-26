@@ -571,7 +571,7 @@ func (r *REPL) Run() error {
 		if m.session != nil {
 			sid = m.session.ID
 		}
-		fmt.Fprintf(os.Stderr, "[ggcode restart] finalModel: restartRequested=%v sessionID=%q updateSvc=%v\n",
+		debug.Log("restart", "finalModel: restartRequested=%v sessionID=%q updateSvc=%v",
 			m.restartRequested, sid, m.updateSvc != nil)
 		r.model = m
 		return r.execRestart()
@@ -644,8 +644,8 @@ func (r *REPL) execRestart() error {
 		sessionID = r.model.session.ID
 	}
 	debug.Log("restart", "exec binary=%s session=%s args=%v", binary, sessionID, args)
-	fmt.Fprintf(os.Stderr, "[ggcode restart] sessionID=%q args=%v\n", sessionID, args)
-	fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s\n", strings.Join(execArgs, " "))
+	debug.Log("restart", "sessionID=%q args=%v", sessionID, args)
+	debug.Log("restart", "exec %s", strings.Join(execArgs, " "))
 
 	return syscall.Exec(binary, execArgs, os.Environ())
 }
