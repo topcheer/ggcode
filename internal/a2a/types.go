@@ -323,7 +323,44 @@ type TaskSubscriptionParams struct {
 	ID string `json:"id"`
 }
 
-// TaskEvent represents an SSE event for task updates.
+// ---------------------------------------------------------------------------
+// Push Notification types
+// ---------------------------------------------------------------------------
+
+// PushNotificationConfig describes a callback endpoint for task notifications.
+type PushNotificationConfig struct {
+	ID             string              `json:"id"`
+	URL            string              `json:"url"`
+	Authentication *AuthenticationInfo `json:"authentication,omitempty"`
+	Metadata       json.RawMessage     `json:"metadata,omitempty"`
+}
+
+// AuthenticationInfo carries credentials for push notification callbacks.
+type AuthenticationInfo struct {
+	Schemes    []string `json:"schemes"`
+	Credential string   `json:"credential,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// SSE Stream Response types
+// ---------------------------------------------------------------------------
+
+// TaskStatusUpdateEvent is sent via SSE when a task's status changes.
+type TaskStatusUpdateEvent struct {
+	TaskID string     `json:"id"`
+	Status TaskStatus `json:"status"`
+	Final  bool       `json:"final"`
+}
+
+// TaskArtifactUpdateEvent is sent via SSE when an artifact is produced.
+type TaskArtifactUpdateEvent struct {
+	TaskID    string   `json:"id"`
+	Artifact  Artifact `json:"artifact"`
+	Append    bool     `json:"append,omitempty"`
+	LastChunk bool     `json:"lastChunk,omitempty"`
+}
+
+// TaskEvent represents an SSE event for task updates (legacy, kept for compat).
 type TaskEvent struct {
 	ID    string      `json:"id"`
 	Event string      `json:"event"` // "status", "artifact", "completed", "failed"
