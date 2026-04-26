@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,7 @@ type Server struct {
 	pushMu         sync.RWMutex
 	tokenValidator *auth.TokenValidator // OAuth2/OIDC token validation
 	mtlsEnabled    bool
+	tlsConfig      *tls.Config // TLS config for mTLS (set via SetTLSConfig)
 }
 
 // ServerConfig holds A2A server configuration.
@@ -74,19 +76,9 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 		Skills:             DefaultSkills(),
 		Metadata:           meta,
 	}
-	if cfg.APIKey != "" {
-		s.card.SecuritySchemes = map[string]Security{
-			"apiKey": {
-				Type:        "apiKey",
-				Location:    "header",
-				Name:        "X-API-Key",
-				Description: "API key authentication",
-			},
-		}
-		s.card.Security = []map[string][]string{
-			{"apiKey": {}},
-		}
-	}
+
+	// Build security declarations from configured auth methods.
+	s.rebuildSecuritySchemes()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/agent.json", s.a2aMiddleware(s.handleAgentCard))
@@ -116,10 +108,20 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("a2a listen: %w", err)
 	}
+
+	// Wrap with TLS if mTLS is configured
+	if s.tlsConfig != nil {
+		ln = tls.NewListener(ln, s.tlsConfig)
+	}
+
 	s.port = ln.Addr().(*net.TCPAddr).Port
 
 	// Update the card URL with the actual port.
-	s.card.URL = fmt.Sprintf("http://%s", ln.Addr().String())
+	scheme := "http"
+	if s.tlsConfig != nil {
+		scheme = "https"
+	}
+	s.card.URL = fmt.Sprintf("%s://%s", scheme, ln.Addr().String())
 
 	safego.Go("a2a.server.serve", func() {
 		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -655,12 +657,59 @@ func (s *Server) SetExtendedCard(card json.RawMessage) {
 // SetTokenValidator installs an OAuth2/OIDC token validator.
 func (s *Server) SetTokenValidator(v *auth.TokenValidator) {
 	s.tokenValidator = v
+	s.rebuildSecuritySchemes()
 }
 
 // SetMTLSEnabled marks the server as using mutual TLS.
-// Actual TLS config is handled by the http.Server.
+// Use SetTLSConfig to provide the actual TLS configuration.
 func (s *Server) SetMTLSEnabled(enabled bool) {
 	s.mtlsEnabled = enabled
+	s.rebuildSecuritySchemes()
+}
+
+// SetTLSConfig configures the server to use TLS with client certificate verification.
+// This enables mutual TLS (mTLS) authentication.
+func (s *Server) SetTLSConfig(tlsCfg *tls.Config) {
+	s.tlsConfig = tlsCfg
+	s.mtlsEnabled = true
+	s.rebuildSecuritySchemes()
+}
+
+// rebuildSecuritySchemes updates the Agent Card's securitySchemes and security
+// to reflect all currently configured authentication methods.
+// This is called after any auth configuration change.
+func (s *Server) rebuildSecuritySchemes() {
+	schemes := map[string]Security{}
+	var security []map[string][]string
+
+	if s.apiKey != "" {
+		schemes["apiKey"] = Security{
+			Type:        "apiKey",
+			Location:    "header",
+			Name:        "X-API-Key",
+			Description: "API key authentication",
+		}
+		security = append(security, map[string][]string{"apiKey": {}})
+	}
+
+	if s.tokenValidator != nil {
+		schemes["bearer"] = Security{
+			Type:        "http",
+			Description: "Bearer token authentication (OAuth2 / OIDC)",
+		}
+		security = append(security, map[string][]string{"bearer": {}})
+	}
+
+	if s.mtlsEnabled {
+		schemes["mutualTLS"] = Security{
+			Type:        "mutualTLS",
+			Description: "Mutual TLS certificate authentication",
+		}
+		security = append(security, map[string][]string{"mutualTLS": {}})
+	}
+
+	s.card.SecuritySchemes = schemes
+	s.card.Security = security
 }
 
 // SetHandler connects the TaskHandler and wires push notifications.

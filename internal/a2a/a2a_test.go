@@ -3,10 +3,16 @@ package a2a
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -2724,4 +2730,182 @@ func TestResubscribeRPC(t *testing.T) {
 	if rpcResp.Error == nil {
 		t.Error("expected error for nonexistent task resubscribe")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Agent Card Security Schemes
+// ---------------------------------------------------------------------------
+
+func TestAgentCardSecurityNoAuth(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if len(srv.card.SecuritySchemes) != 0 {
+		t.Errorf("expected no schemes, got %v", srv.card.SecuritySchemes)
+	}
+	if len(srv.card.Security) != 0 {
+		t.Errorf("expected no security, got %v", srv.card.Security)
+	}
+}
+
+func TestAgentCardSecurityAPIKeyOnly(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test"}, handler)
+	if len(srv.card.SecuritySchemes) != 1 {
+		t.Fatalf("expected 1 scheme, got %d", len(srv.card.SecuritySchemes))
+	}
+	if _, ok := srv.card.SecuritySchemes["apiKey"]; !ok {
+		t.Error("expected apiKey scheme")
+	}
+	if len(srv.card.Security) != 1 {
+		t.Fatalf("expected 1 security requirement, got %d", len(srv.card.Security))
+	}
+}
+
+func TestAgentCardSecurityOAuth2Only(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	tv, _ := auth.NewTokenValidator("test", "https://example.com")
+	srv.SetTokenValidator(tv)
+	if _, ok := srv.card.SecuritySchemes["bearer"]; !ok {
+		t.Error("expected bearer scheme after SetTokenValidator")
+	}
+	if len(srv.card.SecuritySchemes) != 1 {
+		t.Errorf("expected 1 scheme, got %d", len(srv.card.SecuritySchemes))
+	}
+}
+
+func TestAgentCardSecurityMTLSOnly(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv.SetMTLSEnabled(true)
+	if _, ok := srv.card.SecuritySchemes["mutualTLS"]; !ok {
+		t.Error("expected mutualTLS scheme after SetMTLSEnabled")
+	}
+}
+
+func TestAgentCardSecurityMultiScheme(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "key"}, handler)
+	tv, _ := auth.NewTokenValidator("test", "https://example.com")
+	srv.SetTokenValidator(tv)
+	srv.SetMTLSEnabled(true)
+
+	if len(srv.card.SecuritySchemes) != 3 {
+		t.Errorf("expected 3 schemes, got %d: %v", len(srv.card.SecuritySchemes), srv.card.SecuritySchemes)
+	}
+	if len(srv.card.Security) != 3 {
+		t.Errorf("expected 3 security requirements, got %d", len(srv.card.Security))
+	}
+
+	// Each scheme should be present
+	for _, name := range []string{"apiKey", "bearer", "mutualTLS"} {
+		if _, ok := srv.card.SecuritySchemes[name]; !ok {
+			t.Errorf("missing scheme: %s", name)
+		}
+	}
+}
+
+func TestAgentCardSecurityUpdatedDynamically(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+
+	// Initially no auth
+	if len(srv.card.SecuritySchemes) != 0 {
+		t.Error("expected no schemes initially")
+	}
+
+	// Add token validator
+	tv, _ := auth.NewTokenValidator("test", "https://example.com")
+	srv.SetTokenValidator(tv)
+	if len(srv.card.SecuritySchemes) != 1 {
+		t.Error("expected 1 scheme after adding validator")
+	}
+
+	// Add mTLS
+	srv.SetMTLSEnabled(true)
+	if len(srv.card.SecuritySchemes) != 2 {
+		t.Error("expected 2 schemes after adding mTLS")
+	}
+}
+
+func TestServerMTLSSetsTLSConfig(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+
+	// Generate self-signed cert for testing
+	cert, key := generateTestCert(t)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	os.WriteFile(certFile, cert, 0644)
+	os.WriteFile(keyFile, key, 0600)
+
+	mtlsCfg := &auth.MTLSConfig{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}
+	tlsCfg, err := mtlsCfg.BuildTLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.SetTLSConfig(tlsCfg)
+
+	if !srv.mtlsEnabled {
+		t.Error("expected mtlsEnabled=true")
+	}
+	if srv.tlsConfig == nil {
+		t.Error("expected tlsConfig to be set")
+	}
+	if _, ok := srv.card.SecuritySchemes["mutualTLS"]; !ok {
+		t.Error("expected mutualTLS in agent card")
+	}
+}
+
+func TestServerStartWithTLS(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+
+	cert, key := generateTestCert(t)
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	keyFile := filepath.Join(t.TempDir(), "key.pem")
+	os.WriteFile(certFile, cert, 0644)
+	os.WriteFile(keyFile, key, 0600)
+
+	mtlsCfg := &auth.MTLSConfig{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}
+	tlsCfg, _ := mtlsCfg.BuildTLSConfig()
+	srv.SetTLSConfig(tlsCfg)
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start with TLS: %v", err)
+	}
+	defer srv.Stop()
+
+	if !strings.HasPrefix(srv.Endpoint(), "https://") {
+		t.Errorf("expected https URL, got %s", srv.Endpoint())
+	}
+}
+
+func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{Organization: []string{"Test"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var certBuf, keyBuf bytes.Buffer
+	pem.Encode(&certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	pem.Encode(&keyBuf, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	return certBuf.Bytes(), keyBuf.Bytes()
 }
