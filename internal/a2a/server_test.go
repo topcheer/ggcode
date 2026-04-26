@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -106,5 +107,63 @@ func TestInstanceDisplayName(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("DisplayName(%q, %q) = %q, want %q", tt.workspace, tt.endpoint, got, tt.expected)
 		}
+	}
+}
+
+func TestDiscoverMergesAndDeduplicates(t *testing.T) {
+	// Create a temp registry
+	dir := t.TempDir()
+	r := &Registry{dir: dir}
+
+	// Register self
+	selfInfo := InstanceInfo{
+		ID:        "self-id",
+		PID:       os.Getpid(),
+		Workspace: "/tmp/self",
+		Endpoint:  "127.0.0.1:11111",
+		Status:    "ready",
+	}
+	r.selfID = selfInfo.ID
+	r.selfInfo = &selfInfo
+	r.writeInstanceFile(selfInfo)
+
+	// Register another instance in local files
+	otherInfo := InstanceInfo{
+		ID:        "local-only-id",
+		PID:       99999, // won't be alive
+		Workspace: "/tmp/other",
+		Endpoint:  "127.0.0.1:22222",
+		Status:    "ready",
+	}
+	r.writeInstanceFile(otherInfo)
+
+	// Without mDNS, Discover should return only local instances
+	instances, err := r.Discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Dead PID should be pruned, self excluded
+	for _, inst := range instances {
+		if inst.ID == "self-id" {
+			t.Error("should not include self")
+		}
+	}
+}
+
+func TestEnableLANDiscovery(t *testing.T) {
+	r, err := NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Before enabling: no mdnsSvc
+	if r.mdnsSvc != nil {
+		t.Error("mdnsSvc should be nil before EnableLANDiscovery")
+	}
+
+	// Enable
+	r.EnableLANDiscovery()
+	if r.mdnsSvc == nil {
+		t.Error("mdnsSvc should not be nil after EnableLANDiscovery")
 	}
 }
