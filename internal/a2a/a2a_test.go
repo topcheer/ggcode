@@ -814,10 +814,15 @@ func TestContinueTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Wait for async execution to complete (no agent → fails quickly)
+	time.Sleep(200 * time.Millisecond)
+
 	// Put task into input-required state directly on the internal task.
 	handler.mu.Lock()
 	internal := handler.tasks[task.ID]
 	internal.Status = TaskStatus{State: TaskStateInputRequired}
+	// Clear history set by async execution to get deterministic state
+	internal.History = []Message{{Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}}}}
 	// Re-open done channel since it was closed by the execute goroutine.
 	if internal.done == nil {
 		internal.done = make(chan struct{})
@@ -2324,5 +2329,140 @@ a2a:
 	// Just verify it parses — actual YAML parsing tested in config package
 	if yaml == "" {
 		t.Error("yaml should not be empty")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Auth negotiation tests
+// ---------------------------------------------------------------------------
+
+func TestClientNegotiateAuthNoSecurity(t *testing.T) {
+	client := NewClient("http://example.com", "")
+	// Simulate discovered card with no security
+	client.card = &AgentCard{Name: "test"}
+	if err := client.NegotiateAuth(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if client.AuthMethod() != "" {
+		t.Errorf("expected empty auth method, got %q", client.AuthMethod())
+	}
+}
+
+func TestClientNegotiateAuthAPIKey(t *testing.T) {
+	client := NewClient("http://example.com", "my-key")
+	client.card = &AgentCard{
+		SecuritySchemes: map[string]Security{
+			"apiKeyScheme": {Type: "apiKey", Location: "header", Name: "X-API-Key"},
+		},
+		Security: []map[string][]string{
+			{"apiKeyScheme": {}},
+		},
+	}
+	if err := client.NegotiateAuth(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if client.AuthMethod() != "apiKey" {
+		t.Errorf("expected apiKey, got %q", client.AuthMethod())
+	}
+}
+
+func TestClientNegotiateAuthBearerToken(t *testing.T) {
+	client := NewClient("http://example.com", "", WithBearerToken("test-token"))
+	client.card = &AgentCard{
+		SecuritySchemes: map[string]Security{
+			"oauth2": {Type: "oauth2"},
+		},
+		Security: []map[string][]string{
+			{"oauth2": {}},
+		},
+	}
+	if err := client.NegotiateAuth(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if client.AuthMethod() != "bearer" {
+		t.Errorf("expected bearer, got %q", client.AuthMethod())
+	}
+}
+
+func TestClientNegotiateAuthNoMatchingCredential(t *testing.T) {
+	client := NewClient("http://example.com", "") // no key, no token
+	client.card = &AgentCard{
+		SecuritySchemes: map[string]Security{
+			"oauth2": {Type: "oauth2"},
+		},
+		Security: []map[string][]string{
+			{"oauth2": {}},
+		},
+	}
+	err := client.NegotiateAuth()
+	if err == nil {
+		t.Fatal("expected error for missing credential")
+	}
+	if !strings.Contains(err.Error(), "no matching credential") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClientNegotiateAuthBeforeDiscover(t *testing.T) {
+	client := NewClient("http://example.com", "key")
+	err := client.NegotiateAuth()
+	if err == nil {
+		t.Fatal("expected error when called before Discover")
+	}
+	if !strings.Contains(err.Error(), "before Discover") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestClientSetBearerToken(t *testing.T) {
+	client := NewClient("http://example.com", "")
+	client.SetBearerToken("new-token")
+	if client.AuthMethod() != "bearer" {
+		t.Errorf("expected bearer, got %q", client.AuthMethod())
+	}
+}
+
+func TestClientSetAPIKey(t *testing.T) {
+	client := NewClient("http://example.com", "")
+	client.SetAPIKey("new-key")
+	if client.AuthMethod() != "apiKey" {
+		t.Errorf("expected apiKey, got %q", client.AuthMethod())
+	}
+}
+
+func TestClientWithMTLS(t *testing.T) {
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{},
+	}
+	client := NewClient("https://example.com", "", WithMTLS(tlsConfig))
+	if client.AuthMethod() != "mtls" {
+		t.Errorf("expected mtls, got %q", client.AuthMethod())
+	}
+}
+
+func TestClientDiscoverAndNegotiateE2E(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "test-key"}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "test-key")
+
+	card, err := client.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("discover failed: %v", err)
+	}
+	if card == nil {
+		t.Fatal("expected non-nil card")
+	}
+
+	// Card should show apiKey security (server has APIKey configured)
+	if err := client.NegotiateAuth(); err != nil {
+		t.Fatalf("negotiate failed: %v", err)
+	}
+	if client.AuthMethod() != "apiKey" {
+		t.Errorf("expected apiKey, got %q", client.AuthMethod())
 	}
 }
