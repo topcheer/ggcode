@@ -212,6 +212,8 @@ func (m Model) renderSidebar() string {
 		m.renderSidebarIMSection(),
 		"",
 		m.renderSidebarMCPSection(),
+		"",
+		m.renderSidebarA2ASection(),
 	}, "\n")
 
 	return lipgloss.NewStyle().
@@ -300,6 +302,66 @@ func (m Model) renderSidebarMCPSection() string {
 			rows = append(rows, truncateString("• "+item, width))
 		}
 	}
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderSidebarA2ASection() string {
+	if m.a2aHandler == nil {
+		return ""
+	}
+	active := m.a2aHandler.ActiveTaskCount()
+	if active == 0 && len(m.a2aEventBuf) == 0 {
+		return ""
+	}
+
+	width := max(12, m.sidebarWidth()-4)
+	rows := []string{m.renderSidebarSectionTitle("A2A")}
+
+	if active > 0 {
+		rows = append(rows, m.renderSidebarDetailRow(
+			m.t("label.active"), fmt.Sprintf("%d %s", active, m.t("label.tasks")), width,
+		))
+		tasks := m.a2aHandler.ActiveTasks()
+		for _, t := range tasks {
+			if len(tasks) > 3 {
+				rows = append(rows, m.renderSidebarDetailRow(
+					"  "+t.ID[:8], string(t.Status.State), width,
+				))
+			} else {
+				rows = append(rows, m.renderSidebarDetailRow(
+					fmt.Sprintf("  %s [%s]", t.ID[:8], t.Skill), string(t.Status.State), width,
+				))
+			}
+		}
+	}
+
+	// Show last few events
+	m.a2aMu.Lock()
+	events := m.a2aEventBuf
+	if len(events) > 3 {
+		events = events[len(events)-3:]
+	}
+	m.a2aMu.Unlock()
+
+	for _, evt := range events {
+		icon := "●"
+		switch evt.Type {
+		case "start":
+			icon = "▶"
+		case "complete":
+			icon = "✓"
+		case "fail":
+			icon = "✗"
+		case "cancel":
+			icon = "⊘"
+		}
+		msg := evt.Message
+		if len(msg) > width-6 {
+			msg = msg[:width-9] + "..."
+		}
+		rows = append(rows, fmt.Sprintf("  %s %s", icon, msg))
+	}
+
 	return strings.Join(rows, "\n")
 }
 

@@ -531,13 +531,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Start A2A server if enabled.
 	var a2aServer *a2a.Server
 	var a2aRegistry *a2a.Registry
+	var a2aTaskHandler *a2a.TaskHandler
 	if cfg.A2A.Enabled {
-		a2aSrv, a2aReg, err := startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server startup warning: %v\n", err)
 		} else {
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg
+			a2aTaskHandler = a2aHandler
 			defer func() {
 				if a2aRegistry != nil {
 					_ = a2aRegistry.Unregister()
@@ -551,6 +553,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
+	if a2aTaskHandler != nil {
+		repl.SetA2AHandler(a2aTaskHandler)
+	}
 	{
 		imMgr := im.NewManager()
 		bindingsPath, err := im.DefaultBindingsPath()
@@ -650,10 +655,10 @@ func parseA2ATimeout(s string) time.Duration {
 	return d
 }
 
-func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, error) {
+func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, error) {
 	a2aReg, err := a2a.NewRegistry()
 	if err != nil {
-		return nil, nil, fmt.Errorf("a2a registry: %w", err)
+		return nil, nil, nil, fmt.Errorf("a2a registry: %w", err)
 	}
 
 	handler := a2a.NewTaskHandler(workingDir, ag, reg,
@@ -668,7 +673,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	}, handler)
 
 	if err := srv.Start(); err != nil {
-		return nil, nil, fmt.Errorf("a2a start: %w", err)
+		return nil, nil, nil, fmt.Errorf("a2a start: %w", err)
 	}
 
 	// Register this instance in the shared local registry.
@@ -683,7 +688,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	}
 	if err := a2aReg.Register(instance); err != nil {
 		srv.Stop()
-		return nil, nil, fmt.Errorf("a2a register: %w", err)
+		return nil, nil, nil, fmt.Errorf("a2a register: %w", err)
 	}
 
 	// Register MCP bridge tools for external MCP clients (Claude, Cursor, etc.)
@@ -709,7 +714,7 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	})
 
 	debug.Log("root", "A2A server started at %s", srv.Endpoint())
-	return srv, a2aReg, nil
+	return srv, a2aReg, handler, nil
 }
 
 // reportDiscoveredInstances logs discovered ggcode instances at startup.

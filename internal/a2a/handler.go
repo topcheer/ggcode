@@ -49,6 +49,18 @@ type TaskHandler struct {
 	meta      WorkspaceMeta
 	maxTasks  int
 	timeout   time.Duration
+
+	// Event callbacks for observability (TUI, daemon follow, IM).
+	onTaskEvent func(event TaskEventMessage)
+}
+
+// TaskEventMessage describes an A2A task lifecycle event.
+type TaskEventMessage struct {
+	Type    string // "start", "complete", "fail", "cancel"
+	TaskID  string
+	Skill   string
+	Message string // human-readable summary
+	Error   string // only for "fail"
 }
 
 // HandlerOption configures a TaskHandler.
@@ -62,6 +74,31 @@ func WithMaxTasks(n int) HandlerOption {
 // WithTimeout sets the per-task timeout.
 func WithTimeout(d time.Duration) HandlerOption {
 	return func(h *TaskHandler) { h.timeout = d }
+}
+
+// WithOnTaskEvent sets the callback for task lifecycle events.
+func WithOnTaskEvent(fn func(TaskEventMessage)) HandlerOption {
+	return func(h *TaskHandler) { h.onTaskEvent = fn }
+}
+
+// SetOnTaskEvent sets the callback at runtime.
+func (h *TaskHandler) SetOnTaskEvent(fn func(TaskEventMessage)) {
+	h.mu.Lock()
+	h.onTaskEvent = fn
+	h.mu.Unlock()
+}
+
+// ActiveTasks returns snapshots of currently running A2A tasks.
+func (h *TaskHandler) ActiveTasks() []Task {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var result []Task
+	for _, t := range h.tasks {
+		if !t.Status.State.IsTerminal() {
+			result = append(result, t.Snapshot())
+		}
+	}
+	return result
 }
 
 // Timeout returns the configured task timeout.
@@ -339,6 +376,41 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 		t.done = nil
 	}
 	debug.Log("a2a", "task %s → %s", t.ID, state)
+
+	// Fire event callback (outside lock — copy fn ref).
+	if fn := h.onTaskEvent; fn != nil {
+		eventType := ""
+		switch state {
+		case TaskStateWorking:
+			eventType = "start"
+		case TaskStateCompleted:
+			eventType = "complete"
+		case TaskStateFailed:
+			eventType = "fail"
+		case TaskStateCanceled:
+			eventType = "cancel"
+		}
+		if eventType != "" {
+			msg := TaskEventMessage{
+				Type:   eventType,
+				TaskID: t.ID,
+				Skill:  t.Skill,
+			}
+			switch eventType {
+			case "start":
+				msg.Message = fmt.Sprintf("A2A task started [%s] %s", t.Skill, truncateText(extractText(t.History[0]), 60))
+			case "complete":
+				msg.Message = fmt.Sprintf("A2A task completed [%s]", t.Skill)
+			case "fail":
+				msg.Message = fmt.Sprintf("A2A task failed [%s]", t.Skill)
+				msg.Error = message
+			case "cancel":
+				msg.Message = fmt.Sprintf("A2A task canceled [%s]", t.Skill)
+			}
+			// Call async to avoid deadlock (callback may call back into handler).
+			go fn(msg)
+		}
+	}
 }
 
 // GetTask returns a task by ID.
@@ -516,6 +588,13 @@ func extractText(msg Message) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func truncateText(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func pickToolForSkill(skill string, input string) string {
