@@ -102,7 +102,7 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 		mdnsInstances = r.mdnsSvc.lookup()
 	}
 
-	// 3) Merge with dedup by ID
+	// 3) Merge with dedup by ID, pruning dead PIDs from mDNS results
 	seen := make(map[string]bool)
 	var result []InstanceInfo
 	for _, inst := range localInstances {
@@ -112,10 +112,16 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 		}
 	}
 	for _, inst := range mdnsInstances {
-		if !seen[inst.ID] {
-			seen[inst.ID] = true
-			result = append(result, inst)
+		if seen[inst.ID] {
+			continue
 		}
+		// mDNS may advertise instances whose avahi-publish is still running
+		// but the actual ggcode process is dead (killed with SIGKILL).
+		if inst.PID > 0 && !isPIDAlive(inst.PID) {
+			continue
+		}
+		seen[inst.ID] = true
+		result = append(result, inst)
 	}
 	return result, nil
 }
