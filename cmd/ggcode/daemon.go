@@ -592,12 +592,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	// Start A2A server if enabled.
+	var a2aSrv *a2a.Server
+	var a2aReg *a2a.Registry
+	var a2aHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
 		// Apply instance-level A2A config override from .ggcode/a2a.yaml
 		if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
 			config.MergeA2AConfig(&cfg.A2A, a2aOverride)
 		}
-		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
 		} else {
@@ -773,6 +776,26 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		case restartCh <- struct{}{}:
 		default:
 		}
+	})
+	webuiSrv.SetA2ADiscoverFn(func() []webui.A2ADiscoveredInstance {
+		if a2aReg == nil {
+			return nil
+		}
+		instances, err := a2aReg.Discover()
+		if err != nil {
+			return nil
+		}
+		var result []webui.A2ADiscoveredInstance
+		for _, inst := range instances {
+			result = append(result, webui.A2ADiscoveredInstance{
+				ID:        inst.ID,
+				Workspace: inst.Workspace,
+				Endpoint:  inst.Endpoint,
+				Status:    inst.Status,
+				StartedAt: inst.StartedAt,
+			})
+		}
+		return result
 	})
 	webuiAddr := "127.0.0.1:0" // auto port
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)

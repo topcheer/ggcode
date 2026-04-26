@@ -681,10 +681,10 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	)
 
 	srv := a2a.NewServer(a2a.ServerConfig{
-		Host:     cfg.A2A.Host,
-		Port:     cfg.A2A.Port,
-		APIKey:   a2aAPIKey(cfg),
-		APIKeys:  cfg.A2A.Auth.APIKeys,
+		Host:    cfg.A2A.Host,
+		Port:    cfg.A2A.Port,
+		APIKey:  a2aAPIKey(cfg),
+		APIKeys: cfg.A2A.Auth.APIKeys,
 	}, handler)
 
 	// Wire OAuth2/OIDC token validation if configured
