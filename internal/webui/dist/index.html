@@ -257,6 +257,7 @@ async function loadAll() {
     renderModel();
     renderVendors();
     renderMCP();
+    await loadIMRuntime();
     renderIM();
     renderGeneral();
   } catch(e) {
@@ -448,32 +449,82 @@ async function removeMCPServer(name) {
 }
 
 // --- IM ---
+let imRuntime = [];
+
 function renderIM() {
   const im = config.im || {};
   const adapters = im.adapters || {};
   const adapterNames = Object.keys(adapters);
+  // Merge runtime status
+  const rtMap = {};
+  imRuntime.forEach(r => rtMap[r.adapter] = r);
+  const allNames = new Set([...adapterNames, ...Object.keys(rtMap)]);
+  let adapterCards = '';
+  for (const name of allNames) {
+    const rt = rtMap[name];
+    const cfg = adapters[name] || {};
+    let statusBadge, dotClass;
+    if (rt) {
+      if (rt.disabled) { statusBadge = '<span class="badge badge-red">Disabled</span>'; dotClass = 'dot-red'; }
+      else if (rt.muted) { statusBadge = '<span class="badge badge-yellow">Muted</span>'; dotClass = 'dot-yellow'; }
+      else if (rt.healthy) { statusBadge = '<span class="badge badge-green">Active</span>'; dotClass = 'dot-green'; }
+      else { statusBadge = '<span class="badge badge-red">Error</span>'; dotClass = 'dot-red'; }
+    } else {
+      statusBadge = '<span class="badge badge-yellow">Idle</span>'; dotClass = 'dot-yellow';
+    }
+    const platform = rt?.platform || cfg.platform || 'unknown';
+    let actionBtns = '';
+    if (rt) {
+      if (rt.disabled) actionBtns += `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','enable')">Enable</button> `;
+      else {
+        actionBtns += `<button class="btn btn-sm btn-danger" onclick="imAction('${esc(name)}','disable')">Disable</button> `;
+        if (rt.muted) actionBtns += `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','unmute')">Unmute</button> `;
+        else actionBtns += `<button class="btn btn-sm" onclick="imAction('${esc(name)}','mute')">Mute</button> `;
+      }
+    }
+    adapterCards += `<div class="card">
+      <div class="card-title"><span class="dot ${dotClass}"></span>${esc(name)} ${statusBadge} <span class="badge badge-yellow" style="font-size:10px">${esc(platform)}</span></div>
+      <div class="table-wrap"><table>
+        <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+        ${rt?.bound_dir ? `<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>` : ''}
+        ${rt?.channel_id ? `<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>` : ''}
+        ${rt?.status ? `<tr><td>Status</td><td class="mono">${esc(rt.status)}</td></tr>` : ''}
+        ${rt?.last_error ? `<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>` : ''}
+        ${cfg.transport ? `<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>` : ''}
+        ${(cfg.targets||[]).length > 0 ? `<tr><td>Targets</td><td>${cfg.targets.map(t => `<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>` : ''}
+      </table></div>
+      ${actionBtns ? `<div style="margin-top:8px;display:flex;gap:6px">${actionBtns}</div>` : ''}
+    </div>`;
+  }
   document.getElementById('im-content').innerHTML = `
     <div class="card">
-      <div class="card-title">IM Status <span class="badge ${im.enabled ? 'badge-green' : 'badge-yellow'}">${im.enabled ? 'Enabled' : 'Disabled'}</span></div>
+      <div class="card-title">IM Gateway <span class="badge ${im.enabled ? 'badge-green' : 'badge-yellow'}">${im.enabled ? 'Enabled' : 'Disabled'}</span>
+        <span class="badge badge-yellow" style="font-size:10px">${esc(im.output_mode || 'verbose')}</span></div>
       <div class="table-wrap"><table>
-        <tr><th>Setting</th><th>Value</th></tr>
-        <tr><td>Output Mode</td><td class="mono">${im.output_mode || 'verbose'}</td></tr>
+        <tr><th style="width:120px">Setting</th><th>Value</th></tr>
         <tr><td>Streaming</td><td>${im.streaming?.enabled ? 'Enabled' : 'Disabled'}</td></tr>
-        <tr><td>Adapters</td><td>${adapterNames.length > 0 ? adapterNames.join(', ') : 'None'}</td></tr>
       </table></div>
     </div>
-    ${adapterNames.map(name => {
-      const a = adapters[name];
-      const targets = a.targets || [];
-      return `<div class="card">
-        <div class="card-title">${name} <span class="badge ${a.enabled ? 'badge-green' : 'badge-yellow'}">${a.platform || 'unknown'}</span></div>
-        <div class="table-wrap"><table>
-          <tr><th>Setting</th><th>Value</th></tr>
-          <tr><td>Transport</td><td class="mono">${a.transport || 'default'}</td></tr>
-          <tr><td>Targets</td><td>${targets.length} channel(s)</td></tr>
-        </table></div>
-      </div>`;
-    }).join('')}`;
+    ${adapterCards}`;
+}
+
+async function loadIMRuntime() {
+  try {
+    imRuntime = await api('/api/im/status');
+  } catch(e) { imRuntime = []; }
+}
+
+async function imAction(adapter, action) {
+  try {
+    await api('/api/im/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({adapter, action})
+    });
+    toast(`${adapter}: ${action} OK`);
+    await loadIMRuntime();
+    renderIM();
+  } catch(e) { toast(e.message, false); }
 }
 
 // --- General ---
