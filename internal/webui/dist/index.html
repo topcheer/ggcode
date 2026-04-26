@@ -1528,6 +1528,13 @@ async function resetSystemPrompt() {
 // --- Init ---
 loadAll();
 
+// Auto-refresh A2A discovered instances every 10 seconds when A2A page is visible.
+setInterval(() => {
+  if (document.getElementById('page-a2a').classList.contains('active')) {
+    loadA2AInstances();
+  }
+}, 10000);
+
 async function triggerRestart() {
   if (!confirm('Restart ggcode? This will close the WebUI and restart the daemon process.')) return;
   try {
