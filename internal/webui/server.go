@@ -24,10 +24,31 @@ type MCPRuntimeStatus struct {
 	Tools     []string `json:"tools,omitempty"`
 }
 
+// IMStatusFunc returns runtime IM adapter states. Keys are adapter names.
+type IMStatusFunc func() []IMRuntimeStatus
+
+// IMRuntimeStatus describes a running IM adapter's state.
+type IMRuntimeStatus struct {
+	Adapter   string `json:"adapter"`
+	Platform  string `json:"platform"`
+	Healthy   bool   `json:"healthy"`
+	Status    string `json:"status"`
+	LastError string `json:"last_error,omitempty"`
+	BoundDir  string `json:"bound_dir,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+	Muted     bool   `json:"muted"`
+	Disabled  bool   `json:"disabled"`
+}
+
+// IMActionFunc performs an IM action (enable/disable/mute/unmute).
+type IMActionFunc func(adapter string, action string) error
+
 // Server provides a built-in WebUI for configuration and chat.
 type Server struct {
 	cfg         *config.Config
 	mcpStatusFn MCPStatusFunc
+	imStatusFn  IMStatusFunc
+	imActionFn  IMActionFunc
 	mu          sync.RWMutex
 	addr        string
 	listener    net.Listener
@@ -37,6 +58,16 @@ type Server struct {
 // SetMCPStatusFn sets the runtime MCP status provider.
 func (s *Server) SetMCPStatusFn(fn MCPStatusFunc) {
 	s.mcpStatusFn = fn
+}
+
+// SetIMStatusFn sets the runtime IM status provider.
+func (s *Server) SetIMStatusFn(fn IMStatusFunc) {
+	s.imStatusFn = fn
+}
+
+// SetIMActionFn sets the IM action handler.
+func (s *Server) SetIMActionFn(fn IMActionFunc) {
+	s.imActionFn = fn
 }
 
 // NewServer creates a WebUI server bound to the given config.
@@ -97,6 +128,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/mcp/status", s.handleMCPStatus)
 	s.mux.HandleFunc("/api/mcp/", s.handleMCPDetail)
 	s.mux.HandleFunc("/api/im", s.handleIM)
+	s.mux.HandleFunc("/api/im/status", s.handleIMStatus)
+	s.mux.HandleFunc("/api/im/action", s.handleIMAction)
 	s.mux.HandleFunc("/api/general", s.handleGeneral)
 }
 
@@ -431,6 +464,44 @@ func (s *Server) handleIM(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// GET /api/im/status — runtime IM adapter status with bindings
+func (s *Server) handleIMStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.imStatusFn != nil {
+		writeJSON(w, s.imStatusFn())
+		return
+	}
+	writeJSON(w, []IMRuntimeStatus{})
+}
+
+// POST /api/im/action — perform IM action (enable/disable/mute/unmute)
+func (s *Server) handleIMAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Adapter string `json:"adapter"`
+		Action  string `json:"action"` // enable, disable, mute, unmute
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.imActionFn == nil {
+		writeError(w, http.StatusServiceUnavailable, "IM runtime not available")
+		return
+	}
+	if err := s.imActionFn(req.Adapter, req.Action); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // GET/PUT /api/general — general settings (language, mode, max_iterations, allowed_dirs)

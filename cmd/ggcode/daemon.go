@@ -557,6 +557,76 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		return m
 	})
+	webuiSrv.SetIMStatusFn(func() []webui.IMRuntimeStatus {
+		if imMgr == nil {
+			return nil
+		}
+		snap := imMgr.Snapshot()
+		disabledSet := map[string]bool{}
+		for _, b := range snap.DisabledBindings {
+			disabledSet[b.Adapter] = true
+		}
+		mutedSet := map[string]bool{}
+		for _, b := range snap.MutedBindings {
+			mutedSet[b.Adapter] = true
+		}
+		stateMap := map[string]im.AdapterState{}
+		for _, st := range snap.Adapters {
+			stateMap[st.Name] = st
+		}
+		out := make([]webui.IMRuntimeStatus, 0)
+		seen := map[string]bool{}
+		for _, b := range snap.CurrentBindings {
+			st := stateMap[b.Adapter]
+			status := webui.IMRuntimeStatus{
+				Adapter:   b.Adapter,
+				Platform:  string(b.Platform),
+				Healthy:   st.Healthy,
+				Status:    st.Status,
+				BoundDir:  b.Workspace,
+				ChannelID: b.ChannelID,
+				Muted:     mutedSet[b.Adapter],
+				Disabled:  disabledSet[b.Adapter],
+			}
+			if st.LastError != "" {
+				status.LastError = st.LastError
+			}
+			out = append(out, status)
+			seen[b.Adapter] = true
+		}
+		for name, st := range stateMap {
+			if seen[name] {
+				continue
+			}
+			out = append(out, webui.IMRuntimeStatus{
+				Adapter:   name,
+				Platform:  string(st.Platform),
+				Healthy:   st.Healthy,
+				Status:    st.Status,
+				LastError: st.LastError,
+				Muted:     mutedSet[name],
+				Disabled:  disabledSet[name],
+			})
+		}
+		return out
+	})
+	webuiSrv.SetIMActionFn(func(adapter string, action string) error {
+		if imMgr == nil {
+			return fmt.Errorf("IM runtime not available")
+		}
+		switch action {
+		case "mute":
+			return imMgr.MuteBinding(adapter)
+		case "unmute":
+			return imMgr.UnmuteBinding(adapter)
+		case "disable":
+			return imMgr.DisableBinding(adapter)
+		case "enable":
+			return imMgr.EnableBinding(adapter)
+		default:
+			return fmt.Errorf("unknown action: %s", action)
+		}
+	})
 	webuiAddr := "127.0.0.1:0" // auto port
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
 	if webuiErr == nil {
