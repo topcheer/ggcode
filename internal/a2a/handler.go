@@ -52,6 +52,10 @@ type TaskHandler struct {
 
 	// Event callbacks for observability (TUI, daemon follow, IM).
 	onTaskEvent func(event TaskEventMessage)
+
+	// Push notification callback: server injects this to fire HTTP callbacks
+	// to registered push configs when a task status changes.
+	pushNotifier func(taskID string, payload StreamResponse)
 }
 
 // TaskEventMessage describes an A2A task lifecycle event.
@@ -410,10 +414,28 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 			// Call async to avoid deadlock (callback may call back into handler).
 			go fn(msg)
 		}
+
+		// Fire push notification callbacks.
+		if pn := h.pushNotifier; pn != nil {
+			snapshot := t.Snapshot()
+			pn(t.ID, StreamResponse{
+				StatusUpdate: &TaskStatusUpdateEvent{
+					TaskID: t.ID,
+					Status: snapshot.Status,
+					Final:  state.IsTerminal(),
+				},
+			})
+		}
 	}
 }
 
-// GetTask returns a task by ID.
+// SetPushNotifier installs the push notification callback (injected by Server).
+func (h *TaskHandler) SetPushNotifier(fn func(taskID string, payload StreamResponse)) {
+	h.mu.Lock()
+	h.pushNotifier = fn
+	h.mu.Unlock()
+}
+
 // GetTask returns a snapshot of the current state of a task.
 func (h *TaskHandler) GetTask(id string) (*Task, bool) {
 	h.mu.Lock()

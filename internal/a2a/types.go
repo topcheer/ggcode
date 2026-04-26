@@ -310,7 +310,8 @@ type SendMessageConfig struct {
 
 // GetTaskParams is the params for "tasks/get".
 type GetTaskParams struct {
-	ID string `json:"id"`
+	ID            string `json:"id"`
+	HistoryLength *int   `json:"historyLength,omitempty"`
 }
 
 // CancelTaskParams is the params for "tasks/cancel".
@@ -329,8 +330,10 @@ type TaskSubscriptionParams struct {
 
 // PushNotificationConfig describes a callback endpoint for task notifications.
 type PushNotificationConfig struct {
+	TaskID         string              `json:"taskId,omitempty"`
 	ID             string              `json:"id"`
 	URL            string              `json:"url"`
+	Token          string              `json:"token,omitempty"`
 	Authentication *AuthenticationInfo `json:"authentication,omitempty"`
 	Metadata       json.RawMessage     `json:"metadata,omitempty"`
 }
@@ -344,6 +347,15 @@ type AuthenticationInfo struct {
 // ---------------------------------------------------------------------------
 // SSE Stream Response types
 // ---------------------------------------------------------------------------
+
+// StreamResponse is the spec OneOf wrapper for streaming and push events.
+// Exactly one of Task, Message, StatusUpdate, ArtifactUpdate must be set.
+type StreamResponse struct {
+	Task           *Task                    `json:"task,omitempty"`
+	Message        *Message                 `json:"message,omitempty"`
+	StatusUpdate   *TaskStatusUpdateEvent   `json:"statusUpdate,omitempty"`
+	ArtifactUpdate *TaskArtifactUpdateEvent `json:"artifactUpdate,omitempty"`
+}
 
 // TaskStatusUpdateEvent is sent via SSE when a task's status changes.
 type TaskStatusUpdateEvent struct {

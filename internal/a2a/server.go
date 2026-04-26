@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -43,6 +44,11 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 		apiKey:      cfg.APIKey,
 		done:        make(chan struct{}),
 		pushConfigs: make(map[string]PushNotificationConfig),
+	}
+
+	// Wire push notification callbacks: handler → server.firePushNotifications.
+	if handler != nil {
+		handler.SetPushNotifier(s.firePushNotifications)
 	}
 
 	// Build Agent Card.
@@ -250,6 +256,22 @@ func (s *Server) handleMessageSend(w http.ResponseWriter, r *http.Request, req *
 		return
 	}
 
+	// Validate acceptedOutputModes if provided.
+	if params.Configuration != nil && len(params.Configuration.AcceptedOutputModes) > 0 {
+		supported := map[string]bool{"text/plain": true, "text/markdown": true, "application/json": true}
+		found := false
+		for _, mode := range params.Configuration.AcceptedOutputModes {
+			if supported[mode] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeRPCError(w, req.ID, ErrUnsupportedMode)
+			return
+		}
+	}
+
 	task, err := s.handler.Handle(r.Context(), params.Skill, params.Message, params.TaskID)
 	if err != nil {
 		writeRPCError(w, req.ID, &JSONRPCError{
@@ -294,6 +316,22 @@ func (s *Server) handleMessageStream(w http.ResponseWriter, r *http.Request, req
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		writeRPCError(w, req.ID, ErrInvalidParams)
 		return
+	}
+
+	// Validate acceptedOutputModes if provided.
+	if params.Configuration != nil && len(params.Configuration.AcceptedOutputModes) > 0 {
+		supported := map[string]bool{"text/plain": true, "text/markdown": true, "application/json": true}
+		found := false
+		for _, mode := range params.Configuration.AcceptedOutputModes {
+			if supported[mode] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeRPCError(w, req.ID, ErrUnsupportedMode)
+			return
+		}
 	}
 
 	task, err := s.handler.Handle(r.Context(), params.Skill, params.Message, params.TaskID)
@@ -363,6 +401,15 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, req *JSONRPCRequest) {
 	task, ok := s.handler.GetTask(params.ID)
 	if !ok {
 		writeRPCError(w, req.ID, ErrTaskNotFound)
+		return
+	}
+
+	// Trim history if historyLength requested.
+	if params.HistoryLength != nil && *params.HistoryLength >= 0 && len(task.History) > *params.HistoryLength {
+		snapshot := task.Snapshot()
+		start := len(snapshot.History) - *params.HistoryLength
+		snapshot.History = snapshot.History[start:]
+		writeRPCResult(w, req.ID, snapshot)
 		return
 	}
 
@@ -574,6 +621,54 @@ func (s *Server) SetExtendedCard(card json.RawMessage) {
 	s.extendedCard = card
 	if len(card) > 0 {
 		s.card.Capabilities.ExtendedAgentCard = true
+	}
+}
+
+// SetHandler connects the TaskHandler and wires push notifications.
+func (s *Server) SetHandler(h *TaskHandler) {
+	s.handler = h
+	if h != nil {
+		h.SetPushNotifier(s.firePushNotifications)
+	}
+}
+
+// firePushNotifications sends HTTP POST callbacks to all registered push
+// configs for the given task.
+func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
+	s.pushMu.RLock()
+	configs := make([]PushNotificationConfig, 0)
+	for _, cfg := range s.pushConfigs {
+		if cfg.TaskID == "" || cfg.TaskID == taskID {
+			configs = append(configs, cfg)
+		}
+	}
+	s.pushMu.RUnlock()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		debug.Log("a2a", "push marshal error: %v", err)
+		return
+	}
+
+	for _, cfg := range configs {
+		go func(url, token string) {
+			req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+			if err != nil {
+				debug.Log("a2a", "push request error: %v", err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				debug.Log("a2a", "push delivery error: %v", err)
+				return
+			}
+			resp.Body.Close()
+			debug.Log("a2a", "push delivered to %s: %d", url, resp.StatusCode)
+		}(cfg.URL, cfg.Token)
 	}
 }
 
