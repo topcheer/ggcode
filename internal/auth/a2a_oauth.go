@@ -182,10 +182,6 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Debug: log raw response for troubleshooting
-	fmt.Fprintf(os.Stderr, "  Token response (status %d, content-type: %s): %s\n",
-		resp.StatusCode, contentType, string(body))
-
 	// GitHub returns JSON when Accept header is set, otherwise returns URL-encoded
 	var raw map[string]interface{}
 	if strings.Contains(contentType, "application/json") {
@@ -256,7 +252,6 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 		ExpiresIn       int    `json:"expires_in"`
 	}
 	respBody, _ := io.ReadAll(resp.Body)
-	fmt.Fprintf(os.Stderr, "  Device code response: %s\n", string(respBody))
 
 	// Check for error response first
 	var errResp struct {
