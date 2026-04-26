@@ -299,6 +299,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	var daemonRestartRequested bool
+	restartCh := make(chan struct{}, 1)
 
 	// IM Manager
 	imMgr := im.NewManager()
@@ -574,7 +575,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	bridge.SetActivityHook(knightAgent.NotifyActivity)
 	bridge.SetRestartHook(func() {
 		daemonRestartRequested = true
-		selfSignal(syscall.SIGTERM)
+		select {
+		case restartCh <- struct{}{}:
+		default:
+		}
 	})
 	if cfg.Knight().Enabled {
 		// Create Knight emitter (reuse IM emitter)
@@ -765,7 +769,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	webuiSrv.SetRestartFn(func() {
 		daemonRestartRequested = true
-		selfSignal(syscall.SIGTERM)
+		select {
+		case restartCh <- struct{}{}:
+		default:
+		}
 	})
 	webuiAddr := "127.0.0.1:0" // auto port
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
@@ -796,6 +803,8 @@ loop:
 		select {
 		case sig := <-sigCh:
 			_ = sig
+			break loop
+		case <-restartCh:
 			break loop
 		case b, ok := <-kbCh:
 			if !ok {
