@@ -146,6 +146,28 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (*Task, error) {
 	return &result, nil
 }
 
+// ListTasksResult holds the paginated response from tasks/list.
+type ListTasksResult struct {
+	Tasks     []Task `json:"tasks"`
+	NextToken string `json:"nextToken,omitempty"`
+}
+
+// ListTasks retrieves a paginated list of tasks from the remote agent.
+func (c *Client) ListTasks(ctx context.Context, pageToken string, pageSize int) (*ListTasksResult, error) {
+	params := map[string]interface{}{}
+	if pageToken != "" {
+		params["pageToken"] = pageToken
+	}
+	if pageSize > 0 {
+		params["pageSize"] = pageSize
+	}
+	var result ListTasksResult
+	if err := c.rpc(ctx, "tasks/list", params, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // CancelTask requests cancellation of a running task.
 func (c *Client) CancelTask(ctx context.Context, taskID string) (*Task, error) {
 	params := CancelTaskParams{ID: taskID}

@@ -75,7 +75,8 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/agent.json", s.handleAgentCard)
-	mux.HandleFunc("/", s.handleRPC)
+	mux.HandleFunc("/.well-known/a2a.json", s.handleAgentCard)
+	mux.HandleFunc("/", s.a2aMiddleware(s.handleRPC))
 
 	host := cfg.Host
 	if host == "" {
@@ -137,6 +138,17 @@ func (s *Server) Stop() {
 // ---------------------------------------------------------------------------
 // HTTP handlers
 // ---------------------------------------------------------------------------
+
+// A2AProtocolVersion is the implemented A2A protocol version.
+const A2AProtocolVersion = "1.0"
+
+// a2aMiddleware adds A2A protocol headers to all JSON-RPC responses.
+func (s *Server) a2aMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("A2A-Version", A2AProtocolVersion)
+		next(w, r)
+	}
+}
 
 func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -201,6 +213,8 @@ func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRe
 		s.handleMessageStream(w, r, req)
 	case "tasks/get":
 		s.handleTaskGet(w, req)
+	case "tasks/list":
+		s.handleTaskList(w, req)
 	case "tasks/cancel":
 		s.handleTaskCancel(w, req)
 	case "tasks/resubscribe":
@@ -338,6 +352,28 @@ func (s *Server) handleTaskGet(w http.ResponseWriter, req *JSONRPCRequest) {
 	}
 
 	writeRPCResult(w, req.ID, task)
+}
+
+func (s *Server) handleTaskList(w http.ResponseWriter, req *JSONRPCRequest) {
+	var params struct {
+		PageToken string `json:"pageToken,omitempty"`
+		PageSize  int    `json:"pageSize,omitempty"`
+	}
+	if req.Params != nil {
+		_ = json.Unmarshal(req.Params, &params)
+	}
+	if params.PageSize <= 0 {
+		params.PageSize = 50
+	}
+	if params.PageSize > 100 {
+		params.PageSize = 100
+	}
+
+	tasks, nextToken := s.handler.ListTasks(params.PageToken, params.PageSize)
+	writeRPCResult(w, req.ID, map[string]interface{}{
+		"tasks":     tasks,
+		"nextToken": nextToken,
+	})
 }
 
 func (s *Server) handleTaskCancel(w http.ResponseWriter, req *JSONRPCRequest) {

@@ -139,7 +139,7 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	task := &Task{
 		ID:        generateID(),
 		ContextID: generateID(),
-		Status:    TaskStatus{State: TaskStateSubmitted},
+		Status:    TaskStatus{State: TaskStateSubmitted, Timestamp: time.Now()},
 		Skill:     skill,
 		History:   []Message{input},
 		CreatedAt: time.Now(),
@@ -179,7 +179,7 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 
 	// Transition to working state while still holding the lock,
 	// preventing CancelTask from racing between the check and goroutine start.
-	task.Status = TaskStatus{State: TaskStateWorking}
+	task.Status = TaskStatus{State: TaskStateWorking, Timestamp: time.Now()}
 	task.UpdatedAt = time.Now()
 	// Re-create the done channel since it was closed when the previous
 	// execution reached input-required (a pseudo-terminal state).
@@ -322,7 +322,7 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	t.Status = TaskStatus{State: state}
+	t.Status = TaskStatus{State: state, Timestamp: time.Now()}
 	t.UpdatedAt = time.Now()
 	if message != "" {
 		t.History = append(t.History, Message{
@@ -353,6 +353,53 @@ func (h *TaskHandler) GetTask(id string) (*Task, bool) {
 	return &snap, true
 }
 
+// ListTasks returns a page of tasks and a next-page token (cursor pagination).
+func (h *TaskHandler) ListTasks(pageToken string, pageSize int) ([]Task, string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Collect all task IDs in creation order.
+	ids := make([]string, 0, len(h.tasks))
+	for id := range h.tasks {
+		ids = append(ids, id)
+	}
+	// Sort by ID (IDs contain timestamps so this is chronological).
+	for i := 0; i < len(ids); i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if ids[j] < ids[i] {
+				ids[i], ids[j] = ids[j], ids[i]
+			}
+		}
+	}
+
+	start := 0
+	if pageToken != "" {
+		for i, id := range ids {
+			if id == pageToken {
+				start = i
+				break
+			}
+		}
+	}
+
+	end := start + pageSize
+	if end > len(ids) {
+		end = len(ids)
+	}
+
+	result := make([]Task, 0, end-start)
+	for _, id := range ids[start:end] {
+		snap := h.tasks[id].Snapshot()
+		result = append(result, snap)
+	}
+
+	var nextToken string
+	if end < len(ids) {
+		nextToken = ids[end]
+	}
+	return result, nextToken
+}
+
 // GetTaskDone returns the notification channel for a task.
 // The channel is closed when the task reaches a terminal state.
 // Returns nil if the task doesn't exist.
@@ -377,7 +424,7 @@ func (h *TaskHandler) CancelTask(id string) error {
 	if t.Status.IsTerminal() {
 		return fmt.Errorf("task already in terminal state: %s", t.Status.State)
 	}
-	t.Status = TaskStatus{State: TaskStateCanceled}
+	t.Status = TaskStatus{State: TaskStateCanceled, Timestamp: time.Now()}
 	t.UpdatedAt = time.Now()
 	// Cancel the underlying context to stop tool/agent execution.
 	if cancel, ok := h.cancels[id]; ok {
@@ -399,7 +446,7 @@ func (h *TaskHandler) RequestInput(id string, prompt string) error {
 	if t.Status.State != TaskStateWorking {
 		return fmt.Errorf("can only request input from working state, current: %s", t.Status.State)
 	}
-	t.Status = TaskStatus{State: TaskStateInputRequired}
+	t.Status = TaskStatus{State: TaskStateInputRequired, Timestamp: time.Now()}
 	t.UpdatedAt = time.Now()
 	if prompt != "" {
 		t.History = append(t.History, Message{

@@ -44,11 +44,14 @@ var (
 	ErrInternal       = &JSONRPCError{Code: -32603, Message: "Internal error"}
 
 	// A2A-specific error codes (per spec, -32000 to -32099).
-	ErrTaskNotFound      = &JSONRPCError{Code: -32001, Message: "Task not found"}
-	ErrTaskNotCancelable = &JSONRPCError{Code: -32002, Message: "Task not cancelable"}
-	ErrPushNotSupported  = &JSONRPCError{Code: -32003, Message: "Push notification not supported"}
-	ErrUnsupportedOp     = &JSONRPCError{Code: -32004, Message: "Unsupported operation"}
-	ErrContentType       = &JSONRPCError{Code: -32005, Message: "Incompatible content types"}
+	ErrTaskNotFound              = &JSONRPCError{Code: -32001, Message: "Task not found"}
+	ErrTaskNotCancelable         = &JSONRPCError{Code: -32002, Message: "Task not cancelable"}
+	ErrPushNotSupported          = &JSONRPCError{Code: -32003, Message: "Push notification not supported"}
+	ErrUnsupportedOp             = &JSONRPCError{Code: -32004, Message: "Unsupported operation"}
+	ErrContentType               = &JSONRPCError{Code: -32005, Message: "Incompatible content types"}
+	ErrAuthRequired              = &JSONRPCError{Code: -32006, Message: "Authentication required"}
+	ErrUnsupportedMode           = &JSONRPCError{Code: -32007, Message: "Unsupported output mode"}
+	ErrExtendedCardNotConfigured = &JSONRPCError{Code: -32008, Message: "Extended agent card not configured"}
 )
 
 // ---------------------------------------------------------------------------
@@ -69,7 +72,24 @@ type AgentCard struct {
 	DefaultInputModes  []string              `json:"defaultInputModes"`
 	DefaultOutputModes []string              `json:"defaultOutputModes"`
 	Skills             []Skill               `json:"skills"`
+	Interfaces         []AgentInterface      `json:"interfaces,omitempty"`
+	Extensions         []AgentExtension      `json:"extensions,omitempty"`
 	Metadata           interface{}           `json:"metadata,omitempty"`
+}
+
+// AgentInterface describes a protocol binding (JSON-RPC, gRPC, REST).
+type AgentInterface struct {
+	Type     string                 `json:"type"` // "json-rpc-2.0", "grpc", "rest"
+	URL      string                 `json:"url"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// AgentExtension declares an optional extension the agent supports.
+type AgentExtension struct {
+	URI         string                 `json:"uri"`
+	Description string                 `json:"description,omitempty"`
+	Required    bool                   `json:"required,omitempty"`
+	Params      map[string]interface{} `json:"params,omitempty"`
 }
 
 // AgentProvider identifies the organization behind the agent.
@@ -82,6 +102,7 @@ type AgentProvider struct {
 type AgentCapabilities struct {
 	Streaming         bool `json:"streaming"`
 	PushNotifications bool `json:"pushNotifications"`
+	ExtendedAgentCard bool `json:"extendedAgentCard,omitempty"`
 }
 
 // Skill describes one focused capability of the agent.
@@ -90,6 +111,7 @@ type Skill struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags,omitempty"`
+	Examples    []string `json:"examples,omitempty"`
 }
 
 // Security describes a security scheme (API Key only for now).
@@ -115,12 +137,13 @@ const (
 	TaskStateCanceled      TaskState = "canceled"
 	TaskStateFailed        TaskState = "failed"
 	TaskStateRejected      TaskState = "rejected"
+	TaskStateAuthRequired  TaskState = "auth-required"
 )
 
 // IsTerminal returns true for states that cannot transition further.
 func (s TaskState) IsTerminal() bool {
 	switch s {
-	case TaskStateCompleted, TaskStateFailed, TaskStateCanceled, TaskStateRejected:
+	case TaskStateCompleted, TaskStateFailed, TaskStateCanceled, TaskStateRejected, TaskStateAuthRequired:
 		return true
 	}
 	return false
@@ -129,7 +152,8 @@ func (s TaskState) IsTerminal() bool {
 // TaskStatus wraps a TaskState to satisfy the A2A spec requirement that
 // task.status is serialized as { "state": "..." } rather than a bare string.
 type TaskStatus struct {
-	State TaskState `json:"state"`
+	State     TaskState `json:"state"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // IsTerminal returns true for states that cannot transition further.
@@ -137,14 +161,15 @@ func (s TaskStatus) IsTerminal() bool { return s.State.IsTerminal() }
 
 // Task represents an A2A task with its full lifecycle.
 type Task struct {
-	ID        string     `json:"id"`
-	ContextID string     `json:"contextId"`
-	Status    TaskStatus `json:"status"`
-	Skill     string     `json:"skill,omitempty"`
-	History   []Message  `json:"history,omitempty"`
-	Artifacts []Artifact `json:"artifacts,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	ID        string          `json:"id"`
+	ContextID string          `json:"contextId"`
+	Status    TaskStatus      `json:"status"`
+	Skill     string          `json:"skill,omitempty"`
+	History   []Message       `json:"history,omitempty"`
+	Artifacts []Artifact      `json:"artifacts,omitempty"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
 
 	// done is closed when the task reaches a terminal state (completed, failed, canceled, rejected).
 	// Not serialized — used for in-process notification only.
@@ -164,6 +189,10 @@ func (t *Task) Snapshot() Task {
 		Skill:     t.Skill,
 		CreatedAt: t.CreatedAt,
 		UpdatedAt: t.UpdatedAt,
+	}
+	if t.Metadata != nil {
+		cp.Metadata = make(json.RawMessage, len(t.Metadata))
+		copy(cp.Metadata, t.Metadata)
 	}
 	if t.History != nil {
 		cp.History = make([]Message, len(t.History))
@@ -227,9 +256,10 @@ func (a Artifact) snapshot() Artifact {
 
 // Message carries conversation content within a task.
 type Message struct {
-	Role      string `json:"role"` // "user" or "agent"
-	Parts     []Part `json:"parts"`
-	MessageID string `json:"messageId,omitempty"`
+	Role      string          `json:"role"` // "user" or "agent"
+	Parts     []Part          `json:"parts"`
+	MessageID string          `json:"messageId,omitempty"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
 }
 
 // Part is a discriminated content block (text, file, or data).
@@ -250,10 +280,11 @@ type FilePart struct {
 
 // Artifact holds task output.
 type Artifact struct {
-	ArtifactID string `json:"artifactId"`
-	Parts      []Part `json:"parts"`
-	Append     bool   `json:"append,omitempty"`
-	LastChunk  bool   `json:"lastChunk,omitempty"`
+	ArtifactID string          `json:"artifactId"`
+	Parts      []Part          `json:"parts"`
+	Append     bool            `json:"append,omitempty"`
+	LastChunk  bool            `json:"lastChunk,omitempty"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -262,10 +293,19 @@ type Artifact struct {
 
 // SendMessageParams is the params for "message/send" and "message/stream".
 type SendMessageParams struct {
-	Message   Message `json:"message"`
-	Skill     string  `json:"skill,omitempty"`
-	TaskID    string  `json:"id,omitempty"`        // for continuing an existing task
-	ContextID string  `json:"contextId,omitempty"` // for continuing an existing context
+	Message       Message            `json:"message"`
+	Skill         string             `json:"skill,omitempty"`
+	TaskID        string             `json:"id,omitempty"`        // for continuing an existing task
+	ContextID     string             `json:"contextId,omitempty"` // for continuing an existing context
+	Configuration *SendMessageConfig `json:"configuration,omitempty"`
+}
+
+// SendMessageConfig controls how the remote agent should handle the message.
+type SendMessageConfig struct {
+	AcceptedOutputModes []string `json:"acceptedOutputModes,omitempty"`
+	HistoryLength       *int     `json:"historyLength,omitempty"`
+	PushNotification    string   `json:"pushNotification,omitempty"`
+	ReturnImmediately   bool     `json:"returnImmediately,omitempty"`
 }
 
 // GetTaskParams is the params for "tasks/get".
