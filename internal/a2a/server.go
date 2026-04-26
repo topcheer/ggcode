@@ -85,8 +85,8 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/agent.json", s.handleAgentCard)
-	mux.HandleFunc("/.well-known/a2a.json", s.handleAgentCard)
+	mux.HandleFunc("/.well-known/agent.json", s.a2aMiddleware(s.handleAgentCard))
+	mux.HandleFunc("/.well-known/a2a.json", s.a2aMiddleware(s.handleAgentCard))
 	mux.HandleFunc("/", s.a2aMiddleware(s.handleRPC))
 
 	host := cfg.Host

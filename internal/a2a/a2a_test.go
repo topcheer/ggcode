@@ -1435,3 +1435,695 @@ func TestAmbiguousMatchError(t *testing.T) {
 		t.Errorf("expected ambiguous error, got: %s", result.Content)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// P0/P1/P2 spec alignment tests
+// ---------------------------------------------------------------------------
+
+func TestWellKnownA2AJSON(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	resp, err := http.Get("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/a2a.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var card AgentCard
+	if err := json.NewDecoder(resp.Body).Decode(&card); err != nil {
+		t.Fatal(err)
+	}
+	if card.Name != "ggcode" {
+		t.Errorf("expected name=ggcode, got %s", card.Name)
+	}
+}
+
+func TestA2AVersionHeader(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	resp, err := http.Get("http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port()) + "/.well-known/a2a.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	ver := resp.Header.Get("A2A-Version")
+	if ver != "1.0" {
+		t.Errorf("expected A2A-Version=1.0, got %q", ver)
+	}
+}
+
+func TestStreamResponseSerialization(t *testing.T) {
+	sr := StreamResponse{
+		StatusUpdate: &TaskStatusUpdateEvent{
+			TaskID: "task-1",
+			Status: TaskStatus{State: TaskStateWorking},
+			Final:  false,
+		},
+	}
+	data, err := json.Marshal(sr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sr2 StreamResponse
+	if err := json.Unmarshal(data, &sr2); err != nil {
+		t.Fatal(err)
+	}
+	if sr2.StatusUpdate == nil {
+		t.Fatal("expected statusUpdate")
+	}
+	if sr2.StatusUpdate.TaskID != "task-1" {
+		t.Errorf("expected task-1, got %s", sr2.StatusUpdate.TaskID)
+	}
+	if sr2.StatusUpdate.Final != false {
+		t.Error("expected final=false")
+	}
+	if sr2.Task != nil || sr2.Message != nil || sr2.ArtifactUpdate != nil {
+		t.Error("expected nil for unset fields")
+	}
+}
+
+func TestTaskArtifactUpdateEvent(t *testing.T) {
+	evt := TaskArtifactUpdateEvent{
+		TaskID: "task-1",
+		Artifact: Artifact{
+			ArtifactID: "art-1",
+			Parts:      []Part{{Kind: "text", Text: "result"}},
+		},
+		Append:    true,
+		LastChunk: false,
+	}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evt2 TaskArtifactUpdateEvent
+	if err := json.Unmarshal(data, &evt2); err != nil {
+		t.Fatal(err)
+	}
+	if evt2.TaskID != "task-1" || evt2.Artifact.ArtifactID != "art-1" {
+		t.Errorf("unexpected: %+v", evt2)
+	}
+	if evt2.Append != true || evt2.LastChunk != false {
+		t.Errorf("expected append=true, lastChunk=false")
+	}
+}
+
+func TestPushNotificationConfigSerialization(t *testing.T) {
+	cfg := PushNotificationConfig{
+		TaskID: "task-1",
+		ID:     "push-1",
+		URL:    "http://example.com/callback",
+		Token:  "secret-token",
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg2 PushNotificationConfig
+	if err := json.Unmarshal(data, &cfg2); err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.TaskID != "task-1" || cfg2.Token != "secret-token" {
+		t.Errorf("unexpected: %+v", cfg2)
+	}
+}
+
+func TestPushNotificationCRUD(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	// Set
+	cfg := PushNotificationConfig{
+		TaskID: "task-1",
+		URL:    "http://example.com/push",
+		Token:  "tok123",
+	}
+	setBody, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"1"`),
+		Method:  "tasks/pushNotificationConfig/set",
+		Params:  mustMarshal(cfg),
+	})
+	resp, err := http.Post(base, "application/json", bytes.NewReader(setBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var setResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&setResp)
+	resp.Body.Close()
+	if setResp.Error != nil {
+		t.Fatalf("set error: %v", setResp.Error)
+	}
+	// Extract the auto-generated ID.
+	var cfgResult map[string]interface{}
+	json.Unmarshal(mustMarshal(setResp.Result), &cfgResult)
+	pushID, _ := cfgResult["id"].(string)
+	if pushID == "" {
+		t.Fatal("expected auto-generated push ID")
+	}
+
+	// Get
+	getBody, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"2"`),
+		Method:  "tasks/pushNotificationConfig/get",
+		Params:  mustMarshal(map[string]string{"id": pushID}),
+	})
+	resp, err = http.Post(base, "application/json", bytes.NewReader(getBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var getResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&getResp)
+	resp.Body.Close()
+	if getResp.Error != nil {
+		t.Fatalf("get error: %v", getResp.Error)
+	}
+
+	// List
+	listBody, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"3"`),
+		Method:  "tasks/pushNotificationConfig/list",
+		Params:  json.RawMessage(`{}`),
+	})
+	resp, err = http.Post(base, "application/json", bytes.NewReader(listBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&listResp)
+	resp.Body.Close()
+	if listResp.Error != nil {
+		t.Fatalf("list error: %v", listResp.Error)
+	}
+
+	// Delete
+	delBody, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"4"`),
+		Method:  "tasks/pushNotificationConfig/delete",
+		Params:  mustMarshal(map[string]string{"id": pushID}),
+	})
+	resp, err = http.Post(base, "application/json", bytes.NewReader(delBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&delResp)
+	resp.Body.Close()
+	if delResp.Error != nil {
+		t.Fatalf("delete error: %v", delResp.Error)
+	}
+
+	// Get after delete → should fail
+	resp, err = http.Post(base, "application/json", bytes.NewReader(getBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	json.NewDecoder(resp.Body).Decode(&getResp)
+	resp.Body.Close()
+	if getResp.Error == nil {
+		t.Error("expected error after delete")
+	}
+}
+
+func TestAcceptedOutputModesValidation(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	// Unsupported mode → error
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"1"`),
+		Method:  "message/send",
+		Params: mustMarshal(SendMessageParams{
+			Message:       Message{Role: "user", Parts: []Part{{Kind: "text", Text: "test"}}},
+			Configuration: &SendMessageConfig{AcceptedOutputModes: []string{"image/png"}},
+		}),
+	})
+	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&rpcResp)
+	resp.Body.Close()
+	if rpcResp.Error == nil {
+		t.Fatal("expected error for unsupported mode")
+	}
+	if rpcResp.Error.Code != ErrUnsupportedMode.Code {
+		t.Errorf("expected ErrUnsupportedMode (%d), got %d", ErrUnsupportedMode.Code, rpcResp.Error.Code)
+	}
+
+	// Supported mode → should not get ErrUnsupportedMode
+	body2, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"2"`),
+		Method:  "message/send",
+		Params: mustMarshal(SendMessageParams{
+			Message:       Message{Role: "user", Parts: []Part{{Kind: "text", Text: "test"}}},
+			Skill:         SkillFileSearch, // use file-search for quick failure
+			Configuration: &SendMessageConfig{AcceptedOutputModes: []string{"text/plain"}},
+		}),
+	})
+	resp2, err := http.Post(base, "application/json", bytes.NewReader(body2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp2 JSONRPCResponse
+	json.NewDecoder(resp2.Body).Decode(&rpcResp2)
+	resp2.Body.Close()
+	// Should not be ErrUnsupportedMode (may be other errors due to no agent)
+	if rpcResp2.Error != nil && rpcResp2.Error.Code == ErrUnsupportedMode.Code {
+		t.Errorf("text/plain should be supported, got error: %v", rpcResp2.Error)
+	}
+}
+
+func TestHistoryLengthFilter(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	// Create a task and wait for it to finish (no agent → fails quickly)
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// Now force history to have multiple messages (after async execution is done)
+	handler.mu.Lock()
+	handler.tasks[task.ID].History = []Message{
+		{Role: "user", Parts: []Part{{Kind: "text", Text: "msg1"}}},
+		{Role: "agent", Parts: []Part{{Kind: "text", Text: "msg2"}}},
+		{Role: "user", Parts: []Part{{Kind: "text", Text: "msg3"}}},
+	}
+	handler.mu.Unlock()
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	// Get with historyLength=1
+	hl := 1
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"1"`),
+		Method:  "tasks/get",
+		Params:  mustMarshal(GetTaskParams{ID: task.ID, HistoryLength: &hl}),
+	})
+	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&rpcResp)
+	resp.Body.Close()
+	if rpcResp.Error != nil {
+		t.Fatalf("unexpected error: %v", rpcResp.Error)
+	}
+
+	var resultTask Task
+	json.Unmarshal(mustMarshal(rpcResp.Result), &resultTask)
+	if len(resultTask.History) != 1 {
+		t.Fatalf("expected 1 history entry, got %d", len(resultTask.History))
+	}
+	if resultTask.History[0].Parts[0].Text != "msg3" {
+		t.Errorf("expected last message (msg3), got %s", resultTask.History[0].Parts[0].Text)
+	}
+
+	// Get with historyLength=0 → empty history
+	hl0 := 0
+	body0, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"2"`),
+		Method:  "tasks/get",
+		Params:  mustMarshal(GetTaskParams{ID: task.ID, HistoryLength: &hl0}),
+	})
+	resp0, err := http.Post(base, "application/json", bytes.NewReader(body0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp0 JSONRPCResponse
+	json.NewDecoder(resp0.Body).Decode(&rpcResp0)
+	resp0.Body.Close()
+	if rpcResp0.Error != nil {
+		t.Fatalf("unexpected error: %v", rpcResp0.Error)
+	}
+	var resultTask0 Task
+	json.Unmarshal(mustMarshal(rpcResp0.Result), &resultTask0)
+	if len(resultTask0.History) != 0 {
+		t.Errorf("expected 0 history entries, got %d", len(resultTask0.History))
+	}
+}
+
+func TestGetExtendedAgentCardNotConfigured(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"1"`),
+		Method:  "agent/getExtendedCard",
+		Params:  json.RawMessage(`{}`),
+	})
+	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&rpcResp)
+	resp.Body.Close()
+	if rpcResp.Error == nil {
+		t.Fatal("expected error for unconfigured extended card")
+	}
+	if rpcResp.Error.Code != ErrExtendedCardNotConfigured.Code {
+		t.Errorf("expected ErrExtendedCardNotConfigured, got %d", rpcResp.Error.Code)
+	}
+}
+
+func TestGetExtendedAgentCard(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv.SetExtendedCard(json.RawMessage(`{"custom":"data"}`))
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"1"`),
+		Method:  "agent/getExtendedCard",
+		Params:  json.RawMessage(`{}`),
+	})
+	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&rpcResp)
+	resp.Body.Close()
+	if rpcResp.Error != nil {
+		t.Fatalf("unexpected error: %v", rpcResp.Error)
+	}
+	var result map[string]interface{}
+	json.Unmarshal(mustMarshal(rpcResp.Result), &result)
+	if result["custom"] != "data" {
+		t.Errorf("expected custom=data, got %v", result["custom"])
+	}
+
+	// Verify capability flag via agent card endpoint
+	resp2, _ := http.Get(base + "/.well-known/a2a.json")
+	var card AgentCard
+	json.NewDecoder(resp2.Body).Decode(&card)
+	resp2.Body.Close()
+	if !card.Capabilities.ExtendedAgentCard {
+		t.Error("expected ExtendedAgentCard=true after SetExtendedCard")
+	}
+}
+
+func TestTaskEventCallback(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	var events []TaskEventMessage
+	var evMu sync.Mutex
+	handler.SetOnTaskEvent(func(msg TaskEventMessage) {
+		evMu.Lock()
+		events = append(events, msg)
+		evMu.Unlock()
+	})
+
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for async execution to complete (no agent → fails quickly)
+	time.Sleep(300 * time.Millisecond)
+
+	evMu.Lock()
+	defer evMu.Unlock()
+	if len(events) == 0 {
+		t.Fatal("expected at least one event callback")
+	}
+
+	// Events should contain at least one type
+	if events[0].Type == "" {
+		t.Error("expected event type to be set")
+	}
+	if events[0].TaskID != task.ID {
+		t.Errorf("expected task ID %s, got %s", task.ID, events[0].TaskID)
+	}
+
+	// Should have "fail" event (no agent to run)
+	foundFail := false
+	for _, e := range events {
+		if e.Type == "fail" {
+			foundFail = true
+			break
+		}
+	}
+	if !foundFail {
+		t.Error("expected fail event (no agent)")
+	}
+}
+
+func TestActiveTasks(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil, WithTimeout(1*time.Hour))
+
+	task, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	active := handler.ActiveTasks()
+	found := false
+	for _, t := range active {
+		if t.ID == task.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("task %s not in active tasks (count=%d)", task.ID, handler.ActiveTaskCount())
+	}
+}
+
+func TestListTasksRPC(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	// Create a task
+	_, err := handler.Handle(context.Background(), SkillFullTask, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "hello"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"1"`),
+		Method:  "tasks/list",
+		Params:  json.RawMessage(`{}`),
+	})
+	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&rpcResp)
+	resp.Body.Close()
+	if rpcResp.Error != nil {
+		t.Fatalf("unexpected error: %v", rpcResp.Error)
+	}
+
+	var result map[string]interface{}
+	json.Unmarshal(mustMarshal(rpcResp.Result), &result)
+	tasksArr, ok := result["tasks"].([]interface{})
+	if !ok || len(tasksArr) == 0 {
+		t.Errorf("expected tasks array with at least 1 task, got %v", result)
+	}
+}
+
+func TestTaskStateAuthRequiredIsTerminal(t *testing.T) {
+	if !TaskStateAuthRequired.IsTerminal() {
+		t.Error("auth-required should be terminal")
+	}
+}
+
+func TestGetTaskParamsHistoryLength(t *testing.T) {
+	raw := `{"id":"task-1","historyLength":5}`
+	var params GetTaskParams
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.ID != "task-1" {
+		t.Errorf("expected task-1, got %s", params.ID)
+	}
+	if params.HistoryLength == nil || *params.HistoryLength != 5 {
+		t.Errorf("expected historyLength=5, got %v", params.HistoryLength)
+	}
+}
+
+func TestSendMessageConfigFields(t *testing.T) {
+	cfg := SendMessageConfig{
+		AcceptedOutputModes: []string{"text/plain", "application/json"},
+		ReturnImmediately:   true,
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg2 SendMessageConfig
+	if err := json.Unmarshal(data, &cfg2); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg2.AcceptedOutputModes) != 2 {
+		t.Errorf("expected 2 modes, got %d", len(cfg2.AcceptedOutputModes))
+	}
+
+	if !cfg2.ReturnImmediately {
+		t.Error("expected returnImmediately=true")
+	}
+}
+
+func TestAgentCardInterfaces(t *testing.T) {
+	card := AgentCard{
+		Name: "test",
+		Interfaces: []AgentInterface{
+			{Type: "json-rpc", URL: "http://example.com"},
+		},
+		Extensions: []AgentExtension{
+			{URI: "https://example.com/ext", Required: true},
+		},
+	}
+	data, err := json.Marshal(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var card2 AgentCard
+	if err := json.Unmarshal(data, &card2); err != nil {
+		t.Fatal(err)
+	}
+	if len(card2.Interfaces) != 1 || card2.Interfaces[0].Type != "json-rpc" {
+		t.Errorf("unexpected interfaces: %+v", card2.Interfaces)
+	}
+	if len(card2.Extensions) != 1 || !card2.Extensions[0].Required {
+		t.Errorf("unexpected extensions: %+v", card2.Extensions)
+	}
+}
+
+func TestSkillExamples(t *testing.T) {
+	skill := Skill{
+		ID:       "code-edit",
+		Name:     "Code Edit",
+		Examples: []string{"Fix the bug in main.go", "Add error handling"},
+	}
+	data, err := json.Marshal(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var skill2 Skill
+	if err := json.Unmarshal(data, &skill2); err != nil {
+		t.Fatal(err)
+	}
+	if len(skill2.Examples) != 2 {
+		t.Errorf("expected 2 examples, got %d", len(skill2.Examples))
+	}
+}
+
+func TestMetadataFields(t *testing.T) {
+	task := Task{
+		ID:       "t1",
+		Status:   TaskStatus{State: TaskStateWorking},
+		Metadata: json.RawMessage(`{"custom":"value"}`),
+	}
+	data, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsStr(string(data), `"metadata":{"custom":"value"}`) {
+		t.Errorf("expected metadata in JSON, got: %s", string(data))
+	}
+
+	msg := Message{
+		Role:      "user",
+		MessageID: "m1",
+		Parts:     []Part{{Kind: "text", Text: "hi"}},
+		Metadata:  json.RawMessage(`{"source":"test"}`),
+	}
+	data2, _ := json.Marshal(msg)
+	if !containsStr(string(data2), `"metadata":{"source":"test"}`) {
+		t.Errorf("expected metadata in message JSON, got: %s", string(data2))
+	}
+}
+
+func TestErrorCodes(t *testing.T) {
+	if ErrAuthRequired.Code != -32006 {
+		t.Errorf("expected ErrAuthRequired code -32001, got %d", ErrAuthRequired.Code)
+	}
+	if ErrUnsupportedMode.Code != -32007 {
+		t.Errorf("expected ErrUnsupportedMode code -32002, got %d", ErrUnsupportedMode.Code)
+	}
+	if ErrExtendedCardNotConfigured.Code != -32008 {
+		t.Errorf("expected ErrExtendedCardNotConfigured code -32003, got %d", ErrExtendedCardNotConfigured.Code)
+	}
+}
+
+func mustMarshal(v interface{}) json.RawMessage {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
