@@ -1207,10 +1207,19 @@ func (m *Manager) UnmuteBinding(adapterName string) error {
 // MuteAll mutes all currently active bindings for this process.
 // Returns the number of adapters that were muted.
 func (m *Manager) MuteAll() (int, error) {
+	return m.MuteAllExcept("")
+}
+
+// MuteAllExcept mutes all currently active bindings except the named adapter.
+// If exclude is empty, all bindings are muted. Returns the number muted.
+func (m *Manager) MuteAllExcept(exclude string) (int, error) {
 	m.mu.Lock()
 	count := 0
 	for name, binding := range m.currentBindings {
 		if binding.Muted {
+			continue
+		}
+		if name == exclude {
 			continue
 		}
 		binding.Muted = true
