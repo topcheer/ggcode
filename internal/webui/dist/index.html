@@ -118,6 +118,9 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       <div class="nav-item" data-page="general" onclick="showPage('general')">
         <span class="nav-icon">&#9881;</span><span>General</span>
       </div>
+      <div class="nav-item" data-page="impersonate" onclick="showPage('impersonate')">
+        <span class="nav-icon">&#128100;</span><span>Impersonate</span>
+      </div>
     </div>
   </div>
   <div class="main">
@@ -289,6 +292,12 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
         <button class="btn btn-primary" onclick="saveGeneral()" style="margin-top:12px">Save</button>
       </div>
     </div>
+
+    <!-- Impersonate -->
+    <div class="page" id="page-impersonate">
+      <div class="page-header"><h2>Impersonate</h2><p>Switch LLM client identity for compatibility</p></div>
+      <div id="impersonate-content"></div>
+    </div>
   </div>
 </div>
 
@@ -299,6 +308,7 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
 let config = {};
 let vendors = {};
 let mcpServers = []; // loaded from /api/mcp with runtime status
+let impersonateData = null; // loaded from /api/impersonate
 
 // --- API helpers ---
 async function api(path, opts) {
@@ -352,6 +362,8 @@ async function loadAll() {
     await loadIMRuntime();
     renderIM();
     renderGeneral();
+    try { impersonateData = await api('/api/impersonate'); } catch(e) { impersonateData = null; }
+    renderImpersonate();
   } catch(e) {
     toast('Failed to load: ' + e.message, false);
   }
@@ -383,6 +395,7 @@ function renderOverview() {
         <tr><td>MCP Servers</td><td><span class="dot ${mcpCount > 0 ? 'dot-green' : 'dot-yellow'}"></span>${mcpCount > 0 ? 'Configured' : 'None'}</td><td>${mcpCount}</td></tr>
         <tr><td>IM Gateway</td><td><span class="dot ${imEnabled ? 'dot-green' : 'dot-yellow'}"></span>${imEnabled ? 'Enabled' : 'Disabled'}</td><td>${Object.keys(c.im?.adapters || {}).length} adapters</td></tr>
         <tr><td>Vendors</td><td><span class="dot dot-green"></span>Available</td><td>${vendors.length}</td></tr>
+        <tr><td>Impersonate</td><td>${impersonateData ? `<span class="dot dot-green"></span>${esc(impersonateData.presets?.find(p=>p.id===(impersonateData.current?.preset||'none'))?.display_name || 'None')}` : '<span class="dot dot-yellow"></span>N/A'}</td><td></td></tr>
       </table></div>
     </div>`;
 }
@@ -962,6 +975,88 @@ async function saveGeneral() {
     });
     toast('General settings saved');
     loadAll();
+  } catch(e) { toast(e.message, false); }
+}
+
+// --- Impersonate ---
+function renderImpersonate() {
+  if (!impersonateData) {
+    document.getElementById('impersonate-content').innerHTML = '<div class="card"><p>Not available</p></div>';
+    return;
+  }
+  const cur = impersonateData.current || {};
+  const presets = impersonateData.presets || [];
+  const currentPreset = cur.preset || 'none';
+  const customVersion = cur.custom_version || '';
+  const customHeaders = cur.custom_headers || {};
+
+  let html = `<div class="card">
+    <div class="card-title">Current Identity <span class="badge ${currentPreset!=='none'?'badge-green':'badge-yellow'}">${esc(presets.find(p=>p.id===currentPreset)?.display_name || currentPreset)}</span></div>
+    <div class="form-group"><label>Preset</label>
+      <select id="imp-preset" onchange="impPresetChanged()">
+        ${presets.map(p => `<option value="${esc(p.id)}" ${p.id===currentPreset?'selected':''}>${esc(p.display_name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label>Version</label>
+      <input id="imp-version" value="${esc(customVersion)}" placeholder="auto">
+    </div>
+  </div>`;
+
+  // Custom headers
+  const headerKeys = Object.keys(customHeaders);
+  html += `<div class="card" style="margin-top:12px">
+    <div class="card-title">Custom Headers <button class="btn btn-sm" onclick="addImpHeader()" style="margin-left:8px">+ Add</button></div>
+    <div id="imp-headers">
+      ${headerKeys.length === 0 ? '<p style="color:var(--text2);font-size:12px">No custom headers</p>' :
+        headerKeys.map((k,i) => `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+          <input class="imp-hk" value="${esc(k)}" style="flex:1" placeholder="Header name">
+          <input class="imp-hv" value="${esc(customHeaders[k])}" style="flex:2" placeholder="Header value">
+          <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">×</button>
+        </div>`).join('')}
+    </div>
+  </div>`;
+
+  html += `<button class="btn btn-primary" onclick="saveImpersonate()" style="margin-top:12px">Save & Apply</button>`;
+  document.getElementById('impersonate-content').innerHTML = html;
+}
+
+function impPresetChanged() {
+  const sel = document.getElementById('imp-preset').value;
+  const presets = impersonateData.presets || [];
+  const p = presets.find(x => x.id === sel);
+  if (p && !document.getElementById('imp-version').value) {
+    document.getElementById('imp-version').placeholder = p.default_version || 'auto';
+  }
+}
+
+function addImpHeader() {
+  const container = document.getElementById('imp-headers');
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+  div.innerHTML = `<input class="imp-hk" value="" style="flex:1" placeholder="Header name">
+    <input class="imp-hv" value="" style="flex:2" placeholder="Header value">
+    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove()">×</button>`;
+  container.appendChild(div);
+}
+
+async function saveImpersonate() {
+  try {
+    const preset = document.getElementById('imp-preset').value;
+    const version = document.getElementById('imp-version').value.trim();
+    const headers = {};
+    document.querySelectorAll('#imp-headers > div').forEach(row => {
+      const k = row.querySelector('.imp-hk')?.value.trim();
+      const v = row.querySelector('.imp-hv')?.value.trim();
+      if (k) headers[k] = v;
+    });
+    await api('/api/impersonate', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({preset, custom_version: version, custom_headers: headers})
+    });
+    toast('Impersonation updated');
+    impersonateData = await api('/api/impersonate');
+    renderImpersonate();
   } catch(e) { toast(e.message, false); }
 }
 
