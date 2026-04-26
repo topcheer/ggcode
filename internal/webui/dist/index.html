@@ -543,6 +543,7 @@ function renderIM() {
         ${targets.length > 0 ? `<tr><td>Targets</td><td style="display:flex;flex-wrap:wrap;gap:4px">${targets.map(t => `<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>` : ''}
         ${rt?.bound_dir ? `<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>` : ''}
         ${rt?.channel_id ? `<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>` : ''}
+        ${rt && rt.all_dirs && rt.all_dirs.length > 0 ? `<tr><td>All Bound Dirs</td><td style="display:flex;flex-wrap:wrap;gap:4px">${rt.all_dirs.map(d => `<span class="badge ${d===rt.bound_dir?'badge-green':'badge-yellow'}" style="font-size:10px">${esc(d)}</span>`).join(' ')}</td></tr>` : ''}
         ${rt?.status ? `<tr><td>Runtime</td><td class="mono">${esc(rt.status)}</td></tr>` : ''}
         ${rt?.last_error ? `<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>` : ''}
         ${(cfg.allow_from||[]).length > 0 ? `<tr><td>Allow From</td><td>${cfg.allow_from.map(a => `<code>${esc(a)}</code>`).join(', ')}</td></tr>` : ''}
