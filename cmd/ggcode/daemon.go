@@ -588,11 +588,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	// Start A2A server if enabled.
-		if !cfg.A2A.Disabled {
-			// Apply instance-level A2A config override from .ggcode/a2a.yaml
-			if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
-				config.MergeA2AConfig(&cfg.A2A, a2aOverride)
-			}
+	if !cfg.A2A.Disabled {
+		// Apply instance-level A2A config override from .ggcode/a2a.yaml
+		if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
+			config.MergeA2AConfig(&cfg.A2A, a2aOverride)
+		}
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)

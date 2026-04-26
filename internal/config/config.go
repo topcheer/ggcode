@@ -274,10 +274,13 @@ type A2AConfig struct {
 }
 
 // A2AAuthConfig configures which authentication mechanisms the A2A server accepts.
-// Multiple schemes can be enabled simultaneously.
+// Multiple schemes can be enabled simultaneously — clients choose any one.
 type A2AAuthConfig struct {
-	// OAuth2 + PKCE for human-interactive agents.
-	// Client_id is safe to embed (public client, PKCE replaces client_secret).
+	// APIKey is the simplest shared-secret auth. All clients use the same key.
+	// Empty = no API key auth.
+	APIKey string `yaml:"api_key,omitempty"`
+
+	// OAuth2 + PKCE / Device Flow for human-interactive agents.
 	OAuth2 *A2AOAuth2Config `yaml:"oauth2,omitempty"`
 
 	// OpenID Connect — layered on top of OAuth2, provides identity tokens.
@@ -287,27 +290,43 @@ type A2AAuthConfig struct {
 	MTLS *A2AMTLSConfig `yaml:"mtls,omitempty"`
 }
 
-// A2AOAuth2Config for Authorization Code + PKCE flow.
-// No client_secret needed — PKCE protects the token exchange.
-// Use "provider" for built-in presets or set issuer_url + client_id manually.
+// A2AOAuth2Config for OAuth2 Authorization Code + PKCE or Device Flow.
+// Use "provider" for built-in presets or set fields manually for custom IdP.
 type A2AOAuth2Config struct {
-	// Provider selects a built-in preset: "github", "google", "auth0".
-	// When set, client_id and issuer_url are auto-populated.
-	// User can override by also setting client_id/issuer_url explicitly.
+	// Provider selects a built-in preset: "github", "google", "auth0", "azure".
+	// When set, endpoint URLs and default_client_id are auto-populated.
 	Provider string `yaml:"provider,omitempty"`
 
-	ClientID  string `yaml:"client_id,omitempty"`  // public, safe to embed; auto-filled from provider preset
-	IssuerURL string `yaml:"issuer_url,omitempty"` // auto-filled from provider preset
-	Scopes    string `yaml:"scopes,omitempty"`     // space-separated; defaults set by provider preset
+	// ClientID is the OAuth2 client ID. Auto-filled from provider preset.
+	// Override to use your own registered OAuth App.
+	ClientID string `yaml:"client_id,omitempty"`
+
+	// ClientSecret is required for GitHub (confidential client).
+	// Most other providers support PKCE without a secret.
+	// Can also be set via GGCODE_OAUTH_CLIENT_SECRET env var.
+	ClientSecret string `yaml:"client_secret,omitempty"`
+
+	// IssuerURL is the OAuth2 issuer base URL. Auto-filled from provider preset.
+	// For custom providers: "https://your-idp.example.com"
+	IssuerURL string `yaml:"issuer_url,omitempty"`
+
+	// Scopes are space-separated OAuth2 scopes. Auto-filled from provider preset.
+	Scopes string `yaml:"scopes,omitempty"`
+
+	// Flow selects the OAuth2 flow: "auto" (default), "pkce", or "device".
+	// "auto" picks PKCE for desktop environments, Device Flow for headless.
+	Flow string `yaml:"flow,omitempty"`
 }
 
 // A2AOIDCConfig adds OpenID Connect on top of OAuth2.
-// Same provider preset system as OAuth2.
+// Same provider preset and flow selection as OAuth2.
 type A2AOIDCConfig struct {
-	Provider  string `yaml:"provider,omitempty"`
-	ClientID  string `yaml:"client_id,omitempty"`
-	IssuerURL string `yaml:"issuer_url,omitempty"` // must have /.well-known/openid-configuration
-	Scopes    string `yaml:"scopes,omitempty"`     // should include "openid"
+	Provider     string `yaml:"provider,omitempty"`
+	ClientID     string `yaml:"client_id,omitempty"`
+	ClientSecret string `yaml:"client_secret,omitempty"`
+	IssuerURL    string `yaml:"issuer_url,omitempty"` // must have /.well-known/openid-configuration
+	Scopes       string `yaml:"scopes,omitempty"`     // should include "openid"
+	Flow         string `yaml:"flow,omitempty"`       // "auto", "pkce", "device"
 }
 
 // A2AMTLSConfig for mutual TLS authentication.
