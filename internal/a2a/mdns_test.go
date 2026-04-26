@@ -310,3 +310,35 @@ func TestMDNSServiceSelfExclusion(t *testing.T) {
 		}
 	}
 }
+
+func TestPreferredInterface(t *testing.T) {
+	iface := PreferredInterface()
+	if iface == nil {
+		t.Fatal("PreferredInterface returned nil")
+	}
+	t.Logf("Interface: %s (index %d, flags=%x)", iface.Name, iface.Index, iface.Flags)
+
+	ip := PreferredIP()
+	t.Logf("PreferredIP: %s", ip)
+
+	// Verify the interface actually has this IP
+	addrs, err := iface.Addrs()
+	if err != nil {
+		t.Fatalf("Addrs: %v", err)
+	}
+	found := false
+	for _, addr := range addrs {
+		var ifaceIP net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ifaceIP = v.IP
+		}
+		if ifaceIP != nil && ifaceIP.String() == ip {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("IP %s not found on interface %s addrs: %v", ip, iface.Name, addrs)
+	}
+}

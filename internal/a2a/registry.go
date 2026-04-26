@@ -55,21 +55,35 @@ func NewRegistry() (*Registry, error) {
 
 // Register adds this instance to the registry.
 // Writes a per-PID file — no cross-process read-modify-write contention.
+// Register adds this instance to the registry.
+// Writes a per-PID file and optionally starts mDNS broadcasting.
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	r.selfID = info.ID
 	r.selfInfo = &info
+	err := r.writeInstanceFile(info)
+	r.mu.Unlock()
+	if err != nil {
+		return err
+	}
 
-	return r.writeInstanceFile(info)
+	// Start mDNS if LAN discovery is enabled.
+	if r.mdnsSvc != nil {
+		if startErr := r.mdnsSvc.start(info); startErr != nil {
+			// mDNS failure is non-fatal — local discovery still works.
+			fmt.Fprintf(os.Stderr, "A2A mDNS registration warning: %v\n", startErr)
+		}
+	}
+	return nil
 }
 
-// Unregister removes this instance from the registry.
+// Unregister removes this instance from the registry and stops mDNS.
 func (r *Registry) Unregister() error {
+	if r.mdnsSvc != nil {
+		r.mdnsSvc.stop()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	return os.Remove(r.instanceFilePath(r.selfID))
 }
 
