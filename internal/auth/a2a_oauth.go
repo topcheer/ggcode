@@ -58,22 +58,11 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 		return nil, fmt.Errorf("generate state: %w", err)
 	}
 
-	// Start local callback server.
-	// Use localhost (not 127.0.0.1) because GitHub OAuth Apps treat them differently
-	// and the registered callback URL must match exactly.
-	// Port 8089 is the default; users can override via env var GGCODE_OAUTH_PORT.
-	oauthPort := os.Getenv("GGCODE_OAUTH_PORT")
-	if oauthPort == "" {
-		oauthPort = "8089"
-	}
-	listenAddr := "localhost:" + oauthPort
-	listener, err := net.Listen("tcp", listenAddr)
+	// Start local callback server on a random port.
+	// Use localhost (not 127.0.0.1) because GitHub OAuth Apps treat them differently.
+	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		// Port might be in use; try a random port as fallback
-		listener, err = net.Listen("tcp", "localhost:0")
-		if err != nil {
-			return nil, fmt.Errorf("listen: %w", err)
-		}
+		return nil, fmt.Errorf("listen: %w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
