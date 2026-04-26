@@ -56,11 +56,16 @@ func NewRegistry() (*Registry, error) {
 // Register adds this instance to the registry.
 // Writes a per-PID file — no cross-process read-modify-write contention.
 // Register adds this instance to the registry.
-// Writes a per-PID file and optionally starts mDNS broadcasting.
+// Cleans up stale files from the same PID, writes a new file,
+// and optionally starts mDNS broadcasting.
 func (r *Registry) Register(info InstanceInfo) error {
 	r.mu.Lock()
 	r.selfID = info.ID
 	r.selfInfo = &info
+
+	// Remove any stale files from a previous registration of this PID+workspace.
+	r.removeStaleFiles(info.PID, info.Workspace, info.ID)
+
 	err := r.writeInstanceFile(info)
 	r.mu.Unlock()
 	if err != nil {
@@ -75,6 +80,37 @@ func (r *Registry) Register(info InstanceInfo) error {
 		}
 	}
 	return nil
+}
+
+// removeStaleFiles deletes registry files from the same PID+workspace
+// that aren't the current ID. This handles the case where a daemon
+// restarts within the same PID and same workspace over time.
+func (r *Registry) removeStaleFiles(pid int, workspace string, currentID string) {
+	entries, err := os.ReadDir(r.dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		// Extract PID from filename: ggcode-hostname-PID-timestamp.json
+		name := entry.Name()
+		// The current file will be written after this cleanup, so skip it.
+		if strings.Contains(name, currentID) {
+			continue
+		}
+		// Read file to check PID match.
+		path := filepath.Join(r.dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var inst InstanceInfo
+		if json.Unmarshal(data, &inst) == nil && inst.PID == pid && inst.Workspace == workspace {
+			os.Remove(path)
+		}
+	}
 }
 
 // Unregister removes this instance from the registry and stops mDNS.
@@ -126,7 +162,8 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 	return result, nil
 }
 
-// discoverLocal reads the local file-based registry, pruning dead PIDs.
+// discoverLocal reads the local file-based registry, pruning dead PIDs
+// and deduplicating stale files from the same PID+workspace combination.
 func (r *Registry) discoverLocal() ([]InstanceInfo, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -136,12 +173,39 @@ func (r *Registry) discoverLocal() ([]InstanceInfo, error) {
 		return nil, err
 	}
 
-	// Prune dead PIDs and remove their files.
-	var others []InstanceInfo
+	// Group by PID+workspace: keep only the latest (by StartedAt) per key,
+	// remove stale files, and prune dead PIDs entirely.
+	type pidWorkKey struct {
+		pid       int
+		workspace string
+	}
+	latest := make(map[pidWorkKey]InstanceInfo)
+	files := make(map[pidWorkKey][]string) // key → list of file paths
 	for _, inst := range instances {
-		if !isPIDAlive(inst.PID) {
-			os.Remove(r.instanceFilePath(inst.ID))
+		key := pidWorkKey{inst.PID, inst.Workspace}
+		path := r.instanceFilePath(inst.ID)
+		files[key] = append(files[key], path)
+
+		existing, ok := latest[key]
+		if !ok || inst.StartedAt > existing.StartedAt {
+			latest[key] = inst
+		}
+	}
+
+	var others []InstanceInfo
+	for key, inst := range latest {
+		if !isPIDAlive(key.pid) {
+			// Dead PID — remove all its files.
+			for _, p := range files[key] {
+				os.Remove(p)
+			}
 			continue
+		}
+		// Remove stale files from the same key (older registrations).
+		for _, p := range files[key] {
+			if p != r.instanceFilePath(inst.ID) {
+				os.Remove(p)
+			}
 		}
 		if inst.ID != r.selfID {
 			others = append(others, inst)
