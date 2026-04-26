@@ -1001,3 +1001,105 @@ func TestPublishAdapterStateIgnoredWhenMuted(t *testing.T) {
 		t.Fatalf("expected no last error, got '%s'", state.LastError)
 	}
 }
+
+func TestMuteAllExcept(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	// Bind 3 channels
+	for _, name := range []string{"qq", "telegram", "discord"} {
+		_, err := mgr.BindChannel(ChannelBinding{
+			Workspace: "/workspace/test",
+			Platform:  PlatformQQ,
+			Adapter:   name,
+			ChannelID: "ch-" + name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// MuteAllExcept("telegram") — should mute qq and discord, keep telegram
+	count, err := mgr.MuteAllExcept("telegram")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 muted, got %d", count)
+	}
+
+	// Verify telegram is NOT muted
+	snap := mgr.Snapshot()
+	for _, b := range snap.CurrentBindings {
+		switch b.Adapter {
+		case "telegram":
+			if b.Muted {
+				t.Error("telegram should NOT be muted")
+			}
+		case "qq", "discord":
+			if !b.Muted {
+				t.Errorf("%s should be muted", b.Adapter)
+			}
+		}
+	}
+}
+
+func TestMuteAllExceptEmptyExclude(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	for _, name := range []string{"qq", "telegram"} {
+		mgr.BindChannel(ChannelBinding{
+			Workspace: "/workspace/test",
+			Platform:  PlatformQQ,
+			Adapter:   name,
+			ChannelID: "ch-" + name,
+		})
+	}
+
+	// Empty exclude → mute all
+	count, err := mgr.MuteAllExcept("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 muted, got %d", count)
+	}
+
+	snap := mgr.Snapshot()
+	for _, b := range snap.CurrentBindings {
+		if !b.Muted {
+			t.Errorf("%s should be muted when exclude is empty", b.Adapter)
+		}
+	}
+}
+
+func TestMuteAllExceptNonexistent(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq",
+		ChannelID: "ch-qq",
+	})
+
+	// Exclude a name that doesn't exist — qq should still be muted
+	count, err := mgr.MuteAllExcept("nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 muted, got %d", count)
+	}
+}

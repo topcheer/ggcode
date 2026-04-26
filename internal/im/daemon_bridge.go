@@ -717,19 +717,17 @@ func (b *DaemonBridge) handleMuteIM(adapterName string, msg InboundMessage) erro
 func (b *DaemonBridge) handleMuteAll(msg InboundMessage) error {
 	selfAdapter := msg.Envelope.Adapter
 
-	// Mute all, then unmute self
-	count, err := b.manager.MuteAll()
+	count, err := b.manager.MuteAllExcept(selfAdapter)
 	if err != nil {
-		b.emitter.EmitText(fmt.Sprintf("❌ Failed to mute all: %v", err))
+		b.emitter.EmitText(fmt.Sprintf("❌ Failed to mute adapters: %v", err))
 		return nil
 	}
 
-	// Unmute the sender's adapter so they can still receive replies
 	if selfAdapter != "" {
-		_ = b.manager.UnmuteBinding(selfAdapter)
+		b.emitter.EmitText(fmt.Sprintf("🔇 Muted %d adapter(s), keeping %s active", count, selfAdapter))
+	} else {
+		b.emitter.EmitText(fmt.Sprintf("🔇 Muted %d adapter(s)", count))
 	}
-
-	b.emitter.EmitText(fmt.Sprintf("🔇 Muted %d adapter(s) (keeping %s active)", count, selfAdapter))
 	return nil
 }
 
