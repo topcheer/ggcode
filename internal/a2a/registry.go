@@ -41,6 +41,7 @@ type Registry struct {
 	dir      string // ~/.ggcode/a2a/
 	selfID   string
 	selfInfo *InstanceInfo
+	mdnsSvc  *mdnsService // nil if LAN discovery is disabled
 }
 
 // NewRegistry creates or opens the local instance registry.
@@ -73,7 +74,40 @@ func (r *Registry) Unregister() error {
 }
 
 // Discover returns all running instances (excluding self).
+// Merges local file discovery with mDNS LAN discovery, deduplicating by ID.
 func (r *Registry) Discover() ([]InstanceInfo, error) {
+	// 1) Local file discovery
+	localInstances, err := r.discoverLocal()
+	if err != nil {
+		localInstances = nil // non-fatal
+	}
+
+	// 2) mDNS LAN discovery
+	var mdnsInstances []InstanceInfo
+	if r.mdnsSvc != nil {
+		mdnsInstances = r.mdnsSvc.lookup()
+	}
+
+	// 3) Merge with dedup by ID
+	seen := make(map[string]bool)
+	var result []InstanceInfo
+	for _, inst := range localInstances {
+		if !seen[inst.ID] {
+			seen[inst.ID] = true
+			result = append(result, inst)
+		}
+	}
+	for _, inst := range mdnsInstances {
+		if !seen[inst.ID] {
+			seen[inst.ID] = true
+			result = append(result, inst)
+		}
+	}
+	return result, nil
+}
+
+// discoverLocal reads the local file-based registry, pruning dead PIDs.
+func (r *Registry) discoverLocal() ([]InstanceInfo, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -93,8 +127,13 @@ func (r *Registry) Discover() ([]InstanceInfo, error) {
 			others = append(others, inst)
 		}
 	}
-
 	return others, nil
+}
+
+// EnableLANDiscovery enables mDNS broadcasting for this registry.
+// Must be called before Register.
+func (r *Registry) EnableLANDiscovery() {
+	r.mdnsSvc = newMDNSService()
 }
 
 // DiscoverByCapability returns instances whose metadata matches the given tag.

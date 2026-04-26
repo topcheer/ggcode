@@ -124,11 +124,17 @@ func (s *Server) Start() error {
 	s.port = ln.Addr().(*net.TCPAddr).Port
 
 	// Update the card URL with the actual port.
+	// Replace 0.0.0.0 with the preferred outbound IP for LAN reachability.
 	scheme := "http"
 	if s.tlsConfig != nil {
 		scheme = "https"
 	}
-	s.card.URL = fmt.Sprintf("%s://%s", scheme, ln.Addr().String())
+	addr := ln.Addr().String()
+	host, port, _ := net.SplitHostPort(addr)
+	if host == "0.0.0.0" || host == "::" {
+		host = PreferredIP()
+	}
+	s.card.URL = fmt.Sprintf("%s://%s:%s", scheme, host, port)
 
 	safego.Go("a2a.server.serve", func() {
 		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
