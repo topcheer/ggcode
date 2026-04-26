@@ -919,7 +919,19 @@ loop:
 			args = append(args, "--bypass")
 		}
 		execArgs := append([]string{binary}, args...)
-		fmt.Fprintf(os.Stderr, "[ggcode restart] exec %s\n", strings.Join(execArgs, " "))
+		debug.Log("daemon", "restart exec %s", strings.Join(execArgs, " "))
+		if runtime.GOOS == "windows" {
+			// Windows doesn't support syscall.Exec — start new process and exit.
+			restartCmd := exec.Command(binary, args...)
+			restartCmd.Stdin = os.Stdin
+			restartCmd.Stdout = os.Stdout
+			restartCmd.Stderr = os.Stderr
+			if err := restartCmd.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\n", err)
+				return nil
+			}
+			os.Exit(0)
+		}
 		return syscall.Exec(binary, execArgs, os.Environ())
 	}
 
