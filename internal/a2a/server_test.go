@@ -86,3 +86,25 @@ func TestAuthenticateSingleKey(t *testing.T) {
 		t.Error("wrong key should not authenticate")
 	}
 }
+
+func TestInstanceDisplayName(t *testing.T) {
+	tests := []struct {
+		endpoint  string
+		workspace string
+		expected  string
+	}{
+		{"127.0.0.1:12345", "/Users/dev/projects/order-service", "order-service:12345"},
+		{"127.0.0.1:54321", "/Users/dev/projects/order-service", "order-service:54321"},
+		{"10.0.0.1:8080", "/home/user/gateway", "gateway:8080"},
+		{"invalid", "/path/to/project", "project"},
+		{"", "/path/to/project", "project"},
+	}
+
+	for _, tt := range tests {
+		inst := InstanceInfo{Workspace: tt.workspace, Endpoint: tt.endpoint}
+		got := inst.DisplayName()
+		if got != tt.expected {
+			t.Errorf("DisplayName(%q, %q) = %q, want %q", tt.workspace, tt.endpoint, got, tt.expected)
+		}
+	}
+}
