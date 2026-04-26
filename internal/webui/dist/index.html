@@ -454,25 +454,35 @@ let imRuntime = [];
 function renderIM() {
   const im = config.im || {};
   const adapters = im.adapters || {};
-  const adapterNames = Object.keys(adapters);
-  // Merge runtime status
   const rtMap = {};
   imRuntime.forEach(r => rtMap[r.adapter] = r);
-  const allNames = new Set([...adapterNames, ...Object.keys(rtMap)]);
+
+  // All adapter names from config (primary source)
+  const allNames = Object.keys(adapters);
+  // Add runtime-only adapters not in config
+  Object.keys(rtMap).forEach(n => { if (!adapters[n]) allNames.push(n); });
+
   let adapterCards = '';
   for (const name of allNames) {
     const rt = rtMap[name];
     const cfg = adapters[name] || {};
+    const targets = cfg.targets || [];
+
+    // Determine status
     let statusBadge, dotClass;
     if (rt) {
       if (rt.disabled) { statusBadge = '<span class="badge badge-red">Disabled</span>'; dotClass = 'dot-red'; }
       else if (rt.muted) { statusBadge = '<span class="badge badge-yellow">Muted</span>'; dotClass = 'dot-yellow'; }
       else if (rt.healthy) { statusBadge = '<span class="badge badge-green">Active</span>'; dotClass = 'dot-green'; }
       else { statusBadge = '<span class="badge badge-red">Error</span>'; dotClass = 'dot-red'; }
+    } else if (cfg.enabled) {
+      statusBadge = '<span class="badge badge-yellow">Configured</span>'; dotClass = 'dot-yellow';
     } else {
-      statusBadge = '<span class="badge badge-yellow">Idle</span>'; dotClass = 'dot-yellow';
+      statusBadge = '<span class="badge badge-red">Disabled</span>'; dotClass = 'dot-red';
     }
     const platform = rt?.platform || cfg.platform || 'unknown';
+
+    // Action buttons
     let actionBtns = '';
     if (rt) {
       if (rt.disabled) actionBtns += `<button class="btn btn-sm btn-primary" onclick="imAction('${esc(name)}','enable')">Enable</button> `;
@@ -482,16 +492,19 @@ function renderIM() {
         else actionBtns += `<button class="btn btn-sm" onclick="imAction('${esc(name)}','mute')">Mute</button> `;
       }
     }
+
     adapterCards += `<div class="card">
       <div class="card-title"><span class="dot ${dotClass}"></span>${esc(name)} ${statusBadge} <span class="badge badge-yellow" style="font-size:10px">${esc(platform)}</span></div>
       <div class="table-wrap"><table>
         <tr><th style="width:120px">Setting</th><th>Value</th></tr>
+        ${cfg.transport ? `<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>` : ''}
+        ${cfg.command ? `<tr><td>Command</td><td class="mono">${esc(cfg.command)} ${(cfg.args||[]).map(a=>esc(a)).join(' ')}</td></tr>` : ''}
+        ${targets.length > 0 ? `<tr><td>Targets</td><td style="display:flex;flex-wrap:wrap;gap:4px">${targets.map(t => `<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>` : ''}
         ${rt?.bound_dir ? `<tr><td>Bound Dir</td><td class="mono">${esc(rt.bound_dir)}</td></tr>` : ''}
         ${rt?.channel_id ? `<tr><td>Channel</td><td class="mono">${esc(rt.channel_id)}</td></tr>` : ''}
-        ${rt?.status ? `<tr><td>Status</td><td class="mono">${esc(rt.status)}</td></tr>` : ''}
+        ${rt?.status ? `<tr><td>Runtime</td><td class="mono">${esc(rt.status)}</td></tr>` : ''}
         ${rt?.last_error ? `<tr><td>Error</td><td style="color:var(--red)">${esc(rt.last_error)}</td></tr>` : ''}
-        ${cfg.transport ? `<tr><td>Transport</td><td class="mono">${esc(cfg.transport)}</td></tr>` : ''}
-        ${(cfg.targets||[]).length > 0 ? `<tr><td>Targets</td><td>${cfg.targets.map(t => `<span class="badge badge-green" style="font-size:10px">${esc(t.label||t.id||t.channel)}</span>`).join(' ')}</td></tr>` : ''}
+        ${(cfg.allow_from||[]).length > 0 ? `<tr><td>Allow From</td><td>${cfg.allow_from.map(a => `<code>${esc(a)}</code>`).join(', ')}</td></tr>` : ''}
       </table></div>
       ${actionBtns ? `<div style="margin-top:8px;display:flex;gap:6px">${actionBtns}</div>` : ''}
     </div>`;
@@ -503,6 +516,7 @@ function renderIM() {
       <div class="table-wrap"><table>
         <tr><th style="width:120px">Setting</th><th>Value</th></tr>
         <tr><td>Streaming</td><td>${im.streaming?.enabled ? 'Enabled' : 'Disabled'}</td></tr>
+        <tr><td>Adapters</td><td>${allNames.length} configured</td></tr>
       </table></div>
     </div>
     ${adapterCards}`;
