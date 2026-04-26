@@ -170,9 +170,18 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       <div class="card" style="margin-top:16px">
         <div class="card-title">Add MCP Server</div>
         <div class="form-group"><label>Name</label><input id="mcp-name"></div>
-        <div class="form-group"><label>Type</label><select id="mcp-type"><option value="stdio">stdio</option><option value="http">http</option></select></div>
-        <div class="form-group"><label>Command</label><input id="mcp-command" placeholder="npx or command path"></div>
-        <div class="form-group"><label>Args (comma-separated)</label><input id="mcp-args" placeholder="-y, @modelcontextprotocol/server-filesystem"></div>
+        <div class="form-group"><label>Type</label><select id="mcp-type" onchange="toggleMCPFields()">
+          <option value="stdio">stdio (local process)</option>
+          <option value="http">http (remote server)</option>
+        </select></div>
+        <div id="mcp-stdio-fields">
+          <div class="form-group"><label>Command</label><input id="mcp-command" placeholder="npx or command path"></div>
+          <div class="form-group"><label>Args (comma-separated)</label><input id="mcp-args" placeholder="-y, @modelcontextprotocol/server-filesystem"></div>
+        </div>
+        <div id="mcp-http-fields" style="display:none">
+          <div class="form-group"><label>URL</label><input id="mcp-url" placeholder="http://localhost:3000/mcp"></div>
+          <div class="form-group"><label>Headers (Name: Value per line)</label><textarea id="mcp-headers" rows="3" placeholder="Authorization: Bearer token123&#10;X-Custom: value"></textarea></div>
+        </div>
         <div class="form-group"><label>Environment (KEY=VALUE per line)</label><textarea id="mcp-env" rows="3" placeholder="OPENAI_API_KEY=${OPENAI_API_KEY}&#10;NODE_ENV=production"></textarea></div>
         <button class="btn btn-primary" onclick="addMCPServer()">Add Server</button>
       </div>
@@ -246,6 +255,13 @@ function toast(msg, ok = true) {
 function esc(s) {
   if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// --- MCP form toggle ---
+function toggleMCPFields() {
+  const typ = document.getElementById('mcp-type').value;
+  document.getElementById('mcp-stdio-fields').style.display = typ === 'stdio' ? '' : 'none';
+  document.getElementById('mcp-http-fields').style.display = typ === 'http' ? '' : 'none';
 }
 
 // --- Load ---
@@ -379,29 +395,38 @@ function renderMCP() {
   }
   const html = servers.map(s => {
     const rt = s.runtime;
-    let statusBadge = '<span class="badge badge-yellow">Unknown</span>';
+    let statusBadge;
     if (rt) {
       if (rt.disabled) statusBadge = '<span class="badge badge-red">Disabled</span>';
       else if (rt.connected) statusBadge = '<span class="badge badge-green">Connected</span>';
       else if (rt.pending) statusBadge = '<span class="badge badge-yellow">Pending</span>';
       else if (rt.error) statusBadge = '<span class="badge badge-red">Error</span>';
+      else statusBadge = '<span class="badge badge-yellow">Idle</span>';
+    } else {
+      statusBadge = '<span class="badge badge-red">Not Running</span>';
     }
+    const typ = s.type || (s.url ? 'http' : 'stdio');
     const args = (s.args || []).map(a => `<code>${esc(a)}</code>`).join(' ');
     const envKeys = Object.keys(s.env || {});
     const envHtml = envKeys.length > 0
       ? envKeys.map(k => `<div class="mono" style="margin:2px 0">${esc(k)}=${s.env[k].startsWith('$') ? '<span style="color:var(--text2)">•••</span>' : esc(s.env[k])}</div>`).join('')
       : '';
+    const headerKeys = Object.keys(s.headers || {});
+    const headersHtml = headerKeys.length > 0
+      ? headerKeys.map(k => `<div class="mono" style="margin:2px 0">${esc(k)}: ${esc(s.headers[k])}</div>`).join('')
+      : '';
     const toolsHtml = rt && rt.tools && rt.tools.length > 0
       ? rt.tools.map(t => `<span class="badge badge-green" style="font-size:10px">${esc(t)}</span>`).join(' ')
       : '';
     return `<div class="card">
-      <div class="card-title">${esc(s.name)} ${statusBadge} <span class="badge badge-yellow" style="font-size:10px">${s.type || 'stdio'}</span></div>
+      <div class="card-title">${esc(s.name)} ${statusBadge} <span class="badge badge-yellow" style="font-size:10px">${esc(typ)}</span></div>
       <div class="table-wrap"><table>
         <tr><th style="width:120px">Setting</th><th>Value</th></tr>
         ${s.command ? `<tr><td>Command</td><td class="mono">${esc(s.command)}</td></tr>` : ''}
         ${args ? `<tr><td>Args</td><td>${args}</td></tr>` : ''}
         ${envHtml ? `<tr><td>Environment</td><td>${envHtml}</td></tr>` : ''}
         ${s.url ? `<tr><td>URL</td><td class="mono">${esc(s.url)}</td></tr>` : ''}
+        ${headersHtml ? `<tr><td>Headers</td><td>${headersHtml}</td></tr>` : ''}
         ${rt && rt.error ? `<tr><td>Error</td><td style="color:var(--red)">${esc(rt.error)}</td></tr>` : ''}
         ${toolsHtml ? `<tr><td>Tools</td><td style="display:flex;flex-wrap:wrap;gap:4px">${toolsHtml}</td></tr>` : ''}
       </table></div>
@@ -414,27 +439,43 @@ function renderMCP() {
 async function addMCPServer() {
   try {
     const name = document.getElementById('mcp-name').value.trim();
+    if (!name) { toast('Name is required', false); return; }
     const typ = document.getElementById('mcp-type').value;
-    const cmd = document.getElementById('mcp-command').value.trim();
-    const argsStr = document.getElementById('mcp-args').value.trim();
-    const args = argsStr ? argsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const server = { name, type: typ };
+    if (typ === 'stdio') {
+      const cmd = document.getElementById('mcp-command').value.trim();
+      if (!cmd) { toast('Command is required', false); return; }
+      server.command = cmd;
+      const argsStr = document.getElementById('mcp-args').value.trim();
+      server.args = argsStr ? argsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    } else {
+      const url = document.getElementById('mcp-url').value.trim();
+      if (!url) { toast('URL is required', false); return; }
+      server.url = url;
+      const hdrStr = document.getElementById('mcp-headers').value.trim();
+      if (hdrStr) {
+        server.headers = {};
+        hdrStr.split('\n').forEach(line => {
+          const idx = line.indexOf(':');
+          if (idx > 0) server.headers[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+        });
+      }
+    }
     const envStr = document.getElementById('mcp-env').value.trim();
-    const env = {};
     if (envStr) {
+      server.env = {};
       envStr.split('\n').forEach(line => {
         const idx = line.indexOf('=');
-        if (idx > 0) env[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+        if (idx > 0) server.env[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
       });
     }
-    const server = { name, type: typ };
-    if (typ === 'stdio') { server.command = cmd; server.args = args; }
-    else { server.url = cmd; }
-    if (Object.keys(env).length > 0) server.env = env;
     await api('/api/mcp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(server) });
     toast('MCP server added');
     document.getElementById('mcp-name').value = '';
     document.getElementById('mcp-command').value = '';
     document.getElementById('mcp-args').value = '';
+    document.getElementById('mcp-url').value = '';
+    document.getElementById('mcp-headers').value = '';
     document.getElementById('mcp-env').value = '';
     loadAll();
   } catch(e) { toast(e.message, false); }
