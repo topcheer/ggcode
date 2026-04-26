@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -88,6 +89,9 @@ type Model struct {
 	imEmitter                       *im.IMEmitter
 	instanceDetect                  *im.InstanceDetect
 	mcpServers                      []MCPInfo
+	a2aHandler                      *a2a.TaskHandler
+	a2aEventBuf                     []a2a.TaskEventMessage // recent events for display
+	a2aMu                           sync.Mutex
 	config                          *config.Config
 	language                        Language
 	startupVendor                   string
@@ -561,6 +565,22 @@ func (m *Model) closeActivePanel() bool {
 
 func (m *Model) SetMCPServers(servers []MCPInfo) {
 	m.mcpServers = servers
+}
+
+// SetA2AHandler connects the A2A task handler so the sidebar can show
+// active remote tasks and the event callback updates the TUI.
+func (m *Model) SetA2AHandler(h *a2a.TaskHandler) {
+	m.a2aHandler = h
+	if h != nil {
+		h.SetOnTaskEvent(func(msg a2a.TaskEventMessage) {
+			m.a2aMu.Lock()
+			m.a2aEventBuf = append(m.a2aEventBuf, msg)
+			if len(m.a2aEventBuf) > 20 {
+				m.a2aEventBuf = m.a2aEventBuf[len(m.a2aEventBuf)-20:]
+			}
+			m.a2aMu.Unlock()
+		})
+	}
 }
 
 func (m *Model) SetMCPManager(mgr mcpManager) {

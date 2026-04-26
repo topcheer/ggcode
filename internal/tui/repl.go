@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
@@ -65,6 +66,11 @@ func (r *REPL) SetSessionStore(s session.Store) {
 // SetMCPServers passes MCP server info to the TUI model.
 func (r *REPL) SetMCPServers(servers []MCPInfo) {
 	r.model.SetMCPServers(servers)
+}
+
+// SetA2AHandler passes the A2A task handler so the sidebar can show remote tasks.
+func (r *REPL) SetA2AHandler(h *a2a.TaskHandler) {
+	r.model.SetA2AHandler(h)
 }
 
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {

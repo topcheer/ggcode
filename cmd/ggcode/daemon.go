@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
@@ -588,7 +589,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Start A2A server if enabled.
 	if cfg.A2A.Enabled {
-		a2aSrv, a2aReg, err := startA2AServer(cfg, ag, registry, workingDir)
+		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
 		} else {
@@ -597,6 +598,16 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				a2aSrv.Stop()
 			}()
 			fmt.Fprintf(os.Stderr, "🔗 A2A server: %s\n", a2aSrv.Endpoint())
+
+			// Wire A2A task events to follow display + IM
+			if a2aHandler != nil {
+				a2aHandler.SetOnTaskEvent(func(msg a2a.TaskEventMessage) {
+					fmt.Fprintf(os.Stderr, "  %s\n", msg.Message)
+					if emitter != nil {
+						emitter.EmitText(msg.Message)
+					}
+				})
+			}
 		}
 	}
 
