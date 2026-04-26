@@ -224,6 +224,7 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
 // --- State ---
 let config = {};
 let vendors = {};
+let mcpServers = []; // loaded from /api/mcp with runtime status
 
 // --- API helpers ---
 async function api(path, opts) {
@@ -269,6 +270,7 @@ async function loadAll() {
   try {
     config = await api('/api/config');
     vendors = await api('/api/vendors');
+    try { mcpServers = await api('/api/mcp'); } catch(e) { mcpServers = []; }
     renderOverview();
     renderModel();
     renderVendors();
@@ -286,7 +288,7 @@ function renderOverview() {
   const c = config;
   const v = vendors.find(v => v.id === c.vendor);
   const hasKey = v && v.has_api_key;
-  const mcpCount = (c.mcp_servers || []).length;
+  const mcpCount = mcpServers.length;
   const imEnabled = c.im && c.im.enabled;
   document.getElementById('overview-content').innerHTML = `
     <div class="card">
@@ -388,7 +390,7 @@ function renderVendors() {
 
 // --- MCP ---
 function renderMCP() {
-  const servers = config.mcp_servers || [];
+  const servers = mcpServers;
   if (servers.length === 0) {
     document.getElementById('mcp-content').innerHTML = '<div class="card"><p style="color:var(--text2)">No MCP servers configured.</p></div>';
     return;
