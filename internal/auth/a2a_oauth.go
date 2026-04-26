@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -146,9 +148,28 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
 	}
 
+	// GitHub returns JSON when Accept header is set, otherwise returns URL-encoded
+	contentType := resp.Header.Get("Content-Type")
 	var raw map[string]interface{}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parse token response: %w", err)
+	if strings.Contains(contentType, "application/json") {
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, fmt.Errorf("parse token response: %w", err)
+		}
+	} else {
+		// Parse URL-encoded or try JSON anyway
+		if err := json.Unmarshal(body, &raw); err != nil {
+			// Try URL-encoded
+			vals, parseErr := url.ParseQuery(string(body))
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse token response: %w", err)
+			}
+			raw = make(map[string]interface{})
+			for k, v := range vals {
+				if len(v) > 0 {
+					raw[k] = v[0]
+				}
+			}
+		}
 	}
 
 	token := &PKCEToken{
@@ -371,10 +392,17 @@ func strVal(v interface{}) string {
 
 // openBrowser tries to open a URL in the default browser.
 func openBrowser(url string) {
-	// Best-effort; failure is non-fatal.
-	// The URL is already printed to stderr.
-	// On macOS: osascript or open
-	// On Linux: xdg-open
-	// On Windows: start
-	// We use a simple approach; full implementation would use exec.LookPath.
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	// Best-effort; failure is non-fatal — URL already printed to stderr.
+	_ = cmd.Start()
 }
