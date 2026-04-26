@@ -414,22 +414,21 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 			// Call async to avoid deadlock (callback may call back into handler).
 			go fn(msg)
 		}
+	}
 
-		// Fire push notification callbacks.
-		if pn := h.pushNotifier; pn != nil {
-			snapshot := t.Snapshot()
-			pn(t.ID, StreamResponse{
-				StatusUpdate: &TaskStatusUpdateEvent{
-					TaskID: t.ID,
-					Status: snapshot.Status,
-					Final:  state.IsTerminal(),
-				},
-			})
-		}
+	// Fire push notification callbacks (independent of onTaskEvent).
+	if pn := h.pushNotifier; pn != nil {
+		snapshot := t.Snapshot()
+		pn(t.ID, StreamResponse{
+			StatusUpdate: &TaskStatusUpdateEvent{
+				TaskID: t.ID,
+				Status: snapshot.Status,
+				Final:  state.IsTerminal(),
+			},
+		})
 	}
 }
 
-// SetPushNotifier installs the push notification callback (injected by Server).
 func (h *TaskHandler) SetPushNotifier(fn func(taskID string, payload StreamResponse)) {
 	h.mu.Lock()
 	h.pushNotifier = fn

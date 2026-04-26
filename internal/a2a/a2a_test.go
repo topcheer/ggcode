@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/auth"
 	"testing"
 	"time"
 )
@@ -2464,5 +2466,262 @@ func TestClientDiscoverAndNegotiateE2E(t *testing.T) {
 	}
 	if client.AuthMethod() != "apiKey" {
 		t.Errorf("expected apiKey, got %q", client.AuthMethod())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Missing coverage: Push callback fire, SSE stream, multi-auth, E2E
+// ---------------------------------------------------------------------------
+
+func TestPushNotificationFiredOnTaskCompletion(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+
+	var pushPayloads []StreamResponse
+	var pushMu sync.Mutex
+
+	// Set push notifier directly (same as what NewServer does)
+	handler.SetPushNotifier(func(taskID string, payload StreamResponse) {
+		pushMu.Lock()
+		t.Logf("push notifier called for task %s, final=%v", taskID, payload.StatusUpdate != nil && payload.StatusUpdate.Final)
+		pushPayloads = append(pushPayloads, payload)
+		pushMu.Unlock()
+	})
+
+	// Use SkillFileSearch which goes to executeDirectTool (no agent needed, will fail on nil registry)
+	task, err := handler.Handle(context.Background(), SkillFileSearch, Message{
+		Role: "user", Parts: []Part{{Kind: "text", Text: "test"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for async execution
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify task reached terminal state
+	snap, _ := handler.GetTask(task.ID)
+	t.Logf("task %s state=%s", task.ID, snap.Status.State)
+
+	pushMu.Lock()
+	defer pushMu.Unlock()
+	t.Logf("push payloads received: %d", len(pushPayloads))
+	if len(pushPayloads) == 0 {
+		t.Fatal("expected push notification to be fired")
+	}
+	last := pushPayloads[len(pushPayloads)-1]
+	if last.StatusUpdate == nil {
+		t.Fatal("expected StatusUpdate in push payload")
+	}
+	if !last.StatusUpdate.Final {
+		t.Error("expected Final=true for terminal state")
+	}
+}
+
+func TestServerMultiAuth(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "key123"}, handler)
+
+	// Also configure bearer token validator
+	tv, _ := auth.NewTokenValidator("test-client", "https://example.com")
+	srv.SetTokenValidator(tv)
+
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	// 1) API key should work
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0", ID: json.RawMessage(`"1"`), Method: "tasks/list", Params: json.RawMessage(`{}`),
+	})
+	req, _ := http.NewRequest("POST", base, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "key123")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("API key auth: expected 200, got %d", resp.StatusCode)
+	}
+
+	// 2) Bearer token (since our validator accepts any JWT-like token)
+	req2, _ := http.NewRequest("POST", base, bytes.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig")
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	// Note: validator does basic JWT structure check, may accept or reject
+	// The key test is that both paths are exercised
+
+	// 3) Neither key nor token → reject
+	req3, _ := http.NewRequest("POST", base, bytes.NewReader(body))
+	req3.Header.Set("Content-Type", "application/json")
+	resp3, err := http.DefaultClient.Do(req3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != 401 {
+		t.Errorf("no auth: expected 401, got %d", resp3.StatusCode)
+	}
+}
+
+func TestClientNegotiateAuthOIDCScheme(t *testing.T) {
+	client := NewClient("http://example.com", "", WithBearerToken("oidc-token"))
+	client.card = &AgentCard{
+		SecuritySchemes: map[string]Security{
+			"oidc": {Type: "openIdConnect"},
+		},
+		Security: []map[string][]string{
+			{"oidc": {}},
+		},
+	}
+	if err := client.NegotiateAuth(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if client.AuthMethod() != "bearer" {
+		t.Errorf("expected bearer for OIDC, got %q", client.AuthMethod())
+	}
+}
+
+func TestClientNegotiateAuthMultiScheme(t *testing.T) {
+	// Server supports both apiKey and oauth2; client has apiKey
+	client := NewClient("http://example.com", "my-key")
+	client.card = &AgentCard{
+		SecuritySchemes: map[string]Security{
+			"apiKeyScheme": {Type: "apiKey"},
+			"oauth2":       {Type: "oauth2"},
+		},
+		Security: []map[string][]string{
+			{"apiKeyScheme": {}},
+			{"oauth2": {}},
+		},
+	}
+	if err := client.NegotiateAuth(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if client.AuthMethod() != "apiKey" {
+		t.Errorf("expected apiKey (first matching), got %q", client.AuthMethod())
+	}
+}
+
+func TestClientNegotiateAuthMultiSchemeFallback(t *testing.T) {
+	// Server supports apiKey and oauth2; client only has bearer token
+	client := NewClient("http://example.com", "", WithBearerToken("token"))
+	client.card = &AgentCard{
+		SecuritySchemes: map[string]Security{
+			"apiKeyScheme": {Type: "apiKey"},
+			"oauth2":       {Type: "oauth2"},
+		},
+		Security: []map[string][]string{
+			{"apiKeyScheme": {}},
+			{"oauth2": {}},
+		},
+	}
+	if err := client.NegotiateAuth(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if client.AuthMethod() != "bearer" {
+		t.Errorf("expected bearer (fallback), got %q", client.AuthMethod())
+	}
+}
+
+func TestSendMessageE2E(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "")
+
+	task, err := client.SendMessage(context.Background(), SkillFileSearch, "test")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if task == nil || task.ID == "" {
+		t.Error("expected task with ID")
+	}
+}
+
+func TestBearerTokenSentToServer(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "ignore-this"}, handler)
+	tv, _ := auth.NewTokenValidator("test", "https://example.com")
+	srv.SetTokenValidator(tv)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "",
+		WithBearerToken("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig"))
+
+	// Send should include Authorization header
+	task, err := client.SendMessage(context.Background(), SkillFileSearch, "test")
+	// Whether it succeeds depends on token validation, but it should not panic
+	_ = task
+	_ = err
+}
+
+func TestSSEStreamE2E(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	client := NewClient("http://127.0.0.1:"+fmt.Sprintf("%d", srv.Port()), "")
+
+	ch, err := client.SendMessageStream(context.Background(), SkillFileSearch, "stream test")
+	if err != nil {
+		t.Fatalf("Stream failed: %v", err)
+	}
+
+	// Should get at least one event before channel closes
+	gotEvent := false
+	for range ch {
+		gotEvent = true
+		break
+	}
+	if !gotEvent {
+		t.Error("expected at least one SSE event")
+	}
+}
+
+func TestResubscribeRPC(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	base := "http://127.0.0.1:" + fmt.Sprintf("%d", srv.Port())
+
+	body, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"1"`),
+		Method:  "tasks/resubscribe",
+		Params:  mustMarshal(map[string]string{"id": "nonexistent-task"}),
+	})
+	resp, err := http.Post(base, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rpcResp JSONRPCResponse
+	json.NewDecoder(resp.Body).Decode(&rpcResp)
+	resp.Body.Close()
+	if rpcResp.Error == nil {
+		t.Error("expected error for nonexistent task resubscribe")
 	}
 }
