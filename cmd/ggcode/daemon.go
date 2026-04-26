@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -498,6 +500,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					if err == nil {
 						fmt.Fprintf(os.Stderr, "\x1b[33m\u2b21 MCP OAuth: %s\x1b[0m\r\n", serverName)
 						fmt.Fprintf(os.Stderr, "\x1b[36m  Device Code: %s\x1b[0m\r\n", devResp.UserCode)
+						writeClipboard(devResp.UserCode)
 						fmt.Fprintf(os.Stderr, "\x1b[36m  Visit: %s\x1b[0m\r\n", devResp.VerificationURI)
 						pollCtx, pollCancel := context.WithTimeout(context.Background(), 15*time.Minute)
 						defer pollCancel()
@@ -955,4 +958,28 @@ type daemonToolPresenter struct {
 func (p *daemonToolPresenter) Present(toolName, rawArgs string) (displayName, detail, activity string) {
 	pres := im.DescribeTool(p.lang, toolName, rawArgs)
 	return pres.DisplayName, pres.Detail, pres.Activity
+}
+
+// writeClipboard copies text to the system clipboard (best-effort).
+func writeClipboard(text string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbcopy")
+	case "linux":
+		if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--input")
+		} else if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd = exec.Command("wl-copy")
+		}
+	case "windows":
+		cmd = exec.Command("clip")
+	}
+	if cmd == nil {
+		return
+	}
+	cmd.Stdin = strings.NewReader(text)
+	_ = cmd.Run()
 }
