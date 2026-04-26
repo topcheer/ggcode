@@ -98,3 +98,46 @@ func TestIMSerialization(t *testing.T) {
 		t.Errorf("expected 1 adapter, got %d", len(adapters))
 	}
 }
+
+func TestA2ASerialization(t *testing.T) {
+	cfg := &config.Config{
+		Vendor:   "test",
+		Endpoint: "test-ep",
+	}
+	cfg.A2A.Disabled = false
+	cfg.A2A.Port = 0
+	cfg.A2A.Host = "127.0.0.1"
+	cfg.A2A.Auth.APIKey = "test-key"
+	cfg.A2A.Auth.OAuth2 = &config.A2AOAuth2Config{
+		Provider: "github",
+		Flow:     "pkce",
+	}
+
+	s := NewServer(cfg)
+	// Test GET
+	req := httptest.NewRequest(http.MethodGet, "/api/a2a", nil)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["disabled"] == true {
+		t.Error("A2A should be enabled")
+	}
+	auth := result["auth"].(map[string]interface{})
+	if auth["has_api_key"] != true {
+		t.Error("should have API key")
+	}
+	oauth2 := auth["oauth2"].(map[string]interface{})
+	if oauth2["provider"] != "github" {
+		t.Error("oauth2 provider should be github")
+	}
+	if oauth2["has_secret"] == true {
+		t.Error("oauth2 should not have secret")
+	}
+	t.Logf("A2A response: %+v", result)
+}
