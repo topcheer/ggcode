@@ -92,8 +92,11 @@ func (m *mdnsService) startAvahi(name string, port int, txt []string) error {
 	args = append(args, txt...)
 
 	cmd := exec.Command(avahiPath, args...)
-	cmd.Stdout = os.Stderr // pipe output to log
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
+	// Put avahi-publish in its own process group so we can kill it
+	// reliably even if the parent ggcode is killed with SIGKILL.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("avahi-publish start: %w", err)
 	}
@@ -153,8 +156,8 @@ func (m *mdnsService) startHashicorp(name string, port int, txt []string) error 
 // stop shuts down the mDNS server and/or avahi-publish subprocess.
 func (m *mdnsService) stop() {
 	if m.avahiCmd != nil && m.avahiCmd.Process != nil {
-		m.avahiCmd.Process.Signal(os.Interrupt)
-		// Don't wait — just let it die.
+		// Kill the entire process group (avahi-publish + children).
+		syscall.Kill(-m.avahiCmd.Process.Pid, syscall.SIGTERM)
 		m.avahiCmd = nil
 	}
 	if m.mdnsServer != nil {
