@@ -71,7 +71,8 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 
 			// If --__daemonized, skip fork logic — we ARE the daemonized child
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
-				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true)
+				noIM, _ := cmd.Flags().GetBool("__no-im")
+				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM)
 			}
 
 			// If --background, fork and exit parent
@@ -80,7 +81,8 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			}
 
 			// Normal foreground start
-			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false)
+			noIM, _ := cmd.Flags().GetBool("__no-im")
+			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM)
 		},
 	}
 
@@ -90,7 +92,9 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID; use --resume-picker for interactive selection")
 	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
 	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
+	cmd.Flags().Bool("__no-im", false, "internal: skip IM binding check (A2A-only testing)")
 	_ = cmd.Flags().MarkHidden("__daemonized")
+	_ = cmd.Flags().MarkHidden("__no-im")
 	cmd.MarkFlagsMutuallyExclusive("follow", "background")
 	cmd.MarkFlagsMutuallyExclusive("resume", "resume-picker")
 	return cmd
@@ -114,7 +118,7 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	return nil
 }
 
-func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool) error {
+func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
 	resolved, err := cfg.ResolveActiveEndpoint()
@@ -328,7 +332,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 	if !hasActiveBinding {
-		return fmt.Errorf("%s", daemon.Tr(daemon.ResolveLang(cfg.Language), "daemon.no_binding"))
+		if noIM {
+			fmt.Fprintf(os.Stderr, "⚠️  %s\n", daemon.Tr(daemon.ResolveLang(cfg.Language), "daemon.no_binding"))
+		} else {
+			return fmt.Errorf("%s", daemon.Tr(daemon.ResolveLang(cfg.Language), "daemon.no_binding"))
+		}
 	}
 
 	pairingPath, err := im.DefaultPairingStatePath()
