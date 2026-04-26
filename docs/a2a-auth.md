@@ -77,7 +77,7 @@ a2a:
 
 ### Configuration
 
-**Using a built-in provider preset** (endpoint URLs auto-populated):
+**Zero-config (GitHub only — client_id built-in):**
 
 ```yaml
 # ggcode.yaml
@@ -85,8 +85,19 @@ a2a:
   enabled: true
   auth:
     oauth2:
-      provider: "github"                             # auto-fills endpoint URLs
-      client_id: "Ov23li-your-registered-app-id"    # YOUR registered OAuth App ID
+      provider: "github"   # client_id auto-filled, just works
+```
+
+**Using a built-in provider preset with custom client_id:**
+
+```yaml
+# ggcode.yaml
+a2a:
+  enabled: true
+  auth:
+    oauth2:
+      provider: "github"
+      client_id: "Ov23li-your-registered-app-id"    # overrides default
       scopes: "read:user user:email"                 # optional, defaults from preset
 ```
 
@@ -103,9 +114,9 @@ a2a:
       scopes: "openid profile email"
 ```
 
-> **Important:** `client_id` must be obtained by registering an OAuth App with
-> the provider. It is PUBLIC (not a secret), but each registration is tied to
-> specific redirect URIs. ggcode uses PKCE so no `client_secret` is needed.
+> **Note:** GitHub has a built-in public client_id (PKCE-only, no secret).
+> Just set `provider: "github"` for instant zero-config. Other providers
+> require you to register an OAuth App and provide the client_id.
 
 ### Available Provider Presets
 
