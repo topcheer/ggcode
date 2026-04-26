@@ -3,6 +3,7 @@ package a2a
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,17 @@ type InstanceInfo struct {
 	Endpoint     string `json:"endpoint"`
 	AgentCardURL string `json:"agent_card_url"`
 	Status       string `json:"status"` // "ready", "busy", "stopping"
+}
+
+// DisplayName returns a human-readable identifier: "workspace-name:port".
+// Two instances in the same directory are distinguished by port.
+func (i InstanceInfo) DisplayName() string {
+	name := filepath.Base(i.Workspace)
+	_, port, err := net.SplitHostPort(i.Endpoint)
+	if err != nil {
+		return name
+	}
+	return name + ":" + port
 }
 
 // Registry manages local A2A instance discovery via a shared JSON file.

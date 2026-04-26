@@ -130,8 +130,7 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d ggcode instance(s):\n\n", len(instances)))
 	for _, inst := range instances {
-		name := filepath.Base(inst.Workspace)
-		sb.WriteString(fmt.Sprintf("• %s\n", name))
+		sb.WriteString(fmt.Sprintf("• %s\n", inst.DisplayName()))
 		sb.WriteString(fmt.Sprintf("  Workspace: %s\n", inst.Workspace))
 		sb.WriteString(fmt.Sprintf("  Endpoint: %s\n", inst.Endpoint))
 		sb.WriteString(fmt.Sprintf("  Status: %s\n", inst.Status))
@@ -140,7 +139,11 @@ func (t *RemoteTool) listInstances(ctx context.Context) (tool.Result, error) {
 	return tool.Result{Content: sb.String()}, nil
 }
 
-// findInstance locates an instance by name (partial match on workspace basename).
+// findInstance locates an instance by name or name:port.
+// Matching priority:
+//  1. Exact "name:port" match on DisplayName
+//  2. Exact name match on workspace basename
+//  3. Partial (contains) match on workspace basename
 func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 	instances, err := t.discover()
 	if err != nil {
@@ -151,10 +154,37 @@ func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 	}
 
 	target = strings.ToLower(target)
+
+	// 1) Exact name:port match
+	for i := range instances {
+		if strings.ToLower(instances[i].DisplayName()) == target {
+			return &instances[i], nil
+		}
+	}
+
+	// 2) Exact basename match
+	var exactMatches []InstanceInfo
+	for _, inst := range instances {
+		if strings.ToLower(filepath.Base(inst.Workspace)) == target {
+			exactMatches = append(exactMatches, inst)
+		}
+	}
+	if len(exactMatches) == 1 {
+		return &exactMatches[0], nil
+	}
+	if len(exactMatches) > 1 {
+		var names []string
+		for _, inst := range exactMatches {
+			names = append(names, inst.DisplayName())
+		}
+		return nil, fmt.Errorf("ambiguous match %q: multiple instances (%s). Use name:port to disambiguate.", target, strings.Join(names, ", "))
+	}
+
+	// 3) Partial (contains) match
 	var matches []InstanceInfo
 	for _, inst := range instances {
 		name := strings.ToLower(filepath.Base(inst.Workspace))
-		if name == target || strings.Contains(name, target) {
+		if strings.Contains(name, target) {
 			matches = append(matches, inst)
 		}
 	}
@@ -162,16 +192,16 @@ func (t *RemoteTool) findInstance(target string) (*InstanceInfo, error) {
 	if len(matches) == 0 {
 		var names []string
 		for _, inst := range instances {
-			names = append(names, filepath.Base(inst.Workspace))
+			names = append(names, inst.DisplayName())
 		}
 		return nil, fmt.Errorf("no instance matching %q found. Available: %s", target, strings.Join(names, ", "))
 	}
 	if len(matches) > 1 {
 		var names []string
 		for _, inst := range matches {
-			names = append(names, filepath.Base(inst.Workspace))
+			names = append(names, inst.DisplayName())
 		}
-		return nil, fmt.Errorf("ambiguous match for %q: multiple instances (%s). Specify a more precise workspace name.", target, strings.Join(names, ", "))
+		return nil, fmt.Errorf("ambiguous match %q: multiple instances (%s). Use name:port to disambiguate.", target, strings.Join(names, ", "))
 	}
 	return &matches[0], nil
 }
