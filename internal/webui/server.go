@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -52,6 +53,7 @@ type Server struct {
 	mcpStatusFn MCPStatusFunc
 	imStatusFn  IMStatusFunc
 	imActionFn  IMActionFunc
+	restartFn   func() // called when user triggers restart from WebUI
 	mu          sync.RWMutex
 	addr        string
 	listener    net.Listener
@@ -71,6 +73,11 @@ func (s *Server) SetIMStatusFn(fn IMStatusFunc) {
 // SetIMActionFn sets the IM action handler.
 func (s *Server) SetIMActionFn(fn IMActionFunc) {
 	s.imActionFn = fn
+}
+
+// SetRestartFn sets the restart callback (triggers process self-restart).
+func (s *Server) SetRestartFn(fn func()) {
+	s.restartFn = fn
 }
 
 // NewServer creates a WebUI server bound to the given config.
@@ -137,6 +144,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/im/adapters/", s.handleIMAdapterDetail)
 	s.mux.HandleFunc("/api/general", s.handleGeneral)
 	s.mux.HandleFunc("/api/impersonate", s.handleImpersonate)
+	s.mux.HandleFunc("/api/restart", s.handleRestart)
 }
 
 // --- Static SPA ---
@@ -806,6 +814,22 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// POST /api/restart — trigger application restart
+func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "restarting"})
+	// Trigger async so the response can be sent first
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if s.restartFn != nil {
+			s.restartFn()
+		}
+	}()
 }
 
 // --- Helpers ---

@@ -124,6 +124,10 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       <div class="nav-item" data-page="prompt" onclick="showPage('prompt')">
         <span class="nav-icon">&#9997;</span><span>System Prompt</span>
       </div>
+      <div style="flex:1"></div>
+      <div style="padding:8px 4px">
+        <button class="btn btn-danger" style="width:100%" onclick="triggerRestart()">&#x21bb; Restart</button>
+      </div>
     </div>
   </div>
   <div class="main">
@@ -1188,6 +1192,19 @@ async function resetSystemPrompt() {
 
 // --- Init ---
 loadAll();
+
+async function triggerRestart() {
+  if (!confirm('Restart ggcode? This will close the WebUI and restart the daemon process.')) return;
+  try {
+    await api('/api/restart', {method: 'POST'});
+    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#666"><div style="text-align:center"><h2>Restarting...</h2><p>ggcode is restarting. This window will close in a moment.</p></div></div>';
+    setTimeout(() => window.close(), 3000);
+  } catch(e) {
+    // Server shut down before response — that's expected
+    document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#666"><div style="text-align:center"><h2>Restarting...</h2><p>ggcode is restarting. This window will close in a moment.</p></div></div>';
+    setTimeout(() => window.close(), 3000);
+  }
+}
 </script>
 </body>
 </html>

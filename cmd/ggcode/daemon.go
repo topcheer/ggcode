@@ -742,6 +742,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("unknown action: %s", action)
 		}
 	})
+	var daemonRestartRequested bool
+	webuiSrv.SetRestartFn(func() {
+		daemonRestartRequested = true
+		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+	})
 	webuiAddr := "127.0.0.1:0" // auto port
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
 	if webuiErr == nil {
@@ -764,8 +769,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Register PID file for cleanup
 	defer daemon.CleanupDaemon(workingDir)
-
-	var daemonRestartRequested bool
 
 	// Main loop
 loop:
