@@ -91,7 +91,7 @@ type Model struct {
 	mcpServers                      []MCPInfo
 	a2aHandler                      *a2a.TaskHandler
 	a2aEventBuf                     []a2a.TaskEventMessage // recent events for display
-	a2aMu                           sync.Mutex
+	a2aMu                           *sync.Mutex
 	config                          *config.Config
 	language                        Language
 	startupVendor                   string
@@ -365,6 +365,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		urlOpener:            openSystemURL,
 		pending:              &pendingQueue{},
 		sessionMu:            &sync.Mutex{},
+		a2aMu:                &sync.Mutex{},
 	}
 }
 

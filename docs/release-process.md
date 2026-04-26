@@ -350,12 +350,19 @@ Use this checklist for every real release:
 9. Commit `release: vX.Y.Z`.
 10. Push `main`.
 11. Create and push tag `vX.Y.Z`.
-12. Monitor GitHub Actions:
-    - `Release`
+12. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**:
+    - `Release` (verify → release → smoke tests → macos-pkg → windows-msi → publish-site-release-branch)
+    - `CI` (build → vet → test)
     - `npm`
     - `Publish PyPI`
-13. Confirm the release assets exist on GitHub.
-14. Confirm `https://ggcode.dev/downloads/latest/manifest.json` reflects the new tag.
+    - `CodeQL` (security scan)
+13. If any workflow fails:
+    - `gh run view <run-id> --log-failed` to identify root cause
+    - Fix the issue locally, commit, push to `main`
+    - **Delete the tag** (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`) and **re-tag** on the fix commit
+    - Re-monitor all workflows from step 12
+14. Confirm the release assets exist on GitHub (`gh release view vX.Y.Z`).
+15. Confirm `https://ggcode.dev/downloads/latest/manifest.json` reflects the new tag.
 
 ## 11. Recommended monitoring commands
 
@@ -427,6 +434,35 @@ Cause:
 Fix:
 
 - the safest path is usually a follow-up patch release with a new tag
+
+### 12.5 CI or Release workflow fails on pre-existing vet/lint issues
+
+Symptom:
+
+- `go vet ./...` fails on `sync.Mutex` copy-by-value or similar pre-existing warnings
+- Release workflow's "Verify release inputs" step fails even though your code is clean
+
+Cause:
+
+- pre-existing issues in the codebase that CI's `go vet ./...` catches
+
+Fix:
+
+- fix the root cause (e.g. change `sync.Mutex` value fields to `*sync.Mutex` pointers)
+- commit the fix, push to `main`
+- delete and re-create the tag on the fix commit:
+
+```bash
+# Remove old tag locally and remotely
+git tag -d vX.Y.Z
+git push origin :refs/tags/vX.Y.Z
+
+# Re-tag on the fix commit
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+- re-monitor all workflows until every one reaches `completed` / `success`
 
 ## 13. Manual packaging runs
 
