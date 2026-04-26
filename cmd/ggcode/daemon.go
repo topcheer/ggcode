@@ -574,7 +574,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	bridge.SetActivityHook(knightAgent.NotifyActivity)
 	bridge.SetRestartHook(func() {
 		daemonRestartRequested = true
-		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+		selfSignal(syscall.SIGTERM)
 	})
 	if cfg.Knight().Enabled {
 		// Create Knight emitter (reuse IM emitter)
@@ -765,7 +765,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	webuiSrv.SetRestartFn(func() {
 		daemonRestartRequested = true
-		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+		selfSignal(syscall.SIGTERM)
 	})
 	webuiAddr := "127.0.0.1:0" // auto port
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
