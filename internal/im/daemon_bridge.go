@@ -620,7 +620,7 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 		onRestart := b.onRestart
 		b.mu.Unlock()
 		if onRestart != nil {
-			b.emitter.EmitText("Restarting daemon...")
+			b.emitter.EmitText("🔄 Restarting daemon...")
 			go func() {
 				time.Sleep(1 * time.Second)
 				onRestart()
@@ -629,12 +629,127 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 		}
 		return fmt.Errorf("restart not available")
 
+	case "/listim":
+		return b.handleListIM()
+
+	case "/muteim":
+		if len(parts) < 2 {
+			b.emitter.EmitText("Usage: /muteim <adapter_name>\nUse /listim to see adapter names.")
+			return nil
+		}
+		return b.handleMuteIM(parts[1], msg)
+
+	case "/muteall":
+		return b.handleMuteAll(msg)
+
+	case "/muteself":
+		return b.handleMuteSelf(msg)
+
 	case "/help":
-		b.emitter.EmitText("Available commands:\n/restart - Restart daemon\n/help - Show this help")
+		b.emitter.EmitText("Available commands:\n" +
+			"/listim - List IM adapters and their status\n" +
+			"/muteim <name> - Mute a specific adapter\n" +
+			"/muteall - Mute all adapters except the one you're using\n" +
+			"/muteself - Mute THIS adapter (⚠️ you'll stop receiving replies; use /restart from another adapter to recover)\n" +
+			"/restart - Restart daemon (unmutes all adapters)\n" +
+			"/help - Show this help")
 		return nil
 
 	default:
 		b.emitter.EmitText("Unknown command: " + cmd + ". Try /help")
 		return nil
 	}
+}
+
+func (b *DaemonBridge) handleListIM() error {
+	snapshot := b.manager.Snapshot()
+
+	if len(snapshot.Adapters) == 0 {
+		b.emitter.EmitText("📭 No IM adapters configured.")
+		return nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📬 IM Adapters:\n")
+
+	for _, a := range snapshot.Adapters {
+		status := "✅ online"
+		if !a.Healthy {
+			status = "❌ " + a.Status
+		}
+
+		// Check if bound
+		bound := ""
+		for _, binding := range snapshot.CurrentBindings {
+			if binding.Adapter == a.Name {
+				if binding.Muted {
+					bound = " 🔇 muted"
+				} else {
+					bound = " 📡 active"
+				}
+				break
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("  • %s [%s]%s %s\n", a.Name, a.Platform, bound, status))
+	}
+
+	b.emitter.EmitText(sb.String())
+	return nil
+}
+
+func (b *DaemonBridge) handleMuteIM(adapterName string, msg InboundMessage) error {
+	selfAdapter := msg.Envelope.Adapter
+	if adapterName == selfAdapter {
+		b.emitter.EmitText("⚠️ Cannot mute yourself with /muteim. Use /muteself instead.")
+		return nil
+	}
+
+	if err := b.manager.MuteBinding(adapterName); err != nil {
+		b.emitter.EmitText(fmt.Sprintf("❌ Failed to mute %s: %v", adapterName, err))
+		return nil
+	}
+
+	b.emitter.EmitText(fmt.Sprintf("🔇 Muted adapter: %s", adapterName))
+	return nil
+}
+
+func (b *DaemonBridge) handleMuteAll(msg InboundMessage) error {
+	selfAdapter := msg.Envelope.Adapter
+
+	// Mute all, then unmute self
+	count, err := b.manager.MuteAll()
+	if err != nil {
+		b.emitter.EmitText(fmt.Sprintf("❌ Failed to mute all: %v", err))
+		return nil
+	}
+
+	// Unmute the sender's adapter so they can still receive replies
+	if selfAdapter != "" {
+		_ = b.manager.UnmuteBinding(selfAdapter)
+	}
+
+	b.emitter.EmitText(fmt.Sprintf("🔇 Muted %d adapter(s) (keeping %s active)", count, selfAdapter))
+	return nil
+}
+
+func (b *DaemonBridge) handleMuteSelf(msg InboundMessage) error {
+	selfAdapter := msg.Envelope.Adapter
+	if selfAdapter == "" {
+		b.emitter.EmitText("❌ Cannot determine your adapter name.")
+		return nil
+	}
+
+	// Emit warning FIRST (before muting, so the message actually gets delivered)
+	b.emitter.EmitText(fmt.Sprintf(
+		"🔇 Muting adapter %s. You will NOT receive any more replies.\n"+
+			"💡 Use /restart from another adapter to recover.",
+		selfAdapter,
+	))
+
+	// Small delay to ensure the message is sent before we disconnect
+	time.Sleep(500 * time.Millisecond)
+
+	b.manager.MuteBinding(selfAdapter)
+	return nil
 }
