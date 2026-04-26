@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -20,6 +21,7 @@ func MCPBridgeTools(client *Client) []tool.Tool {
 		&a2aDiscoverTool{client: client},
 		&a2aSendTaskTool{client: client},
 		&a2aGetTaskTool{client: client},
+		&a2aListTasksTool{client: client},
 		&a2aCancelTaskTool{client: client},
 	}
 }
@@ -177,6 +179,66 @@ func (t *a2aGetTaskTool) Execute(ctx context.Context, input json.RawMessage) (to
 	}
 
 	return tool.Result{Content: formatTaskResult(task)}, nil
+}
+
+// ---------------------------------------------------------------------------
+// a2a_list_tasks tool
+// ---------------------------------------------------------------------------
+
+type a2aListTasksTool struct {
+	client *Client
+}
+
+func (t *a2aListTasksTool) Name() string { return "a2a_list_tasks" }
+
+func (t *a2aListTasksTool) Description() string {
+	return "List tasks on a remote ggcode agent with cursor pagination."
+}
+
+func (t *a2aListTasksTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"page_token": {
+					"type": "string",
+					"description": "Opaque cursor from a previous response"
+				},
+				"page_size": {
+					"type": "integer",
+					"description": "Max tasks per page (default 50, max 100)"
+				}
+			},
+			"required": []
+		}`)
+}
+
+func (t *a2aListTasksTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	var params struct {
+		PageToken string `json:"page_token"`
+		PageSize  int    `json:"page_size"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return tool.Result{Content: fmt.Sprintf("Invalid input: %v", err), IsError: true}, nil
+	}
+
+	result, err := t.client.ListTasks(ctx, params.PageToken, params.PageSize)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("List failed: %v", err), IsError: true}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Tasks (%d", len(result.Tasks)))
+	if result.NextToken != "" {
+		sb.WriteString(", more available")
+	}
+	sb.WriteString("):\n")
+	for _, t := range result.Tasks {
+		sb.WriteString(fmt.Sprintf("- %s [%s] skill=%s\n", t.ID, t.Status.State, t.Skill))
+	}
+	if result.NextToken != "" {
+		sb.WriteString(fmt.Sprintf("\nnext_page_token: %s", result.NextToken))
+	}
+	return tool.Result{Content: sb.String()}, nil
 }
 
 // ---------------------------------------------------------------------------

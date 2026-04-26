@@ -128,8 +128,8 @@ func TestTaskStatusSerialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Per A2A spec, status must be {"state": "working"}, not bare "working".
-	if !containsStr(string(data), `"status":{"state":"working"}`) {
-		t.Errorf("expected status as object, got: %s", string(data))
+	if !containsStr(string(data), `"status":{"state":"working","timestamp"`) {
+		t.Errorf("expected status as object with state and timestamp, got: %s", string(data))
 	}
 }
 
@@ -590,13 +590,14 @@ func TestWorkspaceMetadata(t *testing.T) {
 func TestMCPBridgeToolsCount(t *testing.T) {
 	client := NewClient("http://localhost:9999", "")
 	tools := MCPBridgeTools(client)
-	if len(tools) != 4 {
-		t.Fatalf("expected 4 MCP bridge tools, got %d", len(tools))
+	if len(tools) != 5 {
+		t.Fatalf("expected 5 MCP bridge tools, got %d", len(tools))
 	}
 
 	expected := map[string]bool{
 		"a2a_discover":    false,
 		"a2a_send_task":   false,
+		"a2a_list_tasks":  false,
 		"a2a_get_task":    false,
 		"a2a_cancel_task": false,
 	}
