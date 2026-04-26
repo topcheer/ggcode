@@ -67,8 +67,8 @@ type AgentCard struct {
 	Version            string                `json:"version,omitempty"`
 	Provider           *AgentProvider        `json:"provider,omitempty"`
 	Capabilities       AgentCapabilities     `json:"capabilities"`
-	SecuritySchemes    map[string]Security   `json:"securitySchemes,omitempty"`
-	Security           []map[string][]string `json:"security,omitempty"`
+	SecuritySchemes    map[string]Security   `json:"securitySchemes,omitempty"` // deprecated, kept for compat
+	Security           []map[string][]string `json:"security,omitempty"`        // security requirements
 	DefaultInputModes  []string              `json:"defaultInputModes"`
 	DefaultOutputModes []string              `json:"defaultOutputModes"`
 	Skills             []Skill               `json:"skills"`
@@ -114,7 +114,67 @@ type Skill struct {
 	Examples    []string `json:"examples,omitempty"`
 }
 
+// ---------------------------------------------------------------------------
+// Security Schemes (A2A Spec Section 4.5)
+// ---------------------------------------------------------------------------
+
+// SecurityScheme is the OneOf type for all supported authentication schemes.
+// Exactly one of the embedded scheme fields should be set.
+type SecurityScheme struct {
+	// Common fields
+	Type        string `json:"type"` // "apiKey", "http", "oauth2", "openIdConnect", "mutualTLS"
+	Description string `json:"description,omitempty"`
+
+	// APIKey scheme fields
+	In   string `json:"in,omitempty"`   // "header" or "query"
+	Name string `json:"name,omitempty"` // header/query parameter name
+
+	// HTTP Auth scheme fields (Bearer, Basic)
+	Scheme string `json:"scheme,omitempty"` // "bearer" or "basic"
+
+	// OAuth2 scheme fields
+	Flows *OAuthFlows `json:"flows,omitempty"`
+
+	// OpenID Connect scheme fields
+	OpenIDConnectURL string `json:"openIdConnectUrl,omitempty"`
+
+	// MutualTLS — no additional fields (cert-based)
+}
+
+// OAuthFlows contains the supported OAuth2 grant types.
+type OAuthFlows struct {
+	AuthorizationCode *OAuthFlowAuthorizationCode `json:"authorizationCode,omitempty"`
+	ClientCredentials *OAuthFlowClientCredentials `json:"clientCredentials,omitempty"`
+	DeviceCode        *OAuthFlowDeviceCode        `json:"deviceCode,omitempty"`
+}
+
+// OAuthFlowAuthorizationCode is the Authorization Code + PKCE flow.
+// No client_secret required for public clients.
+type OAuthFlowAuthorizationCode struct {
+	AuthorizationURL string            `json:"authorizationUrl"`
+	TokenURL         string            `json:"tokenUrl"`
+	RefreshURL       string            `json:"refreshUrl,omitempty"`
+	Scopes           map[string]string `json:"scopes"`
+}
+
+// OAuthFlowClientCredentials is the machine-to-machine flow.
+// Requires client_id + client_secret (user-configured, not hardcoded).
+type OAuthFlowClientCredentials struct {
+	TokenURL string            `json:"tokenUrl"`
+	Scopes   map[string]string `json:"scopes"`
+}
+
+// OAuthFlowDeviceCode is the device authorization flow.
+// No client_secret required. Ideal for headless/CLI environments.
+type OAuthFlowDeviceCode struct {
+	DeviceAuthorizationURL string            `json:"deviceAuthorizationUrl"`
+	TokenURL               string            `json:"tokenUrl"`
+	RefreshURL             string            `json:"refreshUrl,omitempty"`
+	Scopes                 map[string]string `json:"scopes"`
+}
+
 // Security describes a security scheme (API Key only for now).
+// Deprecated: Use SecurityScheme instead. Kept for backward compat.
 type Security struct {
 	Type        string `json:"type"`               // "apiKey"
 	Location    string `json:"location,omitempty"` // "header"

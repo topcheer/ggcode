@@ -9,24 +9,28 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
 type Server struct {
-	handler      *TaskHandler
-	card         AgentCard
-	extendedCard json.RawMessage // optional extended agent card
-	apiKey       string
-	server       *http.Server
-	port         int
-	done         chan struct{}
-	pushConfigs  map[string]PushNotificationConfig // by ID
-	pushMu       sync.RWMutex
+	handler        *TaskHandler
+	card           AgentCard
+	extendedCard   json.RawMessage // optional extended agent card
+	apiKey         string
+	server         *http.Server
+	port           int
+	done           chan struct{}
+	pushConfigs    map[string]PushNotificationConfig // by ID
+	pushMu         sync.RWMutex
+	tokenValidator *auth.TokenValidator // OAuth2/OIDC token validation
+	mtlsEnabled    bool
 }
 
 // ServerConfig holds A2A server configuration.
@@ -206,14 +210,38 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authenticate(r *http.Request) bool {
-	if s.apiKey == "" {
-		return true // no auth required
+	// 1) API Key
+	if s.apiKey != "" {
+		if provided := r.Header.Get("X-API-Key"); provided != "" {
+			return subtle.ConstantTimeCompare([]byte(provided), []byte(s.apiKey)) == 1
+		}
 	}
-	provided := r.Header.Get("X-API-Key")
-	if provided == "" {
+
+	// 2) Bearer token (OAuth2 / OIDC)
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if s.tokenValidator != nil {
+			_, err := s.tokenValidator.ValidateToken(r.Context(), token)
+			return err == nil
+		}
+		// No validator configured → reject
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(s.apiKey)) == 1
+
+	// 3) mTLS — client certificate verified at TLS handshake level
+	if s.mtlsEnabled {
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			return true
+		}
+		return false
+	}
+
+	// 4) No auth configured at all → allow
+	if s.apiKey == "" && s.tokenValidator == nil && !s.mtlsEnabled {
+		return true
+	}
+
+	return false
 }
 
 func (s *Server) routeRPC(w http.ResponseWriter, r *http.Request, req *JSONRPCRequest) {
@@ -622,6 +650,17 @@ func (s *Server) SetExtendedCard(card json.RawMessage) {
 	if len(card) > 0 {
 		s.card.Capabilities.ExtendedAgentCard = true
 	}
+}
+
+// SetTokenValidator installs an OAuth2/OIDC token validator.
+func (s *Server) SetTokenValidator(v *auth.TokenValidator) {
+	s.tokenValidator = v
+}
+
+// SetMTLSEnabled marks the server as using mutual TLS.
+// Actual TLS config is handled by the http.Server.
+func (s *Server) SetMTLSEnabled(enabled bool) {
+	s.mtlsEnabled = enabled
 }
 
 // SetHandler connects the TaskHandler and wires push notifications.

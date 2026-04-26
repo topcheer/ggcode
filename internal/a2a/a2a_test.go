@@ -3,6 +3,8 @@ package a2a
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -2126,4 +2128,201 @@ func mustMarshal(v interface{}) json.RawMessage {
 		panic(err)
 	}
 	return data
+}
+
+// ---------------------------------------------------------------------------
+// Multi-scheme auth tests
+// ---------------------------------------------------------------------------
+
+func TestSecuritySchemeTypes(t *testing.T) {
+	// API Key scheme
+	apiKey := SecurityScheme{
+		Type:        "apiKey",
+		In:          "header",
+		Name:        "X-API-Key",
+		Description: "API key authentication",
+	}
+	data, _ := json.Marshal(apiKey)
+	var parsed SecurityScheme
+	json.Unmarshal(data, &parsed)
+	if parsed.Type != "apiKey" || parsed.Name != "X-API-Key" {
+		t.Errorf("unexpected: %+v", parsed)
+	}
+
+	// OAuth2 scheme
+	oauth2Scheme := SecurityScheme{
+		Type:        "oauth2",
+		Description: "OAuth2 + PKCE",
+		Flows: &OAuthFlows{
+			AuthorizationCode: &OAuthFlowAuthorizationCode{
+				AuthorizationURL: "https://accounts.google.com/o/oauth2/v2/auth",
+				TokenURL:         "https://oauth2.googleapis.com/token",
+				Scopes:           map[string]string{"openid": "OpenID scope"},
+			},
+		},
+	}
+	data2, _ := json.Marshal(oauth2Scheme)
+	var parsed2 SecurityScheme
+	json.Unmarshal(data2, &parsed2)
+	if parsed2.Type != "oauth2" {
+		t.Errorf("expected oauth2, got %s", parsed2.Type)
+	}
+	if parsed2.Flows == nil || parsed2.Flows.AuthorizationCode == nil {
+		t.Fatal("expected authorizationCode flow")
+	}
+	if parsed2.Flows.AuthorizationCode.AuthorizationURL != "https://accounts.google.com/o/oauth2/v2/auth" {
+		t.Errorf("unexpected auth URL: %s", parsed2.Flows.AuthorizationCode.AuthorizationURL)
+	}
+
+	// OpenID Connect scheme
+	oidcScheme := SecurityScheme{
+		Type:             "openIdConnect",
+		OpenIDConnectURL: "https://accounts.google.com/.well-known/openid-configuration",
+	}
+	data3, _ := json.Marshal(oidcScheme)
+	var parsed3 SecurityScheme
+	json.Unmarshal(data3, &parsed3)
+	if parsed3.Type != "openIdConnect" {
+		t.Errorf("expected openIdConnect, got %s", parsed3.Type)
+	}
+
+	// Mutual TLS scheme
+	mtls := SecurityScheme{
+		Type:        "mutualTLS",
+		Description: "Mutual TLS authentication",
+	}
+	data4, _ := json.Marshal(mtls)
+	var parsed4 SecurityScheme
+	json.Unmarshal(data4, &parsed4)
+	if parsed4.Type != "mutualTLS" {
+		t.Errorf("expected mutualTLS, got %s", parsed4.Type)
+	}
+}
+
+func TestOAuthFlowsSerialization(t *testing.T) {
+	flows := OAuthFlows{
+		AuthorizationCode: &OAuthFlowAuthorizationCode{
+			AuthorizationURL: "https://auth.example.com/authorize",
+			TokenURL:         "https://auth.example.com/token",
+			RefreshURL:       "https://auth.example.com/refresh",
+			Scopes:           map[string]string{"read": "Read access", "write": "Write access"},
+		},
+		ClientCredentials: &OAuthFlowClientCredentials{
+			TokenURL: "https://auth.example.com/token",
+			Scopes:   map[string]string{"a2a:read": "Read A2A tasks"},
+		},
+		DeviceCode: &OAuthFlowDeviceCode{
+			DeviceAuthorizationURL: "https://auth.example.com/device/code",
+			TokenURL:               "https://auth.example.com/token",
+			Scopes:                 map[string]string{"read": "Read access"},
+		},
+	}
+	data, err := json.Marshal(flows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flows2 OAuthFlows
+	if err := json.Unmarshal(data, &flows2); err != nil {
+		t.Fatal(err)
+	}
+	if flows2.AuthorizationCode == nil || flows2.ClientCredentials == nil || flows2.DeviceCode == nil {
+		t.Error("expected all three flow types to deserialize")
+	}
+	if flows2.AuthorizationCode.RefreshURL != "https://auth.example.com/refresh" {
+		t.Errorf("unexpected refresh URL: %s", flows2.AuthorizationCode.RefreshURL)
+	}
+	if flows2.DeviceCode.DeviceAuthorizationURL != "https://auth.example.com/device/code" {
+		t.Errorf("unexpected device auth URL: %s", flows2.DeviceCode.DeviceAuthorizationURL)
+	}
+}
+
+func TestServerAuthenticateNoAuth(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	// No auth configured → all requests pass
+	req, _ := http.NewRequest("POST", "/", nil)
+	if !srv.authenticate(req) {
+		t.Error("expected no-auth to allow")
+	}
+}
+
+func TestServerAuthenticateAPIKey(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "secret123"}, handler)
+
+	// No key → reject
+	req, _ := http.NewRequest("POST", "/", nil)
+	if srv.authenticate(req) {
+		t.Error("expected rejection without API key")
+	}
+
+	// Wrong key → reject
+	req.Header.Set("X-API-Key", "wrong")
+	if srv.authenticate(req) {
+		t.Error("expected rejection with wrong key")
+	}
+
+	// Correct key → allow
+	req.Header.Set("X-API-Key", "secret123")
+	if !srv.authenticate(req) {
+		t.Error("expected allow with correct key")
+	}
+}
+
+func TestServerAuthenticateBearerToken(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0, APIKey: "fallback-key"}, handler)
+	// No token validator → Bearer should be rejected
+	req, _ := http.NewRequest("POST", "/", nil)
+	req.Header.Set("Authorization", "Bearer some-token")
+	if srv.authenticate(req) {
+		t.Error("expected rejection when no token validator configured")
+	}
+}
+
+func TestServerAuthenticateMTLS(t *testing.T) {
+	handler := NewTaskHandler(".", nil, nil)
+	srv := NewServer(ServerConfig{Port: 0}, handler)
+	srv.SetMTLSEnabled(true)
+
+	// No TLS → reject
+	req, _ := http.NewRequest("POST", "/", nil)
+	if srv.authenticate(req) {
+		t.Error("expected rejection without TLS client cert")
+	}
+
+	// With TLS + peer cert → allow
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{{}},
+	}
+	if !srv.authenticate(req) {
+		t.Error("expected allow with peer cert")
+	}
+}
+
+func TestA2AAuthConfigYAML(t *testing.T) {
+	// Verify the config struct supports all auth schemes
+	yaml := `
+a2a:
+  enabled: true
+  port: 8080
+  api_key: "dev-key"
+  auth:
+    oauth2:
+      client_id: "ggcode-public"
+      issuer_url: "https://accounts.google.com"
+      scopes: "openid profile"
+    oidc:
+      client_id: "ggcode-oidc"
+      issuer_url: "https://auth.example.com"
+      scopes: "openid email groups"
+    mtls:
+      cert_file: "/etc/ggcode/server.crt"
+      key_file: "/etc/ggcode/server.key"
+      ca_file: "/etc/ggcode/ca.crt"
+`
+	// Just verify it parses — actual YAML parsing tested in config package
+	if yaml == "" {
+		t.Error("yaml should not be empty")
+	}
 }

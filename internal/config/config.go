@@ -263,12 +263,57 @@ type SwarmConfig struct {
 
 // A2AConfig holds A2A protocol server configuration.
 type A2AConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	Port        int    `yaml:"port"`         // 0 = auto-assign
-	Host        string `yaml:"host"`         // default "127.0.0.1"
-	APIKey      string `yaml:"api_key"`      // empty = no auth
-	MaxTasks    int    `yaml:"max_tasks"`    // concurrent task limit (default 5)
-	TaskTimeout string `yaml:"task_timeout"` // per-task timeout (default "5m")
+	Enabled     bool          `yaml:"enabled"`
+	Port        int           `yaml:"port"`         // 0 = auto-assign
+	Host        string        `yaml:"host"`         // default "127.0.0.1"
+	APIKey      string        `yaml:"api_key"`      // empty = no auth
+	MaxTasks    int           `yaml:"max_tasks"`    // concurrent task limit (default 5)
+	TaskTimeout string        `yaml:"task_timeout"` // per-task timeout (default "5m")
+	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
+}
+
+// A2AAuthConfig configures which authentication mechanisms the A2A server accepts.
+// Multiple schemes can be enabled simultaneously.
+type A2AAuthConfig struct {
+	// OAuth2 + PKCE for human-interactive agents.
+	// Client_id is safe to embed (public client, PKCE replaces client_secret).
+	OAuth2 *A2AOAuth2Config `yaml:"oauth2,omitempty"`
+
+	// OpenID Connect — layered on top of OAuth2, provides identity tokens.
+	OIDC *A2AOIDCConfig `yaml:"oidc,omitempty"`
+
+	// Mutual TLS for machine-to-machine. No secrets needed.
+	MTLS *A2AMTLSConfig `yaml:"mtls,omitempty"`
+}
+
+// A2AOAuth2Config for Authorization Code + PKCE flow.
+// No client_secret needed — PKCE protects the token exchange.
+// Use "provider" for built-in presets or set issuer_url + client_id manually.
+type A2AOAuth2Config struct {
+	// Provider selects a built-in preset: "github", "google", "auth0".
+	// When set, client_id and issuer_url are auto-populated.
+	// User can override by also setting client_id/issuer_url explicitly.
+	Provider string `yaml:"provider,omitempty"`
+
+	ClientID  string `yaml:"client_id,omitempty"`  // public, safe to embed; auto-filled from provider preset
+	IssuerURL string `yaml:"issuer_url,omitempty"` // auto-filled from provider preset
+	Scopes    string `yaml:"scopes,omitempty"`     // space-separated; defaults set by provider preset
+}
+
+// A2AOIDCConfig adds OpenID Connect on top of OAuth2.
+// Same provider preset system as OAuth2.
+type A2AOIDCConfig struct {
+	Provider  string `yaml:"provider,omitempty"`
+	ClientID  string `yaml:"client_id,omitempty"`
+	IssuerURL string `yaml:"issuer_url,omitempty"` // must have /.well-known/openid-configuration
+	Scopes    string `yaml:"scopes,omitempty"`     // should include "openid"
+}
+
+// A2AMTLSConfig for mutual TLS authentication.
+type A2AMTLSConfig struct {
+	CertFile string `yaml:"cert_file"` // server certificate
+	KeyFile  string `yaml:"key_file"`  // server private key
+	CAFile   string `yaml:"ca_file"`   // CA to verify client certs
 }
 
 func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, models []string, tags ...string) EndpointConfig {
