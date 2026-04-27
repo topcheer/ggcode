@@ -18,6 +18,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/a2a"
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/daemon"
@@ -281,6 +282,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	ag.SetPermissionPolicy(policy)
 	ag.SetWorkingDir(workingDir)
 	ag.SetSupportsVision(resolved.SupportsVision)
+	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 
 	// Approval handler: auto-approve in daemon mode
 	ag.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
