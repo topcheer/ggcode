@@ -490,6 +490,13 @@ func TestAnalyzeRecentAggregatesAcrossSessions(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		ses := session.NewSession("zai", "test", "test-model")
+		// Add a user message so the session is not considered empty.
+		store.AppendMessage(ses, provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{
+				{Type: "text", Text: "help me with something"},
+			},
+		})
 		for j := 0; j < 4; j++ {
 			store.AppendMessage(ses, provider.Message{
 				Role: "assistant",

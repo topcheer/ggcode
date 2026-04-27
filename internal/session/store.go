@@ -212,13 +212,42 @@ func (s *JSONLStore) sessionPath(id string) string {
 	return filepath.Join(s.dir, id+".jsonl")
 }
 
+// HasUserInteraction returns true if the session contains at least one user
+// message with actual text content. Sessions without user interaction (e.g.,
+// created then immediately closed) should not be persisted to avoid accumulating
+// empty session files.
+func (s *Session) HasUserInteraction() bool {
+	for _, m := range s.Messages {
+		if m.Role != "user" {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Save writes the full session as a JSONL file (atomic).
+// If the session has no user interaction, the file is deleted instead.
 func (s *JSONLStore) Save(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ses.UpdatedAt = time.Now()
 
-	tmp := s.sessionPath(ses.ID) + ".tmp"
+	path := s.sessionPath(ses.ID)
+
+	// No user interaction — remove the file and index entry instead of saving.
+	if !ses.HasUserInteraction() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing empty session file: %w", err)
+		}
+		return s.removeFromIndex(ses.ID)
+	}
+
+	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
@@ -278,10 +307,14 @@ func (s *JSONLStore) Save(ses *Session) error {
 }
 
 // Load reads a session from its JSONL file.
-// It finds the latest checkpoint and uses it as the base, then appends
-// only messages that were recorded after the checkpoint. If no checkpoint
-// exists, all messages are loaded (legacy behavior).
 func (s *JSONLStore) Load(id string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadSession(id)
+}
+
+// loadSession is the lock-free internal version of Load.
+func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	path := s.sessionPath(id)
 	f, err := os.Open(path)
 	if err != nil {
@@ -406,6 +439,30 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
 	})
+
+	// Remove entries for sessions with no user interaction (empty sessions).
+	// This catches orphaned files from crashes or forced exits.
+	// We already hold mu, so call loadSession (no lock) directly.
+	cleaned := false
+	var validIdx []indexEntry
+	for _, e := range idx {
+		ses, loadErr := s.loadSession(e.ID)
+		if loadErr != nil {
+			os.Remove(s.sessionPath(e.ID))
+			cleaned = true
+			continue
+		}
+		if !ses.HasUserInteraction() {
+			os.Remove(s.sessionPath(e.ID))
+			cleaned = true
+			continue
+		}
+		validIdx = append(validIdx, e)
+	}
+	if cleaned {
+		s.saveIndex(validIdx)
+		idx = validIdx
+	}
 
 	result := make([]*Session, 0, len(idx))
 	for _, e := range idx {
@@ -608,12 +665,18 @@ func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 }
 
 // EnsureMeta writes the meta record if the session file doesn't exist yet.
+// If the session has no user interaction, no file is created.
 func (s *JSONLStore) EnsureMeta(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(ses.ID)
 	if _, err := os.Stat(path); err == nil {
 		return nil // already exists
+	}
+
+	// Don't create a meta file for sessions with no user interaction.
+	if !ses.HasUserInteraction() {
+		return nil
 	}
 
 	// Write meta record as the first line
