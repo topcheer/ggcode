@@ -561,6 +561,9 @@ func (h *Handler) handleSessionList(params json.RawMessage) (interface{}, error)
 		})
 	}
 
+	if sessions == nil {
+		sessions = []SessionInfo{}
+	}
 	return ListSessionsResponse{Sessions: sessions}, nil
 }
 
