@@ -1,7 +1,9 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -52,12 +54,14 @@ func TestList(t *testing.T) {
 	ses1 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses1.Title = "First"
 	ses1.Workspace = "/tmp/workspace-a"
+	ses1.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
 	store.Save(ses1)
 	// Ensure different second to get unique ID
 	time.Sleep(1100 * time.Millisecond)
 	ses2 := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
 	ses2.Title = "Second"
 	ses2.Workspace = "/tmp/workspace-b"
+	ses2.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}}}
 	store.Save(ses2)
 
 	list, err := store.List()
@@ -134,6 +138,7 @@ func TestCleanupOlderThan(t *testing.T) {
 
 	store, _ := NewJSONLStore(dir)
 	ses := NewSession("zai", "cn-coding-openai", "glm-5-turbo")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "cleanup test"}}}}
 	store.Save(ses)
 
 	removed, err := store.CleanupOlderThan(time.Now().Add(24 * time.Hour))
@@ -468,5 +473,146 @@ func TestAppendCheckpointFileNotExist(t *testing.T) {
 	}
 	if loaded.Messages[0].Content[0].Text != "from scratch" {
 		t.Fatalf("expected 'from scratch', got '%s'", loaded.Messages[0].Content[0].Text)
+	}
+}
+
+func TestSaveSkipsEmptySession(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "default", "model")
+	// No messages — Save should not create a file.
+	if err := store.Save(ses); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("empty session file should not exist")
+	}
+	// List should not include it
+	list, _ := store.List()
+	if len(list) != 0 {
+		t.Errorf("List returned %d sessions, want 0", len(list))
+	}
+}
+
+func TestSaveDeletesPreviouslySavedEmptySession(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	// Save a session with messages first.
+	ses := NewSession("zai", "default", "model")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hi"}}}}
+	store.Save(ses)
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatal("file should exist after save with messages")
+	}
+	// Now save the same session with messages cleared (simulating empty exit).
+	ses.Messages = nil
+	store.Save(ses)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("file should be deleted after saving empty session")
+	}
+}
+
+func TestHasUserInteraction(t *testing.T) {
+	ses := NewSession("zai", "default", "model")
+	if ses.HasUserInteraction() {
+		t.Error("new session should have no user interaction")
+	}
+	// Assistant-only message doesn't count
+	ses.Messages = []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
+	if ses.HasUserInteraction() {
+		t.Error("assistant-only session should have no user interaction")
+	}
+	// User message with text counts
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
+	if !ses.HasUserInteraction() {
+		t.Error("session with user text should have user interaction")
+	}
+	// User message with empty text doesn't count
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "  "}}}}
+	if ses.HasUserInteraction() {
+		t.Error("session with whitespace-only user text should have no user interaction")
+	}
+	// User message with tool_use doesn't count as text interaction
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolName: "test"}}}}
+	if ses.HasUserInteraction() {
+		t.Error("session with only tool results should have no user interaction")
+	}
+}
+
+func TestEnsureMetaSkipsEmptySession(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "default", "model")
+	// No messages — EnsureMeta should not create file.
+	if err := store.EnsureMeta(ses); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("empty session should not have meta file")
+	}
+}
+
+func TestEnsureMetaCreatesFileForSessionWithMessages(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	ses := NewSession("zai", "default", "model")
+	ses.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}}}
+	if err := store.EnsureMeta(ses); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ses.ID+".jsonl")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("session with messages should have meta file")
+	}
+}
+
+func TestListCleansUpEmptySessions(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ggcode_test_*")
+	defer os.RemoveAll(dir)
+
+	store, _ := NewJSONLStore(dir)
+	// Create a session with messages.
+	ses1 := NewSession("zai", "default", "model")
+	ses1.Messages = []provider.Message{{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "keep me"}}}}
+	store.Save(ses1)
+
+	// Manually create an empty session file (simulating crash before cleanup).
+	ses2 := NewSession("zai", "default", "model")
+	// Write just a meta record (no messages).
+	metaPath := filepath.Join(dir, ses2.ID+".jsonl")
+	f, _ := os.Create(metaPath)
+	json.NewEncoder(f).Encode(jsonlRecord{Type: "meta", SessionID: ses2.ID, Title: "empty"})
+	f.Close()
+
+	// Manually add to index.
+	idx, _ := store.loadIndex()
+	idx = append(idx, indexEntry{ID: ses2.ID, Title: "empty"})
+	store.saveIndex(idx)
+
+	// List should clean up the empty session.
+	list, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("List returned %d sessions, want 1", len(list))
+	}
+	if list[0].ID != ses1.ID {
+		t.Errorf("expected session %s, got %s", ses1.ID, list[0].ID)
+	}
+	// Empty session file should be gone.
+	if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+		t.Error("empty session file should have been cleaned up")
 	}
 }
