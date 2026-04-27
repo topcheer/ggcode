@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 // MCPStatusFunc returns runtime MCP server statuses. Keys are server names.
@@ -68,6 +70,8 @@ type Server struct {
 	imActionFn    IMActionFunc
 	restartFn     func()          // called when user triggers restart from WebUI
 	a2aDiscoverFn A2ADiscoverFunc // returns discovered A2A instances
+	sessionStore  session.Store
+	workspace     string // current ggcode working directory
 	mu            sync.RWMutex
 	addr          string
 	listener      net.Listener
@@ -97,6 +101,12 @@ func (s *Server) SetRestartFn(fn func()) {
 // SetA2ADiscoverFn sets the A2A instance discovery provider.
 func (s *Server) SetA2ADiscoverFn(fn A2ADiscoverFunc) {
 	s.a2aDiscoverFn = fn
+}
+
+// SetSessionStore sets the session store for browsing history.
+func (s *Server) SetSessionStore(store session.Store, workspace string) {
+	s.sessionStore = store
+	s.workspace = workspace
 }
 
 // NewServer creates a WebUI server bound to the given config.
@@ -165,6 +175,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/impersonate", s.handleImpersonate)
 	s.mux.HandleFunc("/api/a2a", s.handleA2A)
 	s.mux.HandleFunc("/api/a2a/discover", s.handleA2ADiscover)
+	s.mux.HandleFunc("/api/sessions", s.handleSessions)
+	s.mux.HandleFunc("/api/sessions/", s.handleSessionDetail)
 	s.mux.HandleFunc("/api/restart", s.handleRestart)
 }
 
@@ -894,6 +906,150 @@ func (s *Server) handleA2ADiscover(w http.ResponseWriter, r *http.Request) {
 		instances = []A2ADiscoveredInstance{}
 	}
 	writeJSON(w, instances)
+}
+
+// GET /api/sessions — list sessions grouped by workspace
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.sessionStore == nil {
+		writeJSON(w, map[string]interface{}{"groups": []interface{}{}, "total": 0, "current_workspace": ""})
+		return
+	}
+	sessions, err := s.sessionStore.List()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Group by workspace
+	type sessionSummary struct {
+		ID        string `json:"id"`
+		Title     string `json:"title"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+		MsgCount  int    `json:"msg_count"`
+		Vendor    string `json:"vendor,omitempty"`
+		Endpoint  string `json:"endpoint,omitempty"`
+		Model     string `json:"model,omitempty"`
+	}
+	type workspaceGroup struct {
+		Workspace string           `json:"workspace"`
+		ShortName string           `json:"short_name"`
+		Count     int              `json:"count"`
+		Sessions  []sessionSummary `json:"sessions"`
+		Current   bool             `json:"current"`
+	}
+	groupMap := map[string]*workspaceGroup{}
+	var groupOrder []string
+	// Ensure current workspace is first
+	if s.workspace != "" {
+		groupMap[s.workspace] = &workspaceGroup{
+			Workspace: s.workspace,
+			ShortName: filepath.Base(s.workspace),
+			Current:   true,
+		}
+		groupOrder = append(groupOrder, s.workspace)
+	}
+	for _, ses := range sessions {
+		ws := ses.Workspace
+		if ws == "" {
+			ws = "(no workspace)"
+		}
+		if _, ok := groupMap[ws]; !ok {
+			groupMap[ws] = &workspaceGroup{
+				Workspace: ws,
+				ShortName: filepath.Base(ws),
+			}
+			groupOrder = append(groupOrder, ws)
+		}
+		g := groupMap[ws]
+		g.Sessions = append(g.Sessions, sessionSummary{
+			ID:        ses.ID,
+			Title:     ses.Title,
+			CreatedAt: ses.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: ses.UpdatedAt.Format(time.RFC3339),
+			MsgCount:  len(ses.Messages),
+			Vendor:    ses.Vendor,
+			Endpoint:  ses.Endpoint,
+			Model:     ses.Model,
+		})
+		g.Count++
+	}
+	groups := make([]workspaceGroup, 0, len(groupOrder))
+	for _, ws := range groupOrder {
+		g := groupMap[ws]
+		groups = append(groups, *g)
+	}
+	writeJSON(w, map[string]interface{}{
+		"groups":            groups,
+		"total":             len(sessions),
+		"current_workspace": s.workspace,
+	})
+}
+
+// GET /api/sessions/{id} — get session detail with messages
+func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.sessionStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "session store not available")
+		return
+	}
+	id := r.URL.Path[len("/api/sessions/"):]
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "session id required")
+		return
+	}
+	ses, err := s.sessionStore.Load(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	// Serialize messages, omitting large image data
+	type contentBlock struct {
+		Type     string          `json:"type"`
+		Text     string          `json:"text,omitempty"`
+		ToolName string          `json:"tool_name,omitempty"`
+		ToolID   string          `json:"tool_id,omitempty"`
+		Input    json.RawMessage `json:"input,omitempty"`
+		Output   string          `json:"output,omitempty"`
+		IsError  bool            `json:"is_error,omitempty"`
+	}
+	type message struct {
+		Role    string         `json:"role"`
+		Content []contentBlock `json:"content"`
+	}
+	msgs := make([]message, 0, len(ses.Messages))
+	for _, m := range ses.Messages {
+		blocks := make([]contentBlock, 0, len(m.Content))
+		for _, b := range m.Content {
+			blocks = append(blocks, contentBlock{
+				Type:     b.Type,
+				Text:     b.Text,
+				ToolName: b.ToolName,
+				ToolID:   b.ToolID,
+				Input:    b.Input,
+				Output:   b.Output,
+				IsError:  b.IsError,
+			})
+		}
+		msgs = append(msgs, message{Role: m.Role, Content: blocks})
+	}
+	writeJSON(w, map[string]interface{}{
+		"id":         ses.ID,
+		"title":      ses.Title,
+		"workspace":  ses.Workspace,
+		"vendor":     ses.Vendor,
+		"endpoint":   ses.Endpoint,
+		"model":      ses.Model,
+		"created_at": ses.CreatedAt.Format(time.RFC3339),
+		"updated_at": ses.UpdatedAt.Format(time.RFC3339),
+		"messages":   msgs,
+	})
 }
 
 // a2aAuthPresets returns the built-in OAuth2/OIDC provider presets for the webui.

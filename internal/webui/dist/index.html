@@ -90,6 +90,48 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
   .sidebar-brand p, .nav-item span { display: none; }
   .page { padding: 20px 16px; }
 }
+/* Session styles */
+.ws-group { margin-bottom: 16px; }
+.ws-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); transition: background 0.15s; }
+.ws-header:hover { background: var(--surface-hover); }
+.ws-header.current { border-left: 3px solid var(--primary, #6366f1); }
+.ws-chevron { transition: transform 0.2s; font-size: 12px; color: var(--text2); }
+.ws-chevron.open { transform: rotate(90deg); }
+.ws-name { font-weight: 600; font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--surface2, var(--surface)); color: var(--text2); }
+.ws-sessions { margin-top: 4px; padding-left: 8px; display: none; }
+.ws-sessions.open { display: block; }
+.sess-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 2px 0; border-radius: 6px; cursor: pointer; transition: background 0.15s; font-size: 13px; }
+.sess-item:hover { background: var(--surface-hover); }
+.sess-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.sess-dot.user { background: #22c55e; }
+.sess-dot.empty { background: var(--text3, #999); }
+.sess-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.sess-meta { font-size: 11px; color: var(--text2); white-space: nowrap; }
+.sess-model { font-family: var(--mono); font-size: 11px; color: var(--text3, #999); background: var(--surface2, var(--surface)); padding: 1px 6px; border-radius: 4px; }
+/* Session detail */
+.sess-back { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--primary, #6366f1); font-size: 14px; margin-bottom: 16px; padding: 4px 0; }
+.sess-back:hover { text-decoration: underline; }
+.sess-detail-header { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.sess-detail-header h3 { margin: 0 0 8px 0; font-size: 18px; }
+.sess-detail-meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text2); }
+.sess-detail-meta span { display: inline-flex; align-items: center; gap: 4px; }
+/* Chat messages */
+.chat-msg { padding: 12px 16px; border-radius: 10px; margin-bottom: 8px; max-width: 100%; }
+.chat-msg.user { background: rgba(99,102,241,0.08); border-left: 3px solid var(--primary, #6366f1); }
+.chat-msg.assistant { background: var(--surface); border: 1px solid var(--border); }
+.chat-msg.system { background: rgba(255,255,255,0.03); border: 1px dashed var(--border); font-size: 12px; color: var(--text2); }
+.chat-role { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; color: var(--text2); }
+.chat-msg.user .chat-role { color: var(--primary, #6366f1); }
+.chat-msg.assistant .chat-role { color: #22c55e; }
+.chat-text { font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.chat-tool { margin: 6px 0; padding: 8px 12px; border-radius: 6px; font-size: 12px; }
+.chat-tool.tool_use { background: rgba(251,191,36,0.08); border-left: 2px solid #fbbf24; }
+.chat-tool.tool_result { background: rgba(34,197,94,0.08); border-left: 2px solid #22c55e; }
+.chat-tool.tool_result.error { background: rgba(239,68,68,0.08); border-left: 2px solid #ef4444; }
+.chat-tool-name { font-weight: 600; font-family: var(--mono); color: var(--text); }
+.chat-tool-data { margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--text2); white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow: auto; }
+.chat-tool-toggle { cursor: pointer; user-select: none; }
 </style>
 </head>
 <body>
@@ -126,6 +168,9 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       </div>
       <div class="nav-item" data-page="prompt" onclick="showPage('prompt')">
         <span class="nav-icon">&#9997;</span><span>System Prompt</span>
+      </div>
+      <div class="nav-item" data-page="sessions" onclick="showPage('sessions')">
+        <span class="nav-icon">&#128214;</span><span>Sessions</span>
       </div>
       <div style="flex:1"></div>
       <div style="padding:8px 4px">
@@ -336,6 +381,17 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
         </div>
       </div>
     </div>
+
+    <!-- Sessions -->
+    <div class="page" id="page-sessions">
+      <div class="page-header">
+        <h2>Sessions</h2>
+        <p>Browse conversation history grouped by workspace</p>
+        <div id="sessions-stats" style="margin-top:6px;font-size:13px;color:var(--text2)"></div>
+      </div>
+      <div id="sessions-list"></div>
+      <div id="session-detail" style="display:none"></div>
+    </div>
   </div>
 </div>
 
@@ -348,6 +404,7 @@ let vendors = {};
 let mcpServers = []; // loaded from /api/mcp with runtime status
 let impersonateData = null; // loaded from /api/impersonate
 let a2aData = null; // loaded from /api/a2a
+let sessionsData = null; // loaded from /api/sessions
 
 // --- API helpers ---
 async function api(path, opts) {
@@ -406,6 +463,8 @@ async function loadAll() {
     try { impersonateData = await api('/api/impersonate'); } catch(e) { impersonateData = null; }
     renderImpersonate();
     renderPrompt();
+    try { sessionsData = await api('/api/sessions'); } catch(e) { sessionsData = null; }
+    renderSessions();
   } catch(e) {
     toast('Failed to load: ' + e.message, false);
   }
@@ -1582,6 +1641,176 @@ async function triggerRestart() {
     // Server shut down before response — that's expected
     document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#666"><div style="text-align:center"><h2>Restarting...</h2><p>ggcode is restarting. This window will close in a moment.</p></div></div>';
     setTimeout(() => window.close(), 3000);
+  }
+}
+
+// --- Sessions ---
+function renderSessions() {
+  const listEl = document.getElementById('sessions-list');
+  const detailEl = document.getElementById('session-detail');
+  const statsEl = document.getElementById('sessions-stats');
+  detailEl.style.display = 'none';
+  listEl.style.display = 'block';
+  if (!sessionsData || !sessionsData.groups || sessionsData.groups.length === 0) {
+    listEl.innerHTML = '<div class="card"><p style="color:var(--text2)">No sessions found</p></div>';
+    return;
+  }
+  statsEl.textContent = `${sessionsData.total} sessions across ${sessionsData.groups.length} workspaces`;
+  let html = '';
+  for (const g of sessionsData.groups) {
+    const currentClass = g.current ? ' current' : '';
+    const label = g.current ? `${esc(g.short_name)} (current)` : esc(g.short_name);
+    html += `<div class="ws-group">
+      <div class="ws-header${currentClass}" onclick="toggleWsGroup(this)">
+        <span class="ws-chevron ${g.current?'open':''}">&#9654;</span>
+        <span class="ws-name">${label}</span>
+        <span class="ws-badge">${g.count}</span>
+      </div>
+      <div class="ws-sessions ${g.current?'open':''}">`;
+    for (const s of g.sessions) {
+      const dotClass = s.msg_count > 0 ? 'user' : 'empty';
+      const timeAgo = formatTimeAgo(s.updated_at);
+      const modelTag = s.model ? `<span class="sess-model">${esc(s.model)}</span>` : '';
+      html += `<div class="sess-item" onclick="loadSessionDetail('${s.id}')">
+        <span class="sess-dot ${dotClass}"></span>
+        <span class="sess-title">${esc(s.title || 'Untitled')}</span>
+        ${modelTag}
+        <span class="sess-meta">${s.msg_count} msgs · ${timeAgo}</span>
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+  listEl.innerHTML = html;
+}
+
+function toggleWsGroup(header) {
+  const chevron = header.querySelector('.ws-chevron');
+  const sessions = header.nextElementSibling;
+  chevron.classList.toggle('open');
+  sessions.classList.toggle('open');
+}
+
+function formatTimeAgo(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  const now = new Date();
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+async function loadSessionDetail(id) {
+  const listEl = document.getElementById('sessions-list');
+  const detailEl = document.getElementById('session-detail');
+  const statsEl = document.getElementById('sessions-stats');
+  listEl.style.display = 'none';
+  statsEl.style.display = 'none';
+  detailEl.style.display = 'block';
+  detailEl.innerHTML = '<div class="card"><p style="color:var(--text2)">Loading...</p></div>';
+  try {
+    const data = await api('/api/sessions/' + id);
+    renderSessionDetail(data);
+  } catch(e) {
+    detailEl.innerHTML = `<div class="card"><p style="color:var(--text2)">Error: ${esc(e.message)}</p>
+      <p><a href="#" onclick="backToSessions();return false;" style="color:var(--primary)">← Back</a></p></div>`;
+  }
+}
+
+function renderSessionDetail(data) {
+  const detailEl = document.getElementById('session-detail');
+  const wsName = data.workspace ? data.workspace.split('/').pop() : '';
+  let metaHtml = '';
+  if (wsName) metaHtml += `<span>&#128193; ${esc(wsName)}</span>`;
+  if (data.model) metaHtml += `<span>&#129302; ${esc(data.model)}</span>`;
+  if (data.vendor) metaHtml += `<span>&#127760; ${esc(data.vendor)}/${esc(data.endpoint||'')}</span>`;
+  metaHtml += `<span>&#128337; ${new Date(data.created_at).toLocaleString()}</span>`;
+  const msgCount = data.messages ? data.messages.length : 0;
+  metaHtml += `<span>&#128172; ${msgCount} messages</span>`;
+
+  let chatHtml = '';
+  if (data.messages) {
+    for (const msg of data.messages) {
+      if (msg.role === 'system' && (!msg.content || !msg.content[0] || msg.content[0].text.length < 200)) continue;
+      chatHtml += renderChatMessage(msg);
+    }
+  }
+
+  detailEl.innerHTML = `
+    <div class="sess-back" onclick="backToSessions()">&#8592; Back to sessions</div>
+    <div class="sess-detail-header">
+      <h3>${esc(data.title || 'Untitled Session')}</h3>
+      <div class="sess-detail-meta">${metaHtml}</div>
+    </div>
+    <div class="chat-messages">${chatHtml || '<p style="color:var(--text2);text-align:center;padding:40px">No messages in this session</p>'}</div>`;
+}
+
+function renderChatMessage(msg) {
+  const role = msg.role;
+  let roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
+  let contentHtml = '';
+
+  if (msg.content) {
+    for (const block of msg.content) {
+      if (block.type === 'text' && block.text) {
+        contentHtml += `<div class="chat-text">${esc(block.text)}</div>`;
+      } else if (block.type === 'tool_use') {
+        const inputStr = block.input ? formatJSON(block.input) : '';
+        const id = 'tool-' + Math.random().toString(36).slice(2,8);
+        contentHtml += `<div class="chat-tool tool_use">
+          <div class="chat-tool-toggle" onclick="document.getElementById('${id}').style.display=document.getElementById('${id}').style.display==='none'?'block':'none'">
+            <span class="chat-tool-name">&#9881; ${esc(block.tool_name || 'tool')}</span>
+            <span style="color:var(--text2);font-size:11px;margin-left:6px">click to expand</span>
+          </div>
+          <div id="${id}" class="chat-tool-data" style="display:none">${esc(inputStr)}</div>
+        </div>`;
+      } else if (block.type === 'tool_result') {
+        const errorClass = block.is_error ? ' error' : '';
+        const id = 'tool-' + Math.random().toString(36).slice(2,8);
+        contentHtml += `<div class="chat-tool tool_result${errorClass}">
+          <div class="chat-tool-toggle" onclick="document.getElementById('${id}').style.display=document.getElementById('${id}').style.display==='none'?'block':'none'">
+            <span class="chat-tool-name">${block.is_error?'&#10060;':'&#9989;'} ${esc(block.tool_name || 'result')}</span>
+            <span style="color:var(--text2);font-size:11px;margin-left:6px">click to expand</span>
+          </div>
+          <div id="${id}" class="chat-tool-data" style="display:none">${esc(block.output || '')}</div>
+        </div>`;
+      } else if (block.type === 'image') {
+        contentHtml += `<div style="color:var(--text2);font-size:12px;font-style:italic">&#128247; Image</div>`;
+      }
+    }
+  }
+
+  if (!contentHtml) return '';
+
+  return `<div class="chat-msg ${role}">
+    <div class="chat-role">${roleLabel}</div>
+    ${contentHtml}
+  </div>`;
+}
+
+function formatJSON(raw) {
+  if (!raw) return '';
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch(e) {
+    return raw;
+  }
+}
+
+function backToSessions() {
+  const listEl = document.getElementById('sessions-list');
+  const detailEl = document.getElementById('session-detail');
+  const statsEl = document.getElementById('sessions-stats');
+  detailEl.style.display = 'none';
+  listEl.style.display = 'block';
+  statsEl.style.display = 'block';
+}
+
+function renderSessionsPage() {
+  if (document.getElementById('page-sessions').classList.contains('active')) {
+    renderSessions();
   }
 }
 </script>
