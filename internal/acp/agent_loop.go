@@ -308,20 +308,12 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
-				Type: "tool_call",
-				ToolCall: &ToolCallUpdate{
-					ToolCallID: event.Tool.ID,
-					Title:      event.Tool.Name,
-					Kind:       ToolKind(kind),
-					Status:     "running",
-					RawInput:   string(event.Tool.Arguments),
-				},
-				Content: &ContentBlock{
-					Type:     "tool_use",
-					ToolName: event.Tool.Name,
-					ToolID:   event.Tool.ID,
-					Input:    event.Tool.Arguments,
-				},
+				Type:       "tool_call",
+				ToolCallID: event.Tool.ID,
+				Title:      event.Tool.Name,
+				Kind:       ToolKind(kind),
+				Status:     "pending",
+				RawInput:   event.Tool.Arguments,
 			},
 		})
 
@@ -330,23 +322,24 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		if event.IsError {
 			status = "failed"
 		}
+		// Build content entries for the tool call update
+		contentEntries := []ToolCallContentEntry{
+			{
+				Type: "content",
+				Content: &ContentBlock{
+					Type: "text",
+					Text: event.Result,
+				},
+			},
+		}
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
-				Type: "tool_result",
-				ToolCall: &ToolCallUpdate{
-					ToolCallID: event.Tool.ID,
-					Title:      event.Tool.Name,
-					Status:     ToolCallStatus(status),
-					RawOutput:  event.Result,
-				},
-				Content: &ContentBlock{
-					Type:     "tool_result",
-					ToolID:   event.Tool.ID,
-					ToolName: event.Tool.Name,
-					Output:   event.Result,
-					IsError:  event.IsError,
-				},
+				Type:       "tool_call_update",
+				ToolCallID: event.Tool.ID,
+				Title:      event.Tool.Name,
+				Status:     ToolCallStatus(status),
+				Content:    contentEntries,
 			},
 		})
 
