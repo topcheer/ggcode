@@ -1,14 +1,18 @@
 package acp
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -1160,5 +1164,457 @@ func TestHandlerSessionNewRejectsInvalidCWD(t *testing.T) {
 				t.Errorf("expected error for cwd %q, got nil", tt.cwd)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AskUser handler tests — use real Transport with io.Pipe
+// ---------------------------------------------------------------------------
+
+// askUserTestHarness sets up a real Transport with bidirectional pipes.
+// The test can read JSON-RPC requests from agentOutput and write responses to agentInput.
+type askUserTestHarness struct {
+	agentInput  *io.PipeWriter // test writes responses here (agent reads)
+	agentOutput *io.PipeReader // test reads requests here (agent writes)
+	registry    *tool.Registry
+	session     *Session
+	agentLoop   *AgentLoop
+	handler     *Handler
+	cancel      context.CancelFunc
+}
+
+func newAskUserTestHarness(t *testing.T) *askUserTestHarness {
+	t.Helper()
+
+	agentRead, agentInput := io.Pipe()
+	agentOutput, agentWrite := io.Pipe()
+
+	transport := NewTransport(agentRead, agentWrite)
+
+	registry := tool.NewRegistry()
+	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+
+	cfg := &config.Config{
+		MaxIterations: 100,
+	}
+
+	session := NewSession("/tmp", nil)
+	handler := NewHandler(cfg, registry, transport, nil)
+	handler.initialized = true
+	handler.sessions["test-session"] = session
+
+	al := NewAgentLoop(cfg, registry, transport, session, ClientCapabilities{}, nil)
+
+	return &askUserTestHarness{
+		agentInput:  agentInput,
+		agentOutput: agentOutput,
+		registry:    registry,
+		session:     session,
+		agentLoop:   al,
+		handler:     handler,
+	}
+}
+
+// readRequest reads a JSON-RPC request from agent output (what the agent sends).
+func (h *askUserTestHarness) readRequest(t *testing.T) map[string]interface{} {
+	t.Helper()
+	// Read a line from agentOutput
+	scanner := bufio.NewScanner(h.agentOutput)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	if !scanner.Scan() {
+		t.Fatal("no request from agent")
+	}
+	line := scanner.Bytes()
+	var req map[string]interface{}
+	if err := json.Unmarshal(line, &req); err != nil {
+		t.Fatalf("unmarshal request: %v\nline: %s", err, line)
+	}
+	return req
+}
+
+// writeResponse writes a JSON-RPC response to agent input.
+func (h *askUserTestHarness) writeResponse(t *testing.T, id interface{}, result interface{}) {
+	t.Helper()
+	data, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	data = append(data, '\n')
+	if _, err := h.agentInput.Write(data); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AskUser handler tests — use dual-pipe Transport like e2e tests
+// ---------------------------------------------------------------------------
+
+func setupAskUserTest(t *testing.T) (*tool.AskUserTool, *Transport, context.CancelFunc) {
+	t.Helper()
+
+	// Dual pipe: agent reads client-writes, client reads agent-writes
+	cr, cw := io.Pipe() // client → agent
+	ar, aw := io.Pipe() // agent → client
+
+	agentTransport := NewTransport(cr, aw)
+	_ = NewTransport(ar, cw) // clientTransport — we read/write raw from ar/cw
+
+	registry := tool.NewRegistry()
+	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+
+	cfg := &config.Config{MaxIterations: 100}
+
+	session := NewSession("/tmp", nil)
+	handler := NewHandler(cfg, registry, agentTransport, nil)
+	handler.initialized = true
+	handler.sessions["test-session"] = session
+
+	// Create AgentLoop (this sets up the ask_user handler)
+	_ = NewAgentLoop(cfg, registry, agentTransport, session, ClientCapabilities{}, nil)
+
+	// Run handler in background to process responses
+	ctx, cancel := context.WithCancel(context.Background())
+	go handler.Run(ctx)
+
+	askTool, ok := registry.Get("ask_user")
+	if !ok {
+		t.Fatal("ask_user tool not found")
+	}
+
+	return askTool.(*tool.AskUserTool), agentTransport, cancel
+}
+
+// readAgentRequest reads a JSON-RPC request that the agent sent out.
+func readAgentRequest(t *testing.T, reader *io.PipeReader) map[string]interface{} {
+	t.Helper()
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	if !scanner.Scan() {
+		t.Fatal("no request from agent")
+	}
+	var req map[string]interface{}
+	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	return req
+}
+
+// writeAgentResponse writes a JSON-RPC response back to the agent.
+func writeAgentResponse(t *testing.T, writer *io.PipeWriter, id interface{}, result interface{}) {
+	t.Helper()
+	data, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	})
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	data = append(data, '\n')
+	if _, err := writer.Write(data); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+}
+
+func TestAskUserHandlerSingleChoice(t *testing.T) {
+	// Setup dual pipes
+	cr, cw := io.Pipe() // client → agent
+	ar, aw := io.Pipe() // agent → client
+
+	agentTransport := NewTransport(cr, aw)
+
+	registry := tool.NewRegistry()
+	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	cfg := &config.Config{MaxIterations: 100}
+	session := NewSession("/tmp", nil)
+	handler := NewHandler(cfg, registry, agentTransport, nil)
+	handler.initialized = true
+	handler.sessions["test-session"] = session
+	_ = NewAgentLoop(cfg, registry, agentTransport, session, ClientCapabilities{}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go handler.Run(ctx)
+
+	askTool, _ := registry.Get("ask_user")
+
+	// Run ask_user in goroutine
+	done := make(chan tool.AskUserResponse, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		input := json.RawMessage(`{
+			"title": "Pick a color",
+			"questions": [{
+				"id": "q1",
+				"title": "Color",
+				"prompt": "Pick a color",
+				"kind": "single",
+				"choices": [
+					{"id": "opt_a", "label": "Red"},
+					{"id": "opt_b", "label": "Blue"}
+				]
+			}]
+		}`)
+		result, err := askTool.Execute(context.Background(), input)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if result.IsError {
+			errCh <- fmt.Errorf("tool error: %s", result.Content)
+			return
+		}
+		var resp tool.AskUserResponse
+		if err := json.Unmarshal([]byte(result.Content), &resp); err != nil {
+			errCh <- err
+			return
+		}
+		done <- resp
+	}()
+
+	// Read permission request from agent (via agent→client pipe)
+	req := readAgentRequest(t, ar)
+	if req["method"] != "session/request_permission" {
+		t.Fatalf("expected method session/request_permission, got %v", req["method"])
+	}
+	reqID := req["id"]
+
+	// Verify options
+	params, _ := req["params"].(map[string]interface{})
+	options, _ := params["options"].([]interface{})
+	if len(options) != 2 {
+		t.Errorf("expected 2 options, got %d", len(options))
+	}
+
+	// Respond: user selected opt_a
+	writeAgentResponse(t, cw, reqID, map[string]interface{}{
+		"outcome": map[string]interface{}{
+			"outcome": "selected",
+			"selectedOption": map[string]interface{}{
+				"optionId": "opt_a",
+			},
+		},
+	})
+
+	select {
+	case resp := <-done:
+		if resp.Status != tool.AskUserStatusSubmitted {
+			t.Errorf("status = %q, want %q", resp.Status, tool.AskUserStatusSubmitted)
+		}
+		if resp.AnsweredCount != 1 {
+			t.Errorf("AnsweredCount = %d, want 1", resp.AnsweredCount)
+		}
+		if len(resp.Answers) != 1 {
+			t.Fatalf("Answers = %d, want 1", len(resp.Answers))
+		}
+		ans := resp.Answers[0]
+		if !ans.Answered {
+			t.Error("expected Answered=true")
+		}
+		if len(ans.SelectedChoiceIDs) != 1 || ans.SelectedChoiceIDs[0] != "opt_a" {
+			t.Errorf("SelectedChoiceIDs = %v, want [opt_a]", ans.SelectedChoiceIDs)
+		}
+	case err := <-errCh:
+		t.Fatalf("ask_user error: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestAskUserHandlerTextSubmit(t *testing.T) {
+	cr, cw := io.Pipe()
+	ar, aw := io.Pipe()
+	agentTransport := NewTransport(cr, aw)
+
+	registry := tool.NewRegistry()
+	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
+	tool.RegisterBuiltinTools(registry, policy, "/tmp")
+
+	cfg := &config.Config{MaxIterations: 100}
+	session := NewSession("/tmp", nil)
+	handler := NewHandler(cfg, registry, agentTransport, nil)
+	handler.initialized = true
+	handler.sessions["test-session"] = session
+	_ = NewAgentLoop(cfg, registry, agentTransport, session, ClientCapabilities{}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go handler.Run(ctx)
+
+	askTool, _ := registry.Get("ask_user")
+
+	done := make(chan tool.AskUserResponse, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		input := json.RawMessage(`{
+			"title": "Enter name",
+			"questions": [{
+				"id": "q1",
+				"title": "Name",
+				"prompt": "Enter your name",
+				"kind": "text"
+			}]
+		}`)
+		result, err := askTool.Execute(context.Background(), input)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if result.IsError {
+			errCh <- fmt.Errorf("tool error: %s", result.Content)
+			return
+		}
+		var resp tool.AskUserResponse
+		json.Unmarshal([]byte(result.Content), &resp)
+		done <- resp
+	}()
+
+	req := readAgentRequest(t, ar)
+	reqID := req["id"]
+
+	// Verify Submit/Cancel options
+	params, _ := req["params"].(map[string]interface{})
+	options, _ := params["options"].([]interface{})
+	if len(options) != 2 {
+		t.Errorf("expected 2 options, got %d", len(options))
+	}
+
+	// User submits
+	writeAgentResponse(t, cw, reqID, map[string]interface{}{
+		"outcome": map[string]interface{}{
+			"outcome": "selected",
+			"selectedOption": map[string]interface{}{
+				"optionId": "submit",
+			},
+		},
+	})
+
+	select {
+	case resp := <-done:
+		if resp.AnsweredCount != 1 {
+			t.Errorf("AnsweredCount = %d, want 1", resp.AnsweredCount)
+		}
+		if len(resp.Answers) != 1 {
+			t.Fatalf("Answers = %d, want 1", len(resp.Answers))
+		}
+		if !resp.Answers[0].Answered {
+			t.Error("expected Answered=true")
+		}
+		if resp.Answers[0].Kind != tool.AskUserKindText {
+			t.Errorf("Kind = %q, want %q", resp.Answers[0].Kind, tool.AskUserKindText)
+		}
+	case err := <-errCh:
+		t.Fatalf("error: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestAskUserHandlerCancelled(t *testing.T) {
+	cr, cw := io.Pipe()
+	ar, aw := io.Pipe()
+	agentTransport := NewTransport(cr, aw)
+
+	registry := tool.NewRegistry()
+	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
+	tool.RegisterBuiltinTools(registry, policy, "/tmp")
+
+	cfg := &config.Config{MaxIterations: 100}
+	session := NewSession("/tmp", nil)
+	handler := NewHandler(cfg, registry, agentTransport, nil)
+	handler.initialized = true
+	handler.sessions["test-session"] = session
+	_ = NewAgentLoop(cfg, registry, agentTransport, session, ClientCapabilities{}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go handler.Run(ctx)
+
+	askTool, _ := registry.Get("ask_user")
+
+	done := make(chan tool.AskUserResponse, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		input := json.RawMessage(`{
+			"title": "Pick",
+			"questions": [{
+				"id": "q1",
+				"title": "Pick",
+				"prompt": "Pick one",
+				"kind": "single",
+				"choices": [{"id": "a", "label": "A"}]
+			}]
+		}`)
+		result, err := askTool.Execute(context.Background(), input)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		var resp tool.AskUserResponse
+		json.Unmarshal([]byte(result.Content), &resp)
+		done <- resp
+	}()
+
+	req := readAgentRequest(t, ar)
+	reqID := req["id"]
+
+	// User cancels
+	writeAgentResponse(t, cw, reqID, map[string]interface{}{
+		"outcome": map[string]interface{}{
+			"outcome": "cancelled",
+		},
+	})
+
+	select {
+	case resp := <-done:
+		if resp.Status != tool.AskUserStatusCancelled {
+			t.Errorf("status = %q, want %q", resp.Status, tool.AskUserStatusCancelled)
+		}
+		if resp.AnsweredCount != 0 {
+			t.Errorf("AnsweredCount = %d, want 0", resp.AnsweredCount)
+		}
+	case err := <-errCh:
+		t.Fatalf("error: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestAskUserHandlerNoHandlerWithoutACP(t *testing.T) {
+	registry := tool.NewRegistry()
+	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp"); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	askTool, ok := registry.Get("ask_user")
+	if !ok {
+		t.Fatal("ask_user not found")
+	}
+
+	input := json.RawMessage(`{"questions":[{"id":"q1","title":"Q","prompt":"Q?","kind":"text"}]}`)
+	result, err := askTool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result when no handler set")
+	}
+	if !strings.Contains(result.Content, "interactive") {
+		t.Errorf("expected 'interactive' in error, got: %s", result.Content)
 	}
 }

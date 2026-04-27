@@ -159,6 +159,9 @@ func NewAgentLoop(
 	// --- Project memory ---
 	al.loadProjectMemory()
 
+	// --- AskUser handler: route through ACP permission request ---
+	al.setupAskUserHandler()
+
 	return al
 }
 
@@ -476,4 +479,163 @@ func (al *AgentLoop) requestClientWriteFile(path, content string) error {
 
 	_ = result
 	return nil
+}
+
+// setupAskUserHandler wires up the ask_user tool to route through ACP
+// session/request_permission. For single/multi choice questions, the choices
+// are mapped to PermissionOption entries. For text questions, we provide
+// Submit/Cancel options (the IDE may support freeform text in the permission UI).
+func (al *AgentLoop) setupAskUserHandler() {
+	askTool, ok := al.registry.Get("ask_user")
+	if !ok {
+		return
+	}
+	askUser, ok := askTool.(*tool.AskUserTool)
+	if !ok {
+		return
+	}
+
+	askUser.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+		// Build permission options from the first question's choices
+		var options []PermissionOption
+		var question tool.AskUserQuestion
+
+		if len(req.Questions) > 0 {
+			question = req.Questions[0]
+		}
+
+		// Build title from request title or first question prompt
+		title := req.Title
+		if title == "" && question.Prompt != "" {
+			title = question.Prompt
+		}
+
+		switch question.Kind {
+		case tool.AskUserKindSingle, tool.AskUserKindMulti:
+			// Map choices to permission options
+			for _, choice := range question.Choices {
+				options = append(options, PermissionOption{
+					OptionID: choice.ID,
+					Name:     choice.Label,
+					Kind:     PermissionOptionAllowOnce,
+				})
+			}
+			if len(options) == 0 {
+				options = []PermissionOption{
+					{OptionID: "ok", Name: "OK", Kind: PermissionOptionAllowOnce},
+					{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
+				}
+			}
+
+		case tool.AskUserKindText, "":
+			// Text question — offer Submit/Cancel
+			options = []PermissionOption{
+				{OptionID: "submit", Name: "Submit", Kind: PermissionOptionAllowOnce},
+				{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
+			}
+
+		default:
+			options = []PermissionOption{
+				{OptionID: "ok", Name: "OK", Kind: PermissionOptionAllowOnce},
+				{OptionID: "cancel", Name: "Cancel", Kind: PermissionOptionRejectOnce},
+			}
+		}
+
+		result, err := al.transport.SendRequest(
+			"session/request_permission",
+			RequestPermissionRequest{
+				SessionID: al.session.ID,
+				ToolCall: &ToolCallUpdate{
+					Title: title,
+					Kind:  ToolKindExecute,
+				},
+				Options: options,
+			},
+			5*time.Minute,
+		)
+		if err != nil {
+			return tool.AskUserResponse{}, fmt.Errorf("ask_user permission request: %w", err)
+		}
+
+		var response RequestPermissionResponse
+		if err := json.Unmarshal(result, &response); err != nil {
+			return tool.AskUserResponse{}, fmt.Errorf("ask_user parse response: %w", err)
+		}
+
+		// Build AskUserResponse from permission response
+		resp := tool.AskUserResponse{
+			Status:        tool.AskUserStatusSubmitted,
+			Title:         title,
+			QuestionCount: len(req.Questions),
+		}
+
+		if response.Outcome.Outcome == "cancelled" || response.Outcome.Outcome == "rejected" {
+			resp.Status = tool.AskUserStatusCancelled
+			for range req.Questions {
+				resp.Answers = append(resp.Answers, tool.AskUserAnswer{
+					CompletionStatus: tool.AskUserCompletionUnanswered,
+					Answered:         false,
+				})
+			}
+			return resp, nil
+		}
+
+		// User selected an option
+		selectedID := ""
+		if response.Outcome.SelectedOption != nil {
+			selectedID = string(response.Outcome.SelectedOption.OptionID)
+		}
+
+		switch question.Kind {
+		case tool.AskUserKindSingle:
+			resp.Answers = append(resp.Answers, tool.AskUserAnswer{
+				ID:                question.ID,
+				Title:             question.Title,
+				Kind:              tool.AskUserKindSingle,
+				CompletionStatus:  tool.AskUserCompletionAnswered,
+				AnswerMode:        tool.AskUserAnswerModeSelectionOnly,
+				Answered:          true,
+				SelectedChoiceIDs: []string{selectedID},
+				SelectedChoices:   []string{selectedID},
+			})
+			resp.AnsweredCount = 1
+
+		case tool.AskUserKindMulti:
+			// Permission options only allow single selection, treat as single
+			resp.Answers = append(resp.Answers, tool.AskUserAnswer{
+				ID:                question.ID,
+				Title:             question.Title,
+				Kind:              tool.AskUserKindSingle,
+				CompletionStatus:  tool.AskUserCompletionAnswered,
+				AnswerMode:        tool.AskUserAnswerModeSelectionOnly,
+				Answered:          true,
+				SelectedChoiceIDs: []string{selectedID},
+				SelectedChoices:   []string{selectedID},
+			})
+			resp.AnsweredCount = 1
+
+		case tool.AskUserKindText, "":
+			// Text question — user selected Submit
+			freeformText := ""
+			if selectedID == "submit" {
+				// IDE permission UI doesn't support freeform text input.
+				// Return an empty string — the LLM will adapt.
+				freeformText = ""
+			}
+			resp.Answers = append(resp.Answers, tool.AskUserAnswer{
+				ID:               question.ID,
+				Title:            question.Title,
+				Kind:             tool.AskUserKindText,
+				CompletionStatus: tool.AskUserCompletionAnswered,
+				AnswerMode:       tool.AskUserAnswerModeFreeformOnly,
+				Answered:         selectedID == "submit",
+				FreeformText:     freeformText,
+			})
+			if selectedID == "submit" {
+				resp.AnsweredCount = 1
+			}
+		}
+
+		return resp, nil
+	})
 }
