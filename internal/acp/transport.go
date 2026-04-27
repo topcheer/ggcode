@@ -197,12 +197,23 @@ func (t *Transport) SendRequest(method string, params interface{}, timeout time.
 
 // DeliverResponse delivers a response from the Client to a pending SendRequest caller.
 // Called by the Handler's message loop when it receives a JSON-RPC response.
-// The response ID (int from JSON) is matched against pending int64 IDs.
 func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 	if resp.ID == nil {
 		return
 	}
-	id := int64(*resp.ID)
+
+	// Convert ID to int64 for pending map lookup
+	var id int64
+	switch v := resp.ID.(type) {
+	case float64:
+		id = int64(v)
+	case int:
+		id = int64(v)
+	case int64:
+		id = v
+	default:
+		return
+	}
 
 	t.pendingMu.Lock()
 	ch, ok := t.pending[id]
@@ -214,20 +225,20 @@ func (t *Transport) DeliverResponse(resp *JSONRPCResponse) {
 }
 
 // WriteResponse writes a JSON-RPC response with the given result.
-func (t *Transport) WriteResponse(id int, result interface{}) error {
+func (t *Transport) WriteResponse(id RequestID, result interface{}) error {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
-		ID:      intPtr(id),
+		ID:      id,
 		Result:  result,
 	}
 	return t.writeJSON(resp)
 }
 
 // WriteError writes a JSON-RPC error response.
-func (t *Transport) WriteError(id int, code int, msg string) error {
+func (t *Transport) WriteError(id RequestID, code int, msg string) error {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
-		ID:      intPtr(id),
+		ID:      id,
 		Error: &JSONRPCError{
 			Code:    code,
 			Message: msg,
@@ -280,8 +291,4 @@ func (t *Transport) writeJSON(v interface{}) error {
 		return fmt.Errorf("writing newline: %w", err)
 	}
 	return nil
-}
-
-func intPtr(i int) *int {
-	return &i
 }

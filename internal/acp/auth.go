@@ -129,7 +129,7 @@ func (ah *AuthHandler) sendAuthInstructions(resp *DeviceCodeResponse) {
 	_ = ah.transport.WriteNotification("session/update", SessionUpdateParams{
 		SessionID: ah.sessionID,
 		Update: SessionUpdate{
-			SessionUpdateType: "auth_required",
+			Type: "auth_required",
 			Content: &ContentBlock{
 				Type: "text",
 				Text: fmt.Sprintf("To authenticate, visit: %s\nEnter code: %s", resp.VerificationURI, resp.UserCode),

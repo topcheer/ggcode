@@ -426,11 +426,15 @@ func TestIntegrationPermissionApproved(t *testing.T) {
 	go func() {
 		result, err := pt.agent.SendRequest(
 			"session/request_permission",
-			acp.PermissionRequestParams{
+			acp.RequestPermissionRequest{
 				SessionID: "test-session",
-				Request: acp.PermissionRequest{
-					Type:        "tool_use",
-					Description: "Execute tool: write_file",
+				ToolCall: &acp.ToolCallUpdate{
+					Title: "Execute tool: write_file",
+					Kind:  acp.ToolKindExecute,
+				},
+				Options: []acp.PermissionOption{
+					{OptionID: "allow", Name: "Allow", Kind: acp.PermissionOptionAllowOnce},
+					{OptionID: "reject", Name: "Reject", Kind: acp.PermissionOptionRejectOnce},
 				},
 			},
 			10*time.Second,
@@ -455,12 +459,13 @@ func TestIntegrationPermissionApproved(t *testing.T) {
 
 	// Extract the request ID and respond
 	reqID := permReq["id"].(float64)
-	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"approved":true}}`, reqID)
+	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"outcome":{"outcome":"selected","selectedOption":{"optionId":"allow"}}}}`, reqID)
 	pt.clientWrite.Write([]byte(respLine + "\n"))
 
 	select {
 	case approved := <-done:
 		if !approved {
+			t.Error("expected approval")
 			t.Error("expected approved=true")
 		}
 		t.Log("Permission approved OK")
@@ -491,12 +496,16 @@ func TestIntegrationPermissionDenied(t *testing.T) {
 	go func() {
 		result, err := pt.agent.SendRequest(
 			"session/request_permission",
-			acp.PermissionRequestParams{
+			acp.RequestPermissionRequest{
 				SessionID: "test-denied",
-				Request: acp.PermissionRequest{
-					Type:        "fs_write",
-					Path:        "/etc/passwd",
-					Description: "Write to system file",
+				ToolCall: &acp.ToolCallUpdate{
+					Title:     "Write to system file",
+					Kind:      acp.ToolKindEdit,
+					Locations: []acp.ToolCallLocation{{Path: "/etc/passwd"}},
+				},
+				Options: []acp.PermissionOption{
+					{OptionID: "allow", Name: "Allow", Kind: acp.PermissionOptionAllowOnce},
+					{OptionID: "reject", Name: "Reject", Kind: acp.PermissionOptionRejectOnce},
 				},
 			},
 			10*time.Second,
@@ -518,7 +527,7 @@ func TestIntegrationPermissionDenied(t *testing.T) {
 	}
 
 	reqID := permReq["id"].(float64)
-	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"approved":false}}`, reqID)
+	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"outcome":{"outcome":"cancelled"}}}`, reqID)
 	pt.clientWrite.Write([]byte(respLine + "\n"))
 
 	select {
@@ -676,7 +685,7 @@ func TestIntegrationSendRequestTimeout(t *testing.T) {
 	go func() {
 		_, err := at.SendRequest(
 			"session/request_permission",
-			acp.PermissionRequestParams{SessionID: "timeout"},
+			acp.RequestPermissionRequest{SessionID: "timeout"},
 			200*time.Millisecond,
 		)
 		done <- err
@@ -965,9 +974,16 @@ func TestIntegrationBidirectionalConcurrent(t *testing.T) {
 		defer wg.Done()
 		pt.agent.SendRequest(
 			"session/request_permission",
-			acp.PermissionRequestParams{
+			acp.RequestPermissionRequest{
 				SessionID: "concurrent",
-				Request:   acp.PermissionRequest{Type: "terminal", Command: "ls", Description: "List"},
+				ToolCall: &acp.ToolCallUpdate{
+					Title: "List",
+					Kind:  acp.ToolKindExecute,
+				},
+				Options: []acp.PermissionOption{
+					{OptionID: "allow", Name: "Allow", Kind: acp.PermissionOptionAllowOnce},
+					{OptionID: "reject", Name: "Reject", Kind: acp.PermissionOptionRejectOnce},
+				},
 			},
 			10*time.Second,
 		)
@@ -989,7 +1005,7 @@ func TestIntegrationBidirectionalConcurrent(t *testing.T) {
 	}
 
 	reqID := permReq["id"].(float64)
-	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"approved":true}}`, reqID)
+	respLine := fmt.Sprintf(`{"jsonrpc":"2.0","id":%.0f,"result":{"outcome":{"outcome":"selected","selectedOption":{"optionId":"allow"}}}}`, reqID)
 	pt.clientWrite.Write([]byte(respLine + "\n"))
 
 	wg.Wait()

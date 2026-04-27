@@ -69,10 +69,12 @@ func NewAgentLoop(
 			return permission.Allow
 		}
 
-		approved, err := al.RequestPermission(ctx, PermissionRequest{
-			Type:        "tool_use",
-			Description: fmt.Sprintf("Execute tool: %s", toolName),
-		})
+		approved, err := al.RequestPermission(ctx, "tool_use",
+			ToolCallUpdate{
+				Title: fmt.Sprintf("Execute tool: %s", toolName),
+				Kind:  ToolKindExecute,
+			},
+		)
 		if err != nil {
 			debug.Log("acp", "permission request error: %v", err)
 			return permission.Deny
@@ -90,11 +92,13 @@ func NewAgentLoop(
 			return true
 		}
 
-		approved, err := al.RequestPermission(ctx, PermissionRequest{
-			Type:        "fs_write",
-			Path:        filePath,
-			Description: fmt.Sprintf("Write file: %s", filePath),
-		})
+		approved, err := al.RequestPermission(ctx, "fs_write",
+			ToolCallUpdate{
+				Title:     fmt.Sprintf("Write file: %s", filePath),
+				Kind:      ToolKindEdit,
+				Locations: []ToolCallLocation{{Path: filePath}},
+			},
+		)
 		if err != nil {
 			debug.Log("acp", "diff permission error: %v", err)
 			return false
@@ -200,7 +204,7 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
-				SessionUpdateType: "agent_message_chunk",
+				Type: "agent_message_chunk",
 				Content: &ContentBlock{
 					Type: "text",
 					Text: event.Text,
@@ -214,11 +218,11 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
-				SessionUpdateType: "tool_call",
+				Type: "tool_call",
 				ToolCall: &ToolCallUpdate{
 					ToolCallID: event.Tool.ID,
 					Title:      event.Tool.Name,
-					Kind:       kind,
+					Kind:       ToolKind(kind),
 					Status:     "running",
 					RawInput:   string(event.Tool.Arguments),
 				},
@@ -239,11 +243,11 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
-				SessionUpdateType: "tool_result",
+				Type: "tool_result",
 				ToolCall: &ToolCallUpdate{
 					ToolCallID: event.Tool.ID,
 					Title:      event.Tool.Name,
-					Status:     status,
+					Status:     ToolCallStatus(status),
 					RawOutput:  event.Result,
 				},
 				Content: &ContentBlock{
@@ -265,7 +269,7 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
-				SessionUpdateType: "agent_message_chunk",
+				Type: "agent_message_chunk",
 				Content: &ContentBlock{
 					Type: "text",
 					Text: "Error: " + event.Error.Error(),
@@ -345,12 +349,18 @@ func (al *AgentLoop) WriteFile(ctx context.Context, path, content string) error 
 
 // RequestPermission sends a permission request to the Client and waits for response.
 // This sends a JSON-RPC request (not a notification) and blocks until the Client responds.
-func (al *AgentLoop) RequestPermission(ctx context.Context, req PermissionRequest) (bool, error) {
+func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, toolCall ToolCallUpdate) (bool, error) {
+	options := []PermissionOption{
+		{OptionID: "allow", Name: "Allow", Kind: PermissionOptionAllowOnce},
+		{OptionID: "reject", Name: "Reject", Kind: PermissionOptionRejectOnce},
+	}
+
 	result, err := al.transport.SendRequest(
 		"session/request_permission",
-		PermissionRequestParams{
+		RequestPermissionRequest{
 			SessionID: al.session.ID,
-			Request:   req,
+			ToolCall:  &toolCall,
+			Options:   options,
 		},
 		5*time.Minute,
 	)
@@ -358,15 +368,13 @@ func (al *AgentLoop) RequestPermission(ctx context.Context, req PermissionReques
 		return false, fmt.Errorf("requesting permission: %w", err)
 	}
 
-	// Parse the Client's approval response
-	var response struct {
-		Approved bool `json:"approved"`
-	}
+	var response RequestPermissionResponse
 	if err := json.Unmarshal(result, &response); err != nil {
 		return false, fmt.Errorf("parsing permission response: %w", err)
 	}
 
-	return response.Approved, nil
+	// Check if user selected "allow"
+	return response.Outcome.Outcome == "selected" && response.Outcome.SelectedOption != nil && response.Outcome.SelectedOption.OptionID == "allow", nil
 }
 
 // requestClientReadFile requests the Client to read a file via fs/read_text_file.

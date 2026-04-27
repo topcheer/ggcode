@@ -119,9 +119,17 @@ func (h *Handler) handleRequest(_ context.Context, req *JSONRPCRequest) {
 		h.dispatch(req, h.handleSessionLoad)
 	case "session/set_mode":
 		h.dispatch(req, h.handleSessionSetMode)
+	case "session/close":
+		h.dispatch(req, h.handleSessionClose)
+	case "session/list":
+		h.dispatch(req, h.handleSessionList)
+	case "session/resume":
+		h.dispatch(req, h.handleSessionResume)
+	case "session/set_config_option":
+		h.dispatch(req, h.handleSetConfigOption)
 	default:
 		if req.ID != nil {
-			_ = h.transport.WriteError(*req.ID, ErrCodeMethodNotFound, fmt.Sprintf("method not found: %s", req.Method))
+			_ = h.transport.WriteError(req.ID, ErrCodeMethodNotFound, fmt.Sprintf("method not found: %s", req.Method))
 		}
 	}
 }
@@ -131,12 +139,12 @@ func (h *Handler) dispatch(req *JSONRPCRequest, handler func(json.RawMessage) (i
 	result, err := handler(req.Params)
 	if err != nil {
 		if req.ID != nil {
-			_ = h.transport.WriteError(*req.ID, ErrCodeInternalError, err.Error())
+			_ = h.transport.WriteError(req.ID, ErrCodeInternalError, err.Error())
 		}
 		return
 	}
 	if req.ID != nil {
-		_ = h.transport.WriteResponse(*req.ID, result)
+		_ = h.transport.WriteResponse(req.ID, result)
 	}
 }
 
@@ -153,7 +161,7 @@ func (h *Handler) handleInitialize(params json.RawMessage) (interface{}, error) 
 	h.initialized = true
 
 	result := InitializeResult{
-		ProtocolVersion: 1,
+		ProtocolVersion: ProtocolVersion,
 		AgentCapabilities: AgentCapabilities{
 			LoadSession: true,
 			PromptCapabilities: &PromptCapabilities{
@@ -163,6 +171,11 @@ func (h *Handler) handleInitialize(params json.RawMessage) (interface{}, error) 
 			MCPCapabilities: &MCPCapabilities{
 				HTTP: true,
 				SSE:  true,
+			},
+			SessionCapabilities: &SessionCapabilities{
+				Close:  &SessionCloseCapabilities{},
+				List:   &SessionListCapabilities{},
+				Resume: &SessionResumeCapabilities{},
 			},
 		},
 		AgentInfo: ImplementationInfo{
@@ -248,7 +261,11 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 		session.mcpManager = mgr
 	}
 
-	return SessionNewResult{SessionID: session.ID}, nil
+	return SessionNewResult{
+		SessionID:     session.ID,
+		Modes:         getDefaultSessionModeStatePtr(),
+		ConfigOptions: getDefaultConfigOptions(),
+	}, nil
 }
 
 // handleSessionPrompt handles the "session/prompt" method.
@@ -371,8 +388,8 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 			_ = h.transport.WriteNotification("session/update", SessionUpdateParams{
 				SessionID: session.ID,
 				Update: SessionUpdate{
-					SessionUpdateType: updateType,
-					Content:           &block,
+					Type:    updateType,
+					Content: &block,
 				},
 			})
 		}
@@ -467,4 +484,200 @@ func (h *Handler) loadSessionFromWorkspaces(sessionID string) (*Session, error) 
 		}
 	}
 	return nil, fmt.Errorf("session %s not found in any workspace", sessionID)
+}
+
+// handleSessionClose closes an active session and cleans up resources.
+func (h *Handler) handleSessionClose(params json.RawMessage) (interface{}, error) {
+	var req CloseSessionRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("parsing session/close params: %w", err)
+	}
+
+	h.sessionsMu.Lock()
+	session, ok := h.sessions[req.SessionID]
+	h.sessionsMu.Unlock()
+
+	if !ok {
+		return nil, fmt.Errorf("session %s not found", req.SessionID)
+	}
+
+	// Cancel any ongoing work
+	if session.Cancel != nil {
+		session.Cancel()
+	}
+
+	// Remove from active sessions
+	h.sessionsMu.Lock()
+	delete(h.sessions, req.SessionID)
+	h.sessionsMu.Unlock()
+
+	debug.Log("acp", "session %s closed", req.SessionID)
+	return CloseSessionResponse{}, nil
+}
+
+// handleSessionList lists existing sessions for the given cwd.
+func (h *Handler) handleSessionList(params json.RawMessage) (interface{}, error) {
+	var req ListSessionsRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("parsing session/list params: %w", err)
+	}
+
+	var sessions []SessionInfo
+	searchDir := h.sessionsDir
+	if req.CWD != "" {
+		searchDir = workspaceSessionsDir(h.sessionsDir, req.CWD)
+	}
+
+	entries, err := os.ReadDir(searchDir)
+	if err != nil {
+		// No sessions yet is not an error
+		return ListSessionsResponse{Sessions: []SessionInfo{}}, nil
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Try to load session metadata
+		metaPath := filepath.Join(searchDir, entry.Name(), "session.json")
+		data, err := os.ReadFile(metaPath)
+		if err != nil {
+			continue
+		}
+		var sd struct {
+			ID        string `json:"id"`
+			CWD       string `json:"cwd"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+		if err := json.Unmarshal(data, &sd); err != nil {
+			continue
+		}
+		sessions = append(sessions, SessionInfo{
+			SessionID: sd.ID,
+			CWD:       sd.CWD,
+			CreatedAt: sd.CreatedAt,
+			UpdatedAt: sd.UpdatedAt,
+		})
+	}
+
+	return ListSessionsResponse{Sessions: sessions}, nil
+}
+
+// handleSessionResume resumes an existing session.
+func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, error) {
+	var req ResumeSessionRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("parsing session/resume params: %w", err)
+	}
+
+	session, err := h.loadSessionFromWorkspaces(req.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("loading session: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = ctx
+	session.SetCancel(cancel)
+
+	// Connect MCP servers if provided
+	if len(req.MCPServers) > 0 {
+		if err := h.connectMCPServers(ctx, session, req.MCPServers); err != nil {
+			debug.Log("acp", "MCP server connection errors: %v", err)
+		}
+	}
+
+	h.sessionsMu.Lock()
+	h.sessions[req.SessionID] = session
+	h.sessionsMu.Unlock()
+
+	modes := getDefaultSessionModeState()
+	configOpts := getDefaultConfigOptions()
+
+	debug.Log("acp", "session %s resumed", req.SessionID)
+	return ResumeSessionResponse{
+		Modes:         &modes,
+		ConfigOptions: configOpts,
+	}, nil
+}
+
+// handleSetConfigOption sets a configuration option for a session.
+func (h *Handler) handleSetConfigOption(params json.RawMessage) (interface{}, error) {
+	var req SetSessionConfigOptionRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, fmt.Errorf("parsing session/set_config_option params: %w", err)
+	}
+
+	h.sessionsMu.Lock()
+	_, ok := h.sessions[req.SessionID]
+	// Mode change is handled by the agent loop config
+	h.sessionsMu.Unlock()
+
+	configOpts := getDefaultConfigOptions()
+	if ok {
+		// Update the current value for mode
+		for i := range configOpts {
+			if configOpts[i].ID == req.ConfigID {
+				configOpts[i].CurrentValue = req.Value
+			}
+		}
+	}
+
+	return SetSessionConfigOptionResponse{
+		ConfigOptions: configOpts,
+	}, nil
+}
+
+// getDefaultSessionModeState returns the default modes for ACP sessions.
+func getDefaultSessionModeState() SessionModeState {
+	return SessionModeState{
+		Modes: []SessionMode{
+			{ID: "supervised", Name: "Supervised", Description: "Asks for confirmation on tool use"},
+			{ID: "auto", Name: "Auto", Description: "Automatically allows safe operations"},
+			{ID: "bypass", Name: "Bypass", Description: "Allows almost everything"},
+			{ID: "autopilot", Name: "Autopilot", Description: "Full autonomy with escalation"},
+		},
+		Current: "bypass",
+	}
+}
+
+func getDefaultSessionModeStatePtr() *SessionModeState {
+	s := getDefaultSessionModeState()
+	return &s
+}
+
+// getDefaultConfigOptions returns config options for ACP sessions.
+func getDefaultConfigOptions() []SessionConfigOption {
+	modes := getDefaultSessionModeState()
+	var modeOptions []interface{}
+	for _, m := range modes.Modes {
+		modeOptions = append(modeOptions, SessionConfigSelectOption{
+			ID:   SessionConfigValueId(m.ID),
+			Name: m.Name,
+		})
+	}
+	return []SessionConfigOption{
+		{
+			Type:         "select",
+			ID:           "mode",
+			Name:         "Mode",
+			Description:  "Permission mode for the session",
+			Category:     "mode",
+			CurrentValue: SessionConfigValueId(modes.Current),
+			Options:      modeOptions,
+		},
+	}
+}
+
+// connectMCPServers connects MCP servers for a session.
+func (h *Handler) connectMCPServers(ctx context.Context, session *Session, servers []MCPServer) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	mgr := NewMCPManager(h.toolRegistry)
+	if err := mgr.ConnectServers(ctx, servers); err != nil {
+		return err
+	}
+	session.mcpManager = mgr
+	return nil
 }

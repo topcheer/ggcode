@@ -27,7 +27,7 @@ func TestTransportReadMessage(t *testing.T) {
 	if req.Method != "initialize" {
 		t.Errorf("expected method 'initialize', got %q", req.Method)
 	}
-	if req.ID == nil || *req.ID != 1 {
+	if req.ID == nil || req.ID != float64(1) {
 		t.Errorf("expected id 1, got %v", req.ID)
 	}
 
@@ -86,7 +86,7 @@ func TestTransportWriteResponse(t *testing.T) {
 	if resp.JSONRPC != "2.0" {
 		t.Errorf("expected jsonrpc '2.0', got %q", resp.JSONRPC)
 	}
-	if resp.ID == nil || *resp.ID != 1 {
+	if resp.ID == nil || resp.ID != float64(1) {
 		t.Errorf("expected id 1, got %v", resp.ID)
 	}
 	if resp.Error != nil {
@@ -251,24 +251,26 @@ func TestACPToProviderContentEmpty(t *testing.T) {
 
 // TestPermissionRequestTypes tests permission request type marshaling
 func TestPermissionRequestTypes(t *testing.T) {
-	req := PermissionRequest{
-		Type:        "fs_write",
-		Path:        "/tmp/test.txt",
-		Description: "Write test file",
+	req := ToolCallUpdate{
+		Title: "Write test file",
+		Kind:  ToolKindEdit,
+		Locations: []ToolCallLocation{
+			{Path: "/tmp/test.txt"},
+		},
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var decoded PermissionRequest
+	var decoded ToolCallUpdate
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if decoded.Type != "fs_write" {
-		t.Errorf("expected type 'fs_write', got %q", decoded.Type)
+	if decoded.Title != "Write test file" {
+		t.Errorf("expected title 'Write test file', got %q", decoded.Title)
 	}
-	if decoded.Path != "/tmp/test.txt" {
-		t.Errorf("expected path '/tmp/test.txt', got %q", decoded.Path)
+	if len(decoded.Locations) != 1 || decoded.Locations[0].Path != "/tmp/test.txt" {
+		t.Errorf("expected location '/tmp/test.txt', got %+v", decoded.Locations)
 	}
 }
 
@@ -447,7 +449,7 @@ func TestTransportReadAnyMessageResponse(t *testing.T) {
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if resp.ID == nil || *resp.ID != 1 {
+	if resp.ID == nil || resp.ID != float64(1) {
 		t.Errorf("expected id 1, got %v", resp.ID)
 	}
 	if resp.Error != nil {
@@ -522,7 +524,7 @@ func TestToolCallUpdateJSON(t *testing.T) {
 
 func TestSessionUpdateWithToolCall(t *testing.T) {
 	update := SessionUpdate{
-		SessionUpdateType: "tool_call",
+		Type: "tool_call",
 		ToolCall: &ToolCallUpdate{
 			ToolCallID: "call-456",
 			Title:      "write_file",
@@ -543,8 +545,8 @@ func TestSessionUpdateWithToolCall(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if decoded.SessionUpdateType != "tool_call" {
-		t.Errorf("expected type 'tool_call', got %q", decoded.SessionUpdateType)
+	if decoded.Type != "tool_call" {
+		t.Errorf("expected type 'tool_call', got %q", decoded.Type)
 	}
 	if decoded.ToolCall == nil {
 		t.Fatal("expected ToolCall to be non-nil")
