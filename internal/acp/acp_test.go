@@ -1457,8 +1457,8 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 
 	askTool, _ := registry.Get("ask_user")
 
-	done := make(chan tool.AskUserResponse, 1)
-	errCh := make(chan error, 1)
+	done := make(chan string, 1)       // error message
+	doneResult := make(chan string, 1) // result content
 	go func() {
 		input := json.RawMessage(`{
 			"title": "Enter name",
@@ -1471,27 +1471,18 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 		}`)
 		result, err := askTool.Execute(context.Background(), input)
 		if err != nil {
-			errCh <- err
+			done <- err.Error()
 			return
 		}
 		if result.IsError {
-			errCh <- fmt.Errorf("tool error: %s", result.Content)
+			done <- result.Content
 			return
 		}
-		var resp tool.AskUserResponse
-		json.Unmarshal([]byte(result.Content), &resp)
-		done <- resp
+		doneResult <- result.Content
 	}()
 
 	req := readAgentRequest(t, ar)
 	reqID := req["id"]
-
-	// Verify Submit/Cancel options
-	params, _ := req["params"].(map[string]interface{})
-	options, _ := params["options"].([]interface{})
-	if len(options) != 2 {
-		t.Errorf("expected 2 options, got %d", len(options))
-	}
 
 	// User submits
 	writeAgentResponse(t, cw, reqID, map[string]interface{}{
@@ -1504,21 +1495,13 @@ func TestAskUserHandlerTextSubmit(t *testing.T) {
 	})
 
 	select {
-	case resp := <-done:
-		if resp.AnsweredCount != 1 {
-			t.Errorf("AnsweredCount = %d, want 1", resp.AnsweredCount)
+	case errMsg := <-done:
+		// Should get an error telling LLM to ask in plain text
+		if !strings.Contains(errMsg, "does not support text input") {
+			t.Errorf("expected 'does not support text input' in error, got: %s", errMsg)
 		}
-		if len(resp.Answers) != 1 {
-			t.Fatalf("Answers = %d, want 1", len(resp.Answers))
-		}
-		if !resp.Answers[0].Answered {
-			t.Error("expected Answered=true")
-		}
-		if resp.Answers[0].Kind != tool.AskUserKindText {
-			t.Errorf("Kind = %q, want %q", resp.Answers[0].Kind, tool.AskUserKindText)
-		}
-	case err := <-errCh:
-		t.Fatalf("error: %v", err)
+	case content := <-doneResult:
+		t.Errorf("expected error fallback, got result: %s", content)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout")
 	}
@@ -1546,8 +1529,8 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 
 	askTool, _ := registry.Get("ask_user")
 
-	done := make(chan tool.AskUserResponse, 1)
-	errCh := make(chan error, 1)
+	done := make(chan string, 1)       // error message
+	doneResult := make(chan string, 1) // result content
 	go func() {
 		input := json.RawMessage(`{
 			"title": "Pick",
@@ -1561,12 +1544,14 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 		}`)
 		result, err := askTool.Execute(context.Background(), input)
 		if err != nil {
-			errCh <- err
+			done <- err.Error()
 			return
 		}
-		var resp tool.AskUserResponse
-		json.Unmarshal([]byte(result.Content), &resp)
-		done <- resp
+		if result.IsError {
+			done <- result.Content
+			return
+		}
+		doneResult <- result.Content
 	}()
 
 	req := readAgentRequest(t, ar)
@@ -1580,15 +1565,13 @@ func TestAskUserHandlerCancelled(t *testing.T) {
 	})
 
 	select {
-	case resp := <-done:
-		if resp.Status != tool.AskUserStatusCancelled {
-			t.Errorf("status = %q, want %q", resp.Status, tool.AskUserStatusCancelled)
+	case errMsg := <-done:
+		// Should get an error telling LLM to ask in plain text
+		if !strings.Contains(errMsg, "dismissed") {
+			t.Errorf("expected 'dismissed' in error, got: %s", errMsg)
 		}
-		if resp.AnsweredCount != 0 {
-			t.Errorf("AnsweredCount = %d, want 0", resp.AnsweredCount)
-		}
-	case err := <-errCh:
-		t.Fatalf("error: %v", err)
+	case content := <-doneResult:
+		t.Errorf("expected error fallback, got result: %s", content)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout")
 	}
