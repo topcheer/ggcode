@@ -77,6 +77,7 @@ func NewAgentLoop(
 
 	// --- Checkpoint manager ---
 	a.SetCheckpointManager(checkpoint.NewManager(50))
+	tool.SetPreWriteHook(tool.CheckpointSaver(a.CheckpointManager()))
 
 	// --- Default mode: auto ---
 	defaultMode := "auto"

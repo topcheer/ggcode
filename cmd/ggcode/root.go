@@ -501,6 +501,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
 
 	// Setup session store
