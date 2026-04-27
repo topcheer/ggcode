@@ -3413,6 +3413,15 @@ func git(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// initTestRepo creates a git repo with local user config so that commits work
+// even when GIT_CONFIG_GLOBAL=/dev/null (e.g., in CI runners with no global config).
+func initTestRepo(t *testing.T, dir string) {
+	t.Helper()
+	git(t, dir, "init")
+	git(t, dir, "config", "user.name", "Test")
+	git(t, dir, "config", "user.email", "test@ggcode.dev")
+}
+
 // gitDisableHooks sets core.hooksPath to /dev/null in the test repo
 // so that Init()'s internal git commands also skip global hooks.
 func gitDisableHooks(t *testing.T, dir string) {

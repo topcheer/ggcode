@@ -16,7 +16,7 @@ import (
 
 func TestSaveAndLoadConfigRoundtrip(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 
 	cfg := DefaultConfig("my-project", "Build an amazing app")
 	cfg.Contexts = []ContextConfig{
@@ -73,9 +73,7 @@ func TestSaveAndLoadConfigRoundtrip(t *testing.T) {
 
 func TestTaskLifecycleNewEnqueueRunLoad(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
-	git(t, root, "config", "user.name", "Test")
-	git(t, root, "config", "user.email", "test@example.com")
+	initTestRepo(t, root)
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
 	git(t, root, "add", "README.md")
 	git(t, root, "commit", "--no-verify", "-m", "init")
@@ -139,7 +137,7 @@ func TestTaskLifecycleNewEnqueueRunLoad(t *testing.T) {
 
 func TestDependencyChainUnblocksInOrder(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
@@ -205,7 +203,7 @@ func TestDependencyChainUnblocksInOrder(t *testing.T) {
 
 func TestListTasksReturnsAllTasks(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 
@@ -234,7 +232,7 @@ func TestListTasksReturnsAllTasks(t *testing.T) {
 
 func TestFormatTaskListShowsGoalsAndStatus(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "fmt test"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -266,7 +264,7 @@ func TestFormatTaskListShowsGoalsAndStatus(t *testing.T) {
 
 func TestListReviewableTasksFiltersCorrectly(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "review test"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -308,7 +306,7 @@ func TestListReviewableTasksFiltersCorrectly(t *testing.T) {
 
 func TestPromoteTaskRejectsUnapprovedTask(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "promo test"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -333,7 +331,7 @@ func TestPromoteTaskRejectsUnapprovedTask(t *testing.T) {
 
 func TestPromoteTaskRejectsAlreadyPromoted(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "promo test"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -356,7 +354,7 @@ func TestPromoteTaskRejectsAlreadyPromoted(t *testing.T) {
 
 func TestListPromotableTasksOnlyShowsReady(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "promo list test"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -399,7 +397,7 @@ func TestListPromotableTasksOnlyShowsReady(t *testing.T) {
 
 func TestRunGCDeletesLogFilesOlderThanThreshold(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "gc logs test"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -449,7 +447,7 @@ func TestRunGCDeletesLogFilesOlderThanThreshold(t *testing.T) {
 
 func TestDoctorDetectsOrphanedWorktrees(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
@@ -483,7 +481,7 @@ func TestDoctorDetectsOrphanedWorktrees(t *testing.T) {
 
 func TestDoctorReportsNoIssuesForHealthyProject(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "healthy project"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -512,7 +510,7 @@ func TestDoctorReportsNoIssuesForHealthyProject(t *testing.T) {
 
 func TestBuildMonitorReportEmptyProject(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "empty monitor"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -538,7 +536,7 @@ func TestBuildMonitorReportEmptyProject(t *testing.T) {
 
 func TestBuildMonitorReportWithRunningTask(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "running monitor"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -569,7 +567,7 @@ func TestBuildMonitorReportWithRunningTask(t *testing.T) {
 
 func TestBuildContextReportWithNoTasks(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	os.MkdirAll(filepath.Join(root, "internal", "api"), 0755)
 	result, err := Init(root, InitOptions{Goal: "context no tasks"})
 	if err != nil {
@@ -592,7 +590,7 @@ func TestBuildContextReportWithNoTasks(t *testing.T) {
 
 func TestBuildContextReportWithFailedTaskInContext(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	os.MkdirAll(filepath.Join(root, "internal", "api"), 0755)
 	result, err := Init(root, InitOptions{Goal: "context failed"})
 	if err != nil {
@@ -626,7 +624,7 @@ func TestBuildContextReportWithFailedTaskInContext(t *testing.T) {
 
 func TestBuildOwnerInboxWithRetryableTasks(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	os.MkdirAll(filepath.Join(root, "internal", "api"), 0755)
 	// Set owner via InitOptions contexts
 	result, err := Init(root, InitOptions{
@@ -667,7 +665,7 @@ func TestBuildOwnerInboxWithRetryableTasks(t *testing.T) {
 
 func TestTaskEventsRecordStatusTransitions(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
@@ -710,7 +708,7 @@ func TestTaskEventsRecordStatusTransitions(t *testing.T) {
 
 func TestSnapshotDBContainsCompletedTaskFields(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
@@ -742,7 +740,7 @@ func TestSnapshotDBContainsCompletedTaskFields(t *testing.T) {
 
 func TestBuildReleasePlanWithEnvironment(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "release env"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -778,7 +776,7 @@ func TestBuildReleasePlanWithEnvironment(t *testing.T) {
 
 func TestApplyReleasePlanCreatesReportFile(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
@@ -824,7 +822,7 @@ func TestApplyReleasePlanCreatesReportFile(t *testing.T) {
 
 func TestListReleaseWaveRolloutsReturnsAppliedPlans(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	os.MkdirAll(filepath.Join(root, "internal", "api"), 0755)
 	os.MkdirAll(filepath.Join(root, "internal", "web"), 0755)
 	result, err := Init(root, InitOptions{Goal: "wave list"})
@@ -884,7 +882,7 @@ func TestListReleaseWaveRolloutsReturnsAppliedPlans(t *testing.T) {
 
 func TestRunTaskWithVerificationFailureRecordsDetails(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
@@ -928,7 +926,7 @@ func TestRunTaskWithVerificationFailureRecordsDetails(t *testing.T) {
 
 func TestStreamingRunnerCapturesOutput(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
@@ -974,7 +972,7 @@ func TestStreamingRunnerCapturesOutput(t *testing.T) {
 
 func TestDiscoverFindsRootFromDeeplyNestedDir(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	deepDir := filepath.Join(root, "a", "b", "c", "d")
 	os.MkdirAll(deepDir, 0755)
 
@@ -1017,7 +1015,7 @@ func TestNormalizeContextsDeduplicatesByName(t *testing.T) {
 
 func TestRunGCAbandonsStaleBlockedTasksOnly(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "gc stale"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -1149,7 +1147,7 @@ run:
 
 func TestInitCreatesContextAgentsMDFiles(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	os.MkdirAll(filepath.Join(root, "internal", "payments"), 0755)
 	os.MkdirAll(filepath.Join(root, "internal", "shipping"), 0755)
 
@@ -1210,7 +1208,7 @@ func TestFindGGCodeConfigReturnsEmptyWhenMissing(t *testing.T) {
 
 func TestCheckProjectFailsWhenCommandFails(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "check fail"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -1239,7 +1237,7 @@ func TestCheckProjectFailsWhenCommandFails(t *testing.T) {
 
 func TestOpenSnapshotDBReturnsValidDB(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	result, err := Init(root, InitOptions{Goal: "snapshot db"})
 	if err != nil {
 		t.Fatalf("Init: %v", err)
@@ -1257,7 +1255,7 @@ func TestOpenSnapshotDBReturnsValidDB(t *testing.T) {
 
 func TestReleaseWaveGateApproveUpdatesStatus(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	os.MkdirAll(filepath.Join(root, "internal", "api"), 0755)
 	os.MkdirAll(filepath.Join(root, "internal", "web"), 0755)
 	result, err := Init(root, InitOptions{Goal: "gate approve"})
@@ -1316,7 +1314,7 @@ func TestReleaseWaveGateApproveUpdatesStatus(t *testing.T) {
 
 func TestReleaseWavePausePreventsAdvance(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	os.MkdirAll(filepath.Join(root, "internal", "api"), 0755)
 	result, err := Init(root, InitOptions{Goal: "pause wave"})
 	if err != nil {
@@ -1383,7 +1381,7 @@ func TestParseContextSpecsDeduplicates(t *testing.T) {
 
 func TestNullableFieldsInSnapshotDB(t *testing.T) {
 	root := t.TempDir()
-	git(t, root, "init")
+	initTestRepo(t, root)
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# test"), 0644)
