@@ -570,14 +570,10 @@ func (al *AgentLoop) setupAskUserHandler() {
 		}
 
 		if response.Outcome.Outcome == "cancelled" || response.Outcome.Outcome == "rejected" {
-			resp.Status = tool.AskUserStatusCancelled
-			for range req.Questions {
-				resp.Answers = append(resp.Answers, tool.AskUserAnswer{
-					CompletionStatus: tool.AskUserCompletionUnanswered,
-					Answered:         false,
-				})
-			}
-			return resp, nil
+			return tool.AskUserResponse{}, fmt.Errorf(
+				"ask_user: the user dismissed the question in the IDE. " +
+					"Please ask the user directly in your response text instead.",
+			)
 		}
 
 		// User selected an option
@@ -615,25 +611,12 @@ func (al *AgentLoop) setupAskUserHandler() {
 			resp.AnsweredCount = 1
 
 		case tool.AskUserKindText, "":
-			// Text question — user selected Submit
-			freeformText := ""
-			if selectedID == "submit" {
-				// IDE permission UI doesn't support freeform text input.
-				// Return an empty string — the LLM will adapt.
-				freeformText = ""
-			}
-			resp.Answers = append(resp.Answers, tool.AskUserAnswer{
-				ID:               question.ID,
-				Title:            question.Title,
-				Kind:             tool.AskUserKindText,
-				CompletionStatus: tool.AskUserCompletionAnswered,
-				AnswerMode:       tool.AskUserAnswerModeFreeformOnly,
-				Answered:         selectedID == "submit",
-				FreeformText:     freeformText,
-			})
-			if selectedID == "submit" {
-				resp.AnsweredCount = 1
-			}
+			// Text question — IDE permission UI doesn't support freeform text input.
+			// Return an error so the LLM falls back to asking in plain text.
+			return tool.AskUserResponse{}, fmt.Errorf(
+				"ask_user: the IDE does not support text input for this question. " +
+					"Please ask the user directly in your response text instead.",
+			)
 		}
 
 		return resp, nil
