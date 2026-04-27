@@ -13,6 +13,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -1599,5 +1600,315 @@ func TestAskUserHandlerNoHandlerWithoutACP(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "interactive") {
 		t.Errorf("expected 'interactive' in error, got: %s", result.Content)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SessionUpdate JSON structure tests (flattened format per ACP spec)
+// ---------------------------------------------------------------------------
+
+func TestSessionUpdateToolCallJSON(t *testing.T) {
+	// tool_call notification — flat fields, no nested objects
+	update := SessionUpdateParams{
+		SessionID: "sess-1",
+		Update: SessionUpdate{
+			Type:       "tool_call",
+			ToolCallID: "call-001",
+			Title:      "read_file",
+			Kind:       "read",
+			Status:     "pending",
+			RawInput:   json.RawMessage(`{"path":"/tmp/test.go"}`),
+		},
+	}
+	data, err := json.Marshal(update)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Verify JSON has flat structure (toolCallId as direct child, not nested)
+	raw := string(data)
+	for _, key := range []string{`"sessionUpdate":"tool_call"`, `"toolCallId":"call-001"`, `"title":"read_file"`, `"kind":"read"`, `"status":"pending"`, `"rawInput"`} {
+		if !strings.Contains(raw, key) {
+			t.Errorf("JSON missing %q in: %s", key, raw)
+		}
+	}
+	// Should NOT have nested "toolCall" object
+	if strings.Contains(raw, `"toolCall":{`) {
+		t.Errorf("JSON should not have nested toolCall object: %s", raw)
+	}
+
+	// Round-trip
+	var decoded SessionUpdateParams
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Update.Type != "tool_call" {
+		t.Errorf("Type = %q", decoded.Update.Type)
+	}
+	if decoded.Update.ToolCallID != "call-001" {
+		t.Errorf("ToolCallID = %q", decoded.Update.ToolCallID)
+	}
+	if decoded.Update.Kind != "read" {
+		t.Errorf("Kind = %q", decoded.Update.Kind)
+	}
+	if decoded.Update.Status != "pending" {
+		t.Errorf("Status = %q", decoded.Update.Status)
+	}
+}
+
+func TestSessionUpdateToolCallUpdateJSON(t *testing.T) {
+	// tool_call_update — status update with formatted title, no content/result
+	update := SessionUpdateParams{
+		SessionID: "sess-1",
+		Update: SessionUpdate{
+			Type:       "tool_call_update",
+			ToolCallID: "call-001",
+			Title:      "Read /tmp/test.go",
+			Status:     "completed",
+		},
+	}
+	data, err := json.Marshal(update)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	raw := string(data)
+	if !strings.Contains(raw, `"sessionUpdate":"tool_call_update"`) {
+		t.Errorf("missing sessionUpdate type: %s", raw)
+	}
+	if !strings.Contains(raw, `"title":"Read /tmp/test.go"`) {
+		t.Errorf("missing formatted title: %s", raw)
+	}
+	if !strings.Contains(raw, `"status":"completed"`) {
+		t.Errorf("missing status: %s", raw)
+	}
+	// Should NOT have content field (no result)
+	if strings.Contains(raw, `"content"`) {
+		t.Errorf("tool_call_update should not have content field: %s", raw)
+	}
+}
+
+func TestSessionUpdateAgentMessageJSON(t *testing.T) {
+	// agent_message_chunk — content is a single ContentBlock
+	update := SessionUpdateParams{
+		SessionID: "sess-1",
+		Update: SessionUpdate{
+			Type: "agent_message_chunk",
+			Content: &ContentBlock{
+				Type: "text",
+				Text: "Hello!",
+			},
+		},
+	}
+	data, err := json.Marshal(update)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	raw := string(data)
+	if !strings.Contains(raw, `"content":{"type":"text","text":"Hello!"}`) {
+		t.Errorf("content should be single object: %s", raw)
+	}
+}
+
+func TestSessionUpdateToolCallUpdateWithContentArray(t *testing.T) {
+	// tool_call_update can also have content as array (for future use)
+	contentEntries := []ToolCallContentEntry{
+		{Type: "content", Content: &ContentBlock{Type: "text", Text: "result text"}},
+	}
+	update := SessionUpdateParams{
+		SessionID: "sess-1",
+		Update: SessionUpdate{
+			Type:       "tool_call_update",
+			ToolCallID: "call-001",
+			Status:     "completed",
+			Content:    contentEntries,
+		},
+	}
+	data, err := json.Marshal(update)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	raw := string(data)
+	if !strings.Contains(raw, `"content":[{"type":"content"`) {
+		t.Errorf("content should be array: %s", raw)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleStreamEvent integration tests
+// ---------------------------------------------------------------------------
+
+func TestHandleStreamEventToolCallFormat(t *testing.T) {
+	// Verify that tool_call notification uses plain tool name (not formatted)
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	registry := tool.NewRegistry()
+	cfg := &config.Config{MaxIterations: 100}
+	session := NewSession("/tmp", nil)
+
+	al := NewAgentLoop(cfg, registry, transport, session, ClientCapabilities{}, nil)
+
+	err := al.handleStreamEvent(provider.StreamEvent{
+		Type: provider.StreamEventToolCallDone,
+		Tool: provider.ToolCallDelta{
+			ID:        "call-123",
+			Name:      "read_file",
+			Arguments: json.RawMessage(`{"path":"/tmp/test.go"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleStreamEvent: %v", err)
+	}
+
+	// Read notification from buffer
+	line, err := buf.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	var notif map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &notif); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if notif["method"] != "session/update" {
+		t.Errorf("method = %v", notif["method"])
+	}
+	params, _ := notif["params"].(map[string]interface{})
+	update, _ := params["update"].(map[string]interface{})
+	if update["sessionUpdate"] != "tool_call" {
+		t.Errorf("sessionUpdate = %v", update["sessionUpdate"])
+	}
+	// tool_call should have plain tool name (not formatted)
+	if update["title"] != "read_file" {
+		t.Errorf("title = %v, want plain 'read_file'", update["title"])
+	}
+	if update["kind"] != "read" {
+		t.Errorf("kind = %v", update["kind"])
+	}
+	if update["status"] != "pending" {
+		t.Errorf("status = %v", update["status"])
+	}
+}
+
+func TestHandleStreamEventToolCallUpdateFormat(t *testing.T) {
+	// Verify that tool_call_update uses DescribeTool formatted title
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	registry := tool.NewRegistry()
+	cfg := &config.Config{MaxIterations: 100}
+	session := NewSession("/tmp", nil)
+
+	al := NewAgentLoop(cfg, registry, transport, session, ClientCapabilities{}, nil)
+
+	err := al.handleStreamEvent(provider.StreamEvent{
+		Type: provider.StreamEventToolResult,
+		Tool: provider.ToolCallDelta{
+			ID:        "call-123",
+			Name:      "read_file",
+			Arguments: json.RawMessage(`{"path":"/tmp/test.go"}`),
+		},
+		Result:  "file contents",
+		IsError: false,
+	})
+	if err != nil {
+		t.Fatalf("handleStreamEvent: %v", err)
+	}
+
+	line, err := buf.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	var notif map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &notif); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	params, _ := notif["params"].(map[string]interface{})
+	update, _ := params["update"].(map[string]interface{})
+	if update["sessionUpdate"] != "tool_call_update" {
+		t.Errorf("sessionUpdate = %v", update["sessionUpdate"])
+	}
+	// tool_call_update should have formatted title from DescribeTool
+	if update["title"] != "Read /tmp/test.go" {
+		t.Errorf("title = %v, want formatted 'Read /tmp/test.go'", update["title"])
+	}
+	if update["status"] != "completed" {
+		t.Errorf("status = %v", update["status"])
+	}
+	// Should NOT have content (no result)
+	if _, hasContent := update["content"]; hasContent {
+		t.Errorf("tool_call_update should not have content, got: %v", update["content"])
+	}
+}
+
+func TestHandleStreamEventToolCallUpdateFailed(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	registry := tool.NewRegistry()
+	cfg := &config.Config{MaxIterations: 100}
+	session := NewSession("/tmp", nil)
+
+	al := NewAgentLoop(cfg, registry, transport, session, ClientCapabilities{}, nil)
+
+	al.handleStreamEvent(provider.StreamEvent{
+		Type: provider.StreamEventToolResult,
+		Tool: provider.ToolCallDelta{
+			ID:        "call-456",
+			Name:      "run_command",
+			Arguments: json.RawMessage(`{"command":"go test ./..."}`),
+		},
+		Result:  "exit code 1",
+		IsError: true,
+	})
+
+	line, _ := buf.ReadString('\n')
+	var notif map[string]interface{}
+	json.Unmarshal([]byte(line), &notif)
+	params, _ := notif["params"].(map[string]interface{})
+	update, _ := params["update"].(map[string]interface{})
+
+	if update["sessionUpdate"] != "tool_call_update" {
+		t.Errorf("sessionUpdate = %v", update["sessionUpdate"])
+	}
+	// run_command → formatted as command text directly
+	if update["title"] != "go test ./..." {
+		t.Errorf("title = %v, want 'go test ./...'", update["title"])
+	}
+	if update["status"] != "failed" {
+		t.Errorf("status = %v, want 'failed'", update["status"])
+	}
+}
+
+func TestHandleStreamEventAgentMessage(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	registry := tool.NewRegistry()
+	cfg := &config.Config{MaxIterations: 100}
+	session := NewSession("/tmp", nil)
+
+	al := NewAgentLoop(cfg, registry, transport, session, ClientCapabilities{}, nil)
+
+	al.handleStreamEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: "Hello from the agent!",
+	})
+
+	line, _ := buf.ReadString('\n')
+	var notif map[string]interface{}
+	json.Unmarshal([]byte(line), &notif)
+	params, _ := notif["params"].(map[string]interface{})
+	update, _ := params["update"].(map[string]interface{})
+
+	if update["sessionUpdate"] != "agent_message_chunk" {
+		t.Errorf("sessionUpdate = %v", update["sessionUpdate"])
+	}
+	content, _ := update["content"].(map[string]interface{})
+	if content["type"] != "text" {
+		t.Errorf("content type = %v", content["type"])
+	}
+	if content["text"] != "Hello from the agent!" {
+		t.Errorf("content text = %v", content["text"])
 	}
 }
