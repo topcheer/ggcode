@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1910,5 +1912,153 @@ func TestHandleStreamEventAgentMessage(t *testing.T) {
 	}
 	if content["text"] != "Hello from the agent!" {
 		t.Errorf("content text = %v", content["text"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Empty session cleanup tests
+// ---------------------------------------------------------------------------
+
+func TestSaveSkipsEmptySession(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession("/tmp", nil)
+	s.SetSaveDir(dir)
+
+	// Save with no messages — should NOT create a file.
+	if err := s.Save(dir); err != nil {
+		t.Fatalf("Save empty session: %v", err)
+	}
+
+	path := filepath.Join(dir, s.ID+".json")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("empty session file should not exist, got err=%v", err)
+	}
+}
+
+func TestSaveDeletesPreviouslySavedEmptySession(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession("/tmp", nil)
+	s.SetSaveDir(dir)
+
+	// Simulate a session that had messages, got saved, then messages were somehow removed.
+	// First, add a message and save.
+	s.AddMessage("user", []ContentBlock{{Type: "text", Text: "hi"}})
+	if err := s.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	path := filepath.Join(dir, s.ID+".json")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Fatal("session file should exist after first save")
+	}
+
+	// Now create a fresh empty session with the same ID and save — should delete the file.
+	s2 := &Session{ID: s.ID, CWD: "/tmp", saveDir: dir}
+	if err := s2.Save(dir); err != nil {
+		t.Fatalf("Save empty: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("empty session file should have been deleted")
+	}
+}
+
+func TestSaveWithMessages(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession("/tmp", nil)
+	s.SetSaveDir(dir)
+
+	s.AddMessage("user", []ContentBlock{{Type: "text", Text: "hello"}})
+	s.AddMessage("assistant", []ContentBlock{{Type: "text", Text: "world"}})
+
+	if err := s.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	path := filepath.Join(dir, s.ID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+
+	var sd SessionData
+	if err := json.Unmarshal(data, &sd); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(sd.Messages) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(sd.Messages))
+	}
+	if sd.Messages[0].Role != "user" {
+		t.Errorf("message 0 role = %q", sd.Messages[0].Role)
+	}
+}
+
+func TestHasMessages(t *testing.T) {
+	s := NewSession("/tmp", nil)
+	if s.HasMessages() {
+		t.Error("new session should not have messages")
+	}
+	s.AddMessage("user", []ContentBlock{{Type: "text", Text: "hi"}})
+	if !s.HasMessages() {
+		t.Error("session with message should report HasMessages=true")
+	}
+}
+
+func TestCleanupEmptySessionsOnEOF(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create two sessions: one with messages, one without.
+	cr, cw := io.Pipe()
+	_, aw := io.Pipe()
+	transport := NewTransport(cr, aw)
+
+	registry := tool.NewRegistry()
+	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
+	tool.RegisterBuiltinTools(registry, policy, "/tmp")
+
+	cfg := &config.Config{MaxIterations: 100}
+	handler := NewHandler(cfg, registry, transport, nil)
+	handler.sessionsDir = dir
+	handler.initialized = true
+
+	// Session with messages
+	sessionWith := NewSession("/tmp", nil)
+	sessionWith.AddMessage("user", []ContentBlock{{Type: "text", Text: "hi"}})
+	sessionDir := filepath.Join(dir, "ws1")
+	os.MkdirAll(sessionDir, 0o755)
+	sessionWith.SetSaveDir(sessionDir)
+	sessionWith.Save(sessionDir)
+
+	// Session without messages
+	sessionEmpty := NewSession("/tmp", nil)
+	sessionDir2 := filepath.Join(dir, "ws2")
+	os.MkdirAll(sessionDir2, 0o755)
+	sessionEmpty.SetSaveDir(sessionDir2)
+
+	handler.sessionsMu.Lock()
+	handler.sessions[sessionWith.ID] = sessionWith
+	handler.workspaceDirs[sessionWith.ID] = sessionDir
+	handler.sessions[sessionEmpty.ID] = sessionEmpty
+	handler.workspaceDirs[sessionEmpty.ID] = sessionDir2
+	handler.sessionsMu.Unlock()
+
+	// Create a file for the empty session to verify it gets deleted.
+	emptyPath := filepath.Join(sessionDir2, sessionEmpty.ID+".json")
+	os.WriteFile(emptyPath, []byte(`{"id":"`+sessionEmpty.ID+`"}`), 0o644)
+
+	// Simulate EOF by closing the reader.
+	cw.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	handler.Run(ctx)
+
+	// Session with messages should still exist.
+	withPath := filepath.Join(sessionDir, sessionWith.ID+".json")
+	if _, err := os.Stat(withPath); os.IsNotExist(err) {
+		t.Error("session with messages should be preserved")
+	}
+
+	// Empty session file should be deleted.
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Error("empty session file should have been cleaned up")
 	}
 }
