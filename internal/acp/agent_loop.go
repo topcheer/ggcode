@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
@@ -305,12 +306,13 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 
 	case provider.StreamEventToolCallDone:
 		kind := toolKind(event.Tool.Name)
+		title := formatToolTitle(event.Tool.Name, event.Tool.Arguments)
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
 				Type:       "tool_call",
 				ToolCallID: event.Tool.ID,
-				Title:      event.Tool.Name,
+				Title:      title,
 				Kind:       ToolKind(kind),
 				Status:     "pending",
 				RawInput:   event.Tool.Arguments,
@@ -322,16 +324,6 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		if event.IsError {
 			status = "failed"
 		}
-		// Build content entries for the tool call update
-		contentEntries := []ToolCallContentEntry{
-			{
-				Type: "content",
-				Content: &ContentBlock{
-					Type: "text",
-					Text: event.Result,
-				},
-			},
-		}
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
@@ -339,7 +331,6 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 				ToolCallID: event.Tool.ID,
 				Title:      event.Tool.Name,
 				Status:     ToolCallStatus(status),
-				Content:    contentEntries,
 			},
 		})
 
@@ -484,4 +475,67 @@ func (al *AgentLoop) requestClientWriteFile(path, content string) error {
 
 	_ = result
 	return nil
+}
+
+// formatToolTitle produces a human-readable tool title with argument preview,
+// matching the TUI's formatToolInline style: "read_file {"path":"/tmp/test.go"}".
+func formatToolTitle(toolName string, rawArgs json.RawMessage) string {
+	preview := compactArgsPreview(string(rawArgs))
+	if preview == "" {
+		return toolName
+	}
+	return toolName + " " + preview
+}
+
+// compactArgsPreview parses raw JSON args and returns a compact single-line preview.
+func compactArgsPreview(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if isTrivialDetail(raw) {
+		return ""
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return compactSingleLine(raw)
+	}
+	if len(args) == 0 {
+		return ""
+	}
+	// Shorten file paths for display
+	for _, key := range []string{"file_path", "path", "directory", "file", "filename"} {
+		if v, ok := args[key].(string); ok {
+			args[key] = shortenPathForDisplay(v)
+		}
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return compactSingleLine(raw)
+	}
+	return compactSingleLine(string(b))
+}
+
+// isTrivialDetail returns true for empty or meaningless arg values.
+func isTrivialDetail(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "", "{}", "[]", "null":
+		return true
+	default:
+		return false
+	}
+}
+
+// compactSingleLine collapses whitespace and truncates to 120 chars.
+func compactSingleLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 120 {
+		return s[:120] + "..."
+	}
+	return s
+}
+
+// shortenPathForDisplay trims trailing slashes from paths.
+func shortenPathForDisplay(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimRight(value, `/\`)
+	return value
 }
