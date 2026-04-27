@@ -19,6 +19,7 @@ type Session struct {
 	CreatedAt  time.Time
 	Cancel     func()
 	mcpManager *MCPManager // MCP server lifecycle manager
+	saveDir    string      // directory for session persistence
 
 	conversation []Message
 	mu           sync.Mutex
@@ -39,6 +40,16 @@ func NewSession(cwd string, mcpServers []MCPServer) *Session {
 		MCPServers: mcpServers,
 		CreatedAt:  time.Now(),
 	}
+}
+
+// SetSaveDir sets the directory where session files are persisted.
+func (s *Session) SetSaveDir(dir string) {
+	s.saveDir = dir
+}
+
+// SaveDir returns the session save directory.
+func (s *Session) SaveDir() string {
+	return s.saveDir
 }
 
 // AddMessage appends a message to the session conversation.

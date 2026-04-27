@@ -593,8 +593,8 @@ func TestAgentLoopSetMode(t *testing.T) {
 	transport := NewTransport(strings.NewReader(""), &buf)
 
 	al := NewAgentLoop(cfg, registry, transport, session, ClientCapabilities{}, nil)
-	if al.mode != "supervised" {
-		t.Errorf("expected default mode 'supervised', got %q", al.mode)
+	if al.mode != "auto" {
+		t.Errorf("expected default mode 'auto', got %q", al.mode)
 	}
 
 	al.SetMode("bypass")
@@ -860,8 +860,8 @@ func TestSessionModeStateJSON(t *testing.T) {
 	if len(decoded.Modes) != 4 {
 		t.Errorf("expected 4 modes, got %d", len(decoded.Modes))
 	}
-	if decoded.Current != "bypass" {
-		t.Errorf("expected current 'bypass', got %q", decoded.Current)
+	if decoded.Current != "auto" {
+		t.Errorf("expected current 'auto', got %q", decoded.Current)
 	}
 	// Verify modes have required fields
 	for _, m := range decoded.Modes {
@@ -954,7 +954,7 @@ func TestSessionConfigOptionJSON(t *testing.T) {
 	if modeOpt.ID != "mode" {
 		t.Errorf("expected ID 'mode', got %q", modeOpt.ID)
 	}
-	if modeOpt.CurrentValue != "bypass" {
+	if modeOpt.CurrentValue != "auto" {
 		t.Errorf("expected currentValue 'bypass', got %q", modeOpt.CurrentValue)
 	}
 }
@@ -1035,7 +1035,7 @@ func TestSessionNewReturnsModesAndConfig(t *testing.T) {
 	if len(newResult.Modes.Modes) != 4 {
 		t.Errorf("expected 4 modes, got %d", len(newResult.Modes.Modes))
 	}
-	if newResult.Modes.Current != "bypass" {
+	if newResult.Modes.Current != "auto" {
 		t.Errorf("expected current mode 'bypass', got %q", newResult.Modes.Current)
 	}
 	if len(newResult.ConfigOptions) == 0 {

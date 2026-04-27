@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/debug"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -31,6 +33,13 @@ type AgentLoop struct {
 }
 
 // NewAgentLoop creates a new AgentLoop for the given session.
+// It configures the agent identically to the TUI/daemon path:
+//   - Project memory (GGCODE.md, AGENTS.md, etc.)
+//   - Hook config (pre/post tool hooks)
+//   - Auto compaction (via contextManager)
+//   - Usage tracking
+//   - Checkpoint support
+//   - Vision support
 func NewAgentLoop(
 	cfg *config.Config,
 	registry *tool.Registry,
@@ -42,11 +51,35 @@ func NewAgentLoop(
 	systemPrompt := cfg.SystemPrompt
 	maxIter := cfg.MaxIterations
 	if maxIter == 0 {
-		maxIter = 100 // sensible default for ACP
+		maxIter = 100
 	}
 
 	a := agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	a.SetWorkingDir(session.CWD)
+
+	// --- Resolve endpoint for context window and model capabilities ---
+	resolved, resolveErr := cfg.ResolveActiveEndpoint()
+	if resolveErr != nil {
+		debug.Log("acp", "warning: could not resolve endpoint: %v", resolveErr)
+	}
+	if resolveErr == nil {
+		if resolved.ContextWindow > 0 {
+			a.ContextManager().SetMaxTokens(resolved.ContextWindow)
+		}
+		if resolved.MaxTokens > 0 {
+			a.ContextManager().SetOutputReserve(resolved.MaxTokens)
+		}
+		a.SetSupportsVision(resolved.SupportsVision)
+	}
+
+	// --- Hook config ---
+	a.SetHookConfig(cfg.Hooks)
+
+	// --- Checkpoint manager ---
+	a.SetCheckpointManager(checkpoint.NewManager(50))
+
+	// --- Default mode: auto ---
+	defaultMode := "auto"
 
 	al := &AgentLoop{
 		cfg:        cfg,
@@ -55,18 +88,28 @@ func NewAgentLoop(
 		session:    session,
 		clientCaps: clientCaps,
 		agent:      a,
-		mode:       "supervised", // default: require Client approval
+		mode:       defaultMode,
 	}
 
-	// Use supervised mode — tools require Client approval via ACP permission flow
-	policy := permission.NewConfigPolicyWithMode(nil, cfg.AllowedDirs, permission.SupervisedMode)
+	// --- Permission policy ---
+	permMode := permission.AutoMode
+	policy := permission.NewConfigPolicyWithMode(nil, cfg.AllowedDirs, permMode)
 	a.SetPermissionPolicy(policy)
 
 	// Route tool approvals through ACP permission request to Client
 	a.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
-		// In bypass/autopilot mode, auto-approve
+		// In auto mode (default), allow safe operations automatically;
+		// only ask the Client for dangerous tools
 		if al.mode == "bypass" || al.mode == "autopilot" {
 			return permission.Allow
+		}
+		if al.mode == "auto" {
+			// Auto mode: let the policy decide. If it says Ask, escalate to Client.
+			decision, _ := policy.Check(toolName, json.RawMessage(input))
+			if decision == permission.Allow {
+				return permission.Allow
+			}
+			// Deny or Ask → ask the Client
 		}
 
 		approved, err := al.RequestPermission(ctx, "tool_use",
@@ -87,11 +130,13 @@ func NewAgentLoop(
 
 	// Route diff confirmations through ACP permission request to Client
 	a.SetDiffConfirm(func(ctx context.Context, filePath, diffText string) bool {
-		// In bypass/autopilot mode, auto-approve
 		if al.mode == "bypass" || al.mode == "autopilot" {
 			return true
 		}
-
+		if al.mode == "auto" {
+			// Auto-approve file writes in auto mode
+			return true
+		}
 		approved, err := al.RequestPermission(ctx, "fs_write",
 			ToolCallUpdate{
 				Title:     fmt.Sprintf("Write file: %s", filePath),
@@ -106,13 +151,52 @@ func NewAgentLoop(
 		return approved
 	})
 
+	// --- Usage tracking ---
+	a.SetUsageHandler(func(usage provider.TokenUsage) {
+		debug.Log("acp", "token usage: input=%d output=%d total=%d", usage.InputTokens, usage.OutputTokens, usage.InputTokens+usage.OutputTokens)
+	})
+
+	// --- Project memory ---
+	al.loadProjectMemory()
+
 	return al
+}
+
+// loadProjectMemory loads project memory files (GGCODE.md, AGENTS.md, etc.)
+// and injects them as a system message into the agent's context.
+func (al *AgentLoop) loadProjectMemory() {
+	content, files, err := memory.LoadProjectMemory(al.session.CWD)
+	if err != nil {
+		debug.Log("acp", "project memory load failed: %v", err)
+		return
+	}
+	if content == "" {
+		return
+	}
+	al.agent.SetProjectMemoryFiles(files)
+	al.agent.AddMessage(provider.Message{
+		Role:    "system",
+		Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
+	})
+	debug.Log("acp", "loaded %d project memory files", len(files))
+}
+
+// RestoreConversation restores previously saved messages into the agent's context.
+// Used by session/resume to rebuild the conversation history.
+func (al *AgentLoop) RestoreConversation(messages []Message) {
+	for _, msg := range messages {
+		providerContent := acpToProviderContent(msg.Content)
+		al.agent.AddMessage(provider.Message{
+			Role:    msg.Role,
+			Content: providerContent,
+		})
+	}
+	debug.Log("acp", "restored %d messages to agent context", len(messages))
 }
 
 // SetMode updates the permission mode for this agent loop.
 func (al *AgentLoop) SetMode(mode string) {
 	al.mode = mode
-	// Also update the agent's permission policy
 	var permMode permission.PermissionMode
 	switch mode {
 	case "bypass":
@@ -121,8 +205,10 @@ func (al *AgentLoop) SetMode(mode string) {
 		permMode = permission.AutopilotMode
 	case "auto":
 		permMode = permission.AutoMode
-	default:
+	case "supervised":
 		permMode = permission.SupervisedMode
+	default:
+		permMode = permission.AutoMode
 	}
 	policy := permission.NewConfigPolicyWithMode(nil, al.cfg.AllowedDirs, permMode)
 	al.agent.SetPermissionPolicy(policy)
@@ -187,6 +273,11 @@ func (al *AgentLoop) ExecutePrompt(ctx context.Context, prompt []ContentBlock) e
 		al.session.AddMessage("assistant", assistantContent)
 	}
 
+	// Persist session to disk
+	if err := al.session.Save(al.session.SaveDir()); err != nil {
+		debug.Log("acp", "session save error: %v", err)
+	}
+
 	return nil
 }
 
@@ -213,7 +304,6 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		})
 
 	case provider.StreamEventToolCallDone:
-		// Determine tool kind based on tool name
 		kind := toolKind(event.Tool.Name)
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
@@ -261,8 +351,6 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		})
 
 	case provider.StreamEventDone:
-		// ACP spec: send a final agent_message_chunk with empty content to signal completion
-		// followed by no further updates
 		return nil
 
 	case provider.StreamEventError:
@@ -304,7 +392,6 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 		case "image":
 			out = append(out, provider.ImageBlock(b.ImageMIME, b.ImageData))
 		default:
-			// Pass through as text for unsupported types
 			if b.Text != "" {
 				out = append(out, provider.TextBlock(b.Text))
 			}
@@ -318,7 +405,6 @@ func (al *AgentLoop) ReadFile(ctx context.Context, path string) (string, error) 
 	if al.clientCaps.FS != nil && al.clientCaps.FS.ReadTextFile {
 		return al.requestClientReadFile(path)
 	}
-	// Fallback: read directly
 	absPath := path
 	if !filepath.IsAbs(absPath) {
 		absPath = filepath.Join(al.session.CWD, path)
@@ -335,7 +421,6 @@ func (al *AgentLoop) WriteFile(ctx context.Context, path, content string) error 
 	if al.clientCaps.FS != nil && al.clientCaps.FS.WriteTextFile {
 		return al.requestClientWriteFile(path, content)
 	}
-	// Fallback: write directly
 	absPath := path
 	if !filepath.IsAbs(absPath) {
 		absPath = filepath.Join(al.session.CWD, path)
@@ -348,7 +433,6 @@ func (al *AgentLoop) WriteFile(ctx context.Context, path, content string) error 
 }
 
 // RequestPermission sends a permission request to the Client and waits for response.
-// This sends a JSON-RPC request (not a notification) and blocks until the Client responds.
 func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, toolCall ToolCallUpdate) (bool, error) {
 	options := []PermissionOption{
 		{OptionID: "allow", Name: "Allow", Kind: PermissionOptionAllowOnce},
@@ -373,7 +457,6 @@ func (al *AgentLoop) RequestPermission(ctx context.Context, permType string, too
 		return false, fmt.Errorf("parsing permission response: %w", err)
 	}
 
-	// Check if user selected "allow"
 	return response.Outcome.Outcome == "selected" && response.Outcome.SelectedOption != nil && response.Outcome.SelectedOption.OptionID == "allow", nil
 }
 
@@ -406,7 +489,6 @@ func (al *AgentLoop) requestClientWriteFile(path, content string) error {
 		return fmt.Errorf("requesting client write file: %w", err)
 	}
 
-	// Response is empty on success
 	_ = result
 	return nil
 }
