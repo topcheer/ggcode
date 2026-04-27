@@ -2062,3 +2062,96 @@ func TestCleanupEmptySessionsOnEOF(t *testing.T) {
 		t.Error("empty session file should have been cleaned up")
 	}
 }
+
+func TestProviderToACPMessage(t *testing.T) {
+	providerMsgs := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "you are helpful"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{
+			{Type: "text", Text: "let me check"},
+			{Type: "tool_use", ToolName: "run_command", ToolID: "t1", Input: json.RawMessage(`{"command":"ls"}`)},
+		}},
+		{Role: "user", Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: "t1", ToolName: "run_command", Output: "file.txt", IsError: false},
+		}},
+	}
+
+	acpMsgs := providerToACPMessage(providerMsgs)
+	if len(acpMsgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(acpMsgs))
+	}
+	if acpMsgs[0].Role != "system" {
+		t.Errorf("msg 0 role = %q", acpMsgs[0].Role)
+	}
+	if acpMsgs[1].Content[0].Text != "hello" {
+		t.Errorf("msg 1 text = %q", acpMsgs[1].Content[0].Text)
+	}
+	if acpMsgs[2].Content[1].ToolName != "run_command" {
+		t.Errorf("msg 2 tool_name = %q", acpMsgs[2].Content[1].ToolName)
+	}
+	if acpMsgs[3].Content[0].Output != "file.txt" {
+		t.Errorf("msg 3 output = %q", acpMsgs[3].Content[0].Output)
+	}
+}
+
+func TestReplaceConversation(t *testing.T) {
+	s := NewSession("/tmp", nil)
+
+	s.AddMessage("user", []ContentBlock{{Type: "text", Text: "hello"}})
+	s.AddMessage("assistant", []ContentBlock{{Type: "text", Text: "world"}})
+	if len(s.Messages()) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(s.Messages()))
+	}
+
+	// Replace with compacted version
+	s.ReplaceConversation([]Message{
+		{Role: "system", Content: []ContentBlock{{Type: "text", Text: "summary of previous conversation"}}},
+		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello"}}},
+	})
+
+	msgs := s.Messages()
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages after replace, got %d", len(msgs))
+	}
+	if msgs[0].Role != "system" {
+		t.Errorf("msg 0 role = %q", msgs[0].Role)
+	}
+	if msgs[0].Content[0].Text != "summary of previous conversation" {
+		t.Errorf("msg 0 text = %q", msgs[0].Content[0].Text)
+	}
+}
+
+func TestCheckpointHandlerPersistsCompactedSession(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create session and save with initial messages.
+	s := NewSession("/tmp", nil)
+	s.SetSaveDir(dir)
+	s.AddMessage("user", []ContentBlock{{Type: "text", Text: "hello"}})
+	s.AddMessage("assistant", []ContentBlock{{Type: "text", Text: "world"}})
+	s.Save(dir)
+
+	path := filepath.Join(dir, s.ID+".json")
+	data, _ := os.ReadFile(path)
+	var sd1 SessionData
+	json.Unmarshal(data, &sd1)
+	if len(sd1.Messages) != 2 {
+		t.Fatalf("initial: expected 2 messages, got %d", len(sd1.Messages))
+	}
+
+	// Simulate checkpoint handler: compact replaces conversation and saves.
+	s.ReplaceConversation([]Message{
+		{Role: "system", Content: []ContentBlock{{Type: "text", Text: "summary"}}},
+	})
+	s.Save(dir)
+
+	data2, _ := os.ReadFile(path)
+	var sd2 SessionData
+	json.Unmarshal(data2, &sd2)
+	if len(sd2.Messages) != 1 {
+		t.Fatalf("after compact: expected 1 message, got %d", len(sd2.Messages))
+	}
+	if sd2.Messages[0].Content[0].Text != "summary" {
+		t.Errorf("compacted message text = %q", sd2.Messages[0].Content[0].Text)
+	}
+}
