@@ -241,6 +241,11 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 		return nil, fmt.Errorf("invalid session/new params: %w", err)
 	}
 
+	// Validate CWD: spec requires an absolute path. Reject empty, "/", or relative paths.
+	if err := validateCWD(sessionParams.CWD); err != nil {
+		return nil, err
+	}
+
 	session := NewSession(sessionParams.CWD, sessionParams.MCPServers)
 
 	// Ensure per-workspace session directory exists
@@ -461,6 +466,22 @@ func (h *Handler) getAuthMethods() []AuthMethod {
 	}
 }
 
+// validateCWD checks that the given path is a valid project working directory.
+// Rejects empty, "/", relative paths, and non-existent/non-directory paths.
+func validateCWD(cwd string) error {
+	if cwd == "" || cwd == "/" || !filepath.IsAbs(cwd) {
+		return fmt.Errorf("invalid cwd %q: must be an absolute project directory path", cwd)
+	}
+	info, err := os.Stat(cwd)
+	if err != nil {
+		return fmt.Errorf("cwd %q does not exist: %w", cwd, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("cwd %q is not a directory", cwd)
+	}
+	return nil
+}
+
 // workspaceSessionsDir returns a per-workspace session directory.
 // This allows multiple ggcode ACP instances to maintain separate session stores
 // for different workspaces without conflicts.
@@ -584,6 +605,16 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	session, err := h.loadSessionFromWorkspaces(req.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("loading session: %w", err)
+	}
+
+	// If client provided a CWD, validate and update; otherwise keep session's original CWD
+	if req.CWD != "" {
+		if err := validateCWD(req.CWD); err != nil {
+			return nil, err
+		}
+		session.CWD = req.CWD
+	} else if err := validateCWD(session.CWD); err != nil {
+		return nil, fmt.Errorf("session has invalid stored cwd: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

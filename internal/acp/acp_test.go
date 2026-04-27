@@ -637,7 +637,7 @@ func TestHandlerSessionNew(t *testing.T) {
 	h := NewHandler(cfg, registry, transport, nil)
 	h.initialized = true
 
-	params := SessionNewParams{CWD: "/tmp/test"}
+	params := SessionNewParams{CWD: "/tmp"}
 	paramsJSON, _ := json.Marshal(params)
 	result, err := h.handleSessionNew(paramsJSON)
 	if err != nil {
@@ -1116,5 +1116,56 @@ func TestContentBlockResourceLink(t *testing.T) {
 func TestProtocolVersionConstant(t *testing.T) {
 	if ProtocolVersion != 1 {
 		t.Errorf("expected ProtocolVersion 1, got %d", ProtocolVersion)
+	}
+}
+
+func TestValidateCWD(t *testing.T) {
+	tests := []struct {
+		name    string
+		cwd     string
+		wantErr bool
+	}{
+		{"empty", "", true},
+		{"root", "/", true},
+		{"relative", "some/relative/path", true},
+		{"nonexistent", "/nonexistent/dir/xyz", true},
+		{"valid tmp", "/tmp", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCWD(tt.cwd)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateCWD(%q) error = %v, wantErr %v", tt.cwd, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestHandlerSessionNewRejectsInvalidCWD(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	cfg := &config.Config{}
+	registry := tool.NewRegistry()
+	h := NewHandler(cfg, registry, transport, nil)
+	h.initialized = true
+
+	tests := []struct {
+		name string
+		cwd  string
+	}{
+		{"empty", ""},
+		{"root", "/"},
+		{"relative", "foo/bar"},
+		{"nonexistent", "/nonexistent/dir/xyz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := SessionNewParams{CWD: tt.cwd}
+			paramsJSON, _ := json.Marshal(params)
+			_, err := h.handleSessionNew(paramsJSON)
+			if err == nil {
+				t.Errorf("expected error for cwd %q, got nil", tt.cwd)
+			}
+		})
 	}
 }
