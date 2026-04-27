@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -803,6 +804,7 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 				"mtls":        sanitizeMTLS(a2a.Auth.MTLS),
 			},
 			"has_legacy_api_key": strings.TrimSpace(a2a.APIKey) != "",
+			"presets":            a2aAuthPresets(),
 		})
 	case http.MethodPut:
 		var req struct {
@@ -892,6 +894,27 @@ func (s *Server) handleA2ADiscover(w http.ResponseWriter, r *http.Request) {
 		instances = []A2ADiscoveredInstance{}
 	}
 	writeJSON(w, instances)
+}
+
+// a2aAuthPresets returns the built-in OAuth2/OIDC provider presets for the webui.
+// The frontend uses these to auto-fill issuer_url, scopes, and flow when the user
+// selects a provider preset.
+func a2aAuthPresets() map[string]interface{} {
+	out := make(map[string]interface{}, len(auth.ProviderPresets))
+	for name, p := range auth.ProviderPresets {
+		out[name] = map[string]interface{}{
+			"name":              p.Name,
+			"authorize_url":     p.AuthorizeURL,
+			"token_url":         p.TokenURL,
+			"device_auth_url":   p.DeviceAuthURL,
+			"oidc_discovery":    p.OIDCDiscovery,
+			"default_scopes":    p.DefaultScopes,
+			"default_client_id": p.DefaultClientID,
+			"supports_pkce":     p.SupportsPKCE,
+			"supports_device":   p.SupportsDevice,
+		}
+	}
+	return out
 }
 
 func sanitizeOAuth2(o *config.A2AOAuth2Config) interface{} {

@@ -997,8 +997,10 @@ async function unbindAdapter(name) {
 
 // --- A2A ---
 const a2aProviderPresets = ['github','google','auth0','azure'];
+let a2aPresets = {}; // preset details from backend
 
 function renderA2A() {
+  if (a2aData && a2aData.presets) a2aPresets = a2aData.presets;
   if (!a2aData) {
     document.getElementById('a2a-content').innerHTML = '<div class="card"><p style="color:var(--text2)">A2A not available</p></div>';
     return;
@@ -1064,7 +1066,7 @@ function renderA2A() {
   const oauth2 = auth.oauth2;
   html += `<div class="card">
     <div class="card-title"><span class="dot ${oauth2?'dot-green':'dot-yellow'}"></span>OAuth2 ${oauth2?'<span class="badge badge-green">Configured</span>':'<span class="badge badge-yellow">Not Set</span>'}</div>
-    <div class="form-group"><label>Provider Preset</label><select id="a2a-oauth2-provider">
+    <div class="form-group"><label>Provider Preset</label><select id="a2a-oauth2-provider" onchange="applyA2APreset('oauth2')">
       <option value="">Custom / None</option>
       ${a2aProviderPresets.map(p => `<option value="${p}" ${oauth2?.provider===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
     </select></div>
@@ -1087,7 +1089,7 @@ function renderA2A() {
   const oidc = auth.oidc;
   html += `<div class="card">
     <div class="card-title"><span class="dot ${oidc?'dot-green':'dot-yellow'}"></span>OpenID Connect ${oidc?'<span class="badge badge-green">Configured</span>':'<span class="badge badge-yellow">Not Set</span>'}</div>
-    <div class="form-group"><label>Provider Preset</label><select id="a2a-oidc-provider">
+    <div class="form-group"><label>Provider Preset</label><select id="a2a-oidc-provider" onchange="applyA2APreset('oidc')">
       <option value="">Custom / None</option>
       ${a2aProviderPresets.map(p => `<option value="${p}" ${oidc?.provider===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
     </select></div>
@@ -1132,6 +1134,41 @@ async function loadA2AInstances() {
     a2aInstances = await api('/api/a2a/discover');
   } catch(e) { a2aInstances = []; }
   renderA2AInstances();
+}
+
+// Apply A2A auth preset: auto-fill issuer_url, scopes, client_id, flow
+function applyA2APrefix(prefix) {
+  const sel = document.getElementById(prefix + '-provider');
+  if (!sel) return;
+  const name = sel.value;
+  const p = a2aPresets[name];
+  const issuerEl = document.getElementById(prefix + '-issuer');
+  const scopesEl = document.getElementById(prefix + '-scopes');
+  const clientIdEl = document.getElementById(prefix + '-client-id');
+  const flowEl = document.getElementById(prefix + '-flow');
+  if (!p) {
+    // Custom selected — don't touch fields
+    return;
+  }
+  // Auto-fill from preset (only if field is empty, don't overwrite user edits)
+  if (issuerEl && !issuerEl.value) {
+    // For OIDC, prefer oidc_discovery; for OAuth2, use token_url domain as hint
+    issuerEl.value = p.oidc_discovery || p.token_url ? p.oidc_discovery || '' : '';
+  }
+  if (scopesEl && !scopesEl.value && p.default_scopes) {
+    scopesEl.value = p.default_scopes.join(' ');
+  }
+  if (clientIdEl && !clientIdEl.value && p.default_client_id) {
+    clientIdEl.value = p.default_client_id;
+  }
+  if (flowEl && flowEl.value === '') {
+    // Auto-select PKCE if supported, else device
+    if (p.supports_pkce) flowEl.value = 'pkce';
+    else if (p.supports_device) flowEl.value = 'device';
+  }
+}
+function applyA2APreset(section) {
+  applyA2APrefix(section === 'oidc' ? 'a2a-oidc' : 'a2a-oauth2');
 }
 
 function renderA2AInstances() {
