@@ -71,6 +71,15 @@ func (s *Session) Messages() []Message {
 	return out
 }
 
+// ReplaceConversation replaces the entire conversation history.
+// Used after context compaction to store the compressed messages.
+func (s *Session) ReplaceConversation(msgs []Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conversation = make([]Message, len(msgs))
+	copy(s.conversation, msgs)
+}
+
 // SetCancel sets the cancellation function for this session.
 func (s *Session) SetCancel(cancel func()) {
 	s.mu.Lock()

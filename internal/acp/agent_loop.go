@@ -156,6 +156,17 @@ func NewAgentLoop(
 		debug.Log("acp", "token usage: input=%d output=%d total=%d", usage.InputTokens, usage.OutputTokens, usage.InputTokens+usage.OutputTokens)
 	})
 
+	// --- Checkpoint handler: persist compacted context to session ---
+	a.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {
+		acpMsgs := providerToACPMessage(messages)
+		al.session.ReplaceConversation(acpMsgs)
+		if err := al.session.Save(al.session.SaveDir()); err != nil {
+			debug.Log("acp", "checkpoint save failed: %v", err)
+		} else {
+			debug.Log("acp", "checkpoint saved: %d messages, %d tokens", len(acpMsgs), tokenCount)
+		}
+	})
+
 	// --- Project memory ---
 	al.loadProjectMemory()
 
@@ -384,6 +395,28 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 				out = append(out, provider.TextBlock(b.Text))
 			}
 		}
+	}
+	return out
+}
+
+// providerToACPMessage converts provider Messages to ACP Messages.
+// Used by the checkpoint handler to persist compacted context.
+func providerToACPMessage(msgs []provider.Message) []Message {
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		blocks := make([]ContentBlock, 0, len(m.Content))
+		for _, b := range m.Content {
+			blocks = append(blocks, ContentBlock{
+				Type:     b.Type,
+				Text:     b.Text,
+				ToolName: b.ToolName,
+				ToolID:   b.ToolID,
+				Input:    b.Input,
+				Output:   b.Output,
+				IsError:  b.IsError,
+			})
+		}
+		out = append(out, Message{Role: m.Role, Content: blocks})
 	}
 	return out
 }
