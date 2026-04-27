@@ -306,13 +306,12 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 
 	case provider.StreamEventToolCallDone:
 		kind := toolKind(event.Tool.Name)
-		title := formatToolTitle(event.Tool.Name, event.Tool.Arguments)
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
 				Type:       "tool_call",
 				ToolCallID: event.Tool.ID,
-				Title:      title,
+				Title:      event.Tool.Name,
 				Kind:       ToolKind(kind),
 				Status:     "pending",
 				RawInput:   event.Tool.Arguments,
@@ -324,12 +323,14 @@ func (al *AgentLoop) handleStreamEvent(event provider.StreamEvent) error {
 		if event.IsError {
 			status = "failed"
 		}
+		// tool_call_update is what the IDE actually renders — show formatted command + args
+		title := formatToolTitle(event.Tool.Name, event.Tool.Arguments)
 		return al.transport.WriteNotification("session/update", SessionUpdateParams{
 			SessionID: al.session.ID,
 			Update: SessionUpdate{
 				Type:       "tool_call_update",
 				ToolCallID: event.Tool.ID,
-				Title:      event.Tool.Name,
+				Title:      title,
 				Status:     ToolCallStatus(status),
 			},
 		})
