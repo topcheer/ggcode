@@ -8,7 +8,7 @@
 | Go version | 1.26.1 |
 | CLI framework | Cobra (`spf13/cobra`) |
 | TUI framework | Bubble Tea / Lip Gloss (`charmbracelet/bubbletea`, `charmbracelet/lipgloss`) |
-| Database | SQLite (`modernc.org/sqlite`, pure Go) — harness subsystem only; sessions use JSONL files |
+| Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
 | Latest documented release | [`v1.1.46`](docs/releases/v1.1.46.md) |
@@ -81,7 +81,7 @@ config/                MCP preset configuration (mcporter.json)
 - **Agent loop** (`internal/agent/`): Central loop sends user messages to the LLM, executes tool calls, feeds results back. Split into focused files: `agent.go` (core struct, Run/RunStream), `agent_autopilot.go` (continuation), `agent_compact.go` (auto-compaction), `agent_memory.go` (memory helpers), `agent_tool.go` (tool execution, diff confirm, hooks).
 - **Provider adapters** (`internal/provider/`): Each LLM provider (OpenAI, Anthropic, Gemini, Copilot) has a protocol-specific adapter. `registry.go` maps protocol names to adapters via `NewProvider()`. Supported protocols: `openai`, `anthropic`, `gemini`, `copilot`. All implement the `Provider` interface (Name, Chat, ChatStream, CountTokens). Retry logic handles transient failures.
 - **Permission modes** (`internal/permission/mode.go`): Five modes in a cycle: `supervised → plan → auto → bypass → autopilot`. Each mode defines default tool allow/deny rules. Autopilot auto-escalates blocked states to `ask_user`. Dangerous tools are classified in `dangerous.go`.
-- **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses SQLite for event storage.
+- **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses JSON files for event/snapshot storage.
 - **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces. Configurable output modes (verbose/quiet/summary) control tool result granularity. Daemon bridge provides IM slash commands for adapter management (`/listim`, `/muteim <name>`, `/muteall`, `/muteself`, `/restart`, `/help`).
 - **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, IM panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
 - **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances.
@@ -238,7 +238,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - **Commit style**: Conventional commits — `fix:`, `feat:`, `chore:`, `docs:`, `ci:`
 - **Config validation**: Legacy `provider`/`providers` keys are explicitly rejected; only `vendor`/`endpoint`/`vendors` schema is supported
 - **Session persistence**: JSONL format in `~/.ggcode/sessions/<id>.jsonl` with checkpoint support after summarize compaction
-- **SQLite usage**: Only used by `internal/harness/` for event/snapshot storage
+- **Storage**: Harness uses JSON files for events/snapshots; sessions use JSONL format
 - **Token persistence**: OAuth2 tokens cached to `~/.ggcode/oauth-tokens/{provider}-{clientID}.json` with 0600 permissions; per-client isolation prevents overwrites between instances
 - **Mute is in-memory**: IM adapter mute state is not persisted to the binding store — daemon restart recovers all adapters
 
@@ -258,7 +258,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - Integration tests require real API keys; the shared local verify script clears provider env vars before `go test -tags=!integration ./...` so local checks behave like CI
 - The `internal/tui/` package is the largest (~17.6k LOC, 47+ files) — changes here need careful TUI regression testing
 - Provider protocol adapters must handle both streaming and non-streaming responses
-- `modernc.org/sqlite` is a pure-Go SQLite implementation (no CGO needed), used only by harness
+- Harness events and snapshots are stored as JSON files under `.ggcode/harness/`
 - The `copilot` protocol uses GitHub's OAuth flow (not API key) — handled by `internal/auth/`
 - Agent tools (`spawn_agent`, `wait_agent`, `list_agents`) are defined in `internal/tool/` but registered in `internal/tui/repl.go`, not in `builtin.go`
 - `save_memory` and `skill` tools are registered at startup (in `cmd/ggcode/root.go`), not in `RegisterBuiltinTools`
