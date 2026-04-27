@@ -105,8 +105,31 @@ type SessionData struct {
 	MCPServers []MCPServer `json:"mcpServers,omitempty"`
 }
 
+// HasMessages returns true if the session has any conversation history.
+func (s *Session) HasMessages() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conversation) > 0
+}
+
 // Save persists the session to disk.
+// If the session has no conversation history, the file is deleted (or not created).
 func (s *Session) Save(dir string) error {
+	s.mu.Lock()
+	hasMessages := len(s.conversation) > 0
+	s.mu.Unlock()
+
+	path := filepath.Join(dir, s.ID+".json")
+
+	// No conversation history — remove the file if it exists (e.g. from a previous save).
+	if !hasMessages {
+		err := os.Remove(path)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing empty session file: %w", err)
+		}
+		return nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -119,7 +142,6 @@ func (s *Session) Save(dir string) error {
 		MCPServers: s.MCPServers,
 	}
 
-	path := filepath.Join(dir, s.ID+".json")
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {

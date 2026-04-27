@@ -74,14 +74,17 @@ func (h *Handler) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			h.cleanupEmptySessions()
 			return ctx.Err()
 		default:
 		}
 
 		req, resp, err := h.transport.ReadAnyMessage()
 		if err != nil {
-			// EOF means client disconnected — normal shutdown
+			// EOF means client disconnected — normal shutdown.
+			// Clean up any sessions that have no conversation history.
 			if errors.Is(err, io.EOF) {
+				h.cleanupEmptySessions()
 				return nil
 			}
 			debug.Log("acp", "error reading message: %v", err)
@@ -511,6 +514,35 @@ func (h *Handler) loadSessionFromWorkspaces(sessionID string) (*Session, error) 
 		}
 	}
 	return nil, fmt.Errorf("session %s not found in any workspace", sessionID)
+}
+
+// cleanupEmptySessions removes session files for sessions that have no
+// conversation history. Called when the transport disconnects (EOF) or
+// context is cancelled, so empty sessions from "open and close" don't
+// accumulate on disk.
+func (h *Handler) cleanupEmptySessions() {
+	h.sessionsMu.RLock()
+	type sessionInfo struct {
+		id      string
+		saveDir string
+	}
+	var toCheck []sessionInfo
+	for id, s := range h.sessions {
+		if !s.HasMessages() {
+			toCheck = append(toCheck, sessionInfo{id: id, saveDir: h.workspaceDirs[id]})
+		}
+	}
+	h.sessionsMu.RUnlock()
+
+	for _, si := range toCheck {
+		if si.saveDir == "" {
+			continue
+		}
+		path := filepath.Join(si.saveDir, si.id+".json")
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			debug.Log("acp", "failed to remove empty session file %s: %v", path, err)
+		}
+	}
 }
 
 // handleSessionClose closes an active session and cleans up resources.
