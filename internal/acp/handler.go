@@ -246,6 +246,7 @@ func (h *Handler) handleSessionNew(params json.RawMessage) (interface{}, error) 
 	// Ensure per-workspace session directory exists
 	sessionDir := workspaceSessionsDir(h.sessionsDir, sessionParams.CWD)
 	os.MkdirAll(sessionDir, 0o755)
+	session.SetSaveDir(sessionDir)
 
 	h.sessionsMu.Lock()
 	h.sessions[session.ID] = session
@@ -286,12 +287,17 @@ func (h *Handler) handleSessionPrompt(params json.RawMessage) (interface{}, erro
 		return nil, fmt.Errorf("session not found: %s", promptParams.SessionID)
 	}
 
-	// Create agent loop and execute prompt in background goroutine
-	loop := NewAgentLoop(h.cfg, h.toolRegistry, h.transport, session, h.clientCaps, h.prov)
-
-	// Store agent loop so set_mode can update it
+	// Get or create agent loop for this session (reuse across prompts)
 	h.sessionsMu.Lock()
-	h.agentLoops[promptParams.SessionID] = loop
+	loop, exists := h.agentLoops[session.ID]
+	if !exists {
+		loop = NewAgentLoop(h.cfg, h.toolRegistry, h.transport, session, h.clientCaps, h.prov)
+		// If session has existing messages, restore them into the agent context
+		if msgs := session.Messages(); len(msgs) > 0 {
+			loop.RestoreConversation(msgs)
+		}
+		h.agentLoops[session.ID] = loop
+	}
 	h.sessionsMu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -509,6 +515,7 @@ func (h *Handler) handleSessionClose(params json.RawMessage) (interface{}, error
 	// Remove from active sessions
 	h.sessionsMu.Lock()
 	delete(h.sessions, req.SessionID)
+	delete(h.agentLoops, req.SessionID)
 	h.sessionsMu.Unlock()
 
 	debug.Log("acp", "session %s closed", req.SessionID)
@@ -640,7 +647,7 @@ func getDefaultSessionModeState() SessionModeState {
 			{ID: "bypass", Name: "Bypass", Description: "Allows almost everything"},
 			{ID: "autopilot", Name: "Autopilot", Description: "Full autonomy with escalation"},
 		},
-		Current: "bypass",
+		Current: "auto",
 	}
 }
 
