@@ -68,14 +68,16 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("creating provider: %w", err)
 			}
 
-			// Use working directory for initial tool setup.
-			// The actual per-session CWD is set via session/new's "cwd" parameter.
+			// Setup tool registry. The per-session CWD comes from session/new's "cwd" parameter.
+			// BypassMode here allows tool registration; actual permission control is in AgentLoop's
+			// ApprovalHandler which uses auto mode by default.
 			workingDir, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("resolving working directory: %w", err)
 			}
 
-			// Setup tool registry with bypass permissions (ACP mode is auto-approve)
+			// Setup tool registry. Bypass permissions at registration level;
+			// actual per-session permission control is in AgentLoop's ApprovalHandler.
 			registry := tool.NewRegistry()
 			policy := permission.NewConfigPolicyWithMode(nil, cfg.AllowedDirs, permission.BypassMode)
 			if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {

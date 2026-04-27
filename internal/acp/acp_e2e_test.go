@@ -103,7 +103,7 @@ func TestE2ESessionNewAndPrompt(t *testing.T) {
 
 	// Step 2: Session/New
 	resp := sendAndReadResponse(t, clientTransport, 2, "session/new", SessionNewParams{
-		CWD: "/tmp/test-e2e",
+		CWD: "/tmp",
 	})
 
 	var newResult SessionNewResult
