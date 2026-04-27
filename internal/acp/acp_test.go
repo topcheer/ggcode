@@ -727,3 +727,394 @@ func mustMarshal(v interface{}) []byte {
 	data, _ := json.Marshal(v)
 	return data
 }
+
+// --- New handler method tests ---
+
+func TestHandlerSessionClose(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	cfg := &config.Config{}
+	registry := tool.NewRegistry()
+	h := NewHandler(cfg, registry, transport, nil)
+	h.initialized = true
+
+	// Create a session first
+	newParams := SessionNewParams{CWD: "/tmp"}
+	newParamsJSON, _ := json.Marshal(newParams)
+	newResult, _ := h.handleSessionNew(newParamsJSON)
+	sessionID := newResult.(SessionNewResult).SessionID
+
+	// Close it
+	closeParams := CloseSessionRequest{SessionID: sessionID}
+	closeParamsJSON, _ := json.Marshal(closeParams)
+	result, err := h.handleSessionClose(closeParamsJSON)
+	if err != nil {
+		t.Fatalf("handleSessionClose error: %v", err)
+	}
+	if _, ok := result.(CloseSessionResponse); !ok {
+		t.Error("expected CloseSessionResponse")
+	}
+
+	// Verify session is removed
+	h.sessionsMu.RLock()
+	_, exists := h.sessions[sessionID]
+	h.sessionsMu.RUnlock()
+	if exists {
+		t.Error("session should be removed after close")
+	}
+
+	// Close nonexistent should error
+	closeParams2 := CloseSessionRequest{SessionID: "nonexistent"}
+	closeParamsJSON2, _ := json.Marshal(closeParams2)
+	_, err = h.handleSessionClose(closeParamsJSON2)
+	if err == nil {
+		t.Error("expected error closing nonexistent session")
+	}
+}
+
+func TestHandlerSessionList(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	cfg := &config.Config{}
+	registry := tool.NewRegistry()
+	h := NewHandler(cfg, registry, transport, nil)
+	h.initialized = true
+
+	// Create two sessions
+	for _, cwd := range []string{"/tmp/a", "/tmp/b"} {
+		params := SessionNewParams{CWD: cwd}
+		paramsJSON, _ := json.Marshal(params)
+		h.handleSessionNew(paramsJSON)
+	}
+
+	// List sessions
+	listParams := ListSessionsRequest{}
+	listParamsJSON, _ := json.Marshal(listParams)
+	result, err := h.handleSessionList(listParamsJSON)
+	if err != nil {
+		t.Fatalf("handleSessionList error: %v", err)
+	}
+	listResult, ok := result.(ListSessionsResponse)
+	if !ok {
+		t.Fatal("expected ListSessionsResponse")
+	}
+	// Sessions may be 0 if not persisted to disk, but should not error
+	if listResult.Sessions == nil {
+		t.Error("Sessions should be non-nil slice")
+	}
+}
+
+func TestHandlerSessionSetConfigOption(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	cfg := &config.Config{}
+	registry := tool.NewRegistry()
+	h := NewHandler(cfg, registry, transport, nil)
+	h.initialized = true
+
+	// Create a session
+	newParams := SessionNewParams{CWD: "/tmp"}
+	newParamsJSON, _ := json.Marshal(newParams)
+	newResult, _ := h.handleSessionNew(newParamsJSON)
+	sessionID := newResult.(SessionNewResult).SessionID
+
+	// Set config option
+	configParams := SetSessionConfigOptionRequest{
+		SessionID: sessionID,
+		ConfigID:  "mode",
+		Value:     "auto",
+	}
+	configParamsJSON, _ := json.Marshal(configParams)
+	result, err := h.handleSetConfigOption(configParamsJSON)
+	if err != nil {
+		t.Fatalf("handleSetConfigOption error: %v", err)
+	}
+	configResult, ok := result.(SetSessionConfigOptionResponse)
+	if !ok {
+		t.Fatal("expected SetSessionConfigOptionResponse")
+	}
+	// Verify mode option updated
+	found := false
+	for _, opt := range configResult.ConfigOptions {
+		if opt.ID == "mode" && opt.CurrentValue == "auto" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected mode config option with currentValue 'auto'")
+	}
+}
+
+// --- Spec type serialization tests ---
+
+func TestSessionModeStateJSON(t *testing.T) {
+	state := getDefaultSessionModeState()
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded SessionModeState
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded.Modes) != 4 {
+		t.Errorf("expected 4 modes, got %d", len(decoded.Modes))
+	}
+	if decoded.Current != "bypass" {
+		t.Errorf("expected current 'bypass', got %q", decoded.Current)
+	}
+	// Verify modes have required fields
+	for _, m := range decoded.Modes {
+		if m.ID == "" {
+			t.Error("mode ID should not be empty")
+		}
+		if m.Name == "" {
+			t.Error("mode Name should not be empty")
+		}
+	}
+}
+
+func TestPermissionOptionJSON(t *testing.T) {
+	opts := []PermissionOption{
+		{OptionID: "allow", Name: "Allow", Kind: PermissionOptionAllowOnce},
+		{OptionID: "reject", Name: "Reject", Kind: PermissionOptionRejectOnce},
+	}
+	data, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded []PermissionOption
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("expected 2 options, got %d", len(decoded))
+	}
+	if decoded[0].OptionID != "allow" {
+		t.Errorf("expected optionId 'allow', got %q", decoded[0].OptionID)
+	}
+	if decoded[0].Kind != PermissionOptionAllowOnce {
+		t.Errorf("expected kind 'allow_once', got %q", decoded[0].Kind)
+	}
+}
+
+func TestRequestPermissionOutcomeJSON(t *testing.T) {
+	// Test "selected" outcome
+	outcome := RequestPermissionOutcome{
+		Outcome: "selected",
+		SelectedOption: &SelectedPermissionOutcome{
+			OptionID: "allow",
+		},
+	}
+	data, err := json.Marshal(outcome)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded RequestPermissionOutcome
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Outcome != "selected" {
+		t.Errorf("expected outcome 'selected', got %q", decoded.Outcome)
+	}
+	if decoded.SelectedOption == nil || decoded.SelectedOption.OptionID != "allow" {
+		t.Error("expected selectedOption with optionId 'allow'")
+	}
+
+	// Test "cancelled" outcome
+	outcome2 := RequestPermissionOutcome{Outcome: "cancelled"}
+	data2, _ := json.Marshal(outcome2)
+	var decoded2 RequestPermissionOutcome
+	json.Unmarshal(data2, &decoded2)
+	if decoded2.Outcome != "cancelled" {
+		t.Errorf("expected outcome 'cancelled', got %q", decoded2.Outcome)
+	}
+	if decoded2.SelectedOption != nil {
+		t.Error("expected nil SelectedOption for cancelled outcome")
+	}
+}
+
+func TestSessionConfigOptionJSON(t *testing.T) {
+	opts := getDefaultConfigOptions()
+	data, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded []SessionConfigOption
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded) == 0 {
+		t.Fatal("expected at least one config option")
+	}
+	modeOpt := decoded[0]
+	if modeOpt.Type != "select" {
+		t.Errorf("expected type 'select', got %q", modeOpt.Type)
+	}
+	if modeOpt.ID != "mode" {
+		t.Errorf("expected ID 'mode', got %q", modeOpt.ID)
+	}
+	if modeOpt.CurrentValue != "bypass" {
+		t.Errorf("expected currentValue 'bypass', got %q", modeOpt.CurrentValue)
+	}
+}
+
+func TestStopReasonJSON(t *testing.T) {
+	resp := PromptResponse{StopReason: StopReasonEndTurn}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded PromptResponse
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.StopReason != StopReasonEndTurn {
+		t.Errorf("expected stopReason 'end_turn', got %q", decoded.StopReason)
+	}
+}
+
+func TestInitializeResponseSessionCapabilities(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	cfg := &config.Config{}
+	registry := tool.NewRegistry()
+	h := NewHandler(cfg, registry, transport, nil)
+
+	params := InitializeParams{
+		ProtocolVersion:    ProtocolVersion,
+		ClientCapabilities: ClientCapabilities{},
+	}
+	paramsJSON, _ := json.Marshal(params)
+	result, err := h.handleInitialize(paramsJSON)
+	if err != nil {
+		t.Fatalf("handleInitialize error: %v", err)
+	}
+	initResult, ok := result.(InitializeResult)
+	if !ok {
+		t.Fatal("expected InitializeResult")
+	}
+	if initResult.ProtocolVersion != ProtocolVersion {
+		t.Errorf("expected protocol version %d, got %d", ProtocolVersion, initResult.ProtocolVersion)
+	}
+	if initResult.AgentCapabilities.SessionCapabilities == nil {
+		t.Fatal("expected SessionCapabilities to be set")
+	}
+	if initResult.AgentCapabilities.SessionCapabilities.Close == nil {
+		t.Error("expected Close capability")
+	}
+	if initResult.AgentCapabilities.SessionCapabilities.List == nil {
+		t.Error("expected List capability")
+	}
+	if initResult.AgentCapabilities.SessionCapabilities.Resume == nil {
+		t.Error("expected Resume capability")
+	}
+}
+
+func TestSessionNewReturnsModesAndConfig(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(strings.NewReader(""), &buf)
+	cfg := &config.Config{}
+	registry := tool.NewRegistry()
+	h := NewHandler(cfg, registry, transport, nil)
+	h.initialized = true
+
+	params := SessionNewParams{CWD: "/tmp"}
+	paramsJSON, _ := json.Marshal(params)
+	result, err := h.handleSessionNew(paramsJSON)
+	if err != nil {
+		t.Fatalf("handleSessionNew error: %v", err)
+	}
+	newResult := result.(SessionNewResult)
+	if newResult.SessionID == "" {
+		t.Error("expected non-empty session ID")
+	}
+	if newResult.Modes == nil {
+		t.Error("expected Modes to be set")
+	}
+	if len(newResult.Modes.Modes) != 4 {
+		t.Errorf("expected 4 modes, got %d", len(newResult.Modes.Modes))
+	}
+	if newResult.Modes.Current != "bypass" {
+		t.Errorf("expected current mode 'bypass', got %q", newResult.Modes.Current)
+	}
+	if len(newResult.ConfigOptions) == 0 {
+		t.Error("expected ConfigOptions to be set")
+	}
+}
+
+func TestPlanEntryJSON(t *testing.T) {
+	plan := Plan{
+		Entries: []PlanEntry{
+			{Content: "Read file", Priority: PlanEntryPriorityHigh, Status: PlanEntryStatusCompleted},
+			{Content: "Edit file", Priority: PlanEntryPriorityMedium, Status: PlanEntryStatusInProgress},
+			{Content: "Test", Priority: PlanEntryPriorityLow, Status: PlanEntryStatusPending},
+		},
+	}
+	data, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded Plan
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(decoded.Entries))
+	}
+	if decoded.Entries[0].Priority != PlanEntryPriorityHigh {
+		t.Errorf("expected high priority, got %q", decoded.Entries[0].Priority)
+	}
+	if decoded.Entries[1].Status != PlanEntryStatusInProgress {
+		t.Errorf("expected in_progress status, got %q", decoded.Entries[1].Status)
+	}
+}
+
+func TestDiffJSON(t *testing.T) {
+	diff := Diff{
+		Path:    "/tmp/test.go",
+		OldText: "old code",
+		NewText: "new code",
+	}
+	data, err := json.Marshal(diff)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded Diff
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Path != "/tmp/test.go" {
+		t.Errorf("expected path '/tmp/test.go', got %q", decoded.Path)
+	}
+	if decoded.OldText != "old code" {
+		t.Errorf("expected oldText 'old code', got %q", decoded.OldText)
+	}
+}
+
+func TestContentBlockResourceLink(t *testing.T) {
+	block := ContentBlock{
+		Type: "resource_link",
+		URI:  "file:///tmp/test.go",
+	}
+	data, err := json.Marshal(block)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded ContentBlock
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Type != "resource_link" {
+		t.Errorf("expected type 'resource_link', got %q", decoded.Type)
+	}
+	if decoded.URI != "file:///tmp/test.go" {
+		t.Errorf("expected URI 'file:///tmp/test.go', got %q", decoded.URI)
+	}
+}
+
+func TestProtocolVersionConstant(t *testing.T) {
+	if ProtocolVersion != 1 {
+		t.Errorf("expected ProtocolVersion 1, got %d", ProtocolVersion)
+	}
+}
