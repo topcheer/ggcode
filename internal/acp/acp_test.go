@@ -524,18 +524,11 @@ func TestToolCallUpdateJSON(t *testing.T) {
 
 func TestSessionUpdateWithToolCall(t *testing.T) {
 	update := SessionUpdate{
-		Type: "tool_call",
-		ToolCall: &ToolCallUpdate{
-			ToolCallID: "call-456",
-			Title:      "write_file",
-			Kind:       "write",
-			Status:     "pending",
-		},
-		Content: &ContentBlock{
-			Type:     "tool_use",
-			ToolName: "write_file",
-			ToolID:   "call-456",
-		},
+		Type:       "tool_call",
+		ToolCallID: "call-456",
+		Title:      "write_file",
+		Kind:       "write",
+		Status:     "pending",
 	}
 	data, err := json.Marshal(update)
 	if err != nil {
@@ -548,11 +541,11 @@ func TestSessionUpdateWithToolCall(t *testing.T) {
 	if decoded.Type != "tool_call" {
 		t.Errorf("expected type 'tool_call', got %q", decoded.Type)
 	}
-	if decoded.ToolCall == nil {
-		t.Fatal("expected ToolCall to be non-nil")
+	if decoded.ToolCallID != "call-456" {
+		t.Errorf("expected ToolCallID 'call-456', got %q", decoded.ToolCallID)
 	}
-	if decoded.ToolCall.ToolCallID != "call-456" {
-		t.Errorf("expected ToolCallID 'call-456', got %q", decoded.ToolCall.ToolCallID)
+	if decoded.Kind != "write" {
+		t.Errorf("expected Kind 'write', got %q", decoded.Kind)
 	}
 }
 

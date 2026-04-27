@@ -418,13 +418,27 @@ type SessionNotification struct {
 	Update    SessionUpdate   `json:"update"`
 }
 
-// SessionUpdate wraps different update types.
+// SessionUpdate is a flattened discriminated union for session/update notifications.
+// Per ACP spec, all fields are direct children of the update object — no nesting.
 type SessionUpdate struct {
-	Type     string          `json:"sessionUpdate"` // enum values below
-	Meta     json.RawMessage `json:"_meta,omitempty"`
-	Content  *ContentBlock   `json:"content,omitempty"`
-	ToolCall *ToolCallUpdate `json:"toolCall,omitempty"`
-	Plan     *Plan           `json:"plan,omitempty"`
+	Type string          `json:"sessionUpdate"` // discriminator: agent_message_chunk, tool_call, tool_call_update, plan, etc.
+	Meta json.RawMessage `json:"_meta,omitempty"`
+
+	// Content: polymorphic — single ContentBlock for messages, or []ToolCallContentEntry for tool_call_update.
+	// Using interface{} because ACP spec reuses the "content" key for both shapes.
+	Content interface{} `json:"content,omitempty"`
+
+	// Tool call fields (tool_call, tool_call_update) — flattened, not nested
+	ToolCallID string             `json:"toolCallId,omitempty"`
+	Title      string             `json:"title,omitempty"`
+	Kind       ToolKind           `json:"kind,omitempty"`
+	Status     ToolCallStatus     `json:"status,omitempty"`
+	Locations  []ToolCallLocation `json:"locations,omitempty"`
+	RawInput   json.RawMessage    `json:"rawInput,omitempty"`
+	RawOutput  json.RawMessage    `json:"rawOutput,omitempty"`
+
+	// Plan fields
+	Plan *Plan `json:"plan,omitempty"`
 }
 
 // Session update type constants.
@@ -432,14 +446,21 @@ const (
 	UpdateAgentMessageChunk = "agent_message_chunk"
 	UpdateUserMessageChunk  = "user_message_chunk"
 	UpdateToolCall          = "tool_call"
-	UpdateToolResult        = "tool_result"
+	UpdateToolCallUpdate    = "tool_call_update"
 	UpdatePlan              = "plan"
 )
 
-// ContentChunk is a streamed item of content.
-type ContentChunk struct {
+// ToolCallContentEntry is a content item within a tool call update.
+type ToolCallContentEntry struct {
 	Meta    json.RawMessage `json:"_meta,omitempty"`
-	Content ContentBlock    `json:"content"`
+	Type    string          `json:"type"`              // "content", "diff", "terminal"
+	Content *ContentBlock   `json:"content,omitempty"` // for type="content"
+	// Diff fields (type="diff")
+	Path    string `json:"path,omitempty"`
+	OldText string `json:"oldText,omitempty"`
+	NewText string `json:"newText,omitempty"`
+	// Terminal fields (type="terminal")
+	TerminalID string `json:"terminalId,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
