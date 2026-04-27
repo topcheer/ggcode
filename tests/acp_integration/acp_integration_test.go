@@ -326,8 +326,10 @@ func TestIntegrationSessionLifecycle(t *testing.T) {
 	resp = clientSendAndRead(t, pt, `{"jsonrpc":"2.0","id":2,"method":"session/authenticate","params":{"authMethodId":"api-key"}}`)
 	t.Logf("authenticate: error=%v", resp["error"])
 
-	// session/new
-	resp = clientSendAndRead(t, pt, `{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":"/tmp/acp-test"}}`)
+	// session/new — create the test CWD first
+	testDir := "/tmp/acp-test"
+	os.MkdirAll(testDir, 0o755)
+	resp = clientSendAndRead(t, pt, fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":%q}}`, testDir))
 	if resp["error"] != nil {
 		t.Fatalf("session/new error: %v", resp["error"])
 	}
@@ -445,10 +447,15 @@ func TestIntegrationPermissionApproved(t *testing.T) {
 			return
 		}
 		var r struct {
-			Approved bool `json:"approved"`
+			Outcome struct {
+				Outcome        string `json:"outcome"`
+				SelectedOption struct {
+					OptionID string `json:"optionId"`
+				} `json:"selectedOption"`
+			} `json:"outcome"`
 		}
 		json.Unmarshal(result, &r)
-		done <- r.Approved
+		done <- r.Outcome.Outcome == "selected" && r.Outcome.SelectedOption.OptionID == "allow"
 	}()
 
 	// Wait for the permission request to appear in collector
