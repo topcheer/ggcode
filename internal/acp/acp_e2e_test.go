@@ -64,7 +64,7 @@ func TestE2EInitializeFlow(t *testing.T) {
 	if err := json.Unmarshal(clientTransport.Scanner.Bytes(), &resp); err != nil {
 		t.Fatalf("parse response: %v", err)
 	}
-	if resp.ID == nil || *resp.ID != 1 {
+	if resp.ID == nil || resp.ID != float64(1) {
 		t.Errorf("expected id 1, got %v", resp.ID)
 	}
 	if resp.Error != nil {
@@ -151,11 +151,15 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 		defer close(done)
 		result, sendErr = agentTransport.SendRequest(
 			"session/request_permission",
-			PermissionRequestParams{
+			RequestPermissionRequest{
 				SessionID: "test-session",
-				Request: PermissionRequest{
-					Type:        "tool_use",
-					Description: "Execute tool: write_file",
+				ToolCall: &ToolCallUpdate{
+					Title: "Execute tool: write_file",
+					Kind:  ToolKindExecute,
+				},
+				Options: []PermissionOption{
+					{OptionID: "allow", Name: "Allow", Kind: PermissionOptionAllowOnce},
+					{OptionID: "reject", Name: "Reject", Kind: PermissionOptionRejectOnce},
 				},
 			},
 			5*time.Second,
@@ -175,7 +179,7 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 	}
 
 	// Client sends response
-	if err := clientTransport.WriteResponse(*req.ID, map[string]bool{"approved": true}); err != nil {
+	if err := clientTransport.WriteResponse(req.ID, map[string]interface{}{"outcome": map[string]interface{}{"outcome": "selected", "selectedOption": map[string]interface{}{"optionId": "allow"}}}); err != nil {
 		t.Fatalf("client write response error: %v", err)
 	}
 
@@ -187,14 +191,12 @@ func TestE2EPermissionRequestResponse(t *testing.T) {
 	}
 
 	// Verify response content
-	var permResp struct {
-		Approved bool `json:"approved"`
-	}
+	var permResp RequestPermissionResponse
 	if err := json.Unmarshal(result, &permResp); err != nil {
 		t.Fatalf("unmarshal permission response: %v", err)
 	}
-	if !permResp.Approved {
-		t.Error("expected approved=true from client")
+	if permResp.Outcome.Outcome != "selected" || permResp.Outcome.SelectedOption == nil || permResp.Outcome.SelectedOption.OptionID != "allow" {
+		t.Errorf("expected outcome=selected/allow, got %+v", permResp.Outcome)
 	}
 }
 
@@ -227,12 +229,15 @@ func TestE2EPermissionDenied(t *testing.T) {
 		defer close(done)
 		result, sendErr = agentTransport.SendRequest(
 			"session/request_permission",
-			PermissionRequestParams{
+			RequestPermissionRequest{
 				SessionID: "test-session",
-				Request: PermissionRequest{
-					Type:        "fs_write",
-					Path:        "/etc/passwd",
-					Description: "Write to system file",
+				ToolCall: &ToolCallUpdate{
+					Title: "Write to system file",
+					Kind:  ToolKindEdit,
+				},
+				Options: []PermissionOption{
+					{OptionID: "allow", Name: "Allow", Kind: PermissionOptionAllowOnce},
+					{OptionID: "reject", Name: "Reject", Kind: PermissionOptionRejectOnce},
 				},
 			},
 			5*time.Second,
@@ -243,7 +248,7 @@ func TestE2EPermissionDenied(t *testing.T) {
 
 	// Client reads and denies
 	req, _ := clientTransport.ReadMessage()
-	clientTransport.WriteResponse(*req.ID, map[string]bool{"approved": false})
+	clientTransport.WriteResponse(req.ID, map[string]interface{}{"outcome": map[string]interface{}{"outcome": "cancelled"}})
 
 	<-done
 
@@ -251,12 +256,10 @@ func TestE2EPermissionDenied(t *testing.T) {
 		t.Fatalf("SendRequest error: %v", sendErr)
 	}
 
-	var permResp struct {
-		Approved bool `json:"approved"`
-	}
+	var permResp RequestPermissionResponse
 	json.Unmarshal(result, &permResp)
-	if permResp.Approved {
-		t.Error("expected approved=false (denied)")
+	if permResp.Outcome.Outcome != "cancelled" {
+		t.Error("expected outcome=cancelled (denied)")
 	}
 }
 
@@ -310,7 +313,7 @@ func TestE2EFSReadFileViaClient(t *testing.T) {
 	}
 
 	// Client responds with file content
-	clientTransport.WriteResponse(*req.ID, FSReadTextFileResult{
+	clientTransport.WriteResponse(req.ID, FSReadTextFileResult{
 		Content: "package main\n\nfunc main() {}\n",
 	})
 
@@ -594,7 +597,7 @@ func readAndVerifyID(t *testing.T, ct *Transport, expectedID int) {
 	data := scanLine(t, ct)
 	var resp JSONRPCResponse
 	json.Unmarshal(data, &resp)
-	if resp.ID == nil || *resp.ID != expectedID {
+	if resp.ID == nil || resp.ID != float64(expectedID) {
 		t.Errorf("expected id %d, got %v", expectedID, resp.ID)
 	}
 	if resp.Error != nil {
