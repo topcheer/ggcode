@@ -1,4 +1,4 @@
-//go:build !integration
+//go:build integration_local
 
 package a2a
 
@@ -17,15 +17,15 @@ import (
 // Multi-instance mutual discovery & cross-instance communication tests
 // ---------------------------------------------------------------------------
 
-// testCluster sets up 3 A2A instances sharing one registry file.
+// discoveryCluster sets up 3 A2A instances sharing one registry file.
 // It simulates the real scenario where 3 ggcode processes discover each other.
-type testCluster struct {
+type discoveryCluster struct {
 	t         *testing.T
 	regDir    string
-	instances []*testNode
+	instances []*discoveryNode
 }
 
-type testNode struct {
+type discoveryNode struct {
 	name     string
 	server   *Server
 	registry *Registry
@@ -33,14 +33,14 @@ type testNode struct {
 	client   *Client
 }
 
-func newTestCluster(t *testing.T) *testCluster {
+func newDiscoveryCluster(t *testing.T) *discoveryCluster {
 	t.Helper()
 
 	// Isolated registry dir.
 	regDir := filepath.Join(t.TempDir(), "a2a")
 	os.MkdirAll(regDir, 0755)
 
-	c := &testCluster{t: t, regDir: regDir}
+	c := &discoveryCluster{t: t, regDir: regDir}
 
 	workspaces := []struct {
 		name string
@@ -63,7 +63,7 @@ func newTestCluster(t *testing.T) *testCluster {
 		remote := NewRemoteTool(reg, "")
 		client := NewClient(srv.Endpoint(), "")
 
-		c.instances = append(c.instances, &testNode{
+		c.instances = append(c.instances, &discoveryNode{
 			name: ws.name, server: srv,
 			registry: reg, remote: remote, client: client,
 		})
@@ -74,7 +74,7 @@ func newTestCluster(t *testing.T) *testCluster {
 
 // registerAll writes each instance into its own per-ID file,
 // simulating each process having registered on startup.
-func (c *testCluster) registerAll() {
+func (c *discoveryCluster) registerAll() {
 	c.t.Helper()
 	for _, n := range c.instances {
 		inst := InstanceInfo{
@@ -89,7 +89,7 @@ func (c *testCluster) registerAll() {
 	}
 }
 
-func (c *testCluster) node(name string) *testNode {
+func (c *discoveryCluster) node(name string) *discoveryNode {
 	for _, n := range c.instances {
 		if n.name == name {
 			return n
@@ -103,7 +103,7 @@ func (c *testCluster) node(name string) *testNode {
 
 // TestCluster_MutualDiscovery tests that all 3 instances see each other.
 func TestCluster_MutualDiscovery(t *testing.T) {
-	c := newTestCluster(t)
+	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	for _, node := range c.instances {
@@ -126,7 +126,7 @@ func TestCluster_MutualDiscovery(t *testing.T) {
 
 // TestCluster_CrossInstanceCall tests A→B, B→C, C→A calls.
 func TestCluster_CrossInstanceCall(t *testing.T) {
-	c := newTestCluster(t)
+	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx := context.Background()
@@ -172,7 +172,7 @@ func TestCluster_CrossInstanceCall(t *testing.T) {
 
 // TestCluster_ChainedCall tests A calls B, then uses B's result to call C.
 func TestCluster_ChainedCall(t *testing.T) {
-	c := newTestCluster(t)
+	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx := context.Background()
@@ -214,7 +214,7 @@ func TestCluster_ChainedCall(t *testing.T) {
 // TestCluster_NewInstanceDiscovered tests that a new instance D is visible
 // after refreshing the cache.
 func TestCluster_NewInstanceDiscovered(t *testing.T) {
-	c := newTestCluster(t)
+	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx := context.Background()
@@ -272,7 +272,7 @@ func TestCluster_NewInstanceDiscovered(t *testing.T) {
 
 // TestCluster_InstanceGone tests that a departed instance is cleaned up.
 func TestCluster_InstanceGone(t *testing.T) {
-	c := newTestCluster(t)
+	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx := context.Background()
@@ -307,7 +307,7 @@ func TestCluster_InstanceGone(t *testing.T) {
 // TestCluster_ConcurrentCrossCalls tests all 3 instances calling each other
 // simultaneously.
 func TestCluster_ConcurrentCrossCalls(t *testing.T) {
-	c := newTestCluster(t)
+	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -367,7 +367,7 @@ func TestCluster_ConcurrentCrossCalls(t *testing.T) {
 
 // TestCluster_FuzzyMatching tests partial name matching.
 func TestCluster_FuzzyMatching(t *testing.T) {
-	c := newTestCluster(t)
+	c := newDiscoveryCluster(t)
 	c.registerAll()
 
 	ctx := context.Background()
