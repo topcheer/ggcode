@@ -81,12 +81,64 @@ That runs `scripts/dev/verify-ci.sh`, which does:
 2. `go mod download`
 3. `go build -o /tmp/ggcode ./cmd/ggcode`
 4. `go vet ./...`
-5. `go test -tags=!integration ./...`
+5. `go test -tags=integration ./...`
+
+### Integration test tiers
+
+Integration tests use Go build tags to separate three tiers:
+
+| Tier | Build tag | What it runs | When to use |
+|------|-----------|--------------|-------------|
+| **Tier 1** | `integration` | Mock/local tests — no API keys, no network, no external services | CI (always), local dev |
+| **Tier 2** | `integration_local` | Tests requiring LLM API key (`ZAI_API_KEY` or `GGCODE_ZAI_API_KEY`) | Local dev only (needs key) |
+| **Tier 3** | `integration_service` | Tests requiring external services (IM/QQ/TG adapters) | Local dev only (needs service config) |
+
+```bash
+# CI-safe (Tier 1 only) — what CI runs
+go test -tags=integration ./...
+
+# Local dev with LLM (Tier 1 + 2)
+go test -tags='integration,integration_local' ./...
+
+# Full suite (Tier 1 + 2 + 3)
+go test -tags='integration,integration_local,integration_service' ./...
+```
+
+Tier assignment by file:
+
+**Tier 1** (`integration` — CI-safe):
+- `cmd/e2e_test/worktree_e2e_test.go` — git worktree operations
+- `internal/acp/acp_e2e_test.go` — ACP pipe transport
+- `internal/context/integration_test.go` — context summarization
+- `internal/harness/integration_test.go` — config loading
+- `internal/im/adapter_close_e2e_test.go` — adapter lifecycle
+- `internal/im/pc_e2e_test.go` — PC adapter
+- `internal/knight/knight_e2e_test.go` — knight runtime
+- `internal/mcp/integration_test.go` — MCP protocol
+- `internal/swarm/e2e_test.go` — swarm orchestration
+- `internal/swarm/collab_e2e_test.go` — collaborative editing
+- `internal/task/e2e_test.go` — task management
+
+**Tier 2** (`integration_local` — needs API key):
+- `cmd/e2e_test/builtin_tools_e2e_test.go` — LLM tool execution
+- `cmd/e2e_test/worktree_llm_e2e_test.go` — LLM worktree tests
+- `internal/a2a/a2e2e_test.go` — A2A mDNS discovery
+- `internal/a2a/e2e_test.go` — A2A real calls
+- `internal/a2a/e2e_mesh_test.go` — A2A mesh
+- `internal/a2a/multi_agent_test.go` — multi-agent
+- `internal/provider/integration_test.go` — provider integration
+- `internal/tool/e2e_test.go` — tool execution with LLM
+- `tests/acp_integration/acp_integration_test.go` — full ACP lifecycle
+
+**Tier 3** (`integration_service` — needs external service):
+- `internal/im/qq_e2e_test.go` — QQ adapter
+- `internal/im/qq_send_e2e_test.go` — QQ sending
+- `internal/im/tg_e2e_test.go` — Telegram adapter
 
 Important details:
 
-- Integration tests are intentionally skipped by the CI-aligned script.
-- The script unsets `ZAI_API_KEY`, `GGCODE_ZAI_API_KEY`, and `ZAI_MODEL`.
+- CI runs Tier 1 only (`-tags=integration`).
+- The verify-ci script unsets `ZAI_API_KEY`, `GGCODE_ZAI_API_KEY`, and `ZAI_MODEL`.
 - The script also clears inherited `GIT_*` environment variables so nested test repos behave like CI.
 
 ### 3.4 Know what the pre-commit hook will do

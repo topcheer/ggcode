@@ -1,3 +1,5 @@
+//go:build integration_local
+
 package acp_integration
 
 import (
