@@ -67,8 +67,23 @@ type A2ADiscoveredInstance struct {
 	StartedAt string `json:"started_at"`
 }
 
-// AgentRunner is the interface for running agent queries.
-// This decouples webui from the concrete agent package.
+// ChatBridge is the interface between webui and the agent.
+// Implemented by im.DaemonBridge — webchat sends messages through the
+// bridge (which routes them as interruptions to the running agent loop)
+// and subscribes to agent events via the EventSubscriber.
+type ChatBridge interface {
+	// Messages returns the current agent conversation history.
+	Messages() []provider.Message
+	// SendUserMessage injects a user message into the agent.
+	// If the agent is idle, it starts a new run. If running, the message
+	// is queued as an interruption (same as TUI/IM mid-run input).
+	SendUserMessage(content []provider.ContentBlock)
+	// Subscribe registers a callback for agent streaming events.
+	// Returns an unsubscribe function.
+	Subscribe(fn func(provider.StreamEvent)) func()
+}
+
+// AgentRunner is kept for backward compatibility — ChatBridge replaces it.
 type AgentRunner interface {
 	RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error
 	RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error
@@ -85,8 +100,9 @@ type Server struct {
 	a2aDiscoverFn A2ADiscoverFunc // returns discovered A2A instances
 	sessionStore  session.Store
 	workspace     string // current ggcode working directory
-	agent         AgentRunner
-	agentMu       sync.Mutex // serializes agent.RunStreamWithContent calls
+	chatBridge    ChatBridge
+	agent         AgentRunner // legacy, for non-bridge setups
+	agentMu       sync.Mutex
 	agentBusy     atomic.Bool
 	mu            sync.RWMutex
 	addr          string
@@ -125,9 +141,16 @@ func (s *Server) SetSessionStore(store session.Store, workspace string) {
 	s.workspace = workspace
 }
 
-// SetAgent sets the agent runner for chat functionality.
+// SetAgent sets the agent runner for chat functionality (legacy mode).
 func (s *Server) SetAgent(a AgentRunner) {
 	s.agent = a
+}
+
+// SetChatBridge sets the chat bridge for WebChat (preferred mode).
+// When set, WebChat uses bridge's interruption/subscription model instead
+// of directly running the agent.
+func (s *Server) SetChatBridge(b ChatBridge) {
+	s.chatBridge = b
 }
 
 // NewServer creates a WebUI server bound to the given config.
@@ -1095,13 +1118,18 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.agent == nil {
+	var msgs []provider.Message
+	switch {
+	case s.chatBridge != nil:
+		msgs = s.chatBridge.Messages()
+	case s.agent != nil:
+		s.agentMu.Lock()
+		msgs = s.agent.Messages()
+		s.agentMu.Unlock()
+	default:
 		writeJSON(w, []interface{}{})
 		return
 	}
-	s.agentMu.Lock()
-	msgs := s.agent.Messages()
-	s.agentMu.Unlock()
 
 	type contentBlock struct {
 		Type     string          `json:"type"`
@@ -1136,7 +1164,7 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
-	if s.agent == nil {
+	if s.chatBridge == nil && s.agent == nil {
 		http.Error(w, "agent not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -1147,10 +1175,18 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// In bridge mode: subscribe immediately so all agent events are forwarded
+	var unsub func()
+	if s.chatBridge != nil {
+		unsub = s.chatBridge.Subscribe(func(event provider.StreamEvent) {
+			s.wsSendEvent(conn, event)
+		})
+		defer unsub()
+	}
+
 	for {
 		_, msgBytes, err := conn.ReadMessage()
 		if err != nil {
-			// Client disconnected or error
 			return
 		}
 
@@ -1196,7 +1232,6 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			if f.Name == "" || f.Data == "" {
 				continue
 			}
-			// Decode base64 and include as text content
 			decoded, err := base64.StdEncoding.DecodeString(f.Data)
 			if err != nil {
 				s.wsSendError(conn, fmt.Sprintf("invalid base64 for file %s", f.Name))
@@ -1220,76 +1255,42 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		}
 		s.wsSend(conn, ackExtras)
 
-		// Check if agent is already busy with another request
-		if !s.agentBusy.CompareAndSwap(false, true) {
-			s.wsSendError(conn, "agent is busy processing another request, please wait")
-			continue
-		}
-
-		// Run agent with streaming (serialized via mutex)
-		s.agentMu.Lock()
-		ctx, cancel := context.WithCancel(r.Context())
-
-		// Watch for client disconnect
-		done := make(chan struct{})
-		go func() {
-			for {
-				_, _, err := conn.ReadMessage()
-				if err != nil {
-					cancel()
-					return
-				}
+		// Route through bridge or direct agent
+		if s.chatBridge != nil {
+			// Bridge mode: SendUserMessage injects as interruption or starts new run
+			s.chatBridge.SendUserMessage(content)
+		} else {
+			// Legacy mode: directly run agent
+			if !s.agentBusy.CompareAndSwap(false, true) {
+				s.wsSendError(conn, "agent is busy processing another request, please wait")
+				continue
 			}
-		}()
-
-		go func() {
-			defer close(done)
-			err := s.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
-				switch event.Type {
-				case provider.StreamEventText:
-					s.wsSend(conn, map[string]interface{}{
-						"type": "text_delta",
-						"text": event.Text,
-					})
-				case provider.StreamEventToolCallDone:
-					s.wsSend(conn, map[string]interface{}{
-						"type":      "tool_call",
-						"id":        event.Tool.ID,
-						"name":      event.Tool.Name,
-						"arguments": string(event.Tool.Arguments),
-					})
-				case provider.StreamEventToolResult:
-					s.wsSend(conn, map[string]interface{}{
-						"type":     "tool_result",
-						"name":     event.Tool.Name,
-						"result":   event.Result,
-						"is_error": event.IsError,
-					})
-				case provider.StreamEventDone:
-					doneMsg := map[string]interface{}{"type": "done"}
-					if event.Usage != nil {
-						doneMsg["usage"] = map[string]interface{}{
-							"input_tokens":  event.Usage.InputTokens,
-							"output_tokens": event.Usage.OutputTokens,
-						}
+			s.agentMu.Lock()
+			ctx, cancel := context.WithCancel(r.Context())
+			done := make(chan struct{})
+			go func() {
+				for {
+					_, _, err := conn.ReadMessage()
+					if err != nil {
+						cancel()
+						return
 					}
-					s.wsSend(conn, doneMsg)
-				case provider.StreamEventError:
-					s.wsSend(conn, map[string]interface{}{
-						"type":  "error",
-						"error": event.Error.Error(),
-					})
 				}
-			})
-			if err != nil && ctx.Err() == nil {
-				s.wsSendError(conn, err.Error())
-			}
-		}()
-
-		<-done
-		cancel()
-		s.agentMu.Unlock()
-		s.agentBusy.Store(false)
+			}()
+			go func() {
+				defer close(done)
+				err := s.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+					s.wsSendEvent(conn, event)
+				})
+				if err != nil && ctx.Err() == nil {
+					s.wsSendError(conn, err.Error())
+				}
+			}()
+			<-done
+			cancel()
+			s.agentMu.Unlock()
+			s.agentBusy.Store(false)
+		}
 	}
 }
 
@@ -1303,6 +1304,35 @@ func (s *Server) wsSend(conn *websocket.Conn, msg interface{}) {
 
 func (s *Server) wsSendError(conn *websocket.Conn, errMsg string) {
 	s.wsSend(conn, map[string]interface{}{"type": "error", "error": errMsg})
+}
+
+// wsSendEvent converts a provider.StreamEvent to a WebSocket JSON message.
+func (s *Server) wsSendEvent(conn *websocket.Conn, event provider.StreamEvent) {
+	switch event.Type {
+	case provider.StreamEventText:
+		s.wsSend(conn, map[string]interface{}{"type": "text_delta", "text": event.Text})
+	case provider.StreamEventToolCallDone:
+		s.wsSend(conn, map[string]interface{}{
+			"type": "tool_call", "id": event.Tool.ID,
+			"name": event.Tool.Name, "arguments": string(event.Tool.Arguments),
+		})
+	case provider.StreamEventToolResult:
+		s.wsSend(conn, map[string]interface{}{
+			"type": "tool_result", "name": event.Tool.Name,
+			"result": event.Result, "is_error": event.IsError,
+		})
+	case provider.StreamEventDone:
+		doneMsg := map[string]interface{}{"type": "done"}
+		if event.Usage != nil {
+			doneMsg["usage"] = map[string]interface{}{
+				"input_tokens":  event.Usage.InputTokens,
+				"output_tokens": event.Usage.OutputTokens,
+			}
+		}
+		s.wsSend(conn, doneMsg)
+	case provider.StreamEventError:
+		s.wsSend(conn, map[string]interface{}{"type": "error", "error": event.Error.Error()})
+	}
 }
 
 // a2aAuthPresets returns the built-in OAuth2/OIDC provider presets for the webui.

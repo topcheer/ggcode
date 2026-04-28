@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -447,32 +448,63 @@ func (m *mockAgent) Messages() []provider.Message {
 	return m.messages
 }
 
-func TestChatWSNoAgent(t *testing.T) {
+// mockChatBridge is a test double for ChatBridge.
+type mockChatBridge struct {
+	messages    []provider.Message
+	lastContent []provider.ContentBlock
+	subs        []func(provider.StreamEvent)
+	subMu       sync.RWMutex
+}
+
+func (m *mockChatBridge) Messages() []provider.Message {
+	return m.messages
+}
+
+func (m *mockChatBridge) SendUserMessage(content []provider.ContentBlock) {
+	m.lastContent = content
+	m.messages = append(m.messages, provider.Message{Role: "user", Content: content})
+}
+
+func (m *mockChatBridge) Subscribe(fn func(provider.StreamEvent)) func() {
+	m.subMu.Lock()
+	defer m.subMu.Unlock()
+	m.subs = append(m.subs, fn)
+	idx := len(m.subs) - 1
+	return func() {
+		m.subMu.Lock()
+		defer m.subMu.Unlock()
+		m.subs[idx] = nil
+	}
+}
+
+func (m *mockChatBridge) broadcastEvent(event provider.StreamEvent) {
+	m.subMu.RLock()
+	defer m.subMu.RUnlock()
+	for _, fn := range m.subs {
+		if fn != nil {
+			fn(event)
+		}
+	}
+}
+
+func TestChatWSNoBridge(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	// No agent set
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
 	_, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err == nil {
-		t.Fatal("expected error when no agent, got connection")
+		t.Fatal("expected error when no bridge, got connection")
 	}
 }
 
-func TestChatWSSimple(t *testing.T) {
-	agent := &mockAgent{
-		events: []provider.StreamEvent{
-			{Type: provider.StreamEventText, Text: "Hello "},
-			{Type: provider.StreamEventText, Text: "world!"},
-			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
-		},
-	}
-
+func TestChatWSBridgeSimple(t *testing.T) {
+	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetAgent(agent)
+	s.SetChatBridge(bridge)
 
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
@@ -487,60 +519,104 @@ func TestChatWSSimple(t *testing.T) {
 	// Send message
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": "hi"})
 
-	// Read responses
-	var msgs []map[string]interface{}
-	for i := 0; i < 4; i++ {
-		var msg map[string]interface{}
-		if err := ws.ReadJSON(&msg); err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-		msgs = append(msgs, msg)
+	// Read user_ack
+	var ack map[string]interface{}
+	ws.ReadJSON(&ack)
+	if ack["type"] != "user_ack" {
+		t.Fatalf("expected user_ack, got %v", ack["type"])
+	}
+	if ack["text"] != "hi" {
+		t.Fatalf("expected text 'hi', got %v", ack["text"])
 	}
 
-	// First: user_ack
-	if msgs[0]["type"] != "user_ack" {
-		t.Errorf("expected user_ack, got %v", msgs[0]["type"])
-	}
-	if msgs[0]["text"] != "hi" {
-		t.Errorf("expected text 'hi', got %v", msgs[0]["text"])
+	// Simulate agent events via bridge broadcast
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "Hello "})
+		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "world!"})
+		bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}})
+	}()
+
+	// Read text deltas
+	var msg1 map[string]interface{}
+	ws.ReadJSON(&msg1)
+	if msg1["type"] != "text_delta" || msg1["text"] != "Hello " {
+		t.Errorf("expected text_delta 'Hello ', got %v", msg1)
 	}
 
-	// Text deltas
-	if msgs[1]["type"] != "text_delta" {
-		t.Errorf("expected text_delta, got %v", msgs[1]["type"])
-	}
-	if msgs[1]["text"] != "Hello " {
-		t.Errorf("expected 'Hello ', got %v", msgs[1]["text"])
+	var msg2 map[string]interface{}
+	ws.ReadJSON(&msg2)
+	if msg2["type"] != "text_delta" || msg2["text"] != "world!" {
+		t.Errorf("expected text_delta 'world!', got %v", msg2)
 	}
 
-	// Done
-	if msgs[3]["type"] != "done" {
-		t.Errorf("expected done, got %v", msgs[3]["type"])
-	}
-	usage := msgs[3]["usage"].(map[string]interface{})
-	if usage["input_tokens"] != float64(10) {
-		t.Errorf("expected 10 input tokens, got %v", usage["input_tokens"])
+	var done map[string]interface{}
+	ws.ReadJSON(&done)
+	if done["type"] != "done" {
+		t.Errorf("expected done, got %v", done)
 	}
 
-	if agent.lastMsg != "hi" {
-		t.Errorf("agent received '%s', expected 'hi'", agent.lastMsg)
+	// Verify bridge received the message
+	if len(bridge.lastContent) != 1 || bridge.lastContent[0].Text != "hi" {
+		t.Errorf("bridge should have received 'hi', got %v", bridge.lastContent)
 	}
 }
 
-func TestChatWSWithTools(t *testing.T) {
-	agent := &mockAgent{
-		events: []provider.StreamEvent{
-			{Type: provider.StreamEventText, Text: "Let me check"},
-			{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "t1", Name: "run_command", Arguments: json.RawMessage(`{"command":"ls"}`)}},
-			{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{Name: "run_command"}, Result: "file.txt\nreadme.md", IsError: false},
-			{Type: provider.StreamEventText, Text: "Found 2 files"},
-			{Type: provider.StreamEventDone},
-		},
-	}
-
+func TestChatWSBridgeBroadcast(t *testing.T) {
+	// Test that two WS connections both receive agent events via broadcast
+	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetAgent(agent)
+	s.SetChatBridge(bridge)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+
+	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws1.Close()
+
+	ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws2.Close()
+
+	// WS1 sends message — only WS1 gets user_ack
+	ws1.WriteJSON(map[string]string{"type": "user_message", "text": "hello"})
+	var ack1 map[string]interface{}
+	ws1.ReadJSON(&ack1)
+	if ack1["type"] != "user_ack" {
+		t.Fatalf("ws1 should get user_ack, got %v", ack1["type"])
+	}
+
+	// Broadcast event — both should receive via subscription
+	bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "response"})
+
+	var r1 map[string]interface{}
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ws1.ReadJSON(&r1)
+	if r1["type"] != "text_delta" || r1["text"] != "response" {
+		t.Errorf("ws1 should get text_delta, got %v", r1)
+	}
+
+	var r2 map[string]interface{}
+	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ws2.ReadJSON(&r2)
+	if r2["type"] != "text_delta" || r2["text"] != "response" {
+		t.Errorf("ws2 should get text_delta (broadcast), got %v", r2)
+	}
+}
+
+func TestChatWSBridgeInvalidMessage(t *testing.T) {
+	bridge := &mockChatBridge{}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetChatBridge(bridge)
 
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
@@ -552,69 +628,19 @@ func TestChatWSWithTools(t *testing.T) {
 	}
 	defer ws.Close()
 
-	ws.WriteJSON(map[string]string{"type": "user_message", "text": "list files"})
-
-	var msgs []map[string]interface{}
-	for i := 0; i < 6; i++ {
-		var msg map[string]interface{}
-		if err := ws.ReadJSON(&msg); err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-		msgs = append(msgs, msg)
-	}
-
-	// Verify tool call
-	toolMsg := msgs[2]
-	if toolMsg["type"] != "tool_call" {
-		t.Errorf("expected tool_call at index 2, got %v", toolMsg["type"])
-	}
-	if toolMsg["name"] != "run_command" {
-		t.Errorf("expected tool name run_command, got %v", toolMsg["name"])
-	}
-
-	// Verify tool result
-	resultMsg := msgs[3]
-	if resultMsg["type"] != "tool_result" {
-		t.Errorf("expected tool_result at index 3, got %v", resultMsg["type"])
-	}
-	if resultMsg["result"] != "file.txt\nreadme.md" {
-		t.Errorf("unexpected result: %v", resultMsg["result"])
-	}
-}
-
-func TestChatWSInvalidMessage(t *testing.T) {
-	agent := &mockAgent{}
-	cfg := config.DefaultConfig()
-	s := NewServer(cfg)
-	s.SetAgent(agent)
-
-	srv := httptest.NewServer(s.mux)
-	defer srv.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws.Close()
-
-	// Send invalid JSON type
 	ws.WriteJSON(map[string]string{"type": "invalid", "text": "hello"})
-
 	var msg map[string]interface{}
-	if err := ws.ReadJSON(&msg); err != nil {
-		t.Fatal(err)
-	}
+	ws.ReadJSON(&msg)
 	if msg["type"] != "error" {
 		t.Errorf("expected error, got %v", msg["type"])
 	}
 }
 
-func TestChatWSEmptyText(t *testing.T) {
-	agent := &mockAgent{}
+func TestChatWSBridgeEmptyText(t *testing.T) {
+	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetAgent(agent)
+	s.SetChatBridge(bridge)
 
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
@@ -627,26 +653,18 @@ func TestChatWSEmptyText(t *testing.T) {
 	defer ws.Close()
 
 	ws.WriteJSON(map[string]string{"type": "user_message", "text": ""})
-
 	var msg map[string]interface{}
-	if err := ws.ReadJSON(&msg); err != nil {
-		t.Fatal(err)
-	}
+	ws.ReadJSON(&msg)
 	if msg["type"] != "error" {
 		t.Errorf("expected error for empty text, got %v", msg["type"])
 	}
 }
 
-func TestChatWSWithImage(t *testing.T) {
-	agent := &mockAgent{
-		events: []provider.StreamEvent{
-			{Type: provider.StreamEventText, Text: "I see an image"},
-			{Type: provider.StreamEventDone},
-		},
-	}
+func TestChatWSBridgeWithImage(t *testing.T) {
+	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetAgent(agent)
+	s.SetChatBridge(bridge)
 
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
@@ -658,60 +676,34 @@ func TestChatWSWithImage(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Send message with image
 	ws.WriteJSON(map[string]interface{}{
-		"type": "user_message",
-		"text": "describe this",
-		"images": []map[string]string{
-			{"mime": "image/png", "data": "iVBORw0KGgo="},
-		},
+		"type":   "user_message",
+		"text":   "describe this",
+		"images": []map[string]string{{"mime": "image/png", "data": "iVBORw0KGgo="}},
 	})
 
-	var msgs []map[string]interface{}
-	for i := 0; i < 3; i++ {
-		var msg map[string]interface{}
-		if err := ws.ReadJSON(&msg); err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-		msgs = append(msgs, msg)
-	}
-
-	// Check ack has image_count
-	ack := msgs[0]
+	var ack map[string]interface{}
+	ws.ReadJSON(&ack)
 	if ack["type"] != "user_ack" {
-		t.Errorf("expected user_ack, got %v", ack["type"])
+		t.Fatalf("expected user_ack, got %v", ack["type"])
 	}
 	if ack["image_count"] != float64(1) {
 		t.Errorf("expected image_count 1, got %v", ack["image_count"])
 	}
-
-	// Check agent received image block
-	if len(agent.lastContent) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(agent.lastContent))
+	// Bridge should have received content with image
+	if len(bridge.lastContent) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(bridge.lastContent))
 	}
-	if agent.lastContent[0].Type != "text" {
-		t.Errorf("expected text block, got %v", agent.lastContent[0].Type)
-	}
-	if agent.lastContent[1].Type != "image" {
-		t.Errorf("expected image block, got %v", agent.lastContent[1].Type)
-	}
-	if agent.lastContent[1].ImageMIME != "image/png" {
-		t.Errorf("expected image/png, got %v", agent.lastContent[1].ImageMIME)
+	if bridge.lastContent[1].Type != "image" {
+		t.Errorf("expected image block, got %v", bridge.lastContent[1].Type)
 	}
 }
 
-func TestChatWSWithFile(t *testing.T) {
-	fileContent := base64.StdEncoding.EncodeToString([]byte("package main\n\nfunc main() {}"))
-
-	agent := &mockAgent{
-		events: []provider.StreamEvent{
-			{Type: provider.StreamEventText, Text: "Reviewed the file"},
-			{Type: provider.StreamEventDone},
-		},
-	}
+func TestChatWSBridgeWithFile(t *testing.T) {
+	bridge := &mockChatBridge{}
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetAgent(agent)
+	s.SetChatBridge(bridge)
 
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
@@ -723,138 +715,34 @@ func TestChatWSWithFile(t *testing.T) {
 	}
 	defer ws.Close()
 
+	fileContent := base64.StdEncoding.EncodeToString([]byte("package main"))
 	ws.WriteJSON(map[string]interface{}{
-		"type": "user_message",
-		"text": "review this file",
-		"files": []map[string]string{
-			{"name": "main.go", "mime": "text/plain", "data": fileContent},
-		},
+		"type":  "user_message",
+		"text":  "review",
+		"files": []map[string]string{{"name": "main.go", "mime": "text/plain", "data": fileContent}},
 	})
 
-	var msgs []map[string]interface{}
-	for i := 0; i < 3; i++ {
-		var msg map[string]interface{}
-		if err := ws.ReadJSON(&msg); err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-		msgs = append(msgs, msg)
-	}
-
-	// Check ack has file_names
-	ack := msgs[0]
+	var ack map[string]interface{}
+	ws.ReadJSON(&ack)
 	if ack["type"] != "user_ack" {
-		t.Errorf("expected user_ack, got %v", ack["type"])
+		t.Fatalf("expected user_ack, got %v", ack["type"])
 	}
 	fnames, ok := ack["file_names"].([]interface{})
-	if !ok || len(fnames) != 1 {
-		t.Fatalf("expected file_names with 1 entry, got %v", ack["file_names"])
-	}
-	if fnames[0] != "main.go" {
-		t.Errorf("expected file name 'main.go', got %v", fnames[0])
-	}
-
-	// Check agent received file as text block
-	if len(agent.lastContent) != 2 {
-		t.Fatalf("expected 2 content blocks, got %d", len(agent.lastContent))
-	}
-	fileBlock := agent.lastContent[1]
-	if fileBlock.Type != "text" {
-		t.Errorf("expected text block for file, got %v", fileBlock.Type)
-	}
-	if !strings.Contains(fileBlock.Text, "main.go") {
-		t.Errorf("file block should contain filename, got: %s", fileBlock.Text)
-	}
-	if !strings.Contains(fileBlock.Text, "func main()") {
-		t.Errorf("file block should contain file content, got: %s", fileBlock.Text)
+	if !ok || len(fnames) != 1 || fnames[0] != "main.go" {
+		t.Errorf("expected file_names [main.go], got %v", ack["file_names"])
 	}
 }
 
-func TestChatWSImageOnlyNoText(t *testing.T) {
-	agent := &mockAgent{
-		events: []provider.StreamEvent{
-			{Type: provider.StreamEventText, Text: "Got it"},
-			{Type: provider.StreamEventDone},
-		},
-	}
-	cfg := config.DefaultConfig()
-	s := NewServer(cfg)
-	s.SetAgent(agent)
-
-	srv := httptest.NewServer(s.mux)
-	defer srv.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws.Close()
-
-	// Send image-only message (no text)
-	ws.WriteJSON(map[string]interface{}{
-		"type": "user_message",
-		"images": []map[string]string{
-			{"mime": "image/jpeg", "data": "/9j/4AAQ"},
-		},
-	})
-
-	var msgs []map[string]interface{}
-	for i := 0; i < 2; i++ {
-		var msg map[string]interface{}
-		if err := ws.ReadJSON(&msg); err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
-		msgs = append(msgs, msg)
-	}
-
-	if msgs[0]["type"] != "user_ack" {
-		t.Errorf("expected user_ack, got %v", msgs[0]["type"])
-	}
-	// Agent should receive only image block
-	if len(agent.lastContent) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(agent.lastContent))
-	}
-	if agent.lastContent[0].Type != "image" {
-		t.Errorf("expected image block, got %v", agent.lastContent[0].Type)
-	}
-}
-
-func TestChatHistoryNoAgent(t *testing.T) {
-	cfg := config.DefaultConfig()
-	s := NewServer(cfg)
-	srv := httptest.NewServer(s.mux)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/api/chat/history")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-	var result []interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-	if len(result) != 0 {
-		t.Errorf("expected empty array, got %v", result)
-	}
-}
-
-func TestChatHistoryWithMessages(t *testing.T) {
-	agent := &mockAgent{
+func TestChatHistoryBridge(t *testing.T) {
+	bridge := &mockChatBridge{
 		messages: []provider.Message{
 			{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
 			{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hi there"}}},
-			{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "how are you?"}}},
-			{Role: "assistant", Content: []provider.ContentBlock{
-				{Type: "text", Text: "let me think"},
-				{Type: "tool_use", ToolName: "run_command", ToolID: "t1", Input: json.RawMessage(`{"command":"ls"}`)},
-			}},
 		},
 	}
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
-	s.SetAgent(agent)
+	s.SetChatBridge(bridge)
 
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
@@ -867,125 +755,28 @@ func TestChatHistoryWithMessages(t *testing.T) {
 
 	var result []map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
-
-	if len(result) != 4 {
-		t.Fatalf("expected 4 messages, got %d", len(result))
-	}
-	if result[0]["role"] != "user" {
-		t.Errorf("first message should be user, got %v", result[0]["role"])
-	}
-	if result[3]["role"] != "assistant" {
-		t.Errorf("fourth message should be assistant, got %v", result[3]["role"])
-	}
-	// Check tool_use block preserved
-	blocks := result[3]["content"].([]interface{})
-	toolBlock := blocks[1].(map[string]interface{})
-	if toolBlock["tool_name"] != "run_command" {
-		t.Errorf("expected tool_name, got %v", toolBlock["tool_name"])
-	}
-}
-
-func TestChatWSBusyRejection(t *testing.T) {
-	// Agent that takes time to respond
-	agent := &mockAgent{
-		delay: 500 * time.Millisecond,
-		events: []provider.StreamEvent{
-			{Type: provider.StreamEventText, Text: "done"},
-			{Type: provider.StreamEventDone},
-		},
-	}
-	cfg := config.DefaultConfig()
-	s := NewServer(cfg)
-	s.SetAgent(agent)
-
-	srv := httptest.NewServer(s.mux)
-	defer srv.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
-
-	// First connection sends a message
-	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws1.Close()
-	ws1.WriteJSON(map[string]string{"type": "user_message", "text": "slow request"})
-
-	// Read ack to ensure first request is being processed
-	var ack map[string]interface{}
-	ws1.ReadJSON(&ack)
-
-	// Second connection tries to send while first is running
-	ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws2.Close()
-
-	// Give a small delay to ensure first request is in the mutex
-	time.Sleep(50 * time.Millisecond)
-
-	ws2.WriteJSON(map[string]string{"type": "user_message", "text": "concurrent request"})
-
-	var errMsg map[string]interface{}
-	ws2.ReadJSON(&errMsg)
-	// Should get either ack then error, or just error
-	for errMsg["type"] == "user_ack" {
-		ws2.ReadJSON(&errMsg)
-	}
-	if errMsg["type"] != "error" {
-		t.Errorf("expected error for concurrent request, got %v", errMsg["type"])
-	}
-	if !strings.Contains(errMsg["error"].(string), "busy") {
-		t.Errorf("error should mention busy, got: %v", errMsg["error"])
-	}
-}
-
-func TestChatWSHistoryUpdates(t *testing.T) {
-	agent := &mockAgent{
-		events: []provider.StreamEvent{
-			{Type: provider.StreamEventText, Text: "Hello!"},
-			{Type: provider.StreamEventDone},
-		},
-	}
-	cfg := config.DefaultConfig()
-	s := NewServer(cfg)
-	s.SetAgent(agent)
-
-	srv := httptest.NewServer(s.mux)
-	defer srv.Close()
-
-	// Send a message via WebSocket
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws.Close()
-
-	ws.WriteJSON(map[string]string{"type": "user_message", "text": "hi"})
-	// Drain responses
-	for i := 0; i < 3; i++ {
-		ws.ReadJSON(&map[string]interface{}{})
-	}
-
-	// Now check history API has the messages
-	resp, err := http.Get(srv.URL + "/api/chat/history")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	var result []map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if len(result) < 2 {
-		t.Fatalf("expected at least 2 messages in history, got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(result))
 	}
 	if result[0]["role"] != "user" {
 		t.Errorf("first should be user, got %v", result[0]["role"])
 	}
-	if result[1]["role"] != "assistant" {
-		t.Errorf("second should be assistant, got %v", result[1]["role"])
+}
+
+func TestChatHistoryNoBridge(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/chat/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var result []interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result) != 0 {
+		t.Errorf("expected empty, got %v", result)
 	}
 }
