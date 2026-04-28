@@ -27,6 +27,11 @@ type pendingAskUser struct {
 
 // DaemonBridge implements the Bridge interface for headless (daemon) mode.
 // IM inbound messages are submitted directly to the agent without a TUI.
+// pendingInterruption wraps a queued user message with all its content blocks.
+type pendingInterruption struct {
+	Content []provider.ContentBlock
+}
+
 type DaemonBridge struct {
 	manager  *Manager
 	emitter  *IMEmitter
@@ -38,11 +43,11 @@ type DaemonBridge struct {
 	mu                   sync.Mutex
 	cancelFunc           context.CancelFunc
 	pendingAsk           *pendingAskUser
-	pendingInterruptions []string
+	pendingInterruptions []pendingInterruption
 	followSink           daemon.FollowSink
 	onActivity           func()
 	onRestart            func() // trigger daemon self-restart
-	eventSubs            []func(provider.StreamEvent)
+	eventSubs            []*daemonBridgeSub
 	eventSubMu           sync.RWMutex
 }
 
@@ -146,7 +151,9 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if activeCancel != nil {
 		debug.Log("daemon-bridge", "agent running, queuing interruption: %s", truncateStr(text, 80))
 		b.mu.Lock()
-		b.pendingInterruptions = append(b.pendingInterruptions, text)
+		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{
+			Content: []provider.ContentBlock{{Type: "text", Text: text}},
+		})
 		b.mu.Unlock()
 		return nil
 	}
@@ -166,7 +173,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		}
 		msg := b.pendingInterruptions[0]
 		b.pendingInterruptions = b.pendingInterruptions[1:]
-		return msg
+		return extractText(msg.Content)
 	})
 	b.cancelFunc = cancel
 	b.mu.Unlock()
@@ -181,19 +188,20 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 
 		// Check if more messages arrived during the run.
 		b.mu.Lock()
-		var nextText string
+		var nextContent []provider.ContentBlock
 		if len(b.pendingInterruptions) > 0 {
-			nextText = b.pendingInterruptions[0]
+			nextContent = b.pendingInterruptions[0].Content
 			b.pendingInterruptions = b.pendingInterruptions[1:]
 		}
 		b.mu.Unlock()
 
-		if nextText == "" {
+		if len(nextContent) == 0 {
 			break
 		}
 
+		nextText := extractText(nextContent)
 		debug.Log("daemon-bridge", "draining queued message for next round: %s", truncateStr(nextText, 80))
-		content = []provider.ContentBlock{{Type: "text", Text: nextText}}
+		content = nextContent
 	}
 
 	b.mu.Lock()
@@ -283,7 +291,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 		}
 		msg := b.pendingInterruptions[0]
 		b.pendingInterruptions = b.pendingInterruptions[1:]
-		return msg
+		return extractText(msg.Content)
 	})
 	defer b.agent.SetInterruptionHandler(nil)
 
@@ -759,6 +767,17 @@ func (b *DaemonBridge) handleMuteSelf(msg InboundMessage) error {
 
 // --- ChatBridge implementation (for webui WebChat) ---
 
+// extractText returns the concatenated text from content blocks.
+func extractText(blocks []provider.ContentBlock) string {
+	var text string
+	for _, b := range blocks {
+		if b.Type == "text" {
+			text += b.Text
+		}
+	}
+	return text
+}
+
 // Messages returns the current agent conversation history.
 func (b *DaemonBridge) Messages() []provider.Message {
 	return b.agent.Messages()
@@ -769,14 +788,8 @@ func (b *DaemonBridge) Messages() []provider.Message {
 // (same mechanism as IM mid-run messages). If the agent is idle, a new run
 // is started.
 func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
-	// Extract text for interruption queue (bridge currently only handles text interruptions)
-	var text string
-	for _, c := range content {
-		if c.Type == "text" {
-			text += c.Text
-		}
-	}
-	if text == "" {
+	text := extractText(content)
+	if text == "" && len(content) == 0 {
 		return
 	}
 
@@ -789,32 +802,95 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 		// Agent is running — inject as interruption
 		debug.Log("daemon-bridge", "webchat: queuing interruption: %s", truncateStr(text, 80))
 		b.mu.Lock()
-		b.pendingInterruptions = append(b.pendingInterruptions, text)
+		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
 		b.mu.Unlock()
 		return
 	}
 
-	// Agent is idle — start a new run (fire and forget)
+	// Agent is idle — start a new run with proper lifecycle management
 	go func() {
-		ctx := context.Background()
-		if err := b.runAgentStream(ctx, content); err != nil {
-			debug.Log("daemon-bridge", "webchat: agent run error: %v", err)
+		ctx2, cancel := context.WithCancel(context.Background())
+
+		b.mu.Lock()
+		b.pendingInterruptions = b.pendingInterruptions[:0] // clear stale
+		b.agent.SetInterruptionHandler(func() string {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			if len(b.pendingInterruptions) == 0 {
+				return ""
+			}
+			msg := b.pendingInterruptions[0]
+			b.pendingInterruptions = b.pendingInterruptions[1:]
+			return extractText(msg.Content)
+		})
+		b.cancelFunc = cancel
+		b.mu.Unlock()
+
+		// Drain loop (same as HandleIMMessage)
+		for {
+			err := b.runAgentStream(ctx2, content)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				debug.Log("daemon-bridge", "webchat: agent run error: %v", err)
+			}
+
+			b.mu.Lock()
+			var nextContent []provider.ContentBlock
+			if len(b.pendingInterruptions) > 0 {
+				nextContent = b.pendingInterruptions[0].Content
+				b.pendingInterruptions = b.pendingInterruptions[1:]
+			}
+			b.mu.Unlock()
+
+			if len(nextContent) == 0 {
+				break
+			}
+			debug.Log("daemon-bridge", "webchat: draining queued message: %s", truncateStr(extractText(nextContent), 80))
+			content = nextContent
 		}
+
+		b.mu.Lock()
+		b.cancelFunc = nil
+		b.agent.SetInterruptionHandler(nil)
+		b.mu.Unlock()
 	}()
 }
 
+type daemonBridgeSub struct {
+	fn   func(provider.StreamEvent)
+	ch   chan provider.StreamEvent
+	done chan struct{}
+}
+
 // Subscribe registers a callback for agent streaming events.
-// All events from the agent loop are forwarded to all subscribers.
+// All events from the agent loop are forwarded to all subscribers
+// via buffered channels to avoid blocking the agent.
 // Returns an unsubscribe function.
 func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
+	sub := &daemonBridgeSub{
+		fn:   fn,
+		ch:   make(chan provider.StreamEvent, 256),
+		done: make(chan struct{}),
+	}
+	// Start async forwarder goroutine
+	go func() {
+		defer close(sub.done)
+		for event := range sub.ch {
+			sub.fn(event)
+		}
+	}()
+
 	b.eventSubMu.Lock()
 	defer b.eventSubMu.Unlock()
-	b.eventSubs = append(b.eventSubs, fn)
+	b.eventSubs = append(b.eventSubs, sub)
 	idx := len(b.eventSubs) - 1
 	return func() {
 		b.eventSubMu.Lock()
 		defer b.eventSubMu.Unlock()
-		b.eventSubs[idx] = nil // prevent re-slicing issues
+		if b.eventSubs[idx] != nil {
+			close(b.eventSubs[idx].ch)
+			<-b.eventSubs[idx].done // wait for drain
+			b.eventSubs[idx] = nil
+		}
 	}
 }
 
@@ -822,9 +898,13 @@ func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 func (b *DaemonBridge) broadcastEvent(event provider.StreamEvent) {
 	b.eventSubMu.RLock()
 	defer b.eventSubMu.RUnlock()
-	for _, fn := range b.eventSubs {
-		if fn != nil {
-			fn(event)
+	for _, sub := range b.eventSubs {
+		if sub != nil {
+			select {
+			case sub.ch <- event:
+			default:
+				debug.Log("daemon-bridge", "webchat subscriber channel full, dropping event")
+			}
 		}
 	}
 }
