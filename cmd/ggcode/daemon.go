@@ -924,6 +924,14 @@ loop:
 			args = append(args, "--bypass")
 		}
 		execArgs := append([]string{binary}, args...)
+
+		// If /restart debug was requested, inject GGCODE_DEBUG=1
+		env := os.Environ()
+		if bridge.ConsumeRestartDebug() {
+			debug.Log("daemon", "restart with GGCODE_DEBUG=1")
+			env = append(env, "GGCODE_DEBUG=1")
+		}
+
 		debug.Log("daemon", "restart exec %s", strings.Join(execArgs, " "))
 		if runtime.GOOS == "windows" {
 			// Windows doesn't support syscall.Exec — start new process and exit.
@@ -931,13 +939,14 @@ loop:
 			restartCmd.Stdin = os.Stdin
 			restartCmd.Stdout = os.Stdout
 			restartCmd.Stderr = os.Stderr
+			restartCmd.Env = env
 			if err := restartCmd.Start(); err != nil {
 				fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\n", err)
 				return nil
 			}
 			os.Exit(0)
 		}
-		return syscall.Exec(binary, execArgs, os.Environ())
+		return syscall.Exec(binary, execArgs, env)
 	}
 
 	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\n")
