@@ -142,6 +142,11 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
 @keyframes typingDots { 0%{content:''} 25%{content:'.'} 50%{content:'..'} 75%{content:'...'} 100%{content:''} }
 .chat-cursor { display: inline-block; width: 2px; height: 14px; background: var(--primary, #6366f1); animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 1px; }
 @keyframes blink { 50% { opacity: 0; } }
+.chat-attach-item { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; color: var(--text); max-width: 200px; }
+.chat-attach-item img { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; }
+.chat-attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-attach-remove { cursor: pointer; color: var(--text2); font-size: 14px; line-height: 1; }
+.chat-attach-remove:hover { color: #ef4444; }
 </style>
 </head>
 <body>
@@ -410,10 +415,15 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
     <div class="page" id="page-chat">
       <div id="chat-container" style="display:flex;flex-direction:column;height:calc(100vh - 80px)">
         <div id="chat-messages" style="flex:1;overflow-y:auto;padding:16px 8px"></div>
-        <div id="chat-input-area" style="padding:12px 8px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:flex-end">
-          <textarea id="chat-input" rows="1" placeholder="Send a message..." style="flex:1;resize:none;padding:10px 14px;font-size:14px;font-family:inherit;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;outline:none;max-height:120px;min-height:42px;line-height:1.5" onkeydown="chatKeyDown(event)" oninput="autoResize(this)"></textarea>
-          <button id="chat-send" class="btn btn-primary" onclick="chatSend()" style="min-width:48px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">&#10148;</button>
-          <button id="chat-stop" class="btn btn-danger" onclick="chatStop()" style="display:none;min-width:48px;height:42px;border-radius:10px;font-size:14px">&#9632;</button>
+        <div id="chat-input-area" style="padding:12px 8px;border-top:1px solid var(--border)">
+          <div id="chat-attachments" style="display:none;margin-bottom:8px;display:flex;flex-wrap:wrap;gap:6px"></div>
+          <div style="display:flex;gap:8px;align-items:flex-end">
+            <input type="file" id="chat-file-input" multiple accept="image/*,.pdf,.txt,.go,.py,.js,.ts,.java,.c,.cpp,.rs,.rb,.sh,.yaml,.yml,.json,.toml,.md,.csv,.xml,.html,.css,.sql,.proto,.graphql" style="display:none" onchange="chatFilesSelected(this)">
+            <button class="btn" onclick="document.getElementById('chat-file-input').click()" style="min-width:42px;height:42px;border-radius:10px;font-size:16px" title="Attach files">&#128206;</button>
+            <textarea id="chat-input" rows="1" placeholder="Send a message... (paste images with Ctrl+V)" style="flex:1;resize:none;padding:10px 14px;font-size:14px;font-family:inherit;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;outline:none;max-height:120px;min-height:42px;line-height:1.5" onkeydown="chatKeyDown(event)" oninput="autoResize(this)" onpaste="chatPaste(event)"></textarea>
+            <button id="chat-send" class="btn btn-primary" onclick="chatSend()" style="min-width:48px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">&#10148;</button>
+            <button id="chat-stop" class="btn btn-danger" onclick="chatStop()" style="display:none;min-width:48px;height:42px;border-radius:10px;font-size:14px">&#9632;</button>
+          </div>
         </div>
         <div id="chat-status" style="padding:2px 12px;font-size:11px;color:var(--text2);display:none"></div>
       </div>
@@ -1678,6 +1688,7 @@ let chatTextBuffer = '';
 let chatToolCalls = [];
 let chatStatusEl = null;
 let chatMessagesEl = null;
+let chatAttachments = []; // {type:'image'|'file', name, mime, data(base64), previewUrl?}
 
 function initChat() {
   chatStatusEl = document.getElementById('chat-status');
@@ -1759,11 +1770,17 @@ function handleChatMessage(msg) {
   }
 }
 
-function appendUserBubble(text) {
+function appendUserBubble(text, imageCount, fileNames) {
   clearWelcome();
   const div = document.createElement('div');
   div.className = 'chat-msg user';
-  div.innerHTML = `<div class="chat-role">You</div><div class="chat-text">${esc(text)}</div>`;
+  let extra = '';
+  if (imageCount) extra += `<div style="margin-top:4px;font-size:12px;color:var(--text2)">&#128247; ${imageCount} image${imageCount>1?'s':''}</div>`;
+  if (fileNames && fileNames.length) {
+    const names = fileNames.map(n => `<code style="font-size:11px;background:var(--surface2,var(--surface));padding:1px 4px;border-radius:3px">${esc(n)}</code>`).join(' ');
+    extra += `<div style="margin-top:4px;font-size:12px;color:var(--text2)">&#128196; ${names}</div>`;
+  }
+  div.innerHTML = `<div class="chat-role">You</div><div class="chat-text">${esc(text||'')}</div>${extra}`;
   chatMessagesEl.appendChild(div);
   scrollChatBottom();
 }
@@ -1868,16 +1885,26 @@ function autoResize(el) {
 function chatSend() {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
-  if (!text || chatStreaming) return;
+  if ((!text && chatAttachments.length === 0) || chatStreaming) return;
   if (!chatWs || chatWs.readyState !== WebSocket.OPEN) {
     chatConnect();
     setTimeout(() => chatSend(), 500);
     return;
   }
-  chatWs.send(JSON.stringify({ type: 'user_message', text }));
+  const msg = { type: 'user_message', text: text };
+  const images = chatAttachments.filter(a => a.type === 'image');
+  const files = chatAttachments.filter(a => a.type === 'file');
+  if (images.length > 0) {
+    msg.images = images.map(a => ({ mime: a.mime, data: a.data }));
+  }
+  if (files.length > 0) {
+    msg.files = files.map(a => ({ name: a.name, mime: a.mime, data: a.data }));
+  }
+  chatWs.send(JSON.stringify(msg));
   input.value = '';
   input.style.height = 'auto';
   input.focus();
+  clearAttachments();
 }
 
 function chatStop() {
@@ -1886,6 +1913,117 @@ function chatStop() {
   updateChatButtons(false);
   renderAssistantBubble(true);
 }
+
+// --- Attachment management ---
+function chatPaste(e) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      addImageAttachment(file);
+      return;
+    }
+  }
+}
+
+function chatFilesSelected(input) {
+  for (const file of input.files) {
+    if (file.type.startsWith('image/')) {
+      addImageAttachment(file);
+    } else {
+      addFileAttachment(file);
+    }
+  }
+  input.value = '';
+}
+
+function addImageAttachment(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const base64 = e.target.result.split(',')[1];
+    chatAttachments.push({
+      type: 'image',
+      name: file.name || 'pasted-image.png',
+      mime: file.type,
+      data: base64,
+      previewUrl: e.target.result
+    });
+    renderAttachments();
+  };
+  reader.readAsDataURL(file);
+}
+
+function addFileAttachment(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const base64 = e.target.result.split(',')[1];
+    chatAttachments.push({
+      type: 'file',
+      name: file.name,
+      mime: file.type || 'text/plain',
+      data: base64
+    });
+    renderAttachments();
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeAttachment(index) {
+  if (chatAttachments[index]?.previewUrl) {
+    URL.revokeObjectURL(chatAttachments[index].previewUrl);
+  }
+  chatAttachments.splice(index, 1);
+  renderAttachments();
+}
+
+function clearAttachments() {
+  chatAttachments.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+  chatAttachments = [];
+  renderAttachments();
+}
+
+function renderAttachments() {
+  const container = document.getElementById('chat-attachments');
+  if (!container) return;
+  if (chatAttachments.length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = 'flex';
+  container.innerHTML = chatAttachments.map((a, i) => {
+    if (a.type === 'image' && a.previewUrl) {
+      return `<div class="chat-attach-item">
+        <img src="${a.previewUrl}" alt="${esc(a.name)}">
+        <span class="chat-attach-name">${esc(a.name)}</span>
+        <span class="chat-attach-remove" onclick="removeAttachment(${i})">&times;</span>
+      </div>`;
+    }
+    const icon = a.type === 'image' ? '&#128247;' : '&#128196;';
+    return `<div class="chat-attach-item">
+      <span>${icon}</span>
+      <span class="chat-attach-name">${esc(a.name)}</span>
+      <span class="chat-attach-remove" onclick="removeAttachment(${i})">&times;</span>
+    </div>`;
+  }).join('');
+}
+
+// Update handleChatMessage to show attachment info in user bubble
+const _origHandleChatMessage = handleChatMessage;
+handleChatMessage = function(msg) {
+  if (msg.type === 'user_ack') {
+    appendUserBubble(msg.text, msg.image_count, msg.file_names);
+    chatTextBuffer = '';
+    chatToolCalls = [];
+    chatAssistantEl = createAssistantBubble();
+    chatStreaming = true;
+    updateChatButtons(true);
+    return;
+  }
+  _origHandleChatMessage(msg);
+};
 
 // Patch showPage to init chat
 const _origShowPage = showPage;

@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -399,13 +400,22 @@ func TestSessionMethodNotAllowed(t *testing.T) {
 
 // mockAgent is a test double for AgentRunner.
 type mockAgent struct {
-	lastMsg string
-	events  []provider.StreamEvent
-	delay   time.Duration
+	lastMsg     string
+	lastContent []provider.ContentBlock
+	events      []provider.StreamEvent
+	delay       time.Duration
 }
 
 func (m *mockAgent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error {
 	m.lastMsg = userMsg
+	return m.RunStreamWithContent(ctx, []provider.ContentBlock{provider.TextBlock(userMsg)}, onEvent)
+}
+
+func (m *mockAgent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error {
+	m.lastContent = content
+	if len(content) > 0 && content[0].Type == "text" {
+		m.lastMsg = content[0].Text
+	}
 	time.Sleep(m.delay)
 	for _, e := range m.events {
 		select {
@@ -605,5 +615,187 @@ func TestChatWSEmptyText(t *testing.T) {
 	}
 	if msg["type"] != "error" {
 		t.Errorf("expected error for empty text, got %v", msg["type"])
+	}
+}
+
+func TestChatWSWithImage(t *testing.T) {
+	agent := &mockAgent{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "I see an image"},
+			{Type: provider.StreamEventDone},
+		},
+	}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	// Send message with image
+	ws.WriteJSON(map[string]interface{}{
+		"type": "user_message",
+		"text": "describe this",
+		"images": []map[string]string{
+			{"mime": "image/png", "data": "iVBORw0KGgo="},
+		},
+	})
+
+	var msgs []map[string]interface{}
+	for i := 0; i < 3; i++ {
+		var msg map[string]interface{}
+		if err := ws.ReadJSON(&msg); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		msgs = append(msgs, msg)
+	}
+
+	// Check ack has image_count
+	ack := msgs[0]
+	if ack["type"] != "user_ack" {
+		t.Errorf("expected user_ack, got %v", ack["type"])
+	}
+	if ack["image_count"] != float64(1) {
+		t.Errorf("expected image_count 1, got %v", ack["image_count"])
+	}
+
+	// Check agent received image block
+	if len(agent.lastContent) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(agent.lastContent))
+	}
+	if agent.lastContent[0].Type != "text" {
+		t.Errorf("expected text block, got %v", agent.lastContent[0].Type)
+	}
+	if agent.lastContent[1].Type != "image" {
+		t.Errorf("expected image block, got %v", agent.lastContent[1].Type)
+	}
+	if agent.lastContent[1].ImageMIME != "image/png" {
+		t.Errorf("expected image/png, got %v", agent.lastContent[1].ImageMIME)
+	}
+}
+
+func TestChatWSWithFile(t *testing.T) {
+	fileContent := base64.StdEncoding.EncodeToString([]byte("package main\n\nfunc main() {}"))
+
+	agent := &mockAgent{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "Reviewed the file"},
+			{Type: provider.StreamEventDone},
+		},
+	}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	ws.WriteJSON(map[string]interface{}{
+		"type": "user_message",
+		"text": "review this file",
+		"files": []map[string]string{
+			{"name": "main.go", "mime": "text/plain", "data": fileContent},
+		},
+	})
+
+	var msgs []map[string]interface{}
+	for i := 0; i < 3; i++ {
+		var msg map[string]interface{}
+		if err := ws.ReadJSON(&msg); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		msgs = append(msgs, msg)
+	}
+
+	// Check ack has file_names
+	ack := msgs[0]
+	if ack["type"] != "user_ack" {
+		t.Errorf("expected user_ack, got %v", ack["type"])
+	}
+	fnames, ok := ack["file_names"].([]interface{})
+	if !ok || len(fnames) != 1 {
+		t.Fatalf("expected file_names with 1 entry, got %v", ack["file_names"])
+	}
+	if fnames[0] != "main.go" {
+		t.Errorf("expected file name 'main.go', got %v", fnames[0])
+	}
+
+	// Check agent received file as text block
+	if len(agent.lastContent) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(agent.lastContent))
+	}
+	fileBlock := agent.lastContent[1]
+	if fileBlock.Type != "text" {
+		t.Errorf("expected text block for file, got %v", fileBlock.Type)
+	}
+	if !strings.Contains(fileBlock.Text, "main.go") {
+		t.Errorf("file block should contain filename, got: %s", fileBlock.Text)
+	}
+	if !strings.Contains(fileBlock.Text, "func main()") {
+		t.Errorf("file block should contain file content, got: %s", fileBlock.Text)
+	}
+}
+
+func TestChatWSImageOnlyNoText(t *testing.T) {
+	agent := &mockAgent{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "Got it"},
+			{Type: provider.StreamEventDone},
+		},
+	}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	// Send image-only message (no text)
+	ws.WriteJSON(map[string]interface{}{
+		"type": "user_message",
+		"images": []map[string]string{
+			{"mime": "image/jpeg", "data": "/9j/4AAQ"},
+		},
+	})
+
+	var msgs []map[string]interface{}
+	for i := 0; i < 2; i++ {
+		var msg map[string]interface{}
+		if err := ws.ReadJSON(&msg); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		msgs = append(msgs, msg)
+	}
+
+	if msgs[0]["type"] != "user_ack" {
+		t.Errorf("expected user_ack, got %v", msgs[0]["type"])
+	}
+	// Agent should receive only image block
+	if len(agent.lastContent) != 1 {
+		t.Fatalf("expected 1 content block, got %d", len(agent.lastContent))
+	}
+	if agent.lastContent[0].Type != "image" {
+		t.Errorf("expected image block, got %v", agent.lastContent[0].Type)
 	}
 }
