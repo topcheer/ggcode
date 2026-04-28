@@ -192,6 +192,18 @@ func (m *Model) emitIMAskUser(text string) {
 	m.imEmitter.EmitAskUser(text)
 }
 
+// emitIMAskUserInteractive sends ask_user to IM via the shared emitter,
+// which handles interactive buttons + fallback logic in one place.
+func (m *Model) emitIMAskUserInteractive(title string, question toolpkg.AskUserQuestion, fallbackText string) {
+	if m.imEmitter == nil {
+		if fallbackText != "" {
+			m.emitIMAskUser(fallbackText)
+		}
+		return
+	}
+	m.imEmitter.EmitAskUserInteractive(title, question, fallbackText)
+}
+
 func (m *Model) formatIMAskUserPrompt(rawArgs string) string {
 	if m.imEmitter == nil {
 		return ""

@@ -21,8 +21,9 @@ import (
 
 // pendingAskUser tracks an in-flight ask_user request waiting for an IM reply.
 type pendingAskUser struct {
-	request  toolpkg.AskUserRequest
-	response chan toolpkg.AskUserResponse
+	request     toolpkg.AskUserRequest
+	response    chan toolpkg.AskUserResponse
+	multiSelect bool // if true, accumulate selections until __done__
 }
 
 // DaemonBridge implements the Bridge interface for headless (daemon) mode.
@@ -45,6 +46,7 @@ type DaemonBridge struct {
 	pendingAsk           *pendingAskUser
 	pendingInterruptions []pendingInterruption
 	interactiveMsgIDs    map[string]string // adapter → platform msg ID (for callback correlation)
+	multiSelectChosen    map[string]bool   // accumulated multi-select choices (choice value → selected)
 	followSink           daemon.FollowSink
 	onActivity           func()
 	onRestart            func() // trigger daemon self-restart
@@ -81,8 +83,50 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	if pending == nil {
 		return
 	}
-	// Join selected values (e.g. "1" or "1,3") — matches parseRemoteSelections format
-	text := strings.Join(cb.Values, ",")
+
+	// Determine the choice value from the callback.
+	// For multi-select, each click toggles a selection; __done__ submits.
+	choice := ""
+	if len(cb.Values) > 0 {
+		choice = cb.Values[0]
+	}
+
+	if pending.multiSelect && choice != "__done__" {
+		// Toggle the selection
+		b.mu.Lock()
+		if b.multiSelectChosen == nil {
+			b.multiSelectChosen = make(map[string]bool)
+		}
+		if b.multiSelectChosen[choice] {
+			delete(b.multiSelectChosen, choice)
+		} else {
+			b.multiSelectChosen[choice] = true
+		}
+		chosen := b.multiSelectChosen
+		b.mu.Unlock()
+		debug.Log("im", "multi-select toggle: choice=%s selected=%v", choice, chosen)
+		return
+	}
+
+	// Submit: single-select sends immediately; multi-select sends accumulated on Done
+	var values []string
+	if pending.multiSelect {
+		// __done__ was clicked — collect all accumulated selections
+		b.mu.Lock()
+		for v := range b.multiSelectChosen {
+			values = append(values, v)
+		}
+		b.multiSelectChosen = nil
+		b.mu.Unlock()
+	} else {
+		values = cb.Values
+	}
+
+	if len(values) == 0 {
+		return
+	}
+
+	text := strings.Join(values, ",")
 	resp := buildAskUserResponse(pending.request, text)
 	select {
 	case pending.response <- resp:
@@ -136,6 +180,11 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		}
 	}
 
+	// Slash commands take priority over everything (including pending ask_user)
+	if strings.HasPrefix(text, "/") {
+		return b.handleSlashCommand(ctx, text, msg)
+	}
+
 	// Check for pending ask_user — if so, route reply there
 	b.mu.Lock()
 	pending := b.pendingAsk
@@ -149,11 +198,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 			b.mu.Unlock()
 			return nil
 		}
-	}
-
-	// Slash commands
-	if strings.HasPrefix(text, "/") {
-		return b.handleSlashCommand(ctx, text, msg)
 	}
 
 	// Normal agent submission
@@ -194,7 +238,12 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	}
 
 	// No active run — start a new one.
-	ctx2, cancel := context.WithCancel(ctx)
+	// Use context.Background() rather than the caller's ctx because the
+	// agent run (including ask_user waiting for IM replies) must survive
+	// beyond the lifetime of a single WS event callback. The caller's ctx
+	// is typically tied to a Feishu/Telegram SDK event and expires when
+	// that event processing completes or the WS reconnects.
+	ctx2, cancel := context.WithCancel(context.Background())
 
 	// Set up interruption handler so mid-run IM messages get injected
 	// into the agent's conversation instead of cancelling the stream.
@@ -269,55 +318,34 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 			text = strings.TrimSpace(q.Title)
 		}
 
-		// Try interactive buttons for single/multi choice questions
-		if len(q.Choices) > 0 && b.emitter.manager != nil {
-			buttons := make([]InteractiveButton, len(q.Choices))
-			for ci, choice := range q.Choices {
-				buttons[ci] = InteractiveButton{
-					Label: choice.Label,
-					Value: fmt.Sprintf("%d", ci+1),
-					Style: "default",
-				}
-			}
-			// Highlight primary choice for binary questions
-			if len(q.Choices) == 2 {
-				buttons[0].Style = "primary"
-			}
-
-			imMsg := InteractiveMessage{
-				ID:          fmt.Sprintf("ask_%s_%d", q.ID, time.Now().UnixMilli()),
-				Text:        text,
-				Buttons:     buttons,
-				MultiSelect: q.Kind == toolpkg.AskUserKindMulti,
-				Placeholder: "Select an option",
-			}
-
-			msgIDs := b.emitter.manager.SendInteractive(ctx, imMsg)
+		// Try interactive buttons for choice questions; fallback to text for
+		// adapters that don't support InteractiveSender (e.g. QQ, DingDing).
+		if len(q.Choices) > 0 {
+			msgIDs := b.emitter.EmitAskUserInteractive(q.Title, q, text)
 			if len(msgIDs) > 0 {
-				// At least one adapter supports interactive — also send text
-				// to adapters that don't (for comprehensive coverage)
-				b.emitter.EmitAskUser(text)
-				// Store message IDs for callback correlation
 				b.mu.Lock()
 				b.interactiveMsgIDs = msgIDs
 				b.mu.Unlock()
-				goto waitReply
+			}
+		} else {
+			// Text-only question — send plain text to all adapters
+			if text != "" {
+				b.emitter.EmitAskUser(text)
 			}
 		}
 
-		// Fallback: send as plain text
-		if text != "" {
-			b.emitter.EmitAskUser(text)
-		}
-
-	waitReply:
 		// Block until the user replies via IM (text or button callback)
+		isMulti := q.Kind == toolpkg.AskUserKindMulti
 		pending := &pendingAskUser{
-			request:  singleReq, // use single-question request for correct answer mapping
-			response: make(chan toolpkg.AskUserResponse, 1),
+			request:     singleReq, // use single-question request for correct answer mapping
+			response:    make(chan toolpkg.AskUserResponse, 1),
+			multiSelect: isMulti,
 		}
 		b.mu.Lock()
 		b.pendingAsk = pending
+		if isMulti {
+			b.multiSelectChosen = nil // reset accumulated selections
+		}
 		b.mu.Unlock()
 
 		select {
