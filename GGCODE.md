@@ -42,6 +42,7 @@ cmd/ggcode-installer/  Standalone Go installer that downloads release binaries
 internal/              334 Go source files (~101k LOC non-test, ~69k LOC test)
   agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
+  webui/              WebUI HTTP server + WebSocket chat, SPA, config/session REST API, ChatBridge interface
   im/                  IM gateway runtime, QQ/Telegram/Discord/Slack/DingTalk/Feishu adapters, pairing, channel bindings, per-channel echo suppression, outbound routing, daemon bridge with slash commands (/listim, /muteim, /muteall, /muteself, /restart)
   daemon/              Daemon mode: follow display, background forking, session picker, i18n labels
   tui/                 Bubble Tea TUI: views, panels, slash commands, i18n (en/zh-CN), fullscreen file browser + preview
@@ -84,6 +85,7 @@ config/                MCP preset configuration (mcporter.json)
 - **Harness** (`internal/harness/`): Multi-step engineering workflow engine with task queues, dependency tracking, git worktrees, context management, drift detection, inbox, promotion, review, release automation, and a monitor. Uses JSON files for event/snapshot storage.
 - **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces. Configurable output modes (verbose/quiet/summary) control tool result granularity. Daemon bridge provides IM slash commands for adapter management (`/listim`, `/muteim <name>`, `/muteall`, `/muteself`, `/restart`, `/help`).
 - **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, IM panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
+- **WebUI** (`internal/webui/`): HTTP server with REST API for config/session management + WebSocket chat. Works in both TUI and daemon modes via `ChatBridge` interface. In daemon mode, `DaemonBridge` injects webchat messages through `pendingInterruptions` into the agent loop. In TUI mode, `TUIChatBridge` routes messages through `program.Send()` into the bubbletea event loop — identical to keyboard input. Agent streaming events are broadcast to all connected WebSocket clients. SPA (frontend) served from embedded `dist/` or fallback to index.html.
 - **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances.
 - **Daemon mode** (`internal/daemon/` + `cmd/ggcode/daemon.go`): Headless agent with terminal follow display, background forking, keyboard shortcuts (v/q/s output mode, M/U mute, f follow toggle, r restart). Uses same tool label system as TUI.
 - **Knight** (`internal/knight/`): Background autonomous agent with daily token budget, activity-driven code monitoring.
@@ -268,3 +270,8 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - Token cache files use `{provider}-{clientID[:12]}` as filename — different clientIDs for the same provider won't overwrite each other
 - `/muteall` uses `MuteAllExcept(selfAdapter)` — sender's adapter is never muted
 - `/muteself` emits the warning message before muting (500ms delay) so the user actually receives it
+- WebUI starts in both TUI and daemon modes on `127.0.0.1:0` (random port). In TUI mode, the URL is displayed as a system message inside the chat area (not stderr — any terminal output after raw mode corrupts rendering)
+- `ChatBridge` interface decouples webui from agent implementation: `DaemonBridge` (daemon mode) and `TUIChatBridge` (TUI mode) both implement it
+- TUI mode webchat messages go through `program.Send(webchatUserMsg)` → TUI's normal submit flow (idle → `startAgent`, busy → `queuePendingSubmission`). This avoids any direct agent access from webui, preventing concurrency issues
+- WebUI WebSocket uses per-connection write goroutines (buffered channel of 256) to prevent concurrent read/write on gorilla/websocket
+- `DaemonBridge.SendUserMessage` claims the run slot under a single mutex lock (TOCTOU-safe). The existing `SubmitInboundMessage` has the same pattern but was not fixed as daemon IM messages are typically serialized by the adapter
