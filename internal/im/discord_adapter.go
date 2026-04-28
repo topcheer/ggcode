@@ -912,6 +912,9 @@ func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any
 
 	// Respond with a deferred update (no visible change to the message)
 	go func() {
+		if a.httpClient == nil {
+			return
+		}
 		url := fmt.Sprintf("%s/interactions/%s/%s/callback", a.apiBase, interactionID, interactionToken)
 		body := map[string]any{"type": 6} // UPDATE_MESSAGE (deferred)
 		bodyBytes, _ := json.Marshal(body)

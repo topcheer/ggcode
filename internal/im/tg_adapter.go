@@ -844,6 +844,9 @@ func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) 
 
 	// Answer the callback to remove the loading spinner
 	go func() {
+		if a.httpClient == nil {
+			return
+		}
 		path := fmt.Sprintf("/bot%s/answerCallbackQuery", a.botToken)
 		a.apiRequest(context.Background(), http.MethodPost, path, map[string]any{
 			"callback_query_id": cbID,
