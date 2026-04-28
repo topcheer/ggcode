@@ -793,40 +793,37 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 		return
 	}
 
-	// Append pending interruption text
+	// Atomically check if agent is running and either queue interruption
+	// or claim the "run starter" role. This prevents TOCTOU races with
+	// concurrent IM messages.
 	b.mu.Lock()
 	activeCancel := b.cancelFunc
-	b.mu.Unlock()
-
 	if activeCancel != nil {
 		// Agent is running — inject as interruption
 		debug.Log("daemon-bridge", "webchat: queuing interruption: %s", truncateStr(text, 80))
-		b.mu.Lock()
 		b.pendingInterruptions = append(b.pendingInterruptions, pendingInterruption{Content: content})
 		b.mu.Unlock()
 		return
 	}
 
-	// Agent is idle — start a new run with proper lifecycle management
-	go func() {
-		ctx2, cancel := context.WithCancel(context.Background())
-
+	// Agent is idle — claim the run slot under the lock
+	ctx2, cancel := context.WithCancel(context.Background())
+	b.pendingInterruptions = b.pendingInterruptions[:0] // clear stale
+	b.agent.SetInterruptionHandler(func() string {
 		b.mu.Lock()
-		b.pendingInterruptions = b.pendingInterruptions[:0] // clear stale
-		b.agent.SetInterruptionHandler(func() string {
-			b.mu.Lock()
-			defer b.mu.Unlock()
-			if len(b.pendingInterruptions) == 0 {
-				return ""
-			}
-			msg := b.pendingInterruptions[0]
-			b.pendingInterruptions = b.pendingInterruptions[1:]
-			return extractText(msg.Content)
-		})
-		b.cancelFunc = cancel
-		b.mu.Unlock()
+		defer b.mu.Unlock()
+		if len(b.pendingInterruptions) == 0 {
+			return ""
+		}
+		msg := b.pendingInterruptions[0]
+		b.pendingInterruptions = b.pendingInterruptions[1:]
+		return extractText(msg.Content)
+	})
+	b.cancelFunc = cancel
+	b.mu.Unlock()
 
-		// Drain loop (same as HandleIMMessage)
+	// Start the run outside the lock
+	go func() {
 		for {
 			err := b.runAgentStream(ctx2, content)
 			if err != nil && !errors.Is(err, context.Canceled) {
