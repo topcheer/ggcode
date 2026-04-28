@@ -63,6 +63,10 @@ type Manager struct {
 	// instanceDetect tracks this process's registration in .ggcode/instances/
 	// for multi-instance detection. Set via RegisterInstance.
 	instanceDetect *InstanceDetect
+
+	// onInteractiveCallback is called when an adapter receives an interactive
+	// button/menu callback. Set via SetInteractiveCallback.
+	onInteractiveCallback func(InteractiveCallback)
 }
 
 type pendingApproval struct {
@@ -100,6 +104,26 @@ func (m *Manager) SetOnRestart(fn func(adapterName string) error) {
 	m.mu.Lock()
 	m.onRestart = fn
 	m.mu.Unlock()
+}
+
+// SetInteractiveCallback registers a handler for interactive button/menu callbacks
+// from adapters. When a user clicks a button, the adapter calls
+// Manager.HandleInteractiveCallback which dispatches to this handler.
+func (m *Manager) SetInteractiveCallback(fn func(InteractiveCallback)) {
+	m.mu.Lock()
+	m.onInteractiveCallback = fn
+	m.mu.Unlock()
+}
+
+// HandleInteractiveCallback is called by adapters when a user clicks an
+// interactive button. It dispatches to the registered callback handler.
+func (m *Manager) HandleInteractiveCallback(cb InteractiveCallback) {
+	m.mu.RLock()
+	fn := m.onInteractiveCallback
+	m.mu.RUnlock()
+	if fn != nil {
+		fn(cb)
+	}
 }
 
 // RegisterInstance creates an InstanceDetect for the given workspace, registers
@@ -825,6 +849,39 @@ func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event 
 		return nil
 	}
 	return sink.Send(ctx, binding, event)
+}
+
+// SendInteractive sends an interactive message to all bound adapters that
+// support it. Returns a map of adapter name → platform message ID for
+// callback correlation. Adapters that don't support interactive messages
+// are skipped (caller should fall back to text).
+func (m *Manager) SendInteractive(ctx context.Context, msg InteractiveMessage) map[string]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make(map[string]string)
+	for _, b := range m.currentBindings {
+		if strings.TrimSpace(b.ChannelID) == "" {
+			continue
+		}
+		sink := m.sinks[b.Adapter]
+		if sink == nil {
+			continue
+		}
+		is, ok := sink.(InteractiveSender)
+		if !ok {
+			continue
+		}
+		msgID, err := is.SendInteractive(ctx, *b, msg)
+		if err != nil {
+			debug.Log("im", "interactive send failed adapter=%s: %v", b.Adapter, err)
+			continue
+		}
+		if msgID != "" {
+			result[b.Adapter] = msgID
+		}
+	}
+	return result
 }
 
 func (m *Manager) RegisterApproval(req ApprovalRequest) (ApprovalRequest, <-chan permission.Decision) {

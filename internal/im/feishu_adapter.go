@@ -1359,3 +1359,130 @@ func (l *feishuSilentLogger) Warn(_ context.Context, args ...interface{}) {
 func (l *feishuSilentLogger) Error(_ context.Context, args ...interface{}) {
 	debug.Log("feishu-sdk", "%v", args)
 }
+
+// SendInteractive implements InteractiveSender using Feishu Card buttons.
+func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
+	a.mu.RLock()
+	connected := a.connected
+	a.mu.RUnlock()
+	if !connected {
+		return "", fmt.Errorf("Feishu bot %q is not online", a.name)
+	}
+
+	chatID := strings.TrimSpace(binding.ChannelID)
+	if chatID == "" {
+		return "", fmt.Errorf("Feishu channel is not configured")
+	}
+
+	// Build card with markdown + button column set
+	elements := []any{
+		map[string]any{
+			"tag":     "markdown",
+			"content": msg.Text,
+		},
+	}
+
+	// Build buttons as a column_set
+	var columns []map[string]any
+	for _, btn := range msg.Buttons {
+		btnElem := map[string]any{
+			"tag": "button",
+			"text": map[string]any{
+				"tag":     "plain_text",
+				"content": btn.Label,
+			},
+			"value": map[string]any{
+				"choice": btn.Value,
+			},
+		}
+		switch btn.Style {
+		case "primary":
+			btnElem["type"] = "primary"
+		case "danger":
+			btnElem["type"] = "danger"
+		default:
+			btnElem["type"] = "default"
+		}
+		columns = append(columns, map[string]any{
+			"tag":      "column",
+			"elements": []any{btnElem},
+		})
+	}
+	if msg.MultiSelect {
+		columns = append(columns, map[string]any{
+			"tag": "column",
+			"elements": []any{
+				map[string]any{
+					"tag":  "button",
+					"type": "primary",
+					"text": map[string]any{
+						"tag":     "plain_text",
+						"content": "✅ Done",
+					},
+					"value": map[string]any{
+						"choice": "__done__",
+					},
+				},
+			},
+		})
+	}
+
+	if len(columns) > 0 {
+		elements = append(elements, map[string]any{
+			"tag":       "column_set",
+			"flex_mode": "bisect",
+			"columns":   columns,
+		})
+	}
+
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{
+			"wide_screen_mode": true,
+		},
+		"body": map[string]any{
+			"elements": elements,
+		},
+	}
+
+	cardBytes, _ := json.Marshal(card)
+	apiBase := a.resolveAPIBase()
+	url := apiBase + "/im/v1/messages?receive_id_type=chat_id"
+	body := map[string]any{
+		"receive_id": chatID,
+		"msg_type":   "interactive",
+		"content":    string(cardBytes),
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+	a.mu.RLock()
+	token := a.token
+	a.mu.RUnlock()
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("Feishu interactive API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	// Extract message_id from response
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+		if data, ok := result["data"].(map[string]any); ok {
+			if msgID, ok := data["message_id"].(string); ok {
+				return msgID, nil
+			}
+		}
+	}
+	return "", nil
+}

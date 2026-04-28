@@ -180,6 +180,11 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 					}
 				}
 			}
+		} else if msgType == "interactive" {
+			payload, _ := envelope["payload"].(map[string]any)
+			if payload != nil {
+				a.handleInteractive(ctx, payload)
+			}
 		}
 	}
 }
@@ -848,4 +853,145 @@ func resolveSlackSTTConfig(global config.IMSTTConfig, extra map[string]interface
 		return nil
 	}
 	return &cfg
+}
+
+// SendInteractive implements InteractiveSender using Slack Block Kit buttons.
+func (a *slackAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
+	a.mu.RLock()
+	connected := a.connected
+	a.mu.RUnlock()
+	if !connected {
+		return "", fmt.Errorf("Slack bot %q is not online", a.name)
+	}
+
+	channelID := strings.TrimSpace(binding.ChannelID)
+	if channelID == "" {
+		return "", fmt.Errorf("Slack channel is not configured")
+	}
+
+	// Build Block Kit message
+	textBlock := map[string]any{
+		"type": "section",
+		"text": map[string]any{
+			"type": "mrkdwn",
+			"text": markdownToMrkdwn(msg.Text),
+		},
+	}
+
+	// Build action buttons
+	var elements []map[string]any
+	for _, btn := range msg.Buttons {
+		style := ""
+		switch btn.Style {
+		case "primary":
+			style = "primary"
+		case "danger":
+			style = "danger"
+		}
+		elements = append(elements, map[string]any{
+			"type":  "button",
+			"text":  map[string]any{"type": "plain_text", "text": btn.Label},
+			"value": btn.Value,
+			"style": style,
+		})
+	}
+	if msg.MultiSelect {
+		elements = append(elements, map[string]any{
+			"type":  "button",
+			"text":  map[string]any{"type": "plain_text", "text": "✅ Done"},
+			"value": "__done__",
+			"style": "primary",
+		})
+	}
+
+	actionsBlock := map[string]any{
+		"type":     "actions",
+		"elements": elements,
+	}
+
+	blocks := []map[string]any{textBlock, actionsBlock}
+	url := slackAPIBase + "/chat.postMessage"
+	body := map[string]any{
+		"channel": channelID,
+		"blocks":  blocks,
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.botToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if ok, _ := result["ok"].(bool); !ok {
+		errMsg, _ := result["error"].(string)
+		return "", fmt.Errorf("Slack chat.postMessage: %s", errMsg)
+	}
+	// Extract ts (message ID)
+	messageTs, _ := result["ts"].(string)
+	return messageTs, nil
+}
+
+// handleInteractive processes Slack interactive payloads (button clicks).
+func (a *slackAdapter) handleInteractive(ctx context.Context, payload map[string]any) {
+	actionType, _ := payload["type"].(string)
+	if actionType != "block_actions" {
+		return
+	}
+
+	actions, _ := payload["actions"].([]any)
+	if len(actions) == 0 {
+		return
+	}
+
+	var values []string
+	for _, act := range actions {
+		action, _ := act.(map[string]any)
+		if action == nil {
+			continue
+		}
+		val, _ := action["value"].(string)
+		if val != "" {
+			values = append(values, val)
+		}
+	}
+	if len(values) == 0 {
+		return
+	}
+
+	// Extract sender info
+	user, _ := payload["user"].(map[string]any)
+	senderID, _ := user["id"].(string)
+	senderName, _ := user["username"].(string)
+
+	channel, _ := payload["channel"].(map[string]any)
+	channelID, _ := channel["id"].(string)
+
+	message, _ := payload["message"].(map[string]any)
+	messageTs, _ := message["ts"].(string)
+
+	if a.manager != nil {
+		a.manager.HandleInteractiveCallback(InteractiveCallback{
+			MessageID: messageTs,
+			Values:    values,
+			Adapter:   a.name,
+			Envelope: Envelope{
+				Adapter:    a.name,
+				Platform:   PlatformSlack,
+				ChannelID:  channelID,
+				SenderID:   senderID,
+				SenderName: senderName,
+				MessageID:  messageTs,
+				ReceivedAt: time.Now(),
+			},
+		})
+	}
 }

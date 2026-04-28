@@ -44,6 +44,7 @@ type DaemonBridge struct {
 	cancelFunc           context.CancelFunc
 	pendingAsk           *pendingAskUser
 	pendingInterruptions []pendingInterruption
+	interactiveMsgIDs    map[string]string // adapter → platform msg ID (for callback correlation)
 	followSink           daemon.FollowSink
 	onActivity           func()
 	onRestart            func() // trigger daemon self-restart
@@ -61,7 +62,31 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		sess:     sess,
 		language: emitter.Language(),
 	}
+	// Register interactive callback handler so button clicks from adapters
+	// are routed to the pending ask_user question.
+	if mgr != nil {
+		mgr.SetInteractiveCallback(b.handleInteractiveCallback)
+	}
 	return b
+}
+
+// handleInteractiveCallback processes button/menu callbacks from IM adapters.
+// It translates the selected values into a text reply and feeds it through
+// the same pendingAsk mechanism as text replies.
+func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
+	b.mu.Lock()
+	pending := b.pendingAsk
+	b.mu.Unlock()
+	if pending == nil {
+		return
+	}
+	// Join selected values (e.g. "1" or "1,3") — matches parseRemoteSelections format
+	text := strings.Join(cb.Values, ",")
+	resp := buildAskUserResponse(pending.request, text)
+	select {
+	case pending.response <- resp:
+	default:
+	}
 }
 
 // SetFollowSink sets or clears the follow-mode display sink.
@@ -214,12 +239,16 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 
 // HandleAskUser is the AskUserHandler for daemon mode — sends questions to IM
 // one at a time and collects answers interactively.
+// For single-choice questions, it first attempts to send native interactive
+// buttons. If the adapter supports it, the user clicks a button instead of
+// typing a number. The answer is routed back through the same pendingAsk
+// mechanism — either from a text reply or a button callback.
 func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserRequest) (toolpkg.AskUserResponse, error) {
 	answers := make([]toolpkg.AskUserAnswer, len(req.Questions))
 	answeredCount := 0
 
 	for i, q := range req.Questions {
-		// Format and send a single question
+		// Format the question text (for display + fallback)
 		singleReq := toolpkg.AskUserRequest{
 			Title:     req.Title,
 			Questions: []toolpkg.AskUserQuestion{q},
@@ -229,11 +258,50 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 		if text == "" {
 			text = strings.TrimSpace(q.Title)
 		}
+
+		// Try interactive buttons for single/multi choice questions
+		if len(q.Choices) > 0 && b.emitter.manager != nil {
+			buttons := make([]InteractiveButton, len(q.Choices))
+			for ci, choice := range q.Choices {
+				buttons[ci] = InteractiveButton{
+					Label: choice.Label,
+					Value: fmt.Sprintf("%d", ci+1),
+					Style: "default",
+				}
+			}
+			// Highlight primary choice for binary questions
+			if len(q.Choices) == 2 {
+				buttons[0].Style = "primary"
+			}
+
+			imMsg := InteractiveMessage{
+				ID:          fmt.Sprintf("ask_%s_%d", q.ID, time.Now().UnixMilli()),
+				Text:        text,
+				Buttons:     buttons,
+				MultiSelect: q.Kind == toolpkg.AskUserKindMulti,
+				Placeholder: "Select an option",
+			}
+
+			msgIDs := b.emitter.manager.SendInteractive(ctx, imMsg)
+			if len(msgIDs) > 0 {
+				// At least one adapter supports interactive — also send text
+				// to adapters that don't (for comprehensive coverage)
+				b.emitter.EmitAskUser(text)
+				// Store message IDs for callback correlation
+				b.mu.Lock()
+				b.interactiveMsgIDs = msgIDs
+				b.mu.Unlock()
+				goto waitReply
+			}
+		}
+
+		// Fallback: send as plain text
 		if text != "" {
 			b.emitter.EmitAskUser(text)
 		}
 
-		// Block until the user replies via IM
+	waitReply:
+		// Block until the user replies via IM (text or button callback)
 		pending := &pendingAskUser{
 			request:  req,
 			response: make(chan toolpkg.AskUserResponse, 1),
@@ -244,7 +312,6 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 
 		select {
 		case resp := <-pending.response:
-			// Extract the answer for this question
 			if len(resp.Answers) > 0 && resp.Answers[0].Answered {
 				answers[i] = resp.Answers[0]
 				answeredCount++

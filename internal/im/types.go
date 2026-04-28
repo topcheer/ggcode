@@ -244,6 +244,53 @@ type TypingIndicator interface {
 	TriggerTyping(ctx context.Context, binding ChannelBinding) error
 }
 
+// InteractiveSender is an optional interface that adapters implement to
+// send messages with native interactive elements (buttons, select menus).
+// Adapters that don't implement this fall back to text-based interaction.
+type InteractiveSender interface {
+	SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error)
+}
+
+// InteractiveMessage describes a message with interactive elements.
+// Used for ask_user questions with choices, approval actions, etc.
+type InteractiveMessage struct {
+	// ID is a unique identifier for correlating callbacks.
+	ID string
+	// Text is the main message body (markdown).
+	Text string
+	// Buttons is a list of clickable options presented to the user.
+	// Each button has a label and a value that gets sent back on click.
+	Buttons []InteractiveButton
+	// MultiSelect allows selecting multiple buttons (for multi-question ask_user).
+	MultiSelect bool
+	// Placeholder is shown in select menus (Slack, DingTalk).
+	Placeholder string
+}
+
+// InteractiveButton represents a single clickable option.
+type InteractiveButton struct {
+	// Label is the button text shown to the user.
+	Label string
+	// Value is the opaque value sent back when the button is clicked.
+	// For ask_user, this is the choice number (e.g. "1", "2").
+	Value string
+	// Style hints (optional): "primary", "danger", "default".
+	Style string
+}
+
+// InteractiveCallback represents a user's response to an interactive element.
+// Adapters translate platform-specific callbacks into this common type.
+type InteractiveCallback struct {
+	// MessageID is the platform message ID of the original interactive message.
+	MessageID string
+	// Values are the selected button values (one for single, multiple for multi-select).
+	Values []string
+	// Adapter is the adapter name that received the callback.
+	Adapter string
+	// Envelope carries the standard sender/channel info.
+	Envelope Envelope
+}
+
 // Closer is an optional interface that adapters implement to close
 // their underlying network connections. Called by Manager when an
 // adapter is muted or disabled to physically disconnect.
