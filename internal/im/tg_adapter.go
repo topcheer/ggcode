@@ -180,7 +180,7 @@ func (a *tgAdapter) pollUpdates(ctx context.Context) ([]map[string]any, error) {
 	body := map[string]any{
 		"offset":          offset,
 		"timeout":         tgPollTimeout,
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	}
 	var result map[string]any
 	_, err := a.apiRequest(ctx, http.MethodPost, path, body, &result)

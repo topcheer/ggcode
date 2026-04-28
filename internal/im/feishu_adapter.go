@@ -487,6 +487,12 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Handle card action callbacks (button clicks from interactive messages)
+	if eventType == "card.action.trigger" {
+		w.WriteHeader(http.StatusOK)
+		go a.handleCardAction(context.Background(), payload)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -563,6 +569,52 @@ func parseUnixSeconds(ts string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return time.Unix(sec, 0), nil
+}
+
+// handleCardAction processes Feishu card action callbacks (button clicks).
+// Card action triggers arrive via the webhook with event_type "card.action.trigger".
+func (a *feishuAdapter) handleCardAction(ctx context.Context, payload map[string]any) {
+	if a.manager == nil {
+		return
+	}
+
+	// Extract action value from the callback
+	action, _ := payload["action"].(map[string]any)
+	if action == nil {
+		return
+	}
+
+	// The button value contains {"choice": "1"} etc.
+	value, _ := action["value"].(map[string]any)
+	if value == nil {
+		return
+	}
+	choice, _ := value["choice"].(string)
+	if choice == "" {
+		return
+	}
+
+	// Extract sender info
+	userID, _ := action["open_id"].(string)
+	senderName := ""
+
+	// Try to get message context from the action
+	messageID, _ := action["message_id"].(string)
+
+	a.manager.HandleInteractiveCallback(InteractiveCallback{
+		MessageID: messageID,
+		Values:    []string{choice},
+		Adapter:   a.name,
+		Envelope: Envelope{
+			Adapter:    a.name,
+			Platform:   PlatformFeishu,
+			ChannelID:  "", // filled from action context if available
+			SenderID:   userID,
+			SenderName: senderName,
+			MessageID:  messageID,
+			ReceivedAt: time.Now(),
+		},
+	})
 }
 
 func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string]any) {
@@ -1361,12 +1413,20 @@ func (l *feishuSilentLogger) Error(_ context.Context, args ...interface{}) {
 }
 
 // SendInteractive implements InteractiveSender using Feishu Card buttons.
+// Only available in webhook mode (webhookPort > 0) because the Feishu SDK's
+// WebSocket mode does not support card action callbacks (WithCardHandler is
+// commented out in the SDK). In WS mode, SendInteractive returns an error and
+// the caller falls back to plain text.
 func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
 	a.mu.RLock()
 	connected := a.connected
+	webhookMode := a.webhookPort > 0
 	a.mu.RUnlock()
 	if !connected {
 		return "", fmt.Errorf("Feishu bot %q is not online", a.name)
+	}
+	if !webhookMode {
+		return "", fmt.Errorf("Feishu interactive buttons require webhook mode (webhook_port)")
 	}
 
 	chatID := strings.TrimSpace(binding.ChannelID)
