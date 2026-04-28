@@ -622,7 +622,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.handleQuestionnaireResult(toolpkg.AskUserStatusSubmitted)
 			}
 			if nextIdx := m.pendingQuestionnaire.firstUnansweredQuestionIndex(); nextIdx >= 0 {
-				m.emitIMAskUser(m.formatIMAskUserQuestion(m.pendingQuestionnaire.request.Title, m.pendingQuestionnaire.request.Questions[nextIdx]))
+				q := m.pendingQuestionnaire.request.Questions[nextIdx]
+				fallback := m.formatIMAskUserQuestion(m.pendingQuestionnaire.request.Title, q)
+				if len(q.Choices) > 0 {
+					m.emitIMAskUserInteractive(m.pendingQuestionnaire.request.Title, q, fallback)
+				} else {
+					m.emitIMAskUser(fallback)
+				}
 			}
 			return m, nil
 		}
@@ -1080,7 +1086,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncQuestionnaireInputWidth()
 		// Push the first question to IM so remote users can answer.
 		if len(msg.Request.Questions) > 0 {
-			m.emitIMAskUser(m.formatIMAskUserQuestion(msg.Request.Title, msg.Request.Questions[0]))
+			q := msg.Request.Questions[0]
+			fallback := m.formatIMAskUserQuestion(msg.Request.Title, q)
+			if len(q.Choices) > 0 {
+				m.emitIMAskUserInteractive(msg.Request.Title, q, fallback)
+			} else {
+				m.emitIMAskUser(fallback)
+			}
 		}
 		return m, nil
 

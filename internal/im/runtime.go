@@ -332,6 +332,25 @@ func (m *Manager) HasActiveBindings() bool {
 	return len(m.currentBindings) > 0
 }
 
+// HasNonInteractiveBindings returns true if there is at least one bound adapter
+// that did NOT receive an interactive message (i.e. doesn't implement InteractiveSender
+// or wasn't in the sentAdapters set). Used to decide whether to send text fallback.
+func (m *Manager) HasNonInteractiveBindings(sentAdapters map[string]string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, b := range m.currentBindings {
+		if strings.TrimSpace(b.ChannelID) == "" {
+			continue
+		}
+		if _, sent := sentAdapters[b.Adapter]; sent {
+			continue
+		}
+		// This binding was not covered by interactive — needs fallback
+		return true
+	}
+	return false
+}
+
 func (m *Manager) ListBindings() ([]ChannelBinding, error) {
 	m.mu.RLock()
 	store := m.bindingStore
@@ -813,13 +832,18 @@ func (m *Manager) EmitExcept(ctx context.Context, event OutboundEvent, excludeAd
 	if excludeAdapter == "" {
 		return m.Emit(ctx, event)
 	}
+	return m.EmitExceptAdapters(ctx, event, map[string]bool{excludeAdapter: true})
+}
+
+// EmitExceptAdapters sends an event to all bound channels except those in excludeSet.
+func (m *Manager) EmitExceptAdapters(ctx context.Context, event OutboundEvent, excludeSet map[string]bool) error {
 	m.mu.RLock()
 	var targets []emitTarget
 	for _, b := range m.currentBindings {
 		if strings.TrimSpace(b.ChannelID) == "" {
 			continue
 		}
-		if b.Adapter == excludeAdapter {
+		if excludeSet[b.Adapter] {
 			continue
 		}
 		sink := m.sinks[b.Adapter]
@@ -882,6 +906,33 @@ func (m *Manager) SendInteractive(ctx context.Context, msg InteractiveMessage) m
 		}
 	}
 	return result
+}
+
+// EmitToNonInteractive sends an event only to adapters that do NOT implement
+// InteractiveSender. Used for ask_user text fallback — adapters that already
+// received interactive buttons should not get the duplicate text version.
+func (m *Manager) EmitToNonInteractive(ctx context.Context, event OutboundEvent) error {
+	m.mu.RLock()
+	var targets []emitTarget
+	for _, b := range m.currentBindings {
+		if strings.TrimSpace(b.ChannelID) == "" {
+			continue
+		}
+		sink := m.sinks[b.Adapter]
+		if sink == nil {
+			continue
+		}
+		// Skip adapters that support interactive messages
+		if _, ok := sink.(InteractiveSender); ok {
+			continue
+		}
+		targets = append(targets, emitTarget{binding: *b, sink: sink})
+	}
+	m.mu.RUnlock()
+	if len(targets) == 0 {
+		return nil // no non-interactive adapters, that's fine
+	}
+	return fanOutSend(ctx, targets, event)
 }
 
 func (m *Manager) RegisterApproval(req ApprovalRequest) (ApprovalRequest, <-chan permission.Decision) {

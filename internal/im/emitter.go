@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +141,70 @@ func (e *IMEmitter) HasTargets() bool {
 		return false
 	}
 	return e.manager.HasActiveBindings()
+}
+
+// Manager returns the underlying Manager. Returns nil if the emitter is nil.
+func (e *IMEmitter) Manager() *Manager {
+	if e == nil {
+		return nil
+	}
+	return e.manager
+}
+
+// EmitAskUserInteractive sends an ask_user question to IM, preferring
+// interactive buttons for adapters that support them (Discord, Telegram,
+// Feishu). Text fallback is only sent to adapters that did NOT receive an
+// interactive message (e.g. QQ, DingDing).
+// If the question has no choices, falls back to EmitAskUser for all adapters.
+func (e *IMEmitter) EmitAskUserInteractive(title string, q toolpkg.AskUserQuestion, fallbackText string) map[string]string {
+	if e == nil || e.manager == nil {
+		return nil
+	}
+	if len(q.Choices) == 0 {
+		e.EmitAskUser(fallbackText)
+		return nil
+	}
+
+	buttons := make([]InteractiveButton, len(q.Choices))
+	for ci, choice := range q.Choices {
+		buttons[ci] = InteractiveButton{
+			Label: choice.Label,
+			Value: fmt.Sprintf("%d", ci+1),
+			Style: "default",
+		}
+	}
+	if len(q.Choices) == 2 {
+		buttons[0].Style = "primary"
+	}
+
+	cardText := q.Title
+	if q.Kind == toolpkg.AskUserKindMulti {
+		cardText += "\n📋 Multi-select — click options then ✅ Done"
+	} else {
+		cardText += "\n📋 Single-select — click one option"
+	}
+	if q.Prompt != "" && q.Prompt != q.Title {
+		cardText += "\n" + q.Prompt
+	}
+
+	imMsg := InteractiveMessage{
+		ID:          fmt.Sprintf("ask_%s_%d", q.ID, time.Now().UnixMilli()),
+		Text:        cardText,
+		Buttons:     buttons,
+		MultiSelect: q.Kind == toolpkg.AskUserKindMulti,
+		Placeholder: "Select an option",
+	}
+
+	msgIDs := e.manager.SendInteractive(context.Background(), imMsg)
+	debug.Log("emitter", "EmitAskUserInteractive: SendInteractive returned msgIDs=%v", msgIDs)
+	// Send text fallback ONLY to adapters that do NOT support InteractiveSender
+	if strings.TrimSpace(fallbackText) != "" {
+		e.manager.EmitToNonInteractive(context.Background(), OutboundEvent{
+			Kind: OutboundEventText,
+			Text: fallbackText,
+		})
+	}
+	return msgIDs
 }
 
 // EmitText sends a text message to IM.
