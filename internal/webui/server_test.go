@@ -403,6 +403,7 @@ type mockAgent struct {
 	lastMsg     string
 	lastContent []provider.ContentBlock
 	events      []provider.StreamEvent
+	messages    []provider.Message
 	delay       time.Duration
 }
 
@@ -416,6 +417,7 @@ func (m *mockAgent) RunStreamWithContent(ctx context.Context, content []provider
 	if len(content) > 0 && content[0].Type == "text" {
 		m.lastMsg = content[0].Text
 	}
+	m.messages = append(m.messages, provider.Message{Role: "user", Content: content})
 	time.Sleep(m.delay)
 	for _, e := range m.events {
 		select {
@@ -425,7 +427,24 @@ func (m *mockAgent) RunStreamWithContent(ctx context.Context, content []provider
 			onEvent(e)
 		}
 	}
+	// Simulate assistant response in history
+	var textContent string
+	for _, e := range m.events {
+		if e.Type == provider.StreamEventText {
+			textContent += e.Text
+		}
+	}
+	if textContent != "" {
+		m.messages = append(m.messages, provider.Message{
+			Role:    "assistant",
+			Content: []provider.ContentBlock{{Type: "text", Text: textContent}},
+		})
+	}
 	return nil
+}
+
+func (m *mockAgent) Messages() []provider.Message {
+	return m.messages
 }
 
 func TestChatWSNoAgent(t *testing.T) {
@@ -797,5 +816,176 @@ func TestChatWSImageOnlyNoText(t *testing.T) {
 	}
 	if agent.lastContent[0].Type != "image" {
 		t.Errorf("expected image block, got %v", agent.lastContent[0].Type)
+	}
+}
+
+func TestChatHistoryNoAgent(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/chat/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result []interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result) != 0 {
+		t.Errorf("expected empty array, got %v", result)
+	}
+}
+
+func TestChatHistoryWithMessages(t *testing.T) {
+	agent := &mockAgent{
+		messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+			{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hi there"}}},
+			{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "how are you?"}}},
+			{Role: "assistant", Content: []provider.ContentBlock{
+				{Type: "text", Text: "let me think"},
+				{Type: "tool_use", ToolName: "run_command", ToolID: "t1", Input: json.RawMessage(`{"command":"ls"}`)},
+			}},
+		},
+	}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/chat/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var result []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if len(result) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(result))
+	}
+	if result[0]["role"] != "user" {
+		t.Errorf("first message should be user, got %v", result[0]["role"])
+	}
+	if result[3]["role"] != "assistant" {
+		t.Errorf("fourth message should be assistant, got %v", result[3]["role"])
+	}
+	// Check tool_use block preserved
+	blocks := result[3]["content"].([]interface{})
+	toolBlock := blocks[1].(map[string]interface{})
+	if toolBlock["tool_name"] != "run_command" {
+		t.Errorf("expected tool_name, got %v", toolBlock["tool_name"])
+	}
+}
+
+func TestChatWSBusyRejection(t *testing.T) {
+	// Agent that takes time to respond
+	agent := &mockAgent{
+		delay: 500 * time.Millisecond,
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "done"},
+			{Type: provider.StreamEventDone},
+		},
+	}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+
+	// First connection sends a message
+	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws1.Close()
+	ws1.WriteJSON(map[string]string{"type": "user_message", "text": "slow request"})
+
+	// Read ack to ensure first request is being processed
+	var ack map[string]interface{}
+	ws1.ReadJSON(&ack)
+
+	// Second connection tries to send while first is running
+	ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws2.Close()
+
+	// Give a small delay to ensure first request is in the mutex
+	time.Sleep(50 * time.Millisecond)
+
+	ws2.WriteJSON(map[string]string{"type": "user_message", "text": "concurrent request"})
+
+	var errMsg map[string]interface{}
+	ws2.ReadJSON(&errMsg)
+	// Should get either ack then error, or just error
+	for errMsg["type"] == "user_ack" {
+		ws2.ReadJSON(&errMsg)
+	}
+	if errMsg["type"] != "error" {
+		t.Errorf("expected error for concurrent request, got %v", errMsg["type"])
+	}
+	if !strings.Contains(errMsg["error"].(string), "busy") {
+		t.Errorf("error should mention busy, got: %v", errMsg["error"])
+	}
+}
+
+func TestChatWSHistoryUpdates(t *testing.T) {
+	agent := &mockAgent{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "Hello!"},
+			{Type: provider.StreamEventDone},
+		},
+	}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	// Send a message via WebSocket
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	ws.WriteJSON(map[string]string{"type": "user_message", "text": "hi"})
+	// Drain responses
+	for i := 0; i < 3; i++ {
+		ws.ReadJSON(&map[string]interface{}{})
+	}
+
+	// Now check history API has the messages
+	resp, err := http.Get(srv.URL + "/api/chat/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var result []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if len(result) < 2 {
+		t.Fatalf("expected at least 2 messages in history, got %d", len(result))
+	}
+	if result[0]["role"] != "user" {
+		t.Errorf("first should be user, got %v", result[0]["role"])
+	}
+	if result[1]["role"] != "assistant" {
+		t.Errorf("second should be assistant, got %v", result[1]["role"])
 	}
 }

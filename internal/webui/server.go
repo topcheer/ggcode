@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -71,6 +72,7 @@ type A2ADiscoveredInstance struct {
 type AgentRunner interface {
 	RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error
 	RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error
+	Messages() []provider.Message
 }
 
 // Server provides a built-in WebUI for configuration and chat.
@@ -84,6 +86,8 @@ type Server struct {
 	sessionStore  session.Store
 	workspace     string // current ggcode working directory
 	agent         AgentRunner
+	agentMu       sync.Mutex // serializes agent.RunStreamWithContent calls
+	agentBusy     atomic.Bool
 	mu            sync.RWMutex
 	addr          string
 	listener      net.Listener
@@ -195,6 +199,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/sessions", s.handleSessions)
 	s.mux.HandleFunc("/api/sessions/", s.handleSessionDetail)
 	s.mux.HandleFunc("/api/chat/ws", s.handleChatWS)
+	s.mux.HandleFunc("/api/chat/history", s.handleChatHistory)
 	s.mux.HandleFunc("/api/restart", s.handleRestart)
 }
 
@@ -1083,6 +1088,53 @@ var upgrader = websocket.Upgrader{
 //	Server → Client: {"type":"tool_result","name":"...","result":"...","is_error":false}
 //	Server → Client: {"type":"done","usage":{"input_tokens":0,"output_tokens":0}}
 //	Server → Client: {"type":"error","error":"..."}
+//
+// GET /api/chat/history — returns current agent conversation messages
+func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.agent == nil {
+		writeJSON(w, []interface{}{})
+		return
+	}
+	s.agentMu.Lock()
+	msgs := s.agent.Messages()
+	s.agentMu.Unlock()
+
+	type contentBlock struct {
+		Type     string          `json:"type"`
+		Text     string          `json:"text,omitempty"`
+		ToolName string          `json:"tool_name,omitempty"`
+		ToolID   string          `json:"tool_id,omitempty"`
+		Input    json.RawMessage `json:"input,omitempty"`
+		Output   string          `json:"output,omitempty"`
+		IsError  bool            `json:"is_error,omitempty"`
+	}
+	type message struct {
+		Role    string         `json:"role"`
+		Content []contentBlock `json:"content"`
+	}
+	result := make([]message, 0, len(msgs))
+	for _, m := range msgs {
+		blocks := make([]contentBlock, 0, len(m.Content))
+		for _, b := range m.Content {
+			blocks = append(blocks, contentBlock{
+				Type:     b.Type,
+				Text:     b.Text,
+				ToolName: b.ToolName,
+				ToolID:   b.ToolID,
+				Input:    b.Input,
+				Output:   b.Output,
+				IsError:  b.IsError,
+			})
+		}
+		result = append(result, message{Role: m.Role, Content: blocks})
+	}
+	writeJSON(w, result)
+}
+
 func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	if s.agent == nil {
 		http.Error(w, "agent not available", http.StatusServiceUnavailable)
@@ -1168,7 +1220,14 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		}
 		s.wsSend(conn, ackExtras)
 
-		// Run agent with streaming
+		// Check if agent is already busy with another request
+		if !s.agentBusy.CompareAndSwap(false, true) {
+			s.wsSendError(conn, "agent is busy processing another request, please wait")
+			continue
+		}
+
+		// Run agent with streaming (serialized via mutex)
+		s.agentMu.Lock()
 		ctx, cancel := context.WithCancel(r.Context())
 
 		// Watch for client disconnect
@@ -1229,6 +1288,8 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 
 		<-done
 		cancel()
+		s.agentMu.Unlock()
+		s.agentBusy.Store(false)
 	}
 }
 
