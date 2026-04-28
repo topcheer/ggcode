@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // TestDaemonBridgeInterruptionQueuing verifies that when an agent run is
@@ -34,8 +36,8 @@ func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 	bridge.mu.Lock()
 	pending := bridge.pendingInterruptions
 	bridge.mu.Unlock()
-	if len(pending) != 1 || pending[0] != "second message" {
-		t.Fatalf("expected 1 pending interruption, got %v", pending)
+	if len(pending) != 1 || extractText(pending[0].Content) != "second message" {
+		t.Fatalf("expected 1 pending interruption 'second message', got %v", pending)
 	}
 
 	// CRITICAL: context must NOT be cancelled — old code would cancel here
@@ -68,7 +70,7 @@ func TestDaemonBridgeInterruptionQueueOrder(t *testing.T) {
 	if len(pending) != 3 {
 		t.Fatalf("expected 3 pending, got %d", len(pending))
 	}
-	if pending[0] != "msg1" || pending[1] != "msg2" || pending[2] != "msg3" {
+	if extractText(pending[0].Content) != "msg1" || extractText(pending[1].Content) != "msg2" || extractText(pending[2].Content) != "msg3" {
 		t.Fatalf("wrong order: %v", pending)
 	}
 }
@@ -76,7 +78,10 @@ func TestDaemonBridgeInterruptionQueueOrder(t *testing.T) {
 // TestDaemonBridgeInterruptionDrain verifies the handler drains the queue correctly.
 func TestDaemonBridgeInterruptionDrain(t *testing.T) {
 	bridge := &DaemonBridge{
-		pendingInterruptions: []string{"msg1", "msg2"},
+		pendingInterruptions: []pendingInterruption{
+			{Content: []provider.ContentBlock{{Type: "text", Text: "msg1"}}},
+			{Content: []provider.ContentBlock{{Type: "text", Text: "msg2"}}},
+		},
 	}
 
 	// This mirrors the handler set up in SubmitInboundMessage
@@ -88,7 +93,7 @@ func TestDaemonBridgeInterruptionDrain(t *testing.T) {
 		}
 		msg := bridge.pendingInterruptions[0]
 		bridge.pendingInterruptions = bridge.pendingInterruptions[1:]
-		return msg
+		return extractText(msg.Content)
 	}
 
 	msg1 := handler()
