@@ -2,6 +2,7 @@ package webui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -69,6 +70,7 @@ type A2ADiscoveredInstance struct {
 // This decouples webui from the concrete agent package.
 type AgentRunner interface {
 	RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error
+	RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error
 }
 
 // Server provides a built-in WebUI for configuration and chat.
@@ -1101,24 +1103,70 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var msg struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type   string `json:"type"`
+			Text   string `json:"text"`
+			Images []struct {
+				MIME string `json:"mime"`
+				Data string `json:"data"` // base64
+			} `json:"images"`
+			Files []struct {
+				Name string `json:"name"`
+				MIME string `json:"mime"`
+				Data string `json:"data"` // base64
+			} `json:"files"`
 		}
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
 			s.wsSendError(conn, "invalid message format")
 			continue
 		}
 
-		if msg.Type != "user_message" || msg.Text == "" {
-			s.wsSendError(conn, "expected user_message with text")
+		if msg.Type != "user_message" {
+			s.wsSendError(conn, "expected user_message")
+			continue
+		}
+		if msg.Text == "" && len(msg.Images) == 0 && len(msg.Files) == 0 {
+			s.wsSendError(conn, "message must contain text, images, or files")
 			continue
 		}
 
-		// Send user acknowledgment
-		s.wsSend(conn, map[string]interface{}{
-			"type": "user_ack",
-			"text": msg.Text,
-		})
+		// Build content blocks
+		content := []provider.ContentBlock{}
+		if msg.Text != "" {
+			content = append(content, provider.TextBlock(msg.Text))
+		}
+		for _, img := range msg.Images {
+			if img.MIME == "" || img.Data == "" {
+				continue
+			}
+			content = append(content, provider.ImageBlock(img.MIME, img.Data))
+		}
+		for _, f := range msg.Files {
+			if f.Name == "" || f.Data == "" {
+				continue
+			}
+			// Decode base64 and include as text content
+			decoded, err := base64.StdEncoding.DecodeString(f.Data)
+			if err != nil {
+				s.wsSendError(conn, fmt.Sprintf("invalid base64 for file %s", f.Name))
+				continue
+			}
+			fileText := fmt.Sprintf("--- File: %s ---\n%s\n--- End of %s ---", f.Name, string(decoded), f.Name)
+			content = append(content, provider.TextBlock(fileText))
+		}
+
+		// Send user acknowledgment with attachment info
+		ackExtras := map[string]interface{}{"type": "user_ack", "text": msg.Text}
+		if len(msg.Images) > 0 {
+			ackExtras["image_count"] = len(msg.Images)
+		}
+		if len(msg.Files) > 0 {
+			fileNames := make([]string, len(msg.Files))
+			for i, f := range msg.Files {
+				fileNames[i] = f.Name
+			}
+			ackExtras["file_names"] = fileNames
+		}
+		s.wsSend(conn, ackExtras)
 
 		// Run agent with streaming
 		ctx, cancel := context.WithCancel(r.Context())
@@ -1137,7 +1185,7 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 
 		go func() {
 			defer close(done)
-			err := s.agent.RunStream(ctx, msg.Text, func(event provider.StreamEvent) {
+			err := s.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 				switch event.Type {
 				case provider.StreamEventText:
 					s.wsSend(conn, map[string]interface{}{
