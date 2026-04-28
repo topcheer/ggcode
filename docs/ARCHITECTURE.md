@@ -89,11 +89,16 @@ internal/
     image.go             # ReadFile, Placeholder
   im/                    # IM gateway runtime
     runtime.go           # Manager: multi-adapter routing, bindings, mute/unmute
-    daemon_bridge.go     # DaemonBridge: agent loop + IM slash commands
+    daemon_bridge.go     # DaemonBridge: agent loop + IM slash commands + ChatBridge impl
     emitter.go           # IMEmitter: outbound event routing
     fanout.go            # Multi-adapter fan-out with echo suppression
     adapter_*.go         # Platform adapters (Telegram, QQ, Discord, Slack, DingTalk, Feishu)
     tool_format.go       # Unified tool result formatting for IM
+  webui/                 # WebUI HTTP server + WebSocket chat
+    server.go            # Server: REST API (config, sessions, MCP, IM, A2A, general) + WS chat handler
+    tui_bridge.go        # TUIChatBridge: routes webchat → TUI event loop via program.Send()
+    server_test.go       # Unit tests for config serialization, sessions, WS
+    server_e2e_test.go   # E2E tests (48 tests): REST API, WS lifecycle, broadcast, attachments, errors
   knight/                # Knight: background autonomous agent
     knight.go            # Daily token budget, activity-driven code monitoring
   mcp/                   # Model Context Protocol client
@@ -185,6 +190,10 @@ docs/                    # Documentation
 - **A2A multi-auth**: Server advertises enabled auth schemes in agent card; client auto-negotiates the strongest available. Auth middleware validates each scheme independently. Multiple schemes can coexist.
 - **Token cache**: OAuth2/OIDC tokens cached at `~/.ggcode/oauth-tokens/{provider}-{clientID[:12]}.json` with per-client isolation. Same client_id = shared token; different client_id = isolated.
 - **IM mute**: In-memory only (not persisted to binding store). `MuteAllExcept(adapter)` prevents self-mute race. Daemon restart recovers all adapters.
+- **WebUI ChatBridge**: Decouples WebSocket chat from agent implementation via `ChatBridge` interface (`SendUserMessage`, `Messages`, `Subscribe`). Two implementations:
+  - `DaemonBridge` (daemon mode): Injects webchat messages through `pendingInterruptions` into agent's `SetInterruptionHandler`. Broadcasts events from agent stream callback.
+  - `TUIChatBridge` (TUI mode): Routes webchat messages through `program.Send(webchatUserMsg)` into bubbletea event loop. No direct agent access — TUI handles queuing/interruption identically to keyboard input. Events broadcast via `BroadcastEvent()` called from TUI's stream callback.
+- **WebUI WebSocket**: Per-connection write goroutine with buffered channel (cap 256). Read and write goroutines fully separated to satisfy gorilla/webstack concurrency requirements. Slow subscribers drop events (non-blocking send) instead of blocking the broadcast path.
 
 ## A2A Authentication Architecture
 
@@ -295,3 +304,92 @@ All provider adapters detect output truncation and policy errors:
 - **Gemini**: `FinishReason=MAX_TOKENS`, `SAFETY`, `RECITATION`, etc. returns error
 
 Default `max_output_tokens` is 16384 (configurable per endpoint).
+
+## WebUI Architecture
+
+The WebUI subsystem provides an HTTP+WebSocket interface for browser-based interaction with ggcode. It starts in both TUI and daemon modes.
+
+### ChatBridge Interface
+
+```
+                    ┌──────────────────────────┐
+                    │     webui.Server          │
+                    │  ┌──────────────────────┐ │
+                    │  │ REST API              │ │
+                    │  │ /api/config, sessions │ │
+                    │  │ /api/mcp, im, a2a...  │ │
+                    │  └──────────────────────┘ │
+                    │  ┌──────────────────────┐ │
+                    │  │ WebSocket Chat        │ │
+                    │  │  ↓ SendUserMessage()  │ │
+                    │  │  ↑ Subscribe() events │ │
+                    │  └──────┬───────────────┘ │
+                    └─────────┼─────────────────┘
+                              │ ChatBridge interface
+                    ┌─────────┼─────────────────┐
+                    │         ▼                  │
+          ┌─────────┴──────────┐  ┌─────────────┴──────────┐
+          │   DaemonBridge     │  │    TUIChatBridge        │
+          │   (daemon mode)    │  │    (TUI mode)           │
+          │                    │  │                         │
+          │ pendingInterrupts  │  │ program.Send()          │
+          │ → agent interrupt  │  │ → bubbletea event loop  │
+          │                    │  │ → startAgent /           │
+          │ broadcastEvent()   │  │   queuePendingSubmission │
+          │ from agent stream  │  │                         │
+          │ callback           │  │ BroadcastEvent()        │
+          │                    │  │ from TUI stream callback │
+          └────────────────────┘  └─────────────────────────┘
+```
+
+### REST API Endpoints
+
+| Path | Methods | Description |
+|------|---------|-------------|
+| `/api/config` | GET | Full configuration (vendors, endpoints, MCP, IM, A2A, general) |
+| `/api/config/active` | GET/PUT | Active vendor/endpoint/model selection |
+| `/api/vendors` | GET/POST | Vendor list / add vendor |
+| `/api/vendors/{id}` | GET/PUT/DELETE | Vendor CRUD |
+| `/api/vendors/{id}/endpoints` | GET/POST | Endpoint list / add |
+| `/api/vendors/{id}/endpoints/{ep}` | GET/PUT/DELETE | Endpoint CRUD |
+| `/api/vendors/{id}/endpoints/{ep}/apikey` | PUT | Set API key |
+| `/api/mcp` | GET/POST | MCP servers config / add |
+| `/api/mcp/status` | GET | Runtime MCP status |
+| `/api/mcp/{name}` | DELETE | Remove MCP server |
+| `/api/im` | GET | IM config |
+| `/api/im/status` | GET | Runtime IM adapter status |
+| `/api/im/adapters/{name}` | POST | IM adapter action (enable/disable/mute) |
+| `/api/general` | GET/PUT | General settings (language, mode, iterations) |
+| `/api/impersonate` | GET/PUT | Impersonation preset selection |
+| `/api/a2a` | GET/PUT | A2A config |
+| `/api/a2a/discover` | GET | Discover remote agents |
+| `/api/sessions` | GET | List sessions grouped by workspace |
+| `/api/sessions/{id}` | GET/DELETE | Session detail / delete |
+| `/api/chat/history` | GET | Current chat history (from agent) |
+| `/api/chat/ws` | WS | WebSocket chat (send messages, receive streaming events) |
+| `/api/restart` | POST | Trigger restart |
+
+### WebSocket Chat Protocol
+
+**Client → Server** (JSON):
+```json
+{"type": "user_message", "text": "explain goroutines", "images": [...], "files": [...]}
+```
+
+**Server → Client** (JSON, event types):
+| Event | Fields | Description |
+|-------|--------|-------------|
+| `user_ack` | `text`, `image_count`, `file_names` | Confirms message received |
+| `text_delta` | `text` | Streaming text chunk |
+| `tool_call_chunk` | `id`, `name`, `arguments_delta` | Partial tool call |
+| `tool_call` | `id`, `name`, `arguments` | Complete tool call |
+| `tool_result` | `name`, `result` | Tool execution result |
+| `error` | `error` | Agent error |
+| `done` | `usage` | Stream complete with token usage |
+
+### Concurrency Safety
+
+1. **WebSocket**: Per-connection write goroutine with buffered channel (256). Read/write fully separated.
+2. **DaemonBridge.SendUserMessage**: TOCTOU-safe — cancelFunc check and run-slot claim happen under a single mutex lock.
+3. **TUIChatBridge**: No direct agent access. Messages route through bubbletea event loop (`program.Send`), identical to keyboard input.
+4. **Broadcast**: Non-blocking sends to subscriber channels. Slow subscribers drop events instead of blocking.
