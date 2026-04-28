@@ -11,7 +11,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.1.50`](docs/releases/v1.1.50.md) |
+| Latest documented release | [`v1.1.51`](docs/releases/v1.1.51.md) |
 
 ## Build & Validation
 
@@ -246,6 +246,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 
 ## Release & Distribution
 
+- **⚠️ ALWAYS read `docs/release-process.md` first** before preparing any release. It contains the exact checklist, file list, and command flow.
 - **GoReleaser** (`.goreleaser.yaml`): Builds for linux/darwin/windows on amd64/arm64 with `CGO_ENABLED=0`. Produces tar.gz, zip (Windows), and packages (deb, rpm, apk, ipk, archlinux). SBOMs included.
 - **Version info**: Injected at build time via `-X` ldflags into `internal/version` (Version, Commit, Date)
 - **npm** (`npm/`): Wrapper that installs the GitHub Release binary
