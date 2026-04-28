@@ -42,6 +42,8 @@ type DaemonBridge struct {
 	followSink           daemon.FollowSink
 	onActivity           func()
 	onRestart            func() // trigger daemon self-restart
+	eventSubs            []func(provider.StreamEvent)
+	eventSubMu           sync.RWMutex
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -289,6 +291,9 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	b.appendUserMessage(content)
 
 	err := b.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+		// Broadcast to webchat subscribers
+		b.broadcastEvent(event)
+
 		switch event.Type {
 		case provider.StreamEventText:
 			// Accumulate text, do NOT send to IM per-token
@@ -750,4 +755,76 @@ func (b *DaemonBridge) handleMuteSelf(msg InboundMessage) error {
 
 	b.manager.MuteBinding(selfAdapter)
 	return nil
+}
+
+// --- ChatBridge implementation (for webui WebChat) ---
+
+// Messages returns the current agent conversation history.
+func (b *DaemonBridge) Messages() []provider.Message {
+	return b.agent.Messages()
+}
+
+// SendUserMessage injects a user message into the agent conversation.
+// If the agent is currently running, the message is queued as an interruption
+// (same mechanism as IM mid-run messages). If the agent is idle, a new run
+// is started.
+func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
+	// Extract text for interruption queue (bridge currently only handles text interruptions)
+	var text string
+	for _, c := range content {
+		if c.Type == "text" {
+			text += c.Text
+		}
+	}
+	if text == "" {
+		return
+	}
+
+	// Append pending interruption text
+	b.mu.Lock()
+	activeCancel := b.cancelFunc
+	b.mu.Unlock()
+
+	if activeCancel != nil {
+		// Agent is running — inject as interruption
+		debug.Log("daemon-bridge", "webchat: queuing interruption: %s", truncateStr(text, 80))
+		b.mu.Lock()
+		b.pendingInterruptions = append(b.pendingInterruptions, text)
+		b.mu.Unlock()
+		return
+	}
+
+	// Agent is idle — start a new run (fire and forget)
+	go func() {
+		ctx := context.Background()
+		if err := b.runAgentStream(ctx, content); err != nil {
+			debug.Log("daemon-bridge", "webchat: agent run error: %v", err)
+		}
+	}()
+}
+
+// Subscribe registers a callback for agent streaming events.
+// All events from the agent loop are forwarded to all subscribers.
+// Returns an unsubscribe function.
+func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
+	b.eventSubMu.Lock()
+	defer b.eventSubMu.Unlock()
+	b.eventSubs = append(b.eventSubs, fn)
+	idx := len(b.eventSubs) - 1
+	return func() {
+		b.eventSubMu.Lock()
+		defer b.eventSubMu.Unlock()
+		b.eventSubs[idx] = nil // prevent re-slicing issues
+	}
+}
+
+// broadcastEvent sends an event to all registered webchat subscribers.
+func (b *DaemonBridge) broadcastEvent(event provider.StreamEvent) {
+	b.eventSubMu.RLock()
+	defer b.eventSubMu.RUnlock()
+	for _, fn := range b.eventSubs {
+		if fn != nil {
+			fn(event)
+		}
+	}
 }
