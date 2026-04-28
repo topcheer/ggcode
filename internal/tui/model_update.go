@@ -679,6 +679,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatListScrollToBottom()
 		return m, nil
 
+	case webchatUserMsg:
+		// Webchat message injected from the webui. Handle like user input.
+		text := msg.Text
+		if text == "" {
+			return m, nil
+		}
+		// If agent is idle, start a new run with the webchat message
+		if m.cancelFunc == nil {
+			cmd := m.startAgent(text)
+			return m, cmd
+		}
+		// Agent is busy — queue as interruption
+		m.queuePendingSubmission(text)
+		return m, nil
+
 	case shellCommandStreamMsg:
 		if msg.RunID != m.activeShellRunID || m.runCanceled || !m.loading {
 			return m, nil

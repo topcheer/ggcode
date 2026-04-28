@@ -38,6 +38,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tui"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/version"
+	"github.com/topcheer/ggcode/internal/webui"
 )
 
 func NewRootCmd() *cobra.Command {
@@ -642,10 +643,40 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
 	repl.SetSwarmManager(swarmMgr, registry)
 
+	// Start webui for TUI mode (session browser + webchat)
+	webuiSrv := webui.NewServer(cfg)
+	webuiSrv.SetSessionStore(store, workingDir)
+
+	// Create TUI chat bridge: webchat messages → TUI event loop
+	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})
+	webuiSrv.SetChatBridge(tuiBridge)
+	repl.SetWebUIBridge(tuiBridge)
+
+	actualAddr, webuiErr := webuiSrv.Start("127.0.0.1:0")
+	if webuiErr != nil {
+		fmt.Fprintf(os.Stderr, "webui: %v (continuing without webui)\n", webuiErr)
+	} else {
+		defer webuiSrv.Close()
+		fmt.Fprintf(os.Stderr, "\x1b[34m⬡ WebUI:\x1b[0m \x1b[36mhttp://%s\x1b[0m\n", actualAddr)
+	}
+
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
 	}
 	return repl.Run()
+}
+
+// tuiWebchatSender implements webui.WebchatMessageSender by routing webchat
+// messages into the TUI bubbletea event loop.
+type tuiWebchatSender struct {
+	repl *tui.REPL
+}
+
+func (s *tuiWebchatSender) SendWebchatMessage(text string) {
+	if s.repl == nil {
+		return
+	}
+	s.repl.InjectWebchatMessage(text)
 }
 
 // a2aAPIKey resolves the A2A API key from config.
