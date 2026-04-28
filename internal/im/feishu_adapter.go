@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 	"github.com/topcheer/ggcode/internal/config"
@@ -191,6 +192,10 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			a.handleLarkMessageEvent(ctx, event)
 			return nil
+		}).
+		OnP2CardActionTrigger(func(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+			a.handleCardActionTrigger(ctx, event)
+			return nil, nil
 		})
 
 	domain := lark.FeishuBaseUrl
@@ -324,9 +329,11 @@ func (a *feishuAdapter) runSingleWSConnection(ctx context.Context, domain string
 			})
 
 		case larkws.MessageTypeCard:
-			// Handle card action callbacks ourselves (SDK drops these)
+			// Card callbacks: delegate to eventHandler which has
+			// OnP2CardActionTrigger registered. The SDK's WS client
+			// drops MessageTypeCard, but our custom WS passes it through.
 			safego.Go("im.feishu.wsCard", func() {
-				a.handleCardActionPayload(ctx, frame.Payload)
+				eventHandler.Do(ctx, frame.Payload)
 			})
 
 		default:
@@ -335,41 +342,43 @@ func (a *feishuAdapter) runSingleWSConnection(ctx context.Context, domain string
 	}
 }
 
-// handleCardActionPayload processes a raw card action callback payload.
-func (a *feishuAdapter) handleCardActionPayload(ctx context.Context, payload []byte) {
-	if a.manager == nil || len(payload) == 0 {
+// handleCardActionTrigger processes a card action callback received via
+// OnP2CardActionTrigger on the EventDispatcher. This handles button clicks
+// from Feishu Card 2.0 interactive messages sent via SendInteractive.
+func (a *feishuAdapter) handleCardActionTrigger(ctx context.Context, event *callback.CardActionTriggerEvent) {
+	if a.manager == nil || event.Event == nil {
 		return
 	}
-	var cardAction struct {
-		OpenID        string `json:"open_id"`
-		OpenMessageID string `json:"open_message_id"`
-		OpenChatID    string `json:"open_chat_id"`
-		Action        *struct {
-			Value map[string]any `json:"value"`
-			Tag   string         `json:"tag"`
-		} `json:"action"`
-	}
-	if err := json.Unmarshal(payload, &cardAction); err != nil {
-		debug.Log("feishu", "adapter=%s card action parse error: %v", a.name, err)
+	action := event.Event.Action
+	if action == nil || action.Value == nil {
 		return
 	}
-	if cardAction.Action == nil || cardAction.Action.Value == nil {
-		return
-	}
-	choice, _ := cardAction.Action.Value["choice"].(string)
+	choice, _ := action.Value["choice"].(string)
 	if choice == "" {
 		return
 	}
+
+	var openID, messageID, chatID string
+	if event.Event.Operator != nil {
+		openID = event.Event.Operator.OpenID
+	}
+	if event.Event.Context != nil {
+		messageID = event.Event.Context.OpenMessageID
+		chatID = event.Event.Context.OpenChatID
+	}
+
+	debug.Log("feishu", "adapter=%s card action: choice=%s openID=%s msgID=%s", a.name, choice, openID, messageID)
+
 	a.manager.HandleInteractiveCallback(InteractiveCallback{
-		MessageID: cardAction.OpenMessageID,
+		MessageID: messageID,
 		Values:    []string{choice},
 		Adapter:   a.name,
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformFeishu,
-			ChannelID:  cardAction.OpenChatID,
-			SenderID:   cardAction.OpenID,
-			MessageID:  cardAction.OpenMessageID,
+			ChannelID:  chatID,
+			SenderID:   openID,
+			MessageID:  messageID,
 			ReceivedAt: time.Now(),
 		},
 	})
