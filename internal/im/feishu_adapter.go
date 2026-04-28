@@ -1599,7 +1599,8 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 	var columns []map[string]any
 	for _, btn := range msg.Buttons {
 		btnElem := map[string]any{
-			"tag": "button",
+			"tag":      "button",
+			"behavior": "callback",
 			"text": map[string]any{
 				"tag":     "plain_text",
 				"content": btn.Label,
@@ -1626,8 +1627,9 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 			"tag": "column",
 			"elements": []any{
 				map[string]any{
-					"tag":  "button",
-					"type": "primary",
+					"tag":      "button",
+					"behavior": "callback",
+					"type":     "primary",
 					"text": map[string]any{
 						"tag":     "plain_text",
 						"content": "✅ Done",
