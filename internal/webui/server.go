@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -11,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
@@ -62,6 +65,12 @@ type A2ADiscoveredInstance struct {
 	StartedAt string `json:"started_at"`
 }
 
+// AgentRunner is the interface for running agent queries.
+// This decouples webui from the concrete agent package.
+type AgentRunner interface {
+	RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error
+}
+
 // Server provides a built-in WebUI for configuration and chat.
 type Server struct {
 	cfg           *config.Config
@@ -72,6 +81,7 @@ type Server struct {
 	a2aDiscoverFn A2ADiscoverFunc // returns discovered A2A instances
 	sessionStore  session.Store
 	workspace     string // current ggcode working directory
+	agent         AgentRunner
 	mu            sync.RWMutex
 	addr          string
 	listener      net.Listener
@@ -107,6 +117,11 @@ func (s *Server) SetA2ADiscoverFn(fn A2ADiscoverFunc) {
 func (s *Server) SetSessionStore(store session.Store, workspace string) {
 	s.sessionStore = store
 	s.workspace = workspace
+}
+
+// SetAgent sets the agent runner for chat functionality.
+func (s *Server) SetAgent(a AgentRunner) {
+	s.agent = a
 }
 
 // NewServer creates a WebUI server bound to the given config.
@@ -177,6 +192,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/a2a/discover", s.handleA2ADiscover)
 	s.mux.HandleFunc("/api/sessions", s.handleSessions)
 	s.mux.HandleFunc("/api/sessions/", s.handleSessionDetail)
+	s.mux.HandleFunc("/api/chat/ws", s.handleChatWS)
 	s.mux.HandleFunc("/api/restart", s.handleRestart)
 }
 
@@ -1050,6 +1066,134 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		"updated_at": ses.UpdatedAt.Format(time.RFC3339),
 		"messages":   msgs,
 	})
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// handleChatWS handles the WebSocket connection for chat.
+// Protocol:
+//
+//	Client → Server: {"type":"user_message","text":"..."}
+//	Server → Client: {"type":"text_delta","text":"..."}
+//	Server → Client: {"type":"tool_call","id":"...","name":"...","arguments":"..."}
+//	Server → Client: {"type":"tool_result","name":"...","result":"...","is_error":false}
+//	Server → Client: {"type":"done","usage":{"input_tokens":0,"output_tokens":0}}
+//	Server → Client: {"type":"error","error":"..."}
+func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
+	if s.agent == nil {
+		http.Error(w, "agent not available", http.StatusServiceUnavailable)
+		return
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		debug.Log("webui", "ws upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	for {
+		_, msgBytes, err := conn.ReadMessage()
+		if err != nil {
+			// Client disconnected or error
+			return
+		}
+
+		var msg struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(msgBytes, &msg); err != nil {
+			s.wsSendError(conn, "invalid message format")
+			continue
+		}
+
+		if msg.Type != "user_message" || msg.Text == "" {
+			s.wsSendError(conn, "expected user_message with text")
+			continue
+		}
+
+		// Send user acknowledgment
+		s.wsSend(conn, map[string]interface{}{
+			"type": "user_ack",
+			"text": msg.Text,
+		})
+
+		// Run agent with streaming
+		ctx, cancel := context.WithCancel(r.Context())
+
+		// Watch for client disconnect
+		done := make(chan struct{})
+		go func() {
+			for {
+				_, _, err := conn.ReadMessage()
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}()
+
+		go func() {
+			defer close(done)
+			err := s.agent.RunStream(ctx, msg.Text, func(event provider.StreamEvent) {
+				switch event.Type {
+				case provider.StreamEventText:
+					s.wsSend(conn, map[string]interface{}{
+						"type": "text_delta",
+						"text": event.Text,
+					})
+				case provider.StreamEventToolCallDone:
+					s.wsSend(conn, map[string]interface{}{
+						"type":      "tool_call",
+						"id":        event.Tool.ID,
+						"name":      event.Tool.Name,
+						"arguments": string(event.Tool.Arguments),
+					})
+				case provider.StreamEventToolResult:
+					s.wsSend(conn, map[string]interface{}{
+						"type":     "tool_result",
+						"name":     event.Tool.Name,
+						"result":   event.Result,
+						"is_error": event.IsError,
+					})
+				case provider.StreamEventDone:
+					doneMsg := map[string]interface{}{"type": "done"}
+					if event.Usage != nil {
+						doneMsg["usage"] = map[string]interface{}{
+							"input_tokens":  event.Usage.InputTokens,
+							"output_tokens": event.Usage.OutputTokens,
+						}
+					}
+					s.wsSend(conn, doneMsg)
+				case provider.StreamEventError:
+					s.wsSend(conn, map[string]interface{}{
+						"type":  "error",
+						"error": event.Error.Error(),
+					})
+				}
+			})
+			if err != nil && ctx.Err() == nil {
+				s.wsSendError(conn, err.Error())
+			}
+		}()
+
+		<-done
+		cancel()
+	}
+}
+
+func (s *Server) wsSend(conn *websocket.Conn, msg interface{}) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := conn.WriteJSON(msg); err != nil {
+		debug.Log("webui", "ws write error: %v", err)
+	}
+}
+
+func (s *Server) wsSendError(conn *websocket.Conn, errMsg string) {
+	s.wsSend(conn, map[string]interface{}{"type": "error", "error": errMsg})
 }
 
 // a2aAuthPresets returns the built-in OAuth2/OIDC provider presets for the webui.

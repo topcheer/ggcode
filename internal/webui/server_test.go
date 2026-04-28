@@ -1,12 +1,15 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -391,5 +394,216 @@ func TestSessionMethodNotAllowed(t *testing.T) {
 	s.mux.ServeHTTP(w, req)
 	if w.Code != 405 {
 		t.Errorf("expected 405 for POST /api/sessions/123, got %d", w.Code)
+	}
+}
+
+// mockAgent is a test double for AgentRunner.
+type mockAgent struct {
+	lastMsg string
+	events  []provider.StreamEvent
+	delay   time.Duration
+}
+
+func (m *mockAgent) RunStream(ctx context.Context, userMsg string, onEvent func(provider.StreamEvent)) error {
+	m.lastMsg = userMsg
+	time.Sleep(m.delay)
+	for _, e := range m.events {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			onEvent(e)
+		}
+	}
+	return nil
+}
+
+func TestChatWSNoAgent(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	// No agent set
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	_, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("expected error when no agent, got connection")
+	}
+}
+
+func TestChatWSSimple(t *testing.T) {
+	agent := &mockAgent{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "Hello "},
+			{Type: provider.StreamEventText, Text: "world!"},
+			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 5}},
+		},
+	}
+
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	// Send message
+	ws.WriteJSON(map[string]string{"type": "user_message", "text": "hi"})
+
+	// Read responses
+	var msgs []map[string]interface{}
+	for i := 0; i < 4; i++ {
+		var msg map[string]interface{}
+		if err := ws.ReadJSON(&msg); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		msgs = append(msgs, msg)
+	}
+
+	// First: user_ack
+	if msgs[0]["type"] != "user_ack" {
+		t.Errorf("expected user_ack, got %v", msgs[0]["type"])
+	}
+	if msgs[0]["text"] != "hi" {
+		t.Errorf("expected text 'hi', got %v", msgs[0]["text"])
+	}
+
+	// Text deltas
+	if msgs[1]["type"] != "text_delta" {
+		t.Errorf("expected text_delta, got %v", msgs[1]["type"])
+	}
+	if msgs[1]["text"] != "Hello " {
+		t.Errorf("expected 'Hello ', got %v", msgs[1]["text"])
+	}
+
+	// Done
+	if msgs[3]["type"] != "done" {
+		t.Errorf("expected done, got %v", msgs[3]["type"])
+	}
+	usage := msgs[3]["usage"].(map[string]interface{})
+	if usage["input_tokens"] != float64(10) {
+		t.Errorf("expected 10 input tokens, got %v", usage["input_tokens"])
+	}
+
+	if agent.lastMsg != "hi" {
+		t.Errorf("agent received '%s', expected 'hi'", agent.lastMsg)
+	}
+}
+
+func TestChatWSWithTools(t *testing.T) {
+	agent := &mockAgent{
+		events: []provider.StreamEvent{
+			{Type: provider.StreamEventText, Text: "Let me check"},
+			{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{ID: "t1", Name: "run_command", Arguments: json.RawMessage(`{"command":"ls"}`)}},
+			{Type: provider.StreamEventToolResult, Tool: provider.ToolCallDelta{Name: "run_command"}, Result: "file.txt\nreadme.md", IsError: false},
+			{Type: provider.StreamEventText, Text: "Found 2 files"},
+			{Type: provider.StreamEventDone},
+		},
+	}
+
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	ws.WriteJSON(map[string]string{"type": "user_message", "text": "list files"})
+
+	var msgs []map[string]interface{}
+	for i := 0; i < 6; i++ {
+		var msg map[string]interface{}
+		if err := ws.ReadJSON(&msg); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		msgs = append(msgs, msg)
+	}
+
+	// Verify tool call
+	toolMsg := msgs[2]
+	if toolMsg["type"] != "tool_call" {
+		t.Errorf("expected tool_call at index 2, got %v", toolMsg["type"])
+	}
+	if toolMsg["name"] != "run_command" {
+		t.Errorf("expected tool name run_command, got %v", toolMsg["name"])
+	}
+
+	// Verify tool result
+	resultMsg := msgs[3]
+	if resultMsg["type"] != "tool_result" {
+		t.Errorf("expected tool_result at index 3, got %v", resultMsg["type"])
+	}
+	if resultMsg["result"] != "file.txt\nreadme.md" {
+		t.Errorf("unexpected result: %v", resultMsg["result"])
+	}
+}
+
+func TestChatWSInvalidMessage(t *testing.T) {
+	agent := &mockAgent{}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	// Send invalid JSON type
+	ws.WriteJSON(map[string]string{"type": "invalid", "text": "hello"})
+
+	var msg map[string]interface{}
+	if err := ws.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg["type"] != "error" {
+		t.Errorf("expected error, got %v", msg["type"])
+	}
+}
+
+func TestChatWSEmptyText(t *testing.T) {
+	agent := &mockAgent{}
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetAgent(agent)
+
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	ws.WriteJSON(map[string]string{"type": "user_message", "text": ""})
+
+	var msg map[string]interface{}
+	if err := ws.ReadJSON(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if msg["type"] != "error" {
+		t.Errorf("expected error for empty text, got %v", msg["type"])
 	}
 }

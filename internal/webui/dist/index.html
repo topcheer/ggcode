@@ -132,6 +132,16 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
 .chat-tool-name { font-weight: 600; font-family: var(--mono); color: var(--text); }
 .chat-tool-data { margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--text2); white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow: auto; }
 .chat-tool-toggle { cursor: pointer; user-select: none; }
+/* Live chat */
+#chat-messages { scroll-behavior: smooth; }
+.chat-welcome { text-align: center; padding: 60px 20px; color: var(--text2); }
+.chat-welcome h3 { font-size: 20px; margin-bottom: 8px; color: var(--text); }
+.chat-welcome p { font-size: 14px; max-width: 400px; margin: 0 auto; }
+.chat-typing { display: inline-block; }
+.chat-typing::after { content: '...'; animation: typingDots 1.2s steps(4,end) infinite; }
+@keyframes typingDots { 0%{content:''} 25%{content:'.'} 50%{content:'..'} 75%{content:'...'} 100%{content:''} }
+.chat-cursor { display: inline-block; width: 2px; height: 14px; background: var(--primary, #6366f1); animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 1px; }
+@keyframes blink { 50% { opacity: 0; } }
 </style>
 </head>
 <body>
@@ -171,6 +181,9 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       </div>
       <div class="nav-item" data-page="sessions" onclick="showPage('sessions')">
         <span class="nav-icon">&#128214;</span><span>Sessions</span>
+      </div>
+      <div class="nav-item" data-page="chat" onclick="showPage('chat')">
+        <span class="nav-icon">&#128172;</span><span>Chat</span>
       </div>
       <div style="flex:1"></div>
       <div style="padding:8px 4px">
@@ -391,6 +404,19 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       </div>
       <div id="sessions-list"></div>
       <div id="session-detail" style="display:none"></div>
+    </div>
+
+    <!-- Chat -->
+    <div class="page" id="page-chat">
+      <div id="chat-container" style="display:flex;flex-direction:column;height:calc(100vh - 80px)">
+        <div id="chat-messages" style="flex:1;overflow-y:auto;padding:16px 8px"></div>
+        <div id="chat-input-area" style="padding:12px 8px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:flex-end">
+          <textarea id="chat-input" rows="1" placeholder="Send a message..." style="flex:1;resize:none;padding:10px 14px;font-size:14px;font-family:inherit;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;outline:none;max-height:120px;min-height:42px;line-height:1.5" onkeydown="chatKeyDown(event)" oninput="autoResize(this)"></textarea>
+          <button id="chat-send" class="btn btn-primary" onclick="chatSend()" style="min-width:48px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px">&#10148;</button>
+          <button id="chat-stop" class="btn btn-danger" onclick="chatStop()" style="display:none;min-width:48px;height:42px;border-radius:10px;font-size:14px">&#9632;</button>
+        </div>
+        <div id="chat-status" style="padding:2px 12px;font-size:11px;color:var(--text2);display:none"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1643,6 +1669,233 @@ async function triggerRestart() {
     setTimeout(() => window.close(), 3000);
   }
 }
+
+// --- Chat ---
+let chatWs = null;
+let chatStreaming = false;
+let chatAssistantEl = null;
+let chatTextBuffer = '';
+let chatToolCalls = [];
+let chatStatusEl = null;
+let chatMessagesEl = null;
+
+function initChat() {
+  chatStatusEl = document.getElementById('chat-status');
+  chatMessagesEl = document.getElementById('chat-messages');
+  if (!chatMessagesEl) return;
+  if (chatMessagesEl.children.length === 0) {
+    chatMessagesEl.innerHTML = '<div class="chat-welcome"><h3>&#128172; WebChat</h3><p>Chat with ggcode directly from your browser. Messages are processed by the active agent.</p></div>';
+  }
+}
+
+function chatConnect() {
+  if (chatWs && chatWs.readyState === WebSocket.OPEN) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  chatWs = new WebSocket(`${proto}//${location.host}/api/chat/ws`);
+  chatWs.onopen = () => { debugLog('chat', 'ws connected'); };
+  chatWs.onclose = () => {
+    debugLog('chat', 'ws closed');
+    if (document.getElementById('page-chat').classList.contains('active')) {
+      setTimeout(chatConnect, 2000);
+    }
+  };
+  chatWs.onerror = (e) => { debugLog('chat', 'ws error'); };
+  chatWs.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleChatMessage(msg);
+  };
+}
+
+function debugLog(tag, ...args) { /* noop for production */ }
+
+function handleChatMessage(msg) {
+  switch (msg.type) {
+    case 'user_ack':
+      appendUserBubble(msg.text);
+      // Prepare assistant bubble
+      chatTextBuffer = '';
+      chatToolCalls = [];
+      chatAssistantEl = createAssistantBubble();
+      chatStreaming = true;
+      updateChatButtons(true);
+      break;
+
+    case 'text_delta':
+      chatTextBuffer += msg.text;
+      renderAssistantBubble();
+      scrollChatBottom();
+      break;
+
+    case 'tool_call':
+      chatToolCalls.push({ name: msg.name, id: msg.id, arguments: msg.arguments, pending: true });
+      renderAssistantBubble();
+      scrollChatBottom();
+      break;
+
+    case 'tool_result':
+      const tc = chatToolCalls.find(t => t.name === msg.name && t.pending);
+      if (tc) {
+        tc.result = msg.result;
+        tc.isError = msg.is_error;
+        tc.pending = false;
+      }
+      renderAssistantBubble();
+      scrollChatBottom();
+      break;
+
+    case 'done':
+      chatStreaming = false;
+      updateChatButtons(false);
+      // Remove cursor
+      renderAssistantBubble(true);
+      if (chatStatusEl) chatStatusEl.style.display = 'none';
+      break;
+
+    case 'error':
+      chatStreaming = false;
+      updateChatButtons(false);
+      appendErrorBubble(msg.error);
+      break;
+  }
+}
+
+function appendUserBubble(text) {
+  clearWelcome();
+  const div = document.createElement('div');
+  div.className = 'chat-msg user';
+  div.innerHTML = `<div class="chat-role">You</div><div class="chat-text">${esc(text)}</div>`;
+  chatMessagesEl.appendChild(div);
+  scrollChatBottom();
+}
+
+function createAssistantBubble() {
+  clearWelcome();
+  const div = document.createElement('div');
+  div.className = 'chat-msg assistant';
+  chatMessagesEl.appendChild(div);
+  return div;
+}
+
+function renderAssistantBubble(final) {
+  if (!chatAssistantEl) return;
+  let html = '<div class="chat-role">Assistant</div>';
+
+  // Text with optional cursor
+  if (chatTextBuffer) {
+    html += `<div class="chat-text">${renderMarkdown(chatTextBuffer)}${final ? '' : '<span class="chat-cursor"></span>'}</div>`;
+  } else if (!final && chatToolCalls.length === 0) {
+    html += '<div class="chat-text"><span class="chat-typing">Thinking</span></div>';
+  }
+
+  // Tool calls
+  for (const tc of chatToolCalls) {
+    const icon = tc.pending ? '&#9881;' : (tc.isError ? '&#10060;' : '&#9989;');
+    const statusClass = tc.isError ? ' error' : '';
+    const detail = tc.result || tc.arguments || '';
+    const expanded = tc.pending ? 'block' : 'none';
+    html += `<div class="chat-tool tool_use${statusClass}">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span>${icon}</span>
+        <span class="chat-tool-name">${esc(tc.name)}</span>
+        ${tc.pending ? '<span style="color:var(--text2);font-size:11px">running...</span>' : ''}
+      </div>
+      <div class="chat-tool-data" style="display:${expanded};margin-top:4px">${esc(truncate(detail, 2000))}</div>
+    </div>`;
+  }
+
+  chatAssistantEl.innerHTML = html;
+}
+
+function appendErrorBubble(error) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg assistant';
+  div.innerHTML = `<div class="chat-role" style="color:#ef4444">Error</div><div class="chat-text" style="color:#ef4444">${esc(error)}</div>`;
+  chatMessagesEl.appendChild(div);
+  scrollChatBottom();
+}
+
+function clearWelcome() {
+  const w = chatMessagesEl.querySelector('.chat-welcome');
+  if (w) w.remove();
+}
+
+function renderMarkdown(text) {
+  // Simple markdown: code blocks, inline code, bold, italic
+  let html = esc(text);
+  // Code blocks
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:var(--surface2,var(--surface));padding:8px 12px;border-radius:6px;overflow-x:auto;font-size:12px;margin:4px 0"><code>$2</code></pre>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--surface2,var(--surface));padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  return html;
+}
+
+function truncate(str, max) {
+  if (!str || str.length <= max) return str || '';
+  return str.slice(0, max) + '...';
+}
+
+function scrollChatBottom() {
+  requestAnimationFrame(() => {
+    if (chatMessagesEl) chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  });
+}
+
+function updateChatButtons(streaming) {
+  const send = document.getElementById('chat-send');
+  const stop = document.getElementById('chat-stop');
+  if (send) send.style.display = streaming ? 'none' : 'flex';
+  if (stop) stop.style.display = streaming ? 'flex' : 'none';
+  if (chatStatusEl) chatStatusEl.style.display = streaming ? 'block' : 'none';
+  if (streaming && chatStatusEl) chatStatusEl.textContent = 'Agent is working...';
+}
+
+function chatKeyDown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    chatSend();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function chatSend() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text || chatStreaming) return;
+  if (!chatWs || chatWs.readyState !== WebSocket.OPEN) {
+    chatConnect();
+    setTimeout(() => chatSend(), 500);
+    return;
+  }
+  chatWs.send(JSON.stringify({ type: 'user_message', text }));
+  input.value = '';
+  input.style.height = 'auto';
+  input.focus();
+}
+
+function chatStop() {
+  if (chatWs) chatWs.close();
+  chatStreaming = false;
+  updateChatButtons(false);
+  renderAssistantBubble(true);
+}
+
+// Patch showPage to init chat
+const _origShowPage = showPage;
+showPage = function(id) {
+  _origShowPage(id);
+  if (id === 'chat') {
+    initChat();
+    chatConnect();
+  }
+};
 
 // --- Sessions ---
 function renderSessions() {
