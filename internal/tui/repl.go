@@ -117,6 +117,21 @@ func (r *REPL) SetKnight(k *knight.Knight) {
 	r.model.SetKnight(k)
 }
 
+// SetWebUIBridge sets the webui event broadcaster for forwarding agent
+// events to webchat subscribers.
+func (r *REPL) SetWebUIBridge(b WebUIEventBroadcaster) {
+	r.model.webuiBridge = b
+}
+
+// InjectWebchatMessage sends a webchat user message into the TUI event loop.
+// The message is handled like a normal user input — if the agent is idle,
+// it starts a new run; if busy, it queues as a pending interruption.
+func (r *REPL) InjectWebchatMessage(text string) {
+	if r.program != nil {
+		r.program.Send(webchatUserMsg{Text: text})
+	}
+}
+
 // SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt
 // when skills or other dynamic parts change.
 func (r *REPL) SetSystemPromptRebuilder(fn func() string) {

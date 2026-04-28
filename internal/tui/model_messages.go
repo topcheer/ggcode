@@ -173,3 +173,10 @@ type updatePrepareResultMsg struct {
 }
 
 type updateCheckTickMsg struct{}
+
+// webchatUserMsg is sent by the webui TUIChatBridge to inject a webchat
+// message into the TUI event loop. The TUI handles it like a normal
+// user input submission.
+type webchatUserMsg struct {
+	Text string
+}

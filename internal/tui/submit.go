@@ -241,13 +241,11 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 	})
 
 	err := m.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
-		// Protect the entire stream callback against panics. The callback
-		// runs on the provider's stream-reading goroutine; an unrecovered
-		// panic here would terminate the read goroutine (best case) or
-		// crash the whole process (worst case). Recovering keeps the TUI
-		// alive and lets the higher-level error handling surface a sane
-		// error to the user.
 		defer safego.Recover("tui.streamCallback")
+		// Broadcast to webchat subscribers
+		if m.webuiBridge != nil {
+			m.webuiBridge.BroadcastEvent(event)
+		}
 		if m.program == nil {
 			return
 		}

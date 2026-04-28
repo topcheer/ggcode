@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
@@ -197,6 +198,7 @@ type Model struct {
 	clipboardLoader       func() (imageAttachedMsg, error)
 	clipboardWriter       func(string) error
 	urlOpener             func(string) error
+	webuiBridge           WebUIEventBroadcaster
 	updateSvc             *update.Service
 	updateInfo            update.CheckResult
 	updateError           string
@@ -214,6 +216,11 @@ type pendingQueue struct {
 }
 
 // MCPInfo holds display info about a connected MCP server.
+// WebUIEventBroadcaster broadcasts agent events to webui subscribers.
+type WebUIEventBroadcaster interface {
+	BroadcastEvent(event provider.StreamEvent)
+}
+
 type MCPInfo struct {
 	Name          string
 	ToolNames     []string
