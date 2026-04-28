@@ -1694,9 +1694,65 @@ function initChat() {
   chatStatusEl = document.getElementById('chat-status');
   chatMessagesEl = document.getElementById('chat-messages');
   if (!chatMessagesEl) return;
+  // Load agent history on first open
   if (chatMessagesEl.children.length === 0) {
-    chatMessagesEl.innerHTML = '<div class="chat-welcome"><h3>&#128172; WebChat</h3><p>Chat with ggcode directly from your browser. Messages are processed by the active agent.</p></div>';
+    loadChatHistory();
   }
+}
+
+async function loadChatHistory() {
+  try {
+    const resp = await fetch('/api/chat/history');
+    const msgs = await resp.json();
+    if (!msgs || msgs.length === 0) {
+      chatMessagesEl.innerHTML = '<div class="chat-welcome"><h3>&#128172; WebChat</h3><p>Chat with ggcode directly from your browser. Messages are processed by the active agent.</p></div>';
+      return;
+    }
+    chatMessagesEl.innerHTML = '';
+    for (const msg of msgs) {
+      appendHistoryBubble(msg);
+    }
+    scrollChatBottom();
+  } catch(e) {
+    chatMessagesEl.innerHTML = '<div class="chat-welcome"><h3>&#128172; WebChat</h3><p>Chat with ggcode directly from your browser.</p></div>';
+  }
+}
+
+function appendHistoryBubble(msg) {
+  const div = document.createElement('div');
+  div.className = `chat-msg ${msg.role}`;
+  let html = `<div class="chat-role">${msg.role === 'user' ? 'You' : msg.role === 'assistant' ? 'Assistant' : msg.role}</div>`;
+  if (msg.content) {
+    for (const block of msg.content) {
+      if (block.type === 'text' && block.text) {
+        html += `<div class="chat-text">${renderMarkdown(block.text)}</div>`;
+      } else if (block.type === 'tool_use') {
+        const id = 'hist-' + Math.random().toString(36).slice(2,8);
+        html += `<div class="chat-tool tool_use">
+          <div class="chat-tool-toggle" onclick="document.getElementById('${id}').style.display=document.getElementById('${id}').style.display==='none'?'block':'none'">
+            <span class="chat-tool-name">&#9881; ${esc(block.tool_name||'tool')}</span>
+            <span style="color:var(--text2);font-size:11px;margin-left:6px">click to expand</span>
+          </div>
+          <div id="${id}" class="chat-tool-data" style="display:none">${esc(formatJSON(block.input))}</div>
+        </div>`;
+      } else if (block.type === 'tool_result') {
+        const errorClass = block.is_error ? ' error' : '';
+        const icon = block.is_error ? '&#10060;' : '&#9989;';
+        const id = 'hist-' + Math.random().toString(36).slice(2,8);
+        html += `<div class="chat-tool tool_result${errorClass}">
+          <div class="chat-tool-toggle" onclick="document.getElementById('${id}').style.display=document.getElementById('${id}').style.display==='none'?'block':'none'">
+            <span class="chat-tool-name">${icon} ${esc(block.tool_name||'result')}</span>
+            <span style="color:var(--text2);font-size:11px;margin-left:6px">click to expand</span>
+          </div>
+          <div id="${id}" class="chat-tool-data" style="display:none">${esc(truncate(block.output||'', 2000))}</div>
+        </div>`;
+      } else if (block.type === 'image') {
+        html += `<div style="color:var(--text2);font-size:12px;font-style:italic">&#128247; Image</div>`;
+      }
+    }
+  }
+  div.innerHTML = html;
+  chatMessagesEl.appendChild(div);
 }
 
 function chatConnect() {
@@ -1722,8 +1778,7 @@ function debugLog(tag, ...args) { /* noop for production */ }
 function handleChatMessage(msg) {
   switch (msg.type) {
     case 'user_ack':
-      appendUserBubble(msg.text);
-      // Prepare assistant bubble
+      appendUserBubble(msg.text, msg.image_count, msg.file_names);
       chatTextBuffer = '';
       chatToolCalls = [];
       chatAssistantEl = createAssistantBubble();
@@ -2009,21 +2064,6 @@ function renderAttachments() {
     </div>`;
   }).join('');
 }
-
-// Update handleChatMessage to show attachment info in user bubble
-const _origHandleChatMessage = handleChatMessage;
-handleChatMessage = function(msg) {
-  if (msg.type === 'user_ack') {
-    appendUserBubble(msg.text, msg.image_count, msg.file_names);
-    chatTextBuffer = '';
-    chatToolCalls = [];
-    chatAssistantEl = createAssistantBubble();
-    chatStreaming = true;
-    updateChatButtons(true);
-    return;
-  }
-  _origHandleChatMessage(msg);
-};
 
 // Patch showPage to init chat
 const _origShowPage = showPage;
