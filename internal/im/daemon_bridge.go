@@ -48,6 +48,7 @@ type DaemonBridge struct {
 	followSink           daemon.FollowSink
 	onActivity           func()
 	onRestart            func() // trigger daemon self-restart
+	restartDebug         bool   // set by /restart debug to enable debug logging on next launch
 	eventSubs            []*daemonBridgeSub
 	eventSubMu           sync.RWMutex
 }
@@ -109,6 +110,15 @@ func (b *DaemonBridge) SetRestartHook(fn func()) {
 	b.mu.Lock()
 	b.onRestart = fn
 	b.mu.Unlock()
+}
+
+// ConsumeRestartDebug returns whether /restart debug was requested and resets the flag.
+func (b *DaemonBridge) ConsumeRestartDebug() bool {
+	b.mu.Lock()
+	v := b.restartDebug
+	b.restartDebug = false
+	b.mu.Unlock()
+	return v
 }
 
 // SubmitInboundMessage handles an inbound IM message by submitting it to the agent.
@@ -700,7 +710,15 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 		onRestart := b.onRestart
 		b.mu.Unlock()
 		if onRestart != nil {
-			b.emitter.EmitText("🔄 Restarting daemon...")
+			// /restart debug → enable debug logging on next launch
+			if len(parts) > 1 && strings.ToLower(parts[1]) == "debug" {
+				b.mu.Lock()
+				b.restartDebug = true
+				b.mu.Unlock()
+				b.emitter.EmitText("🔄 Restarting daemon with debug logging (GGCODE_DEBUG=1)...")
+			} else {
+				b.emitter.EmitText("🔄 Restarting daemon...")
+			}
 			go func() {
 				time.Sleep(1 * time.Second)
 				onRestart()
@@ -731,7 +749,7 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 			"/muteim <name> - Mute a specific adapter\n" +
 			"/muteall - Mute all adapters except the one you're using\n" +
 			"/muteself - Mute THIS adapter (⚠️ you'll stop receiving replies; use /restart from another adapter to recover)\n" +
-			"/restart - Restart daemon (unmutes all adapters)\n" +
+			"/restart [debug] - Restart daemon (unmutes all adapters; add 'debug' to enable GGCODE_DEBUG=1)\n" +
 			"/help - Show this help")
 		return nil
 

@@ -320,6 +320,7 @@ func (a *feishuAdapter) runSingleWSConnection(ctx context.Context, domain string
 
 		headers := larkws.Headers(frame.Headers)
 		msgType := headers.GetString("type")
+		debug.Log("feishu", "adapter=%s WS frame: type=%s payload_len=%d", a.name, msgType, len(frame.Payload))
 
 		switch larkws.MessageType(msgType) {
 		case larkws.MessageTypeEvent:
