@@ -180,3 +180,9 @@ type updateCheckTickMsg struct{}
 type webchatUserMsg struct {
 	Text string
 }
+
+// webuiReadyMsg is sent when the webui HTTP server is ready. The TUI
+// displays the URL as a system message in the chat area.
+type webuiReadyMsg struct {
+	Addr string
+}

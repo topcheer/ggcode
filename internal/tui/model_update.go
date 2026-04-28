@@ -694,6 +694,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.queuePendingSubmission(text)
 		return m, nil
 
+	case webuiReadyMsg:
+		// Display webui URL as a subtle system message in the chat area
+		if msg.Addr != "" {
+			m.chatWriteSystem(nextSystemID(), "⬡ WebUI: http://"+msg.Addr)
+			m.chatListScrollToBottom()
+		}
+		return m, nil
+
 	case shellCommandStreamMsg:
 		if msg.RunID != m.activeShellRunID || m.runCanceled || !m.loading {
 			return m, nil

@@ -47,6 +47,7 @@ type REPL struct {
 	commandMgr          *commands.Manager
 	imManager           *im.Manager
 	projectMemoryLoader func() (string, []string, error)
+	webuiAddr           string // webui listen address, displayed after TUI ready
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -130,6 +131,13 @@ func (r *REPL) InjectWebchatMessage(text string) {
 	if r.program != nil {
 		r.program.Send(webchatUserMsg{Text: text})
 	}
+}
+
+// SetWebUIReadyAddr stores the webui address to be displayed in the TUI
+// after startup. The actual program.Send happens in the startup goroutine
+// alongside logoMsg to ensure the TUI is ready.
+func (r *REPL) SetWebUIReadyAddr(addr string) {
+	r.webuiAddr = addr
 }
 
 // SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt
@@ -547,6 +555,9 @@ func (r *REPL) Run() error {
 		time.Sleep(100 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
+		if r.webuiAddr != "" {
+			r.program.Send(webuiReadyMsg{Addr: r.webuiAddr})
+		}
 		if r.projectMemoryLoader != nil {
 			loader := r.projectMemoryLoader
 			safego.Go("tui.repl.projectMemory", func() {

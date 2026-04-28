@@ -654,10 +654,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	actualAddr, webuiErr := webuiSrv.Start("127.0.0.1:0")
 	if webuiErr != nil {
-		fmt.Fprintf(os.Stderr, "webui: %v (continuing without webui)\n", webuiErr)
+		// Silently continue — webui is optional
+		debug.Log("root", "webui failed to start: %v", webuiErr)
 	} else {
 		defer webuiSrv.Close()
-		fmt.Fprintf(os.Stderr, "\x1b[34m⬡ WebUI:\x1b[0m \x1b[36mhttp://%s\x1b[0m\n", actualAddr)
+		// Schedule the URL display for after TUI is ready (see repl startup goroutine)
+		repl.SetWebUIReadyAddr(actualAddr)
 	}
 
 	if resumeID != "" {
