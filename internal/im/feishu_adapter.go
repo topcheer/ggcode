@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
+	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -185,6 +187,11 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 			return nil
 		})
 
+	domain := lark.FeishuBaseUrl
+	if a.domain == "lark" {
+		domain = "https://open.larksuite.com"
+	}
+
 	opts := []larkws.ClientOption{
 		larkws.WithEventHandler(eventHandler),
 		larkws.WithLogger(&feishuSilentLogger{}),
@@ -205,6 +212,14 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 		}
 	})
 
+	// Start a secondary raw WS connection for card action callbacks.
+	// The SDK's WS client silently drops MessageTypeCard frames (see
+	// handleDataFrame → case MessageTypeCard: return). We maintain our
+	// own connection that only handles card callbacks.
+	safego.Go("im.feishu.wsCard", func() {
+		a.runCardWebSocket(ctx, domain)
+	})
+
 	select {
 	case <-ctx.Done():
 		debug.Log("feishu", "adapter=%s context cancelled", a.name)
@@ -215,6 +230,137 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 			debug.Log("feishu", "adapter=%s websocket error: %v", a.name, err)
 		}
 	}
+}
+
+// runCardWebSocket maintains a dedicated WebSocket connection for receiving
+// card action callbacks (button clicks). The Feishu SDK's built-in WS client
+// discards MessageTypeCard frames, so we establish a parallel connection that
+// only processes card events. Both connections serve the same app; Feishu
+// broadcasts events to all active connections for the same device.
+func (a *feishuAdapter) runCardWebSocket(ctx context.Context, domain string) {
+	// Get WS endpoint URL
+	body := map[string]string{
+		"AppID":     a.appID,
+		"AppSecret": a.appSecret,
+	}
+	bs, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, domain+"/callback/ws/endpoint", bytes.NewReader(bs))
+	if err != nil {
+		debug.Log("feishu", "adapter=%s card-ws endpoint request error: %v", a.name, err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		debug.Log("feishu", "adapter=%s card-ws endpoint error: %v", a.name, err)
+		return
+	}
+	defer resp.Body.Close()
+	var endpointResp struct {
+		Code int `json:"code"`
+		Data *struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&endpointResp); err != nil || endpointResp.Data == nil || endpointResp.Data.URL == "" {
+		debug.Log("feishu", "adapter=%s card-ws no endpoint URL: %v", a.name, err)
+		return
+	}
+	wsURL := endpointResp.Data.URL
+
+	// Connect
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		debug.Log("feishu", "adapter=%s card-ws dial error: %v", a.name, err)
+		return
+	}
+	defer conn.Close()
+	debug.Log("feishu", "adapter=%s card-ws connected", a.name)
+
+	// Ping loop
+	safego.Go("im.feishu.cardWsPing", func() {
+		ticker := time.NewTicker(90 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+
+	// Read loop
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		mt, msg, err := conn.ReadMessage()
+		if err != nil {
+			debug.Log("feishu", "adapter=%s card-ws read error: %v", a.name, err)
+			return
+		}
+		if mt != websocket.BinaryMessage {
+			continue
+		}
+		// Parse protobuf frame
+		var frame larkws.Frame
+		if err := frame.Unmarshal(msg); err != nil {
+			continue
+		}
+		headers := larkws.Headers(frame.Headers)
+		msgType := headers.GetString("type")
+		if msgType != string(larkws.MessageTypeCard) {
+			continue // Only process card messages
+		}
+		// Parse card action payload
+		a.handleCardActionPayload(ctx, frame.Payload)
+	}
+}
+
+// handleCardActionPayload processes a raw card action callback payload.
+func (a *feishuAdapter) handleCardActionPayload(ctx context.Context, payload []byte) {
+	if a.manager == nil || len(payload) == 0 {
+		return
+	}
+	var cardAction struct {
+		OpenID        string `json:"open_id"`
+		OpenMessageID string `json:"open_message_id"`
+		OpenChatID    string `json:"open_chat_id"`
+		Action        *struct {
+			Value map[string]any `json:"value"`
+			Tag   string         `json:"tag"`
+		} `json:"action"`
+	}
+	if err := json.Unmarshal(payload, &cardAction); err != nil {
+		debug.Log("feishu", "adapter=%s card action parse error: %v", a.name, err)
+		return
+	}
+	if cardAction.Action == nil || cardAction.Action.Value == nil {
+		return
+	}
+	choice, _ := cardAction.Action.Value["choice"].(string)
+	if choice == "" {
+		return
+	}
+	a.manager.HandleInteractiveCallback(InteractiveCallback{
+		MessageID: cardAction.OpenMessageID,
+		Values:    []string{choice},
+		Adapter:   a.name,
+		Envelope: Envelope{
+			Adapter:    a.name,
+			Platform:   PlatformFeishu,
+			ChannelID:  cardAction.OpenChatID,
+			SenderID:   cardAction.OpenID,
+			MessageID:  cardAction.OpenMessageID,
+			ReceivedAt: time.Now(),
+		},
+	})
 }
 
 func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) {
@@ -1413,20 +1559,15 @@ func (l *feishuSilentLogger) Error(_ context.Context, args ...interface{}) {
 }
 
 // SendInteractive implements InteractiveSender using Feishu Card buttons.
-// Only available in webhook mode (webhookPort > 0) because the Feishu SDK's
-// WebSocket mode does not support card action callbacks (WithCardHandler is
-// commented out in the SDK). In WS mode, SendInteractive returns an error and
-// the caller falls back to plain text.
+// Works in both WebSocket and webhook modes. In WS mode, card callbacks
+// are received via a parallel WS connection (runCardWebSocket) since the
+// SDK's primary WS client silently drops MessageTypeCard frames.
 func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
 	a.mu.RLock()
 	connected := a.connected
-	webhookMode := a.webhookPort > 0
 	a.mu.RUnlock()
 	if !connected {
 		return "", fmt.Errorf("Feishu bot %q is not online", a.name)
-	}
-	if !webhookMode {
-		return "", fmt.Errorf("Feishu interactive buttons require webhook mode (webhook_port)")
 	}
 
 	chatID := strings.TrimSpace(binding.ChannelID)
