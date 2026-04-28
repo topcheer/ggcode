@@ -303,7 +303,7 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 	waitReply:
 		// Block until the user replies via IM (text or button callback)
 		pending := &pendingAskUser{
-			request:  req,
+			request:  singleReq, // use single-question request for correct answer mapping
 			response: make(chan toolpkg.AskUserResponse, 1),
 		}
 		b.mu.Lock()
