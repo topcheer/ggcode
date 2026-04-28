@@ -202,6 +202,11 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 				if d != nil {
 					a.handleMessage(ctx, d)
 				}
+			} else if t == "INTERACTION_CREATE" {
+				d, _ := payload["d"].(map[string]any)
+				if d != nil {
+					a.handleInteraction(ctx, d)
+				}
 			}
 
 		case discordOpReconnect:
@@ -822,4 +827,144 @@ func resolveDiscordSTTConfig(global config.IMSTTConfig, extra map[string]interfa
 		return nil
 	}
 	return &cfg
+}
+
+// SendInteractive implements InteractiveSender using Discord message components.
+func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
+	a.mu.RLock()
+	connected := a.connected
+	a.mu.RUnlock()
+	if !connected {
+		return "", fmt.Errorf("Discord bot %q is not online", a.name)
+	}
+
+	channelID := strings.TrimSpace(binding.ChannelID)
+	if channelID == "" {
+		return "", fmt.Errorf("Discord channel is not configured")
+	}
+
+	// Build action row with buttons
+	var buttons []map[string]any
+	for _, btn := range msg.Buttons {
+		style := 2 // Secondary (default)
+		switch btn.Style {
+		case "primary":
+			style = 1 // Primary (blurple)
+		case "danger":
+			style = 4 // Danger (red)
+		}
+		buttons = append(buttons, map[string]any{
+			"type":      2,
+			"style":     style,
+			"label":     btn.Label,
+			"custom_id": btn.Value,
+		})
+	}
+	if msg.MultiSelect {
+		buttons = append(buttons, map[string]any{
+			"type":      2,
+			"style":     3, // Success (green)
+			"label":     "✅ Done",
+			"custom_id": "__done__",
+		})
+	}
+
+	url := a.apiBase + "/channels/" + channelID + "/messages"
+	body := map[string]any{
+		"content": msg.Text,
+		"components": []map[string]any{
+			{
+				"type":       1, // ActionRow
+				"components": buttons,
+			},
+		},
+	}
+	bodyBytes, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bot "+a.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if id, ok := result["id"].(string); ok {
+		return id, nil
+	}
+	return "", nil
+}
+
+// handleInteraction processes Discord INTERACTION_CREATE events (button clicks).
+func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any) {
+	// Acknowledge the interaction (required by Discord)
+	interactionID, _ := d["id"].(string)
+	interactionToken, _ := d["token"].(string)
+	if interactionID == "" || interactionToken == "" {
+		return
+	}
+
+	// Respond with a deferred update (no visible change to the message)
+	go func() {
+		url := fmt.Sprintf("%s/interactions/%s/%s/callback", a.apiBase, interactionID, interactionToken)
+		body := map[string]any{"type": 6} // UPDATE_MESSAGE (deferred)
+		bodyBytes, _ := json.Marshal(body)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(bodyBytes))
+		req.Header.Set("Authorization", "Bot "+a.token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := a.httpClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
+
+	// Extract button click data
+	data, _ := d["data"].(map[string]any)
+	if data == nil {
+		return
+	}
+	customID, _ := data["custom_id"].(string)
+	if customID == "" {
+		return
+	}
+
+	// Extract sender
+	member, _ := d["member"].(map[string]any)
+	senderID, _ := member["user"].(map[string]any)
+	senderIDStr := ""
+	senderName := ""
+	if senderID != nil {
+		senderIDStr, _ = senderID["id"].(string)
+		senderName, _ = senderID["username"].(string)
+	}
+
+	channelID, _ := d["channel_id"].(string)
+	messageID, _ := d["message"].(map[string]any)
+	messageIDStr := ""
+	if messageID != nil {
+		messageIDStr, _ = messageID["id"].(string)
+	}
+
+	if a.manager != nil {
+		a.manager.HandleInteractiveCallback(InteractiveCallback{
+			MessageID: messageIDStr,
+			Values:    []string{customID},
+			Adapter:   a.name,
+			Envelope: Envelope{
+				Adapter:    a.name,
+				Platform:   PlatformDiscord,
+				ChannelID:  channelID,
+				SenderID:   senderIDStr,
+				SenderName: senderName,
+				MessageID:  messageIDStr,
+				ReceivedAt: time.Now(),
+			},
+		})
+	}
 }

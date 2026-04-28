@@ -211,6 +211,12 @@ func (a *tgAdapter) pollUpdates(ctx context.Context) ([]map[string]any, error) {
 }
 
 func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
+	// Handle callback queries (button clicks) first
+	if cb, ok := update["callback_query"].(map[string]any); ok {
+		a.handleCallbackQuery(ctx, cb)
+		return
+	}
+
 	msg, ok := update["message"].(map[string]any)
 	if !ok {
 		return
@@ -828,6 +834,67 @@ func (a *tgAdapter) recordPassiveReply(binding ChannelBinding, replyTo string) {
 	}
 }
 
+// handleCallbackQuery processes Telegram inline keyboard button callbacks.
+func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) {
+	cbID, _ := cb["id"].(string)
+	data, _ := cb["data"].(string)
+	if cbID == "" {
+		return
+	}
+
+	// Answer the callback to remove the loading spinner
+	go func() {
+		path := fmt.Sprintf("/bot%s/answerCallbackQuery", a.botToken)
+		a.apiRequest(context.Background(), http.MethodPost, path, map[string]any{
+			"callback_query_id": cbID,
+			"text":              "✓",
+		}, nil)
+	}()
+
+	if data == "" || a.manager == nil {
+		return
+	}
+
+	// Extract sender info
+	from, _ := cb["from"].(map[string]any)
+	senderID := ""
+	senderName := ""
+	if from != nil {
+		senderID = jsonInt64Str(from["id"])
+		firstName, _ := from["first_name"].(string)
+		lastName, _ := from["last_name"].(string)
+		senderName = strings.TrimSpace(firstName + " " + lastName)
+	}
+
+	msg, _ := cb["message"].(map[string]any)
+	messageID := ""
+	if msg != nil {
+		messageID = jsonInt64Str(msg["message_id"])
+	}
+
+	chat, _ := msg["chat"].(map[string]any)
+	if chat == nil {
+		// Try cb.message
+		return
+	}
+	channelID := jsonInt64Str(chat["id"])
+
+	a.manager.HandleInteractiveCallback(InteractiveCallback{
+		MessageID: messageID,
+		Values:    []string{data},
+		Adapter:   a.name,
+		Envelope: Envelope{
+			Adapter:    a.name,
+			Platform:   PlatformTelegram,
+			ChannelID:  channelID,
+			SenderID:   senderID,
+			SenderName: senderName,
+			MessageID:  messageID,
+			ReceivedAt: time.Now(),
+		},
+	})
+}
+
 func (a *tgAdapter) seenUpdate(updateID int) bool {
 	if updateID <= 0 {
 		return false
@@ -1024,4 +1091,77 @@ func tgPayloadKeys(value any) string {
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, ",")
+}
+
+// SendInteractive implements InteractiveSender.
+// Sends a message with Telegram InlineKeyboard buttons.
+func (a *tgAdapter) SendInteractive(ctx context.Context, binding ChannelBinding, msg InteractiveMessage) (string, error) {
+	a.mu.RLock()
+	connected := a.connected
+	a.mu.RUnlock()
+	if !connected {
+		return "", fmt.Errorf("Telegram bot %q is not online", a.name)
+	}
+
+	chatID := strings.TrimSpace(binding.ChannelID)
+	if chatID == "" {
+		return "", fmt.Errorf("Telegram channel is not configured")
+	}
+
+	// Build InlineKeyboard buttons
+	var rows [][]map[string]any
+	for _, btn := range msg.Buttons {
+		button := map[string]any{
+			"text":          btn.Label,
+			"callback_data": btn.Value,
+		}
+		rows = append(rows, []map[string]any{button})
+	}
+	// For multi-select, add a "Done" button
+	if msg.MultiSelect {
+		rows = append(rows, []map[string]any{
+			{"text": "✅ Done", "callback_data": "__done__"},
+		})
+	}
+
+	// Convert markdown to Telegram format
+	messages, _ := a.formatMessages(msg.Text)
+	textContent := ""
+	if len(messages) > 0 {
+		textContent = messages[0].Text
+	}
+	if textContent == "" {
+		textContent = msg.Text
+	}
+
+	path := fmt.Sprintf(tgSendMessagePath, a.botToken)
+	body := map[string]any{
+		"chat_id": chatID,
+		"text":    textContent,
+		"reply_markup": map[string]any{
+			"inline_keyboard": rows,
+		},
+	}
+	if a.parseMode != "" {
+		body["parse_mode"] = a.parseMode
+	}
+
+	resp, err := a.apiRequest(ctx, http.MethodPost, path, body, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var respData map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return "", nil
+	}
+
+	// Extract message_id from response
+	result, _ := respData["result"].(map[string]any)
+	if result != nil {
+		if msgID := jsonInt64Str(result["message_id"]); msgID != "" {
+			return msgID, nil
+		}
+	}
+	return "", nil
 }
