@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1158,6 +1159,123 @@ func TestEmitAskUserInteractive_OnlyNonInteractiveAdapters(t *testing.T) {
 	// No interactive adapters → msgIDs empty, falls back to EmitAskUser (plain text)
 	if len(msgIDs) != 0 {
 		t.Errorf("expected no msgIDs, got %v", msgIDs)
+	}
+}
+
+func TestEmitAskUserInteractive_NilEmitter(t *testing.T) {
+	var emitter *IMEmitter
+	msgIDs := emitter.EmitAskUserInteractive("Pick", toolpkg.AskUserQuestion{
+		ID:    "q1",
+		Title: "Choose",
+		Kind:  toolpkg.AskUserKindSingle,
+		Choices: []toolpkg.AskUserChoice{
+			{ID: "a", Label: "A"},
+		},
+	}, "fallback")
+	if msgIDs != nil {
+		t.Errorf("expected nil, got %v", msgIDs)
+	}
+}
+
+func TestEmitAskUserInteractive_EmptyFallback(t *testing.T) {
+	mgr := NewManager()
+
+	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = tg
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
+
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	emitter := NewIMEmitter(mgr, "en", "/ws")
+
+	// Empty fallback text — QQ should NOT receive anything
+	msgIDs := emitter.EmitAskUserInteractive("Pick", toolpkg.AskUserQuestion{
+		ID:    "q1",
+		Title: "Choose",
+		Kind:  toolpkg.AskUserKindSingle,
+		Choices: []toolpkg.AskUserChoice{
+			{ID: "a", Label: "A"},
+		},
+	}, "")
+
+	if len(msgIDs) != 1 {
+		t.Errorf("expected 1 msgID, got %v", msgIDs)
+	}
+	if qq.eventCount() != 0 {
+		t.Errorf("qq should receive nothing with empty fallback, got %d events", qq.eventCount())
+	}
+}
+
+func TestEmitAskUserInteractive_MultiSelect(t *testing.T) {
+	mgr := NewManager()
+
+	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = tg
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
+
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	emitter := NewIMEmitter(mgr, "en", "/ws")
+
+	emitter.EmitAskUserInteractive("Pick", toolpkg.AskUserQuestion{
+		ID:    "q1",
+		Title: "Choose multiple",
+		Kind:  toolpkg.AskUserKindMulti,
+		Choices: []toolpkg.AskUserChoice{
+			{ID: "a", Label: "A"},
+			{ID: "b", Label: "B"},
+			{ID: "c", Label: "C"},
+		},
+	}, "pick several")
+
+	last := tg.lastInteractive()
+	if last == nil {
+		t.Fatal("expected interactive message")
+	}
+	if !last.MultiSelect {
+		t.Error("expected MultiSelect=true")
+	}
+	if !strings.Contains(last.Text, "Multi-select") {
+		t.Errorf("card text should mention multi-select: %s", last.Text)
+	}
+	// Non-binary → all buttons should be "default" style
+	for _, btn := range last.Buttons {
+		if btn.Style != "default" {
+			t.Errorf("non-binary multi-select button should be default, got %s", btn.Style)
+		}
+	}
+}
+
+func TestEmitAskUserInteractive_WithPrompt(t *testing.T) {
+	mgr := NewManager()
+
+	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = tg
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
+
+	emitter := NewIMEmitter(mgr, "en", "/ws")
+
+	emitter.EmitAskUserInteractive("Pick", toolpkg.AskUserQuestion{
+		ID:     "q1",
+		Title:  "Choose",
+		Kind:   toolpkg.AskUserKindSingle,
+		Prompt: "Select your preferred option",
+		Choices: []toolpkg.AskUserChoice{
+			{ID: "a", Label: "A"},
+			{ID: "b", Label: "B"},
+		},
+	}, "fallback")
+
+	last := tg.lastInteractive()
+	if last == nil {
+		t.Fatal("expected interactive message")
+	}
+	if !strings.Contains(last.Text, "Select your preferred option") {
+		t.Errorf("card should contain prompt text: %s", last.Text)
 	}
 }
 
