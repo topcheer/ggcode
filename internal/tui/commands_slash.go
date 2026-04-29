@@ -477,7 +477,7 @@ func (m *Model) handleConfigCommand(parts []string) tea.Cmd {
 				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to set API key: %s", err))
 				return nil
 			}
-			if err := m.config.Save(); err != nil {
+			if err := m.saveConfig(); err != nil {
 				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to save config: %s", err))
 				return nil
 			}
@@ -508,7 +508,7 @@ func (m *Model) handleStatusCommand() tea.Cmd {
 }
 
 func (m *Model) reloadActiveProvider() error {
-	if err := m.config.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		return err
 	}
 	if err := m.tryActivateCurrentSelection(); err != nil {
@@ -867,7 +867,7 @@ func (m *Model) handleConfigAddEndpoint(args []string) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to add endpoint: %s", err))
 		return nil
 	}
-	if err := m.config.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to save config: %s", err))
 		return nil
 	}
@@ -904,7 +904,7 @@ func (m *Model) handleConfigRemoveEndpoint(args []string) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to remove endpoint: %s", err))
 		return nil
 	}
-	if err := m.config.Save(); err != nil {
+	if err := m.saveConfig(); err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to save config: %s", err))
 		return nil
 	}

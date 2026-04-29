@@ -164,7 +164,7 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = err.Error()
 			return *m, nil
 		}
-		if err := m.config.Save(); err != nil {
+		if err := m.saveConfig(); err != nil {
 			panel.message = err.Error()
 			return *m, nil
 		}
@@ -214,7 +214,7 @@ func (m *Model) refreshActiveModelList() tea.Cmd {
 			remote: true,
 		}
 		if err := m.config.SetEndpointModels(m.config.Vendor, m.config.Endpoint, result.models); err == nil {
-			result.saveErr = m.config.Save()
+			result.saveErr = m.saveConfig()
 		} else {
 			result.saveErr = err
 		}

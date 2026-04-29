@@ -478,7 +478,7 @@ func (m *Model) ensureTGRuntime(autoEnable bool) error {
 			return fmt.Errorf("%s", m.tgRuntimeStatus())
 		}
 		m.config.IM.Enabled = true
-		if err := m.config.Save(); err != nil {
+		if err := m.saveConfig(); err != nil {
 			return fmt.Errorf("enable IM runtime: %w", err)
 		}
 	}

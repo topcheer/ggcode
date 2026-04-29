@@ -266,7 +266,7 @@ func (m *Model) ensurePCReady() error {
 			return errors.New("config not available")
 		}
 		m.config.IM.Enabled = true
-		if err := m.config.Save(); err != nil {
+		if err := m.saveConfig(); err != nil {
 			return fmt.Errorf("enable IM: %w", err)
 		}
 		bindingsPath, err := im.DefaultBindingsPath()

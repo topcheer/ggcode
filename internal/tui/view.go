@@ -1325,12 +1325,32 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 	if strings.TrimSpace(title) != "" {
 		content = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" "+title) + "\n" + body
 	}
+	// Add scope indicator if any panel is open
+	scopeLine := ""
+	if m.config != nil && m.config.HasInstanceConfigAttached() && m.isAnyPanelOpen() {
+		scopeLabel := m.configSaveScopeLabel()
+		scopeColor := lipgloss.Color("8") // gray for global
+		if m.configSaveScope == "instance" {
+			scopeColor = lipgloss.Color("14") // cyan for instance
+		}
+		scopeLine = "\n" + lipgloss.NewStyle().Foreground(scopeColor).Render(
+			fmt.Sprintf(" Save target: %s  [Ctrl+T toggle]", scopeLabel))
+	}
+	content += scopeLine
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(chromeBorderColor).
 		Padding(0, 1).
 		Width(width).
 		Render(content)
+}
+
+func (m Model) isAnyPanelOpen() bool {
+	return m.modelPanel != nil || m.providerPanel != nil ||
+		m.qqPanel != nil || m.tgPanel != nil || m.pcPanel != nil ||
+		m.discordPanel != nil || m.feishuPanel != nil || m.slackPanel != nil ||
+		m.dingtalkPanel != nil || m.imPanel != nil || m.mcpPanel != nil ||
+		m.impersonatePanel != nil
 }
 
 func (m Model) currentSelection() (string, string, string) {
