@@ -151,6 +151,42 @@ func TestLSP_Go_Diagnostics(t *testing.T) {
 	t.Logf("Diagnostics: %d items", len(diags))
 }
 
+func TestLSP_Go_Diagnostics_Errors(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws := t.TempDir()
+	defer cleanupSessions(t, ws)
+
+	if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module testlsp\n\ngo 1.22\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// File with a deliberate type error
+	code := `package testlsp
+
+func broken() int {
+	return "not an int"
+}
+`
+	f := filepath.Join(ws, "bad.go")
+	if err := os.WriteFile(f, []byte(code), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "mod", "tidy")
+	cmd.Dir = ws
+	_ = cmd.Run() // may fail, that's ok
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	diags, err := Diagnostics(ctx, ws, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Error("expected diagnostics for type error")
+	}
+	t.Logf("Error Diagnostics: %d", len(diags))
+}
+
 func TestLSP_Go_CallHierarchy(t *testing.T) {
 	skipIfNoBinary(t, "gopls")
 	ws, f := createGoWorkspace(t)
