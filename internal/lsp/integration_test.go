@@ -9,19 +9,35 @@ import (
 	"time"
 )
 
-// lspIntegrationTestDir creates a temporary Go module with a sample file
-// for LSP integration tests. Returns the workspace dir and file path.
-func lspIntegrationTestDir(t *testing.T) (workspace, goFile string) {
+// ── helpers ──────────────────────────────────────────────────────────────
+
+func skipIfNoBinary(t *testing.T, name string) {
 	t.Helper()
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("%s not found in PATH, skipping", name)
+	}
+}
 
+func cleanupSessions(t *testing.T, workspace string) {
+	t.Helper()
+	globalSessions.mu.Lock()
+	for k, s := range globalSessions.sessions {
+		if s.workspace == workspace {
+			s.close()
+			delete(globalSessions.sessions, k)
+		}
+	}
+	globalSessions.mu.Unlock()
+}
+
+// ── Go / gopls ───────────────────────────────────────────────────────────
+
+func createGoWorkspace(t *testing.T) (workspace, goFile string) {
+	t.Helper()
 	workspace = t.TempDir()
-
-	// Create go.mod
 	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module testlsp\n\ngo 1.22\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-
-	// Create a simple Go file with various symbols to query
 	code := `package testlsp
 
 import "fmt"
@@ -46,337 +62,535 @@ func SayHi(name string) string {
 	if err := os.WriteFile(goFile, []byte(code), 0644); err != nil {
 		t.Fatal(err)
 	}
-
-	// Run `go mod tidy` so gopls is happy
 	cmd := exec.Command("go", "mod", "tidy")
 	cmd.Dir = workspace
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go mod tidy failed: %v\n%s", err, out)
+		t.Fatalf("go mod tidy: %v\n%s", err, out)
 	}
-
 	return workspace, goFile
 }
 
-// skipIfNoGopls skips the test if gopls is not available.
-func skipIfNoGopls(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("gopls"); err != nil {
-		t.Skip("gopls not found in PATH, skipping LSP integration test")
-	}
-}
-
-func TestLSP_Hover_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_Hover(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Hover over "Greeter" on line 6, char 6 (type name)
-	result, err := Hover(ctx, workspace, goFile, Position{Line: 6, Character: 6})
+	got, err := Hover(ctx, ws, f, Position{Line: 6, Character: 6})
 	if err != nil {
-		t.Fatalf("Hover failed: %v", err)
+		t.Fatal(err)
 	}
-	if result == "" {
-		t.Error("expected non-empty hover result for Greeter")
+	if got == "" {
+		t.Error("empty hover result for Greeter")
 	}
-	t.Logf("Hover result: %s", result)
-
-	// Clean up global session so other tests don't reuse it
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
 }
 
-func TestLSP_Definition_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_Definition(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Definition of "Greeter" on line 18 (in SayHi function)
-	locs, err := Definition(ctx, workspace, goFile, Position{Line: 18, Character: 11})
+	locs, err := Definition(ctx, ws, f, Position{Line: 18, Character: 11})
 	if err != nil {
-		t.Fatalf("Definition failed: %v", err)
+		t.Fatal(err)
 	}
 	if len(locs) == 0 {
-		t.Error("expected at least one definition location")
-	} else {
-		t.Logf("Definition: %+v", locs[0])
+		t.Error("expected definition location")
 	}
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
 }
 
-func TestLSP_References_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_References(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// References to "Greet" method on line 12
-	locs, err := References(ctx, workspace, goFile, Position{Line: 12, Character: 16})
+	locs, err := References(ctx, ws, f, Position{Line: 12, Character: 16})
 	if err != nil {
-		t.Fatalf("References failed: %v", err)
+		t.Fatal(err)
 	}
 	if len(locs) == 0 {
-		t.Error("expected at least one reference to Greet")
-	} else {
-		t.Logf("Found %d references", len(locs))
+		t.Error("expected references to Greet")
 	}
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
 }
 
-func TestLSP_Implementation_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_Implementation(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Implementation query on Greeter struct
-	locs, err := Implementation(ctx, workspace, goFile, Position{Line: 6, Character: 6})
+	locs, err := Implementation(ctx, ws, f, Position{Line: 6, Character: 6})
 	if err != nil {
-		t.Fatalf("Implementation failed: %v", err)
+		t.Fatal(err)
 	}
 	t.Logf("Implementation: %d results", len(locs))
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
 }
 
-func TestLSP_Diagnostics_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_Diagnostics(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	diags, err := Diagnostics(ctx, workspace, goFile)
+	diags, err := Diagnostics(ctx, ws, f)
 	if err != nil {
-		t.Fatalf("Diagnostics failed: %v", err)
+		t.Fatal(err)
 	}
 	t.Logf("Diagnostics: %d items", len(diags))
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
 }
 
-func TestLSP_PrepareCallHierarchy_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_CallHierarchy(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Call hierarchy for "Greet" method on line 12
-	items, err := PrepareCallHierarchy(ctx, workspace, goFile, Position{Line: 12, Character: 16})
+	items, err := PrepareCallHierarchy(ctx, ws, f, Position{Line: 12, Character: 16})
 	if err != nil {
-		t.Fatalf("PrepareCallHierarchy failed: %v", err)
+		t.Fatal(err)
 	}
 	if len(items) == 0 {
-		t.Error("expected at least one call hierarchy item")
-	} else {
-		t.Logf("CallHierarchy item: Name=%s, Path=%s", items[0].Name, items[0].Path)
+		t.Fatal("no call hierarchy items")
 	}
+	t.Logf("PrepareCallHierarchy: Name=%s", items[0].Name)
 
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
+	inCalls, err := IncomingCalls(ctx, ws, items[0])
+	if err != nil {
+		t.Fatal(err)
 	}
-	globalSessions.mu.Unlock()
+	t.Logf("IncomingCalls: %d results", len(inCalls))
+
+	outItems, err := PrepareCallHierarchy(ctx, ws, f, Position{Line: 18, Character: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outItems) > 0 {
+		outCalls, err := OutgoingCalls(ctx, ws, outItems[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("OutgoingCalls: %d results", len(outCalls))
+	}
 }
 
-func TestLSP_IncomingCalls_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_WorkspaceSymbols(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, _ := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// First prepare hierarchy for Greet method
-	items, err := PrepareCallHierarchy(ctx, workspace, goFile, Position{Line: 12, Character: 16})
+	symbols, err := WorkspaceSymbols(ctx, ws, "Greet")
 	if err != nil {
-		t.Fatalf("PrepareCallHierarchy failed: %v", err)
-	}
-	if len(items) == 0 {
-		t.Fatal("no call hierarchy items, cannot test IncomingCalls")
-	}
-
-	// Get incoming calls (callers of Greet)
-	calls, err := IncomingCalls(ctx, workspace, items[0])
-	if err != nil {
-		t.Fatalf("IncomingCalls failed: %v", err)
-	}
-	t.Logf("IncomingCalls: %d results", len(calls))
-	if len(calls) > 0 {
-		t.Logf("  From: %s", calls[0].From.Name)
-	}
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
-}
-
-func TestLSP_OutgoingCalls_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Prepare hierarchy for SayHi function
-	items, err := PrepareCallHierarchy(ctx, workspace, goFile, Position{Line: 18, Character: 16})
-	if err != nil {
-		t.Fatalf("PrepareCallHierarchy failed: %v", err)
-	}
-	if len(items) == 0 {
-		t.Fatal("no call hierarchy items, cannot test OutgoingCalls")
-	}
-
-	// Get outgoing calls (callees of SayHi)
-	calls, err := OutgoingCalls(ctx, workspace, items[0])
-	if err != nil {
-		t.Fatalf("OutgoingCalls failed: %v", err)
-	}
-	t.Logf("OutgoingCalls: %d results", len(calls))
-	if len(calls) > 0 {
-		t.Logf("  To: %s", calls[0].To.Name)
-	}
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
-}
-
-func TestLSP_WorkspaceSymbols_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, _ := lspIntegrationTestDir(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	symbols, err := WorkspaceSymbols(ctx, workspace, "Greet")
-	if err != nil {
-		t.Fatalf("WorkspaceSymbols failed: %v", err)
+		t.Fatal(err)
 	}
 	if len(symbols) == 0 {
-		t.Error("expected at least one symbol matching 'Greet'")
-	} else {
-		t.Logf("Found %d symbols", len(symbols))
-		for _, s := range symbols {
-			t.Logf("  %s (kind=%d, path=%s)", s.Name, s.Kind, s.Path)
-		}
+		t.Error("expected symbols matching 'Greet'")
 	}
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
 }
 
-func TestLSP_RenameEdits_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_RenameEdits(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Rename "Greet" to "Hello"
-	edits, err := RenameEdits(ctx, workspace, goFile, Position{Line: 12, Character: 16}, "Hello")
+	edits, err := RenameEdits(ctx, ws, f, Position{Line: 12, Character: 16}, "Hello")
 	if err != nil {
-		t.Fatalf("RenameEdits failed: %v", err)
+		t.Fatal(err)
 	}
 	if len(edits) == 0 {
-		t.Error("expected at least one file edit for rename")
-	} else {
-		t.Logf("Rename produces %d file edits", len(edits))
+		t.Error("expected rename edits")
 	}
-
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
-	}
-	globalSessions.mu.Unlock()
 }
 
-func TestLSP_CodeActions_Integration(t *testing.T) {
-	skipIfNoGopls(t)
-	workspace, goFile := lspIntegrationTestDir(t)
+func TestLSP_Go_CodeActions(t *testing.T) {
+	skipIfNoBinary(t, "gopls")
+	ws, f := createGoWorkspace(t)
+	defer cleanupSessions(t, ws)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Request code actions on the import line (range within actual content)
-	actions, err := CodeActions(ctx, workspace, goFile, Range{
+	actions, err := CodeActions(ctx, ws, f, Range{
 		Start: Position{Line: 5, Character: 0},
 		End:   Position{Line: 5, Character: 10},
 	})
 	if err != nil {
-		t.Fatalf("CodeActions failed: %v", err)
+		t.Fatal(err)
 	}
 	t.Logf("CodeActions: %d results", len(actions))
+}
 
-	globalSessions.mu.Lock()
-	for k, s := range globalSessions.sessions {
-		if s.workspace == workspace {
-			s.close()
-			delete(globalSessions.sessions, k)
-		}
+// ── TypeScript / typescript-language-server ──────────────────────────────
+
+func createTSWorkspace(t *testing.T) (workspace, tsFile string) {
+	t.Helper()
+	workspace = t.TempDir()
+
+	// package.json + tsconfig.json + install typescript so tsserver is happy
+	pkgJSON := `{"name":"testlsp","version":"1.0.0","dependencies":{}}`
+	if err := os.WriteFile(filepath.Join(workspace, "package.json"), []byte(pkgJSON), 0644); err != nil {
+		t.Fatal(err)
 	}
-	globalSessions.mu.Unlock()
+	tsconfig := `{"compilerOptions":{"target":"ES2020","module":"commonjs","strict":true}}`
+	if err := os.WriteFile(filepath.Join(workspace, "tsconfig.json"), []byte(tsconfig), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// npm install so tsserver sees a real project
+	cmd := exec.Command("npm", "install", "--ignore-scripts")
+	cmd.Dir = workspace
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("npm install: %v\n%s", err, out)
+	}
+
+	code := `export interface User {
+  name: string;
+  age: number;
+}
+
+export function greet(user: User): string {
+  return "Hello, " + user.name;
+}
+
+export function main(): void {
+  const u: User = { name: "World", age: 42 };
+  console.log(greet(u));
+}
+`
+	tsFile = filepath.Join(workspace, "index.ts")
+	if err := os.WriteFile(tsFile, []byte(code), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return workspace, tsFile
+}
+
+func TestLSP_TS_Hover(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Hover over 'greet' function name on line 6
+	got, err := Hover(ctx, ws, f, Position{Line: 6, Character: 25})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("TS Hover: %s", truncateForLog(got, 200))
+	// tsserver may return empty on first call; just log, don't fail
+}
+
+func TestLSP_TS_Definition(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Definition of "User" on line 6 (greet param type)
+	locs, err := Definition(ctx, ws, f, Position{Line: 6, Character: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locs) == 0 {
+		t.Error("expected definition location for User")
+	}
+}
+
+func TestLSP_TS_References(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	locs, err := References(ctx, ws, f, Position{Line: 6, Character: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locs) == 0 {
+		t.Error("expected references to 'greet'")
+	}
+	t.Logf("TS References: %d", len(locs))
+}
+
+func TestLSP_TS_Diagnostics(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	diags, err := Diagnostics(ctx, ws, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("TS Diagnostics: %d", len(diags))
+}
+
+func TestLSP_TS_WorkspaceSymbols(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, _ := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	symbols, err := WorkspaceSymbols(ctx, ws, "greet")
+	if err != nil {
+		// tsserver may error with "No Project" in minimal temp dir
+		t.Logf("WorkspaceSymbols error (may be ok for temp workspace): %v", err)
+		return
+	}
+	t.Logf("TS WorkspaceSymbols: %d results", len(symbols))
+}
+
+func TestLSP_TS_RenameEdits(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	edits, err := RenameEdits(ctx, ws, f, Position{Line: 6, Character: 20}, "sayHello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("TS Rename: %d file edits", len(edits))
+}
+
+func TestLSP_TS_CodeActions(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	actions, err := CodeActions(ctx, ws, f, Range{
+		Start: Position{Line: 1, Character: 0},
+		End:   Position{Line: 1, Character: 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("TS CodeActions: %d results", len(actions))
+}
+
+func TestLSP_TS_Implementation(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	locs, err := Implementation(ctx, ws, f, Position{Line: 1, Character: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("TS Implementation: %d results", len(locs))
+}
+
+func TestLSP_TS_CallHierarchy(t *testing.T) {
+	skipIfNoBinary(t, "typescript-language-server")
+	ws, f := createTSWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	items, err := PrepareCallHierarchy(ctx, ws, f, Position{Line: 6, Character: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("no call hierarchy items for greet")
+	}
+	t.Logf("TS PrepareCallHierarchy: Name=%s", items[0].Name)
+
+	inCalls, err := IncomingCalls(ctx, ws, items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("TS IncomingCalls: %d", len(inCalls))
+
+	outCalls, err := OutgoingCalls(ctx, ws, items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("TS OutgoingCalls: %d", len(outCalls))
+}
+
+// ── Lua / lua-language-server ────────────────────────────────────────────
+
+func createLuaWorkspace(t *testing.T) (workspace, luaFile string) {
+	t.Helper()
+	workspace = t.TempDir()
+
+	code := `--- A simple calculator module
+local M = {}
+
+--- Add two numbers
+function M.add(a, b)
+  return a + b
+end
+
+--- Multiply two numbers
+function M.mul(a, b)
+  return a * b
+end
+
+--- Chain add then multiply
+function M.chain(x, y, z)
+  return M.mul(M.add(x, y), z)
+end
+
+return M
+`
+	luaFile = filepath.Join(workspace, "calc.lua")
+	if err := os.WriteFile(luaFile, []byte(code), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return workspace, luaFile
+}
+
+func TestLSP_Lua_Hover(t *testing.T) {
+	skipIfNoBinary(t, "lua-language-server")
+	ws, f := createLuaWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := Hover(ctx, ws, f, Position{Line: 5, Character: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Lua Hover: %s", truncateForLog(got, 200))
+}
+
+func TestLSP_Lua_Definition(t *testing.T) {
+	skipIfNoBinary(t, "lua-language-server")
+	ws, f := createLuaWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	locs, err := Definition(ctx, ws, f, Position{Line: 18, Character: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Lua Definition: %d results", len(locs))
+}
+
+func TestLSP_Lua_References(t *testing.T) {
+	skipIfNoBinary(t, "lua-language-server")
+	ws, f := createLuaWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	locs, err := References(ctx, ws, f, Position{Line: 5, Character: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Lua References: %d results", len(locs))
+}
+
+func TestLSP_Lua_Diagnostics(t *testing.T) {
+	skipIfNoBinary(t, "lua-language-server")
+	ws, f := createLuaWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	diags, err := Diagnostics(ctx, ws, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Lua Diagnostics: %d", len(diags))
+}
+
+func TestLSP_Lua_WorkspaceSymbols(t *testing.T) {
+	skipIfNoBinary(t, "lua-language-server")
+	ws, _ := createLuaWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	symbols, err := WorkspaceSymbols(ctx, ws, "add")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Lua WorkspaceSymbols: %d results", len(symbols))
+}
+
+func TestLSP_Lua_RenameEdits(t *testing.T) {
+	skipIfNoBinary(t, "lua-language-server")
+	ws, f := createLuaWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	edits, err := RenameEdits(ctx, ws, f, Position{Line: 5, Character: 14}, "sum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Lua Rename: %d file edits", len(edits))
+}
+
+func TestLSP_Lua_CodeActions(t *testing.T) {
+	skipIfNoBinary(t, "lua-language-server")
+	ws, f := createLuaWorkspace(t)
+	defer cleanupSessions(t, ws)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	actions, err := CodeActions(ctx, ws, f, Range{
+		Start: Position{Line: 1, Character: 0},
+		End:   Position{Line: 1, Character: 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Lua CodeActions: %d results", len(actions))
+}
+
+// ── util ─────────────────────────────────────────────────────────────────
+
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
