@@ -373,6 +373,14 @@ func (c *Config) SaveInstance(workspace string) error {
 		return err
 	}
 	debug.Log("config", "saved instance config to %s", path)
+
+	// Migrate any plaintext API keys in the instance config to keys.env.
+	if migrated, migrateErr := MigratePlaintextAPIKeys(path); migrateErr != nil {
+		debug.Log("config", "SaveInstance: migration error: %v", migrateErr)
+	} else if len(migrated) > 0 {
+		debug.Log("config", "SaveInstance: migrated %d plaintext secret(s)", len(migrated))
+	}
+
 	return nil
 }
 
@@ -405,7 +413,9 @@ func (c *Config) InstanceWorkspace() string {
 // SaveScoped persists config changes to either global or instance config.
 // scope: "global" saves to the global config file (default behavior).
 // scope: "instance" saves to the instance config directory.
+// Also sets c.saveScope so that subsequent Save*Preference calls use the same target.
 func (c *Config) SaveScoped(scope string) error {
+	c.saveScope = scope
 	switch scope {
 	case "instance":
 		return c.SaveInstance(c.instanceWS)
