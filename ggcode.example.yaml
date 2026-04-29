@@ -456,7 +456,18 @@ im:
       extra:
         bot_token: ${DISCORD_BOT_TOKEN}
 
-    # Feishu / Lark — uses Feishu WebSocket gateway
+    # Feishu / Lark — uses Feishu SDK WebSocket long connection.
+    #
+    # Prerequisites in Feishu Developer Console (开发者后台):
+    #   1. Under "Events & Callbacks" (事件与回调), ensure the connection mode
+    #      is set to "Long Connection / WebSocket" (长连接).
+    #   2. Under "Events & Callbacks" → "Callback Configuration" (回调配置),
+    #      add the callback: card.action.trigger (卡片回传交互回调).
+    #      NOTE: This is in "Callback Configuration" (回调配置), NOT in
+    #      "Event Subscription" (事件订阅). The card callback and event
+    #      subscription are separate sections.
+    #      Without this step, card buttons will render but clicking them
+    #      will produce error 200340 (card callback not configured).
     feishu:
       enabled: true
       platform: feishu
@@ -495,6 +506,33 @@ tool_permissions:
   git_status: allow
   git_diff: allow
   git_log: allow
+
+# Knight — background auto-evolution agent
+# Knight analyzes sessions, creates/validates skills, generates tests,
+# and maintains project health during idle time.
+# Enabled by default; set enabled: false to disable.
+knight:
+  enabled: true
+  # Trust level: readonly (analyze only), staged (write, user approves), auto (auto-promote)
+  # trust_level: staged
+  # Daily token budget (default 5M tokens; set to 0 for unlimited)
+  # daily_token_budget: 5000000
+  # Idle delay before Knight starts tasks (default 300 seconds)
+  # idle_delay_sec: 300
+  # Quiet hours — no tasks or notifications during these ranges
+  # quiet_hours:
+  #   - "23:00-07:00"
+  # Capabilities — which tasks Knight is allowed to perform
+  # capabilities:
+  #   - skill_creation
+  #   - skill_validation
+  #   - test_generation
+  #   - regression_testing
+  #   - doc_sync
+  # Optional: use a different LLM for Knight tasks
+  # vendor: openai
+  # endpoint: gpt-4o
+  # model: gpt-4o-mini
 
 # MCP servers for extended tool sets
 mcp_servers:

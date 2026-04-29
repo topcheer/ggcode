@@ -42,7 +42,7 @@ type KnightConfig struct {
 // DefaultKnightConfig returns the default Knight configuration.
 func DefaultKnightConfig() KnightConfig {
 	return KnightConfig{
-		Enabled:          false,
+		Enabled:          true,
 		TrustLevel:       "staged",
 		DailyTokenBudget: 5_000_000,
 		Capabilities: []string{
