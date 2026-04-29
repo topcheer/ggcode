@@ -563,8 +563,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if a2aTaskHandler != nil {
 		repl.SetA2AHandler(a2aTaskHandler)
 	}
+	var imMgr *im.Manager
 	{
-		imMgr := im.NewManager()
+		imMgr = im.NewManager()
 		bindingsPath, err := im.DefaultBindingsPath()
 		if err != nil {
 			return fmt.Errorf("resolving IM bindings path: %w", err)
@@ -646,6 +647,59 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Start webui for TUI mode (session browser + webchat)
 	webuiSrv := webui.NewServer(cfg)
 	webuiSrv.SetSessionStore(store, workingDir)
+
+	// Wire MCP status for webui config page
+	webuiSrv.SetMCPStatusFn(func() map[string]webui.MCPRuntimeStatus {
+		snapshot := mcpMgr.Snapshot()
+		m := make(map[string]webui.MCPRuntimeStatus, len(snapshot))
+		for _, info := range snapshot {
+			m[info.Name] = webui.MCPRuntimeStatus{
+				Connected: string(info.Status) == "connected",
+				Pending:   string(info.Status) == "pending",
+				Disabled:  info.Disabled,
+				Error:     info.Error,
+				Tools:     info.ToolNames,
+			}
+		}
+		return m
+	})
+
+	// Wire A2A discover for webui config page
+	webuiSrv.SetA2ADiscoverFn(func() []webui.A2ADiscoveredInstance {
+		if a2aRegistry == nil {
+			return nil
+		}
+		instances, err := a2aRegistry.Discover()
+		if err != nil {
+			return nil
+		}
+		var result []webui.A2ADiscoveredInstance
+		for _, inst := range instances {
+			result = append(result, webui.A2ADiscoveredInstance{
+				ID:        inst.ID,
+				Workspace: inst.Workspace,
+				Endpoint:  inst.Endpoint,
+				Status:    inst.Status,
+				StartedAt: inst.StartedAt,
+			})
+		}
+		return result
+	})
+
+	// Wire IM status for webui config page
+	if imMgr != nil {
+		webuiSrv.SetIMStatusFn(func() []webui.IMRuntimeStatus {
+			snap := imMgr.Snapshot()
+			out := make([]webui.IMRuntimeStatus, 0, len(snap.Adapters))
+			for _, a := range snap.Adapters {
+				out = append(out, webui.IMRuntimeStatus{
+					Adapter: a.Name, Platform: string(a.Platform),
+					Healthy: a.Healthy, Status: a.Status, LastError: a.LastError,
+				})
+			}
+			return out
+		})
+	}
 
 	// Create TUI chat bridge: webchat messages → TUI event loop
 	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})
