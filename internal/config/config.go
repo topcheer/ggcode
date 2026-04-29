@@ -191,6 +191,7 @@ type Config struct {
 	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
 	instancePath   string                    `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
 	instanceWS     string                    `yaml:"-" json:"-"` // workspace path for SaveInstance
+	saveScope      string                    `yaml:"-" json:"-"` // current save scope: "global" or "instance"
 	globalSnap     *Config                   `yaml:"-" json:"-"` // deep copy of global config before instance merge
 	instanceFields map[string]bool           `yaml:"-" json:"-"` // fields that were filled by instance config
 }
@@ -1402,6 +1403,16 @@ func (c *Config) RemoveMCPServer(name string) bool {
 
 // Save persists the config to its configured file path (global config).
 // If an instance config was merged at load time (globalSnap is set), only
+// effectiveFilePath returns the file path that should be used for config I/O.
+// When a saveScope is set to "instance", it returns the instance config path.
+// Otherwise it returns the global config path (c.FilePath).
+func (c *Config) effectiveFilePath(saveScope string) string {
+	if saveScope == "instance" && c.instancePath != "" {
+		return c.instancePath
+	}
+	return c.FilePath
+}
+
 // fields that existed in the global config are written back. Instance-only
 // fields are never leaked into the global file.
 func (c *Config) Save() error {
@@ -1478,41 +1489,64 @@ func (c *Config) marshalGlobalOnly() ([]byte, error) {
 	return yaml.Marshal(currentRaw)
 }
 
-func (c *Config) SaveLanguagePreference(lang string) error {
+// patchConfigFile reads the effective config file (global or instance depending
+// on saveScope), applies a patch function to the raw YAML map, and writes it back.
+// This is the common implementation for Save*Preference methods.
+func (c *Config) patchConfigFile(patch func(raw map[string]interface{})) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	if strings.TrimSpace(c.FilePath) == "" {
+	fp := c.effectiveFilePath(c.saveScope)
+	if strings.TrimSpace(fp) == "" {
 		return fmt.Errorf("config file path is empty")
 	}
-	lang = strings.TrimSpace(lang)
-	if lang == "" {
-		return fmt.Errorf("language must not be empty")
-	}
-	unlock := lockConfigFile(c.FilePath)
+	unlock := lockConfigFile(fp)
 	defer unlock()
 
 	raw := map[string]interface{}{}
-	data, err := os.ReadFile(c.FilePath)
+	data, err := os.ReadFile(fp)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+			return fmt.Errorf("reading config %s: %w", fp, err)
 		}
+		// File doesn't exist yet — start with empty map.
 	} else if len(data) > 0 {
 		if err := yaml.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
+			return fmt.Errorf("parsing config %s: %w", fp, err)
 		}
 	}
-	raw["language"] = lang
+
+	patch(raw)
 
 	updated, err := yaml.Marshal(raw)
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fp), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
+	if err := util.AtomicWriteFile(fp, updated, 0644); err != nil {
+		return err
+	}
+
+	// Migrate plaintext API keys if saving to a real file.
+	if migrated, migrateErr := MigratePlaintextAPIKeys(fp); migrateErr != nil {
+		debug.Log("config", "patchConfigFile: post-save migration error: %v", migrateErr)
+	} else if len(migrated) > 0 {
+		debug.Log("config", "patchConfigFile: migrated %d plaintext secret(s)", len(migrated))
+	}
+
+	return nil
+}
+
+func (c *Config) SaveLanguagePreference(lang string) error {
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return fmt.Errorf("language must not be empty")
+	}
+	if err := c.patchConfigFile(func(raw map[string]interface{}) {
+		raw["language"] = lang
+	}); err != nil {
 		return err
 	}
 	c.Language = lang
@@ -1522,55 +1556,23 @@ func (c *Config) SaveLanguagePreference(lang string) error {
 
 // SaveImpersonation persists impersonation settings to the config file.
 func (c *Config) SaveImpersonation(imp ImpersonationConfig) error {
-	if c == nil {
-		return fmt.Errorf("config is nil")
-	}
-	if strings.TrimSpace(c.FilePath) == "" {
-		return fmt.Errorf("config file path is empty")
-	}
-	unlock := lockConfigFile(c.FilePath)
-	defer unlock()
-
-	raw := map[string]interface{}{}
-	data, err := os.ReadFile(c.FilePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+	return c.patchConfigFile(func(raw map[string]interface{}) {
+		if imp.Preset == "" && imp.CustomVersion == "" && len(imp.CustomHeaders) == 0 {
+			delete(raw, "impersonation")
+		} else {
+			impMap := map[string]interface{}{}
+			if imp.Preset != "" {
+				impMap["preset"] = imp.Preset
+			}
+			if imp.CustomVersion != "" {
+				impMap["custom_version"] = imp.CustomVersion
+			}
+			if len(imp.CustomHeaders) > 0 {
+				impMap["custom_headers"] = imp.CustomHeaders
+			}
+			raw["impersonation"] = impMap
 		}
-	} else if len(data) > 0 {
-		if err := yaml.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
-		}
-	}
-
-	if imp.Preset == "" && imp.CustomVersion == "" && len(imp.CustomHeaders) == 0 {
-		delete(raw, "impersonation")
-	} else {
-		impMap := map[string]interface{}{}
-		if imp.Preset != "" {
-			impMap["preset"] = imp.Preset
-		}
-		if imp.CustomVersion != "" {
-			impMap["custom_version"] = imp.CustomVersion
-		}
-		if len(imp.CustomHeaders) > 0 {
-			impMap["custom_headers"] = imp.CustomHeaders
-		}
-		raw["impersonation"] = impMap
-	}
-
-	updated, err := yaml.Marshal(raw)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
-		return err
-	}
-	c.Impersonation = imp
-	return nil
+	})
 }
 
 func (c *Config) SidebarVisible() bool {
@@ -1581,41 +1583,14 @@ func (c *Config) SidebarVisible() bool {
 }
 
 func (c *Config) SaveSidebarPreference(visible bool) error {
-	if c == nil {
-		return fmt.Errorf("config is nil")
-	}
-	if strings.TrimSpace(c.FilePath) == "" {
-		return fmt.Errorf("config file path is empty")
-	}
-	unlock := lockConfigFile(c.FilePath)
-	defer unlock()
-
-	raw := map[string]interface{}{}
-	data, err := os.ReadFile(c.FilePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
+	if err := c.patchConfigFile(func(raw map[string]interface{}) {
+		uiRaw, _ := raw["ui"].(map[string]interface{})
+		if uiRaw == nil {
+			uiRaw = map[string]interface{}{}
 		}
-	} else if len(data) > 0 {
-		if err := yaml.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
-		}
-	}
-	uiRaw, _ := raw["ui"].(map[string]interface{})
-	if uiRaw == nil {
-		uiRaw = map[string]interface{}{}
-	}
-	uiRaw["sidebar_visible"] = visible
-	raw["ui"] = uiRaw
-
-	updated, err := yaml.Marshal(raw)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
+		uiRaw["sidebar_visible"] = visible
+		raw["ui"] = uiRaw
+	}); err != nil {
 		return err
 	}
 	c.UI.SidebarVisible = boolPtr(visible)
@@ -1624,42 +1599,15 @@ func (c *Config) SaveSidebarPreference(visible bool) error {
 }
 
 func (c *Config) SaveDefaultModePreference(mode string) error {
-	if c == nil {
-		return fmt.Errorf("config is nil")
-	}
-	if strings.TrimSpace(c.FilePath) == "" {
-		return fmt.Errorf("config file path is empty")
-	}
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
 	case "supervised", "plan", "auto", "bypass", "autopilot":
 	default:
 		return fmt.Errorf("default_mode %q must be one of supervised, plan, auto, bypass, autopilot", mode)
 	}
-	unlock := lockConfigFile(c.FilePath)
-	defer unlock()
-
-	raw := map[string]interface{}{}
-	data, err := os.ReadFile(c.FilePath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("reading config %s: %w", c.FilePath, err)
-		}
-	} else if len(data) > 0 {
-		if err := yaml.Unmarshal(data, &raw); err != nil {
-			return fmt.Errorf("parsing config %s: %w", c.FilePath, err)
-		}
-	}
-	raw["default_mode"] = mode
-
-	updated, err := yaml.Marshal(raw)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-	if err := util.AtomicWriteFile(c.FilePath, updated, 0644); err != nil {
+	if err := c.patchConfigFile(func(raw map[string]interface{}) {
+		raw["default_mode"] = mode
+	}); err != nil {
 		return err
 	}
 	c.DefaultMode = mode
@@ -1704,7 +1652,7 @@ func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
 		adapter.Targets = append(adapter.Targets, target)
 	}
 	c.IM.Adapters[adapterName] = adapter
-	return c.Save()
+	return c.SaveScoped(c.saveScope)
 }
 
 func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
@@ -1726,7 +1674,7 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 		return fmt.Errorf("IM adapter %q already exists", name)
 	}
 	c.IM.Adapters[name] = adapter
-	return c.Save()
+	return c.SaveScoped(c.saveScope)
 }
 
 // RemoveIMAdapter removes an IM adapter from the configuration.
@@ -1745,7 +1693,7 @@ func (c *Config) RemoveIMAdapter(name string) error {
 		return fmt.Errorf("IM adapter %q not found", name)
 	}
 	delete(c.IM.Adapters, name)
-	return c.Save()
+	return c.SaveScoped(c.saveScope)
 }
 
 // SetIMAdapterEnabled toggles the enabled state of an IM adapter.
@@ -1763,7 +1711,7 @@ func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
 	}
 	adapter.Enabled = enabled
 	c.IM.Adapters[name] = adapter
-	return c.Save()
+	return c.SaveScoped(c.saveScope)
 }
 
 // SetIMAdapterExtra sets a single key in the adapter's Extra map.
@@ -1788,7 +1736,7 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	}
 	adapter.Extra[key] = value
 	c.IM.Adapters[name] = adapter
-	return c.Save()
+	return c.SaveScoped(c.saveScope)
 }
 
 func boolPtr(v bool) *bool {

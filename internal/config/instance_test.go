@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -1138,5 +1139,175 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 	// Second call should return false (already migrated)
 	if MigrateA2AYaml(workspace) {
 		t.Error("second MigrateA2AYaml call should return false")
+	}
+}
+
+// --- Coverage: patchConfigFile & effectiveFilePath ---
+
+func TestEffectiveFilePath_Global(t *testing.T) {
+	cfg := &Config{FilePath: "/home/user/.ggcode/ggcode.yaml"}
+	if cfg.effectiveFilePath("global") != "/home/user/.ggcode/ggcode.yaml" {
+		t.Error("effectiveFilePath should return FilePath for global scope")
+	}
+	if cfg.effectiveFilePath("") != "/home/user/.ggcode/ggcode.yaml" {
+		t.Error("effectiveFilePath should default to FilePath")
+	}
+}
+
+func TestEffectiveFilePath_Instance(t *testing.T) {
+	cfg := &Config{
+		FilePath:     "/home/user/.ggcode/ggcode.yaml",
+		instancePath: "/home/user/.ggcode/instances/abc123/ggcode.yaml",
+	}
+	if cfg.effectiveFilePath("instance") != "/home/user/.ggcode/instances/abc123/ggcode.yaml" {
+		t.Error("effectiveFilePath should return instancePath for instance scope")
+	}
+}
+
+func TestEffectiveFilePath_InstanceFallback(t *testing.T) {
+	cfg := &Config{FilePath: "/home/user/.ggcode/ggcode.yaml"}
+	// instancePath is empty → fallback to FilePath
+	if cfg.effectiveFilePath("instance") != "/home/user/.ggcode/ggcode.yaml" {
+		t.Error("effectiveFilePath should fallback to FilePath when instancePath is empty")
+	}
+}
+
+func TestPatchConfigFile_Global(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	cfg, _ := Load(globalPath)
+	err := cfg.patchConfigFile(func(raw map[string]interface{}) {
+		raw["language"] = "zh-CN"
+	})
+	if err != nil {
+		t.Fatalf("patchConfigFile error: %v", err)
+	}
+
+	// Verify file was patched
+	data, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(data), "zh-CN") {
+		t.Errorf("file should contain zh-CN:\n%s", string(data))
+	}
+}
+
+func TestPatchConfigFile_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	// Create instance config
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("default_mode: auto\n"), 0644)
+
+	err := cfg.patchConfigFile(func(raw map[string]interface{}) {
+		raw["default_mode"] = "supervised"
+	})
+	if err != nil {
+		t.Fatalf("patchConfigFile error: %v", err)
+	}
+
+	// Verify instance file was patched (not global)
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "supervised") {
+		t.Errorf("instance file should contain supervised:\n%s", string(instData))
+	}
+	// Global file should be unchanged
+	globalData, _ := os.ReadFile(globalPath)
+	if strings.Contains(string(globalData), "supervised") {
+		t.Error("global file should NOT contain supervised")
+	}
+}
+
+func TestPatchConfigFile_NewFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	fp := filepath.Join(tmpDir, "newdir", "ggcode.yaml")
+
+	cfg := &Config{FilePath: fp}
+	err := cfg.patchConfigFile(func(raw map[string]interface{}) {
+		raw["language"] = "en"
+	})
+	if err != nil {
+		t.Fatalf("patchConfigFile error for new file: %v", err)
+	}
+
+	data, _ := os.ReadFile(fp)
+	if !strings.Contains(string(data), "language") {
+		t.Errorf("new file should contain language:\n%s", string(data))
+	}
+}
+
+func TestSaveLanguagePreference_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	// Create instance config
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("default_mode: auto\n"), 0644)
+
+	if err := cfg.SaveLanguagePreference("zh-TW"); err != nil {
+		t.Fatalf("SaveLanguagePreference error: %v", err)
+	}
+
+	// Language should be in instance config
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "zh-TW") {
+		t.Errorf("instance config should contain zh-TW:\n%s", string(instData))
+	}
+	// Global should be unchanged
+	globalData, _ := os.ReadFile(globalPath)
+	if strings.Contains(string(globalData), "zh-TW") {
+		t.Error("global config should NOT contain zh-TW")
+	}
+}
+
+func TestSaveDefaultModePreference_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+
+	if err := cfg.SaveDefaultModePreference("auto"); err != nil {
+		t.Fatalf("SaveDefaultModePreference error: %v", err)
+	}
+
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "auto") {
+		t.Errorf("instance config should contain auto mode:\n%s", string(instData))
+	}
+}
+
+func TestSaveDefaultModePreference_Invalid(t *testing.T) {
+	cfg := &Config{FilePath: "/tmp/test.yaml"}
+	err := cfg.SaveDefaultModePreference("invalid-mode")
+	if err == nil {
+		t.Error("SaveDefaultModePreference should reject invalid mode")
 	}
 }
