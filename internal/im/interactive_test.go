@@ -924,3 +924,352 @@ func TestHandleInteractiveCallback_ConcurrentCallbacks(t *testing.T) {
 		t.Errorf("expected 100 callbacks, got %d", atomicLoad(&count))
 	}
 }
+
+// ============================================================
+// EmitToNonInteractive — fallback filtering by interface type
+// ============================================================
+
+// trackingSink records every outbound event it receives.
+type trackingSink struct {
+	testSink
+	events []OutboundEvent
+	mu     sync.Mutex
+}
+
+func (s *trackingSink) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *trackingSink) lastEvent() *OutboundEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.events) == 0 {
+		return nil
+	}
+	return &s.events[len(s.events)-1]
+}
+
+func (s *trackingSink) eventCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.events)
+}
+
+func TestEmitToNonInteractive_OnlySendsToNonInteractiveAdapters(t *testing.T) {
+	mgr := NewManager()
+
+	// Interactive adapter — should NOT receive fallback
+	intAdapter := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = intAdapter
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "chat1"}
+
+	// Non-interactive adapter — SHOULD receive fallback
+	plainSink := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = plainSink
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "group1"}
+
+	err := mgr.EmitToNonInteractive(context.Background(), OutboundEvent{
+		Kind: OutboundEventText,
+		Text: "fallback text",
+	})
+	if err != nil {
+		t.Fatalf("EmitToNonInteractive error: %v", err)
+	}
+
+	// QQ should have received the fallback
+	if plainSink.eventCount() != 1 {
+		t.Fatalf("expected 1 event on qq, got %d", plainSink.eventCount())
+	}
+	if plainSink.lastEvent().Text != "fallback text" {
+		t.Errorf("qq text mismatch: %q", plainSink.lastEvent().Text)
+	}
+
+	// TG should NOT have received anything (it's interactive)
+	if intAdapter.lastInteractive() != nil {
+		t.Error("tg should not receive fallback via EmitToNonInteractive")
+	}
+}
+
+func TestEmitToNonInteractive_AllInteractive(t *testing.T) {
+	mgr := NewManager()
+
+	// Only interactive adapters
+	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = tg
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
+
+	discord := &mockInteractiveAdapter{testSink: testSink{name: "discord"}}
+	mgr.sinks["discord"] = discord
+	mgr.currentBindings["discord"] = &ChannelBinding{Adapter: "discord", ChannelID: "c2"}
+
+	// No non-interactive adapters → should return nil (no targets)
+	err := mgr.EmitToNonInteractive(context.Background(), OutboundEvent{
+		Kind: OutboundEventText,
+		Text: "should not go anywhere",
+	})
+	if err != nil {
+		t.Errorf("expected nil when no non-interactive adapters, got: %v", err)
+	}
+
+	if tg.lastInteractive() != nil {
+		t.Error("tg should not receive anything")
+	}
+	if discord.lastInteractive() != nil {
+		t.Error("discord should not receive anything")
+	}
+}
+
+func TestEmitToNonInteractive_AllNonInteractive(t *testing.T) {
+	mgr := NewManager()
+
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	dd := &trackingSink{testSink: testSink{name: "dd"}}
+	mgr.sinks["dd"] = dd
+	mgr.currentBindings["dd"] = &ChannelBinding{Adapter: "dd", ChannelID: "g2"}
+
+	err := mgr.EmitToNonInteractive(context.Background(), OutboundEvent{
+		Kind: OutboundEventText,
+		Text: "both should get this",
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	if qq.eventCount() != 1 {
+		t.Errorf("qq expected 1 event, got %d", qq.eventCount())
+	}
+	if dd.eventCount() != 1 {
+		t.Errorf("dd expected 1 event, got %d", dd.eventCount())
+	}
+}
+
+// ============================================================
+// EmitAskUserInteractive — unified interactive + fallback
+// ============================================================
+
+func TestEmitAskUserInteractive_MixedAdapters_FallbackOnlyToNonInteractive(t *testing.T) {
+	mgr := NewManager()
+
+	// Interactive adapters
+	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = tg
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
+
+	// Non-interactive adapter
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	emitter := NewIMEmitter(mgr, "en", "/ws")
+
+	msgIDs := emitter.EmitAskUserInteractive("Language", toolpkg.AskUserQuestion{
+		ID:    "q1",
+		Title: "Which language?",
+		Kind:  toolpkg.AskUserKindSingle,
+		Choices: []toolpkg.AskUserChoice{
+			{ID: "go", Label: "Go"},
+			{ID: "rust", Label: "Rust"},
+		},
+	}, "fallback: Go or Rust?")
+
+	// TG should have received interactive message
+	if len(msgIDs) != 1 || msgIDs["tg"] == "" {
+		t.Fatalf("expected 1 msgID for tg, got %v", msgIDs)
+	}
+	last := tg.lastInteractive()
+	if last == nil {
+		t.Fatal("tg should have received interactive message")
+	}
+	if len(last.Buttons) != 2 {
+		t.Errorf("expected 2 buttons, got %d", len(last.Buttons))
+	}
+	if last.Buttons[0].Label != "Go" {
+		t.Errorf("button 0 label: %s", last.Buttons[0].Label)
+	}
+
+	// QQ should have received text fallback
+	if qq.eventCount() != 1 {
+		t.Fatalf("qq expected 1 fallback event, got %d", qq.eventCount())
+	}
+	if qq.lastEvent().Text != "fallback: Go or Rust?" {
+		t.Errorf("qq fallback text: %q", qq.lastEvent().Text)
+	}
+}
+
+func TestEmitAskUserInteractive_NoChoices_SendsPlainTextToAll(t *testing.T) {
+	mgr := NewManager()
+
+	tg := &mockInteractiveAdapter{testSink: testSink{name: "tg"}}
+	mgr.sinks["tg"] = tg
+	mgr.currentBindings["tg"] = &ChannelBinding{Adapter: "tg", ChannelID: "c1"}
+
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	emitter := NewIMEmitter(mgr, "en", "/ws")
+
+	msgIDs := emitter.EmitAskUserInteractive("Feature", toolpkg.AskUserQuestion{
+		ID:    "q2",
+		Title: "What feature?",
+		Kind:  toolpkg.AskUserKindText,
+	}, "fallback: describe the feature")
+
+	// No interactive message sent (text-only question)
+	if len(msgIDs) != 0 {
+		t.Errorf("expected no msgIDs for text question, got %v", msgIDs)
+	}
+
+	// EmitAskUser is called internally → emits to all via event queue
+	// We can't easily verify exact delivery in unit test without waiting
+	// for the async emitter goroutine, so we just verify no panic and
+	// no interactive message was sent.
+	if tg.lastInteractive() != nil {
+		t.Error("tg should not receive interactive for text question")
+	}
+}
+
+func TestEmitAskUserInteractive_OnlyNonInteractiveAdapters(t *testing.T) {
+	mgr := NewManager()
+
+	// Only non-interactive adapter — no InteractiveSender
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	emitter := NewIMEmitter(mgr, "en", "/ws")
+
+	msgIDs := emitter.EmitAskUserInteractive("Pick", toolpkg.AskUserQuestion{
+		ID:    "q1",
+		Title: "Choose one",
+		Kind:  toolpkg.AskUserKindSingle,
+		Choices: []toolpkg.AskUserChoice{
+			{ID: "a", Label: "A"},
+			{ID: "b", Label: "B"},
+		},
+	}, "fallback: A or B?")
+
+	// No interactive adapters → msgIDs empty, falls back to EmitAskUser (plain text)
+	if len(msgIDs) != 0 {
+		t.Errorf("expected no msgIDs, got %v", msgIDs)
+	}
+}
+
+// ============================================================
+// Slash command takes priority over pendingAsk
+// ============================================================
+
+func TestSubmitInboundMessage_SlashCommandBeforePendingAsk(t *testing.T) {
+	mgr := NewManager()
+
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	emitter := NewIMEmitter(mgr, "en", "ws")
+	bridge := NewDaemonBridge(mgr, nil, emitter, nil, nil)
+
+	var restartCalled bool
+	bridge.SetRestartHook(func() { restartCalled = true })
+
+	// Set up a pending ask_user
+	bridge.mu.Lock()
+	bridge.pendingAsk = &pendingAskUser{
+		request: toolpkg.AskUserRequest{
+			Title: "stuck",
+			Questions: []toolpkg.AskUserQuestion{
+				{ID: "q1", Title: "Choose", Kind: toolpkg.AskUserKindSingle, Choices: []toolpkg.AskUserChoice{{ID: "yes", Label: "Yes"}}},
+			},
+		},
+		response: make(chan toolpkg.AskUserResponse, 1),
+	}
+	bridge.mu.Unlock()
+
+	// Send /restart while ask_user is pending
+	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
+		Envelope: Envelope{
+			Adapter:  "qq",
+			Platform: PlatformQQ,
+		},
+		Text: "/restart",
+	})
+	if err != nil {
+		t.Fatalf("SubmitInboundMessage error: %v", err)
+	}
+
+	// Restart is async (1s delay), wait for it
+	time.Sleep(1500 * time.Millisecond)
+
+	if !restartCalled {
+		t.Fatal("/restart should have triggered restart even with pendingAsk")
+	}
+
+	// pendingAsk should still be set (not consumed)
+	bridge.mu.Lock()
+	pending := bridge.pendingAsk
+	bridge.mu.Unlock()
+	if pending == nil {
+		t.Fatal("pendingAsk should still be set — /restart must not consume it")
+	}
+}
+
+func TestSubmitInboundMessage_TextGoesToPendingAsk(t *testing.T) {
+	mgr := NewManager()
+
+	qq := &trackingSink{testSink: testSink{name: "qq"}}
+	mgr.sinks["qq"] = qq
+	mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "g1"}
+
+	emitter := NewIMEmitter(mgr, "en", "ws")
+	bridge := NewDaemonBridge(mgr, nil, emitter, nil, nil)
+
+	// Set up a pending ask_user
+	respCh := make(chan toolpkg.AskUserResponse, 1)
+	bridge.mu.Lock()
+	bridge.pendingAsk = &pendingAskUser{
+		request: toolpkg.AskUserRequest{
+			Title: "q",
+			Questions: []toolpkg.AskUserQuestion{
+				{ID: "q1", Title: "What?", Kind: toolpkg.AskUserKindText},
+			},
+		},
+		response: respCh,
+	}
+	bridge.mu.Unlock()
+
+	// Send regular text — should be consumed as ask_user answer
+	err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
+		Envelope: Envelope{
+			Adapter:  "qq",
+			Platform: PlatformQQ,
+		},
+		Text: "my answer",
+	})
+	if err != nil {
+		t.Fatalf("SubmitInboundMessage error: %v", err)
+	}
+
+	// The answer should have been sent to the response channel
+	select {
+	case resp := <-respCh:
+		if len(resp.Answers) == 0 || resp.Answers[0].FreeformText != "my answer" {
+			t.Errorf("expected 'my answer', got %+v", resp.Answers[0])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for ask_user response")
+	}
+
+	// pendingAsk should be cleared
+	bridge.mu.Lock()
+	pending := bridge.pendingAsk
+	bridge.mu.Unlock()
+	if pending != nil {
+		t.Fatal("pendingAsk should be nil after answer")
+	}
+}
