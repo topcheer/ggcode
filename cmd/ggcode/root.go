@@ -650,18 +650,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Wire MCP status for webui config page
 	webuiSrv.SetMCPStatusFn(func() map[string]webui.MCPRuntimeStatus {
-		snapshot := mcpMgr.Snapshot()
-		m := make(map[string]webui.MCPRuntimeStatus, len(snapshot))
-		for _, info := range snapshot {
-			m[info.Name] = webui.MCPRuntimeStatus{
-				Connected: string(info.Status) == "connected",
-				Pending:   string(info.Status) == "pending",
-				Disabled:  info.Disabled,
-				Error:     info.Error,
-				Tools:     info.ToolNames,
-			}
-		}
-		return m
+		return mcpSnapshotToWebUI(mcpMgr.Snapshot())
 	})
 
 	// Wire A2A discover for webui config page
@@ -673,31 +662,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if err != nil {
 			return nil
 		}
-		var result []webui.A2ADiscoveredInstance
-		for _, inst := range instances {
-			result = append(result, webui.A2ADiscoveredInstance{
-				ID:        inst.ID,
-				Workspace: inst.Workspace,
-				Endpoint:  inst.Endpoint,
-				Status:    inst.Status,
-				StartedAt: inst.StartedAt,
-			})
-		}
-		return result
+		return a2aInstancesToWebUI(instances)
 	})
 
 	// Wire IM status for webui config page
 	if imMgr != nil {
 		webuiSrv.SetIMStatusFn(func() []webui.IMRuntimeStatus {
-			snap := imMgr.Snapshot()
-			out := make([]webui.IMRuntimeStatus, 0, len(snap.Adapters))
-			for _, a := range snap.Adapters {
-				out = append(out, webui.IMRuntimeStatus{
-					Adapter: a.Name, Platform: string(a.Platform),
-					Healthy: a.Healthy, Status: a.Status, LastError: a.LastError,
-				})
-			}
-			return out
+			return imSnapshotToWebUI(imMgr.Snapshot())
 		})
 	}
 
