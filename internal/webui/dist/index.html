@@ -124,7 +124,16 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
 .chat-role { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; color: var(--text2); }
 .chat-msg.user .chat-role { color: var(--primary, #6366f1); }
 .chat-msg.assistant .chat-role { color: #22c55e; }
-.chat-text { font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.chat-text { font-size: 13px; line-height: 1.6; word-break: break-word; }
+.chat-text pre { width: 100%; box-sizing: border-box; }
+.chat-text p { margin: 6px 0; }
+.chat-text ul, .chat-text ol { margin: 4px 0; padding-left: 20px; }
+.chat-text li { margin: 2px 0; }
+.chat-text h2, .chat-text h3, .chat-text h4 { margin: 12px 0 4px; color: var(--text); }
+.chat-text a { color: var(--accent); text-decoration: none; }
+.chat-text a:hover { text-decoration: underline; }
+.chat-text code { background: var(--surface2, var(--surface)); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.chat-text pre code { background: none; padding: 0; font-size: 12px; }
 .chat-tool { margin: 6px 0; padding: 8px 12px; border-radius: 6px; font-size: 12px; }
 .chat-tool.tool_use { background: rgba(251,191,36,0.08); border-left: 2px solid #fbbf24; }
 .chat-tool.tool_result { background: rgba(34,197,94,0.08); border-left: 2px solid #22c55e; }
@@ -1577,7 +1586,7 @@ function setPromptMode(mode) {
     previewDiv.style.display = '';
     editDiv.style.display = 'none';
     const text = config.system_prompt || '';
-    previewDiv.innerHTML = text ? renderMarkdown(text) : '<p style="color:var(--text2)">No system prompt configured. Click "Edit" to add one.</p>';
+    previewDiv.innerHTML = text ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;max-height:600px;overflow-y:auto">${renderMarkdown(text)}</div>` : '<p style="color:var(--text2)">No system prompt configured. Click "Edit" to add one.</p>';
   } else {
     editBtn.classList.add('btn-primary');
     editBtn.classList.remove('btn');
@@ -1587,35 +1596,6 @@ function setPromptMode(mode) {
     editDiv.style.display = '';
     document.getElementById('prompt-textarea').value = config.system_prompt || '';
   }
-}
-
-// Lightweight markdown renderer (no external deps)
-function renderMarkdown(text) {
-  let html = esc(text);
-  // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    return `<pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;margin:8px 0"><code>${code}</code></pre>`;
-  });
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg);padding:2px 6px;border-radius:3px;font-size:12px">$1</code>');
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Italic
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  // Headers
-  html = html.replace(/^### (.+)$/gm, '<h4 style="margin:12px 0 4px;font-size:14px">$1</h4>');
-  html = html.replace(/^## (.+)$/gm, '<h3 style="margin:16px 0 6px;font-size:15px">$1</h3>');
-  html = html.replace(/^# (.+)$/gm, '<h2 style="margin:20px 0 8px;font-size:16px">$1</h2>');
-  // Unordered lists
-  html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px">$1</li>');
-  html = html.replace(/(<li[^>]*>.*<\/li>\n?)+/g, m => '<ul style="margin:4px 0;padding-left:0;list-style:disc inside">' + m + '</ul>');
-  // Horizontal rules
-  html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">');
-  // Line breaks → paragraphs
-  html = html.replace(/\n\n+/g, '</p><p style="margin:6px 0;line-height:1.6">');
-  html = html.replace(/\n/g, '<br>');
-  html = '<p style="margin:0;line-height:1.6">' + html + '</p>';
-  return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;max-height:600px;overflow-y:auto">${html}</div>`;
 }
 
 async function saveSystemPrompt() {
@@ -1710,6 +1690,7 @@ async function loadChatHistory() {
     }
     chatMessagesEl.innerHTML = '';
     for (const msg of msgs) {
+      if (msg.role === 'system') continue;
       appendHistoryBubble(msg);
     }
     scrollChatBottom();
@@ -1835,7 +1816,7 @@ function appendUserBubble(text, imageCount, fileNames) {
     const names = fileNames.map(n => `<code style="font-size:11px;background:var(--surface2,var(--surface));padding:1px 4px;border-radius:3px">${esc(n)}</code>`).join(' ');
     extra += `<div style="margin-top:4px;font-size:12px;color:var(--text2)">&#128196; ${names}</div>`;
   }
-  div.innerHTML = `<div class="chat-role">You</div><div class="chat-text">${esc(text||'')}</div>${extra}`;
+  div.innerHTML = `<div class="chat-role">You</div><div class="chat-text">${renderMarkdown(text||'')}</div>${extra}`;
   chatMessagesEl.appendChild(div);
   scrollChatBottom();
 }
@@ -1892,16 +1873,36 @@ function clearWelcome() {
 }
 
 function renderMarkdown(text) {
-  // Simple markdown: code blocks, inline code, bold, italic
+  // Markdown renderer for chat messages
   let html = esc(text);
   // Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:var(--surface2,var(--surface));padding:8px 12px;border-radius:6px;overflow-x:auto;font-size:12px;margin:4px 0"><code>$2</code></pre>');
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const langAttr = lang ? ` class="language-${lang}"` : '';
+    return `<pre style="background:var(--surface2,var(--surface));padding:8px 12px;border-radius:6px;overflow-x:auto;font-size:12px;margin:4px 0;width:100%;box-sizing:border-box"><code${langAttr}>${code}</code></pre>`;
+  });
   // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--surface2,var(--surface));padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   // Bold
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   // Italic
   html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h4 style="font-size:14px">$1</h4>');
+  html = html.replace(/^## (.+)$/gm, '<h3 style="font-size:15px">$1</h3>');
+  html = html.replace(/^# (.+)$/gm, '<h2 style="font-size:16px">$1</h2>');
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, m => '<ul>' + m + '</ul>');
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:12px 0">');
+  // Paragraphs: double newline
+  html = html.replace(/\n\n+/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  html = '<p>' + html + '</p>';
+  // Clean empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
   return html;
 }
 
@@ -2164,7 +2165,7 @@ function renderSessionDetail(data) {
   let chatHtml = '';
   if (data.messages) {
     for (const msg of data.messages) {
-      if (msg.role === 'system' && (!msg.content || !msg.content[0] || !msg.content[0].text || String(msg.content[0].text).length < 200)) continue;
+      if (msg.role === 'system') continue;
       chatHtml += renderChatMessage(msg);
     }
   }
@@ -2186,7 +2187,7 @@ function renderChatMessage(msg) {
   if (msg.content) {
     for (const block of msg.content) {
       if (block.type === 'text' && block.text) {
-        contentHtml += `<div class="chat-text">${esc(block.text)}</div>`;
+        contentHtml += `<div class="chat-text">${renderMarkdown(block.text)}</div>`;
       } else if (block.type === 'tool_use') {
         const inputStr = block.input ? formatJSON(block.input) : '';
         const id = 'tool-' + Math.random().toString(36).slice(2,8);
