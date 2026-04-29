@@ -79,7 +79,8 @@ func NewRootCmd() *cobra.Command {
 
 			debug.Init()
 
-			cfg, err := config.Load(cfgFile)
+			workingDirForConfig, _ := os.Getwd()
+			cfg, err := config.LoadWithInstance(cfgFile, workingDirForConfig)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
@@ -536,10 +537,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	var a2aRegistry *a2a.Registry
 	var a2aTaskHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
-		// Apply instance-level A2A config override from .ggcode/a2a.yaml
-		if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
-			config.MergeA2AConfig(&cfg.A2A, a2aOverride)
-		}
+		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			debug.Log("root", "A2A server startup warning: %v", err)

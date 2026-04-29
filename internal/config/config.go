@@ -166,28 +166,32 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 
 // Config is the top-level configuration.
 type Config struct {
-	Vendor        string                    `yaml:"vendor" json:"vendor"`
-	Endpoint      string                    `yaml:"endpoint" json:"endpoint"`
-	Model         string                    `yaml:"model" json:"model"`
-	Language      string                    `yaml:"language" json:"language"`
-	UI            UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM            IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
-	SystemPrompt  string                    `yaml:"system_prompt" json:"system_prompt"`
-	Vendors       map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
-	AllowedDirs   []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations int                       `yaml:"max_iterations" json:"max_iterations"`
-	ToolPerms     map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins       []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
-	MCPServers    []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
-	Hooks         hooks.HookConfig          `yaml:"hooks" json:"hooks"`
-	DefaultMode   string                    `yaml:"default_mode" json:"default_mode"`
-	SubAgents     SubAgentConfig            `yaml:"subagents" json:"subagents"`
-	Impersonation ImpersonationConfig       `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
-	KnightConfig  KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
-	Swarm         SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
-	A2A           A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
-	FilePath      string                    `yaml:"-" json:"-"`
-	FirstRun      bool                      `yaml:"-" json:"-"`
+	Vendor         string                    `yaml:"vendor" json:"vendor"`
+	Endpoint       string                    `yaml:"endpoint" json:"endpoint"`
+	Model          string                    `yaml:"model" json:"model"`
+	Language       string                    `yaml:"language" json:"language"`
+	UI             UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM             IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
+	SystemPrompt   string                    `yaml:"system_prompt" json:"system_prompt"`
+	Vendors        map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
+	AllowedDirs    []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations  int                       `yaml:"max_iterations" json:"max_iterations"`
+	ToolPerms      map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins        []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
+	MCPServers     []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	Hooks          hooks.HookConfig          `yaml:"hooks" json:"hooks"`
+	DefaultMode    string                    `yaml:"default_mode" json:"default_mode"`
+	SubAgents      SubAgentConfig            `yaml:"subagents" json:"subagents"`
+	Impersonation  ImpersonationConfig       `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
+	KnightConfig   KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
+	Swarm          SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	A2A            A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	FilePath       string                    `yaml:"-" json:"-"`
+	FirstRun       bool                      `yaml:"-" json:"-"`
+	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
+	instancePath   string                    `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
+	globalSnap     *Config                   `yaml:"-" json:"-"` // deep copy of global config before instance merge
+	instanceFields map[string]bool           `yaml:"-" json:"-"` // fields that were filled by instance config
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
@@ -1395,7 +1399,10 @@ func (c *Config) RemoveMCPServer(name string) bool {
 	return false
 }
 
-// Save persists the config to its configured file path.
+// Save persists the config to its configured file path (global config).
+// If an instance config was merged at load time (globalSnap is set), only
+// fields that existed in the global config are written back. Instance-only
+// fields are never leaked into the global file.
 func (c *Config) Save() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -1408,9 +1415,22 @@ func (c *Config) Save() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(c)
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
+
+	var data []byte
+	var err error
+	if c.globalSnap != nil && len(c.instanceFields) > 0 {
+		// Instance config was merged. Write back only global fields.
+		// Strategy: serialize globalSnap as the base, then overlay with
+		// current Config values for fields that globalSnap already had set.
+		data, err = c.marshalGlobalOnly()
+		if err != nil {
+			return fmt.Errorf("marshaling global-only config: %w", err)
+		}
+	} else {
+		data, err = yaml.Marshal(c)
+		if err != nil {
+			return fmt.Errorf("marshaling config: %w", err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
@@ -1419,16 +1439,42 @@ func (c *Config) Save() error {
 		return err
 	}
 	// Re-migrate any plaintext secrets that yaml.Marshal produced.
-	// The in-memory config holds expanded values, so Save() writes
-	// plaintext secrets back into the YAML.  This call detects those,
-	// persists them to ~/.ggcode/keys.env, and rewrites the YAML with
-	// ${VAR} references — keeping keys.env and the config file in sync.
 	if migrated, migrateErr := MigratePlaintextAPIKeys(c.FilePath); migrateErr != nil {
 		debug.Log("config", "Save: post-save migration error: %v", migrateErr)
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: re-migrated %d plaintext secret(s)", len(migrated))
 	}
 	return nil
+}
+
+// marshalGlobalOnly serializes the config for writing to the global file,
+// excluding fields that were filled in by instance config merge.
+//
+// Strategy:
+//  1. Serialize current Config as raw map
+//  2. Remove any top-level keys that are in instanceFields
+//  3. Return the cleaned YAML
+func (c *Config) marshalGlobalOnly() ([]byte, error) {
+	currentData, err := yaml.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(c.instanceFields) == 0 {
+		return currentData, nil
+	}
+
+	currentRaw := map[string]interface{}{}
+	if err := yaml.Unmarshal(currentData, &currentRaw); err != nil {
+		return nil, err
+	}
+
+	// Remove fields that came from instance config.
+	for key := range c.instanceFields {
+		delete(currentRaw, key)
+	}
+
+	return yaml.Marshal(currentRaw)
 }
 
 func (c *Config) SaveLanguagePreference(lang string) error {

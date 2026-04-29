@@ -62,7 +62,8 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			}
 
 			debug.Init()
-			cfg, err := config.Load(resolvedCfg)
+			daemonWorkDir, _ := os.Getwd()
+			cfg, err := config.LoadWithInstance(resolvedCfg, daemonWorkDir)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
@@ -607,10 +608,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aReg *a2a.Registry
 	var a2aHandler *a2a.TaskHandler
 	if !cfg.A2A.Disabled {
-		// Apply instance-level A2A config override from .ggcode/a2a.yaml
-		if a2aOverride := config.LoadA2AOverride(workingDir); a2aOverride != nil {
-			config.MergeA2AConfig(&cfg.A2A, a2aOverride)
-		}
+		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
