@@ -1078,3 +1078,65 @@ func TestSaveGlobalNoLeak_EndToEnd(t *testing.T) {
 		t.Error("instance config should be unchanged")
 	}
 }
+
+// --- Coverage: MigrateA2AYaml ---
+
+func TestMigrateA2AYaml_NoLegacyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+
+	if MigrateA2AYaml(workspace) {
+		t.Error("MigrateA2AYaml should return false when no legacy file exists")
+	}
+}
+
+func TestMigrateA2AYaml_AlreadyMigrated(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
+	os.WriteFile(filepath.Join(workspace, ".ggcode", "a2a.yaml"), []byte("api_key: test\n"), 0644)
+
+	// Create instance config
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("language: en\n"), 0644)
+
+	if MigrateA2AYaml(workspace) {
+		t.Error("MigrateA2AYaml should return false when instance config already exists")
+	}
+}
+
+func TestMigrateA2AYaml_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
+	os.WriteFile(filepath.Join(workspace, ".ggcode", "a2a.yaml"),
+		[]byte("api_key: migrated-key\nhost: 0.0.0.0\n"), 0644)
+
+	if !MigrateA2AYaml(workspace) {
+		t.Fatal("MigrateA2AYaml should return true on successful migration")
+	}
+
+	// Verify instance config was created with a2a content
+	inst := LoadInstanceConfig(workspace)
+	if inst == nil {
+		t.Fatal("instance config should exist after migration")
+	}
+	if inst.A2A.APIKey != "migrated-key" {
+		t.Errorf("A2A.APIKey = %q, want %q", inst.A2A.APIKey, "migrated-key")
+	}
+	if inst.A2A.Host != "0.0.0.0" {
+		t.Errorf("A2A.Host = %q, want %q", inst.A2A.Host, "0.0.0.0")
+	}
+
+	// Legacy file should still exist (not deleted)
+	if _, err := os.Stat(filepath.Join(workspace, ".ggcode", "a2a.yaml")); err != nil {
+		t.Error("legacy .ggcode/a2a.yaml should still exist after migration")
+	}
+
+	// Second call should return false (already migrated)
+	if MigrateA2AYaml(workspace) {
+		t.Error("second MigrateA2AYaml call should return false")
+	}
+}
