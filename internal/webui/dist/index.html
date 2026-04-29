@@ -470,8 +470,8 @@ function toast(msg, ok = true) {
 
 // --- HTML escape ---
 function esc(s) {
-  if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // --- MCP form toggle ---
@@ -2164,7 +2164,7 @@ function renderSessionDetail(data) {
   let chatHtml = '';
   if (data.messages) {
     for (const msg of data.messages) {
-      if (msg.role === 'system' && (!msg.content || !msg.content[0] || msg.content[0].text.length < 200)) continue;
+      if (msg.role === 'system' && (!msg.content || !msg.content[0] || !msg.content[0].text || String(msg.content[0].text).length < 200)) continue;
       chatHtml += renderChatMessage(msg);
     }
   }
@@ -2223,10 +2223,11 @@ function renderChatMessage(msg) {
 
 function formatJSON(raw) {
   if (!raw) return '';
+  if (typeof raw === 'object') return JSON.stringify(raw, null, 2);
   try {
     return JSON.stringify(JSON.parse(raw), null, 2);
   } catch(e) {
-    return raw;
+    return String(raw);
   }
 }
 
