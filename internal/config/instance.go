@@ -455,6 +455,9 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	// This allows Save() to distinguish global fields from instance overrides.
 	cfg.globalSnap = deepCopyConfig(cfg)
 
+	// Attempt to migrate legacy .ggcode/a2a.yaml if instance config doesn't exist yet.
+	MigrateA2AYaml(workspace)
+
 	// Apply instance-level config if available.
 	instanceCfg := LoadInstanceConfig(workspace)
 	if instanceCfg != nil {
@@ -464,12 +467,65 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	}
 
 	// Also apply legacy .ggcode/a2a.yaml if it exists (for backward compat).
+	// This uses "instance wins" semantics (unlike MergeInstance's "global wins").
 	if a2aOverride := LoadA2AOverride(workspace); a2aOverride != nil {
 		MergeA2AConfig(&cfg.A2A, a2aOverride)
 		debug.Log("config", "applied legacy .ggcode/a2a.yaml override")
 	}
 
 	return cfg, nil
+}
+
+// MigrateA2AYaml checks if a legacy .ggcode/a2a.yaml exists and offers
+// to migrate it to the new instance config system.
+// Returns true if migration was performed or already done.
+func MigrateA2AYaml(workspace string) bool {
+	legacyPath := filepath.Join(workspace, ".ggcode", "a2a.yaml")
+	if _, err := os.Stat(legacyPath); err != nil {
+		return false // no legacy file
+	}
+
+	// Legacy file exists. Check if instance config already exists.
+	if HasInstanceConfig(workspace) {
+		return false // already migrated or manually created
+	}
+
+	// Read the legacy A2A config
+	data, err := os.ReadFile(legacyPath)
+	if err != nil {
+		return false
+	}
+
+	// Parse as raw map to wrap it under "a2a:" key
+	var a2aRaw map[string]interface{}
+	if err := yaml.Unmarshal(data, &a2aRaw); err != nil {
+		return false
+	}
+
+	// Create instance config with A2A content
+	instanceData := map[string]interface{}{
+		"a2a": a2aRaw,
+	}
+	out, err := yaml.Marshal(instanceData)
+	if err != nil {
+		return false
+	}
+
+	// Write to instance config
+	instDir := InstanceDir(workspace)
+	if instDir == "" {
+		return false
+	}
+	if err := os.MkdirAll(instDir, 0755); err != nil {
+		return false
+	}
+	instPath := filepath.Join(instDir, "ggcode.yaml")
+	if err := writeFileAtomic(instPath, out, 0644); err != nil {
+		return false
+	}
+
+	debug.Log("config", "migrated legacy .ggcode/a2a.yaml to %s", instPath)
+	return true
 }
 
 // InstanceSummary returns a debug string about the instance config state.
