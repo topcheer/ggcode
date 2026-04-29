@@ -1,3 +1,26 @@
+// Package im contains the Feishu adapter.
+//
+// # Feishu Developer Console Setup
+//
+// To enable interactive card callbacks (e.g. ask_user buttons), the following
+// must be configured in the Feishu Developer Console (开发者后台):
+//
+//  1. Under "Events & Callbacks" (事件与回调), set the connection mode to
+//     "Long Connection / WebSocket" (长连接).
+//
+//  2. Under "Events & Callbacks" → "Callback Configuration" (回调配置), add the
+//     callback: card.action.trigger (卡片回传交互回调).
+//
+//     IMPORTANT: This is in the "Callback Configuration" (回调配置) section,
+//     NOT in "Event Subscription" (事件订阅). Card callbacks and event
+//     subscriptions are separate sections. Without this step, card buttons will
+//     render but clicking them will produce error 200340 (card callback not
+//     configured).
+//
+// The adapter uses the official Feishu Go SDK's larkws.NewClient for the
+// WebSocket connection, which registers the callback capability with the
+// Feishu platform so card.action.trigger events are delivered over the
+// long connection.
 package im
 
 import (
@@ -19,8 +42,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -203,144 +226,35 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 		domain = "https://open.larksuite.com"
 	}
 
-	// Retry loop: reconnect on disconnection
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		_ = a.runSingleWSConnection(ctx, domain, eventHandler)
-		if ctx.Err() != nil {
-			return
-		}
-		debug.Log("feishu", "adapter=%s WS disconnected, reconnecting in 3s...", a.name)
-		a.publishState(false, "reconnecting", "websocket disconnected, reconnecting")
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(3 * time.Second):
-		}
-	}
-}
-
-// runSingleWSConnection establishes one WS connection, processes all message
-// types (events + card callbacks), and returns when the connection is lost.
-func (a *feishuAdapter) runSingleWSConnection(ctx context.Context, domain string, eventHandler *dispatcher.EventDispatcher) error {
-	// 1. Get WS endpoint URL
-	body := map[string]string{
-		"AppID":     a.appID,
-		"AppSecret": a.appSecret,
-	}
-	bs, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, domain+"/callback/ws/endpoint", bytes.NewReader(bs))
-	if err != nil {
-		return fmt.Errorf("endpoint request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("endpoint fetch: %w", err)
-	}
-	defer resp.Body.Close()
-	var endpointResp struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-		Data *struct {
-			URL       string `json:"url"`
-			Lifespan  int64  `json:"lifespan"`
-			ExpiresAt int64  `json:"expire_in"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&endpointResp); err != nil || endpointResp.Data == nil || endpointResp.Data.URL == "" {
-		return fmt.Errorf("no endpoint URL: code=%d, err=%v", endpointResp.Code, err)
-	}
-	wsURL := endpointResp.Data.URL
-	debug.Log("feishu", "adapter=%s got WS endpoint, connecting...", a.name)
-
-	// 2. Dial WebSocket
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
-	if err != nil {
-		return fmt.Errorf("ws dial: %w", err)
-	}
-	defer conn.Close()
+	// Use the official Feishu SDK WS client so the platform recognizes
+	// this connection as capable of receiving card callbacks.
+	// Our hand-rolled WS connection was not registering the callback
+	// capability, so card.action.trigger was never delivered.
+	wsClient := larkws.NewClient(
+		a.appID, a.appSecret,
+		larkws.WithEventHandler(eventHandler),
+		larkws.WithAutoReconnect(true),
+		larkws.WithDomain(domain),
+		larkws.WithLogLevel(larkcore.LogLevelError),
+		larkws.WithLogger(&feishuSilentLogger{}),
+	)
 
 	a.mu.Lock()
 	a.connected = true
 	a.mu.Unlock()
-	a.publishState(true, "online", "websocket connected")
-	debug.Log("feishu", "adapter=%s WS connected", a.name)
+	a.publishState(true, "online", "websocket connected (SDK)")
+	debug.Log("feishu", "adapter=%s WS connected (SDK client)", a.name)
 
-	// 3. Ping loop (Feishu requires periodic ping to keep connection alive)
-	safego.Go("im.feishu.wsPing", func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := conn.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
-					debug.Log("feishu", "adapter=%s ping failed: %v", a.name, err)
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
+	if err := wsClient.Start(ctx); err != nil {
+		if ctx.Err() != nil {
+			return
 		}
-	})
-
-	// 4. Read loop — dispatch based on message type
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		mt, msg, err := conn.ReadMessage()
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			debug.Log("feishu", "adapter=%s WS read error: %v", a.name, err)
-			return fmt.Errorf("read: %w", err)
-		}
-
-		// Text messages: "pong" responses to our ping
-		if mt == websocket.TextMessage {
-			continue
-		}
-
-		// Binary messages: protobuf frames with event/card data
-		if mt != websocket.BinaryMessage {
-			continue
-		}
-
-		var frame larkws.Frame
-		if err := frame.Unmarshal(msg); err != nil {
-			continue
-		}
-
-		headers := larkws.Headers(frame.Headers)
-		msgType := headers.GetString("type")
-		debug.Log("feishu", "adapter=%s WS frame: type=%s payload_len=%d", a.name, msgType, len(frame.Payload))
-
-		switch larkws.MessageType(msgType) {
-		case larkws.MessageTypeEvent:
-			// Delegate to SDK's event dispatcher for message handling
-			safego.Go("im.feishu.wsEvent", func() {
-				eventHandler.Do(ctx, frame.Payload)
-			})
-
-		case larkws.MessageTypeCard:
-			// Card callbacks: delegate to eventHandler which has
-			// OnP2CardActionTrigger registered. The SDK's WS client
-			// drops MessageTypeCard, but our custom WS passes it through.
-			safego.Go("im.feishu.wsCard", func() {
-				eventHandler.Do(ctx, frame.Payload)
-			})
-
-		default:
-			// ping/pong/ack — no action needed
-		}
+		debug.Log("feishu", "adapter=%s SDK WS client exited: %v", a.name, err)
 	}
+
+	a.mu.Lock()
+	a.connected = false
+	a.mu.Unlock()
 }
 
 // handleCardActionTrigger processes a card action callback received via
@@ -1616,11 +1530,9 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 			},
 			"behaviors": []any{
 				map[string]any{
-					"type": "callback",
+					"type":  "callback",
+					"value": map[string]any{"choice": btn.Value},
 				},
-			},
-			"value": map[string]any{
-				"choice": btn.Value,
 			},
 		}
 		switch btn.Style {
@@ -1649,11 +1561,9 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 					},
 					"behaviors": []any{
 						map[string]any{
-							"type": "callback",
+							"type":  "callback",
+							"value": map[string]any{"choice": "__done__"},
 						},
-					},
-					"value": map[string]any{
-						"choice": "__done__",
 					},
 				},
 			},
@@ -1679,6 +1589,7 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 	}
 
 	cardBytes, _ := json.Marshal(card)
+	debug.Log("feishu", "adapter=%s SendInteractive card JSON: %s", a.name, string(cardBytes))
 	apiBase := a.resolveAPIBase()
 	url := apiBase + "/im/v1/messages?receive_id_type=chat_id"
 	body := map[string]any{

@@ -624,7 +624,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			// Wire A2A task events to follow display + IM
 			if a2aHandler != nil {
 				a2aHandler.SetOnTaskEvent(func(msg a2a.TaskEventMessage) {
-					fmt.Fprintf(os.Stderr, "  %s\n", msg.Message)
+					fmt.Fprintf(os.Stderr, "  %s\r\n", msg.Message)
 					if emitter != nil {
 						emitter.EmitText(msg.Message)
 					}
@@ -941,7 +941,7 @@ loop:
 			restartCmd.Stderr = os.Stderr
 			restartCmd.Env = env
 			if err := restartCmd.Start(); err != nil {
-				fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\n", err)
+				fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
 				return nil
 			}
 			os.Exit(0)
@@ -988,10 +988,10 @@ func readKeyboard(ch chan<- byte) func() {
 func detachToBackground(lang daemon.Lang, cfgFile, workingDir, sessionID string) {
 	pid, err := daemon.ForkIntoBackground(cfgFile, workingDir, sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.bg_fail", err))
+		fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.bg_fail", err))
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.bg_ok", pid))
+	fmt.Fprintf(os.Stderr, "%s\r\n", daemon.Tr(lang, "daemon.bg_ok", pid))
 }
 
 // pickSessionInteractive lists up to 10 sessions for the current workspace and reads the user's choice from stdin.
