@@ -555,7 +555,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.message = m.t("panel.provider.saved")
 				return *m, nil
 			}
-			if err := m.config.Save(); err != nil {
+			if err := m.saveConfig(); err != nil {
 				panel.message = err.Error()
 				return *m, nil
 			}
@@ -717,7 +717,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = err.Error()
 			return *m, nil
 		}
-		if err := m.config.Save(); err != nil {
+		if err := m.saveConfig(); err != nil {
 			panel.message = err.Error()
 			return *m, nil
 		}
@@ -809,7 +809,7 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		}
 
 		if result.updated > 0 {
-			if err := m.config.Save(); err != nil {
+			if err := m.saveConfig(); err != nil {
 				result.saveErr = err
 			}
 		}

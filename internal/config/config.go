@@ -190,6 +190,7 @@ type Config struct {
 	FirstRun       bool                      `yaml:"-" json:"-"`
 	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
 	instancePath   string                    `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
+	instanceWS     string                    `yaml:"-" json:"-"` // workspace path for SaveInstance
 	globalSnap     *Config                   `yaml:"-" json:"-"` // deep copy of global config before instance merge
 	instanceFields map[string]bool           `yaml:"-" json:"-"` // fields that were filled by instance config
 }

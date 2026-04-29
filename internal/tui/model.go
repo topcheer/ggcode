@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -111,6 +112,7 @@ type Model struct {
 	knight                          *knight.Knight
 	mcpManager                      mcpManager
 	mode                            permission.PermissionMode
+	configSaveScope                 string // "global" or "instance" — where config panel saves go
 	pendingDiffConfirm              *DiffConfirmMsg
 	pendingQuestionnaire            *questionnaireState
 	pendingHarnessCheckpointConfirm *HarnessCheckpointConfirmMsg
@@ -684,6 +686,35 @@ func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
 
 func (m *Model) SetKnight(k *knight.Knight) {
 	m.knight = k
+}
+
+// saveConfig saves config changes to either global or instance config
+// based on the current configSaveScope setting.
+func (m *Model) saveConfig() error {
+	if m.config == nil {
+		return fmt.Errorf("config is nil")
+	}
+	return m.config.SaveScoped(m.configSaveScope)
+}
+
+// toggleConfigSaveScope switches between "global" and "instance" save targets.
+func (m *Model) toggleConfigSaveScope() {
+	if m.configSaveScope == "instance" {
+		m.configSaveScope = "global"
+	} else {
+		// Only allow instance scope if instance config is available
+		if m.config != nil && m.config.HasInstanceConfigAttached() {
+			m.configSaveScope = "instance"
+		}
+	}
+}
+
+// configSaveScopeLabel returns a display label for the current save scope.
+func (m *Model) configSaveScopeLabel() string {
+	if m.configSaveScope == "instance" {
+		return "Instance"
+	}
+	return "Global"
 }
 
 func (m *Model) vendorNames() string {

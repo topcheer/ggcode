@@ -383,12 +383,35 @@ func (c *Config) SetInstancePaths(workspace string) {
 	if dir != "" {
 		c.instanceDir = dir
 		c.instancePath = filepath.Join(dir, "ggcode.yaml")
+		c.instanceWS = workspace
 	}
 }
 
 // InstanceDirPath returns the instance directory for this config, or empty string.
 func (c *Config) InstanceDirPath() string {
 	return c.instanceDir
+}
+
+// HasInstanceConfigAttached returns true if this config has an instance workspace attached.
+func (c *Config) HasInstanceConfigAttached() bool {
+	return c.instanceWS != ""
+}
+
+// InstanceWorkspace returns the workspace path for instance config, or empty string.
+func (c *Config) InstanceWorkspace() string {
+	return c.instanceWS
+}
+
+// SaveScoped persists config changes to either global or instance config.
+// scope: "global" saves to the global config file (default behavior).
+// scope: "instance" saves to the instance config directory.
+func (c *Config) SaveScoped(scope string) error {
+	switch scope {
+	case "instance":
+		return c.SaveInstance(c.instanceWS)
+	default:
+		return c.Save()
+	}
 }
 
 // writeFileAtomic writes data to a temp file then renames.

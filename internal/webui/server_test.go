@@ -321,12 +321,12 @@ func TestSessionDetail(t *testing.T) {
 	}
 
 	msgs := result["messages"].([]interface{})
-	if len(msgs) != 5 {
-		t.Fatalf("expected 5 messages, got %d", len(msgs))
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages (system filtered), got %d", len(msgs))
 	}
 
-	// Check tool_use block is preserved
-	assistantMsg := msgs[2].(map[string]interface{})
+	// Check tool_use block is preserved (msgs[1] is the assistant message)
+	assistantMsg := msgs[1].(map[string]interface{})
 	blocks := assistantMsg["content"].([]interface{})
 	toolBlock := blocks[1].(map[string]interface{})
 	if toolBlock["tool_name"] != "run_command" {
@@ -336,8 +336,8 @@ func TestSessionDetail(t *testing.T) {
 		t.Error("tool input should be present")
 	}
 
-	// Check tool_result block
-	toolResultMsg := msgs[3].(map[string]interface{})
+	// Check tool_result block (msgs[2] is the user message with tool_result)
+	toolResultMsg := msgs[2].(map[string]interface{})
 	resultBlocks := toolResultMsg["content"].([]interface{})
 	resultBlock := resultBlocks[0].(map[string]interface{})
 	if resultBlock["output"] != "file.txt" {
@@ -736,6 +736,7 @@ func TestChatWSBridgeWithFile(t *testing.T) {
 func TestChatHistoryBridge(t *testing.T) {
 	bridge := &mockChatBridge{
 		messages: []provider.Message{
+			{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "you are helpful"}}},
 			{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
 			{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "hi there"}}},
 		},
@@ -756,7 +757,7 @@ func TestChatHistoryBridge(t *testing.T) {
 	var result []map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
 	if len(result) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(result))
+		t.Fatalf("expected 2 messages (system filtered), got %d", len(result))
 	}
 	if result[0]["role"] != "user" {
 		t.Errorf("first should be user, got %v", result[0]["role"])

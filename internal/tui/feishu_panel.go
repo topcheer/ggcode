@@ -461,7 +461,7 @@ func (m *Model) ensureFeishuRuntime() error {
 	}
 	if !m.config.IM.Enabled {
 		m.config.IM.Enabled = true
-		if err := m.config.Save(); err != nil {
+		if err := m.saveConfig(); err != nil {
 			return fmt.Errorf("enable IM runtime: %w", err)
 		}
 	}

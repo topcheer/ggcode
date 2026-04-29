@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -247,6 +248,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.String() == "ctrl+c" && !m.loading && len(m.langOptions) == 0 && m.closeActivePanel() {
+			return m, nil
+		}
+
+		// Toggle config save scope (global ↔ instance) in any panel.
+		if msg.String() == "ctrl+t" {
+			m.toggleConfigSaveScope()
 			return m, nil
 		}
 
@@ -691,10 +698,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
+		// Render the user bubble and persist to session -- same as keyboard input.
+		m.chatWriteUser(nextChatID(), text)
+		m.chatListScrollToBottom()
+		m.appendUserMessage(text)
 		// If agent is idle, start a new run with the webchat message
 		if m.cancelFunc == nil {
+			m.streamBuffer = &bytes.Buffer{}
+			m.shellBuffer = nil
+			m.streamPrefixWritten = false
+			m.loading = true
+			m.statusActivity = m.t("status.thinking")
+			m.statusToolName = ""
+			m.statusToolArg = ""
+			m.statusToolCount = 0
 			cmd := m.startAgent(text)
-			return m, cmd
+			return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 		}
 		// Agent is busy — queue as interruption
 		m.queuePendingSubmission(text)

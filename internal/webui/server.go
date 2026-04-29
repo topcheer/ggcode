@@ -100,6 +100,7 @@ type Server struct {
 	a2aDiscoverFn A2ADiscoverFunc // returns discovered A2A instances
 	sessionStore  session.Store
 	workspace     string // current ggcode working directory
+	saveScope     string // "global" or "instance" — where config saves go
 	chatBridge    ChatBridge
 	agent         AgentRunner // legacy, for non-bridge setups
 	agentMu       sync.Mutex
@@ -156,11 +157,22 @@ func (s *Server) SetChatBridge(b ChatBridge) {
 // NewServer creates a WebUI server bound to the given config.
 func NewServer(cfg *config.Config) *Server {
 	s := &Server{
-		cfg: cfg,
-		mux: http.NewServeMux(),
+		cfg:       cfg,
+		mux:       http.NewServeMux(),
+		saveScope: "global",
 	}
 	s.routes()
 	return s
+}
+
+// saveConfig persists config using the current save scope.
+func (s *Server) saveConfig() error {
+	return s.cfg.SaveScoped(s.saveScope)
+}
+
+// SetSaveScope sets the config save scope for WebUI operations.
+func (s *Server) SetSaveScope(scope string) {
+	s.saveScope = scope
 }
 
 // Start starts the HTTP server on the given address (e.g. "127.0.0.1:0" for auto).
@@ -201,6 +213,7 @@ func (s *Server) routes() {
 
 	// Config REST API
 	s.mux.HandleFunc("/api/config", s.handleConfig)
+	s.mux.HandleFunc("/api/config/scope", s.handleConfigScope)
 	s.mux.HandleFunc("/api/config/active", s.handleActiveSelection)
 	s.mux.HandleFunc("/api/vendors", s.handleVendors)
 	s.mux.HandleFunc("/api/vendors/", s.handleVendorDetail)
@@ -246,7 +259,7 @@ func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
 
 // --- Config API ---
 
-// GET /api/config — full config as JSON
+// GET /api/config — full config as JSON (includes scope info)
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -255,8 +268,49 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	sanitized := sanitizeConfigForAPI(s.cfg)
-	writeJSON(w, sanitized)
+	result := sanitizeConfigForAPI(s.cfg)
+	result["_scope"] = map[string]interface{}{
+		"current":     s.saveScope,
+		"hasInstance": s.cfg.HasInstanceConfigAttached(),
+		"instanceDir": s.cfg.InstanceDirPath(),
+	}
+	writeJSON(w, result)
+}
+
+// GET/PUT /api/config/scope — read/switch config save scope
+func (s *Server) handleConfigScope(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		writeJSON(w, map[string]interface{}{
+			"scope":       s.saveScope,
+			"hasInstance": s.cfg.HasInstanceConfigAttached(),
+			"instanceDir": s.cfg.InstanceDirPath(),
+		})
+	case http.MethodPut:
+		var req struct {
+			Scope string `json:"scope"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.Scope != "global" && req.Scope != "instance" {
+			writeError(w, http.StatusBadRequest, "scope must be 'global' or 'instance'")
+			return
+		}
+		if req.Scope == "instance" && !s.cfg.HasInstanceConfigAttached() {
+			writeError(w, http.StatusBadRequest, "no instance config available for this workspace")
+			return
+		}
+		s.mu.Lock()
+		s.saveScope = req.Scope
+		s.mu.Unlock()
+		writeJSON(w, map[string]string{"scope": req.Scope})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // GET/PUT /api/config/active — read/switch active vendor+endpoint+model
@@ -286,7 +340,7 @@ func (s *Server) handleActiveSelection(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -343,7 +397,7 @@ func (s *Server) handleVendors(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -403,7 +457,7 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 			vc = s.cfg.Vendors[vendor]
 		}
 		s.cfg.Vendors[vendor] = vc
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -416,7 +470,7 @@ func (s *Server) handleVendorDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -459,7 +513,7 @@ func (s *Server) handleEndpoints(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -509,7 +563,7 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		vc.Endpoints[endpoint] = ep
 		s.cfg.Vendors[vendor] = vc
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -522,7 +576,7 @@ func (s *Server) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -557,7 +611,7 @@ func (s *Server) handleAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.cfg.Save(); err != nil {
+	if err := s.saveConfig(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -597,7 +651,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.cfg.UpsertMCPServer(server)
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -638,7 +692,7 @@ func (s *Server) handleMCPDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "MCP server not found")
 		return
 	}
-	if err := s.cfg.Save(); err != nil {
+	if err := s.saveConfig(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -661,7 +715,7 @@ func (s *Server) handleIM(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.cfg.IM = im
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -751,7 +805,7 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -764,7 +818,7 @@ func (s *Server) handleIMAdapterDetail(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -927,7 +981,7 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 				s.cfg.A2A.Auth.MTLS = req.Auth.MTLS
 			}
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -1071,6 +1125,11 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs := make([]message, 0, len(ses.Messages))
 	for _, m := range ses.Messages {
+		// Skip system messages — they contain internal prompts and should
+		// not be shown in the history detail view.
+		if m.Role == "system" {
+			continue
+		}
 		blocks := make([]contentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
 			blocks = append(blocks, contentBlock{
@@ -1146,6 +1205,9 @@ func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]message, 0, len(msgs))
 	for _, m := range msgs {
+		if m.Role == "system" {
+			continue
+		}
 		blocks := make([]contentBlock, 0, len(m.Content))
 		for _, b := range m.Content {
 			blocks = append(blocks, contentBlock{
@@ -1482,7 +1544,7 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 				s.cfg.SystemPrompt = req.SystemPrompt
 			}
 		}
-		if err := s.cfg.Save(); err != nil {
+		if err := s.saveConfig(); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
