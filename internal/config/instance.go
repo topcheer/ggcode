@@ -409,6 +409,15 @@ func (c *Config) HasInstanceConfigAttached() bool {
 	return c.instanceWS != ""
 }
 
+// HasInstanceConfigFile returns true if an instance config file actually exists on disk.
+func (c *Config) HasInstanceConfigFile() bool {
+	if c.instancePath == "" {
+		return false
+	}
+	_, err := os.Stat(c.instancePath)
+	return err == nil
+}
+
 // InstanceWorkspace returns the workspace path for instance config, or empty string.
 func (c *Config) InstanceWorkspace() string {
 	return c.instanceWS

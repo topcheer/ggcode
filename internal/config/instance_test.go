@@ -2055,3 +2055,32 @@ func TestMigrateInstanceKeys_MCPServerEnv(t *testing.T) {
 		t.Errorf("instance keys.env should use prefix:\n%s", string(instKeysData))
 	}
 }
+
+func TestHasInstanceConfigFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+
+	// No instance at all — false
+	cfg, _ := Load(globalPath)
+	if cfg.HasInstanceConfigFile() {
+		t.Error("should be false without LoadWithInstance")
+	}
+
+	// LoadWithInstance but no file — false
+	cfg, _ = LoadWithInstance(globalPath, workspace)
+	if cfg.HasInstanceConfigFile() {
+		t.Error("should be false when instance file doesn't exist yet")
+	}
+
+	// Create instance file — true
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("language: zh\n"), 0644)
+	cfg, _ = LoadWithInstance(globalPath, workspace)
+	if !cfg.HasInstanceConfigFile() {
+		t.Error("should be true when instance file exists")
+	}
+}

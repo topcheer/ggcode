@@ -1333,8 +1333,14 @@ func (m Model) renderContextBox(title, body string, accent color.Color) string {
 		if m.configSaveScope == "instance" {
 			scopeColor = lipgloss.Color("14") // cyan for instance
 		}
+		hint := ""
+		if m.configSaveScope == "instance" {
+			if _, err := os.Stat(m.config.InstanceDirPath()); os.IsNotExist(err) {
+				hint = " (new config will be created on save)"
+			}
+		}
 		scopeLine = "\n" + lipgloss.NewStyle().Foreground(scopeColor).Render(
-			fmt.Sprintf(" Save target: %s  [Ctrl+T toggle]", scopeLabel))
+			fmt.Sprintf(" Save target: %s%s  [Ctrl+T toggle]", scopeLabel, hint))
 	}
 	content += scopeLine
 	return lipgloss.NewStyle().
