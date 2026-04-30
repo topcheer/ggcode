@@ -44,6 +44,17 @@ a { color: var(--accent); text-decoration: none; }
 .badge-green { background: rgba(63,185,80,.15); color: var(--green); }
 .badge-red { background: rgba(248,81,73,.15); color: var(--red); }
 .badge-yellow { background: rgba(210,153,34,.15); color: var(--yellow); }
+.badge-cyan { background: rgba(56,182,255,.15); color: #38b6ff; }
+
+/* Scope toggle */
+.scope-box { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 11px; }
+.scope-label { color: var(--text2); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.scope-label .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.scope-toggle { display: flex; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); margin-top: 4px; }
+.scope-toggle button { flex: 1; padding: 5px 0; font-size: 11px; border: none; background: transparent; color: var(--text2); cursor: pointer; transition: all .15s; }
+.scope-toggle button.active-global { background: rgba(139,148,158,.15); color: var(--text); font-weight: 600; }
+.scope-toggle button.active-instance { background: rgba(56,182,255,.15); color: #38b6ff; font-weight: 600; }
+.scope-toggle button:disabled { opacity: .4; cursor: not-allowed; }
 
 /* Form elements */
 .form-group { margin-bottom: 16px; }
@@ -200,6 +211,13 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
         <span class="nav-icon">&#128172;</span><span>Chat</span>
       </div>
       <div style="flex:1"></div>
+      <div id="scope-box" class="scope-box" style="display:none">
+        <div class="scope-label"><span class="dot" id="scope-dot" style="background:#8b949e"></span> Save Target</div>
+        <div class="scope-toggle">
+          <button id="btn-scope-global" class="active-global" onclick="setScope('global')">Global</button>
+          <button id="btn-scope-instance" onclick="setScope('instance')">Instance</button>
+        </div>
+      </div>
       <div style="padding:8px 4px">
         <button class="btn btn-danger" style="width:100%" onclick="triggerRestart()">&#x21bb; Restart</button>
       </div>
@@ -495,6 +513,8 @@ async function loadAll() {
   try {
     config = await api('/api/config');
     vendors = await api('/api/vendors');
+    // Initialize scope UI from config._scope
+    initScopeUI(config._scope);
     try { mcpServers = await api('/api/mcp'); } catch(e) { mcpServers = []; }
     renderOverview();
     renderModel();
@@ -515,6 +535,46 @@ async function loadAll() {
   }
 }
 
+// --- Config Save Scope ---
+let currentScope = 'global';
+let hasInstance = false;
+
+function initScopeUI(scope) {
+  if (!scope) return;
+  currentScope = scope.current || 'global';
+  hasInstance = scope.hasInstance || false;
+  updateScopeUI();
+}
+
+function updateScopeUI() {
+  const box = document.getElementById('scope-box');
+  const btnGlobal = document.getElementById('btn-scope-global');
+  const btnInstance = document.getElementById('btn-scope-instance');
+  const dot = document.getElementById('scope-dot');
+  if (!box) return;
+  if (hasInstance) {
+    box.style.display = '';
+    btnGlobal.className = currentScope === 'global' ? 'active-global' : '';
+    btnInstance.className = currentScope === 'instance' ? 'active-instance' : '';
+    btnInstance.disabled = false;
+    dot.style.background = currentScope === 'instance' ? '#38b6ff' : '#8b949e';
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+async function setScope(scope) {
+  try {
+    const r = await api('/api/config/scope', { method: 'PUT', body: JSON.stringify({ scope }) });
+    currentScope = r.scope || scope;
+    updateScopeUI();
+    renderOverview();
+    toast('Config save target: ' + (currentScope === 'instance' ? 'Instance' : 'Global'), true);
+  } catch(e) {
+    toast('Failed to switch scope: ' + e.message, false);
+  }
+}
+
 // --- Overview ---
 function renderOverview() {
   const c = config;
@@ -522,9 +582,13 @@ function renderOverview() {
   const hasKey = v && v.has_api_key;
   const mcpCount = mcpServers.length;
   const imEnabled = c.im && c.im.enabled;
+  const scope = c._scope || {};
+  const scopeBadge = scope.hasInstance
+    ? `<span class="badge ${scope.current === 'instance' ? 'badge-cyan' : ''}" style="${scope.current !== 'instance' ? 'background:rgba(139,148,158,.15);color:var(--text2)' : ''}">Save: ${scope.current === 'instance' ? 'Instance' : 'Global'}</span>`
+    : '';
   document.getElementById('overview-content').innerHTML = `
     <div class="card">
-      <div class="card-title">Active Configuration <span class="badge ${hasKey ? 'badge-green' : 'badge-red'}">${hasKey ? 'API Key Set' : 'No API Key'}</span></div>
+      <div class="card-title">Active Configuration <span class="badge ${hasKey ? 'badge-green' : 'badge-red'}">${hasKey ? 'API Key Set' : 'No API Key'}</span> ${scopeBadge}</div>
       <div class="table-wrap"><table>
         <tr><th>Setting</th><th>Value</th></tr>
         <tr><td>Vendor</td><td><span class="mono">${c.vendor}</span></td></tr>

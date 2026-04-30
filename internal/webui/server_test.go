@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -779,5 +780,151 @@ func TestChatHistoryNoBridge(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	if len(result) != 0 {
 		t.Errorf("expected empty, got %v", result)
+	}
+}
+
+// --- Config Save Scope Tests ---
+
+func TestHandleConfigScope_GET(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config/scope", nil)
+	w := httptest.NewRecorder()
+	s.handleConfigScope(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["scope"] != "global" {
+		t.Errorf("scope = %v, want global", resp["scope"])
+	}
+}
+
+func TestHandleConfigScope_PUT_Global(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	body := `{"scope":"global"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/config/scope", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleConfigScope(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["scope"] != "global" {
+		t.Errorf("scope = %v, want global", resp["scope"])
+	}
+}
+
+func TestHandleConfigScope_PUT_InstanceWithoutInstance(t *testing.T) {
+	cfg := config.DefaultConfig()
+	// No instance config attached — should reject instance scope
+	s := NewServer(cfg)
+
+	body := `{"scope":"instance"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/config/scope", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleConfigScope(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("status = %d, want 400 (no instance config)", w.Code)
+	}
+}
+
+func TestHandleConfigScope_PUT_InvalidScope(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	body := `{"scope":"nonsense"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/config/scope", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleConfigScope(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestHandleConfigScope_MethodNotAllowed(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/config/scope", nil)
+	w := httptest.NewRecorder()
+	s.handleConfigScope(w, req)
+
+	if w.Code != 405 {
+		t.Fatalf("status = %d, want 405", w.Code)
+	}
+}
+
+func TestHandleConfig_IncludesScope(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	s.handleConfig(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	scope, ok := resp["_scope"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response should have _scope field")
+	}
+	if scope["current"] != "global" {
+		t.Errorf("_scope.current = %v, want global", scope["current"])
+	}
+}
+
+func TestHandleConfigScope_PutInstanceWithInstance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := tmpDir + "/ggcode.yaml"
+	cfg := config.DefaultConfig()
+	cfg.FilePath = globalPath
+	cfg.Save()
+
+	workspace := tmpDir + "/project"
+	// Manually create instance config dir and file
+	instDir := config.InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(instDir+"/ggcode.yaml", []byte("language: en\n"), 0644)
+
+	cfg, _ = config.LoadWithInstance(globalPath, workspace)
+	s := NewServer(cfg)
+
+	body := `{"scope":"instance"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/config/scope", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleConfigScope(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["scope"] != "instance" {
+		t.Errorf("scope = %v, want instance", resp["scope"])
+	}
+
+	// Verify server's saveScope changed
+	s.mu.RLock()
+	sc := s.saveScope
+	s.mu.RUnlock()
+	if sc != "instance" {
+		t.Errorf("server saveScope = %q, want instance", sc)
 	}
 }
