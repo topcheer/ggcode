@@ -1114,3 +1114,150 @@ func TestKnightSkillContentAPI(t *testing.T) {
 		}
 	})
 }
+
+// --- Knight edge cases ---
+
+func TestKnightSkillsNoFn(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/api/knight/skills", nil)
+	w := httptest.NewRecorder()
+	s.handleKnightSkills(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	active, _ := resp["active"].([]interface{})
+	staging, _ := resp["staging"].([]interface{})
+	if len(active) != 0 || len(staging) != 0 {
+		t.Errorf("expected empty arrays, got active=%d staging=%d", len(active), len(staging))
+	}
+}
+
+func TestKnightSkillsMethodNotAllowed(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/api/knight/skills", nil)
+	w := httptest.NewRecorder()
+	s.handleKnightSkills(w, req)
+	if w.Code != 405 {
+		t.Fatalf("status = %d, want 405", w.Code)
+	}
+}
+
+func TestKnightActionEdgeCases(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	var captured string
+	s.SetKnightActionFn(func(action, name string, params map[string]interface{}) error {
+		captured = action + ":" + name
+		return nil
+	})
+
+	t.Run("missing action field", func(t *testing.T) {
+		body := `{"name":"x"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/action", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleKnightAction(w, req)
+		if w.Code != 400 {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		body := `{not json`
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/action", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleKnightAction(w, req)
+		if w.Code != 400 {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("delete_queue action", func(t *testing.T) {
+		body := `{"action":"delete_queue","name":"bad-candidate"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/action", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleKnightAction(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if captured != "delete_queue:bad-candidate" {
+			t.Errorf("got %q", captured)
+		}
+	})
+}
+
+func TestKnightContentEdgeCases(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	s.SetKnightSkillContentFn(func(name string, staging bool) (string, error) {
+		return "# " + name, nil
+	})
+
+	t.Run("missing name param", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content", nil)
+		w := httptest.NewRecorder()
+		s.handleKnightSkillContent(w, req)
+		if w.Code != 400 {
+			t.Fatalf("status = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("no content fn", func(t *testing.T) {
+		cfg2 := config.DefaultConfig()
+		s2 := NewServer(cfg2)
+		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content?name=x", nil)
+		w := httptest.NewRecorder()
+		s2.handleKnightSkillContent(w, req)
+		if w.Code != 503 {
+			t.Fatalf("status = %d, want 503", w.Code)
+		}
+	})
+
+	t.Run("method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/skill-content?name=x", nil)
+		w := httptest.NewRecorder()
+		s.handleKnightSkillContent(w, req)
+		if w.Code != 405 {
+			t.Fatalf("status = %d, want 405", w.Code)
+		}
+	})
+}
+
+func TestKnightTypes(t *testing.T) {
+	// Verify KnightStatus JSON serialization
+	s := KnightStatus{
+		Enabled: true,
+		Running: true,
+		Status:  "running",
+		Budget:  KnightBudget{Used: 50000, Remaining: 4950000, Limit: 5000000},
+		Active: []KnightSkill{
+			{Name: "test-skill", Description: "A test", Scope: "project", UsageCount: 3},
+		},
+		Queue: []KnightCandidate{
+			{Name: "fix-build", Category: "failure-fix", Score: 4.0, EvidenceCount: 2},
+		},
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded KnightStatus
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Enabled || !decoded.Running {
+		t.Error("enabled/running not preserved")
+	}
+	if decoded.Budget.Limit != 5000000 {
+		t.Errorf("budget limit = %d", decoded.Budget.Limit)
+	}
+	if len(decoded.Active) != 1 || decoded.Active[0].Name != "test-skill" {
+		t.Errorf("active = %v", decoded.Active)
+	}
+	if len(decoded.Queue) != 1 || decoded.Queue[0].Category != "failure-fix" {
+		t.Errorf("queue = %v", decoded.Queue)
+	}
+}
