@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1010,6 +1011,106 @@ func TestKnightAPI(t *testing.T) {
 		s.handleKnight(w, req)
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("status = %d, want 405", w.Code)
+		}
+	})
+}
+
+func TestKnightActionAPI(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	var lastAction, lastSkillName string
+	var lastParams map[string]interface{}
+	s.SetKnightActionFn(func(action, skillName string, params map[string]interface{}) error {
+		lastAction = action
+		lastSkillName = skillName
+		lastParams = params
+		if action == "fail" {
+			return fmt.Errorf("intentional error")
+		}
+		return nil
+	})
+
+	t.Run("promote action", func(t *testing.T) {
+		body := `{"action":"promote","name":"my-skill"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/action", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleKnightAction(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if lastAction != "promote" || lastSkillName != "my-skill" {
+			t.Errorf("got action=%q name=%q", lastAction, lastSkillName)
+		}
+	})
+
+	t.Run("action with params", func(t *testing.T) {
+		body := `{"action":"record_effectiveness","name":"my-skill","params":{"score":5}}`
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/action", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleKnightAction(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if lastParams["score"] != 5.0 {
+			t.Errorf("params = %v", lastParams)
+		}
+	})
+
+	t.Run("error response", func(t *testing.T) {
+		body := `{"action":"fail","name":"x"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/action", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s.handleKnightAction(w, req)
+		if w.Code != 500 {
+			t.Fatalf("status = %d, want 500", w.Code)
+		}
+	})
+
+	t.Run("no action fn", func(t *testing.T) {
+		cfg2 := config.DefaultConfig()
+		s2 := NewServer(cfg2)
+		body := `{"action":"promote","name":"x"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/knight/action", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		s2.handleKnightAction(w, req)
+		if w.Code != 503 {
+			t.Fatalf("status = %d, want 503", w.Code)
+		}
+	})
+}
+
+func TestKnightSkillContentAPI(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	s.SetKnightSkillContentFn(func(name string, staging bool) (string, error) {
+		if name == "missing" {
+			return "", fmt.Errorf("not found")
+		}
+		return "# " + name, nil
+	})
+
+	t.Run("get content", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content?name=my-skill&staging=true", nil)
+		w := httptest.NewRecorder()
+		s.handleKnightSkillContent(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var resp map[string]string
+		json.NewDecoder(w.Body).Decode(&resp)
+		if resp["content"] != "# my-skill" {
+			t.Errorf("content = %q", resp["content"])
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content?name=missing", nil)
+		w := httptest.NewRecorder()
+		s.handleKnightSkillContent(w, req)
+		if w.Code != 404 {
+			t.Fatalf("status = %d, want 404", w.Code)
 		}
 	})
 }
