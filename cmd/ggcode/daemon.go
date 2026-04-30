@@ -824,6 +824,67 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		return result
 	})
+	webuiSrv.SetKnightStatusFn(func() webui.KnightStatus {
+		if knightAgent == nil {
+			return webui.KnightStatus{Enabled: false, Status: "not initialized"}
+		}
+		used, remaining, limit := knightAgent.BudgetStatus()
+		status := webui.KnightStatus{
+			Enabled: true,
+			Running: knightAgent.Running(),
+			Status:  knightAgent.Status(),
+			Budget: webui.KnightBudget{
+				Used:      used,
+				Remaining: remaining,
+				Limit:     limit,
+			},
+		}
+		if idx := knightAgent.Index(); idx != nil {
+			if active, err := idx.ActiveSkills(); err == nil {
+				for _, s := range active {
+					status.Active = append(status.Active, webui.KnightSkill{
+						Name:        s.Meta.Name,
+						Description: s.Meta.Description,
+						Scope:       s.Scope,
+						CreatedBy:   s.Meta.CreatedBy,
+						UsageCount:  s.Meta.UsageCount,
+						Frozen:      s.Meta.Frozen,
+						Platforms:   s.Meta.Platforms,
+					})
+				}
+			}
+			if staging, err := idx.StagingSkills(); err == nil {
+				for _, s := range staging {
+					status.Staging = append(status.Staging, webui.KnightSkill{
+						Name:        s.Meta.Name,
+						Description: s.Meta.Description,
+						Scope:       s.Scope,
+						Staging:     true,
+						CreatedBy:   s.Meta.CreatedBy,
+						UsageCount:  s.Meta.UsageCount,
+						Frozen:      s.Meta.Frozen,
+						Platforms:   s.Meta.Platforms,
+					})
+				}
+			}
+		}
+		if q := knightAgent.Queue(); q != nil {
+			if items, err := q.List(); err == nil {
+				for _, c := range items {
+					status.Queue = append(status.Queue, webui.KnightCandidate{
+						Name:           c.Name,
+						Description:    c.Description,
+						Category:       c.Category,
+						Score:          c.Score,
+						EvidenceCount:  c.EvidenceCount,
+						Reason:         c.Reason,
+						SourceSessions: c.SourceSessions,
+					})
+				}
+			}
+		}
+		return status
+	})
 	webuiSrv.SetSessionStore(store, workingDir)
 	webuiSrv.SetChatBridge(bridge)
 	webuiAddr := "127.0.0.1:0" // auto port
