@@ -490,9 +490,12 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	instanceCfg := LoadInstanceConfig(workspace)
 	if instanceCfg != nil {
 		MergeInstance(cfg, instanceCfg)
-		cfg.SetInstancePaths(workspace)
 		debug.Log("config", "applied instance config for workspace %s", workspace)
 	}
+	// Always record instance paths so HasInstanceConfigAttached() returns true
+	// even when no instance config file exists yet. This allows the user to
+	// switch to instance scope and create the first instance config.
+	cfg.SetInstancePaths(workspace)
 
 	// Also apply legacy .ggcode/a2a.yaml if it exists (for backward compat).
 	// This uses "instance wins" semantics (unlike MergeInstance's "global wins").
