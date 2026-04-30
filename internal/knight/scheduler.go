@@ -300,6 +300,11 @@ func (k *Knight) Index() *SkillIndex {
 	return k.index
 }
 
+// Queue returns the candidate queue for external queries.
+func (k *Knight) Queue() *CandidateQueue {
+	return k.queue
+}
+
 // Status returns a human-readable status string.
 func (k *Knight) Status() string {
 	if !k.cfg.Enabled {

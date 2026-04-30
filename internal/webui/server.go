@@ -58,6 +58,47 @@ type IMActionFunc func(adapter string, action string) error
 // A2ADiscoverFunc returns discovered A2A instances (other running ggcode processes).
 type A2ADiscoverFunc func() []A2ADiscoveredInstance
 
+// KnightStatusFunc returns current Knight agent status and skill data.
+type KnightStatusFunc func() KnightStatus
+
+// KnightStatus holds all Knight state exposed via the WebUI API.
+type KnightStatus struct {
+	Enabled bool              `json:"enabled"`
+	Running bool              `json:"running"`
+	Status  string            `json:"status"` // human-readable status string
+	Budget  KnightBudget      `json:"budget"`
+	Active  []KnightSkill     `json:"active"`
+	Staging []KnightSkill     `json:"staging"`
+	Queue   []KnightCandidate `json:"queue"`
+}
+
+type KnightBudget struct {
+	Used      int `json:"used"`
+	Remaining int `json:"remaining"`
+	Limit     int `json:"limit"`
+}
+
+type KnightSkill struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Scope       string   `json:"scope"`
+	Staging     bool     `json:"staging"`
+	CreatedBy   string   `json:"created_by"`
+	UsageCount  int      `json:"usage_count"`
+	Frozen      bool     `json:"frozen"`
+	Platforms   []string `json:"platforms,omitempty"`
+}
+
+type KnightCandidate struct {
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	Category       string   `json:"category"`
+	Score          float64  `json:"score"`
+	EvidenceCount  int      `json:"evidence_count"`
+	Reason         string   `json:"reason,omitempty"`
+	SourceSessions []string `json:"source_sessions,omitempty"`
+}
+
 // A2ADiscoveredInstance describes a remote ggcode instance discovered via A2A.
 type A2ADiscoveredInstance struct {
 	ID        string `json:"id"`
@@ -92,23 +133,24 @@ type AgentRunner interface {
 
 // Server provides a built-in WebUI for configuration and chat.
 type Server struct {
-	cfg           *config.Config
-	mcpStatusFn   MCPStatusFunc
-	imStatusFn    IMStatusFunc
-	imActionFn    IMActionFunc
-	restartFn     func()          // called when user triggers restart from WebUI
-	a2aDiscoverFn A2ADiscoverFunc // returns discovered A2A instances
-	sessionStore  session.Store
-	workspace     string // current ggcode working directory
-	saveScope     string // "global" or "instance" — where config saves go
-	chatBridge    ChatBridge
-	agent         AgentRunner // legacy, for non-bridge setups
-	agentMu       sync.Mutex
-	agentBusy     atomic.Bool
-	mu            sync.RWMutex
-	addr          string
-	listener      net.Listener
-	mux           *http.ServeMux
+	cfg            *config.Config
+	mcpStatusFn    MCPStatusFunc
+	imStatusFn     IMStatusFunc
+	imActionFn     IMActionFunc
+	restartFn      func()           // called when user triggers restart from WebUI
+	a2aDiscoverFn  A2ADiscoverFunc  // returns discovered A2A instances
+	knightStatusFn KnightStatusFunc // returns Knight agent status
+	sessionStore   session.Store
+	workspace      string // current ggcode working directory
+	saveScope      string // "global" or "instance" — where config saves go
+	chatBridge     ChatBridge
+	agent          AgentRunner // legacy, for non-bridge setups
+	agentMu        sync.Mutex
+	agentBusy      atomic.Bool
+	mu             sync.RWMutex
+	addr           string
+	listener       net.Listener
+	mux            *http.ServeMux
 }
 
 // SetMCPStatusFn sets the runtime MCP status provider.
@@ -134,6 +176,11 @@ func (s *Server) SetRestartFn(fn func()) {
 // SetA2ADiscoverFn sets the A2A instance discovery provider.
 func (s *Server) SetA2ADiscoverFn(fn A2ADiscoverFunc) {
 	s.a2aDiscoverFn = fn
+}
+
+// SetKnightStatusFn sets the callback for Knight agent status.
+func (s *Server) SetKnightStatusFn(fn KnightStatusFunc) {
+	s.knightStatusFn = fn
 }
 
 // SetSessionStore sets the session store for browsing history.
@@ -237,6 +284,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/chat/ws", s.handleChatWS)
 	s.mux.HandleFunc("/api/chat/history", s.handleChatHistory)
 	s.mux.HandleFunc("/api/restart", s.handleRestart)
+	s.mux.HandleFunc("/api/knight", s.handleKnight)
+	s.mux.HandleFunc("/api/knight/skills", s.handleKnightSkills)
 }
 
 // --- Static SPA ---
@@ -1570,6 +1619,36 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 			s.restartFn()
 		}
 	}()
+}
+
+// handleKnight returns Knight agent status and all skill data.
+func (s *Server) handleKnight(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.knightStatusFn == nil {
+		writeJSON(w, KnightStatus{Enabled: false, Status: "unavailable"})
+		return
+	}
+	writeJSON(w, s.knightStatusFn())
+}
+
+// handleKnightSkills returns only the active and staging skills (lighter endpoint).
+func (s *Server) handleKnightSkills(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.knightStatusFn == nil {
+		writeJSON(w, map[string]interface{}{"active": []interface{}{}, "staging": []interface{}{}})
+		return
+	}
+	status := s.knightStatusFn()
+	writeJSON(w, map[string]interface{}{
+		"active":  status.Active,
+		"staging": status.Staging,
+	})
 }
 
 // --- Helpers ---

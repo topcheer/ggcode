@@ -928,3 +928,88 @@ func TestHandleConfigScope_PutInstanceWithInstance(t *testing.T) {
 		t.Errorf("server saveScope = %q, want instance", sc)
 	}
 }
+
+func TestKnightAPI(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+
+	t.Run("no knight fn returns disabled", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/knight", nil)
+		w := httptest.NewRecorder()
+		s.handleKnight(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var status KnightStatus
+		json.NewDecoder(w.Body).Decode(&status)
+		if status.Enabled {
+			t.Error("expected enabled=false when no knightStatusFn set")
+		}
+	})
+
+	t.Run("with knight fn returns full status", func(t *testing.T) {
+		s.SetKnightStatusFn(func() KnightStatus {
+			return KnightStatus{
+				Enabled: true,
+				Running: true,
+				Status:  "running (tokens: 50K / 5M)",
+				Budget:  KnightBudget{Used: 50000, Remaining: 4950000, Limit: 5000000},
+				Active: []KnightSkill{
+					{Name: "build-convention", Description: "Always use make build", Scope: "project", CreatedBy: "knight"},
+				},
+				Staging: []KnightSkill{
+					{Name: "read-first", Description: "Read before editing", Scope: "global", Staging: true, CreatedBy: "knight"},
+				},
+				Queue: []KnightCandidate{
+					{Name: "fix-missing-file", Category: "failure-fix", Score: 4.0, EvidenceCount: 2},
+				},
+			}
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/api/knight", nil)
+		w := httptest.NewRecorder()
+		s.handleKnight(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var status KnightStatus
+		json.NewDecoder(w.Body).Decode(&status)
+		if !status.Enabled || !status.Running {
+			t.Error("expected enabled=true, running=true")
+		}
+		if len(status.Active) != 1 || status.Active[0].Name != "build-convention" {
+			t.Errorf("active skills = %v", status.Active)
+		}
+		if len(status.Staging) != 1 || !status.Staging[0].Staging {
+			t.Errorf("staging skills = %v", status.Staging)
+		}
+		if len(status.Queue) != 1 || status.Queue[0].Category != "failure-fix" {
+			t.Errorf("queue = %v", status.Queue)
+		}
+	})
+
+	t.Run("skills endpoint returns only skills", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/knight/skills", nil)
+		w := httptest.NewRecorder()
+		s.handleKnightSkills(w, req)
+		if w.Code != 200 {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		var resp map[string]interface{}
+		json.NewDecoder(w.Body).Decode(&resp)
+		active, _ := resp["active"].([]interface{})
+		staging, _ := resp["staging"].([]interface{})
+		if len(active) != 1 || len(staging) != 1 {
+			t.Errorf("active=%d staging=%d", len(active), len(staging))
+		}
+	})
+
+	t.Run("method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/knight", nil)
+		w := httptest.NewRecorder()
+		s.handleKnight(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want 405", w.Code)
+		}
+	})
+}
