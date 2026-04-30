@@ -906,6 +906,16 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 		return
 	}
 
+	// Notify activity hook (Knight idle timer) for webchat messages too.
+	if text != "" {
+		b.mu.Lock()
+		onActivity := b.onActivity
+		b.mu.Unlock()
+		if onActivity != nil {
+			onActivity()
+		}
+	}
+
 	// Atomically check if agent is running and either queue interruption
 	// or claim the "run starter" role. This prevents TOCTOU races with
 	// concurrent IM messages.

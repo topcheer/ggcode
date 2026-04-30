@@ -595,6 +595,19 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	if cfg.Knight().Enabled {
 		// Create Knight emitter (reuse IM emitter)
 		knightAgent.SetEmitter(emitter)
+		// Wire Knight task events to stderr for follow display
+		knightAgent.SetEventSink(&knight.FuncSink{
+			OnStart: func(taskName string) {
+				fmt.Fprintf(os.Stderr, "🌙 Knight: starting %s\n", taskName)
+			},
+			OnComplete: func(taskName string, report string, duration time.Duration) {
+				suffix := ""
+				if duration > 0 {
+					suffix = fmt.Sprintf(" (%.0fs)", duration.Seconds())
+				}
+				fmt.Fprintf(os.Stderr, "🌙 Knight %s completed%s — %s\n", taskName, suffix, report)
+			},
+		})
 		if err := knightAgent.Start(context.Background()); err != nil {
 			fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
 		} else {

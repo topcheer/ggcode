@@ -2,6 +2,7 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/knight"
@@ -15,6 +16,14 @@ type streamMsg string
 
 // doneMsg signals generation is complete.
 type doneMsg struct{}
+
+// knightTaskEventMsg is sent by the Knight background agent to display
+// task start/complete notifications in the chat area as system messages.
+type knightTaskEventMsg struct {
+	TaskName string
+	Report   string // non-empty = completed, empty = started
+	Duration time.Duration
+}
 
 // errMsg signals an error.
 type errMsg struct{ err error }

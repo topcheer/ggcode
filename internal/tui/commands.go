@@ -105,7 +105,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 
 func (m *Model) submitText(text string, addToHistory bool) tea.Cmd {
 	// Notify Knight that user is active (resets idle timer)
-	if m.knight != nil {
+	if m.knight != nil && strings.TrimSpace(text) != "" {
 		m.knight.NotifyActivity()
 	}
 	text = m.stripPendingImagePlaceholder(text)

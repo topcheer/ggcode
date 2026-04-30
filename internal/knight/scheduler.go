@@ -21,6 +21,14 @@ type Emitter interface {
 	HasTargets() bool
 }
 
+// EventSink receives Knight task lifecycle events for display in TUI/daemon.
+type EventSink interface {
+	// OnTaskStart is called when a Knight task begins.
+	OnTaskStart(taskName string)
+	// OnTaskComplete is called when a Knight task finishes with a detailed report.
+	OnTaskComplete(taskName string, report string, duration time.Duration)
+}
+
 // Knight is the background auto-evolution agent. It runs scheduled tasks
 // during idle time, analyzes sessions, creates and validates skills.
 type Knight struct {
@@ -32,6 +40,7 @@ type Knight struct {
 	queue    *CandidateQueue
 	store    session.Store
 	emitter  Emitter
+	sink     EventSink
 	factory  AgentFactory
 	homeDir  string
 	projDir  string
@@ -154,6 +163,38 @@ func (k *Knight) SetFactory(f AgentFactory) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.factory = f
+}
+
+// SetEventSink sets the event sink for task lifecycle notifications.
+func (k *Knight) SetEventSink(s EventSink) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.sink = s
+}
+
+// FuncSink is an EventSink that delegates to callback functions.
+type FuncSink struct {
+	OnStart    func(taskName string)
+	OnComplete func(taskName string, report string, duration time.Duration)
+}
+
+func (s *FuncSink) OnTaskStart(taskName string) {
+	if s.OnStart != nil {
+		s.OnStart(taskName)
+	}
+}
+
+func (s *FuncSink) OnTaskComplete(taskName string, report string, duration time.Duration) {
+	if s.OnComplete != nil {
+		s.OnComplete(taskName, report, duration)
+	}
+}
+
+// getEventSink returns the current event sink under lock protection.
+func (k *Knight) getEventSink() EventSink {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.sink
 }
 
 // getFactory returns the current agent factory under lock protection.
@@ -429,30 +470,54 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 	// Hourly (throttled): analyze recent sessions for skill candidates
 	if isIdle && k.hasCapability("skill_creation") && shouldRunScheduledTask(now, k.lastAnalysis, k.lastAnalysisAttempt, knightAnalysisEvery, knightRetryBackoffEvery) {
 		k.lastAnalysisAttempt = now
+		sink := k.getEventSink()
+		if sink != nil {
+			sink.OnTaskStart("session-analysis")
+		}
+		analysisStart := time.Now()
 		if err := k.analyzeRecentSessions(ctx); err != nil {
 			debug.Log("knight", "scheduled analysis failed: %v", err)
 		} else {
 			k.lastAnalysis = now
+		}
+		if sink != nil {
+			sink.OnTaskComplete("session-analysis", fmt.Sprintf("analyzed sessions (next in %s)", knightAnalysisEvery), time.Since(analysisStart))
 		}
 	}
 
 	// Every 6 hours: validate all skills
 	if k.hasCapability("skill_validation") && shouldRunScheduledTask(now, k.lastValidation, k.lastValidationAttempt, knightValidationEvery, knightRetryBackoffEvery) {
 		k.lastValidationAttempt = now
+		sink := k.getEventSink()
+		if sink != nil {
+			sink.OnTaskStart("skill-validation")
+		}
+		validationStart := time.Now()
 		if err := k.validateAllSkills(ctx); err != nil {
 			debug.Log("knight", "scheduled validation failed: %v", err)
 		} else {
 			k.lastValidation = now
+		}
+		if sink != nil {
+			sink.OnTaskComplete("skill-validation", "validated all skills", time.Since(validationStart))
 		}
 	}
 
 	// Nightly (2 AM): deep maintenance
 	if now.Hour() == 2 && shouldRunScheduledTask(now, k.lastMaintenance, k.lastMaintenanceAttempt, knightMaintenanceEvery, knightRetryBackoffEvery) {
 		k.lastMaintenanceAttempt = now
+		sink := k.getEventSink()
+		if sink != nil {
+			sink.OnTaskStart("nightly-maintenance")
+		}
+		maintenanceStart := time.Now()
 		if err := k.nightlyMaintenance(ctx); err != nil {
 			debug.Log("knight", "scheduled maintenance failed: %v", err)
 		} else {
 			k.lastMaintenance = now
+		}
+		if sink != nil {
+			sink.OnTaskComplete("nightly-maintenance", "nightly maintenance completed", time.Since(maintenanceStart))
 		}
 	}
 }
@@ -699,17 +764,24 @@ Do not edit files. Produce a concise report with:
 }
 
 // emitReport sends a Knight report via IM if an emitter is configured.
+// If an EventSink is configured, the report is also forwarded as a
+// task-complete event for display in TUI/daemon terminal.
 func (k *Knight) emitReport(report string) {
 	if k.inQuietHours(time.Now()) {
 		return
 	}
 	k.mu.Lock()
 	em := k.emitter
+	sink := k.sink
 	k.mu.Unlock()
-	if em == nil || !em.HasTargets() {
-		return
+	if em != nil && em.HasTargets() {
+		em.EmitKnightReport(report)
 	}
-	em.EmitKnightReport(report)
+	// Forward to EventSink for TUI/daemon terminal display.
+	// Use empty task name — the report is self-describing (emoji prefixed).
+	if sink != nil {
+		sink.OnTaskComplete("", report, 0)
+	}
 }
 
 func (k *Knight) markStagingNotified(name string) bool {
@@ -743,11 +815,25 @@ func (k *Knight) runMaintenanceTask(ctx context.Context, taskName, prompt string
 	if factory == nil {
 		return ""
 	}
-	result := k.RunTask(ctx, taskName, prompt, factory)
-	if result.Error != nil {
-		return fmt.Sprintf("task failed: %v", result.Error)
+	sink := k.getEventSink()
+	if sink != nil {
+		sink.OnTaskStart(taskName)
 	}
-	return formatKnightTaskOutput(result.Output)
+	start := time.Now()
+	result := k.RunTask(ctx, taskName, prompt, factory)
+	dur := time.Since(start)
+	output := formatKnightTaskOutput(result.Output)
+	if result.Error != nil {
+		errMsg := fmt.Sprintf("task failed: %v", result.Error)
+		if sink != nil {
+			sink.OnTaskComplete(taskName, errMsg, dur)
+		}
+		return errMsg
+	}
+	if sink != nil {
+		sink.OnTaskComplete(taskName, output, dur)
+	}
+	return output
 }
 
 func formatKnightTaskOutput(output string) string {

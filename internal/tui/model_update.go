@@ -698,6 +698,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
+		// Notify Knight idle timer — webchat counts as user activity too.
+		if m.knight != nil {
+			m.knight.NotifyActivity()
+		}
 		// Render the user bubble and persist to session -- same as keyboard input.
 		m.chatWriteUser(nextChatID(), text)
 		m.chatListScrollToBottom()
@@ -945,6 +949,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatListScrollToBottom()
 		return m, nil
 
+	case knightTaskEventMsg:
+		if msg.Report == "" {
+			// Task started
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight: starting %s", msg.TaskName))
+		} else if msg.TaskName == "" {
+			// Detailed report from emitReport (same as IM)
+			m.chatWriteSystem(nextSystemID(), msg.Report)
+		} else {
+			// Task completed with summary
+			suffix := ""
+			if msg.Duration > 0 {
+				suffix = fmt.Sprintf(" (%.0fs)", msg.Duration.Seconds())
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight %s completed%s\n%s", msg.TaskName, suffix, msg.Report))
+		}
+		m.chatListScrollToBottom()
+		return m, nil
 	case harnessContextSuggestionsMsg:
 		state := m.harnessContextPrompt
 		if state == nil || state.mode != harnessContextPromptInit {

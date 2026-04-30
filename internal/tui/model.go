@@ -686,6 +686,21 @@ func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
 
 func (m *Model) SetKnight(k *knight.Knight) {
 	m.knight = k
+	// Wire Knight task events into the TUI chat area via program.Send.
+	if k != nil {
+		k.SetEventSink(&knight.FuncSink{
+			OnStart: func(taskName string) {
+				if m.program != nil {
+					m.program.Send(knightTaskEventMsg{TaskName: taskName})
+				}
+			},
+			OnComplete: func(taskName string, report string, duration time.Duration) {
+				if m.program != nil {
+					m.program.Send(knightTaskEventMsg{TaskName: taskName, Report: report, Duration: duration})
+				}
+			},
+		})
+	}
 }
 
 // saveConfig saves config changes to either global or instance config
