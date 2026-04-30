@@ -204,6 +204,9 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       <div class="nav-item" data-page="prompt" onclick="showPage('prompt')">
         <span class="nav-icon">&#9997;</span><span>System Prompt</span>
       </div>
+      <div class="nav-item" data-page="knight" onclick="showPage('knight')">
+        <span class="nav-icon">&#127919;</span><span>Knight</span>
+      </div>
       <div class="nav-item" data-page="sessions" onclick="showPage('sessions')">
         <span class="nav-icon">&#128214;</span><span>Sessions</span>
       </div>
@@ -428,6 +431,32 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
       </div>
     </div>
 
+    <!-- Knight -->
+    <div class="page" id="page-knight">
+      <div class="page-header">
+        <h2>&#127919; Knight</h2>
+        <p>Background autonomous agent — monitors sessions and generates behavioral skills</p>
+      </div>
+      <div id="knight-status"></div>
+      <h3 style="font-size:14px;margin:20px 0 8px;color:var(--accent)">Active Skills</h3>
+      <div id="knight-active"></div>
+      <h3 style="font-size:14px;margin:20px 0 8px;color:var(--yellow)">Staging Skills <span style="font-size:11px;color:var(--text2)">(awaiting approval)</span></h3>
+      <div id="knight-staging"></div>
+      <h3 style="font-size:14px;margin:20px 0 8px;color:var(--purple)">Candidate Queue</h3>
+      <div id="knight-queue"></div>
+    </div>
+
+    <!-- Knight Skill Content Modal -->
+    <div id="knight-content-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.5);align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;width:700px;max-height:80vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 id="knight-content-title" style="font-size:16px"></h3>
+          <button class="btn btn-sm" onclick="hideKnightContentModal()">&times; Close</button>
+        </div>
+        <pre id="knight-content-body" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;font-size:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;max-height:60vh;line-height:1.5"></pre>
+      </div>
+    </div>
+
     <!-- Sessions -->
     <div class="page" id="page-sessions">
       <div class="page-header">
@@ -469,6 +498,7 @@ let mcpServers = []; // loaded from /api/mcp with runtime status
 let impersonateData = null; // loaded from /api/impersonate
 let a2aData = null; // loaded from /api/a2a
 let sessionsData = null; // loaded from /api/sessions
+let knightData = null; // loaded from /api/knight
 
 // --- API helpers ---
 async function api(path, opts) {
@@ -531,6 +561,8 @@ async function loadAll() {
     renderPrompt();
     try { sessionsData = await api('/api/sessions'); } catch(e) { sessionsData = null; }
     renderSessions();
+    try { knightData = await api('/api/knight'); } catch(e) { knightData = null; }
+    renderKnight();
   } catch(e) {
     toast('Failed to load: ' + e.message, false);
   }
@@ -2316,6 +2348,170 @@ function renderSessionsPage() {
   if (document.getElementById('page-sessions').classList.contains('active')) {
     renderSessions();
   }
+}
+
+// --- Knight ---
+function renderKnight() {
+  renderKnightStatus();
+  renderKnightActive();
+  renderKnightStaging();
+  renderKnightQueue();
+}
+
+function renderKnightStatus() {
+  const el = document.getElementById('knight-status');
+  if (!knightData || !knightData.enabled) {
+    el.innerHTML = '<div class="card"><p style="color:var(--text2)">Knight is not enabled or not available in this session.</p></div>';
+    return;
+  }
+  const k = knightData;
+  const statusDot = k.running ? 'dot-green' : 'dot-red';
+  const statusLabel = k.running ? 'Running' : 'Stopped';
+  const budgetPct = k.budget.limit > 0 ? Math.round(k.budget.used / k.budget.limit * 100) : 0;
+  const budgetColor = budgetPct > 80 ? 'var(--red)' : budgetPct > 50 ? 'var(--yellow)' : 'var(--green)';
+
+  el.innerHTML = `<div class="card">
+    <div class="card-title">Agent Status <span class="badge ${k.running?'badge-green':'badge-red'}"><span class="dot ${statusDot}"></span>${statusLabel}</span></div>
+    <div class="table-wrap"><table>
+      <tr><th style="width:140px">Setting</th><th>Value</th></tr>
+      <tr><td>Status</td><td>${esc(k.status)}</td></tr>
+      <tr><td>Budget</td><td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="flex:1;background:var(--surface2);border-radius:4px;height:8px;overflow:hidden">
+            <div style="width:${budgetPct}%;height:100%;background:${budgetColor};border-radius:4px;transition:width .3s"></div>
+          </div>
+          <span style="font-size:12px;color:var(--text2)">${formatTokens(k.budget.used)} / ${formatTokens(k.budget.limit)}</span>
+        </div>
+      </td></tr>
+      <tr><td>Active Skills</td><td>${k.active ? k.active.length : 0}</td></tr>
+      <tr><td>Staging Skills</td><td>${k.staging ? k.staging.length : 0}</td></tr>
+      <tr><td>Candidates</td><td>${k.queue ? k.queue.length : 0}</td></tr>
+    </table></div>
+    <div style="margin-top:12px;display:flex;gap:6px">
+      <button class="btn btn-sm btn-primary" onclick="knightAction('analyze','','Trigger analysis?')">&#9889; Analyze Now</button>
+      <button class="btn btn-sm" onclick="knightAction('validate','','Run validation?')">&#9989; Validate Now</button>
+      <button class="btn btn-sm" onclick="loadKnight()">&#8635; Refresh</button>
+    </div>
+  </div>`;
+}
+
+function renderKnightActive() {
+  const el = document.getElementById('knight-active');
+  const skills = (knightData && knightData.active) || [];
+  if (skills.length === 0) {
+    el.innerHTML = '<div class="card"><p style="color:var(--text2)">No active skills yet. Knight generates skills from session patterns.</p></div>';
+    return;
+  }
+  el.innerHTML = skills.map(s => {
+    const scopeBadge = s.scope === 'global' ? '<span class="badge badge-green" style="font-size:10px">global</span>' : '<span class="badge badge-cyan" style="font-size:10px">project</span>';
+    const frozenBadge = s.frozen ? '<span class="badge badge-yellow" style="font-size:10px">frozen</span>' : '';
+    return `<div class="card">
+      <div class="card-title">${esc(s.name)} ${scopeBadge} ${frozenBadge}</div>
+      <p style="color:var(--text2);font-size:12px;margin-bottom:8px">${esc(s.description)}</p>
+      <div style="display:flex;gap:6px;font-size:12px;color:var(--text2);flex-wrap:wrap;margin-bottom:8px">
+        ${s.usage_count > 0 ? `<span>Used ${s.usage_count}x</span>` : ''}
+        ${s.created_by ? `<span>by ${esc(s.created_by)}</span>` : ''}
+        ${s.created_at ? `<span>created ${s.created_at}</span>` : ''}
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm" onclick="showKnightContent('${esc(s.name)}',false)">&#128196; View</button>
+        ${s.frozen
+          ? `<button class="btn btn-sm btn-primary" onclick="knightAction('unfreeze','${esc(s.name)}','Unfreeze this skill?')">&#9881; Unfreeze</button>`
+          : `<button class="btn btn-sm" onclick="knightAction('freeze','${esc(s.name)}','Freeze this skill?')">&#10052; Freeze</button>`}
+        <button class="btn btn-sm" onclick="knightAction('rollback','${esc(s.name)}','Rollback to previous version?')">&#8634; Rollback</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderKnightStaging() {
+  const el = document.getElementById('knight-staging');
+  const skills = (knightData && knightData.staging) || [];
+  if (skills.length === 0) {
+    el.innerHTML = '<div class="card"><p style="color:var(--text2)">No staging skills awaiting approval.</p></div>';
+    return;
+  }
+  el.innerHTML = skills.map(s => {
+    const scopeBadge = s.scope === 'global' ? '<span class="badge badge-green" style="font-size:10px">global</span>' : '<span class="badge badge-cyan" style="font-size:10px">project</span>';
+    return `<div class="card" style="border-left:3px solid var(--yellow)">
+      <div class="card-title">${esc(s.name)} ${scopeBadge} <span class="badge badge-yellow">staging</span></div>
+      <p style="color:var(--text2);font-size:12px;margin-bottom:8px">${esc(s.description)}</p>
+      <div style="display:flex;gap:6px;font-size:12px;color:var(--text2);flex-wrap:wrap;margin-bottom:8px">
+        ${s.created_by ? `<span>by ${esc(s.created_by)}</span>` : ''}
+        ${s.created_at ? `<span>created ${s.created_at}</span>` : ''}
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm" onclick="showKnightContent('${esc(s.name)}',true)">&#128196; View</button>
+        <button class="btn btn-sm btn-primary" onclick="knightAction('promote','${esc(s.name)}','Promote this skill to active?')">&#9989; Approve</button>
+        <button class="btn btn-sm btn-danger" onclick="knightAction('reject','${esc(s.name)}','Reject and delete this skill?')">&#10060; Reject</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderKnightQueue() {
+  const el = document.getElementById('knight-queue');
+  const queue = (knightData && knightData.queue) || [];
+  if (queue.length === 0) {
+    el.innerHTML = '<div class="card"><p style="color:var(--text2)">No candidates in queue.</p></div>';
+    return;
+  }
+  let html = `<div class="table-wrap"><table>
+    <tr><th>Name</th><th>Category</th><th>Score</th><th>Evidence</th><th>Description</th><th>Actions</th></tr>`;
+  for (const c of queue) {
+    const catBadge = c.category === 'correction' ? 'badge-green' : c.category === 'failure-fix' ? 'badge-yellow' : '';
+    html += `<tr>
+      <td class="mono" style="font-size:12px">${esc(c.name)}</td>
+      <td>${catBadge ? `<span class="badge ${catBadge}" style="font-size:10px">${esc(c.category)}</span>` : esc(c.category)}</td>
+      <td style="font-weight:600">${c.score.toFixed(1)}</td>
+      <td>${c.evidence_count}</td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2);font-size:12px" title="${esc(c.description)}">${esc(c.description)}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="knightAction('delete_queue','${esc(c.name)}','Remove this candidate?')">&#128465;</button></td>
+    </tr>`;
+  }
+  html += '</table></div>';
+  el.innerHTML = html;
+}
+
+function formatTokens(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(0) + 'K';
+  return String(n);
+}
+
+async function loadKnight() {
+  try {
+    knightData = await api('/api/knight');
+  } catch(e) { knightData = null; }
+  renderKnight();
+}
+
+async function knightAction(action, name, confirmMsg) {
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  try {
+    await api('/api/knight/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action, name})
+    });
+    toast(`Knight: ${action} ${name || ''} OK`);
+    await loadKnight();
+  } catch(e) { toast('Knight action failed: ' + e.message, false); }
+}
+
+async function showKnightContent(name, staging) {
+  try {
+    const resp = await api('/api/knight/skill-content?name=' + encodeURIComponent(name) + '&staging=' + staging);
+    document.getElementById('knight-content-title').textContent = name;
+    document.getElementById('knight-content-body').textContent = resp.content || '';
+    document.getElementById('knight-content-modal').style.display = 'flex';
+  } catch(e) {
+    toast('Failed to load skill: ' + e.message, false);
+  }
+}
+
+function hideKnightContentModal() {
+  document.getElementById('knight-content-modal').style.display = 'none';
 }
 </script>
 </body>
