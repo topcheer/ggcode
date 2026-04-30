@@ -885,6 +885,64 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		return status
 	})
+	webuiSrv.SetKnightActionFn(func(action, skillName string, params map[string]interface{}) error {
+		if knightAgent == nil {
+			return fmt.Errorf("Knight not initialized")
+		}
+		switch action {
+		case "promote":
+			return knightAgent.PromoteStaging(skillName)
+		case "reject":
+			return knightAgent.RejectStaging(skillName)
+		case "freeze":
+			return knightAgent.SetSkillFrozen(skillName, true)
+		case "unfreeze":
+			return knightAgent.SetSkillFrozen(skillName, false)
+		case "rollback":
+			return knightAgent.RollbackSkill(skillName)
+		case "record_effectiveness":
+			score := 3
+			if v, ok := params["score"]; ok {
+				if f, ok := v.(float64); ok {
+					score = int(f)
+				}
+			}
+			knightAgent.RecordSkillEffectiveness(skillName, score)
+			return nil
+		case "analyze":
+			return knightAgent.PerformSkillAnalysis(context.Background())
+		case "validate":
+			_, err := knightAgent.PerformSkillValidation(context.Background())
+			return err
+		case "delete_queue":
+			if q := knightAgent.Queue(); q != nil {
+				return q.Remove(knight.SkillCandidate{Name: skillName})
+			}
+			return fmt.Errorf("candidate queue not available")
+		default:
+			return fmt.Errorf("unknown action: %s", action)
+		}
+	})
+	webuiSrv.SetKnightSkillContentFn(func(name string, staging bool) (string, error) {
+		if knightAgent == nil {
+			return "", fmt.Errorf("Knight not initialized")
+		}
+		var entry *knight.SkillEntry
+		var err error
+		if staging {
+			entry, err = knightAgent.FindStagingSkill(name)
+		} else {
+			entry, err = knightAgent.FindActiveSkill(name)
+		}
+		if err != nil || entry == nil {
+			return "", fmt.Errorf("skill %q not found", name)
+		}
+		data, err := os.ReadFile(entry.Path)
+		if err != nil {
+			return "", fmt.Errorf("read skill file: %w", err)
+		}
+		return string(data), nil
+	})
 	webuiSrv.SetSessionStore(store, workingDir)
 	webuiSrv.SetChatBridge(bridge)
 	webuiAddr := "127.0.0.1:0" // auto port

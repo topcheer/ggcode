@@ -61,6 +61,12 @@ type A2ADiscoverFunc func() []A2ADiscoveredInstance
 // KnightStatusFunc returns current Knight agent status and skill data.
 type KnightStatusFunc func() KnightStatus
 
+// KnightActionFunc performs an action on a Knight skill. Returns an error message or empty string on success.
+type KnightActionFunc func(action, skillName string, params map[string]interface{}) error
+
+// KnightSkillContentFunc reads the raw content of a skill file by name and staging flag.
+type KnightSkillContentFunc func(name string, staging bool) (string, error)
+
 // KnightStatus holds all Knight state exposed via the WebUI API.
 type KnightStatus struct {
 	Enabled bool              `json:"enabled"`
@@ -87,6 +93,9 @@ type KnightSkill struct {
 	UsageCount  int      `json:"usage_count"`
 	Frozen      bool     `json:"frozen"`
 	Platforms   []string `json:"platforms,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
 }
 
 type KnightCandidate struct {
@@ -133,24 +142,26 @@ type AgentRunner interface {
 
 // Server provides a built-in WebUI for configuration and chat.
 type Server struct {
-	cfg            *config.Config
-	mcpStatusFn    MCPStatusFunc
-	imStatusFn     IMStatusFunc
-	imActionFn     IMActionFunc
-	restartFn      func()           // called when user triggers restart from WebUI
-	a2aDiscoverFn  A2ADiscoverFunc  // returns discovered A2A instances
-	knightStatusFn KnightStatusFunc // returns Knight agent status
-	sessionStore   session.Store
-	workspace      string // current ggcode working directory
-	saveScope      string // "global" or "instance" — where config saves go
-	chatBridge     ChatBridge
-	agent          AgentRunner // legacy, for non-bridge setups
-	agentMu        sync.Mutex
-	agentBusy      atomic.Bool
-	mu             sync.RWMutex
-	addr           string
-	listener       net.Listener
-	mux            *http.ServeMux
+	cfg             *config.Config
+	mcpStatusFn     MCPStatusFunc
+	imStatusFn      IMStatusFunc
+	imActionFn      IMActionFunc
+	restartFn       func()                 // called when user triggers restart from WebUI
+	a2aDiscoverFn   A2ADiscoverFunc        // returns discovered A2A instances
+	knightStatusFn  KnightStatusFunc       // returns Knight agent status
+	knightActionFn  KnightActionFunc       // performs actions on Knight skills
+	knightContentFn KnightSkillContentFunc // reads skill file content
+	sessionStore    session.Store
+	workspace       string // current ggcode working directory
+	saveScope       string // "global" or "instance" — where config saves go
+	chatBridge      ChatBridge
+	agent           AgentRunner // legacy, for non-bridge setups
+	agentMu         sync.Mutex
+	agentBusy       atomic.Bool
+	mu              sync.RWMutex
+	addr            string
+	listener        net.Listener
+	mux             *http.ServeMux
 }
 
 // SetMCPStatusFn sets the runtime MCP status provider.
@@ -181,6 +192,16 @@ func (s *Server) SetA2ADiscoverFn(fn A2ADiscoverFunc) {
 // SetKnightStatusFn sets the callback for Knight agent status.
 func (s *Server) SetKnightStatusFn(fn KnightStatusFunc) {
 	s.knightStatusFn = fn
+}
+
+// SetKnightActionFn sets the callback for Knight skill actions.
+func (s *Server) SetKnightActionFn(fn KnightActionFunc) {
+	s.knightActionFn = fn
+}
+
+// SetKnightSkillContentFn sets the callback for reading skill file content.
+func (s *Server) SetKnightSkillContentFn(fn KnightSkillContentFunc) {
+	s.knightContentFn = fn
 }
 
 // SetSessionStore sets the session store for browsing history.
@@ -286,6 +307,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/restart", s.handleRestart)
 	s.mux.HandleFunc("/api/knight", s.handleKnight)
 	s.mux.HandleFunc("/api/knight/skills", s.handleKnightSkills)
+	s.mux.HandleFunc("/api/knight/action", s.handleKnightAction)
+	s.mux.HandleFunc("/api/knight/skill-content", s.handleKnightSkillContent)
 }
 
 // --- Static SPA ---
@@ -1649,6 +1672,75 @@ func (s *Server) handleKnightSkills(w http.ResponseWriter, r *http.Request) {
 		"active":  status.Active,
 		"staging": status.Staging,
 	})
+}
+
+// handleKnightAction performs skill lifecycle actions.
+// POST with JSON body: {"action": "...", "name": "skill-name", ...params}
+//
+// Supported actions:
+//   - promote: promote a staging skill to active
+//   - reject: reject (delete) a staging skill
+//   - freeze: freeze an active skill (disable auto-updates)
+//   - unfreeze: unfreeze an active skill
+//   - rollback: rollback a skill to its previous version
+//   - record_effectiveness: record effectiveness score (params: {"score": 1-5})
+//   - analyze: trigger immediate session analysis
+//   - validate: trigger immediate skill validation
+//   - delete_queue: remove a candidate from the queue (params: {"name": "..."})
+func (s *Server) handleKnightAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.knightActionFn == nil {
+		writeError(w, http.StatusServiceUnavailable, "Knight not available")
+		return
+	}
+	var req struct {
+		Action string                 `json:"action"`
+		Name   string                 `json:"name"`
+		Params map[string]interface{} `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Action == "" {
+		writeError(w, http.StatusBadRequest, "missing 'action' field")
+		return
+	}
+
+	err := s.knightActionFn(req.Action, req.Name, req.Params)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// handleKnightSkillContent returns the raw markdown content of a skill file.
+// GET with query params: ?name=skill-name&staging=true
+func (s *Server) handleKnightSkillContent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.knightContentFn == nil {
+		writeError(w, http.StatusServiceUnavailable, "Knight not available")
+		return
+	}
+	name := r.URL.Query().Get("name")
+	staging := r.URL.Query().Get("staging") == "true"
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing 'name' query parameter")
+		return
+	}
+	content, err := s.knightContentFn(name, staging)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"content": content})
 }
 
 // --- Helpers ---
