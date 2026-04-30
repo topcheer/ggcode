@@ -217,6 +217,7 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
           <button id="btn-scope-global" class="active-global" onclick="setScope('global')">Global</button>
           <button id="btn-scope-instance" onclick="setScope('instance')">Instance</button>
         </div>
+        <div id="scope-hint" style="font-size:10px;color:var(--text2);margin-top:4px;display:none">New instance config will be created on first save</div>
       </div>
       <div style="padding:8px 4px">
         <button class="btn btn-danger" style="width:100%" onclick="triggerRestart()">&#x21bb; Restart</button>
@@ -551,6 +552,7 @@ function updateScopeUI() {
   const btnGlobal = document.getElementById('btn-scope-global');
   const btnInstance = document.getElementById('btn-scope-instance');
   const dot = document.getElementById('scope-dot');
+  const hint = document.getElementById('scope-hint');
   if (!box) return;
   if (hasInstance) {
     box.style.display = '';
@@ -558,6 +560,11 @@ function updateScopeUI() {
     btnInstance.className = currentScope === 'instance' ? 'active-instance' : '';
     btnInstance.disabled = false;
     dot.style.background = currentScope === 'instance' ? '#38b6ff' : '#8b949e';
+    // Show hint when switching to instance and no instance config file exists yet
+    if (hint) {
+      const hasFile = config._scope && config._scope.hasInstanceFile;
+      hint.style.display = (currentScope === 'instance' && !hasFile) ? '' : 'none';
+    }
   } else {
     box.style.display = 'none';
   }

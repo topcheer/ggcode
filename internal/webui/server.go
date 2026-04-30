@@ -270,9 +270,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	result := sanitizeConfigForAPI(s.cfg)
 	result["_scope"] = map[string]interface{}{
-		"current":     s.saveScope,
-		"hasInstance": s.cfg.HasInstanceConfigAttached(),
-		"instanceDir": s.cfg.InstanceDirPath(),
+		"current":         s.saveScope,
+		"hasInstance":     s.cfg.HasInstanceConfigAttached(),
+		"hasInstanceFile": s.cfg.HasInstanceConfigFile(),
+		"instanceDir":     s.cfg.InstanceDirPath(),
 	}
 	writeJSON(w, result)
 }
@@ -286,7 +287,8 @@ func (s *Server) handleConfigScope(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]interface{}{
 			"scope":       s.saveScope,
 			"hasInstance": s.cfg.HasInstanceConfigAttached(),
-			"instanceDir": s.cfg.InstanceDirPath(),
+			"hasInstanceFile": s.cfg.HasInstanceConfigFile(),
+				"instanceDir": s.cfg.InstanceDirPath(),
 		})
 	case http.MethodPut:
 		var req struct {

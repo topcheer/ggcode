@@ -698,15 +698,25 @@ func (m *Model) saveConfig() error {
 }
 
 // toggleConfigSaveScope switches between "global" and "instance" save targets.
-func (m *Model) toggleConfigSaveScope() {
+// Returns a short status message for display.
+func (m *Model) toggleConfigSaveScope() string {
 	if m.configSaveScope == "instance" {
 		m.configSaveScope = "global"
-	} else {
-		// Only allow instance scope if instance config is available
-		if m.config != nil && m.config.HasInstanceConfigAttached() {
-			m.configSaveScope = "instance"
-		}
+		return "Save target → Global"
 	}
+	// Only allow instance scope if instance workspace is attached
+	if m.config != nil && m.config.HasInstanceConfigAttached() {
+		m.configSaveScope = "instance"
+		hasFile := false
+		if _, err := os.Stat(m.config.InstanceDirPath()); err == nil {
+			hasFile = true
+		}
+		if hasFile {
+			return "Save target → Instance"
+		}
+		return "Save target → Instance (new config will be created)"
+	}
+	return "Instance config not available for this workspace"
 }
 
 // configSaveScopeLabel returns a display label for the current save scope.

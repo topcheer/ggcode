@@ -253,7 +253,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Toggle config save scope (global ↔ instance) in any panel.
 		if msg.String() == "ctrl+t" {
-			m.toggleConfigSaveScope()
+			_ = m.toggleConfigSaveScope()
 			return m, nil
 		}
 
