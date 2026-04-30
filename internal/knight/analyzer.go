@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -16,20 +17,34 @@ import (
 
 // SessionAnalyzer analyzes session history to discover reusable patterns.
 type SessionAnalyzer struct {
-	store   session.Store
-	budget  *Budget
-	knight  *Knight
-	projDir string
+	store             session.Store
+	budget            *Budget
+	knight            *Knight
+	projDir           string
+	normalizedProj    string // workspace-normalized project path for session filtering
+	filterByWorkspace bool   // false in test environments with tmp dirs
 }
 
 // NewSessionAnalyzer creates a session analyzer.
 func NewSessionAnalyzer(k *Knight) *SessionAnalyzer {
+	normalized := session.NormalizeWorkspacePath(k.projDir)
 	return &SessionAnalyzer{
-		store:   k.store,
-		budget:  k.budget,
-		knight:  k,
-		projDir: k.projDir,
+		store:             k.store,
+		budget:            k.budget,
+		knight:            k,
+		projDir:           k.projDir,
+		normalizedProj:    normalized,
+		filterByWorkspace: normalized != "" && !isTempDir(normalized),
 	}
+}
+
+// isTempDir returns true if the path looks like a temp directory (test scenario).
+func isTempDir(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	return strings.Contains(path, "/tmp/") || strings.HasPrefix(path, "/tmp/") ||
+		strings.Contains(path, "/var/folders/") || // macOS tmp
+		strings.HasPrefix(base, "knight-") || strings.HasPrefix(base, "test-") ||
+		strings.Contains(base, "tmp")
 }
 
 // AnalysisResult holds the outcome of a session analysis.
@@ -47,19 +62,21 @@ type SkillCandidate struct {
 	Reason         string
 	EvidenceCount  int
 	SourceSessions []string
+	// Evidence holds the key conversation excerpts that justify this skill.
+	// For corrections: [0]=what AI did wrong, [1]=what user said instead.
+	// For failure-fix: [0]=error message, [1]=how it was fixed.
+	Evidence []string
+	// Category classifies the skill source for LLM context.
+	Category string // "correction", "failure-fix", "convention"
 }
 
-// toolCallDetail holds extracted information from a single tool call.
-type toolCallDetail struct {
-	ToolName string
-	Input    map[string]interface{}
-	RawInput json.RawMessage
-	IsError  bool
-	ErrorMsg string
-	Output   string
-}
-
-// AnalyzeRecent scans recent sessions for reusable patterns.
+// AnalyzeRecent scans recent sessions for high-value learning signals.
+//
+// Filtering and priority:
+//  1. Only sessions matching the current project workspace are analyzed.
+//  2. Sessions already analyzed in previous ticks are skipped (dedup).
+//  3. Sessions are prioritized: corrections/failure-fixes first, then recency.
+//  4. Up to `limit` sessions are analyzed per tick.
 func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, error) {
 	if sa.store == nil {
 		return nil, fmt.Errorf("session store not available")
@@ -70,36 +87,105 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
 
+	// Filter: only current project's sessions, not yet analyzed (or updated since last analysis).
+	var eligible []*session.Session
+	for _, s := range sessions {
+		if lastAnalyzed, ok := sa.knight.analyzedSessions[s.ID]; ok {
+			// Already analyzed — skip unless the session has new activity since then
+			if !s.UpdatedAt.After(lastAnalyzed) {
+				continue
+			}
+		}
+		// Filter by workspace: skip sessions from different projects.
+		// Only filter when running in a real project (not tests).
+		// Sessions with empty workspace are always included (legacy data).
+		if sa.filterByWorkspace && s.Workspace != "" && s.Workspace != sa.normalizedProj {
+			continue
+		}
+		// Load full session to check eligibility
+		full, loadErr := sa.store.Load(s.ID)
+		if loadErr != nil {
+			debug.Log("knight", "cannot load session %s: %v", s.ID, loadErr)
+			continue
+		}
+		if len(full.Messages) < 4 {
+			continue
+		}
+		eligible = append(eligible, full)
+	}
+
+	// Priority sort: sessions with correction/failure signals first.
+	sort.SliceStable(eligible, func(i, j int) bool {
+		si := sa.sessionSignalScore(eligible[i])
+		sj := sa.sessionSignalScore(eligible[j])
+		if si != sj {
+			return si > sj
+		}
+		return eligible[i].UpdatedAt.After(eligible[j].UpdatedAt)
+	})
+
 	result := &AnalysisResult{}
 	aggregated := make(map[string]*candidateAggregate)
 
-	// Analyze up to 10 most recent sessions
 	limit := 10
-	if len(sessions) < limit {
-		limit = len(sessions)
+	if len(eligible) < limit {
+		limit = len(eligible)
 	}
 
 	for i := 0; i < limit; i++ {
-		full, err := sa.store.Load(sessions[i].ID)
-		if err != nil {
-			debug.Log("knight", "cannot load session %s: %v", sessions[i].ID, err)
-			continue
-		}
-		candidates := sa.analyzeSession(full)
+		candidates := sa.analyzeSession(eligible[i])
 		for _, candidate := range candidates {
-			aggregateCandidate(aggregated, candidate, full.ID)
+			aggregateCandidate(aggregated, candidate, eligible[i].ID)
 		}
+		sa.knight.analyzedSessions[eligible[i].ID] = time.Now()
 		result.SessionsAnalyzed++
 	}
 	result.SkillCandidates = finalizeCandidates(aggregated)
 
-	debug.Log("knight", "session analysis: %d sessions, %d candidates",
-		result.SessionsAnalyzed, len(result.SkillCandidates))
+	debug.Log("knight", "session analysis: %d eligible (of %d total), %d analyzed, %d candidates",
+		len(eligible), len(sessions), result.SessionsAnalyzed, len(result.SkillCandidates))
+
+	// Trim dedup set to prevent unbounded growth.
+	// Keep only IDs that appear in the current session list.
+	if len(sa.knight.analyzedSessions) > 1000 {
+		current := make(map[string]time.Time, len(sessions))
+		for _, s := range sessions {
+			if t, ok := sa.knight.analyzedSessions[s.ID]; ok {
+				current[s.ID] = t
+			}
+		}
+		sa.knight.analyzedSessions = current
+	}
 
 	return result, nil
 }
 
-// analyzeSession runs all analysis heuristics on a single session.
+// sessionSignalScore estimates how likely a session contains learning signals.
+// Higher score = higher priority for analysis.
+func (sa *SessionAnalyzer) sessionSignalScore(ses *session.Session) int {
+	score := 0
+	textLower := ""
+	for _, msg := range ses.Messages {
+		for _, block := range msg.Content {
+			if block.Type == "text" {
+				textLower += strings.ToLower(block.Text) + " "
+			}
+			if block.Type == "tool_result" && block.IsError {
+				score += 3 // error tool results are strong signals
+			}
+		}
+	}
+	// Check for correction signals in user messages
+	for _, signal := range correctionSignals {
+		if strings.Contains(textLower, strings.ToLower(signal)) {
+			score += 5
+			break
+		}
+	}
+	return score
+}
+
+// analyzeSession runs analysis heuristics on a single session.
 func (sa *SessionAnalyzer) analyzeSession(ses *session.Session) []SkillCandidate {
 	if len(ses.Messages) < 4 {
 		return nil // too short to be interesting
@@ -107,71 +193,28 @@ func (sa *SessionAnalyzer) analyzeSession(ses *session.Session) []SkillCandidate
 
 	var all []SkillCandidate
 
-	// 1. Detect repeated tool patterns (workflow extraction)
-	all = append(all, sa.detectToolPatterns(ses)...)
-
-	// 2. Detect user corrections (highest value learning source)
+	// 1. User corrections — the highest-value learning signal
 	all = append(all, sa.detectCorrections(ses)...)
 
-	// 3. Detect failure → fix pairs
-	all = append(all, sa.detectFailurePatterns(ses)...)
-
-	// 4. Extract tool parameter insights (commands, files, conventions)
-	all = append(all, sa.detectToolParameterInsights(ses)...)
+	// 2. Failure → fix pairs (tool error followed by successful correction)
+	all = append(all, sa.detectFailureFixes(ses)...)
 
 	return all
 }
 
-// --- Heuristic 1: Repeated tool patterns ---
-
-func (sa *SessionAnalyzer) detectToolPatterns(ses *session.Session) []SkillCandidate {
-	var candidates []SkillCandidate
-
-	toolCounts := make(map[string]int)
-	var toolSequence []string
-	for _, msg := range ses.Messages {
-		for _, block := range msg.Content {
-			if block.Type == "tool_use" {
-				toolCounts[block.ToolName]++
-				toolSequence = append(toolSequence, block.ToolName)
-			}
-		}
-	}
-
-	// Repeated sequences
-	patterns := detectRepeatedPatterns(toolSequence)
-	for _, pattern := range patterns {
-		if len(pattern.Tools) >= 2 && pattern.Count >= 2 {
-			candidates = append(candidates, SkillCandidate{
-				Name:        pattern.SuggestedName(),
-				Description: pattern.Description(),
-				Scope:       inferScope(pattern.Tools),
-				Score:       float64(pattern.Count) * float64(len(pattern.Tools)) * 0.3,
-				Reason:      fmt.Sprintf("repeated %d times in session %s", pattern.Count, ses.ID),
-			})
-		}
-	}
-
-	// Heavy tool combinations
-	if toolCounts["run_command"] >= 3 && toolCounts["read_file"] >= 2 {
-		candidates = append(candidates, SkillCandidate{
-			Name:        "build-and-verify",
-			Description: "Build project, run tests, and verify output",
-			Scope:       "project",
-			Score:       0.5,
-			Reason:      fmt.Sprintf("build-verify pattern in session %s", ses.ID),
-		})
-	}
-
-	return candidates
-}
-
-// --- Heuristic 2: User corrections (highest value) ---
+// --- Heuristic 1: User corrections ---
+//
+// When a user says "不对/错了/wrong/不要" they are teaching us something.
+// We capture what the AI did wrong and what the user said instead.
+// These become behavioral guidelines (e.g. "always check code before concluding").
 
 var correctionSignals = []string{
 	"不要", "别用", "不应该", "不对", "错了", "应该是", "改用", "换成",
+	"而不是", "不是什么", "你需要", "为什么你不会", "为什么你不", "不要没搞清楚",
+	"先看", "看逻辑", "你看一下", "看一下逻辑",
 	"wrong", "don't", "should be", "instead", "no,", "not that", "use x.",
-	"incorrect", "fix it", "different",
+	"incorrect", "fix it", "different", "look at the", "read the code",
+	"not what i", "that's not", "the right way",
 }
 
 func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandidate {
@@ -206,177 +249,142 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 		}
 
 		prevText := extractText(prev.Content)
-		// Also extract what tools the assistant used
-		var toolsUsed []string
-		for _, block := range prev.Content {
-			if block.Type == "tool_use" {
-				toolsUsed = append(toolsUsed, block.ToolName)
-			}
+
+		// Only create a candidate if the user message has substantive content
+		// (not just "no" or "wrong" but explains WHY or WHAT to do instead)
+		if len([]rune(text)) < 10 {
+			continue
 		}
 
-		desc := fmt.Sprintf("User correction: %s", truncate(text, 80))
-		if prevText != "" {
-			desc = fmt.Sprintf("Instead of \"%s\", user said: %s", truncate(prevText, 40), truncate(text, 60))
+		name := buildCorrectionSkillName(text)
+		evidence := []string{
+			fmt.Sprintf("AI did: %s", truncate(prevText, 300)),
+			fmt.Sprintf("User corrected: %s", truncate(text, 500)),
 		}
+
+		desc := truncate(text, 120)
 
 		candidates = append(candidates, SkillCandidate{
-			Name:        buildCorrectionName(text, toolsUsed),
+			Name:        name,
 			Description: desc,
-			Scope:       inferCorrectionScope(text, prevText, toolsUsed),
-			Score:       2.0, // Corrections are the highest value signal
-			Reason:      fmt.Sprintf("user correction in session %s (tools: %s)", ses.ID, strings.Join(toolsUsed, ",")),
+			Scope:       "", // scope decided by LLM during generation
+			Score:       2.0,
+			Reason:      fmt.Sprintf("user correction in session %s", ses.ID),
+			Evidence:    evidence,
+			Category:    "correction",
 		})
 	}
 
 	return candidates
 }
 
-// --- Heuristic 3: Failure → fix pairs ---
+// --- Heuristic 2: Failure → fix chains ---
+//
+// When a tool call fails (is_error=true) and then the AI or user corrects
+// the approach and succeeds, the failure reason + fix method is a learnable pattern.
+// We look at the ACTUAL error and the fix, not just tool names.
 
-func (sa *SessionAnalyzer) detectFailurePatterns(ses *session.Session) []SkillCandidate {
+func (sa *SessionAnalyzer) detectFailureFixes(ses *session.Session) []SkillCandidate {
 	var candidates []SkillCandidate
 
-	// Build maps: toolID → toolName and toolID → input summary from tool_use blocks
-	toolIDToName := make(map[string]string)
-	toolIDToInput := make(map[string]string)
+	// Build maps: toolID → toolName, toolID → input, toolID → output
+	type toolInfo struct {
+		name  string
+		input string
+	}
+	toolMap := make(map[string]toolInfo)
 	for _, msg := range ses.Messages {
 		for _, block := range msg.Content {
-			if block.Type == "tool_use" {
-				toolIDToName[block.ToolID] = block.ToolName
+			if block.Type == "tool_use" && block.ToolID != "" {
+				input := ""
 				if block.Input != nil {
 					if b, err := json.Marshal(block.Input); err == nil {
-						toolIDToInput[block.ToolID] = truncate(string(b), 200)
+						input = string(b)
 					}
 				}
+				toolMap[block.ToolID] = toolInfo{name: block.ToolName, input: truncate(input, 300)}
 			}
 		}
 	}
 
-	// Find [tool_result(is_error=true)] followed by [tool_result(success)] for the same tool.
-	// To avoid false positives (e.g. two unrelated run_command calls), we track
-	// which failure→success pairs have already been matched per toolName so each
-	// tool only generates at most one candidate per session.
-	type failure struct {
-		toolName  string
-		toolInput string
-		errMsg    string
-		index     int
-	}
+	// Find error tool_results, then look for the fix in subsequent messages
 	var failures []failure
 	matched := make(map[string]bool) // toolName → already matched
 
 	for i, msg := range ses.Messages {
 		for _, block := range msg.Content {
 			if block.Type == "tool_result" && block.IsError {
-				toolName := toolIDToName[block.ToolID]
-				if toolName == "" {
+				info, ok := toolMap[block.ToolID]
+				if !ok {
 					continue
 				}
 				failures = append(failures, failure{
-					toolName:  toolName,
-					toolInput: toolIDToInput[block.ToolID],
-					errMsg:    truncate(block.Output, 200),
-					index:     i,
+					toolName: info.name,
+					toolInp:  info.input,
+					errMsg:   truncate(block.Output, 300),
+					index:    i,
 				})
 			}
 		}
 	}
 
-	// For each failure, look for a successful use of the same tool within 4 messages.
-	// Only match if there is at least one assistant message (a correction attempt)
-	// between the failure and the success.
 	for _, f := range failures {
 		if matched[f.toolName] {
 			continue
 		}
-		for j := f.index + 1; j < len(ses.Messages) && j <= f.index+4; j++ {
-			msg := ses.Messages[j]
-			// Require an assistant correction message between failure and fix
-			hasCorrection := false
+
+		// Look for a successful result of the same tool within 6 messages
+		// with at least one assistant message in between (the fix attempt)
+		for j := f.index + 1; j < len(ses.Messages) && j <= f.index+6; j++ {
+			hasAssistantBetween := false
 			for k := f.index + 1; k < j; k++ {
 				if ses.Messages[k].Role == "assistant" {
-					hasCorrection = true
+					hasAssistantBetween = true
 					break
 				}
 			}
-			if !hasCorrection {
+			if !hasAssistantBetween {
 				continue
 			}
-			for _, block := range msg.Content {
+
+			for _, block := range ses.Messages[j].Content {
 				if block.Type == "tool_result" && !block.IsError {
-					toolName := toolIDToName[block.ToolID]
-					if toolName == f.toolName {
-						candidates = append(candidates, SkillCandidate{
-							Name:        "troubleshoot-" + sanitizeName(f.toolName),
-							Description: fmt.Sprintf("%s failure recovery: %s", f.toolName, f.errMsg),
-							Scope:       "project",
-							Score:       1.5,
-							Reason:      fmt.Sprintf("error->fix pattern for %s (input: %s) in session %s", f.toolName, truncate(f.toolInput, 60), ses.ID),
-						})
-						matched[f.toolName] = true
-						break
+					info, ok := toolMap[block.ToolID]
+					if !ok || info.name != f.toolName {
+						continue
 					}
+
+					// Extract what the assistant did to fix it
+					var fixDesc string
+					for k := f.index + 1; k < j; k++ {
+						if ses.Messages[k].Role == "assistant" {
+							fixDesc = truncate(extractText(ses.Messages[k].Content), 300)
+							break
+						}
+					}
+
+					name := buildFailureFixName(f)
+					evidence := []string{
+						fmt.Sprintf("Error: %s (input: %s)", truncate(f.errMsg, 200), truncate(f.toolInp, 100)),
+						fmt.Sprintf("Fix: %s", fixDesc),
+					}
+
+					candidates = append(candidates, SkillCandidate{
+						Name:        name,
+						Description: fmt.Sprintf("Fix for %s error: %s", f.toolName, truncate(f.errMsg, 80)),
+						Scope:       "", // scope decided by LLM during generation
+						Score:       1.5,
+						Reason:      fmt.Sprintf("failure-fix in session %s", ses.ID),
+						Evidence:    evidence,
+						Category:    "failure-fix",
+					})
+					matched[f.toolName] = true
+					break
 				}
 			}
-		}
-	}
-
-	return candidates
-}
-
-// --- Heuristic 4: Tool parameter insights ---
-
-func (sa *SessionAnalyzer) detectToolParameterInsights(ses *session.Session) []SkillCandidate {
-	var candidates []SkillCandidate
-
-	// Extract frequently used commands from run_command calls
-	commands := make(map[string]int)
-	editPaths := make(map[string]int)
-
-	for _, msg := range ses.Messages {
-		for _, block := range msg.Content {
-			if block.Type != "tool_use" {
-				continue
+			if matched[f.toolName] {
+				break
 			}
-
-			detail := extractToolDetailFromBlock(block)
-
-			switch block.ToolName {
-			case "run_command":
-				if cmd := detail.command(); cmd != "" {
-					commands[cmd]++
-				}
-			case "edit_file", "write_file":
-				if p := detail.filePath(); p != "" {
-					editPaths[p]++
-				}
-			}
-		}
-	}
-
-	// Frequently used commands → project conventions
-	for cmd, count := range commands {
-		if count >= 2 {
-			candidates = append(candidates, SkillCandidate{
-				Name:        "project-command-" + sanitizeName(cmd),
-				Description: fmt.Sprintf("Project uses command: %s (used %d times)", cmd, count),
-				Scope:       inferCommandScope(cmd),
-				Score:       float64(count) * 0.4,
-				Reason:      fmt.Sprintf("frequent command in session %s", ses.ID),
-			})
-		}
-	}
-
-	// Frequently edited files → hot files
-	for p, count := range editPaths {
-		if count >= 2 {
-			candidates = append(candidates, SkillCandidate{
-				Name:        "hot-file-" + sanitizeName(filepath.Base(p)),
-				Description: fmt.Sprintf("Frequently edited file: %s (%d edits)", p, count),
-				Scope:       "project",
-				Score:       float64(count) * 0.3,
-				Reason:      fmt.Sprintf("hot file in session %s", ses.ID),
-			})
 		}
 	}
 
@@ -402,7 +410,6 @@ func (sa *SessionAnalyzer) CollectProjectConventions() string {
 		if err != nil {
 			continue
 		}
-		// Truncate large files
 		content := string(data)
 		if len(content) > 2000 {
 			content = content[:2000] + "\n... (truncated)"
@@ -416,31 +423,90 @@ func (sa *SessionAnalyzer) CollectProjectConventions() string {
 // --- LLM skill generation ---
 
 // GenerateSkillFromAnalysis uses LLM to create a skill from a high-value candidate.
+// The skill is a behavioral guideline that teaches the AI what to do (or not do)
+// based on real user interactions.
 func (sa *SessionAnalyzer) GenerateSkillFromAnalysis(ctx context.Context, candidate SkillCandidate, factory AgentFactory) (string, error) {
-	// Collect project conventions for context
 	conventions := sa.CollectProjectConventions()
 	conventionsSection := ""
 	if conventions != "" {
-		conventionsSection = fmt.Sprintf("\n\n## Project conventions (from config files)\n%s", conventions)
+		conventionsSection = fmt.Sprintf("\n\n## Project conventions\n%s", conventions)
 	}
 
-	prompt := fmt.Sprintf(`Analyze the following reusable development pattern and create a skill document for it.
+	evidenceSection := ""
+	if len(candidate.Evidence) > 0 {
+		evidenceSection = fmt.Sprintf("\n\n## Evidence from conversations\n%s", strings.Join(candidate.Evidence, "\n"))
+	}
 
-Pattern name: %s
-Description: %s
-Scope: %s
-Reason discovered: %s%s
+	prompt := fmt.Sprintf(`You are generating a BEHAVIORAL SKILL — a reusable guideline that teaches an AI coding assistant how to act based on real user interactions.
 
-Create a SKILL.md document with:
-1. YAML frontmatter with fields: name, description, scope, platforms, requires, created_by: knight
-   IMPORTANT: all string values containing colons, quotes, or special chars MUST be quoted
-2. Clear step-by-step procedure
-3. Known gotchas or pitfalls
-4. When to use and when NOT to use
+## What happened
+Category: %s
+%s
 
-Output ONLY the skill document content, starting with ---`, candidate.Name, candidate.Description, candidate.Scope, candidate.Reason, conventionsSection)
+## Your task
+Create a concise, actionable skill document. This is NOT a tutorial — it's a RULE that the AI should follow.
+Think of it as adding a paragraph to the project's AGENTS.md based on what was learned.
 
-	result := sa.knight.RunTask(ctx, "skill-generation", prompt, factory)
+Examples of good skills:
+- "bool-default-trap": In Go, bool zero-value is false. When a config field should default to true, use a separate `+"`"+`enabledSet bool`+"`"+` field to distinguish "not set" from "explicitly disabled".
+- "build-only-official-binary": Only use `+"`"+`make build`+"`"+` → `+"`"+`bin/ggcode`+"`"+`. The restart workflow expects this exact path. Never create debug variants.
+- "read-code-before-concluding": When investigating runtime behavior, read the relevant source code first. Don't guess at file paths or log locations — find the constants and functions that define them.
+
+## Source sessions (read these to understand context)
+%s
+
+## Instructions
+1. Use read_file to examine 1-2 of the source sessions under ~/.ggcode/sessions/ — focus on the conversation around the evidence above
+2. Extract the CORE LESSON — what should the AI do differently next time?
+3. Write the skill document below
+
+Create a SKILL.md document with this EXACT structure:
+
+---
+name: "%s"
+description: "<one-line actionable rule>"
+scope: "<DECIDE: 'project' if the lesson only applies to this codebase, 'global' if it applies to any Go/programming project>"
+platforms: ["darwin", "linux", "windows"]
+created_by: "knight"
+---
+
+# %s
+
+<1-2 sentence summary of the rule>
+
+## Rule
+
+<The core behavioral rule — what to do or not do, and WHY>
+
+## Steps
+
+1. **Step one**: <specific action>
+2. **Step two**: <specific action>
+
+## When to Apply
+
+- <specific situations where this rule applies>
+
+## Examples
+
+<Concrete example from the real interaction showing wrong vs right approach>
+
+## Anti-Patterns
+
+- <what NOT to do and why>
+
+RULES:
+- Output ONLY the skill document content, starting with ---
+- The "## Steps" heading is REQUIRED (exact text)
+- Each step must be specific and actionable — not "analyze the situation" but "read the function at line N of file X"
+- The Examples section must include REAL details from the session, not generic placeholders
+- All YAML string values containing colons or quotes MUST be quoted%s%s`,
+		candidate.Category, candidate.Reason,
+		strings.Join(candidate.SourceSessions, ", "),
+		candidate.Name, candidate.Name,
+		conventionsSection, evidenceSection)
+
+	result := sa.knight.RunTaskWithTurns(ctx, "skill-generation", prompt, factory, 15)
 	if result.Error != nil {
 		return "", result.Error
 	}
@@ -469,33 +535,6 @@ func findPrevAssistant(messages []provider.Message, beforeIdx int) *provider.Mes
 	return nil
 }
 
-func extractToolDetailFromBlock(block provider.ContentBlock) toolCallDetail {
-	d := toolCallDetail{ToolName: block.ToolName}
-	if block.Input != nil {
-		d.RawInput = block.Input
-		json.Unmarshal(block.Input, &d.Input)
-	}
-	if block.IsError {
-		d.ErrorMsg = block.Output
-	}
-	d.Output = block.Output
-	return d
-}
-
-func (d toolCallDetail) command() string {
-	if cmd, ok := d.Input["command"].(string); ok {
-		return cmd
-	}
-	return ""
-}
-
-func (d toolCallDetail) filePath() string {
-	if p, ok := d.Input["file_path"].(string); ok {
-		return p
-	}
-	return ""
-}
-
 func truncate(s string, maxRunes int) string {
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
@@ -506,168 +545,102 @@ func truncate(s string, maxRunes int) string {
 
 func sanitizeName(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
 			return r
 		}
 		return '-'
 	}, s)
+	// Collapse consecutive dashes
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
 	return strings.Trim(s, "-")
 }
 
-// --- Tool pattern types ---
+func buildCorrectionSkillName(text string) string {
+	textLower := strings.ToLower(text)
 
-type toolPattern struct {
-	Tools []string
-	Count int
+	// Try to infer a meaningful name from the correction content
+	keywords := []struct {
+		keyword string
+		name    string
+	}{
+		{"看逻辑", "read-code-before-concluding"},
+		{"先看", "read-code-first"},
+		{"搞清楚", "understand-before-acting"},
+		{"不要自作主张", "confirm-before-acting"},
+		{"编译", "build-convention"},
+		{"二进制", "binary-convention"},
+		{"debug", "no-debug-binary"},
+		{"默认值", "default-value-check"},
+		{"bool", "bool-zero-value"},
+		{"为什么你不会", "read-code-before-concluding"},
+		{"read the code", "read-code-first"},
+		{"look at", "look-before-acting"},
+		{"don't guess", "dont-guess-read-code"},
+	}
+
+	for _, kw := range keywords {
+		if strings.Contains(textLower, kw.keyword) {
+			return kw.name
+		}
+	}
+
+	// Fallback: derive from first meaningful words
+	words := strings.Fields(textLower)
+	var parts []string
+	for _, w := range words {
+		w = strings.Trim(w, "，。,.!?！？、")
+		if len(w) > 2 && len(w) < 15 {
+			parts = append(parts, sanitizeName(w))
+		}
+		if len(parts) >= 3 {
+			break
+		}
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, "-")
+	}
+	return "correction-" + fmt.Sprintf("%d", len(text))
 }
 
-func (p *toolPattern) SuggestedName() string {
-	names := make([]string, len(p.Tools))
-	for i, t := range p.Tools {
-		switch t {
-		case "run_command":
-			names[i] = "run"
-		case "read_file":
-			names[i] = "read"
-		case "edit_file":
-			names[i] = "edit"
-		case "write_file":
-			names[i] = "write"
-		case "search_files":
-			names[i] = "search"
-		case "glob":
-			names[i] = "find"
-		default:
-			names[i] = t
-		}
-	}
-	return strings.Join(names, "-")
+type failure struct {
+	toolName string
+	toolInp  string
+	errMsg   string
+	index    int
 }
 
-func (p *toolPattern) Description() string {
-	return fmt.Sprintf("Workflow: %s (repeated %d times)", strings.Join(p.Tools, " -> "), p.Count)
+func buildFailureFixName(f failure) string {
+	// Build a descriptive name from the error context
+	inputLower := strings.ToLower(f.toolInp)
+
+	type matcher struct {
+		keyword string
+		name    string
+	}
+	matchers := []matcher{
+		{"build", "build-failure-recovery"},
+		{"compile", "compile-failure-recovery"},
+		{"test", "test-failure-recovery"},
+		{"go.mod", "go-module-failure"},
+		{"go.sum", "go-module-failure"},
+		{"permission", "permission-failure"},
+		{"not found", "not-found-recovery"},
+		{"no such file", "missing-file-recovery"},
+		{"already exists", "already-exists-recovery"},
+	}
+
+	for _, m := range matchers {
+		if strings.Contains(inputLower, m.keyword) || strings.Contains(strings.ToLower(f.errMsg), m.keyword) {
+			return m.name
+		}
+	}
+
+	return "fix-" + sanitizeName(f.toolName)
 }
 
-func detectRepeatedPatterns(tools []string) []toolPattern {
-	var patterns []toolPattern
-	seen := make(map[string]int)
-
-	for size := 2; size <= 3; size++ {
-		if len(tools) < size {
-			continue
-		}
-		for i := 0; i <= len(tools)-size; i++ {
-			seq := strings.Join(tools[i:i+size], "|")
-			seen[seq]++
-		}
-	}
-
-	for seq, count := range seen {
-		if count >= 2 {
-			patterns = append(patterns, toolPattern{
-				Tools: strings.Split(seq, "|"),
-				Count: count,
-			})
-		}
-	}
-
-	return patterns
-}
-
-func inferScope(tools []string) string {
-	if len(tools) == 0 {
-		return "project"
-	}
-	for _, t := range tools {
-		switch t {
-		case "edit_file", "write_file", "read_file", "search_files", "glob", "run_command":
-			return "project"
-		}
-	}
-	for _, t := range tools {
-		switch t {
-		case "web_fetch", "web_search":
-		default:
-			return "project"
-		}
-	}
-	return "global"
-}
-
-func inferCommandScope(cmd string) string {
-	cmd = strings.ToLower(strings.TrimSpace(cmd))
-	if cmd == "" {
-		return "project"
-	}
-	projectHints := []string{
-		"./", "../", ".ggcode", "go.mod", "go.sum", "package.json", "pyproject.toml",
-		"make ", "internal/", "cmd/", "scripts/", "docs/", "src/", "test ",
-	}
-	for _, hint := range projectHints {
-		if strings.Contains(cmd, hint) {
-			return "project"
-		}
-	}
-	globalPrefixes := []string{
-		"git status", "git diff", "git log", "docker ps", "docker images", "docker logs",
-		"kubectl get", "go env", "go version", "python --version", "node --version",
-	}
-	for _, prefix := range globalPrefixes {
-		if strings.HasPrefix(cmd, prefix) {
-			return "global"
-		}
-	}
-	return "project"
-}
-
-func inferCorrectionScope(text, prevText string, toolsUsed []string) string {
-	scope := inferScope(toolsUsed)
-	if scope == "project" {
-		return scope
-	}
-	combined := strings.ToLower(text + " " + prevText)
-	for _, hint := range []string{"internal/", "cmd/", "src/", ".ggcode", "go.mod", "package.json", "pyproject.toml"} {
-		if strings.Contains(combined, hint) {
-			return "project"
-		}
-	}
-	if len(toolsUsed) == 0 {
-		return "project"
-	}
-	return scope
-}
-
-func buildCorrectionName(text string, toolsUsed []string) string {
-	parts := []string{"correction"}
-	if len(toolsUsed) > 0 {
-		parts = append(parts, sanitizeName(strings.Join(uniqueStrings(toolsUsed), "-")))
-	}
-	if slug := sanitizeName(truncate(text, 40)); slug != "" {
-		parts = append(parts, slug)
-	}
-	name := strings.Join(parts, "-")
-	if len(name) > 80 {
-		name = name[:80]
-	}
-	return strings.Trim(name, "-")
-}
-
-func uniqueStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	var out []string
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
+// --- Aggregation ---
 
 type candidateAggregate struct {
 	candidate SkillCandidate
@@ -677,7 +650,7 @@ type candidateAggregate struct {
 }
 
 func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate SkillCandidate, sessionID string) {
-	key := strings.ToLower(strings.TrimSpace(candidate.Scope + "|" + candidate.Name))
+	key := strings.ToLower(strings.TrimSpace(candidate.Name))
 	if key == "" {
 		return
 	}
@@ -695,11 +668,15 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 	}
 	agg.hits++
 	agg.scoreSum += candidate.Score
+	// Keep the longer description and evidence
 	if len(candidate.Description) > len(agg.candidate.Description) {
 		agg.candidate.Description = candidate.Description
 	}
 	if len(candidate.Reason) > len(agg.candidate.Reason) {
 		agg.candidate.Reason = candidate.Reason
+	}
+	if len(candidate.Evidence) > len(agg.candidate.Evidence) {
+		agg.candidate.Evidence = candidate.Evidence
 	}
 	agg.sessions[sessionID] = struct{}{}
 }

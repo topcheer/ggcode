@@ -592,20 +592,25 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		default:
 		}
 	})
+	debug.Log("daemon", "Knight config: enabled=%v trust=%s budget=%d idle=%ds capabilities=%v",
+		cfg.Knight().Enabled, cfg.Knight().TrustLevel, cfg.Knight().DailyTokenBudget,
+		cfg.Knight().IdleDelaySec, cfg.Knight().Capabilities)
 	if cfg.Knight().Enabled {
 		// Create Knight emitter (reuse IM emitter)
 		knightAgent.SetEmitter(emitter)
 		// Wire Knight task events to stderr for follow display
 		knightAgent.SetEventSink(&knight.FuncSink{
 			OnStart: func(taskName string) {
-				fmt.Fprintf(os.Stderr, "🌙 Knight: starting %s\n", taskName)
+				fmt.Fprintf(os.Stderr, "🌙 Knight: starting %s\r\n", taskName)
 			},
 			OnComplete: func(taskName string, report string, duration time.Duration) {
 				suffix := ""
 				if duration > 0 {
 					suffix = fmt.Sprintf(" (%.0fs)", duration.Seconds())
 				}
-				fmt.Fprintf(os.Stderr, "🌙 Knight %s completed%s — %s\n", taskName, suffix, report)
+				// report may contain \n — convert to \r\n for raw terminal mode
+				safeReport := strings.ReplaceAll(report, "\n", "\r\n")
+				fmt.Fprintf(os.Stderr, "🌙 Knight %s completed%s — %s\r\n", taskName, suffix, safeReport)
 			},
 		})
 		if err := knightAgent.Start(context.Background()); err != nil {
@@ -960,7 +965,7 @@ loop:
 		return syscall.Exec(binary, execArgs, env)
 	}
 
-	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\n")
+	fmt.Fprint(os.Stderr, daemon.Tr(lang, "daemon.shutting_down")+"\r\n")
 
 	// Save session on exit
 	ses.Messages = ag.Messages()

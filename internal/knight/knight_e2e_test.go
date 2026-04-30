@@ -47,45 +47,59 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 	ses := session.NewSession("zai", "test", "test-model")
 	ses.Title = "Build and test iteration"
 
-	// Simulate 3 rounds of build-test (assistant calls tools, user returns results)
-	for i := 0; i < 3; i++ {
-		store.AppendMessage(ses, provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{
-				{Type: "text", Text: "build and test"},
-			},
-		})
-		store.AppendMessage(ses, provider.Message{
-			Role: "assistant",
-			Content: []provider.ContentBlock{
-				{Type: "tool_use", ToolName: "run_command", ToolID: fmt.Sprintf("build-%d", i)},
-			},
-		})
-		store.AppendMessage(ses, provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{
-				{Type: "tool_result", ToolID: fmt.Sprintf("build-%d", i), Output: "build success"},
-			},
-		})
-		store.AppendMessage(ses, provider.Message{
-			Role: "assistant",
-			Content: []provider.ContentBlock{
-				{Type: "tool_use", ToolName: "run_command", ToolID: fmt.Sprintf("test-%d", i)},
-			},
-		})
-		store.AppendMessage(ses, provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{
-				{Type: "tool_result", ToolID: fmt.Sprintf("test-%d", i), Output: "tests passed"},
-			},
-		})
-		store.AppendMessage(ses, provider.Message{
-			Role: "assistant",
-			Content: []provider.ContentBlock{
-				{Type: "text", Text: "Build and tests passed"},
-			},
-		})
-	}
+	// Simulate a conversation with a user correction and a failure-fix
+	// Round 1: AI makes a mistake, user corrects
+	store.AppendMessage(ses, provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: "find the debug log path"},
+		},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: "The debug logs should be in /var/log/ggcode/"},
+			{Type: "tool_use", ToolName: "run_command", ToolID: "find-log"},
+		},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: "find-log", Output: "no such directory", IsError: true},
+		},
+	})
+	// AI retries with the correct path
+	store.AppendMessage(ses, provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{
+			{Type: "tool_use", ToolName: "run_command", ToolID: "find-log2"},
+		},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			{Type: "tool_result", ToolID: "find-log2", Output: "/tmp/ggcode-debug/"},
+		},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: "Found it at /tmp/ggcode-debug/"},
+		},
+	})
+	// User correction — this is the key learning signal
+	store.AppendMessage(ses, provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: "为什么你不会去看看逻辑再得出你的结论呢，debug log path is defined in internal/debug/debug.go, always read the code first"},
+		},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: "You're right, I should have read internal/debug/debug.go first to find the defaultLogDir constant"},
+		},
+	})
 
 	// Create Knight
 	cfg := config.DefaultKnightConfig()
@@ -131,22 +145,7 @@ func TestEndToEnd_KnightLifecycle(t *testing.T) {
 
 	// Step 3: Check that we found patterns
 	if len(result.SkillCandidates) == 0 {
-		// Debug: manually run the heuristics
-		toolCounts := make(map[string]int)
-		var toolSequence []string
-		for _, msg := range ses.Messages {
-			for _, block := range msg.Content {
-				if block.Type == "tool_use" {
-					toolCounts[block.ToolName]++
-					toolSequence = append(toolSequence, block.ToolName)
-				}
-			}
-		}
-		t.Logf("DEBUG tool counts: %v", toolCounts)
-		t.Logf("DEBUG tool sequence: %v", toolSequence)
-		patterns := detectRepeatedPatterns(toolSequence)
-		t.Logf("DEBUG patterns: %v", patterns)
-		t.Fatal("expected at least 1 skill candidate from build-test pattern")
+		t.Fatal("expected at least 1 skill candidate (correction or failure-fix)")
 	}
 
 	// Step 4: Write the best candidate to staging

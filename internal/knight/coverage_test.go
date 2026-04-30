@@ -1,7 +1,6 @@
 package knight
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -51,56 +50,6 @@ func TestFindPrevAssistant_None(t *testing.T) {
 	}
 }
 
-func TestExtractToolDetailFromBlock(t *testing.T) {
-	block := provider.ContentBlock{
-		ToolName: "run_command",
-		Input:    json.RawMessage(`{"command": "go test"}`),
-		Output:   "PASS",
-	}
-	d := extractToolDetailFromBlock(block)
-	if d.ToolName != "run_command" {
-		t.Errorf("expected run_command, got %q", d.ToolName)
-	}
-	if d.command() != "go test" {
-		t.Errorf("expected 'go test', got %q", d.command())
-	}
-}
-
-func TestExtractToolDetailFromBlock_Error(t *testing.T) {
-	block := provider.ContentBlock{
-		ToolName: "edit_file",
-		IsError:  true,
-		Output:   "file not found",
-	}
-	d := extractToolDetailFromBlock(block)
-	if d.ErrorMsg != "file not found" {
-		t.Errorf("expected 'file not found', got %q", d.ErrorMsg)
-	}
-}
-
-func TestToolCallDetail_FilePath(t *testing.T) {
-	d := toolCallDetail{
-		Input: map[string]interface{}{"file_path": "/tmp/test.go"},
-	}
-	if d.filePath() != "/tmp/test.go" {
-		t.Errorf("expected /tmp/test.go, got %q", d.filePath())
-	}
-}
-
-func TestToolCallDetail_FilePath_Empty(t *testing.T) {
-	d := toolCallDetail{}
-	if d.filePath() != "" {
-		t.Errorf("expected empty, got %q", d.filePath())
-	}
-}
-
-func TestToolCallDetail_Command_Empty(t *testing.T) {
-	d := toolCallDetail{}
-	if d.command() != "" {
-		t.Errorf("expected empty, got %q", d.command())
-	}
-}
-
 func TestTruncate(t *testing.T) {
 	if truncate("hello", 10) != "hello" {
 		t.Error("short string should not be truncated")
@@ -118,7 +67,7 @@ func TestSanitizeName(t *testing.T) {
 	}{
 		{"hello world", "hello-world"},
 		{"test@#$%", "test"},
-		{"UPPER_case-123", "UPPER_case-123"},
+		{"UPPER_case-123", "UPPER-case-123"},
 		{"   ", ""},
 	}
 	for _, tt := range tests {
@@ -129,33 +78,40 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
-func TestInferCorrectionScope(t *testing.T) {
-	if inferCorrectionScope("fix bug", "error", nil) != "project" {
-		t.Error("expected project for no tools")
+func TestBuildCorrectionSkillName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制", "build-convention"},
+		{"为什么你不会去看看逻辑再得出你的结论呢", "read-code-before-concluding"},
+		{"不要没搞清楚状况就自作主张", "understand-before-acting"},
+		{"先看一下代码", "read-code-first"},
+		{"bool默认值应该是true", "default-value-check"},
 	}
-	if inferCorrectionScope("fix in cmd/main.go", "", []string{"edit_file"}) != "project" {
-		t.Error("expected project for cmd/ path hint")
-	}
-}
-
-func TestBuildCorrectionName(t *testing.T) {
-	got := buildCorrectionName("fix nil pointer", []string{"edit_file"})
-	if got == "" {
-		t.Error("expected non-empty name")
-	}
-}
-
-func TestUniqueStrings(t *testing.T) {
-	got := uniqueStrings([]string{"a", "b", "a", "", "b", "c"})
-	if len(got) != 3 {
-		t.Errorf("expected 3, got %d: %v", len(got), got)
+	for _, tt := range tests {
+		got := buildCorrectionSkillName(tt.input)
+		if got != tt.expected {
+			t.Errorf("buildCorrectionSkillName(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
 	}
 }
 
-func TestUniqueStrings_Empty(t *testing.T) {
-	got := uniqueStrings(nil)
-	if len(got) != 0 {
-		t.Errorf("expected 0, got %d", len(got))
+func TestBuildFailureFixName(t *testing.T) {
+	tests := []struct {
+		f        failure
+		expected string
+	}{
+		{failure{toolInp: `{"command":"go build ./..."}`, errMsg: "undefined: x"}, "build-failure-recovery"},
+		{failure{toolInp: `{"command":"go test ./..."}`, errMsg: "FAIL"}, "test-failure-recovery"},
+		{failure{toolInp: `{"file_path":"internal/config/config.go"}`, errMsg: "no such file"}, "missing-file-recovery"},
+		{failure{toolName: "edit_file"}, "fix-edit-file"},
+	}
+	for _, tt := range tests {
+		got := buildFailureFixName(tt.f)
+		if got != tt.expected {
+			t.Errorf("buildFailureFixName(%+v) = %q, want %q", tt.f, got, tt.expected)
+		}
 	}
 }
 

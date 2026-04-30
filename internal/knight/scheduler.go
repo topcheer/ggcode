@@ -57,33 +57,40 @@ type Knight struct {
 	lastValidationAttempt  time.Time
 	lastMaintenance        time.Time
 	lastMaintenanceAttempt time.Time
-	notifiedStaging        map[string]bool // tracks staging skills already notified to avoid spam
+
+	// Session dedup — persists across ticks, survives analyzer recreation
+	analyzedSessions map[string]time.Time // session ID → time of last analysis
+	notifiedStaging  map[string]bool      // tracks staging skills already notified to avoid spam
+	stagingFailCount map[string]int       // consecutive validation failure count per staging skill
 }
 
 const (
-	knightTickInterval       = 5 * time.Minute
-	knightInitialDelay       = 1 * time.Minute
-	knightAnalysisEvery      = 1 * time.Hour
-	knightValidationEvery    = 6 * time.Hour
-	knightMaintenanceEvery   = 24 * time.Hour
-	knightRetryBackoffEvery  = 15 * time.Minute
-	knightMaxGeneratedSkills = 3
+	knightTickInterval              = 5 * time.Minute
+	knightInitialDelay              = 1 * time.Minute
+	knightAnalysisEvery             = 1 * time.Hour
+	knightValidationEvery           = 6 * time.Hour
+	knightMaintenanceEvery          = 24 * time.Hour
+	knightRetryBackoffEvery         = 15 * time.Minute
+	knightMaxGeneratedSkills        = 3
+	knightStagingMaxValidationFails = 3 // auto-reject after N consecutive validation failures
 )
 
 // New creates a new Knight instance.
 func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) *Knight {
 	knightDir := filepath.Join(homeDir, ".ggcode")
 	return &Knight{
-		cfg:             cfg,
-		budget:          NewBudget(knightDir, cfg),
-		index:           NewSkillIndex(homeDir, projDir),
-		promoter:        NewPromoter(homeDir, projDir),
-		usage:           NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
-		queue:           NewCandidateQueue(filepath.Join(projDir, ".ggcode", "knight-candidate-queue.json")),
-		store:           store,
-		homeDir:         homeDir,
-		projDir:         projDir,
-		notifiedStaging: make(map[string]bool),
+		cfg:              cfg,
+		budget:           NewBudget(knightDir, cfg),
+		index:            NewSkillIndex(homeDir, projDir),
+		promoter:         NewPromoter(homeDir, projDir),
+		usage:            NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
+		queue:            NewCandidateQueue(filepath.Join(projDir, ".ggcode", "knight-candidate-queue.json")),
+		store:            store,
+		homeDir:          homeDir,
+		projDir:          projDir,
+		notifiedStaging:  make(map[string]bool),
+		stagingFailCount: make(map[string]int),
+		analyzedSessions: make(map[string]time.Time),
 	}
 }
 
@@ -556,9 +563,26 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 	for _, s := range staging {
 		result := ValidateSkill(s)
 		if !result.Valid {
-			debug.Log("knight", "staging skill %s validation failed: %v", s.Name, result.Errors)
+			k.stagingFailCount[s.Name]++
+			debug.Log("knight", "staging skill %s validation failed (%d/%d): %v",
+				s.Name, k.stagingFailCount[s.Name], knightStagingMaxValidationFails, result.Errors)
+			if k.stagingFailCount[s.Name] >= knightStagingMaxValidationFails {
+				debug.Log("knight", "auto-rejecting staging skill %s after %d consecutive validation failures",
+					s.Name, k.stagingFailCount[s.Name])
+				if err := k.promoter.Reject(s); err != nil {
+					debug.Log("knight", "reject staging skill %s failed: %v", s.Name, err)
+				} else {
+					k.index.Invalidate()
+					k.clearStagingNotification(s.Name)
+					delete(k.stagingFailCount, s.Name)
+					k.emitReport(fmt.Sprintf("🗑️ Auto-rejected staging skill %s: failed validation %d times (%v)",
+						s.Name, knightStagingMaxValidationFails, result.Errors))
+				}
+			}
 			continue
 		}
+		// Valid — reset failure count
+		delete(k.stagingFailCount, s.Name)
 		if CheckDuplicate(s, active) {
 			debug.Log("knight", "staging skill %s is duplicate, rejecting", s.Name)
 			if err := k.promoter.Reject(s); err != nil {
@@ -1007,9 +1031,15 @@ Current skill:
 }
 
 func (k *Knight) shouldStageCandidate(c SkillCandidate) bool {
-	if c.EvidenceCount >= 2 {
+	// Corrections are the highest-value signal — always worth staging
+	if c.Category == "correction" && c.Score >= 1.5 {
 		return true
 	}
+	// Failure-fix patterns need at least 2 occurrences across sessions to be reliable
+	if c.Category == "failure-fix" && c.EvidenceCount >= 2 {
+		return true
+	}
+	// Fallback for any future category
 	return c.Score >= 3.0
 }
 
