@@ -1408,3 +1408,650 @@ func TestLoadInstanceKeysEnv_NoFile(t *testing.T) {
 		t.Errorf("LoadInstanceKeysEnv with no keys.env should not error: %v", err)
 	}
 }
+
+// ============================================================
+// COMPREHENSIVE INSTANCE CONFIG SAFETY TESTS
+// These tests verify that instance-level config operations
+// NEVER corrupt, leak into, or overwrite global config.
+// ============================================================
+
+// --- SaveImpersonation: instance scope ---
+
+func TestSaveImpersonation_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	err := cfg.SaveImpersonation(ImpersonationConfig{
+		Preset: "claude-code",
+	})
+	if err != nil {
+		t.Fatalf("SaveImpersonation error: %v", err)
+	}
+
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "claude-code") {
+		t.Errorf("instance config should contain impersonation preset:\n%s", string(instData))
+	}
+
+	globalData, _ := os.ReadFile(globalPath)
+	if strings.Contains(string(globalData), "claude-code") {
+		t.Errorf("global config should NOT contain instance impersonation:\n%s", string(globalData))
+	}
+}
+
+func TestSaveImpersonation_ClearInstance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("impersonation:\n  preset: claude-code\n"), 0644)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	// Clear impersonation
+	err := cfg.SaveImpersonation(ImpersonationConfig{})
+	if err != nil {
+		t.Fatalf("SaveImpersonation clear error: %v", err)
+	}
+
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if strings.Contains(string(instData), "impersonation") {
+		t.Errorf("instance config should not have impersonation after clear:\n%s", string(instData))
+	}
+}
+
+// --- SaveSidebarPreference: instance scope ---
+
+func TestSaveSidebarPreference_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	if err := cfg.SaveSidebarPreference(false); err != nil {
+		t.Fatalf("SaveSidebarPreference error: %v", err)
+	}
+
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "sidebar_visible") {
+		t.Errorf("instance config should contain sidebar_visible:\n%s", string(instData))
+	}
+}
+
+// --- patchConfigFile: instance key migration ---
+
+func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
+	os.WriteFile(globalKeysEnv, []byte("export GGCODE_OPENAI_API_KEY='sk-global-key'\n"), 0600)
+	keysEnvPathOverride = globalKeysEnv
+	defer func() { keysEnvPathOverride = "" }()
+
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	// Patch with a vendor API key — should trigger instance migration
+	err := cfg.patchConfigFile(func(raw map[string]interface{}) {
+		raw["vendors"] = map[string]interface{}{
+			"openai": map[string]interface{}{
+				"api_key": "sk-instance-key-from-patch",
+				"endpoints": map[string]interface{}{
+					"cn": map[string]interface{}{
+						"base_url": "https://api.example.com",
+					},
+				},
+			},
+		}
+	})
+	if err != nil {
+		t.Fatalf("patchConfigFile error: %v", err)
+	}
+
+	// Global keys.env must be unchanged
+	globalData, _ := os.ReadFile(globalKeysEnv)
+	if strings.Contains(string(globalData), "sk-instance-key-from-patch") {
+		t.Errorf("global keys.env MUST NOT contain instance key:\n%s", string(globalData))
+	}
+	if !strings.Contains(string(globalData), "sk-global-key") {
+		t.Errorf("global keys.env lost its original key:\n%s", string(globalData))
+	}
+
+	// Instance keys.env must exist with prefixed key
+	instKeysEnv := filepath.Join(instDir, "keys.env")
+	instKeysData, err := os.ReadFile(instKeysEnv)
+	if err != nil {
+		t.Fatalf("instance keys.env should exist: %v", err)
+	}
+	hash := filepath.Base(instDir)
+	if !strings.Contains(string(instKeysData), "GGCODE_I_"+hash+"_") {
+		t.Errorf("instance keys.env should use prefixed env var:\n%s", string(instKeysData))
+	}
+}
+
+// --- AddIMAdapter: instance scope with token ---
+
+func TestAddIMAdapter_Instance_TokenIsolation(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
+	os.WriteFile(globalKeysEnv, []byte("export GGCODE_IM_mybot_bot_token='global-bot-token'\n"), 0600)
+	keysEnvPathOverride = globalKeysEnv
+	defer func() { keysEnvPathOverride = "" }()
+
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters: {}\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+
+	cfg, _ := Load(globalPath)
+	cfg.SetInstancePaths(workspace)
+	cfg.saveScope = "instance"
+
+	err := cfg.AddIMAdapter("mybot", IMAdapterConfig{
+		Enabled:  true,
+		Platform: "telegram",
+		Extra: map[string]interface{}{
+			"bot_token": "123456:instance-bot-token",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AddIMAdapter error: %v", err)
+	}
+
+	// Verify instance config has the adapter
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "mybot") {
+		t.Errorf("instance config should contain adapter 'mybot':\n%s", string(instData))
+	}
+
+	// Global keys.env must still have the original token
+	globalData, _ := os.ReadFile(globalKeysEnv)
+	if !strings.Contains(string(globalData), "global-bot-token") {
+		t.Errorf("global keys.env lost original token:\n%s", string(globalData))
+	}
+	if strings.Contains(string(globalData), "instance-bot-token") {
+		t.Errorf("global keys.env MUST NOT contain instance token:\n%s", string(globalData))
+	}
+
+	// Global config must not have the adapter
+	globalCfgData, _ := os.ReadFile(globalPath)
+	if strings.Contains(string(globalCfgData), "mybot") {
+		t.Errorf("global config MUST NOT contain instance adapter:\n%s", string(globalCfgData))
+	}
+}
+
+// --- SetIMAdapterExtra: instance scope ---
+
+func TestSetIMAdapterExtra_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters: {}\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("im:\n  enabled: true\n  adapters:\n    mybot:\n      platform: telegram\n      enabled: true\n"), 0644)
+
+	cfg, _ := LoadWithInstance(globalPath, workspace)
+	cfg.saveScope = "instance"
+
+	err := cfg.SetIMAdapterExtra("mybot", "bot_token", "new-instance-token")
+	if err != nil {
+		t.Fatalf("SetIMAdapterExtra error: %v", err)
+	}
+
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "bot_token") {
+		t.Errorf("instance config should contain bot_token:\n%s", string(instData))
+	}
+
+	globalData, _ := os.ReadFile(globalPath)
+	if strings.Contains(string(globalData), "mybot") || strings.Contains(string(globalData), "bot_token") {
+		t.Errorf("global config MUST NOT be affected:\n%s", string(globalData))
+	}
+}
+
+// --- RemoveIMAdapter: instance scope ---
+
+func TestRemoveIMAdapter_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters:\n    globalbot:\n      platform: slack\n      enabled: true\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("im:\n  enabled: true\n  adapters:\n    instbot:\n      platform: telegram\n      enabled: true\n"), 0644)
+
+	cfg, _ := LoadWithInstance(globalPath, workspace)
+	cfg.saveScope = "instance"
+
+	err := cfg.RemoveIMAdapter("instbot")
+	if err != nil {
+		t.Fatalf("RemoveIMAdapter error: %v", err)
+	}
+
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if strings.Contains(string(instData), "instbot") {
+		t.Errorf("instance config should not contain removed adapter:\n%s", string(instData))
+	}
+
+	globalData, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(globalData), "globalbot") {
+		t.Errorf("global config should still have globalbot:\n%s", string(globalData))
+	}
+}
+
+// --- SetIMAdapterEnabled: instance scope ---
+
+func TestSetIMAdapterEnabled_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters: {}\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("im:\n  enabled: true\n  adapters:\n    mybot:\n      platform: telegram\n      enabled: true\n"), 0644)
+
+	cfg, _ := LoadWithInstance(globalPath, workspace)
+	cfg.saveScope = "instance"
+
+	err := cfg.SetIMAdapterEnabled("mybot", false)
+	if err != nil {
+		t.Fatalf("SetIMAdapterEnabled error: %v", err)
+	}
+
+	reloaded := LoadInstanceConfig(workspace)
+	if reloaded == nil {
+		t.Fatal("instance config should exist")
+	}
+	adapter, ok := reloaded.IM.Adapters["mybot"]
+	if !ok {
+		t.Fatal("adapter mybot should exist")
+	}
+	if adapter.Enabled != false {
+		t.Errorf("adapter should be disabled, got enabled=%v", adapter.Enabled)
+	}
+}
+
+// --- AddIMTarget: instance scope ---
+
+func TestAddIMTarget_Instance(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters: {}\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("im:\n  enabled: true\n  adapters:\n    mybot:\n      platform: telegram\n      enabled: true\n      targets: []\n"), 0644)
+
+	cfg, _ := LoadWithInstance(globalPath, workspace)
+	cfg.saveScope = "instance"
+
+	err := cfg.AddIMTarget("mybot", IMTargetConfig{
+		ID:      "chat-123",
+		Label:   "Test Chat",
+		Channel: "-10012345",
+	})
+	if err != nil {
+		t.Fatalf("AddIMTarget error: %v", err)
+	}
+
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "chat-123") {
+		t.Errorf("instance config should contain target:\n%s", string(instData))
+	}
+}
+
+// ============================================================
+// DISASTER SCENARIO TESTS
+// Verify that no combination of operations corrupts config.
+// ============================================================
+
+// Disaster 1: Global has openai key, instance saves different openai key,
+// then global saves again — global key must survive.
+
+func TestDisaster_InstanceThenGlobalSave_KeySurvival(t *testing.T) {
+	// LoadWithInstance merges instance config, then Save() must not leak
+	// instance fields into the global file.
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("default_mode: auto\nmax_iterations: 42\n"), 0644)
+
+	cfg, _ := LoadWithInstance(globalPath, workspace)
+	if cfg.DefaultMode != "auto" {
+		t.Fatalf("DefaultMode should be auto from instance, got %q", cfg.DefaultMode)
+	}
+
+	// Modify a global-only field
+	cfg.Language = "zh-TW"
+
+	// Save to global — instance fields must NOT leak
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+
+	globalData, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(globalData), "zh-TW") {
+		t.Errorf("global should have zh-TW:\n%s", string(globalData))
+	}
+	if strings.Contains(string(globalData), "auto") || strings.Contains(string(globalData), "max_iterations") || strings.Contains(string(globalData), "42") {
+		t.Errorf("DISASTER: instance fields leaked into global!\n%s", string(globalData))
+	}
+}
+
+func TestDisaster_TwoWorkspaces_SameVendor_Isolation(t *testing.T) {
+	// Two workspaces with different instance configs — verify no cross-contamination
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	ws1 := filepath.Join(tmpDir, "ws1")
+	ws2 := filepath.Join(tmpDir, "ws2")
+	os.MkdirAll(ws1, 0755)
+	os.MkdirAll(ws2, 0755)
+
+	// Instance 1: default_mode = auto
+	inst1Dir := InstanceDir(ws1)
+	os.MkdirAll(inst1Dir, 0755)
+	os.WriteFile(filepath.Join(inst1Dir, "ggcode.yaml"), []byte("default_mode: auto\n"), 0644)
+
+	// Instance 2: default_mode = plan
+	inst2Dir := InstanceDir(ws2)
+	os.MkdirAll(inst2Dir, 0755)
+	os.WriteFile(filepath.Join(inst2Dir, "ggcode.yaml"), []byte("default_mode: plan\n"), 0644)
+
+	cfg1, _ := LoadWithInstance(globalPath, ws1)
+	cfg2, _ := LoadWithInstance(globalPath, ws2)
+
+	if cfg1.DefaultMode != "auto" {
+		t.Errorf("ws1 DefaultMode = %q, want auto", cfg1.DefaultMode)
+	}
+	if cfg2.DefaultMode != "plan" {
+		t.Errorf("ws2 DefaultMode = %q, want plan", cfg2.DefaultMode)
+	}
+
+	// Verify global config untouched by both loads
+	globalData, _ := os.ReadFile(globalPath)
+	if strings.Contains(string(globalData), "auto") || strings.Contains(string(globalData), "plan") {
+		t.Errorf("DISASTER: global config contains instance modes!\n%s", string(globalData))
+	}
+
+	// Verify instance 1 config
+	inst1Data, _ := os.ReadFile(filepath.Join(inst1Dir, "ggcode.yaml"))
+	if strings.Contains(string(inst1Data), "plan") {
+		t.Errorf("DISASTER: instance1 config contains ws2 mode 'plan'!\n%s", string(inst1Data))
+	}
+
+	// Verify instance 2 config
+	inst2Data, _ := os.ReadFile(filepath.Join(inst2Dir, "ggcode.yaml"))
+	if strings.Contains(string(inst2Data), "auto") {
+		t.Errorf("DISASTER: instance2 config contains ws1 mode 'auto'!\n%s", string(inst2Data))
+	}
+}
+
+func TestDisaster_RapidScopeToggle_NoCorruption(t *testing.T) {
+	// LoadWithInstance records instanceFields. Then Save() excludes them.
+	// This tests the core guarantee: instance fields never appear in global file.
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("default_mode: auto\n"), 0644)
+
+	cfg, _ := LoadWithInstance(globalPath, workspace)
+	if cfg.DefaultMode != "auto" {
+		t.Fatalf("DefaultMode = %q, want auto", cfg.DefaultMode)
+	}
+	if len(cfg.instanceFields) == 0 {
+		t.Fatal("instanceFields should be populated")
+	}
+
+	// Modify global field and save
+	cfg.Language = "zh-CN"
+	cfg.saveScope = "global"
+	if err := cfg.SaveScoped("global"); err != nil {
+		t.Fatalf("SaveScoped(global) error: %v", err)
+	}
+
+	// Global: has zh-CN, does NOT have "auto"
+	globalData, _ := os.ReadFile(globalPath)
+	if !strings.Contains(string(globalData), "zh-CN") {
+		t.Errorf("global should have zh-CN:\n%s", string(globalData))
+	}
+	if strings.Contains(string(globalData), "auto") {
+		t.Errorf("DISASTER: global contains instance 'auto'!\n%s", string(globalData))
+	}
+
+	// Instance: still has auto
+	instData, _ := os.ReadFile(filepath.Join(instDir, "ggcode.yaml"))
+	if !strings.Contains(string(instData), "auto") {
+		t.Errorf("instance should have 'auto':\n%s", string(instData))
+	}
+}
+
+func TestSave_LeakPrevention_MultipleInstanceFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "ggcode.yaml"),
+		[]byte("default_mode: auto\nmax_iterations: 50\n"), 0644)
+
+	cfg, _ := LoadWithInstance(globalPath, workspace)
+
+	// Verify instance fields were merged
+	if cfg.DefaultMode != "auto" {
+		t.Errorf("DefaultMode = %q, want auto", cfg.DefaultMode)
+	}
+	if cfg.MaxIterations != 50 {
+		t.Errorf("MaxIterations = %d, want 50", cfg.MaxIterations)
+	}
+	if len(cfg.instanceFields) == 0 {
+		t.Fatal("instanceFields should be populated")
+	}
+
+	// Now save global — instance fields must NOT leak
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+
+	globalData, _ := os.ReadFile(globalPath)
+	if strings.Contains(string(globalData), "auto") {
+		t.Errorf("DISASTER: instance default_mode 'auto' leaked into global!\n%s", string(globalData))
+	}
+	if strings.Contains(string(globalData), "max_iterations") {
+		t.Errorf("DISASTER: instance max_iterations leaked into global!\n%s", string(globalData))
+	}
+	if !strings.Contains(string(globalData), "language: en") {
+		t.Errorf("global lost its own field 'language: en':\n%s", string(globalData))
+	}
+}
+func TestMigrateInstanceKeys_IMAdapterToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
+	os.WriteFile(globalKeysEnv, []byte("export GGCODE_IM_mybot_bot_token='global-tg-token'\n"), 0600)
+	keysEnvPathOverride = globalKeysEnv
+	defer func() { keysEnvPathOverride = "" }()
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	instPath := filepath.Join(instDir, "ggcode.yaml")
+	os.WriteFile(instPath, []byte("im:\n  adapters:\n    mybot:\n      platform: telegram\n      extra:\n        bot_token: 'instance-tg-token'\n"), 0644)
+
+	hash := filepath.Base(instDir)
+	findings, err := MigrateInstancePlaintextAPIKeys(instPath, hash)
+	if err != nil {
+		t.Fatalf("MigrateInstancePlaintextAPIKeys error: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("should find bot_token as plaintext key")
+	}
+
+	// Global keys.env must be untouched
+	globalData, _ := os.ReadFile(globalKeysEnv)
+	if !strings.Contains(string(globalData), "global-tg-token") {
+		t.Errorf("global keys.env lost its token:\n%s", string(globalData))
+	}
+	if strings.Contains(string(globalData), "instance-tg-token") {
+		t.Errorf("DISASTER: instance IM token leaked to global keys.env!\n%s", string(globalData))
+	}
+
+	// Instance keys.env must have prefixed token
+	instKeysData, _ := os.ReadFile(filepath.Join(instDir, "keys.env"))
+	prefix := "GGCODE_I_" + hash + "_"
+	if !strings.Contains(string(instKeysData), prefix) {
+		t.Errorf("instance keys.env should use prefix %s:\n%s", prefix, string(instKeysData))
+	}
+	if !strings.Contains(string(instKeysData), "instance-tg-token") {
+		t.Errorf("instance keys.env should contain instance token:\n%s", string(instKeysData))
+	}
+}
+
+// --- Verify IM adapter extra merge doesn't lose global extra ---
+
+func TestMergeInstance_IMAdapterExtraMerge(t *testing.T) {
+	// When global and instance have same adapter name, global wins (adapter-level isolation).
+	// Instance adapter with a NEW name gets added.
+	global := &Config{IM: IMConfig{
+		Enabled: true,
+		Adapters: map[string]IMAdapterConfig{
+			"globalbot": {
+				Platform: "telegram",
+				Extra:    map[string]interface{}{"bot_token": "global-token"},
+			},
+		},
+	}}
+	instance := &Config{IM: IMConfig{
+		Adapters: map[string]IMAdapterConfig{
+			"globalbot": {
+				// Same name as global — global wins, this is ignored
+				Extra: map[string]interface{}{"bot_token": "instance-token"},
+			},
+			"instancebot": {
+				// New adapter — gets added
+				Platform: "slack",
+				Extra:    map[string]interface{}{"bot_token": "instance-slack-token"},
+			},
+		},
+	}}
+
+	MergeInstance(global, instance)
+
+	// Global adapter unchanged
+	globalBot := global.IM.Adapters["globalbot"]
+	if globalBot.Extra["bot_token"] != "global-token" {
+		t.Errorf("global adapter should keep its token, got %v", globalBot.Extra["bot_token"])
+	}
+
+	// Instance adapter added
+	instBot, ok := global.IM.Adapters["instancebot"]
+	if !ok {
+		t.Fatal("instance adapter 'instancebot' should be added")
+	}
+	if instBot.Extra["bot_token"] != "instance-slack-token" {
+		t.Errorf("instance adapter should have its token, got %v", instBot.Extra["bot_token"])
+	}
+}
+
+// --- MCP server instance migration ---
+
+func TestMigrateInstanceKeys_MCPServerEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
+	os.WriteFile(globalKeysEnv, []byte("export GGCODE_MCP_myserver_api_key='global-mcp-key'\n"), 0600)
+	keysEnvPathOverride = globalKeysEnv
+	defer func() { keysEnvPathOverride = "" }()
+
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	instPath := filepath.Join(instDir, "ggcode.yaml")
+	os.WriteFile(instPath, []byte("mcp_servers:\n  - name: myserver\n    env:\n        api_key: instance-mcp-key\n"), 0644)
+
+	hash := filepath.Base(instDir)
+	findings, err := MigrateInstancePlaintextAPIKeys(instPath, hash)
+	if err != nil {
+		t.Fatalf("MigrateInstancePlaintextAPIKeys error: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("should find MCP env as plaintext key")
+	}
+
+	// Global keys.env untouched
+	globalData, _ := os.ReadFile(globalKeysEnv)
+	if strings.Contains(string(globalData), "instance-mcp-key") {
+		t.Errorf("DISASTER: instance MCP key leaked to global:\n%s", string(globalData))
+	}
+
+	// Instance keys.env has prefixed MCP key
+	instKeysData, _ := os.ReadFile(filepath.Join(instDir, "keys.env"))
+	if !strings.Contains(string(instKeysData), "GGCODE_I_"+hash+"_") {
+		t.Errorf("instance keys.env should use prefix:\n%s", string(instKeysData))
+	}
+}
