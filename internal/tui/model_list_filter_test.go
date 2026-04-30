@@ -45,11 +45,13 @@ func TestBuildModelListWindowFiltersModels(t *testing.T) {
 }
 
 func TestProviderPanelIgnoresPlaceholderAPIKeyForRefresh(t *testing.T) {
+	// Use a placeholder that is extremely unlikely to exist in any environment.
+	// Using ${OPENAI_API_KEY} is flaky because CI runners may have it set.
 	cfg := config.DefaultConfig()
 	cfg.Vendors = map[string]config.VendorConfig{
 		"openai": {
 			DisplayName: "OpenAI",
-			APIKey:      "${OPENAI_API_KEY}",
+			APIKey:      "${GGCODE_TEST_PLACEHOLDER_KEY_91827364}",
 			Endpoints: map[string]config.EndpointConfig{
 				"api": {
 					DisplayName:   "API",

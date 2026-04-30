@@ -285,10 +285,10 @@ func (s *Server) handleConfigScope(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		writeJSON(w, map[string]interface{}{
-			"scope":       s.saveScope,
-			"hasInstance": s.cfg.HasInstanceConfigAttached(),
+			"scope":           s.saveScope,
+			"hasInstance":     s.cfg.HasInstanceConfigAttached(),
 			"hasInstanceFile": s.cfg.HasInstanceConfigFile(),
-				"instanceDir": s.cfg.InstanceDirPath(),
+			"instanceDir":     s.cfg.InstanceDirPath(),
 		})
 	case http.MethodPut:
 		var req struct {
