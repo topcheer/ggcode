@@ -898,6 +898,18 @@ func TestLoadWithInstance_NoInstanceConfig(t *testing.T) {
 	if len(cfg.instanceFields) > 0 {
 		t.Errorf("instanceFields should be empty, got %v", cfg.instanceFields)
 	}
+	// SetInstancePaths is always called — allows user to switch to instance scope
+	// even when no instance config file exists yet.
+	if !cfg.HasInstanceConfigAttached() {
+		t.Error("HasInstanceConfigAttached should be true (instanceWS set)")
+	}
+	if cfg.InstanceWorkspace() != workspace {
+		t.Errorf("InstanceWorkspace = %q, want %q", cfg.InstanceWorkspace(), workspace)
+	}
+	// But no instance file exists yet
+	if cfg.HasInstanceConfigFile() {
+		t.Error("HasInstanceConfigFile should be false (no file created yet)")
+	}
 }
 
 // --- Coverage: LoadWithInstance with legacy a2a.yaml ---
