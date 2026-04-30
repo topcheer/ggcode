@@ -1270,3 +1270,211 @@ Use it.
 		t.Fatalf("expected 1 deferred candidate to remain queued, got %+v", remaining)
 	}
 }
+
+// --- EventSink Tests ---
+
+func TestFuncSink(t *testing.T) {
+	var startName, completeName, completeReport string
+	var completeDuration time.Duration
+
+	sink := &FuncSink{
+		OnStart: func(name string) { startName = name },
+		OnComplete: func(name string, report string, dur time.Duration) {
+			completeName = name
+			completeReport = report
+			completeDuration = dur
+		},
+	}
+
+	sink.OnTaskStart("test-task")
+	if startName != "test-task" {
+		t.Errorf("OnStart: got %q, want %q", startName, "test-task")
+	}
+
+	sink.OnTaskComplete("test-task", "done", 5*time.Second)
+	if completeName != "test-task" {
+		t.Errorf("OnComplete name: got %q, want %q", completeName, "test-task")
+	}
+	if completeReport != "done" {
+		t.Errorf("OnComplete report: got %q, want %q", completeReport, "done")
+	}
+	if completeDuration != 5*time.Second {
+		t.Errorf("OnComplete duration: got %v, want %v", completeDuration, 5*time.Second)
+	}
+}
+
+func TestFuncSink_NilCallbacks(t *testing.T) {
+	// Should not panic with nil callbacks
+	sink := &FuncSink{}
+	sink.OnTaskStart("anything")
+	sink.OnTaskComplete("anything", "report", time.Second)
+}
+
+func TestSetEventSink(t *testing.T) {
+	cfg := config.KnightConfig{Enabled: true, Capabilities: []string{"skill_creation", "skill_validation", "test_generation", "regression_testing", "doc_sync"}}
+	k := New(cfg, t.TempDir(), t.TempDir(), nil)
+
+	var events []string
+	sink := &FuncSink{
+		OnStart:    func(name string) { events = append(events, "start:"+name) },
+		OnComplete: func(name string, report string, dur time.Duration) { events = append(events, "complete:"+name) },
+	}
+	k.SetEventSink(sink)
+	got := k.getEventSink()
+	if got != sink {
+		t.Error("getEventSink should return the same sink")
+	}
+}
+
+type mockRecordingSink struct {
+	mu        sync.Mutex
+	starts    []string
+	completes []sinkComplete
+}
+
+type sinkComplete struct {
+	name     string
+	report   string
+	duration time.Duration
+}
+
+func (s *mockRecordingSink) OnTaskStart(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.starts = append(s.starts, name)
+}
+
+func (s *mockRecordingSink) OnTaskComplete(name string, report string, dur time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completes = append(s.completes, sinkComplete{name, report, dur})
+}
+
+func TestRunMaintenanceTask_EmitsEvents(t *testing.T) {
+	cfg := config.KnightConfig{Enabled: true, Capabilities: []string{"skill_creation", "skill_validation", "test_generation"}}
+	tmpDir := t.TempDir()
+	k := New(cfg, tmpDir, tmpDir, nil)
+
+	recorder := &mockRecordingSink{}
+	k.SetEventSink(recorder)
+
+	// Set up a mock factory
+	callCount := 0
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		callCount++
+		return &stubKnightRunner{output: "maintenance result output", err: nil}, nil
+	})
+
+	result := k.runMaintenanceTask(context.Background(), "test-maintenance", "do something")
+	if result != "maintenance result output" {
+		t.Errorf("result = %q, want %q", result, "maintenance result output")
+	}
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.starts) != 1 || recorder.starts[0] != "test-maintenance" {
+		t.Errorf("starts = %v, want [test-maintenance]", recorder.starts)
+	}
+	if len(recorder.completes) != 1 || recorder.completes[0].name != "test-maintenance" {
+		t.Errorf("completes = %v, want [test-maintenance]", recorder.completes)
+	}
+	if recorder.completes[0].report != "maintenance result output" {
+		t.Errorf("complete report = %q, want %q", recorder.completes[0].report, "maintenance result output")
+	}
+}
+
+func TestRunMaintenanceTask_EmitsOnError(t *testing.T) {
+	cfg := config.KnightConfig{Enabled: true}
+	tmpDir := t.TempDir()
+	k := New(cfg, tmpDir, tmpDir, nil)
+
+	recorder := &mockRecordingSink{}
+	k.SetEventSink(recorder)
+
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return &stubKnightRunner{output: "", err: fmt.Errorf("something broke")}, nil
+	})
+
+	result := k.runMaintenanceTask(context.Background(), "fail-task", "do something")
+	if !strings.Contains(result, "task failed") {
+		t.Errorf("result = %q, should contain 'task failed'", result)
+	}
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.starts) != 1 || recorder.starts[0] != "fail-task" {
+		t.Errorf("starts = %v, want [fail-task]", recorder.starts)
+	}
+	if len(recorder.completes) != 1 {
+		t.Fatalf("completes = %v, want 1 entry", recorder.completes)
+	}
+	if !strings.Contains(recorder.completes[0].report, "task failed") {
+		t.Errorf("complete report = %q, should contain 'task failed'", recorder.completes[0].report)
+	}
+}
+
+func TestRunMaintenanceTask_NoFactory(t *testing.T) {
+	cfg := config.KnightConfig{Enabled: true}
+	tmpDir := t.TempDir()
+	k := New(cfg, tmpDir, tmpDir, nil)
+
+	recorder := &mockRecordingSink{}
+	k.SetEventSink(recorder)
+
+	result := k.runMaintenanceTask(context.Background(), "nope", "do something")
+	if result != "" {
+		t.Errorf("result = %q, want empty", result)
+	}
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.starts) != 0 {
+		t.Errorf("no factory → no events, got starts = %v", recorder.starts)
+	}
+	if len(recorder.completes) != 0 {
+		t.Errorf("no factory → no events, got completes = %v", recorder.completes)
+	}
+}
+
+func TestEmitReport_ForwardsToSink(t *testing.T) {
+	cfg := config.KnightConfig{Enabled: true}
+	cfg.TrustLevel = "staged"
+	tmpDir := t.TempDir()
+	k := New(cfg, tmpDir, tmpDir, nil)
+
+	recorder := &mockRecordingSink{}
+	k.SetEventSink(recorder)
+
+	// emitReport also sends to sink (with empty task name)
+	k.emitReport("test report content")
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.completes) != 1 {
+		t.Fatalf("completes = %v, want 1 entry", recorder.completes)
+	}
+	if recorder.completes[0].name != "" {
+		t.Errorf("name = %q, want empty (emitReport uses empty name)", recorder.completes[0].name)
+	}
+	if recorder.completes[0].report != "test report content" {
+		t.Errorf("report = %q, want %q", recorder.completes[0].report, "test report content")
+	}
+}
+
+func TestEmitReport_QuietHours_SkipsSink(t *testing.T) {
+	cfg := config.KnightConfig{Enabled: true}
+	cfg.QuietHours = []string{"00:00-23:59"}
+	tmpDir := t.TempDir()
+	k := New(cfg, tmpDir, tmpDir, nil)
+
+	recorder := &mockRecordingSink{}
+	k.SetEventSink(recorder)
+
+	k.emitReport("should be suppressed")
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.completes) != 0 {
+		t.Errorf("quiet hours should suppress sink events, got %d", len(recorder.completes))
+	}
+}

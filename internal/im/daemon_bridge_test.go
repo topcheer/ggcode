@@ -367,3 +367,68 @@ func testMsg(adapter string) InboundMessage {
 		Envelope: Envelope{Adapter: adapter, Platform: PlatformTelegram},
 	}
 }
+
+// --- Activity Hook Tests ---
+
+func TestDaemonBridge_SetActivityHook(t *testing.T) {
+	br := &DaemonBridge{}
+
+	var hookCalled bool
+	br.SetActivityHook(func() { hookCalled = true })
+
+	br.mu.Lock()
+	hook := br.onActivity
+	br.mu.Unlock()
+
+	if hook == nil {
+		t.Fatal("onActivity should be set")
+	}
+	hook()
+	if !hookCalled {
+		t.Error("hook should have been called")
+	}
+}
+
+func TestDaemonBridge_SetActivityHookNil(t *testing.T) {
+	br := &DaemonBridge{}
+	br.SetActivityHook(nil)
+
+	br.mu.Lock()
+	hook := br.onActivity
+	br.mu.Unlock()
+
+	if hook != nil {
+		t.Error("onActivity should be nil")
+	}
+}
+
+func TestDaemonBridge_SendUserMessageTriggersActivity(t *testing.T) {
+	br := &DaemonBridge{}
+
+	// Simulate agent running state to avoid nil deref in SendUserMessage
+	br.mu.Lock()
+	br.cancelFunc = func() {}
+	br.mu.Unlock()
+
+	var activityCalled bool
+	br.SetActivityHook(func() { activityCalled = true })
+
+	br.SendUserMessage([]provider.ContentBlock{{Type: "text", Text: "hello"}})
+
+	if !activityCalled {
+		t.Error("SendUserMessage should have triggered activity hook for non-empty text")
+	}
+}
+
+func TestDaemonBridge_SendUserMessageEmptyNoActivity(t *testing.T) {
+	br := &DaemonBridge{}
+
+	var activityCalled bool
+	br.SetActivityHook(func() { activityCalled = true })
+
+	br.SendUserMessage([]provider.ContentBlock{})
+
+	if activityCalled {
+		t.Error("SendUserMessage with empty content should not trigger activity hook")
+	}
+}
