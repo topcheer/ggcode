@@ -7,6 +7,8 @@ type KnightConfig struct {
 	// Enabled controls whether Knight runs in daemon mode.
 	Enabled bool `yaml:"enabled,omitempty"`
 
+	enabledSet bool `yaml:"-"`
+
 	// Vendor/Endpoint/Model optionally override the main agent LLM selection.
 	// Any empty field falls back to the main active selection.
 	Vendor   string `yaml:"vendor,omitempty"`
@@ -67,9 +69,11 @@ func (kc *KnightConfig) UnmarshalYAML(value *yaml.Node) error {
 	}
 	*kc = KnightConfig(decoded)
 	for i := 0; i+1 < len(value.Content); i += 2 {
-		if value.Content[i].Value == "daily_token_budget" {
+		switch value.Content[i].Value {
+		case "daily_token_budget":
 			kc.dailyTokenBudgetSet = true
-			break
+		case "enabled":
+			kc.enabledSet = true
 		}
 	}
 	return nil
@@ -84,6 +88,19 @@ func (kc KnightConfig) HasExplicitDailyTokenBudget() bool {
 // Knight returns the Knight configuration, applying defaults for zero values.
 func (c *Config) Knight() KnightConfig {
 	kc := c.KnightConfig
+	// Apply defaults for fields not set in the YAML. The YAML tag uses
+	// "omitempty" so an absent "knight:" section leaves all fields at Go
+	// zero-values (Enabled=false, TrustLevel="", etc). We must restore the
+	// intended defaults here so that "no knight config" == "default config".
+	kc.SetDefaults()
+	return kc
+}
+
+// SetDefaults fills in default values for any zero-valued fields.
+func (kc *KnightConfig) SetDefaults() {
+	if !kc.enabledSet {
+		kc.Enabled = true
+	}
 	if kc.DailyTokenBudget < 0 {
 		kc.DailyTokenBudget = 5_000_000
 	}
@@ -105,7 +122,6 @@ func (c *Config) Knight() KnightConfig {
 			"doc_sync",
 		}
 	}
-	return kc
 }
 
 // ResolveKnightEndpoint resolves Knight's optional dedicated provider selection.

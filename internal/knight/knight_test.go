@@ -490,29 +490,32 @@ func TestAnalyzeRecentAggregatesAcrossSessions(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		ses := session.NewSession("zai", "test", "test-model")
-		// Add a user message so the session is not considered empty.
+		// Simulate a correction pattern in each session
 		store.AppendMessage(ses, provider.Message{
 			Role: "user",
 			Content: []provider.ContentBlock{
-				{Type: "text", Text: "help me with something"},
+				{Type: "text", Text: "build the project"},
 			},
 		})
-		for j := 0; j < 4; j++ {
-			store.AppendMessage(ses, provider.Message{
-				Role: "assistant",
-				Content: []provider.ContentBlock{
-					{Type: "tool_use", ToolName: "run_command"},
-				},
-			})
-		}
-		for j := 0; j < 3; j++ {
-			store.AppendMessage(ses, provider.Message{
-				Role: "assistant",
-				Content: []provider.ContentBlock{
-					{Type: "tool_use", ToolName: "read_file"},
-				},
-			})
-		}
+		store.AppendMessage(ses, provider.Message{
+			Role: "assistant",
+			Content: []provider.ContentBlock{
+				{Type: "text", Text: "I will create a debug binary"},
+				{Type: "tool_use", ToolName: "run_command", ToolID: "build"},
+			},
+		})
+		store.AppendMessage(ses, provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{
+				{Type: "text", Text: "你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制，用 make build"},
+			},
+		})
+		store.AppendMessage(ses, provider.Message{
+			Role: "assistant",
+			Content: []provider.ContentBlock{
+				{Type: "text", Text: "Understood, using make build"},
+			},
+		})
 	}
 
 	k := New(config.DefaultKnightConfig(), homeDir, projDir, store)
@@ -577,14 +580,11 @@ created_by: knight
 	}
 }
 
-func TestBuildCorrectionNameIsStableAcrossSessions(t *testing.T) {
-	first := buildCorrectionName("不要用 group，应该用 users", []string{"run_command"})
-	second := buildCorrectionName("不要用 group，应该用 users", []string{"run_command"})
+func TestBuildCorrectionSkillNameIsStableAcrossSessions(t *testing.T) {
+	first := buildCorrectionSkillName("你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制")
+	second := buildCorrectionSkillName("你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制")
 	if first != second {
 		t.Fatalf("expected stable correction name, got %q vs %q", first, second)
-	}
-	if contains(first, "session") {
-		t.Fatalf("expected correction name to avoid session-specific suffix, got %q", first)
 	}
 }
 
@@ -621,26 +621,6 @@ created_by: knight
 	// File should be gone
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("staging file should be deleted after reject")
-	}
-}
-
-func TestDetectRepeatedPatterns(t *testing.T) {
-	tools := []string{"read_file", "edit_file", "run_command", "read_file", "edit_file", "run_command", "read_file", "edit_file"}
-
-	patterns := detectRepeatedPatterns(tools)
-	if len(patterns) == 0 {
-		t.Fatal("expected to find repeated patterns")
-	}
-
-	// Should find "read_file|edit_file" repeated 3 times
-	found := false
-	for _, p := range patterns {
-		if len(p.Tools) == 2 && p.Tools[0] == "read_file" && p.Tools[1] == "edit_file" && p.Count >= 3 {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected read_file|edit_file pattern with count>=3, got %v", patterns)
 	}
 }
 
@@ -726,24 +706,6 @@ func TestUsageTrackerPersistence(t *testing.T) {
 	}
 	if avg != 5.0 {
 		t.Fatalf("expected persisted avg=5.0, got %f", avg)
-	}
-}
-
-func TestInferCommandScope(t *testing.T) {
-	tests := []struct {
-		command string
-		want    string
-	}{
-		{"git status", "global"},
-		{"docker ps", "global"},
-		{"go test ./...", "project"},
-		{"make verify-ci", "project"},
-		{"cat internal/knight/analyzer.go", "project"},
-	}
-	for _, tt := range tests {
-		if got := inferCommandScope(tt.command); got != tt.want {
-			t.Errorf("inferCommandScope(%q) = %q, want %q", tt.command, got, tt.want)
-		}
 	}
 }
 
@@ -1476,5 +1438,75 @@ func TestEmitReport_QuietHours_SkipsSink(t *testing.T) {
 	defer recorder.mu.Unlock()
 	if len(recorder.completes) != 0 {
 		t.Errorf("quiet hours should suppress sink events, got %d", len(recorder.completes))
+	}
+}
+
+func TestAnalyzeRecentDedupAcrossCalls(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-dedup-*")
+	defer os.RemoveAll(dir)
+
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	storeDir := filepath.Join(homeDir, ".ggcode", "sessions")
+	os.MkdirAll(storeDir, 0755)
+	store, _ := session.NewJSONLStore(storeDir)
+
+	// Create one session with a correction
+	ses := session.NewSession("zai", "test", "test-model")
+	store.AppendMessage(ses, provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: "build"}},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role:    "assistant",
+		Content: []provider.ContentBlock{{Type: "text", Text: "debug binary"}},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: "你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制"}},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role:    "assistant",
+		Content: []provider.ContentBlock{{Type: "text", Text: "OK"}},
+	})
+
+	k := New(config.DefaultKnightConfig(), homeDir, projDir, store)
+
+	// First call: should find the candidate
+	r1, err := NewSessionAnalyzer(k).AnalyzeRecent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.SessionsAnalyzed != 1 {
+		t.Fatalf("first call: expected 1 analyzed, got %d", r1.SessionsAnalyzed)
+	}
+
+	// Second call: session unchanged, should be skipped (dedup)
+	r2, err := NewSessionAnalyzer(k).AnalyzeRecent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.SessionsAnalyzed != 0 {
+		t.Fatalf("second call: expected 0 analyzed (dedup), got %d", r2.SessionsAnalyzed)
+	}
+
+	// Third call: session got a new message (UpdatedAt advanced) → should re-analyze
+	// Wait a tiny bit so UpdatedAt changes
+	time.Sleep(10 * time.Millisecond)
+	store.AppendMessage(ses, provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: "不要没搞清楚状况就自作主张"}},
+	})
+	store.AppendMessage(ses, provider.Message{
+		Role:    "assistant",
+		Content: []provider.ContentBlock{{Type: "text", Text: "Understood"}},
+	})
+
+	r3, err := NewSessionAnalyzer(k).AnalyzeRecent(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r3.SessionsAnalyzed != 1 {
+		t.Fatalf("third call: expected 1 re-analyzed (session updated), got %d", r3.SessionsAnalyzed)
 	}
 }

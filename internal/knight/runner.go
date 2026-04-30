@@ -29,9 +29,14 @@ type AgentRunner interface {
 // The onUsage callback receives token usage after each LLM call.
 type AgentFactory func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error)
 
-// RunTask executes a single Knight task with budget tracking.
+// RunTask executes a single Knight task with budget tracking and default maxTurns=10.
 // Token usage is tracked via the onUsage callback wired into the agent.
 func (k *Knight) RunTask(ctx context.Context, taskName, prompt string, factory AgentFactory) TaskResult {
+	return k.RunTaskWithTurns(ctx, taskName, prompt, factory, 10)
+}
+
+// RunTaskWithTurns executes a single Knight task with a custom maxTurns limit.
+func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, factory AgentFactory, maxTurns int) TaskResult {
 	start := time.Now()
 	result := TaskResult{TaskName: taskName}
 
@@ -59,7 +64,7 @@ func (k *Knight) RunTask(ctx context.Context, taskName, prompt string, factory A
 	}
 
 	// Create agent via factory
-	runner, err := factory(sysPrompt, 10, onUsage)
+	runner, err := factory(sysPrompt, maxTurns, onUsage)
 	if err != nil {
 		result.Error = fmt.Errorf("create agent: %w", err)
 		return result

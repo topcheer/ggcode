@@ -139,6 +139,52 @@ func (r *ValidationResult) checkContentQuality(entry *SkillEntry) {
 	if hasUnresolvedMarkers(body) {
 		r.Warnings = append(r.Warnings, "skill contains TODOs or unresolved placeholders")
 	}
+
+	// Semantic quality: reject generic/trivial content that adds no value
+	r.checkSemanticQuality(body)
+}
+
+// checkSemanticQuality rejects skills that are too generic to be useful.
+// A skill must teach something specific, not describe basic tool usage.
+func (r *ValidationResult) checkSemanticQuality(body string) {
+	lower := strings.ToLower(body)
+
+	// Trivial skill patterns: these add zero value
+	trivialPatterns := []string{
+		"run commands sequentially",
+		"execute a series of commands",
+		"run multiple commands",
+		"read file contents",
+		"edit a file",
+		"search for patterns",
+	}
+	for _, pat := range trivialPatterns {
+		if strings.Contains(lower, pat) {
+			r.Errors = append(r.Errors, "skill content is too generic/trivial: must teach a specific behavioral rule, not describe basic tool usage")
+			return
+		}
+	}
+
+	// Check for specificity: skill should mention at least one concrete thing
+	// (file path, command name, function name, or tool name with context)
+	hasConcrete := false
+	concretePatterns := []string{
+		"internal/", "cmd/", "src/", "pkg/",
+		".go", ".ts", ".py", ".rs",
+		"make ", "go test", "go build", "npm ",
+		"config.", "debug.", "knight.",
+		"bool", "zero value", "default",
+		"permission", "mode",
+	}
+	for _, pat := range concretePatterns {
+		if strings.Contains(lower, pat) {
+			hasConcrete = true
+			break
+		}
+	}
+	if !hasConcrete {
+		r.Warnings = append(r.Warnings, "skill lacks concrete details (file paths, commands, or code references): may be too abstract")
+	}
 }
 
 // CheckDuplicate returns true if a skill with similar name already exists.

@@ -158,63 +158,30 @@ func TestAnalyzeSession_TooShort(t *testing.T) {
 	}
 }
 
-func TestAnalyzeSession_BuildVerifyPattern(t *testing.T) {
+func TestAnalyzeSession_CorrectionDetection(t *testing.T) {
 	sa := &SessionAnalyzer{}
-	// Simulate a session with build-verify pattern
-	ses := &session.Session{ID: "test-123", Messages: make([]provider.Message, 20)}
-	// Inject tool_use blocks simulating: run_command x4, read_file x3
-	for i := 0; i < 4; i++ {
-		ses.Messages[i] = provider.Message{
-			Role: "assistant",
-			Content: []provider.ContentBlock{
-				{Type: "tool_use", ToolName: "run_command"},
-			},
-		}
-	}
-	for i := 4; i < 7; i++ {
-		ses.Messages[i] = provider.Message{
-			Role: "assistant",
-			Content: []provider.ContentBlock{
-				{Type: "tool_use", ToolName: "read_file"},
-			},
-		}
-	}
+	ses := &session.Session{ID: "test-correction", Messages: []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "build the project"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Creating debug binary"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "OK using make build"}}},
+	}}
 
 	candidates := sa.analyzeSession(ses)
-	// Should find build-verify pattern (run_command>=3 && read_file>=2)
+	if len(candidates) == 0 {
+		t.Fatal("expected at least 1 correction candidate")
+	}
 	found := false
 	for _, c := range candidates {
-		if c.Name == "build-and-verify" {
+		if c.Category == "correction" {
 			found = true
-			if c.Scope != "project" {
-				t.Errorf("expected scope=project, got %s", c.Scope)
+			if c.Name == "" {
+				t.Error("expected non-empty name for correction candidate")
 			}
 		}
 	}
 	if !found {
-		t.Errorf("expected build-and-verify candidate, got %d candidates", len(candidates))
-	}
-}
-
-// --- Scope inference tests ---
-
-func TestInferScope(t *testing.T) {
-	tests := []struct {
-		tools []string
-		want  string
-	}{
-		{[]string{"run_command"}, "project"},
-		{[]string{"edit_file"}, "project"},
-		{[]string{"read_file", "search_files"}, "project"},
-		{[]string{"read_file", "edit_file", "run_command"}, "project"},
-		{[]string{"web_fetch", "web_search"}, "global"},
-		{[]string{"write_file"}, "project"},
-	}
-	for _, tt := range tests {
-		got := inferScope(tt.tools)
-		if got != tt.want {
-			t.Errorf("inferScope(%v) = %q, want %q", tt.tools, got, tt.want)
-		}
+		t.Errorf("expected correction category, got %d candidates", len(candidates))
 	}
 }
 
