@@ -113,7 +113,7 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 			env[key] = val
 		}
 		return nil
-	}); err == nil {
+	}, KeysEnvPath()); err == nil {
 		// Also set into process env so subsequent lookups work.
 		for name, value := range env {
 			os.Setenv(name, value)
