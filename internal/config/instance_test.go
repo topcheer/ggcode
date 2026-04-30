@@ -1311,3 +1311,100 @@ func TestSaveDefaultModePreference_Invalid(t *testing.T) {
 		t.Error("SaveDefaultModePreference should reject invalid mode")
 	}
 }
+
+// --- Instance keys.env isolation tests ---
+
+func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Set up global keys.env with an existing key
+	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
+	os.WriteFile(globalKeysEnv, []byte("export GGCODE_OPENAI_API_KEY='sk-global-key'\n"), 0600)
+
+	// Override keys.env path for testing
+	keysEnvPathOverride = globalKeysEnv
+	defer func() { keysEnvPathOverride = "" }()
+
+	// Create instance config with a different key for the same vendor
+	workspace := filepath.Join(tmpDir, "project")
+	os.MkdirAll(workspace, 0755)
+	instDir := InstanceDir(workspace)
+	os.MkdirAll(instDir, 0755)
+	instPath := filepath.Join(instDir, "ggcode.yaml")
+	os.WriteFile(instPath, []byte("vendors:\n  openai:\n    api_key: sk-instance-key\n    endpoints:\n      cn:\n        base_url: https://api.example.com\n"), 0644)
+
+	// Run instance migration
+	hash := filepath.Base(instDir)
+	findings, err := MigrateInstancePlaintextAPIKeys(instPath, hash)
+	if err != nil {
+		t.Fatalf("MigrateInstancePlaintextAPIKeys error: %v", err)
+	}
+	if len(findings) == 0 {
+		t.Fatal("expected to find plaintext API key in instance config")
+	}
+
+	// Verify global keys.env was NOT changed
+	globalData, _ := os.ReadFile(globalKeysEnv)
+	if strings.Contains(string(globalData), "sk-instance-key") {
+		t.Errorf("global keys.env should NOT contain instance key:\n%s", string(globalData))
+	}
+	if !strings.Contains(string(globalData), "sk-global-key") {
+		t.Errorf("global keys.env should still contain global key:\n%s", string(globalData))
+	}
+
+	// Verify instance keys.env was created with prefixed var name
+	instKeysEnv := filepath.Join(instDir, "keys.env")
+	instData, err := os.ReadFile(instKeysEnv)
+	if err != nil {
+		t.Fatalf("instance keys.env should exist: %v", err)
+	}
+	if !strings.Contains(string(instData), "GGCODE_I_"+hash+"_") {
+		t.Errorf("instance keys.env should use prefixed env var:\n%s", string(instData))
+	}
+	if strings.Contains(string(instData), "sk-global-key") {
+		t.Errorf("instance keys.env should NOT contain global key:\n%s", string(instData))
+	}
+
+	// Verify instance YAML now uses ${PREFIXED_VAR} reference
+	instYAML, _ := os.ReadFile(instPath)
+	if !strings.Contains(string(instYAML), "${GGCODE_I_"+hash+"_") {
+		t.Errorf("instance YAML should use prefixed env var reference:\n%s", string(instYAML))
+	}
+}
+
+func TestLoadInstanceKeysEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create instance keys.env with prefixed vars
+	instDir := filepath.Join(tmpDir, "inst")
+	os.MkdirAll(instDir, 0755)
+	os.WriteFile(filepath.Join(instDir, "keys.env"),
+		[]byte("export GGCODE_I_abc123_OPENAI_API_KEY='sk-inst-key'\n"), 0600)
+
+	// Clean env
+	os.Unsetenv("GGCODE_I_abc123_OPENAI_API_KEY")
+
+	// Load instance keys
+	if err := LoadInstanceKeysEnv(instDir); err != nil {
+		t.Fatalf("LoadInstanceKeysEnv error: %v", err)
+	}
+
+	val, ok := os.LookupEnv("GGCODE_I_abc123_OPENAI_API_KEY")
+	if !ok || val != "sk-inst-key" {
+		t.Errorf("env var not set correctly: got %q, want %q", val, "sk-inst-key")
+	}
+	os.Unsetenv("GGCODE_I_abc123_OPENAI_API_KEY")
+}
+
+func TestLoadInstanceKeysEnv_EmptyDir(t *testing.T) {
+	if err := LoadInstanceKeysEnv(""); err != nil {
+		t.Errorf("LoadInstanceKeysEnv('') should not error: %v", err)
+	}
+}
+
+func TestLoadInstanceKeysEnv_NoFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := LoadInstanceKeysEnv(tmpDir); err != nil {
+		t.Errorf("LoadInstanceKeysEnv with no keys.env should not error: %v", err)
+	}
+}

@@ -1530,10 +1530,19 @@ func (c *Config) patchConfigFile(patch func(raw map[string]interface{})) error {
 	}
 
 	// Migrate plaintext API keys if saving to a real file.
-	if migrated, migrateErr := MigratePlaintextAPIKeys(fp); migrateErr != nil {
-		debug.Log("config", "patchConfigFile: post-save migration error: %v", migrateErr)
-	} else if len(migrated) > 0 {
-		debug.Log("config", "patchConfigFile: migrated %d plaintext secret(s)", len(migrated))
+	if c.saveScope == "instance" && c.instanceDir != "" {
+		hash := filepath.Base(c.instanceDir)
+		if migrated, migrateErr := MigrateInstancePlaintextAPIKeys(fp, hash); migrateErr != nil {
+			debug.Log("config", "patchConfigFile: instance migration error: %v", migrateErr)
+		} else if len(migrated) > 0 {
+			debug.Log("config", "patchConfigFile: migrated %d instance secret(s)", len(migrated))
+		}
+	} else {
+		if migrated, migrateErr := MigratePlaintextAPIKeys(fp); migrateErr != nil {
+			debug.Log("config", "patchConfigFile: migration error: %v", migrateErr)
+		} else if len(migrated) > 0 {
+			debug.Log("config", "patchConfigFile: migrated %d plaintext secret(s)", len(migrated))
+		}
 	}
 
 	return nil

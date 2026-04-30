@@ -379,6 +379,20 @@ func normalizeWarningConfigPath(path string) string {
 // the migration. If no plaintext keys are found, it returns an empty slice
 // and nil error without touching any file.
 func MigratePlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
+	return migratePlaintextAPIKeysTo(path, "", "")
+}
+
+// MigrateInstancePlaintextAPIKeys is the instance-level version of
+// MigratePlaintextAPIKeys. It writes keys to the instance directory's
+// keys.env and uses instance-prefixed env var names (GGCODE_I_{hash}_*)
+// to avoid collisions with global keys.
+// instanceHash is the short SHA256 hash of the workspace path.
+func MigrateInstancePlaintextAPIKeys(path, instanceHash string) ([]APIKeyFinding, error) {
+	prefix := "GGCODE_I_" + instanceHash + "_"
+	return migratePlaintextAPIKeysTo(path, prefix, filepath.Join(filepath.Dir(path), "keys.env"))
+}
+
+func migratePlaintextAPIKeysTo(path, envPrefix, keysPath string) ([]APIKeyFinding, error) {
 	raw, err := loadRawConfigMap(path)
 	if err != nil {
 		return nil, err
@@ -390,6 +404,13 @@ func MigratePlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
 	findings := detectPlaintextAPIKeysFromRaw(raw)
 	if len(findings) == 0 {
 		return nil, nil
+	}
+
+	// Apply env var prefix for instance configs to avoid collisions.
+	if envPrefix != "" {
+		for i := range findings {
+			findings[i].EnvVar = envPrefix + findings[i].EnvVar
+		}
 	}
 
 	// Collect key=value pairs for keys.env.
@@ -406,8 +427,12 @@ func MigratePlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
 		}
 	}
 
-	// Persist to ~/.ggcode/keys.env (merge with existing entries).
-	if err := writeKeysEnv(envEntries); err != nil {
+	// Determine where to write keys.env.
+	if keysPath == "" {
+		keysPath = KeysEnvPath()
+	}
+	// Persist to keys.env (merge with existing entries).
+	if err := writeKeysEnvTo(envEntries, keysPath); err != nil {
 		return nil, fmt.Errorf("writing keys.env: %w", err)
 	}
 
@@ -440,11 +465,19 @@ var keysEnvPathOverride string
 // process environment. Keys that are already set in the environment take
 // precedence and are not overwritten.
 func LoadKeysEnv() error {
-	return loadKeysEnvInto(os.Setenv)
+	return loadKeysEnvInto(os.Setenv, KeysEnvPath())
 }
 
-func loadKeysEnvInto(setenv func(string, string) error) error {
-	path := KeysEnvPath()
+// LoadInstanceKeysEnv loads API keys from an instance directory's keys.env.
+// Instance keys override global keys for the current process.
+func LoadInstanceKeysEnv(instanceDir string) error {
+	if instanceDir == "" {
+		return nil
+	}
+	return loadKeysEnvInto(os.Setenv, filepath.Join(instanceDir, "keys.env"))
+}
+
+func loadKeysEnvInto(setenv func(string, string) error, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -467,8 +500,11 @@ func loadKeysEnvInto(setenv func(string, string) error) error {
 }
 
 func writeKeysEnv(newEntries map[string]string) error {
-	path := KeysEnvPath()
+	return writeKeysEnvTo(newEntries, KeysEnvPath())
+}
 
+// writeKeysEnvTo merges new entries into the keys.env file at the given path.
+func writeKeysEnvTo(newEntries map[string]string, path string) error {
 	// Load existing entries first so we merge rather than overwrite.
 	existing := make(map[string]string)
 	if data, err := os.ReadFile(path); err == nil {
@@ -500,7 +536,7 @@ func writeKeysEnv(newEntries map[string]string) error {
 		fmt.Fprintf(&b, "export %s='%s'\n", k, existing[k])
 	}
 
-	if err := os.MkdirAll(ConfigDir(), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 	// 0600: only owner can read/write — these are secrets.

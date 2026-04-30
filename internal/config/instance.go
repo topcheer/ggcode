@@ -374,11 +374,15 @@ func (c *Config) SaveInstance(workspace string) error {
 	}
 	debug.Log("config", "saved instance config to %s", path)
 
-	// Migrate any plaintext API keys in the instance config to keys.env.
-	if migrated, migrateErr := MigratePlaintextAPIKeys(path); migrateErr != nil {
-		debug.Log("config", "SaveInstance: migration error: %v", migrateErr)
-	} else if len(migrated) > 0 {
-		debug.Log("config", "SaveInstance: migrated %d plaintext secret(s)", len(migrated))
+	// Migrate any plaintext API keys in the instance config to instance keys.env.
+	// Use instance-prefixed env vars to avoid overwriting global keys.
+	if c.instanceDir != "" {
+		hash := filepath.Base(c.instanceDir) // the SHA256 short hash
+		if migrated, migrateErr := MigrateInstancePlaintextAPIKeys(path, hash); migrateErr != nil {
+			debug.Log("config", "SaveInstance: migration error: %v", migrateErr)
+		} else if len(migrated) > 0 {
+			debug.Log("config", "SaveInstance: migrated %d plaintext secret(s)", len(migrated))
+		}
 	}
 
 	return nil
@@ -467,6 +471,11 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 
 	// Attempt to migrate legacy .ggcode/a2a.yaml if instance config doesn't exist yet.
 	MigrateA2AYaml(workspace)
+
+	// Load instance-level API keys into the environment so ${VAR} expansion
+	// in the instance config can resolve them. Instance keys override globals.
+	instDir := InstanceDir(workspace)
+	LoadInstanceKeysEnv(instDir)
 
 	// Apply instance-level config if available.
 	instanceCfg := LoadInstanceConfig(workspace)
