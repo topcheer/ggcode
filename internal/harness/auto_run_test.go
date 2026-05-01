@@ -136,19 +136,42 @@ func TestShouldAutoRun_NoAutoInit(t *testing.T) {
 	}
 }
 
-func TestShouldAutoRun_HarnessNoProjectDowngrades(t *testing.T) {
-	cfg := &config.Config{Harness: config.HarnessConfig{AutoRun: "on"}}
+func TestShouldAutoRun_StrictModeEnforcesWorktree(t *testing.T) {
+	dir := t.TempDir()
+	createMinimalHarnessProject(t, dir)
+
+	cfg := &config.Config{Harness: config.HarnessConfig{AutoRun: "strict"}}
 	ctx := RouteContext{
 		Input:      "Fix the bug in auth.go",
-		WorkingDir: "", // No working dir = no project
+		WorkingDir: dir,
 	}
 	result, err := ShouldAutoRun(cfg, "Fix the bug in auth.go", ctx)
 	if err != nil {
 		t.Fatalf("ShouldAutoRun() error = %v", err)
 	}
-	// Router says RouteHarness but no project → downgrade
-	if result.Decision == RouteHarness && result.Project == nil {
-		t.Error("should not return RouteHarness without a project")
+	if result.Decision != RouteHarness {
+		t.Errorf("strict mode: decision = %v, want RouteHarness", result.Decision)
+	}
+	if !result.StrictWriteGuard {
+		t.Error("strict mode should set StrictWriteGuard = true")
+	}
+}
+
+func TestShouldAutoRun_OnModeDoesNotSetWriteGuard(t *testing.T) {
+	dir := t.TempDir()
+	createMinimalHarnessProject(t, dir)
+
+	cfg := &config.Config{Harness: config.HarnessConfig{AutoRun: "on"}}
+	ctx := RouteContext{
+		Input:      "Fix the bug in auth.go",
+		WorkingDir: dir,
+	}
+	result, err := ShouldAutoRun(cfg, "Fix the bug in auth.go", ctx)
+	if err != nil {
+		t.Fatalf("ShouldAutoRun() error = %v", err)
+	}
+	if result.StrictWriteGuard {
+		t.Error("on mode should NOT set StrictWriteGuard")
 	}
 }
 

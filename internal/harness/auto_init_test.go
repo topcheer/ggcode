@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,31 @@ func TestAutoInit_CreatesMinimalConfig(t *testing.T) {
 	}
 	if cfg.Version != 1 {
 		t.Errorf("config version = %d, want 1", cfg.Version)
+	}
+	// Minimal config should have NO required files (no AGENTS.md)
+	if len(cfg.Checks.RequiredFiles) != 0 {
+		t.Errorf("minimal config should have no required files, got %v", cfg.Checks.RequiredFiles)
+	}
+	if len(cfg.Checks.ContentRules) != 0 {
+		t.Errorf("minimal config should have no content rules, got %v", cfg.Checks.ContentRules)
+	}
+}
+
+func TestAutoInit_MinimalConfigPassesChecks(t *testing.T) {
+	dir := t.TempDir()
+
+	result, err := AutoInit(dir)
+	if err != nil {
+		t.Fatalf("AutoInit() error = %v", err)
+	}
+
+	// Run checks with the auto-init'd config — should pass
+	report, err := CheckProject(context.Background(), result.Project, result.Config, CheckOptions{})
+	if err != nil {
+		t.Fatalf("CheckProject() error = %v", err)
+	}
+	if !report.Passed {
+		t.Errorf("auto-init'd project should pass its own checks, but got issues: %v", report.Issues)
 	}
 }
 

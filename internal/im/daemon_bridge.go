@@ -13,7 +13,9 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/daemon"
+	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -34,12 +36,15 @@ type pendingInterruption struct {
 }
 
 type DaemonBridge struct {
-	manager  *Manager
-	emitter  *IMEmitter
-	agent    *agent.Agent
-	store    session.Store
-	sess     *session.Session
-	language string
+	manager         *Manager
+	emitter         *IMEmitter
+	agent           *agent.Agent
+	store           session.Store
+	sess            *session.Session
+	language        string
+	harnessMode     string // "off", "suggest", "on", "strict"
+	harnessAutoInit bool
+	workingDir      string
 
 	mu                   sync.Mutex
 	cancelFunc           context.CancelFunc
@@ -73,7 +78,13 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 	return b
 }
 
-// handleInteractiveCallback processes button/menu callbacks from IM adapters.
+// SetHarnessConfig configures auto-run routing for daemon mode.
+func (b *DaemonBridge) SetHarnessConfig(mode string, autoInit bool, workingDir string) {
+	b.harnessMode = mode
+	b.harnessAutoInit = autoInit
+	b.workingDir = workingDir
+}
+
 // It translates the selected values into a text reply and feeds it through
 // the same pendingAsk mechanism as text replies.
 func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
@@ -403,6 +414,11 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	// Save user message to session
 	b.appendUserMessage(content)
 
+	// Auto-run routing check: log suggestion for harness-eligible tasks.
+	// In daemon mode, auto-run is informational only — the agent decides
+	// whether to use harness based on its skill instructions.
+	b.checkAutoRunSuggestion(extractText(content))
+
 	err := b.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 		// Broadcast to webchat subscribers
 		b.broadcastEvent(event)
@@ -518,6 +534,31 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 		}
 	})
 	return err
+}
+
+// checkAutoRunSuggestion logs whether the input should be routed to harness.
+// In daemon mode this is informational — the agent uses skill instructions
+// to decide whether to invoke harness. Future: integrate with harness run API.
+func (b *DaemonBridge) checkAutoRunSuggestion(text string) {
+	if b.harnessMode == "" || b.harnessMode == "off" || text == "" {
+		return
+	}
+	ctx := harness.RouteContext{
+		Input:      text,
+		WorkingDir: b.workingDir,
+	}
+	// Build a minimal config for ShouldAutoRun
+	cfg := &config.Config{Harness: config.HarnessConfig{
+		AutoRun:  b.harnessMode,
+		AutoInit: b.harnessAutoInit,
+	}}
+	result, err := harness.ShouldAutoRun(cfg, text, ctx)
+	if err != nil || result == nil {
+		return
+	}
+	if result.Decision == harness.RouteHarness || result.Decision == harness.RouteSuggest {
+		debug.Log("daemon", "auto-run suggestion: %s → %s (project=%v)", text, result.Decision, result.Project != nil)
+	}
 }
 
 // appendUserMessage adds the user message to the session store.

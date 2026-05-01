@@ -393,6 +393,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		emitter.SetOutputMode(cfg.IM.OutputMode)
 	}
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
+	bridge.SetHarnessConfig(cfg.Harness.AutoRunMode(), cfg.Harness.AutoInit, workingDir)
 
 	// Wire checkpoint handler — persist compacted state after summarize
 	ag.SetCheckpointHandler(func(messages []provider.Message, tokenCount int) {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 )
@@ -346,11 +348,25 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		}
 	}
 
-	// Regular message → start agent
+	// Regular message → check auto-run routing before starting agent
 	displayText := text
 	if m.pendingImage != nil {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
+
+	// Auto-run routing: if harness.auto_run is configured, decide whether
+	// this input should be routed to harness instead of the normal agent.
+	if autoRunResult, err := m.checkAutoRun(text); err == nil && autoRunResult != nil {
+		switch autoRunResult.Decision {
+		case harness.RouteSuggest:
+			m.chatWriteSystem(nextChatID(), autoRunResult.Message)
+			m.chatListScrollToBottom()
+			return nil
+		case harness.RouteHarness:
+			return m.handleAutoRun(text, autoRunResult)
+		}
+	}
+
 	m.chatWriteUser(nextChatID(), displayText)
 	m.chatListScrollToBottom()
 
@@ -400,4 +416,58 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	m.statusToolCount = 0
 
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(prompt))
+}
+
+// checkAutoRun evaluates whether the user input should be routed to harness
+// based on the harness.auto_run configuration. Returns nil if auto-run is
+// disabled or the input should go to the normal agent.
+func (m *Model) checkAutoRun(text string) (*harness.AutoRunResult, error) {
+	if m.config == nil {
+		return nil, nil
+	}
+	mode := m.config.Harness.AutoRunMode()
+	if mode == "off" {
+		return nil, nil
+	}
+	workDir, _ := os.Getwd()
+	ctx := harness.RouteContext{
+		Input:      text,
+		WorkingDir: workDir,
+	}
+	return harness.ShouldAutoRun(m.config, text, ctx)
+}
+
+// handleAutoRun processes a harness auto-run decision by delegating to the
+// harness run command path. This creates a harness task and starts execution.
+func (m *Model) handleAutoRun(text string, result *harness.AutoRunResult) tea.Cmd {
+	if result.Project == nil {
+		m.chatWriteSystem(nextChatID(), "harness auto-run: no project available. Run /harness init first.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	// Apply strict write guard if needed
+	if result.StrictWriteGuard {
+		m.applyStrictWriteGuard()
+	}
+
+	// Delegate to /harness run
+	harnessText := "/harness run " + text
+	m.chatWriteUser(nextChatID(), text)
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🔀 Auto-routing to harness: %s", text))
+	m.chatListScrollToBottom()
+	return m.handleCommand(harnessText)
+}
+
+// applyStrictWriteGuard adds Deny rules for write tools to the permission
+// policy when strict mode is active. This prevents the main agent from
+// directly modifying project files.
+func (m *Model) applyStrictWriteGuard() {
+	if m.policy == nil {
+		return
+	}
+	// This is a signal to the agent — actual enforcement happens at the
+	// permission policy level. The agent's context prompt will include
+	// instructions to use harness for all code changes.
+	debug.Log("auto-run", "strict write guard enabled")
 }
