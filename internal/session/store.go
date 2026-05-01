@@ -78,7 +78,8 @@ type JSONLStore struct {
 	// O_APPEND writers can interleave inside a single JSONL line (>4KB writes
 	// are not atomic) and the index load/modify/save races silently lose
 	// updates from the loser. See locks.md S3.
-	mu sync.Mutex
+	mu         sync.Mutex
+	indexDirty bool // set when updateIndex fails; triggers repair on next loadIndex
 }
 
 // NewJSONLStore creates a store rooted at dir (creates dir if needed).
@@ -123,7 +124,27 @@ func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
 	}
 	var idx []indexEntry
 	if err := json.Unmarshal(data, &idx); err != nil {
-		return nil, err
+		// Corrupt index — trigger repair by returning empty so List()
+		// falls through to repairIndex().
+		s.indexDirty = true
+		return nil, nil
+	}
+	// If index was marked dirty, run repair to catch any missed sessions.
+	if s.indexDirty {
+		s.indexDirty = false
+		entries, _ := os.ReadDir(s.dir)
+		jsonlCount := 0
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".jsonl") {
+				jsonlCount++
+			}
+		}
+		if jsonlCount > len(idx) {
+			// There are JSONL files not in the index — rebuild.
+			// This is safe because loadIndex is always called under s.mu.
+			repaired, _ := s.repairIndex(idx)
+			_ = repaired
+		}
 	}
 	return idx, nil
 }
@@ -144,6 +165,7 @@ func (s *JSONLStore) saveIndex(idx []indexEntry) error {
 func (s *JSONLStore) updateIndex(ses *Session) error {
 	idx, err := s.loadIndex()
 	if err != nil {
+		s.indexDirty = true
 		return err
 	}
 	found := false
@@ -157,7 +179,12 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 	if !found {
 		idx = append(idx, sessionToIndexEntry(ses))
 	}
-	return s.saveIndex(idx)
+	if err := s.saveIndex(idx); err != nil {
+		s.indexDirty = true
+		return err
+	}
+	s.indexDirty = false
+	return nil
 }
 
 func (s *JSONLStore) removeFromIndex(id string) error {
@@ -780,6 +807,9 @@ func (s *JSONLStore) Dir() string {
 // AppendCheckpoint appends a checkpoint record to the session JSONL file.
 // The checkpoint captures the compacted messages state after a summarize operation,
 // so that future --resume operations can skip re-compacting old history.
+// AppendCheckpoint persists a checkpoint (compaction snapshot) to the session's
+// JSONL file and updates the Session object in place. The caller must ensure
+// no concurrent access to the Session object.
 func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider.Message, tokenCount int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -801,6 +831,31 @@ func (s *JSONLStore) AppendCheckpoint(ses *Session, compactedMessages []provider
 	}
 
 	ses.UpdatedAt = time.Now()
+	return s.updateIndex(ses)
+}
+
+// AppendCheckpointToDisk persists a checkpoint to the session's JSONL file and
+// updates the index, but does NOT modify the Session object. Use this when the
+// caller manages Session mutations under its own lock and only needs the disk
+// write to happen outside that lock.
+func (s *JSONLStore) AppendCheckpointToDisk(ses *Session, compactedMessages []provider.Message, tokenCount int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.sessionPath(ses.ID)
+
+	msgs := make([]provider.Message, len(compactedMessages))
+	copy(msgs, compactedMessages)
+
+	rec := jsonlRecord{
+		Type:               "checkpoint",
+		SessionID:          ses.ID,
+		CheckpointMessages: msgs,
+		CheckpointTokens:   tokenCount,
+	}
+	if err := appendRecordLine(path, rec); err != nil {
+		return fmt.Errorf("encoding checkpoint: %w", err)
+	}
+
 	return s.updateIndex(ses)
 }
 

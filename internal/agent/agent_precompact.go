@@ -68,7 +68,9 @@ func (a *Agent) StartPreCompact() {
 		return
 	}
 
-	bgCtx, cancel := context.WithTimeout(context.Background(), precompactBackgroundTimeout)
+	// Use the agent's shutdown context as base so precompact is cancelled
+	// when the agent is closed, not just on timeout.
+	bgCtx, cancel := context.WithTimeout(a.shutdownCtx, precompactBackgroundTimeout)
 	pc := &precompactState{
 		done:      make(chan struct{}),
 		cancel:    cancel,
