@@ -554,7 +554,11 @@ func (m *Model) applyStrictWriteGuard() {
 		"write_file",
 		"edit_file",
 		"multi_edit_file",
+		"notebook_edit",
 		"run_command",
+		"git_add",
+		"git_commit",
+		"git_stash",
 	}
 	for _, tool := range writeTools {
 		cp.SetOverride(tool, permission.Deny)
