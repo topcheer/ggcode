@@ -564,19 +564,12 @@ func (m *Model) handleHarnessPromoteApply(taskID string) tea.Cmd {
 		if err != nil {
 			return harnessPromoteResultMsg{Err: fmt.Errorf("load harness: %w", err), TaskID: taskID}
 		}
-		tasks, err := harness.PromoteApprovedTasks(context.Background(), project, "promoted via auto-promote CTA")
+		// Promote ONLY the specific task — never batch-promote all approved tasks.
+		task, err := harness.PromoteTask(context.Background(), project, taskID, "promoted via auto-promote CTA")
 		if err != nil {
 			return harnessPromoteResultMsg{Err: err, TaskID: taskID}
 		}
-		// Find our task in the results
-		var promoted *harness.Task
-		for _, t := range tasks {
-			if t.ID == taskID {
-				promoted = t
-				break
-			}
-		}
-		return harnessPromoteResultMsg{Task: promoted, TaskID: taskID}
+		return harnessPromoteResultMsg{Task: task, TaskID: taskID}
 	}
 }
 
