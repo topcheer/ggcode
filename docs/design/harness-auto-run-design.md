@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented (v1.1.68).
+In Progress (v1.1.68). Phases 1–6 implemented, closing remaining gaps.
 
 ## Goal
 

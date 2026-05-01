@@ -186,11 +186,13 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	// Auto-run routing: if harness.auto_run is enabled and --no-harness is not set,
 	// check whether this prompt should be routed to harness instead of the normal agent.
-	if !noHarness {
-		if autoRunResult, err := checkPipeAutoRun(cfg, prompt, workingDir); err == nil && autoRunResult != nil {
+	// Use fullPrompt (includes stdin data) for routing and harness goal.
+	// Skip auto-run for image inputs (harness uses text-only goals).
+	if !noHarness && len(imageBlocks) == 0 {
+		if autoRunResult, err := checkPipeAutoRun(cfg, fullPrompt, workingDir); err == nil && autoRunResult != nil {
 			switch autoRunResult.Decision {
 			case harness.RouteHarness:
-				return runPipeHarness(autoRunResult, prompt)
+				return runPipeHarness(autoRunResult, fullPrompt)
 			case harness.RouteSuggest:
 				fmt.Fprintf(os.Stderr, "harness auto-run: %s\n", autoRunResult.Message)
 				// Fall through to normal agent

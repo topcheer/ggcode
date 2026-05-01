@@ -64,6 +64,15 @@ func (s *RunService) Run(ctx context.Context, input RunServiceInput) *RunService
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// If no ConfirmDirtyWorkspace is provided, use fail-fast: refuse to
+	// auto-commit dirty workspace. This prevents auto-run from silently
+	// modifying the user's working tree.
+	if input.Options.ConfirmDirtyWorkspace == nil {
+		input.Options.ConfirmDirtyWorkspace = func(checkpoint DirtyWorkspaceCheckpoint) (bool, error) {
+			return false, fmt.Errorf("harness auto-run requires clean workspace (dirty: %d files). Commit or stash your changes first, or use /harness run interactively.", len(checkpoint.DirtyPaths))
+		}
+	}
+
 	summary, err := RunTaskWithOptions(runCtx, input.Project, input.Config, input.Goal, input.Runner, input.Options)
 	result := &RunServiceResult{
 		Summary: summary,
@@ -81,6 +90,12 @@ func FormatCTA(result *RunServiceResult) string {
 		return ""
 	}
 	return fmt.Sprintf("\n📋 Next: %s", result.CTAMessage)
+}
+
+// GenerateCTA determines the next action based on task outcome.
+// Exported for use by TUI handler to generate CTA for manual harness runs.
+func GenerateCTA(summary *RunSummary, err error) (CTAAction, string) {
+	return generateCTA(summary, err)
 }
 
 // generateCTA determines the next action based on task outcome.

@@ -433,6 +433,12 @@ func (m *Model) checkAutoRun(text string) (*harness.AutoRunResult, error) {
 	if mode == "off" {
 		return nil, nil
 	}
+	// In strict mode, apply write guard immediately regardless of route outcome.
+	// This ensures the main agent cannot write to the project even if the input
+	// is not routed to harness.
+	if mode == "strict" {
+		m.applyStrictWriteGuard()
+	}
 	workDir, _ := os.Getwd()
 	ctx := harness.RouteContext{
 		Input:      text,
@@ -448,11 +454,6 @@ func (m *Model) handleAutoRun(text string, result *harness.AutoRunResult) tea.Cm
 		m.chatWriteSystem(nextChatID(), "harness auto-run: no project available. Run /harness init first.")
 		m.chatListScrollToBottom()
 		return nil
-	}
-
-	// Apply strict write guard if needed
-	if result.StrictWriteGuard {
-		m.applyStrictWriteGuard()
 	}
 
 	// Use the config from auto-run result (may have strict overrides)
@@ -547,10 +548,13 @@ func (m *Model) applyStrictWriteGuard() {
 	}
 	// Deny all file-writing tools for the main agent in strict mode.
 	// The harness worker agent runs in a worktree and is not affected.
+	// run_command is included because it can be used to bypass file write
+	// restrictions (e.g., `echo > file`, `sed -i`).
 	writeTools := []string{
 		"write_file",
 		"edit_file",
 		"multi_edit_file",
+		"run_command",
 	}
 	for _, tool := range writeTools {
 		cp.SetOverride(tool, permission.Deny)
