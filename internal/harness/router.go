@@ -280,7 +280,9 @@ func DecideRouteWithFeatures(input string, mode string, features PromptFeatures,
 		return RouteNormal
 	}
 
-	if score >= 3 {
+	if score >= 5 {
+		// Score >= 5: extremely strong signal (action verb + file path + 2+ other signals).
+		// Almost certainly a complex code change -- skip LLM, route directly.
 		switch mode {
 		case "suggest":
 			return RouteSuggest
@@ -289,15 +291,28 @@ func DecideRouteWithFeatures(input string, mode string, features PromptFeatures,
 		}
 	}
 
-	// Layer 3: LLM classifier for ambiguous cases (score 1-2).
+	// Layer 3: LLM classifier for score 1-4.
+	// Catches ambiguous inputs AND filters out simple changes that scored 3-4
+	// (e.g. "fix the typo in README.md" has verb+path = score 4 but is trivial).
 	// Only called when mode is "on" or "strict" and a provider is available.
-	if score >= 1 && score < 3 && (mode == "on" || mode == "strict") && ctx.LLMClassifierProvider != nil {
+	if score >= 1 && (mode == "on" || mode == "strict") && ctx.LLMClassifierProvider != nil {
 		llmResult, err := ClassifyWithLLM(context.Background(), ctx.LLMClassifierProvider, input)
 		if err == nil && llmResult != nil {
 			if decision := RouteFromLLMResult(llmResult, mode); decision != RouteNormal {
-				debug.Log("auto-run", "LLM classifier override: %v (confidence=%.2f, score=%d)", decision, llmResult.Confidence, score)
+				debug.Log("auto-run", "LLM classifier override: %v (confidence=%.2f, complexity=%s, score=%d)", decision, llmResult.Confidence, llmResult.Complexity, score)
 				return decision
 			}
+			debug.Log("auto-run", "LLM classifier declined: code_change=%v complexity=%s score=%d", llmResult.IsCodeChange, llmResult.Complexity, score)
+		}
+	}
+
+	// Fallback: without LLM provider, use deterministic score >= 3 threshold.
+	if ctx.LLMClassifierProvider == nil && score >= 3 {
+		switch mode {
+		case "suggest":
+			return RouteSuggest
+		case "on", "strict":
+			return RouteHarness
 		}
 	}
 

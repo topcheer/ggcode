@@ -171,7 +171,7 @@ func TestClassifyWithLLM_ProviderError(t *testing.T) {
 func TestClassifyWithLLM_Timeout(t *testing.T) {
 	prov := &mockClassifierProvider{
 		response: `{"classification": "code_change", "confidence": 0.9, "reason": "test"}`,
-		delay:    10 * time.Second, // longer than 5s timeout
+		delay:    15 * time.Second, // longer than 8s timeout
 	}
 	result, err := ClassifyWithLLM(context.Background(), prov, "this is a long enough input for the classifier to process")
 	if err == nil {
@@ -191,12 +191,14 @@ func TestRouteFromLLMResult(t *testing.T) {
 	}{
 		{"nil result", nil, "on", RouteNormal},
 		{"not code change", &LLMClassifierResult{IsCodeChange: false, Confidence: 0.9}, "on", RouteNormal},
-		{"high confidence on", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.85}, "on", RouteHarness},
-		{"medium confidence on", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.65}, "on", RouteSuggest},
-		{"low confidence on", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.3}, "on", RouteNormal},
-		{"high confidence strict", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.6}, "strict", RouteHarness},
-		{"low confidence strict", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.3}, "strict", RouteNormal},
-		{"suggest mode ignored", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.9}, "suggest", RouteNormal},
+		{"simple → normal agent", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.95, Complexity: "simple"}, "on", RouteNormal},
+		{"high confidence complex on", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.85, Complexity: "complex"}, "on", RouteHarness},
+		{"medium confidence complex on", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.65, Complexity: "complex"}, "on", RouteSuggest},
+		{"low confidence complex on", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.3, Complexity: "complex"}, "on", RouteNormal},
+		{"high confidence complex strict", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.6, Complexity: "complex"}, "strict", RouteHarness},
+		{"low confidence complex strict", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.3, Complexity: "complex"}, "strict", RouteNormal},
+		{"simple strict still normal", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.95, Complexity: "simple"}, "strict", RouteNormal},
+		{"suggest mode ignored", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.9, Complexity: "complex"}, "suggest", RouteNormal},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
