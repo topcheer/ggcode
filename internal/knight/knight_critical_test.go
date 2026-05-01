@@ -214,8 +214,8 @@ func TestKnightConfigDefaults(t *testing.T) {
 	cfg := config.Config{}
 	kc := cfg.Knight()
 
-	if kc.DailyTokenBudget != 5_000_000 {
-		t.Errorf("expected default budget 5M, got %d", kc.DailyTokenBudget)
+	if kc.DailyTokenBudget != 50_000_000 {
+		t.Errorf("expected default budget 50M, got %d", kc.DailyTokenBudget)
 	}
 	if kc.TrustLevel != "staged" {
 		t.Errorf("expected default trust_level 'staged', got %q", kc.TrustLevel)

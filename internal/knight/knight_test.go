@@ -60,9 +60,9 @@ func TestBudgetRecordAndCheck(t *testing.T) {
 		t.Fatalf("expected used=300, got %d", used)
 	}
 
-	// Remaining should be 5M - 300
-	if rem := b.Remaining(); rem != 5_000_000-300 {
-		t.Fatalf("expected remaining=%d, got %d", 5_000_000-300, rem)
+	// Remaining should be 50M - 300
+	if rem := b.Remaining(); rem != 50_000_000-300 {
+		t.Fatalf("expected remaining=%d, got %d", 50_000_000-300, rem)
 	}
 }
 
@@ -121,7 +121,7 @@ vendors:
 
 	b := NewBudget(dir, loaded.Knight())
 	b.EnsureDir()
-	if err := b.Record("unlimited", 5_000_000, 5_000_000); err != nil {
+	if err := b.Record("unlimited", 50_000_000, 50_000_000); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
 	if !b.CanSpend() {

@@ -72,6 +72,7 @@ const (
 	knightMaintenanceEvery          = 24 * time.Hour
 	knightRetryBackoffEvery         = 15 * time.Minute
 	knightMaxGeneratedSkills        = 3
+	knightMaxGenFailures            = 3 // abandon candidate after this many consecutive generation failures
 	knightStagingMaxValidationFails = 3 // auto-reject after N consecutive validation failures
 )
 
@@ -663,8 +664,14 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 			// High-value candidate: use LLM to generate a proper skill
 			content, genErr := analyzer.GenerateSkillFromAnalysis(ctx, c, k.getFactory())
 			if genErr != nil {
-				debug.Log("knight", "LLM skill generation failed for %s: %v", c.Name, genErr)
-				_ = k.queue.Upsert(c)
+				c.GenFailCount++
+				if c.GenFailCount >= knightMaxGenFailures {
+					debug.Log("knight", "abandoning candidate %s after %d consecutive generation failures", c.Name, c.GenFailCount)
+					_ = k.queue.Remove(c)
+				} else {
+					debug.Log("knight", "LLM skill generation failed for %s (%d/%d): %v", c.Name, c.GenFailCount, knightMaxGenFailures, genErr)
+					_ = k.queue.Upsert(c)
+				}
 				reported = append(reported, c)
 				continue
 			}

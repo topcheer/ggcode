@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,6 +69,8 @@ type SkillCandidate struct {
 	Evidence []string
 	// Category classifies the skill source for LLM context.
 	Category string // "correction", "failure-fix", "convention"
+	// GenFailCount tracks consecutive LLM generation failures; abandon after knightMaxGenFailures.
+	GenFailCount int `json:",omitempty"`
 }
 
 // AnalyzeRecent scans recent sessions for high-value learning signals.
@@ -257,6 +260,9 @@ func (sa *SessionAnalyzer) detectCorrections(ses *session.Session) []SkillCandid
 		}
 
 		name := buildCorrectionSkillName(text)
+		if !isValidCandidateName(name) {
+			continue
+		}
 		evidence := []string{
 			fmt.Sprintf("AI did: %s", truncate(prevText, 300)),
 			fmt.Sprintf("User corrected: %s", truncate(text, 500)),
@@ -506,12 +512,24 @@ RULES:
 		candidate.Name, candidate.Name,
 		conventionsSection, evidenceSection)
 
-	result := sa.knight.RunTaskWithTurns(ctx, "skill-generation", prompt, factory, 15)
+	result := sa.knight.RunTaskWithTurns(ctx, "skill-generation", prompt, factory, 50)
 	if result.Error != nil {
 		return "", result.Error
 	}
 
-	return strings.TrimSpace(result.Output), nil
+	output := strings.TrimSpace(result.Output)
+	// LLM may prepend reasoning/thinking before the actual skill document.
+	// Extract only the content starting from the YAML frontmatter delimiter.
+	if idx := strings.Index(output, "---"); idx > 0 {
+		output = strings.TrimSpace(output[idx:])
+	}
+
+	// Validate that the output looks like a proper skill document
+	if !strings.HasPrefix(output, "---") {
+		return "", fmt.Errorf("LLM output does not contain valid YAML frontmatter (expected ---): %s", truncate(output, 200))
+	}
+
+	return output, nil
 }
 
 // --- Helpers ---
@@ -555,6 +573,28 @@ func sanitizeName(s string) string {
 		s = strings.ReplaceAll(s, "--", "-")
 	}
 	return strings.Trim(s, "-")
+}
+
+// isValidCandidateName rejects garbage names that carry no semantic meaning.
+func isValidCandidateName(name string) bool {
+	if len(name) < 8 {
+		return false
+	}
+	// Pure fallback patterns like "correction-123"
+	if strings.HasPrefix(name, "correction-") {
+		rest := strings.TrimPrefix(name, "correction-")
+		if _, err := strconv.Atoi(rest); err == nil {
+			return false
+		}
+	}
+	// Check that at least half the characters are alphanumeric (not dashes)
+	alnum := 0
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			alnum++
+		}
+	}
+	return alnum >= len(name)/2
 }
 
 func buildCorrectionSkillName(text string) string {

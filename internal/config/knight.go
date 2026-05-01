@@ -22,7 +22,7 @@ type KnightConfig struct {
 	TrustLevel string `yaml:"trust_level,omitempty"`
 
 	// DailyTokenBudget is the maximum tokens Knight may consume per day.
-	// Default: 5,000,000 (5M). Set to 0 to disable budget checking.
+	// Default: 50,000,000 (50M). Set to 0 to disable budget checking.
 	DailyTokenBudget int `yaml:"daily_token_budget,omitempty"`
 
 	// Capabilities lists what Knight is allowed to do.
@@ -46,7 +46,7 @@ func DefaultKnightConfig() KnightConfig {
 	return KnightConfig{
 		Enabled:          true,
 		TrustLevel:       "staged",
-		DailyTokenBudget: 5_000_000,
+		DailyTokenBudget: 50_000_000,
 		Capabilities: []string{
 			"skill_creation",
 			"skill_validation",
@@ -102,10 +102,10 @@ func (kc *KnightConfig) SetDefaults() {
 		kc.Enabled = true
 	}
 	if kc.DailyTokenBudget < 0 {
-		kc.DailyTokenBudget = 5_000_000
+		kc.DailyTokenBudget = 50_000_000
 	}
 	if kc.DailyTokenBudget == 0 && !kc.HasExplicitDailyTokenBudget() {
-		kc.DailyTokenBudget = 5_000_000
+		kc.DailyTokenBudget = 50_000_000
 	}
 	if kc.TrustLevel == "" {
 		kc.TrustLevel = "staged"
