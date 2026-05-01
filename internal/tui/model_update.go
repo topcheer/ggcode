@@ -739,7 +739,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case harnessPanelRefreshResultMsg:
-		// Future: async harness panel data loading
+		m.applyHarnessPanelResult(msg)
 		return m, nil
 
 	case shellCommandStreamMsg:
@@ -1064,9 +1064,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.shouldAutoRefreshHarnessTask() {
 			return m, nil
 		}
-		m.refreshHarnessPanelForced()
+		cmd := m.refreshHarnessPanelForced()
 		if !m.shouldAutoRefreshHarnessTask() {
-			return m, nil
+			// Task completed — stop polling, but still return the refresh cmd
+			// so the data arrives.
+			return m, cmd
+		}
+		if cmd != nil {
+			return m, tea.Batch(cmd, m.pollHarnessPanelAutoRefresh())
 		}
 		return m, m.pollHarnessPanelAutoRefresh()
 
