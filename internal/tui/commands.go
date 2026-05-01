@@ -538,9 +538,31 @@ func (m *Model) executeAutoHarnessRun(goal string, project harness.Project, cfg 
 	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
 }
 
+// handleHarnessReviewApprove creates a tea.Cmd that approves a harness task
+// and displays the result. Used by the one-key review CTA.
+func (m *Model) handleHarnessReviewApprove(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		workDir, _ := os.Getwd()
+		project, _, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			return harnessReviewResultMsg{Err: fmt.Errorf("load harness: %w", err), TaskID: taskID}
+		}
+		task, err := harness.ApproveTaskReview(project, taskID, "approved via auto-review CTA")
+		if err != nil {
+			return harnessReviewResultMsg{Err: err, TaskID: taskID}
+		}
+		return harnessReviewResultMsg{Task: task, TaskID: taskID}
+	}
+}
+
 // applyStrictWriteGuard adds Deny rules for write tools to the permission
 // policy when strict mode is active. This prevents the main agent from
 // directly modifying project files.
+//
+// Guard exemption: BinaryRunner spawns a subprocess with its own policy,
+// so the worker is NOT affected. If subagent mode (in-process) is used
+// in the future, the worker must use a separate ConfigPolicy or call
+// ClearOverride() for the tools it needs.
 func (m *Model) applyStrictWriteGuard() {
 	cp, ok := m.policy.(*permission.ConfigPolicy)
 	if !ok {

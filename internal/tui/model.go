@@ -164,6 +164,11 @@ type Model struct {
 	pendingAutoRun     *harness.AutoRunResult
 	pendingAutoRunText string
 
+	// pendingHarnessReview holds a completed task awaiting review approval.
+	// Set after harnessRunResultMsg when task is completed+review pending.
+	// Enter approves, Esc skips. Similar UX to pendingAutoRun suggest mode.
+	pendingHarnessReview *harness.Task
+
 	// Status bar state
 	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
 	statusToolName  string // current executing tool name
