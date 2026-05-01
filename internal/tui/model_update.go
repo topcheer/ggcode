@@ -551,6 +551,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatListScrollToBottom()
 				return m, nil
 			}
+			// Handle pending harness promote: Esc skips promote
+			if m.pendingHarnessPromote != nil {
+				taskID := m.pendingHarnessPromote.ID
+				m.pendingHarnessPromote = nil
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Promote skipped for task %s. Use /harness promote apply %s to promote later.", taskID, taskID))
+				m.chatListScrollToBottom()
+				return m, nil
+			}
 			if m.pendingAutoRun != nil {
 				text := m.pendingAutoRunText
 				m.pendingAutoRun = nil
@@ -579,6 +587,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatListScrollToBottom()
 				return m, m.handleHarnessReviewApprove(task.ID)
 			}
+			// Handle pending harness promote: Enter promotes the task
+			if m.pendingHarnessPromote != nil {
+				task := m.pendingHarnessPromote
+				m.pendingHarnessPromote = nil
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Promoting task %s...", task.ID))
+				m.chatListScrollToBottom()
+				return m, m.handleHarnessPromoteApply(task.ID)
+			}
 			if m.pendingAutoRun != nil {
 				result := m.pendingAutoRun
 				text := m.pendingAutoRunText
@@ -596,6 +612,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.pendingAutoRun != nil {
 				m.pendingAutoRun = nil
 				m.pendingAutoRunText = ""
+			}
+			if m.pendingHarnessReview != nil {
+				m.pendingHarnessReview = nil
+			}
+			if m.pendingHarnessPromote != nil {
+				m.pendingHarnessPromote = nil
 			}
 			text := strings.TrimSpace(m.input.Value())
 			m.input.Reset()
@@ -1007,11 +1029,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				status = string(msg.Task.ReviewStatus)
 			}
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Task %s review: %s", msg.TaskID, status))
-			// If approved, show promote CTA
+			// If approved, set pending promote for one-key CTA
 			if msg.Task != nil && msg.Task.ReviewStatus == harness.ReviewApproved {
-				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Ready to promote. Press Enter to apply changes, or use /harness promote apply %s.", msg.TaskID))
-				m.pendingHarnessReview = nil // Clear any stale state
+				m.pendingHarnessPromote = msg.Task
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Task %s approved. Press Enter to promote, Esc to skip.", msg.TaskID))
 			}
+		}
+		m.chatListScrollToBottom()
+		return m, nil
+
+	case harnessPromoteResultMsg:
+		m.loading = false
+		m.spinner.Stop()
+		if msg.Err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Promote failed for task %s: %v", msg.TaskID, msg.Err))
+		} else if msg.Task != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Task %s promoted successfully.", msg.TaskID))
+		} else {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Task %s promote completed.", msg.TaskID))
 		}
 		m.chatListScrollToBottom()
 		return m, nil

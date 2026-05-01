@@ -21,7 +21,7 @@ func TestBundledSkillsIncludeOperationalSkills(t *testing.T) {
 		}
 	}
 
-	required := []string{"verify", "debug", "simplify", "update-config", "browser-automation", "harness-run", "harness-review", "harness-promote", "harness-diagnose"}
+	required := []string{"verify", "debug", "simplify", "update-config", "browser-automation", "documentation-update", "harness-run", "harness-review", "harness-promote", "harness-diagnose"}
 	for _, name := range required {
 		if _, ok := byName[name]; !ok {
 			t.Fatalf("missing bundled skill %q", name)
@@ -80,6 +80,30 @@ func TestBundledBrowserAutomationSkillRequiresMCP(t *testing.T) {
 	for _, needle := range []string{"list_mcp_capabilities", "/mcp", "mcp_servers", "@playwright/mcp"} {
 		if !strings.Contains(skill.Template, needle) {
 			t.Fatalf("browser-automation template missing %q", needle)
+		}
+	}
+}
+
+func TestBundledDocumentationUpdateSkillIsConservative(t *testing.T) {
+	var skill *Command
+	for _, cmd := range bundledSkills() {
+		if cmd.Name == "documentation-update" {
+			skill = cmd
+			break
+		}
+	}
+	if skill == nil {
+		t.Fatal("missing documentation-update skill")
+	}
+	for _, needle := range []string{
+		"conservatively",
+		"user-visible",
+		"docs/releases",
+		"Do not create branches, commits, pushes, or PRs",
+		"no significant documentation impact",
+	} {
+		if !strings.Contains(skill.Template, needle) {
+			t.Fatalf("documentation-update template missing %q", needle)
 		}
 	}
 }

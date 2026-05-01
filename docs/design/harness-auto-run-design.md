@@ -57,14 +57,13 @@ The existing harness package is already a real control plane:
 ### What is missing relative to the goal
 
 1. **No LLM classifier (4th routing layer).** The 3-layer classifier is sufficient. An LLM-based classifier could improve accuracy for ambiguous prompts.
-2. **CTA promote is still text-only.** After review approval, promote requires /harness promote command. One-key promote Enter handler not yet added (only review has interactive CTA).
-3. **Limited integration tests for review CTA.** pendingHarnessReview Enter/Esc handlers are unit-tested but lack e2e test with real harness flow.
+2. **Limited integration tests for review/promote CTA.** pendingHarnessReview/pendingHarnessPromote Enter/Esc handlers are unit-tested but lack e2e test with real harness flow.
 
 ## Distance to Target
 
-Approximate readiness: **95%**.
+Approximate readiness: **98%**.
 
-All core components implemented and wired: config (P1), skills (P2), router (P3), RunService (P4), strict isolation (P5), review/promote CTA with one-key review (P6), daemon auto-run (P4), IM/WebUI mirroring (P6). Remaining: LLM classifier (optional), promote one-key CTA, integration test coverage.
+All core components implemented and wired: config (P1), skills (P2), router (P3), RunService (P4), strict isolation (P5), review/promote CTA with one-key review and promote (P6), daemon auto-run (P4), IM/WebUI mirroring (P6). Remaining: LLM classifier (optional), integration test coverage for review/promote CTA.
 
 ## Proposed Architecture
 

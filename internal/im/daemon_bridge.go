@@ -598,6 +598,10 @@ func (b *DaemonBridge) tryHarnessAutoRun(ctx context.Context, text string) *harn
 	b.emitter.EmitText(fmt.Sprintf("harness auto-run: %s", truncate(text, 60)))
 
 	svc := harness.NewRunService()
+	if result.Project == nil {
+		debug.Log("daemon", "auto-run: RouteHarness but no project — falling through to agent")
+		return nil
+	}
 	project := *result.Project
 	runResult := svc.Run(ctx, harness.RunServiceInput{
 		Project: project,
