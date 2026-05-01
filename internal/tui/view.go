@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -778,6 +779,14 @@ func (m Model) sidebarGitBranch() string {
 	return branch
 }
 
+// refreshCachedGitBranch invalidates the git dir cache so the next View()
+// picks up the new branch. Called periodically from the Update loop.
+func (m *Model) refreshCachedGitBranch() {
+	gitDirCacheMu.Lock()
+	gitDirCacheDir = ""
+	gitDirCacheMu.Unlock()
+}
+
 func (m Model) loadedSkillCount() int {
 	if m.commandMgr == nil {
 		return 0
@@ -814,8 +823,36 @@ func shortenSidebarPath(value string) string {
 	return value
 }
 
+// gitDirCache caches the resolved .git directory for the working directory
+// to avoid stat-walking on every View() render.
+var (
+	gitDirCacheDir   string
+	gitDirCacheValue string
+	gitDirCacheMu    sync.RWMutex
+)
+
+func resolveGitDirCached(start string) (string, error) {
+	gitDirCacheMu.RLock()
+	if gitDirCacheDir == start && gitDirCacheValue != "" {
+		v := gitDirCacheValue
+		gitDirCacheMu.RUnlock()
+		return v, nil
+	}
+	gitDirCacheMu.RUnlock()
+
+	result, err := resolveGitDir(start)
+	if err != nil {
+		return "", err
+	}
+	gitDirCacheMu.Lock()
+	gitDirCacheDir = start
+	gitDirCacheValue = result
+	gitDirCacheMu.Unlock()
+	return result, nil
+}
+
 func gitBranchForDir(start string) (string, error) {
-	gitDir, err := resolveGitDir(start)
+	gitDir, err := resolveGitDirCached(start)
 	if err != nil {
 		return "", err
 	}

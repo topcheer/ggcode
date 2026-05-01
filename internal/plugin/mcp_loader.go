@@ -95,6 +95,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	if err != nil {
 		var oauthErr *mcp.OAuthRequiredError
 		if errors.As(err, &oauthErr) {
+			_ = client.Close()
 			return nil, &MCPOAuthRequiredError{
 				ServerName: m.cfg.Name,
 				Handler:    oauthErr.Handler,

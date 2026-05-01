@@ -183,6 +183,10 @@ type updatePrepareResultMsg struct {
 
 type updateCheckTickMsg struct{}
 
+// gitBranchTickMsg is sent every 2 seconds to refresh the cached git branch
+// shown in the sidebar, avoiding disk I/O on every View() render.
+type gitBranchTickMsg struct{}
+
 // webchatUserMsg is sent by the webui TUIChatBridge to inject a webchat
 // message into the TUI event loop. The TUI handles it like a normal
 // user input submission.
@@ -194,6 +198,23 @@ type webchatUserMsg struct {
 // displays the URL as a system message in the chat area.
 type webuiReadyMsg struct {
 	Addr string
+}
+
+// harnessPanelRefreshResultMsg carries the result of an async harness panel
+// data load. The handler applies the data to the harness panel state.
+type harnessPanelRefreshResultMsg struct {
+	Err      string
+	Project  *harness.Project
+	Cfg      *harness.Config
+	Doctor   *harness.DoctorReport
+	Monitor  *harness.MonitorReport
+	Contexts *harness.ContextReport
+	Tasks    []*harness.Task
+	Inbox    *harness.OwnerInbox
+	Review   []*harness.Task
+	Promote  []*harness.Task
+	Release  *harness.ReleasePlan
+	Rollouts []*harness.ReleaseWavePlan
 }
 
 // knightStartupHintMsg is sent once at startup to show a Knight-related hint

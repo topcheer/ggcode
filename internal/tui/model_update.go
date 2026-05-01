@@ -738,6 +738,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case harnessPanelRefreshResultMsg:
+		m.applyHarnessPanelResult(msg)
+		return m, nil
+
 	case shellCommandStreamMsg:
 		if msg.RunID != m.activeShellRunID || m.runCanceled || !m.loading {
 			return m, nil
@@ -1060,7 +1064,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.shouldAutoRefreshHarnessTask() {
 			return m, nil
 		}
-		m.refreshHarnessPanel()
+		m.refreshHarnessPanelForced()
 		if !m.shouldAutoRefreshHarnessTask() {
 			return m, nil
 		}
@@ -1176,6 +1180,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case updateCheckTickMsg:
 		return m, tea.Batch(m.checkForUpdateCmd(), m.scheduleUpdateCheckCmd())
+
+	case gitBranchTickMsg:
+		m.refreshCachedGitBranch()
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return gitBranchTickMsg{}
+		})
 
 	case updatePrepareResultMsg:
 		return m.handlePreparedUpdate(msg)

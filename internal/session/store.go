@@ -520,7 +520,7 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 			}
 		}
 		if !found {
-			ses, loadErr := s.Load(id)
+			ses, loadErr := s.loadSession(id)
 			if loadErr == nil {
 				newIdx = append(newIdx, sessionToIndexEntry(ses))
 				changed = true

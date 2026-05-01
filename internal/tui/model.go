@@ -389,6 +389,7 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		func() tea.Msg { return textarea.Blink() },
 		func() tea.Msg { return tea.RequestWindowSize() },
+		func() tea.Msg { return gitBranchTickMsg{} },
 	}
 	if m.updateSvc != nil {
 		cmds = append(cmds, m.checkForUpdateCmd())
@@ -400,6 +401,7 @@ func (m Model) Init() tea.Cmd {
 func (m *Model) SetProgram(p *tea.Program) {
 	m.program = p
 	m.refreshIMRuntimeHooks()
+	m.refreshCachedGitBranch()
 }
 
 func (m *Model) SetSession(ses *session.Session, store session.Store) {

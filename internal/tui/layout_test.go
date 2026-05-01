@@ -2363,8 +2363,8 @@ func TestInitRequestsInitialWindowSize(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected init to return a batch command, got %T", msg)
 	}
-	if len(batch) != 2 {
-		t.Fatalf("expected blink and window size commands, got %d", len(batch))
+	if len(batch) < 2 {
+		t.Fatalf("expected at least blink and window size commands, got %d", len(batch))
 	}
 }
 

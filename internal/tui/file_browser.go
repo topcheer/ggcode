@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -25,6 +26,7 @@ type fileBrowserState struct {
 	filtering    bool
 	treeViewport ViewportModel
 	preview      *previewPanelState
+	lastSyncAt   time.Time
 }
 
 type fileBrowserEntry struct {
@@ -92,6 +94,7 @@ func (m *Model) syncFileBrowser(initial bool) {
 		return
 	}
 	state := m.fileBrowser
+	state.lastSyncAt = time.Now()
 	state.entries = buildFileBrowserEntries(state.rootPath, state.expanded, state.filter)
 	if len(state.entries) == 0 {
 		state.selected = 0
@@ -160,6 +163,8 @@ func buildFileBrowserEntries(root string, expanded map[string]bool, filter strin
 	return entries
 }
 
+const fileBrowserMaxEntries = 2000
+
 func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, filter string) ([]fileBrowserEntry, bool) {
 	children, err := os.ReadDir(dir)
 	if err != nil {
@@ -178,6 +183,9 @@ func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, 
 	var entries []fileBrowserEntry
 	matched := false
 	for _, child := range children {
+		if len(entries) >= fileBrowserMaxEntries {
+			break
+		}
 		name := child.Name()
 		if child.IsDir() {
 			if _, skip := skippedBrowserDirs[strings.ToLower(name)]; skip {
