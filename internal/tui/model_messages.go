@@ -31,8 +31,10 @@ type errMsg struct{ err error }
 type startupReadyMsg struct{}
 
 type harnessRunResultMsg struct {
-	Summary *harness.RunSummary
-	Err     error
+	Summary    *harness.RunSummary
+	Err        error
+	CTA        harness.CTAAction
+	CTAMessage string
 }
 
 type harnessRunProgressMsg struct {
