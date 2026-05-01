@@ -77,11 +77,14 @@ func TestPipeAllowedDirsDedupesIdenticalBases(t *testing.T) {
 }
 
 func TestPipePermissionModeHonorsBypass(t *testing.T) {
-	if got := pipePermissionMode(true); got != permission.BypassMode {
+	if got := pipePermissionMode(true, ""); got != permission.BypassMode {
 		t.Fatalf("pipePermissionMode(true) = %v, want %v", got, permission.BypassMode)
 	}
-	if got := pipePermissionMode(false); got != permission.AutoMode {
-		t.Fatalf("pipePermissionMode(false) = %v, want %v", got, permission.AutoMode)
+	if got := pipePermissionMode(false, ""); got != permission.AutoMode {
+		t.Fatalf("pipePermissionMode(false, empty) = %v, want %v", got, permission.AutoMode)
+	}
+	if got := pipePermissionMode(false, "bypass"); got != permission.BypassMode {
+		t.Fatalf("pipePermissionMode(false, bypass) = %v, want %v", got, permission.BypassMode)
 	}
 }
 

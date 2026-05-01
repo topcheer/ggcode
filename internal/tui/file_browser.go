@@ -159,13 +159,17 @@ func resolveFileBrowserSelection(state *fileBrowserState) {
 
 func buildFileBrowserEntries(root string, expanded map[string]bool, filter string) []fileBrowserEntry {
 	filter = strings.TrimSpace(strings.ToLower(filter))
-	entries, _ := collectFileBrowserEntries(root, 0, expanded, filter)
+	remain := fileBrowserMaxEntries
+	entries, _ := collectFileBrowserEntries(root, 0, expanded, filter, &remain)
 	return entries
 }
 
 const fileBrowserMaxEntries = 2000
 
-func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, filter string) ([]fileBrowserEntry, bool) {
+func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, filter string, remain *int) ([]fileBrowserEntry, bool) {
+	if *remain <= 0 {
+		return nil, false
+	}
 	children, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, false
@@ -183,7 +187,7 @@ func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, 
 	var entries []fileBrowserEntry
 	matched := false
 	for _, child := range children {
-		if len(entries) >= fileBrowserMaxEntries {
+		if *remain <= 0 {
 			break
 		}
 		name := child.Name()
@@ -195,8 +199,11 @@ func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, 
 		path := session.NormalizeWorkspacePath(filepath.Join(dir, name))
 		nameMatches := filter == "" || strings.Contains(strings.ToLower(name), filter)
 		if child.IsDir() {
-			childEntries, childMatched := collectFileBrowserEntries(path, depth+1, expanded, filter)
+			childEntries, childMatched := collectFileBrowserEntries(path, depth+1, expanded, filter, remain)
 			if !nameMatches && !childMatched {
+				continue
+			}
+			if *remain <= 0 {
 				continue
 			}
 			entries = append(entries, fileBrowserEntry{
@@ -205,9 +212,16 @@ func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, 
 				depth: depth,
 				isDir: true,
 			})
+			*remain--
 			matched = true
 			if expanded[path] || filter != "" {
-				entries = append(entries, childEntries...)
+				for _, e := range childEntries {
+					if *remain <= 0 {
+						break
+					}
+					entries = append(entries, e)
+					*remain--
+				}
 			}
 			continue
 		}
@@ -220,6 +234,7 @@ func collectFileBrowserEntries(dir string, depth int, expanded map[string]bool, 
 			depth: depth,
 			isDir: false,
 		})
+		*remain--
 		matched = true
 	}
 	return entries, matched

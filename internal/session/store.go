@@ -629,6 +629,9 @@ func (s *JSONLStore) CleanupOlderThan(before time.Time) (int, error) {
 
 // AppendMessage atomically appends a single message to the session's JSONL file.
 // This is more efficient than Save() for incremental updates.
+// AppendMessage persists a message to the session's JSONL file and updates
+// the Session object in place (Messages, UpdatedAt, Title). The caller must
+// ensure no concurrent access to the Session object.
 func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -659,6 +662,23 @@ func (s *JSONLStore) AppendMessage(ses *Session, msg provider.Message) error {
 				break
 			}
 		}
+	}
+
+	return s.updateIndex(ses)
+}
+
+// AppendMessageToDisk persists a message to the session's JSONL file and
+// updates the index, but does NOT modify the Session object. Use this when
+// the caller manages Session mutations under its own lock (e.g. sessionMutex
+// in the TUI), and only needs the disk write to happen outside that lock.
+func (s *JSONLStore) AppendMessageToDisk(ses *Session, msg provider.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := s.sessionPath(ses.ID)
+
+	rec := jsonlRecord{Type: "message", SessionID: ses.ID, Message: &msg}
+	if err := appendRecordLine(path, rec); err != nil {
+		return err
 	}
 
 	return s.updateIndex(ses)

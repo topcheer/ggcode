@@ -62,7 +62,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			rules[name] = permission.Deny
 		}
 	}
-	mode := pipePermissionMode(bypass)
+	mode := pipePermissionMode(bypass, cfg.DefaultMode)
 	policy := permission.NewConfigPolicyWithModeAndReadOnlyDirs(rules, allowedDirs, readOnlyAllowedDirs, mode)
 
 	// Apply allowedTools filter
@@ -252,9 +252,12 @@ func effectivePipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string, al
 	return pipeAllowedDirs(cfg, cfgPath, workingDir)
 }
 
-func pipePermissionMode(bypass bool) permission.PermissionMode {
+func pipePermissionMode(bypass bool, defaultMode string) permission.PermissionMode {
 	if bypass {
 		return permission.BypassMode
+	}
+	if m := permission.ParsePermissionMode(defaultMode); m != permission.SupervisedMode {
+		return m
 	}
 	return permission.AutoMode
 }

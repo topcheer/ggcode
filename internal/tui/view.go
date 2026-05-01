@@ -768,22 +768,25 @@ func (m Model) sidebarWorkingDirectory() string {
 }
 
 func (m Model) sidebarGitBranch() string {
+	gitDirCacheMu.RLock()
+	v := gitBranchCache
+	gitDirCacheMu.RUnlock()
+	return v
+}
+
+// refreshCachedGitBranch reads the current git branch and caches the result.
+// Called periodically from the Update loop via gitBranchTickMsg timer.
+func (m *Model) refreshCachedGitBranch() {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return ""
+		return
 	}
 	branch, err := gitBranchForDir(cwd)
 	if err != nil {
-		return ""
+		return
 	}
-	return branch
-}
-
-// refreshCachedGitBranch invalidates the git dir cache so the next View()
-// picks up the new branch. Called periodically from the Update loop.
-func (m *Model) refreshCachedGitBranch() {
 	gitDirCacheMu.Lock()
-	gitDirCacheDir = ""
+	gitBranchCache = branch
 	gitDirCacheMu.Unlock()
 }
 
@@ -823,11 +826,12 @@ func shortenSidebarPath(value string) string {
 	return value
 }
 
-// gitDirCache caches the resolved .git directory for the working directory
-// to avoid stat-walking on every View() render.
+// gitBranchCache caches the resolved git branch string to avoid os.ReadFile
+// on every View() render. Updated by gitBranchTickMsg timer every 2 seconds.
 var (
 	gitDirCacheDir   string
 	gitDirCacheValue string
+	gitBranchCache   string
 	gitDirCacheMu    sync.RWMutex
 )
 
