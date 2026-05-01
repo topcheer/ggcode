@@ -287,16 +287,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 
-	// Approval handler: auto-approve in daemon mode
+	// Approval handler: always auto-approve in daemon mode.
+	// Daemon has no TUI for interactive prompts. BypassMode and AutoMode
+	// auto-approve by design. SupervisedMode is intentionally mapped to
+	// Allow here because the IM approval flow (ask_user tool) handles
+	// user confirmation at a higher level — the agent decides when to
+	// ask via ask_user, not via the permission system's Ask callback.
+	// See docs/design/daemon-permission-model.md for rationale.
 	ag.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
-		switch mode {
-		case permission.BypassMode:
-			return permission.Allow
-		case permission.AutoMode:
-			return permission.Allow
-		default:
-			return permission.Allow
-		}
+		return permission.Allow
 	})
 
 	// --- Steps 9+: IM & Daemon setup ---
@@ -478,7 +477,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	defer imMgr.UnregisterInstance()
 
 	// Start MCP connections
-	for _, warning := range mcpMgr.ConnectAll(context.Background()) {
+	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer mcpCancel()
+	for _, warning := range mcpMgr.ConnectAll(mcpCtx) {
 		fmt.Fprintln(os.Stderr, warning)
 	}
 	mcpMgr.StartBackground(context.Background())
