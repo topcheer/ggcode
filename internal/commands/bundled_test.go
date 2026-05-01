@@ -16,12 +16,12 @@ func TestBundledSkillsIncludeOperationalSkills(t *testing.T) {
 		if skill.LoadedFrom != LoadedFromBundled {
 			t.Fatalf("skill %q loaded_from = %q, want %q", skill.Name, skill.LoadedFrom, LoadedFromBundled)
 		}
-		if skill.UserInvocable {
+		if skill.UserInvocable && !strings.HasPrefix(skill.Name, "harness-") {
 			t.Fatalf("skill %q should not be user slash invocable", skill.Name)
 		}
 	}
 
-	required := []string{"verify", "debug", "simplify", "update-config", "browser-automation"}
+	required := []string{"verify", "debug", "simplify", "update-config", "browser-automation", "harness-run", "harness-review", "harness-promote", "harness-diagnose"}
 	for _, name := range required {
 		if _, ok := byName[name]; !ok {
 			t.Fatalf("missing bundled skill %q", name)
