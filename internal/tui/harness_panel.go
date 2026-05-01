@@ -96,7 +96,43 @@ func (m *Model) openHarnessPanel() {
 	m.harnessPanel = &harnessPanelState{
 		actionInput: newHarnessPanelInput(m.currentLanguage()),
 	}
-	m.refreshHarnessPanel()
+	_ = m.refreshHarnessPanel()
+}
+
+// refreshHarnessPanelSync loads harness panel data synchronously.
+// Used by tests that need immediate data without async cmd dispatch.
+func (m *Model) refreshHarnessPanelSync() {
+	panel := m.harnessPanel
+	if panel == nil {
+		return
+	}
+	panel.lastRefreshAt = time.Now()
+
+	workDir, _ := os.Getwd()
+	project, cfg, err := loadHarnessForTUI(workDir)
+	if err != nil {
+		panel.loadErr = err.Error()
+		panel.project = nil
+		panel.cfg = nil
+		return
+	}
+	panel.loadErr = ""
+	panel.project = &project
+	panel.cfg = cfg
+
+	panel.doctor, _ = harness.Doctor(project, cfg)
+	panel.monitor, _ = harness.BuildMonitorReport(project, harness.MonitorOptions{})
+	panel.contexts, _ = harness.BuildContextReport(project, cfg)
+	panel.tasks, _ = harness.ListTasks(project)
+	panel.inbox, _ = harness.BuildOwnerInbox(project, cfg)
+	panel.review, _ = harness.ListReviewableTasks(project)
+	panel.promote, _ = harness.ListPromotableTasks(project)
+	panel.release, _ = harness.BuildReleasePlan(project, cfg)
+	panel.rollouts, _ = harness.ListReleaseWaveRollouts(project)
+
+	panel.selectedSection = clampHarnessIndex(panel.selectedSection, len(harnessSectionTitles(m.currentLanguage())))
+	m.updateHarnessPanelInputState()
+	m.syncHarnessPanelSelection()
 }
 
 func (m *Model) closeHarnessPanel() {
@@ -205,23 +241,23 @@ func (m *Model) applyHarnessPanelResult(msg harnessPanelRefreshResultMsg) {
 	m.syncHarnessPanelSelection()
 }
 
-func (m *Model) refreshHarnessPanel() {
+func (m *Model) refreshHarnessPanel() tea.Cmd {
 	panel := m.harnessPanel
 	if panel == nil {
-		return
+		return nil
 	}
 	// Debounce: skip refresh if last one was less than 500ms ago,
 	// but always allow initial loads (no data yet).
 	if panel.project != nil && panel.lastRefreshAt.After(time.Now().Add(-500*time.Millisecond)) {
-		return
+		return nil
 	}
-	m.refreshHarnessPanelForced()
+	return m.refreshHarnessPanelForced()
 }
 
-func (m *Model) refreshHarnessPanelForced() {
+func (m *Model) refreshHarnessPanelForced() tea.Cmd {
 	panel := m.harnessPanel
 	if panel == nil {
-		return
+		return nil
 	}
 	panel.lastRefreshAt = time.Now()
 
@@ -231,27 +267,21 @@ func (m *Model) refreshHarnessPanelForced() {
 		panel.loadErr = err.Error()
 		panel.project = nil
 		panel.cfg = nil
-		return
+		return nil
 	}
 	panel.loadErr = ""
 	panel.project = &project
 	panel.cfg = cfg
 
-	// Only load the heavy data for the currently selected section,
-	// not all 9 sections at once. This cuts the synchronous I/O by ~80%.
-	panel.doctor, _ = harness.Doctor(project, cfg)
-	panel.monitor, _ = harness.BuildMonitorReport(project, harness.MonitorOptions{})
-	panel.contexts, _ = harness.BuildContextReport(project, cfg)
-	panel.tasks, _ = harness.ListTasks(project)
-	panel.inbox, _ = harness.BuildOwnerInbox(project, cfg)
-	panel.review, _ = harness.ListReviewableTasks(project)
-	panel.promote, _ = harness.ListPromotableTasks(project)
-	panel.release, _ = harness.BuildReleasePlan(project, cfg)
-	panel.rollouts, _ = harness.ListReleaseWaveRollouts(project)
-
 	panel.selectedSection = clampHarnessIndex(panel.selectedSection, len(harnessSectionTitles(m.currentLanguage())))
 	m.updateHarnessPanelInputState()
 	m.syncHarnessPanelSelection()
+
+	// Return async cmd — data loads in a background goroutine,
+	// result arrives via harnessPanelRefreshResultMsg.
+	// This avoids blocking the UI main thread with 9 synchronous
+	// harness API calls.
+	return m.refreshHarnessPanelCmd()
 }
 
 func (m *Model) syncHarnessPanelSelection() {
@@ -382,7 +412,9 @@ func (m *Model) handleHarnessPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, m.pollHarnessPanelAutoRefresh()
 	case "r":
 		panel.message = ""
-		m.refreshHarnessPanel()
+		if cmd := m.refreshHarnessPanel(); cmd != nil {
+			return *m, tea.Batch(cmd, m.pollHarnessPanelAutoRefresh())
+		}
 		return *m, m.pollHarnessPanelAutoRefresh()
 	case "i":
 		if panel.loadErr != "" || panel.selectedSection == harnessSectionInit {
@@ -479,7 +511,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 	case harnessSectionCheck:
 		return m.runHarnessCheck()
 	case harnessSectionMonitor:
-		m.refreshHarnessPanel()
+		_ = m.refreshHarnessPanel()
 		if panel := m.harnessPanel; panel != nil {
 			panel.message = m.t("harness.message.monitor_refreshed")
 		}
@@ -516,7 +548,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			panel.message = err.Error()
 			return nil
 		}
-		m.refreshHarnessPanel()
+		_ = m.refreshHarnessPanel()
 		panel.message = m.t("harness.message.review_approved", updated.ID)
 	case harnessSectionPromote:
 		task := m.selectedHarnessPromoteTask()
@@ -528,7 +560,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			panel.message = err.Error()
 			return nil
 		}
-		m.refreshHarnessPanel()
+		_ = m.refreshHarnessPanel()
 		panel.message = m.t("harness.message.promoted", updated.ID)
 	case harnessSectionRelease:
 		if panel.release == nil || len(panel.release.Tasks) == 0 {
@@ -540,7 +572,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			panel.message = err.Error()
 			return nil
 		}
-		m.refreshHarnessPanel()
+		_ = m.refreshHarnessPanel()
 		panel.message = m.t("harness.message.release_applied", applied.BatchID)
 	case harnessSectionRollouts:
 		rollout := m.selectedHarnessRollout()
@@ -553,7 +585,7 @@ func (m *Model) runHarnessPanelPrimaryAction() tea.Cmd {
 			panel.message = err.Error()
 			return nil
 		}
-		m.refreshHarnessPanel()
+		_ = m.refreshHarnessPanel()
 		panel.message = m.t("harness.message.rollout_advanced", updated.RolloutID)
 	}
 	return m.pollHarnessPanelAutoRefresh()
@@ -590,7 +622,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				panel.message = err.Error()
 				return nil
 			}
-			m.refreshHarnessPanel()
+			_ = m.refreshHarnessPanel()
 			panel.message = m.t("harness.message.owner_promoted", len(promoted), entry.Owner)
 		case "f":
 			summary, err := harness.RetryFailedTasksForOwner(context.Background(), *panel.project, panel.cfg, entry.Owner, harness.BinaryRunner{})
@@ -599,7 +631,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				return nil
 			}
 			panel.lastQueueRun = summary
-			m.refreshHarnessPanel()
+			_ = m.refreshHarnessPanel()
 			panel.message = m.t("harness.message.owner_retried", entry.Owner)
 		}
 	case harnessSectionReview:
@@ -615,7 +647,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 			panel.message = err.Error()
 			return nil
 		}
-		m.refreshHarnessPanel()
+		_ = m.refreshHarnessPanel()
 		panel.message = m.t("harness.message.review_rejected", updated.ID)
 	case harnessSectionRollouts:
 		rollout := m.selectedHarnessRollout()
@@ -629,7 +661,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				panel.message = err.Error()
 				return nil
 			}
-			m.refreshHarnessPanel()
+			_ = m.refreshHarnessPanel()
 			panel.message = m.t("harness.message.gate_approved", updated.RolloutID)
 		case "p":
 			for _, group := range rollout.Groups {
@@ -639,9 +671,9 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 						panel.message = err.Error()
 						return nil
 					}
-					m.refreshHarnessPanel()
+					_ = m.refreshHarnessPanel()
 					panel.message = m.t("harness.message.rollout_resumed", updated.RolloutID)
-					return nil
+					return m.refreshHarnessPanel()
 				}
 			}
 			updated, err := harness.PauseReleaseWaveRollout(*panel.project, rollout.RolloutID, "")
@@ -649,7 +681,7 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				panel.message = err.Error()
 				return nil
 			}
-			m.refreshHarnessPanel()
+			_ = m.refreshHarnessPanel()
 			panel.message = m.t("harness.message.rollout_paused", updated.RolloutID)
 		case "x":
 			updated, err := harness.AbortReleaseWaveRollout(*panel.project, rollout.RolloutID, "")
@@ -657,11 +689,11 @@ func (m *Model) runHarnessPanelSecondaryAction(action string) tea.Cmd {
 				panel.message = err.Error()
 				return nil
 			}
-			m.refreshHarnessPanel()
+			_ = m.refreshHarnessPanel()
 			panel.message = m.t("harness.message.rollout_aborted", updated.RolloutID)
 		}
 	}
-	return nil
+	return m.refreshHarnessPanel()
 }
 
 func (m *Model) initHarnessFromPanel() tea.Cmd {
@@ -702,7 +734,7 @@ func (m *Model) runHarnessGC() tea.Cmd {
 		return nil
 	}
 	panel.lastGC = report
-	m.refreshHarnessPanel()
+	_ = m.refreshHarnessPanel()
 	if panel := m.harnessPanel; panel != nil {
 		panel.lastGC = report
 		panel.message = m.t("harness.message.gc_complete")
@@ -741,7 +773,7 @@ func (m *Model) queueHarnessDraft() tea.Cmd {
 		panel.message = err.Error()
 		return nil
 	}
-	m.refreshHarnessPanel()
+	_ = m.refreshHarnessPanel()
 	if panel := m.harnessPanel; panel != nil {
 		panel.message = m.t("harness.message.queued", task.ID)
 		panel.actionInput.SetValue("")
@@ -777,7 +809,7 @@ func (m *Model) runHarnessQueued(opts harness.QueueRunOptions) tea.Cmd {
 		return nil
 	}
 	panel.lastQueueRun = summary
-	m.refreshHarnessPanel()
+	_ = m.refreshHarnessPanel()
 	if panel := m.harnessPanel; panel != nil {
 		panel.lastQueueRun = summary
 		panel.message = queueRunMessage(m.currentLanguage(), summary, opts)
