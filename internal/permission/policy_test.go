@@ -176,6 +176,18 @@ func TestConfigPolicy_SetOverride(t *testing.T) {
 	}
 }
 
+func TestConfigPolicy_ClearOverride(t *testing.T) {
+	p := NewConfigPolicy(nil, nil)
+	p.SetOverride("write_file", Deny)
+	if p.GetDecision("write_file") != Deny {
+		t.Error("expected Deny after override")
+	}
+	p.ClearOverride("write_file")
+	if p.GetDecision("write_file") == Deny {
+		t.Error("expected Deny to be cleared")
+	}
+}
+
 func TestConfigPolicy_IsDangerous(t *testing.T) {
 	p := NewConfigPolicy(nil, nil)
 	if !p.IsDangerous("rm -rf /") {

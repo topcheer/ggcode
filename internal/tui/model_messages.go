@@ -37,6 +37,13 @@ type harnessRunResultMsg struct {
 	CTAMessage string
 }
 
+// harnessReviewResultMsg carries the result of a one-key review approve action.
+type harnessReviewResultMsg struct {
+	Task   *harness.Task
+	TaskID string
+	Err    error
+}
+
 type harnessRunProgressMsg struct {
 	TaskID    string
 	Activity  string

@@ -188,6 +188,15 @@ func (p *ConfigPolicy) SetOverride(toolName string, decision Decision) {
 	p.rules[toolName] = decision
 }
 
+// ClearOverride removes a previously set override for the given tool.
+// Used by harness worker agents to exempt themselves from the strict
+// write guard applied to the main agent.
+func (p *ConfigPolicy) ClearOverride(toolName string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.rules, toolName)
+}
+
 // Mode returns the current permission mode.
 func (p *ConfigPolicy) Mode() PermissionMode {
 	p.mu.RLock()

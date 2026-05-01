@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress (v1.1.69). All 6 phases implemented, gaps closing.
+In Progress (v1.1.71). All phases implemented, daemon and review CTA closed.
 
 ## Goal
 
@@ -56,17 +56,15 @@ The existing harness package is already a real control plane:
 
 ### What is missing relative to the goal
 
-1. **Daemon/IM/WebUI auto-run integration.** Daemon only logs suggestions; IM and WebUI do not route through the harness router. Design intent: daemon/agent uses skill instructions to decide, not enforced routing. May add explicit daemon routing later.
-2. **CTA is text-only, not interactive.** Post-run CTA shows slash commands but no one-click review/promote buttons, pending-task notifications, or auto-opening review panel.
-3. **No LLM classifier (4th routing layer).** The 3-layer classifier (exclusion → structural features → conservative default) is sufficient for now. An LLM-based classifier could improve accuracy for ambiguous prompts.
-4. **Worker guard exemption not needed yet.** Auto-run uses BinaryRunner (subprocess), so strict write guard does not affect the worker. If subagent mode is used in the future, guard exemption logic will be needed.
-5. **Limited integration tests.** Unit tests cover routing, CTA, strict guard, and config propagation. Missing: TUI suggest Enter confirmation e2e, pipe with stdin auto-run, strict RouteNone write guard e2e.
+1. **No LLM classifier (4th routing layer).** The 3-layer classifier is sufficient. An LLM-based classifier could improve accuracy for ambiguous prompts.
+2. **CTA promote is still text-only.** After review approval, promote requires /harness promote command. One-key promote Enter handler not yet added (only review has interactive CTA).
+3. **Limited integration tests for review CTA.** pendingHarnessReview Enter/Esc handlers are unit-tested but lack e2e test with real harness flow.
 
 ## Distance to Target
 
-Approximate readiness: **90%**.
+Approximate readiness: **95%**.
 
-All core components implemented: config (P1), skills (P2), router (P3), RunService (P4), strict isolation (P5), review/promote CTA (P6). Remaining: integration testing, daemon/IM routing, and CTA UX refinement.
+All core components implemented and wired: config (P1), skills (P2), router (P3), RunService (P4), strict isolation (P5), review/promote CTA with one-key review (P6), daemon auto-run (P4), IM/WebUI mirroring (P6). Remaining: LLM classifier (optional), promote one-key CTA, integration test coverage.
 
 ## Proposed Architecture
 

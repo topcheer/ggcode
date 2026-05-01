@@ -543,6 +543,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			// Handle pending auto-run suggestion: Esc dismisses (before autocomplete)
+			// Handle pending harness review: Esc skips review
+			if m.pendingHarnessReview != nil {
+				taskID := m.pendingHarnessReview.ID
+				m.pendingHarnessReview = nil
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Review skipped for task %s. Use /harness review approve %s to approve later.", taskID, taskID))
+				m.chatListScrollToBottom()
+				return m, nil
+			}
 			if m.pendingAutoRun != nil {
 				text := m.pendingAutoRunText
 				m.pendingAutoRun = nil
@@ -563,6 +571,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			// Handle pending auto-run suggestion: Enter confirms harness run (before autocomplete)
+			// Handle pending harness review: Enter approves the task
+			if m.pendingHarnessReview != nil {
+				task := m.pendingHarnessReview
+				m.pendingHarnessReview = nil
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Approving task %s...", task.ID))
+				m.chatListScrollToBottom()
+				return m, m.handleHarnessReviewApprove(task.ID)
+			}
 			if m.pendingAutoRun != nil {
 				result := m.pendingAutoRun
 				text := m.pendingAutoRunText
@@ -954,20 +970,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if streamedHarnessOutput {
 			rendered = trimHarnessRunOutputSection(rendered)
 		}
-		// Append CTA (next action) — generate from summary if not provided
+		// Append CTA (next action) - generate from summary if not provided
+		ctaAction := msg.CTA
 		ctaMsg := msg.CTAMessage
 		if ctaMsg == "" && msg.Summary != nil {
-			_, ctaMsg = harness.GenerateCTA(msg.Summary, msg.Err)
+			ctaAction, ctaMsg = harness.GenerateCTA(msg.Summary, msg.Err)
 		}
 		if ctaMsg != "" {
 			rendered += fmt.Sprintf("\nNext: %s", ctaMsg)
 		}
+		// Set pending review for one-key approve/reject if CTA is review
+		if ctaAction == harness.CTAReview && msg.Summary != nil && msg.Summary.Task != nil {
+			m.pendingHarnessReview = msg.Summary.Task
+			rendered += "\nPress Enter to approve, Esc to skip."
+		}
 		m.renderStreamBuffer(true)
 		m.chatWriteSystem(nextSystemID(), rendered)
 		m.chatListScrollToBottom()
+		// Broadcast harness result to WebUI subscribers if available
+		if m.webuiBridge != nil {
+			m.webuiBridge.BroadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: rendered})
+		}
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)
 		}
+		return m, nil
+
+	case harnessReviewResultMsg:
+		m.loading = false
+		m.spinner.Stop()
+		if msg.Err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Review failed for task %s: %v", msg.TaskID, msg.Err))
+		} else {
+			status := "approved"
+			if msg.Task != nil {
+				status = string(msg.Task.ReviewStatus)
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Task %s review: %s", msg.TaskID, status))
+			// If approved, show promote CTA
+			if msg.Task != nil && msg.Task.ReviewStatus == harness.ReviewApproved {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Ready to promote. Press Enter to apply changes, or use /harness promote apply %s.", msg.TaskID))
+				m.pendingHarnessReview = nil // Clear any stale state
+			}
+		}
+		m.chatListScrollToBottom()
 		return m, nil
 
 	case knightTaskResultMsg:

@@ -569,6 +569,50 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// tryHarnessAutoRun checks whether the input should be routed to harness
+// and executes via RunService if so. Returns non-nil result when harness
+// handled the request. Returns nil to fall through to normal agent run.
+func (b *DaemonBridge) tryHarnessAutoRun(ctx context.Context, text string) *harness.RunServiceResult {
+	routeCtx := harness.RouteContext{
+		Input:      text,
+		WorkingDir: b.workingDir,
+	}
+	cfg := &config.Config{Harness: config.HarnessConfig{
+		AutoRun:  b.harnessMode,
+		AutoInit: b.harnessAutoInit,
+	}}
+	result, err := harness.ShouldAutoRun(cfg, text, routeCtx)
+	if err != nil || result == nil {
+		return nil
+	}
+	if result.Decision != harness.RouteHarness {
+		// Suggest mode: let agent handle it (skill instructions guide the model)
+		if result.Decision == harness.RouteSuggest {
+			debug.Log("daemon", "auto-run suggest: %s", truncate(text, 60))
+		}
+		return nil
+	}
+
+	// Route to harness — emit status and run
+	debug.Log("daemon", "auto-run harness: %s", truncate(text, 60))
+	b.emitter.EmitText(fmt.Sprintf("harness auto-run: %s", truncate(text, 60)))
+
+	svc := harness.NewRunService()
+	project := *result.Project
+	runResult := svc.Run(ctx, harness.RunServiceInput{
+		Project: project,
+		Config:  result.Config,
+		Goal:    text,
+		Runner:  harness.BinaryRunner{},
+		Options: harness.RunTaskOptions{},
+	})
+
+	// Emit the result
+	output := harness.FormatRunServiceResult(runResult)
+	b.emitter.EmitText(output)
+	return runResult
+}
+
 // appendUserMessage adds the user message to the session store.
 func (b *DaemonBridge) appendUserMessage(content []provider.ContentBlock) {
 	if b.store == nil || b.sess == nil {
@@ -996,6 +1040,17 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 
 	// Start the run outside the lock
 	go func() {
+		// Check if this input should be routed to harness auto-run
+		if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
+			if harnessResult := b.tryHarnessAutoRun(ctx2, text); harnessResult != nil {
+				// Harness handled the request — skip normal agent run
+				b.mu.Lock()
+				b.cancelFunc = nil
+				b.agent.SetInterruptionHandler(nil)
+				b.mu.Unlock()
+				return
+			}
+		}
 		for {
 			err := b.runAgentStream(ctx2, content)
 			if err != nil && !errors.Is(err, context.Canceled) {
