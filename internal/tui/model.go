@@ -158,6 +158,12 @@ type Model struct {
 	harnessRunRemainder string
 	harnessRunLiveTail  string
 
+	// Auto-run pending suggestion: when harness.auto_run is "suggest" and the
+	// router detects a code-change task, the pending result is saved here.
+	// Enter confirms (routes to harness), Esc dismisses (normal agent).
+	pendingAutoRun     *harness.AutoRunResult
+	pendingAutoRunText string
+
 	// Status bar state
 	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
 	statusToolName  string // current executing tool name

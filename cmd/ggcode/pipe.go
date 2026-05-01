@@ -442,13 +442,44 @@ func runPipeHarness(result *harness.AutoRunResult, prompt string) int {
 		fmt.Fprintln(os.Stderr, "harness auto-run: no project available. Run ggcode harness init first.")
 		return 1
 	}
-	// Delegate to harness run via CLI invocation
+
+	project := *result.Project
+	cfg := result.Config
+	if cfg == nil {
+		loadedCfg, err := harness.LoadConfig(project.ConfigPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "harness auto-run: failed to load config: %v\n", err)
+			return 1
+		}
+		cfg = loadedCfg
+	}
+
 	displayPrompt := prompt
 	if len(prompt) > 60 {
 		displayPrompt = prompt[:57] + "..."
 	}
-	fmt.Fprintf(os.Stderr, "🔀 Auto-routing to harness: %s\n", displayPrompt)
-	fmt.Fprintln(os.Stderr, "Use 'ggcode harness list' to check task status.")
-	// TODO: Create and wait for harness task inline (Phase 4 of auto-run design)
+	fmt.Fprintf(os.Stderr, "🔀 Harness auto-run: %s\n", displayPrompt)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	opts := harness.RunTaskOptions{}
+	summary, err := harness.RunTaskWithOptions(ctx, project, cfg, prompt, harness.BinaryRunner{}, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "harness auto-run failed: %v\n", err)
+		if summary != nil && summary.Result != nil && summary.Result.Output != "" {
+			fmt.Fprint(os.Stdout, summary.Result.Output)
+		}
+		return 1
+	}
+
+	if summary != nil {
+		if summary.Result != nil && summary.Result.Output != "" {
+			fmt.Fprint(os.Stdout, summary.Result.Output)
+		}
+		if summary.Task != nil {
+			fmt.Fprintf(os.Stderr, "\n✅ Harness auto-run complete: task %s\n", summary.Task.ID)
+		}
+	}
 	return 0
 }

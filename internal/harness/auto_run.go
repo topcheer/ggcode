@@ -13,6 +13,10 @@ type AutoRunResult struct {
 	// Project is the resolved harness project, if available.
 	// nil if no project could be found or auto-initialized.
 	Project *Project
+	// Config is the loaded (and possibly overridden) harness config.
+	// In strict mode, Run.WorktreeMode is overridden to "required".
+	// The caller should use this config instead of re-reading from disk.
+	Config *Config
 	// AutoInitPerformed is true if a minimal harness was auto-initialized.
 	AutoInitPerformed bool
 	// StrictWriteGuard is true when the caller should block direct file
@@ -65,13 +69,13 @@ func ShouldAutoRun(cfg *config.Config, input string, ctx RouteContext) (*AutoRun
 		}
 	}
 
-	// In strict mode, enforce worktree isolation.
-	// If the project's config has worktree_mode != "required",
-	// override it for this run.
+	// In strict mode, enforce worktree isolation by overriding the config.
+	var strictConfig *Config
 	if mode == "strict" && project != nil {
 		loadedCfg, err := LoadConfig(project.ConfigPath)
-		if err == nil && loadedCfg.Run.WorktreeMode != "required" {
+		if err == nil {
 			loadedCfg.Run.WorktreeMode = "required"
+			strictConfig = loadedCfg
 		}
 	}
 
@@ -81,6 +85,7 @@ func ShouldAutoRun(cfg *config.Config, input string, ctx RouteContext) (*AutoRun
 	result := &AutoRunResult{
 		Decision:          decision,
 		Project:           project,
+		Config:            strictConfig,
 		AutoInitPerformed: autoInitPerformed,
 		StrictWriteGuard:  mode == "strict" && project != nil,
 	}
