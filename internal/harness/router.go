@@ -1,10 +1,14 @@
 package harness
 
 import (
+	"context"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // RouteDecision represents the routing decision for a user prompt.
@@ -51,6 +55,10 @@ type RouteContext struct {
 	// WorkingDir is the current working directory, used for project discovery
 	// and auto-init. If empty, defaults to os.Getwd().
 	WorkingDir string
+	// LLMClassifierProvider is an optional LLM provider for the 4th-layer
+	// classifier. When nil, the LLM classifier is skipped and only the
+	// deterministic 3-layer router is used.
+	LLMClassifierProvider provider.Provider
 }
 
 // PromptFeatures are structural features extracted from a user prompt.
@@ -278,6 +286,18 @@ func DecideRouteWithFeatures(input string, mode string, features PromptFeatures,
 			return RouteSuggest
 		case "on", "strict":
 			return RouteHarness
+		}
+	}
+
+	// Layer 3: LLM classifier for ambiguous cases (score 1-2).
+	// Only called when mode is "on" or "strict" and a provider is available.
+	if score >= 1 && score < 3 && (mode == "on" || mode == "strict") && ctx.LLMClassifierProvider != nil {
+		llmResult, err := ClassifyWithLLM(context.Background(), ctx.LLMClassifierProvider, input)
+		if err == nil && llmResult != nil {
+			if decision := RouteFromLLMResult(llmResult, mode); decision != RouteNormal {
+				debug.Log("auto-run", "LLM classifier override: %v (confidence=%.2f, score=%d)", decision, llmResult.Confidence, score)
+				return decision
+			}
 		}
 	}
 

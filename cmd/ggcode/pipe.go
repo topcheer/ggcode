@@ -189,7 +189,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Use fullPrompt (includes stdin data) for routing and harness goal.
 	// Skip auto-run for image inputs (harness uses text-only goals).
 	if !noHarness && len(imageBlocks) == 0 {
-		if autoRunResult, err := checkPipeAutoRun(cfg, fullPrompt, workingDir); err == nil && autoRunResult != nil {
+		if autoRunResult, err := checkPipeAutoRun(cfg, fullPrompt, workingDir, prov); err == nil && autoRunResult != nil {
 			switch autoRunResult.Decision {
 			case harness.RouteHarness:
 				return runPipeHarness(autoRunResult, fullPrompt)
@@ -429,14 +429,15 @@ func truncatePipeProgress(text string, maxLen int) string {
 	return text[:maxLen-3] + "..."
 }
 
-func checkPipeAutoRun(cfg *config.Config, prompt string, workingDir string) (*harness.AutoRunResult, error) {
+func checkPipeAutoRun(cfg *config.Config, prompt string, workingDir string, prov provider.Provider) (*harness.AutoRunResult, error) {
 	mode := cfg.Harness.AutoRunMode()
 	if mode == "off" {
 		return nil, nil
 	}
 	ctx := harness.RouteContext{
-		Input:      prompt,
-		WorkingDir: workingDir,
+		Input:                 prompt,
+		WorkingDir:            workingDir,
+		LLMClassifierProvider: prov,
 	}
 	return harness.ShouldAutoRun(cfg, prompt, ctx)
 }

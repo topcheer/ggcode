@@ -441,8 +441,9 @@ func (m *Model) checkAutoRun(text string) (*harness.AutoRunResult, error) {
 	}
 	workDir, _ := os.Getwd()
 	ctx := harness.RouteContext{
-		Input:      text,
-		WorkingDir: workDir,
+		Input:                 text,
+		WorkingDir:            workDir,
+		LLMClassifierProvider: m.agent.Provider(),
 	}
 	return harness.ShouldAutoRun(m.config, text, ctx)
 }
