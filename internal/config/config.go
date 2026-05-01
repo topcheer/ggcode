@@ -186,6 +186,7 @@ type Config struct {
 	KnightConfig   KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
 	Swarm          SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
 	A2A            A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	Harness        HarnessConfig             `yaml:"harness,omitempty" json:"harness,omitempty"`
 	FilePath       string                    `yaml:"-" json:"-"`
 	FirstRun       bool                      `yaml:"-" json:"-"`
 	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
@@ -287,7 +288,32 @@ func (c A2AConfig) HasAuth() bool {
 		c.Auth.OAuth2 != nil ||
 		c.Auth.OIDC != nil ||
 		c.Auth.MTLS != nil ||
-		strings.TrimSpace(c.APIKey) != "" // legacy
+		strings.TrimSpace(c.APIKey) != ""
+}
+
+// HarnessConfig controls automatic harness routing behavior.
+// AutoRun modes:
+//   - "off":     No automatic routing (default). Users run harness explicitly.
+//   - "suggest": Detect code-change tasks and prompt the user to use harness.
+//   - "on":      Automatically route detected code-change tasks to harness.
+//   - "strict":  Same as "on" but enforces worktree isolation; blocks direct file writes.
+type HarnessConfig struct {
+	AutoRun  string `yaml:"auto_run,omitempty" json:"auto_run,omitempty"`   // "off", "suggest", "on", "strict"
+	AutoInit bool   `yaml:"auto_init,omitempty" json:"auto_init,omitempty"` // auto-create harness.yaml when missing
+}
+
+// AutoRunMode returns the normalized auto_run mode, defaulting to "off".
+func (h HarnessConfig) AutoRunMode() string {
+	switch strings.ToLower(strings.TrimSpace(h.AutoRun)) {
+	case "suggest":
+		return "suggest"
+	case "on":
+		return "on"
+	case "strict":
+		return "strict"
+	default:
+		return "off"
+	}
 }
 
 // A2AAuthConfig configures which authentication mechanisms the A2A server accepts.
