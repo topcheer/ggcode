@@ -63,6 +63,7 @@ func logClassification(t *testing.T, result *LLMClassifierResult) {
 	}
 	t.Logf("  classification: %s", class)
 	t.Logf("  confidence:     %.2f", result.Confidence)
+	t.Logf("  complexity:     %s", result.Complexity)
 	t.Logf("  reason:         %s", result.Reason)
 }
 
@@ -164,5 +165,51 @@ func TestSmoke_LLMClassifier_ChineseChat(t *testing.T) {
 
 	if result.IsCodeChange {
 		t.Errorf("expected conversation for Chinese chat, got code_change (confidence=%.2f)", result.Confidence)
+	}
+}
+
+func TestSmoke_LLMClassifier_SimpleChange(t *testing.T) {
+	prov := smokeProvider(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := ClassifyWithLLM(ctx, prov,
+		"把 README 里的版本号从 1.0 改成 2.0")
+	if err != nil {
+		t.Fatalf("ClassifyWithLLM error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("ClassifyWithLLM returned nil")
+	}
+	logClassification(t, result)
+
+	if !result.IsCodeChange {
+		t.Errorf("expected code_change, got conversation")
+	}
+	if result.Complexity != "simple" {
+		t.Errorf("expected simple, got %s (confidence=%.2f)", result.Complexity, result.Confidence)
+	}
+}
+
+func TestSmoke_LLMClassifier_ComplexFeature(t *testing.T) {
+	prov := smokeProvider(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := ClassifyWithLLM(ctx, prov,
+		"重构认证模块，把 JWT 换成 session-based 认证，需要修改登录、注册、密码重置等所有相关接口")
+	if err != nil {
+		t.Fatalf("ClassifyWithLLM error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("ClassifyWithLLM returned nil")
+	}
+	logClassification(t, result)
+
+	if !result.IsCodeChange {
+		t.Errorf("expected code_change, got conversation")
+	}
+	if result.Complexity != "complex" {
+		t.Errorf("expected complex, got %s (confidence=%.2f)", result.Complexity, result.Confidence)
 	}
 }

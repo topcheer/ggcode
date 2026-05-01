@@ -19,6 +19,11 @@ type LLMClassifierResult struct {
 	Confidence float64
 	// Reason is the LLM's explanation for its classification.
 	Reason string
+	// Complexity is the LLM's assessment of task complexity: "simple" or "complex".
+	// "simple" = small localized change (rename, typo fix, single-line edit)
+	// "complex" = multi-file change, new feature, bug investigation, refactoring
+	// Only meaningful when IsCodeChange is true.
+	Complexity string
 }
 
 // classifierResponse is the expected JSON structure from the LLM.
@@ -26,15 +31,22 @@ type classifierResponse struct {
 	Classification string  `json:"classification"`
 	Confidence     float64 `json:"confidence"`
 	Reason         string  `json:"reason"`
+	Complexity     string  `json:"complexity"`
 }
 
 // llmClassifierPrompt is the system prompt for the task router.
-const llmClassifierPrompt = `You are a task router. Classify the following user input as either:
-- "code_change": The user is requesting code modifications, bug fixes, refactoring, new features, or any engineering task that would modify files in a codebase.
-- "conversation": The user is asking a question, requesting explanation, having a chat, or doing anything that does NOT require modifying code files.
+const llmClassifierPrompt = `You are a task router. Classify the following user input:
+
+1. Is it a code change request?
+   - "code_change": The user is requesting code modifications, bug fixes, refactoring, new features, or any engineering task that would modify files in a codebase.
+   - "conversation": The user is asking a question, requesting explanation, having a chat, or anything that does NOT require modifying code files.
+
+2. If it IS a code change, assess complexity:
+   - "simple": Small localized change — typo fix, rename, single value update, one-line edit, config tweak. The main agent can handle this directly without an isolated workflow.
+   - "complex": Multi-file change, new feature, bug investigation requiring testing, refactoring, architecture change. Benefits from an isolated worktree with review before merging.
 
 Respond with ONLY a JSON object, no other text:
-{"classification": "code_change" or "conversation", "confidence": 0.0 to 1.0, "reason": "brief explanation"}`
+{"classification": "code_change" or "conversation", "confidence": 0.0 to 1.0, "complexity": "simple" or "complex" or "", "reason": "brief explanation"}`
 
 // ClassifyWithLLM uses an LLM to classify whether a user input is a code change task.
 // It returns nil (and a nil error) if the provider is nil, effectively disabling the classifier.
@@ -54,8 +66,8 @@ func ClassifyWithLLM(ctx context.Context, prov provider.Provider, input string) 
 
 	userPrompt := fmt.Sprintf("User input: %q", input)
 
-	// 5-second timeout
-	classifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// 8-second timeout (CN proxy endpoints can be slow)
+	classifyCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
 	resp, err := prov.Chat(classifyCtx, []provider.Message{
@@ -82,8 +94,8 @@ func ClassifyWithLLM(ctx context.Context, prov provider.Provider, input string) 
 		return nil, err
 	}
 
-	debug.Log("llm-classifier", "result: is_code_change=%v confidence=%.2f reason=%s",
-		result.IsCodeChange, result.Confidence, truncateText(result.Reason, 60))
+	debug.Log("llm-classifier", "result: is_code_change=%v confidence=%.2f complexity=%s reason=%s",
+		result.IsCodeChange, result.Confidence, result.Complexity, truncateText(result.Reason, 60))
 
 	return result, nil
 }
@@ -140,21 +152,28 @@ func parseClassifierResponse(text string) (*LLMClassifierResult, error) {
 		IsCodeChange: isCodeChange,
 		Confidence:   confidence,
 		Reason:       resp.Reason,
+		Complexity:   resp.Complexity,
 	}, nil
 }
 
 // RouteFromLLMResult converts an LLM classifier result to a RouteDecision.
-// High confidence (≥0.8) code change → RouteHarness.
-// Medium confidence (≥0.5) code change → RouteSuggest.
-// Low confidence or not code change → RouteNormal.
+// Only complex code changes go to harness. Simple changes go to main agent.
+// High confidence (≥0.8) complex code change → RouteHarness.
+// Medium confidence (≥0.5) complex code change → RouteSuggest.
+// Simple code change or low confidence → RouteNormal.
 func RouteFromLLMResult(result *LLMClassifierResult, mode string) RouteDecision {
 	if result == nil || !result.IsCodeChange {
 		return RouteNormal
 	}
 
+	// Simple changes don't need harness isolation
+	if result.Complexity == "simple" {
+		return RouteNormal
+	}
+
 	switch mode {
 	case "strict":
-		// Strict mode: always route to harness for code changes
+		// Strict mode: always route to harness for complex code changes
 		if result.Confidence >= 0.5 {
 			return RouteHarness
 		}
