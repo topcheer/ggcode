@@ -555,6 +555,31 @@ func (m *Model) handleHarnessReviewApprove(taskID string) tea.Cmd {
 	}
 }
 
+// handleHarnessPromoteApply creates a tea.Cmd that promotes a harness task.
+// Used by the one-key promote CTA after review approval.
+func (m *Model) handleHarnessPromoteApply(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		workDir, _ := os.Getwd()
+		project, _, err := loadHarnessForTUI(workDir)
+		if err != nil {
+			return harnessPromoteResultMsg{Err: fmt.Errorf("load harness: %w", err), TaskID: taskID}
+		}
+		tasks, err := harness.PromoteApprovedTasks(context.Background(), project, "promoted via auto-promote CTA")
+		if err != nil {
+			return harnessPromoteResultMsg{Err: err, TaskID: taskID}
+		}
+		// Find our task in the results
+		var promoted *harness.Task
+		for _, t := range tasks {
+			if t.ID == taskID {
+				promoted = t
+				break
+			}
+		}
+		return harnessPromoteResultMsg{Task: promoted, TaskID: taskID}
+	}
+}
+
 // applyStrictWriteGuard adds Deny rules for write tools to the permission
 // policy when strict mode is active. This prevents the main agent from
 // directly modifying project files.

@@ -75,6 +75,17 @@ func bundledSkills() []*Command {
 			UserInvocable: false,
 			Enabled:       true,
 		},
+		{
+			Name:          "documentation-update",
+			DisplayName:   "Update documentation",
+			Description:   "Conservatively review user-facing code changes and keep documentation, README content, and release notes synchronized without cluttering docs.",
+			WhenToUse:     "Use after changes to features, CLI commands or flags, config options, APIs, user-visible behavior, breaking changes, or release-worthy functionality that may need documentation updates.",
+			Template:      "Review documentation impact conservatively. Inspect the current working tree, current branch diff against the default/base branch, or the user-specified commit range. Treat changes as documentation-worthy only when they affect users: new features, CLI commands or flags, config options, APIs, breaking changes, user-visible behavior, setup/installation, or release notes. Skip internal refactors, tests-only changes, minor bug fixes without user impact, typo-only code changes, and performance work with no user-visible effect. Locate existing docs such as README files, `docs/`, `docs/releases/`, platform config for Mintlify/Docusaurus/GitBook/Fumadocs, or linked docs repositories. Read nearby docs first and match their tone, headings, terminology, code block style, frontmatter, and platform conventions. Prefer minimal, strictly additive edits that preserve accurate existing content. For ggcode, consider whether `docs/releases/<tag>.md`, `docs/releases/README.md`, `GGCODE.md`, installer wrapper docs, or command/config docs need updates. If no significant documentation impact exists, say so clearly. Do not create branches, commits, pushes, or PRs unless the user explicitly asks for release or repository automation.",
+			Source:        SourceBundled,
+			LoadedFrom:    LoadedFromBundled,
+			UserInvocable: false,
+			Enabled:       true,
+		},
 		// --- Harness bundled skills ---
 		{
 			Name:          "harness-run",

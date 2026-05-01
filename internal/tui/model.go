@@ -169,6 +169,11 @@ type Model struct {
 	// Enter approves, Esc skips. Similar UX to pendingAutoRun suggest mode.
 	pendingHarnessReview *harness.Task
 
+	// pendingHarnessPromote holds an approved task awaiting promotion.
+	// Set after harnessReviewResultMsg when task is ReviewApproved.
+	// Enter promotes (applies changes), Esc skips.
+	pendingHarnessPromote *harness.Task
+
 	// Status bar state
 	statusActivity  string // "Thinking...", "Writing...", "Executing: tool_name"
 	statusToolName  string // current executing tool name

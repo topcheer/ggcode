@@ -44,6 +44,13 @@ type harnessReviewResultMsg struct {
 	Err    error
 }
 
+// harnessPromoteResultMsg carries the result of a one-key promote action.
+type harnessPromoteResultMsg struct {
+	Task   *harness.Task
+	TaskID string
+	Err    error
+}
+
 type harnessRunProgressMsg struct {
 	TaskID    string
 	Activity  string
