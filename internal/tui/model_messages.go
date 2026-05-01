@@ -195,3 +195,9 @@ type webchatUserMsg struct {
 type webuiReadyMsg struct {
 	Addr string
 }
+
+// knightStartupHintMsg is sent once at startup to show a Knight-related hint
+// (e.g. another instance holds the lock) in the chat area.
+type knightStartupHintMsg struct {
+	Hint string
+}

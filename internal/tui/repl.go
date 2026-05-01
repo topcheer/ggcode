@@ -48,6 +48,7 @@ type REPL struct {
 	imManager           *im.Manager
 	projectMemoryLoader func() (string, []string, error)
 	webuiAddr           string // webui listen address, displayed after TUI ready
+	knightStartupHint   string // one-time hint shown at startup (e.g. lock conflict)
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -116,6 +117,11 @@ func (r *REPL) SetAutoMemory(am *memory.AutoMemory) {
 
 func (r *REPL) SetKnight(k *knight.Knight) {
 	r.model.SetKnight(k)
+}
+
+// SetKnightStartupHint sets a one-time hint to show in the chat area at startup.
+func (r *REPL) SetKnightStartupHint(hint string) {
+	r.knightStartupHint = hint
 }
 
 // SetWebUIBridge sets the webui event broadcaster for forwarding agent
@@ -557,6 +563,9 @@ func (r *REPL) Run() error {
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
 		if r.webuiAddr != "" {
 			r.program.Send(webuiReadyMsg{Addr: r.webuiAddr})
+		}
+		if r.knightStartupHint != "" {
+			r.program.Send(knightStartupHintMsg{Hint: r.knightStartupHint})
 		}
 		if r.projectMemoryLoader != nil {
 			loader := r.projectMemoryLoader

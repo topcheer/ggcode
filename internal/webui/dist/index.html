@@ -547,6 +547,8 @@ async function loadAll() {
     // Initialize scope UI from config._scope
     initScopeUI(config._scope);
     try { mcpServers = await api('/api/mcp'); } catch(e) { mcpServers = []; }
+    try { a2aData = await api('/api/a2a'); } catch(e) { a2aData = null; }
+    try { impersonateData = await api('/api/impersonate'); } catch(e) { impersonateData = null; }
     renderOverview();
     renderModel();
     renderVendors();
@@ -554,9 +556,7 @@ async function loadAll() {
     await loadIMRuntime();
     renderIM();
     renderGeneral();
-    try { a2aData = await api('/api/a2a'); } catch(e) { a2aData = null; }
     renderA2A();
-    try { impersonateData = await api('/api/impersonate'); } catch(e) { impersonateData = null; }
     renderImpersonate();
     renderPrompt();
     try { sessionsData = await api('/api/sessions'); } catch(e) { sessionsData = null; }

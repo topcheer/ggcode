@@ -44,6 +44,7 @@ type Knight struct {
 	factory  AgentFactory
 	homeDir  string
 	projDir  string
+	lock     *instanceLock // cross-process lock for exclusive Knight access
 
 	mu       sync.Mutex
 	running  bool
@@ -95,6 +96,11 @@ func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) 
 	}
 }
 
+// ErrLockConflict is returned by Start when another ggcode instance in the same
+// project directory already holds the Knight lock. Callers can check this to
+// show a user-facing hint without treating it as a real error.
+var ErrLockConflict = fmt.Errorf("knight: another instance already running in this workspace")
+
 // Start begins the Knight background loop.
 func (k *Knight) Start(ctx context.Context) error {
 	if !k.cfg.Enabled {
@@ -102,13 +108,28 @@ func (k *Knight) Start(ctx context.Context) error {
 		return nil
 	}
 
+	// Acquire cross-process lock — only one Knight per project directory.
+	lock := tryAcquireLock(k.projDir)
+	if lock == nil {
+		pid, _ := LockHeldBy(k.projDir)
+		debug.Log("knight", "%s", FormatLockMessage(pid))
+		return ErrLockConflict
+	}
+	k.lock = lock
+
 	if err := k.budget.EnsureDir(); err != nil {
+		k.lock.release()
+		k.lock = nil
 		return fmt.Errorf("knight: init budget dir: %w", err)
 	}
 	if err := k.usage.EnsureDir(); err != nil {
+		k.lock.release()
+		k.lock = nil
 		return fmt.Errorf("knight: init usage dir: %w", err)
 	}
 	if err := k.queue.EnsureDir(); err != nil {
+		k.lock.release()
+		k.lock = nil
 		return fmt.Errorf("knight: init candidate queue dir: %w", err)
 	}
 
@@ -119,6 +140,8 @@ func (k *Knight) Start(ctx context.Context) error {
 		filepath.Join(k.projDir, ".ggcode", "skills-snapshots"),
 	} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
+			k.lock.release()
+			k.lock = nil
 			return fmt.Errorf("knight: create dir %s: %w", dir, err)
 		}
 	}
@@ -149,6 +172,10 @@ func (k *Knight) Stop() {
 		k.cancel = nil
 	}
 	k.running = false
+	if k.lock != nil {
+		k.lock.release()
+		k.lock = nil
+	}
 	debug.Log("knight", "stopped")
 }
 
@@ -312,6 +339,12 @@ func (k *Knight) Status() string {
 		return "disabled"
 	}
 	if !k.running {
+		if k.lock == nil {
+			pid, _ := LockHeldBy(k.projDir)
+			if pid > 0 {
+				return fmt.Sprintf("deferred — instance PID %d holds lock", pid)
+			}
+		}
 		return "stopped"
 	}
 	used := k.budget.Used()
