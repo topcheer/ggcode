@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress (v1.1.72). All phases implemented, promote CTA uses single-task PromoteTask.
+In Progress (v1.1.73). All phases implemented, promote CTA uses single-task PromoteTask.
 
 ## Goal
 

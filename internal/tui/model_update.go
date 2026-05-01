@@ -1036,6 +1036,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.chatListScrollToBottom()
+		if m.webuiBridge != nil {
+			m.webuiBridge.BroadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: fmt.Sprintf("Task %s review: done", msg.TaskID)})
+		}
 		return m, nil
 
 	case harnessPromoteResultMsg:
@@ -1049,6 +1052,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Task %s promote completed.", msg.TaskID))
 		}
 		m.chatListScrollToBottom()
+		if m.webuiBridge != nil {
+			m.webuiBridge.BroadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: fmt.Sprintf("Task %s promoted", msg.TaskID)})
+		}
 		return m, nil
 
 	case knightTaskResultMsg:
