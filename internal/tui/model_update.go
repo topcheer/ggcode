@@ -542,16 +542,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "esc":
+			// Handle pending auto-run suggestion: Esc dismisses (before autocomplete)
+			if m.pendingAutoRun != nil {
+				text := m.pendingAutoRunText
+				m.pendingAutoRun = nil
+				m.pendingAutoRunText = ""
+				m.chatWriteSystem(nextSystemID(), "Running normally (harness skipped).")
+				m.chatListScrollToBottom()
+				return m, m.submitText(text, true)
+			}
 			if m.autoCompleteActive {
-				// Handle pending auto-run suggestion: Esc dismisses
-				if m.pendingAutoRun != nil {
-					text := m.pendingAutoRunText
-					m.pendingAutoRun = nil
-					m.pendingAutoRunText = ""
-					m.chatWriteSystem(nextSystemID(), "→ Running normally (harness skipped).")
-					m.chatListScrollToBottom()
-					return m, m.submitText(text, true)
-				}
 				m.autoCompleteActive = false
 				m.autoCompleteItems = nil
 				return m, nil
@@ -562,20 +562,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "enter":
+			// Handle pending auto-run suggestion: Enter confirms harness run (before autocomplete)
+			if m.pendingAutoRun != nil {
+				result := m.pendingAutoRun
+				text := m.pendingAutoRunText
+				m.pendingAutoRun = nil
+				m.pendingAutoRunText = ""
+				m.chatWriteSystem(nextSystemID(), "Running in harness...")
+				m.chatListScrollToBottom()
+				return m, m.handleAutoRun(text, result)
+			}
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
-				// Handle pending auto-run suggestion: Enter confirms harness run
-				if m.pendingAutoRun != nil && m.input.Value() == "" {
-					result := m.pendingAutoRun
-					text := m.pendingAutoRunText
-					m.pendingAutoRun = nil
-					m.pendingAutoRunText = ""
-					m.chatWriteSystem(nextSystemID(), "→ Running in harness...")
-					m.chatListScrollToBottom()
-					return m, m.handleAutoRun(text, result)
-				}
 				return m, m.applyAutoComplete()
 			}
 			m.resetExitConfirm()
+			// Clear stale auto-run suggestion when user submits new text
+			if m.pendingAutoRun != nil {
+				m.pendingAutoRun = nil
+				m.pendingAutoRunText = ""
+			}
 			text := strings.TrimSpace(m.input.Value())
 			m.input.Reset()
 			if text == "" {
@@ -949,9 +954,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if streamedHarnessOutput {
 			rendered = trimHarnessRunOutputSection(rendered)
 		}
-		// Append CTA (next action) if available
-		if msg.CTA != "" && msg.CTAMessage != "" {
-			rendered += fmt.Sprintf("\nNext: %s", msg.CTAMessage)
+		// Append CTA (next action) — generate from summary if not provided
+		ctaMsg := msg.CTAMessage
+		if ctaMsg == "" && msg.Summary != nil {
+			_, ctaMsg = harness.GenerateCTA(msg.Summary, msg.Err)
+		}
+		if ctaMsg != "" {
+			rendered += fmt.Sprintf("\nNext: %s", ctaMsg)
 		}
 		m.renderStreamBuffer(true)
 		m.chatWriteSystem(nextSystemID(), rendered)

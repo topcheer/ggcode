@@ -31,6 +31,9 @@ func TestApplyStrictWriteGuard_DeniesWriteTools(t *testing.T) {
 	if policy.GetDecision("multi_edit_file") != permission.Deny {
 		t.Error("multi_edit_file should be denied after guard")
 	}
+	if policy.GetDecision("run_command") != permission.Deny {
+		t.Error("run_command should be denied after guard")
+	}
 }
 
 func TestApplyStrictWriteGuard_NilPolicy_NoPanic(t *testing.T) {
