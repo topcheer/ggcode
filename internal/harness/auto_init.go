@@ -17,6 +17,33 @@ type AutoInitResult struct {
 	CreatedPaths []string
 }
 
+// MinimalAutoInitConfig returns a harness config suitable for auto-initialized
+// projects. Unlike DefaultConfig, it has no required files (no AGENTS.md),
+// no content rules, and no check commands. This ensures that an auto-init'd
+// project passes its own checks out of the box.
+func MinimalAutoInitConfig(projectName string) *Config {
+	return &Config{
+		Version: 1,
+		Project: ProjectConfig{
+			Name: projectName,
+			Goal: "Auto-initialized harness project",
+			Deliverables: []string{
+				"Working implementation",
+				"Runnable validation",
+			},
+		},
+		Checks: CheckConfig{
+			// No required files — auto-init does not create AGENTS.md.
+			// No content rules — no scaffold files to validate.
+			// No commands — the user hasn't configured any yet.
+		},
+		Run: RunConfig{
+			Mode:         "subagent",
+			WorktreeMode: "auto",
+		},
+	}
+}
+
 // AutoInit performs a minimal harness initialization suitable for automatic
 // routing. Unlike InitProject, it does NOT:
 //   - Create AGENTS.md or context AGENTS.md files
@@ -42,7 +69,7 @@ func AutoInit(projectDir string) (*AutoInitResult, error) {
 	project := projectFromRoot(root)
 	projectName := filepath.Base(root)
 
-	cfg := DefaultConfig(projectName, "")
+	cfg := MinimalAutoInitConfig(projectName)
 
 	// Create directories
 	dirs := []string{

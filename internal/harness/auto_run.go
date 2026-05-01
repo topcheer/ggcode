@@ -15,6 +15,11 @@ type AutoRunResult struct {
 	Project *Project
 	// AutoInitPerformed is true if a minimal harness was auto-initialized.
 	AutoInitPerformed bool
+	// StrictWriteGuard is true when the caller should block direct file
+	// writes (write_file, edit_file, multi_edit_file) to the main project.
+	// This is set when auto_run is "strict" and a harness project is available.
+	// The caller should add Deny rules for write tools to the permission policy.
+	StrictWriteGuard bool
 	// Message is a human-readable message explaining the decision.
 	// For RouteSuggest, this is the prompt to show the user.
 	Message string
@@ -60,6 +65,16 @@ func ShouldAutoRun(cfg *config.Config, input string, ctx RouteContext) (*AutoRun
 		}
 	}
 
+	// In strict mode, enforce worktree isolation.
+	// If the project's config has worktree_mode != "required",
+	// override it for this run.
+	if mode == "strict" && project != nil {
+		loadedCfg, err := LoadConfig(project.ConfigPath)
+		if err == nil && loadedCfg.Run.WorktreeMode != "required" {
+			loadedCfg.Run.WorktreeMode = "required"
+		}
+	}
+
 	// Run the deterministic router.
 	decision := DecideRouteWithFeatures(input, mode, ExtractFeatures(input), ctx)
 
@@ -67,6 +82,7 @@ func ShouldAutoRun(cfg *config.Config, input string, ctx RouteContext) (*AutoRun
 		Decision:          decision,
 		Project:           project,
 		AutoInitPerformed: autoInitPerformed,
+		StrictWriteGuard:  mode == "strict" && project != nil,
 	}
 
 	// Generate appropriate messages.

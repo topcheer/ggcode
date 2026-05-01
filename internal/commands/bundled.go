@@ -84,7 +84,7 @@ func bundledSkills() []*Command {
 			Template:      "Run the requested task in harness mode. Use the harness system to create an isolated worktree, execute the coding task with a worker agent, run configured checks, and present the result for review. Steps: 1) Parse the task description from the user's request. 2) Create a harness task with a clear goal. 3) Use `ggcode harness run` or the harness API to start execution. 4) Monitor progress and report results. 5) If checks fail, report the specific failures. 6) If checks pass, inform the user that the result is ready for review.",
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
-			UserInvocable: true,
+			UserInvocable: false,
 			Enabled:       true,
 		},
 		{
@@ -95,7 +95,7 @@ func bundledSkills() []*Command {
 			Template:      "Review harness task results. Show the user what was changed, which checks passed/failed, and the evidence. Steps: 1) List completed harness tasks awaiting review. 2) For the selected task, show the diff summary, check results, and any evidence files. 3) Ask the user to approve or reject. 4) If approved, the task becomes promotable. If rejected, note the rejection reason.",
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
-			UserInvocable: true,
+			UserInvocable: false,
 			Enabled:       true,
 		},
 		{
@@ -106,7 +106,7 @@ func bundledSkills() []*Command {
 			Template:      "Promote approved harness task changes. Steps: 1) List promotable tasks (reviewed and approved). 2) For each task, show the changes that will be promoted. 3) Execute the promotion to merge worktree changes into the project root. 4) Report promotion success or any conflicts that need manual resolution.",
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
-			UserInvocable: true,
+			UserInvocable: false,
 			Enabled:       true,
 		},
 		{
@@ -117,7 +117,7 @@ func bundledSkills() []*Command {
 			Template:      "Diagnose harness issues systematically. Steps: 1) Run `harness doctor` to check configuration and environment health. 2) Check the specific task's logs and error output. 3) Verify harness.yaml configuration is valid. 4) Check worktree state and git status. 5) Identify the root cause and suggest a fix. Common issues: missing harness.yaml, git not initialized, worktree conflicts, check command failures.",
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
-			UserInvocable: true,
+			UserInvocable: false,
 			Enabled:       true,
 		},
 	}

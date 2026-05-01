@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -181,6 +182,18 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		}
 		defer f.Close()
 		w = f
+	}
+
+	// Auto-run routing: if harness.auto_run is enabled, check whether
+	// this prompt should be routed to harness instead of the normal agent.
+	if autoRunResult, err := checkPipeAutoRun(cfg, prompt, workingDir); err == nil && autoRunResult != nil {
+		switch autoRunResult.Decision {
+		case harness.RouteHarness:
+			return runPipeHarness(autoRunResult, prompt)
+		case harness.RouteSuggest:
+			fmt.Fprintf(os.Stderr, "harness auto-run: %s\n", autoRunResult.Message)
+			// Fall through to normal agent
+		}
 	}
 
 	// Run agent non-interactively
@@ -410,4 +423,32 @@ func truncatePipeProgress(text string, maxLen int) string {
 		return text[:maxLen]
 	}
 	return text[:maxLen-3] + "..."
+}
+
+func checkPipeAutoRun(cfg *config.Config, prompt string, workingDir string) (*harness.AutoRunResult, error) {
+	mode := cfg.Harness.AutoRunMode()
+	if mode == "off" {
+		return nil, nil
+	}
+	ctx := harness.RouteContext{
+		Input:      prompt,
+		WorkingDir: workingDir,
+	}
+	return harness.ShouldAutoRun(cfg, prompt, ctx)
+}
+
+func runPipeHarness(result *harness.AutoRunResult, prompt string) int {
+	if result.Project == nil {
+		fmt.Fprintln(os.Stderr, "harness auto-run: no project available. Run ggcode harness init first.")
+		return 1
+	}
+	// Delegate to harness run via CLI invocation
+	displayPrompt := prompt
+	if len(prompt) > 60 {
+		displayPrompt = prompt[:57] + "..."
+	}
+	fmt.Fprintf(os.Stderr, "🔀 Auto-routing to harness: %s\n", displayPrompt)
+	fmt.Fprintln(os.Stderr, "Use 'ggcode harness list' to check task status.")
+	// TODO: Create and wait for harness task inline (Phase 4 of auto-run design)
+	return 0
 }

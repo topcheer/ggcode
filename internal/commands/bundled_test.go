@@ -16,7 +16,7 @@ func TestBundledSkillsIncludeOperationalSkills(t *testing.T) {
 		if skill.LoadedFrom != LoadedFromBundled {
 			t.Fatalf("skill %q loaded_from = %q, want %q", skill.Name, skill.LoadedFrom, LoadedFromBundled)
 		}
-		if skill.UserInvocable && !strings.HasPrefix(skill.Name, "harness-") {
+		if skill.UserInvocable {
 			t.Fatalf("skill %q should not be user slash invocable", skill.Name)
 		}
 	}
