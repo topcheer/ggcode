@@ -142,8 +142,17 @@ func (s *JSONLStore) loadIndex() ([]indexEntry, error) {
 		if jsonlCount > len(idx) {
 			// There are JSONL files not in the index — rebuild.
 			// This is safe because loadIndex is always called under s.mu.
-			repaired, _ := s.repairIndex(idx)
-			_ = repaired
+			// repairIndex writes the merged index to disk; reload it
+			// so callers get the repaired data instead of stale idx.
+			if _, err := s.repairIndex(idx); err == nil {
+				data2, err2 := os.ReadFile(s.indexPath())
+				if err2 == nil {
+					var repaired []indexEntry
+					if json.Unmarshal(data2, &repaired) == nil {
+						idx = repaired
+					}
+				}
+			}
 		}
 	}
 	return idx, nil
