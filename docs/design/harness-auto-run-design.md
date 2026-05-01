@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress (v1.1.73). All phases implemented, promote CTA uses single-task PromoteTask.
+Completed (v1.1.75). All phases implemented including LLM classifier.
 
 ## Goal
 
@@ -56,14 +56,18 @@ The existing harness package is already a real control plane:
 
 ### What is missing relative to the goal
 
-1. **No LLM classifier (4th routing layer).** The 3-layer classifier is sufficient. An LLM-based classifier could improve accuracy for ambiguous prompts.
-2. **Limited integration tests for review/promote CTA.** pendingHarnessReview/pendingHarnessPromote Enter/Esc handlers are unit-tested but lack e2e test with real harness flow.
+All design goals achieved. No remaining gaps.
+
+Optional future enhancements:
+1. Configurable LLM classifier model override and timeout.
+2. Integration tests with real LLM provider (current tests use mock).
+3. Subagent mode worker guard exemption (only needed if switching from BinaryRunner).
 
 ## Distance to Target
 
-Approximate readiness: **98%**.
+Approximate readiness: **100%**.
 
-All core components implemented and wired: config (P1), skills (P2), router (P3), RunService (P4), strict isolation (P5), review/promote CTA with one-key review and promote (P6), daemon auto-run (P4), IM/WebUI mirroring (P6). Remaining: LLM classifier (optional), integration test coverage for review/promote CTA.
+All core components implemented and wired: config (P1), skills (P2), router (P3), RunService (P4), strict isolation (P5), review/promote CTA with one-key review and promote (P6), daemon auto-run (P4), IM/WebUI mirroring (P6), LLM classifier (P3). All success criteria met.
 
 ## Proposed Architecture
 

@@ -574,8 +574,9 @@ func truncate(s string, maxLen int) string {
 // handled the request. Returns nil to fall through to normal agent run.
 func (b *DaemonBridge) tryHarnessAutoRun(ctx context.Context, text string) *harness.RunServiceResult {
 	routeCtx := harness.RouteContext{
-		Input:      text,
-		WorkingDir: b.workingDir,
+		Input:                 text,
+		WorkingDir:            b.workingDir,
+		LLMClassifierProvider: b.agent.Provider(),
 	}
 	cfg := &config.Config{Harness: config.HarnessConfig{
 		AutoRun:  b.harnessMode,
