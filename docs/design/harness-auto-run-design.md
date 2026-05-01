@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress (v1.1.71). All phases implemented, daemon and review CTA closed.
+In Progress (v1.1.72). All phases implemented, promote CTA uses single-task PromoteTask.
 
 ## Goal
 
