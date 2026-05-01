@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress (v1.1.68). Phases 1–6 implemented, closing remaining gaps.
+In Progress (v1.1.69). All 6 phases implemented, gaps closing.
 
 ## Goal
 
@@ -56,23 +56,17 @@ The existing harness package is already a real control plane:
 
 ### What is missing relative to the goal
 
-The gap is mostly in routing, policy, and model guidance:
-
-1. **No automatic harness routing.** Normal user prompts still go through the standard TUI/pipe/daemon agent path. Harness only runs when the user explicitly types `ggcode harness run ...` or `/harness run ...`.
-2. **No built-in harness skills.** `internal/commands/bundled.go` currently registers bundled skills like `verify`, `debug`, `simplify`, `update-config`, and `browser-automation`, but no `harness-run`, `harness-review`, or `harness-promote` skill. This means the model is not strongly instructed to enter harness mode.
-3. **No harness-aware write guard.** Built-in file and shell tools remain available to the primary agent. A harness-enabled repo does not currently prevent direct `write_file`, `edit_file`, `apply_patch`, `git_commit`, or mutating shell commands in the project root.
-4. **Worktree isolation is best effort.** `worktree_mode: "auto"` falls back to the project root if worktree creation fails. For the target safety model, auto-run tasks should default to `required` or an equivalent strict mode unless the user deliberately opts out.
-5. **No unified "harness run state" in the primary session.** TUI has harness-run progress rendering, but the core runtime does not have a reusable execution router that pipe, daemon, IM, WebUI, and TUI all share.
-6. **No automatic initialization/upgrade path.** A project without `.ggcode/harness.yaml` only gets manual init prompts. There is no repo-level setting such as "initialize harness on first engineering request".
-7. **Review/promotion is manual only.** Completed tasks enter review, but there is no first-class notification, summary, or command/skill loop that makes the next review/promote action obvious to the primary user or remote surfaces.
+1. **Daemon/IM/WebUI auto-run integration.** Daemon only logs suggestions; IM and WebUI do not route through the harness router. Design intent: daemon/agent uses skill instructions to decide, not enforced routing. May add explicit daemon routing later.
+2. **CTA is text-only, not interactive.** Post-run CTA shows slash commands but no one-click review/promote buttons, pending-task notifications, or auto-opening review panel.
+3. **No LLM classifier (4th routing layer).** The 3-layer classifier (exclusion → structural features → conservative default) is sufficient for now. An LLM-based classifier could improve accuracy for ambiguous prompts.
+4. **Worker guard exemption not needed yet.** Auto-run uses BinaryRunner (subprocess), so strict write guard does not affect the worker. If subagent mode is used in the future, guard exemption logic will be needed.
+5. **Limited integration tests.** Unit tests cover routing, CTA, strict guard, and config propagation. Missing: TUI suggest Enter confirmation e2e, pipe with stdin auto-run, strict RouteNone write guard e2e.
 
 ## Distance to Target
 
-Approximate readiness: **55-60%**.
+Approximate readiness: **90%**.
 
-The hard persistence and task lifecycle pieces already exist: task state, worktree creation, worker execution, checks, evidence capture, review, promotion, release, monitoring, and TUI display. The missing work is not another whole harness engine; it is making harness the default execution path and enforcing the boundary so the primary agent cannot accidentally bypass it.
-
-The most important remaining milestone is: **introduce a harness execution router that can intercept eligible engineering prompts before the normal agent loop starts.**
+All core components implemented: config (P1), skills (P2), router (P3), RunService (P4), strict isolation (P5), review/promote CTA (P6). Remaining: integration testing, daemon/IM routing, and CTA UX refinement.
 
 ## Proposed Architecture
 
