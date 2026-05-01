@@ -59,9 +59,10 @@ The existing harness package is already a real control plane:
 All design goals achieved. No remaining gaps.
 
 Optional future enhancements:
-1. Configurable LLM classifier model override and timeout.
-2. Integration tests with real LLM provider (current tests use mock).
-3. Subagent mode worker guard exemption (only needed if switching from BinaryRunner).
+1. **LLM classifier model override.** Currently uses the user's main model (Sonnet/Opus) for classification. Should use a cheap model (Haiku/Flash) to reduce cost. Requires provider.Chat() to accept a model override parameter.
+2. **LLM classifier async pre-warming.** Currently blocks for up to 3s. Could start classification in parallel with agent initialization to hide latency.
+3. Integration tests with real LLM provider (current tests use mock; smoke tests available via `GGCODE_TEST_PROVIDER` env var).
+4. Subagent mode worker guard exemption (only needed if switching from BinaryRunner).
 
 ## Distance to Target
 

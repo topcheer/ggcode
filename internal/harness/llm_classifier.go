@@ -54,8 +54,8 @@ func ClassifyWithLLM(ctx context.Context, prov provider.Provider, input string) 
 
 	userPrompt := fmt.Sprintf("User input: %q", input)
 
-	// 3-second timeout
-	classifyCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	// 5-second timeout
+	classifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	resp, err := prov.Chat(classifyCtx, []provider.Message{
