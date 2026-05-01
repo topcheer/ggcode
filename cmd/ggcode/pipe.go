@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -88,11 +89,15 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Load plugins
 	pluginMgr := plugin.NewManager()
 	pluginMgr.LoadAll(cfg.Plugins)
-	for _, warning := range mcpMgr.ConnectAll(context.Background()) {
+	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer mcpCancel()
+	for _, warning := range mcpMgr.ConnectAll(mcpCtx) {
 		fmt.Fprintln(os.Stderr, warning)
 	}
 	defer mcpMgr.Close()
-	pluginMgr.RegisterTools(registry)
+	if err := pluginMgr.RegisterTools(registry); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: plugin registration failed: %v\n", err)
+	}
 
 	// Load project memory documents.
 	projectMem, projectMemFiles, _ := memory.LoadProjectMemory(workingDir)
