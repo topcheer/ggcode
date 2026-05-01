@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 func (m *Model) updateAutoComplete() {
@@ -359,6 +361,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 	if autoRunResult, err := m.checkAutoRun(text); err == nil && autoRunResult != nil {
 		switch autoRunResult.Decision {
 		case harness.RouteSuggest:
+			m.pendingAutoRun = autoRunResult
+			m.pendingAutoRunText = text
 			m.chatWriteSystem(nextChatID(), autoRunResult.Message)
 			m.chatListScrollToBottom()
 			return nil
@@ -437,8 +441,8 @@ func (m *Model) checkAutoRun(text string) (*harness.AutoRunResult, error) {
 	return harness.ShouldAutoRun(m.config, text, ctx)
 }
 
-// handleAutoRun processes a harness auto-run decision by delegating to the
-// harness run command path. This creates a harness task and starts execution.
+// handleAutoRun processes a harness auto-run decision by directly executing
+// a harness task. This skips the context prompt and goes straight to run.
 func (m *Model) handleAutoRun(text string, result *harness.AutoRunResult) tea.Cmd {
 	if result.Project == nil {
 		m.chatWriteSystem(nextChatID(), "harness auto-run: no project available. Run /harness init first.")
@@ -451,23 +455,91 @@ func (m *Model) handleAutoRun(text string, result *harness.AutoRunResult) tea.Cm
 		m.applyStrictWriteGuard()
 	}
 
-	// Delegate to /harness run
-	harnessText := "/harness run " + text
+	// Use the config from auto-run result (may have strict overrides)
+	// Fall back to loading from disk if not provided
+	project := *result.Project
+	cfg := result.Config
+	if cfg == nil {
+		loadedCfg, err := harness.LoadConfig(project.ConfigPath)
+		if err != nil {
+			m.chatWriteSystem(nextChatID(), fmt.Sprintf("harness auto-run: failed to load config: %v", err))
+			m.chatListScrollToBottom()
+			return nil
+		}
+		cfg = loadedCfg
+	}
+
+	// Show auto-run message
 	m.chatWriteUser(nextChatID(), text)
-	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🔀 Auto-routing to harness: %s", text))
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🔀 Harness auto-run: %s", text))
 	m.chatListScrollToBottom()
-	return m.handleCommand(harnessText)
+
+	// Skip context prompt — go directly to harness run execution
+	// with an empty context list (auto-init'd projects have no contexts)
+	return m.executeAutoHarnessRun(text, project, cfg)
+}
+
+// executeAutoHarnessRun runs a harness task directly, skipping the context
+// selection prompt that manual /harness run uses.
+func (m *Model) executeAutoHarnessRun(goal string, project harness.Project, cfg *harness.Config) tea.Cmd {
+	m.harnessRunProject = &project
+	m.harnessRunGoal = strings.TrimSpace(goal)
+	m.harnessRunTaskID = ""
+	m.harnessRunLogPath = ""
+	m.harnessRunLogOffset = 0
+	m.harnessRunLastDetail = ""
+	m.harnessRunRemainder = ""
+	m.harnessRunLiveTail = ""
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.loading = true
+	m.runCanceled = false
+	m.runFailed = false
+	m.statusActivity = m.t("command.harness_status_starting_run")
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
+	m.streamBuffer = &bytes.Buffer{}
+	m.streamPrefixWritten = false
+
+	opts := harness.RunTaskOptions{
+		ContextName: "",
+		ContextPath: "",
+	}
+
+	if m.program == nil {
+		return func() tea.Msg {
+			summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
+			return harnessRunResultMsg{Summary: summary, Err: err}
+		}
+	}
+
+	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
+	safego.Go("tui.commands.autoHarnessRun", func() {
+		summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
+		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
+	})
+	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
 }
 
 // applyStrictWriteGuard adds Deny rules for write tools to the permission
 // policy when strict mode is active. This prevents the main agent from
 // directly modifying project files.
 func (m *Model) applyStrictWriteGuard() {
-	if m.policy == nil {
+	cp, ok := m.policy.(*permission.ConfigPolicy)
+	if !ok {
 		return
 	}
-	// This is a signal to the agent — actual enforcement happens at the
-	// permission policy level. The agent's context prompt will include
-	// instructions to use harness for all code changes.
-	debug.Log("auto-run", "strict write guard enabled")
+	// Deny all file-writing tools for the main agent in strict mode.
+	// The harness worker agent runs in a worktree and is not affected.
+	writeTools := []string{
+		"write_file",
+		"edit_file",
+		"multi_edit_file",
+	}
+	for _, tool := range writeTools {
+		cp.SetOverride(tool, permission.Deny)
+	}
+	debug.Log("auto-run", "strict write guard enabled: denied %v", writeTools)
 }

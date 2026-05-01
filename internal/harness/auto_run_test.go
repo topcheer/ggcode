@@ -136,7 +136,7 @@ func TestShouldAutoRun_NoAutoInit(t *testing.T) {
 	}
 }
 
-func TestShouldAutoRun_StrictModeEnforcesWorktree(t *testing.T) {
+func TestShouldAutoRun_StrictModeConfigOverride(t *testing.T) {
 	dir := t.TempDir()
 	createMinimalHarnessProject(t, dir)
 
@@ -152,8 +152,11 @@ func TestShouldAutoRun_StrictModeEnforcesWorktree(t *testing.T) {
 	if result.Decision != RouteHarness {
 		t.Errorf("strict mode: decision = %v, want RouteHarness", result.Decision)
 	}
-	if !result.StrictWriteGuard {
-		t.Error("strict mode should set StrictWriteGuard = true")
+	if result.Config == nil {
+		t.Fatal("strict mode should return overridden config")
+	}
+	if result.Config.Run.WorktreeMode != "required" {
+		t.Errorf("strict mode config worktree_mode = %q, want 'required'", result.Config.Run.WorktreeMode)
 	}
 }
 

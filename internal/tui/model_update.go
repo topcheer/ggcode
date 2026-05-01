@@ -543,6 +543,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			if m.autoCompleteActive {
+				// Handle pending auto-run suggestion: Esc dismisses
+				if m.pendingAutoRun != nil {
+					text := m.pendingAutoRunText
+					m.pendingAutoRun = nil
+					m.pendingAutoRunText = ""
+					m.chatWriteSystem(nextSystemID(), "→ Running normally (harness skipped).")
+					m.chatListScrollToBottom()
+					return m, m.submitText(text, true)
+				}
 				m.autoCompleteActive = false
 				m.autoCompleteItems = nil
 				return m, nil
@@ -554,6 +563,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
+				// Handle pending auto-run suggestion: Enter confirms harness run
+				if m.pendingAutoRun != nil && m.input.Value() == "" {
+					result := m.pendingAutoRun
+					text := m.pendingAutoRunText
+					m.pendingAutoRun = nil
+					m.pendingAutoRunText = ""
+					m.chatWriteSystem(nextSystemID(), "→ Running in harness...")
+					m.chatListScrollToBottom()
+					return m, m.handleAutoRun(text, result)
+				}
 				return m, m.applyAutoComplete()
 			}
 			m.resetExitConfirm()
