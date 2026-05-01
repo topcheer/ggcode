@@ -557,8 +557,16 @@ func (b *DaemonBridge) checkAutoRunSuggestion(text string) {
 		return
 	}
 	if result.Decision == harness.RouteHarness || result.Decision == harness.RouteSuggest {
-		debug.Log("daemon", "auto-run suggestion: %s → %s (project=%v)", text, result.Decision, result.Project != nil)
+		debug.Log("daemon", "auto-run: %s → %v (project=%v)", truncate(text, 40), result.Decision, result.Project != nil)
 	}
+}
+
+// truncate shortens s to maxLen for logging.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // appendUserMessage adds the user message to the session store.

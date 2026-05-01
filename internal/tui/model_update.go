@@ -949,12 +949,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if streamedHarnessOutput {
 			rendered = trimHarnessRunOutputSection(rendered)
 		}
-		m.renderStreamBuffer(true)
-		if msg.Summary != nil && msg.Summary.Task != nil && msg.Summary.Task.Status == harness.TaskFailed {
-			m.chatWriteSystem(nextSystemID(), rendered)
-		} else {
-			m.chatWriteSystem(nextSystemID(), rendered)
+		// Append CTA (next action) if available
+		if msg.CTA != "" && msg.CTAMessage != "" {
+			rendered += fmt.Sprintf("\nNext: %s", msg.CTAMessage)
 		}
+		m.renderStreamBuffer(true)
+		m.chatWriteSystem(nextSystemID(), rendered)
 		m.chatListScrollToBottom()
 		if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
 			return m, m.submitText(m.consumePendingSubmission(), false)

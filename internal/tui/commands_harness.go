@@ -524,6 +524,23 @@ func (m *Model) handleHarnessCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		return m.runTrackedHarnessRerun(strings.Join(parts, " "), project, cfg, task)
+	case "auto":
+		// /harness auto [off|suggest|on|strict]
+		if len(parts) < 3 {
+			m.chatWriteSystem(nextSystemID(), "Usage: /harness auto off|suggest|on|strict")
+			return nil
+		}
+		mode := strings.ToLower(strings.TrimSpace(parts[2]))
+		switch mode {
+		case "off", "suggest", "on", "strict":
+			if m.config != nil {
+				m.config.Harness.AutoRun = mode
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Harness auto-run mode set to: %s", mode))
+		default:
+			m.chatWriteSystem(nextSystemID(), "Unknown mode. Use: off, suggest, on, strict")
+		}
+		return nil
 	default:
 		m.chatWriteSystem(nextSystemID(), m.t("command.harness_usage"))
 		return nil

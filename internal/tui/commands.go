@@ -510,15 +510,29 @@ func (m *Model) executeAutoHarnessRun(goal string, project harness.Project, cfg 
 
 	if m.program == nil {
 		return func() tea.Msg {
-			summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
-			return harnessRunResultMsg{Summary: summary, Err: err}
+			svc := harness.NewRunService()
+			result := svc.Run(ctx, harness.RunServiceInput{
+				Project: project,
+				Config:  cfg,
+				Goal:    goal,
+				Runner:  harness.BinaryRunner{},
+				Options: opts,
+			})
+			return harnessRunResultMsg{Summary: result.Summary, Err: result.Error, CTA: result.CTA, CTAMessage: result.CTAMessage}
 		}
 	}
 
 	startSpinner := m.spinner.Start(m.t("command.harness_spinner_running"))
 	safego.Go("tui.commands.autoHarnessRun", func() {
-		summary, err := executeHarnessRun(ctx, project, cfg, goal, opts)
-		m.program.Send(harnessRunResultMsg{Summary: summary, Err: err})
+		svc := harness.NewRunService()
+		result := svc.Run(ctx, harness.RunServiceInput{
+			Project: project,
+			Config:  cfg,
+			Goal:    goal,
+			Runner:  harness.BinaryRunner{},
+			Options: opts,
+		})
+		m.program.Send(harnessRunResultMsg{Summary: result.Summary, Err: result.Error, CTA: result.CTA, CTAMessage: result.CTAMessage})
 	})
 	return tea.Batch(startSpinner, m.pollHarnessRunProgress())
 }

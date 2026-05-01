@@ -27,7 +27,7 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, noHarness bool, readOnlyAllowedDirs []string) int {
 	resolved, err := cfg.ResolveActiveEndpoint()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolving endpoint: %v\n", err)
@@ -184,15 +184,17 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		w = f
 	}
 
-	// Auto-run routing: if harness.auto_run is enabled, check whether
-	// this prompt should be routed to harness instead of the normal agent.
-	if autoRunResult, err := checkPipeAutoRun(cfg, prompt, workingDir); err == nil && autoRunResult != nil {
-		switch autoRunResult.Decision {
-		case harness.RouteHarness:
-			return runPipeHarness(autoRunResult, prompt)
-		case harness.RouteSuggest:
-			fmt.Fprintf(os.Stderr, "harness auto-run: %s\n", autoRunResult.Message)
-			// Fall through to normal agent
+	// Auto-run routing: if harness.auto_run is enabled and --no-harness is not set,
+	// check whether this prompt should be routed to harness instead of the normal agent.
+	if !noHarness {
+		if autoRunResult, err := checkPipeAutoRun(cfg, prompt, workingDir); err == nil && autoRunResult != nil {
+			switch autoRunResult.Decision {
+			case harness.RouteHarness:
+				return runPipeHarness(autoRunResult, prompt)
+			case harness.RouteSuggest:
+				fmt.Fprintf(os.Stderr, "harness auto-run: %s\n", autoRunResult.Message)
+				// Fall through to normal agent
+			}
 		}
 	}
 
@@ -464,22 +466,23 @@ func runPipeHarness(result *harness.AutoRunResult, prompt string) int {
 	defer cancel()
 
 	opts := harness.RunTaskOptions{}
-	summary, err := harness.RunTaskWithOptions(ctx, project, cfg, prompt, harness.BinaryRunner{}, opts)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "harness auto-run failed: %v\n", err)
-		if summary != nil && summary.Result != nil && summary.Result.Output != "" {
-			fmt.Fprint(os.Stdout, summary.Result.Output)
+	svc := harness.NewRunService()
+	runResult := svc.Run(ctx, harness.RunServiceInput{
+		Project: project,
+		Config:  cfg,
+		Goal:    prompt,
+		Runner:  harness.BinaryRunner{},
+		Options: opts,
+	})
+	if runResult.Error != nil {
+		fmt.Fprintf(os.Stderr, "harness auto-run failed: %v\n", runResult.Error)
+		if runResult.Summary != nil && runResult.Summary.Result != nil && runResult.Summary.Result.Output != "" {
+			fmt.Fprint(os.Stdout, runResult.Summary.Result.Output)
 		}
 		return 1
 	}
 
-	if summary != nil {
-		if summary.Result != nil && summary.Result.Output != "" {
-			fmt.Fprint(os.Stdout, summary.Result.Output)
-		}
-		if summary.Task != nil {
-			fmt.Fprintf(os.Stderr, "\n✅ Harness auto-run complete: task %s\n", summary.Task.ID)
-		}
-	}
+	// Output the result
+	fmt.Fprint(os.Stdout, harness.FormatRunServiceResult(runResult))
 	return 0
 }

@@ -50,6 +50,7 @@ func NewRootCmd() *cobra.Command {
 	var allowedDirs []string
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
+	var noHarnessFlag bool
 	var outputPath string
 	var helperManifest string
 
@@ -91,7 +92,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, noHarnessFlag, readOnlyAllowedDirs)
 				if code != 0 {
 					debug.Close()
 					os.Exit(code)
@@ -117,6 +118,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
+	cmd.Flags().BoolVar(&noHarnessFlag, "no-harness", false, "skip harness auto-run routing in pipe mode (force normal agent)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 
 	helperCmd := &cobra.Command{
