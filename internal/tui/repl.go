@@ -527,15 +527,33 @@ func (r *REPL) Run() error {
 		}
 		mu := r.model.sessionMutex()
 		mu.Lock()
-		defer mu.Unlock()
 		ses := r.model.Session()
 		if ses == nil {
+			mu.Unlock()
 			return
 		}
-		if err := r.store.AppendCheckpoint(ses, messages, tokenCount); err != nil {
-			debug.Log("repl", "checkpoint save failed: %v", err)
+		// Mutate Session object under sessionMutex.
+		ses.UpdatedAt = time.Now()
+		store := r.store
+		mu.Unlock()
+
+		// Persist to disk outside sessionMutex.
+		// AppendCheckpointToDisk only does JSONL write + index update
+		// (both protected by the store's own mu), no Session mutation.
+		if jsonlStore, ok := store.(*session.JSONLStore); ok {
+			if err := jsonlStore.AppendCheckpointToDisk(ses, messages, tokenCount); err != nil {
+				debug.Log("repl", "checkpoint save failed: %v", err)
+			} else {
+				debug.Log("repl", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+			}
 		} else {
-			debug.Log("repl", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+			mu.Lock()
+			if err := store.AppendCheckpoint(ses, messages, tokenCount); err != nil {
+				debug.Log("repl", "checkpoint save failed: %v", err)
+			} else {
+				debug.Log("repl", "checkpoint saved: %d messages, %d tokens", len(messages), tokenCount)
+			}
+			mu.Unlock()
 		}
 	})
 

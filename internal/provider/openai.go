@@ -255,6 +255,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			emitted := false
 			retry := false
 			normalEnd := false
+			cancelledCleanly := false
 
 			func() {
 				defer localStreamer.Close()
@@ -265,14 +266,21 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// some Azure deployments) terminate the SSE without ever
 					// emitting finish_reason; without this flush the agent
 					// silently drops the tool call and hangs in "thinking".
-					// See locks.md S7. Only flush on a clean EOF — never on
-					// retry (would double-execute) or hard error (broken
-					// conversation, can't trust the partial args).
-					if !normalEnd || retry {
+					// Flush on clean EOF or context cancellation (the latter
+					// may carry complete tool call data from a prior stream).
+					// Never flush on retry (would double-execute) or hard
+					// error (broken conversation, can't trust partial args).
+					shouldFlush := (normalEnd || cancelledCleanly) && !retry
+					if !shouldFlush {
 						return
 					}
 					for idx, tc := range toolCalls {
-						if tc.Name == "" && len(tc.Arguments) == 0 {
+						if tc.Name == "" || tc.ID == "" {
+							continue
+						}
+						// Validate arguments look like complete JSON
+						if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
+							debug.Log("openai", "skip flush incomplete tool_call id=%s name=%s (invalid JSON args)", tc.ID, tc.Name)
 							continue
 						}
 						debug.Log("openai", "flush residual tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
@@ -290,6 +298,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							debug.Log("openai", "Stream ended normally: %v", recvErr)
 							if errors.Is(recvErr, io.EOF) {
 								normalEnd = true
+							}
+							if recvErr == context.Canceled {
+								cancelledCleanly = true
 							}
 							return
 						}

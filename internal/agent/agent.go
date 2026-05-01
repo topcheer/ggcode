@@ -54,6 +54,8 @@ type Agent struct {
 	projectMemory  map[string]struct{}
 	supportsVision bool
 	precompact     *precompactState
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc // cancels on Close()
 	mu             sync.RWMutex
 }
 
@@ -75,12 +77,15 @@ type modeAwarePolicy interface {
 
 // NewAgent creates a new agent with optional permission policy.
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
+	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
 		provider:       p,
 		tools:          tools,
 		maxIter:        maxIter,
 		contextManager: ctxpkg.NewManager(128000),
 		projectMemory:  make(map[string]struct{}),
+		shutdownCtx:    ctx,
+		shutdownCancel: cancel,
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerTodoPathLocked()
@@ -128,6 +133,15 @@ func (a *Agent) PermissionPolicy() permission.PermissionPolicy {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.policy
+}
+
+// Close releases resources held by the agent, including cancelling any
+// in-flight pre-compact operations. Should be called on shutdown.
+func (a *Agent) Close() {
+	a.CancelPreCompact()
+	if a.shutdownCancel != nil {
+		a.shutdownCancel()
+	}
 }
 
 // SetContextManager replaces the default context manager.
