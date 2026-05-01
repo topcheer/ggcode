@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -614,7 +615,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			},
 		})
 		if err := knightAgent.Start(context.Background()); err != nil {
-			fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
+			if errors.Is(err, knight.ErrLockConflict) {
+				pid, _ := knight.LockHeldBy(workingDir)
+				fmt.Fprintf(os.Stderr, "🌙 %s\n", knight.FormatLockMessage(pid))
+			} else {
+				fmt.Fprintf(os.Stderr, "Knight startup warning: %v\n", err)
+			}
 		} else {
 			defer knightAgent.Stop()
 			fmt.Fprintf(os.Stderr, "🌙 Knight started (budget: %dM tokens/day)\n", cfg.Knight().DailyTokenBudget/1_000_000)

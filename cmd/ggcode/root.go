@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -521,9 +522,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
+	var knightConflictHint string
 	if cfg.Knight().Enabled {
 		if err := knightAgent.Start(context.Background()); err != nil {
-			debug.Log("root", "Knight startup warning: %v", err)
+			if errors.Is(err, knight.ErrLockConflict) {
+				pid, _ := knight.LockHeldBy(workingDir)
+				knightConflictHint = knight.FormatLockMessage(pid)
+			} else {
+				debug.Log("root", "Knight startup warning: %v", err)
+			}
 		} else {
 			defer knightAgent.Stop()
 		}
@@ -614,6 +621,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
 	repl.SetKnight(knightAgent)
+	if knightConflictHint != "" {
+		repl.SetKnightStartupHint(knightConflictHint)
+	}
 
 	// Register task, cron, plan mode, config, and send_message tools
 	taskMgr := task.NewManager()
@@ -669,6 +679,127 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			return imSnapshotToWebUI(imMgr.Snapshot())
 		})
 	}
+
+	// Wire Knight status for webui config page
+	webuiSrv.SetKnightStatusFn(func() webui.KnightStatus {
+		if knightAgent == nil {
+			return webui.KnightStatus{Enabled: false, Status: "not initialized"}
+		}
+		used, remaining, limit := knightAgent.BudgetStatus()
+		status := webui.KnightStatus{
+			Enabled: true,
+			Running: knightAgent.Running(),
+			Status:  knightAgent.Status(),
+			Budget: webui.KnightBudget{
+				Used:      used,
+				Remaining: remaining,
+				Limit:     limit,
+			},
+		}
+		if idx := knightAgent.Index(); idx != nil {
+			if active, err := idx.ActiveSkills(); err == nil {
+				for _, s := range active {
+					status.Active = append(status.Active, webui.KnightSkill{
+						Name:        s.Meta.Name,
+						Description: s.Meta.Description,
+						Scope:       s.Scope,
+						CreatedBy:   s.Meta.CreatedBy,
+						UsageCount:  s.Meta.UsageCount,
+						Frozen:      s.Meta.Frozen,
+						Platforms:   s.Meta.Platforms,
+					})
+				}
+			}
+			if staging, err := idx.StagingSkills(); err == nil {
+				for _, s := range staging {
+					status.Staging = append(status.Staging, webui.KnightSkill{
+						Name:        s.Meta.Name,
+						Description: s.Meta.Description,
+						Scope:       s.Scope,
+						Staging:     true,
+						CreatedBy:   s.Meta.CreatedBy,
+						UsageCount:  s.Meta.UsageCount,
+						Frozen:      s.Meta.Frozen,
+						Platforms:   s.Meta.Platforms,
+					})
+				}
+			}
+		}
+		if q := knightAgent.Queue(); q != nil {
+			if items, err := q.List(); err == nil {
+				for _, c := range items {
+					status.Queue = append(status.Queue, webui.KnightCandidate{
+						Name:           c.Name,
+						Description:    c.Description,
+						Category:       c.Category,
+						Score:          c.Score,
+						EvidenceCount:  c.EvidenceCount,
+						Reason:         c.Reason,
+						SourceSessions: c.SourceSessions,
+					})
+				}
+			}
+		}
+		return status
+	})
+	webuiSrv.SetKnightActionFn(func(action, skillName string, params map[string]interface{}) error {
+		if knightAgent == nil {
+			return fmt.Errorf("Knight not initialized")
+		}
+		switch action {
+		case "promote":
+			return knightAgent.PromoteStaging(skillName)
+		case "reject":
+			return knightAgent.RejectStaging(skillName)
+		case "freeze":
+			return knightAgent.SetSkillFrozen(skillName, true)
+		case "unfreeze":
+			return knightAgent.SetSkillFrozen(skillName, false)
+		case "rollback":
+			return knightAgent.RollbackSkill(skillName)
+		case "record_effectiveness":
+			score := 3
+			if v, ok := params["score"]; ok {
+				if f, ok := v.(float64); ok {
+					score = int(f)
+				}
+			}
+			knightAgent.RecordSkillEffectiveness(skillName, score)
+			return nil
+		case "analyze":
+			return knightAgent.PerformSkillAnalysis(context.Background())
+		case "validate":
+			_, err := knightAgent.PerformSkillValidation(context.Background())
+			return err
+		case "delete_queue":
+			if q := knightAgent.Queue(); q != nil {
+				return q.Remove(knight.SkillCandidate{Name: skillName})
+			}
+			return fmt.Errorf("candidate queue not available")
+		default:
+			return fmt.Errorf("unknown action: %s", action)
+		}
+	})
+	webuiSrv.SetKnightSkillContentFn(func(name string, staging bool) (string, error) {
+		if knightAgent == nil {
+			return "", fmt.Errorf("Knight not initialized")
+		}
+		var entry *knight.SkillEntry
+		var err error
+		if staging {
+			entry, err = knightAgent.FindStagingSkill(name)
+		} else {
+			entry, err = knightAgent.FindActiveSkill(name)
+		}
+		if err != nil || entry == nil {
+			return "", fmt.Errorf("skill %q not found", name)
+		}
+		data, err := os.ReadFile(entry.Path)
+		if err != nil {
+			return "", fmt.Errorf("read skill file: %w", err)
+		}
+		return string(data), nil
+	})
 
 	// Create TUI chat bridge: webchat messages → TUI event loop
 	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})

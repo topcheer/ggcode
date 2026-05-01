@@ -731,6 +731,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case knightStartupHintMsg:
+		if msg.Hint != "" {
+			m.chatWriteSystem(nextSystemID(), msg.Hint)
+			m.chatListScrollToBottom()
+		}
+		return m, nil
+
 	case shellCommandStreamMsg:
 		if msg.RunID != m.activeShellRunID || m.runCanceled || !m.loading {
 			return m, nil

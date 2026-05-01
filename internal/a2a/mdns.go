@@ -146,7 +146,7 @@ func (m *mdnsService) startHashicorp(name string, port int, txt []string) error 
 	}
 
 	iface := PreferredInterface()
-	cfg := &mdns.Config{Zone: service}
+	cfg := &mdns.Config{Zone: service, Logger: silentLogger}
 	if iface != nil {
 		cfg.Iface = iface
 	}
