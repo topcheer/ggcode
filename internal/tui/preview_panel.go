@@ -35,6 +35,17 @@ func buildPreviewPanelStateForPath(absPath string, targetLine int) *previewPanel
 	if err != nil || info.IsDir() {
 		return nil
 	}
+	// Skip large files to avoid blocking the UI thread
+	if info.Size() > 1<<20 {
+		state := &previewPanelState{
+			DisplayPath: displayPreviewPath("", absPath),
+			AbsPath:     absPath,
+			TargetLine:  targetLine,
+			Error:       fmt.Sprintf("file too large (%.1f MB)", float64(info.Size())/(1<<20)),
+		}
+		state.viewport = newPreviewViewport()
+		return state
+	}
 	data, err := os.ReadFile(absPath)
 	displayPath := displayPreviewPath("", absPath)
 	if err != nil {

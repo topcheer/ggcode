@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/image"
@@ -90,6 +91,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	for _, warning := range mcpMgr.ConnectAll(context.Background()) {
 		fmt.Fprintln(os.Stderr, warning)
 	}
+	defer mcpMgr.Close()
 	pluginMgr.RegisterTools(registry)
 
 	// Load project memory documents.
@@ -148,7 +150,11 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)
 	}
 	ag.SetPermissionPolicy(policy)
+	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
+	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
+	ag.SetSupportsVision(resolved.SupportsVision)
 
 	// Read stdin if available
 	stdinData, err := readStdin()

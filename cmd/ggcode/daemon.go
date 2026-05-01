@@ -572,12 +572,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Load project memory synchronously (daemon mode has no TUI event loop)
 	if projectMemoryLoader != nil {
-		content, _, err := projectMemoryLoader()
+		content, memFiles, err := projectMemoryLoader()
 		if err == nil && content != "" {
 			ag.AddMessage(provider.Message{
 				Role:    "system",
 				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + content}},
 			})
+		}
+		if len(memFiles) > 0 {
+			ag.SetProjectMemoryFiles(memFiles)
 		}
 	}
 

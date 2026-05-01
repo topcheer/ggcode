@@ -357,11 +357,18 @@ func (m *Manager) SetCancel(id string, cancel context.CancelFunc) {
 func (m *Manager) Complete(id string, result string, err error) {
 	m.mu.Lock()
 	sa, ok := m.agents[id]
+	onComplete := m.onComplete
 	m.mu.Unlock()
 	if !ok {
 		return
 	}
 	sa.mu.Lock()
+	// Terminal state check: don't overwrite cancelled/completed/failed
+	switch sa.Status {
+	case StatusCancelled, StatusCompleted, StatusFailed:
+		sa.mu.Unlock()
+		return
+	}
 	if err != nil {
 		sa.Status = StatusFailed
 		sa.CurrentPhase = "failed"
@@ -378,8 +385,8 @@ func (m *Manager) Complete(id string, result string, err error) {
 	sa.EndedAt = time.Now()
 	sa.mu.Unlock()
 
-	if m.onComplete != nil {
-		m.onComplete(sa)
+	if onComplete != nil {
+		onComplete(sa)
 	}
 }
 
@@ -416,7 +423,9 @@ func (m *Manager) Notify(id string) {
 
 // SetOnComplete sets a callback invoked when any sub-agent completes.
 func (m *Manager) SetOnComplete(fn func(*SubAgent)) {
+	m.mu.Lock()
 	m.onComplete = fn
+	m.mu.Unlock()
 }
 
 // SendToAgent sends a message to a specific sub-agent's mailbox.
@@ -455,7 +464,9 @@ func (m *Manager) Broadcast(msg AgentMessage) []string {
 
 // SetOnUpdate sets a callback invoked when any sub-agent activity changes.
 func (m *Manager) SetOnUpdate(fn func(*SubAgent)) {
+	m.mu.Lock()
 	m.onUpdate = fn
+	m.mu.Unlock()
 }
 
 // AcquireSemaphore blocks until a slot is available for a new sub-agent to run.
@@ -484,7 +495,10 @@ func (m *Manager) ShowOutput() bool {
 }
 
 func (m *Manager) notifyUpdate(sa *SubAgent) {
-	if m.onUpdate != nil {
-		m.onUpdate(sa)
+	m.mu.Lock()
+	fn := m.onUpdate
+	m.mu.Unlock()
+	if fn != nil {
+		fn(sa)
 	}
 }

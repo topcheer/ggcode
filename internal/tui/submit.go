@@ -21,8 +21,8 @@ import (
 
 func (m *Model) appendUserMessage(text string) {
 	m.sessionMutex().Lock()
-	defer m.sessionMutex().Unlock()
 	if m.session == nil || m.sessionStore == nil {
+		m.sessionMutex().Unlock()
 		return
 	}
 	msg := provider.Message{
@@ -37,11 +37,20 @@ func (m *Model) appendUserMessage(text string) {
 			m.session.Title = text
 		}
 	}
-	if store, ok := m.sessionStore.(*session.JSONLStore); ok {
-		_ = store.AppendMessage(m.session, msg)
+	ses := m.session
+	store := m.sessionStore
+	m.sessionMutex().Unlock()
+
+	// Persist outside the lock — JSONLStore.AppendMessage has its own locking
+	if jsonlStore, ok := store.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMessage(ses, msg)
 	} else {
-		m.session.Messages = append(m.session.Messages, msg)
-		_ = m.sessionStore.Save(m.session)
+		m.sessionMutex().Lock()
+		if m.session == ses {
+			m.session.Messages = append(m.session.Messages, msg)
+			_ = store.Save(m.session)
+		}
+		m.sessionMutex().Unlock()
 	}
 }
 
