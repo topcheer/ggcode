@@ -29,6 +29,10 @@ func (m *Model) appendUserMessage(text string) {
 		Role:    "user",
 		Content: []provider.ContentBlock{{Type: "text", Text: text}},
 	}
+	// Mutate Session object under sessionMutex to prevent data races
+	// with checkpoint handler and other readers.
+	m.session.Messages = append(m.session.Messages, msg)
+	m.session.UpdatedAt = time.Now()
 	// Auto-generate title from first user message
 	if m.session.Title == "" || m.session.Title == "New session" {
 		if len(text) > 60 {
@@ -41,15 +45,15 @@ func (m *Model) appendUserMessage(text string) {
 	store := m.sessionStore
 	m.sessionMutex().Unlock()
 
-	// Persist outside the lock — JSONLStore.AppendMessage has its own locking
+	// Persist to disk outside the lock.
+	// JSONLStore.AppendMessageToDisk only writes the JSONL file + updates
+	// the index (both protected by the store's own mu). It does NOT modify
+	// the Session object, so no race with the TUI thread.
 	if jsonlStore, ok := store.(*session.JSONLStore); ok {
-		_ = jsonlStore.AppendMessage(ses, msg)
+		_ = jsonlStore.AppendMessageToDisk(ses, msg)
 	} else {
 		m.sessionMutex().Lock()
-		if m.session == ses {
-			m.session.Messages = append(m.session.Messages, msg)
-			_ = store.Save(m.session)
-		}
+		_ = store.Save(m.session)
 		m.sessionMutex().Unlock()
 	}
 }

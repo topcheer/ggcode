@@ -739,7 +739,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case harnessPanelRefreshResultMsg:
-		m.applyHarnessPanelResult(msg)
+		// Future: async harness panel data loading
 		return m, nil
 
 	case shellCommandStreamMsg:

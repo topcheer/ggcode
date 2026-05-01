@@ -919,6 +919,8 @@ func TestSidebarRendersWorkingDirectoryAndGitBranch(t *testing.T) {
 
 	m := newTestModel()
 	m.handleResize(128, 28)
+	// Populate the branch cache (normally done by gitBranchTickMsg timer)
+	m.refreshCachedGitBranch()
 
 	if got := m.sidebarWorkingDirectory(); !strings.HasSuffix(got, filepath.Base(repoDir)) {
 		t.Fatalf("expected sidebarWorkingDirectory to end with %q, got %q", filepath.Base(repoDir), got)

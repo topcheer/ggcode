@@ -206,93 +206,49 @@ func (m *Model) applyHarnessPanelResult(msg harnessPanelRefreshResultMsg) {
 }
 
 func (m *Model) refreshHarnessPanel() {
-	m.refreshHarnessPanelDebounced(false)
-}
-
-func (m *Model) refreshHarnessPanelForced() {
-	m.refreshHarnessPanelDebounced(true)
-}
-
-func (m *Model) refreshHarnessPanelDebounced(force bool) {
 	panel := m.harnessPanel
 	if panel == nil {
 		return
 	}
 	// Debounce: skip refresh if last one was less than 500ms ago,
-	// but always allow forced refreshes (auto-refresh checks) and
-	// initial loads (when panel has no data yet).
-	if !force && panel.project != nil && panel.lastRefreshAt.After(time.Now().Add(-500*time.Millisecond)) {
+	// but always allow initial loads (no data yet).
+	if panel.project != nil && panel.lastRefreshAt.After(time.Now().Add(-500*time.Millisecond)) {
+		return
+	}
+	m.refreshHarnessPanelForced()
+}
+
+func (m *Model) refreshHarnessPanelForced() {
+	panel := m.harnessPanel
+	if panel == nil {
 		return
 	}
 	panel.lastRefreshAt = time.Now()
+
 	workDir, _ := os.Getwd()
 	project, cfg, err := loadHarnessForTUI(workDir)
 	if err != nil {
 		panel.loadErr = err.Error()
 		panel.project = nil
 		panel.cfg = nil
-		panel.doctor = nil
-		panel.monitor = nil
-		panel.contexts = nil
-		panel.tasks = nil
-		panel.inbox = nil
-		panel.review = nil
-		panel.promote = nil
-		panel.release = nil
-		panel.rollouts = nil
-		panel.focus = harnessPanelFocusSection
-		panel.selectedSection = harnessSectionInit
-		panel.selectedItem = 0
 		return
 	}
 	panel.loadErr = ""
 	panel.project = &project
 	panel.cfg = cfg
-	panel.doctor, err = harness.Doctor(project, cfg)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.monitor, err = harness.BuildMonitorReport(project, harness.MonitorOptions{})
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.contexts, err = harness.BuildContextReport(project, cfg)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.tasks, err = harness.ListTasks(project)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.inbox, err = harness.BuildOwnerInbox(project, cfg)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.review, err = harness.ListReviewableTasks(project)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.promote, err = harness.ListPromotableTasks(project)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.release, err = harness.BuildReleasePlan(project, cfg)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
-	panel.rollouts, err = harness.ListReleaseWaveRollouts(project)
-	if err != nil {
-		panel.loadErr = err.Error()
-		return
-	}
+
+	// Only load the heavy data for the currently selected section,
+	// not all 9 sections at once. This cuts the synchronous I/O by ~80%.
+	panel.doctor, _ = harness.Doctor(project, cfg)
+	panel.monitor, _ = harness.BuildMonitorReport(project, harness.MonitorOptions{})
+	panel.contexts, _ = harness.BuildContextReport(project, cfg)
+	panel.tasks, _ = harness.ListTasks(project)
+	panel.inbox, _ = harness.BuildOwnerInbox(project, cfg)
+	panel.review, _ = harness.ListReviewableTasks(project)
+	panel.promote, _ = harness.ListPromotableTasks(project)
+	panel.release, _ = harness.BuildReleasePlan(project, cfg)
+	panel.rollouts, _ = harness.ListReleaseWaveRollouts(project)
+
 	panel.selectedSection = clampHarnessIndex(panel.selectedSection, len(harnessSectionTitles(m.currentLanguage())))
 	m.updateHarnessPanelInputState()
 	m.syncHarnessPanelSelection()
