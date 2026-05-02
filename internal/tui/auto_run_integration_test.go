@@ -7,8 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 // TestSuggestMode_EnterConfirmsHarness verifies that pressing Enter when
@@ -60,6 +62,7 @@ func TestSuggestMode_EscDismisses(t *testing.T) {
 	}
 	m.pendingAutoRunText = "Fix the auth bug"
 	m.input.SetValue("Fix the auth bug")
+	m.chatWriteUser(nextChatID(), "Fix the auth bug")
 
 	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m2 := model.(Model)
@@ -73,6 +76,12 @@ func TestSuggestMode_EscDismisses(t *testing.T) {
 	output := renderedOutput(&m2)
 	if !strings.Contains(output, "skipped") && !strings.Contains(output, "normally") {
 		t.Logf("Output after Esc: %s", output)
+	}
+	if count := strings.Count(output, "Fix the auth bug"); count != 1 {
+		t.Fatalf("user message rendered %d times, want once; output=%s", count, output)
+	}
+	if !m2.loading {
+		t.Fatal("Esc fallback should continue into the normal agent path")
 	}
 }
 
@@ -148,6 +157,68 @@ func TestStrictWriteGuard_GlobalEvenForQuestions(t *testing.T) {
 	}
 	if policy.GetDecision("git_commit") != permission.Deny {
 		t.Error("strict guard should deny git_commit even for non-routed inputs")
+	}
+}
+
+func TestAutoRunCheckDisplaysAndRecordsUserOnce(t *testing.T) {
+	m := newTestModel()
+	m.config = &config.Config{Harness: config.HarnessConfig{AutoRun: "on"}}
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+	m.sessionStore = store
+	m.session = &session.Session{
+		ID:        "test-session",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Title:     "New session",
+	}
+
+	cmd := m.startAutoRunCheck("fix auth bug", "fix auth bug")
+	if cmd == nil {
+		t.Fatal("startAutoRunCheck should return a routing command")
+	}
+
+	output := renderedOutput(&m)
+	if count := strings.Count(output, "fix auth bug"); count != 1 {
+		t.Fatalf("user message rendered %d times, want once; output=%s", count, output)
+	}
+	if got := len(m.session.Messages); got != 1 {
+		t.Fatalf("session messages = %d, want 1", got)
+	}
+	if got := m.session.Messages[0].Content[0].Text; got != "fix auth bug" {
+		t.Fatalf("session message = %q, want original prompt", got)
+	}
+}
+
+func TestAutoRunFallbackUsesNormalDisplayedPath(t *testing.T) {
+	m := newTestModel()
+	m.config = &config.Config{Harness: config.HarnessConfig{AutoRun: "on"}}
+	_ = m.startAutoRunCheck("what does auth do?", "what does auth do?")
+
+	model, cmd := m.Update(autoRunCheckResultMsg{
+		Text:        "what does auth do?",
+		DisplayText: "what does auth do?",
+		Result:      &harness.AutoRunResult{Decision: harness.RouteNormal},
+	})
+	m2 := model.(Model)
+
+	if cmd == nil {
+		t.Fatal("normal fallback should start the agent")
+	}
+	if !m2.loading {
+		t.Fatal("normal fallback should restore loading state before starting agent")
+	}
+	if m2.streamBuffer == nil {
+		t.Fatal("normal fallback should initialize streamBuffer")
+	}
+	if m2.statusActivity != m2.t("status.thinking") {
+		t.Fatalf("statusActivity = %q, want thinking status", m2.statusActivity)
+	}
+	output := renderedOutput(&m2)
+	if count := strings.Count(output, "what does auth do?"); count != 1 {
+		t.Fatalf("user message rendered %d times, want once; output=%s", count, output)
 	}
 }
 
