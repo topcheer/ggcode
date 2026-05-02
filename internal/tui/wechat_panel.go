@@ -187,6 +187,12 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.authPhase = "requesting"
 		panel.message = ""
 		return *m, m.requestWechatQRCode()
+	case "enter", "b":
+		// Bind selected bot to current workspace
+		if len(entries) > 0 && panel.selected < len(entries) {
+			entry := entries[panel.selected]
+			return *m, m.bindWechatEntry(entry)
+		}
 	case "e":
 		if len(entries) > 0 && panel.selected < len(entries) {
 			entry := entries[panel.selected]
@@ -197,18 +203,10 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 	case "r":
+		// Remove: unbind + stop adapter + delete config
 		if len(entries) > 0 && panel.selected < len(entries) {
 			entry := entries[panel.selected]
-			if m.imManager != nil {
-				if err := m.imManager.UnbindAdapter(entry.Adapter); err != nil {
-					panel.message = fmt.Sprintf("Error: %v", err)
-				} else {
-					panel.message = m.t("panel.wechat.removed", entry.Adapter)
-					if panel.selected >= len(entries)-1 && panel.selected > 0 {
-						panel.selected--
-					}
-				}
-			}
+			return *m, m.removeWechatEntry(entry)
 		}
 	}
 	return *m, nil
@@ -368,32 +366,58 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 		debug.Log("wechat", "saveWechatBotToken: adapter %q created and saved", adapterName)
 
 		// Start the adapter
+		// Start the adapter (no auto-bind — user must press [b] or send pairing message)
 		if m.imManager != nil {
 			if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
 				debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
 			} else {
 				debug.Log("wechat", "saveWechatBotToken: adapter %q started", adapterName)
 			}
-
-			// Auto-bind: create a channel binding for current workspace
-			ws := m.currentWorkspacePath()
-			if ws != "" {
-				_, err := m.imManager.BindChannel(im.ChannelBinding{
-					Workspace: ws,
-					Platform:  im.PlatformWechat,
-					Adapter:   adapterName,
-				})
-				if err != nil {
-					debug.Log("wechat", "saveWechatBotToken: BindChannel failed: %v", err)
-				} else {
-					debug.Log("wechat", "saveWechatBotToken: bound adapter %q to workspace %s", adapterName, ws)
-				}
-			}
 		} else {
 			debug.Log("wechat", "saveWechatBotToken: imManager is nil, adapter not started")
 		}
 
 		return imEditResultMsg{adapterName: adapterName, field: "bot_token", value: "***"}
+	}
+}
+
+// bindWechatEntry binds the selected bot to the current workspace.
+func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imEditResultMsg{err: fmt.Errorf("IM manager not available")}
+		}
+		ws := m.currentWorkspacePath()
+		if ws == "" {
+			return imEditResultMsg{err: fmt.Errorf("no active workspace")}
+		}
+		_, err := m.imManager.BindChannel(im.ChannelBinding{
+			Workspace: ws,
+			Platform:  im.PlatformWechat,
+			Adapter:   entry.Adapter,
+		})
+		if err != nil {
+			return imEditResultMsg{err: err}
+		}
+		return imEditResultMsg{adapterName: entry.Adapter, field: "bind", value: ws}
+	}
+}
+
+// removeWechatEntry fully removes a bot: unbind, stop adapter, delete config.
+func (m *Model) removeWechatEntry(entry wechatBindingEntry) tea.Cmd {
+	return func() tea.Msg {
+		// 1. Unbind + stop (ignore error if no binding exists)
+		if m.imManager != nil {
+			m.imManager.StopAdapter(entry.Adapter)
+			_ = m.imManager.UnbindAdapter(entry.Adapter)
+		}
+		// 2. Remove from config
+		if m.config != nil {
+			if err := m.config.RemoveIMAdapter(entry.Adapter); err != nil {
+				return imEditResultMsg{err: fmt.Errorf("remove config: %w", err)}
+			}
+		}
+		return imEditResultMsg{adapterName: entry.Adapter, field: "remove", value: "ok"}
 	}
 }
 

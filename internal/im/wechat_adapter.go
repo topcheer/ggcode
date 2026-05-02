@@ -343,6 +343,10 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	}
 
 	// Store context_token for reply correlation
+	a.mu.Lock()
+	a.contextTokens[channelID] = msg.ContextToken
+	a.mu.Unlock()
+
 	inbound := InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
@@ -358,14 +362,84 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		},
 	}
 
-	// Store context_token for reply correlation
-	a.mu.Lock()
-	a.contextTokens[channelID] = msg.ContextToken
-	a.mu.Unlock()
-
-	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
-		debug.Log("wechat", "adapter=%s handle inbound error: %v", a.name, err)
+	// Pairing flow: same as QQ adapter
+	// 1. Try HandlePairingInbound — if consumed, reply with pairing instructions
+	pairingResult, err := a.manager.HandlePairingInbound(inbound)
+	if err != nil && err != ErrNoSessionBound {
+		a.publishState(false, "warning", err.Error())
 	}
+	if pairingResult.Consumed {
+		_ = a.sendTextToUser(ctx, channelID, pairingResult.ReplyText)
+		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
+			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
+				Kind: OutboundEventText,
+				Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
+			}); err != nil {
+				debug.Log("wechat", "adapter=%s notify previous channel: %v", a.name, err)
+			}
+		}
+		return
+	}
+
+	// 2. Normal inbound routing
+	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
+		if err == ErrInboundChannelDenied {
+			debug.Log("wechat", "adapter=%s unauthorized inbound channel=%s", a.name, channelID)
+			_ = a.sendTextToUser(ctx, channelID, "你是未授权用户")
+			return
+		}
+		if err != ErrNoChannelBound {
+			debug.Log("wechat", "adapter=%s handle inbound error: %v", a.name, err)
+		}
+	}
+}
+
+// sendTextToUser sends a plain text reply to a WeChat user/group.
+func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content string) error {
+	a.mu.RLock()
+	token := a.botToken
+	contextToken := a.contextTokens[toUserID]
+	a.mu.RUnlock()
+
+	if token == "" || strings.TrimSpace(content) == "" {
+		return nil
+	}
+
+	items := []ilinkItem{
+		{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: content}},
+	}
+
+	outMsg := ilinkSendMessageRequest{
+		Msg: ilinkOutboundMessage{
+			ToUserID:     toUserID,
+			MessageType:  ilinkMsgTypeBot,
+			MessageState: ilinkMsgStateFinish,
+			ContextToken: contextToken,
+			ItemList:     items,
+		},
+	}
+
+	bodyJSON, err := json.Marshal(outMsg)
+	if err != nil {
+		return fmt.Errorf("marshal sendmessage: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+ilinkSendMessagePath, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return fmt.Errorf("create sendmessage request: %w", err)
+	}
+	a.setCommonHeaders(req, token)
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sendmessage request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("sendmessage status=%d", resp.StatusCode)
+	}
+	return nil
 }
 
 // Send sends an outbound message to the bound WeChat channel.
