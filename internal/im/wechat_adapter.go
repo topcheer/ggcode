@@ -82,10 +82,12 @@ type ilinkQRCodeStatusResponse struct {
 
 // ilinkGetUpdatesResponse is the response from getupdates.
 type ilinkGetUpdatesResponse struct {
-	Ret                int            `json:"ret"`
-	Msgs               []ilinkMessage `json:"msgs"`
-	GetUpdatesBuf      string         `json:"get_updates_buf"`
-	LongPollingTimeout int            `json:"longpolling_timeout_ms"`
+	Ret               int            `json:"ret"`
+	ErrCode           int            `json:"errcode"`
+	ErrMsg            string         `json:"errmsg"`
+	Msgs              []ilinkMessage `json:"msgs"`
+	GetUpdatesBuf     string         `json:"get_updates_buf"`
+	LongPollTimeoutMs int            `json:"longpolling_timeout_ms"`
 }
 
 // ilinkMessage represents a single iLink message.
@@ -126,11 +128,17 @@ type ilinkFileItem struct {
 
 // ilinkSendMessageRequest is the request body for sendmessage.
 type ilinkSendMessageRequest struct {
-	Msg ilinkOutboundMessage `json:"msg"`
+	Msg      ilinkOutboundMessage `json:"msg"`
+	BaseInfo ilinkBaseInfo        `json:"base_info"`
+}
+
+type ilinkBaseInfo struct {
+	ChannelVersion string `json:"channel_version"`
 }
 
 type ilinkOutboundMessage struct {
 	ToUserID     string      `json:"to_user_id"`
+	ClientID     string      `json:"client_id"`
 	MessageType  int         `json:"message_type"`
 	MessageState int         `json:"message_state"`
 	ContextToken string      `json:"context_token"`
@@ -298,6 +306,14 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 		return fmt.Errorf("decode getupdates: %w", err)
 	}
 
+	// Check for session expiry or errors
+	if result.ErrCode == -14 {
+		return fmt.Errorf("session expired — bot_token may need re-scan")
+	}
+	if result.Ret != 0 {
+		return fmt.Errorf("getupdates error: ret=%d errcode=%d errmsg=%s", result.Ret, result.ErrCode, result.ErrMsg)
+	}
+
 	// Update cursor
 	if result.GetUpdatesBuf != "" {
 		a.mu.Lock()
@@ -412,11 +428,13 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content st
 	outMsg := ilinkSendMessageRequest{
 		Msg: ilinkOutboundMessage{
 			ToUserID:     toUserID,
+			ClientID:     generateWechatClientID(),
 			MessageType:  ilinkMsgTypeBot,
 			MessageState: ilinkMsgStateFinish,
 			ContextToken: contextToken,
 			ItemList:     items,
 		},
+		BaseInfo: ilinkBaseInfo{ChannelVersion: "1.0.0"},
 	}
 
 	bodyJSON, err := json.Marshal(outMsg)
@@ -470,11 +488,13 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	outMsg := ilinkSendMessageRequest{
 		Msg: ilinkOutboundMessage{
 			ToUserID:     toUserID,
+			ClientID:     generateWechatClientID(),
 			MessageType:  ilinkMsgTypeBot,
 			MessageState: ilinkMsgStateFinish,
 			ContextToken: contextToken,
 			ItemList:     items,
 		},
+		BaseInfo: ilinkBaseInfo{ChannelVersion: "1.0.0"},
 	}
 
 	bodyJSON, err := json.Marshal(outMsg)
@@ -545,6 +565,14 @@ func (a *WechatAdapter) GetState() AdapterState {
 		Healthy: connected,
 		Status:  status,
 	}
+}
+
+// generateWechatClientID generates a unique client ID for message sending.
+// Matches SDK pattern: random hex suffix.
+func generateWechatClientID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("go-weixin-%x", b)
 }
 
 // WechatAdapter returns the first wechat adapter sink from the manager, or nil.
