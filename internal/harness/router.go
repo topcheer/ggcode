@@ -280,34 +280,28 @@ func DecideRouteWithFeatures(input string, mode string, features PromptFeatures,
 		return RouteNormal
 	}
 
-	if score >= 5 {
-		// Score >= 5: extremely strong signal (action verb + file path + 2+ other signals).
-		// Almost certainly a complex code change -- skip LLM, route directly.
-		switch mode {
-		case "suggest":
-			return RouteSuggest
-		case "on", "strict":
-			return RouteHarness
-		}
-	}
-
-	// Layer 3: LLM classifier for score 1-4.
-	// Catches ambiguous inputs AND filters out simple changes that scored 3-4
+	// Layer 3: LLM classifier for score >= 1.
+	// Catches ambiguous inputs AND filters out simple changes that scored high
 	// (e.g. "fix the typo in README.md" has verb+path = score 4 but is trivial).
-	// Only called when mode is "on" or "strict" and a provider is available.
-	if score >= 1 && (mode == "on" || mode == "strict") && ctx.LLMClassifierProvider != nil {
+	// A high structural score is a strong code-change signal, but not a
+	// reliable complexity signal; use the LLM when available before deciding
+	// whether the task needs harness isolation.
+	if score >= 1 && ctx.LLMClassifierProvider != nil {
 		llmResult, err := ClassifyWithLLM(context.Background(), ctx.LLMClassifierProvider, input)
 		if err == nil && llmResult != nil {
-			if decision := RouteFromLLMResult(llmResult, mode); decision != RouteNormal {
-				debug.Log("auto-run", "LLM classifier override: %v (confidence=%.2f, complexity=%s, score=%d)", decision, llmResult.Confidence, llmResult.Complexity, score)
-				return decision
-			}
-			debug.Log("auto-run", "LLM classifier declined: code_change=%v complexity=%s score=%d", llmResult.IsCodeChange, llmResult.Complexity, score)
+			decision := RouteFromLLMResult(llmResult, mode)
+			debug.Log("auto-run", "LLM classifier decision: %v (code_change=%v confidence=%.2f complexity=%s score=%d)", decision, llmResult.IsCodeChange, llmResult.Confidence, llmResult.Complexity, score)
+			return decision
+		}
+		if err != nil {
+			debug.Log("auto-run", "LLM classifier unavailable; falling back to deterministic routing: %v", err)
 		}
 	}
 
-	// Fallback: without LLM provider, use deterministic score >= 3 threshold.
-	if ctx.LLMClassifierProvider == nil && score >= 3 {
+	// Fallback: use deterministic score >= 3 threshold whenever the LLM is
+	// unavailable, disabled, or times out. This preserves responsiveness and
+	// avoids dropping obvious code-change prompts.
+	if score >= 3 {
 		switch mode {
 		case "suggest":
 			return RouteSuggest
