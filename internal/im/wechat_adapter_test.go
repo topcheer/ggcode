@@ -188,8 +188,14 @@ func TestWechatAdapter_Send_Success(t *testing.T) {
 	if receivedBody.Msg.ToUserID != "user-123" {
 		t.Errorf("expected ToUserID 'user-123', got %q", receivedBody.Msg.ToUserID)
 	}
+	if receivedBody.Msg.ClientID == "" {
+		t.Error("expected ClientID to be set")
+	}
 	if receivedBody.Msg.MessageType != ilinkMsgTypeBot {
 		t.Errorf("expected MessageType=%d, got %d", ilinkMsgTypeBot, receivedBody.Msg.MessageType)
+	}
+	if receivedBody.BaseInfo.ChannelVersion != "1.0.0" {
+		t.Errorf("expected BaseInfo.ChannelVersion '1.0.0', got %q", receivedBody.BaseInfo.ChannelVersion)
 	}
 	if len(receivedBody.Msg.ItemList) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(receivedBody.Msg.ItemList))
