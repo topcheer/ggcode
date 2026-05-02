@@ -73,6 +73,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 				m.autoCompleteActive = false
 				m.autoCompleteItems = nil
 				m.autoCompleteIndex = 0
+				m.inputHint = ""
 				m.history = append(m.history, selected)
 				m.historyIdx = len(m.history)
 				return m.handleCommand(selected)
@@ -81,11 +82,26 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 			m.autoCompleteActive = false
 			m.autoCompleteItems = nil
 			m.autoCompleteIndex = 0
+			m.inputHint = ""
 			return nil
 		}
+		// Fillable commands: put command in input with placeholder hint.
+		// User can press Enter (no args) or type arguments.
+		if placeholder, ok := SlashCommandPlaceholders[selected]; ok {
+			m.input.SetValue(selected + " ")
+			m.input.CursorEnd()
+			m.inputHint = placeholder
+			m.autoCompleteActive = false
+			m.autoCompleteItems = nil
+			m.autoCompleteIndex = 0
+			return nil
+		}
+		// Non-fillable commands: execute immediately
 		m.input.SetValue("")
 		m.autoCompleteActive = false
 		m.autoCompleteItems = nil
+		m.autoCompleteIndex = 0
+		m.inputHint = ""
 		m.history = append(m.history, selected)
 		m.historyIdx = len(m.history)
 		return m.handleCommand(selected)
@@ -371,6 +387,10 @@ func (m *Model) startNormalTextRun(text string, displayText string) tea.Cmd {
 	// Save original user message to session
 	m.appendUserMessage(text)
 
+	return m.continueDisplayedNormalTextRun(text)
+}
+
+func (m *Model) continueDisplayedNormalTextRun(text string) tea.Cmd {
 	m.streamBuffer = &bytes.Buffer{}
 	m.shellBuffer = nil
 	m.streamPrefixWritten = false
@@ -434,6 +454,7 @@ func (m *Model) startAutoRunCheck(text string, displayText string) tea.Cmd {
 	// Show the user's input immediately — don't wait for the async routing check.
 	m.chatWriteUser(nextChatID(), displayText)
 	m.chatListScrollToBottom()
+	m.appendUserMessage(text)
 
 	cfg := m.config
 	workDir, _ := os.Getwd()
@@ -483,8 +504,6 @@ func (m *Model) handleAutoRun(text string, result *harness.AutoRunResult) tea.Cm
 		cfg = loadedCfg
 	}
 
-	// Show auto-run message
-	m.chatWriteUser(nextChatID(), text)
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🔀 Harness auto-run: %s", text))
 	m.chatListScrollToBottom()
 

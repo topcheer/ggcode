@@ -1357,7 +1357,12 @@ func (m Model) renderComposerPanel() string {
 }
 
 func (m Model) renderComposerInput() string {
-	return m.input.View()
+	v := m.input.View()
+	if m.inputHint != "" && !m.loading {
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.inputHint)
+		v += hint
+	}
+	return v
 }
 
 func (m Model) renderContextBox(title, body string, accent color.Color) string {
