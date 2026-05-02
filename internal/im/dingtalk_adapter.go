@@ -139,12 +139,20 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 	}
 	debug.Log("dingtalk", "adapter=%s stream endpoint=%s", a.name, wsURL)
 
-	// Connect WebSocket with required Origin header (DingTalk validates this).
-	wsHeader := http.Header{}
-	wsHeader.Set("Origin", "https://api.dingtalk.com")
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, wsHeader)
+	// Connect WebSocket (no special headers needed — ticket in URL is the auth).
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
-		return fmt.Errorf("dial stream: %w", err)
+		status := 0
+		body := ""
+		if resp != nil {
+			status = resp.StatusCode
+			if b, readErr := io.ReadAll(io.LimitReader(resp.Body, 512)); readErr == nil {
+				body = string(b)
+			}
+			resp.Body.Close()
+		}
+		debug.Log("dingtalk", "adapter=%s WS handshake failed: status=%d body=%s err=%v", a.name, status, body, err)
+		return fmt.Errorf("dial stream: %w (HTTP %d: %s)", err, status, body)
 	}
 	defer func() {
 		a.mu.Lock()
@@ -270,9 +278,10 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	body := map[string]any{
 		"clientId":     a.appKey,
 		"clientSecret": a.appSecret,
+		"ua":           "ggcode-dingtalk-adapter/1.0",
 		"subscriptions": []map[string]any{
 			{
-				"type":  "EVENT",
+				"type":  "CALLBACK",
 				"topic": "/v1.0/im/bot/messages/get",
 			},
 		},
@@ -298,12 +307,15 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 		return "", err
 	}
 	endpoint, _ := result["endpoint"].(string)
-	if endpoint == "" {
+	ticket, _ := result["ticket"].(string)
+	if endpoint == "" || ticket == "" {
 		debug.Log("dingtalk", "adapter=%s streamOpen response: %s", a.name, string(data))
-		return "", fmt.Errorf("DingTalk stream endpoint is empty: %s", strings.TrimSpace(string(data)))
+		return "", fmt.Errorf("DingTalk stream endpoint/ticket is empty: %s", strings.TrimSpace(string(data)))
 	}
-	debug.Log("dingtalk", "adapter=%s stream endpoint: %s", a.name, endpoint)
-	return endpoint, nil
+	// Official SDK: wssUrl = endpoint + "?ticket=" + ticket
+	wsURL := fmt.Sprintf("%s?ticket=%s", endpoint, ticket)
+	debug.Log("dingtalk", "adapter=%s stream endpoint=%s ticket=%s wsURL=%s", a.name, endpoint, ticket, wsURL)
+	return wsURL, nil
 }
 
 func (a *dingtalkAdapter) handleBotMessage(ctx context.Context, body string, messageID string, conn *websocket.Conn) {
