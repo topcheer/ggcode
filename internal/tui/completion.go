@@ -151,6 +151,10 @@ func CompleteMention(prefix string, workDir string) []string {
 		// No prefix: list contents of workDir itself
 		dir = workDir
 		partial = ""
+	} else if strings.HasSuffix(prefix, "/") {
+		// Trailing slash: user wants to browse INTO this directory
+		dir = filepath.Join(workDir, prefix)
+		partial = ""
 	} else {
 		fullPath := filepath.Join(workDir, prefix)
 		dir = filepath.Dir(fullPath)
