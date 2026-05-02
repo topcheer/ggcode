@@ -190,6 +190,7 @@ type Model struct {
 	autoCompleteActive   bool
 	autoCompleteKind     string // "slash" or "mention"
 	autoCompleteWorkDir  string // working directory for mention completion
+	inputHint            string // placeholder hint shown after cursor (e.g. "<subcommand>")
 	startedAt            time.Time
 	inputDrainUntil      time.Time // suppress all KeyPressMsg until this time (after setProgramMsg)
 	inputReady           bool      // true after setProgramMsg + drain completes; before that, all KeyPress is discarded

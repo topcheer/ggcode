@@ -565,7 +565,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingAutoRunText = ""
 				m.chatWriteSystem(nextSystemID(), "Running normally (harness skipped).")
 				m.chatListScrollToBottom()
-				return m, m.submitText(text, true)
+				return m, m.continueDisplayedNormalTextRun(text)
 			}
 			if m.autoCompleteActive {
 				m.autoCompleteActive = false
@@ -951,7 +951,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolCount = 0
 		if msg.Err != nil {
 			debug.Log("auto-run", "routing check failed; continuing normally: %v", msg.Err)
-			return m, m.startAgent(msg.Text)
+			return m, m.continueDisplayedNormalTextRun(msg.Text)
 		}
 		if msg.Result != nil {
 			switch msg.Result.Decision {
@@ -966,7 +966,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// No harness routing — continue to normal agent.
-		return m, m.startAgent(msg.Text)
+		return m, m.continueDisplayedNormalTextRun(msg.Text)
 
 	case harnessRunResultMsg:
 		if path := strings.TrimSpace(m.harnessRunLogPath); path != "" {
@@ -1846,6 +1846,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update autocomplete state based on current input
 	m.updateAutoComplete()
+
+	// Clear input hint when user types
+	if oldValue != newValue {
+		m.inputHint = ""
+	}
 
 	return m, combineCmds(spinnerCmd, cmd)
 }

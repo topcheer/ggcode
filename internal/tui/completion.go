@@ -232,6 +232,29 @@ var SlashCommandDescriptions = map[string]string{
 	"/skills":      "Browse available skills",
 }
 
+// SlashCommandPlaceholders maps commands that accept optional arguments.
+// When Tab-completing these commands, the input is filled with the command
+// plus a trailing space and the placeholder is shown as a hint.
+// Commands NOT in this map are executed immediately on Tab completion.
+var SlashCommandPlaceholders = map[string]string{
+	"/model":       "<model-name>",
+	"/provider":    "<vendor> [endpoint]",
+	"/impersonate": "<cli-tool>",
+	"/harness":     "<subcommand>",
+	"/knight":      "<subcommand>",
+	"/mode":        "<mode>",
+	"/allow":       "<tool-name>",
+	"/resume":      "<session-id>",
+	"/export":      "<session-id>",
+	"/lang":        "<en|zh-CN>",
+	"/memory":      "<subcommand>",
+	"/image":       "<path>",
+	"/config":      "<key> [value]",
+	"/skills":      "<skill-name>",
+	"/init":        "[path]",
+	"/im":          "<subcommand>",
+}
+
 // CompleteSlashCommand returns matching slash commands for a given prefix.
 func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command) []string {
 	var matches []string
