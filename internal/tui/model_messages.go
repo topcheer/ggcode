@@ -30,6 +30,13 @@ type errMsg struct{ err error }
 
 type startupReadyMsg struct{}
 
+type autoRunCheckResultMsg struct {
+	Text        string
+	DisplayText string
+	Result      *harness.AutoRunResult
+	Err         error
+}
+
 type harnessRunResultMsg struct {
 	Summary    *harness.RunSummary
 	Err        error

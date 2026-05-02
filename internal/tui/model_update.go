@@ -942,6 +942,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatListScrollToBottom()
 		return m, nil
 
+	case autoRunCheckResultMsg:
+		m.loading = false
+		m.spinner.Stop()
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		if msg.Err != nil {
+			debug.Log("auto-run", "routing check failed; continuing normally: %v", msg.Err)
+			return m, m.startAgent(msg.Text)
+		}
+		if msg.Result != nil {
+			switch msg.Result.Decision {
+			case harness.RouteSuggest:
+				m.pendingAutoRun = msg.Result
+				m.pendingAutoRunText = msg.Text
+				m.chatWriteSystem(nextChatID(), msg.Result.Message)
+				m.chatListScrollToBottom()
+				return m, nil
+			case harness.RouteHarness:
+				return m, m.handleAutoRun(msg.Text, msg.Result)
+			}
+		}
+		// No harness routing — continue to normal agent.
+		return m, m.startAgent(msg.Text)
+
 	case harnessRunResultMsg:
 		if path := strings.TrimSpace(m.harnessRunLogPath); path != "" {
 			chunk, nextOffset := readHarnessRunLogChunk(path, m.harnessRunLogOffset)
