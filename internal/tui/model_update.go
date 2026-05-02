@@ -1552,6 +1552,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyIMEditResult(&m.dingtalkPanel.editState, msg)
 		} else if m.pcPanel != nil && m.pcPanel.editState.mode != imEditNone {
 			m.applyIMEditResult(&m.pcPanel.editState, msg)
+		} else if m.wechatPanel != nil {
+			if m.wechatPanel.editState.mode != imEditNone {
+				m.applyIMEditResult(&m.wechatPanel.editState, msg)
+			} else if msg.err != nil {
+				m.wechatPanel.message = fmt.Sprintf("Error: %v", msg.err)
+			} else if msg.adapterName != "" {
+				m.wechatPanel.message = m.t("panel.wechat.auth_success") + " (" + msg.adapterName + ")"
+			}
 		}
 		return m, nil
 
