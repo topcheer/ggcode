@@ -412,7 +412,8 @@ func (m *MCPManager) StartBackground(ctx context.Context) {
 			if MCPDisabled(plugin.Name()) {
 				continue
 			}
-			go m.connectWithRetry(ctx, plugin)
+			pluginCopy := plugin
+			safego.Go("plugin.mcp.connectWithRetry", func() { m.connectWithRetry(ctx, pluginCopy) })
 		}
 	})
 }
@@ -445,7 +446,8 @@ func (m *MCPManager) Retry(name string) bool {
 		if plugin.Name() != name {
 			continue
 		}
-		go m.connectOne(context.Background(), plugin)
+		pluginCopy := plugin
+		safego.Go("plugin.mcp.connectOne", func() { m.connectOne(context.Background(), pluginCopy) })
 		return true
 	}
 	return false
@@ -533,7 +535,8 @@ func (m *MCPManager) Reconnect(name string) bool {
 		if plugin.Name() != name {
 			continue
 		}
-		go m.connectOne(context.Background(), plugin)
+		pluginCopy := plugin
+		safego.Go("plugin.mcp.reconnect", func() { m.connectOne(context.Background(), pluginCopy) })
 		return true
 	}
 	return false

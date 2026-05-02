@@ -127,7 +127,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.stdin = stdin
 	c.stdout = stdout
 	c.reader = bufio.NewReader(stdout)
-	go c.captureStderr(stderr)
+	safego.Go("mcp.captureStderr", func() { c.captureStderr(stderr) })
 
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("mcp[%s]: starting server: %w", c.name, err)

@@ -20,6 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -87,7 +88,7 @@ func (a *dingtalkAdapter) Name() string { return a.name }
 func (a *dingtalkAdapter) Start(ctx context.Context) {
 	debug.Log("dingtalk", "adapter=%s start appKey=%s", a.name, a.appKey)
 	a.publishState(false, "connecting", "")
-	go a.run(ctx)
+	safego.Go("im.dingtalk.run", func() { a.run(ctx) })
 }
 
 func (a *dingtalkAdapter) Close() error {
@@ -158,7 +159,7 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 	debug.Log("dingtalk", "adapter=%s connected", a.name)
 
 	// Token refresh loop
-	go a.tokenRefreshLoop(ctx)
+	safego.Go("im.dingtalk.tokenRefresh", func() { a.tokenRefreshLoop(ctx) })
 
 	// Read loop
 	for {

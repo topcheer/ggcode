@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"fmt"
+	runtimedebug "runtime/debug"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ func runTeammateLoop(
 	// Panic recovery: ensure we always mark the teammate as done.
 	defer func() {
 		if r := recover(); r != nil {
+			debug.Log("swarm", "teammate panic recovered teammate=%s error=%v stack=%s", tm.ID, r, string(runtimedebug.Stack()))
 			tm.setStatus(TeammateShuttingDown)
 			if onEvent != nil {
 				onEvent(Event{

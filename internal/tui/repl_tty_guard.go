@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // enableBubbleteaTrace points bubbletea v2 at a per-pid log file by setting
@@ -103,7 +104,7 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 			preBubbletea.Lflag, preBubbletea.Lflag&unix.ICANON != 0, preBubbletea.Lflag&unix.ECHO != 0)
 	}
 	wctx, cancel := context.WithCancel(ctx)
-	go func() {
+	safego.Go("tui.ttyWatchdog", func() {
 		// Tight initial loop: aggressively re-apply raw mode for the first
 		// ~1.5s after bubbletea startup. This is the window in which bubbletea
 		// (or something it calls into) has been observed to silently revert
@@ -167,7 +168,7 @@ func startTTYWatchdog(ctx context.Context) (stop func()) {
 				warned = false
 			}
 		}
-	}()
+	})
 	return cancel
 }
 

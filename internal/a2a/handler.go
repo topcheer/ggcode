@@ -13,6 +13,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -197,7 +198,7 @@ func (h *TaskHandler) Handle(ctx context.Context, skill string, input Message, e
 	h.mu.Unlock()
 
 	// Execute asynchronously.
-	go h.execute(taskCtx, task, perm)
+	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm) })
 
 	snap := task.Snapshot()
 	return &snap, nil
@@ -238,7 +239,7 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	}
 
 	// Resume execution.
-	go h.execute(taskCtx, task, perm)
+	safego.Go("a2a.execute", func() { h.execute(taskCtx, task, perm) })
 
 	snap := task.Snapshot()
 	return &snap, nil
@@ -350,6 +351,7 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 
 	var buf strings.Builder
 	err := a.RunStream(ctx, prompt, func(event provider.StreamEvent) {
+		defer safego.Recover("a2a.executeAgent.streamCallback")
 		if event.Type == provider.StreamEventText {
 			buf.WriteString(event.Text)
 		}
@@ -412,7 +414,8 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 				msg.Message = fmt.Sprintf("A2A task canceled [%s]", t.Skill)
 			}
 			// Call async to avoid deadlock (callback may call back into handler).
-			go fn(msg)
+			msgCopy := msg
+			safego.Go("a2a.taskEvent", func() { fn(msgCopy) })
 		}
 	}
 

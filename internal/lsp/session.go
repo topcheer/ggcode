@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const sessionIdleTTL = 2 * time.Minute
@@ -87,7 +89,7 @@ func withOpenDocument[T any](ctx context.Context, workspace, path string, fn fun
 
 func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved ResolvedServer) (*sessionClient, error) {
 	m.once.Do(func() {
-		go m.reapIdle()
+		safego.Go("lsp.reapIdle", func() { m.reapIdle() })
 	})
 	key := workspace + "\x00" + resolved.Binary + "\x00" + strings.Join(resolved.Args, "\x1f")
 	m.mu.Lock()

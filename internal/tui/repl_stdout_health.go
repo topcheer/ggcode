@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // displaySleepMsg is sent by the stdout health monitor when stdout
@@ -50,7 +51,7 @@ func startStdoutHealthMonitor(ctx context.Context, sendMsg func(any)) (stop func
 	wctx, cancel := context.WithCancel(ctx)
 	dead := false
 
-	go func() {
+	safego.Go("tui.stdoutHealth", func() {
 		ticker := time.NewTicker(stdoutHealthInterval)
 		defer ticker.Stop()
 
@@ -77,7 +78,7 @@ func startStdoutHealthMonitor(ctx context.Context, sendMsg func(any)) (stop func
 				}
 			}
 		}
-	}()
+	})
 
 	return cancel
 }

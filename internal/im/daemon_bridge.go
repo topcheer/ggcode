@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -420,6 +421,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 	b.checkAutoRunSuggestion(extractText(content))
 
 	err := b.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+		defer safego.Recover("im.daemonBridge.streamCallback")
 		// Broadcast to webchat subscribers
 		b.broadcastEvent(event)
 
@@ -845,10 +847,10 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 			} else {
 				b.emitter.EmitText("🔄 Restarting daemon...")
 			}
-			go func() {
+			safego.Go("im.daemonBridge.restart", func() {
 				time.Sleep(1 * time.Second)
 				onRestart()
-			}()
+			})
 			return nil
 		}
 		return fmt.Errorf("restart not available")
@@ -1044,15 +1046,16 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 	b.mu.Unlock()
 
 	// Start the run outside the lock
-	go func() {
+	safego.Go("im.daemonBridge.run", func() {
+		defer func() {
+			b.mu.Lock()
+			b.cancelFunc = nil
+			b.agent.SetInterruptionHandler(nil)
+			b.mu.Unlock()
+		}()
 		// Check if this input should be routed to harness auto-run
 		if text != "" && b.harnessMode != "" && b.harnessMode != "off" {
 			if harnessResult := b.tryHarnessAutoRun(ctx2, text); harnessResult != nil {
-				// Harness handled the request — skip normal agent run
-				b.mu.Lock()
-				b.cancelFunc = nil
-				b.agent.SetInterruptionHandler(nil)
-				b.mu.Unlock()
 				return
 			}
 		}
@@ -1077,11 +1080,7 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 			content = nextContent
 		}
 
-		b.mu.Lock()
-		b.cancelFunc = nil
-		b.agent.SetInterruptionHandler(nil)
-		b.mu.Unlock()
-	}()
+	})
 }
 
 type daemonBridgeSub struct {
@@ -1101,12 +1100,15 @@ func (b *DaemonBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 		done: make(chan struct{}),
 	}
 	// Start async forwarder goroutine
-	go func() {
+	safego.Go("im.daemonBridge.subscriber", func() {
 		defer close(sub.done)
 		for event := range sub.ch {
-			sub.fn(event)
+			func() {
+				defer safego.Recover("im.daemonBridge.subscriberCallback")
+				sub.fn(event)
+			}()
 		}
-	}()
+	})
 
 	b.eventSubMu.Lock()
 	defer b.eventSubMu.Unlock()

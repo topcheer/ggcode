@@ -14,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // ProtectedResourceMetadata represents RFC 9728 protected resource metadata.
@@ -556,7 +557,7 @@ func (h *OAuthHandler) startCallbackServer(expectedState string) (int, chan oaut
 		return 0, nil, nil, fmt.Errorf("starting callback listener: %w", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	go srv.Serve(ln)
+	safego.Go("mcp.oauth.serve", func() { _ = srv.Serve(ln) })
 	return port, ch, srv, nil
 }
 

@@ -492,7 +492,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return nil
 	})
 	mcpOAuthDone := make(chan string, 4)
-	go func() {
+	safego.Go("daemon.mcpOAuth.poll", func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -503,7 +503,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			mcpMgr.ClearPendingOAuth()
 			handler := pending.Handler
 			serverName := pending.ServerName
-			go func() {
+			safego.Go("daemon.mcpOAuth.handle", func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				if handler.SupportsDCR() {
@@ -563,14 +563,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				}
 				fmt.Fprintf(os.Stderr, "\x1b[32m  MCP server %s authenticated \u2713\x1b[0m\r\n", serverName)
 				mcpOAuthDone <- serverName
-			}()
+			})
 		}
-	}()
-	go func() {
+	})
+	safego.Go("daemon.mcpOAuth.retry", func() {
 		for name := range mcpOAuthDone {
 			mcpMgr.Retry(name)
 		}
-	}()
+	})
 
 	// Load project memory synchronously (daemon mode has no TUI event loop)
 	if projectMemoryLoader != nil {

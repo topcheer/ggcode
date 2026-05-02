@@ -5,6 +5,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // TUIAgent is the subset of agent.Agent needed by TUIChatBridge.
@@ -67,12 +68,15 @@ func (b *TUIChatBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 		ch:   make(chan provider.StreamEvent, 256),
 		done: make(chan struct{}),
 	}
-	go func() {
+	safego.Go("webui.tuiBridge.subscriber", func() {
 		defer close(sub.done)
 		for event := range sub.ch {
-			fn(event)
+			func() {
+				defer safego.Recover("webui.tuiBridge.subscriberCallback")
+				fn(event)
+			}()
 		}
-	}()
+	})
 
 	b.subMu.Lock()
 	defer b.subMu.Unlock()

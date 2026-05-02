@@ -186,7 +186,7 @@ func rgAvailable() bool {
 		}
 		// Try silent async install (fire and forget)
 		if rgTrying.CompareAndSwap(false, true) {
-			go installRG()
+			safego.Go("tool.grep.installRG", installRG)
 		}
 	})
 	return rgPath != ""

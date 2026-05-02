@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/task"
 )
 
@@ -220,7 +221,9 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	}
 
 	// Start idle loop in a goroutine
-	go runTeammateLoop(ctx, tm, team, agent, m, m.emit, m.cfg.TeammateTimeout)
+	safego.Go("swarm.teammateLoop", func() {
+		runTeammateLoop(ctx, tm, team, agent, m, m.emit, m.cfg.TeammateTimeout)
+	})
 
 	m.emit(Event{
 		Type:         "teammate_spawned",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
@@ -102,36 +103,38 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	subagentType := args.SubagentType
 
 	// Launch the sub-agent in a goroutine
-	go subagent.Run(runCtx, subagent.RunnerConfig{
-		Provider:     t.Provider,
-		AllTools:     allToolInfo,
-		Task:         args.Task,
-		AllowedTools: args.Tools,
-		Manager:      t.Manager,
-		SubAgentID:   id,
-		AgentFactory: t.AgentFactory,
-		Model:        model,
-		AgentType:    subagentType,
-		BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
-			subReg := NewRegistry()
-			if len(allowedTools) == 0 {
-				for _, ti := range allToolInfo {
-					name := ti.Name()
-					if name != "spawn_agent" && name != "wait_agent" && name != "list_agents" {
+	safego.Go("tool.spawnAgent.subagent", func() {
+		subagent.Run(runCtx, subagent.RunnerConfig{
+			Provider:     t.Provider,
+			AllTools:     allToolInfo,
+			Task:         args.Task,
+			AllowedTools: args.Tools,
+			Manager:      t.Manager,
+			SubAgentID:   id,
+			AgentFactory: t.AgentFactory,
+			Model:        model,
+			AgentType:    subagentType,
+			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
+				subReg := NewRegistry()
+				if len(allowedTools) == 0 {
+					for _, ti := range allToolInfo {
+						name := ti.Name()
+						if name != "spawn_agent" && name != "wait_agent" && name != "list_agents" {
+							if tl, ok := tools.Get(name); ok {
+								subReg.Register(tl)
+							}
+						}
+					}
+				} else {
+					for _, name := range allowedTools {
 						if tl, ok := tools.Get(name); ok {
 							subReg.Register(tl)
 						}
 					}
 				}
-			} else {
-				for _, name := range allowedTools {
-					if tl, ok := tools.Get(name); ok {
-						subReg.Register(tl)
-					}
-				}
-			}
-			return subReg
-		},
+				return subReg
+			},
+		})
 	})
 
 	return Result{Content: fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)}, nil

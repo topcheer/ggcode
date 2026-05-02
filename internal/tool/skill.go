@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
@@ -162,37 +163,39 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 	for _, tl := range t.Tools.List() {
 		allToolInfo = append(allToolInfo, tl)
 	}
-	go subagent.Run(ctx, subagent.RunnerConfig{
-		Provider:     t.Provider,
-		AllTools:     allToolInfo,
-		Task:         task,
-		AllowedTools: cmd.AllowedTools,
-		Manager:      mgr,
-		SubAgentID:   id,
-		AgentFactory: t.AgentFactory,
-		BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
-			subReg := NewRegistry()
-			registerTool := func(name string) {
-				if tl, ok := t.Tools.Get(name); ok {
-					_ = subReg.Register(tl)
+	safego.Go("tool.skill.subagent", func() {
+		subagent.Run(ctx, subagent.RunnerConfig{
+			Provider:     t.Provider,
+			AllTools:     allToolInfo,
+			Task:         task,
+			AllowedTools: cmd.AllowedTools,
+			Manager:      mgr,
+			SubAgentID:   id,
+			AgentFactory: t.AgentFactory,
+			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
+				subReg := NewRegistry()
+				registerTool := func(name string) {
+					if tl, ok := t.Tools.Get(name); ok {
+						_ = subReg.Register(tl)
+					}
 				}
-			}
-			if len(allowedTools) > 0 {
-				for _, name := range allowedTools {
-					registerTool(name)
+				if len(allowedTools) > 0 {
+					for _, name := range allowedTools {
+						registerTool(name)
+					}
+					return subReg
+				}
+				for _, tl := range t.Tools.List() {
+					switch tl.Name() {
+					case "spawn_agent", "wait_agent", "list_agents":
+						continue
+					default:
+						registerTool(tl.Name())
+					}
 				}
 				return subReg
-			}
-			for _, tl := range t.Tools.List() {
-				switch tl.Name() {
-				case "spawn_agent", "wait_agent", "list_agents":
-					continue
-				default:
-					registerTool(tl.Name())
-				}
-			}
-			return subReg
-		},
+			},
+		})
 	})
 
 	result, err := subagent.Wait(ctx, mgr, id)

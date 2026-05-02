@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -92,7 +93,7 @@ func (a *tgAdapter) Name() string { return a.name }
 func (a *tgAdapter) Start(ctx context.Context) {
 	debug.Log("tg", "adapter=%s start", a.name)
 	a.publishState(false, "connecting", "")
-	go a.run(ctx)
+	safego.Go("im.tg.run", func() { a.run(ctx) })
 }
 
 // Close signals the polling loop to stop immediately.
@@ -843,7 +844,7 @@ func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) 
 	}
 
 	// Answer the callback to remove the loading spinner
-	go func() {
+	safego.Go("im.tg.answerCallback", func() {
 		if a.httpClient == nil {
 			return
 		}
@@ -852,7 +853,7 @@ func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) 
 			"callback_query_id": cbID,
 			"text":              "✓",
 		}, nil)
-	}()
+	})
 
 	if data == "" || a.manager == nil {
 		return

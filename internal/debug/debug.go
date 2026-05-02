@@ -10,7 +10,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
+
+func init() {
+	// Wire up safego's logger to break the circular import.
+	safego.SetLogger(Log)
+}
 
 const (
 	defaultLogDir       = "/tmp/ggcode-debug"
@@ -523,7 +530,7 @@ func newAsyncFileSink(basePath, compatPath string, maxSize int64, maxFiles, buff
 	}
 	s.refreshCompatPath()
 	s.wg.Add(1)
-	go s.run()
+	safego.Go("debug.asyncFileSink", func() { s.run() })
 	return s, nil
 }
 

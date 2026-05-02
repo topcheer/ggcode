@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -67,7 +68,7 @@ func (a *slackAdapter) Name() string { return a.name }
 func (a *slackAdapter) Start(ctx context.Context) {
 	debug.Log("slack", "adapter=%s start", a.name)
 	a.publishState(false, "connecting", "")
-	go a.run(ctx)
+	safego.Go("im.slack.run", func() { a.run(ctx) })
 }
 
 func (a *slackAdapter) Close() error {

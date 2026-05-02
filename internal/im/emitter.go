@@ -326,7 +326,9 @@ func (e *IMEmitter) TriggerTyping() {
 		return
 	}
 	e.typing.lastTrigger = now
-	go e.manager.TriggerTyping(context.Background())
+	safego.Go("im.emitter.typing", func() {
+		e.manager.TriggerTyping(context.Background())
+	})
 }
 
 // Language returns the emitter's configured language.
