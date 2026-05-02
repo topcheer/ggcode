@@ -448,50 +448,55 @@ func renderQRFromString(content string) (string, error) {
 
 func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 	var entries []wechatBindingEntry
-	if m.imManager == nil {
+	if m.config == nil {
 		return entries
 	}
 
+	// Collect runtime adapter states
 	adapterStates := make(map[string]im.AdapterState)
-	snapshot := m.imManager.Snapshot()
-	for _, state := range snapshot.Adapters {
-		if state.Name == "" {
-			continue
+	if m.imManager != nil {
+		snapshot := m.imManager.Snapshot()
+		for _, state := range snapshot.Adapters {
+			if state.Name == "" {
+				continue
+			}
+			adapterStates[state.Name] = state
 		}
-		adapterStates[state.Name] = state
 	}
 
+	// Check which workspaces have bindings (for showing "occupied by other workspace")
+	occupied := make(map[string]string)
 	wsPath := m.currentWorkspacePath()
-	bindings, err := m.imManager.ListBindings()
-	if err != nil {
-		return entries
+	if m.imManager != nil {
+		if bindings, err := m.imManager.ListBindings(); err == nil {
+			for _, b := range bindings {
+				if b.Platform == im.PlatformWechat && b.Workspace != "" && b.Workspace != wsPath {
+					occupied[b.Adapter] = b.Workspace
+				}
+			}
+		}
 	}
 
-	for _, b := range bindings {
-		if b.Platform != im.PlatformWechat {
-			continue
+	// List all wechat adapters from config (not just bound ones)
+	keys := make([]string, 0, len(m.config.IM.Adapters))
+	for name, adapter := range m.config.IM.Adapters {
+		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformWechat)) {
+			keys = append(keys, name)
 		}
-		occupiedBy := ""
-		if b.Workspace != "" && b.Workspace != wsPath {
-			occupiedBy = b.Workspace
-		}
+	}
+	sort.Strings(keys)
+
+	for _, name := range keys {
 		var state *im.AdapterState
-		if s, ok := adapterStates[b.Adapter]; ok {
+		if s, ok := adapterStates[name]; ok {
 			state = &s
 		}
 		entries = append(entries, wechatBindingEntry{
-			Adapter:      b.Adapter,
-			TargetID:     b.TargetID,
-			ChannelID:    b.ChannelID,
-			OccupiedBy:   occupiedBy,
+			Adapter:      name,
+			OccupiedBy:   occupied[name],
 			AdapterState: state,
-			Muted:        b.Muted,
 		})
 	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Adapter < entries[j].Adapter
-	})
 	return entries
 }
 
