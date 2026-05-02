@@ -64,8 +64,8 @@ func TestWechatAdapter_AuthenticateQRCode(t *testing.T) {
 			t.Errorf("expected AuthorizationType header 'ilink_bot_token', got %q", r.Header.Get("AuthorizationType"))
 		}
 		resp := ilinkQRCodeResponse{
-			QRCode:          "test-qrcode-token-123",
-			QRCodeImgBase64: "iVBORw0KGgoAAAANSUhEUg==", // minimal PNG header base64
+			QRCode:           "test-qrcode-token-123",
+			QRCodeImgContent: "https://login.weixin.qq.com/l/test123",
 		}
 		json.NewEncoder(w).Encode(resp)
 	}))
@@ -83,7 +83,7 @@ func TestWechatAdapter_AuthenticateQRCode(t *testing.T) {
 		t.Errorf("expected qrcode token, got %q", qrcodeToken)
 	}
 	if imgBase64 == "" {
-		t.Error("expected non-empty img base64")
+		t.Error("expected non-empty img content")
 	}
 }
 

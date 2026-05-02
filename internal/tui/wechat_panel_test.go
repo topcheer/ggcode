@@ -2,8 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"image"
-	"image/color"
 	"strings"
 	"testing"
 
@@ -236,35 +234,27 @@ func TestWechatPanelRenderLocalizesToChinese(t *testing.T) {
 	}
 }
 
-func TestRenderWechatQRFromBase64_InvalidBase64(t *testing.T) {
-	_, err := renderWechatQRFromBase64("!!!invalid-base64!!!")
+func TestRenderQRFromString_EmptyContent(t *testing.T) {
+	_, err := renderQRFromString("")
 	if err == nil {
-		t.Fatal("expected error for invalid base64")
+		t.Fatal("expected error for empty content")
 	}
 }
 
-func TestRenderWechatQRFromBase64_InvalidPNG(t *testing.T) {
-	// Valid base64 but not a valid PNG
-	_, err := renderWechatQRFromBase64("aW52YWxpZCBwbmc=")
-	if err == nil {
-		t.Fatal("expected error for invalid PNG data")
+func TestRenderQRFromString_ValidURL(t *testing.T) {
+	result, err := renderQRFromString("https://login.weixin.qq.com/l/test123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-func TestRenderQRFromImage(t *testing.T) {
-	// Create a minimal 2x2 image
-	img := createTestImage(2, 2)
-	result := renderQRFromImage(img)
 	if result == "" {
 		t.Fatal("expected non-empty rendered QR")
 	}
 	lines := strings.Split(result, "\n")
 	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 lines (border + 1 row + border), got %d", len(lines))
+		t.Fatalf("expected at least 3 lines, got %d", len(lines))
 	}
-	// Check borders use block chars
-	if !strings.Contains(lines[0], "▄") && !strings.Contains(lines[0], "█") {
-		t.Errorf("expected top border with block chars, got %q", lines[0])
+	if !strings.Contains(result, "█") && !strings.Contains(result, " ") {
+		t.Error("expected block characters in QR rendering")
 	}
 }
 
@@ -273,20 +263,6 @@ func TestWechatPanel_NavigateEmpty(t *testing.T) {
 	m.openWechatPanel()
 
 	// Up/down on empty list should not crash
-	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Text: "up"})
-	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Text: "down"})
-}
-
-func createTestImage(w, h int) image.Image {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			if (x+y)%2 == 0 {
-				img.Set(x, y, color.Black)
-			} else {
-				img.Set(x, y, color.White)
-			}
-		}
-	}
-	return img
+	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Code: tea.KeyDown})
 }

@@ -69,8 +69,8 @@ type WechatAdapter struct {
 
 // ilinkQRCodeResponse is the response from get_bot_qrcode.
 type ilinkQRCodeResponse struct {
-	QRCode          string `json:"qrcode"`
-	QRCodeImgBase64 string `json:"qrcode_img_content"`
+	QRCode           string `json:"qrcode"`
+	QRCodeImgContent string `json:"qrcode_img_content"`
 }
 
 // ilinkQRCodeStatusResponse is the response from get_qrcode_status.
@@ -197,7 +197,7 @@ func (a *WechatAdapter) AuthenticateQRCode(ctx context.Context) (qrcode string, 
 	if result.QRCode == "" {
 		return "", "", fmt.Errorf("empty qrcode token in response")
 	}
-	return result.QRCode, result.QRCodeImgBase64, nil
+	return result.QRCode, result.QRCodeImgContent, nil
 }
 
 // PollQRCodeStatus checks the QR code scan status. Returns status string and
