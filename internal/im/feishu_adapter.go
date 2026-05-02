@@ -158,7 +158,7 @@ func (a *feishuAdapter) Name() string { return a.name }
 func (a *feishuAdapter) Start(ctx context.Context) {
 	debug.Log("feishu", "adapter=%s start domain=%s webhookPort=%d", a.name, a.domain, a.webhookPort)
 	a.publishState(false, "connecting", "")
-	go a.run(ctx)
+	safego.Go("im.feishu.run", func() { a.run(ctx) })
 }
 
 func (a *feishuAdapter) Close() error {
@@ -186,7 +186,7 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	debug.Log("feishu", "adapter=%s connected (token obtained)", a.name)
 
 	// Start token refresh goroutine
-	go a.tokenRefreshLoop(ctx)
+	safego.Go("im.feishu.tokenRefresh", func() { a.tokenRefreshLoop(ctx) })
 
 	// Start webhook server if port configured (legacy mode)
 	if a.webhookPort > 0 {
@@ -565,14 +565,14 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			// event in a detached goroutine. Use background ctx because the
 			// HTTP request ctx is cancelled the moment we return.
 			w.WriteHeader(http.StatusOK)
-			go a.handleMessageEvent(context.Background(), event)
+			safego.Go("im.feishu.handleMessageEvent", func() { a.handleMessageEvent(context.Background(), event) })
 			return
 		}
 	}
 	// Handle card action callbacks (button clicks from interactive messages)
 	if eventType == "card.action.trigger" {
 		w.WriteHeader(http.StatusOK)
-		go a.handleCardAction(context.Background(), payload)
+		safego.Go("im.feishu.handleCardAction", func() { a.handleCardAction(context.Background(), payload) })
 		return
 	}
 	w.WriteHeader(http.StatusOK)

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 type Position struct {
@@ -489,8 +491,8 @@ func startClient(ctx context.Context, workspace string, resolved ResolvedServer)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	go func() { client.waitErr <- cmd.Wait() }()
-	go client.readLoop()
+	safego.Go("lsp.waitProcess", func() { client.waitErr <- cmd.Wait() })
+	safego.Go("lsp.readLoop", func() { client.readLoop() })
 	if err := client.call(ctx, "initialize", map[string]any{
 		"processId": os.Getpid(),
 		"rootPath":  workspace,

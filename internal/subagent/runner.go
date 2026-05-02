@@ -3,9 +3,11 @@ package subagent
 import (
 	"context"
 	"fmt"
+	runtimedebug "runtime/debug"
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -50,6 +52,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	// Panic recovery: ensures Complete() is always called so Wait() never blocks forever.
 	defer func() {
 		if r := recover(); r != nil {
+			debug.Log("subagent", "panic recovered subagent=%s error=%v stack=%s", cfg.SubAgentID, r, string(runtimedebug.Stack()))
 			cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("sub-agent panic: %v", r))
 		}
 	}()

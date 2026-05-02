@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -147,7 +149,7 @@ func startClaudeCallbackListenerNet(expectedState string) (*ClaudeOAuthFlow, err
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	go server.Serve(ln)
+	safego.Go("auth.claudeOAuth.serve", func() { _ = server.Serve(ln) })
 
 	flow := &ClaudeOAuthFlow{
 		Port:       port,

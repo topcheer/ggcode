@@ -25,6 +25,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -100,7 +101,7 @@ func (a *qqAdapter) Name() string { return a.name }
 func (a *qqAdapter) Start(ctx context.Context) {
 	debug.Log("qq", "adapter=%s start credentials=%s", a.name, firstNonEmpty(strings.TrimSpace(a.credentialSource), "unknown"))
 	a.publishState(false, "connecting", "")
-	go a.run(ctx)
+	safego.Go("im.qq.run", func() { a.run(ctx) })
 }
 
 // Close physically closes the websocket connection.
@@ -187,7 +188,7 @@ func (a *qqAdapter) connectAndServe(ctx context.Context) error {
 
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
 	defer heartbeatCancel()
-	go a.heartbeatLoop(heartbeatCtx)
+	safego.Go("im.qq.heartbeat", func() { a.heartbeatLoop(heartbeatCtx) })
 
 	for {
 		if ctx.Err() != nil {
@@ -449,7 +450,9 @@ func (a *qqAdapter) handleGatewayPayload(ctx context.Context, raw []byte) error 
 		switch eventType {
 		case "C2C_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE", "DIRECT_MESSAGE_CREATE", "GUILD_MESSAGE_CREATE", "GUILD_AT_MESSAGE_CREATE":
 			if d, ok := payload["d"].(map[string]any); ok {
-				go a.handleMessageEvent(ctx, eventType, d)
+				eventData := d
+				eventTypeCopy := eventType
+				safego.Go("im.qq.handleMessageEvent", func() { a.handleMessageEvent(ctx, eventTypeCopy, eventData) })
 			}
 		default:
 			if eventType != "" {

@@ -757,7 +757,9 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 	}
 
 	for _, cfg := range configs {
-		go func(url, token string) {
+		url := cfg.URL
+		token := cfg.Token
+		safego.Go("a2a.pushNotify", func() {
 			req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 			if err != nil {
 				debug.Log("a2a", "push request error: %v", err)
@@ -774,7 +776,7 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 			}
 			resp.Body.Close()
 			debug.Log("a2a", "push delivered to %s: %d", url, resp.StatusCode)
-		}(cfg.URL, cfg.Token)
+		})
 	}
 }
 

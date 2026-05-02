@@ -96,7 +96,7 @@ func (c *pcRelayClient) Connect(ctx context.Context) error {
 
 	// Start heartbeat
 	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
-	go c.HeartbeatLoop(heartbeatCtx)
+	safego.Go("im.pcRelay.heartbeat", func() { c.HeartbeatLoop(heartbeatCtx) })
 
 	// Start ReadLoop in background — it will signal readyCh on provider_ready
 	safego.Go("im.pcRelay.readLoop", func() {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -260,7 +261,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 			return Result{IsError: true, Content: fmt.Sprintf("failed to start GUI command: %v", err)}, nil
 		}
 		// Detach — don't wait for exit
-		go func() { _ = cmd.Wait() }()
+		safego.Go("tool.runCommand.guiWait", func() { _ = cmd.Wait() })
 		return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", cmd.Process.Pid)}, nil
 	}
 
@@ -323,9 +324,9 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cmd *exec.Cmd
 	}
 
 	done := make(chan error, 1)
-	go func() {
+	safego.Go("tool.runCommand.autoBackgroundWait", func() {
 		done <- cmd.Wait()
-	}()
+	})
 
 	select {
 	case err := <-done:

@@ -8,6 +8,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // TaskResult holds the outcome of a Knight task execution.
@@ -73,6 +74,7 @@ func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, 
 	// Run, collecting text output
 	var output strings.Builder
 	err = runner.RunStream(ctx, prompt, func(event provider.StreamEvent) {
+		defer safego.Recover("knight.runner.streamCallback")
 		switch event.Type {
 		case provider.StreamEventText:
 			output.WriteString(event.Text)

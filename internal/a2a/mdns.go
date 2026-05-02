@@ -17,6 +17,7 @@ import (
 
 	"github.com/hashicorp/mdns"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -119,12 +120,12 @@ func (m *mdnsService) startAvahi(name string, port int, txt []string) error {
 	debug.Log("a2a.mdns", "registered via avahi-publish as %s port=%d", name, port)
 
 	// Monitor in background — if avahi-publish dies, we just lose registration silently.
-	go func() {
+	safego.Go("a2a.mdns.avahiWait", func() {
 		err := cmd.Wait()
 		if err != nil {
 			debug.Log("a2a.mdns", "avahi-publish exited: %v", err)
 		}
-	}()
+	})
 
 	return nil
 }
@@ -327,7 +328,7 @@ func (m *mdnsService) lookupHashicorp() []InstanceInfo {
 	entriesCh := make(chan *mdns.ServiceEntry, 16)
 
 	done := make(chan struct{})
-	go func() {
+	safego.Go("a2a.mdns.lookup", func() {
 		params := &mdns.QueryParam{
 			Service:             mDNSServiceType,
 			Domain:              mDNSDomain,
@@ -345,7 +346,7 @@ func (m *mdnsService) lookupHashicorp() []InstanceInfo {
 		}
 		close(entriesCh)
 		close(done)
-	}()
+	})
 
 	timer := time.NewTimer(mDNSLookupTime)
 	defer timer.Stop()

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -126,7 +127,7 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, timeout t
 		return &snapshot, nil
 	}
 
-	go m.waitForJob(jobCtx, cmd, job)
+	safego.Go("tool.commandJob.wait", func() { m.waitForJob(jobCtx, cmd, job) })
 	snapshot := m.snapshot(job)
 	return &snapshot, nil
 }
@@ -230,7 +231,7 @@ func (m *CommandJobManager) AutoBackground(cmd *exec.Cmd, command string, initia
 		job.appendOutput(initialStderr)
 	}
 
-	go m.waitForAutoBackgroundedJob(ctx, cmd, job)
+	safego.Go("tool.commandJob.autoBackgroundWait", func() { m.waitForAutoBackgroundedJob(ctx, cmd, job) })
 	return job.ID
 }
 

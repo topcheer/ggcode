@@ -12,6 +12,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -158,7 +159,7 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.lastIdle = time.Now()
 	k.mu.Unlock()
 
-	go k.runLoop(ctx)
+	safego.Go("knight.runLoop", func() { k.runLoop(ctx) })
 	debug.Log("knight", "started (budget=%dM, trust=%s)", k.cfg.DailyTokenBudget/1_000_000, k.cfg.TrustLevel)
 	return nil
 }

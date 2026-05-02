@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
@@ -79,7 +80,7 @@ func (a *discordAdapter) Name() string { return a.name }
 func (a *discordAdapter) Start(ctx context.Context) {
 	debug.Log("discord", "adapter=%s start", a.name)
 	a.publishState(false, "connecting", "")
-	go a.run(ctx)
+	safego.Go("im.discord.run", func() { a.run(ctx) })
 }
 
 func (a *discordAdapter) Close() error {
@@ -178,7 +179,7 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 					interval = iv
 				}
 			}
-			go a.heartbeatLoop(heartbeatCtx, conn, interval)
+			safego.Go("im.discord.heartbeat", func() { a.heartbeatLoop(heartbeatCtx, conn, interval) })
 			a.sendIdentify(conn)
 
 		case discordOpHeartbeatACK:
@@ -911,7 +912,7 @@ func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any
 	}
 
 	// Respond with a deferred update (no visible change to the message)
-	go func() {
+	safego.Go("im.discord.ackInteraction", func() {
 		if a.httpClient == nil {
 			return
 		}
@@ -925,7 +926,7 @@ func (a *discordAdapter) handleInteraction(ctx context.Context, d map[string]any
 		if err == nil {
 			resp.Body.Close()
 		}
-	}()
+	})
 
 	// Extract button click data
 	data, _ := d["data"].(map[string]any)

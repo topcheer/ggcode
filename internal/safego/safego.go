@@ -12,9 +12,17 @@ package safego
 
 import (
 	"runtime/debug"
-
-	internaldebug "github.com/topcheer/ggcode/internal/debug"
 )
+
+// logFn is set by the debug package at init time to avoid a circular import.
+// Before it is set, panic recovery still works but nothing is logged.
+var logFn func(category, format string, args ...any)
+
+// SetLogger installs the debug log function. Called once at startup by
+// internal/debug to wire up the dependency without creating an import cycle.
+func SetLogger(fn func(category, format string, args ...any)) {
+	logFn = fn
+}
 
 // PanicHook, when non-nil, is invoked once with the recovered value and the
 // full stack trace each time Go() catches a panic. It runs synchronously in
@@ -51,14 +59,18 @@ func Recover(name string) {
 		return
 	}
 	stack := debug.Stack()
-	internaldebug.Log("safego", "PANIC in goroutine %q: %v\n%s", name, r, stack)
+	if logFn != nil {
+		logFn("safego", "PANIC in goroutine %q: %v\n%s", name, r, stack)
+	}
 	if hook := PanicHook; hook != nil {
 		// Guard the hook itself against panics so a buggy hook can't
 		// re-trigger the very crash safego is meant to prevent.
 		func() {
 			defer func() {
 				if r2 := recover(); r2 != nil {
-					internaldebug.Log("safego", "PANIC in PanicHook for %q: %v", name, r2)
+					if logFn != nil {
+						logFn("safego", "PANIC in PanicHook for %q: %v", name, r2)
+					}
 				}
 			}()
 			hook(name, r, stack)

@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/debug"
 	"io"
 	"math/big"
 	"net"
@@ -25,6 +24,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // ---------------------------------------------------------------------------
@@ -117,7 +118,7 @@ func StartPKCEFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, error)
 		fmt.Fprintf(w, "<html><body><h2>✓ Authentication successful!</h2><p>You can close this tab.</p></body></html>")
 	})
 
-	go srv.Serve(listener)
+	safego.Go("auth.a2aOAuth.serve", func() { _ = srv.Serve(listener) })
 	defer srv.Close()
 
 	// Open browser

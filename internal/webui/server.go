@@ -19,6 +19,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -253,9 +254,9 @@ func (s *Server) Start(addr string) (string, error) {
 	s.listener = ln
 	s.addr = ln.Addr().String()
 
-	go func() {
+	safego.Go("webui.httpServe", func() {
 		_ = http.Serve(ln, s.mux)
-	}()
+	})
 
 	return s.addr, nil
 }
@@ -1316,7 +1317,7 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	// and all writes serialized. This channel achieves both.
 	writeCh := make(chan interface{}, 64)
 	writeDone := make(chan struct{})
-	go func() {
+	safego.Go("webui.ws.writeLoop", func() {
 		defer close(writeDone)
 		for msg := range writeCh {
 			if err := conn.WriteJSON(msg); err != nil {
@@ -1324,7 +1325,7 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	}()
+	})
 
 	send := func(msg interface{}) {
 		select {
@@ -1428,7 +1429,7 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			s.agentMu.Lock()
 			ctx, cancel := context.WithCancel(r.Context())
 			done := make(chan struct{})
-			go func() {
+			safego.Go("webui.ws.readPump", func() {
 				for {
 					_, _, err := conn.ReadMessage()
 					if err != nil {
@@ -1436,16 +1437,17 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 				}
-			}()
-			go func() {
+			})
+			safego.Go("webui.ws.agentStream", func() {
 				defer close(done)
 				err := s.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
+					defer safego.Recover("webui.ws.streamCallback")
 					send(streamEventToJSON(event))
 				})
 				if err != nil && ctx.Err() == nil {
 					send(map[string]interface{}{"type": "error", "error": err.Error()})
 				}
-			}()
+			})
 			<-done
 			cancel()
 			s.agentMu.Unlock()
@@ -1636,12 +1638,12 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]string{"status": "restarting"})
 	// Trigger async so the response can be sent first
-	go func() {
+	safego.Go("webui.restart", func() {
 		time.Sleep(500 * time.Millisecond)
 		if s.restartFn != nil {
 			s.restartFn()
 		}
-	}()
+	})
 }
 
 // handleKnight returns Knight agent status and all skill data.
