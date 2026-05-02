@@ -79,6 +79,30 @@ func TestCompleteMention(t *testing.T) {
 	// Directory is empty so 0 completions is valid
 }
 
+func TestCompleteMentionEmptyPrefix(t *testing.T) {
+	// When prefix is empty, should list contents of workDir, not parent directory
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte(""), 0644)
+	os.MkdirAll(filepath.Join(dir, "internal"), 0755)
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte(""), 0644)
+
+	completions := CompleteMention("", dir)
+	if len(completions) < 3 {
+		t.Errorf("expected at least 3 completions for empty prefix, got %d: %v", len(completions), completions)
+	}
+	// Should contain our files/dirs
+	names := map[string]bool{}
+	for _, c := range completions {
+		names[c] = true
+	}
+	if !names["main.go"] {
+		t.Errorf("expected 'main.go' in completions, got: %v", completions)
+	}
+	if !names["internal/"] {
+		t.Errorf("expected 'internal/' in completions, got: %v", completions)
+	}
+}
+
 func TestParseMentions_PathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "safe.txt"), []byte("safe content"), 0644)

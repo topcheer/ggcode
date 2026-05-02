@@ -113,11 +113,24 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 		for atPos >= 0 && value[atPos] != '@' {
 			atPos--
 		}
-		replacement = "@" + selected + " "
+		if strings.HasSuffix(selected, "/") {
+			// Directory: no trailing space so user can keep navigating
+			replacement = "@" + selected
+		} else {
+			replacement = "@" + selected + " "
+		}
 		value = value[:atPos] + replacement + value[cursor:]
 	}
 
 	m.input.SetValue(value)
+	m.input.CursorEnd()
+
+	// For directory mentions, re-trigger autocomplete to show contents
+	if m.autoCompleteKind == "mention" && strings.HasSuffix(selected, "/") {
+		m.updateAutoComplete()
+		return nil
+	}
+
 	m.autoCompleteActive = false
 	m.autoCompleteItems = nil
 	m.autoCompleteIndex = 0
