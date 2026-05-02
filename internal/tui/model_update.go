@@ -294,6 +294,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleDingtalkPanelKey(msg)
 		}
 
+		if m.wechatPanel != nil {
+			return m.handleWechatPanelKey(msg)
+		}
 		if m.imPanel != nil {
 			return m.handleIMPanelKey(msg)
 		}
@@ -1451,6 +1454,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case wechatQRCodeMsg:
+		return m.handleWechatQRCodeMsg(msg)
+	case wechatQRPollMsg:
+		return m.handleWechatQRPollMsg(msg)
 
 	case qqBindResultMsg:
 		if m.qqPanel != nil {

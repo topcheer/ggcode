@@ -156,6 +156,13 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 	case PlatformDummy:
 		adapter := newDummyAdapter(name, cfg, adapterCfg, mgr)
 		start(adapter)
+	case PlatformWechat:
+		adapter, err := newWechatAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			adapterCancel()
+			return err
+		}
+		start(adapter)
 	}
 	return nil
 }
