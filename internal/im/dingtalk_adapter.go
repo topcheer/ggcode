@@ -139,7 +139,10 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 	}
 	debug.Log("dingtalk", "adapter=%s stream endpoint=%s", a.name, wsURL)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	// Connect WebSocket with required Origin header (DingTalk validates this).
+	wsHeader := http.Header{}
+	wsHeader.Set("Origin", "https://api.dingtalk.com")
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, wsHeader)
 	if err != nil {
 		return fmt.Errorf("dial stream: %w", err)
 	}
