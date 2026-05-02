@@ -265,7 +265,8 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	token := a.accessToken
 	a.mu.RUnlock()
 	body := map[string]any{
-		"clientId": a.appKey,
+		"clientId":     a.appKey,
+		"clientSecret": a.appSecret,
 		"subscriptions": []map[string]any{
 			{
 				"type":  "EVENT",
