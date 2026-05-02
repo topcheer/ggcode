@@ -1294,6 +1294,8 @@ func platformDisplayName(p im.Platform) string {
 		return "DingTalk"
 	case im.PlatformSlack:
 		return "Slack"
+	case im.PlatformWechat:
+		return "WeChat"
 	default:
 		return "IM"
 	}
@@ -1313,6 +1315,8 @@ func platformCNName(p im.Platform) string {
 		return "钉钉"
 	case im.PlatformSlack:
 		return "Slack"
+	case im.PlatformWechat:
+		return "微信"
 	default:
 		return "IM"
 	}
