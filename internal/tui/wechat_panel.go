@@ -318,7 +318,6 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 	case "confirmed":
 		panel.authPhase = "confirmed"
 		panel.botToken = msg.botToken
-		panel.message = m.t("panel.wechat.auth_success")
 		// Auto-create adapter config and start it
 		return *m, m.saveWechatBotToken(msg.botToken)
 	case "scanned":
@@ -341,6 +340,7 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 	return func() tea.Msg {
 		if m.config == nil {
+			debug.Log("wechat", "saveWechatBotToken: config is nil")
 			return imEditResultMsg{err: fmt.Errorf("config unavailable")}
 		}
 
@@ -362,15 +362,22 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 				"bot_token": botToken,
 			},
 		}); err != nil {
+			debug.Log("wechat", "saveWechatBotToken: AddIMAdapter failed: %v", err)
 			return imEditResultMsg{err: fmt.Errorf("create adapter config: %w", err)}
 		}
+		debug.Log("wechat", "saveWechatBotToken: adapter %q created and saved", adapterName)
 
 		// Start the adapter
 		if m.imManager != nil {
-			_ = im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager)
+			if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
+				debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
+			} else {
+				debug.Log("wechat", "saveWechatBotToken: adapter %q started", adapterName)
+			}
+		} else {
+			debug.Log("wechat", "saveWechatBotToken: imManager is nil, adapter not started")
 		}
 
-		debug.Log("wechat", "bot token saved as %s and adapter started", adapterName)
 		return imEditResultMsg{adapterName: adapterName, field: "bot_token", value: "***"}
 	}
 }
