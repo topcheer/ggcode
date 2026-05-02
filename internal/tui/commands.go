@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -356,21 +357,14 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		displayText = strings.TrimSpace(m.pendingImage.placeholder + " " + text)
 	}
 
-	// Auto-run routing: if harness.auto_run is configured, decide whether
-	// this input should be routed to harness instead of the normal agent.
-	if autoRunResult, err := m.checkAutoRun(text); err == nil && autoRunResult != nil {
-		switch autoRunResult.Decision {
-		case harness.RouteSuggest:
-			m.pendingAutoRun = autoRunResult
-			m.pendingAutoRunText = text
-			m.chatWriteSystem(nextChatID(), autoRunResult.Message)
-			m.chatListScrollToBottom()
-			return nil
-		case harness.RouteHarness:
-			return m.handleAutoRun(text, autoRunResult)
-		}
+	if m.shouldCheckAutoRun() {
+		return m.startAutoRunCheck(text, displayText)
 	}
 
+	return m.startNormalTextRun(text, displayText)
+}
+
+func (m *Model) startNormalTextRun(text string, displayText string) tea.Cmd {
 	m.chatWriteUser(nextChatID(), displayText)
 	m.chatListScrollToBottom()
 
@@ -422,30 +416,48 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startAgent(prompt))
 }
 
-// checkAutoRun evaluates whether the user input should be routed to harness
-// based on the harness.auto_run configuration. Returns nil if auto-run is
-// disabled or the input should go to the normal agent.
-func (m *Model) checkAutoRun(text string) (*harness.AutoRunResult, error) {
-	if m.config == nil {
-		return nil, nil
-	}
+func (m *Model) shouldCheckAutoRun() bool {
+	return m.config != nil && m.config.Harness.AutoRunMode() != "off"
+}
+
+// startAutoRunCheck evaluates harness auto-run routing off the Bubble Tea
+// update path so the optional LLM classifier cannot freeze the TUI.
+func (m *Model) startAutoRunCheck(text string, displayText string) tea.Cmd {
 	mode := m.config.Harness.AutoRunMode()
-	if mode == "off" {
-		return nil, nil
-	}
 	// In strict mode, apply write guard immediately regardless of route outcome.
 	// This ensures the main agent cannot write to the project even if the input
 	// is not routed to harness.
 	if mode == "strict" {
 		m.applyStrictWriteGuard()
 	}
+
+	// Show the user's input immediately — don't wait for the async routing check.
+	m.chatWriteUser(nextChatID(), displayText)
+	m.chatListScrollToBottom()
+
+	cfg := m.config
 	workDir, _ := os.Getwd()
-	ctx := harness.RouteContext{
-		Input:                 text,
-		WorkingDir:            workDir,
-		LLMClassifierProvider: m.agent.Provider(),
+	var classifierProvider provider.Provider
+	if m.agent != nil {
+		classifierProvider = m.agent.Provider()
 	}
-	return harness.ShouldAutoRun(m.config, text, ctx)
+
+	m.loading = true
+	m.statusActivity = "Checking harness routing..."
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
+
+	checkCmd := func() tea.Msg {
+		ctx := harness.RouteContext{
+			Input:                 text,
+			WorkingDir:            workDir,
+			LLMClassifierProvider: classifierProvider,
+		}
+		result, err := harness.ShouldAutoRun(cfg, text, ctx)
+		return autoRunCheckResultMsg{Text: text, DisplayText: displayText, Result: result, Err: err}
+	}
+	return tea.Batch(m.startLoadingSpinner(m.statusActivity), checkCmd)
 }
 
 // handleAutoRun processes a harness auto-run decision by directly executing
