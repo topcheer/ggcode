@@ -92,15 +92,18 @@ type ilinkGetUpdatesResponse struct {
 
 // ilinkMessage represents a single iLink message.
 type ilinkMessage struct {
+	Seq          int64       `json:"seq"`
+	MessageID    int64       `json:"message_id"`
 	FromUserID   string      `json:"from_user_id"`
 	ToUserID     string      `json:"to_user_id"`
+	ClientID     string      `json:"client_id"`
+	CreateTimeMs int64       `json:"create_time_ms"`
+	SessionID    string      `json:"session_id"`
 	GroupID      string      `json:"group_id"`
 	MessageType  int         `json:"message_type"`
 	MessageState int         `json:"message_state"`
 	ContextToken string      `json:"context_token"`
 	ItemList     []ilinkItem `json:"item_list"`
-	MsgID        string      `json:"msg_id"`
-	Timestamp    int64       `json:"timestamp"`
 }
 
 // ilinkItem is a single item in an iLink message.
@@ -369,7 +372,7 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 			Platform:   PlatformWechat,
 			ChannelID:  channelID,
 			SenderID:   msg.FromUserID,
-			MessageID:  msg.MsgID,
+			MessageID:  strconv.FormatInt(msg.MessageID, 10),
 			ReceivedAt: time.Now(),
 		},
 		Text: text,
