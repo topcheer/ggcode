@@ -235,7 +235,7 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 	a.accessToken = token
 	a.tokenExpire = time.Now().Add(time.Duration(expire) * time.Second)
 	a.mu.Unlock()
-	debug.Log("dingtalk", "adapter=%s token refreshed, expires in %ds", a.name, expire)
+	debug.Log("dingtalk", "adapter=%s token refreshed (appKey=%s), expires in %ds", a.name, a.appKey, expire)
 	return nil
 }
 
