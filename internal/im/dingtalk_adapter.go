@@ -224,7 +224,8 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 	}
 	token, _ := result["accessToken"].(string)
 	if token == "" {
-		return fmt.Errorf("DingTalk accessToken is empty")
+		debug.Log("dingtalk", "adapter=%s token response: %s", a.name, string(data))
+		return fmt.Errorf("DingTalk accessToken is empty: %s", string(data))
 	}
 	expire, _ := intValue(result["expireIn"])
 	if expire <= 0 {
@@ -294,8 +295,10 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	}
 	endpoint, _ := result["endpoint"].(string)
 	if endpoint == "" {
+		debug.Log("dingtalk", "adapter=%s streamOpen response: %s", a.name, string(data))
 		return "", fmt.Errorf("DingTalk stream endpoint is empty: %s", strings.TrimSpace(string(data)))
 	}
+	debug.Log("dingtalk", "adapter=%s stream endpoint: %s", a.name, endpoint)
 	return endpoint, nil
 }
 
