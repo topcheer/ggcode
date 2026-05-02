@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -50,12 +51,12 @@ Respond with ONLY a JSON object, no other text:
 
 // ClassifyWithLLM uses an LLM to classify whether a user input is a code change task.
 // It returns nil (and a nil error) if the provider is nil, effectively disabling the classifier.
-// On timeout or error, it returns nil, falling back to the deterministic router.
+// On timeout or error, it returns nil with the error so callers can fall back to the deterministic router.
 func ClassifyWithLLM(ctx context.Context, prov provider.Provider, input string) (*LLMClassifierResult, error) {
 	if prov == nil {
 		return nil, nil
 	}
-	if len(input) < 20 {
+	if len([]rune(strings.TrimSpace(input))) < 10 {
 		return nil, nil
 	}
 
@@ -137,7 +138,7 @@ func parseClassifierResponse(text string) (*LLMClassifierResult, error) {
 		return nil, fmt.Errorf("parse JSON: %w", err)
 	}
 
-	isCodeChange := resp.Classification == "code_change"
+	isCodeChange := strings.EqualFold(strings.TrimSpace(resp.Classification), "code_change")
 
 	// Clamp confidence to [0, 1]
 	confidence := resp.Confidence
@@ -152,41 +153,62 @@ func parseClassifierResponse(text string) (*LLMClassifierResult, error) {
 		IsCodeChange: isCodeChange,
 		Confidence:   confidence,
 		Reason:       resp.Reason,
-		Complexity:   resp.Complexity,
+		Complexity:   normalizeClassifierComplexity(resp.Complexity),
 	}, nil
 }
 
 // RouteFromLLMResult converts an LLM classifier result to a RouteDecision.
-// Only complex code changes go to harness. Simple changes go to main agent.
+// In "on" and "suggest" modes, only complex code changes go to harness/suggestion.
+// In "strict" mode, any confident code change goes to harness because the main
+// agent write guard prevents direct project mutation.
 // High confidence (≥0.8) complex code change → RouteHarness.
 // Medium confidence (≥0.5) complex code change → RouteSuggest.
-// Simple code change or low confidence → RouteNormal.
+// Unknown complexity never auto-routes to harness in "on"; it asks instead.
+// Simple code change or low confidence → RouteNormal unless mode is "strict".
 func RouteFromLLMResult(result *LLMClassifierResult, mode string) RouteDecision {
 	if result == nil || !result.IsCodeChange {
 		return RouteNormal
 	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
 
-	// Simple changes don't need harness isolation
-	if result.Complexity == "simple" {
+	if result.Confidence < 0.5 {
+		return RouteNormal
+	}
+
+	complexity := normalizeClassifierComplexity(result.Complexity)
+	if mode == "strict" {
+		return RouteHarness
+	}
+	if complexity == "simple" {
+		return RouteNormal
+	}
+	if complexity == "" {
+		if result.Confidence >= 0.8 && (mode == "on" || mode == "suggest") {
+			return RouteSuggest
+		}
 		return RouteNormal
 	}
 
 	switch mode {
-	case "strict":
-		// Strict mode: always route to harness for complex code changes
-		if result.Confidence >= 0.5 {
-			return RouteHarness
-		}
-		return RouteNormal
+	case "suggest":
+		return RouteSuggest
 	case "on":
 		if result.Confidence >= 0.8 {
 			return RouteHarness
 		}
-		if result.Confidence >= 0.5 {
-			return RouteSuggest
-		}
-		return RouteNormal
+		return RouteSuggest
 	default:
 		return RouteNormal
+	}
+}
+
+func normalizeClassifierComplexity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "simple":
+		return "simple"
+	case "complex":
+		return "complex"
+	default:
+		return ""
 	}
 }

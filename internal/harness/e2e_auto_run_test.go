@@ -309,7 +309,7 @@ func TestE2EAutoRun_LLMClassifierOverrides(t *testing.T) {
 	// "the login page is broken" — no action verb, no file path, low structural score
 	// But with LLM classifier, it should be classified as code change
 	prov := &mockClassifierProvider{
-		response: `{"classification": "code_change", "confidence": 0.92, "reason": "bug report implying code fix"}`,
+		response: `{"classification": "code_change", "confidence": 0.92, "complexity": "complex", "reason": "bug report implying code fix"}`,
 	}
 
 	cfg := &config.Config{Harness: config.HarnessConfig{AutoRun: "on"}}

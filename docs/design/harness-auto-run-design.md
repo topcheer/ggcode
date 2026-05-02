@@ -60,7 +60,7 @@ All design goals achieved. No remaining gaps.
 
 Optional future enhancements:
 1. **LLM classifier model override.** Currently uses the user's main model (Sonnet/Opus) for classification. Should use a cheap model (Haiku/Flash) to reduce cost. Requires provider.Chat() to accept a model override parameter.
-2. **LLM classifier async pre-warming.** Currently blocks for up to 3s. Could start classification in parallel with agent initialization to hide latency.
+2. **LLM classifier latency hiding.** TUI routing checks now run off the Bubble Tea update path, but classification can still delay when a submitted prompt starts executing. A future cheap-model classifier or speculative pre-classification could reduce that latency further.
 3. Integration tests with real LLM provider (current tests use mock; smoke tests available via `GGCODE_TEST_PROVIDER` env var).
 4. Subagent mode worker guard exemption (only needed if switching from BinaryRunner).
 

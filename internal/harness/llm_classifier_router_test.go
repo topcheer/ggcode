@@ -1,8 +1,11 @@
 package harness
 
 import (
+	"errors"
 	"testing"
 )
+
+var errTestClassifier = errors.New("classifier unavailable")
 
 // TestDecideRouteWithFeatures_LLMClassifierOverrides tests that the LLM
 // classifier can override a low-score input to RouteHarness.
@@ -22,13 +25,12 @@ func TestDecideRouteWithFeatures_LLMClassifierOverrides(t *testing.T) {
 	}
 }
 
-// TestDecideRouteWithFeatures_ScoreVeryHigh_SkipsLLM tests that score >= 5
-// routes directly without calling the LLM classifier.
-func TestDecideRouteWithFeatures_ScoreVeryHigh_SkipsLLM(t *testing.T) {
-	// This provider returns "conversation" — if LLM were called, it would
-	// downgrade to RouteNormal. But score >= 5 should skip LLM entirely.
+// TestDecideRouteWithFeatures_ScoreVeryHigh_UsesLLMComplexity tests that a
+// very high structural score still uses the LLM when available; high score
+// means code-related, not necessarily complex enough for harness.
+func TestDecideRouteWithFeatures_ScoreVeryHigh_UsesLLMComplexity(t *testing.T) {
 	prov := &mockClassifierProvider{
-		response: `{"classification": "conversation", "confidence": 0.9, "reason": "test"}`,
+		response: `{"classification": "code_change", "confidence": 0.95, "complexity": "simple", "reason": "localized typo/config fix"}`,
 	}
 
 	// Need score >= 5: action verb (+2) + file path (+2) + code block (+1) + task goal (+1) = 6
@@ -39,8 +41,8 @@ func TestDecideRouteWithFeatures_ScoreVeryHigh_SkipsLLM(t *testing.T) {
 	}
 
 	decision := DecideRouteWithFeatures(input, "on", features, ctx)
-	if decision != RouteHarness {
-		t.Errorf("decision = %v, want RouteHarness (score >= 5, LLM skipped)", decision)
+	if decision != RouteNormal {
+		t.Errorf("decision = %v, want RouteNormal (LLM simple complexity filters high score)", decision)
 	}
 }
 
@@ -86,6 +88,23 @@ func TestDecideRouteWithFeatures_Score3or4_ComplexGoesToHarness(t *testing.T) {
 	}
 }
 
+func TestDecideRouteWithFeatures_LLMFailureFallsBackDeterministic(t *testing.T) {
+	prov := &mockClassifierProvider{
+		err: errTestClassifier,
+	}
+
+	input := "fix the bug in auth.go"
+	features := ExtractFeatures(input)
+	ctx := RouteContext{
+		LLMClassifierProvider: prov,
+	}
+
+	decision := DecideRouteWithFeatures(input, "on", features, ctx)
+	if decision != RouteHarness {
+		t.Errorf("decision = %v, want RouteHarness (deterministic fallback after LLM failure)", decision)
+	}
+}
+
 // TestDecideRouteWithFeatures_SkippedWhenNoProvider tests that no LLM call
 // happens when provider is nil — falls back to deterministic only.
 func TestDecideRouteWithFeatures_SkippedWhenNoProvider(t *testing.T) {
@@ -100,20 +119,21 @@ func TestDecideRouteWithFeatures_SkippedWhenNoProvider(t *testing.T) {
 	}
 }
 
-// TestDecideRouteWithFeatures_SkippedForSuggestMode tests that LLM is
-// not called in suggest mode.
-func TestDecideRouteWithFeatures_SkippedForSuggestMode(t *testing.T) {
+// TestDecideRouteWithFeatures_SuggestModeWithProviderSuggests tests that
+// suggest mode still prompts when a provider is available.
+func TestDecideRouteWithFeatures_SuggestModeWithProviderSuggests(t *testing.T) {
 	prov := &mockClassifierProvider{
 		response: `{"classification": "code_change", "confidence": 0.9, "complexity": "complex", "reason": "test"}`,
 	}
 
-	features := ExtractFeatures("the login page is broken")
+	input := "fix the login module"
+	features := ExtractFeatures(input)
 	ctx := RouteContext{
 		LLMClassifierProvider: prov,
 	}
 
-	decision := DecideRouteWithFeatures("the login page is broken", "suggest", features, ctx)
-	if decision != RouteNormal {
-		t.Errorf("decision = %v, want RouteNormal (suggest mode skips LLM)", decision)
+	decision := DecideRouteWithFeatures(input, "suggest", features, ctx)
+	if decision != RouteSuggest {
+		t.Errorf("decision = %v, want RouteSuggest (suggest mode with provider)", decision)
 	}
 }

@@ -46,7 +46,7 @@ func (m *mockClassifierProvider) CountTokens(ctx context.Context, messages []pro
 }
 
 func TestParseClassifierResponse_CodeChange(t *testing.T) {
-	input := `{"classification": "code_change", "confidence": 0.9, "reason": "User wants to fix a bug"}`
+	input := `{"classification": "code_change", "confidence": 0.9, "complexity": "complex", "reason": "User wants to fix a bug"}`
 	result, err := parseClassifierResponse(input)
 	if err != nil {
 		t.Fatalf("parseClassifierResponse() error = %v", err)
@@ -59,6 +59,9 @@ func TestParseClassifierResponse_CodeChange(t *testing.T) {
 	}
 	if result.Reason != "User wants to fix a bug" {
 		t.Errorf("reason = %q, want bug fix", result.Reason)
+	}
+	if result.Complexity != "complex" {
+		t.Errorf("complexity = %q, want complex", result.Complexity)
 	}
 }
 
@@ -108,6 +111,17 @@ func TestParseClassifierResponse_ConfidenceClamped(t *testing.T) {
 	}
 }
 
+func TestParseClassifierResponse_NormalizesInvalidComplexity(t *testing.T) {
+	input := `{"classification": "code_change", "confidence": 0.9, "complexity": "large", "reason": "test"}`
+	result, err := parseClassifierResponse(input)
+	if err != nil {
+		t.Fatalf("parseClassifierResponse() error = %v", err)
+	}
+	if result.Complexity != "" {
+		t.Errorf("complexity = %q, want empty for invalid value", result.Complexity)
+	}
+}
+
 func TestParseClassifierResponse_InvalidJSON(t *testing.T) {
 	_, err := parseClassifierResponse("not json at all")
 	if err == nil {
@@ -138,7 +152,7 @@ func TestClassifyWithLLM_TooShort(t *testing.T) {
 
 func TestClassifyWithLLM_SuccessfulClassification(t *testing.T) {
 	prov := &mockClassifierProvider{
-		response: `{"classification": "code_change", "confidence": 0.92, "reason": "bug fix request"}`,
+		response: `{"classification": "code_change", "confidence": 0.92, "complexity": "complex", "reason": "bug fix request"}`,
 	}
 	result, err := ClassifyWithLLM(context.Background(), prov, "the login page shows a 500 error when the session expires")
 	if err != nil {
@@ -197,8 +211,10 @@ func TestRouteFromLLMResult(t *testing.T) {
 		{"low confidence complex on", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.3, Complexity: "complex"}, "on", RouteNormal},
 		{"high confidence complex strict", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.6, Complexity: "complex"}, "strict", RouteHarness},
 		{"low confidence complex strict", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.3, Complexity: "complex"}, "strict", RouteNormal},
-		{"simple strict still normal", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.95, Complexity: "simple"}, "strict", RouteNormal},
-		{"suggest mode ignored", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.9, Complexity: "complex"}, "suggest", RouteNormal},
+		{"simple strict still harness", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.95, Complexity: "simple"}, "strict", RouteHarness},
+		{"suggest mode complex suggests", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.9, Complexity: "complex"}, "suggest", RouteSuggest},
+		{"unknown complexity high confidence asks", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.9}, "on", RouteSuggest},
+		{"unknown complexity low confidence normal", &LLMClassifierResult{IsCodeChange: true, Confidence: 0.6}, "on", RouteNormal},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
