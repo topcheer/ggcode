@@ -103,6 +103,31 @@ func TestCompleteMentionEmptyPrefix(t *testing.T) {
 	}
 }
 
+func TestCompleteMentionTrailingSlash(t *testing.T) {
+	// When prefix ends with "/", should list contents of that directory
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "internal", "agent"), 0755)
+	os.WriteFile(filepath.Join(dir, "internal", "agent", "agent.go"), []byte(""), 0644)
+	os.WriteFile(filepath.Join(dir, "internal", "main.go"), []byte(""), 0644)
+
+	// "internal/" should list internal/ contents, not re-match "internal" in parent
+	completions := CompleteMention("internal/", dir)
+	names := map[string]bool{}
+	for _, c := range completions {
+		names[c] = true
+	}
+	if !names["internal/agent/"] {
+		t.Errorf("expected 'internal/agent/' in completions for 'internal/', got: %v", completions)
+	}
+	if !names["internal/main.go"] {
+		t.Errorf("expected 'internal/main.go' in completions for 'internal/', got: %v", completions)
+	}
+	// Should NOT contain just "internal/" (that was the old bug)
+	if names["internal/"] {
+		t.Errorf("should not contain 'internal/' when browsing into it, got: %v", completions)
+	}
+}
+
 func TestParseMentions_PathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "safe.txt"), []byte("safe content"), 0644)
