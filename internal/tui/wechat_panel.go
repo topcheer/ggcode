@@ -3,9 +3,12 @@ package tui
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
+	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -13,9 +16,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 )
+
+const wechatILinkBaseURL = "https://ilinkai.weixin.qq.com"
 
 // wechatPanelState tracks the WeChat iLink panel UI state.
 type wechatPanelState struct {
@@ -179,7 +185,9 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		panel.message = ""
 	case "a":
-		// Start QR auth flow
+		// Start QR auth flow — no pre-existing adapter needed
+		panel.authPhase = "requesting"
+		panel.message = ""
 		return *m, m.requestWechatQRCode()
 	case "e":
 		if len(entries) > 0 && panel.selected < len(entries) {
@@ -191,7 +199,6 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 		}
 	case "r":
-		// Remove bot binding
 		if len(entries) > 0 && panel.selected < len(entries) {
 			entry := entries[panel.selected]
 			if m.imManager != nil {
@@ -209,51 +216,80 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// requestWechatQRCode starts the QR code authentication flow.
+// ---- iLink HTTP helpers (no adapter dependency) ----
+
+func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("AuthorizationType", "ilink_bot_token")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+// requestWechatQRCode requests a QR code directly from iLink (no adapter needed).
 func (m *Model) requestWechatQRCode() tea.Cmd {
 	return func() tea.Msg {
-		adapter := m.getWechatAdapter()
-		if adapter == nil {
-			return wechatQRCodeMsg{err: fmt.Errorf("no wechat adapter configured — add 'wechat' platform to im config")}
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		qrcodeToken, imgBase64, err := adapter.AuthenticateQRCode(ctx)
+
+		url := wechatILinkBaseURL + "/ilink/bot/get_bot_qrcode?bot_type=3"
+		data, err := wechatILinkRequest(ctx, http.MethodGet, url)
 		if err != nil {
-			return wechatQRCodeMsg{err: err}
+			return wechatQRCodeMsg{err: fmt.Errorf("QR code request failed: %w", err)}
 		}
-		qrImage, err := renderWechatQRFromBase64(imgBase64)
+
+		var resp struct {
+			QRCode          string `json:"qrcode"`
+			QRCodeImgBase64 string `json:"qrcode_img_content"`
+		}
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return wechatQRCodeMsg{err: fmt.Errorf("QR code decode failed: %w", err)}
+		}
+		if resp.QRCode == "" {
+			return wechatQRCodeMsg{err: fmt.Errorf("empty QR code token in response")}
+		}
+
+		qrImage, err := renderWechatQRFromBase64(resp.QRCodeImgBase64)
 		if err != nil {
 			debug.Log("wechat", "QR render failed: %v", err)
 			qrImage = fmt.Sprintf("[QR decode error: %v]", err)
 		}
-		return wechatQRCodeMsg{qrcodeToken: qrcodeToken, qrcodeImage: qrImage}
+		return wechatQRCodeMsg{qrcodeToken: resp.QRCode, qrcodeImage: qrImage}
 	}
 }
 
-// pollWechatQRStatus polls the QR code scan status.
+// pollWechatQRStatus polls the QR code scan status directly (no adapter needed).
 func (m *Model) pollWechatQRStatus(qrcodeToken string) tea.Cmd {
 	return func() tea.Msg {
-		adapter := m.getWechatAdapter()
-		if adapter == nil {
-			return wechatQRPollMsg{err: fmt.Errorf("adapter lost")}
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		status, botToken, err := adapter.PollQRCodeStatus(ctx, qrcodeToken)
+
+		url := wechatILinkBaseURL + "/ilink/bot/get_qrcode_status?qrcode=" + qrcodeToken
+		data, err := wechatILinkRequest(ctx, http.MethodGet, url)
 		if err != nil {
 			return wechatQRPollMsg{err: err}
 		}
-		return wechatQRPollMsg{status: status, botToken: botToken}
+
+		var resp struct {
+			Status   string `json:"status"`
+			BotToken string `json:"bot_token"`
+		}
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return wechatQRPollMsg{err: fmt.Errorf("decode status: %w", err)}
+		}
+		return wechatQRPollMsg{status: resp.Status, botToken: resp.BotToken}
 	}
 }
 
-func (m *Model) getWechatAdapter() *im.WechatAdapter {
-	if m.imManager == nil {
-		return nil
-	}
-	return m.imManager.WechatAdapter()
-}
+// ---- QR message handlers ----
 
 func (m *Model) handleWechatQRCodeMsg(msg wechatQRCodeMsg) (Model, tea.Cmd) {
 	panel := m.wechatPanel
@@ -283,11 +319,8 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 		panel.authPhase = "confirmed"
 		panel.botToken = msg.botToken
 		panel.message = m.t("panel.wechat.auth_success")
-		adapter := m.getWechatAdapter()
-		if adapter != nil {
-			adapter.SetBotToken(msg.botToken)
-		}
-		return *m, nil
+		// Auto-create adapter config and start it
+		return *m, m.saveWechatBotToken(msg.botToken)
 	case "scanned":
 		panel.authPhase = "polling"
 		panel.message = m.t("panel.wechat.scanned")
@@ -303,6 +336,45 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 }
+
+// saveWechatBotToken creates the wechat adapter config and starts the adapter.
+func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
+	return func() tea.Msg {
+		if m.config == nil {
+			return imEditResultMsg{err: fmt.Errorf("config unavailable")}
+		}
+
+		adapterName := "wechat"
+
+		// If adapter doesn't exist yet, create it
+		if _, exists := m.config.IM.Adapters[adapterName]; !exists {
+			if err := m.config.AddIMAdapter(adapterName, config.IMAdapterConfig{
+				Enabled:  true,
+				Platform: "wechat",
+				Extra: map[string]interface{}{
+					"bot_token": botToken,
+				},
+			}); err != nil {
+				return imEditResultMsg{err: fmt.Errorf("create adapter config: %w", err)}
+			}
+		} else {
+			// Adapter exists — update the token
+			if err := m.config.SetIMAdapterExtra(adapterName, "bot_token", botToken); err != nil {
+				return imEditResultMsg{err: fmt.Errorf("save bot_token: %w", err)}
+			}
+		}
+
+		// Start the adapter
+		if m.imManager != nil {
+			_ = im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager)
+		}
+
+		debug.Log("wechat", "bot token saved and adapter started")
+		return imEditResultMsg{adapterName: adapterName, field: "bot_token", value: "***"}
+	}
+}
+
+// ---- QR rendering ----
 
 // renderWechatQRFromBase64 decodes a base64 PNG and renders it as Unicode block characters.
 func renderWechatQRFromBase64(imgBase64 string) (string, error) {
@@ -405,6 +477,8 @@ func renderQRFromImage(img image.Image) string {
 
 	return strings.Join(lines, "\n")
 }
+
+// ---- Binding entries ----
 
 func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 	var entries []wechatBindingEntry
