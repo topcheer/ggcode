@@ -374,6 +374,21 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 			} else {
 				debug.Log("wechat", "saveWechatBotToken: adapter %q started", adapterName)
 			}
+
+			// Auto-bind: create a channel binding for current workspace
+			ws := m.currentWorkspacePath()
+			if ws != "" {
+				_, err := m.imManager.BindChannel(im.ChannelBinding{
+					Workspace: ws,
+					Platform:  im.PlatformWechat,
+					Adapter:   adapterName,
+				})
+				if err != nil {
+					debug.Log("wechat", "saveWechatBotToken: BindChannel failed: %v", err)
+				} else {
+					debug.Log("wechat", "saveWechatBotToken: bound adapter %q to workspace %s", adapterName, ws)
+				}
+			}
 		} else {
 			debug.Log("wechat", "saveWechatBotToken: imManager is nil, adapter not started")
 		}
