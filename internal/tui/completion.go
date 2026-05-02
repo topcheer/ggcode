@@ -193,7 +193,7 @@ func CompleteMention(prefix string, workDir string) []string {
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
-	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding",
+	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills",
@@ -220,6 +220,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/lark":        "Manage Feishu channel binding",
 	"/slack":       "Manage Slack channel binding",
 	"/dingtalk":    "Manage DingTalk channel binding",
+	"/wechat":      "Manage WeChat (iLink) channel binding",
 	"/ding":        "Manage DingTalk channel binding",
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
@@ -266,6 +267,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/skills":      "<skill-name>",
 	"/init":        "[path]",
 	"/im":          "<subcommand>",
+	"/wechat":      "<subcommand>",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.
