@@ -2,11 +2,8 @@ package tui
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/png"
 	"io"
 	"net/http"
 	"sort"
@@ -15,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -247,8 +245,8 @@ func (m *Model) requestWechatQRCode() tea.Cmd {
 		}
 
 		var resp struct {
-			QRCode          string `json:"qrcode"`
-			QRCodeImgBase64 string `json:"qrcode_img_content"`
+			QRCode           string `json:"qrcode"`
+			QRCodeImgContent string `json:"qrcode_img_content"`
 		}
 		if err := json.Unmarshal(data, &resp); err != nil {
 			return wechatQRCodeMsg{err: fmt.Errorf("QR code decode failed: %w", err)}
@@ -257,10 +255,12 @@ func (m *Model) requestWechatQRCode() tea.Cmd {
 			return wechatQRCodeMsg{err: fmt.Errorf("empty QR code token in response")}
 		}
 
-		qrImage, err := renderWechatQRFromBase64(resp.QRCodeImgBase64)
+		// qrcode_img_content is the text content (URL) for generating QR,
+		// NOT a base64-encoded image. Use go-qrcode to render it.
+		qrImage, err := renderQRFromString(resp.QRCodeImgContent)
 		if err != nil {
 			debug.Log("wechat", "QR render failed: %v", err)
-			qrImage = fmt.Sprintf("[QR decode error: %v]", err)
+			qrImage = fmt.Sprintf("[QR render error: %v]", err)
 		}
 		return wechatQRCodeMsg{qrcodeToken: resp.QRCode, qrcodeImage: qrImage}
 	}
@@ -344,24 +344,25 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 			return imEditResultMsg{err: fmt.Errorf("config unavailable")}
 		}
 
+		// Auto-generate name: wechat → wechat-2 → wechat-3 ...
 		adapterName := "wechat"
+		n := 2
+		for {
+			if _, exists := m.config.IM.Adapters[adapterName]; !exists {
+				break
+			}
+			adapterName = fmt.Sprintf("wechat-%d", n)
+			n++
+		}
 
-		// If adapter doesn't exist yet, create it
-		if _, exists := m.config.IM.Adapters[adapterName]; !exists {
-			if err := m.config.AddIMAdapter(adapterName, config.IMAdapterConfig{
-				Enabled:  true,
-				Platform: "wechat",
-				Extra: map[string]interface{}{
-					"bot_token": botToken,
-				},
-			}); err != nil {
-				return imEditResultMsg{err: fmt.Errorf("create adapter config: %w", err)}
-			}
-		} else {
-			// Adapter exists — update the token
-			if err := m.config.SetIMAdapterExtra(adapterName, "bot_token", botToken); err != nil {
-				return imEditResultMsg{err: fmt.Errorf("save bot_token: %w", err)}
-			}
+		if err := m.config.AddIMAdapter(adapterName, config.IMAdapterConfig{
+			Enabled:  true,
+			Platform: "wechat",
+			Extra: map[string]interface{}{
+				"bot_token": botToken,
+			},
+		}); err != nil {
+			return imEditResultMsg{err: fmt.Errorf("create adapter config: %w", err)}
 		}
 
 		// Start the adapter
@@ -369,50 +370,34 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 			_ = im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager)
 		}
 
-		debug.Log("wechat", "bot token saved and adapter started")
+		debug.Log("wechat", "bot token saved as %s and adapter started", adapterName)
 		return imEditResultMsg{adapterName: adapterName, field: "bot_token", value: "***"}
 	}
 }
 
 // ---- QR rendering ----
 
-// renderWechatQRFromBase64 decodes a base64 PNG and renders it as Unicode block characters.
-func renderWechatQRFromBase64(imgBase64 string) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(imgBase64)
+// renderQRFromString generates a terminal-rendered QR code from a text string (URL).
+// Uses go-qrcode to generate the bitmap, then renders as Unicode half-block chars.
+func renderQRFromString(content string) (string, error) {
+	if strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("empty QR content")
+	}
+	code, err := qrcode.New(strings.TrimSpace(content), qrcode.Low)
 	if err != nil {
-		return "", fmt.Errorf("base64 decode: %w", err)
+		return "", fmt.Errorf("generate QR: %w", err)
 	}
-	img, err := png.Decode(strings.NewReader(string(data)))
-	if err != nil {
-		return "", fmt.Errorf("png decode: %w", err)
-	}
-	return renderQRFromImage(img), nil
-}
-
-// renderQRFromImage converts an image to Unicode block characters for terminal display.
-func renderQRFromImage(img image.Image) string {
-	bounds := img.Bounds()
-	w := bounds.Dx()
-	h := bounds.Dy()
-
-	threshold := 128
-	rows := h
-	cols := w
-
-	bitmap := make([][]bool, rows)
-	for y := 0; y < rows; y++ {
-		bitmap[y] = make([]bool, cols)
-		for x := 0; x < cols; x++ {
-			r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
-			lum := (int(r>>8)*299 + int(g>>8)*587 + int(b>>8)*114) / 1000
-			bitmap[y][x] = lum < threshold
-		}
+	bitmap := code.Bitmap()
+	moduleCount := len(bitmap)
+	if moduleCount == 0 {
+		return "", fmt.Errorf("empty QR bitmap")
 	}
 
-	if rows%2 == 1 {
-		padding := make([]bool, cols)
+	// Ensure even row count for half-block rendering
+	if moduleCount%2 == 1 {
+		padding := make([]bool, moduleCount)
 		bitmap = append(bitmap, padding)
-		rows++
+		moduleCount++
 	}
 
 	const (
@@ -422,41 +407,14 @@ func renderQRFromImage(img image.Image) string {
 		blackAll   = " "
 	)
 
-	maxWidth := 60
-	if cols > maxWidth {
-		scale := (cols + maxWidth - 1) / maxWidth
-		newCols := cols / scale
-		newRows := rows / scale
-		scaled := make([][]bool, newRows)
-		for y := 0; y < newRows; y++ {
-			scaled[y] = make([]bool, newCols)
-			for x := 0; x < newCols; x++ {
-				sy := y * scale
-				sx := x * scale
-				if sy < rows && sx < cols {
-					scaled[y][x] = bitmap[sy][sx]
-				}
-			}
-		}
-		bitmap = scaled
-		rows = newRows
-		cols = newCols
-		if rows%2 == 1 {
-			padding := make([]bool, cols)
-			bitmap = append(bitmap, padding)
-			rows++
-		}
-	}
-
-	borderTop := strings.Repeat(blackWhite, cols+2)
-	borderBottom := strings.Repeat(whiteBlack, cols+2)
 	var lines []string
+	// Top border
+	lines = append(lines, strings.Repeat(whiteAll, moduleCount+2))
 
-	lines = append(lines, borderTop)
-	for row := 0; row < rows; row += 2 {
+	for row := 0; row < moduleCount; row += 2 {
 		var b strings.Builder
 		b.WriteString(whiteAll)
-		for col := 0; col < cols; col++ {
+		for col := 0; col < len(bitmap[row]); col++ {
 			top := bitmap[row][col]
 			bottom := bitmap[row+1][col]
 			switch {
@@ -473,9 +431,10 @@ func renderQRFromImage(img image.Image) string {
 		b.WriteString(whiteAll)
 		lines = append(lines, b.String())
 	}
-	lines = append(lines, borderBottom)
+	// Bottom border
+	lines = append(lines, strings.Repeat(whiteAll, moduleCount+2))
 
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), nil
 }
 
 // ---- Binding entries ----
