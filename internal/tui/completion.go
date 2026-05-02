@@ -144,12 +144,18 @@ func ExpandMentions(input string, workDir string) (string, error) {
 // CompleteMention returns file/directory completions for an @mention prefix.
 // prefix is the text after "@" (e.g., "internal/t" from "@internal/t").
 func CompleteMention(prefix string, workDir string) []string {
+	var dir string
+	var partial string
+
 	if prefix == "" {
-		prefix = "."
+		// No prefix: list contents of workDir itself
+		dir = workDir
+		partial = ""
+	} else {
+		fullPath := filepath.Join(workDir, prefix)
+		dir = filepath.Dir(fullPath)
+		partial = filepath.Base(fullPath)
 	}
-	fullPath := filepath.Join(workDir, prefix)
-	dir := filepath.Dir(fullPath)
-	partial := filepath.Base(fullPath)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -159,20 +165,23 @@ func CompleteMention(prefix string, workDir string) []string {
 	var completions []string
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, partial) {
-			// Skip hidden files (except . files explicitly referenced)
-			if strings.HasPrefix(name, ".") && !strings.HasPrefix(partial, ".") {
-				continue
-			}
-			displayPath := filepath.Join(filepath.Dir(prefix), name)
-			if prefix == "." {
-				displayPath = name
-			}
-			if e.IsDir() {
-				displayPath += "/"
-			}
-			completions = append(completions, displayPath)
+		if partial != "" && !strings.HasPrefix(name, partial) {
+			continue
 		}
+		// Skip hidden files (except . files explicitly referenced)
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(partial, ".") {
+			continue
+		}
+		var displayPath string
+		if prefix == "" {
+			displayPath = name
+		} else {
+			displayPath = filepath.Join(filepath.Dir(prefix), name)
+		}
+		if e.IsDir() {
+			displayPath += "/"
+		}
+		completions = append(completions, displayPath)
 	}
 	return completions
 }
