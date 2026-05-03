@@ -1352,3 +1352,44 @@ func extractArgIntValue(rawArgs, key string) int {
 	}
 	return int(f)
 }
+
+func (a *WechatAdapter) outboundText(event OutboundEvent) string {
+	return defaultOutboundText(event)
+}
+
+func (a *dingtalkAdapter) outboundText(event OutboundEvent) string {
+	return defaultOutboundText(event)
+}
+
+// defaultOutboundText is the shared outboundText implementation used by adapters
+// that do not need custom per-adapter formatting.
+func defaultOutboundText(event OutboundEvent) string {
+	switch event.Kind {
+	case OutboundEventText:
+		return event.Text
+	case OutboundEventStatus:
+		return event.Status
+	case OutboundEventToolCall:
+		if event.ToolCall == nil {
+			return ""
+		}
+		return formatToolCallText(event.ToolCall)
+	case OutboundEventToolResult:
+		if event.ToolRes == nil {
+			return ""
+		}
+		return formatToolResultText(event.ToolRes)
+	case OutboundEventApprovalRequest:
+		if event.Approval == nil {
+			return ""
+		}
+		return fmt.Sprintf("[approval] %s\n%s", event.Approval.ToolName, event.Approval.Input)
+	case OutboundEventApprovalResult:
+		if event.Result == nil {
+			return ""
+		}
+		return fmt.Sprintf("[approval result] %s", event.Result.Decision)
+	default:
+		return ""
+	}
+}

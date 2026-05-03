@@ -79,11 +79,10 @@ type WechatAdapter struct {
 	baseURL string
 
 	// Runtime state
-	mu            sync.RWMutex
-	connected     bool
-	botToken      string
-	cursor        string            // get_updates_buf cursor
-	contextTokens map[string]string // msg_id → context_token for reply correlation
+	mu        sync.RWMutex
+	connected bool
+	botToken  string
+	cursor    string // get_updates_buf cursor
 }
 
 // ilinkQRCodeResponse is the response from get_bot_qrcode.
@@ -174,13 +173,12 @@ func newWechatAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 	}
 	botToken := strings.TrimSpace(stringValue(adapterCfg.Extra, "bot_token"))
 	return &WechatAdapter{
-		name:          name,
-		manager:       mgr,
-		httpClient:    &http.Client{Timeout: 30 * time.Second},
-		lpClient:      &http.Client{Timeout: 40 * time.Second},
-		baseURL:       baseURL,
-		botToken:      botToken,
-		contextTokens: make(map[string]string),
+		name:       name,
+		manager:    mgr,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		lpClient:   &http.Client{Timeout: 40 * time.Second},
+		baseURL:    baseURL,
+		botToken:   botToken,
 	}, nil
 }
 
@@ -268,8 +266,17 @@ func (a *WechatAdapter) run(ctx context.Context) {
 			return
 		}
 		if err := a.pollLoop(ctx); err != nil {
-			a.publishState(false, "error", err.Error())
-			debug.Log("wechat", "adapter=%s error: %v", a.name, err)
+			errMsg := err.Error()
+			isRecoverable := strings.Contains(errMsg, "EOF") ||
+				strings.Contains(errMsg, "timeout") ||
+				strings.Contains(errMsg, "connection refused") ||
+				strings.Contains(errMsg, "context deadline")
+			if isRecoverable {
+				debug.Log("wechat", "adapter=%s recoverable poll error: %v", a.name, err)
+			} else {
+				a.publishState(false, "error", errMsg)
+				debug.Log("wechat", "adapter=%s error: %v", a.name, err)
+			}
 		}
 		delay := backoffs[min(attempt, len(backoffs)-1)]
 		attempt++
@@ -296,7 +303,7 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 	body := map[string]interface{}{
 		"get_updates_buf": cursor,
 		"base_info": map[string]string{
-			"channel_version": "1.0.0",
+			"channel_version": "2.0.0",
 		},
 	}
 	bodyJSON, err := json.Marshal(body)
@@ -384,10 +391,13 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		channelID = msg.GroupID
 	}
 
-	// Store context_token for reply correlation
-	a.mu.Lock()
-	a.contextTokens[channelID] = msg.ContextToken
-	a.mu.Unlock()
+	// Persist context_token into the channel binding.
+	// Per iLink protocol, context_token is required for every sendmessage.
+	// Each inbound message provides a fresh token; update the binding so
+	// the token survives restarts and is available to Send.
+	if a.manager != nil && msg.ContextToken != "" {
+		a.manager.UpdateBindingContextToken(a.name, msg.ContextToken)
+	}
 
 	inbound := InboundMessage{
 		Envelope: Envelope{
@@ -404,7 +414,7 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		},
 	}
 
-	// Pairing flow: same as QQ adapter
+	// Pairing flow: first inbound message triggers pairing to obtain ChannelID/TargetID
 	// 1. Try HandlePairingInbound — if consumed, reply with pairing instructions
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
@@ -440,12 +450,20 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content string) error {
 	a.mu.RLock()
 	token := a.botToken
-	contextToken := a.contextTokens[toUserID]
 	a.mu.RUnlock()
 
 	if token == "" || strings.TrimSpace(content) == "" {
 		return nil
 	}
+
+	// Read context_token from persisted binding (set by UpdateBindingContextToken).
+	var contextToken string
+	if a.manager != nil {
+		contextToken = a.manager.GetBindingContextToken(a.name)
+	}
+
+	debug.Log("wechat", "adapter=%s sendTextToUser to=%s context_token=%s text_len=%d",
+		a.name, toUserID, truncateStr(contextToken, 12), len(content))
 
 	items := []ilinkItem{
 		{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: content}},
@@ -460,7 +478,7 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content st
 			ContextToken: contextToken,
 			ItemList:     items,
 		},
-		BaseInfo: ilinkBaseInfo{ChannelVersion: "1.0.0"},
+		BaseInfo: ilinkBaseInfo{ChannelVersion: "2.0.0"},
 	}
 
 	bodyJSON, err := json.Marshal(outMsg)
@@ -487,32 +505,33 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content st
 }
 
 // Send sends an outbound message to the bound WeChat channel.
+// Per iLink protocol spec: context_token is NOT optional — every sendmessage
+// must carry the latest context_token from an inbound message, keyed by userID.
+// Without it, WeChat cannot route the reply to the correct conversation.
 func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	a.mu.RLock()
 	token := a.botToken
-	contextToken := a.contextTokens[binding.ChannelID]
 	a.mu.RUnlock()
+
+	// context_token from binding (persisted across restarts via UpdateBindingContextToken).
+	// Per iLink protocol it is required for every sendmessage. Tokens expire after ~24h;
+	// a fresh inbound message is needed to renew it.
+	contextToken := binding.ContextToken
 
 	if token == "" {
 		return fmt.Errorf("wechat adapter %q: no bot_token", a.name)
 	}
 
-	text := event.Text
+	text := strings.TrimSpace(a.outboundText(event))
 	if text == "" {
+		debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
 		return nil
 	}
 
-	toUserID := binding.TargetID
-	if toUserID == "" {
-		toUserID = binding.ChannelID
-	}
+	toUserID := binding.ChannelID
 
-	// Note: WeChat iLink passive reply has a ~5 second context_token expiry
-	// and a 5-message limit per inbound. If the agent takes longer or produces
-	// more than 5 outbound messages, subsequent sends may fail silently.
-	// The context_token is consumed on first use — for multi-turn agent replies,
-	// only the first message benefits from passive reply semantics.
-	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d", a.name, toUserID, truncateStr(contextToken, 8), len(text))
+	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d kind=%s",
+		a.name, toUserID, truncateStr(contextToken, 12), len(text), event.Kind)
 
 	items := []ilinkItem{
 		{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: text}},
@@ -526,13 +545,16 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			ContextToken: contextToken,
 			ItemList:     items,
 		},
-		BaseInfo: ilinkBaseInfo{ChannelVersion: "1.0.0"},
+		BaseInfo: ilinkBaseInfo{ChannelVersion: "2.0.0"},
 	}
 
 	bodyJSON, err := json.Marshal(outMsg)
 	if err != nil {
 		return fmt.Errorf("marshal sendmessage: %w", err)
 	}
+
+	debug.Log("wechat", "adapter=%s sendmessage body_len=%d has_context_token=%v",
+		a.name, len(bodyJSON), contextToken != "")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+ilinkSendMessagePath, bytes.NewReader(bodyJSON))
 	if err != nil {

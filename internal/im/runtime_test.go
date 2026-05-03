@@ -316,7 +316,7 @@ func TestRejectPendingPairingBlacklistsAfterThreeRejectionsAndPersists(t *testin
 	if err != nil {
 		t.Fatalf("HandlePairingInbound blacklisted returned error: %v", err)
 	}
-	if !result.Consumed || !strings.Contains(result.ReplyText, "不再接受") {
+	if !result.Consumed || !strings.Contains(result.ReplyText, "黑名单") {
 		t.Fatalf("expected blacklisted pairing reply, got %#v", result)
 	}
 }
@@ -1001,5 +1001,54 @@ func TestManager_Emit_AutoCreatedAt(t *testing.T) {
 	m.Emit(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hi"})
 	if sink.events[0].CreatedAt.IsZero() {
 		t.Error("expected CreatedAt to be auto-set")
+	}
+}
+
+func TestManager_UpdateBindingContextToken(t *testing.T) {
+	mgr := NewManager()
+	store := NewMemoryBindingStore()
+	_ = mgr.SetBindingStore(store)
+
+	// Bind a wechat adapter
+	mgr.BindSession(SessionBinding{Workspace: "/ws"})
+	mgr.currentBindings["wechat"] = &ChannelBinding{
+		Workspace: "/ws",
+		Platform:  PlatformWechat,
+		Adapter:   "wechat",
+		ChannelID: "user-abc",
+	}
+
+	// Update context token
+	mgr.UpdateBindingContextToken("wechat", "token-123")
+
+	// Verify in-memory
+	got := mgr.GetBindingContextToken("wechat")
+	if got != "token-123" {
+		t.Errorf("GetBindingContextToken: got %q, want %q", got, "token-123")
+	}
+
+	// Verify persisted
+	bindings, _ := store.List()
+	if len(bindings) != 1 {
+		t.Fatalf("store: expected 1, got %d", len(bindings))
+	}
+	if bindings[0].ContextToken != "token-123" {
+		t.Errorf("store ContextToken: got %q", bindings[0].ContextToken)
+	}
+	if bindings[0].ContextTokenUpdatedAt.IsZero() {
+		t.Error("store ContextTokenUpdatedAt should not be zero")
+	}
+
+	// Non-existent adapter
+	got = mgr.GetBindingContextToken("nonexistent")
+	if got != "" {
+		t.Errorf("nonexistent adapter: got %q, want empty", got)
+	}
+
+	// Update again — should replace
+	mgr.UpdateBindingContextToken("wechat", "token-456")
+	got = mgr.GetBindingContextToken("wechat")
+	if got != "token-456" {
+		t.Errorf("after update: got %q, want %q", got, "token-456")
 	}
 }

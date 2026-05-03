@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/session"
 )
 
 func TestWechatPanelEscClosesPanel(t *testing.T) {
@@ -265,4 +267,126 @@ func TestWechatPanel_NavigateEmpty(t *testing.T) {
 	// Up/down on empty list should not crash
 	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	_, _ = m.handleWechatPanelKey(tea.KeyPressMsg{Code: tea.KeyDown})
+}
+
+func TestWechatBindingEntries_BoundCountIncludesCurrentWorkspace(t *testing.T) {
+	// Setup: config with one wechat adapter, manager with a binding to current workspace
+	m := NewModel(nil, nil)
+	m.width = 120
+	m.height = 40
+
+	mgr := im.NewManager()
+	_ = mgr.SetBindingStore(im.NewMemoryBindingStore())
+	mgr.BindSession(im.SessionBinding{SessionID: "s1", Workspace: "/test/workspace"})
+
+	// Bind wechat adapter to the current workspace
+	_, _ = mgr.BindChannel(im.ChannelBinding{
+		Platform:  im.PlatformWechat,
+		Adapter:   "wechat",
+		TargetID:  "user123",
+		ChannelID: "ch-1",
+		Workspace: "/test/workspace",
+	})
+
+	m.imManager = mgr
+	m.config = &config.Config{
+		IM: config.IMConfig{
+			Adapters: map[string]config.IMAdapterConfig{
+				"wechat": {Enabled: true, Platform: "wechat"},
+			},
+		},
+	}
+	m.session = &session.Session{ID: "s1", Workspace: "/test/workspace"}
+
+	entries := m.wechatBindingEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if !entries[0].Bound {
+		t.Fatal("expected entry.Bound=true for adapter bound to current workspace, got false")
+	}
+	// macOS may resolve /tmp to /private/tmp — just check OccupiedBy is same workspace
+	if entries[0].OccupiedBy != "" && entries[0].OccupiedBy != "/private/test/workspace" {
+		t.Fatalf("expected OccupiedBy empty or resolved path, got %q", entries[0].OccupiedBy)
+	}
+
+	// Verify boundCount in rendered view
+	m.openWechatPanel()
+	view := m.View().Content
+	if !strings.Contains(view, "Bound: 1") {
+		t.Fatalf("expected 'Bound: 1' in panel view, got:\n%s", view)
+	}
+}
+
+func TestWechatBindingEntries_BoundToOtherWorkspace(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.width = 120
+	m.height = 40
+
+	mgr := im.NewManager()
+	_ = mgr.SetBindingStore(im.NewMemoryBindingStore())
+	mgr.BindSession(im.SessionBinding{SessionID: "s1", Workspace: "/test/workspace"})
+
+	// Bind wechat adapter to a DIFFERENT workspace
+	_, _ = mgr.BindChannel(im.ChannelBinding{
+		Platform:  im.PlatformWechat,
+		Adapter:   "wechat",
+		TargetID:  "user456",
+		ChannelID: "ch-2",
+		Workspace: "/test/other-workspace",
+	})
+
+	m.imManager = mgr
+	m.config = &config.Config{
+		IM: config.IMConfig{
+			Adapters: map[string]config.IMAdapterConfig{
+				"wechat": {Enabled: true, Platform: "wechat"},
+			},
+		},
+	}
+	m.session = &session.Session{ID: "s1", Workspace: "/test/workspace"}
+
+	entries := m.wechatBindingEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if !entries[0].Bound {
+		t.Fatal("expected entry.Bound=true (adapter is bound, just to different workspace)")
+	}
+	if entries[0].OccupiedBy != "/test/other-workspace" {
+		t.Fatalf("expected OccupiedBy=/test/other-workspace, got %q", entries[0].OccupiedBy)
+	}
+}
+
+func TestWechatBindingEntries_NotBound(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.width = 120
+	m.height = 40
+
+	mgr := im.NewManager()
+	_ = mgr.SetBindingStore(im.NewMemoryBindingStore())
+
+	m.imManager = mgr
+	m.config = &config.Config{
+		IM: config.IMConfig{
+			Adapters: map[string]config.IMAdapterConfig{
+				"wechat": {Enabled: true, Platform: "wechat"},
+			},
+		},
+	}
+
+	entries := m.wechatBindingEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].Bound {
+		t.Fatal("expected entry.Bound=false for unbound adapter")
+	}
+
+	m.openWechatPanel()
+
+	view := m.View().Content
+	if !strings.Contains(view, "Bound: 0") {
+		t.Fatalf("expected 'Bound: 0' in panel view, got:\n%s", view)
+	}
 }

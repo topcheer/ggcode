@@ -569,6 +569,10 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	return bridge.SubmitInboundMessage(ctx, msg)
 }
 
+// HandlePairingInbound processes an inbound IM message for pairing.
+// If the adapter has no binding with a ChannelID, it creates a pairing challenge
+// (4-digit code displayed on screen). The user must enter the code in the IM channel
+// to complete binding and obtain the ChannelID/TargetID.
 func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error) {
 	m.mu.Lock()
 	if m.session == nil {
@@ -593,7 +597,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 		m.mu.Unlock()
 		return PairingResult{
 			Consumed:  true,
-			ReplyText: "该 QQ 渠道已被拒绝绑定，不再接受新的配对请求。",
+			ReplyText: fmt.Sprintf("该 %s 渠道因多次被拒绝，已被加入黑名单。", msg.Envelope.Platform),
 		}, nil
 	}
 
@@ -634,7 +638,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 				}
 				reply := "绑定成功，现在可以继续对话了。"
 				if pending.Kind == PairingKindRebind {
-					reply = "绑定成功，已切换到当前 QQ 渠道。"
+					reply = fmt.Sprintf("绑定成功，已切换到当前 %s 渠道。", msg.Envelope.Platform)
 				}
 				copy := bound
 				return PairingResult{
@@ -657,7 +661,7 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 		return PairingResult{
 			Consumed:  true,
 			Kind:      pending.Kind,
-			ReplyText: "当前已有其他渠道在等待绑定，请在对应 QQ 渠道输入屏幕上的 4 位绑定码。",
+			ReplyText: fmt.Sprintf("当前已有其他渠道在等待绑定，请在对应 %s 渠道输入屏幕上的 4 位绑定码。", msg.Envelope.Platform),
 		}, nil
 	}
 
@@ -1059,6 +1063,38 @@ func (m *Manager) BindChannel(binding ChannelBinding) (ChannelBinding, error) {
 	}
 	m.syncInstanceActiveChannels()
 	return bound, nil
+}
+
+// GetBindingContextToken returns the persisted ContextToken for the given adapter.
+func (m *Manager) GetBindingContextToken(adapter string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, b := range m.currentBindings {
+		if b.Adapter == adapter {
+			return b.ContextToken
+		}
+	}
+	return ""
+}
+
+// UpdateBindingContextToken updates the ContextToken (and ContextTokenUpdatedAt) on the
+// binding for the given adapter. The token is persisted to disk so it survives restarts.
+// WeChat iLink requires context_token for every sendmessage; without it only ~2 messages
+// succeed before the server stops responding. Tokens expire after ~24 hours.
+func (m *Manager) UpdateBindingContextToken(adapter, token string) {
+	m.mu.Lock()
+	for _, b := range m.currentBindings {
+		if b.Adapter == adapter {
+			b.ContextToken = token
+			b.ContextTokenUpdatedAt = time.Now()
+			if m.bindingStore != nil {
+				_ = m.bindingStore.Save(*b)
+			}
+			debug.Log("wechat", "persisted context_token for adapter=%s len=%d", adapter, len(token))
+			break
+		}
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) UnbindChannel(workspace string) error {

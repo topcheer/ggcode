@@ -571,35 +571,37 @@ func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, even
 		return fmt.Errorf("dingtalk adapter %s not connected", a.name)
 	}
 
-	if event.Kind == OutboundEventText && strings.TrimSpace(event.Text) != "" {
-		// Try sessionWebhook first (from the most recent callback).
-		// This is the recommended way to reply in DingTalk.
-		a.mu.RLock()
-		webhook := a.lastWebhook
-		robotCode := a.lastRobotCode
-		a.mu.RUnlock()
-
-		if webhook != "" {
-			debug.Log("dingtalk", "adapter=%s Send via webhook text_len=%d", a.name, len(event.Text))
-			err := a.sendTextViaWebhook(ctx, webhook, event.Text, robotCode)
-			if err == nil {
-				debug.Log("dingtalk", "adapter=%s Send webhook OK", a.name)
-				return nil
-			}
-			debug.Log("dingtalk", "adapter=%s Send webhook failed: %v, falling back to API", a.name, err)
-		}
-
-		// Fallback: use REST API with userId (staffId from ChannelID).
-		debug.Log("dingtalk", "adapter=%s Send via API userId=%s text_len=%d", a.name, binding.ChannelID, len(event.Text))
-		err := a.sendTextViaAPI(ctx, binding, event.Text)
-		if err != nil {
-			debug.Log("dingtalk", "adapter=%s Send API failed: %v", a.name, err)
-		} else {
-			debug.Log("dingtalk", "adapter=%s Send API OK", a.name)
-		}
-		return err
+	content := strings.TrimSpace(a.outboundText(event))
+	if content == "" {
+		return nil
 	}
-	return nil
+
+	// Try sessionWebhook first (from the most recent callback).
+	// This is the recommended way to reply in DingTalk.
+	a.mu.RLock()
+	webhook := a.lastWebhook
+	robotCode := a.lastRobotCode
+	a.mu.RUnlock()
+
+	if webhook != "" {
+		debug.Log("dingtalk", "adapter=%s Send via webhook text_len=%d", a.name, len(content))
+		err := a.sendTextViaWebhook(ctx, webhook, content, robotCode)
+		if err == nil {
+			debug.Log("dingtalk", "adapter=%s Send webhook OK", a.name)
+			return nil
+		}
+		debug.Log("dingtalk", "adapter=%s Send webhook failed: %v, falling back to API", a.name, err)
+	}
+
+	// Fallback: use REST API with userId (staffId from ChannelID).
+	debug.Log("dingtalk", "adapter=%s Send via API userId=%s text_len=%d", a.name, binding.ChannelID, len(content))
+	err := a.sendTextViaAPI(ctx, binding, content)
+	if err != nil {
+		debug.Log("dingtalk", "adapter=%s Send API failed: %v", a.name, err)
+	} else {
+		debug.Log("dingtalk", "adapter=%s Send API OK", a.name)
+	}
+	return err
 }
 
 // sendTextViaWebhook sends a reply using the sessionWebhook URL from the callback.
