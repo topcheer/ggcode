@@ -106,5 +106,10 @@ Rules:
 - If you discover issues, describe them clearly
 - If you create content (skills, tests), use the appropriate tools
 - Do not ask questions — make reasonable assumptions
-- Report your findings and actions clearly at the end`, taskName)
+- IMPORTANT: Your FINAL text output must be exactly the requested artifact (skill document, test code, etc.), NOT a summary or analysis of what you did. The user will only see your last text output.
+
+For skill-generation tasks specifically:
+- Your LAST message must be the complete skill document starting with ---
+- Do NOT output any analysis, summary, or explanation after the skill document
+- Do NOT output any text before the --- frontmatter in your final message`, taskName)
 }
