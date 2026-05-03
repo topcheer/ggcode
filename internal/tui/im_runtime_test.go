@@ -180,11 +180,11 @@ func TestLivePromptEmitsSingleFinalIMText(t *testing.T) {
 		return !state.loading
 	})
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	var events []im.OutboundEvent
 	for time.Now().Before(deadline) {
 		events = sink.snapshot()
-		if len(events) >= 1 {
+		if len(events) >= 2 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
