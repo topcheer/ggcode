@@ -95,7 +95,26 @@ func testRunCommandContextCancelStopsDetachedDescendants(t *testing.T, ignoreTer
 	if err != nil {
 		t.Fatalf("read detached pid file: %v", err)
 	}
-	childPID, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	// File may exist but be empty if shell hasn't written PID yet.
+	content := strings.TrimSpace(string(pidBytes))
+	if content == "" {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(25 * time.Millisecond)
+			pidBytes, err = os.ReadFile(pidFile)
+			if err != nil {
+				t.Fatalf("read detached pid file (retry): %v", err)
+			}
+			content = strings.TrimSpace(string(pidBytes))
+			if content != "" {
+				break
+			}
+		}
+		if content == "" {
+			t.Fatal("detached pid file is still empty after waiting")
+		}
+	}
+	childPID, err := strconv.Atoi(content)
 	if err != nil {
 		t.Fatalf("parse detached pid: %v", err)
 	}
