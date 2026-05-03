@@ -229,8 +229,11 @@ func (m *Model) bindDiscordEntry(entry discordBindingEntry) tea.Cmd {
 			if err := m.waitForDiscordAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 				return discordBindResultMsg{err: err}
 			}
-			if err := m.imManager.SyncSessionHistory(context.Background(), m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
-				return discordBindResultMsg{err: err}
+			// Sync session history to the newly bound channel only.
+			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+					return discordBindResultMsg{err: err}
+				}
 			}
 		}
 		return discordBindResultMsg{message: m.t("panel.discord.message.bound_success")}

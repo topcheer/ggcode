@@ -226,6 +226,16 @@ type StatusSnapshot struct {
 	PendingApprovals []ApprovalState
 }
 
+// BindingByAdapter returns the first current binding matching the given adapter name.
+func (s StatusSnapshot) BindingByAdapter(adapter string) *ChannelBinding {
+	for i := range s.CurrentBindings {
+		if s.CurrentBindings[i].Adapter == adapter {
+			return &s.CurrentBindings[i]
+		}
+	}
+	return nil
+}
+
 type Bridge interface {
 	SubmitInboundMessage(ctx context.Context, msg InboundMessage) error
 }

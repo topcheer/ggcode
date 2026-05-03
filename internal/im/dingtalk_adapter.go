@@ -3,14 +3,11 @@ package im
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,149 +15,207 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
-	imstt "github.com/topcheer/ggcode/internal/im/stt"
-	imagepkg "github.com/topcheer/ggcode/internal/image"
-	"github.com/topcheer/ggcode/internal/safego"
 )
 
 const (
-	dingtalkAPIBase    = "https://api.dingtalk.com"
-	dingtalkMaxTextLen = 4000
+	dingtalkAPIBase = "https://api.dingtalk.com"
+
+	// DataFrame types (from official SDK payload/data_frame.go)
+	dingtalkSubCallback = "CALLBACK"
+	dingtalkSubEvent    = "EVENT"
+
+	// DataFrame header keys
+	dfHeaderTopic       = "topic"
+	dfHeaderContentType = "contentType"
+	dfHeaderMessageID   = "messageId"
+	dfHeaderTime        = "time"
+
+	dfContentTypeJSON = "application/json"
+
+	dfStatusOK = 200
+
+	// Callback topics (from official SDK payload/utils.go)
+	dingtalkBotCallbackTopic      = "/v1.0/im/bot/messages/get"
+	dingtalkCardCallbackTopic     = "/v1.0/card/instances/callback"
+	dingtalkSystemPingTopic       = "ping"
+	dingtalkSystemDisconnectTopic = "disconnect"
+
+	// Heartbeat and reconnect intervals (from official SDK)
+	wsPingInterval = 120 * time.Second
+	wsPongWait     = 5 * time.Second
+	reconnectDelay = 3 * time.Second
 )
 
-type dingtalkAdapter struct {
-	name       string
-	manager    *Manager
-	httpClient *http.Client
-	appKey     string
-	appSecret  string
-	stt        imstt.Transcriber
+// ---- DataFrame protocol ----
 
-	mu          sync.RWMutex
-	connected   bool
-	accessToken string
-	tokenExpire time.Time
-	ws          *websocket.Conn
+type dingtalkDataFrame struct {
+	SpecVersion string            `json:"specVersion"`
+	Type        string            `json:"type"`
+	Headers     map[string]string `json:"headers"`
+	Data        string            `json:"data"`
 }
 
-func newDingTalkAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*dingtalkAdapter, error) {
-	appKey := strings.TrimSpace(stringValue(adapterCfg.Extra, "app_key", "appKey"))
-	if appKey == "" {
-		return nil, fmt.Errorf("DingTalk app_key is required for adapter %q", name)
-	}
-	appSecret := strings.TrimSpace(stringValue(adapterCfg.Extra, "app_secret", "appSecret"))
-	if appSecret == "" {
-		return nil, fmt.Errorf("DingTalk app_secret is required for adapter %q", name)
+type dingtalkDataFrameResponse struct {
+	Code    int               `json:"code"`
+	Headers map[string]string `json:"headers"`
+	Data    string            `json:"data"`
+	Message string            `json:"message,omitempty"`
+}
+
+// ---- Bot callback message (parsed from DataFrame.Data) ----
+
+type dingtalkBotCallbackData struct {
+	ConversationID   string `json:"conversationId"`
+	ChatbotUserID    string `json:"chatbotUserId"`
+	ChatbotCorpID    string `json:"chatbotCorpId"`
+	MsgID            string `json:"msgId"`
+	SenderNick       string `json:"senderNick"`
+	SenderID         string `json:"senderId"`
+	SenderStaffID    string `json:"senderStaffId"`
+	SessionWebhook   string `json:"sessionWebhook"`
+	IsAdmin          bool   `json:"isAdmin"`
+	ConversationType string `json:"conversationType"`
+	AtUsers          []struct {
+		DingtalkID string `json:"dingtalkId"`
+	} `json:"atUsers"`
+	IsInAtList     bool   `json:"isInAtList"`
+	ChatbotUnionID string `json:"chatbotUnionId"`
+	Text           struct {
+		Content string `json:"content"`
+	} `json:"text"`
+	RobotCode string `json:"robotCode"`
+	MsgType   string `json:"msgtype"`
+}
+
+// ---- dingtalkAdapter ----
+
+type dingtalkAdapter struct {
+	name      string
+	manager   *Manager
+	appKey    string
+	appSecret string
+
+	mu            sync.RWMutex
+	accessToken   string
+	tokenExpire   time.Time
+	ws            *websocket.Conn
+	connected     bool
+	cancel        context.CancelFunc
+	lastWebhook   string // Latest sessionWebhook from callback
+	lastRobotCode string // Latest robotCode from callback
+}
+
+func newDingtalkAdapter(name string, mgr *Manager, adapterCfg config.IMAdapterConfig) (*dingtalkAdapter, error) {
+	appKeyVal, _ := adapterCfg.Extra["app_key"]
+	appSecretVal, _ := adapterCfg.Extra["app_secret"]
+	appKey := strings.TrimSpace(fmt.Sprintf("%v", appKeyVal))
+	appSecret := strings.TrimSpace(fmt.Sprintf("%v", appSecretVal))
+	if appKey == "" || appKey == "<nil>" || appSecret == "" || appSecret == "<nil>" {
+		return nil, fmt.Errorf("dingtalk adapter requires app_key and app_secret")
 	}
 	return &dingtalkAdapter{
-		name:       name,
-		manager:    mgr,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		appKey:     appKey,
-		appSecret:  appSecret,
-		stt:        buildSTTWithFallback(imCfg.STT, adapterCfg.Extra, resolveDingTalkSTTConfig),
+		name:      name,
+		manager:   mgr,
+		appKey:    appKey,
+		appSecret: appSecret,
 	}, nil
 }
 
-func resolveDingTalkSTTConfig(global config.IMSTTConfig, extra map[string]interface{}) *config.IMSTTConfig {
-	var cfg config.IMSTTConfig
-	hasOverride := false
-	if sttExtra, ok := extra["stt"].(map[string]interface{}); ok {
-		cfg.Provider = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["provider"])), cfg.Provider)
-		cfg.BaseURL = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["baseUrl"])), strings.TrimSpace(stringFromAny(sttExtra["base_url"])), cfg.BaseURL)
-		cfg.APIKey = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["apiKey"])), strings.TrimSpace(stringFromAny(sttExtra["api_key"])), cfg.APIKey)
-		cfg.Model = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["model"])), cfg.Model)
-		if cfg.Provider != "" || cfg.BaseURL != "" || cfg.APIKey != "" || cfg.Model != "" {
-			hasOverride = true
-		}
-	}
-	if !hasOverride {
-		if global.Provider == "" && global.BaseURL == "" && global.APIKey == "" {
-			return nil
-		}
-		return &global
-	}
-	return &cfg
-}
+// ---- Sink interface ----
 
-func (a *dingtalkAdapter) Name() string { return a.name }
+func (a *dingtalkAdapter) Name() string {
+	return a.name
+}
 
 func (a *dingtalkAdapter) Start(ctx context.Context) {
 	debug.Log("dingtalk", "adapter=%s start appKey=%s", a.name, a.appKey)
 	a.publishState(false, "connecting", "")
-	safego.Go("im.dingtalk.run", func() { a.run(ctx) })
+	childCtx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.cancel = cancel
+	a.mu.Unlock()
+	go a.run(childCtx)
 }
 
-func (a *dingtalkAdapter) Close() error {
+func (a *dingtalkAdapter) Stop() {
 	a.mu.Lock()
-	ws := a.ws
-	a.ws = nil
-	a.connected = false
-	a.mu.Unlock()
-	if ws != nil {
-		return ws.Close()
+	if a.cancel != nil {
+		a.cancel()
 	}
+	a.connected = false
+	a.ws = nil
+	a.mu.Unlock()
+}
+
+// Close implements io.Closer for adapter lifecycle.
+func (a *dingtalkAdapter) Close() error {
+	a.Stop()
 	return nil
 }
 
+// ---- Main run loop with reconnect ----
+
 func (a *dingtalkAdapter) run(ctx context.Context) {
-	backoffs := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second}
+	// Start token refresh goroutine
+	go a.tokenRefresher(ctx)
+
+	backoffs := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
 	attempt := 0
+
 	for {
-		if ctx.Err() != nil {
-			a.publishState(false, "stopped", "")
-			return
-		}
-		if err := a.connectAndServe(ctx); err != nil {
-			a.publishState(false, "error", err.Error())
-			debug.Log("dingtalk", "adapter=%s error: %v", a.name, err)
-		}
-		delay := backoffs[min(attempt, len(backoffs)-1)]
-		attempt++
 		select {
 		case <-ctx.Done():
-			a.publishState(false, "stopped", "")
+			return
+		default:
+		}
+
+		err := a.connectAndServe(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+
+		a.mu.Lock()
+		a.connected = false
+		a.ws = nil
+		a.mu.Unlock()
+		a.publishState(false, "disconnected", "")
+
+		if err != nil {
+			debug.Log("dingtalk", "adapter=%s error: %v", a.name, err)
+			a.publishState(false, "error", err.Error())
+		}
+
+		delay := backoffs[min(attempt, len(backoffs)-1)]
+		attempt++
+		debug.Log("dingtalk", "adapter=%s reconnecting in %v (attempt %d)", a.name, delay, attempt)
+
+		select {
+		case <-ctx.Done():
 			return
 		case <-time.After(delay):
 		}
 	}
 }
 
+// ---- Connect + serve messages (single connection lifecycle) ----
+
 func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
-	// Get access token
+	// 1. Refresh token
 	if err := a.refreshToken(ctx); err != nil {
-		return fmt.Errorf("get access token: %w", err)
+		return fmt.Errorf("refresh token: %w", err)
 	}
 
-	// Open Stream connection
+	// 2. Open stream → get endpoint + ticket
 	wsURL, err := a.streamOpen(ctx)
 	if err != nil {
 		return fmt.Errorf("stream open: %w", err)
 	}
-	debug.Log("dingtalk", "adapter=%s stream endpoint=%s", a.name, wsURL)
 
-	// Connect WebSocket (no special headers needed — ticket in URL is the auth).
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	// 3. Connect WebSocket
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
-		status := 0
-		body := ""
-		if resp != nil {
-			status = resp.StatusCode
-			if b, readErr := io.ReadAll(io.LimitReader(resp.Body, 512)); readErr == nil {
-				body = string(b)
-			}
-			resp.Body.Close()
-		}
-		debug.Log("dingtalk", "adapter=%s WS handshake failed: status=%d body=%s err=%v", a.name, status, body, err)
-		return fmt.Errorf("dial stream: %w (HTTP %d: %s)", err, status, body)
+		return fmt.Errorf("dial stream: %w", err)
 	}
-	defer func() {
-		a.mu.Lock()
-		a.connected = false
-		a.ws = nil
-		a.mu.Unlock()
-		conn.Close()
-	}()
 
 	a.mu.Lock()
 	a.ws = conn
@@ -169,42 +224,239 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 	a.publishState(true, "connected", "")
 	debug.Log("dingtalk", "adapter=%s connected", a.name)
 
-	// Token refresh loop
-	safego.Go("im.dingtalk.tokenRefresh", func() { a.tokenRefreshLoop(ctx) })
+	defer func() {
+		a.mu.Lock()
+		a.connected = false
+		a.ws = nil
+		a.mu.Unlock()
+		conn.Close()
+	}()
 
-	// Read loop
+	// 4. Read loop with ping/pong
+	conn.SetPongHandler(func(appData string) error {
+		debug.Log("dingtalk", "adapter=%s pong received", a.name)
+		return nil
+	})
+
+	pingTicker := time.NewTicker(wsPingInterval)
+	defer pingTicker.Stop()
+
+	readErr := make(chan error, 1)
+
+	// Read goroutine
+	go func() {
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				readErr <- err
+				return
+			}
+			a.handleDataFrame(ctx, conn, message)
+		}
+	}()
+
+	// Main loop: read errors, ping, context cancellation
 	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-		_, msgBytes, err := conn.ReadMessage()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return fmt.Errorf("read websocket: %w", err)
-		}
-		var msg map[string]any
-		if err := json.Unmarshal(msgBytes, &msg); err != nil {
-			continue
-		}
-
-		headers, _ := msg["headers"].(map[string]any)
-		if headers == nil {
-			continue
-		}
-		contentType, _ := headers["contentType"].(string)
-		topic, _ := headers["topic"].(string)
-		messageID, _ := headers["messageId"].(string)
-
-		if topic == "/v1.0/im/bot/messages/get" {
-			body, _ := msg["body"].(string)
-			if body != "" {
-				a.handleBotMessage(ctx, body, messageID, conn)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-readErr:
+			return fmt.Errorf("read: %w", err)
+		case <-pingTicker.C:
+			a.mu.RLock()
+			ws := a.ws
+			a.mu.RUnlock()
+			if ws != nil {
+				if err := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					return fmt.Errorf("ping: %w", err)
+				}
 			}
 		}
+	}
+}
 
-		_ = contentType
+// ---- DataFrame handling ----
+
+func (a *dingtalkAdapter) handleDataFrame(ctx context.Context, conn *websocket.Conn, raw []byte) {
+	var frame dingtalkDataFrame
+	if err := json.Unmarshal(raw, &frame); err != nil {
+		debug.Log("dingtalk", "adapter=%s unmarshal frame: %v", a.name, err)
+		return
+	}
+
+	topic := frame.Headers[dfHeaderTopic]
+	msgID := frame.Headers[dfHeaderMessageID]
+
+	debug.Log("dingtalk", "adapter=%s frame type=%s topic=%s msgID=%s", a.name, frame.Type, topic, msgID)
+
+	switch {
+	case frame.Type == dingtalkSubCallback && topic == dingtalkBotCallbackTopic:
+		// Bot message callback — process and ACK
+		a.processBotCallback(ctx, frame)
+		a.sendFrameResponse(conn, frame, dfStatusOK, "")
+
+	case frame.Type == dingtalkSubCallback && topic == dingtalkCardCallbackTopic:
+		// Card callback — ACK only for now
+		a.sendFrameResponse(conn, frame, dfStatusOK, "")
+
+	case topic == dingtalkSystemPingTopic:
+		// System ping — ACK
+		a.sendFrameResponse(conn, frame, dfStatusOK, "pong")
+
+	case topic == dingtalkSystemDisconnectTopic:
+		// Server requests disconnect — close and reconnect
+		debug.Log("dingtalk", "adapter=%s server disconnect requested", a.name)
+		a.sendFrameResponse(conn, frame, dfStatusOK, "")
+		conn.Close()
+
+	default:
+		debug.Log("dingtalk", "adapter=%s unhandled frame type=%s topic=%s", a.name, frame.Type, topic)
+		// ACK with 404 (handler not found) as per SDK
+		if frame.Type == dingtalkSubCallback || frame.Type == dingtalkSubEvent {
+			a.sendFrameResponse(conn, frame, 404, "handler not found")
+		}
+	}
+}
+
+func (a *dingtalkAdapter) processBotCallback(ctx context.Context, frame dingtalkDataFrame) {
+	var callbackData dingtalkBotCallbackData
+	if err := json.Unmarshal([]byte(frame.Data), &callbackData); err != nil {
+		debug.Log("dingtalk", "adapter=%s unmarshal bot callback: %v", a.name, err)
+		return
+	}
+
+	text := strings.TrimSpace(callbackData.Text.Content)
+	debug.Log("dingtalk", "adapter=%s callback: sender=%s(%s) conv=%s text=%q webhook=%q robotCode=%q convType=%q",
+		a.name, callbackData.SenderNick, callbackData.SenderStaffID,
+		callbackData.ConversationID, text,
+		callbackData.SessionWebhook, callbackData.RobotCode, callbackData.ConversationType)
+
+	if text == "" {
+		debug.Log("dingtalk", "adapter=%s empty text, skipping", a.name)
+		return
+	}
+
+	// Strip @bot mention prefix
+
+	// Cache webhook and robotCode for Send fallback
+	a.mu.Lock()
+	a.lastWebhook = callbackData.SessionWebhook
+	a.lastRobotCode = callbackData.RobotCode
+	a.mu.Unlock()
+	atPrefix := "@" + callbackData.RobotCode + " "
+	text = strings.TrimPrefix(text, atPrefix)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+
+	channelID := callbackData.SenderStaffID
+	if channelID == "" {
+		channelID = callbackData.SenderID
+	}
+
+	senderID := channelID
+
+	inbound := InboundMessage{
+		Envelope: Envelope{
+			Adapter:    a.name,
+			Platform:   PlatformDingTalk,
+			ChannelID:  channelID,
+			SenderID:   senderID,
+			MessageID:  callbackData.MsgID,
+			ReceivedAt: time.Now(),
+		},
+		Text: text,
+		Metadata: map[string]string{
+			"session_webhook":   callbackData.SessionWebhook,
+			"sender_nick":       callbackData.SenderNick,
+			"conversation_type": callbackData.ConversationType,
+			"robot_code":        callbackData.RobotCode,
+		},
+	}
+
+	// Pairing flow (same as QQ and WeChat)
+	pairingResult, err := a.manager.HandlePairingInbound(inbound)
+	debug.Log("dingtalk", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
+	if err != nil && err != ErrNoSessionBound {
+		a.publishState(false, "warning", err.Error())
+	}
+	if pairingResult.Consumed {
+		_ = a.sendTextViaWebhook(ctx, callbackData.SessionWebhook, pairingResult.ReplyText, callbackData.RobotCode)
+		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
+			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
+				Kind: OutboundEventText,
+				Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
+			}); err != nil {
+				debug.Log("dingtalk", "adapter=%s notify previous: %v", a.name, err)
+			}
+		}
+		return
+	}
+
+	// Normal inbound
+	debug.Log("dingtalk", "adapter=%s calling HandleInbound channel=%s sender=%s", a.name, channelID, senderID)
+	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
+		if err == ErrInboundChannelDenied {
+			_ = a.sendTextViaWebhook(ctx, callbackData.SessionWebhook, "你是未授权用户", callbackData.RobotCode)
+			return
+		}
+		if err != ErrNoChannelBound {
+			debug.Log("dingtalk", "adapter=%s handle inbound: %v", a.name, err)
+		}
+	}
+}
+
+// sendFrameResponse sends a DataFrame ACK back to the server.
+func (a *dingtalkAdapter) sendFrameResponse(conn *websocket.Conn, reqFrame dingtalkDataFrame, code int, data string) {
+	resp := dingtalkDataFrameResponse{
+		Code: code,
+		Headers: map[string]string{
+			dfHeaderContentType: dfContentTypeJSON,
+			dfHeaderMessageID:   reqFrame.Headers[dfHeaderMessageID],
+		},
+		Data: data,
+	}
+	if resp.Headers[dfHeaderMessageID] == "" {
+		resp.Headers[dfHeaderMessageID] = reqFrame.Headers["messageId"]
+	}
+
+	respBytes, err := json.Marshal(resp)
+	if err != nil {
+		return
+	}
+
+	a.mu.RLock()
+	ws := a.ws
+	a.mu.RUnlock()
+
+	if ws != nil {
+		if err := ws.WriteMessage(websocket.TextMessage, respBytes); err != nil {
+			debug.Log("dingtalk", "adapter=%s write frame response: %v", a.name, err)
+		}
+	}
+}
+
+// ---- Token management ----
+
+func (a *dingtalkAdapter) tokenRefresher(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.mu.RLock()
+			expire := a.tokenExpire
+			a.mu.RUnlock()
+			if time.Until(expire) < 10*time.Minute {
+				if err := a.refreshToken(ctx); err != nil {
+					debug.Log("dingtalk", "adapter=%s token refresh: %v", a.name, err)
+				}
+			}
+		}
 	}
 }
 
@@ -214,13 +466,15 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 		"appKey":    a.appKey,
 		"appSecret": a.appSecret,
 	}
-	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	bodyJSON, _ := json.Marshal(body)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -229,6 +483,7 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
 		return err
@@ -238,10 +493,13 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 		debug.Log("dingtalk", "adapter=%s token response: %s", a.name, string(data))
 		return fmt.Errorf("DingTalk accessToken is empty: %s", string(data))
 	}
-	expire, _ := intValue(result["expireIn"])
-	if expire <= 0 {
-		expire = 7200
+	expire := 7200
+	if exp, ok := result["expireIn"]; ok {
+		if n, err := strconv.Atoi(fmt.Sprintf("%v", exp)); err == nil {
+			expire = n
+		}
 	}
+
 	a.mu.Lock()
 	a.accessToken = token
 	a.tokenExpire = time.Now().Add(time.Duration(expire) * time.Second)
@@ -250,50 +508,34 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 	return nil
 }
 
-func (a *dingtalkAdapter) tokenRefreshLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			a.mu.RLock()
-			expire := a.tokenExpire
-			a.mu.RUnlock()
-			if time.Until(expire) < 5*time.Minute {
-				if err := a.refreshToken(ctx); err != nil {
-					debug.Log("dingtalk", "adapter=%s token refresh error: %v", a.name, err)
-				}
-			}
-		}
-	}
-}
+// ---- Stream open (get WS endpoint + ticket) ----
 
 func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	url := dingtalkAPIBase + "/v1.0/gateway/connections/open"
 	a.mu.RLock()
 	token := a.accessToken
 	a.mu.RUnlock()
+
 	body := map[string]any{
 		"clientId":     a.appKey,
 		"clientSecret": a.appSecret,
-		"ua":           "ggcode-dingtalk-adapter/1.0",
 		"subscriptions": []map[string]any{
 			{
 				"type":  "CALLBACK",
-				"topic": "/v1.0/im/bot/messages/get",
+				"topic": dingtalkBotCallbackTopic,
 			},
 		},
 	}
-	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	bodyJSON, _ := json.Marshal(body)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("X-Acs-Dingtalk-Access-Token", token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
+	req.Header.Set("x-acs-dingtalk-access-token", token)
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -302,6 +544,7 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
 		return "", err
@@ -310,439 +553,136 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 	ticket, _ := result["ticket"].(string)
 	if endpoint == "" || ticket == "" {
 		debug.Log("dingtalk", "adapter=%s streamOpen response: %s", a.name, string(data))
-		return "", fmt.Errorf("DingTalk stream endpoint/ticket is empty: %s", strings.TrimSpace(string(data)))
+		return "", fmt.Errorf("DingTalk stream endpoint/ticket empty: %s", strings.TrimSpace(string(data)))
 	}
-	// Official SDK: wssUrl = endpoint + "?ticket=" + ticket
+
 	wsURL := fmt.Sprintf("%s?ticket=%s", endpoint, ticket)
-	debug.Log("dingtalk", "adapter=%s stream endpoint=%s ticket=%s wsURL=%s", a.name, endpoint, ticket, wsURL)
+	debug.Log("dingtalk", "adapter=%s wsURL=%s", a.name, wsURL)
 	return wsURL, nil
 }
 
-func (a *dingtalkAdapter) handleBotMessage(ctx context.Context, body string, messageID string, conn *websocket.Conn) {
-	var msgData map[string]any
-	if err := json.Unmarshal([]byte(body), &msgData); err != nil {
-		debug.Log("dingtalk", "adapter=%s parse bot message error: %v", a.name, err)
-		return
-	}
-
-	sender, _ := msgData["sender"].(map[string]any)
-	conversationID, _ := msgData["conversationId"].(string)
-	var senderID, senderNick string
-	if sender != nil {
-		senderID, _ = sender["senderId"].(string)
-		senderNick, _ = sender["nick"].(string)
-		if senderNick == "" {
-			st, _ := sender["senderType"].(string)
-			if st == "" {
-				senderNick = senderID
-			}
-		}
-	}
-
-	textContent, _ := msgData["text"].(map[string]any)
-	var text string
-	if textContent != nil {
-		content, _ := textContent["content"].(string)
-		text = content
-	}
-
-	// Process non-text message types
-	msgType, _ := msgData["msgtype"].(string)
-	attachments := a.processDingTalkAttachments(ctx, msgType, msgData, messageID)
-
-	text = strings.TrimSpace(text)
-	if text == "" && len(attachments) == 0 {
-		return
-	}
-
-	debug.Log("dingtalk", "adapter=%s inbound conversation=%s sender=%s msgType=%s len=%d attachments=%d", a.name, conversationID, senderID, msgType, len(text), len(attachments))
-
-	// Send ack response
-	if conn != nil && messageID != "" {
-		ack := map[string]any{
-			"code":    200,
-			"headers": map[string]string{"contentType": "application/json"},
-			"message": "",
-			"data":    map[string]string{"response": "success"},
-		}
-		ackData, _ := json.Marshal(ack)
-		_ = conn.WriteMessage(1, ackData)
-	}
-
-	inbound := InboundMessage{
-		Envelope: Envelope{
-			Adapter:    a.name,
-			Platform:   PlatformDingTalk,
-			ChannelID:  conversationID,
-			SenderID:   senderID,
-			SenderName: senderNick,
-			MessageID:  messageID,
-			ReceivedAt: time.Now(),
-		},
-		Text:        text,
-		Attachments: attachments,
-	}
-
-	pairingResult, err := a.manager.HandlePairingInbound(inbound)
-	if err != nil && err != ErrNoSessionBound {
-		a.publishState(false, "warning", err.Error())
-	}
-	if pairingResult.Consumed {
-		if sendErr := a.sendGroupMessage(ctx, conversationID, pairingResult.ReplyText); sendErr != nil {
-			a.publishState(false, "warning", sendErr.Error())
-		}
-		return
-	}
-
-	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
-		if err == ErrInboundChannelDenied {
-			debug.Log("dingtalk", "adapter=%s unauthorized inbound conversation=%s", a.name, conversationID)
-			return
-		}
-		if err != ErrNoChannelBound {
-			a.publishState(false, "warning", err.Error())
-		}
-	}
-}
-
-// processDingTalkAttachments handles non-text message types (picture, voice, file).
-// DingTalk Stream API sends msgtype + corresponding content field.
-func (a *dingtalkAdapter) processDingTalkAttachments(ctx context.Context, msgType string, msgData map[string]any, messageID string) []Attachment {
-	switch msgType {
-	case "picture":
-		picData, _ := msgData["content"].(map[string]any)
-		if picData == nil {
-			picData, _ = msgData["picture"].(map[string]any)
-		}
-		if picData == nil {
-			return nil
-		}
-		downloadCode, _ := picData["downloadCode"].(string)
-		if downloadCode == "" {
-			return nil
-		}
-		data, mimeType, err := a.downloadDingTalkFile(ctx, downloadCode)
-		if err != nil {
-			debug.Log("dingtalk", "adapter=%s download image failed: %v", a.name, err)
-			return nil
-		}
-		if len(data) == 0 {
-			return nil
-		}
-		if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
-			mimeType = decoded.MIME
-		}
-		return []Attachment{{
-			Kind:       AttachmentImage,
-			Name:       "image.jpg",
-			MIME:       mimeType,
-			DataBase64: base64.StdEncoding.EncodeToString(data),
-		}}
-	case "voice":
-		voiceData, _ := msgData["content"].(map[string]any)
-		if voiceData == nil {
-			voiceData, _ = msgData["voice"].(map[string]any)
-		}
-		if voiceData == nil {
-			return nil
-		}
-		downloadCode, _ := voiceData["downloadCode"].(string)
-		if downloadCode == "" {
-			return nil
-		}
-		data, mimeType, err := a.downloadDingTalkFile(ctx, downloadCode)
-		if err != nil {
-			debug.Log("dingtalk", "adapter=%s download voice failed: %v", a.name, err)
-			return nil
-		}
-		if len(data) == 0 {
-			return nil
-		}
-		// Try STT transcription
-		transcript := ""
-		if a.stt != nil {
-			transcript = a.transcribeDingTalkAudio(ctx, data, mimeType)
-		}
-		return []Attachment{{
-			Kind:       AttachmentVoice,
-			Name:       "voice.amr",
-			MIME:       mimeType,
-			Transcript: transcript,
-		}}
-	case "file", "richText":
-		fileData, _ := msgData["content"].(map[string]any)
-		if fileData == nil {
-			fileData, _ = msgData[msgType].(map[string]any)
-		}
-		if fileData == nil {
-			return nil
-		}
-		downloadCode, _ := fileData["downloadCode"].(string)
-		fileName, _ := fileData["fileName"].(string)
-		if downloadCode == "" {
-			return nil
-		}
-		data, mimeType, err := a.downloadDingTalkFile(ctx, downloadCode)
-		if err != nil {
-			debug.Log("dingtalk", "adapter=%s download file failed: %v", a.name, err)
-			return nil
-		}
-		localPath, cacheErr := cacheDingTalkAttachment(data, fileName, mimeType)
-		if cacheErr != nil {
-			debug.Log("dingtalk", "adapter=%s cache file failed: %v", a.name, cacheErr)
-		}
-		return []Attachment{{
-			Kind: AttachmentFile,
-			Name: fileName,
-			MIME: mimeType,
-			Path: localPath,
-		}}
-	}
-	return nil
-}
-
-// downloadDingTalkFile downloads a file using the robot's downloadCode.
-// DingTalk API: POST https://api.dingtalk.com/v1.0/robot/messageFiles/download
-func (a *dingtalkAdapter) downloadDingTalkFile(ctx context.Context, downloadCode string) ([]byte, string, error) {
-	a.mu.RLock()
-	token := a.accessToken
-	a.mu.RUnlock()
-
-	url := dingtalkAPIBase + "/v1.0/robot/messageFiles/download"
-	body := map[string]any{"downloadCode": downloadCode}
-	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("x-acs-dingtalk-access-token", token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, "", fmt.Errorf("DingTalk download [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", err
-	}
-	return data, strings.TrimSpace(resp.Header.Get("Content-Type")), nil
-}
-
-func cacheDingTalkAttachment(data []byte, filename, mimeType string) (string, error) {
-	ext := filepath.Ext(strings.TrimSpace(filename))
-	if ext == "" {
-		ext = dingtalkAttachmentExt(mimeType)
-	}
-	tmpFile, err := os.CreateTemp("", "ggcode-dingtalk-*"+ext)
-	if err != nil {
-		return "", err
-	}
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		_ = os.Remove(tmpFile.Name())
-		return "", err
-	}
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpFile.Name())
-		return "", err
-	}
-	return tmpFile.Name(), nil
-}
-
-func dingtalkAttachmentExt(mimeType string) string {
-	switch strings.ToLower(strings.TrimSpace(mimeType)) {
-	case "image/png":
-		return ".png"
-	case "image/jpeg", "image/jpg":
-		return ".jpg"
-	case "image/gif":
-		return ".gif"
-	case "audio/amr":
-		return ".amr"
-	case "audio/wav":
-		return ".wav"
-	case "application/pdf":
-		return ".pdf"
-	default:
-		return ".bin"
-	}
-}
+// ---- Send messages ----
 
 func (a *dingtalkAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	a.mu.RLock()
 	connected := a.connected
 	a.mu.RUnlock()
 	if !connected {
-		return fmt.Errorf("DingTalk bot %q is not online", a.name)
-	}
-	conversationID := strings.TrimSpace(binding.ChannelID)
-	if conversationID == "" {
-		return fmt.Errorf("DingTalk channel is not configured for current directory")
-	}
-	content := strings.TrimSpace(a.outboundText(event))
-	if content == "" {
-		return nil
+		return fmt.Errorf("dingtalk adapter %s not connected", a.name)
 	}
 
-	// Extract images and send them
-	images, remainingText := ExtractImagesFromText(content)
-	for _, img := range images {
-		if err := a.sendExtractedImage(ctx, conversationID, img); err != nil {
-			debug.Log("dingtalk", "adapter=%s image send failed: %v", a.name, err)
-		}
-	}
+	if event.Kind == OutboundEventText && strings.TrimSpace(event.Text) != "" {
+		// Try sessionWebhook first (from the most recent callback).
+		// This is the recommended way to reply in DingTalk.
+		a.mu.RLock()
+		webhook := a.lastWebhook
+		robotCode := a.lastRobotCode
+		a.mu.RUnlock()
 
-	// Send remaining text as markdown
-	remainingText = strings.TrimSpace(remainingText)
-	if remainingText == "" {
-		return nil
-	}
-	chunks := splitDingTalkMessage(remainingText, dingtalkMaxTextLen)
-	for _, chunk := range chunks {
-		if err := a.sendGroupMessage(ctx, conversationID, chunk); err != nil {
-			return err
+		if webhook != "" {
+			debug.Log("dingtalk", "adapter=%s Send via webhook text_len=%d", a.name, len(event.Text))
+			err := a.sendTextViaWebhook(ctx, webhook, event.Text, robotCode)
+			if err == nil {
+				debug.Log("dingtalk", "adapter=%s Send webhook OK", a.name)
+				return nil
+			}
+			debug.Log("dingtalk", "adapter=%s Send webhook failed: %v, falling back to API", a.name, err)
 		}
+
+		// Fallback: use REST API with userId (staffId from ChannelID).
+		debug.Log("dingtalk", "adapter=%s Send via API userId=%s text_len=%d", a.name, binding.ChannelID, len(event.Text))
+		err := a.sendTextViaAPI(ctx, binding, event.Text)
+		if err != nil {
+			debug.Log("dingtalk", "adapter=%s Send API failed: %v", a.name, err)
+		} else {
+			debug.Log("dingtalk", "adapter=%s Send API OK", a.name)
+		}
+		return err
 	}
 	return nil
 }
 
-func (a *dingtalkAdapter) outboundText(event OutboundEvent) string {
-	switch event.Kind {
-	case OutboundEventText:
-		return event.Text
-	case OutboundEventStatus:
-		return event.Status
-	case OutboundEventToolCall:
-		if event.ToolCall == nil {
-			return ""
-		}
-		return formatToolCallText(event.ToolCall)
-	case OutboundEventToolResult:
-		if event.ToolRes == nil {
-			return ""
-		}
-		return formatToolResultText(event.ToolRes)
-	case OutboundEventApprovalRequest:
-		if event.Approval == nil {
-			return ""
-		}
-		return fmt.Sprintf("[approval] %s\n%s", event.Approval.ToolName, event.Approval.Input)
-	case OutboundEventApprovalResult:
-		if event.Result == nil {
-			return ""
-		}
-		return fmt.Sprintf("[approval result] %s", event.Result.Decision)
-	default:
-		return ""
-	}
-}
-
-func (a *dingtalkAdapter) sendGroupMessage(ctx context.Context, conversationID, content string) error {
-	a.mu.RLock()
-	token := a.accessToken
-	a.mu.RUnlock()
-
-	// Use markdown format for rich content
-	msgParam, _ := json.Marshal(map[string]string{"title": "", "text": content})
-
-	if strings.HasPrefix(conversationID, "cid") {
-		// Group message
-		url := dingtalkAPIBase + "/v1.0/robot/groupMessages/send"
-		body := map[string]any{
-			"robotCode":      a.appKey,
-			"conversationId": conversationID,
-			"msgKey":         "sampleMarkdown",
-			"msgParam":       string(msgParam),
-		}
-		return a.doDingTalkPost(ctx, url, token, body)
-	}
-
-	// Single chat message — conversationID is a userId
-	url := dingtalkAPIBase + "/v1.0/robot/oToMessages/batchSend"
-	body := map[string]any{
-		"robotCode": a.appKey,
-		"userIds":   []string{conversationID},
-		"msgKey":    "sampleMarkdown",
-		"msgParam":  string(msgParam),
-	}
-	return a.doDingTalkPost(ctx, url, token, body)
-}
-
-// sendExtractedImage resolves and sends an extracted image via DingTalk.
-func (a *dingtalkAdapter) sendExtractedImage(ctx context.Context, conversationID string, img ExtractedImage) error {
-	switch img.Kind {
-	case "url":
-		if IsLocalFilePath(img.Data) {
-			// DingTalk image messages require a URL, can't upload local files directly
-			debug.Log("dingtalk", "adapter=%s skipping local file image (not supported)", a.name)
-			return nil
-		}
-		return a.sendImageMessage(ctx, conversationID, img.Data)
-	case "data_url":
-		// DingTalk doesn't support base64 uploads directly
-		debug.Log("dingtalk", "adapter=%s skipping data URL image (not supported)", a.name)
+// sendTextViaWebhook sends a reply using the sessionWebhook URL from the callback.
+// This is the official SDK's method for replying to bot messages.
+func (a *dingtalkAdapter) sendTextViaWebhook(ctx context.Context, webhookURL, text, robotCode string) error {
+	if webhookURL == "" || text == "" {
 		return nil
-	default:
-		return fmt.Errorf("unknown image kind: %s", img.Kind)
-	}
-}
-
-// sendImageMessage sends an image message using DingTalk's sampleImageMsg.
-func (a *dingtalkAdapter) sendImageMessage(ctx context.Context, conversationID, photoURL string) error {
-	a.mu.RLock()
-	token := a.accessToken
-	a.mu.RUnlock()
-
-	msgParam, _ := json.Marshal(map[string]string{"photoURL": photoURL})
-
-	if strings.HasPrefix(conversationID, "cid") {
-		url := dingtalkAPIBase + "/v1.0/robot/groupMessages/send"
-		body := map[string]any{
-			"robotCode":      a.appKey,
-			"conversationId": conversationID,
-			"msgKey":         "sampleImageMsg",
-			"msgParam":       string(msgParam),
-		}
-		return a.doDingTalkPost(ctx, url, token, body)
 	}
 
-	// Single chat
-	url := dingtalkAPIBase + "/v1.0/robot/oToMessages/batchSend"
 	body := map[string]any{
-		"robotCode": a.appKey,
-		"userIds":   []string{conversationID},
-		"msgKey":    "sampleImageMsg",
-		"msgParam":  string(msgParam),
+		"msgtype": "text",
+		"text": map[string]string{
+			"content": text,
+		},
+		"robotCode": robotCode,
 	}
-	return a.doDingTalkPost(ctx, url, token, body)
-}
+	bodyJSON, _ := json.Marshal(body)
 
-func (a *dingtalkAdapter) doDingTalkPost(ctx context.Context, url, token string, body map[string]any) error {
-	bodyBytes, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("x-acs-dingtalk-access-token", token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := a.httpClient.Do(req)
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("webhook send: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("DingTalk API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("webhook send HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
 
-func (a *dingtalkAdapter) publishState(healthy bool, status, lastErr string) {
+// sendTextViaAPI sends a message via the DingTalk REST API (for outbound messages
+// not triggered by a callback, e.g. proactive messages).
+func (a *dingtalkAdapter) sendTextViaAPI(ctx context.Context, binding ChannelBinding, text string) error {
+	a.mu.RLock()
+	token := a.accessToken
+	a.mu.RUnlock()
+	if token == "" {
+		return fmt.Errorf("no access token")
+	}
+
+	// DingTalk oToMessages/batchSend requires userIds (staffId).
+	// ChannelID stores the sender's staffId.
+	userID := strings.TrimSpace(binding.ChannelID)
+	if userID == "" {
+		return fmt.Errorf("no userId in binding (ChannelID is empty)")
+	}
+
+	body := map[string]any{
+		"robotCode": a.appKey,
+		"userIds":   []string{userID},
+		"msgKey":    "sampleText",
+		"msgParam":  fmt.Sprintf(`{"content":"%s"}`, escapeJSONString(text)),
+	}
+	bodyJSON, _ := json.Marshal(body)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dingtalkAPIBase+"/v1.0/robot/oToMessages/batchSend", bytes.NewReader(bodyJSON))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-acs-dingtalk-access-token", token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("api send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("api send HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// ---- Helpers ----
+
+func (a *dingtalkAdapter) publishState(healthy bool, status, errMsg string) {
 	if a.manager == nil {
 		return
 	}
@@ -751,95 +691,15 @@ func (a *dingtalkAdapter) publishState(healthy bool, status, lastErr string) {
 		Platform:  PlatformDingTalk,
 		Healthy:   healthy,
 		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		LastError: errMsg,
 	})
 }
 
-func splitDingTalkMessage(text string, maxLen int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" || len(text) <= maxLen {
-		return []string{text}
-	}
-	var chunks []string
-	for len(text) > 0 {
-		if len(text) <= maxLen {
-			chunks = append(chunks, text)
-			break
-		}
-		splitAt := maxLen
-		if idx := strings.LastIndex(text[:maxLen], "\n"); idx > 0 {
-			splitAt = idx + 1
-		}
-		chunks = append(chunks, text[:splitAt])
-		text = text[splitAt:]
-	}
-	return chunks
-}
-
-// TriggerTyping sends a brief "⏳ processing..." status message to indicate
-// the bot is working. DingTalk does not have a native typing indicator API,
-// so we send and then immediately try to recall the status message.
-func (a *dingtalkAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
-	conversationID := strings.TrimSpace(binding.ChannelID)
-	if conversationID == "" {
-		return nil
-	}
-	// Send a typing status message that the agent loop will overwrite
-	// with actual content once the response is ready.
-	return a.sendGroupMessage(ctx, conversationID, "⏳ ...")
-}
-
-func (a *dingtalkAdapter) transcribeDingTalkAudio(ctx context.Context, data []byte, mimeType string) string {
-	ext := ".amr"
-	if strings.Contains(mimeType, "wav") {
-		ext = ".wav"
-	} else if strings.Contains(mimeType, "mp3") || strings.Contains(mimeType, "mpeg") {
-		ext = ".mp3"
-	} else if strings.Contains(mimeType, "ogg") || strings.Contains(mimeType, "opus") {
-		ext = ".ogg"
-	}
-
-	src, err := os.CreateTemp("", "ggcode-dingtalk-audio-*"+ext)
-	if err != nil {
-		return ""
-	}
-	if _, err := src.Write(data); err != nil {
-		src.Close()
-		return ""
-	}
-	src.Close()
-	audioPath := src.Name()
-	cleanup := func() { _ = os.Remove(audioPath) }
-
-	// Convert to wav if needed
-	if ext != ".wav" {
-		dst, err := os.CreateTemp("", "ggcode-dingtalk-audio-*.wav")
-		if err != nil {
-			cleanup()
-			return ""
-		}
-		dst.Close()
-		cmd := exec.Command("ffmpeg", "-y", "-i", audioPath, dst.Name())
-		if _, err := cmd.CombinedOutput(); err != nil {
-			_ = os.Remove(dst.Name())
-			cleanup()
-			return ""
-		}
-		cleanup()
-		audioPath = dst.Name()
-		cleanup = func() { _ = os.Remove(audioPath) }
-	}
-	defer cleanup()
-
-	result, err := a.stt.Transcribe(ctx, imstt.Request{
-		MIME: "audio/wav",
-		Name: filepath.Base(audioPath),
-		Path: audioPath,
-	})
-	if err != nil {
-		debug.Log("dingtalk", "adapter=%s STT failed: %v", a.name, err)
-		return ""
-	}
-	return strings.TrimSpace(result.Text)
+func escapeJSONString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	return s
 }

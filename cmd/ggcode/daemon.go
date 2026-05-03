@@ -598,6 +598,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		default:
 		}
 	})
+	bridge.SetProviderSwitchHook(func(vendor, endpoint, model string) (string, error) {
+		return daemonProviderSwitch(cfg, vendor, endpoint, model)
+	})
 	debug.Log("daemon", "Knight config: enabled=%v trust=%s budget=%d idle=%ds capabilities=%v",
 		cfg.Knight().Enabled, cfg.Knight().TrustLevel, cfg.Knight().DailyTokenBudget,
 		cfg.Knight().IdleDelaySec, cfg.Knight().Capabilities)
@@ -1224,4 +1227,50 @@ func writeClipboard(text string) {
 	}
 	cmd.Stdin = strings.NewReader(text)
 	_ = cmd.Run()
+}
+
+// daemonProviderSwitch handles /provider, /model, /config IM commands.
+// All three params may be empty (show current config), or selectively set.
+func daemonProviderSwitch(cfg *config.Config, vendor, endpoint, model string) (string, error) {
+	// All empty → show current config
+	if vendor == "" && endpoint == "" && model == "" {
+		resolved, err := cfg.ResolveActiveEndpoint()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve config: %w", err)
+		}
+		vendors := make([]string, 0)
+		for v := range cfg.Vendors {
+			vendors = append(vendors, v)
+		}
+		endpoints := cfg.EndpointNames(cfg.Vendor)
+		models := resolved.Models
+		if len(models) == 0 && resolved.Model != "" {
+			models = []string{resolved.Model}
+		}
+		return fmt.Sprintf(
+			"📋 Current config:\n  Provider: %s (%s)\n  Model: %s\n  Available providers: %s\n  Endpoints: %s\n  Models: %s",
+			resolved.VendorName, resolved.EndpointName, resolved.Model,
+			strings.Join(vendors, ", "),
+			strings.Join(endpoints, ", "),
+			strings.Join(models, ", "),
+		), nil
+	}
+
+	// Set the selection
+	if err := cfg.SetActiveSelection(vendor, endpoint, model); err != nil {
+		return "", err
+	}
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve after switch: %w", err)
+	}
+
+	if model != "" {
+		return fmt.Sprintf("✅ Model switched to: %s (%s)", resolved.Model, resolved.VendorName), nil
+	}
+	if vendor != "" {
+		return fmt.Sprintf("✅ Provider switched to: %s (%s) → model: %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
+	}
+	return fmt.Sprintf("✅ Config updated: %s (%s) → %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
 }

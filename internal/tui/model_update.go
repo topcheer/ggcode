@@ -666,6 +666,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendStreamChunk(string(msg))
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
+	case quitMsg:
+		return m, tea.Quit
+
 	case remoteInboundMsg:
 		// Track the originating adapter for per-channel echo suppression.
 		m.remoteInboundAdapter = msg.Message.Envelope.Adapter
@@ -705,6 +708,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if response, handled := m.ExecuteRemoteSlashCommand(prompt); handled {
+			// Handle /restart: send IM confirmation first, then quit after delay.
+			if response == "RESTART" || response == "RESTART:DEBUG" {
+				if response == "RESTART:DEBUG" {
+					m.emitIMText("\U0001f504 Restarting ggcode with debug mode enabled...")
+				} else {
+					m.emitIMText("\U0001f504 Restarting ggcode...")
+				}
+				if msg.Response != nil {
+					msg.Response <- nil
+				}
+				return m, m.scheduleRemoteRestart()
+			}
+			// Handle /muteself: send warning first, then mute after delay.
+			if strings.HasPrefix(response, "MUTES:") {
+				adapter := strings.TrimPrefix(response, "MUTES:")
+				m.emitIMText("\U0001f507 Muting this adapter... You will stop receiving replies. Use /restart from another adapter to recover.")
+				if msg.Response != nil {
+					msg.Response <- nil
+				}
+				return m, m.scheduleMuteSelf(adapter)
+			}
 			if strings.TrimSpace(response) != "" {
 				m.emitIMText(response)
 			}

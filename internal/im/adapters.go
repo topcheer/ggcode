@@ -140,7 +140,7 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 		}
 		start(adapter)
 	case PlatformDingTalk:
-		adapter, err := newDingTalkAdapter(name, cfg, adapterCfg, mgr)
+		adapter, err := newDingtalkAdapter(name, mgr, adapterCfg)
 		if err != nil {
 			adapterCancel()
 			return err

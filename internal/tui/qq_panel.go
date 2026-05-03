@@ -148,17 +148,24 @@ func (m Model) renderQQPanel() string {
 	} else if panel.editState.mode == imEditInput {
 		body = append(body, "", m.renderIMEditInput(&panel.editState))
 	}
+	// Share QR code section — extract to place at top later
+	var qqQRSection []string
 	if strings.TrimSpace(panel.shareLink) != "" {
-		body = append(body,
+		qqQRSection = append(qqQRSection,
 			"",
 			lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.bind_channel")),
 			fmt.Sprintf(" %s", m.t("panel.qq.adapter", firstNonEmptyQQ(panel.shareAdapter, m.t("panel.qq.none")))),
 			" "+m.t("panel.qq.scan_hint"),
 		)
 		if qr := strings.TrimRight(panel.shareQRCode, "\n"); qr != "" {
-			body = append(body, " "+m.t("panel.qq.qr_code"), indentQQBlock(qr, "  "))
+			qqQRSection = append(qqQRSection, " "+m.t("panel.qq.qr_code"), indentQQBlock(qr, "  "))
 		}
-		body = append(body, " "+m.t("panel.qq.share_link"), indentQQBlock(wrapQQLink(panel.shareLink, maxQQ(m.boxInnerWidth(m.mainColumnWidth())-6, 24)), "  "))
+		qqQRSection = append(qqQRSection, " "+m.t("panel.qq.share_link"), indentQQBlock(wrapQQLink(panel.shareLink, maxQQ(m.boxInnerWidth(m.mainColumnWidth())-6, 24)), "  "))
+	}
+
+	// Place QR at top if present
+	if len(qqQRSection) > 0 {
+		body = append(append(qqQRSection, ""), body...)
 	}
 	if panel.message != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(panel.message))
@@ -266,8 +273,11 @@ func (m *Model) bindQQEntry(entry qqBindingEntry) tea.Cmd {
 			if err := m.waitForAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 				return qqBindResultMsg{err: err}
 			}
-			if err := m.imManager.SyncSessionHistory(context.Background(), m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
-				return qqBindResultMsg{err: err}
+			// Sync session history to the newly bound channel only.
+			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+					return qqBindResultMsg{err: err}
+				}
 			}
 		}
 		return qqBindResultMsg{message: m.t("panel.qq.message.bound_success")}

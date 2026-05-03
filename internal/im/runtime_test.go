@@ -501,7 +501,11 @@ func TestSyncSessionHistoryUsesCurrentBinding(t *testing.T) {
 	}
 	sink := &stubSink{name: "qq"}
 	mgr.RegisterSink(sink)
-	err := mgr.SyncSessionHistory(context.Background(), []provider.Message{
+	err := mgr.SyncSessionHistory(context.Background(), ChannelBinding{
+		Platform:  PlatformQQ,
+		Adapter:   "qq",
+		ChannelID: "group-1",
+	}, []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
 		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
 	})
@@ -510,6 +514,59 @@ func TestSyncSessionHistoryUsesCurrentBinding(t *testing.T) {
 	}
 	if len(sink.events) != 2 {
 		t.Fatalf("expected 2 history events, got %d", len(sink.events))
+	}
+}
+
+func TestSyncSessionHistoryOnlySendsToTargetBinding(t *testing.T) {
+	mgr := NewManager()
+	_ = mgr.SetBindingStore(NewMemoryBindingStore())
+	mgr.BindSession(SessionBinding{SessionID: "session-1", Workspace: "/tmp/project"})
+
+	// Bind two channels: QQ (existing) and DingTalk (newly paired)
+	if _, err := mgr.BindChannel(ChannelBinding{
+		Platform:  PlatformQQ,
+		Adapter:   "qq",
+		TargetID:  "ops",
+		ChannelID: "qq-group-1",
+	}); err != nil {
+		t.Fatalf("BindChannel QQ returned error: %v", err)
+	}
+	if _, err := mgr.BindChannel(ChannelBinding{
+		Platform:  PlatformDingTalk,
+		Adapter:   "dingtalk",
+		TargetID:  "staff123",
+		ChannelID: "staff123",
+	}); err != nil {
+		t.Fatalf("BindChannel DingTalk returned error: %v", err)
+	}
+
+	// Register sinks for both adapters
+	qqSink := &stubSink{name: "qq"}
+	dingtalkSink := &stubSink{name: "dingtalk"}
+	mgr.RegisterSink(qqSink)
+	mgr.RegisterSink(dingtalkSink)
+
+	// Sync history to DingTalk only (simulating new pairing)
+	dingtalkBinding := ChannelBinding{
+		Platform:  PlatformDingTalk,
+		Adapter:   "dingtalk",
+		ChannelID: "staff123",
+	}
+	err := mgr.SyncSessionHistory(context.Background(), dingtalkBinding, []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "world"}}},
+	})
+	if err != nil {
+		t.Fatalf("SyncSessionHistory returned error: %v", err)
+	}
+
+	// DingTalk should receive the history
+	if len(dingtalkSink.events) != 2 {
+		t.Fatalf("expected 2 history events on DingTalk, got %d", len(dingtalkSink.events))
+	}
+	// QQ must NOT receive the history — this was the bug
+	if len(qqSink.events) != 0 {
+		t.Fatalf("expected 0 history events on QQ (not the target), got %d — history leaked to wrong channel!", len(qqSink.events))
 	}
 }
 

@@ -343,16 +343,30 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			} else {
 				round.ToolSuccesses++
 			}
-			m.emitIMEvent(im.OutboundEvent{
-				Kind: im.OutboundEventToolResult,
-				ToolRes: &im.ToolResultInfo{
-					ToolName: event.Tool.Name,
-					Args:     string(event.Tool.Arguments),
-					Result:   event.Result,
-					IsError:  event.IsError,
-					Detail:   present.Detail,
-				},
-			})
+			// Emit tool result to IM based on output mode.
+			toolInfo := im.ToolResultInfo{
+				ToolName: event.Tool.Name,
+				Args:     string(event.Tool.Arguments),
+				Result:   event.Result,
+				IsError:  event.IsError,
+				Detail:   present.Detail,
+			}
+			outputMode := "verbose"
+			if m.imEmitter != nil {
+				outputMode = m.imEmitter.OutputMode()
+			}
+			switch outputMode {
+			case "summary":
+				round.PendingTools = append(round.PendingTools, toolInfo)
+			case "quiet":
+				if event.IsError {
+					m.emitIMEvent(im.OutboundEvent{Kind: im.OutboundEventToolResult, ToolRes: &toolInfo})
+				} else {
+					round.PendingTools = append(round.PendingTools, toolInfo)
+				}
+			default:
+				m.emitIMEvent(im.OutboundEvent{Kind: im.OutboundEventToolResult, ToolRes: &toolInfo})
+			}
 			// Accumulate tool result events for batched delivery.
 			batchMu.Lock()
 			toolBatchStatus = append(toolBatchStatus, agentStatusMsg{RunID: runID, statusMsg: statusMsg{
@@ -420,6 +434,7 @@ type agentIMRoundState struct {
 	ToolSuccesses int
 	ToolFailures  int
 	AskUserText   string
+	PendingTools  []im.ToolResultInfo // buffered tool results for quiet/summary mode
 }
 
 func (s *agentIMRoundState) AppendText(text string) {
@@ -444,6 +459,7 @@ func (s *agentIMRoundState) Reset() {
 	s.ToolSuccesses = 0
 	s.ToolFailures = 0
 	s.AskUserText = ""
+	s.PendingTools = nil
 }
 
 func buildAgentSubmissionContent(text string, img *imageAttachedMsg, includeImage bool) []provider.ContentBlock {
