@@ -255,14 +255,18 @@ func (t *Task) Snapshot() Task {
 		copy(cp.Metadata, t.Metadata)
 	}
 	if t.History != nil {
-		cp.History = make([]Message, len(t.History))
-		for i, m := range t.History {
+		// Snapshot the slice header first to avoid concurrent append
+		// shrinking the visible length between make and range.
+		history := t.History
+		cp.History = make([]Message, len(history))
+		for i, m := range history {
 			cp.History[i] = m.snapshot()
 		}
 	}
 	if t.Artifacts != nil {
-		cp.Artifacts = make([]Artifact, len(t.Artifacts))
-		for i, a := range t.Artifacts {
+		artifacts := t.Artifacts
+		cp.Artifacts = make([]Artifact, len(artifacts))
+		for i, a := range artifacts {
 			cp.Artifacts[i] = a.snapshot()
 		}
 	}
