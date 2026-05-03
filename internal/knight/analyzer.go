@@ -522,23 +522,34 @@ RULES:
 	}
 
 	output := strings.TrimSpace(result.Output)
-	// LLM may prepend reasoning/thinking before the actual skill document,
-	// or append analysis after it. Find the LAST occurrence of a YAML
-	// frontmatter block using the "---\nname:" signature.
-	if idx := strings.LastIndex(output, "---\nname:"); idx >= 0 {
-		output = strings.TrimSpace(output[idx:])
-	} else if idx := strings.LastIndex(output, "---\r\nname:"); idx >= 0 {
-		output = strings.TrimSpace(output[idx:])
-	} else if idx := strings.Index(output, "---"); idx > 0 {
-		output = strings.TrimSpace(output[idx:])
-	}
-
-	// Validate that the output looks like a proper skill document
-	if !strings.HasPrefix(output, "---") {
-		return "", fmt.Errorf("LLM output does not contain valid YAML frontmatter (expected ---): %s", truncate(output, 200))
+	output = extractSkillDocument(output)
+	if output == "" {
+		return "", fmt.Errorf("LLM output does not contain valid YAML frontmatter (expected ---): %s", truncate(result.Output, 200))
 	}
 
 	return output, nil
+}
+
+// extractSkillDocument extracts a YAML frontmatter skill document from LLM output.
+// Handles cases where the LLM prepends analysis or appends commentary.
+// Returns empty string if no valid skill document is found.
+func extractSkillDocument(output string) string {
+	// Try the most specific pattern first: "---\nname:" signature
+	if idx := strings.LastIndex(output, "---\nname:"); idx >= 0 {
+		return strings.TrimSpace(output[idx:])
+	}
+	if idx := strings.LastIndex(output, "---\r\nname:"); idx >= 0 {
+		return strings.TrimSpace(output[idx:])
+	}
+	// Fallback: any "---" not at position 0
+	if idx := strings.Index(output, "---"); idx > 0 {
+		return strings.TrimSpace(output[idx:])
+	}
+	// Already starts with ---
+	if strings.HasPrefix(output, "---") {
+		return output
+	}
+	return ""
 }
 
 // --- Helpers ---
