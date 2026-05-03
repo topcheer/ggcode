@@ -146,7 +146,7 @@ func TestWechatAdapter_SetBotToken(t *testing.T) {
 
 func TestWechatAdapter_Send_NoToken(t *testing.T) {
 	a, _ := newWechatAdapter("wc", config.IMConfig{}, config.IMAdapterConfig{}, nil)
-	err := a.Send(context.Background(), ChannelBinding{}, OutboundEvent{Text: "hello"})
+	err := a.Send(context.Background(), ChannelBinding{}, OutboundEvent{Kind: OutboundEventText, Text: "hello"})
 	if err == nil {
 		t.Fatal("expected error when bot_token is empty")
 	}
@@ -178,9 +178,8 @@ func TestWechatAdapter_Send_Success(t *testing.T) {
 	}, nil)
 
 	err := a.Send(context.Background(), ChannelBinding{
-		TargetID:  "user-123",
-		ChannelID: "chan-456",
-	}, OutboundEvent{Text: "Hello WeChat!"})
+		ChannelID: "user-123",
+	}, OutboundEvent{Kind: OutboundEventText, Text: "Hello WeChat!"})
 	if err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
@@ -194,8 +193,8 @@ func TestWechatAdapter_Send_Success(t *testing.T) {
 	if receivedBody.Msg.MessageType != ilinkMsgTypeBot {
 		t.Errorf("expected MessageType=%d, got %d", ilinkMsgTypeBot, receivedBody.Msg.MessageType)
 	}
-	if receivedBody.BaseInfo.ChannelVersion != "1.0.0" {
-		t.Errorf("expected BaseInfo.ChannelVersion '1.0.0', got %q", receivedBody.BaseInfo.ChannelVersion)
+	if receivedBody.BaseInfo.ChannelVersion != "2.0.0" {
+		t.Errorf("expected BaseInfo.ChannelVersion '2.0.0', got %q", receivedBody.BaseInfo.ChannelVersion)
 	}
 	if len(receivedBody.Msg.ItemList) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(receivedBody.Msg.ItemList))
@@ -218,43 +217,9 @@ func TestWechatAdapter_Send_EmptyText(t *testing.T) {
 		},
 	}, nil)
 
-	err := a.Send(context.Background(), ChannelBinding{}, OutboundEvent{Text: ""})
+	err := a.Send(context.Background(), ChannelBinding{}, OutboundEvent{Kind: OutboundEventText, Text: ""})
 	if err != nil {
 		t.Fatalf("expected nil for empty text, got: %v", err)
-	}
-}
-
-func TestWechatAdapter_Send_WithContextToken(t *testing.T) {
-	var receivedBody ilinkSendMessageRequest
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&receivedBody)
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ret":0}`)
-	}))
-	defer srv.Close()
-
-	a, _ := newWechatAdapter("wc", config.IMConfig{}, config.IMAdapterConfig{
-		Extra: map[string]any{
-			"base_url":  srv.URL,
-			"bot_token": "test-token",
-		},
-	}, nil)
-
-	// Simulate receiving a message that sets context token
-	a.mu.Lock()
-	a.contextTokens["chan-456"] = "ctx-token-from-inbound"
-	a.mu.Unlock()
-
-	err := a.Send(context.Background(), ChannelBinding{
-		TargetID:  "user-789",
-		ChannelID: "chan-456",
-	}, OutboundEvent{Text: "Reply"})
-	if err != nil {
-		t.Fatalf("Send error: %v", err)
-	}
-
-	if receivedBody.Msg.ContextToken != "ctx-token-from-inbound" {
-		t.Errorf("expected ContextToken 'ctx-token-from-inbound', got %q", receivedBody.Msg.ContextToken)
 	}
 }
 
@@ -271,7 +236,7 @@ func TestWechatAdapter_Send_HTTPError(t *testing.T) {
 		},
 	}, nil)
 
-	err := a.Send(context.Background(), ChannelBinding{TargetID: "user-123"}, OutboundEvent{Text: "test"})
+	err := a.Send(context.Background(), ChannelBinding{TargetID: "user-123"}, OutboundEvent{Kind: OutboundEventText, Text: "test"})
 	if err == nil {
 		t.Fatal("expected error on HTTP 500")
 	}
@@ -328,7 +293,7 @@ func TestWechatAdapter_CommonHeaders(t *testing.T) {
 		},
 	}, nil)
 
-	_ = a.Send(context.Background(), ChannelBinding{TargetID: "u"}, OutboundEvent{Text: "hi"})
+	_ = a.Send(context.Background(), ChannelBinding{TargetID: "u"}, OutboundEvent{Kind: OutboundEventText, Text: "hi"})
 
 	if gotHeaders.Get("Content-Type") != "application/json" {
 		t.Errorf("expected Content-Type application/json, got %q", gotHeaders.Get("Content-Type"))
@@ -341,5 +306,68 @@ func TestWechatAdapter_CommonHeaders(t *testing.T) {
 	}
 	if gotHeaders.Get("Authorization") != "Bearer bearer-token-xyz" {
 		t.Errorf("expected Authorization Bearer, got %q", gotHeaders.Get("Authorization"))
+	}
+}
+
+func TestWechatAdapter_Send_UsesBindingContextToken(t *testing.T) {
+	var receivedBody ilinkSendMessageRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ret":0}`)
+	}))
+	defer srv.Close()
+
+	a, _ := newWechatAdapter("wc", config.IMConfig{}, config.IMAdapterConfig{
+		Extra: map[string]any{
+			"base_url":  srv.URL,
+			"bot_token": "test-token",
+		},
+	}, nil)
+
+	// Send with ContextToken in binding
+	err := a.Send(context.Background(), ChannelBinding{
+		ChannelID:    "user-123",
+		ContextToken: "saved-token-xyz",
+	}, OutboundEvent{Kind: OutboundEventText, Text: "Hello"})
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+
+	if receivedBody.Msg.ContextToken != "saved-token-xyz" {
+		t.Errorf("ContextToken: got %q, want %q", receivedBody.Msg.ContextToken, "saved-token-xyz")
+	}
+	if receivedBody.BaseInfo.ChannelVersion != "2.0.0" {
+		t.Errorf("ChannelVersion: got %q", receivedBody.BaseInfo.ChannelVersion)
+	}
+}
+
+func TestWechatAdapter_Send_EmptyContextToken(t *testing.T) {
+	var receivedBody ilinkSendMessageRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&receivedBody)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ret":0}`)
+	}))
+	defer srv.Close()
+
+	a, _ := newWechatAdapter("wc", config.IMConfig{}, config.IMAdapterConfig{
+		Extra: map[string]any{
+			"base_url":  srv.URL,
+			"bot_token": "test-token",
+		},
+	}, nil)
+
+	// Send without ContextToken (first boot, no inbound yet)
+	err := a.Send(context.Background(), ChannelBinding{
+		ChannelID: "user-123",
+	}, OutboundEvent{Kind: OutboundEventText, Text: "Hello"})
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+
+	// Should still send (empty context_token) — WeChat will accept ~2 messages
+	if receivedBody.Msg.ContextToken != "" {
+		t.Errorf("ContextToken should be empty, got %q", receivedBody.Msg.ContextToken)
 	}
 }

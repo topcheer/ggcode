@@ -242,7 +242,7 @@ func (a *feishuAdapter) runWebSocket(ctx context.Context) {
 	a.mu.Lock()
 	a.connected = true
 	a.mu.Unlock()
-	a.publishState(true, "online", "websocket connected (SDK)")
+	a.publishState(true, "online", "")
 	debug.Log("feishu", "adapter=%s WS connected (SDK client)", a.name)
 
 	if err := wsClient.Start(ctx); err != nil {

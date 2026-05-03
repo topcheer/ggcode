@@ -1,9 +1,11 @@
 package im
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // --- MemoryBindingStore ---
@@ -294,5 +296,105 @@ func TestCompositeKey(t *testing.T) {
 	}
 	if adapter != "bot1" {
 		t.Errorf("expected adapter bot1, got %q", adapter)
+	}
+}
+
+func TestJSONFileBindingStore_ContextTokenRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bindings.json")
+	store, _ := NewJSONFileBindingStore(path)
+
+	// Save a binding with ContextToken
+	b := ChannelBinding{
+		Workspace:             "/tmp/ws",
+		Platform:              PlatformWechat,
+		Adapter:               "wechat",
+		ChannelID:             "user-123",
+		ContextToken:          "AARzJWA-test-token",
+		ContextTokenUpdatedAt: time.Date(2026, 5, 3, 15, 0, 0, 0, time.Local),
+		BoundAt:               time.Now(),
+	}
+	if err := store.Save(b); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Reload from disk
+	all, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(all))
+	}
+	got := all[0]
+	if got.ContextToken != "AARzJWA-test-token" {
+		t.Errorf("ContextToken: got %q, want %q", got.ContextToken, "AARzJWA-test-token")
+	}
+	if got.ContextTokenUpdatedAt.IsZero() {
+		t.Error("ContextTokenUpdatedAt should not be zero")
+	}
+
+	// Update token
+	b.ContextToken = "NEW-TOKEN-XYZ"
+	b.ContextTokenUpdatedAt = time.Now()
+	if err := store.Save(b); err != nil {
+		t.Fatalf("Save update: %v", err)
+	}
+	all, _ = store.List()
+	if all[0].ContextToken != "NEW-TOKEN-XYZ" {
+		t.Errorf("updated ContextToken: got %q", all[0].ContextToken)
+	}
+}
+
+func TestJSONFileBindingStore_OldFileWithoutContextToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bindings.json")
+
+	// Write an old-format file without ContextToken fields
+	// Use Go string with actual null byte in key (JSON key = workspace + \x00 + adapter)
+	key := "/tmp/ws\x00wechat"
+	oldMap := map[string]ChannelBinding{
+		key: {
+			Workspace: "/tmp/ws",
+			Platform:  PlatformWechat,
+			Adapter:   "wechat",
+			ChannelID: "user-123",
+			BoundAt:   time.Date(2026, 5, 3, 15, 0, 0, 0, time.Local),
+		},
+	}
+	oldJSON, _ := json.Marshal(oldMap)
+	if err := os.WriteFile(path, oldJSON, 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Load — should not fail, ContextToken should be empty string
+	store, _ := NewJSONFileBindingStore(path)
+	all, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(all))
+	}
+	got := all[0]
+	if got.ContextToken != "" {
+		t.Errorf("ContextToken should be empty for old format, got %q", got.ContextToken)
+	}
+	if got.ChannelID != "user-123" {
+		t.Errorf("ChannelID: got %q", got.ChannelID)
+	}
+
+	// Save with new token — should preserve all fields
+	got.ContextToken = "fresh-token"
+	got.ContextTokenUpdatedAt = time.Now()
+	if err := store.Save(got); err != nil {
+		t.Fatalf("Save with token: %v", err)
+	}
+	all, _ = store.List()
+	if all[0].ContextToken != "fresh-token" {
+		t.Errorf("after save, ContextToken: got %q", all[0].ContextToken)
+	}
+	if all[0].ChannelID != "user-123" {
+		t.Errorf("ChannelID preserved: got %q", all[0].ChannelID)
 	}
 }

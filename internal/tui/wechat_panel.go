@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -39,6 +40,7 @@ type wechatBindingEntry struct {
 	OccupiedBy   string
 	AdapterState *im.AdapterState
 	Muted        bool
+	Bound        bool
 }
 
 type wechatQRCodeMsg struct {
@@ -70,7 +72,7 @@ func (m Model) renderWechatPanel() string {
 	entries := m.wechatBindingEntries()
 	boundCount := 0
 	for _, entry := range entries {
-		if strings.TrimSpace(entry.OccupiedBy) != "" {
+		if entry.Bound {
 			boundCount++
 		}
 	}
@@ -371,8 +373,7 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 		}
 		debug.Log("wechat", "saveWechatBotToken: adapter %q created and saved", adapterName)
 
-		// Start the adapter
-		// Start the adapter (no auto-bind — user must press [b] or send pairing message)
+		// Start the adapter (binding happens when the first inbound message triggers pairing)
 		if m.imManager != nil {
 			if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
 				debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
@@ -388,6 +389,9 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 }
 
 // bindWechatEntry binds the selected bot to the current workspace.
+// bindWechatEntry binds the wechat adapter to the current workspace.
+// This only registers the workspace association — the ChannelID/TargetID
+// are set later when the first inbound message triggers the pairing flow.
 func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
@@ -401,6 +405,7 @@ func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
 			Workspace: ws,
 			Platform:  im.PlatformWechat,
 			Adapter:   entry.Adapter,
+			TargetID:  defaultWechatTargetID(ws),
 		})
 		if err != nil {
 			return imEditResultMsg{err: err}
@@ -510,13 +515,19 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 	}
 
 	// Check which workspaces have bindings (for showing "occupied by other workspace")
+	// Track bound adapters (any workspace, including current)
+	bound := make(map[string]bool)
+	// Track adapters bound to a DIFFERENT workspace (for "occupied by" label)
 	occupied := make(map[string]string)
 	wsPath := m.currentWorkspacePath()
 	if m.imManager != nil {
 		if bindings, err := m.imManager.ListBindings(); err == nil {
 			for _, b := range bindings {
-				if b.Platform == im.PlatformWechat && b.Workspace != "" && b.Workspace != wsPath {
-					occupied[b.Adapter] = b.Workspace
+				if b.Platform == im.PlatformWechat && b.Workspace != "" {
+					bound[b.Adapter] = true
+					if b.Workspace != wsPath {
+						occupied[b.Adapter] = b.Workspace
+					}
 				}
 			}
 		}
@@ -540,6 +551,7 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 			Adapter:      name,
 			OccupiedBy:   occupied[name],
 			AdapterState: state,
+			Bound:        bound[name],
 		})
 	}
 	return entries
@@ -559,4 +571,12 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func defaultWechatTargetID(workspace string) string {
+	base := filepath.Base(strings.TrimSpace(workspace))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "current-cli"
+	}
+	return base
 }
