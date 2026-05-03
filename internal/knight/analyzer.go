@@ -443,7 +443,9 @@ func (sa *SessionAnalyzer) GenerateSkillFromAnalysis(ctx context.Context, candid
 		evidenceSection = fmt.Sprintf("\n\n## Evidence from conversations\n%s", strings.Join(candidate.Evidence, "\n"))
 	}
 
-	prompt := fmt.Sprintf(`You are generating a BEHAVIORAL SKILL — a reusable guideline that teaches an AI coding assistant how to act based on real user interactions.
+	prompt := fmt.Sprintf(`CRITICAL: Your FINAL text output must be a SKILL.md document starting with the line --- (YAML frontmatter). Do NOT output analysis, summaries, or explanations as your final message. Only the skill document.
+
+You are generating a BEHAVIORAL SKILL — a reusable guideline that teaches an AI coding assistant how to act based on real user interactions.
 
 ## What happened
 Category: %s
@@ -503,6 +505,8 @@ created_by: "knight"
 
 RULES:
 - Output ONLY the skill document content, starting with ---
+- Do NOT output any analysis, reasoning, or summary before or after the skill document
+- Your ENTIRE final text output must be the skill document from --- to the end
 - The "## Steps" heading is REQUIRED (exact text)
 - Each step must be specific and actionable — not "analyze the situation" but "read the function at line N of file X"
 - The Examples section must include REAL details from the session, not generic placeholders
@@ -518,9 +522,14 @@ RULES:
 	}
 
 	output := strings.TrimSpace(result.Output)
-	// LLM may prepend reasoning/thinking before the actual skill document.
-	// Extract only the content starting from the YAML frontmatter delimiter.
-	if idx := strings.Index(output, "---"); idx > 0 {
+	// LLM may prepend reasoning/thinking before the actual skill document,
+	// or append analysis after it. Find the LAST occurrence of a YAML
+	// frontmatter block using the "---\nname:" signature.
+	if idx := strings.LastIndex(output, "---\nname:"); idx >= 0 {
+		output = strings.TrimSpace(output[idx:])
+	} else if idx := strings.LastIndex(output, "---\r\nname:"); idx >= 0 {
+		output = strings.TrimSpace(output[idx:])
+	} else if idx := strings.Index(output, "---"); idx > 0 {
 		output = strings.TrimSpace(output[idx:])
 	}
 
