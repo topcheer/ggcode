@@ -1533,9 +1533,9 @@ func (m *Manager) ClearReplyWindow(workspace string) error {
 	return nil
 }
 
-func (m *Manager) SyncSessionHistory(ctx context.Context, messages []provider.Message) error {
+func (m *Manager) SyncSessionHistory(ctx context.Context, binding ChannelBinding, messages []provider.Message) error {
 	for _, event := range SessionHistoryEvents(messages) {
-		if err := m.Emit(ctx, event); err != nil {
+		if err := m.SendDirect(ctx, binding, event); err != nil {
 			return err
 		}
 	}
@@ -1787,4 +1787,28 @@ func (m *Manager) PCAdapter() PCAdapterAPI {
 		}
 	}
 	return nil
+}
+
+// ResolveOutputMode returns the effective output mode for the given adapter.
+// If the adapter's platform has a recommended default (e.g. WeChat → summary),
+// and the global mode is "verbose" (the default), the platform default is used.
+func (m *Manager) ResolveOutputMode(adapterName, globalMode string) string {
+	if m == nil {
+		return globalMode
+	}
+	m.mu.RLock()
+	state, ok := m.adapters[adapterName]
+	m.mu.RUnlock()
+	if !ok {
+		return globalMode
+	}
+	switch state.Platform {
+	case PlatformWechat:
+		// WeChat iLink: context_token expires in ~5s, max 5 passive replies.
+		// Force summary mode to ensure only one combined reply per inbound.
+		if globalMode == "" || globalMode == "verbose" {
+			return WechatDefaultOutputMode
+		}
+	}
+	return globalMode
 }

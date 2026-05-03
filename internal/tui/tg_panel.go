@@ -241,8 +241,11 @@ func (m *Model) bindTGEntry(entry tgBindingEntry) tea.Cmd {
 			if err := m.waitForTGAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 				return tgBindResultMsg{err: err}
 			}
-			if err := m.imManager.SyncSessionHistory(context.Background(), m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
-				return tgBindResultMsg{err: err}
+			// Sync session history to the newly bound channel only.
+			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+					return tgBindResultMsg{err: err}
+				}
 			}
 		}
 		return tgBindResultMsg{message: m.t("panel.tg.message.bound_success")}

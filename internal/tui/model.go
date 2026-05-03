@@ -446,6 +446,11 @@ func (m *Model) SetIMManager(mgr *im.Manager) {
 		}
 		workDir, _ := os.Getwd()
 		m.imEmitter = im.NewIMEmitter(mgr, lang, workDir)
+		// If any bound adapter is WeChat, default to summary mode
+		// (WeChat iLink has a 5s context_token expiry + 5 msg limit per inbound).
+		if im.HasWechatAdapter(mgr) {
+			m.imEmitter.SetOutputMode(im.WechatDefaultOutputMode)
+		}
 	}
 	m.refreshIMRuntimeHooks()
 	m.bindIMSession()

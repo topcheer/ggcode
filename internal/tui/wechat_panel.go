@@ -118,21 +118,27 @@ func (m Model) renderWechatPanel() string {
 		}
 	}
 
-	// QR code auth section
+	// QR code auth section — render separately so we can place it at top
+	var qrSection []string
 	if panel.authPhase == "showing_qr" || panel.authPhase == "polling" {
-		body = append(body, "",
+		qrSection = append(qrSection, "",
 			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(m.t("panel.wechat.scan_qr")),
 		)
 		if panel.qrcodeImage != "" {
-			body = append(body, panel.qrcodeImage)
+			qrSection = append(qrSection, panel.qrcodeImage)
 		}
 		if panel.authPhase == "polling" {
-			body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.wechat.waiting_scan")))
+			qrSection = append(qrSection, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.wechat.waiting_scan")))
 		}
 	} else if panel.authPhase == "confirmed" {
-		body = append(body, "",
+		qrSection = append(qrSection, "",
 			lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(m.t("panel.wechat.auth_confirmed")),
 		)
+	}
+
+	// Build body with QR at top if present
+	if len(qrSection) > 0 {
+		body = append(append(qrSection, ""), body...)
 	}
 
 	// Edit mode

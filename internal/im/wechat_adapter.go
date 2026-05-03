@@ -50,11 +50,30 @@ const (
 	ilinkMsgStateFinish     = 3
 )
 
-// WechatAdapter implements the Sink interface for WeChat iLink Bot API.
+// WechatDefaultOutputMode is the recommended output mode for WeChat IM channels.
+// WeChat iLink passive reply has a ~5 second context_token expiry and a 5-message
+// limit per inbound. Summary mode ensures only one combined reply is sent.
+const WechatDefaultOutputMode = "summary"
+
+// HasWechatAdapter returns true if the manager has any active WeChat adapter.
+func HasWechatAdapter(mgr *Manager) bool {
+	if mgr == nil {
+		return false
+	}
+	snapshot := mgr.Snapshot()
+	for _, a := range snapshot.Adapters {
+		if a.Platform == PlatformWechat && a.Healthy {
+			return true
+		}
+	}
+	return false
+}
+
 type WechatAdapter struct {
 	name       string
 	manager    *Manager
-	httpClient *http.Client
+	httpClient *http.Client // Normal requests (30s timeout)
+	lpClient   *http.Client // Long-poll requests (40s timeout, separate connection pool)
 
 	// Config
 	baseURL string
@@ -157,7 +176,8 @@ func newWechatAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 	return &WechatAdapter{
 		name:          name,
 		manager:       mgr,
-		httpClient:    &http.Client{Timeout: 40 * time.Second},
+		httpClient:    &http.Client{Timeout: 30 * time.Second},
+		lpClient:      &http.Client{Timeout: 40 * time.Second},
 		baseURL:       baseURL,
 		botToken:      botToken,
 		contextTokens: make(map[string]string),
@@ -290,7 +310,7 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 	}
 	a.setCommonHeaders(req, token)
 
-	resp, err := a.httpClient.Do(req)
+	resp, err := a.lpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("getupdates request: %w", err)
 	}
@@ -316,6 +336,7 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 	if result.Ret != 0 {
 		return fmt.Errorf("getupdates error: ret=%d errcode=%d errmsg=%s", result.Ret, result.ErrCode, result.ErrMsg)
 	}
+	debug.Log("wechat", "adapter=%s getupdates OK: msgs=%d cursor_len=%d", a.name, len(result.Msgs), len(result.GetUpdatesBuf))
 
 	// Update cursor
 	if result.GetUpdatesBuf != "" {
@@ -351,7 +372,9 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		}
 	}
 	text := strings.Join(textParts, "\n")
+	debug.Log("wechat", "adapter=%s handleMessage: from=%s to=%s items=%d text=%q context_token=%q", a.name, msg.FromUserID, msg.ToUserID, len(msg.ItemList), text, msg.ContextToken)
 	if strings.TrimSpace(text) == "" {
+		debug.Log("wechat", "adapter=%s handleMessage: empty text, skipping", a.name)
 		return
 	}
 
@@ -479,15 +502,21 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		return nil
 	}
 
-	items := []ilinkItem{
-		{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: text}},
-	}
-
 	toUserID := binding.TargetID
 	if toUserID == "" {
 		toUserID = binding.ChannelID
 	}
 
+	// Note: WeChat iLink passive reply has a ~5 second context_token expiry
+	// and a 5-message limit per inbound. If the agent takes longer or produces
+	// more than 5 outbound messages, subsequent sends may fail silently.
+	// The context_token is consumed on first use — for multi-turn agent replies,
+	// only the first message benefits from passive reply semantics.
+	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d", a.name, toUserID, truncateStr(contextToken, 8), len(text))
+
+	items := []ilinkItem{
+		{Type: ilinkItemText, TextItem: &ilinkTextItem{Text: text}},
+	}
 	outMsg := ilinkSendMessageRequest{
 		Msg: ilinkOutboundMessage{
 			ToUserID:     toUserID,
@@ -518,9 +547,11 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		debug.Log("wechat", "adapter=%s sendmessage failed: status=%d body=%s", a.name, resp.StatusCode, string(respBody))
 		return fmt.Errorf("sendmessage failed: status=%d body=%s", resp.StatusCode, string(respBody))
 	}
+	debug.Log("wechat", "adapter=%s sendmessage OK to=%s", a.name, toUserID)
 
 	return nil
 }
@@ -545,6 +576,7 @@ func (a *WechatAdapter) publishState(healthy bool, status, lastErr string) {
 	}
 	a.manager.PublishAdapterState(AdapterState{
 		Name:      a.name,
+		Platform:  PlatformWechat,
 		Healthy:   healthy,
 		Status:    status,
 		LastError: lastErr,

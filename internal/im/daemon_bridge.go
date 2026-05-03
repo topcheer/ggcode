@@ -55,8 +55,9 @@ type DaemonBridge struct {
 	multiSelectChosen    map[string]bool   // accumulated multi-select choices (choice value → selected)
 	followSink           daemon.FollowSink
 	onActivity           func()
-	onRestart            func() // trigger daemon self-restart
-	restartDebug         bool   // set by /restart debug to enable debug logging on next launch
+	onRestart            func()                                               // trigger daemon self-restart
+	onProviderSwitch     func(vendor, endpoint, model string) (string, error) // switch provider/model, returns summary
+	restartDebug         bool                                                 // set by /restart debug to enable debug logging on next launch
 	eventSubs            []*daemonBridgeSub
 	eventSubMu           sync.RWMutex
 }
@@ -165,6 +166,15 @@ func (b *DaemonBridge) SetActivityHook(fn func()) {
 func (b *DaemonBridge) SetRestartHook(fn func()) {
 	b.mu.Lock()
 	b.onRestart = fn
+	b.mu.Unlock()
+}
+
+// SetProviderSwitchHook installs a callback to switch provider/model.
+// The callback receives (vendor, endpoint, model) — any may be empty to mean "keep current".
+// It returns a human-readable summary string.
+func (b *DaemonBridge) SetProviderSwitchHook(fn func(vendor, endpoint, model string) (string, error)) {
+	b.mu.Lock()
+	b.onProviderSwitch = fn
 	b.mu.Unlock()
 }
 
@@ -445,7 +455,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			// Sleep tool is special: emit the duration immediately
 			// so the user sees it before the tool blocks.
 			// Only emit in verbose mode — quiet/summary aggregate it.
-			if toolName == "sleep" && b.emitter.OutputMode() == "verbose" {
+			if toolName == "sleep" && b.resolveEffectiveOutputMode() == "verbose" {
 				b.emitter.EmitEvent(OutboundEvent{
 					Kind: OutboundEventToolCall,
 					ToolCall: &ToolCallInfo{
@@ -475,7 +485,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 				Lang:     b.language,
 			}
 
-			switch b.emitter.OutputMode() {
+			switch b.resolveEffectiveOutputMode() {
 			case "summary":
 				// Only buffer, never send individual tool results
 				round.pendingTools = append(round.pendingTools, toolInfo)
@@ -502,7 +512,7 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 
 		case provider.StreamEventDone:
 			text := round.Text()
-			mode := b.emitter.OutputMode()
+			mode := b.resolveEffectiveOutputMode()
 
 			// For quiet/summary modes, emit aggregated tool summary
 			if (mode == "quiet" || mode == "summary") && len(round.pendingTools) > 0 {
@@ -878,8 +888,20 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 			"/muteall - Mute all adapters except the one you're using\n" +
 			"/muteself - Mute THIS adapter (⚠️ you'll stop receiving replies; use /restart from another adapter to recover)\n" +
 			"/restart [debug] - Restart daemon (unmutes all adapters; add 'debug' to enable GGCODE_DEBUG=1)\n" +
+			"/provider [vendor] [endpoint] - Show or switch LLM provider\n" +
+			"/model [name] - Show or switch model\n" +
+			"/config - Show current provider and model configuration\n" +
 			"/help - Show this help")
 		return nil
+
+	case "/provider":
+		return b.handleProviderCommand(parts)
+
+	case "/model":
+		return b.handleModelCommand(parts)
+
+	case "/config":
+		return b.handleConfigCommand()
 
 	default:
 		b.emitter.EmitText("Unknown command: " + cmd + ". Try /help")
@@ -975,6 +997,99 @@ func (b *DaemonBridge) handleMuteSelf(msg InboundMessage) error {
 	time.Sleep(500 * time.Millisecond)
 
 	b.manager.MuteBinding(selfAdapter)
+	return nil
+}
+
+func (b *DaemonBridge) handleProviderCommand(parts []string) error {
+	b.mu.Lock()
+	fn := b.onProviderSwitch
+	b.mu.Unlock()
+	if fn == nil {
+		b.emitter.EmitText("❌ Provider switching not available in this mode.")
+		return nil
+	}
+
+	vendor := ""
+	endpoint := ""
+	if len(parts) > 1 {
+		vendor = parts[1]
+	}
+	if len(parts) > 2 {
+		endpoint = parts[2]
+	}
+
+	summary, err := fn(vendor, endpoint, "")
+	if err != nil {
+		b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
+		return nil
+	}
+	b.emitter.EmitText(summary)
+	return nil
+}
+
+func (b *DaemonBridge) handleModelCommand(parts []string) error {
+	b.mu.Lock()
+	fn := b.onProviderSwitch
+	b.mu.Unlock()
+	if fn == nil {
+		b.emitter.EmitText("❌ Model switching not available in this mode.")
+		return nil
+	}
+
+	model := ""
+	if len(parts) > 1 {
+		model = parts[1]
+	}
+
+	summary, err := fn("", "", model)
+	if err != nil {
+		b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
+		return nil
+	}
+	b.emitter.EmitText(summary)
+	return nil
+}
+
+// resolveEffectiveOutputMode returns the output mode considering the
+// platform-specific defaults. If any bound adapter's platform requires
+// a different mode (e.g. WeChat -> summary), that overrides the global mode.
+func (b *DaemonBridge) resolveEffectiveOutputMode() string {
+	globalMode := b.emitter.OutputMode()
+	if b.manager == nil {
+		return globalMode
+	}
+	snapshot := b.manager.Snapshot()
+	for _, binding := range snapshot.CurrentBindings {
+		if binding.Muted {
+			continue
+		}
+		for _, adapter := range snapshot.Adapters {
+			if adapter.Name == binding.Adapter && adapter.Platform == PlatformWechat {
+				if globalMode == "" || globalMode == "verbose" {
+					return WechatDefaultOutputMode
+				}
+			}
+		}
+	}
+	return globalMode
+}
+
+func (b *DaemonBridge) handleConfigCommand() error {
+	b.mu.Lock()
+	fn := b.onProviderSwitch
+	b.mu.Unlock()
+	if fn == nil {
+		b.emitter.EmitText("❌ Config display not available in this mode.")
+		return nil
+	}
+
+	// Call with all empty → returns current config summary
+	summary, err := fn("", "", "")
+	if err != nil {
+		b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
+		return nil
+	}
+	b.emitter.EmitText(summary)
 	return nil
 }
 

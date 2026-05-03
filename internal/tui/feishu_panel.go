@@ -225,8 +225,11 @@ func (m *Model) bindFeishuEntry(entry feishuBindingEntry) tea.Cmd {
 			if err := m.waitForFeishuAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
 				return feishuBindResultMsg{err: err}
 			}
-			if err := m.imManager.SyncSessionHistory(context.Background(), m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
-				return feishuBindResultMsg{err: err}
+			// Sync session history to the newly bound channel only.
+			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+					return feishuBindResultMsg{err: err}
+				}
 			}
 		}
 		return feishuBindResultMsg{message: m.t("panel.feishu.message.bound_success")}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,11 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	if event.Kind == OutboundEventText {
 		if strings.TrimSpace(event.Text) == "" {
 			return
+		}
+		// Debug: log text emission with caller stack for tracing replay bugs
+		if len(event.Text) > 50 {
+			_, file, line, _ := runtime.Caller(2)
+			debug.Log("emitter", "EmitText len=%d caller=%s:%d", len(event.Text), file, line)
 		}
 	}
 	if event.Kind == OutboundEventStatus {

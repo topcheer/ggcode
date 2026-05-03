@@ -234,15 +234,16 @@ type IMSTTConfig struct {
 }
 
 type IMAdapterConfig struct {
-	Enabled   bool                   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Platform  string                 `yaml:"platform,omitempty" json:"platform,omitempty"`
-	Transport string                 `yaml:"transport,omitempty" json:"transport,omitempty"`
-	Command   string                 `yaml:"command,omitempty" json:"command,omitempty"`
-	Args      []string               `yaml:"args,omitempty" json:"args,omitempty"`
-	Env       map[string]string      `yaml:"env,omitempty" json:"env,omitempty"`
-	AllowFrom []string               `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
-	Targets   []IMTargetConfig       `yaml:"targets,omitempty" json:"targets,omitempty"`
-	Extra     map[string]interface{} `yaml:"extra,omitempty" json:"extra,omitempty"`
+	Enabled    bool                   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Platform   string                 `yaml:"platform,omitempty" json:"platform,omitempty"`
+	Transport  string                 `yaml:"transport,omitempty" json:"transport,omitempty"`
+	Command    string                 `yaml:"command,omitempty" json:"command,omitempty"`
+	Args       []string               `yaml:"args,omitempty" json:"args,omitempty"`
+	Env        map[string]string      `yaml:"env,omitempty" json:"env,omitempty"`
+	AllowFrom  []string               `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+	OutputMode string                 `yaml:"output_mode,omitempty" json:"output_mode,omitempty"` // adapter-level override: verbose, quiet, summary
+	Targets    []IMTargetConfig       `yaml:"targets,omitempty" json:"targets,omitempty"`
+	Extra      map[string]interface{} `yaml:"extra,omitempty" json:"extra,omitempty"`
 }
 
 type IMTargetConfig struct {
