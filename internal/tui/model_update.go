@@ -1599,6 +1599,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case wecomBindResultMsg:
+		if m.wecomPanel != nil {
+			if msg.err != nil {
+				m.wecomPanel.message = msg.err.Error()
+			} else {
+				m.wecomPanel.message = msg.message
+			}
+		}
+		return m, nil
+
+	case mattermostBindResultMsg:
+		if m.mattermostPanel != nil {
+			if msg.err != nil {
+				m.mattermostPanel.message = msg.err.Error()
+			} else {
+				m.mattermostPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case tgBindResultMsg:
 		if m.tgPanel != nil {
 			if msg.err != nil {
