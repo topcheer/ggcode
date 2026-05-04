@@ -33,6 +33,9 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 		return m.executeRemoteHelp(), true
 	case "/config":
 		return m.executeRemoteConfig(), true
+	case "/stream":
+		resp, _ := m.handleStreamSlash(strings.Join(parts[1:], " "))
+		return resp, true
 	default:
 		return "", false
 	}
@@ -134,16 +137,12 @@ func (m *Model) executeRemoteRestartCommand(parts []string) string {
 // confirmation message is delivered) and then triggers the restart.
 func (m *Model) scheduleRemoteRestart() tea.Cmd {
 	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
-		m.chatWriteSystem(nextSystemID(), "Restarting ggcode...")
-		m.quitting = true
-		m.restartRequested = true
-		return quitMsg{}
+		return remoteRestartMsg{}
 	})
 }
 
-// quitMsg is a custom message that triggers a clean quit.
-// The Update handler recognizes this and returns tea.Quit.
-type quitMsg struct{}
+// remoteRestartMsg triggers a clean restart (quit + execve).
+type remoteRestartMsg struct{}
 
 // ---- IM management (aligned with daemon_bridge.go) ----
 
@@ -244,6 +243,7 @@ func (m *Model) executeRemoteHelp() string {
 		"/restart [debug] - Restart ggcode (add 'debug' to enable GGCODE_DEBUG=1)\n" +
 		"/provider [vendor] [endpoint] - Show or switch LLM provider\n" +
 		"/model [name] - Show or switch model\n" +
+		"/stream start|stop|status|config - Control live streaming\n" +
 		"/config - Show current provider, model and endpoint configuration\n" +
 		"/help - Show this help"
 }

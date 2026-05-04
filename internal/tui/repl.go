@@ -303,9 +303,12 @@ func (s *replModeSwitcher) SetMode(mode permission.PermissionMode) {
 // RememberMode saves the current mode as "previous" and returns what was saved.
 // This is called by enter_plan_mode to remember the mode before switching.
 func (s *replModeSwitcher) RememberMode(currentMode permission.PermissionMode) permission.PermissionMode {
-	// The current actual mode comes from the policy, not the argument.
-	// The argument is the NEW mode we're about to switch to.
-	actualCurrent := s.model.mode
+	// Read the actual current mode from ConfigPolicy (thread-safe, always up-to-date)
+	// rather than s.model.mode which may be stale (Bubble Tea copies the model).
+	actualCurrent := currentMode // fallback to the argument
+	if cp, ok := s.model.policy.(*permission.ConfigPolicy); ok {
+		actualCurrent = cp.CurrentMode()
+	}
 	s.previousMode = actualCurrent
 	return actualCurrent
 }

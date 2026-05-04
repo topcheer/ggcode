@@ -92,6 +92,7 @@ type Model struct {
 	imManager                       *im.Manager
 	streamManager                   *stream.Manager
 	streamPanel                     *streamPanelState
+	knightPanel                     *knightPanelState
 	streamViewState                 *streamViewStateData // shared pointer — survives Model copies
 	imEmitter                       *im.IMEmitter
 	instanceDetect                  *im.InstanceDetect
@@ -592,6 +593,8 @@ func (m *Model) closeActivePanel() bool {
 		m.closeInspectorPanel()
 	case m.streamPanel != nil:
 		m.closeStreamPanel()
+	case m.knightPanel != nil:
+		m.closeKnightPanel()
 	case m.harnessContextPrompt != nil:
 		m.harnessContextPrompt = nil
 	case m.harnessPanel != nil:

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -164,14 +165,22 @@ func (e *Encoder) buildArgs(encoderName string, isHW bool) []string {
 
 	if isHW {
 		// Hardware encoder args
-		args = append(args,
+		hwArgs := []string{
 			"-c:v", encoderName,
 			"-b:v", "5000k",
 			"-maxrate", "6000k",
 			"-bufsize", "10000k",
 			"-pix_fmt", "yuv420p",
 			"-g", fmt.Sprintf("%d", e.fps*2),
-		)
+		}
+		// VideoToolbox (macOS) supports -profile and -quality
+		if strings.Contains(encoderName, "videotoolbox") {
+			hwArgs = append(hwArgs,
+				"-profile", "high",
+				"-quality", "realtime",
+			)
+		}
+		args = append(args, hwArgs...)
 	} else {
 		// Software encoder (libx264) — CBR for stable live bitrate.
 		// CRF produces very low bitrate on static terminal screens.
@@ -207,5 +216,42 @@ func (e *Encoder) selectEncoder() (name string, isHW bool) {
 	if e.hwEncoder != "" {
 		return e.hwEncoder, true
 	}
+	// Auto-detect hardware encoder
+	if hw := detectHWEncoder(); hw != "" {
+		return hw, true
+	}
 	return "libx264", false
+}
+
+// detectHWEncoder probes FFmpeg for available hardware encoders.
+func detectHWEncoder() string {
+	candidates := []string{
+		"h264_videotoolbox", // macOS (Apple Silicon + Intel)
+		"hevc_videotoolbox", // macOS HEVC
+		"h264_vaapi",        // Linux (VA-API)
+		"h264_nvenc",        // NVIDIA
+		"h264_amf",          // Windows (AMD)
+		"h264_qsv",          // Intel Quick Sync
+	}
+	for _, enc := range candidates {
+		if probeEncoder(enc) {
+			return enc
+		}
+	}
+	return ""
+}
+
+// probeEncoder checks if FFmpeg supports a given encoder.
+func probeEncoder(name string) bool {
+	cmd := exec.Command("ffmpeg", "-hide_banner", "-encoders")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, name) {
+			return true
+		}
+	}
+	return false
 }

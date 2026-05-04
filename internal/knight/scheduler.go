@@ -369,6 +369,19 @@ func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
 	return nil
 }
 
+// DeleteSkill removes an active skill by deleting its file.
+func (k *Knight) DeleteSkill(name string) error {
+	entry, err := k.FindActiveSkill(name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(entry.Path); err != nil {
+		return fmt.Errorf("delete skill %q: %w", name, err)
+	}
+	k.index.Invalidate()
+	return nil
+}
+
 // RollbackSkill restores the latest snapshot for an active skill.
 func (k *Knight) RollbackSkill(name string) error {
 	entry, err := k.FindActiveSkill(name)
@@ -521,14 +534,33 @@ func (k *Knight) PromoteStaging(skillName string) error {
 	if err != nil {
 		return err
 	}
+	return k.promoteStagingEntry(s)
+}
+
+// PromoteStagingByPath promotes a staging skill by its file path.
+// Use this when multiple staging skills share the same name/scope.
+func (k *Knight) PromoteStagingByPath(path string) error {
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		return err
+	}
+	for _, s := range staging {
+		if s.Path == path {
+			return k.promoteStagingEntry(s)
+		}
+	}
+	return fmt.Errorf("staging skill not found at path: %s", path)
+}
+
+func (k *Knight) promoteStagingEntry(s *SkillEntry) error {
 	result := ValidateSkill(s)
 	if !result.Valid {
-		return fmt.Errorf("skill %q failed validation: %s", skillName, result.Errors)
+		return fmt.Errorf("skill %q failed validation: %s", s.Name, result.Errors)
 	}
 
 	active, _ := k.index.ActiveSkills()
 	if CheckDuplicate(s, active) && !stagingUpdatesActiveSkill(s, active) {
-		return fmt.Errorf("skill %q duplicates an existing skill", skillName)
+		return fmt.Errorf("skill %q duplicates an existing skill", s.Name)
 	}
 
 	if err := k.promoter.Promote(s); err != nil {
@@ -551,6 +583,25 @@ func (k *Knight) RejectStaging(skillName string) error {
 	if err != nil {
 		return err
 	}
+	return k.rejectStagingEntry(s)
+}
+
+// RejectStagingByPath rejects a staging skill by its file path.
+// Use this when multiple staging skills share the same name/scope.
+func (k *Knight) RejectStagingByPath(path string) error {
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		return err
+	}
+	for _, s := range staging {
+		if s.Path == path {
+			return k.rejectStagingEntry(s)
+		}
+	}
+	return fmt.Errorf("staging skill not found at path: %s", path)
+}
+
+func (k *Knight) rejectStagingEntry(s *SkillEntry) error {
 	if err := k.promoter.Reject(s); err != nil {
 		return err
 	}

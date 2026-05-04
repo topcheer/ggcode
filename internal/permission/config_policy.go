@@ -210,6 +210,13 @@ func (p *ConfigPolicy) SetMode(mode PermissionMode) {
 	p.mode = mode
 }
 
+// CurrentMode returns the current permission mode (thread-safe).
+func (p *ConfigPolicy) CurrentMode() PermissionMode {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.mode
+}
+
 // GetDecision returns the current decision for a tool (for TUI display).
 func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 	p.mu.RLock()
