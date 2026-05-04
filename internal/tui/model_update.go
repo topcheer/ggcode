@@ -214,6 +214,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mattermostPanel.editState.editInput += msg.Content
 			return m, nil
 		}
+		if m.matrixPanel != nil && m.matrixPanel.editState.mode == imEditInput {
+			m.matrixPanel.editState.editInput += msg.Content
+			return m, nil
+		}
 		if m.pcPanel != nil && m.pcPanel.editState.mode == imEditInput {
 			m.pcPanel.editState.editInput += msg.Content
 			return m, nil
@@ -334,6 +338,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mattermostPanel != nil {
 			return m.handleMattermostPanelKey(msg)
 		}
+		if m.matrixPanel != nil {
+			return m.handleMatrixPanelKey(msg)
+		}
+
 		if m.imPanel != nil {
 			return m.handleIMPanelKey(msg)
 		}
@@ -1635,6 +1643,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case matrixBindResultMsg:
+		if m.matrixPanel != nil {
+			if msg.err != nil {
+				m.matrixPanel.message = msg.err.Error()
+			} else {
+				m.matrixPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case tgBindResultMsg:
 		if m.tgPanel != nil {
 			if msg.err != nil {
@@ -1673,6 +1691,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyIMEditResult(&m.wecomPanel.editState, msg)
 		} else if m.mattermostPanel != nil && m.mattermostPanel.editState.mode != imEditNone {
 			m.applyIMEditResult(&m.mattermostPanel.editState, msg)
+		} else if m.matrixPanel != nil && m.matrixPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.matrixPanel.editState, msg)
 		}
 		return m, nil
 

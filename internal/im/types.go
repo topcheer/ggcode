@@ -23,6 +23,7 @@ const (
 	PlatformWechat     Platform = "wechat"
 	PlatformWeCom      Platform = "wecom"
 	PlatformMattermost Platform = "mattermost"
+	PlatformMatrix     Platform = "matrix"
 )
 
 type AttachmentKind string
