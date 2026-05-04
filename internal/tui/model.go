@@ -132,6 +132,7 @@ type Model struct {
 	slackPanel                      *slackPanelState
 	dingtalkPanel                   *dingtalkPanelState
 	wechatPanel                     *wechatPanelState
+	wecomPanel                      *wecomPanelState
 	imPanel                         *imPanelState
 	mcpPanel                        *mcpPanelState
 	pendingDeviceCodes              []deviceCodeInfo
@@ -584,6 +585,9 @@ func (m *Model) closeActivePanel() bool {
 	case m.imPanel != nil:
 	case m.wechatPanel != nil:
 		m.closeWechatPanel()
+		m.closeIMPanel()
+	case m.wecomPanel != nil:
+		m.closeWeComPanel()
 		m.closeIMPanel()
 	case m.mcpPanel != nil:
 		m.closeMCPPanel()

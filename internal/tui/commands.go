@@ -283,6 +283,9 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		case "/wechat":
 			m.openWechatPanel()
 			return nil
+		case "/wecom":
+			m.openWeComPanel()
+			return nil
 		case "/im":
 			m.openIMPanel()
 			return nil

@@ -1148,6 +1148,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderDingtalkPanel()
 	case m.wechatPanel != nil:
 		return m.renderWechatPanel()
+	case m.wecomPanel != nil:
+		return m.renderWeComPanel()
 	case m.imPanel != nil:
 		return m.renderIMPanel()
 	case m.mcpPanel != nil:

@@ -21,6 +21,7 @@ const (
 	PlatformSlack    Platform = "slack"
 	PlatformDummy    Platform = "dummy"
 	PlatformWechat   Platform = "wechat"
+	PlatformWeCom    Platform = "wecom"
 )
 
 type AttachmentKind string
