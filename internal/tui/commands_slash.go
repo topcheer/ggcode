@@ -639,33 +639,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 
 	switch subcmd {
 	case "status", "":
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight: %s", m.knight.Status()))
-		used, remaining, limit := m.knight.BudgetStatus()
-		if limit == 0 {
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Budget: %d tokens used / unlimited", used))
-		} else {
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Budget: %d used / %d remaining / %d total", used, remaining, limit))
-		}
-		// Show staging skills
-		staging, _ := m.knight.Index().StagingSkills()
-		if len(staging) > 0 {
-			m.chatWriteSystem(nextSystemID(), "Staging skills:")
-			for _, s := range staging {
-				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  • %s (%s): %s", s.Name, s.Scope, s.Meta.Description))
-			}
-		}
-		if evals, err := m.knight.RecentAutoPromoteEvals(3); err == nil && len(evals) > 0 {
-			m.chatWriteSystem(nextSystemID(), "Recent auto-promote evals:")
-			for _, eval := range evals {
-				m.chatWriteSystem(nextSystemID(), "  • "+formatAutoPromoteEval(eval))
-			}
-		}
-		if scenarios, err := m.knight.RecentSkillScenarios(3); err == nil && len(scenarios) > 0 {
-			m.chatWriteSystem(nextSystemID(), "Recent replay scenarios:")
-			for _, scenario := range scenarios {
-				m.chatWriteSystem(nextSystemID(), "  • "+formatSkillScenario(scenario))
-			}
-		}
+		m.openKnightPanel()
 	case "budget":
 		used, remaining, limit := m.knight.BudgetStatus()
 		if limit == 0 {

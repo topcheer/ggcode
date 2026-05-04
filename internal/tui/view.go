@@ -1154,6 +1154,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderMCPPanel()
 	case m.streamPanel != nil:
 		return m.renderStreamPanel()
+	case m.knightPanel != nil:
+		return m.renderKnightPanel()
 	case m.skillsPanel != nil:
 		return m.renderSkillsPanel()
 	case m.inspectorPanel != nil:
@@ -1373,7 +1375,8 @@ func (m Model) renderComposerPanel() string {
 			if fps == 0 {
 				fps = 15
 			}
-			hints = append(hints, fmt.Sprintf("\U0001f534 %s %s@%dfps", strings.Join(names, ","), res, fps))
+			streamDot := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("\u25cf")
+			hints = append(hints, fmt.Sprintf("%s %s %s@%dfps", streamDot, strings.Join(names, ","), res, fps))
 		}
 	}
 

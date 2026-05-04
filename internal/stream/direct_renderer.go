@@ -12,6 +12,9 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
+
+	// For TTC (TrueType Collection) fallback parsing
+	"golang.org/x/image/font/sfnt"
 )
 
 // DirectRenderer converts ANSI terminal strings directly to *image.RGBA
@@ -38,6 +41,7 @@ type DirectRenderer struct {
 	faceBold   font.Face
 	symbolFace font.Face // system monospace font (symbols fallback)
 	cjkFace    font.Face // CJK font (wide char fallback)
+	emojiFace  font.Face // emoji font (color/monochrome fallback)
 	fontLoaded bool
 }
 
@@ -131,7 +135,13 @@ func (r *DirectRenderer) loadFonts() {
 		}
 	}
 
-	// 4. Bold face from DejaVu Mono Bold
+	// 4. Emoji fallback — system emoji font (Apple Color Emoji, Noto Color Emoji, etc.)
+	emojiPath := FindEmojiFont()
+	if emojiPath != "" {
+		r.emojiFace = r.loadFontFace(emojiPath)
+	}
+
+	// 5. Bold face from DejaVu Mono Bold
 	boldData := DejaVuMonoBold()
 	if boldParsed, err := opentype.Parse(boldData); err == nil {
 		r.faceBold, _ = opentype.NewFace(boldParsed, &opentype.FaceOptions{
@@ -166,6 +176,38 @@ func findSymbolFallbackFont() string {
 	return ""
 }
 
+// loadFontFace loads a font file (.ttf, .otf, or .ttc) and returns a font.Face.
+// For .ttc files, tries the first font in the collection.
+func (r *DirectRenderer) loadFontFace(path string) font.Face {
+	data, err := ReadFontFile(path)
+	if err != nil {
+		return nil
+	}
+
+	opts := &opentype.FaceOptions{
+		Size:    float64(r.fontSize),
+		DPI:     72,
+		Hinting: font.HintingFull,
+	}
+
+	// Try opentype.Parse first (handles .ttf and .otf)
+	if parsed, err := opentype.Parse(data); err == nil {
+		if face, err := opentype.NewFace(parsed, opts); err == nil {
+			return face
+		}
+	}
+
+	// Fallback: try sfnt.Parse for .ttc collections
+	// TTC files contain multiple fonts; we try to parse each offset.
+	if sfntFont, err := sfnt.Parse(data); err == nil {
+		if face, err := opentype.NewFace(sfntFont, opts); err == nil {
+			return face
+		}
+	}
+
+	return nil
+}
+
 // Cols returns terminal column count.
 func (r *DirectRenderer) Cols() int { return r.cols }
 
@@ -194,6 +236,11 @@ func (r *DirectRenderer) FontInfo() string {
 
 // Render converts ANSI text directly to an *image.RGBA.
 func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
+	// Replace emoji with safe equivalents before rendering.
+	// Go's font renderer cannot draw bitmap/color emoji, so we substitute
+	// visually similar outline characters that DejaVu Mono supports.
+	ansiText = replaceEmojiForRender(ansiText)
+
 	r.fontOnce.Do(r.loadFonts)
 	if r.fontErr != nil {
 		return nil, r.fontErr
@@ -238,6 +285,9 @@ func (r *DirectRenderer) Render(ansiText string) (*image.RGBA, error) {
 
 	// selectFace picks the right font face for a rune.
 	selectFace := func(rne rune, bold bool) font.Face {
+		if IsEmoji(rne) && r.emojiFace != nil {
+			return r.emojiFace
+		}
 		if IsWide(rne) && r.cjkFace != nil {
 			return r.cjkFace
 		}

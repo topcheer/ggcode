@@ -90,7 +90,7 @@ func spinnerFrameGlyph(frame int) string {
 
 // tick returns a tea.Cmd that sends the next spinner frame.
 func (s *ToolSpinner) tick(generation uint64) tea.Cmd {
-	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
 		return spinnerMsg{Time: t, generation: generation}
 	})
 }

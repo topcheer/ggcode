@@ -324,6 +324,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateStreamPanel(msg)
 		}
 
+		if m.knightPanel != nil {
+			return m.updateKnightPanel(msg)
+		}
+
 		if m.impersonatePanel != nil {
 			return m.handleImpersonatePanelKey(msg)
 		}
@@ -685,7 +689,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendStreamChunk(string(msg))
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
-	case quitMsg:
+	case remoteRestartMsg:
+		m.quitting = true
+		m.restartRequested = true
 		return m, tea.Quit
 
 	case remoteInboundMsg:
