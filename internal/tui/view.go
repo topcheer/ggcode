@@ -1154,6 +1154,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderMattermostPanel()
 	case m.matrixPanel != nil:
 		return m.renderMatrixPanel()
+	case m.signalPanel != nil:
+		return m.renderSignalPanel()
 	case m.imPanel != nil:
 		return m.renderIMPanel()
 	case m.mcpPanel != nil:
@@ -1316,6 +1318,8 @@ func platformDisplayName(p im.Platform) string {
 		return "Mattermost"
 	case im.PlatformMatrix:
 		return "Matrix"
+	case im.PlatformSignal:
+		return "Signal"
 	default:
 		return "IM"
 	}
@@ -1341,6 +1345,8 @@ func platformCNName(p im.Platform) string {
 		return "企业微信"
 	case im.PlatformMattermost:
 		return "Mattermost"
+	case im.PlatformSignal:
+		return "Signal"
 	default:
 		return "IM"
 	}

@@ -184,6 +184,13 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 			return err
 		}
 		start(adapter)
+	case PlatformSignal:
+		adapter, err := newSignalAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			adapterCancel()
+			return err
+		}
+		start(adapter)
 	}
 	return nil
 }

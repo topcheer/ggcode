@@ -24,6 +24,7 @@ const (
 	PlatformWeCom      Platform = "wecom"
 	PlatformMattermost Platform = "mattermost"
 	PlatformMatrix     Platform = "matrix"
+	PlatformSignal     Platform = "signal"
 )
 
 type AttachmentKind string

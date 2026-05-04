@@ -180,6 +180,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.matrixPanel.createInput += msg.Content
 			return m, nil
 		}
+		if m.signalPanel != nil && m.signalPanel.createMode {
+			m.signalPanel.createInput += msg.Content
+			return m, nil
+		}
 		// Forward paste to PC panel create-input.
 		if m.pcPanel != nil && m.pcPanel.createMode {
 			m.pcPanel.createInput += msg.Content
@@ -220,6 +224,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.matrixPanel != nil && m.matrixPanel.editState.mode == imEditInput {
 			m.matrixPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.signalPanel != nil && m.signalPanel.editState.mode == imEditInput {
+			m.signalPanel.editState.editInput += msg.Content
 			return m, nil
 		}
 		if m.pcPanel != nil && m.pcPanel.editState.mode == imEditInput {
@@ -344,6 +352,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.matrixPanel != nil {
 			return m.handleMatrixPanelKey(msg)
+		}
+		if m.signalPanel != nil {
+			return m.handleSignalPanelKey(msg)
 		}
 
 		if m.imPanel != nil {
@@ -1657,6 +1668,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case signalBindResultMsg:
+		if m.signalPanel != nil {
+			if msg.err != nil {
+				m.signalPanel.message = msg.err.Error()
+			} else {
+				m.signalPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case tgBindResultMsg:
 		if m.tgPanel != nil {
 			if msg.err != nil {
@@ -1697,6 +1718,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyIMEditResult(&m.mattermostPanel.editState, msg)
 		} else if m.matrixPanel != nil && m.matrixPanel.editState.mode != imEditNone {
 			m.applyIMEditResult(&m.matrixPanel.editState, msg)
+		} else if m.signalPanel != nil && m.signalPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.signalPanel.editState, msg)
 		}
 		return m, nil
 
