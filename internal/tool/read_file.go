@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/extract"
 	"github.com/topcheer/ggcode/internal/image"
@@ -117,7 +118,110 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// Plain text file: apply range reading.
 	content := string(data)
 	text := readFileRange(content, args.Offset, args.Limit, 0)
+
+	// Detect indentation style and encoding, prepend as metadata hint.
+	// This helps the LLM produce correct old_text matches for edit_file.
+	var meta string
+	indentHint := detectIndentStyle(content)
+	if indentHint != "" {
+		meta = indentHint
+	}
+	encHint := detectEncoding(data)
+	if encHint != "" {
+		if meta != "" {
+			meta += ", "
+		}
+		meta += encHint
+	}
+	if meta != "" {
+		text = "[" + meta + "]\n" + text
+	}
+
 	return Result{Content: text}, nil
+}
+
+// detectIndentStyle analyzes the first ~200 lines to determine tab vs space indentation.
+func detectIndentStyle(content string) string {
+	tabs, spaces := 0, 0
+	lines := strings.Split(content, "\n")
+	limit := len(lines)
+	if limit > 200 {
+		limit = 200
+	}
+	for _, line := range lines[:limit] {
+		if len(line) == 0 || (line[0] != ' ' && line[0] != '\t') {
+			continue
+		}
+		if line[0] == '\t' {
+			tabs++
+		} else {
+			i := 0
+			for i < len(line) && line[i] == ' ' {
+				i++
+			}
+			if i >= 2 {
+				spaces++
+			}
+		}
+	}
+	total := tabs + spaces
+	if total == 0 {
+		return ""
+	}
+	if tabs > spaces {
+		return "indent: tab"
+	}
+	// Detect base indent unit by finding the greatest common divisor
+	// of all leading-space counts. This handles 2-space YAML vs 4-space Python/etc.
+	widths := map[int]int{}
+	for _, line := range lines[:limit] {
+		if len(line) == 0 || line[0] != ' ' {
+			continue
+		}
+		i := 0
+		for i < len(line) && line[i] == ' ' {
+			i++
+		}
+		if i >= 2 {
+			widths[i]++
+		}
+	}
+	if len(widths) == 0 {
+		return "indent: spaces"
+	}
+	// Find GCD of all observed widths
+	allWidths := make([]int, 0, len(widths))
+	for w := range widths {
+		allWidths = append(allWidths, w)
+	}
+	g := allWidths[0]
+	for _, w := range allWidths[1:] {
+		g = gcd(g, w)
+	}
+	if g < 2 {
+		g = 2
+	}
+	return fmt.Sprintf("indent: %d spaces", g)
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+// detectEncoding checks for BOM or non-UTF-8 content.
+func detectEncoding(data []byte) string {
+	if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+		return "encoding: UTF-8 BOM"
+	}
+	for _, b := range data[:min(len(data), 512)] {
+		if b == 0 {
+			return "encoding: binary/UTF-16"
+		}
+	}
+	return ""
 }
 
 // --- provider.ToolDefinition helper ---

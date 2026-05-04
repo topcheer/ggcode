@@ -470,23 +470,34 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		toolNames[i] = t.Name()
 	}
 
-	// Collect user-facing slash shortcuts separately from the full skill registry.
-	userSlashCmds := commandMgr.UserSlashCommands()
-	customCmdNames := make([]string, 0, len(userSlashCmds))
-	for name := range userSlashCmds {
-		customCmdNames = append(customCmdNames, name)
-	}
+	buildCurrentSystemPrompt := func() (string, []string) {
+		// Collect user-facing slash shortcuts separately from the full skill registry.
+		userSlashCmds := commandMgr.UserSlashCommands()
+		customCmdNames := make([]string, 0, len(userSlashCmds))
+		for name := range userSlashCmds {
+			customCmdNames = append(customCmdNames, name)
+		}
 
-	// Build enhanced system prompt with runtime context
-	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
-	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
-		systemPrompt += "\n\n## Skills\n" + skillsPrompt
+		// Build enhanced system prompt with runtime context
+		prompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
+		skillsPrompt, promptSkillRefs := buildSkillsSystemPromptWithPromptRefs(commandMgr.List())
+		if skillsPrompt != "" {
+			prompt += "\n\n## Skills\n" + skillsPrompt
+		}
+		if mode == permission.AutopilotMode {
+			prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
+		}
+		if autoContent != "" {
+			prompt += "\n\n## Auto Memory\n" + autoContent
+		}
+		return prompt, promptSkillRefs
 	}
-	if mode == permission.AutopilotMode {
-		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
-	}
-	if autoContent != "" {
-		systemPrompt += "\n\n## Auto Memory\n" + autoContent
+	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
+	var promptSkillRefsMu sync.RWMutex
+	currentPromptSkillRefs := func() []string {
+		promptSkillRefsMu.RLock()
+		defer promptSkillRefsMu.RUnlock()
+		return append([]string(nil), promptSkillRefs...)
 	}
 
 	// Setup sub-agent manager
@@ -496,6 +507,30 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	refreshAgentSystemPrompt := func() {
+		nextPrompt, nextRefs := buildCurrentSystemPrompt()
+		systemPrompt = nextPrompt
+		promptSkillRefsMu.Lock()
+		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
+		promptSkillRefsMu.Unlock()
+		ag.UpdateSystemPrompt(systemPrompt)
+		if knightAgent != nil {
+			knightAgent.RecordSkillPromptExposure(nextRefs)
+		}
+	}
+	ag.SetRunResultWithContentHandler(func(content []provider.ContentBlock, err error) {
+		if knightAgent == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		refs := currentPromptSkillRefs()
+		if len(refs) == 0 {
+			return
+		}
+		knightAgent.RecordPromptSkillOutcome(refs, err == nil)
+		if scenarioErr := knightAgent.RecordPromptSkillScenario(refs, content, err == nil, err); scenarioErr != nil {
+			debug.Log("root", "Knight scenario record failed: %v", scenarioErr)
+		}
+	})
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
 	}
@@ -535,6 +570,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			}
 		} else {
 			defer knightAgent.Stop()
+			if commandMgr.Reload() {
+				refreshAgentSystemPrompt()
+			} else {
+				knightAgent.RecordSkillPromptExposure(currentPromptSkillRefs())
+			}
 		}
 	}
 
@@ -617,6 +657,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetMCPManager(mcpMgr)
 	repl.SetPluginManager(pluginMgr)
 	repl.SetCommandsManager(commandMgr)
+	repl.SetSkillsChangedHook(refreshAgentSystemPrompt)
 	repl.SetAutoMemory(autoMem)
 	repl.SetAutoMemoryFiles(autoFiles)
 	repl.SetProjectMemoryLoader(projectMemoryLoader)
@@ -1080,6 +1121,11 @@ func loadInteractiveStartupAssets(
 }
 
 func buildSkillsSystemPrompt(skills []*commands.Command) string {
+	prompt, _ := buildSkillsSystemPromptWithPromptRefs(skills)
+	return prompt
+}
+
+func buildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, []string) {
 	var lines []string
 	lines = append(lines,
 		"Use the skill tool to load reusable workflows when they clearly match the user's task.",
@@ -1096,6 +1142,7 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 	included := 0
 	mcpSkillCount := 0
 	mcpServers := make(map[string]struct{})
+	var promptSkillRefs []string
 	for _, skill := range prioritizedSkillsForPrompt(skills) {
 		name := strings.TrimSpace(skill.Name)
 		if name == "" {
@@ -1128,6 +1175,9 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 		lines = append(lines, line)
 		total += len(line) + 1
 		included++
+		if ref := skillPromptExposureRef(skill); ref != "" {
+			promptSkillRefs = append(promptSkillRefs, ref)
+		}
 	}
 	if mcpSkillCount > 0 {
 		servers := sortedStringKeys(mcpServers)
@@ -1144,7 +1194,25 @@ func buildSkillsSystemPrompt(skills []*commands.Command) string {
 	if hidden := countModelVisibleSkills(skills) - included - mcpSkillCount; hidden > 0 {
 		lines = append(lines, fmt.Sprintf("- ... and %d more skills available via the skill tool and /skills", hidden))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), promptSkillRefs
+}
+
+func skillPromptExposureRef(skill *commands.Command) string {
+	if skill == nil || skill.LoadedFrom != commands.LoadedFromSkills {
+		return ""
+	}
+	name := strings.TrimSpace(skill.Name)
+	if name == "" {
+		return ""
+	}
+	switch skill.Source {
+	case commands.SourceProject:
+		return knight.FormatSkillRefForDisplay("project", name)
+	case commands.SourceUser:
+		return knight.FormatSkillRefForDisplay("global", name)
+	default:
+		return ""
+	}
 }
 
 func prioritizedSkillsForPrompt(skills []*commands.Command) []*commands.Command {

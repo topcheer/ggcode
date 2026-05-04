@@ -161,6 +161,13 @@ type knightTaskResultMsg struct {
 	Err    error
 }
 
+type knightProjectProposalResultMsg struct {
+	Goal     string
+	Proposal knight.ProjectImprovementProposal
+	Result   knight.TaskResult
+	Err      error
+}
+
 // setProgramMsg is sent via program.Send so the model copy inside Bubble Tea's
 // event loop gets the real *tea.Program reference (NewProgram copies the model).
 type setProgramMsg struct {

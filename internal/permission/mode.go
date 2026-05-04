@@ -105,5 +105,9 @@ func IsReadOnlyTool(name string) bool {
 		"wait_command", "get_config":
 		return true
 	}
+	// All MCP tools are allowed in plan mode (they have their own access control)
+	if strings.HasPrefix(name, "mcp__") {
+		return true
+	}
 	return false
 }

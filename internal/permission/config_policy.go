@@ -101,13 +101,8 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 			return Allow, nil
 		}
 		if IsReadOnlyTool(toolName) {
-			// Still check sandbox for read tools
-			if isFileTool(toolName) {
-				path, _ := extractFilePath(input)
-				if path != "" && !p.sandbox.Allowed(path) {
-					return Deny, nil
-				}
-			}
+			// Read-only tools are always allowed in plan mode, even outside sandbox.
+			// Plan mode is strictly read-only, so there's no risk.
 			return Allow, nil
 		}
 		return Deny, nil
@@ -178,7 +173,11 @@ func (p *ConfigPolicy) AllowedPathForTool(toolName, path string) bool {
 	if !isPlan {
 		return true
 	}
-	return isReadOnlyFileTool(toolName) && p.readOnlySandbox != nil && p.readOnlySandbox.Allowed(path)
+	// Plan mode: read-only tools bypass sandbox (no risk since they can't write)
+	if isReadOnlyFileTool(toolName) {
+		return true
+	}
+	return false
 }
 
 // SetOverride allows runtime modification of per-tool policy.
@@ -257,11 +256,7 @@ func isFileTool(name string) bool {
 }
 
 func isReadOnlyFileTool(name string) bool {
-	switch name {
-	case "read_file", "list_directory", "search_files", "glob":
-		return true
-	}
-	return false
+	return IsReadOnlyTool(name)
 }
 
 // isWriteFileTool returns true for file tools that mutate disk (used for

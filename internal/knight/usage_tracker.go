@@ -2,6 +2,7 @@ package knight
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -25,12 +26,28 @@ type UsageTracker struct {
 }
 
 type skillUsage struct {
-	UsageCount    int       `json:"usage_count"`
-	LastUsed      time.Time `json:"last_used"`
-	Effectiveness []int     `json:"effectiveness_scores,omitempty"`
+	UsageCount          int       `json:"usage_count"`
+	LastUsed            time.Time `json:"last_used"`
+	PromptExposureCount int       `json:"prompt_exposure_count,omitempty"`
+	LastPromptExposure  time.Time `json:"last_prompt_exposure,omitempty"`
+	PromptSuccessCount  int       `json:"prompt_success_count,omitempty"`
+	PromptFailureCount  int       `json:"prompt_failure_count,omitempty"`
+	// Decayed counters retain a fractional, time-weighted view of the same
+	// success/failure signal. They are the values consumed by the prompt-tuning
+	// gates so historical noise eventually fades.
+	PromptSuccessDecayed float64   `json:"prompt_success_decayed,omitempty"`
+	PromptFailureDecayed float64   `json:"prompt_failure_decayed,omitempty"`
+	LastPromptDecay      time.Time `json:"last_prompt_decay,omitempty"`
+	Effectiveness        []int     `json:"effectiveness_scores,omitempty"`
 }
 
 const defaultWriteInterval = 30 * time.Second
+
+// promptOutcomeHalfLife controls how quickly old prompt success/failure
+// signals fade. A 30-day half-life means a 6-month-old failure contributes
+// ~1/64 of its original weight, so historical noise stops dominating the
+// gates that read PromptSuccessDecayed / PromptFailureDecayed.
+const promptOutcomeHalfLife = 30 * 24 * time.Hour
 
 // NewUsageTracker creates a usage tracker that persists to the given path.
 func NewUsageTracker(path string) *UsageTracker {
@@ -50,6 +67,41 @@ func (ut *UsageTracker) RecordUse(name string) {
 	entry := ut.getOrCreate(name)
 	entry.UsageCount++
 	entry.LastUsed = time.Now()
+	ut.markDirty()
+}
+
+// RecordPromptExposure increments the count of times a skill was listed in the
+// system prompt. Exposure is not the same as use; it only proves the model could
+// see the skill when deciding whether to invoke it.
+func (ut *UsageTracker) RecordPromptExposure(name string) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.ensureLoaded()
+
+	entry := ut.getOrCreate(name)
+	entry.PromptExposureCount++
+	entry.LastPromptExposure = time.Now()
+	ut.markDirty()
+}
+
+// RecordPromptOutcome records a weak task-level outcome for a skill that was
+// visible in the prompt during a run. It is attribution, not proof of causality.
+func (ut *UsageTracker) RecordPromptOutcome(name string, success bool) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.ensureLoaded()
+
+	entry := ut.getOrCreate(name)
+	now := time.Now()
+	entry.applyPromptDecayLocked(now)
+	if success {
+		entry.PromptSuccessCount++
+		entry.PromptSuccessDecayed += 1
+	} else {
+		entry.PromptFailureCount++
+		entry.PromptFailureDecayed += 1
+	}
+	entry.LastPromptDecay = now
 	ut.markDirty()
 }
 
@@ -94,6 +146,37 @@ func (ut *UsageTracker) GetFeedback(name string) (avgScore float64, samples int)
 	return entry.avgScore(), len(entry.Effectiveness)
 }
 
+// GetPromptExposure returns prompt exposure data for a skill.
+func (ut *UsageTracker) GetPromptExposure(name string) (count int, lastExposed time.Time) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.ensureLoaded()
+
+	entry, ok := ut.data[name]
+	if !ok {
+		return 0, time.Time{}
+	}
+	return entry.PromptExposureCount, entry.LastPromptExposure
+}
+
+// GetPromptOutcome returns weak task-level outcome counts for prompt-visible use.
+// The returned counts are the time-decayed values consumed by Knight's
+// prompt-tuning gates: a stale historical failure no longer dominates the
+// recent signal. Callers wanting raw lifetime counts should read
+// PromptSuccessCount/PromptFailureCount via Snapshot.
+func (ut *UsageTracker) GetPromptOutcome(name string) (successes int, failures int) {
+	ut.mu.Lock()
+	defer ut.mu.Unlock()
+	ut.ensureLoaded()
+
+	entry, ok := ut.data[name]
+	if !ok {
+		return 0, 0
+	}
+	entry.applyPromptDecayLocked(time.Now())
+	return int(entry.PromptSuccessDecayed + 0.5), int(entry.PromptFailureDecayed + 0.5)
+}
+
 func (ut *UsageTracker) Snapshot(name string) (skillUsage, bool) {
 	ut.mu.Lock()
 	defer ut.mu.Unlock()
@@ -103,6 +186,7 @@ func (ut *UsageTracker) Snapshot(name string) (skillUsage, bool) {
 	if !ok {
 		return skillUsage{}, false
 	}
+	entry.applyPromptDecayLocked(time.Now())
 	return *entry, true
 }
 
@@ -168,6 +252,46 @@ func (su *skillUsage) avgScore() float64 {
 		sum += s
 	}
 	return float64(sum) / float64(len(su.Effectiveness))
+}
+
+// applyPromptDecayLocked decays the prompt outcome counters toward zero based
+// on the elapsed time since the last update. Callers must already hold the
+// tracker mutex (or operate on a private snapshot during migration).
+func (su *skillUsage) applyPromptDecayLocked(now time.Time) {
+	if su == nil {
+		return
+	}
+	// Backfill: existing entries that pre-date decay accounting use raw counts
+	// once, then enter the decayed regime. This keeps historical data visible
+	// without "double counting" a fresh signal.
+	if su.LastPromptDecay.IsZero() {
+		if su.PromptSuccessDecayed == 0 && su.PromptSuccessCount > 0 {
+			su.PromptSuccessDecayed = float64(su.PromptSuccessCount)
+		}
+		if su.PromptFailureDecayed == 0 && su.PromptFailureCount > 0 {
+			su.PromptFailureDecayed = float64(su.PromptFailureCount)
+		}
+		su.LastPromptDecay = now
+		return
+	}
+	elapsed := now.Sub(su.LastPromptDecay)
+	if elapsed <= 0 {
+		return
+	}
+	if su.PromptSuccessDecayed == 0 && su.PromptFailureDecayed == 0 {
+		su.LastPromptDecay = now
+		return
+	}
+	factor := math.Pow(0.5, float64(elapsed)/float64(promptOutcomeHalfLife))
+	su.PromptSuccessDecayed *= factor
+	su.PromptFailureDecayed *= factor
+	if su.PromptSuccessDecayed < 0.001 {
+		su.PromptSuccessDecayed = 0
+	}
+	if su.PromptFailureDecayed < 0.001 {
+		su.PromptFailureDecayed = 0
+	}
+	su.LastPromptDecay = now
 }
 
 func (ut *UsageTracker) ensureLoaded() {

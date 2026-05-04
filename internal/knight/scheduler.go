@@ -33,19 +33,22 @@ type EventSink interface {
 // Knight is the background auto-evolution agent. It runs scheduled tasks
 // during idle time, analyzes sessions, creates and validates skills.
 type Knight struct {
-	cfg      config.KnightConfig
-	budget   *Budget
-	index    *SkillIndex
-	promoter *Promoter
-	usage    *UsageTracker
-	queue    *CandidateQueue
-	store    session.Store
-	emitter  Emitter
-	sink     EventSink
-	factory  AgentFactory
-	homeDir  string
-	projDir  string
-	lock     *instanceLock // cross-process lock for exclusive Knight access
+	cfg          config.KnightConfig
+	budget       *Budget
+	bucketBudget *bucketBudget
+	index        *SkillIndex
+	promoter     *Promoter
+	usage        *UsageTracker
+	queue        *CandidateQueue
+	rejects      *rejectFeedbackStore
+	emitGate     *emitThrottle
+	store        session.Store
+	emitter      Emitter
+	sink         EventSink
+	factory      AgentFactory
+	homeDir      string
+	projDir      string
+	lock         *instanceLock // cross-process lock for exclusive Knight access
 
 	mu       sync.Mutex
 	running  bool
@@ -76,6 +79,8 @@ const (
 	knightMaxGeneratedSkills        = 3
 	knightMaxGenFailures            = 3 // abandon candidate after this many consecutive generation failures
 	knightStagingMaxValidationFails = 3 // auto-reject after N consecutive validation failures
+	knightPromptIgnoredThreshold    = 5 // shown this many times with zero explicit use → improve trigger copy
+	knightPromptOutcomeMinSamples   = 3 // enough weak run outcomes to consider noisy prompt guidance
 )
 
 // New creates a new Knight instance.
@@ -84,10 +89,13 @@ func New(cfg config.KnightConfig, homeDir, projDir string, store session.Store) 
 	return &Knight{
 		cfg:              cfg,
 		budget:           NewBudget(knightDir, cfg),
+		bucketBudget:     newBucketBudget(cfg.DailyTokenBudget),
 		index:            NewSkillIndex(homeDir, projDir),
 		promoter:         NewPromoter(homeDir, projDir),
 		usage:            NewUsageTracker(filepath.Join(projDir, ".ggcode", "skill-usage.json")),
 		queue:            NewCandidateQueue(filepath.Join(projDir, ".ggcode", "knight-candidate-queue.json")),
+		rejects:          newRejectFeedbackStore(filepath.Join(projDir, ".ggcode", "knight-reject-feedback.jsonl")),
+		emitGate:         newEmitThrottle(0),
 		store:            store,
 		homeDir:          homeDir,
 		projDir:          projDir,
@@ -144,6 +152,13 @@ func (k *Knight) Start(ctx context.Context) error {
 			k.lock.release()
 			k.lock = nil
 			return fmt.Errorf("knight: create dir %s: %w", dir, err)
+		}
+	}
+	if !strings.EqualFold(k.cfg.TrustLevel, "readonly") {
+		if migrated, err := k.normalizeActiveSkillLayout(); err != nil {
+			debug.Log("knight", "normalize active skill layout failed: %v", err)
+		} else if migrated > 0 {
+			debug.Log("knight", "normalized %d loose active skill files into standard SKILL.md layout", migrated)
 		}
 	}
 
@@ -249,6 +264,50 @@ func (k *Knight) RecordSkillUse(ref string) {
 	k.syncSkillMetadata(ref)
 }
 
+// RecordSkillPromptExposure records that one or more active skills were visible
+// to the model in the system prompt. This is a weak signal, separate from actual
+// skill invocation, and helps distinguish "never shown" from "shown but ignored".
+func (k *Knight) RecordSkillPromptExposure(refs []string) {
+	if k == nil || k.usage == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		k.usage.RecordPromptExposure(ref)
+		k.syncSkillMetadata(ref)
+	}
+}
+
+// RecordPromptSkillOutcome records a weak task-level outcome for prompt-visible
+// skills. It should be used only as a soft signal because prompt visibility does
+// not prove the skill caused the outcome.
+func (k *Knight) RecordPromptSkillOutcome(refs []string, success bool) {
+	if k == nil || k.usage == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		k.usage.RecordPromptOutcome(ref, success)
+		k.syncSkillMetadata(ref)
+	}
+}
+
 // RecordSkillEffectiveness records a 1-5 effectiveness score for a skill.
 func (k *Knight) RecordSkillEffectiveness(ref string, score int) {
 	if k.usage != nil {
@@ -263,6 +322,23 @@ func (k *Knight) SkillUsage(ref string) (count int, lastUsed time.Time, avgScore
 		return 0, time.Time{}, 0
 	}
 	return k.usage.GetUsage(ref)
+}
+
+// SkillPromptExposure returns how often a skill has been visible in the prompt.
+func (k *Knight) SkillPromptExposure(ref string) (count int, lastExposed time.Time) {
+	if k.usage == nil {
+		return 0, time.Time{}
+	}
+	return k.usage.GetPromptExposure(ref)
+}
+
+// SkillPromptOutcome returns weak success/failure counts from runs where a skill
+// was visible in the prompt.
+func (k *Knight) SkillPromptOutcome(ref string) (successes int, failures int) {
+	if k.usage == nil {
+		return 0, 0
+	}
+	return k.usage.GetPromptOutcome(ref)
 }
 
 // SkillFeedback returns runtime feedback stats for a skill.
@@ -303,6 +379,15 @@ func (k *Knight) RollbackSkill(name string) error {
 		return err
 	}
 	k.index.Invalidate()
+	if k.rejects != nil {
+		_ = k.rejects.Append(rejectFeedbackEntry{
+			Name:     entry.Name,
+			Scope:    entry.Scope,
+			Action:   "rollback",
+			Reporter: "user",
+			Reason:   "manual rollback",
+		})
+	}
 	return nil
 }
 
@@ -442,7 +527,7 @@ func (k *Knight) PromoteStaging(skillName string) error {
 	}
 
 	active, _ := k.index.ActiveSkills()
-	if CheckDuplicate(s, active) {
+	if CheckDuplicate(s, active) && !stagingUpdatesActiveSkill(s, active) {
 		return fmt.Errorf("skill %q duplicates an existing skill", skillName)
 	}
 
@@ -451,6 +536,12 @@ func (k *Knight) PromoteStaging(skillName string) error {
 	}
 	k.index.Invalidate()
 	k.clearStagingNotification(s.Name)
+	if k.emitGate != nil {
+		k.emitGate.reset(s.Name)
+	}
+	_ = k.RecordSemanticMemory("skill-promoted",
+		fmt.Sprintf("promoted skill %s — %s", s.Name, s.Meta.Description),
+		[]string{s.Scope + ":" + s.Name}, s.Path)
 	return nil
 }
 
@@ -465,6 +556,20 @@ func (k *Knight) RejectStaging(skillName string) error {
 	}
 	k.index.Invalidate()
 	k.clearStagingNotification(s.Name)
+	if k.emitGate != nil {
+		k.emitGate.reset(s.Name)
+	}
+	if k.rejects != nil {
+		_ = k.rejects.Append(rejectFeedbackEntry{
+			Name:     s.Name,
+			Scope:    s.Scope,
+			Action:   "reject",
+			Reporter: "user",
+		})
+	}
+	_ = k.RecordSemanticMemory("skill-rejected",
+		fmt.Sprintf("user rejected staged skill %s — %s", s.Name, s.Meta.Description),
+		[]string{s.Scope + ":" + s.Name}, s.Path)
 	return nil
 }
 
@@ -615,15 +720,28 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 					k.index.Invalidate()
 					k.clearStagingNotification(s.Name)
 					delete(k.stagingFailCount, s.Name)
-					k.emitReport(fmt.Sprintf("🗑️ Auto-rejected staging skill %s: failed validation %d times (%v)",
-						s.Name, knightStagingMaxValidationFails, result.Errors))
+					if k.rejects != nil {
+						_ = k.rejects.Append(rejectFeedbackEntry{
+							Name:     s.Name,
+							Scope:    s.Scope,
+							Action:   "auto-reject",
+							Reporter: "validator",
+							Reason:   fmt.Sprintf("%d consecutive validation failures: %v", knightStagingMaxValidationFails, result.Errors),
+						})
+					}
+					_ = k.RecordSemanticMemory("skill-auto-rejected",
+						fmt.Sprintf("auto-rejected staging skill %s after %d validation failures: %v", s.Name, knightStagingMaxValidationFails, result.Errors),
+						[]string{s.Scope + ":" + s.Name}, s.Path)
+					k.emitReportKeyed(fmt.Sprintf("🗑️ Auto-rejected staging skill %s: failed validation %d times (%v)",
+						s.Name, knightStagingMaxValidationFails, result.Errors), s.Name, EmitSeverityNotice)
 				}
 			}
 			continue
 		}
 		// Valid — reset failure count
 		delete(k.stagingFailCount, s.Name)
-		if CheckDuplicate(s, active) {
+		isRevision := stagingUpdatesActiveSkill(s, active)
+		if CheckDuplicate(s, active) && !isRevision {
 			debug.Log("knight", "staging skill %s is duplicate, rejecting", s.Name)
 			if err := k.promoter.Reject(s); err != nil {
 				debug.Log("knight", "reject staging skill %s failed: %v", s.Name, err)
@@ -634,6 +752,20 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 		}
 
 		if k.cfg.TrustLevel == "auto" {
+			if allowed, reason := canAutoPromoteStagingSkill(s, result, isRevision); !allowed {
+				if k.markStagingNotified(s.Name) {
+					k.emitReportKeyed(fmt.Sprintf("📝 Skill candidate requires review: %s\n%s\nReason: %s\n👉 /knight approve %s to promote / /knight reject %s to decline",
+						s.Name, s.Meta.Description, reason, s.Name, s.Name), s.Name, EmitSeverityActionRequired)
+				}
+				continue
+			}
+			if allowed, reason := k.evaluateAutoPromoteCandidate(ctx, s); !allowed {
+				if k.markStagingNotified(s.Name) {
+					k.emitReportKeyed(fmt.Sprintf("📝 Skill candidate requires review: %s\n%s\nReason: %s\n👉 /knight approve %s to promote / /knight reject %s to decline",
+						s.Name, s.Meta.Description, reason, s.Name, s.Name), s.Name, EmitSeverityActionRequired)
+				}
+				continue
+			}
 			debug.Log("knight", "auto-promoting skill %s", s.Name)
 			if err := k.promoter.Promote(s); err != nil {
 				debug.Log("knight", "auto-promote skill %s failed: %v", s.Name, err)
@@ -641,15 +773,327 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			}
 			k.index.Invalidate()
 			k.clearStagingNotification(s.Name)
+			if k.emitGate != nil {
+				k.emitGate.reset(s.Name)
+			}
 			k.emitReport(fmt.Sprintf("✅ Skill auto-promoted: %s (%s)", s.Name, s.Meta.Description))
+			_ = k.RecordSemanticMemory("skill-auto-promoted",
+				fmt.Sprintf("auto-promoted skill %s — %s", s.Name, s.Meta.Description),
+				[]string{s.Scope + ":" + s.Name}, s.Path)
 		} else {
 			// For "staged" trust level, notify user once per skill
 			if k.markStagingNotified(s.Name) {
-				k.emitReport(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
-					s.Name, s.Meta.Description, s.Name, s.Name))
+				k.emitReportKeyed(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
+					s.Name, s.Meta.Description, s.Name, s.Name), s.Name, EmitSeverityActionRequired)
 			}
 		}
 	}
+}
+
+func stagingUpdatesActiveSkill(staging *SkillEntry, active []*SkillEntry) bool {
+	if staging == nil {
+		return false
+	}
+	for _, entry := range active {
+		if entry == nil || entry.Staging {
+			continue
+		}
+		if entry.Name == staging.Name && entry.Scope == staging.Scope {
+			return true
+		}
+	}
+	return false
+}
+
+func canAutoPromoteStagingSkill(entry *SkillEntry, validation ValidationResult, isRevision bool) (bool, string) {
+	if entry == nil {
+		return false, "skill entry is unavailable"
+	}
+	if isRevision {
+		return false, "updates to existing active skills require explicit review"
+	}
+	if !strings.EqualFold(strings.TrimSpace(entry.Meta.CreatedBy), "knight") {
+		return false, "only Knight-created staging skills may be auto-promoted"
+	}
+	if entry.Scope != "project" {
+		return false, "only project-scoped skills are eligible for auto-promotion"
+	}
+	if len(entry.Meta.Requires) > 0 {
+		return false, "skills with external command dependencies require explicit review"
+	}
+	if len(validation.Warnings) > 0 {
+		return false, "validation warnings require explicit review"
+	}
+	return true, ""
+}
+
+func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillEntry) (bool, string) {
+	factory := k.getFactory()
+	if factory == nil {
+		k.appendAutoPromoteEval(entry, autoPromoteEvalDecision{
+			Rationale:   "scenario evaluation unavailable",
+			FailureMode: "no_factory",
+		})
+		return false, "scenario evaluation unavailable"
+	}
+	content, err := readSkillContent(entry.Path)
+	if err != nil {
+		reason := fmt.Sprintf("cannot read staging skill for scenario evaluation: %v", err)
+		k.appendAutoPromoteEval(entry, autoPromoteEvalDecision{
+			Rationale:   reason,
+			FailureMode: "read_error",
+		})
+		return false, fmt.Sprintf("cannot read staging skill for scenario evaluation: %v", err)
+	}
+	// Deterministic rule-based overlap check. Run before invoking the LLM so
+	// that an obviously redundant candidate doesn't burn eval-bucket tokens.
+	active, _ := k.index.ActiveSkills()
+	overlap := computeRuleBasedOverlap(entry, string(content), active, func(e *SkillEntry) string {
+		body, _ := readSkillContent(e.Path)
+		return string(body)
+	})
+	if overlap.HasOverlap {
+		decision := autoPromoteEvalDecision{
+			RuleOverlap:        true,
+			RuleOverlapJaccard: overlap.WorstSimilarity,
+			RuleOverlapWith:    overlap.WorstActiveRef,
+			Rationale:          formatOverlapRationale(overlap),
+		}
+		decision.finalizeFailureMode()
+		k.appendAutoPromoteEval(entry, decision)
+		return false, decision.Rationale
+	}
+	// Deterministic A/B replay against recent prompt scenarios. Block only when
+	// we DO have scenarios and the candidate clearly does not cover any of them
+	// — that protects against promoting skills that don't match real usage.
+	scenariosForReplay, _ := k.RecentSkillScenarios(40)
+	var baselineBody string
+	if overlap.WorstActiveRef != "" {
+		for _, e := range active {
+			if e == nil {
+				continue
+			}
+			if (e.Scope + ":" + e.Name) == overlap.WorstActiveRef {
+				if body, err := readSkillContent(e.Path); err == nil {
+					baselineBody = string(body)
+				}
+				break
+			}
+		}
+	}
+	replay := computeABReplayScore(entry, string(content), baselineBody, scenariosForReplay)
+	if replay.ScenariosConsidered >= 5 && replay.CandidateScore < 0.05 {
+		decision := autoPromoteEvalDecision{
+			ReplayScenarios:      replay.ScenariosConsidered,
+			ReplayCandidateScore: replay.CandidateScore,
+			ReplayBaselineScore:  replay.BaselineScore,
+			ReplayDelta:          replay.Delta,
+			ReplayVerdict:        abReplayVerdict(replay),
+			Rationale:            "A/B replay: " + abReplayVerdict(replay),
+			FailureMode:          "replay_no_coverage",
+		}
+		k.appendAutoPromoteEval(entry, decision)
+		return false, decision.Rationale
+	}
+	scenarioContext := k.formatRecentSkillScenariosForEval(8)
+	hasSavedScenarios := strings.TrimSpace(scenarioContext) != ""
+	if scenarioContext == "" {
+		scenarioContext = "No saved project scenarios are available yet."
+	}
+	baselineContext := k.formatActiveSkillBaselinesForEval(entry, 8)
+	hasActiveBaseline := strings.TrimSpace(baselineContext) != ""
+	if baselineContext == "" {
+		baselineContext = "No active baseline skills are available yet."
+	}
+	memoryContext := k.formatRecentSemanticMemoryForEval(8)
+	if memoryContext == "" {
+		memoryContext = "No prior Knight lessons recorded yet."
+	}
+	prompt := fmt.Sprintf(`Evaluate whether this staged project skill is safe and useful enough for automatic promotion.
+
+This is a conservative gate. The skill will affect future agent behavior on the user's project.
+
+Approve only if all are true:
+- The skill is project-facing and practical
+- The trigger guidance is specific enough to avoid broad/noisy activation
+- The workflow is low-risk and does not require destructive actions, external services, credentials, publishing, or broad code rewrites
+- The skill adds concrete value beyond generic advice
+- The skill adds distinct value beyond existing active skills and is not just a duplicate or narrower rewrite of an active skill
+
+Replay check:
+- Invent two realistic positive user tasks where this skill SHOULD be selected.
+- Invent two realistic negative user tasks where this skill SHOULD NOT be selected.
+- Compare the skill's description and when_to_use against those scenarios.
+- Use the saved project scenarios below as additional real-world examples; do not approve if the skill would be selected for unrelated saved tasks.
+- Compare the staged skill against the active baseline skills below; do not approve if existing active skills already cover the same trigger/workflow well enough.
+- Approve only if the positives are clearly covered and the negatives are clearly excluded.
+
+Return exactly:
+PROMOTE: yes
+REPLAY: pass
+SAVED_REPLAY: pass
+FALSE_POSITIVES: 0
+FALSE_NEGATIVES: 0
+BASELINE_REPLAY: pass
+OVERLAP_COUNT: 0
+RATIONALE: one short sentence
+
+or:
+PROMOTE: no
+REPLAY: fail
+SAVED_REPLAY: fail
+FALSE_POSITIVES: <number>
+FALSE_NEGATIVES: <number>
+BASELINE_REPLAY: fail
+OVERLAP_COUNT: <number>
+RATIONALE: one short sentence
+
+Use SAVED_REPLAY: skip only when no saved project scenarios are available.
+Use BASELINE_REPLAY: skip only when no active baseline skills are available.
+
+Saved project scenarios:
+%s
+
+Active baseline skills:
+%s
+
+Prior Knight lessons (semantic memory; promoted skills + approved proposals):
+%s
+
+Staged skill:
+%s`, scenarioContext, baselineContext, memoryContext, string(content))
+	result := k.RunTaskWithTurns(ctx, "skill-auto-promote-eval", prompt, factory, 3)
+	if result.Error != nil {
+		reason := fmt.Sprintf("scenario evaluation failed: %v", result.Error)
+		k.appendAutoPromoteEval(entry, autoPromoteEvalDecision{
+			Rationale:   reason,
+			RawOutput:   result.Output,
+			FailureMode: "runner_error",
+		})
+		return false, fmt.Sprintf("scenario evaluation failed: %v", result.Error)
+	}
+	decision := parseAutoPromoteEvalDecision(result.Output)
+	decision.SavedReplayRequired = hasSavedScenarios
+	decision.BaselineReplayRequired = hasActiveBaseline
+	decision.RuleOverlapJaccard = overlap.WorstSimilarity
+	decision.RuleOverlapWith = overlap.WorstActiveRef
+	decision.ReplayScenarios = replay.ScenariosConsidered
+	decision.ReplayCandidateScore = replay.CandidateScore
+	decision.ReplayBaselineScore = replay.BaselineScore
+	decision.ReplayDelta = replay.Delta
+	decision.ReplayVerdict = abReplayVerdict(replay)
+	decision.finalizeFailureMode()
+	k.appendAutoPromoteEval(entry, decision)
+	if !decision.Allowed() {
+		if decision.Rationale == "" {
+			decision.Rationale = "scenario evaluation did not approve auto-promotion"
+		}
+		return false, decision.Rationale
+	}
+	return true, ""
+}
+
+type autoPromoteEvalDecision struct {
+	Promote                bool
+	ReplayPassed           bool
+	SavedReplayRequired    bool
+	SavedReplayStatus      string
+	FalsePositiveCount     int
+	FalseNegativeCount     int
+	BaselineReplayRequired bool
+	BaselineReplayStatus   string
+	OverlapCount           int
+	RuleOverlap            bool
+	RuleOverlapJaccard     float64
+	RuleOverlapWith        string
+	ReplayScenarios        int
+	ReplayCandidateScore   float64
+	ReplayBaselineScore    float64
+	ReplayDelta            float64
+	ReplayVerdict          string
+	Rationale              string
+	RawOutput              string
+	FailureMode            string
+}
+
+func (d autoPromoteEvalDecision) Allowed() bool {
+	if d.RuleOverlap {
+		return false
+	}
+	if !d.Promote || !d.ReplayPassed {
+		return false
+	}
+	if !d.SavedReplayRequired {
+		return !d.BaselineReplayRequired || (d.BaselineReplayStatus == "pass" && d.OverlapCount == 0)
+	}
+	if d.SavedReplayStatus != "pass" || d.FalsePositiveCount != 0 || d.FalseNegativeCount != 0 {
+		return false
+	}
+	return !d.BaselineReplayRequired || (d.BaselineReplayStatus == "pass" && d.OverlapCount == 0)
+}
+
+func (d *autoPromoteEvalDecision) finalizeFailureMode() {
+	if d.RuleOverlap {
+		d.FailureMode = "rule_overlap"
+		return
+	}
+	if !d.Promote {
+		d.FailureMode = "promote_rejected"
+	} else if !d.ReplayPassed {
+		d.FailureMode = "replay_failed"
+	} else if d.SavedReplayRequired && (d.SavedReplayStatus != "pass" || d.FalsePositiveCount != 0 || d.FalseNegativeCount != 0) {
+		d.FailureMode = "saved_replay_failed"
+	} else if d.BaselineReplayRequired && (d.BaselineReplayStatus != "pass" || d.OverlapCount != 0) {
+		d.FailureMode = "baseline_replay_failed"
+	} else {
+		d.FailureMode = ""
+	}
+}
+
+func parseAutoPromoteEvalOutput(output string) (bool, string) {
+	decision := parseAutoPromoteEvalDecision(output)
+	return decision.Allowed(), decision.Rationale
+}
+
+func parseAutoPromoteEvalDecision(output string) autoPromoteEvalDecision {
+	decision := autoPromoteEvalDecision{RawOutput: output}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		lower := strings.ToLower(line)
+		switch {
+		case strings.HasPrefix(lower, "promote:"):
+			value := strings.TrimSpace(strings.TrimPrefix(lower, "promote:"))
+			decision.Promote = value == "yes"
+		case strings.HasPrefix(lower, "replay:"):
+			value := strings.TrimSpace(strings.TrimPrefix(lower, "replay:"))
+			decision.ReplayPassed = value == "pass"
+		case strings.HasPrefix(lower, "saved_replay:"):
+			value := strings.TrimSpace(strings.TrimPrefix(lower, "saved_replay:"))
+			decision.SavedReplayStatus = value
+		case strings.HasPrefix(lower, "false_positives:"):
+			value := strings.TrimSpace(strings.TrimPrefix(lower, "false_positives:"))
+			if n, err := strconv.Atoi(value); err == nil && n >= 0 {
+				decision.FalsePositiveCount = n
+			}
+		case strings.HasPrefix(lower, "false_negatives:"):
+			value := strings.TrimSpace(strings.TrimPrefix(lower, "false_negatives:"))
+			if n, err := strconv.Atoi(value); err == nil && n >= 0 {
+				decision.FalseNegativeCount = n
+			}
+		case strings.HasPrefix(lower, "baseline_replay:"):
+			value := strings.TrimSpace(strings.TrimPrefix(lower, "baseline_replay:"))
+			decision.BaselineReplayStatus = value
+		case strings.HasPrefix(lower, "overlap_count:"):
+			value := strings.TrimSpace(strings.TrimPrefix(lower, "overlap_count:"))
+			if n, err := strconv.Atoi(value); err == nil && n >= 0 {
+				decision.OverlapCount = n
+			}
+		case strings.HasPrefix(lower, "rationale:"):
+			decision.Rationale = strings.TrimSpace(line[len("RATIONALE:"):])
+		}
+	}
+	decision.finalizeFailureMode()
+	return decision
 }
 
 // analyzeRecentSessions scans recent session history for reusable patterns.
@@ -709,16 +1153,45 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 				reported = append(reported, c)
 				continue
 			}
-			path, writeErr := k.promoter.WriteStaging(c.Name, c.Scope, content)
+			stagingCandidate, stagingContent, normalizeErr := k.normalizeGeneratedSkillDocument(c, content)
+			if normalizeErr != nil {
+				c.GenFailCount++
+				debug.Log("knight", "generated skill normalization failed for %s (%d/%d): %v", c.Name, c.GenFailCount, knightMaxGenFailures, normalizeErr)
+				if c.GenFailCount >= knightMaxGenFailures {
+					_ = k.queue.Remove(c)
+				} else {
+					_ = k.queue.Upsert(c)
+				}
+				reported = append(reported, c)
+				continue
+			}
+			if k.isKnownCandidate(stagingCandidate, active, staging) {
+				debug.Log("knight", "skip generated known candidate %s (%s)", stagingCandidate.Name, stagingCandidate.Scope)
+				_ = k.queue.Remove(c)
+				continue
+			}
+			path, writeErr := k.promoter.WriteStaging(stagingCandidate.Name, stagingCandidate.Scope, stagingContent)
 			if writeErr != nil {
-				debug.Log("knight", "write staging failed for %s: %v", c.Name, writeErr)
+				debug.Log("knight", "write staging failed for %s: %v", stagingCandidate.Name, writeErr)
 				_ = k.queue.Upsert(c)
 				reported = append(reported, c)
 				continue
 			}
 			_ = k.queue.Remove(c)
-			c.Reason += fmt.Sprintf(" (refined and staged: %s)", filepath.Base(path))
-			reported = append(reported, c)
+			staging = append(staging, &SkillEntry{
+				Name: stagingCandidate.Name,
+				Meta: SkillMeta{
+					Name:        stagingCandidate.Name,
+					Description: stagingCandidate.Description,
+					Scope:       stagingCandidate.Scope,
+					CreatedBy:   "knight",
+				},
+				Path:    path,
+				Scope:   stagingCandidate.Scope,
+				Staging: true,
+			})
+			stagingCandidate.Reason += fmt.Sprintf(" (refined and staged: %s)", filepath.Base(path))
+			reported = append(reported, stagingCandidate)
 		} else {
 			reported = append(reported, c)
 		}
@@ -771,11 +1244,17 @@ func (k *Knight) validateAllSkills(ctx context.Context) error {
 				continue
 			}
 			count, lastUsed, _ := k.usage.GetUsage(skillRef)
+			exposures, lastExposed := k.usage.GetPromptExposure(skillRef)
 			debug.Log("knight", "skill %s may be stale: used=%d last=%v", skill.Name, count, lastUsed)
+			staleKey := "stale:" + skillRef
 			if count == 0 {
-				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' has never been used. Consider removing it.", skill.Name))
+				if exposures > 0 {
+					k.emitReportKeyed(fmt.Sprintf("⚠️ Skill '%s' has been shown in the prompt %d times but never invoked (last shown: %s). Consider improving its description/when_to_use or rejecting it if it is noise.", skill.Name, exposures, lastExposed.Format("2006-01-02")), staleKey, EmitSeverityNotice)
+				} else {
+					k.emitReportKeyed(fmt.Sprintf("⚠️ Skill '%s' has never been used and has not been prompt-visible recently. Consider removing it.", skill.Name), staleKey, EmitSeverityNotice)
+				}
 			} else {
-				k.emitReport(fmt.Sprintf("⚠️ Skill '%s' not used in 30+ days (last: %s). /knight rate %s 5 if it is still valuable, or let it fade out.", skill.Name, lastUsed.Format("2006-01-02"), skillRef))
+				k.emitReportKeyed(fmt.Sprintf("⚠️ Skill '%s' not used in 30+ days (last: %s). /knight rate %s 5 if it is still valuable, or let it fade out.", skill.Name, lastUsed.Format("2006-01-02"), skillRef), staleKey, EmitSeverityNotice)
 			}
 		}
 
@@ -783,9 +1262,10 @@ func (k *Knight) validateAllSkills(ctx context.Context) error {
 		avgScore, samples, shouldWarn := k.shouldWarnLowEffectiveness(skillRef)
 		if shouldWarn {
 			debug.Log("knight", "skill %s has low effectiveness: %.1f/5", skill.Name, avgScore)
-			k.emitReport(fmt.Sprintf("📉 Skill '%s' effectiveness: %.1f/5 across %d signals. Consider updating or removing.", skill.Name, avgScore, samples))
+			k.emitReportKeyed(fmt.Sprintf("📉 Skill '%s' effectiveness: %.1f/5 across %d signals. Consider updating or removing.", skill.Name, avgScore, samples), "low-eff:"+skillRef, EmitSeverityNotice)
 			k.maybeStageSkillPatch(ctx, skill, avgScore, samples)
 		}
+		k.maybeStagePromptSignalPatch(ctx, skill, skillRef)
 	}
 	return nil
 }
@@ -829,6 +1309,11 @@ Do not edit files. Produce a concise report with:
 		k.emitReport("Knight nightly maintenance had no enabled maintenance tasks")
 		return nil
 	}
+	if report, err := k.RunSelfReflection(ctx, 7*24*time.Hour); err == nil {
+		sections = append(sections, "🪞 Self-reflection\n"+report.FormatHuman())
+	} else {
+		debug.Log("knight", "self-reflection failed: %v", err)
+	}
 	k.emitReport("🌙 Knight nightly maintenance\n\n" + strings.Join(sections, "\n\n"))
 	return nil
 }
@@ -837,7 +1322,18 @@ Do not edit files. Produce a concise report with:
 // If an EventSink is configured, the report is also forwarded as a
 // task-complete event for display in TUI/daemon terminal.
 func (k *Knight) emitReport(report string) {
+	k.emitReportKeyed(report, "", EmitSeverityInfo)
+}
+
+// emitReportKeyed adds optional throttling. When key is non-empty, the same
+// (key, severity) combination is suppressed for emitThrottle.window after the
+// last successful emit. This prevents staging/stale notifications from
+// flooding when scheduler ticks every 5 minutes.
+func (k *Knight) emitReportKeyed(report, key string, severity EmitSeverity) {
 	if k.inQuietHours(time.Now()) {
+		return
+	}
+	if !k.emitGate.allow(key, severity, time.Now()) {
 		return
 	}
 	k.mu.Lock()
@@ -847,8 +1343,6 @@ func (k *Knight) emitReport(report string) {
 	if em != nil && em.HasTargets() {
 		em.EmitKnightReport(report)
 	}
-	// Forward to EventSink for TUI/daemon terminal display.
-	// Use empty task name — the report is self-describing (emoji prefixed).
 	if sink != nil {
 		sink.OnTaskComplete("", report, 0)
 	}
@@ -994,6 +1488,14 @@ func (k *Knight) syncSkillMetadata(ref string) {
 		} else {
 			fmMap["last_used"] = snapshot.LastUsed.Format(time.RFC3339)
 		}
+		fmMap["prompt_exposure_count"] = snapshot.PromptExposureCount
+		if snapshot.LastPromptExposure.IsZero() {
+			fmMap["last_prompt_exposure"] = nil
+		} else {
+			fmMap["last_prompt_exposure"] = snapshot.LastPromptExposure.Format(time.RFC3339)
+		}
+		fmMap["prompt_success_count"] = snapshot.PromptSuccessCount
+		fmMap["prompt_failure_count"] = snapshot.PromptFailureCount
 		fmMap["effectiveness_scores"] = append([]int(nil), snapshot.Effectiveness...)
 	}); err == nil {
 		k.index.Invalidate()
@@ -1006,19 +1508,6 @@ func (k *Knight) maybeStageSkillPatch(ctx context.Context, skill *SkillEntry, av
 	if skill == nil || strings.EqualFold(k.cfg.TrustLevel, "readonly") || !k.hasCapability("skill_creation") {
 		return
 	}
-	factory := k.getFactory()
-	if factory == nil {
-		return
-	}
-	staging, err := k.index.StagingSkills()
-	if err == nil {
-		for _, candidate := range staging {
-			if candidate.Name == skill.Name {
-				return
-			}
-		}
-	}
-
 	content, err := readSkillContent(skill.Path)
 	if err != nil {
 		debug.Log("knight", "read skill %s for patch failed: %v", skill.Name, err)
@@ -1037,10 +1526,74 @@ Requirements:
 - Add clearer "When to Use", "When Not to Use", "Steps", and "Gotchas" guidance if missing
 - Output only the revised SKILL.md content
 
-Current skill:
-%s`, skill.Name, skill.Scope, avgScore, samples, string(content))
+	Current skill:
+	%s`, skill.Name, skill.Scope, avgScore, samples, string(content))
 
-	result := k.RunTask(ctx, "skill-patch", prompt, factory)
+	report := fmt.Sprintf("🛠️ Staged updated skill '%s' after low-effectiveness signals (%.1f/5 over %d ratings). Review with /knight approve %s or /knight reject %s.", skill.Name, avgScore, samples, skill.Name, skill.Name)
+	k.stageSkillRevision(ctx, skill, "skill-patch", prompt, report)
+}
+
+func (k *Knight) maybeStagePromptSignalPatch(ctx context.Context, skill *SkillEntry, skillRef string) {
+	if skill == nil || k.usage == nil || strings.EqualFold(k.cfg.TrustLevel, "readonly") || !k.hasCapability("skill_creation") {
+		return
+	}
+	uses, _, _ := k.usage.GetUsage(skillRef)
+	exposures, _ := k.usage.GetPromptExposure(skillRef)
+	successes, failures := k.usage.GetPromptOutcome(skillRef)
+	totalOutcomes := successes + failures
+
+	reason := ""
+	switch {
+	case uses == 0 && exposures >= knightPromptIgnoredThreshold:
+		reason = fmt.Sprintf("shown in the prompt %d times but never explicitly invoked", exposures)
+	case uses == 0 && totalOutcomes >= knightPromptOutcomeMinSamples && failures >= successes:
+		reason = fmt.Sprintf("shown in %d runs with weak outcomes +%d/-%d and never explicitly invoked", totalOutcomes, successes, failures)
+	default:
+		return
+	}
+
+	content, err := readSkillContent(skill.Path)
+	if err != nil {
+		debug.Log("knight", "read skill %s for prompt-signal patch failed: %v", skill.Name, err)
+		return
+	}
+	prompt := fmt.Sprintf(`Revise the following existing SKILL.md because it is visible to the model but is not being selected reliably.
+
+Skill name: %s
+Scope: %s
+Prompt signal: %s
+
+Requirements:
+- Keep the same skill name and scope
+- Do not add risky commands or broaden permissions
+- Improve the description and when_to_use so the model can decide when this skill actually applies
+- Add or tighten "When Not to Use" if the skill is too broad or noisy
+- Keep the workflow concise and project/user-facing
+- Preserve it as a complete SKILL.md document with valid YAML frontmatter
+- Output only the revised SKILL.md content
+
+Current skill:
+%s`, skill.Name, skill.Scope, reason, string(content))
+
+	report := fmt.Sprintf("🛠️ Staged updated skill '%s' after prompt-selection signals (%s). Review with /knight approve %s or /knight reject %s.", skill.Name, reason, skill.Name, skill.Name)
+	k.stageSkillRevision(ctx, skill, "skill-prompt-tuning", prompt, report)
+}
+
+func (k *Knight) stageSkillRevision(ctx context.Context, skill *SkillEntry, taskName string, prompt string, report string) {
+	factory := k.getFactory()
+	if factory == nil {
+		return
+	}
+	staging, err := k.index.StagingSkills()
+	if err == nil {
+		for _, candidate := range staging {
+			if candidate.Name == skill.Name {
+				return
+			}
+		}
+	}
+
+	result := k.RunTask(ctx, taskName, prompt, factory)
 	if result.Error != nil {
 		debug.Log("knight", "skill patch generation failed for %s: %v", skill.Name, result.Error)
 		return
@@ -1073,10 +1626,19 @@ Current skill:
 		return
 	}
 	k.index.Invalidate()
-	k.emitReport(fmt.Sprintf("🛠️ Staged updated skill '%s' after low-effectiveness signals (%.1f/5 over %d ratings). Review with /knight approve %s or /knight reject %s.", skill.Name, avgScore, samples, skill.Name, skill.Name))
+	k.emitReport(report)
 }
 
 func (k *Knight) shouldStageCandidate(c SkillCandidate) bool {
+	// If the user (or auto-reject) recently rejected/rolled back a same-name
+	// candidate, suppress regeneration so the next analysis tick doesn't
+	// produce the same churn.
+	if k.rejects != nil {
+		if entry, blocked := k.rejects.coolDownActive(c.Scope, c.Name, time.Now()); blocked {
+			debug.Log("knight", "skip candidate %s (cool-down: last %s by %s)", c.Name, entry.Action, entry.Reporter)
+			return false
+		}
+	}
 	// Corrections are the highest-value signal — always worth staging
 	if c.Category == "correction" && c.Score >= 1.5 {
 		return true
@@ -1089,6 +1651,53 @@ func (k *Knight) shouldStageCandidate(c SkillCandidate) bool {
 	return c.Score >= 3.0
 }
 
+func (k *Knight) normalizeGeneratedSkillDocument(candidate SkillCandidate, content string) (SkillCandidate, string, error) {
+	meta, err := parseSkillFrontmatter(content)
+	if err != nil {
+		return candidate, "", err
+	}
+	name := strings.TrimSpace(meta.Name)
+	if name == "" {
+		name = strings.TrimSpace(candidate.Name)
+	}
+	if err := validateSkillName(name); err != nil {
+		return candidate, "", err
+	}
+	scope := strings.TrimSpace(meta.Scope)
+	if scope == "" {
+		scope = strings.TrimSpace(candidate.Scope)
+	}
+	if scope == "" {
+		scope = "project"
+	}
+	if scope != "global" && scope != "project" {
+		return candidate, "", fmt.Errorf("invalid generated skill scope %q", scope)
+	}
+	if scope == "global" {
+		if reason := scopeDowngradeReason(k.projDir, content); reason != "" {
+			debug.Log("knight", "scope downgrade global->project for %s: %s", name, reason)
+			scope = "project"
+			_ = k.RecordSemanticMemory("scope-downgraded",
+				fmt.Sprintf("downgraded global skill %s to project: %s", name, reason),
+				[]string{"project:" + name}, "")
+		}
+	}
+	normalized, err := mutateSkillFrontmatter(content, func(fmMap map[string]interface{}) {
+		fmMap["name"] = name
+		fmMap["scope"] = scope
+		fmMap["created_by"] = "knight"
+	})
+	if err != nil {
+		return candidate, "", err
+	}
+	candidate.Name = name
+	candidate.Scope = scope
+	if strings.TrimSpace(meta.Description) != "" {
+		candidate.Description = strings.TrimSpace(meta.Description)
+	}
+	return candidate, normalized, nil
+}
+
 func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntry) bool {
 	candidate := &SkillEntry{
 		Name:  c.Name,
@@ -1098,6 +1707,7 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 	if CheckDuplicate(candidate, active) {
 		return true
 	}
+	candFP := skillSimilarityFingerprint(c.Name, c.Description, "")
 	for _, s := range staging {
 		if strings.EqualFold(strings.TrimSpace(s.Name), strings.TrimSpace(c.Name)) {
 			return true
@@ -1109,8 +1719,54 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 				return true
 			}
 		}
+		// Semantic dedup via name+description token Jaccard. 0.6 is empirically
+		// the threshold above which two candidates describe the same workflow
+		// in this repo's existing skills.
+		if jaccardSimilarity(candFP, skillSimilarityFingerprint(s.Name, s.Meta.Description, "")) >= 0.6 {
+			return true
+		}
+	}
+	for _, a := range active {
+		if a == nil {
+			continue
+		}
+		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= 0.6 {
+			return true
+		}
 	}
 	return false
+}
+
+func (k *Knight) normalizeActiveSkillLayout() (int, error) {
+	loose, err := k.index.LooseActiveSkillFiles()
+	if err != nil {
+		return 0, err
+	}
+	migrated := 0
+	for _, entry := range loose {
+		if !strings.EqualFold(strings.TrimSpace(entry.Meta.CreatedBy), "knight") {
+			debug.Log("knight", "loose active skill %s is not created_by=knight; leaving untouched", entry.Path)
+			k.emitReportKeyed(
+				fmt.Sprintf("Skill file %s sits at the top of a skills directory and will NOT be loaded. Move it to %s/SKILL.md to activate it.", entry.Path, strings.TrimSuffix(entry.Path, ".md")),
+				"loose-skill:"+entry.Path,
+				EmitSeverityNotice,
+			)
+			continue
+		}
+		if entry.Meta.Scope != "" && entry.Meta.Scope != entry.Scope {
+			debug.Log("knight", "loose active skill %s scope corrected from %s to %s", entry.Path, entry.Scope, entry.Meta.Scope)
+			entry.Scope = entry.Meta.Scope
+		}
+		if err := k.promoter.MigrateLooseActive(entry); err != nil {
+			debug.Log("knight", "migrate loose active skill %s failed: %v", entry.Path, err)
+			continue
+		}
+		migrated++
+	}
+	if migrated > 0 {
+		k.index.Invalidate()
+	}
+	return migrated, nil
 }
 
 func (k *Knight) inQuietHours(now time.Time) bool {

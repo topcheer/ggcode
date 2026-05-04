@@ -27,6 +27,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"github.com/topcheer/ggcode/internal/stream"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -74,6 +75,7 @@ type Model struct {
 	loading                         bool
 	quitting                        bool
 	restartRequested                bool
+	restartDebug                    bool
 	width                           int
 	height                          int
 	styles                          styles
@@ -88,6 +90,9 @@ type Model struct {
 	session                         *session.Session
 	sessionStore                    session.Store
 	imManager                       *im.Manager
+	streamManager                   *stream.Manager
+	streamPanel                     *streamPanelState
+	streamViewState                 *streamViewStateData // shared pointer — survives Model copies
 	imEmitter                       *im.IMEmitter
 	instanceDetect                  *im.InstanceDetect
 	mcpServers                      []MCPInfo
@@ -393,6 +398,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		pending:              &pendingQueue{},
 		sessionMu:            &sync.Mutex{},
 		a2aMu:                &sync.Mutex{},
+		streamViewState:      &streamViewStateData{},
 	}
 }
 
@@ -584,6 +590,8 @@ func (m *Model) closeActivePanel() bool {
 		m.closeSkillsPanel()
 	case m.inspectorPanel != nil:
 		m.closeInspectorPanel()
+	case m.streamPanel != nil:
+		m.closeStreamPanel()
 	case m.harnessContextPrompt != nil:
 		m.harnessContextPrompt = nil
 	case m.harnessPanel != nil:

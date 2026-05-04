@@ -1,3 +1,5 @@
+//go:build integration_local
+
 package tui
 
 import (
@@ -159,6 +161,78 @@ func TestKnightRunCommandExecutesTask(t *testing.T) {
 	}
 	if !strings.Contains(output, "Added tests and verified they pass.") {
 		t.Fatalf("expected Knight task summary, got %q", output)
+	}
+}
+
+func TestKnightProposeCommandCreatesReviewableProposal(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	k := knight.New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
+		return testKnightRunner{output: `# Improve Verification
+
+## Summary
+Add a reviewable verification proposal.
+
+## Proposed Changes
+Keep this as a proposal only.
+
+## Validation Plan
+Run focused tests.
+
+## Risks and Rollback
+Reject the proposal.`}, nil
+	})
+	if err := k.Start(t.Context()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer k.Stop()
+
+	m := newTestModel()
+	m.SetKnight(k)
+	cmd := m.handleKnightCommand([]string{"/knight", "propose", "improve", "verification"})
+	if cmd == nil {
+		t.Fatal("expected /knight propose to return async command")
+	}
+
+	msg := cmd()
+	updated, followup := m.Update(msg)
+	if followup != nil {
+		t.Fatal("expected no follow-up command after knight proposal result")
+	}
+	next := updated.(Model)
+	output := renderedOutput(&next)
+	if !strings.Contains(output, "Knight proposal created: Improve Verification") {
+		t.Fatalf("expected proposal creation output, got %q", output)
+	}
+
+	proposals, err := k.RecentProjectImprovementProposals(1)
+	if err != nil {
+		t.Fatalf("RecentProjectImprovementProposals() error = %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("expected one proposal, got %d", len(proposals))
+	}
+	next.handleKnightCommand([]string{"/knight", "proposals", proposals[0].ID})
+	output = renderedOutput(&next)
+	if !strings.Contains(output, "# Improve Verification") {
+		t.Fatalf("expected proposal body in output, got %q", output)
+	}
+}
+
+func TestKnightPoliciesCommandShowsAutomationBoundaries(t *testing.T) {
+	k := knight.New(config.KnightConfig{Enabled: true}, t.TempDir(), t.TempDir(), nil)
+	m := newTestModel()
+	m.SetKnight(k)
+
+	cmd := m.handleKnightCommand([]string{"/knight", "policies"})
+	if cmd != nil {
+		t.Fatal("expected /knight policies to render synchronously")
+	}
+	output := renderedOutput(&m)
+	if !strings.Contains(output, "project code writes") || !strings.Contains(output, "never automatic") {
+		t.Fatalf("expected policy boundaries in output, got %q", output)
 	}
 }
 

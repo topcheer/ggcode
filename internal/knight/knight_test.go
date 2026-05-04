@@ -3,6 +3,7 @@ package knight
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
@@ -26,6 +28,21 @@ func (r stubKnightRunner) RunStream(ctx context.Context, prompt string, onEvent 
 		onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: r.output})
 	}
 	return r.err
+}
+
+type captureKnightRunner struct {
+	output string
+	prompt *string
+}
+
+func (r captureKnightRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+	if r.prompt != nil {
+		*r.prompt = prompt
+	}
+	if strings.TrimSpace(r.output) != "" {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: r.output})
+	}
+	return nil
 }
 
 type stubKnightEmitter struct {
@@ -580,6 +597,139 @@ created_by: knight
 	}
 }
 
+func TestPromoterWriteStagingDoesNotClobberExistingCandidate(t *testing.T) {
+	dir := t.TempDir()
+	p := NewPromoter(filepath.Join(dir, "home"), filepath.Join(dir, "project"))
+	content := `---
+name: same-skill
+description: Same skill
+scope: project
+created_by: knight
+---
+# Same
+
+## Steps
+1. Do it.`
+	first, err := p.WriteStaging("same-skill", "project", content)
+	if err != nil {
+		t.Fatalf("first WriteStaging: %v", err)
+	}
+	second, err := p.WriteStaging("same-skill", "project", content)
+	if err != nil {
+		t.Fatalf("second WriteStaging: %v", err)
+	}
+	if first == second {
+		t.Fatalf("WriteStaging should not clobber existing staging file: %s", first)
+	}
+	if _, err := os.Stat(first); err != nil {
+		t.Fatalf("first staging file missing: %v", err)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Fatalf("second staging file missing: %v", err)
+	}
+}
+
+func TestNormalizeGeneratedSkillDocumentUsesFrontmatterNameAndScope(t *testing.T) {
+	candidate := SkillCandidate{
+		Name:        "build-convention",
+		Scope:       "",
+		Description: "fallback description",
+		Category:    "correction",
+	}
+	content := `---
+name: "autopilot-no-status-halts"
+description: "Do not stop for status summaries in autopilot"
+scope: "global"
+platforms: ["darwin", "linux", "windows"]
+---
+
+# autopilot-no-status-halts
+
+## Steps
+1. Keep working.`
+
+	k := &Knight{}
+	normalizedCandidate, normalizedContent, err := k.normalizeGeneratedSkillDocument(candidate, content)
+	if err != nil {
+		t.Fatalf("normalizeGeneratedSkillDocument: %v", err)
+	}
+	if normalizedCandidate.Name != "autopilot-no-status-halts" {
+		t.Fatalf("name = %q", normalizedCandidate.Name)
+	}
+	if normalizedCandidate.Scope != "global" {
+		t.Fatalf("scope = %q", normalizedCandidate.Scope)
+	}
+	if normalizedCandidate.Description != "Do not stop for status summaries in autopilot" {
+		t.Fatalf("description = %q", normalizedCandidate.Description)
+	}
+	if !strings.Contains(normalizedContent, "created_by: knight") {
+		t.Fatalf("normalized content should mark created_by knight:\n%s", normalizedContent)
+	}
+}
+
+func TestNormalizeActiveSkillLayoutMigratesKnightLooseMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillsDir := filepath.Join(projDir, ".ggcode", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loosePath := filepath.Join(skillsDir, "build-flow.md")
+	looseContent := `---
+name: "build-flow"
+description: "Build flow"
+scope: "project"
+created_by: "knight"
+---
+
+# Build Flow
+
+## Steps
+1. Run make verify-ci.`
+	if err := os.WriteFile(loosePath, []byte(looseContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	userLoosePath := filepath.Join(skillsDir, "user-note.md")
+	if err := os.WriteFile(userLoosePath, []byte(`---
+name: "user-note"
+description: "User note"
+scope: "project"
+created_by: "user"
+---
+
+# User Note`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	k := New(config.DefaultKnightConfig(), homeDir, projDir, nil)
+	migrated, err := k.normalizeActiveSkillLayout()
+	if err != nil {
+		t.Fatalf("normalizeActiveSkillLayout: %v", err)
+	}
+	if migrated != 1 {
+		t.Fatalf("migrated = %d, want 1", migrated)
+	}
+	standardPath := filepath.Join(skillsDir, "build-flow", "SKILL.md")
+	if _, err := os.Stat(standardPath); err != nil {
+		t.Fatalf("standard skill missing: %v", err)
+	}
+	if _, err := os.Stat(loosePath); !os.IsNotExist(err) {
+		t.Fatalf("loose knight skill should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(userLoosePath); err != nil {
+		t.Fatalf("user-authored loose markdown should be left untouched: %v", err)
+	}
+
+	cmds := commands.NewLoader(projDir).Load()
+	if _, ok := cmds["build-flow"]; !ok {
+		t.Fatal("migrated standard skill should be loadable by ggcode loader")
+	}
+	if _, ok := cmds["user-note"]; ok {
+		t.Fatal("loose user markdown should not be loadable by ggcode loader")
+	}
+}
+
 func TestBuildCorrectionSkillNameIsStableAcrossSessions(t *testing.T) {
 	first := buildCorrectionSkillName("你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制")
 	second := buildCorrectionSkillName("你需要编译的是正式的 ggcode 二进制而不是什么 debug 二进制")
@@ -643,6 +793,64 @@ func TestUsageTrackerRecordAndGet(t *testing.T) {
 	}
 	if avg != 0 {
 		t.Fatalf("expected avg_score=0 (no scores), got %f", avg)
+	}
+}
+
+func TestUsageTrackerPromptExposure(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-usage-*")
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "usage.json")
+	ut1 := NewUsageTracker(path)
+	ut1.EnsureDir()
+	ut1.RecordPromptExposure("project:test-skill")
+	ut1.RecordPromptExposure("project:test-skill")
+	ut1.Flush()
+
+	exposed, lastExposed := ut1.GetPromptExposure("project:test-skill")
+	if exposed != 2 {
+		t.Fatalf("expected exposure_count=2, got %d", exposed)
+	}
+	if lastExposed.IsZero() {
+		t.Fatal("expected non-zero last_prompt_exposure")
+	}
+	count, _, _ := ut1.GetUsage("project:test-skill")
+	if count != 0 {
+		t.Fatalf("prompt exposure must not increment usage_count, got %d", count)
+	}
+
+	ut2 := NewUsageTracker(path)
+	persisted, persistedLast := ut2.GetPromptExposure("project:test-skill")
+	if persisted != 2 || persistedLast.IsZero() {
+		t.Fatalf("expected persisted exposure data, got count=%d last=%v", persisted, persistedLast)
+	}
+}
+
+func TestUsageTrackerPromptOutcome(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-usage-*")
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "usage.json")
+	ut1 := NewUsageTracker(path)
+	ut1.EnsureDir()
+	ut1.RecordPromptOutcome("project:test-skill", true)
+	ut1.RecordPromptOutcome("project:test-skill", false)
+	ut1.RecordPromptOutcome("project:test-skill", true)
+	ut1.Flush()
+
+	successes, failures := ut1.GetPromptOutcome("project:test-skill")
+	if successes != 2 || failures != 1 {
+		t.Fatalf("expected prompt outcomes +2/-1, got +%d/-%d", successes, failures)
+	}
+	count, _, _ := ut1.GetUsage("project:test-skill")
+	if count != 0 {
+		t.Fatalf("prompt outcome must not increment usage_count, got %d", count)
+	}
+
+	ut2 := NewUsageTracker(path)
+	persistedSuccesses, persistedFailures := ut2.GetPromptOutcome("project:test-skill")
+	if persistedSuccesses != 2 || persistedFailures != 1 {
+		t.Fatalf("expected persisted outcomes +2/-1, got +%d/-%d", persistedSuccesses, persistedFailures)
 	}
 }
 
@@ -866,6 +1074,9 @@ Use for builds.
 	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
 	ref := "project:build-flow"
 	k.RecordSkillUse(ref)
+	k.RecordSkillPromptExposure([]string{ref, ref})
+	k.RecordPromptSkillOutcome([]string{ref, ref}, true)
+	k.RecordPromptSkillOutcome([]string{ref}, false)
 	k.RecordSkillEffectiveness(ref, 5)
 
 	meta, err := parseSkillFile(skillPath)
@@ -877,6 +1088,15 @@ Use for builds.
 	}
 	if meta.LastUsed == "" {
 		t.Fatal("expected last_used to be persisted")
+	}
+	if meta.PromptExposureCount != 1 {
+		t.Fatalf("expected prompt_exposure_count=1, got %d", meta.PromptExposureCount)
+	}
+	if meta.LastPromptExposure == "" {
+		t.Fatal("expected last_prompt_exposure to be persisted")
+	}
+	if meta.PromptSuccessCount != 1 || meta.PromptFailureCount != 1 {
+		t.Fatalf("expected prompt outcome +1/-1, got +%d/-%d", meta.PromptSuccessCount, meta.PromptFailureCount)
 	}
 	if len(meta.EffectivenessScores) != 1 || meta.EffectivenessScores[0] != 5 {
 		t.Fatalf("expected effectiveness_scores=[5], got %#v", meta.EffectivenessScores)
@@ -996,6 +1216,584 @@ Do not use this for unrelated tasks.
 	}
 	if !found {
 		t.Fatal("expected low-effectiveness skill patch to be staged")
+	}
+}
+
+func TestKnightStagesPatchForIgnoredPromptVisibleSkill(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	skillDir := filepath.Join(projDir, ".ggcode", "skills", "review-flow")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: review-flow
+description: Review flow
+scope: project
+created_by: knight
+---
+# Review Flow
+
+## When to Use
+Use for reviews.
+
+## Steps
+1. Review the change
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	k := New(config.KnightConfig{
+		Enabled:      true,
+		TrustLevel:   "staged",
+		Capabilities: []string{"skill_creation"},
+	}, homeDir, projDir, nil)
+	var patchPrompt string
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return captureKnightRunner{prompt: &patchPrompt, output: `---
+name: review-flow
+description: Review changes when the task asks for code review, implementation-quality assessment, or regression-risk analysis.
+scope: project
+created_by: knight
+---
+# Review Flow
+
+## When to Use
+Use when the user asks to review code changes or assess implementation quality.
+
+## When Not to Use
+Do not use for implementing new code without a review request.
+
+## Steps
+1. Inspect the diff and related context.
+2. Identify correctness, safety, and regression risks.
+3. Report only actionable findings.
+
+## Gotchas
+- Do not treat every coding task as a review task.
+`}, nil
+	})
+	for i := 0; i < knightPromptIgnoredThreshold; i++ {
+		k.RecordSkillPromptExposure([]string{"project:review-flow"})
+	}
+
+	k.validateAllSkills(context.Background())
+
+	if !strings.Contains(patchPrompt, "visible to the model but is not being selected reliably") {
+		t.Fatalf("expected prompt-signal tuning instructions, got:\n%s", patchPrompt)
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		t.Fatalf("StagingSkills() error = %v", err)
+	}
+	if len(staging) != 1 || staging[0].Name != "review-flow" {
+		t.Fatalf("expected review-flow tuning patch to be staged, got %#v", staging)
+	}
+}
+
+func TestKnightPromoteStagingAllowsActiveSkillRevision(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	activeDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(activeDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(activeDir) error = %v", err)
+	}
+	activePath := filepath.Join(activeDir, "SKILL.md")
+	if err := os.WriteFile(activePath, []byte(`---
+name: build-flow
+description: Old build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds.
+
+## Steps
+1. Run the old build
+`), 0644); err != nil {
+		t.Fatalf("WriteFile(active) error = %v", err)
+	}
+
+	k := New(config.KnightConfig{Enabled: true, TrustLevel: "staged"}, homeDir, projDir, nil)
+	if _, err := k.promoter.WriteStaging("build-flow", "project", `---
+name: build-flow
+description: Revised build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds and tests.
+
+## When Not to Use
+Do not use for documentation-only changes.
+
+## Steps
+1. Run the build
+2. Run tests
+`); err != nil {
+		t.Fatalf("WriteStaging() error = %v", err)
+	}
+	if err := k.PromoteStaging("build-flow"); err != nil {
+		t.Fatalf("PromoteStaging() revision error = %v", err)
+	}
+
+	data, err := os.ReadFile(activePath)
+	if err != nil {
+		t.Fatalf("ReadFile(active) error = %v", err)
+	}
+	if !strings.Contains(string(data), "Revised build flow") {
+		t.Fatalf("expected active skill to be revised, got:\n%s", string(data))
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		t.Fatalf("StagingSkills() error = %v", err)
+	}
+	if len(staging) != 0 {
+		t.Fatalf("expected staging revision to be removed after promote, got %d", len(staging))
+	}
+}
+
+func TestKnightAutoModeDoesNotPromoteActiveSkillRevision(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	activeDir := filepath.Join(projDir, ".ggcode", "skills", "build-flow")
+	if err := os.MkdirAll(activeDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(activeDir) error = %v", err)
+	}
+	activePath := filepath.Join(activeDir, "SKILL.md")
+	if err := os.WriteFile(activePath, []byte(`---
+name: build-flow
+description: Old build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds.
+
+## Steps
+1. Run the old build
+`), 0644); err != nil {
+		t.Fatalf("WriteFile(active) error = %v", err)
+	}
+
+	k := New(config.KnightConfig{Enabled: true, TrustLevel: "auto"}, homeDir, projDir, nil)
+	emitter := &stubKnightEmitter{}
+	k.SetEmitter(emitter)
+	if _, err := k.promoter.WriteStaging("build-flow", "project", `---
+name: build-flow
+description: Revised build flow
+scope: project
+created_by: knight
+---
+# Build Flow
+
+## When to Use
+Use for builds and tests.
+
+## When Not to Use
+Do not use for documentation-only changes.
+
+## Steps
+1. Run the build
+2. Run tests
+`); err != nil {
+		t.Fatalf("WriteStaging() error = %v", err)
+	}
+
+	k.reviewStagingSkills(context.Background())
+
+	data, err := os.ReadFile(activePath)
+	if err != nil {
+		t.Fatalf("ReadFile(active) error = %v", err)
+	}
+	if strings.Contains(string(data), "Revised build flow") {
+		t.Fatalf("auto mode should not promote active revisions without review, got:\n%s", string(data))
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		t.Fatalf("StagingSkills() error = %v", err)
+	}
+	if len(staging) != 1 {
+		t.Fatalf("expected revision to remain staged for review, got %d", len(staging))
+	}
+	if len(emitter.reports) == 0 || !strings.Contains(emitter.reports[0], "requires review") {
+		t.Fatalf("expected review notification, got %#v", emitter.reports)
+	}
+}
+
+func TestKnightAutoModePromotesOnlyAfterScenarioEvalApproval(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+
+	k := New(config.KnightConfig{Enabled: true, TrustLevel: "auto"}, homeDir, projDir, nil)
+	var evalPrompt string
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return captureKnightRunner{
+			prompt: &evalPrompt,
+			output: "PROMOTE: yes\nREPLAY: pass\nSAVED_REPLAY: pass\nFALSE_POSITIVES: 0\nFALSE_NEGATIVES: 0\nRATIONALE: Specific low-risk project workflow.",
+		}, nil
+	})
+	if _, err := k.promoter.WriteStaging("go-verify-flow", "project", `---
+name: go-verify-flow
+description: Verify this Go project with go test before reporting completion.
+scope: project
+created_by: knight
+---
+# Go Verify Flow
+
+## When to Use
+Use when changing Go files in internal/ or cmd/ and the user expects verified code.
+
+## When Not to Use
+Do not use for documentation-only changes.
+
+## Steps
+1. Run go test ./internal/... for the touched package area.
+2. Run go test ./cmd/... if command behavior changed.
+3. Report any failing package and the concrete next fix.
+`); err != nil {
+		t.Fatalf("WriteStaging() error = %v", err)
+	}
+	if err := k.RecordPromptSkillScenario([]string{"project:existing-build-flow"}, []provider.ContentBlock{
+		provider.TextBlock("Fix internal/knight/scheduler.go and verify the Go tests before reporting done."),
+	}, true, nil); err != nil {
+		t.Fatalf("RecordPromptSkillScenario() error = %v", err)
+	}
+
+	k.reviewStagingSkills(context.Background())
+
+	if !strings.Contains(evalPrompt, "Evaluate whether this staged project skill is safe") || !strings.Contains(evalPrompt, "Invent two realistic positive user tasks") {
+		t.Fatalf("expected auto-promotion scenario eval prompt, got:\n%s", evalPrompt)
+	}
+	if !strings.Contains(evalPrompt, "Saved project scenarios:") || !strings.Contains(evalPrompt, "FALSE_POSITIVES: 0") || !strings.Contains(evalPrompt, "Fix internal/knight/scheduler.go") {
+		t.Fatalf("expected saved project scenarios in eval prompt, got:\n%s", evalPrompt)
+	}
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		t.Fatalf("ActiveSkills() error = %v", err)
+	}
+	if len(active) != 1 || active[0].Name != "go-verify-flow" {
+		t.Fatalf("expected go-verify-flow to be auto-promoted after eval, got %#v", active)
+	}
+	logData, err := os.ReadFile(filepath.Join(projDir, ".ggcode", "skill-auto-promote-evals.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile(eval log) error = %v", err)
+	}
+	if !strings.Contains(string(logData), `"allowed":true`) || !strings.Contains(string(logData), `"replay_pass":true`) || !strings.Contains(string(logData), `"saved_replay_required":true`) {
+		t.Fatalf("expected allowed replay eval log entry, got:\n%s", string(logData))
+	}
+	evals, err := k.RecentAutoPromoteEvals(1)
+	if err != nil {
+		t.Fatalf("RecentAutoPromoteEvals() error = %v", err)
+	}
+	if len(evals) != 1 || !evals[0].Allowed || !evals[0].ReplayPass || !evals[0].SavedReplayRequired || evals[0].SavedReplayStatus != "pass" || evals[0].Skill != "go-verify-flow" {
+		t.Fatalf("unexpected recent evals: %#v", evals)
+	}
+}
+
+func TestKnightRecordPromptSkillScenarioBoundsAndRedactsMedia(t *testing.T) {
+	dir := t.TempDir()
+	k := New(config.KnightConfig{Enabled: true}, filepath.Join(dir, "home"), filepath.Join(dir, "project"), nil)
+
+	longTask := strings.Repeat("x", maxSkillScenarioTaskLen+50)
+	if err := k.RecordPromptSkillScenario([]string{"project:flow", "project:flow", "global:flow"}, []provider.ContentBlock{
+		provider.ImageBlock("image/png", strings.Repeat("a", 1024)),
+		provider.TextBlock(longTask),
+	}, false, errors.New(strings.Repeat("e", maxSkillScenarioErrLen+50))); err != nil {
+		t.Fatalf("RecordPromptSkillScenario() error = %v", err)
+	}
+	scenarios, err := k.RecentSkillScenarios(1)
+	if err != nil {
+		t.Fatalf("RecentSkillScenarios() error = %v", err)
+	}
+	if len(scenarios) != 1 {
+		t.Fatalf("expected one scenario, got %d", len(scenarios))
+	}
+	if len(scenarios[0].Task) > maxSkillScenarioTaskLen+3 || !strings.Contains(scenarios[0].Task, "[image:image/png]") {
+		t.Fatalf("scenario task not bounded or media marker missing: %q", scenarios[0].Task)
+	}
+	if strings.Contains(scenarios[0].Task, strings.Repeat("a", 32)) {
+		t.Fatalf("scenario task should not persist image base64: %q", scenarios[0].Task)
+	}
+	if got := scenarios[0].SkillRefs; len(got) != 2 || got[0] != "project:flow" || got[1] != "global:flow" {
+		t.Fatalf("unexpected scenario refs: %#v", got)
+	}
+	if len(scenarios[0].Error) > maxSkillScenarioErrLen+3 {
+		t.Fatalf("scenario error not bounded: len=%d", len(scenarios[0].Error))
+	}
+}
+
+func TestKnightAutoModeKeepsCandidateStagedWhenScenarioEvalRejects(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+
+	k := New(config.KnightConfig{Enabled: true, TrustLevel: "auto"}, homeDir, projDir, nil)
+	emitter := &stubKnightEmitter{}
+	k.SetEmitter(emitter)
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return stubKnightRunner{output: "PROMOTE: no\nREPLAY: fail\nRATIONALE: Trigger is still too broad."}, nil
+	})
+	if _, err := k.promoter.WriteStaging("go-verify-flow", "project", `---
+name: go-verify-flow
+description: Verify this Go project with go test before reporting completion.
+scope: project
+created_by: knight
+---
+# Go Verify Flow
+
+## When to Use
+Use when changing Go files in internal/ or cmd/ and the user expects verified code.
+
+## When Not to Use
+Do not use for documentation-only changes.
+
+## Steps
+1. Run go test ./internal/... for the touched package area.
+2. Run go test ./cmd/... if command behavior changed.
+3. Report any failing package and the concrete next fix.
+`); err != nil {
+		t.Fatalf("WriteStaging() error = %v", err)
+	}
+
+	k.reviewStagingSkills(context.Background())
+
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		t.Fatalf("ActiveSkills() error = %v", err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("expected scenario-rejected candidate to remain inactive, got %#v", active)
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		t.Fatalf("StagingSkills() error = %v", err)
+	}
+	if len(staging) != 1 {
+		t.Fatalf("expected scenario-rejected candidate to remain staged, got %d", len(staging))
+	}
+	if len(emitter.reports) == 0 || !strings.Contains(emitter.reports[0], "Trigger is still too broad") {
+		t.Fatalf("expected scenario eval rationale in review notification, got %#v", emitter.reports)
+	}
+	logData, err := os.ReadFile(filepath.Join(projDir, ".ggcode", "skill-auto-promote-evals.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile(eval log) error = %v", err)
+	}
+	if !strings.Contains(string(logData), `"allowed":false`) || !strings.Contains(string(logData), `"failure_mode":"promote_rejected"`) {
+		t.Fatalf("expected rejected replay eval log entry, got:\n%s", string(logData))
+	}
+	evals, err := k.RecentAutoPromoteEvalsForSkill("project", "go-verify-flow", 1)
+	if err != nil {
+		t.Fatalf("RecentAutoPromoteEvalsForSkill() error = %v", err)
+	}
+	if len(evals) != 1 || evals[0].Allowed || evals[0].FailureMode != "promote_rejected" {
+		t.Fatalf("unexpected recent skill evals: %#v", evals)
+	}
+}
+
+func TestParseAutoPromoteEvalOutputRequiresReplayPass(t *testing.T) {
+	allowed, rationale := parseAutoPromoteEvalOutput("PROMOTE: yes\nREPLAY: pass\nRATIONALE: clear trigger")
+	if !allowed || rationale != "clear trigger" {
+		t.Fatalf("expected allowed with rationale, got allowed=%v rationale=%q", allowed, rationale)
+	}
+	allowed, _ = parseAutoPromoteEvalOutput("PROMOTE: yes\nRATIONALE: missing replay")
+	if allowed {
+		t.Fatal("expected missing replay pass to block auto-promotion")
+	}
+	allowed, _ = parseAutoPromoteEvalOutput("PROMOTE: yes\nREPLAY: fail\nRATIONALE: negative scenarios are noisy")
+	if allowed {
+		t.Fatal("expected replay fail to block auto-promotion")
+	}
+}
+
+func TestAutoPromoteEvalDecisionRequiresSavedReplayWhenScenariosExist(t *testing.T) {
+	decision := parseAutoPromoteEvalDecision("PROMOTE: yes\nREPLAY: pass\nSAVED_REPLAY: pass\nFALSE_POSITIVES: 0\nFALSE_NEGATIVES: 0\nRATIONALE: clean")
+	decision.SavedReplayRequired = true
+	decision.finalizeFailureMode()
+	if !decision.Allowed() {
+		t.Fatalf("expected saved replay pass to allow promotion: %#v", decision)
+	}
+
+	decision = parseAutoPromoteEvalDecision("PROMOTE: yes\nREPLAY: pass\nSAVED_REPLAY: fail\nFALSE_POSITIVES: 1\nFALSE_NEGATIVES: 0\nRATIONALE: too broad")
+	decision.SavedReplayRequired = true
+	decision.finalizeFailureMode()
+	if decision.Allowed() || decision.FailureMode != "saved_replay_failed" || decision.FalsePositiveCount != 1 {
+		t.Fatalf("expected saved replay failure to block promotion: %#v", decision)
+	}
+}
+
+func TestKnightAutoModeBlocksCandidateOverlappingActiveBaseline(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	activeDir := filepath.Join(projDir, ".ggcode", "skills", "existing-go-verification")
+	if err := os.MkdirAll(activeDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(activeDir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(activeDir, "SKILL.md"), []byte(`---
+name: existing-go-verification
+description: Existing Go verification workflow.
+scope: project
+created_by: knight
+---
+# Existing Go Verification
+
+## When to Use
+Use when Go source files change and the agent must verify tests before reporting completion.
+
+## Steps
+1. Run focused Go tests for touched packages.
+`), 0644); err != nil {
+		t.Fatalf("WriteFile(active skill) error = %v", err)
+	}
+
+	k := New(config.KnightConfig{Enabled: true, TrustLevel: "auto"}, homeDir, projDir, nil)
+	var evalPrompt string
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return captureKnightRunner{
+			prompt: &evalPrompt,
+			output: "PROMOTE: yes\nREPLAY: pass\nSAVED_REPLAY: skip\nFALSE_POSITIVES: 0\nFALSE_NEGATIVES: 0\nBASELINE_REPLAY: fail\nOVERLAP_COUNT: 1\nRATIONALE: Existing skill already covers this workflow.",
+		}, nil
+	})
+	if _, err := k.promoter.WriteStaging("go-verify-flow", "project", `---
+name: go-verify-flow
+description: Verify Go changes before reporting completion.
+scope: project
+created_by: knight
+---
+# Go Verify Flow
+
+## When to Use
+Use when changing Go files and the user expects verified code.
+
+## When Not to Use
+Do not use for documentation-only changes.
+
+## Steps
+1. Run focused Go tests for the touched package area.
+`); err != nil {
+		t.Fatalf("WriteStaging() error = %v", err)
+	}
+
+	k.reviewStagingSkills(context.Background())
+
+	if !strings.Contains(evalPrompt, "Active baseline skills:") || !strings.Contains(evalPrompt, "existing-go-verification") {
+		t.Fatalf("expected active baseline skills in eval prompt, got:\n%s", evalPrompt)
+	}
+	active, err := k.index.ActiveSkills()
+	if err != nil {
+		t.Fatalf("ActiveSkills() error = %v", err)
+	}
+	if len(active) != 1 || active[0].Name != "existing-go-verification" {
+		t.Fatalf("overlapping candidate should not be promoted, active=%#v", active)
+	}
+	staging, err := k.index.StagingSkills()
+	if err != nil {
+		t.Fatalf("StagingSkills() error = %v", err)
+	}
+	if len(staging) != 1 || staging[0].Name != "go-verify-flow" {
+		t.Fatalf("expected overlapping candidate to remain staged, got %#v", staging)
+	}
+	evals, err := k.RecentAutoPromoteEvalsForSkill("project", "go-verify-flow", 1)
+	if err != nil {
+		t.Fatalf("RecentAutoPromoteEvalsForSkill() error = %v", err)
+	}
+	if len(evals) != 1 || evals[0].Allowed || !evals[0].BaselineReplayRequired || evals[0].FailureMode != "baseline_replay_failed" || evals[0].OverlapCount != 1 {
+		t.Fatalf("unexpected baseline evals: %#v", evals)
+	}
+}
+
+func TestKnightGenerateProjectImprovementProposalWritesReviewableMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	projDir := filepath.Join(dir, "project")
+	k := New(config.KnightConfig{Enabled: true}, homeDir, projDir, nil)
+	var prompt string
+	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
+		return captureKnightRunner{
+			prompt: &prompt,
+			output: `# Tighten Go Verification
+
+## Summary
+Run focused Go checks before reporting completion.
+
+## Proposed Changes
+Document the existing verification path.
+
+## Validation Plan
+Run go test ./internal/knight.
+
+## Risks and Rollback
+Discard this proposal if it is too broad.`,
+		}, nil
+	})
+
+	proposal, result, err := k.GenerateProjectImprovementProposal(context.Background(), "improve verification flow")
+	if err != nil {
+		t.Fatalf("GenerateProjectImprovementProposal() error = %v", err)
+	}
+	if result.Output == "" {
+		t.Fatal("expected task output")
+	}
+	if !strings.Contains(prompt, "Do NOT modify project source files") {
+		t.Fatalf("proposal prompt should forbid direct project edits, got:\n%s", prompt)
+	}
+	if proposal.ID == "" || proposal.Title != "Tighten Go Verification" || proposal.Summary == "" {
+		t.Fatalf("unexpected proposal metadata: %#v", proposal)
+	}
+	content, err := os.ReadFile(proposal.Path)
+	if err != nil {
+		t.Fatalf("ReadFile(proposal) error = %v", err)
+	}
+	if !strings.Contains(string(content), "status: proposed") || !strings.Contains(string(content), "## Validation Plan") {
+		t.Fatalf("unexpected proposal content:\n%s", string(content))
+	}
+	recent, err := k.RecentProjectImprovementProposals(1)
+	if err != nil {
+		t.Fatalf("RecentProjectImprovementProposals() error = %v", err)
+	}
+	if len(recent) != 1 || recent[0].ID != proposal.ID {
+		t.Fatalf("unexpected recent proposals: %#v", recent)
+	}
+	readBack, readContent, err := k.ReadProjectImprovementProposal(proposal.ID)
+	if err != nil {
+		t.Fatalf("ReadProjectImprovementProposal() error = %v", err)
+	}
+	if readBack.ID != proposal.ID || !strings.Contains(readContent, "# Tighten Go Verification") {
+		t.Fatalf("unexpected readback: %#v\n%s", readBack, readContent)
+	}
+}
+
+func TestKnightAutoPoliciesDocumentGuardrails(t *testing.T) {
+	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), t.TempDir(), nil)
+	policies := k.AutoPolicies()
+	if len(policies) == 0 {
+		t.Fatal("expected auto policies")
+	}
+	var hasAutoPromote, hasNoCodeWrites bool
+	for _, policy := range policies {
+		if policy.Name == "" || policy.Mode == "" || policy.Description == "" || policy.Guardrail == "" {
+			t.Fatalf("policy should be fully described: %#v", policy)
+		}
+		if strings.Contains(policy.Name, "auto-promotion") && strings.Contains(policy.Guardrail, "active baseline overlap") {
+			hasAutoPromote = true
+		}
+		if strings.Contains(policy.Name, "project code writes") && policy.Mode == "never automatic" {
+			hasNoCodeWrites = true
+		}
+	}
+	if !hasAutoPromote || !hasNoCodeWrites {
+		t.Fatalf("expected auto-promote and no-code-write guardrails, got %#v", policies)
 	}
 }
 
@@ -1197,9 +1995,11 @@ func TestAnalyzeRecentSessionsProcessesDeferredQueueWithoutStore(t *testing.T) {
 			t.Fatalf("queue.Upsert(%d) error = %v", i, err)
 		}
 	}
+	generated := 0
 	k.SetFactory(func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (AgentRunner, error) {
-		return stubKnightRunner{output: `---
-name: generated-skill
+		generated++
+		return stubKnightRunner{output: fmt.Sprintf(`---
+name: generated-skill-%d
 description: "Generated skill"
 scope: project
 created_by: knight
@@ -1211,7 +2011,7 @@ Use it.
 
 ## Steps
 1. Do the thing
-`}, nil
+`, generated)}, nil
 	})
 
 	if err := k.analyzeRecentSessions(context.Background()); err != nil {

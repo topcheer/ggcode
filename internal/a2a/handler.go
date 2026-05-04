@@ -269,23 +269,19 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	// Check if task was canceled *before* execution completed.
 	canceled := ctx.Err() == context.Canceled
 
-	// Clean up cancel func.
-	h.mu.Lock()
-	if c, ok := h.cancels[t.ID]; ok {
-		c()
-		delete(h.cancels, t.ID)
-	}
-	h.mu.Unlock()
-
 	if canceled {
 		h.updateStatus(t, TaskStateCanceled, "canceled by client")
+		h.cleanupCancel(t.ID)
 		return
 	}
 
 	if err != nil {
 		h.updateStatus(t, TaskStateFailed, err.Error())
+		h.cleanupCancel(t.ID)
 		return
 	}
+
+	h.cleanupCancel(t.ID)
 
 	t.Artifacts = []Artifact{{
 		ArtifactID: generateID(),
@@ -361,6 +357,16 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 	}
 
 	return buf.String(), nil
+}
+
+// cleanupCancel removes and calls the cancel func for a task.
+func (h *TaskHandler) cleanupCancel(taskID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if c, ok := h.cancels[taskID]; ok {
+		c()
+		delete(h.cancels, taskID)
+	}
 }
 
 func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
@@ -510,6 +516,10 @@ func (h *TaskHandler) CancelTask(id string) error {
 	t, ok := h.tasks[id]
 	if !ok {
 		return fmt.Errorf("task not found: %s", id)
+	}
+	if t.Status.State == TaskStateCanceled {
+		// Already canceled — idempotent success.
+		return nil
 	}
 	if t.Status.IsTerminal() {
 		return fmt.Errorf("task already in terminal state: %s", t.Status.State)

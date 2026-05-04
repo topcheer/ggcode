@@ -33,6 +33,7 @@ type DiffConfirmFunc func(ctx context.Context, filePath, diffText string) bool
 type ApprovalFunc func(ctx context.Context, toolName string, input string) permission.Decision
 
 type interruptionHandler func() string
+type runResultHandler func([]provider.ContentBlock, error)
 
 var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
 
@@ -46,6 +47,7 @@ type Agent struct {
 	onApproval     ApprovalFunc
 	onUsage        func(usage provider.TokenUsage)
 	onCheckpoint   func(messages []provider.Message, tokenCount int)
+	onRunResult    runResultHandler
 	hookConfig     hooks.HookConfig
 	workingDir     string
 	checkpoints    *checkpoint.Manager
@@ -110,6 +112,29 @@ func (a *Agent) SetUsageHandler(fn func(usage provider.TokenUsage)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onUsage = fn
+}
+
+// SetRunResultHandler sets a callback invoked after each RunStreamWithContent
+// call completes. The callback receives the final error, if any.
+func (a *Agent) SetRunResultHandler(fn func(error)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if fn == nil {
+		a.onRunResult = nil
+		return
+	}
+	a.onRunResult = func(_ []provider.ContentBlock, err error) {
+		fn(err)
+	}
+}
+
+// SetRunResultWithContentHandler sets a callback invoked after each
+// RunStreamWithContent call completes. The callback receives the original user
+// content and the final error, if any.
+func (a *Agent) SetRunResultWithContentHandler(fn func([]provider.ContentBlock, error)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onRunResult = fn
 }
 
 // SetApprovalHandler sets a callback for interactive approval (Ask → Deny by default).
@@ -350,8 +375,16 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 }
 
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
-func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) error {
+func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
+	defer func() {
+		a.mu.RLock()
+		fn := a.onRunResult
+		a.mu.RUnlock()
+		if fn != nil {
+			fn(content, err)
+		}
+	}()
 
 	a.contextManager.Add(provider.Message{
 		Role:    "user",

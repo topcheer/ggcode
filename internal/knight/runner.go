@@ -45,6 +45,11 @@ func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, 
 		result.Error = fmt.Errorf("daily budget exhausted")
 		return result
 	}
+	bucket := classifyBucket(taskName)
+	if !k.bucketBudget.canSpend(bucket, time.Now()) {
+		result.Error = fmt.Errorf("bucket %q exhausted for today", bucket)
+		return result
+	}
 
 	debug.Log("knight", "starting task: %s", taskName)
 
@@ -62,6 +67,7 @@ func (k *Knight) RunTaskWithTurns(ctx context.Context, taskName, prompt string, 
 		if err := k.budget.Record(taskName, usage.InputTokens, usage.OutputTokens); err != nil {
 			debug.Log("knight", "budget record error: %v", err)
 		}
+		k.bucketBudget.record(bucket, usage.InputTokens+usage.OutputTokens, time.Now())
 	}
 
 	// Create agent via factory

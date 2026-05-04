@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -257,24 +258,59 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	for i, t := range tools {
 		toolNames[i] = t.Name()
 	}
-	userSlashCmds := commandMgr.UserSlashCommands()
-	customCmdNames := make([]string, 0, len(userSlashCmds))
-	for name := range userSlashCmds {
-		customCmdNames = append(customCmdNames, name)
+	buildCurrentSystemPrompt := func() (string, []string) {
+		userSlashCmds := commandMgr.UserSlashCommands()
+		customCmdNames := make([]string, 0, len(userSlashCmds))
+		for name := range userSlashCmds {
+			customCmdNames = append(customCmdNames, name)
+		}
+		prompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
+		skillsPrompt, promptSkillRefs := buildSkillsSystemPromptWithPromptRefs(commandMgr.List())
+		if skillsPrompt != "" {
+			prompt += "\n\n## Skills\n" + skillsPrompt
+		}
+		if mode == permission.AutopilotMode {
+			prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
+		}
+		if autoContent != "" {
+			prompt += "\n\n## Auto Memory\n" + autoContent
+		}
+		return prompt, promptSkillRefs
 	}
-	systemPrompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
-	if skillsPrompt := buildSkillsSystemPrompt(commandMgr.List()); skillsPrompt != "" {
-		systemPrompt += "\n\n## Skills\n" + skillsPrompt
-	}
-	if mode == permission.AutopilotMode {
-		systemPrompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
-	}
-	if autoContent != "" {
-		systemPrompt += "\n\n## Auto Memory\n" + autoContent
+	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
+	var promptSkillRefsMu sync.RWMutex
+	currentPromptSkillRefs := func() []string {
+		promptSkillRefsMu.RLock()
+		defer promptSkillRefsMu.RUnlock()
+		return append([]string(nil), promptSkillRefs...)
 	}
 
 	// Agent
 	ag = agent.NewAgent(prov, registry, systemPrompt, cfg.MaxIterations)
+	refreshAgentSystemPrompt := func() {
+		nextPrompt, nextRefs := buildCurrentSystemPrompt()
+		systemPrompt = nextPrompt
+		promptSkillRefsMu.Lock()
+		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
+		promptSkillRefsMu.Unlock()
+		ag.UpdateSystemPrompt(systemPrompt)
+		if knightAgent != nil {
+			knightAgent.RecordSkillPromptExposure(nextRefs)
+		}
+	}
+	ag.SetRunResultWithContentHandler(func(content []provider.ContentBlock, err error) {
+		if knightAgent == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		refs := currentPromptSkillRefs()
+		if len(refs) == 0 {
+			return
+		}
+		knightAgent.RecordPromptSkillOutcome(refs, err == nil)
+		if scenarioErr := knightAgent.RecordPromptSkillScenario(refs, content, err == nil, err); scenarioErr != nil {
+			debug.Log("daemon", "Knight scenario record failed: %v", scenarioErr)
+		}
+	})
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
 	}
@@ -631,6 +667,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			}
 		} else {
 			defer knightAgent.Stop()
+			if commandMgr.Reload() {
+				refreshAgentSystemPrompt()
+			} else {
+				knightAgent.RecordSkillPromptExposure(currentPromptSkillRefs())
+			}
 			fmt.Fprintf(os.Stderr, "🌙 Knight started (budget: %dM tokens/day)\n", cfg.Knight().DailyTokenBudget/1_000_000)
 		}
 	}
@@ -673,7 +714,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			for {
 				select {
 				case <-ticker.C:
-					commandMgr.Reload()
+					if commandMgr.Reload() {
+						refreshAgentSystemPrompt()
+					}
 				case <-stop:
 					return
 				}
