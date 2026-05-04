@@ -369,6 +369,26 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		Attachments: attachments,
 	}
 
+	// Pairing flow: first inbound from an unbound channel triggers pairing.
+	pairingResult, err := a.manager.HandlePairingInbound(msg)
+	debug.Log("wecom", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
+	if err != nil && err != ErrNoSessionBound {
+		a.publishState(false, "warning", err.Error())
+	}
+	if pairingResult.Consumed {
+		// Reply with pairing prompt or success message
+		_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
+		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
+			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
+				Kind: OutboundEventText,
+				Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
+			}); err != nil {
+				debug.Log("wecom", "adapter=%s notify previous: %v", a.name, err)
+			}
+		}
+		return
+	}
+
 	a.manager.HandleInbound(ctx, msg)
 }
 
@@ -449,30 +469,27 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 
 // Send delivers an outbound message to a WeCom chat.
 func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
-	text := event.Text
-	if text == "" {
-		return nil
-	}
 	chatID := binding.ChannelID
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	if chatID == "" {
-		return fmt.Errorf("WeCom: no chat_id for binding %s", binding.Adapter)
-	}
+	return a.sendText(ctx, chatID, event.Text)
+}
 
+// sendText sends a markdown text message to a WeCom chat.
+func (a *wecomAdapter) sendText(ctx context.Context, chatID, text string) error {
 	a.mu.RLock()
 	ws := a.ws
 	a.mu.RUnlock()
 	if ws == nil {
 		return fmt.Errorf("WeCom: not connected")
 	}
-
-	// Truncate long messages
+	if text == "" || chatID == "" {
+		return nil
+	}
 	if len(text) > wecomMaxTextLen {
 		text = text[:wecomMaxTextLen]
 	}
-
 	sendMsg := map[string]any{
 		"cmd":     wecomCmdSend,
 		"headers": map[string]any{"req_id": newWeComReqID("send")},
@@ -484,11 +501,7 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 			},
 		},
 	}
-
-	if err := ws.WriteJSON(sendMsg); err != nil {
-		return fmt.Errorf("WeCom send: %w", err)
-	}
-	return nil
+	return ws.WriteJSON(sendMsg)
 }
 
 func (a *wecomAdapter) publishState(healthy bool, status, lastErr string) {
