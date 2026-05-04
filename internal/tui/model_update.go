@@ -168,6 +168,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dingtalkPanel.createInput += msg.Content
 			return m, nil
 		}
+		if m.wecomPanel != nil && m.wecomPanel.createMode {
+			m.wecomPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.mattermostPanel != nil && m.mattermostPanel.createMode {
+			m.mattermostPanel.createInput += msg.Content
+			return m, nil
+		}
 		// Forward paste to PC panel create-input.
 		if m.pcPanel != nil && m.pcPanel.createMode {
 			m.pcPanel.createInput += msg.Content
@@ -196,6 +204,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.dingtalkPanel != nil && m.dingtalkPanel.editState.mode == imEditInput {
 			m.dingtalkPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.wecomPanel != nil && m.wecomPanel.editState.mode == imEditInput {
+			m.wecomPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.mattermostPanel != nil && m.mattermostPanel.editState.mode == imEditInput {
+			m.mattermostPanel.editState.editInput += msg.Content
 			return m, nil
 		}
 		if m.pcPanel != nil && m.pcPanel.editState.mode == imEditInput {
