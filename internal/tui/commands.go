@@ -172,7 +172,7 @@ func shouldExecuteWhileBusy(text string) bool {
 	// Panel / UI commands — always safe
 	case "/lang", "/model", "/provider", "/impersonate",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
-		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/im",
+		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/im",
 		"/skills", "/sessions", "/mcp",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
 		"/stream", "/restart", "/help", "/?":

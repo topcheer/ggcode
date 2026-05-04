@@ -193,7 +193,7 @@ func CompleteMention(prefix string, workDir string) []string {
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
-	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat",
+	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
@@ -222,6 +222,9 @@ var SlashCommandDescriptions = map[string]string{
 	"/dingtalk":    "Manage DingTalk channel binding",
 	"/wechat":      "Manage WeChat (iLink) channel binding",
 	"/ding":        "Manage DingTalk channel binding",
+	"/wecom":       "Manage WeCom (Enterprise WeChat) channel binding",
+	"/mattermost":  "Manage Mattermost channel binding",
+	"/mm":          "Manage Mattermost channel binding",
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
 	"/undo":        "Undo last file edit",
@@ -270,6 +273,9 @@ var SlashCommandPlaceholders = map[string]string{
 	"/im":          "<subcommand>",
 	"/wechat":      "<subcommand>",
 	"/stream":      "<start|stop|status|config>",
+	"/wecom":       "<subcommand>",
+	"/mattermost":  "<subcommand>",
+	"/mm":          "<subcommand>",
 	"/restart":     "[debug]",
 }
 
