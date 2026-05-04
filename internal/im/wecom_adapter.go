@@ -633,30 +633,110 @@ func (a *wecomAdapter) isGroupAllowed(chatID, senderID string) bool {
 // --- Outbound ---
 
 // Send delivers an outbound message to a WeCom chat.
-// Uses aibot_respond_msg for replies (when req_id is available) for better UX,
-// falls back to aibot_send_msg for proactive messages.
+// Prefers aibot_respond_msg (stream reply) when the inbound message's req_id
+// is still tracked, which shows a "reply" bubble in the WeCom UI.
+// Falls back to aibot_send_msg (proactive message) otherwise.
 func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	chatID := binding.ChannelID
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	return a.sendText(ctx, chatID, event.Text)
+	if event.Text == "" || chatID == "" {
+		return nil
+	}
+	text := event.Text
+	if len(text) > wecomMaxTextLen {
+		text = text[:wecomMaxTextLen]
+	}
+
+	// Try respond_msg if we have a tracked req_id for the last inbound message
+	if msgID := strings.TrimSpace(binding.LastInboundMessageID); msgID != "" {
+		a.mu.RLock()
+		reqID, ok := a.replyReqIDs[msgID]
+		a.mu.RUnlock()
+		if ok && reqID != "" {
+			return a.sendRespond(chatID, reqID, text)
+		}
+	}
+
+	return a.sendProactive(chatID, text)
 }
 
-// sendText sends a markdown text message to a WeCom chat via aibot_send_msg.
-func (a *wecomAdapter) sendText(ctx context.Context, chatID, text string) error {
+// TriggerTyping implements the TypingIndicator interface.
+// WeCom AI Bot does not have a native typing API, but we can send an
+// intermediate respond_msg with finish=false to show a "thinking" state.
+func (a *wecomAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	msgID := strings.TrimSpace(binding.LastInboundMessageID)
+	if msgID == "" {
+		return nil
+	}
+	a.mu.RLock()
+	reqID, ok := a.replyReqIDs[msgID]
+	a.mu.RUnlock()
+	if !ok || reqID == "" {
+		return nil
+	}
+
+	a.mu.RLock()
+	ws := a.ws
+	a.mu.RUnlock()
+	if ws == nil {
+		return nil
+	}
+
+	typingMsg := map[string]any{
+		"cmd":     wecomCmdRespond,
+		"headers": map[string]any{"req_id": reqID},
+		"body": map[string]any{
+			"msgtype": "stream",
+			"stream": map[string]any{
+				"id":      newWeComReqID("stream"),
+				"finish":  false,
+				"content": "",
+			},
+		},
+	}
+	return ws.WriteJSON(typingMsg)
+}
+
+// sendRespond sends via aibot_respond_msg — shows as a reply bubble in WeCom.
+func (a *wecomAdapter) sendRespond(chatID, replyReqID, text string) error {
 	a.mu.RLock()
 	ws := a.ws
 	a.mu.RUnlock()
 	if ws == nil {
 		return fmt.Errorf("WeCom: not connected")
 	}
-	if text == "" || chatID == "" {
-		return nil
+
+	respondMsg := map[string]any{
+		"cmd":     wecomCmdRespond,
+		"headers": map[string]any{"req_id": replyReqID},
+		"body": map[string]any{
+			"msgtype": "stream",
+			"stream": map[string]any{
+				"id":      newWeComReqID("stream"),
+				"finish":  true,
+				"content": text,
+			},
+		},
 	}
-	if len(text) > wecomMaxTextLen {
-		text = text[:wecomMaxTextLen]
+	if err := ws.WriteJSON(respondMsg); err != nil {
+		// Fall back to proactive send on respond failure
+		debug.Log("wecom", "adapter=%s respond_msg failed: %v, falling back to send_msg", a.name, err)
+		return a.sendProactive(chatID, text)
 	}
+	return nil
+}
+
+// sendProactive sends via aibot_send_msg — a standalone message.
+func (a *wecomAdapter) sendProactive(chatID, text string) error {
+	a.mu.RLock()
+	ws := a.ws
+	a.mu.RUnlock()
+	if ws == nil {
+		return fmt.Errorf("WeCom: not connected")
+	}
+
 	sendMsg := map[string]any{
 		"cmd":     wecomCmdSend,
 		"headers": map[string]any{"req_id": newWeComReqID("send")},
@@ -669,6 +749,14 @@ func (a *wecomAdapter) sendText(ctx context.Context, chatID, text string) error 
 		},
 	}
 	return ws.WriteJSON(sendMsg)
+}
+
+// sendText is a convenience wrapper used for pairing replies (no inbound to correlate).
+func (a *wecomAdapter) sendText(ctx context.Context, chatID, text string) error {
+	if text == "" || chatID == "" {
+		return nil
+	}
+	return a.sendProactive(chatID, text)
 }
 
 func (a *wecomAdapter) publishState(healthy bool, status, lastErr string) {
