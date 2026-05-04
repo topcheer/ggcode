@@ -1635,6 +1635,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if m.wecomPanel != nil && m.wecomPanel.editState.mode != imEditNone {
 			m.applyIMEditResult(&m.wecomPanel.editState, msg)
+		} else if m.mattermostPanel != nil && m.mattermostPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.mattermostPanel.editState, msg)
 		}
 		return m, nil
 
