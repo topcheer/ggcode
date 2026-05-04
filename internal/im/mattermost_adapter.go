@@ -422,6 +422,29 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 	return nil
 }
 
+// TriggerTyping implements the TypingIndicator interface.
+// Mattermost supports a "user is typing" WebSocket broadcast.
+func (a *mattermostAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
+	channelID := strings.TrimSpace(binding.ChannelID)
+	if channelID == "" {
+		return nil
+	}
+	a.mu.RLock()
+	ws := a.ws
+	a.mu.RUnlock()
+	if ws == nil {
+		return nil
+	}
+	typingMsg := map[string]any{
+		"seq":    0,
+		"action": "user_typing",
+		"data": map[string]any{
+			"channel_id": channelID,
+		},
+	}
+	return ws.WriteJSON(typingMsg)
+}
+
 // --- REST API helpers ---
 
 func (a *mattermostAdapter) apiURL(path string) string {
