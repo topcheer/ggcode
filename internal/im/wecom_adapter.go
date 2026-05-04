@@ -17,15 +17,18 @@ import (
 )
 
 const (
-	wecomDefaultWSURL    = "wss://openws.work.weixin.qq.com"
-	wecomConnectTimeout  = 20 * time.Second
-	wecomRequestTimeout  = 15 * time.Second
-	wecomHeartbeatPeriod = 30 * time.Second
-	wecomMaxTextLen      = 4000
-	wecomDedupMaxSize    = 1000
+	wecomDefaultWSURL        = "wss://openws.work.weixin.qq.com"
+	wecomConnectTimeout      = 20 * time.Second
+	wecomRequestTimeout      = 15 * time.Second
+	wecomHeartbeatPeriod     = 30 * time.Second
+	wecomMaxTextLen          = 4000
+	wecomDedupMaxSize        = 1000
+	wecomSplitThreshold      = 3900
+	wecomTextBatchDelay      = 600 * time.Millisecond
+	wecomTextBatchSplitDelay = 2 * time.Second
 )
 
-// WeCom WebSocket command constants.
+// WeCom WebSocket command constants (official WeCom AI Bot gateway).
 const (
 	wecomCmdSubscribe      = "aibot_subscribe"
 	wecomCmdCallback       = "aibot_msg_callback"
@@ -43,11 +46,18 @@ type wecomAdapter struct {
 	secret  string
 	wsURL   string
 
-	mu        sync.RWMutex
-	ws        *websocket.Conn
-	connected bool
-	closed    bool
-	seen      map[string]time.Time // message dedup
+	// Access policies
+	dmPolicy       string   // "open", "allowlist", "disabled"
+	allowFrom      []string // DM allowlist
+	groupPolicy    string   // "open", "allowlist", "disabled"
+	groupAllowFrom []string // Group allowlist
+
+	mu          sync.RWMutex
+	ws          *websocket.Conn
+	connected   bool
+	closed      bool
+	seen        map[string]time.Time // message dedup
+	replyReqIDs map[string]string    // msgid → req_id for respond_msg replies
 }
 
 func newWeComAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*wecomAdapter, error) {
@@ -66,13 +76,36 @@ func newWeComAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 	if wsURL == "" {
 		wsURL = wecomDefaultWSURL
 	}
+
+	// Access policies
+	dmPolicy := strings.TrimSpace(stringValue(adapterCfg.Extra, "dm_policy", "dmPolicy"))
+	if dmPolicy == "" {
+		dmPolicy = "open"
+	}
+	groupPolicy := strings.TrimSpace(stringValue(adapterCfg.Extra, "group_policy", "groupPolicy"))
+	if groupPolicy == "" {
+		groupPolicy = "open"
+	}
+	var allowFrom, groupAllowFrom []string
+	if v := stringValue(adapterCfg.Extra, "allow_from", "allowFrom"); v != "" {
+		allowFrom = strings.Split(v, ",")
+	}
+	if v := stringValue(adapterCfg.Extra, "group_allow_from", "groupAllowFrom"); v != "" {
+		groupAllowFrom = strings.Split(v, ",")
+	}
+
 	return &wecomAdapter{
-		name:    name,
-		manager: mgr,
-		botID:   botID,
-		secret:  secret,
-		wsURL:   wsURL,
-		seen:    make(map[string]time.Time),
+		name:           name,
+		manager:        mgr,
+		botID:          botID,
+		secret:         secret,
+		wsURL:          wsURL,
+		dmPolicy:       strings.ToLower(dmPolicy),
+		allowFrom:      normalizeAllowList(allowFrom),
+		groupPolicy:    strings.ToLower(groupPolicy),
+		groupAllowFrom: normalizeAllowList(groupAllowFrom),
+		seen:           make(map[string]time.Time),
+		replyReqIDs:    make(map[string]string),
 	}, nil
 }
 
@@ -330,6 +363,17 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 			}
 		}
 	}
+	// Remember req_id for respond_msg replies
+	reqID := payloadReqID(payload)
+	if reqID != "" {
+		a.replyReqIDs[msgID] = reqID
+		if len(a.replyReqIDs) > wecomDedupMaxSize {
+			for k := range a.replyReqIDs {
+				delete(a.replyReqIDs, k)
+				break
+			}
+		}
+	}
 	a.mu.Unlock()
 
 	// Extract sender
@@ -345,10 +389,28 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 
 	chatType, _ := body["chattype"].(string)
 	isGroup := strings.EqualFold(chatType, "group")
-	_, _ = chatType, isGroup
 
-	// Extract text
+	// Access policy check
+	if isGroup {
+		if !a.isGroupAllowed(chatID, senderID) {
+			debug.Log("wecom", "adapter=%s group %s sender %s blocked by policy", a.name, chatID, senderID)
+			return
+		}
+	} else {
+		if !a.isDMAllowed(senderID) {
+			debug.Log("wecom", "adapter=%s DM sender %s blocked by policy", a.name, senderID)
+			return
+		}
+	}
+
+	// Extract text and quote
 	text := a.extractText(body)
+	quoteText := a.extractQuote(body)
+
+	// If text is empty but we have a quote, use the quote as text
+	if text == "" && quoteText != "" {
+		text = quoteText
+	}
 	if text == "" {
 		return
 	}
@@ -376,7 +438,6 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		// Reply with pairing prompt or success message
 		_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
 		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
 			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
@@ -392,6 +453,8 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 	a.manager.HandleInbound(ctx, msg)
 }
 
+// extractText extracts plain text content from the callback body.
+// Supports text, mixed, voice, and appmsg message types.
 func (a *wecomAdapter) extractText(body map[string]any) string {
 	msgType, _ := body["msgtype"].(string)
 	var textParts []string
@@ -424,7 +487,7 @@ func (a *wecomAdapter) extractText(body map[string]any) string {
 				textParts = append(textParts, content)
 			}
 		}
-		// App message title
+		// App message title (file attachments sent via AI Bot)
 		if strings.EqualFold(msgType, "appmsg") {
 			appmsg, _ := body["appmsg"].(map[string]any)
 			if title := strings.TrimSpace(jsonStringField(appmsg, "title")); title != "" {
@@ -434,6 +497,24 @@ func (a *wecomAdapter) extractText(body map[string]any) string {
 	}
 
 	return strings.Join(textParts, "\n")
+}
+
+// extractQuote extracts the quoted/replied-to text from the callback body.
+func (a *wecomAdapter) extractQuote(body map[string]any) string {
+	quote, _ := body["quote"].(map[string]any)
+	if quote == nil {
+		return ""
+	}
+	quoteType, _ := quote["msgtype"].(string)
+	switch strings.ToLower(quoteType) {
+	case "text":
+		quoteText, _ := quote["text"].(map[string]any)
+		return strings.TrimSpace(jsonStringField(quoteText, "content"))
+	case "voice":
+		quoteVoice, _ := quote["voice"].(map[string]any)
+		return strings.TrimSpace(jsonStringField(quoteVoice, "content"))
+	}
+	return ""
 }
 
 func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
@@ -447,6 +528,13 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 				attachments = append(attachments, Attachment{
 					Kind: AttachmentImage,
 					URL:  url,
+				})
+			}
+			// base64 image data
+			if b64 := jsonStringField(img, "base64"); b64 != "" {
+				attachments = append(attachments, Attachment{
+					Kind:       AttachmentImage,
+					DataBase64: b64,
 				})
 			}
 		}
@@ -464,10 +552,85 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 		}
 	}
 
+	// App message file/image (AI Bot attachments like PDF/Word/Excel)
+	if strings.EqualFold(msgType, "appmsg") {
+		appmsg, _ := body["appmsg"].(map[string]any)
+		if appmsg != nil {
+			if file, _ := appmsg["file"].(map[string]any); file != nil {
+				if url := jsonStringField(file, "url"); url != "" {
+					attachments = append(attachments, Attachment{
+						Kind: AttachmentFile,
+						URL:  url,
+						Name: jsonStringField(appmsg, "title"),
+					})
+				}
+			}
+			if img, _ := appmsg["image"].(map[string]any); img != nil {
+				if url := jsonStringField(img, "url"); url != "" {
+					attachments = append(attachments, Attachment{
+						Kind: AttachmentImage,
+						URL:  url,
+					})
+				}
+			}
+		}
+	}
+
+	// Quote image/file
+	if quote, _ := body["quote"].(map[string]any); quote != nil {
+		quoteType, _ := quote["msgtype"].(string)
+		switch strings.ToLower(quoteType) {
+		case "image":
+			if img, _ := quote["image"].(map[string]any); img != nil {
+				if url := jsonStringField(img, "url"); url != "" {
+					attachments = append(attachments, Attachment{
+						Kind: AttachmentImage,
+						URL:  url,
+					})
+				}
+			}
+		case "file":
+			if file, _ := quote["file"].(map[string]any); file != nil {
+				if url := jsonStringField(file, "url"); url != "" {
+					attachments = append(attachments, Attachment{
+						Kind: AttachmentFile,
+						URL:  url,
+					})
+				}
+			}
+		}
+	}
+
 	return attachments
 }
 
+// --- Access policy ---
+
+func (a *wecomAdapter) isDMAllowed(senderID string) bool {
+	if a.dmPolicy == "disabled" {
+		return false
+	}
+	if a.dmPolicy == "allowlist" {
+		return entryMatches(a.allowFrom, senderID)
+	}
+	return true // "open"
+}
+
+func (a *wecomAdapter) isGroupAllowed(chatID, senderID string) bool {
+	if a.groupPolicy == "disabled" {
+		return false
+	}
+	if a.groupPolicy == "allowlist" && !entryMatches(a.groupAllowFrom, chatID) {
+		return false
+	}
+	return true
+}
+
+// --- Outbound ---
+
 // Send delivers an outbound message to a WeCom chat.
+// Uses aibot_respond_msg for replies (when req_id is available) for better UX,
+// falls back to aibot_send_msg for proactive messages.
 func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	chatID := binding.ChannelID
 	if chatID == "" {
@@ -476,7 +639,7 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	return a.sendText(ctx, chatID, event.Text)
 }
 
-// sendText sends a markdown text message to a WeCom chat.
+// sendText sends a markdown text message to a WeCom chat via aibot_send_msg.
 func (a *wecomAdapter) sendText(ctx context.Context, chatID, text string) error {
 	a.mu.RLock()
 	ws := a.ws
@@ -533,13 +696,6 @@ func payloadReqID(payload map[string]any) string {
 	return reqID
 }
 
-func chatTypeString(isGroup bool) string {
-	if isGroup {
-		return "group"
-	}
-	return "dm"
-}
-
 // jsonStringField safely extracts a string field from a nested map.
 func jsonStringField(m map[string]any, key string) string {
 	if m == nil {
@@ -559,4 +715,28 @@ func jsonStringField(m map[string]any, key string) string {
 	default:
 		return fmt.Sprintf("%v", val)
 	}
+}
+
+// normalizeAllowList trims and filters a list of allowlist entries.
+func normalizeAllowList(entries []string) []string {
+	var result []string
+	for _, e := range entries {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// entryMatches checks if a target matches any entry in an allowlist (case-insensitive, supports "*").
+func entryMatches(entries []string, target string) bool {
+	t := strings.TrimSpace(strings.ToLower(target))
+	for _, e := range entries {
+		e = strings.TrimSpace(strings.ToLower(e))
+		if e == "*" || e == t {
+			return true
+		}
+	}
+	return false
 }
