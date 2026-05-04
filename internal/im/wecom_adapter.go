@@ -432,25 +432,29 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 	}
 
 	// Pairing flow: first inbound from an unbound channel triggers pairing.
-	pairingResult, err := a.manager.HandlePairingInbound(msg)
-	debug.Log("wecom", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-	if err != nil && err != ErrNoSessionBound {
-		a.publishState(false, "warning", err.Error())
-	}
-	if pairingResult.Consumed {
-		_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
-		if pairingResult.Bound && pairingResult.PreviousBinding != nil {
-			if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
-				Kind: OutboundEventText,
-				Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
-			}); err != nil {
-				debug.Log("wecom", "adapter=%s notify previous: %v", a.name, err)
-			}
+	if a.manager != nil {
+		pairingResult, err := a.manager.HandlePairingInbound(msg)
+		debug.Log("wecom", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
+		if err != nil && err != ErrNoSessionBound {
+			a.publishState(false, "warning", err.Error())
 		}
-		return
+		if pairingResult.Consumed {
+			_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
+			if pairingResult.Bound && pairingResult.PreviousBinding != nil {
+				if err := a.manager.SendDirect(ctx, *pairingResult.PreviousBinding, OutboundEvent{
+					Kind: OutboundEventText,
+					Text: "当前目录已绑定到其他渠道，如需重新绑定请再次发起配对。",
+				}); err != nil {
+					debug.Log("wecom", "adapter=%s notify previous: %v", a.name, err)
+				}
+			}
+			return
+		}
 	}
 
-	a.manager.HandleInbound(ctx, msg)
+	if a.manager != nil {
+		a.manager.HandleInbound(ctx, msg)
+	}
 }
 
 // extractText extracts plain text content from the callback body.
