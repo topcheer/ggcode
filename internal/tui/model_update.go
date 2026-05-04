@@ -312,6 +312,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.wechatPanel != nil {
 			return m.handleWechatPanelKey(msg)
 		}
+		if m.wecomPanel != nil {
+			return m.handleWeComPanelKey(msg)
+		}
 		if m.imPanel != nil {
 			return m.handleIMPanelKey(msg)
 		}
@@ -1627,6 +1630,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if msg.adapterName != "" {
 				m.wechatPanel.message = m.t("panel.wechat.auth_success") + " (" + msg.adapterName + ")"
 			}
+		} else if m.wecomPanel != nil && m.wecomPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.wecomPanel.editState, msg)
 		}
 		return m, nil
 
