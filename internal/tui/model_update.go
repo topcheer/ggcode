@@ -176,6 +176,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mattermostPanel.createInput += msg.Content
 			return m, nil
 		}
+		if m.matrixPanel != nil && m.matrixPanel.createMode {
+			m.matrixPanel.createInput += msg.Content
+			return m, nil
+		}
 		// Forward paste to PC panel create-input.
 		if m.pcPanel != nil && m.pcPanel.createMode {
 			m.pcPanel.createInput += msg.Content
