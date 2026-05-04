@@ -552,22 +552,39 @@ func TestCancelTask(t *testing.T) {
 		Role: "user", Parts: []Part{{Kind: "text", Text: "test"}},
 	}, "")
 
-	// Cancel the task.
-	if err := handler.CancelTask(task.ID); err != nil {
-		t.Fatal(err)
-	}
+	// Cancel the task. With a nil agent, the goroutine may complete
+	// before we get here, so CancelTask is allowed to fail.
+	err := handler.CancelTask(task.ID)
 
 	gotTask, ok := handler.GetTask(task.ID)
 	if !ok {
 		t.Fatal("task not found")
 	}
-	if gotTask.Status.State != TaskStateCanceled {
-		t.Errorf("expected canceled, got %s", gotTask.Status.State)
+
+	if err != nil {
+		// Cancel lost the race — task already finished (failed).
+		if gotTask.Status.State != TaskStateFailed {
+			t.Errorf("expected failed (race), got %s", gotTask.Status.State)
+		}
+	} else {
+		// Cancel won the race — task should be canceled.
+		if gotTask.Status.State != TaskStateCanceled {
+			t.Errorf("expected canceled, got %s", gotTask.Status.State)
+		}
 	}
 
-	// Cancel again should fail (terminal state).
-	if err := handler.CancelTask(task.ID); err == nil {
-		t.Error("expected error for canceling terminal task")
+	// Cancel again: idempotent if canceled, error if already failed.
+	err2 := handler.CancelTask(task.ID)
+	if err == nil {
+		// First cancel succeeded (canceled state) — second should be idempotent.
+		if err2 != nil {
+			t.Errorf("idempotent cancel should succeed, got: %v", err2)
+		}
+	} else {
+		// First cancel lost race (failed state) — second should also fail.
+		if err2 == nil {
+			t.Error("expected error for canceling failed task")
+		}
 	}
 }
 

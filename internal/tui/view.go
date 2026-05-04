@@ -87,14 +87,18 @@ func (m Model) View() tea.View {
 	sections = append(sections, composer)
 	left := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	right := m.renderAuxColumn()
+	var content string
 	if right == "" {
-		v := tea.NewView(left)
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
+		content = left
+	} else {
+		content = lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 	}
-	result := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
-	v := tea.NewView(result)
+
+	// Cache view snapshot for streaming goroutine (thread-safe via pointer)
+	if m.streamViewState != nil {
+		m.streamViewState.setSnapshot(content)
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
@@ -1148,6 +1152,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderIMPanel()
 	case m.mcpPanel != nil:
 		return m.renderMCPPanel()
+	case m.streamPanel != nil:
+		return m.renderStreamPanel()
 	case m.skillsPanel != nil:
 		return m.renderSkillsPanel()
 	case m.inspectorPanel != nil:
@@ -1349,6 +1355,26 @@ func (m Model) renderComposerPanel() string {
 	}
 	if m.pendingImage != nil {
 		hints = append(hints, m.t("hint.image_attached"))
+	}
+	// Stream status: show platform-resolution@fps when streaming
+	if m.streamManager != nil && m.streamManager.IsRunning() {
+		statuses := m.streamManager.Status()
+		if len(statuses) > 0 {
+			ew, eh := m.streamManager.EncoderSize()
+			res := fmt.Sprintf("%dx%d", ew, eh)
+			if ew == 0 || eh == 0 {
+				res = "..."
+			}
+			names := make([]string, 0, len(statuses))
+			for _, s := range statuses {
+				names = append(names, s.Name)
+			}
+			fps := m.streamManager.FPS()
+			if fps == 0 {
+				fps = 15
+			}
+			hints = append(hints, fmt.Sprintf("\U0001f534 %s %s@%dfps", strings.Join(names, ","), res, fps))
+		}
 	}
 
 	body := m.renderComposerInput() + "\n" +

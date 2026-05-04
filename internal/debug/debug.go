@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/safego"
 )
@@ -367,9 +368,10 @@ func Log(pkg, format string, args ...interface{}) {
 		l.Print(msg)
 	}
 
-	// Write to main file
+	// Write to main file with timestamp
 	if ms != nil {
-		_, _ = ms.Write([]byte(msg))
+		ts := time.Now().Format("15:04:05.000000")
+		_, _ = ms.Write([]byte(ts + " " + msg))
 	}
 }
 
@@ -384,12 +386,13 @@ func Logf(format string, args ...interface{}) {
 	mu.RUnlock()
 
 	if ms != nil {
+		ts := time.Now().Format("15:04:05.000000")
 		msg := fmt.Sprintf(format, args...)
 		if len(msg) > maxMessageLen {
 			msg = msg[:maxMessageLen]
 		}
 		msg += "\n"
-		_, _ = ms.Write([]byte(msg))
+		_, _ = ms.Write([]byte(ts + " " + msg))
 	}
 }
 

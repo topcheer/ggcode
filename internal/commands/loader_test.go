@@ -96,6 +96,41 @@ Deploy from $DIR with $ARGS`
 	}
 }
 
+func TestLoad_SkillsIgnoreTopLevelMarkdown(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(tmpDir, "home"))
+	skillsDir := filepath.Join(tmpDir, ".ggcode", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "loose.md"), []byte(`---
+name: loose
+description: Not a standard skill
+---
+Loose skill`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	standardDir := filepath.Join(skillsDir, "standard")
+	if err := os.MkdirAll(standardDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(standardDir, "SKILL.md"), []byte(`---
+name: Standard
+description: Standard skill
+---
+Standard skill`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmds := NewLoader(tmpDir).Load()
+	if _, ok := cmds["loose"]; ok {
+		t.Fatal("top-level .md under skills must not be loaded as a skill")
+	}
+	if _, ok := cmds["standard"]; !ok {
+		t.Fatal("directory/SKILL.md skill should be loaded")
+	}
+}
+
 func TestLoad_SharedAgentsSkills(t *testing.T) {
 	tmpDir := t.TempDir()
 	home := filepath.Join(tmpDir, "home")

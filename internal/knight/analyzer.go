@@ -71,6 +71,13 @@ type SkillCandidate struct {
 	Category string // "correction", "failure-fix", "convention"
 	// GenFailCount tracks consecutive LLM generation failures; abandon after knightMaxGenFailures.
 	GenFailCount int `json:",omitempty"`
+	// Queue metadata is persisted for deferred candidates so Knight can make
+	// less myopic prioritization decisions across later analysis ticks.
+	FirstQueuedAt       time.Time `json:"first_queued_at,omitempty"`
+	LastQueuedAt        time.Time `json:"last_queued_at,omitempty"`
+	QueueTouchCount     int       `json:"queue_touch_count,omitempty"`
+	QueuePriority       float64   `json:"queue_priority,omitempty"`
+	QueuePriorityReason string    `json:"queue_priority_reason,omitempty"`
 }
 
 // AnalyzeRecent scans recent sessions for high-value learning signals.
@@ -443,6 +450,13 @@ func (sa *SessionAnalyzer) GenerateSkillFromAnalysis(ctx context.Context, candid
 		evidenceSection = fmt.Sprintf("\n\n## Evidence from conversations\n%s", strings.Join(candidate.Evidence, "\n"))
 	}
 
+	memorySection := ""
+	if sa.knight != nil {
+		if mem := sa.knight.formatRecentSemanticMemoryForEval(8); mem != "" {
+			memorySection = fmt.Sprintf("\n\n## Prior Knight lessons (avoid duplicating these)\n%s", mem)
+		}
+	}
+
 	prompt := fmt.Sprintf(`CRITICAL: Your FINAL text output must be a SKILL.md document starting with the line --- (YAML frontmatter). Do NOT output analysis, summaries, or explanations as your final message. Only the skill document.
 
 You are generating a BEHAVIORAL SKILL — a reusable guideline that teaches an AI coding assistant how to act based on real user interactions.
@@ -473,7 +487,7 @@ Create a SKILL.md document with this EXACT structure:
 ---
 name: "%s"
 description: "<one-line actionable rule>"
-scope: "<DECIDE: 'project' if the lesson only applies to this codebase, 'global' if it applies to any Go/programming project>"
+scope: "<DECIDE: default to 'project'. Use 'global' ONLY if the rule references nothing project-specific (no project basename, no internal/cmd/pkg paths, no project-specific make targets or scripts) AND would genuinely apply unchanged to any unrelated codebase. When in doubt, choose 'project'.>"
 platforms: ["darwin", "linux", "windows"]
 created_by: "knight"
 ---
@@ -510,11 +524,11 @@ RULES:
 - The "## Steps" heading is REQUIRED (exact text)
 - Each step must be specific and actionable — not "analyze the situation" but "read the function at line N of file X"
 - The Examples section must include REAL details from the session, not generic placeholders
-- All YAML string values containing colons or quotes MUST be quoted%s%s`,
+- All YAML string values containing colons or quotes MUST be quoted%s%s%s`,
 		candidate.Category, candidate.Reason,
 		strings.Join(candidate.SourceSessions, ", "),
 		candidate.Name, candidate.Name,
-		conventionsSection, evidenceSection)
+		conventionsSection, evidenceSection, memorySection)
 
 	result := sa.knight.RunTaskWithTurns(ctx, "skill-generation", prompt, factory, 50)
 	if result.Error != nil {

@@ -175,7 +175,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/im",
 		"/skills", "/sessions", "/mcp",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
-		"/help", "/?":
+		"/stream", "/restart", "/help", "/?":
 		return true
 	// Harness: only the bare command (opens panel) is safe
 	case "/harness":
@@ -349,7 +349,13 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		case "/update":
 			return m.handleUpdateCommand()
 		case "/restart":
-			return m.handleRestartCommand()
+			return m.handleRestartCommand(text)
+		case "/stream":
+			args := strings.TrimPrefix(text, "/stream")
+			args = strings.TrimSpace(args)
+			resp, _ := m.handleStreamSlash(args)
+			m.chatWriteSystem(nextSystemID(), resp)
+			return nil
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {

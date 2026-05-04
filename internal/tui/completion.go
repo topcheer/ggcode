@@ -196,7 +196,7 @@ var SlashCommands = []string{
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
-	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills",
+	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -244,6 +244,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/restart":     "Restart ggcode (picks up latest binary)",
 	"/lang":        "Switch interface language",
 	"/skills":      "Browse available skills",
+	"/stream":      "Live stream TUI to platforms (YouTube, Bilibili, etc.)",
 }
 
 // SlashCommandPlaceholders maps commands that accept optional arguments.
@@ -268,6 +269,8 @@ var SlashCommandPlaceholders = map[string]string{
 	"/init":        "[path]",
 	"/im":          "<subcommand>",
 	"/wechat":      "<subcommand>",
+	"/stream":      "<start|stop|status|config>",
+	"/restart":     "[debug]",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.

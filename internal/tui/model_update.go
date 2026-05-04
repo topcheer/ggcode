@@ -209,6 +209,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingQuestionnaire.saveActiveQuestionInput()
 			return m, cmd
 		}
+		// Forward paste to stream panel editing inputs.
+		if m.streamPanel != nil && m.streamPanel.editingField != "" {
+			var cmd tea.Cmd
+			switch m.streamPanel.editingField {
+			case "key":
+				m.streamPanel.keyInput, cmd = m.streamPanel.keyInput.Update(msg)
+			case "url":
+				m.streamPanel.urlInput, cmd = m.streamPanel.urlInput.Update(msg)
+			case "name":
+				m.streamPanel.nameInput, cmd = m.streamPanel.nameInput.Update(msg)
+			default:
+				return m, nil
+			}
+			return m, cmd
+		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -303,6 +318,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.mcpPanel != nil {
 			return m.handleMCPPanelKey(msg)
+		}
+
+		if m.streamPanel != nil {
+			return m.updateStreamPanel(msg)
 		}
 
 		if m.impersonatePanel != nil {
@@ -1125,6 +1144,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight task completed: %s", msg.Goal))
 		m.chatWriteSystem(nextSystemID(), strings.TrimSpace(msg.Result.Output))
+		m.chatListScrollToBottom()
+		return m, nil
+
+	case knightProjectProposalResultMsg:
+		m.loading = false
+		m.spinner.Stop()
+		m.cancelFunc = nil
+		m.statusActivity = ""
+		m.statusToolName = ""
+		m.statusToolArg = ""
+		m.statusToolCount = 0
+		if msg.Err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Knight proposal failed: %v", msg.Err))
+			m.chatListScrollToBottom()
+			return m, nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("📝 Knight proposal created: %s", msg.Proposal.Title))
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("ID: %s\nPath: %s\nReview with /knight proposals %s", msg.Proposal.ID, msg.Proposal.Path, msg.Proposal.ID))
 		m.chatListScrollToBottom()
 		return m, nil
 

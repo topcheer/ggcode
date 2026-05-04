@@ -41,10 +41,12 @@ type REPL struct {
 	model               Model
 	agent               *agent.Agent
 	program             *tea.Program
+	planSwitcher        *replModeSwitcher
 	store               session.Store
 	resumeID            string
 	mcpMgr              *plugin.MCPManager
 	commandMgr          *commands.Manager
+	skillsChangedHook   func()
 	imManager           *im.Manager
 	projectMemoryLoader func() (string, []string, error)
 	webuiAddr           string // webui listen address, displayed after TUI ready
@@ -101,6 +103,10 @@ func (r *REPL) SetUpdateService(svc *update.Service) {
 func (r *REPL) SetCommandsManager(mgr *commands.Manager) {
 	r.commandMgr = mgr
 	r.model.SetCommandsManager(mgr)
+}
+
+func (r *REPL) SetSkillsChangedHook(hook func()) {
+	r.skillsChangedHook = hook
 }
 
 func (r *REPL) SetIMManager(mgr *im.Manager) {
@@ -234,6 +240,7 @@ func (r *REPL) SetCronScheduler(s *cron.Scheduler, tools *tool.Registry) {
 // remembers the previous mode so exit_plan_mode can restore it.
 func (r *REPL) SetPlanModeTools(tools *tool.Registry) {
 	switcher := &replModeSwitcher{model: &r.model}
+	r.planSwitcher = switcher
 	tools.Register(tool.EnterPlanModeTool{Switcher: switcher})
 	tools.Register(tool.ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode})
 }
@@ -278,6 +285,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 // replModeSwitcher implements tool.ModeSwitcher by delegating to the TUI Model.
 type replModeSwitcher struct {
 	model        *Model
+	program      *tea.Program
 	previousMode permission.PermissionMode
 }
 
@@ -287,8 +295,8 @@ func (s *replModeSwitcher) SetMode(mode permission.PermissionMode) {
 		cp.SetMode(mode)
 	}
 	// Update Model.mode via program.Send for thread safety
-	if s.model.program != nil {
-		s.model.program.Send(modeChangeMsg{Mode: mode})
+	if s.program != nil {
+		s.program.Send(modeChangeMsg{Mode: mode})
 	}
 }
 
@@ -449,6 +457,9 @@ func (r *REPL) Run() error {
 	markdown.Warmup()
 
 	r.program = tea.NewProgram(r.model)
+	if r.planSwitcher != nil {
+		r.planSwitcher.program = r.program
+	}
 	debug.Log("repl", "program created stdin_is_term=%v stdout_is_term=%v",
 		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()))
 
@@ -485,6 +496,9 @@ func (r *REPL) Run() error {
 				select {
 				case <-ticker.C:
 					if r.commandMgr.Reload() && r.program != nil {
+						if r.skillsChangedHook != nil {
+							r.skillsChangedHook()
+						}
 						r.program.Send(skillsChangedMsg{})
 					}
 				case <-stop:
@@ -700,5 +714,10 @@ func (r *REPL) execRestart() error {
 	debug.Log("restart", "sessionID=%q args=%v", sessionID, args)
 	debug.Log("restart", "exec %s", strings.Join(execArgs, " "))
 
-	return syscall.Exec(binary, execArgs, os.Environ())
+	env := os.Environ()
+	if r.model.restartDebug {
+		env = append(env, "GGCODE_DEBUG=1")
+	}
+
+	return syscall.Exec(binary, execArgs, env)
 }

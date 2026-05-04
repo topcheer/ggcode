@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -614,6 +615,11 @@ func (m *Model) handleClipboardPaste() tea.Cmd {
 		}
 		msg, err := loader()
 		if err != nil {
+			// Silently ignore if clipboard doesn't contain an image.
+			// This is common (user pressed Ctrl+V with text in clipboard).
+			if errors.Is(err, image.ErrClipboardImageUnavailable) {
+				return nil // no-op, don't interrupt anything
+			}
 			return errMsg{err: fmt.Errorf(m.t("image.clipboard_failed"), err)}
 		}
 		return msg
@@ -648,12 +654,43 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  • %s (%s): %s", s.Name, s.Scope, s.Meta.Description))
 			}
 		}
+		if evals, err := m.knight.RecentAutoPromoteEvals(3); err == nil && len(evals) > 0 {
+			m.chatWriteSystem(nextSystemID(), "Recent auto-promote evals:")
+			for _, eval := range evals {
+				m.chatWriteSystem(nextSystemID(), "  • "+formatAutoPromoteEval(eval))
+			}
+		}
+		if scenarios, err := m.knight.RecentSkillScenarios(3); err == nil && len(scenarios) > 0 {
+			m.chatWriteSystem(nextSystemID(), "Recent replay scenarios:")
+			for _, scenario := range scenarios {
+				m.chatWriteSystem(nextSystemID(), "  • "+formatSkillScenario(scenario))
+			}
+		}
 	case "budget":
 		used, remaining, limit := m.knight.BudgetStatus()
 		if limit == 0 {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Knight budget: %d tokens used / unlimited", used))
 		} else {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Knight budget: %d used / %d remaining / %d total", used, remaining, limit))
+		}
+	case "queue":
+		items, err := m.knight.Queue().List()
+		if err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+			return nil
+		}
+		if len(items) == 0 {
+			m.chatWriteSystem(nextSystemID(), "No deferred Knight candidates")
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Deferred Knight candidates (%d):", len(items)))
+		for _, item := range items {
+			age := "new"
+			if !item.FirstQueuedAt.IsZero() {
+				age = fmt.Sprintf("%dd", int(time.Since(item.FirstQueuedAt).Hours()/24))
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  • %s:%s [priority=%.1f, touches=%d, age=%s, category=%s, evidence=%d] %s — %s",
+				item.Scope, item.Name, item.QueuePriority, item.QueueTouchCount, age, item.Category, item.EvidenceCount, item.Description, truncateStr(item.QueuePriorityReason, 120)))
 		}
 	case "review":
 		staging, _ := m.knight.Index().StagingSkills()
@@ -683,6 +720,12 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 					m.chatWriteSystem(nextSystemID(), "Errors:")
 					for _, issue := range result.Errors {
 						m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  - %s", issue))
+					}
+				}
+				if evals, err := m.knight.RecentAutoPromoteEvalsForSkill(s.Scope, s.Name, 3); err == nil && len(evals) > 0 {
+					m.chatWriteSystem(nextSystemID(), "Recent auto-promote evals:")
+					for _, eval := range evals {
+						m.chatWriteSystem(nextSystemID(), "  • "+formatAutoPromoteEval(eval))
 					}
 				}
 				m.chatWriteSystem(nextSystemID(), strings.TrimSpace(string(content)))
@@ -725,12 +768,104 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				Err:    err,
 			}
 		}
+	case "propose":
+		if len(parts) < 3 {
+			m.chatWriteSystem(nextSystemID(), "Usage: /knight propose <project-improvement-goal>")
+			return nil
+		}
+		goal := strings.TrimSpace(strings.Join(parts[2:], " "))
+		if goal == "" {
+			m.chatWriteSystem(nextSystemID(), "Usage: /knight propose <project-improvement-goal>")
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("📝 Knight drafting project proposal: %s", goal))
+		m.loading = true
+		m.spinner.Start("Knight proposal")
+		m.statusActivity = "Knight proposal"
+		m.statusToolName = "knight"
+		m.statusToolArg = truncateStr(goal, 80)
+		m.statusToolCount = 1
+		return func() tea.Msg {
+			proposal, result, err := m.knight.GenerateProjectImprovementProposal(context.Background(), goal)
+			return knightProjectProposalResultMsg{
+				Goal:     goal,
+				Proposal: proposal,
+				Result:   result,
+				Err:      err,
+			}
+		}
+	case "proposals":
+		if len(parts) >= 4 {
+			action := strings.ToLower(parts[2])
+			id := parts[3]
+			note := ""
+			if len(parts) > 4 {
+				note = strings.Join(parts[4:], " ")
+			}
+			switch action {
+			case "approve":
+				p, err := m.knight.ApproveProposal(id, note)
+				if err != nil {
+					m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+					return nil
+				}
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Approved proposal %s: %s", p.ID, p.Title))
+				return nil
+			case "reject":
+				p, err := m.knight.RejectProposal(id, note)
+				if err != nil {
+					m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+					return nil
+				}
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Rejected proposal %s: %s", p.ID, p.Title))
+				return nil
+			}
+		}
+		if len(parts) >= 3 {
+			proposal, content, err := m.knight.ReadProjectImprovementProposal(parts[2])
+			if err != nil {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Project proposal %s: %s [%s]", proposal.ID, proposal.Title, proposal.Status))
+			m.chatWriteSystem(nextSystemID(), strings.TrimSpace(content))
+			return nil
+		}
+		proposals, err := m.knight.RecentProjectImprovementProposals(10)
+		if err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+			return nil
+		}
+		if len(proposals) == 0 {
+			m.chatWriteSystem(nextSystemID(), "No project improvement proposals")
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Project improvement proposals (%d):", len(proposals)))
+		for _, proposal := range proposals {
+			m.chatWriteSystem(nextSystemID(), "  • "+formatProjectProposal(proposal))
+		}
+	case "policies":
+		policies := m.knight.AutoPolicies()
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Knight auto policies (%d):", len(policies)))
+		for _, policy := range policies {
+			eff := "active"
+			if !policy.Effective {
+				eff = "inactive"
+				if policy.Reason != "" {
+					eff = "inactive: " + policy.Reason
+				}
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  • %s [%s] (%s): %s Guardrail: %s", policy.Name, policy.Mode, eff, policy.Description, policy.Guardrail))
+		}
 	case "approve":
 		if len(parts) < 3 {
 			m.chatWriteSystem(nextSystemID(), "Usage: /knight approve <skill-name>")
 			return nil
 		}
 		name := parts[2]
+		if entry, err := m.knight.FindStagingSkill(name); err == nil && entry != nil && entry.Scope == "global" {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("⚠️  '%s' is GLOBAL scope — it will affect every project on this machine.", name))
+		}
 		if err := m.knight.PromoteStaging(name); err != nil {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
 		} else {
@@ -793,14 +928,88 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				}
 				ref := knight.FormatSkillRefForDisplay(s.Scope, s.Name)
 				used, _, _ := m.knight.SkillUsage(ref)
+				exposed, _ := m.knight.SkillPromptExposure(ref)
+				promptOK, promptFail := m.knight.SkillPromptOutcome(ref)
 				avg, samples := m.knight.SkillFeedback(ref)
 				feedback := "n/a"
 				if samples > 0 {
 					feedback = fmt.Sprintf("%.1f/5 (%d)", avg, samples)
 				}
-				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  %s %s (%s): %s [used: %d, feedback: %s]", status, s.Name, s.Scope, s.Meta.Description, used, feedback))
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  %s %s (%s): %s [shown: %d, runs: +%d/-%d, used: %d, feedback: %s]", status, s.Name, s.Scope, s.Meta.Description, exposed, promptOK, promptFail, used, feedback))
 			}
 		}
+	case "scenarios":
+		if len(parts) >= 3 && strings.EqualFold(parts[2], "clear") {
+			if err := m.knight.ClearSkillScenarios(); err != nil {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), "Cleared saved replay scenarios")
+			return nil
+		}
+		scenarios, err := m.knight.RecentSkillScenarios(10)
+		if err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+			return nil
+		}
+		if len(scenarios) == 0 {
+			m.chatWriteSystem(nextSystemID(), "No saved replay scenarios")
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Recent replay scenarios (%d):", len(scenarios)))
+		for _, scenario := range scenarios {
+			m.chatWriteSystem(nextSystemID(), "  • "+formatSkillScenario(scenario))
+		}
+	case "rejects", "reject-history":
+		if len(parts) >= 3 && strings.EqualFold(parts[2], "clear") {
+			if err := m.knight.ClearRejectFeedback(); err != nil {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), "Cleared reject feedback log")
+			return nil
+		}
+		entries := m.knight.RecentRejectFeedback(20)
+		if len(entries) == 0 {
+			m.chatWriteSystem(nextSystemID(), "No reject feedback recorded")
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Recent reject/rollback events (%d):", len(entries)))
+		for _, line := range entries {
+			m.chatWriteSystem(nextSystemID(), "  • "+line)
+		}
+	case "memory":
+		entries, err := m.knight.RecentSemanticMemory(20)
+		if err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+			return nil
+		}
+		if len(entries) == 0 {
+			m.chatWriteSystem(nextSystemID(), "No semantic memory recorded yet")
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Semantic memory (%d):", len(entries)))
+		for _, e := range entries {
+			when := ""
+			if !e.Time.IsZero() {
+				when = e.Time.Format("2006-01-02 15:04") + " "
+			}
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  • %s[%s] %s", when, e.Kind, e.Summary))
+		}
+	case "audit":
+		report, err := m.knight.RunGovernanceAudit(30 * 24 * time.Hour)
+		if err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), report.FormatHuman())
+	case "reflect":
+		report, err := m.knight.RunSelfReflection(context.Background(), 7*24*time.Hour)
+		if err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Error: %v", err))
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), report.FormatHuman())
 	case "rate":
 		if len(parts) < 4 {
 			m.chatWriteSystem(nextSystemID(), "Usage: /knight rate <skill-name> <1-5>")
@@ -822,9 +1031,86 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		avg, samples := m.knight.SkillFeedback(ref)
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("⭐ Rated skill '%s' %d/5 (avg: %.1f/5 over %d signals)", name, score, avg, samples))
 	default:
-		m.chatWriteSystem(nextSystemID(), "Knight commands: status, budget, review [name], run <task>, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills")
+		m.chatWriteSystem(nextSystemID(), "Knight commands: status, budget, queue, review [name], run <task>, propose <goal>, proposals [id|approve <id>|reject <id>], policies, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills, scenarios [clear], rejects [clear], memory, audit, reflect")
 	}
 	return nil
+}
+
+func formatAutoPromoteEval(eval knight.AutoPromoteEvalLogEntry) string {
+	decision := "review"
+	if eval.Allowed {
+		decision = "auto-promote"
+	}
+	replay := "fail"
+	if eval.ReplayPass {
+		replay = "pass"
+	}
+	if eval.SavedReplayRequired {
+		savedReplay := eval.SavedReplayStatus
+		if savedReplay == "" {
+			savedReplay = "missing"
+		}
+		replay = fmt.Sprintf("%s,saved=%s,fp=%d,fn=%d", replay, savedReplay, eval.FalsePositiveCount, eval.FalseNegativeCount)
+	}
+	if eval.BaselineReplayRequired {
+		baselineReplay := eval.BaselineReplayStatus
+		if baselineReplay == "" {
+			baselineReplay = "missing"
+		}
+		replay = fmt.Sprintf("%s,baseline=%s,overlap=%d", replay, baselineReplay, eval.OverlapCount)
+	}
+	when := ""
+	if !eval.Time.IsZero() {
+		when = eval.Time.Format("2006-01-02 15:04") + " "
+	}
+	reason := strings.TrimSpace(eval.Rationale)
+	if reason == "" {
+		reason = strings.TrimSpace(eval.FailureMode)
+	}
+	if reason != "" {
+		reason = " — " + truncateStr(reason, 100)
+	}
+	return fmt.Sprintf("%s%s:%s %s (replay=%s)%s", when, eval.Scope, eval.Skill, decision, replay, reason)
+}
+
+func formatSkillScenario(scenario knight.SkillScenarioLogEntry) string {
+	outcome := "success"
+	if !scenario.Success {
+		outcome = "failure"
+	}
+	when := ""
+	if !scenario.Time.IsZero() {
+		when = scenario.Time.Format("2006-01-02 15:04") + " "
+	}
+	refs := strings.Join(scenario.SkillRefs, ", ")
+	if refs != "" {
+		refs = " refs=" + refs
+	}
+	task := truncateStr(strings.ReplaceAll(strings.TrimSpace(scenario.Task), "\n", " "), 120)
+	errText := ""
+	if scenario.Error != "" {
+		errText = " error=" + truncateStr(strings.TrimSpace(scenario.Error), 80)
+	}
+	return fmt.Sprintf("%s%s:%s%s%s", when, outcome, task, refs, errText)
+}
+
+func formatProjectProposal(proposal knight.ProjectImprovementProposal) string {
+	when := ""
+	if !proposal.Time.IsZero() {
+		when = proposal.Time.Format("2006-01-02 15:04") + " "
+	}
+	summary := strings.TrimSpace(proposal.Summary)
+	if summary == "" {
+		summary = strings.TrimSpace(proposal.Goal)
+	}
+	if summary != "" {
+		summary = " — " + truncateStr(summary, 100)
+	}
+	status := strings.TrimSpace(proposal.Status)
+	if status == "" {
+		status = "proposed"
+	}
+	return fmt.Sprintf("%s%s [%s] %s%s", when, proposal.ID, status, proposal.Title, summary)
 }
 
 func (m *Model) handleConfigAddEndpoint(args []string) tea.Cmd {
@@ -912,8 +1198,22 @@ func (m *Model) handleConfigRemoveEndpoint(args []string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleRestartCommand() tea.Cmd {
+func (m *Model) handleRestartCommand(text string) tea.Cmd {
+	// Check for "debug" argument
+	parts := strings.Fields(text)
+	debugMode := false
+	for _, p := range parts[1:] {
+		if strings.EqualFold(p, "debug") {
+			debugMode = true
+		}
+	}
+	if debugMode {
+		m.restartDebug = true
+	}
 	m.chatWriteSystem(nextSystemID(), "Restarting ggcode...")
+	if debugMode {
+		m.chatWriteSystem(nextSystemID(), "  (debug mode enabled: GGCODE_DEBUG=1)")
+	}
 	m.quitting = true
 	m.restartRequested = true
 	return tea.Quit

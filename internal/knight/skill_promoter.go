@@ -100,6 +100,50 @@ func (p *Promoter) Reject(entry *SkillEntry) error {
 	return nil
 }
 
+// MigrateLooseActive moves a legacy active top-level *.md skill into the
+// standard <name>/SKILL.md layout used by the ggcode skill loader.
+func (p *Promoter) MigrateLooseActive(entry *SkillEntry) error {
+	if entry == nil {
+		return fmt.Errorf("skill entry is nil")
+	}
+	if entry.Staging {
+		return fmt.Errorf("staging skill %q cannot be migrated as active", entry.Name)
+	}
+	if !strings.HasSuffix(entry.Path, ".md") || filepath.Base(entry.Path) == "SKILL.md" {
+		return fmt.Errorf("skill %q is not a loose active markdown file", entry.Name)
+	}
+	if err := validateSkillName(entry.Name); err != nil {
+		return err
+	}
+	targetDir := p.activeDir(entry)
+	if targetDir == "" {
+		return fmt.Errorf("cannot determine target directory for scope %q", entry.Scope)
+	}
+	skillDir := filepath.Join(targetDir, entry.Name)
+	targetPath := filepath.Join(skillDir, "SKILL.md")
+	if _, err := os.Stat(targetPath); err == nil {
+		return fmt.Errorf("standard skill already exists at %s", targetPath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("check standard skill path: %w", err)
+	}
+	content, err := os.ReadFile(entry.Path)
+	if err != nil {
+		return fmt.Errorf("read loose skill: %w", err)
+	}
+	updated := updateTimestamps(string(content), time.Now())
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return fmt.Errorf("create skill dir: %w", err)
+	}
+	if err := util.AtomicWriteFile(targetPath, []byte(updated), 0644); err != nil {
+		return fmt.Errorf("write standard skill: %w", err)
+	}
+	if err := os.Remove(entry.Path); err != nil {
+		debug.Log("knight", "remove loose skill %s: %v", entry.Path, err)
+	}
+	p.appendChangelog("migrate", entry.Name, entry.Scope, entry.Path)
+	return nil
+}
+
 // Rollback restores the most recent snapshot for an active skill.
 func (p *Promoter) Rollback(entry *SkillEntry) error {
 	if entry == nil {
@@ -156,6 +200,15 @@ func (p *Promoter) WriteStaging(name, scope, content string) (string, error) {
 	// Generate filename with date prefix
 	filename := fmt.Sprintf("knight-%s-%s.md", time.Now().Format("20060102"), name)
 	path := filepath.Join(stagingDir, filename)
+	for i := 2; ; i++ {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			break
+		} else if err != nil {
+			return "", fmt.Errorf("check staging skill path: %w", err)
+		}
+		filename = fmt.Sprintf("knight-%s-%s-%d.md", time.Now().Format("20060102"), name, i)
+		path = filepath.Join(stagingDir, filename)
+	}
 
 	if err := util.AtomicWriteFile(path, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write staging skill: %w", err)

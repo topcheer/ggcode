@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -302,6 +303,47 @@ func TestBuildSkillsSystemPromptPrioritizesBundledAndSummarizesMCP(t *testing.T)
 	}
 	if strings.Contains(prompt, "docs:summarize: MCP prompt from docs") {
 		t.Fatalf("expected MCP skill to be summarized rather than listed verbatim, got:\n%s", prompt)
+	}
+}
+
+func TestBuildSkillsSystemPromptReturnsPromptVisibleSkillRefs(t *testing.T) {
+	prompt, refs := buildSkillsSystemPromptWithPromptRefs([]*commands.Command{
+		{
+			Name:        "project-flow",
+			Description: "Project workflow",
+			Source:      commands.SourceProject,
+			LoadedFrom:  commands.LoadedFromSkills,
+			Enabled:     true,
+		},
+		{
+			Name:        "global-flow",
+			Description: "Global workflow",
+			Source:      commands.SourceUser,
+			LoadedFrom:  commands.LoadedFromSkills,
+			Enabled:     true,
+		},
+		{
+			Name:        "legacy-command",
+			Description: "Legacy command",
+			Source:      commands.SourceProject,
+			LoadedFrom:  commands.LoadedFromCommands,
+			Enabled:     true,
+		},
+		{
+			Name:        "verify",
+			Description: "Bundled skill",
+			Source:      commands.SourceBundled,
+			LoadedFrom:  commands.LoadedFromBundled,
+			Enabled:     true,
+		},
+	})
+
+	if !strings.Contains(prompt, "- project-flow: Project workflow") {
+		t.Fatalf("expected project skill in prompt, got:\n%s", prompt)
+	}
+	want := []string{"global:global-flow", "project:project-flow"}
+	if !reflect.DeepEqual(refs, want) {
+		t.Fatalf("prompt refs = %#v, want %#v", refs, want)
 	}
 }
 

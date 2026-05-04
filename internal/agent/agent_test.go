@@ -173,6 +173,61 @@ func TestNewAgent(t *testing.T) {
 	}
 }
 
+func TestAgentRunResultHandler(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{{Type: "text", Text: "done"}},
+			},
+			Usage: provider.TokenUsage{InputTokens: 10, OutputTokens: 2},
+		},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 1)
+	called := false
+	a.SetRunResultHandler(func(err error) {
+		called = true
+		if err != nil {
+			t.Fatalf("run result error = %v, want nil", err)
+		}
+	})
+
+	if err := a.RunStream(context.Background(), "hello", func(provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	if !called {
+		t.Fatal("expected run result handler to be called")
+	}
+}
+
+func TestAgentRunResultWithContentHandler(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{{Type: "text", Text: "done"}},
+			},
+			Usage: provider.TokenUsage{InputTokens: 10, OutputTokens: 2},
+		},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 1)
+	var got []provider.ContentBlock
+	a.SetRunResultWithContentHandler(func(content []provider.ContentBlock, err error) {
+		if err != nil {
+			t.Fatalf("run result error = %v, want nil", err)
+		}
+		got = content
+	})
+
+	content := []provider.ContentBlock{provider.TextBlock("hello with context"), provider.ImageBlock("image/png", "base64")}
+	if err := a.RunStreamWithContent(context.Background(), content, func(provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStreamWithContent() error = %v", err)
+	}
+	if len(got) != 2 || got[0].Text != "hello with context" || got[1].ImageMIME != "image/png" {
+		t.Fatalf("unexpected handler content: %#v", got)
+	}
+}
+
 func TestAgent_AddMessage(t *testing.T) {
 	mp := &mockProvider{}
 	a := NewAgent(mp, tool.NewRegistry(), "", 1)

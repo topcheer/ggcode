@@ -24,6 +24,10 @@ type SkillMeta struct {
 	UpdatedAt           string   `yaml:"updated_at"`
 	UsageCount          int      `yaml:"usage_count"`
 	LastUsed            string   `yaml:"last_used"`
+	PromptExposureCount int      `yaml:"prompt_exposure_count"`
+	LastPromptExposure  string   `yaml:"last_prompt_exposure"`
+	PromptSuccessCount  int      `yaml:"prompt_success_count"`
+	PromptFailureCount  int      `yaml:"prompt_failure_count"`
 	EffectivenessScores []int    `yaml:"effectiveness_scores"`
 	Frozen              bool     `yaml:"frozen"`
 }
@@ -141,6 +145,24 @@ func (si *SkillIndex) StagingSkills() ([]*SkillEntry, error) {
 	return staging, nil
 }
 
+// LooseActiveSkillFiles returns legacy/non-standard top-level *.md files under
+// active skill directories. These files look like skills but are not loaded by
+// ggcode's standard skill loader, which only accepts <name>/SKILL.md.
+func (si *SkillIndex) LooseActiveSkillFiles() ([]*SkillEntry, error) {
+	var entries []*SkillEntry
+	globals, err := si.scanLooseActiveDir(si.globalDir, "global")
+	if err != nil {
+		return nil, err
+	}
+	entries = append(entries, globals...)
+	projects, err := si.scanLooseActiveDir(si.projectDir, "project")
+	if err != nil {
+		return nil, err
+	}
+	entries = append(entries, projects...)
+	return entries, nil
+}
+
 // FindActiveByName finds an active skill by name.
 func (si *SkillIndex) FindActiveByName(name string) *SkillEntry {
 	// Project-level takes priority
@@ -226,6 +248,43 @@ func (si *SkillIndex) scanDir(dir, scope string, staging bool) ([]*SkillEntry, e
 		}
 	}
 
+	return entries, nil
+}
+
+func (si *SkillIndex) scanLooseActiveDir(dir, scope string) ([]*SkillEntry, error) {
+	var entries []*SkillEntry
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return entries, nil
+	}
+	items, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if item.IsDir() || !strings.HasSuffix(item.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(dir, item.Name())
+		meta, err := parseSkillFile(path)
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSuffix(item.Name(), ".md")
+		if meta.Name != "" {
+			name = meta.Name
+		}
+		entryScope := scope
+		if meta.Scope == "global" || meta.Scope == "project" {
+			entryScope = meta.Scope
+		}
+		entries = append(entries, &SkillEntry{
+			Name:    name,
+			Meta:    meta,
+			Path:    path,
+			Scope:   entryScope,
+			Staging: false,
+		})
+	}
 	return entries, nil
 }
 

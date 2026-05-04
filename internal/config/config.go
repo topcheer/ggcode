@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
+	"github.com/topcheer/ggcode/internal/stream"
 	"github.com/topcheer/ggcode/internal/util"
 	"gopkg.in/yaml.v3"
 )
@@ -187,6 +188,7 @@ type Config struct {
 	Swarm          SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
 	A2A            A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
 	Harness        HarnessConfig             `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Stream         stream.StreamConfig       `yaml:"stream,omitempty" json:"stream,omitempty"`
 	FilePath       string                    `yaml:"-" json:"-"`
 	FirstRun       bool                      `yaml:"-" json:"-"`
 	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
