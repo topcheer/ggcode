@@ -193,7 +193,7 @@ func CompleteMention(prefix string, workDir string) []string {
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
-	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix",
+	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
@@ -226,6 +226,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/mattermost":  "Manage Mattermost channel binding",
 	"/mm":          "Manage Mattermost channel binding",
 	"/matrix":      "Manage Matrix channel binding",
+	"/signal":      "Manage Signal channel binding",
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
 	"/undo":        "Undo last file edit",
@@ -278,6 +279,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/mattermost":  "<subcommand>",
 	"/mm":          "<subcommand>",
 	"/matrix":      "<subcommand>",
+	"/signal":      "<subcommand>",
 	"/restart":     "[debug]",
 }
 

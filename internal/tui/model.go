@@ -135,6 +135,7 @@ type Model struct {
 	wecomPanel                      *wecomPanelState
 	mattermostPanel                 *mattermostPanelState
 	matrixPanel                     *matrixPanelState
+	signalPanel                     *signalPanelState
 	imPanel                         *imPanelState
 	mcpPanel                        *mcpPanelState
 	pendingDeviceCodes              []deviceCodeInfo
@@ -595,6 +596,8 @@ func (m *Model) closeActivePanel() bool {
 		m.closeMattermostPanel()
 	case m.matrixPanel != nil:
 		m.closeMatrixPanel()
+	case m.signalPanel != nil:
+		m.closeSignalPanel()
 		m.closeIMPanel()
 		m.closeIMPanel()
 	case m.mcpPanel != nil:
