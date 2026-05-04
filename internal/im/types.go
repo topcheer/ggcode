@@ -12,16 +12,17 @@ import (
 type Platform string
 
 const (
-	PlatformUnknown  Platform = ""
-	PlatformQQ       Platform = "qq"
-	PlatformTelegram Platform = "telegram"
-	PlatformDiscord  Platform = "discord"
-	PlatformFeishu   Platform = "feishu"
-	PlatformDingTalk Platform = "dingtalk"
-	PlatformSlack    Platform = "slack"
-	PlatformDummy    Platform = "dummy"
-	PlatformWechat   Platform = "wechat"
-	PlatformWeCom    Platform = "wecom"
+	PlatformUnknown    Platform = ""
+	PlatformQQ         Platform = "qq"
+	PlatformTelegram   Platform = "telegram"
+	PlatformDiscord    Platform = "discord"
+	PlatformFeishu     Platform = "feishu"
+	PlatformDingTalk   Platform = "dingtalk"
+	PlatformSlack      Platform = "slack"
+	PlatformDummy      Platform = "dummy"
+	PlatformWechat     Platform = "wechat"
+	PlatformWeCom      Platform = "wecom"
+	PlatformMattermost Platform = "mattermost"
 )
 
 type AttachmentKind string

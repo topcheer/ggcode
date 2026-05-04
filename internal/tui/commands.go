@@ -286,6 +286,9 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 		case "/wecom":
 			m.openWeComPanel()
 			return nil
+		case "/mattermost", "/mm":
+			m.openMattermostPanel()
+			return nil
 		case "/im":
 			m.openIMPanel()
 			return nil

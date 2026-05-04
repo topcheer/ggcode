@@ -315,6 +315,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.wecomPanel != nil {
 			return m.handleWeComPanelKey(msg)
 		}
+		if m.mattermostPanel != nil {
+			return m.handleMattermostPanelKey(msg)
+		}
 		if m.imPanel != nil {
 			return m.handleIMPanelKey(msg)
 		}
