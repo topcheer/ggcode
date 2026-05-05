@@ -317,7 +317,7 @@ func (a *nostrAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	if target == "" {
 		target = binding.TargetID
 	}
-	return a.sendNostrDM(target, event.Text)
+	return a.sendNostrDM(target, defaultOutboundText(event))
 }
 
 func (a *nostrAdapter) sendNostrDM(recipientPubKey, text string) error {

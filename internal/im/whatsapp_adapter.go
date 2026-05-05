@@ -81,7 +81,8 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 	if a.client == nil || !a.Connected() {
 		return nil
 	}
-	if event.Kind != OutboundEventText || event.Text == "" {
+	text := defaultOutboundText(event)
+	if text == "" {
 		return nil
 	}
 
@@ -98,7 +99,7 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 		return fmt.Errorf("whatsapp %q: parse JID %q: %w", a.name, target, err)
 	}
 
-	chunks := chunkWAText(event.Text, waMaxTextLen)
+	chunks := chunkWAText(text, waMaxTextLen)
 	for i, chunk := range chunks {
 		msg := &waE2E.Message{Conversation: proto.String(chunk)}
 		_, err := a.client.SendMessage(ctx, jid, msg)
