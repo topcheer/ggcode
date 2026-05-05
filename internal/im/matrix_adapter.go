@@ -262,6 +262,16 @@ func (a *matrixAdapter) dispatchSyncEvents(ctx context.Context, data map[string]
 	if rooms == nil {
 		return
 	}
+
+	// Auto-join invited rooms
+	invited, _ := rooms["invite"].(map[string]any)
+	for roomID := range invited {
+		debug.Log("matrix", "adapter=%s invited to room=%s, auto-joining", a.name, roomID)
+		if err := a.joinRoom(roomID); err != nil {
+			debug.Log("matrix", "adapter=%s failed to join room=%s: %v", a.name, roomID, err)
+		}
+	}
+
 	joined, _ := rooms["join"].(map[string]any)
 	if joined == nil {
 		return
@@ -274,6 +284,10 @@ func (a *matrixAdapter) dispatchSyncEvents(ctx context.Context, data map[string]
 		if !ok {
 			continue
 		}
+
+		// Ensure DM status is known before processing messages
+		a.ensureDMStatus(roomID, roomMap)
+
 		timeline, _ := roomMap["timeline"].(map[string]any)
 		if timeline == nil {
 			continue
@@ -615,6 +629,66 @@ func (a *matrixAdapter) fetchDMRooms() {
 	debug.Log("matrix", "adapter=%s found %d DM rooms", a.name, len(a.dmRooms))
 }
 
+// ensureDMStatus checks if a room is a DM. First consults the cached m.direct
+// data. If not found, falls back to counting joined members — rooms with
+// exactly 2 members are treated as DMs (matching OpenClaw's 2-member fallback).
+func (a *matrixAdapter) ensureDMStatus(roomID string, roomMap map[string]any) {
+	a.mu.RLock()
+	if a.dmRooms[roomID] {
+		a.mu.RUnlock()
+		return
+	}
+	a.mu.RUnlock()
+
+	// Check joined member count from state events
+	members := a.collectJoinedMembers(roomMap)
+	if len(members) == 2 {
+		a.mu.Lock()
+		a.dmRooms[roomID] = true
+		a.mu.Unlock()
+		debug.Log("matrix", "adapter=%s room=%s detected as DM via 2-member fallback", a.name, roomID)
+	}
+}
+
+// collectJoinedMembers extracts joined member user IDs from room state events.
+func (a *matrixAdapter) collectJoinedMembers(roomMap map[string]any) []string {
+	state, _ := roomMap["state"].(map[string]any)
+	if state == nil {
+		return nil
+	}
+	events, _ := state["events"].([]any)
+	seen := make(map[string]bool)
+	for _, ev := range events {
+		event, ok := ev.(map[string]any)
+		if !ok {
+			continue
+		}
+		if eventType, _ := event["type"].(string); eventType != "m.room.member" {
+			continue
+		}
+		content, _ := event["content"].(map[string]any)
+		membership, _ := content["membership"].(string)
+		if membership != "join" {
+			continue
+		}
+		userID, _ := event["state_key"].(string)
+		if userID != "" {
+			seen[userID] = true
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for id := range seen {
+		result = append(result, id)
+	}
+	return result
+}
+
+// joinRoom sends a join request for the given room.
+func (a *matrixAdapter) joinRoom(roomID string) error {
+	_, err := a.apiPost("_matrix/client/v3/join/"+roomID, nil)
+	return err
+}
+
 // --- REST API helpers ---
 
 func (a *matrixAdapter) baseURL() string {
@@ -699,6 +773,43 @@ func (a *matrixAdapter) apiPut(path string, payload map[string]any) (map[string]
 	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("PUT %s decode: %w", path, err)
+	}
+	return result, nil
+}
+
+func (a *matrixAdapter) apiPost(path string, payload map[string]any) (map[string]any, error) {
+	var bodyReader io.Reader
+	if payload != nil {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest("POST", a.baseURL()+"/"+path, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := a.conn.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("POST %s → %d: %s", path, resp.StatusCode, string(respBody))
+	}
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		// Some endpoints return empty body
+		return nil, nil
 	}
 	return result, nil
 }
