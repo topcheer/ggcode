@@ -5,13 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
 	"image/png"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/makiuchi-d/gozxing"
+	"github.com/makiuchi-d/gozxing/qrcode"
+	goqrcode "github.com/skip2/go-qrcode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -115,75 +118,30 @@ func firstNonEmptySignal(values ...string) string {
 
 // renderQRCodeASCII converts a PNG QR code image to Unicode block-character ASCII art.
 func renderQRCodeASCII(pngData []byte) string {
+	// Step 1: Decode PNG image
 	img, err := png.Decode(bytes.NewReader(pngData))
 	if err != nil {
-		return "(QR code decode failed)"
-	}
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	// Sample the image into a black/white grid (2 rows per pixel using ▀/█/ space)
-	// First find module size by scanning from top-left
-	moduleSize := 1
-	ox, oy := 0, 0
-	// Find first black pixel
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			if isBlack(img, x, y) {
-				ox, oy = x, y
-				break
-			}
-		}
-		if ox > 0 {
-			break
-		}
-	}
-	// Count consecutive black pixels = module size
-	for x := ox + 1; x < w; x++ {
-		if isBlack(img, x, oy) {
-			moduleSize++
-		} else {
-			break
-		}
-	}
-	if moduleSize < 1 {
-		moduleSize = 1
+		return "(QR code PNG decode failed)"
 	}
 
-	// Sample center of each module
-	modulesW := w / moduleSize
-	modulesH := h / moduleSize
-
-	var b strings.Builder
-	for y := 0; y < modulesH; y += 2 {
-		for x := 0; x < modulesW; x++ {
-			sx := ox + x*moduleSize + moduleSize/2
-			syTop := oy + y*moduleSize + moduleSize/2
-			syBot := oy + (y+1)*moduleSize + moduleSize/2
-
-			top := sx < w && syTop < h && isBlack(img, sx, syTop)
-			bot := sx < w && syBot < h && isBlack(img, sx, syBot)
-
-			if top && bot {
-				b.WriteString("█")
-			} else if top {
-				b.WriteString("▀")
-			} else if bot {
-				b.WriteString("▄")
-			} else {
-				b.WriteString(" ")
-			}
-		}
-		b.WriteString("\n")
+	// Step 2: Decode QR code content from the image using gozxing
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "(QR code bitmap failed)"
 	}
-	return b.String()
-}
+	reader := qrcode.NewQRCodeReader()
+	result, err := reader.Decode(bmp, nil)
+	if err != nil {
+		return "(QR code content decode failed)"
+	}
+	content := result.String()
 
-func isBlack(img image.Image, x, y int) bool {
-	r, g, b, _ := img.At(x, y).RGBA()
-	// Luminance threshold
-	lum := int(0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b))
-	return lum < 32768 // < 50% brightness = black
+	// Step 3: Re-generate QR code as ASCII using go-qrcode
+	qr, err := goqrcode.New(content, goqrcode.Medium)
+	if err != nil {
+		return "(QR code regenerate failed)"
+	}
+	return qr.ToSmallString(false)
 }
 
 func maxSignal(v, min int) int {
