@@ -207,6 +207,20 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	// 5. Setup syncer
 	syncer := mautrix.NewDefaultSyncer()
 
+	// Auto-join when invited
+	syncer.OnEventType(event.StateMember, func(ctx context.Context, evt *event.Event) {
+		membership, _ := evt.Content.Raw["membership"].(string)
+		if membership == "invite" && evt.GetStateKey() == string(a.client.UserID) {
+			debug.Log("matrix", "adapter=%s invited to room=%s, joining", a.name, evt.RoomID)
+			_, err := a.client.JoinRoom(ctx, evt.RoomID.String(), nil)
+			if err != nil {
+				debug.Log("matrix", "adapter=%s failed to join room=%s: %v", a.name, evt.RoomID, err)
+			} else {
+				debug.Log("matrix", "adapter=%s joined room=%s", a.name, evt.RoomID)
+			}
+		}
+	})
+
 	// OnSync: mark first sync done + process crypto to-device events
 	syncer.OnSync(func(ctx context.Context, resp *mautrix.RespSync, since string) bool {
 		if since != "" {
