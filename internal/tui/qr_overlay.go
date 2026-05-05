@@ -12,20 +12,13 @@ import (
 
 // qrOverlayState holds the state for the QR code overlay panel.
 type qrOverlayState struct {
-	platformName string // e.g. "Telegram", "Discord"
-	contactURI   string // deep link URL
-	qrText       string // rendered QR code ASCII art
-	returnPanel  string // which panel to return to (for key routing)
+	title       string // e.g. "Telegram — Scan to Add Bot"
+	description string // scan hint text
+	qrText      string // rendered QR code ASCII art
+	footer      string // URI or additional info line
 }
 
-// openQROverlay creates a QR overlay for the first adapter with a ContactURI.
-// entries is a slice of structs that have an AdapterState *im.AdapterState field.
-func (m *Model) openQROverlay(platformName string, entries interface{ GetAdapterState() *im.AdapterState }) bool {
-	// Use reflection-free approach: just pass the entries directly
-	return false
-}
-
-// openQROverlayFromStates creates a QR overlay from adapter states.
+// openQROverlayFromStates creates a QR overlay from adapter states (contact URI).
 func (m *Model) openQROverlayFromStates(platformName string, states []*im.AdapterState) bool {
 	var contactURI string
 	for _, s := range states {
@@ -40,11 +33,27 @@ func (m *Model) openQROverlayFromStates(platformName string, states []*im.Adapte
 
 	qrText := renderContactQRCode(contactURI)
 	m.qrOverlay = &qrOverlayState{
-		platformName: platformName,
-		contactURI:   contactURI,
-		qrText:       qrText,
+		title:       fmt.Sprintf("%s — %s", m.t("panel.qr.title"), platformName),
+		description: m.t("panel.qr.scan_hint"),
+		qrText:      qrText,
+		footer:      contactURI,
 	}
 	return true
+}
+
+// openQROverlayDirect opens a QR overlay with explicit content.
+func (m *Model) openQROverlayDirect(title, description, qrText, footer string) {
+	m.qrOverlay = &qrOverlayState{
+		title:       title,
+		description: description,
+		qrText:      qrText,
+		footer:      footer,
+	}
+}
+
+// closeQROverlay closes the QR overlay panel.
+func (m *Model) closeQROverlay() {
+	m.qrOverlay = nil
 }
 
 // renderQROverlay renders the full QR overlay panel.
@@ -58,24 +67,28 @@ func (m Model) renderQROverlay() string {
 
 	// Title
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render(
-		fmt.Sprintf(" %s — %s", m.t("panel.qr.title"), o.platformName),
+		fmt.Sprintf(" %s", o.title),
 	)
 	body = append(body, title, "")
 
-	// Scan hint
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
-		" " + m.t("panel.qr.scan_hint"),
-	)
-	body = append(body, hint, "")
+	// Description
+	if o.description != "" {
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+			fmt.Sprintf(" %s", o.description),
+		)
+		body = append(body, hint, "")
+	}
 
 	// QR code
 	if o.qrText != "" {
 		body = append(body, o.qrText, "")
 	}
 
-	// Contact URI
-	uriStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	body = append(body, uriStyle.Render(fmt.Sprintf(" %s", o.contactURI)), "")
+	// Footer (URI or extra info)
+	if o.footer != "" {
+		footerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+		body = append(body, footerStyle.Render(fmt.Sprintf(" %s", o.footer)), "")
+	}
 
 	// Esc hint
 	escHint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(

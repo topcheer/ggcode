@@ -193,37 +193,6 @@ func (m Model) renderSignalPanel() string {
 
 	body := []string{}
 
-	// QR code at the top
-	if panel.qrFetching {
-		body = append(body,
-			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
-			" "+m.t("panel.signal.qr_fetching"),
-		)
-	} else if panel.qrError != "" {
-		body = append(body,
-			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" "+panel.qrError),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.qr_retry_hint")),
-		)
-	} else if panel.qrCode != "" {
-		body = append(body,
-			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
-			"",
-			panel.qrCode,
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.qr_scan_hint")),
-		)
-	} else if panel.daemonOK != nil && !*panel.daemonOK {
-		body = append(body,
-			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" "+m.t("panel.signal.qr_no_daemon")),
-		)
-	} else if panel.daemonOK != nil && *panel.daemonOK {
-		body = append(body,
-			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
-			" "+m.t("panel.signal.qr_press_q"),
-		)
-	}
-
 	body = append(body,
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.directory")),

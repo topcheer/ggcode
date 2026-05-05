@@ -113,15 +113,6 @@ func (m Model) renderNostrPanel() string {
 
 	body := []string{}
 
-	// QR code at top when available
-	if panel.qrCode != "" {
-		body = append(body, panel.qrCode)
-		if panel.generatedNpub != "" {
-			body = append(body, fmt.Sprintf(" %s", m.t("panel.nostr.message.pubkey", panel.generatedNpub)))
-		}
-		body = append(body, "")
-	}
-
 	body = append(body,
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.nostr.directory")),
 		fmt.Sprintf(" %s", wsPath),
