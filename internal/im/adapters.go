@@ -212,6 +212,13 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 			return err
 		}
 		start(adapter)
+	case PlatformWhatsApp:
+		adapter, err := newWhatsAppAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			adapterCancel()
+			return err
+		}
+		start(adapter)
 	}
 	return nil
 }

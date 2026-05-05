@@ -29,6 +29,7 @@ const (
 	PlatformNostr      Platform = "nostr"
 	PlatformSynology   Platform = "synology"
 	PlatformTwitch     Platform = "twitch"
+	PlatformWhatsApp   Platform = "whatsapp"
 )
 
 type AttachmentKind string
