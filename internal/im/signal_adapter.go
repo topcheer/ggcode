@@ -278,14 +278,28 @@ func (a *signalAdapter) handleSSEEvent(ctx context.Context, eventType, data stri
 // Message processing
 // ---------------------------------------------------------------------------
 
-func (a *signalAdapter) processEnvelope(ctx context.Context, envelope map[string]any) {
+func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any) {
+	// signal-cli-rest-api wraps the actual envelope in an "envelope" field:
+	// {"account":"+...", "envelope":{...}}
+	inner, _ := raw["envelope"].(map[string]any)
+	if inner != nil {
+		// Merge account-level fields into inner envelope
+		if acct, ok := raw["account"].(string); ok {
+			inner["account"] = acct
+		}
+		raw = inner
+	}
+
 	// Check for syncMessage (sent by this account from another device)
-	syncMsg, _ := envelope["syncMessage"].(map[string]any)
+	syncMsg, _ := raw["syncMessage"].(map[string]any)
 	isNoteToSelf := false
+	isGroupSync := false
 	if syncMsg != nil {
 		sentMsg, _ := syncMsg["sentMessage"].(map[string]any)
 		if sentMsg != nil {
 			dest, _ := sentMsg["destinationNumber"].(string)
+			// Check if it's a group message sync
+			groupInfo, _ := sentMsg["groupInfo"].(map[string]any)
 			if dest != "" && dest == a.account {
 				// Check echo suppression
 				ts := jsonInt64(sentMsg, "timestamp")
@@ -295,34 +309,45 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, envelope map[string
 				}
 				// Genuine Note to Self
 				isNoteToSelf = true
-				envelope["dataMessage"] = sentMsg
+				raw["dataMessage"] = sentMsg
+			} else if groupInfo != nil {
+				// Sync of a message sent to a group — treat as outbound echo
+				ts := jsonInt64(sentMsg, "timestamp")
+				if ts > 0 && a.isSentTimestamp(ts) {
+					a.removeSentTimestamp(ts)
+					return
+				}
+				// Not our sent message — treat as inbound group message
+				isGroupSync = true
+				raw["dataMessage"] = sentMsg
 			}
 		}
-		if !isNoteToSelf {
+		if !isNoteToSelf && !isGroupSync {
 			return
 		}
 	}
 
 	// Extract sender
-	sender, _ := envelope["sourceNumber"].(string)
+	sender, _ := raw["sourceNumber"].(string)
 	if sender == "" {
-		sender, _ = envelope["source"].(string)
+		sender, _ = raw["source"].(string)
 	}
-	senderName, _ := envelope["sourceName"].(string)
+	senderName, _ := raw["sourceName"].(string)
 	if sender == "" {
-		debug.Log("signal", "adapter=%s ignoring envelope with no sender", a.name)
+		rawJSON, _ := json.Marshal(raw)
+		debug.Log("signal", "adapter=%s ignoring envelope with no sender: %s", a.name, string(rawJSON))
 		return
 	}
 
-	// Self-message filtering (but allow Note to Self)
-	if sender == a.account && !isNoteToSelf {
+	// Self-message filtering (but allow Note to Self and group sync)
+	if sender == a.account && !isNoteToSelf && !isGroupSync {
 		return
 	}
 
 	// Get dataMessage (or editMessage)
-	dataMessage, _ := envelope["dataMessage"].(map[string]any)
+	dataMessage, _ := raw["dataMessage"].(map[string]any)
 	if dataMessage == nil {
-		if editMsg, _ := envelope["editMessage"].(map[string]any); editMsg != nil {
+		if editMsg, _ := raw["editMessage"].(map[string]any); editMsg != nil {
 			dataMessage, _ = editMsg["dataMessage"].(map[string]any)
 		}
 	}
