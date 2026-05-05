@@ -2,12 +2,8 @@ package im
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -17,15 +13,16 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 
-	"github.com/gorilla/websocket"
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip04"
+	"github.com/nbd-wtf/go-nostr/nip19"
 )
 
 const (
 	nostrMaxMessageLen    = 2000
 	nostrReconnectBackoff = 5 * time.Second
 	nostrMaxBackoff       = 120 * time.Second
-	nostrDedupMaxSize     = 2000
-	nostrKindDM           = 4 // NIP-04 encrypted DM
+	nostrDedupMaxSize     = 5000
 	nostrStartupLookback  = 120
 )
 
@@ -37,23 +34,20 @@ type nostrAdapter struct {
 	name    string
 	manager *Manager
 
-	// Keys
+	// Keys (hex)
 	privKey string
 	pubKey  string
 
 	// Relays
 	relays []string
 
-	mu        sync.RWMutex
-	conns     map[string]*websocket.Conn
-	connected int
-	closed    bool
+	mu         sync.RWMutex
+	relayConns []*nostr.Relay
+	connected  int
+	closed     bool
 
 	// Dedup
 	seen map[string]time.Time
-
-	// Subscription counter
-	subCounter int64
 }
 
 func newNostrAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*nostrAdapter, error) {
@@ -64,12 +58,18 @@ func newNostrAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 	if privKey == "" {
 		return nil, fmt.Errorf("Nostr private_key is required for adapter %q (set 'private_key' in extra or NOSTR_PRIVATE_KEY env)", name)
 	}
+
+	// Decode nsec → hex if needed
 	privKey = normalizeNostrKey(privKey)
 	if len(privKey) != 64 {
-		return nil, fmt.Errorf("Nostr private_key must be 32 bytes hex (64 chars)")
+		return nil, fmt.Errorf("Nostr private_key must be 32 bytes hex (64 chars) or nsec format")
 	}
 
-	pubKey := deriveNostrPubKey(privKey)
+	// Verify the key is valid by deriving pubkey
+	pubKey, err := nostr.GetPublicKey(privKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Nostr private_key: %w", err)
+	}
 
 	relays := parseCommaList(stringValue(adapterCfg.Extra, "relays"), os.Getenv("NOSTR_RELAYS"))
 	if len(relays) == 0 {
@@ -86,7 +86,6 @@ func newNostrAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 		privKey: privKey,
 		pubKey:  pubKey,
 		relays:  relays,
-		conns:   make(map[string]*websocket.Conn),
 		seen:    make(map[string]time.Time),
 	}, nil
 }
@@ -103,12 +102,10 @@ func (a *nostrAdapter) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.closed = true
-	for url, conn := range a.conns {
-		conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"))
-		conn.Close()
-		delete(a.conns, url)
+	for _, r := range a.relayConns {
+		r.Close()
 	}
+	a.relayConns = nil
 	a.connected = 0
 	return nil
 }
@@ -118,8 +115,8 @@ func (a *nostrAdapter) Close() error {
 // ---------------------------------------------------------------------------
 
 func (a *nostrAdapter) run(ctx context.Context) {
-	for _, relay := range a.relays {
-		safego.Go("im.nostr.relay."+relay, func() { a.relayLoop(ctx, relay) })
+	for _, relayURL := range a.relays {
+		safego.Go("im.nostr.relay."+relayURL, func() { a.relayLoop(ctx, relayURL) })
 	}
 	<-ctx.Done()
 	a.publishState(false, "stopped", "")
@@ -137,10 +134,12 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 		if isClosed {
 			return
 		}
+
 		if err := a.connectRelay(ctx, relayURL); err != nil {
 			debug.Log("nostr", "adapter=%s relay=%s error: %v", a.name, relayURL, err)
 			a.publishState(false, "error", fmt.Sprintf("%s: %v", relayURL, err))
 		}
+
 		select {
 		case <-ctx.Done():
 			return
@@ -158,71 +157,60 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error {
 	debug.Log("nostr", "adapter=%s connecting to %s", a.name, relayURL)
 
-	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.DialContext(ctx, relayURL, http.Header{})
+	relay, err := nostr.RelayConnect(ctx, relayURL)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", relayURL, err)
+		return fmt.Errorf("connect %s: %w", relayURL, err)
 	}
 
 	a.mu.Lock()
-	a.conns[relayURL] = conn
+	a.relayConns = append(a.relayConns, relay)
 	a.connected++
 	a.mu.Unlock()
 	a.publishState(true, "connected", "")
 	debug.Log("nostr", "adapter=%s connected to %s", a.name, relayURL)
 
 	defer func() {
-		conn.Close()
+		relay.Close()
 		a.mu.Lock()
-		delete(a.conns, relayURL)
+		for i, r := range a.relayConns {
+			if r == relay {
+				a.relayConns = append(a.relayConns[:i], a.relayConns[i+1:]...)
+				break
+			}
+		}
 		a.connected--
 		a.mu.Unlock()
 	}()
 
 	// Subscribe to DMs (kind 4) with p-tag = our pubkey
-	since := time.Now().Unix() - nostrStartupLookback
-	subID := a.nextSubID()
-	filter := map[string]any{
-		"kinds": []int{nostrKindDM},
-		"#p":    []string{a.pubKey},
-		"since": since,
-		"limit": 100,
+	since := nostr.Now() - nostrStartupLookback
+	filter := nostr.Filter{
+		Kinds: []int{nostr.KindEncryptedDirectMessage},
+		Tags:  nostr.TagMap{"p": []string{a.pubKey}},
+		Since: &since,
+		Limit: 100,
 	}
-	subMsg := []any{"REQ", subID, filter}
-	if err := a.writeWS(conn, subMsg); err != nil {
+
+	sub, err := relay.Subscribe(ctx, nostr.Filters{filter})
+	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
 	}
-	debug.Log("nostr", "adapter=%s subscribed to DMs on %s (sub=%s)", a.name, relayURL, subID)
+	debug.Log("nostr", "adapter=%s subscribed to DMs on %s", a.name, relayURL)
 
-	// Read loop
+	// Event loop
 	for {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil
-		}
-		_, data, err := conn.ReadMessage()
-		if err != nil {
-			return fmt.Errorf("read: %w", err)
-		}
-
-		var msg []json.RawMessage
-		if err := json.Unmarshal(data, &msg); err != nil || len(msg) == 0 {
-			continue
-		}
-
-		var msgType string
-		json.Unmarshal(msg[0], &msgType)
-
-		switch msgType {
-		case "EVENT":
-			if len(msg) >= 3 {
-				a.handleEvent(ctx, msg[2])
+		case evt, ok := <-sub.Events:
+			if !ok {
+				return fmt.Errorf("subscription closed")
 			}
-		case "NOTICE":
-			var notice string
-			if len(msg) >= 2 {
-				json.Unmarshal(msg[1], &notice)
+			if evt != nil {
+				a.handleEvent(ctx, evt)
 			}
-			debug.Log("nostr", "adapter=%s NOTICE from %s: %s", a.name, relayURL, notice)
+		case <-sub.EndOfStoredEvents:
+			debug.Log("nostr", "adapter=%s EOSE from %s", a.name, relayURL)
 		}
 	}
 }
@@ -231,29 +219,18 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 // Event handling
 // ---------------------------------------------------------------------------
 
-func (a *nostrAdapter) handleEvent(ctx context.Context, raw json.RawMessage) {
-	var event struct {
-		ID        string     `json:"id"`
-		PubKey    string     `json:"pubkey"`
-		CreatedAt int64      `json:"created_at"`
-		Kind      int        `json:"kind"`
-		Content   string     `json:"content"`
-		Tags      [][]string `json:"tags"`
-	}
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return
-	}
-	if event.ID == "" || event.Kind != nostrKindDM {
+func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
+	if evt.ID == "" || evt.Kind != nostr.KindEncryptedDirectMessage {
 		return
 	}
 
 	// Dedup
 	a.mu.Lock()
-	if _, seen := a.seen[event.ID]; seen {
+	if _, seen := a.seen[evt.ID]; seen {
 		a.mu.Unlock()
 		return
 	}
-	a.seen[event.ID] = time.Now()
+	a.seen[evt.ID] = time.Now()
 	if len(a.seen) > nostrDedupMaxSize {
 		cutoff := time.Now().Add(-10 * time.Minute)
 		for k, t := range a.seen {
@@ -264,15 +241,23 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, raw json.RawMessage) {
 	}
 	a.mu.Unlock()
 
-	if event.PubKey == a.pubKey {
+	// Ignore our own events
+	if evt.PubKey == a.pubKey {
 		return
 	}
 
-	plaintext, err := decryptNIP04(event.Content, a.privKey, event.PubKey)
+	// Decrypt NIP-04 content
+	sharedSecret, err := nip04.ComputeSharedSecret(evt.PubKey, a.privKey)
 	if err != nil {
-		debug.Log("nostr", "adapter=%s decrypt failed: %v", a.name, err)
+		debug.Log("nostr", "adapter=%s ECDH failed for event %s: %v", a.name, evt.ID[:12], err)
 		return
 	}
+	plaintext, err := nip04.Decrypt(evt.Content, sharedSecret)
+	if err != nil {
+		debug.Log("nostr", "adapter=%s decrypt failed for event %s: %v", a.name, evt.ID[:12], err)
+		return
+	}
+
 	if strings.TrimSpace(plaintext) == "" {
 		return
 	}
@@ -281,22 +266,26 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, raw json.RawMessage) {
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformNostr,
-			ChannelID:  event.PubKey,
-			SenderID:   event.PubKey,
-			SenderName: event.PubKey[:12],
-			MessageID:  event.ID,
-			ReceivedAt: time.Unix(event.CreatedAt, 0),
+			ChannelID:  evt.PubKey,
+			SenderID:   evt.PubKey,
+			SenderName: evt.PubKey[:12],
+			MessageID:  evt.ID,
+			ReceivedAt: evt.CreatedAt.Time(),
 		},
 		Text: strings.TrimSpace(plaintext),
 	}
 
+	// Pairing flow
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
-		debug.Log("nostr", "adapter=%s pairing: consumed=%v err=%v", a.name, pairingResult.Consumed, err)
+		debug.Log("nostr", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
 		if pairingResult.Consumed {
-			_ = a.sendNostrDM(event.PubKey, pairingResult.ReplyText)
+			_ = a.sendNostrDM(evt.PubKey, pairingResult.ReplyText)
 			return
 		}
+	}
+
+	if a.manager != nil {
 		a.manager.HandleInbound(ctx, msg)
 	}
 }
@@ -317,37 +306,47 @@ func (a *nostrAdapter) sendNostrDM(recipientPubKey, text string) error {
 	if text == "" || recipientPubKey == "" {
 		return nil
 	}
+
+	// Resolve npub → hex if needed
+	recipientPubKey = resolveNostrPubkey(recipientPubKey)
+
 	chunks := splitSignalMessage(text, nostrMaxMessageLen)
 	var lastErr error
 	for _, chunk := range chunks {
-		encrypted, err := encryptNIP04(chunk, a.privKey, recipientPubKey)
+		// Compute shared secret for NIP-04 encryption
+		sharedSecret, err := nip04.ComputeSharedSecret(recipientPubKey, a.privKey)
+		if err != nil {
+			lastErr = fmt.Errorf("ECDH: %w", err)
+			continue
+		}
+		encrypted, err := nip04.Encrypt(chunk, sharedSecret)
 		if err != nil {
 			lastErr = fmt.Errorf("NIP-04 encrypt: %w", err)
 			continue
 		}
-		now := time.Now().Unix()
-		event := map[string]any{
-			"pubkey":     a.pubKey,
-			"created_at": now,
-			"kind":       nostrKindDM,
-			"tags":       [][]string{{"p", recipientPubKey}},
-			"content":    encrypted,
-		}
-		eventID := computeNostrEventID(event)
-		event["id"] = eventID
-		event["sig"] = signNostrEvent(eventID, a.privKey)
 
-		publishMsg := []any{"EVENT", event}
-		a.mu.RLock()
-		conns := make(map[string]*websocket.Conn, len(a.conns))
-		for k, v := range a.conns {
-			conns[k] = v
+		// Build and sign event
+		evt := nostr.Event{
+			PubKey:    a.pubKey,
+			CreatedAt: nostr.Now(),
+			Kind:      nostr.KindEncryptedDirectMessage,
+			Tags:      nostr.Tags{{"p", recipientPubKey}},
+			Content:   encrypted,
 		}
+		if err := evt.Sign(a.privKey); err != nil {
+			lastErr = fmt.Errorf("sign: %w", err)
+			continue
+		}
+
+		// Publish to all connected relays
+		a.mu.RLock()
+		conns := make([]*nostr.Relay, len(a.relayConns))
+		copy(conns, a.relayConns)
 		a.mu.RUnlock()
 
-		for url, conn := range conns {
-			if err := a.writeWS(conn, publishMsg); err != nil {
-				debug.Log("nostr", "adapter=%s publish to %s failed: %v", a.name, url, err)
+		for _, relay := range conns {
+			if err := relay.Publish(context.Background(), evt); err != nil {
+				debug.Log("nostr", "adapter=%s publish to %s failed: %v", a.name, relay.URL, err)
 			}
 		}
 	}
@@ -359,71 +358,39 @@ func (a *nostrAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket helpers
-// ---------------------------------------------------------------------------
-
-func (a *nostrAdapter) writeWS(conn *websocket.Conn, msg any) error {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	return conn.WriteMessage(websocket.TextMessage, data)
-}
-
-func (a *nostrAdapter) nextSubID() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.subCounter++
-	return fmt.Sprintf("ggcode_%d", a.subCounter)
-}
-
-// ---------------------------------------------------------------------------
-// NIP-01 crypto (simplified — for production use a proper Nostr library)
+// Key helpers
 // ---------------------------------------------------------------------------
 
 func normalizeNostrKey(key string) string {
+	key = strings.TrimSpace(key)
 	if strings.HasPrefix(key, "nsec1") {
-		return key // In production: bech32 decode
+		_, value, err := nip19.Decode(key)
+		if err != nil {
+			return key
+		}
+		if sk, ok := value.(string); ok {
+			return sk
+		}
 	}
-	return strings.ToLower(strings.TrimSpace(key))
+	return strings.ToLower(key)
 }
 
-func deriveNostrPubKey(privKeyHex string) string {
-	h := sha256.Sum256([]byte("nostr-pubkey:" + privKeyHex))
-	return hex.EncodeToString(h[:])
-}
-
-func computeNostrEventID(event map[string]any) string {
-	pubkey, _ := event["pubkey"].(string)
-	createdAt, _ := event["created_at"].(int64)
-	kind, _ := event["kind"].(int)
-	content, _ := event["content"].(string)
-	serialized := fmt.Sprintf("[0,\"%s\",%d,%d,[],\"%s\"]", pubkey, createdAt, kind, content)
-	h := sha256.Sum256([]byte(serialized))
-	return hex.EncodeToString(h[:])
-}
-
-func signNostrEvent(eventID, privKeyHex string) string {
-	h := sha256.Sum256([]byte(eventID + ":" + privKeyHex))
-	return hex.EncodeToString(h[:])
-}
-
-func encryptNIP04(plaintext, privKeyHex, pubKeyHex string) (string, error) {
-	return fmt.Sprintf("enc:%s:%s", plaintext, pubKeyHex[:8]), nil
-}
-
-func decryptNIP04(ciphertext, privKeyHex, senderPubKey string) (string, error) {
-	if strings.HasPrefix(ciphertext, "enc:") {
-		parts := strings.SplitN(ciphertext[4:], ":", 2)
-		return parts[0], nil
+func resolveNostrPubkey(input string) string {
+	input = strings.TrimSpace(input)
+	if strings.HasPrefix(input, "npub1") {
+		_, value, err := nip19.Decode(input)
+		if err != nil {
+			return input
+		}
+		if pk, ok := value.(string); ok {
+			return pk
+		}
 	}
-	return "", fmt.Errorf("NIP-04 decryption requires proper crypto library")
-}
-
-func generateRandomHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	// Verify it's valid hex
+	if _, err := hex.DecodeString(input); err == nil && len(input) == 64 {
+		return input
+	}
+	return input
 }
 
 // ---------------------------------------------------------------------------
