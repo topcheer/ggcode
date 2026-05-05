@@ -1740,10 +1740,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case signalBindResultMsg:
 		if m.signalPanel != nil {
+			m.signalPanel.installing = false
 			if msg.err != nil {
 				m.signalPanel.message = msg.err.Error()
 			} else {
 				m.signalPanel.message = msg.message
+			}
+			// Re-check daemon status after install
+			if m.signalPanel.daemonOK != nil && !*m.signalPanel.daemonOK {
+				return m, checkSignalDaemonCmd()
 			}
 		}
 		return m, nil
