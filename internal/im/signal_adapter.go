@@ -3,6 +3,7 @@ package im
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -532,9 +533,12 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 			"message": chunk,
 		}
 		if strings.HasPrefix(chatID, "group:") {
-			// signal-cli-rest-api expects "group." prefix + base64 group ID
-			payload["recipients"] = []string{"group." + chatID[6:]}
-			endpoint = "/v2/send"
+			// signal-cli-rest-api double-base64-encodes group IDs:
+			// the groupId from receive is single-encoded, we need to encode it again
+			// and prefix with "group."
+			rawGroupID := chatID[6:]
+			doubleEncoded := base64.StdEncoding.EncodeToString([]byte(rawGroupID))
+			payload["recipients"] = []string{"group." + doubleEncoded}
 		} else {
 			payload["recipients"] = []string{chatID}
 		}
