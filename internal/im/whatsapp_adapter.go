@@ -18,7 +18,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/mdp/qrterminal"
+	"github.com/skip2/go-qrcode"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -194,7 +194,8 @@ func (a *whatsappAdapter) Start(ctx context.Context) {
 			for evt := range qrChan {
 				if evt.Event == "code" {
 					debug.Log("whatsapp", "adapter %q: QR code generated", a.name)
-					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stderr)
+					img, _ := qrcode.New(evt.Code, qrcode.Medium)
+					fmt.Fprint(os.Stderr, string(img.ToSmallString(false)))
 				}
 			}
 		}
