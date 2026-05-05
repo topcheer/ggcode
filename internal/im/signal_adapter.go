@@ -598,7 +598,7 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if strings.HasPrefix(chatID, "group:") {
 		payload["groupId"] = chatID[6:]
 	} else {
-		payload["recipient"] = []string{chatID}
+		payload["recipient"] = chatID
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest("PUT", a.baseURL+"/v1/typing-indicator/"+url.PathEscape(a.account), bytes.NewReader(body))
