@@ -103,6 +103,11 @@ var Categories = []Category{
 		Tags:        []string{"feishu", "feishu-sdk"},
 	},
 	{
+		Name: "matrix", EnvSuffix: "MATRIX",
+		Description: "Matrix IM adapter",
+		Tags:        []string{"matrix"},
+	},
+	{
 		Name: "pc", EnvSuffix: "PC",
 		Description: "PC relay adapter and client",
 		Tags:        []string{"pc", "pc_adapter", "pc_relay"},
