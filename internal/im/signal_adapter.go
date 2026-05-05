@@ -532,10 +532,9 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 			"message": chunk,
 		}
 		if strings.HasPrefix(chatID, "group:") {
-			// v1/send supports is_group flag for group messages
-			payload["recipients"] = []string{chatID[6:]}
-			payload["is_group"] = true
-			endpoint = "/v1/send"
+			// signal-cli-rest-api expects "group." prefix + base64 group ID
+			payload["recipients"] = []string{"group." + chatID[6:]}
+			endpoint = "/v2/send"
 		} else {
 			payload["recipients"] = []string{chatID}
 		}
