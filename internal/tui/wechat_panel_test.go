@@ -74,24 +74,32 @@ func TestWechatPanelViewShowsNoBotsMessage(t *testing.T) {
 	}
 }
 
-func TestWechatPanelViewShowsQRCode(t *testing.T) {
+func TestWechatPanelQRCodeOpensOverlay(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.width = 120
 	m.height = 40
 	m.openWechatPanel()
-	m.wechatPanel.authPhase = "showing_qr"
-	m.wechatPanel.qrcodeImage = "████\n█  █\n████"
+	m.wechatPanel.authPhase = "requesting"
 
-	view := m.View().Content
-	if !strings.Contains(view, "████") {
-		t.Fatalf("expected QR code in panel, got:\n%s", view)
+	msg := wechatQRCodeMsg{
+		qrcodeToken: "test-token-123",
+		qrcodeImage: "████\n████",
 	}
-	if !strings.Contains(view, "Scan QR") {
-		t.Fatalf("expected scan QR prompt, got:\n%s", view)
+	updated, _ := m.handleWechatQRCodeMsg(msg)
+	m = updated
+
+	if m.qrOverlay == nil {
+		t.Fatal("expected QR overlay to be opened after wechat QR code received")
+	}
+	if m.qrOverlay.qrText != "████\n████" {
+		t.Fatalf("expected QR text in overlay, got: %q", m.qrOverlay.qrText)
+	}
+	if m.wechatPanel.authPhase != "showing_qr" {
+		t.Fatalf("expected authPhase 'showing_qr', got: %q", m.wechatPanel.authPhase)
 	}
 }
 
-func TestWechatPanelViewShowsPollingState(t *testing.T) {
+func TestWechatPanelPollingStatePanelOnly(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.width = 120
 	m.height = 40
@@ -99,21 +107,29 @@ func TestWechatPanelViewShowsPollingState(t *testing.T) {
 	m.wechatPanel.authPhase = "polling"
 
 	view := m.View().Content
-	if !strings.Contains(view, "Waiting") && !strings.Contains(view, "waiting") {
-		t.Fatalf("expected waiting/polling message, got:\n%s", view)
+	// QR code should NOT be in panel view (it's in overlay when showing_qr)
+	if strings.Contains(view, "████") {
+		t.Fatalf("QR code should not appear in panel view, got:\n%s", view)
 	}
 }
 
-func TestWechatPanelViewShowsConfirmed(t *testing.T) {
+func TestWechatPanelConfirmedClosesOverlay(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.width = 120
 	m.height = 40
 	m.openWechatPanel()
-	m.wechatPanel.authPhase = "confirmed"
+	m.wechatPanel.authPhase = "showing_qr"
+	m.openQROverlayDirect("test", "test", "QR", "")
 
-	view := m.View().Content
-	if !strings.Contains(view, "confirmed") && !strings.Contains(view, "authorized") {
-		t.Fatalf("expected confirmed message, got:\n%s", view)
+	// Simulate confirmed poll
+	updated, _ := m.handleWechatQRPollMsg(wechatQRPollMsg{status: "confirmed", botToken: "test-token"})
+	m = updated
+
+	if m.qrOverlay != nil {
+		t.Fatal("expected QR overlay to be closed after confirmed")
+	}
+	if m.wechatPanel.authPhase != "confirmed" {
+		t.Fatalf("expected authPhase 'confirmed', got: %q", m.wechatPanel.authPhase)
 	}
 }
 

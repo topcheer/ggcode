@@ -62,24 +62,29 @@ func TestQQPanelEscClosesPanel(t *testing.T) {
 	}
 }
 
-func TestQQPanelViewShowsInlineShareQRCode(t *testing.T) {
+func TestQQPanelShareQROpensOverlay(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.width = 120
 	m.height = 40
 	m.openQQPanel()
-	m.qqPanel.shareAdapter = "ggcodetest"
-	m.qqPanel.shareLink = "https://example.com/qq-share"
-	m.qqPanel.shareQRCode = "QR\nQR"
 
-	view := m.View().Content
-	if !strings.Contains(view, "QR") {
-		t.Fatalf("expected inline QR code in qq panel, got:\n%s", view)
+	// Simulate a successful share link result — should open QR overlay
+	updated, _ := m.Update(qqBindResultMsg{
+		message:      "Link generated",
+		shareAdapter: "ggcodetest",
+		shareLink:    "https://example.com/qq-share",
+		shareQRCode:  "QR\nQR",
+	})
+	m = updated.(Model)
+
+	if m.qrOverlay == nil {
+		t.Fatal("expected QR overlay to be opened after share link result")
 	}
-	if !strings.Contains(view, "Bind Channel") || !strings.Contains(view, "Share Link:") {
-		t.Fatalf("expected bind channel section in qq panel, got:\n%s", view)
+	if m.qrOverlay.qrText != "QR\nQR" {
+		t.Fatalf("expected QR text in overlay, got: %q", m.qrOverlay.qrText)
 	}
-	if !strings.Contains(view, "https://example.com/qq-share") {
-		t.Fatalf("expected share link in qq panel, got:\n%s", view)
+	if !strings.Contains(m.qrOverlay.footer, "https://example.com/qq-share") {
+		t.Fatalf("expected share link in overlay footer, got: %q", m.qrOverlay.footer)
 	}
 }
 

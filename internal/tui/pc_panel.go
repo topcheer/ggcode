@@ -108,15 +108,6 @@ func (m Model) renderPCPanel() string {
 		}
 	}
 
-	// QR display
-	if panel.showQR && panel.qrCode != "" {
-		body = append(body, "", lipgloss.NewStyle().Bold(true).Render("QR Code"))
-		body = append(body, panel.qrCode)
-		if panel.inviteURI != "" {
-			body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  URI: "+panel.inviteURI))
-		}
-	}
-
 	// Create mode
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render("Actions"))
 	if panel.createMode {

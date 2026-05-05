@@ -120,29 +120,6 @@ func (m Model) renderWechatPanel() string {
 		}
 	}
 
-	// QR code auth section — render separately so we can place it at top
-	var qrSection []string
-	if panel.authPhase == "showing_qr" || panel.authPhase == "polling" {
-		qrSection = append(qrSection, "",
-			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(m.t("panel.wechat.scan_qr")),
-		)
-		if panel.qrcodeImage != "" {
-			qrSection = append(qrSection, panel.qrcodeImage)
-		}
-		if panel.authPhase == "polling" {
-			qrSection = append(qrSection, "", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(m.t("panel.wechat.waiting_scan")))
-		}
-	} else if panel.authPhase == "confirmed" {
-		qrSection = append(qrSection, "",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(m.t("panel.wechat.auth_confirmed")),
-		)
-	}
-
-	// Build body with QR at top if present
-	if len(qrSection) > 0 {
-		body = append(append(qrSection, ""), body...)
-	}
-
 	// Edit mode
 	if panel.editState.mode == imEditSelect {
 		body = append(body, "", m.renderIMEditSelect(&panel.editState))
@@ -321,6 +298,13 @@ func (m *Model) handleWechatQRCodeMsg(msg wechatQRCodeMsg) (Model, tea.Cmd) {
 	panel.qrcodeImage = msg.qrcodeImage
 	panel.authPhase = "showing_qr"
 	panel.message = ""
+	// Open QR overlay for user to scan
+	m.openQROverlayDirect(
+		"WeChat — "+m.t("panel.wechat.scan_qr"),
+		m.t("panel.wechat.scan_qr"),
+		msg.qrcodeImage,
+		"",
+	)
 	return *m, m.pollWechatQRStatus(msg.qrcodeToken)
 }
 
@@ -334,6 +318,7 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 	case "confirmed":
 		panel.authPhase = "confirmed"
 		panel.botToken = msg.botToken
+		m.closeQROverlay() // close QR overlay, back to panel
 		// Auto-create adapter config and start it
 		return *m, m.saveWechatBotToken(msg.botToken)
 	case "scanned":

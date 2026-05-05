@@ -1658,6 +1658,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.qqPanel.shareLink = msg.shareLink
 				m.qqPanel.shareQRCode = msg.shareQRCode
 				m.qqPanel.message = msg.message
+				// Open QR overlay with share link
+				if msg.shareQRCode != "" || msg.shareLink != "" {
+					m.openQROverlayDirect(
+						"QQ — Share Link",
+						"Scan to share",
+						msg.shareQRCode,
+						msg.shareLink,
+					)
+				}
 			}
 		}
 		return m, nil
@@ -1770,6 +1779,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.signalPanel.qrError = msg.err.Error()
 			} else {
 				m.signalPanel.qrCode = msg.qr
+				// Open QR overlay for user to scan device pairing code
+				m.openQROverlayDirect(
+					"Signal — "+m.t("panel.signal.qr_title"),
+					m.t("panel.signal.qr_scan_hint"),
+					msg.qr,
+					"",
+				)
 			}
 		}
 		return m, nil
@@ -1792,6 +1808,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.nostrPanel.message = msg.message
 				m.nostrPanel.qrCode = msg.qrCode
 				m.nostrPanel.generatedNpub = msg.npub
+				// Open QR overlay with npub
+				if msg.qrCode != "" || msg.npub != "" {
+					m.openQROverlayDirect(
+						"Nostr — Public Key",
+						m.t("panel.qr.scan_hint"),
+						msg.qrCode,
+						msg.npub,
+					)
+				}
 			}
 		}
 		return m, nil
