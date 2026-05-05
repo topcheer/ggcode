@@ -220,6 +220,12 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 
 	// Mark first sync done after initial sync completes
 	syncer.OnEvent(func(ctx context.Context, evt *event.Event) {
+		// Feed member/encryption events to OlmMachine for crypto tracking
+		if a.mach != nil {
+			if evt.Type == event.StateMember {
+				a.mach.HandleMemberEvent(ctx, evt)
+			}
+		}
 		// Skip events from initial sync (before we have a "since" token)
 		if !a.didFirstSync.Load() {
 			debug.Log("matrix", "adapter=%s skipping initial sync event type=%s", a.name, evt.Type.Type)
