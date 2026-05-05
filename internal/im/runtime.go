@@ -377,6 +377,14 @@ func (m *Manager) RegisterSink(sink Sink) {
 	m.mu.Unlock()
 }
 
+// Sink returns the registered sink by adapter name.
+func (m *Manager) Sink(name string) (Sink, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.sinks[name]
+	return s, ok
+}
+
 func (m *Manager) UnregisterSink(name string) {
 	m.mu.Lock()
 	delete(m.sinks, name)
@@ -1061,6 +1069,8 @@ func (m *Manager) BindChannel(binding ChannelBinding) (ChannelBinding, error) {
 	if cb != nil {
 		cb(snapshot)
 	}
+	// Start the adapter if not already running so it can receive messages.
+	m.EnsureAdapterRunning(bound.Adapter)
 	m.syncInstanceActiveChannels()
 	return bound, nil
 }
@@ -1095,6 +1105,19 @@ func (m *Manager) UpdateBindingContextToken(adapter, token string) {
 		}
 	}
 	m.mu.Unlock()
+}
+
+// EnsureAdapterRunning starts the adapter for the given name if it is not already running.
+// This is called after BindChannel to ensure the adapter can receive inbound messages.
+func (m *Manager) EnsureAdapterRunning(adapterName string) {
+	if _, exists := m.Sink(adapterName); exists {
+		return
+	}
+	if onRestart := m.onRestart; onRestart != nil {
+		if err := onRestart(adapterName); err != nil {
+			debug.Log("im", "EnsureAdapterRunning: start adapter %s: %v", adapterName, err)
+		}
+	}
 }
 
 func (m *Manager) UnbindChannel(workspace string) error {
