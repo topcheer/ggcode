@@ -174,6 +174,23 @@ func (m Model) renderMatrixPanel() string {
 		body = append(body, "", m.renderIMEditInput(&panel.editState))
 	}
 
+	// QR code at top - find first adapter with ContactURI
+	var contactURI string
+	for _, entry := range entries {
+		if entry.AdapterState != nil && entry.AdapterState.ContactURI != "" {
+			contactURI = entry.AdapterState.ContactURI
+			break
+		}
+	}
+	if contactURI != "" {
+		var qrSection []string
+		if qr := renderContactQRCode(contactURI); qr != "" {
+			qrSection = append(qrSection, qr)
+		}
+		qrSection = append(qrSection, fmt.Sprintf(" %s", contactURI), "")
+		body = append(append(qrSection, body...), "")
+	}
+
 	if panel.message != "" {
 		body = append(body, "", lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" "+panel.message))
 	}

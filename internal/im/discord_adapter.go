@@ -53,6 +53,7 @@ type discordAdapter struct {
 	sessionID string
 	sequence  int
 	ws        *websocket.Conn
+	botUserID string // set from READY event
 }
 
 func newDiscordAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) (*discordAdapter, error) {
@@ -620,13 +621,18 @@ func (a *discordAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	contactURI := ""
+	if a.botUserID != "" {
+		contactURI = "https://discord.com/users/" + a.botUserID
+	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformDiscord,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		Name:       a.name,
+		Platform:   PlatformDiscord,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  lastErr,
+		ContactURI: contactURI,
+		UpdatedAt:  time.Now(),
 	})
 }
 

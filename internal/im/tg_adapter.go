@@ -980,12 +980,13 @@ func (a *tgAdapter) publishState(healthy bool, status, lastErr string) {
 		return
 	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformTelegram,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		Name:       a.name,
+		Platform:   PlatformTelegram,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  lastErr,
+		ContactURI: "https://t.me/" + a.botUsername,
+		UpdatedAt:  time.Now(),
 	})
 }
 

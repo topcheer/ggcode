@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	qrcode "github.com/skip2/go-qrcode"
+
 	"github.com/topcheer/ggcode/internal/im"
 )
 
@@ -482,4 +484,17 @@ func firstNonEmptyIM(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// renderContactQRCode renders a QR code string from a contact URI.
+func renderContactQRCode(uri string) string {
+	if uri == "" {
+		return ""
+	}
+	qr, err := qrcode.New(uri, qrcode.Medium)
+	if err != nil {
+		return ""
+	}
+	qr.DisableBorder = true
+	return strings.TrimRight(qr.ToSmallString(false), "\n")
 }

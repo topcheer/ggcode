@@ -643,13 +643,18 @@ func (a *matrixAdapter) publishState(healthy bool, status, lastErr string) {
 	a.mu.Lock()
 	a.connected = healthy
 	a.mu.Unlock()
+	contactURI := ""
+	if a.userID != "" {
+		contactURI = "https://matrix.to/#/" + a.userID
+	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformMatrix,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		Name:       a.name,
+		Platform:   PlatformMatrix,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  lastErr,
+		ContactURI: contactURI,
+		UpdatedAt:  time.Now(),
 	})
 }
 
