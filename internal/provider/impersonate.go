@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/version"
 )
 
 // ImpersonationPreset defines a known CLI tool identity that can be used to
@@ -32,7 +34,7 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "none",
 			DisplayName:    "None (ggcode)",
 			UATemplate:     "ggcode/{version}",
-			DefaultVersion: "1.0",
+			DefaultVersion: version.Version,
 		},
 		{
 			ID:             "claude-cli",
