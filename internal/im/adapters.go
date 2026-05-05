@@ -82,10 +82,6 @@ func StartNamedAdapter(parent context.Context, cfg config.IMConfig, name string,
 	if mgr == nil {
 		return fmt.Errorf("IM manager is nil")
 	}
-	// Already running — skip.
-	if _, ok := mgr.Sink(name); ok {
-		return nil
-	}
 	adapterCfg, ok := cfg.Adapters[name]
 	if !ok {
 		return fmt.Errorf("IM adapter %q is not configured", name)
@@ -196,13 +192,11 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 		}
 		start(adapter)
 	case PlatformIRC:
-		debug.Log("im", "adapter=%s creating IRC adapter", name)
 		adapter, err := newIRCAdapter(name, cfg, adapterCfg, mgr)
 		if err != nil {
 			adapterCancel()
 			return err
 		}
-		debug.Log("im", "adapter=%s IRC adapter created, starting", name)
 		start(adapter)
 	case PlatformNostr:
 		adapter, err := newNostrAdapter(name, cfg, adapterCfg, mgr)
