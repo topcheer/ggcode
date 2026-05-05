@@ -32,10 +32,10 @@ echo "[verify-ci] downloading modules"
 go mod download
 
 echo "[verify-ci] building ggcode"
-go build -o /tmp/ggcode ./cmd/ggcode
+go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
 echo "[verify-ci] running go vet"
-go vet ./...
+go vet -tags goolm ./...
 
 echo "[verify-ci] running tests (unit + Tier 1 integration)"
-go test -tags=integration ./...
+go test -tags "goolm,integration" ./...

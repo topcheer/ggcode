@@ -4,14 +4,16 @@ INSTALLER_PKG := github.com/topcheer/ggcode/cmd/ggcode-installer
 
 .PHONY: build test lint verify-ci knight-eval install install-installer install-git-hooks clean
 
+TAGS := goolm
+
 build:
-	go build -o $(BINARY) ./cmd/ggcode
+	go build -tags "$(TAGS)" -o $(BINARY) ./cmd/ggcode
 
 test:
-	go test ./...
+	go test -tags "$(TAGS)" ./...
 
 lint:
-	go vet ./...
+	go vet -tags "$(TAGS)" ./...
 
 verify-ci:
 	./scripts/dev/verify-ci.sh
