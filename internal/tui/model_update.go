@@ -184,6 +184,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.signalPanel.createInput += msg.Content
 			return m, nil
 		}
+		if m.ircPanel != nil && m.ircPanel.createMode {
+			m.ircPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.nostrPanel != nil && m.nostrPanel.createMode {
+			m.nostrPanel.createInput += msg.Content
+			return m, nil
+		}
+		if m.twitchPanel != nil && m.twitchPanel.createMode {
+			m.twitchPanel.createInput += msg.Content
+			return m, nil
+		}
 		// Forward paste to PC panel create-input.
 		if m.pcPanel != nil && m.pcPanel.createMode {
 			m.pcPanel.createInput += msg.Content
@@ -228,6 +240,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.signalPanel != nil && m.signalPanel.editState.mode == imEditInput {
 			m.signalPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.ircPanel != nil && m.ircPanel.editState.mode == imEditInput {
+			m.ircPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.nostrPanel != nil && m.nostrPanel.editState.mode == imEditInput {
+			m.nostrPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.twitchPanel != nil && m.twitchPanel.editState.mode == imEditInput {
+			m.twitchPanel.editState.editInput += msg.Content
 			return m, nil
 		}
 		if m.pcPanel != nil && m.pcPanel.editState.mode == imEditInput {
@@ -355,6 +379,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.signalPanel != nil {
 			return m.handleSignalPanelKey(msg)
+		}
+		if m.ircPanel != nil {
+			return m.handleIRCPanelKey(msg)
+		}
+		if m.nostrPanel != nil {
+			return m.handleNostrPanelKey(msg)
+		}
+		if m.twitchPanel != nil {
+			return m.handleTwitchPanelKey(msg)
 		}
 
 		if m.imPanel != nil {
@@ -1678,6 +1711,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ircBindResultMsg:
+		if m.ircPanel != nil {
+			if msg.err != nil {
+				m.ircPanel.message = msg.err.Error()
+			} else {
+				m.ircPanel.message = msg.message
+			}
+		}
+		return m, nil
+
+	case nostrBindResultMsg:
+		if m.nostrPanel != nil {
+			if msg.err != nil {
+				m.nostrPanel.message = msg.err.Error()
+			} else {
+				m.nostrPanel.message = msg.message
+			}
+		}
+		return m, nil
+
+	case twitchBindResultMsg:
+		if m.twitchPanel != nil {
+			if msg.err != nil {
+				m.twitchPanel.message = msg.err.Error()
+			} else {
+				m.twitchPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case tgBindResultMsg:
 		if m.tgPanel != nil {
 			if msg.err != nil {
@@ -1720,6 +1783,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyIMEditResult(&m.matrixPanel.editState, msg)
 		} else if m.signalPanel != nil && m.signalPanel.editState.mode != imEditNone {
 			m.applyIMEditResult(&m.signalPanel.editState, msg)
+		} else if m.ircPanel != nil && m.ircPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.ircPanel.editState, msg)
+		} else if m.nostrPanel != nil && m.nostrPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.nostrPanel.editState, msg)
+		} else if m.twitchPanel != nil && m.twitchPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.twitchPanel.editState, msg)
 		}
 		return m, nil
 

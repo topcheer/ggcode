@@ -172,7 +172,7 @@ func shouldExecuteWhileBusy(text string) bool {
 	// Panel / UI commands — always safe
 	case "/lang", "/model", "/provider", "/impersonate",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
-		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/im",
+		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/im",
 		"/skills", "/sessions", "/mcp",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status",
 		"/stream", "/restart", "/help", "/?":
@@ -294,6 +294,15 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			return nil
 		case "/signal":
 			m.openSignalPanel()
+			return nil
+		case "/irc":
+			m.openIRCPanel()
+			return nil
+		case "/nostr":
+			m.openNostrPanel()
+			return nil
+		case "/twitch":
+			m.openTwitchPanel()
 			return nil
 		case "/im":
 			m.openIMPanel()

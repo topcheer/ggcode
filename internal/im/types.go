@@ -25,6 +25,10 @@ const (
 	PlatformMattermost Platform = "mattermost"
 	PlatformMatrix     Platform = "matrix"
 	PlatformSignal     Platform = "signal"
+	PlatformIRC        Platform = "irc"
+	PlatformNostr      Platform = "nostr"
+	PlatformSynology   Platform = "synology"
+	PlatformTwitch     Platform = "twitch"
 )
 
 type AttachmentKind string
