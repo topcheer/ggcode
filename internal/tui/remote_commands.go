@@ -37,7 +37,7 @@ func (m *Model) ExecuteRemoteSlashCommand(text string) (string, bool) {
 		resp, _ := m.handleStreamSlash(strings.Join(parts[1:], " "))
 		return resp, true
 	default:
-		return "", false
+		return fmt.Sprintf("Unknown command: %s. Try /help", strings.ToLower(parts[0])), true
 	}
 }
 

@@ -32,3 +32,19 @@ func TestExecuteRemoteSlashCommandModelSummary(t *testing.T) {
 		t.Fatalf("expected model summary in response, got %q", resp)
 	}
 }
+
+func TestExecuteRemoteSlashCommand_Unknown(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.SetConfig(config.DefaultConfig())
+
+	resp, handled := m.ExecuteRemoteSlashCommand("/foobar")
+	if !handled {
+		t.Fatal("expected unknown command to be handled (return error message)")
+	}
+	if !strings.Contains(resp, "Unknown command") && !strings.Contains(resp, "未知") {
+		t.Fatalf("expected unknown command error, got %q", resp)
+	}
+	if !strings.Contains(resp, "/help") {
+		t.Fatalf("expected /help hint, got %q", resp)
+	}
+}
