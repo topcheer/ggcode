@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -23,7 +26,10 @@ type signalPanelState struct {
 	createMode  bool
 	createInput string
 	editState   imAdapterEditState
-	daemonOK    *bool // nil=checking, true=ok, false=unreachable
+	daemonOK    *bool  // nil=checking, true=ok, false=unreachable
+	qrCode      string // ASCII art QR code, empty if not fetched
+	qrFetching  bool   // true while fetching QR code
+	qrError     string // error if QR fetch failed
 }
 
 type signalBindingEntry struct {
@@ -47,10 +53,25 @@ type signalDaemonCheckMsg struct {
 	err error
 }
 
+type signalQRCodeMsg struct {
+	qr  string // ASCII art
+	err error
+}
+
 func checkSignalDaemonCmd() tea.Cmd {
 	return func() tea.Msg {
 		err := im.CheckSignalDaemon("")
 		return signalDaemonCheckMsg{ok: err == nil, err: err}
+	}
+}
+
+func fetchSignalQRCmd(baseURL string) tea.Cmd {
+	return func() tea.Msg {
+		png, err := im.FetchSignalQRCode(baseURL, "ggcode")
+		if err != nil {
+			return signalQRCodeMsg{err: err}
+		}
+		return signalQRCodeMsg{qr: renderQRCodeASCII(png)}
 	}
 }
 
@@ -89,6 +110,79 @@ func firstNonEmptySignal(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// renderQRCodeASCII converts a PNG QR code image to Unicode block-character ASCII art.
+func renderQRCodeASCII(pngData []byte) string {
+	img, err := png.Decode(bytes.NewReader(pngData))
+	if err != nil {
+		return "(QR code decode failed)"
+	}
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	// Sample the image into a black/white grid (2 rows per pixel using ▀/█/ space)
+	// First find module size by scanning from top-left
+	moduleSize := 1
+	ox, oy := 0, 0
+	// Find first black pixel
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if isBlack(img, x, y) {
+				ox, oy = x, y
+				break
+			}
+		}
+		if ox > 0 {
+			break
+		}
+	}
+	// Count consecutive black pixels = module size
+	for x := ox + 1; x < w; x++ {
+		if isBlack(img, x, oy) {
+			moduleSize++
+		} else {
+			break
+		}
+	}
+	if moduleSize < 1 {
+		moduleSize = 1
+	}
+
+	// Sample center of each module
+	modulesW := w / moduleSize
+	modulesH := h / moduleSize
+
+	var b strings.Builder
+	for y := 0; y < modulesH; y += 2 {
+		for x := 0; x < modulesW; x++ {
+			sx := ox + x*moduleSize + moduleSize/2
+			syTop := oy + y*moduleSize + moduleSize/2
+			syBot := oy + (y+1)*moduleSize + moduleSize/2
+
+			top := sx < w && syTop < h && isBlack(img, sx, syTop)
+			bot := sx < w && syBot < h && isBlack(img, sx, syBot)
+
+			if top && bot {
+				b.WriteString("█")
+			} else if top {
+				b.WriteString("▀")
+			} else if bot {
+				b.WriteString("▄")
+			} else {
+				b.WriteString(" ")
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func isBlack(img image.Image, x, y int) bool {
+	r, g, b, _ := img.At(x, y).RGBA()
+	// Luminance threshold
+	lum := int(0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b))
+	return lum < 32768 // < 50% brightness = black
 }
 
 func maxSignal(v, min int) int {
@@ -138,7 +232,41 @@ func (m Model) renderSignalPanel() string {
 		wsPath = m.t("panel.signal.none")
 	}
 
-	body := []string{
+	body := []string{}
+
+	// QR code at the top
+	if panel.qrFetching {
+		body = append(body,
+			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
+			" "+m.t("panel.signal.qr_fetching"),
+		)
+	} else if panel.qrError != "" {
+		body = append(body,
+			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" "+panel.qrError),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.qr_retry_hint")),
+		)
+	} else if panel.qrCode != "" {
+		body = append(body,
+			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
+			"",
+			panel.qrCode,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.qr_scan_hint")),
+		)
+	} else if panel.daemonOK != nil && !*panel.daemonOK {
+		body = append(body,
+			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" "+m.t("panel.signal.qr_no_daemon")),
+		)
+	} else if panel.daemonOK != nil && *panel.daemonOK {
+		body = append(body,
+			lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.qr_title")),
+			" "+m.t("panel.signal.qr_press_q"),
+		)
+	}
+
+	body = append(body,
+		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.directory")),
 		fmt.Sprintf(" %s", wsPath),
 		"",
@@ -148,7 +276,7 @@ func (m Model) renderSignalPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.signal.available", maxSignal(len(entries)-boundCount, 0))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.current_binding")),
-	}
+	)
 
 	if len(currentBindings) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.signal.none")))
@@ -314,6 +442,13 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "r", "R":
 		panel.daemonOK = nil
 		return *m, checkSignalDaemonCmd()
+	case "q", "Q":
+		if panel.daemonOK != nil && *panel.daemonOK {
+			panel.qrFetching = true
+			panel.qrError = ""
+			panel.qrCode = ""
+			return *m, fetchSignalQRCmd("")
+		}
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""

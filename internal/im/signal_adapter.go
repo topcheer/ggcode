@@ -778,6 +778,32 @@ func CheckSignalDaemon(baseURL string) error {
 	return nil
 }
 
+// FetchSignalQRCode fetches the QR code PNG from signal-cli-rest-api for
+// device linking. Returns the raw PNG bytes.
+func FetchSignalQRCode(baseURL, deviceName string) ([]byte, error) {
+	if baseURL == "" {
+		baseURL = signalDefaultBaseURL
+	}
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	if deviceName == "" {
+		deviceName = "ggcode"
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/v1/qrcodelink?device_name=%s", baseURL, url.QueryEscape(deviceName)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch QR code: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("QR code request failed (status %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return io.ReadAll(resp.Body)
+}
+
 // SignalDaemonInstallCommand returns a shell command string that installs
 // signal-cli-rest-api via Docker.
 func SignalDaemonInstallCommand() string {
