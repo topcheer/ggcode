@@ -41,6 +41,9 @@ type nostrAdapter struct {
 	// Relays
 	relays []string
 
+	// Proxy
+	proxy string
+
 	mu         sync.RWMutex
 	relayConns []*nostr.Relay
 	connected  int
@@ -80,12 +83,15 @@ func newNostrAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 		}
 	}
 
+	proxy := resolveProxy(stringValue(adapterCfg.Extra, "proxy"), "NOSTR_PROXY")
+
 	return &nostrAdapter{
 		name:    name,
 		manager: mgr,
 		privKey: privKey,
 		pubKey:  pubKey,
 		relays:  relays,
+		proxy:   proxy,
 		seen:    make(map[string]time.Time),
 	}, nil
 }
@@ -155,7 +161,19 @@ func (a *nostrAdapter) relayLoop(ctx context.Context, relayURL string) {
 }
 
 func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error {
-	debug.Log("nostr", "adapter=%s connecting to %s", a.name, relayURL)
+	debug.Log("nostr", "adapter=%s connecting to %s proxy=%s", a.name, relayURL, a.proxy)
+
+	// If proxy is set, inject HTTPS_PROXY into the environment.
+	// go-nostr/coder/websocket uses http.DefaultTransport which reads HTTPS_PROXY.
+	var cleanup func()
+	if a.proxy != "" {
+		cleanup = setEnvTemp("HTTPS_PROXY", a.proxy)
+	}
+	defer func() {
+		if cleanup != nil {
+			cleanup()
+		}
+	}()
 
 	relay, err := nostr.RelayConnect(ctx, relayURL)
 	if err != nil {

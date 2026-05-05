@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -98,6 +99,15 @@ func newSignalAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 	allowedUsers := parseCommaList(stringValue(adapterCfg.Extra, "allowed_users"), os.Getenv("SIGNAL_ALLOWED_USERS"))
 	groupAllowlist := parseCommaList(stringValue(adapterCfg.Extra, "group_allowlist"), os.Getenv("SIGNAL_GROUP_ALLOWLIST"))
 
+	proxy := resolveProxy(stringValue(adapterCfg.Extra, "proxy"), "SIGNAL_PROXY")
+	httpClient := &http.Client{Timeout: signalRequestTimeout}
+	if proxy != "" {
+		proxyURL, err := url.Parse(proxy)
+		if err == nil {
+			httpClient.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		}
+	}
+
 	return &signalAdapter{
 		name:           name,
 		manager:        mgr,
@@ -106,7 +116,7 @@ func newSignalAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 		requireMention: requireMention,
 		allowedUsers:   allowedUsers,
 		groupAllowlist: groupAllowlist,
-		conn:           &http.Client{Timeout: signalRequestTimeout},
+		conn:           httpClient,
 		seen:           make(map[int64]time.Time),
 	}, nil
 }

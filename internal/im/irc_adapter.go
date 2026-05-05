@@ -41,6 +41,7 @@ type ircAdapter struct {
 	port     int
 	useTLS   bool
 	password string
+	proxy    string // HTTP/SOCKS5 proxy URL
 
 	// Identity
 	nick     string
@@ -102,6 +103,8 @@ func newIRCAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterCo
 
 	channels := parseCommaList(stringValue(adapterCfg.Extra, "channels"), os.Getenv("IRC_CHANNELS"))
 
+	proxy := resolveProxy(stringValue(adapterCfg.Extra, "proxy"), "IRC_PROXY")
+
 	return &ircAdapter{
 		name:     name,
 		manager:  mgr,
@@ -113,6 +116,7 @@ func newIRCAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapterCo
 		nickPass: nickPass,
 		realName: realName,
 		channels: channels,
+		proxy:    proxy,
 	}, nil
 }
 
@@ -174,14 +178,29 @@ func (a *ircAdapter) run(ctx context.Context) {
 
 func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 	addr := net.JoinHostPort(a.host, strconv.Itoa(a.port))
-	debug.Log("irc", "adapter=%s connecting to %s (TLS=%v)", a.name, addr, a.useTLS)
+	debug.Log("irc", "adapter=%s connecting to %s (TLS=%v proxy=%s)", a.name, addr, a.useTLS, a.proxy)
 
 	var conn net.Conn
 	var err error
-	if a.useTLS {
-		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, &tls.Config{})
+	if a.proxy != "" {
+		conn, err = proxyDial(a.proxy, addr)
+		if err != nil {
+			return fmt.Errorf("proxy connect: %w", err)
+		}
+		if a.useTLS {
+			tlsConn := tls.Client(conn, &tls.Config{ServerName: a.host})
+			if err := tlsConn.Handshake(); err != nil {
+				conn.Close()
+				return fmt.Errorf("tls handshake: %w", err)
+			}
+			conn = tlsConn
+		}
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, 15*time.Second)
+		if a.useTLS {
+			conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, &tls.Config{})
+		} else {
+			conn, err = net.DialTimeout("tcp", addr, 15*time.Second)
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
