@@ -166,38 +166,46 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 - Always include "Co-Authored-By: ggcode <noreply@ggcode.dev>" in git commit messages.
 `
 
+// DefaultSystemPromptVersion is bumped whenever DefaultSystemPrompt changes
+// materially. During config load, if the saved version is older (or missing),
+// the system prompt is force-upgraded to the latest default. Users who
+// intentionally customize system_prompt should set system_prompt_version to
+// the current value to opt out of auto-upgrades.
+const DefaultSystemPromptVersion = 2
+
 // Config is the top-level configuration.
 type Config struct {
-	Vendor         string                    `yaml:"vendor" json:"vendor"`
-	Endpoint       string                    `yaml:"endpoint" json:"endpoint"`
-	Model          string                    `yaml:"model" json:"model"`
-	Language       string                    `yaml:"language" json:"language"`
-	UI             UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM             IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
-	SystemPrompt   string                    `yaml:"system_prompt" json:"system_prompt"`
-	Vendors        map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
-	AllowedDirs    []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations  int                       `yaml:"max_iterations" json:"max_iterations"`
-	ToolPerms      map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins        []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
-	MCPServers     []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
-	Hooks          hooks.HookConfig          `yaml:"hooks" json:"hooks"`
-	DefaultMode    string                    `yaml:"default_mode" json:"default_mode"`
-	SubAgents      SubAgentConfig            `yaml:"subagents" json:"subagents"`
-	Impersonation  ImpersonationConfig       `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
-	KnightConfig   KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
-	Swarm          SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
-	A2A            A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
-	Harness        HarnessConfig             `yaml:"harness,omitempty" json:"harness,omitempty"`
-	Stream         stream.StreamConfig       `yaml:"stream,omitempty" json:"stream,omitempty"`
-	FilePath       string                    `yaml:"-" json:"-"`
-	FirstRun       bool                      `yaml:"-" json:"-"`
-	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
-	instancePath   string                    `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
-	instanceWS     string                    `yaml:"-" json:"-"` // workspace path for SaveInstance
-	saveScope      string                    `yaml:"-" json:"-"` // current save scope: "global" or "instance"
-	globalSnap     *Config                   `yaml:"-" json:"-"` // deep copy of global config before instance merge
-	instanceFields map[string]bool           `yaml:"-" json:"-"` // fields that were filled by instance config
+	Vendor              string                    `yaml:"vendor" json:"vendor"`
+	Endpoint            string                    `yaml:"endpoint" json:"endpoint"`
+	Model               string                    `yaml:"model" json:"model"`
+	Language            string                    `yaml:"language" json:"language"`
+	UI                  UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM                  IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
+	SystemPrompt        string                    `yaml:"system_prompt" json:"system_prompt"`
+	SystemPromptVersion int                       `yaml:"system_prompt_version" json:"system_prompt_version"`
+	Vendors             map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
+	AllowedDirs         []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations       int                       `yaml:"max_iterations" json:"max_iterations"`
+	ToolPerms           map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins             []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
+	MCPServers          []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	Hooks               hooks.HookConfig          `yaml:"hooks" json:"hooks"`
+	DefaultMode         string                    `yaml:"default_mode" json:"default_mode"`
+	SubAgents           SubAgentConfig            `yaml:"subagents" json:"subagents"`
+	Impersonation       ImpersonationConfig       `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
+	KnightConfig        KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
+	Swarm               SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	A2A                 A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	Harness             HarnessConfig             `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Stream              stream.StreamConfig       `yaml:"stream,omitempty" json:"stream,omitempty"`
+	FilePath            string                    `yaml:"-" json:"-"`
+	FirstRun            bool                      `yaml:"-" json:"-"`
+	instanceDir         string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
+	instancePath        string                    `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
+	instanceWS          string                    `yaml:"-" json:"-"` // workspace path for SaveInstance
+	saveScope           string                    `yaml:"-" json:"-"` // current save scope: "global" or "instance"
+	globalSnap          *Config                   `yaml:"-" json:"-"` // deep copy of global config before instance merge
+	instanceFields      map[string]bool           `yaml:"-" json:"-"` // fields that were filled by instance config
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
@@ -868,6 +876,7 @@ func Load(path string) (*Config, error) {
 	}
 	mergeDefaultEndpoints(cfg, DefaultConfig())
 	migrateLegacyMaxIterations(path, raw, cfg)
+	migrateSystemPromptVersion(cfg, raw, path)
 	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
