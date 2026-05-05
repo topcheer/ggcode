@@ -391,6 +391,9 @@ func (m *Model) bindMatEntry(entry matrixBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return matrixBindResultMsg{err: errors.New(m.t("panel.matrix.error.config_unavailable"))}
 		}
+		if err := m.startMatAdapterIfNeeded(entry.Adapter); err != nil {
+			return matrixBindResultMsg{err: err}
+		}
 		targetID := defaultMatTargetID(ws)
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Workspace: ws,

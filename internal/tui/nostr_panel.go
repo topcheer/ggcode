@@ -391,6 +391,9 @@ func (m *Model) bindNostrEntry(entry nostrBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_unavailable"))}
 		}
+		if err := m.startNostrAdapterIfNeeded(entry.Adapter); err != nil {
+			return nostrBindResultMsg{err: err}
+		}
 		targetID := defaultNostrTargetID(ws)
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Workspace: ws,

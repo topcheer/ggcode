@@ -390,6 +390,30 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 
 // bindWechatEntry binds the selected bot to the current workspace.
 // bindWechatEntry binds the wechat adapter to the current workspace.
+func (m *Model) startWechatAdapterIfNeeded(name string) error {
+	if m.imManager == nil || m.config == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("adapter name required")
+	}
+	snapshot := m.imManager.Snapshot()
+	for _, state := range snapshot.Adapters {
+		if state.Name == name {
+			return nil
+		}
+	}
+	adapterCfg, ok := m.config.IM.Adapters[name]
+	if !ok {
+		return fmt.Errorf("wechat adapter %s not configured", name)
+	}
+	if !adapterCfg.Enabled {
+		return fmt.Errorf("wechat adapter %s is disabled", name)
+	}
+	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+}
+
 // This only registers the workspace association — the ChannelID/TargetID
 // are set later when the first inbound message triggers the pairing flow.
 func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
@@ -400,6 +424,9 @@ func (m *Model) bindWechatEntry(entry wechatBindingEntry) tea.Cmd {
 		ws := m.currentWorkspacePath()
 		if ws == "" {
 			return imEditResultMsg{err: fmt.Errorf("no active workspace")}
+		}
+		if err := m.startWechatAdapterIfNeeded(entry.Adapter); err != nil {
+			return imEditResultMsg{err: err}
 		}
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Workspace: ws,
