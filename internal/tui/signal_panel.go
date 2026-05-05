@@ -27,6 +27,7 @@ type signalPanelState struct {
 	createInput string
 	editState   imAdapterEditState
 	daemonOK    *bool  // nil=checking, true=ok, false=unreachable
+	installing  bool   // true while Docker install is running
 	qrCode      string // ASCII art QR code, empty if not fetched
 	qrFetching  bool   // true while fetching QR code
 	qrError     string // error if QR fetch failed
@@ -86,7 +87,7 @@ func (m *Model) closeSignalPanel() {
 
 func (m *Model) installSignalDaemon() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "sh", "-c", im.SignalDaemonInstallCommand())
 		output, err := cmd.CombinedOutput()
@@ -97,9 +98,9 @@ func (m *Model) installSignalDaemon() tea.Cmd {
 		time.Sleep(3 * time.Second)
 		checkErr := im.CheckSignalDaemon("")
 		if checkErr != nil {
-			return signalBindResultMsg{message: "Docker container started. Daemon may need a few seconds to become ready."}
+			return signalBindResultMsg{message: "Docker container started. Daemon may need a few seconds to become ready. Press r to re-check."}
 		}
-		return signalBindResultMsg{message: "signal-cli-rest-api installed and running."}
+		return signalBindResultMsg{message: "signal-cli-rest-api installed and running. Press q to generate QR code."}
 	}
 }
 
@@ -321,7 +322,9 @@ func (m Model) renderSignalPanel() string {
 
 	// Daemon status
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.daemon")))
-	if panel.daemonOK == nil {
+	if panel.installing {
+		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" "+m.t("panel.signal.daemon_installing")))
+	} else if panel.daemonOK == nil {
 		body = append(body, " "+m.t("panel.signal.daemon_checking"))
 	} else if *panel.daemonOK {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(" "+m.t("panel.signal.daemon_ok")))
@@ -373,6 +376,9 @@ func (m *Model) sigAdapterStatus(state *im.AdapterState) string {
 func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	panel := m.signalPanel
 	if panel == nil {
+		return *m, nil
+	}
+	if panel.installing {
 		return *m, nil
 	}
 	if panel.editState.mode != imEditNone {
@@ -438,6 +444,8 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return *m, m.unbindSigEntry(entries[clampSignalSelection(panel.selected, len(entries))].Adapter)
 	case "d", "D":
+		panel.installing = true
+		panel.message = ""
 		return *m, m.installSignalDaemon()
 	case "r", "R":
 		panel.daemonOK = nil
