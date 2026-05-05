@@ -275,7 +275,7 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 			a.nick = newNick
 			a.mu.Unlock()
 			a.sendRaw(fmt.Sprintf("NICK %s", newNick))
-		case "PRIVMSG", "NOTICE":
+		case "PRIVMSG":
 			a.handlePRIVMSG(ctx, msg)
 		}
 
@@ -386,6 +386,12 @@ func parseIRCPrefix(prefix string) (nick, user, host string) {
 func (a *ircAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage) {
 	senderNick, _, _ := parseIRCPrefix(msg.Prefix)
 	if senderNick == "" {
+		return
+	}
+
+	// Ignore messages from IRC services
+	switch senderNick {
+	case "NickServ", "ChanServ", "MemoServ", "OperServ", "HostServ", "BotServ", "InfoServ", "StatServ", "ALIS":
 		return
 	}
 
