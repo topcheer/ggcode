@@ -208,9 +208,11 @@ func (a *matrixAdapter) connectAndServe(ctx context.Context) error {
 	}()
 
 	// 4. Sync loop (long-poll)
+	debug.Log("matrix", "adapter=%s entering sync loop", a.name)
 	backoff := matrixInitialBackoff
 	for {
 		if ctx.Err() != nil {
+			debug.Log("matrix", "adapter=%s sync loop: context done", a.name)
 			return nil
 		}
 		a.mu.RLock()
@@ -264,6 +266,9 @@ func (a *matrixAdapter) dispatchSyncEvents(ctx context.Context, data map[string]
 	if joined == nil {
 		return
 	}
+	if len(joined) > 0 {
+		debug.Log("matrix", "adapter=%s sync: %d joined room(s)", a.name, len(joined))
+	}
 	for roomID, roomData := range joined {
 		roomMap, ok := roomData.(map[string]any)
 		if !ok {
@@ -274,6 +279,9 @@ func (a *matrixAdapter) dispatchSyncEvents(ctx context.Context, data map[string]
 			continue
 		}
 		events, _ := timeline["events"].([]any)
+		if len(events) > 0 {
+			debug.Log("matrix", "adapter=%s room=%s: %d timeline event(s)", a.name, roomID, len(events))
+		}
 		for _, ev := range events {
 			event, ok := ev.(map[string]any)
 			if !ok {
@@ -363,6 +371,7 @@ func (a *matrixAdapter) handleRoomEvent(ctx context.Context, roomID string, even
 
 	// DM detection
 	isDM := a.dmRooms[roomID]
+	debug.Log("matrix", "adapter=%s event room=%s sender=%s isDM=%v dmRooms=%d type=%s body=%.80s", a.name, roomID, sender, isDM, len(a.dmRooms), msgtype, body)
 
 	// Allowed users check
 	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
