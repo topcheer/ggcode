@@ -301,6 +301,8 @@ func (a *matrixAdapter) dispatchSyncEvents(ctx context.Context, data map[string]
 			if !ok {
 				continue
 			}
+			et, _ := event["type"].(string)
+			debug.Log("matrix", "adapter=%s dispatching event type=%s room=%s", a.name, et, roomID)
 			a.handleRoomEvent(ctx, roomID, event)
 		}
 	}
@@ -313,6 +315,7 @@ func (a *matrixAdapter) handleRoomEvent(ctx context.Context, roomID string, even
 	}
 
 	sender, _ := event["sender"].(string)
+	debug.Log("matrix", "adapter=%s handleRoomEvent room=%s sender=%s self=%s", a.name, roomID, sender, a.userID)
 	if sender == a.userID {
 		return
 	}
