@@ -40,7 +40,7 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "claude-cli",
 			DisplayName:    "Claude CLI",
 			UATemplate:     "claude-cli/{version} (individual, cli)",
-			DefaultVersion: "2.1.92",
+			DefaultVersion: "2.1.126",
 			ExtraHeaders: map[string]string{
 				"x-app":             "cli",
 				"anthropic-version": "2023-06-01",
@@ -50,7 +50,7 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "codex-cli",
 			DisplayName:    "Codex CLI",
 			UATemplate:     "codex-cli/{version}",
-			DefaultVersion: "1.0",
+			DefaultVersion: "0.128.0",
 			ExtraHeaders: map[string]string{
 				"anthropic-version": "2023-06-01",
 			},
@@ -59,13 +59,13 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "gemini-cli",
 			DisplayName:    "Gemini CLI",
 			UATemplate:     "gemini-cli/{version}",
-			DefaultVersion: "0.23.0",
+			DefaultVersion: "0.40.1",
 		},
 		{
 			ID:             "opencode",
 			DisplayName:    "OpenCode",
 			UATemplate:     "opencode/{version}",
-			DefaultVersion: "1.3.2",
+			DefaultVersion: "1.14.35",
 		},
 		{
 			ID:             "copilot",
@@ -81,13 +81,13 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "cline",
 			DisplayName:    "Cline",
 			UATemplate:     "Cline/{version}",
-			DefaultVersion: "2.5.1",
+			DefaultVersion: "3.39.1",
 		},
 		{
 			ID:             "aider",
 			DisplayName:    "Aider",
 			UATemplate:     "aider/{version}",
-			DefaultVersion: "0.85.0",
+			DefaultVersion: "0.86.2",
 			ExtraHeaders: map[string]string{
 				"Editor-Version":         "aider/{version}",
 				"Copilot-Integration-Id": "vscode-chat",
@@ -97,19 +97,19 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			ID:             "cursor",
 			DisplayName:    "Cursor",
 			UATemplate:     "cursor/{version}",
-			DefaultVersion: "1.5.9",
+			DefaultVersion: "3.1",
 		},
 		{
 			ID:             "roo-code",
 			DisplayName:    "Roo Code",
 			UATemplate:     "roo-cline/{version}",
-			DefaultVersion: "3.0",
+			DefaultVersion: "3.53.0",
 		},
 		{
 			ID:             "kilocode",
 			DisplayName:    "KiloCode",
 			UATemplate:     "kilocode/{version}",
-			DefaultVersion: "0.16.0",
+			DefaultVersion: "7.2.26",
 		},
 		{
 			ID:             "openclaw",
