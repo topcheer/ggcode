@@ -1587,7 +1587,7 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 			"default_mode":   s.cfg.DefaultMode,
 			"max_iterations": s.cfg.MaxIterations,
 			"allowed_dirs":   s.cfg.AllowedDirs,
-			"system_prompt":  s.cfg.SystemPrompt,
+			"extra_prompt":   s.cfg.ExtraPrompt,
 		})
 	case http.MethodPut:
 		var req struct {
@@ -1595,7 +1595,7 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 			DefaultMode   string   `json:"default_mode"`
 			MaxIterations int      `json:"max_iterations"`
 			AllowedDirs   []string `json:"allowed_dirs"`
-			SystemPrompt  string   `json:"system_prompt"`
+			ExtraPrompt   string   `json:"extra_prompt"`
 		}
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -1613,11 +1613,11 @@ func (s *Server) handleGeneral(w http.ResponseWriter, r *http.Request) {
 		if req.AllowedDirs != nil {
 			s.cfg.AllowedDirs = req.AllowedDirs
 		}
-		if req.SystemPrompt != "" {
-			if req.SystemPrompt == "__reset__" {
-				s.cfg.SystemPrompt = config.DefaultSystemPrompt
+		if req.ExtraPrompt != "" {
+			if req.ExtraPrompt == "__reset__" {
+				s.cfg.ExtraPrompt = ""
 			} else {
-				s.cfg.SystemPrompt = req.SystemPrompt
+				s.cfg.ExtraPrompt = req.ExtraPrompt
 			}
 		}
 		if err := s.saveConfig(); err != nil {
@@ -1775,7 +1775,7 @@ func sanitizeConfigForAPI(cfg *config.Config) map[string]interface{} {
 		"default_mode":   cfg.DefaultMode,
 		"max_iterations": cfg.MaxIterations,
 		"allowed_dirs":   cfg.AllowedDirs,
-		"system_prompt":  cfg.SystemPrompt,
+		"extra_prompt":   cfg.ExtraPrompt,
 		"im":             cfg.IM,
 		"mcp_servers":    cfg.MCPServers,
 		"vendors":        cfg.Vendors,

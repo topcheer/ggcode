@@ -166,46 +166,38 @@ const DefaultSystemPrompt = `You are ggcode, an AI coding assistant running in a
 - Always include "Co-Authored-By: ggcode <noreply@ggcode.dev>" in git commit messages.
 `
 
-// DefaultSystemPromptVersion is bumped whenever DefaultSystemPrompt changes
-// materially. During config load, if the saved version is older (or missing),
-// the system prompt is force-upgraded to the latest default. Users who
-// intentionally customize system_prompt should set system_prompt_version to
-// the current value to opt out of auto-upgrades.
-const DefaultSystemPromptVersion = 2
-
 // Config is the top-level configuration.
 type Config struct {
-	Vendor              string                    `yaml:"vendor" json:"vendor"`
-	Endpoint            string                    `yaml:"endpoint" json:"endpoint"`
-	Model               string                    `yaml:"model" json:"model"`
-	Language            string                    `yaml:"language" json:"language"`
-	UI                  UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM                  IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
-	SystemPrompt        string                    `yaml:"system_prompt" json:"system_prompt"`
-	SystemPromptVersion int                       `yaml:"system_prompt_version" json:"system_prompt_version"`
-	Vendors             map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
-	AllowedDirs         []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations       int                       `yaml:"max_iterations" json:"max_iterations"`
-	ToolPerms           map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins             []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
-	MCPServers          []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
-	Hooks               hooks.HookConfig          `yaml:"hooks" json:"hooks"`
-	DefaultMode         string                    `yaml:"default_mode" json:"default_mode"`
-	SubAgents           SubAgentConfig            `yaml:"subagents" json:"subagents"`
-	Impersonation       ImpersonationConfig       `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
-	KnightConfig        KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
-	Swarm               SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
-	A2A                 A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
-	Harness             HarnessConfig             `yaml:"harness,omitempty" json:"harness,omitempty"`
-	Stream              stream.StreamConfig       `yaml:"stream,omitempty" json:"stream,omitempty"`
-	FilePath            string                    `yaml:"-" json:"-"`
-	FirstRun            bool                      `yaml:"-" json:"-"`
-	instanceDir         string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
-	instancePath        string                    `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
-	instanceWS          string                    `yaml:"-" json:"-"` // workspace path for SaveInstance
-	saveScope           string                    `yaml:"-" json:"-"` // current save scope: "global" or "instance"
-	globalSnap          *Config                   `yaml:"-" json:"-"` // deep copy of global config before instance merge
-	instanceFields      map[string]bool           `yaml:"-" json:"-"` // fields that were filled by instance config
+	Vendor         string                    `yaml:"vendor" json:"vendor"`
+	Endpoint       string                    `yaml:"endpoint" json:"endpoint"`
+	Model          string                    `yaml:"model" json:"model"`
+	Language       string                    `yaml:"language" json:"language"`
+	UI             UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM             IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
+	ExtraPrompt    string                    `yaml:"extra_prompt" json:"extra_prompt"`
+	Vendors        map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
+	AllowedDirs    []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations  int                       `yaml:"max_iterations" json:"max_iterations"`
+	ToolPerms      map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins        []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
+	MCPServers     []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	Hooks          hooks.HookConfig          `yaml:"hooks" json:"hooks"`
+	DefaultMode    string                    `yaml:"default_mode" json:"default_mode"`
+	SubAgents      SubAgentConfig            `yaml:"subagents" json:"subagents"`
+	Impersonation  ImpersonationConfig       `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
+	KnightConfig   KnightConfig              `yaml:"knight,omitempty" json:"knight,omitempty"`
+	Swarm          SwarmConfig               `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	A2A            A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	Harness        HarnessConfig             `yaml:"harness,omitempty" json:"harness,omitempty"`
+	Stream         stream.StreamConfig       `yaml:"stream,omitempty" json:"stream,omitempty"`
+	FilePath       string                    `yaml:"-" json:"-"`
+	FirstRun       bool                      `yaml:"-" json:"-"`
+	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
+	instancePath   string                    `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
+	instanceWS     string                    `yaml:"-" json:"-"` // workspace path for SaveInstance
+	saveScope      string                    `yaml:"-" json:"-"` // current save scope: "global" or "instance"
+	globalSnap     *Config                   `yaml:"-" json:"-"` // deep copy of global config before instance merge
+	instanceFields map[string]bool           `yaml:"-" json:"-"` // fields that were filled by instance config
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
@@ -424,7 +416,6 @@ func defaultVendor(displayName, apiKey string, endpoints map[string]EndpointConf
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	cfg := &Config{
-		SystemPrompt:  DefaultSystemPrompt,
 		Vendor:        "zai",
 		Endpoint:      "cn-coding-openai",
 		Model:         "glm-5-turbo",
@@ -863,6 +854,16 @@ func Load(path string) (*Config, error) {
 
 	// Expand env vars
 	lookup = runtimeEnvLookup(raw)
+
+	// Remove deprecated system_prompt key from YAML if present.
+	if _, has := raw["system_prompt"]; has {
+		delete(raw, "system_prompt")
+		debug.Log("config", "removed deprecated system_prompt from %s", path)
+		if rewriteErr := rewriteYAML(path, raw); rewriteErr != nil {
+			debug.Log("config", "failed to rewrite config after removing system_prompt: %v", rewriteErr)
+		}
+	}
+
 	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
 
 	// Re-marshal and unmarshal into struct
@@ -876,7 +877,6 @@ func Load(path string) (*Config, error) {
 	}
 	mergeDefaultEndpoints(cfg, DefaultConfig())
 	migrateLegacyMaxIterations(path, raw, cfg)
-	migrateSystemPromptVersion(cfg, raw, path)
 	cfg.expandEnvWithLookup(lookup)
 	cfg.normalizeActiveModel()
 	if err := cfg.Validate(); err != nil {
@@ -930,7 +930,7 @@ func (c *Config) expandEnvWithLookup(lookup envLookupFunc) {
 	c.Vendor = ExpandEnvWithLookup(c.Vendor, lookup)
 	c.Endpoint = ExpandEnvWithLookup(c.Endpoint, lookup)
 	c.Model = ExpandEnvWithLookup(c.Model, lookup)
-	c.SystemPrompt = ExpandEnvWithLookup(c.SystemPrompt, lookup)
+	c.ExtraPrompt = ExpandEnvWithLookup(c.ExtraPrompt, lookup)
 	c.DefaultMode = ExpandEnvWithLookup(c.DefaultMode, lookup)
 	for i, dir := range c.AllowedDirs {
 		c.AllowedDirs[i] = ExpandEnvWithLookup(dir, lookup)
@@ -1852,17 +1852,21 @@ func uniqueNonEmptyStrings(values ...string) []string {
 }
 
 // BuildSystemPrompt enhances the base system prompt with runtime context.
-func BuildSystemPrompt(basePrompt, workingDir, language string, toolNames []string, gitStatus string, customCmds []string) string {
-	if basePrompt == "" {
-		basePrompt = DefaultSystemPrompt
-	}
+// BuildSystemPrompt builds the full system prompt by prepending the built-in
+// default, appending the user's extra_prompt (if any), then runtime context.
+func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []string, gitStatus string, customCmds []string) string {
 	toolNames = append([]string(nil), toolNames...)
 	sort.Strings(toolNames)
 	customCmds = append([]string(nil), customCmds...)
 	sort.Strings(customCmds)
 
 	var sb strings.Builder
-	sb.WriteString(basePrompt)
+	sb.WriteString(DefaultSystemPrompt)
+
+	if extraPrompt != "" {
+		sb.WriteString("\n\n## Extra instructions\n")
+		sb.WriteString(extraPrompt)
+	}
 
 	if replyLanguageGuidance := buildReplyLanguageGuidance(language); replyLanguageGuidance != "" {
 		sb.WriteString("\n\n## Reply Language\n")
@@ -2115,4 +2119,13 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	}
 	c.Vendors[vendor] = vc
 	return nil
+}
+
+// rewriteYAML rewrites the config file from the given raw map.
+func rewriteYAML(path string, raw map[string]interface{}) error {
+	data, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
 }
