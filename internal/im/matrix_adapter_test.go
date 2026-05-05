@@ -1,6 +1,7 @@
 package im
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -22,6 +23,14 @@ func TestNewMatrixAdapter_MissingHomeserver(t *testing.T) {
 }
 
 func TestNewMatrixAdapter_MissingToken(t *testing.T) {
+	orig := os.Getenv("GGCODE_IM_MATRIX_ACCESS_TOKEN")
+	os.Unsetenv("GGCODE_IM_MATRIX_ACCESS_TOKEN")
+	os.Unsetenv("MATRIX_ACCESS_TOKEN")
+	defer func() {
+		if orig != "" {
+			os.Setenv("GGCODE_IM_MATRIX_ACCESS_TOKEN", orig)
+		}
+	}()
 	adapterCfg := config.IMAdapterConfig{
 		Enabled:  true,
 		Platform: "matrix",
@@ -215,21 +224,21 @@ func TestMatrixAdapter_StripMention(t *testing.T) {
 
 func TestSplitMatrixMessage(t *testing.T) {
 	// Short message
-	chunks := splitMatrixMessage("hello", 10)
+	chunks := chunkText("hello", 10)
 	if len(chunks) != 1 || chunks[0] != "hello" {
 		t.Errorf("short message: %v", chunks)
 	}
 
 	// Long message, no newlines
 	long := strings.Repeat("a", 100)
-	chunks = splitMatrixMessage(long, 30)
+	chunks = chunkText(long, 30)
 	if len(chunks) < 3 {
 		t.Errorf("expected >= 3 chunks, got %d", len(chunks))
 	}
 
 	// Long message with newlines
 	longWithNewlines := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10"
-	chunks = splitMatrixMessage(longWithNewlines, 20)
+	chunks = chunkText(longWithNewlines, 20)
 	for _, chunk := range chunks {
 		if len(chunk) > 25 { // allow slightly over for newline splits
 			t.Errorf("chunk too long (%d): %q", len(chunk), chunk)

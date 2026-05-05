@@ -8,6 +8,8 @@ builds:
     binary: ggcode
     env:
       - CGO_ENABLED=0
+    tags:
+      - goolm
     ldflags:
       - >-
         -s -w
