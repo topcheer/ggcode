@@ -204,27 +204,30 @@ func (a *signalAdapter) connectAndServe(ctx context.Context) error {
 
 func (a *signalAdapter) sseLoop(ctx context.Context) error {
 	receiveURL := a.baseURL + "/v1/receive/" + url.PathEscape(a.account)
-	debug.Log("signal", "adapter=%s polling %s", a.name, receiveURL)
+	debug.Log("signal", "adapter=%s long-polling %s", a.name, receiveURL)
 
-	client := &http.Client{Timeout: 120 * time.Second}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	// /v1/receive/ is a long-poll endpoint — it blocks until a message
+	// arrives (or times out server-side). Use a long client timeout and
+	// issue requests sequentially, not on a ticker.
+	client := &http.Client{Timeout: 300 * time.Second}
 
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return nil
-		case <-ticker.C:
 		}
 
 		req, err := http.NewRequestWithContext(ctx, "GET", receiveURL, nil)
 		if err != nil {
 			debug.Log("signal", "adapter=%s receive request error: %v", a.name, err)
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			debug.Log("signal", "adapter=%s receive error: %v", a.name, err)
 			time.Sleep(5 * time.Second)
 			continue
@@ -245,9 +248,11 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 
 		var envelopes []map[string]any
 		if err := json.Unmarshal(body, &envelopes); err != nil {
-			// May be empty or non-array response
+			// Empty array or non-JSON — just loop again
 			continue
 		}
+
+		debug.Log("signal", "adapter=%s received %d envelope(s)", a.name, len(envelopes))
 
 		for _, env := range envelopes {
 			a.processEnvelope(ctx, env)
