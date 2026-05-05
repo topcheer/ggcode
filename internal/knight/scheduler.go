@@ -2,6 +2,7 @@ package knight
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -369,14 +370,21 @@ func (k *Knight) SetSkillFrozen(name string, frozen bool) error {
 	return nil
 }
 
-// DeleteSkill removes an active skill by deleting its file.
+// DeleteSkill removes an active skill by deleting its file and directory.
 func (k *Knight) DeleteSkill(name string) error {
 	entry, err := k.FindActiveSkill(name)
 	if err != nil {
 		return err
 	}
+	// Remove the skill file
 	if err := os.Remove(entry.Path); err != nil {
 		return fmt.Errorf("delete skill %q: %w", name, err)
+	}
+	// Remove the parent directory (skills/<name>/) if empty
+	skillDir := filepath.Dir(entry.Path)
+	if err := os.Remove(skillDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Non-fatal: directory may not be empty (shouldn't happen, but be safe)
+		debug.Log("knight", "remove skill dir %s: %v", skillDir, err)
 	}
 	k.index.Invalidate()
 	return nil

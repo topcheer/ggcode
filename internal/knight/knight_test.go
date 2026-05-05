@@ -2310,3 +2310,40 @@ func TestAnalyzeRecentDedupAcrossCalls(t *testing.T) {
 		t.Fatalf("third call: expected 1 re-analyzed (session updated), got %d", r3.SessionsAnalyzed)
 	}
 }
+
+func TestDeleteSkillRemovesDirectory(t *testing.T) {
+	home := t.TempDir()
+	// Create .ggcode/skills/<name>/SKILL.md layout that SkillIndex expects
+	skillsDir := filepath.Join(home, ".ggcode", "skills")
+	skillDir := filepath.Join(skillsDir, "test-skill")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	content := "---\nname: test-skill\ndescription: test\nscope: global\n---\n# test\n"
+	if err := os.WriteFile(skillPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create Knight — NewSkillIndex uses home/.ggcode/skills
+	k := &Knight{
+		homeDir: home,
+		projDir: home,
+		index:   NewSkillIndex(home, home),
+	}
+
+	// Delete the skill (global scope since home==project, index sees duplicate)
+	if err := k.DeleteSkill("global:test-skill"); err != nil {
+		t.Fatalf("DeleteSkill failed: %v", err)
+	}
+
+	// File should be gone
+	if _, err := os.Stat(skillPath); !os.IsNotExist(err) {
+		t.Error("skill file should be deleted")
+	}
+
+	// Directory should also be gone (this was the bug)
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Errorf("skill directory %s should be deleted", skillDir)
+	}
+}
