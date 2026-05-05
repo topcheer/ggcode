@@ -87,6 +87,7 @@ type Model struct {
 	history                         []string
 	historyIdx                      int
 	pendingApproval                 *ApprovalMsg
+	approvalNotifiedIM              bool // true when approval was pushed to IM
 	session                         *session.Session
 	sessionStore                    session.Store
 	imManager                       *im.Manager
