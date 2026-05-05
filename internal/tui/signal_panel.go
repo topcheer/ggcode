@@ -382,6 +382,33 @@ func (m *Model) ensureSigRuntime() error {
 	return nil
 }
 
+func (m *Model) startSignalAdapterIfNeeded(name string) error {
+	if m.imManager == nil || m.config == nil {
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New(m.t("panel.signal.error.adapter_required"))
+	}
+	snapshot := m.imManager.Snapshot()
+	for _, state := range snapshot.Adapters {
+		if state.Name == name {
+			return nil
+		}
+	}
+	adapterCfg, ok := m.config.IM.Adapters[name]
+	if !ok {
+		return fmt.Errorf(m.t("panel.signal.error.not_configured"), name)
+	}
+	if !adapterCfg.Enabled {
+		return fmt.Errorf(m.t("panel.signal.error.disabled"), name)
+	}
+	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformSignal)) {
+		return fmt.Errorf(m.t("panel.signal.error.not_signal_adapter"), name)
+	}
+	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+}
+
 func (m *Model) bindSigEntry(entry signalBindingEntry) tea.Cmd {
 	return func() tea.Msg {
 		ws := m.currentWorkspacePath()
@@ -390,6 +417,9 @@ func (m *Model) bindSigEntry(entry signalBindingEntry) tea.Cmd {
 		}
 		if m.imManager == nil {
 			return signalBindResultMsg{err: errors.New(m.t("panel.signal.error.config_unavailable"))}
+		}
+		if err := m.startSignalAdapterIfNeeded(entry.Adapter); err != nil {
+			return signalBindResultMsg{err: err}
 		}
 		targetID := defaultSignalTargetID(ws)
 		_, err := m.imManager.BindChannel(im.ChannelBinding{

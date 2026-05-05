@@ -393,6 +393,9 @@ func (m *Model) bindTwitchEntry(entry twitchBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return twitchBindResultMsg{err: errors.New(m.t("panel.twitch.error.config_unavailable"))}
 		}
+		if err := m.startTwitchAdapterIfNeeded(entry.Adapter); err != nil {
+			return twitchBindResultMsg{err: err}
+		}
 		targetID := defaultTwitchTargetID(ws)
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Workspace: ws,

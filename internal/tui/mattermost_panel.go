@@ -391,6 +391,9 @@ func (m *Model) bindMMEntry(entry mattermostBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return mattermostBindResultMsg{err: errors.New(m.t("panel.mattermost.error.config_unavailable"))}
 		}
+		if err := m.startMMAdapterIfNeeded(entry.Adapter); err != nil {
+			return mattermostBindResultMsg{err: err}
+		}
 		targetID := defaultMMTargetID(ws)
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Workspace: ws,

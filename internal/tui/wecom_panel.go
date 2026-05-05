@@ -386,6 +386,9 @@ func (m *Model) bindWeComEntry(entry wecomBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return wecomBindResultMsg{err: errors.New(m.t("panel.wecom.error.config_unavailable"))}
 		}
+		if err := m.startWeComAdapterIfNeeded(entry.Adapter); err != nil {
+			return wecomBindResultMsg{err: err}
+		}
 		targetID := defaultWeComTargetID(ws)
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Workspace: ws,

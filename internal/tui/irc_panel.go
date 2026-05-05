@@ -393,6 +393,10 @@ func (m *Model) bindIRCEntry(entry ircBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return ircBindResultMsg{err: errors.New(m.t("panel.irc.error.config_unavailable"))}
 		}
+		// Start the adapter if not already running.
+		if err := m.startIRCAdapterIfNeeded(entry.Adapter); err != nil {
+			return ircBindResultMsg{err: err}
+		}
 		targetID := defaultIRCTargetID(ws)
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Workspace: ws,
