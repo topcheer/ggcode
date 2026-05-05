@@ -475,7 +475,8 @@ func (a *ircAdapter) Send(ctx context.Context, binding ChannelBinding, event Out
 	if target == "" {
 		target = binding.TargetID
 	}
-	return a.sendIRCMessage(target, event.Text)
+	text := defaultOutboundText(event)
+	return a.sendIRCMessage(target, text)
 }
 
 func (a *ircAdapter) sendIRCMessage(target, text string) error {
