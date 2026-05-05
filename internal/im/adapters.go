@@ -75,6 +75,33 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 			return nil, err
 		}
 	}
+
+	// Start adapters that have no binding but need to be online for pairing.
+	// IRC must be connected to receive DMs; Matrix must sync to receive invites.
+	alwaysStartPlatforms := map[Platform]bool{
+		PlatformIRC:    true,
+		PlatformMatrix: true,
+	}
+	startedAdapters := make(map[string]bool)
+	for _, binding := range bindings {
+		startedAdapters[binding.Adapter] = true
+	}
+	for name, adapterCfg := range cfg.Adapters {
+		if !adapterCfg.Enabled {
+			continue
+		}
+		if startedAdapters[name] {
+			continue
+		}
+		platform := Platform(strings.TrimSpace(adapterCfg.Platform))
+		if !alwaysStartPlatforms[platform] {
+			continue
+		}
+		if err := startConfiguredAdapter(ctx, cfg, name, adapterCfg, mgr); err != nil {
+			debug.Log("im", "start unbound adapter %s: %v", name, err)
+		}
+	}
+
 	return controller, nil
 }
 
