@@ -28,19 +28,18 @@ func TestWechatPanelEscClosesPanel(t *testing.T) {
 	}
 }
 
-func TestWechatPanelQAlsoClosesPanel(t *testing.T) {
+func TestWechatPanelQOpensQROverlay(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.width = 120
 	m.height = 40
 	m.openWechatPanel()
 
-	updated, cmd := m.handleWechatPanelKey(tea.KeyPressMsg{Text: "q"})
-	if cmd != nil {
-		t.Fatal("expected q to close without command")
-	}
+	updated, _ := m.handleWechatPanelKey(tea.KeyPressMsg{Text: "q"})
 	m = updated
-	if m.wechatPanel != nil {
-		t.Fatal("expected q to close the wechat panel")
+	// Without a running adapter with ContactURI, q should not open overlay
+	// but should not close the panel either
+	if m.wechatPanel == nil {
+		t.Fatal("expected q to NOT close the wechat panel (it now opens QR overlay)")
 	}
 }
 

@@ -177,9 +177,19 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	entries := m.wechatBindingEntries()
 
 	switch msg.String() {
-	case "esc", "q":
+	case "esc":
 		m.closeWechatPanel()
 		return *m, nil
+	case "q":
+		var states []*im.AdapterState
+		for _, entry := range entries {
+			if entry.AdapterState != nil {
+				states = append(states, entry.AdapterState)
+			}
+		}
+		if m.openQROverlayFromStates("WeChat", states) {
+			return *m, nil
+		}
 	case "up", "k":
 		if len(entries) > 0 {
 			panel.selected = (panel.selected - 1 + len(entries)) % len(entries)

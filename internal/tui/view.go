@@ -1129,6 +1129,9 @@ func (m Model) sidebarActivity() string {
 }
 
 func (m Model) renderContextPanel() string {
+	if m.qrOverlay != nil {
+		return m.renderQROverlay()
+	}
 	switch {
 	case m.modelPanel != nil:
 		return m.renderModelPanel()
