@@ -1786,6 +1786,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.nostrPanel.message = msg.err.Error()
 			} else {
 				m.nostrPanel.message = msg.message
+				m.nostrPanel.qrCode = msg.qrCode
+				m.nostrPanel.generatedNpub = msg.npub
 			}
 		}
 		return m, nil
