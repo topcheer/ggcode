@@ -379,7 +379,7 @@ func (a *twitchAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	if target == "" {
 		target = binding.TargetID
 	}
-	return a.sendTwitchMessage(target, event.Text)
+	return a.sendTwitchMessage(target, defaultOutboundText(event))
 }
 
 func (a *twitchAdapter) sendTwitchMessage(target, text string) error {
