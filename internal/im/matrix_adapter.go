@@ -1,6 +1,7 @@
 package im
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/yuin/goldmark"
 )
 
 const (
@@ -590,6 +592,14 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			MsgType: event.MsgText,
 			Body:    chunk,
 		}
+
+		// Render markdown to HTML for rich display in Element
+		var htmlBuf bytes.Buffer
+		if err := goldmark.Convert([]byte(chunk), &htmlBuf); err == nil && htmlBuf.Len() > 0 {
+			content.Format = event.FormatHTML
+			content.FormattedBody = htmlBuf.String()
+		}
+
 		if threadID != "" {
 			content.RelatesTo = &event.RelatesTo{
 				Type:    event.RelThread,
