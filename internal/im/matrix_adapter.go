@@ -561,7 +561,16 @@ func (a *matrixAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	return a.sendText(ctx, chatID, binding.ThreadID, event.Text)
+
+	text := a.outboundText(event)
+	if text == "" {
+		return nil
+	}
+	return a.sendText(ctx, chatID, binding.ThreadID, text)
+}
+
+func (a *matrixAdapter) outboundText(event OutboundEvent) string {
+	return defaultOutboundText(event)
 }
 
 func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text string) error {
