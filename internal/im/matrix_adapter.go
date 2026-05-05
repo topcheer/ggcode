@@ -240,9 +240,14 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	roomID := string(evt.RoomID)
 	sender := string(evt.Sender)
 
-	// Handle decrypted events (from crypto machine)
-	// If it's an encrypted event and we have crypto, decrypt it
-	if evt.Type == event.EventEncrypted && a.mach != nil {
+	debug.Log("matrix", "adapter=%s handleEvent room=%s sender=%s type=%s", a.name, roomID, sender, evt.Type.Type)
+
+	// Handle E2EE: decrypt encrypted events
+	if evt.Type == event.EventEncrypted {
+		if a.mach == nil {
+			debug.Log("matrix", "adapter=%s encrypted event but no crypto machine, dropping", a.name)
+			return
+		}
 		decrypted, err := a.mach.DecryptMegolmEvent(ctx, evt)
 		if err != nil {
 			debug.Log("matrix", "adapter=%s decrypt failed room=%s: %v", a.name, roomID, err)
@@ -252,8 +257,9 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		evt = decrypted
 	}
 
-	// Only handle messages
-	if evt.Type != event.EventMessage && evt.Type != event.EventEncrypted {
+	// Only handle text messages
+	if evt.Type != event.EventMessage {
+		debug.Log("matrix", "adapter=%s skipping non-message type=%s", a.name, evt.Type.Type)
 		return
 	}
 
@@ -271,7 +277,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		return
 	}
 	a.seen[eventID] = now
-	// Prune old entries
 	for k, v := range a.seen {
 		if now.Sub(v) > 10*time.Minute {
 			delete(a.seen, k)
@@ -282,16 +287,18 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	// Extract content
 	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
 	if !ok {
-		// Try raw content
+		debug.Log("matrix", "adapter=%s content not parsed, trying raw (hasRaw=%v)", a.name, evt.Content.Raw != nil)
 		var rawContent struct {
 			MsgType string `json:"msgtype"`
 			Body    string `json:"body"`
 		}
 		rawBytes, _ := json.Marshal(evt.Content.Raw)
 		if err := json.Unmarshal(rawBytes, &rawContent); err != nil {
+			debug.Log("matrix", "adapter=%s raw content parse error: %v", a.name, err)
 			return
 		}
 		if rawContent.MsgType != "m.text" && rawContent.MsgType != "" {
+			debug.Log("matrix", "adapter=%s skipping non-text raw msgtype=%s", a.name, rawContent.MsgType)
 			return
 		}
 		content = &event.MessageEventContent{
@@ -303,8 +310,8 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	msgtype := string(content.MsgType)
 	body := content.Body
 
-	// Only handle m.text
 	if msgtype != "m.text" && msgtype != "" {
+		debug.Log("matrix", "adapter=%s skipping msgtype=%s", a.name, msgtype)
 		return
 	}
 
@@ -327,7 +334,6 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	dmCount := len(a.dmRooms)
 	a.mu.RUnlock()
 	if !isDM {
-		// Inline fallback: query room members via API
 		isDM = a.checkIsDMViaAPI(ctx, roomID)
 	}
 	debug.Log("matrix", "adapter=%s room=%s isDM=%v dmRooms=%d", a.name, roomID, isDM, dmCount)
@@ -337,7 +343,7 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		isFree := entryMatches(a.freeRooms, roomID)
 		if !isFree && a.requireMention {
 			hasMention := a.hasMention(body, evt.Content.Raw)
-			debug.Log("matrix", "adapter=%s non-DM room=%s free=%v mention=%v requireMention=%v — dropping", a.name, roomID, isFree, hasMention, a.requireMention)
+			debug.Log("matrix", "adapter=%s non-DM room=%s free=%v mention=%v requireMention=%v", a.name, roomID, isFree, hasMention, a.requireMention)
 			if !hasMention {
 				return
 			}
@@ -359,6 +365,8 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		},
 		Text: strings.TrimSpace(body),
 	}
+
+	debug.Log("matrix", "adapter=%s -> HandlePairingInbound", a.name)
 
 	// Pairing flow
 	if a.manager != nil {
