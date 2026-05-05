@@ -526,12 +526,16 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 	chunks := splitSignalMessage(text, signalMaxMessageLen)
 	var lastErr error
 	for _, chunk := range chunks {
+		endpoint := "/v2/send"
 		payload := map[string]any{
 			"number":  a.account,
 			"message": chunk,
 		}
 		if strings.HasPrefix(chatID, "group:") {
-			payload["group"] = chatID[6:]
+			// v1/send supports is_group flag for group messages
+			payload["recipients"] = []string{chatID[6:]}
+			payload["is_group"] = true
+			endpoint = "/v1/send"
 		} else {
 			payload["recipients"] = []string{chatID}
 		}
@@ -542,7 +546,7 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 			continue
 		}
 
-		req, err := http.NewRequest("POST", a.baseURL+"/v2/send", bytes.NewReader(body))
+		req, err := http.NewRequest("POST", a.baseURL+endpoint, bytes.NewReader(body))
 		if err != nil {
 			lastErr = err
 			continue
