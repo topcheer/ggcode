@@ -531,7 +531,7 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 			"message": chunk,
 		}
 		if strings.HasPrefix(chatID, "group:") {
-			payload["recipients"] = []string{chatID[6:]}
+			payload["group"] = chatID[6:]
 		} else {
 			payload["recipients"] = []string{chatID}
 		}
