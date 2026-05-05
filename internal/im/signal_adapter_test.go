@@ -464,30 +464,3 @@ func TestSignalDedup(t *testing.T) {
 	a.processEnvelope(nil, envelope)
 	a.processEnvelope(nil, envelope) // should be deduped
 }
-
-func TestParseSSELine(t *testing.T) {
-	tests := []struct {
-		line      string
-		wantField string
-		wantValue string
-	}{
-		{"event: message", "event", "message"},
-		{"data: {\"key\": \"val\"}", "data", "{\"key\": \"val\"}"},
-		{"id: 12345", "id", "12345"},
-		{": comment", "", ""}, // comment — field is empty
-		{"nocolon", "nocolon", ""},
-	}
-	for _, tt := range tests {
-		field, value := parseSSELine(tt.line)
-		// Comments start with ":" so field will be empty
-		if tt.line == ": comment" {
-			if field != "" {
-				t.Errorf("comment field should be empty, got %q", field)
-			}
-			continue
-		}
-		if field != tt.wantField || value != tt.wantValue {
-			t.Errorf("parseSSELine(%q) = (%q, %q), want (%q, %q)", tt.line, field, value, tt.wantField, tt.wantValue)
-		}
-	}
-}

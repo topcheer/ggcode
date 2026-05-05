@@ -1,7 +1,6 @@
 package im
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -22,7 +21,6 @@ import (
 
 const (
 	signalDefaultBaseURL    = "http://127.0.0.1:8080"
-	signalRPCID             = "ggcode-signal"
 	signalMaxMessageLen     = 2000
 	signalConnectTimeout    = 20 * time.Second
 	signalRequestTimeout    = 30 * time.Second
@@ -201,90 +199,60 @@ func (a *signalAdapter) connectAndServe(ctx context.Context) error {
 }
 
 // ---------------------------------------------------------------------------
-// SSE (Server-Sent Events) — inbound messages
+// Receive loop — polling /v1/receive/{number}
 // ---------------------------------------------------------------------------
 
 func (a *signalAdapter) sseLoop(ctx context.Context) error {
-	url := a.baseURL + "/api/v1/events?account=" + a.account
-	debug.Log("signal", "adapter=%s SSE connecting to %s", a.name, url)
+	receiveURL := a.baseURL + "/v1/receive/" + url.PathEscape(a.account)
+	debug.Log("signal", "adapter=%s polling %s", a.name, receiveURL)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return fmt.Errorf("SSE request: %w", err)
-	}
-	req.Header.Set("Accept", "text/event-stream")
+	client := &http.Client{Timeout: 120 * time.Second}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 
-	// Use a client with no timeout for SSE
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("SSE connect: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("SSE status %d: %s", resp.StatusCode, string(body))
-	}
-
-	debug.Log("signal", "adapter=%s SSE stream open", a.name)
-
-	scanner := bufio.NewScanner(resp.Body)
-	// Allow large SSE data lines
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	var eventType, eventData string
-
-	for scanner.Scan() {
-		if ctx.Err() != nil {
+	for {
+		select {
+		case <-ctx.Done():
 			return nil
+		case <-ticker.C:
 		}
-		line := scanner.Text()
 
-		if line == "" {
-			// Blank line = flush event
-			if eventData != "" {
-				a.handleSSEEvent(ctx, eventType, eventData)
-			}
-			eventType = ""
-			eventData = ""
+		req, err := http.NewRequestWithContext(ctx, "GET", receiveURL, nil)
+		if err != nil {
+			debug.Log("signal", "adapter=%s receive request error: %v", a.name, err)
 			continue
 		}
 
-		if strings.HasPrefix(line, ":") {
-			// Comment, ignore
+		resp, err := client.Do(req)
+		if err != nil {
+			debug.Log("signal", "adapter=%s receive error: %v", a.name, err)
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		field, value := parseSSELine(line)
-		switch field {
-		case "event":
-			eventType = value
-		case "data":
-			if eventData != "" {
-				eventData += "\n"
-			}
-			eventData += value
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+		resp.Body.Close()
+		if err != nil {
+			debug.Log("signal", "adapter=%s receive read error: %v", a.name, err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			debug.Log("signal", "adapter=%s receive status %d: %s", a.name, resp.StatusCode, string(body))
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		var envelopes []map[string]any
+		if err := json.Unmarshal(body, &envelopes); err != nil {
+			// May be empty or non-array response
+			continue
+		}
+
+		for _, env := range envelopes {
+			a.processEnvelope(ctx, env)
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("SSE read: %w", err)
-	}
-	return nil
-}
-
-func parseSSELine(line string) (field, value string) {
-	idx := strings.Index(line, ":")
-	if idx < 0 {
-		return line, ""
-	}
-	field = line[:idx]
-	value = line[idx+1:]
-	if strings.HasPrefix(value, " ") {
-		value = value[1:]
-	}
-	return field, value
 }
 
 func (a *signalAdapter) handleSSEEvent(ctx context.Context, eventType, data string) {
@@ -526,25 +494,51 @@ func (a *signalAdapter) sendText(chatID, text string) error {
 	chunks := splitSignalMessage(text, signalMaxMessageLen)
 	var lastErr error
 	for _, chunk := range chunks {
-		params := map[string]any{
-			"account": a.account,
+		payload := map[string]any{
+			"number":  a.account,
 			"message": chunk,
 		}
 		if strings.HasPrefix(chatID, "group:") {
-			params["groupId"] = chatID[6:]
+			payload["recipients"] = []string{chatID[6:]}
 		} else {
-			params["recipient"] = []string{chatID}
+			payload["recipients"] = []string{chatID}
 		}
 
-		result, err := a.rpc("send", params)
+		body, err := json.Marshal(payload)
+		if err != nil {
+			lastErr = fmt.Errorf("Signal send marshal: %w", err)
+			continue
+		}
+
+		req, err := http.NewRequest("POST", a.baseURL+"/v2/send", bytes.NewReader(body))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := a.conn.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("Signal send: %w", err)
 			debug.Log("signal", "adapter=%s send error to %s: %v", a.name, chatID, err)
 			continue
 		}
+
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("Signal send status %d: %s", resp.StatusCode, string(respBody))
+			debug.Log("signal", "adapter=%s send error to %s: %s", a.name, chatID, string(respBody))
+			continue
+		}
+
 		// Track sent timestamp for echo suppression
-		if ts := jsonInt64(result, "timestamp"); ts > 0 {
-			a.addSentTimestamp(ts)
+		var result struct {
+			Timestamp int64 `json:"timestamp"`
+		}
+		if json.Unmarshal(respBody, &result) == nil && result.Timestamp > 0 {
+			a.addSentTimestamp(result.Timestamp)
 		}
 	}
 	return lastErr
@@ -559,68 +553,26 @@ func (a *signalAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	if chatID == "" {
 		return nil
 	}
-	params := map[string]any{
-		"account": a.account,
+	payload := map[string]any{
+		"number": a.account,
 	}
 	if strings.HasPrefix(chatID, "group:") {
-		params["groupId"] = chatID[6:]
+		payload["groupId"] = chatID[6:]
 	} else {
-		params["recipient"] = []string{chatID}
+		payload["recipient"] = []string{chatID}
 	}
-	_, err := a.rpc("sendTyping", params)
-	return err
-}
-
-func (a *signalAdapter) rpc(method string, params map[string]any) (map[string]any, error) {
-	payload := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      signalRPCID,
-		"method":  method,
-		"params":  params,
-	}
-	body, err := json.Marshal(payload)
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest("PUT", a.baseURL+"/v1/typing-indicator/"+url.PathEscape(a.account), bytes.NewReader(body))
 	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", a.baseURL+"/api/v1/rpc", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-
 	resp, err := a.conn.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("RPC %s: %w", method, err)
+		return err
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("RPC %s read: %w", method, err)
-	}
-
-	if resp.StatusCode == http.StatusCreated {
-		return nil, nil // signal-cli returns 201 for fire-and-forget
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("RPC %s → %d: %s", method, resp.StatusCode, string(respBody))
-	}
-
-	var result struct {
-		Result map[string]any `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("RPC %s decode: %w", method, err)
-	}
-	if result.Error != nil {
-		return nil, fmt.Errorf("RPC %s error %d: %s", method, result.Error.Code, result.Error.Message)
-	}
-	return result.Result, nil
+	resp.Body.Close()
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -628,7 +580,7 @@ func (a *signalAdapter) rpc(method string, params map[string]any) (map[string]an
 // ---------------------------------------------------------------------------
 
 func (a *signalAdapter) healthCheck() error {
-	req, err := http.NewRequest("GET", a.baseURL+"/api/v1/check", nil)
+	req, err := http.NewRequest("GET", a.baseURL+"/v1/health", nil)
 	if err != nil {
 		return err
 	}
