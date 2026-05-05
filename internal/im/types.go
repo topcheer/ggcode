@@ -189,12 +189,13 @@ type AdapterDescriptor struct {
 }
 
 type AdapterState struct {
-	Name      string
-	Platform  Platform
-	Healthy   bool
-	Status    string
-	LastError string
-	UpdatedAt time.Time
+	Name       string
+	Platform   Platform
+	Healthy    bool
+	Status     string
+	LastError  string
+	ContactURI string // deep link to add/contact bot (e.g. https://t.me/botname)
+	UpdatedAt  time.Time
 }
 
 type ApprovalRequest struct {
