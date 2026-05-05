@@ -11,16 +11,22 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/nbd-wtf/go-nostr"
+	"github.com/nbd-wtf/go-nostr/nip19"
+	qrcode "github.com/skip2/go-qrcode"
+
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 )
 
 type nostrPanelState struct {
-	selected    int
-	message     string
-	createMode  bool
-	createInput string
-	editState   imAdapterEditState
+	selected      int
+	message       string
+	createMode    bool
+	createInput   string
+	editState     imAdapterEditState
+	qrCode        string // npub QR code rendered as text
+	generatedNpub string // npub to display alongside QR
 }
 
 type nostrBindingEntry struct {
@@ -37,6 +43,8 @@ type nostrBindingEntry struct {
 type nostrBindResultMsg struct {
 	message string
 	err     error
+	qrCode  string // rendered QR code for npub
+	npub    string // npub public key
 }
 
 func (m *Model) openNostrPanel() {
@@ -103,7 +111,18 @@ func (m Model) renderNostrPanel() string {
 		wsPath = m.t("panel.nostr.none")
 	}
 
-	body := []string{
+	body := []string{}
+
+	// QR code at top when available
+	if panel.qrCode != "" {
+		body = append(body, panel.qrCode)
+		if panel.generatedNpub != "" {
+			body = append(body, fmt.Sprintf(" %s", m.t("panel.nostr.message.pubkey", panel.generatedNpub)))
+		}
+		body = append(body, "")
+	}
+
+	body = append(body,
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.nostr.directory")),
 		fmt.Sprintf(" %s", wsPath),
 		"",
@@ -113,7 +132,7 @@ func (m Model) renderNostrPanel() string {
 		fmt.Sprintf(" %s", m.t("panel.nostr.available", maxNostr(len(entries)-boundCount, 0))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.nostr.current_binding")),
-	}
+	)
 
 	if len(currentBindings) == 0 {
 		body = append(body, fmt.Sprintf(" %s", m.t("panel.nostr.none")))
@@ -162,6 +181,7 @@ func (m Model) renderNostrPanel() string {
 			" "+m.t("panel.nostr.bot_input", panel.createInput+"█"),
 			" "+m.t("panel.nostr.create_format"),
 			" "+m.t("panel.nostr.create_example"),
+			" "+m.t("panel.nostr.create_full_example"),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.nostr.create_hint")),
 		)
 	} else {
@@ -289,12 +309,26 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_unavailable"))}
 		}
 		fields := strings.Fields(spec)
-		if len(fields) < 3 {
+		if len(fields) < 1 {
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_format"))}
 		}
 		name := strings.TrimSpace(fields[0])
-		privateKey := strings.TrimSpace(fields[1])
-		relays := strings.TrimSpace(fields[2])
+
+		var privateKey string
+		var relays string
+		switch len(fields) {
+		case 1:
+			// Auto-generate key, use default relays
+			privateKey = nostr.GeneratePrivateKey()
+			relays = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
+		case 2:
+			privateKey = strings.TrimSpace(fields[1])
+			relays = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
+		default:
+			privateKey = strings.TrimSpace(fields[1])
+			relays = strings.TrimSpace(fields[2])
+		}
+
 		adapter := config.IMAdapterConfig{
 			Enabled:  true,
 			Platform: string(im.PlatformNostr),
@@ -313,7 +347,31 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 		if err := m.startNostrAdapterIfNeeded(name); err != nil {
 			return nostrBindResultMsg{err: err}
 		}
-		return nostrBindResultMsg{message: m.t("panel.nostr.message.added_bot", name)}
+
+		// Derive public key for QR code
+		pubKey, _ := nostr.GetPublicKey(privateKey)
+		npub, _ := nip19.EncodePublicKey(pubKey)
+		var qrText string
+		qr, err := qrcode.New("nostr:"+npub, qrcode.Medium)
+		if err == nil {
+			qr.DisableBorder = true
+			qrText = qr.ToSmallString(false)
+		}
+
+		var msg string
+		if len(fields) == 1 {
+			// Show nsec for auto-generated key so user can back it up
+			nsec, _ := nip19.EncodePrivateKey(privateKey)
+			msg = m.t("panel.nostr.message.added_bot_key", name, nsec)
+		} else {
+			msg = m.t("panel.nostr.message.added_bot", name)
+		}
+
+		return nostrBindResultMsg{
+			message: msg,
+			qrCode:  qrText,
+			npub:    npub,
+		}
 	}
 }
 
