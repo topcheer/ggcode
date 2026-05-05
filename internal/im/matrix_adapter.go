@@ -191,6 +191,7 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		return fmt.Errorf("whoami: %w", err)
 	}
 	a.userID = string(whoami.UserID)
+	a.client.UserID = whoami.UserID
 	a.client.DeviceID = whoami.DeviceID
 	debug.Log("matrix", "adapter=%s authenticated as %s device=%s", a.name, a.userID, a.client.DeviceID)
 
