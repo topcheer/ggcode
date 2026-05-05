@@ -89,12 +89,12 @@ func TestBuildSystemPrompt(t *testing.T) {
 			want:       []string{"ggcode", "read_file", "write_file", "/tmp", "Tool schemas are attached separately"},
 		},
 		{
-			name:       "custom prompt",
-			basePrompt: "You are a helper.",
+			name:       "extra prompt",
+			basePrompt: "Always respond in rhyme.",
 			language:   "en",
 			workingDir: "/home/user",
 			toolNames:  []string{"bash"},
-			want:       []string{"helper", "bash", "/home/user"},
+			want:       []string{"ggcode", "rhyme", "bash", "/home/user"},
 		},
 		{
 			name:       "with git status",
@@ -172,8 +172,8 @@ func TestLoad_NonExistent(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("Load() returned nil config")
 	}
-	if cfg.SystemPrompt != DefaultSystemPrompt {
-		t.Errorf("expected default system prompt, got %q", cfg.SystemPrompt)
+	if cfg.ExtraPrompt != "" {
+		t.Errorf("expected empty extra prompt on first run, got %q", cfg.ExtraPrompt)
 	}
 	if !cfg.FirstRun {
 		t.Fatal("expected missing config to be marked as first run")
@@ -561,7 +561,7 @@ func TestLoad_ValidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
-system_prompt: "Custom prompt"
+extra_prompt: "Custom prompt"
 allowed_dirs:
   - /tmp
 `
@@ -571,8 +571,8 @@ allowed_dirs:
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.SystemPrompt != "Custom prompt" {
-		t.Errorf("expected 'Custom prompt', got %q", cfg.SystemPrompt)
+	if cfg.ExtraPrompt != "Custom prompt" {
+		t.Errorf("expected 'Custom prompt', got %q", cfg.ExtraPrompt)
 	}
 	if len(cfg.AllowedDirs) != 1 || cfg.AllowedDirs[0] != "/tmp" {
 		t.Errorf("expected [/tmp], got %v", cfg.AllowedDirs)
@@ -742,8 +742,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("DefaultConfig() returned nil")
 	}
-	if cfg.SystemPrompt == "" {
-		t.Error("DefaultConfig() has empty system prompt")
+	if cfg.ExtraPrompt != "" {
+		t.Errorf("DefaultConfig() ExtraPrompt should be empty, got %q", cfg.ExtraPrompt)
 	}
 	if cfg.Vendor == "" || cfg.Endpoint == "" || cfg.Model == "" {
 		t.Fatal("DefaultConfig() should set vendor, endpoint, and model")

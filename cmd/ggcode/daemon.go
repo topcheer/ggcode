@@ -264,7 +264,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		for name := range userSlashCmds {
 			customCmdNames = append(customCmdNames, name)
 		}
-		prompt := config.BuildSystemPrompt(cfg.SystemPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
+		prompt := config.BuildSystemPrompt(cfg.ExtraPrompt, workingDir, cfg.Language, toolNames, gitStatus, customCmdNames)
 		skillsPrompt, promptSkillRefs := buildSkillsSystemPromptWithPromptRefs(commandMgr.List())
 		if skillsPrompt != "" {
 			prompt += "\n\n## Skills\n" + skillsPrompt

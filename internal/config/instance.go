@@ -107,8 +107,8 @@ func MergeInstance(global, instance *Config) {
 		global.Language = instance.Language
 		global.instanceFields["language"] = true
 	}
-	if global.SystemPrompt == "" && instance.SystemPrompt != "" {
-		global.SystemPrompt = instance.SystemPrompt
+	if global.ExtraPrompt == "" && instance.ExtraPrompt != "" {
+		global.ExtraPrompt = instance.ExtraPrompt
 		global.instanceFields["system_prompt"] = true
 	}
 	if global.DefaultMode == "" && instance.DefaultMode != "" {
