@@ -1754,6 +1754,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case signalQRCodeMsg:
+		if m.signalPanel != nil {
+			m.signalPanel.qrFetching = false
+			if msg.err != nil {
+				m.signalPanel.qrError = msg.err.Error()
+			} else {
+				m.signalPanel.qrCode = msg.qr
+			}
+		}
+		return m, nil
+
 	case ircBindResultMsg:
 		if m.ircPanel != nil {
 			if msg.err != nil {
