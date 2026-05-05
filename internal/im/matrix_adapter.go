@@ -142,22 +142,50 @@ func (a *matrixAdapter) Close() error {
 func (a *matrixAdapter) run(ctx context.Context) {
 	debug.Log("matrix", "adapter=%s start", a.name)
 
+	backoff := 5 * time.Second
+	maxBackoff := 60 * time.Second
+
+	for {
+		if ctx.Err() != nil {
+			a.publishState(false, "stopped", "")
+			return
+		}
+
+		err := a.runOnce(ctx)
+		if err == nil {
+			// Clean shutdown
+			return
+		}
+
+		debug.Log("matrix", "adapter=%s runOnce failed: %v, retrying in %v", a.name, err, backoff)
+		a.publishState(false, "reconnecting", err.Error())
+
+		select {
+		case <-ctx.Done():
+			a.publishState(false, "stopped", "")
+			return
+		case <-time.After(backoff):
+		}
+
+		backoff = backoff * 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
+
+func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	// 1. Create mautrix client
 	client, err := mautrix.NewClient(a.homeserver, id.UserID(a.userID), a.token)
 	if err != nil {
-		debug.Log("matrix", "adapter=%s failed to create client: %v", a.name, err)
-		a.publishState(false, "error", fmt.Sprintf("client init: %v", err))
-		return
+		return fmt.Errorf("client init: %w", err)
 	}
-	// Use default http.Client from mautrix
 	a.client = client
 
 	// 2. Whoami to verify token
 	whoami, err := client.Whoami(ctx)
 	if err != nil {
-		debug.Log("matrix", "adapter=%s whoami failed: %v", a.name, err)
-		a.publishState(false, "error", fmt.Sprintf("whoami: %v", err))
-		return
+		return fmt.Errorf("whoami: %w", err)
 	}
 	a.userID = string(whoami.UserID)
 	debug.Log("matrix", "adapter=%s authenticated as %s", a.name, a.userID)
@@ -192,8 +220,9 @@ func (a *matrixAdapter) run(ctx context.Context) {
 	err = client.SyncWithContext(ctx)
 	if err != nil && ctx.Err() == nil {
 		debug.Log("matrix", "adapter=%s sync stopped with error: %v", a.name, err)
-		a.publishState(false, "error", err.Error())
+		return fmt.Errorf("sync: %w", err)
 	}
+	return nil
 }
 
 func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
