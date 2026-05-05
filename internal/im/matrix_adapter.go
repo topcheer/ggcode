@@ -58,6 +58,9 @@ type matrixAdapter struct {
 	// Dedup
 	seen map[string]time.Time
 
+	// First sync flag — ignore events from initial sync
+	didFirstSync atomic.Bool
+
 	// Transaction ID counter for send
 	txnID atomic.Int64
 }
@@ -202,7 +205,24 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	// 5. Setup syncer
 	syncer := mautrix.NewDefaultSyncer()
 
+	// OnSync: mark first sync done + process crypto to-device events
+	syncer.OnSync(func(ctx context.Context, resp *mautrix.RespSync, since string) bool {
+		if since != "" {
+			a.didFirstSync.Store(true)
+		}
+		if a.mach != nil {
+			return a.mach.ProcessSyncResponse(ctx, resp, since)
+		}
+		return true
+	})
+
+	// Mark first sync done after initial sync completes
 	syncer.OnEvent(func(ctx context.Context, evt *event.Event) {
+		// Skip events from initial sync (before we have a "since" token)
+		if !a.didFirstSync.Load() {
+			debug.Log("matrix", "adapter=%s skipping initial sync event type=%s", a.name, evt.Type.Type)
+			return
+		}
 		a.handleEvent(ctx, evt)
 	})
 
