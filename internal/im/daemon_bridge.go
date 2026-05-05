@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/daemon"
 	"github.com/topcheer/ggcode/internal/harness"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
@@ -50,6 +51,7 @@ type DaemonBridge struct {
 	mu                   sync.Mutex
 	cancelFunc           context.CancelFunc
 	pendingAsk           *pendingAskUser
+	pendingApproval      chan permission.Decision // non-nil when waiting for IM approval reply
 	pendingInterruptions []pendingInterruption
 	interactiveMsgIDs    map[string]string // adapter → platform msg ID (for callback correlation)
 	multiSelectChosen    map[string]bool   // accumulated multi-select choices (choice value → selected)
@@ -76,6 +78,10 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 	// are routed to the pending ask_user question.
 	if mgr != nil {
 		mgr.SetInteractiveCallback(b.handleInteractiveCallback)
+	}
+	// Register approval handler so tool permission requests are pushed to IM.
+	if ag != nil {
+		ag.SetApprovalHandler(b.handleApproval)
 	}
 	return b
 }
@@ -202,9 +208,25 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		}
 	}
 
-	// Slash commands take priority over everything (including pending ask_user)
+	// Slash commands take priority over everything (including pending approval/ask_user)
 	if strings.HasPrefix(text, "/") {
 		return b.handleSlashCommand(ctx, text, msg)
+	}
+
+	// Check for pending approval — y/a/n reply for tool permission
+	b.mu.Lock()
+	approvalCh := b.pendingApproval
+	b.mu.Unlock()
+	if approvalCh != nil && text != "" {
+		decision, ok := parseDaemonApprovalReply(text)
+		if ok {
+			approvalCh <- decision
+			b.mu.Lock()
+			b.pendingApproval = nil
+			b.mu.Unlock()
+			return nil
+		}
+		// Not a valid approval reply — fall through to ask_user or normal message
 	}
 
 	// Check for pending ask_user — if so, route reply there
@@ -400,6 +422,81 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 		AnsweredCount: answeredCount,
 		Answers:       answers,
 	}, nil
+}
+
+// handleApproval is the ApprovalHandler for daemon mode — pushes tool permission
+// requests to IM and waits for a y/a/n reply.
+func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, input string) permission.Decision {
+	detail := formatToolInline(toolName, input)
+	lang := b.language
+	var prompt string
+	if lang == "zh-CN" || lang == "zh" {
+		prompt = fmt.Sprintf("🔒 需要审批: %s\n\n回复 y 允许 · a 总是允许 · n 拒绝", detail)
+	} else {
+		prompt = fmt.Sprintf("🔒 Approval required: %s\n\nReply y allow · a always allow · n deny", detail)
+	}
+	b.emitter.EmitText(prompt)
+
+	// Create a channel and register it so IM replies can resolve it.
+	ch := make(chan permission.Decision, 1)
+	b.mu.Lock()
+	b.pendingApproval = ch
+	b.mu.Unlock()
+
+	debug.Log("daemon", "approval: waiting for IM reply on tool=%s", toolName)
+
+	select {
+	case decision := <-ch:
+		debug.Log("daemon", "approval: received %v for tool=%s", decision, toolName)
+		// Send result confirmation back to IM
+		var resultMsg string
+		decisionStr := "deny"
+		if decision == permission.Allow {
+			decisionStr = "allow"
+		}
+		if lang == "zh-CN" || lang == "zh" {
+			switch decisionStr {
+			case "allow":
+				resultMsg = fmt.Sprintf("✅ 已允许: %s", formatToolInline(toolName, ""))
+			case "deny":
+				resultMsg = fmt.Sprintf("❌ 已拒绝: %s", formatToolInline(toolName, ""))
+			}
+		} else {
+			switch decisionStr {
+			case "allow":
+				resultMsg = fmt.Sprintf("✅ Allowed: %s", formatToolInline(toolName, ""))
+			case "deny":
+				resultMsg = fmt.Sprintf("❌ Denied: %s", formatToolInline(toolName, ""))
+			}
+		}
+		if resultMsg != "" {
+			b.emitter.EmitText(resultMsg)
+		}
+		return decision
+	case <-ctx.Done():
+		debug.Log("daemon", "approval: context cancelled for tool=%s", toolName)
+		b.mu.Lock()
+		b.pendingApproval = nil
+		b.mu.Unlock()
+		return permission.Deny
+	}
+}
+
+// formatToolInline renders a concise one-line tool summary for approval prompts.
+func formatToolInline(toolName, input string) string {
+	if input == "" {
+		return toolName
+	}
+	// Try to extract a short description from JSON input
+	var m map[string]any
+	if err := json.Unmarshal([]byte(input), &m); err == nil {
+		for _, key := range []string{"command", "path", "file_path", "query", "url", "message"} {
+			if v, ok := m[key].(string); ok && v != "" {
+				return fmt.Sprintf("%s: %s", toolName, truncate(v, 60))
+			}
+		}
+	}
+	return fmt.Sprintf("%s: %s", toolName, truncate(input, 60))
 }
 
 // runAgentStream executes the agent with streaming output sent to IM.
@@ -907,6 +1004,26 @@ func (b *DaemonBridge) handleSlashCommand(ctx context.Context, text string, msg 
 		b.emitter.EmitText("Unknown command: " + cmd + ". Try /help")
 		return nil
 	}
+}
+
+// parseDaemonApprovalReply parses an IM text reply as an approval decision.
+func parseDaemonApprovalReply(text string) (permission.Decision, bool) {
+	t := strings.ToLower(strings.TrimSpace(text))
+	switch t {
+	case "y", "yes", "ok", "好", "好的", "允许", "同意", "确认":
+		return permission.Allow, true
+	case "a", "always", "总是允许", "总是", "始终允许":
+		return permission.Allow, true
+	case "n", "no", "nope", "拒绝", "取消", "不要", "deny":
+		return permission.Deny, true
+	}
+	if strings.HasPrefix(t, "y") && len(t) <= 3 {
+		return permission.Allow, true
+	}
+	if strings.HasPrefix(t, "n") && len(t) <= 3 {
+		return permission.Deny, true
+	}
+	return permission.Deny, false
 }
 
 func (b *DaemonBridge) handleListIM() error {
