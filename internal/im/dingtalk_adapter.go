@@ -688,12 +688,17 @@ func (a *dingtalkAdapter) publishState(healthy bool, status, errMsg string) {
 	if a.manager == nil {
 		return
 	}
+	contactURI := ""
+	if a.appKey != "" {
+		contactURI = "https://h5.dingtalk.com/circle/healthCheckBoard.html?appkey=" + a.appKey
+	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformDingTalk,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: errMsg,
+		Name:       a.name,
+		Platform:   PlatformDingTalk,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  errMsg,
+		ContactURI: contactURI,
 	})
 }
 

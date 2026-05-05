@@ -36,6 +36,7 @@ type slackAdapter struct {
 	botToken   string
 	appToken   string
 	botUserID  string
+	teamID     string
 	apiBase    string // override for tests
 	stt        imstt.Transcriber
 
@@ -618,13 +619,18 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	contactURI := ""
+	if a.botUserID != "" {
+		contactURI = "https://slack.com/app_redirect?channel=" + a.botUserID
+	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformSlack,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		Name:       a.name,
+		Platform:   PlatformSlack,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  lastErr,
+		ContactURI: contactURI,
+		UpdatedAt:  time.Now(),
 	})
 }
 

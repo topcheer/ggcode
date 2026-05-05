@@ -763,13 +763,18 @@ func (a *wecomAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	contactURI := ""
+	if a.botID != "" {
+		contactURI = "https://work.weixin.qq.com/wework_admin/chat?botId=" + a.botID
+	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformWeCom,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		Name:       a.name,
+		Platform:   PlatformWeCom,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  lastErr,
+		ContactURI: contactURI,
+		UpdatedAt:  time.Now(),
 	})
 }
 
