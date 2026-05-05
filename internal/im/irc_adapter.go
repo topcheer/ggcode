@@ -482,10 +482,16 @@ func (a *ircAdapter) sendIRCMessage(target, text string) error {
 	if text == "" || target == "" {
 		return nil
 	}
-	chunks := splitIRCMessage(text, ircMaxMessageLen)
-	for _, chunk := range chunks {
-		// IRC PRIVMSG: target is channel (#xxx) or nick (DM)
-		a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
+	// Split by newlines first — each line is a separate PRIVMSG.
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		chunks := splitIRCMessage(line, ircMaxMessageLen)
+		for _, chunk := range chunks {
+			a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk))
+		}
 	}
 	return nil
 }
