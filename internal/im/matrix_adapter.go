@@ -384,8 +384,16 @@ func (a *matrixAdapter) handleRoomEvent(ctx context.Context, roomID string, even
 	}
 
 	// DM detection
+	a.mu.RLock()
 	isDM := a.dmRooms[roomID]
-	debug.Log("matrix", "adapter=%s event room=%s sender=%s isDM=%v dmRooms=%d type=%s body=%.80s", a.name, roomID, sender, isDM, len(a.dmRooms), msgtype, body)
+	dmCount := len(a.dmRooms)
+	a.mu.RUnlock()
+	if !isDM {
+		// Inline fallback: query room members via API if not cached.
+		// This covers rooms that appeared in incremental sync without state events.
+		isDM = a.checkIsDMViaAPI(roomID)
+	}
+	debug.Log("matrix", "adapter=%s event room=%s sender=%s isDM=%v dmRooms=%d type=%s body=%.80s", a.name, roomID, sender, isDM, dmCount, msgtype, body)
 
 	// Allowed users check
 	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
@@ -398,6 +406,7 @@ func (a *matrixAdapter) handleRoomEvent(ctx context.Context, roomID string, even
 		isFree := entryMatches(a.freeRooms, roomID)
 		if !isFree && a.requireMention {
 			hasMention := a.hasMention(body, content)
+			debug.Log("matrix", "adapter=%s non-DM room=%s free=%v mention=%v requireMention=%v — dropping", a.name, roomID, isFree, hasMention, a.requireMention)
 			if !hasMention {
 				return
 			}
@@ -640,14 +649,67 @@ func (a *matrixAdapter) ensureDMStatus(roomID string, roomMap map[string]any) {
 	}
 	a.mu.RUnlock()
 
-	// Check joined member count from state events
+	// Check joined member count from both state events and timeline events.
+	// Incremental syncs may only include member changes in timeline.
 	members := a.collectJoinedMembers(roomMap)
+
+	// Also check timeline events for member joins
+	timeline, _ := roomMap["timeline"].(map[string]any)
+	if timeline != nil {
+		events, _ := timeline["events"].([]any)
+		for _, ev := range events {
+			event, ok := ev.(map[string]any)
+			if !ok {
+				continue
+			}
+			if eventType, _ := event["type"].(string); eventType == "m.room.member" {
+				content, _ := event["content"].(map[string]any)
+				membership, _ := content["membership"].(string)
+				userID, _ := event["state_key"].(string)
+				if membership == "join" && userID != "" {
+					found := false
+					for _, m := range members {
+						if m == userID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						members = append(members, userID)
+					}
+				}
+			}
+		}
+	}
+
+	debug.Log("matrix", "adapter=%s room=%s ensureDMStatus: %d member(s) (%v)", a.name, roomID, len(members), members)
 	if len(members) == 2 {
 		a.mu.Lock()
 		a.dmRooms[roomID] = true
 		a.mu.Unlock()
 		debug.Log("matrix", "adapter=%s room=%s detected as DM via 2-member fallback", a.name, roomID)
 	}
+}
+
+// checkIsDMViaAPI queries the room membership via Matrix API and returns true
+// if the room has exactly 2 joined members. Results are cached in dmRooms.
+func (a *matrixAdapter) checkIsDMViaAPI(roomID string) bool {
+	// Use /_matrix/client/v3/rooms/{roomId}/members with membership=join
+	data, err := a.apiGet("_matrix/client/v3/rooms/" + roomID + "/members?membership=join&not_membership=leave&not_membership=ban")
+	if err != nil {
+		debug.Log("matrix", "adapter=%s checkIsDMViaAPI room=%s error: %v", a.name, roomID, err)
+		return false
+	}
+	chunk, _ := data["chunk"].([]any)
+	if len(chunk) == 2 {
+		a.mu.Lock()
+		a.dmRooms[roomID] = true
+		a.mu.Unlock()
+		debug.Log("matrix", "adapter=%s room=%s detected as DM via API member query (2 members)", a.name, roomID)
+		return true
+	}
+	debug.Log("matrix", "adapter=%s room=%s API member query: %d members", a.name, roomID, len(chunk))
+	return false
 }
 
 // collectJoinedMembers extracts joined member user IDs from room state events.
