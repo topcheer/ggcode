@@ -383,14 +383,6 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 	groupID, _ := groupInfo["groupId"].(string)
 	isGroup := groupID != ""
 
-	// Group allowlist check — if configured, enforce it
-	if isGroup && len(a.groupAllowlist) > 0 {
-		if !entryMatches(a.groupAllowlist, groupID) && !entryMatches(a.groupAllowlist, "*") {
-			debug.Log("signal", "adapter=%s group %s not in allowlist", a.name, groupID[:min(8, len(groupID))])
-			return
-		}
-	}
-
 	// Allowed users check
 	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
 		debug.Log("signal", "adapter=%s user %s not in allowed list", a.name, sender)
@@ -452,10 +444,6 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		}
 		if pairingResult.Consumed {
 			// Auto-add first paired group to allowlist
-			if isGroup && len(a.groupAllowlist) == 0 {
-				a.groupAllowlist = []string{groupID}
-				debug.Log("signal", "adapter=%s auto-added group %s to allowlist", a.name, groupID[:min(8, len(groupID))])
-			}
 			_ = a.sendText(chatID, pairingResult.ReplyText)
 			return
 		}
