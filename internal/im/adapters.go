@@ -191,6 +191,27 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 			return err
 		}
 		start(adapter)
+	case PlatformIRC:
+		adapter, err := newIRCAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			adapterCancel()
+			return err
+		}
+		start(adapter)
+	case PlatformNostr:
+		adapter, err := newNostrAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			adapterCancel()
+			return err
+		}
+		start(adapter)
+	case PlatformTwitch:
+		adapter, err := newTwitchAdapter(name, cfg, adapterCfg, mgr)
+		if err != nil {
+			adapterCancel()
+			return err
+		}
+		start(adapter)
 	}
 	return nil
 }

@@ -1156,6 +1156,12 @@ func (m Model) renderContextPanel() string {
 		return m.renderMatrixPanel()
 	case m.signalPanel != nil:
 		return m.renderSignalPanel()
+	case m.ircPanel != nil:
+		return m.renderIRCPanel()
+	case m.nostrPanel != nil:
+		return m.renderNostrPanel()
+	case m.twitchPanel != nil:
+		return m.renderTwitchPanel()
 	case m.imPanel != nil:
 		return m.renderIMPanel()
 	case m.mcpPanel != nil:
@@ -1320,6 +1326,12 @@ func platformDisplayName(p im.Platform) string {
 		return "Matrix"
 	case im.PlatformSignal:
 		return "Signal"
+	case im.PlatformIRC:
+		return "IRC"
+	case im.PlatformNostr:
+		return "Nostr"
+	case im.PlatformTwitch:
+		return "Twitch"
 	default:
 		return "IM"
 	}
@@ -1347,6 +1359,12 @@ func platformCNName(p im.Platform) string {
 		return "Mattermost"
 	case im.PlatformSignal:
 		return "Signal"
+	case im.PlatformIRC:
+		return "IRC"
+	case im.PlatformNostr:
+		return "Nostr"
+	case im.PlatformTwitch:
+		return "Twitch"
 	default:
 		return "IM"
 	}
