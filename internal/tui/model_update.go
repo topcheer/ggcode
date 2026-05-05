@@ -1748,6 +1748,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case signalDaemonCheckMsg:
+		if m.signalPanel != nil {
+			m.signalPanel.daemonOK = &msg.ok
+		}
+		return m, nil
+
 	case ircBindResultMsg:
 		if m.ircPanel != nil {
 			if msg.err != nil {

@@ -52,6 +52,11 @@ func enSignalModule() map[string]string {
 		"panel.signal.error.not_signal_adapter":  "adapter %q is not a Signal bot",
 		"panel.signal.status.not_started":        "not started",
 		"panel.signal.status.unknown":            "unknown",
+		"panel.signal.daemon":                    "signal-cli Daemon",
+		"panel.signal.daemon_checking":           "Checking...",
+		"panel.signal.daemon_ok":                 "✓ signal-cli-rest-api is reachable",
+		"panel.signal.daemon_unavailable":        "✕ signal-cli-rest-api is NOT reachable",
+		"panel.signal.daemon_install_hint":       "Press d to install via Docker, r to re-check",
 	}
 }
 
@@ -103,5 +108,10 @@ func zhSignalModule() map[string]string {
 		"panel.signal.error.not_signal_adapter":  "适配器 %q 不是 Signal 机器人",
 		"panel.signal.status.not_started":        "未启动",
 		"panel.signal.status.unknown":            "未知",
+		"panel.signal.daemon":                    "signal-cli 守护进程",
+		"panel.signal.daemon_checking":           "检查中...",
+		"panel.signal.daemon_ok":                 "✓ signal-cli-rest-api 可达",
+		"panel.signal.daemon_unavailable":        "✕ signal-cli-rest-api 不可达",
+		"panel.signal.daemon_install_hint":       "按 d 通过 Docker 安装，按 r 重新检查",
 	}
 }

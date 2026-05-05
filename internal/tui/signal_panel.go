@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -21,6 +23,7 @@ type signalPanelState struct {
 	createMode  bool
 	createInput string
 	editState   imAdapterEditState
+	daemonOK    *bool // nil=checking, true=ok, false=unreachable
 }
 
 type signalBindingEntry struct {
@@ -39,12 +42,44 @@ type signalBindResultMsg struct {
 	err     error
 }
 
-func (m *Model) openSignalPanel() {
+type signalDaemonCheckMsg struct {
+	ok  bool
+	err error
+}
+
+func checkSignalDaemonCmd() tea.Cmd {
+	return func() tea.Msg {
+		err := im.CheckSignalDaemon("")
+		return signalDaemonCheckMsg{ok: err == nil, err: err}
+	}
+}
+
+func (m *Model) openSignalPanel() tea.Cmd {
 	m.signalPanel = &signalPanelState{}
+	return checkSignalDaemonCmd()
 }
 
 func (m *Model) closeSignalPanel() {
 	m.signalPanel = nil
+}
+
+func (m *Model) installSignalDaemon() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "sh", "-c", im.SignalDaemonInstallCommand())
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return signalBindResultMsg{err: fmt.Errorf("install failed: %s: %s", err, strings.TrimSpace(string(output)))}
+		}
+		// Re-check daemon after install
+		time.Sleep(3 * time.Second)
+		checkErr := im.CheckSignalDaemon("")
+		if checkErr != nil {
+			return signalBindResultMsg{message: "Docker container started. Daemon may need a few seconds to become ready."}
+		}
+		return signalBindResultMsg{message: "signal-cli-rest-api installed and running."}
+	}
 }
 
 func firstNonEmptySignal(values ...string) string {
@@ -156,6 +191,19 @@ func (m Model) renderSignalPanel() string {
 		}
 	}
 
+	// Daemon status
+	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.daemon")))
+	if panel.daemonOK == nil {
+		body = append(body, " "+m.t("panel.signal.daemon_checking"))
+	} else if *panel.daemonOK {
+		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(" "+m.t("panel.signal.daemon_ok")))
+	} else {
+		body = append(body,
+			lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" "+m.t("panel.signal.daemon_unavailable")),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.signal.daemon_install_hint")),
+		)
+	}
+
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.create")))
 	if panel.createMode {
 		body = append(body,
@@ -261,6 +309,11 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 		return *m, m.unbindSigEntry(entries[clampSignalSelection(panel.selected, len(entries))].Adapter)
+	case "d", "D":
+		return *m, m.installSignalDaemon()
+	case "r", "R":
+		panel.daemonOK = nil
+		return *m, checkSignalDaemonCmd()
 	case "i", "I":
 		panel.createMode = true
 		panel.createInput = ""
