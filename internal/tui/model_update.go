@@ -776,6 +776,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Track the originating adapter for per-channel echo suppression.
 		m.remoteInboundAdapter = msg.Message.Envelope.Adapter
 		prompt := buildRemoteInboundPrompt(msg.Message)
+
+		// Handle IM approval reply: y/a/n for pending tool permission
+		if m.pendingApproval != nil {
+			text := strings.TrimSpace(prompt)
+			if text != "" {
+				decision, ok := parseApprovalReply(text)
+				if ok {
+					toolName := m.pendingApproval.ToolName
+					decisionStr := "deny"
+					var cmd tea.Cmd
+					if decision == permission.Allow && isApprovalAlwaysReply(text) {
+						cmd = m.handleApprovalAllowAlways()
+						decisionStr = "always"
+					} else {
+						if decision == permission.Allow {
+							decisionStr = "allow"
+						}
+						cmd = m.handleApproval(decision)
+					}
+					if msg.Response != nil {
+						msg.Response <- nil
+					}
+					// Send result confirmation back to IM
+					if m.approvalNotifiedIM {
+						m.emitIMApprovalResult(toolName, decisionStr)
+					}
+					return m, cmd
+				}
+			}
+		}
+
 		if m.pendingQuestionnaire != nil {
 			if strings.TrimSpace(prompt) == "" {
 				if msg.Response != nil {
@@ -1402,6 +1433,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingApproval = &msg
 		m.approvalOptions = defaultApprovalOptions()
 		m.approvalCursor = 0
+		// Push to IM if available so user can approve remotely
+		m.approvalNotifiedIM = false
+		if m.imEmitter != nil {
+			m.emitIMApproval(msg.ToolName, msg.Input)
+			m.approvalNotifiedIM = true
+		}
 		return m, nil
 
 	case DiffConfirmMsg:
@@ -2098,4 +2135,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, combineCmds(spinnerCmd, cmd)
+}
+
+// parseApprovalReply parses an IM text reply as an approval decision.
+// Returns (decision, true) if the text is a valid approval response.
+// Returns (Deny, false) for unrecognized text.
+func parseApprovalReply(text string) (permission.Decision, bool) {
+	t := strings.ToLower(strings.TrimSpace(text))
+	switch t {
+	case "y", "yes", "ok", "好", "好的", "允许", "同意", "确认":
+		return permission.Allow, true
+	case "a", "always", "总是允许", "总是", "始终允许":
+		return permission.Allow, true
+	case "n", "no", "nope", "拒绝", "取消", "不要", "deny":
+		return permission.Deny, true
+	}
+	// Single-word prefix match: "y xxx" → allow
+	if strings.HasPrefix(t, "y") && len(t) <= 3 {
+		return permission.Allow, true
+	}
+	if strings.HasPrefix(t, "n") && len(t) <= 3 {
+		return permission.Deny, true
+	}
+	return permission.Deny, false
+}
+
+// isApprovalAlwaysReply returns true if the IM text indicates "always allow".
+func isApprovalAlwaysReply(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	switch t {
+	case "a", "always", "总是允许", "总是", "始终允许":
+		return true
+	}
+	return false
 }
