@@ -237,7 +237,7 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 			continue
 		}
 
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 			debug.Log("signal", "adapter=%s receive status %d: %s", a.name, resp.StatusCode, string(body))
 			time.Sleep(5 * time.Second)
 			continue
@@ -589,7 +589,7 @@ func (a *signalAdapter) healthCheck() error {
 		return fmt.Errorf("health check: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("health check: status %d", resp.StatusCode)
 	}
 	return nil
