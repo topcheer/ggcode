@@ -755,3 +755,31 @@ func (a *signalAdapter) publishState(healthy bool, status, lastErr string) {
 		UpdatedAt: time.Now(),
 	})
 }
+
+// CheckSignalDaemon pings the signal-cli REST API at the given baseURL to
+// check if the daemon is running. Returns nil if reachable.
+func CheckSignalDaemon(baseURL string) error {
+	if baseURL == "" {
+		baseURL = signalDefaultBaseURL
+	}
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(baseURL + "/v1/about")
+	if err != nil {
+		return fmt.Errorf("signal-cli daemon not reachable at %s: %w", baseURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("signal-cli daemon at %s returned status %d", baseURL, resp.StatusCode)
+	}
+	return nil
+}
+
+// SignalDaemonInstallCommand returns a shell command string that installs
+// signal-cli-rest-api via Docker.
+func SignalDaemonInstallCommand() string {
+	return "docker run -d --name signal-cli-rest-api -p 8080:8080 -v signal-cli-config:/home/.local/share/signal-cli/ bbernhard/signal-cli-rest-api:latest"
+}

@@ -293,8 +293,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			m.openMatrixPanel()
 			return nil
 		case "/signal":
-			m.openSignalPanel()
-			return nil
+			return m.openSignalPanel()
 		case "/irc":
 			m.openIRCPanel()
 			return nil
