@@ -414,6 +414,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSkillsPanelKey(msg)
 		}
 
+		if m.qrOverlay != nil {
+			return m.handleQROverlayKey(msg)
+		}
+
 		if m.inspectorPanel != nil {
 			return m.handleInspectorPanelKey(msg)
 		}
