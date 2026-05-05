@@ -36,6 +36,7 @@ type slackAdapter struct {
 	botToken   string
 	appToken   string
 	botUserID  string
+	apiBase    string // override for tests
 	stt        imstt.Transcriber
 
 	mu        sync.RWMutex
@@ -542,7 +543,11 @@ func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 	if channelID == "" || ts == "" {
 		return nil
 	}
-	url := slackAPIBase + "/reactions.add"
+	baseURL := slackAPIBase
+	if a.apiBase != "" {
+		baseURL = a.apiBase
+	}
+	url := baseURL + "/reactions.add"
 	body := map[string]any{
 		"channel":   channelID,
 		"timestamp": ts,

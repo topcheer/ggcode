@@ -39,6 +39,7 @@ type twitchAdapter struct {
 	token    string // OAuth token (oauth:xxxxx)
 	nick     string // username (lowercase)
 	channels []string
+	proxy    string // HTTP/SOCKS5 proxy URL
 
 	mu        sync.RWMutex
 	conn      net.Conn
@@ -75,12 +76,15 @@ func newTwitchAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 		}
 	}
 
+	proxy := resolveProxy(stringValue(adapterCfg.Extra, "proxy"), "TWITCH_PROXY")
+
 	return &twitchAdapter{
 		name:     name,
 		manager:  mgr,
 		token:    token,
 		nick:     nick,
 		channels: channels,
+		proxy:    proxy,
 	}, nil
 }
 
@@ -142,11 +146,26 @@ func (a *twitchAdapter) run(ctx context.Context) {
 
 func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 	addr := net.JoinHostPort(twitchHost, strconv.Itoa(twitchPort))
-	debug.Log("twitch", "adapter=%s connecting to %s", a.name, addr)
+	debug.Log("twitch", "adapter=%s connecting to %s proxy=%s", a.name, addr, a.proxy)
 
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, &tls.Config{})
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+	var conn net.Conn
+	var err error
+	if a.proxy != "" {
+		conn, err = proxyDial(a.proxy, addr)
+		if err != nil {
+			return fmt.Errorf("proxy connect: %w", err)
+		}
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: twitchHost})
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			return fmt.Errorf("tls handshake: %w", err)
+		}
+		conn = tlsConn
+	} else {
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, &tls.Config{})
+		if err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
 	}
 
 	a.mu.Lock()

@@ -506,14 +506,9 @@ func TestSlackTriggerTyping_AlreadyReacted(t *testing.T) {
 	defer srv.Close()
 
 	adapter := &slackAdapter{
-		httpClient: &http.Client{
-			Transport: urlRewriteTransport{
-				targets:   []string{"https://slack.com"},
-				rewriteTo: srv.URL,
-				transport: http.DefaultTransport,
-			},
-		},
-		botToken: "token",
+		httpClient: srv.Client(),
+		botToken:   "token",
+		apiBase:    srv.URL,
 	}
 
 	// "already_reacted" is not an error — should return nil.
@@ -536,6 +531,7 @@ func TestSlackTriggerTyping_OtherError(t *testing.T) {
 	adapter := &slackAdapter{
 		httpClient: srv.Client(),
 		botToken:   "token",
+		apiBase:    srv.URL,
 	}
 
 	// Other errors are logged but not returned.
