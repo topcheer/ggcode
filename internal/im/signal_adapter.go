@@ -311,11 +311,20 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 				isNoteToSelf = true
 				raw["dataMessage"] = sentMsg
 			} else if groupInfo != nil {
-				// Sync of a message sent to a group — treat as outbound echo
+				// Sync of a message sent to a group from another device
 				ts := jsonInt64(sentMsg, "timestamp")
 				if ts > 0 && a.isSentTimestamp(ts) {
 					a.removeSentTimestamp(ts)
 					return
+				}
+				// Treat as inbound - set source fields so sender extraction works
+				isGroupSync = true
+				raw["dataMessage"] = sentMsg
+				if _, ok := raw["sourceNumber"]; !ok {
+					raw["sourceNumber"] = a.account
+				}
+				if _, ok := raw["sourceName"]; !ok {
+					raw["sourceName"] = "Me"
 				}
 				// Not our sent message — treat as inbound group message
 				isGroupSync = true
@@ -340,9 +349,9 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 	}
 
 	// Self-message filtering (but allow Note to Self and group sync)
-	if sender == a.account && !isNoteToSelf && !isGroupSync {
-		return
-	}
+	// Note-to-self and group sync messages are handled by syncMessage logic above
+	_ = isNoteToSelf
+	_ = isGroupSync
 
 	// Get dataMessage (or editMessage)
 	dataMessage, _ := raw["dataMessage"].(map[string]any)
