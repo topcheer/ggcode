@@ -191,7 +191,8 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		return fmt.Errorf("whoami: %w", err)
 	}
 	a.userID = string(whoami.UserID)
-	debug.Log("matrix", "adapter=%s authenticated as %s", a.name, a.userID)
+	a.client.DeviceID = whoami.DeviceID
+	debug.Log("matrix", "adapter=%s authenticated as %s device=%s", a.name, a.userID, a.client.DeviceID)
 
 	// 3. Setup E2EE crypto
 	if err := a.setupCrypto(ctx); err != nil {
@@ -246,11 +247,6 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 }
 
 func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
-	deviceID := ""
-	if a.client.DeviceID != "" {
-		deviceID = string(a.client.DeviceID)
-	}
-
 	store := crypto.NewMemoryStore(nil)
 
 	mach := crypto.NewOlmMachine(a.client, nil, store, &cryptoStateStore{adapter: a})
@@ -259,8 +255,14 @@ func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
 		return fmt.Errorf("load olm machine: %w", err)
 	}
 
+	// Upload device keys and one-time keys so other users can send us encrypted messages
+	if err := mach.ShareKeys(ctx, -1); err != nil {
+		debug.Log("matrix", "adapter=%s ShareKeys failed: %v", a.name, err)
+		// Non-fatal: keys may already be uploaded
+	}
+
 	a.mach = mach
-	debug.Log("matrix", "adapter=%s E2EE crypto loaded (device=%s)", a.name, deviceID)
+	debug.Log("matrix", "adapter=%s E2EE crypto loaded (device=%s)", a.name, a.client.DeviceID)
 	return nil
 }
 
