@@ -84,13 +84,13 @@ func newSignalAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapte
 	}
 
 	// Mention policy — default false for DMs, configurable for groups
-	requireMention := true
-	if v := strings.ToLower(stringValue(adapterCfg.Extra, "require_mention")); v == "false" || v == "0" || v == "no" {
-		requireMention = false
+	requireMention := false
+	if v := strings.ToLower(stringValue(adapterCfg.Extra, "require_mention")); v == "true" || v == "1" || v == "yes" {
+		requireMention = true
 	}
 	if envVal := os.Getenv("SIGNAL_REQUIRE_MENTION"); envVal != "" {
-		if strings.ToLower(envVal) == "false" || envVal == "0" || strings.ToLower(envVal) == "no" {
-			requireMention = false
+		if strings.ToLower(envVal) == "true" || envVal == "1" || strings.ToLower(envVal) == "yes" {
+			requireMention = true
 		}
 	}
 
@@ -279,6 +279,9 @@ func (a *signalAdapter) handleSSEEvent(ctx context.Context, eventType, data stri
 // ---------------------------------------------------------------------------
 
 func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any) {
+	rawJSON, _ := json.Marshal(raw)
+	debug.Log("signal", "adapter=%s processEnvelope: %s", a.name, string(rawJSON))
+
 	// signal-cli-rest-api wraps the actual envelope in an "envelope" field:
 	// {"account":"+...", "envelope":{...}}
 	inner, _ := raw["envelope"].(map[string]any)
@@ -416,6 +419,7 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 			}
 		}
 		if !hasMention {
+			debug.Log("signal", "adapter=%s ignoring group message (no mention)", a.name)
 			return
 		}
 		text = stripSignalMention(text, a.account)
