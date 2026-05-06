@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -38,8 +39,11 @@ type whatsappBindResultMsg struct {
 	err     error
 }
 
-func (m *Model) openWhatsAppPanel() {
+func (m *Model) openWhatsAppPanel() tea.Cmd {
 	m.whatsappPanel = &whatsappPanelState{}
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return imPanelRefreshMsg{}
+	})
 }
 
 func (m *Model) closeWhatsAppPanel() {

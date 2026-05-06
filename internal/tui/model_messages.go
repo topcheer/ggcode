@@ -217,6 +217,11 @@ type updateCheckTickMsg struct{}
 // shown in the sidebar, avoiding disk I/O on every View() render.
 type gitBranchTickMsg struct{}
 
+// imPanelRefreshMsg is sent every 2 seconds when an IM panel is open
+// and the selected adapter is in a non-terminal state (pairing, connecting, etc.)
+// This ensures dynamic content like WhatsApp QR codes appears without manual refresh.
+type imPanelRefreshMsg struct{}
+
 // webchatUserMsg is sent by the webui TUIChatBridge to inject a webchat
 // message into the TUI event loop. The TUI handles it like a normal
 // user input submission.

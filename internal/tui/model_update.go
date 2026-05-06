@@ -1535,6 +1535,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return gitBranchTickMsg{}
 		})
 
+	case imPanelRefreshMsg:
+		// Continue ticking as long as any IM panel that needs live state is open
+		if m.whatsappPanel != nil {
+			return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+				return imPanelRefreshMsg{}
+			})
+		}
+		return m, nil
+
 	case updatePrepareResultMsg:
 		return m.handlePreparedUpdate(msg)
 
