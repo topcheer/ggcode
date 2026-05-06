@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 type loadTarget struct {
@@ -34,7 +36,7 @@ type Loader struct {
 
 // NewLoader creates a loader scanning global and project-local skills and commands.
 func NewLoader(projectDir string) *Loader {
-	home, _ := os.UserHomeDir()
+	home := config.HomeDir()
 	return &Loader{
 		targets: []loadTarget{
 			{Dir: filepath.Join(home, ".agents", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},

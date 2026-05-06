@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 const (
@@ -453,10 +455,7 @@ func ResolveInstallDir(explicit string) (string, error) {
 			return filepath.Join(first, "bin"), nil
 		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
-	}
+	home := config.HomeDir()
 	return filepath.Join(home, "go", "bin"), nil
 }
 

@@ -37,6 +37,7 @@ type mattermostAdapter struct {
 	// Bot identity (fetched after connect)
 	botUserID   string
 	botUsername string
+	teamName    string // first team slug, for ContactURI
 
 	// Policies
 	requireMention bool
@@ -165,6 +166,9 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	a.botUsername, _ = me["username"].(string)
 	debug.Log("mattermost", "adapter=%s authenticated as @%s (%s)", a.name, a.botUsername, a.botUserID)
 
+	// Fetch first team for ContactURI deep link
+	a.fetchTeamInfo(ctx)
+
 	// 2. Connect WebSocket
 	wsURL := strings.Replace(a.baseURL, "http", "ws", 1) + "/" + mattermostAPIVersion + "/websocket"
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -189,6 +193,37 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	a.mu.Unlock()
 	a.publishState(true, "connected", "")
 	debug.Log("mattermost", "adapter=%s connected to %s", a.name, wsURL)
+
+	// 3.5 Heartbeat goroutine: send application-level ping to keep connection alive.
+	// Mattermost server closes idle WebSocket connections; sending periodic pings
+	// prevents silent TCP drops (NAT expiry, intermediate router timeouts).
+	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
+	defer heartbeatCancel()
+	safego.Go("im.mattermost.heartbeat", func() {
+		ticker := time.NewTicker(mattermostHeartbeatPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				a.mu.RLock()
+				wsConn := a.ws
+				a.mu.RUnlock()
+				if wsConn == nil {
+					return
+				}
+				pingMsg := map[string]any{
+					"seq":    0,
+					"action": "ping",
+				}
+				if err := wsConn.WriteJSON(pingMsg); err != nil {
+					debug.Log("mattermost", "adapter=%s heartbeat ping failed: %v", a.name, err)
+					return
+				}
+			}
+		}
+	})
 
 	defer func() {
 		a.mu.Lock()
@@ -403,23 +438,65 @@ func (a *mattermostAdapter) sendText(ctx context.Context, channelID, rootID, tex
 	if text == "" || channelID == "" {
 		return nil
 	}
-	if len(text) > mattermostDefaultMaxPostLen {
-		text = text[:mattermostDefaultMaxPostLen]
-	}
 
-	payload := map[string]any{
-		"channel_id": channelID,
-		"message":    text,
-	}
-	if rootID != "" && a.replyMode == "thread" {
-		payload["root_id"] = rootID
-	}
-
-	_, err := a.apiPost("posts", payload)
-	if err != nil {
-		return fmt.Errorf("Mattermost send: %w", err)
+	// Split into chunks that respect rune boundaries (Mattermost max post = 4000 chars)
+	chunks := splitMattermostText(text, mattermostDefaultMaxPostLen)
+	for i, chunk := range chunks {
+		payload := map[string]any{
+			"channel_id": channelID,
+			"message":    chunk,
+		}
+		// Only thread the first chunk; subsequent chunks are replies in the same thread
+		if rootID != "" && a.replyMode == "thread" {
+			payload["root_id"] = rootID
+		}
+		result, err := a.apiPost("posts", payload)
+		if err != nil {
+			return fmt.Errorf("Mattermost send chunk %d/%d: %w", i+1, len(chunks), err)
+		}
+		// If this is the first chunk in a thread and we have no rootID yet,
+		// use the new post's ID as root for subsequent chunks.
+		if rootID == "" && len(chunks) > 1 && i == 0 {
+			if newID, ok := result["id"].(string); ok && newID != "" {
+				rootID = newID
+			}
+		}
 	}
 	return nil
+}
+
+// splitMattermostText splits text into chunks at most maxLen runes,
+// preferring newline boundaries for cleaner splits.
+func splitMattermostText(text string, maxLen int) []string {
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return []string{text}
+	}
+	var chunks []string
+	for len(runes) > 0 {
+		end := maxLen
+		if end > len(runes) {
+			end = len(runes)
+		}
+		// Prefer splitting at a newline within the last 200 runes
+		if end < len(runes) {
+			lookBack := end - 200
+			if lookBack < 0 {
+				lookBack = 0
+			}
+			bestSplit := end
+			for i := end - 1; i >= lookBack; i-- {
+				if runes[i] == '\n' {
+					bestSplit = i + 1
+					break
+				}
+			}
+			end = bestSplit
+		}
+		chunks = append(chunks, string(runes[:end]))
+		runes = runes[end:]
+	}
+	return chunks
 }
 
 // TriggerTyping implements the TypingIndicator interface.
@@ -511,14 +588,48 @@ func (a *mattermostAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	contactURI := ""
+	if a.teamName != "" && a.botUsername != "" {
+		contactURI = a.baseURL + "/" + a.teamName + "/messages/@" + a.botUsername
+	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformMattermost,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		Name:       a.name,
+		Platform:   PlatformMattermost,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  lastErr,
+		ContactURI: contactURI,
+		UpdatedAt:  time.Now(),
 	})
+}
+
+// fetchTeamInfo gets the bot's first team slug for building a ContactURI deep link.
+// GET /api/v4/users/me/teams → [{"name":"team-slug", ...}, ...]
+func (a *mattermostAdapter) fetchTeamInfo(ctx context.Context) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.apiURL("users/me/teams"), nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.conn.Do(req)
+	if err != nil {
+		debug.Log("mattermost", "adapter=%s fetch teams: %v", a.name, err)
+		return
+	}
+	defer resp.Body.Close()
+	var teams []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&teams); err != nil {
+		debug.Log("mattermost", "adapter=%s parse teams: %v", a.name, err)
+		return
+	}
+	for _, t := range teams {
+		if slug, ok := t["name"].(string); ok && slug != "" {
+			a.teamName = slug
+			debug.Log("mattermost", "adapter=%s team=%s", a.name, slug)
+			return
+		}
+	}
 }
 
 // --- Helpers ---

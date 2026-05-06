@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/creack/pty/v2"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // ptyHarness manages a ggcode process running in a pseudo-terminal.
@@ -622,10 +624,7 @@ vendors:
 
 // findRealConfig returns the path to the user's real ggcode.yaml.
 func findRealConfig() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
+	home := config.HomeDir()
 	candidates := []string{
 		filepath.Join(home, ".ggcode", "ggcode.yaml"),
 		filepath.Join(home, ".ggcode", "config.yaml"),

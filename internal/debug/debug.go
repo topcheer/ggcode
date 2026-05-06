@@ -103,6 +103,11 @@ var Categories = []Category{
 		Tags:        []string{"feishu", "feishu-sdk"},
 	},
 	{
+		Name: "whatsapp", EnvSuffix: "WHATSAPP",
+		Description: "WhatsApp IM adapter (whatsmeow)",
+		Tags:        []string{"whatsapp"},
+	},
+	{
 		Name: "matrix", EnvSuffix: "MATRIX",
 		Description: "Matrix IM adapter",
 		Tags:        []string{"matrix"},

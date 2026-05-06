@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // ProjectMemoryFilenames lists the supported project bootstrap documents in
@@ -145,10 +147,7 @@ func findProjectMemoryRoot(dir string) string {
 }
 
 func globalProjectMemoryFiles() []string {
-	globalDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
+	globalDir := config.HomeDir()
 	var files []string
 	for _, name := range ProjectMemoryFilenames {
 		files = append(files, filepath.Join(globalDir, ".ggcode", name))

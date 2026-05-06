@@ -33,8 +33,19 @@ func NewTokenCache(dir string) *TokenCache {
 
 // DefaultTokenCacheDir returns the default cache directory.
 func DefaultTokenCacheDir() string {
-	home, _ := os.UserHomeDir()
+	home := homeDir()
 	return filepath.Join(home, ".ggcode", "oauth-tokens")
+}
+
+// homeDir respects $HOME env var, then falls back to os.UserHomeDir().
+func homeDir() string {
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	if h, err := os.UserHomeDir(); err == nil {
+		return h
+	}
+	return "/root"
 }
 
 // Save writes a token to the cache.

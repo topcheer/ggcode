@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // Todo represents a single todo item.
@@ -27,7 +29,7 @@ func TodoDir(workspace string) string {
 	if trimmed := strings.TrimSpace(workspace); trimmed != "" {
 		return filepath.Join(filepath.Clean(trimmed), ".ggcode")
 	}
-	home, _ := os.UserHomeDir()
+	home := config.HomeDir()
 	return filepath.Join(home, ".ggcode")
 }
 

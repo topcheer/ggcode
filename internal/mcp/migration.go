@@ -90,8 +90,8 @@ func knownClaudeSources(workingDir string) []migrationSource {
 }
 
 func knownUserClaudeSources() []migrationSource {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
+	home := config.HomeDir()
+	if strings.TrimSpace(home) == "" {
 		return nil
 	}
 	return []migrationSource{

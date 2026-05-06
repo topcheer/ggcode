@@ -15,6 +15,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -817,15 +818,13 @@ func shortenSidebarPath(value string) string {
 		return ""
 	}
 	value = filepath.ToSlash(filepath.Clean(value))
-	home, err := os.UserHomeDir()
-	if err == nil {
-		home = filepath.ToSlash(filepath.Clean(home))
-		if value == home {
-			return "~"
-		}
-		if strings.HasPrefix(value, home+"/") {
-			return "~/" + strings.TrimPrefix(value, home+"/")
-		}
+	home := config.HomeDir()
+	home = filepath.ToSlash(filepath.Clean(home))
+	if value == home {
+		return "~"
+	}
+	if strings.HasPrefix(value, home+"/") {
+		return "~/" + strings.TrimPrefix(value, home+"/")
 	}
 	return value
 }
@@ -1165,6 +1164,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderNostrPanel()
 	case m.twitchPanel != nil:
 		return m.renderTwitchPanel()
+	case m.whatsappPanel != nil:
+		return m.renderWhatsAppPanel()
 	case m.imPanel != nil:
 		return m.renderIMPanel()
 	case m.mcpPanel != nil:

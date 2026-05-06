@@ -495,6 +495,6 @@ func renderContactQRCode(uri string) string {
 	if err != nil {
 		return ""
 	}
-	qr.DisableBorder = true
+	qr.DisableBorder = false
 	return strings.TrimRight(qr.ToSmallString(false), "\n")
 }

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 var (
@@ -14,10 +16,7 @@ var (
 )
 
 func mcpDisabledPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+	home := config.HomeDir()
 	return filepath.Join(home, ".ggcode", "disabled_mcp.json"), nil
 }
 

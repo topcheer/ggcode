@@ -2,10 +2,10 @@ package permission
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"sync"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -229,10 +229,7 @@ func (p *ConfigPolicy) GetDecision(toolName string) Decision {
 
 // isSensitivePath returns true for paths that are system-critical or user-config.
 func isSensitivePath(path string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
+	home := config.HomeDir()
 	sensitiveFiles := []string{
 		".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
 		".ssh/config", ".ssh/authorized_keys", ".ssh/id_rsa", ".ssh/id_ed25519",

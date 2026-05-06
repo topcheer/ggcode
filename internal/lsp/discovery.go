@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 type LanguageStatus struct {
@@ -362,7 +364,8 @@ func resolveRustAnalyzerFallback() (display string, command string, ok bool) {
 			}
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	home := config.HomeDir()
+	{
 		path := filepath.Join(home, ".cargo", "bin", executableName("rust-analyzer"))
 		if executableExists(path) {
 			return "rust-analyzer", path, true
@@ -382,7 +385,8 @@ func resolveGoBinaryFallback(binary string) (display string, command string, ok 
 			candidates = append(candidates, filepath.Join(first, "bin", executableName(binary)))
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	{
+		home := config.HomeDir()
 		candidates = append(candidates, filepath.Join(home, "go", "bin", executableName(binary)))
 	}
 	for _, candidate := range candidates {
@@ -447,10 +451,7 @@ func resolveNodeBinaryFallback(candidates []string, workspace string) (display s
 }
 
 func resolveDotnetToolFallback(candidates []string) (display string, command string, ok bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", false
-	}
+	home := config.HomeDir()
 	for _, candidate := range candidates {
 		for _, name := range executableNames(candidate) {
 			path := filepath.Join(home, ".dotnet", "tools", name)

@@ -13,6 +13,8 @@ import (
 // TestPCAutoStartE2E simulates the exact root.go startup flow
 // when IM is disabled, verifying the PC adapter is available.
 func TestPCAutoStartE2E(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := config.IMConfig{Enabled: false}
 	mgr := NewManager()
 
@@ -54,6 +56,8 @@ func TestPCAutoStartE2E(t *testing.T) {
 // 3. "SetIMManager" (just verify the manager is the same object)
 // 4. Check PCAdapter() from the same manager reference
 func TestPCStartAfterSetIMManager(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := config.IMConfig{Enabled: false}
 
 	// Step 1: Create Manager (like root.go line 459)

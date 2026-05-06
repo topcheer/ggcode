@@ -195,6 +195,7 @@ type AdapterState struct {
 	Status     string
 	LastError  string
 	ContactURI string // deep link to add/contact bot (e.g. https://t.me/botname)
+	QRCode     string // ASCII art QR code (for WhatsApp pairing, etc.)
 	UpdatedAt  time.Time
 }
 

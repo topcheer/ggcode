@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/topcheer/ggcode/internal/config"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -110,10 +112,7 @@ func NewJSONFilePairingStore(path string) (*JSONFilePairingStore, error) {
 }
 
 func DefaultPairingStatePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+	home := config.HomeDir()
 	return filepath.Join(home, ".ggcode", "im-pairing.json"), nil
 }
 

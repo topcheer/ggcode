@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // AutoMemory manages automatic memory persistence in ~/.ggcode/memory/.
@@ -15,10 +17,7 @@ type AutoMemory struct {
 
 // NewAutoMemory creates an AutoMemory instance.
 func NewAutoMemory() *AutoMemory {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
+	home := config.HomeDir()
 	dir := filepath.Join(home, ".ggcode", "memory")
 	_ = os.MkdirAll(dir, 0755)
 	return &AutoMemory{dir: dir}

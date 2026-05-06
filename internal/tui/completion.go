@@ -193,7 +193,7 @@ func CompleteMention(prefix string, workDir string) []string {
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
-	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch",
+	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
 	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
@@ -230,6 +230,8 @@ var SlashCommandDescriptions = map[string]string{
 	"/irc":         "Manage IRC channel binding",
 	"/nostr":       "Manage Nostr channel binding",
 	"/twitch":      "Manage Twitch channel binding",
+	"/whatsapp":    "Manage WhatsApp channel binding",
+	"/wa":          "Alias for /whatsapp",
 	"/mcp":         "Show MCP servers",
 	"/memory":      "Manage memory",
 	"/undo":        "Undo last file edit",
@@ -286,6 +288,8 @@ var SlashCommandPlaceholders = map[string]string{
 	"/irc":         "<subcommand>",
 	"/nostr":       "<subcommand>",
 	"/twitch":      "<subcommand>",
+	"/whatsapp":    "",
+	"/wa":          "",
 	"/restart":     "[debug]",
 }
 

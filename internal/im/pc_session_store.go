@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/topcheer/ggcode/internal/config"
 	"path/filepath"
 	"sync"
 	"time"
@@ -78,10 +80,7 @@ func NewJSONFilePCSessionStore(path string) (*JSONFilePCSessionStore, error) {
 }
 
 func DefaultPCSessionStorePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+	home := config.HomeDir()
 	return filepath.Join(home, ".ggcode", "im-pc-sessions.json"), nil
 }
 

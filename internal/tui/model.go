@@ -140,6 +140,7 @@ type Model struct {
 	ircPanel                        *ircPanelState
 	nostrPanel                      *nostrPanelState
 	twitchPanel                     *twitchPanelState
+	whatsappPanel                   *whatsappPanelState
 	imPanel                         *imPanelState
 	mcpPanel                        *mcpPanelState
 	pendingDeviceCodes              []deviceCodeInfo
@@ -611,6 +612,8 @@ func (m *Model) closeActivePanel() bool {
 		m.closeNostrPanel()
 	case m.twitchPanel != nil:
 		m.closeTwitchPanel()
+	case m.whatsappPanel != nil:
+		m.closeWhatsAppPanel()
 	case m.mcpPanel != nil:
 		m.closeMCPPanel()
 	case m.skillsPanel != nil:

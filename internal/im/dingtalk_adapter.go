@@ -690,7 +690,9 @@ func (a *dingtalkAdapter) publishState(healthy bool, status, errMsg string) {
 	}
 	contactURI := ""
 	if a.appKey != "" {
-		contactURI = "https://h5.dingtalk.com/circle/healthCheckBoard.html?appkey=" + a.appKey
+		// DingTalk enterprise bots don't have a public scan-to-add URL.
+		// Link to the developer console app detail page instead.
+		contactURI = "https://dev.dingtalk.com/app/detail?appKey=" + a.appKey
 	}
 	a.manager.PublishAdapterState(AdapterState{
 		Name:       a.name,
