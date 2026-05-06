@@ -37,7 +37,7 @@ try {
                 "-X github.com/topcheer/ggcode/internal/version.Commit=$commit",
                 "-X github.com/topcheer/ggcode/internal/version.Date=$buildDate"
             ) -join " "
-            go build -ldflags $ldflags -o (Join-Path $stageDir "ggcode.exe") ./cmd/ggcode
+            go build -tags goolm -ldflags $ldflags -o (Join-Path $stageDir "ggcode.exe") ./cmd/ggcode
             if ($LASTEXITCODE -ne 0) {
                 throw "go build failed for $($build.GoArch)"
             }
