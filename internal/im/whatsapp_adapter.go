@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
@@ -351,17 +352,33 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 			debug.Log("whatsapp", "adapter %q: connected (jid=%s)", a.name, jid)
 			a.publishState(true, "connected", "")
 
-			// Mark ourselves as available so the server starts pushing messages.
-			// Without this, WhatsApp may not deliver inbound messages to linked devices.
 			if a.client != nil {
 				if a.client.Store.PushName == "" {
 					a.client.Store.PushName = "ggcode"
 				}
+				// Mark ourselves as available so the server starts pushing messages.
 				if err := a.client.SendPresence(context.Background(), types.PresenceAvailable); err != nil {
 					debug.Log("whatsapp", "adapter %q: send presence available failed: %v", a.name, err)
 				} else {
 					debug.Log("whatsapp", "adapter %q: presence set to available", a.name)
 				}
+
+				// Fetch critical app state (encryption keys, contact list, group metadata).
+				// Without these, the client cannot decrypt incoming messages.
+				// Matches mautrix-whatsapp bridge's post-connect initialization.
+				go func() {
+					ctx := context.Background()
+					for _, name := range []appstate.WAPatchName{
+						appstate.WAPatchCriticalBlock,
+						appstate.WAPatchCriticalUnblockLow,
+					} {
+						if err := a.client.FetchAppState(ctx, name, false, false); err != nil {
+							debug.Log("whatsapp", "adapter %q: fetch app state %s failed: %v", a.name, name, err)
+						} else {
+							debug.Log("whatsapp", "adapter %q: fetched app state %s", a.name, name)
+						}
+					}
+				}()
 			}
 
 		case *events.Disconnected:
