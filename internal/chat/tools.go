@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -15,16 +16,20 @@ import (
 // Concrete tool types embed this and override RenderBody/RenderParams.
 type BaseToolItem struct {
 	CachedItem
-	id           string
-	toolName     string
-	status       ToolStatus
-	input        string // raw JSON input
-	result       string // result text (may contain error)
-	isError      bool
-	markdownBody bool // render result as markdown
-	suppressBody bool // hide body entirely (e.g., save_memory)
-	formatJSON   bool // parse JSON result and render as formatted key-value pairs
-	styles       Styles
+	id             string
+	toolName       string
+	status         ToolStatus
+	input          string // raw JSON input
+	result         string // result text (may contain error)
+	isError        bool
+	markdownBody   bool // render result as markdown
+	suppressBody   bool // hide body entirely (e.g., save_memory)
+	suppressHeader bool // hide header entirely (e.g., read_command_output)
+	formatJSON     bool // parse JSON result and render as formatted key-value pairs
+	styles         Styles
+	fileBodyMode   string // "" default, "linecount" for read/write, "editdiff" for edit
+	lang           string // "zh-CN", "en"
+	rawArgs        string // raw JSON args for body rendering (e.g. edit diff)
 }
 
 // NewBaseToolItem creates a base tool item.
@@ -106,6 +111,22 @@ func (t *BaseToolItem) RenderBody(width int) string {
 		return t.styles.ErrorStyle.Render(t.result)
 	}
 
+	// File tool: line count or edit diff
+	switch t.fileBodyMode {
+	case "linecount":
+		return t.renderFileLineCount()
+	case "editdiff":
+		return t.renderEditDiff()
+	case "searchcount":
+		return t.renderSearchCount()
+	case "gitstatus":
+		return t.renderGitStatus()
+	case "gitdiff":
+		return t.renderGitDiff()
+	case "gitlog":
+		return t.renderGitLog()
+	}
+
 	if t.markdownBody {
 		rendered := markdown.Render(t.result, width)
 		return t.styles.ToolBody.Render(strings.TrimSuffix(rendered, "\n"))
@@ -118,6 +139,198 @@ func (t *BaseToolItem) RenderBody(width int) string {
 
 	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
 	return t.styles.ToolBody.Render(body)
+}
+
+func (t *BaseToolItem) renderFileLineCount() string {
+	var lines int
+
+	// For write_file, count lines from content arg in rawArgs
+	if t.rawArgs != "" {
+		var args struct {
+			Content string `json:"content"`
+		}
+		if json.Unmarshal([]byte(t.rawArgs), &args) == nil && args.Content != "" {
+			lines = strings.Count(args.Content, "\n")
+			if !strings.HasSuffix(args.Content, "\n") {
+				lines++
+			}
+			var text string
+			if strings.HasPrefix(t.lang, "zh") {
+				text = fmt.Sprintf("%d行", lines)
+			} else {
+				text = fmt.Sprintf("%d lines", lines)
+			}
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("    " + text)
+		}
+	}
+
+	// For read_file, extract actual line count from numbered lines in result
+	// Result has lines like "     1    content"
+	re := regexp.MustCompile(`(?m)^\s+\d+\s`)
+	matches := re.FindAllString(t.result, -1)
+	lines = len(matches)
+
+	var text string
+	if strings.HasPrefix(t.lang, "zh") {
+		text = fmt.Sprintf("%d行", lines)
+	} else {
+		text = fmt.Sprintf("%d lines", lines)
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("    " + text)
+}
+
+func (t *BaseToolItem) renderEditDiff() string {
+	var args struct {
+		OldText string `json:"old_text"`
+		NewText string `json:"new_text"`
+		Edits   []struct {
+			OldText string `json:"old_text"`
+			NewText string `json:"new_text"`
+		} `json:"edits"`
+	}
+	_ = json.Unmarshal([]byte(t.rawArgs), &args)
+
+	var added, removed int
+	if len(args.Edits) > 0 {
+		for _, e := range args.Edits {
+			removed += strings.Count(e.OldText, "\n")
+			added += strings.Count(e.NewText, "\n")
+		}
+	} else {
+		removed = strings.Count(args.OldText, "\n")
+		added = strings.Count(args.NewText, "\n")
+	}
+
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	red := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	return "    " + green.Render(fmt.Sprintf("+%d", added)) + " " + red.Render(fmt.Sprintf("-%d", removed))
+}
+
+func (t *BaseToolItem) renderSearchCount() string {
+	// "Found N matches" or "Showing X of Y matches"
+	re := regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|of (\d+) results?`)
+	m := re.FindStringSubmatch(t.result)
+	n := ""
+	if len(m) >= 4 {
+		if m[1] != "" {
+			n = m[1]
+		} else if m[2] != "" {
+			n = m[2]
+		} else if len(m) >= 4 && m[3] != "" {
+			n = m[3]
+		}
+	}
+	// Fallback: count non-empty lines (e.g. glob returns plain file paths)
+	if n == "" && t.result != "" {
+		lines := 0
+		for _, l := range strings.Split(t.result, "\n") {
+			if strings.TrimSpace(l) != "" {
+				lines++
+			}
+		}
+		n = fmt.Sprintf("%d", lines)
+	}
+	if n == "" || n == "0" {
+		return ""
+	}
+	var text string
+	if strings.HasPrefix(t.lang, "zh") {
+		text = fmt.Sprintf("%s 个匹配", n)
+	} else {
+		text = fmt.Sprintf("%s matches", n)
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("    " + text)
+}
+
+func (t *BaseToolItem) renderGitStatus() string {
+	if t.result == "" {
+		return ""
+	}
+	modified := 0
+	added := 0
+	deleted := 0
+	untracked := 0
+	for _, line := range strings.Split(t.result, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'M':
+			modified++
+		case 'A':
+			added++
+		case 'D':
+			deleted++
+		case '?':
+			untracked++
+		}
+	}
+	if modified == 0 && added == 0 && deleted == 0 && untracked == 0 {
+		return ""
+	}
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	red := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	yellow := lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	parts := []string{}
+	if modified > 0 {
+		parts = append(parts, yellow.Render(fmt.Sprintf("%d modified", modified)))
+	}
+	if added > 0 {
+		parts = append(parts, green.Render(fmt.Sprintf("%d added", added)))
+	}
+	if deleted > 0 {
+		parts = append(parts, red.Render(fmt.Sprintf("%d deleted", deleted)))
+	}
+	if untracked > 0 {
+		parts = append(parts, yellow.Render(fmt.Sprintf("%d untracked", untracked)))
+	}
+	return "    " + strings.Join(parts, " ")
+}
+
+func (t *BaseToolItem) renderGitDiff() string {
+	if t.result == "" {
+		return ""
+	}
+	added := 0
+	removed := 0
+	for _, line := range strings.Split(t.result, "\n") {
+		if len(line) == 0 {
+			continue
+		}
+		// Skip diff header lines (+++, ---, @@, etc.)
+		if line[0] == '+' && !strings.HasPrefix(line, "+++") {
+			added++
+		} else if line[0] == '-' && !strings.HasPrefix(line, "---") {
+			removed++
+		}
+	}
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	red := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	return "    " + green.Render(fmt.Sprintf("+%d", added)) + " " + red.Render(fmt.Sprintf("-%d", removed))
+}
+
+func (t *BaseToolItem) renderGitLog() string {
+	if t.result == "" {
+		return ""
+	}
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	// Show first 3 commit lines (one-line format)
+	lines := []string{}
+	for _, line := range strings.Split(t.result, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+		if len(lines) >= 3 {
+			break
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "    " + green.Render(strings.Join(lines, "\n    "))
 }
 
 // Render produces the full tool output: header + optional body.
@@ -181,7 +394,8 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 		"swarm_task_create", "swarm_task_claim", "swarm_task_complete",
 		"send_message", "config",
 		"enter_plan_mode", "exit_plan_mode",
-		"task_update", "task_stop":
+		"task_update", "task_stop",
+		"skill":
 		return BodySuppress
 	case "cron_create", "task_create", "task_get":
 		return BodyFormatJSON
@@ -231,6 +445,7 @@ func PrettifyToolName(name string) string {
 
 func NewBashToolItem(id, displayName, command string, status ToolStatus, styles Styles) *BashToolItem {
 	b := NewBaseToolItem(id, displayName, status, command, styles)
+	b.suppressBody = true
 	result := &BashToolItem{BaseToolItem: *b, command: command}
 	return result
 }
@@ -240,17 +455,6 @@ func (t *BashToolItem) RenderParams() string {
 }
 
 // RenderBody uses BashBody style for command output.
-func (t *BashToolItem) RenderBody(width int) string {
-	if t.result == "" {
-		return ""
-	}
-	if t.isError {
-		return t.styles.ErrorStyle.Render(t.result)
-	}
-	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
-	return t.styles.BashBody.Render(body)
-}
-
 func (t *BashToolItem) Render(width int) string {
 	if cached, _, ok := t.GetCached(width); ok {
 		return cached
@@ -264,53 +468,28 @@ func (t *BashToolItem) Render(width int) string {
 type FileToolItem struct {
 	BaseToolItem
 	filePath string
-	toolType string // "Read", "Write", "Edit", "MultiEdit"
-	lang     string // "zh-CN", "en"
 }
 
 // NewFileToolItem creates a new file operation tool item.
-func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles, lang string) *FileToolItem {
+func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles, lang string, rawArgs string) *FileToolItem {
 	b := NewBaseToolItem(id, displayName, status, filePath, styles)
+	b.lang = lang
+	b.rawArgs = rawArgs
+	// Determine body mode based on display name
+	switch displayName {
+	case "Edit", "编辑", "MultiEdit", "批量编辑":
+		b.fileBodyMode = "editdiff"
+	default:
+		b.fileBodyMode = "linecount"
+	}
 	return &FileToolItem{
 		BaseToolItem: *b,
 		filePath:     filePath,
-		toolType:     displayName,
-		lang:         lang,
 	}
 }
 
 func (t *FileToolItem) RenderParams() string {
 	return t.filePath
-}
-
-// RenderBody shows only the line count (green) instead of file contents.
-func (t *FileToolItem) RenderBody(width int) string {
-	if t.result == "" || t.isError {
-		return ""
-	}
-	lines := strings.Count(t.result, "\n")
-	if strings.HasSuffix(t.result, "\n") {
-		lines--
-	}
-	if lines < 0 {
-		lines = 0
-	}
-	var lineText string
-	if strings.HasPrefix(t.lang, "zh") {
-		lineText = fmt.Sprintf("%d行", lines)
-	} else {
-		lineText = fmt.Sprintf("%d lines", lines)
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("    " + lineText)
-}
-
-func (t *FileToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
 }
 
 // SearchToolItem renders grep/glob/ls operations.
@@ -322,6 +501,7 @@ type SearchToolItem struct {
 // NewSearchToolItem creates a new search tool item.
 func NewSearchToolItem(id, displayName, pattern string, status ToolStatus, styles Styles) *SearchToolItem {
 	b := NewBaseToolItem(id, displayName, status, pattern, styles)
+	b.fileBodyMode = "searchcount"
 	return &SearchToolItem{BaseToolItem: *b, pattern: pattern}
 }
 
@@ -348,6 +528,7 @@ type ListToolItem struct {
 
 func newListToolItem(id, displayName, path string, status ToolStatus, styles Styles) *ListToolItem {
 	b := NewBaseToolItem(id, displayName, status, path, styles)
+	b.suppressBody = true
 	return &ListToolItem{BaseToolItem: *b, path: path}
 }
 
@@ -357,7 +538,7 @@ func (t *ListToolItem) Render(width int) string {
 	if cached, _, ok := t.GetCached(width); ok {
 		return cached
 	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
+	rendered := t.renderCore(width, t.RenderParams(), "")
 	t.SetCached(rendered, width, measureHeight(rendered))
 	return rendered
 }
@@ -460,6 +641,11 @@ func (t *CmdToolItem) RenderBody(width int) string {
 func (t *CmdToolItem) Render(width int) string {
 	if cached, _, ok := t.GetCached(width); ok {
 		return cached
+	}
+	if t.suppressHeader {
+		rendered := ""
+		t.SetCached(rendered, width, 0)
+		return rendered
 	}
 	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
 	t.SetCached(rendered, width, measureHeight(rendered))
@@ -607,7 +793,7 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 	case catBash:
 		return NewBashToolItem(id, displayName, ctx.Detail, status, styles)
 	case catFile:
-		return NewFileToolItem(id, displayName, ctx.Detail, status, styles, ctx.Lang)
+		return NewFileToolItem(id, displayName, ctx.Detail, status, styles, ctx.Lang, ctx.RawArgs)
 	case catSearch:
 		return NewSearchToolItem(id, displayName, ctx.Detail, status, styles)
 	case catList:
@@ -615,9 +801,28 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 	case catWeb:
 		return newWebToolItem(id, displayName, ctx.Detail, status, styles)
 	case catGit:
-		return newGitToolItem(id, displayName, ctx.Detail, status, styles)
+		item := newGitToolItem(id, displayName, ctx.Detail, status, styles)
+		switch ctx.ToolName {
+		case "git_status":
+			item.BaseToolItem.fileBodyMode = "gitstatus"
+		case "git_diff":
+			item.BaseToolItem.fileBodyMode = "gitdiff"
+		case "git_log":
+			item.BaseToolItem.fileBodyMode = "gitlog"
+		default:
+			item.BaseToolItem.suppressBody = true
+		}
+		return item
 	case catCmd:
-		return newCmdToolItem(id, displayName, ctx.Detail, status, styles)
+		if ctx.ToolName == "start_command" {
+			item := newCmdToolItem(id, displayName, ctx.Detail, status, styles)
+			item.BaseToolItem.suppressBody = true
+			return item
+		}
+		item := newCmdToolItem(id, displayName, ctx.Detail, status, styles)
+		item.BaseToolItem.suppressBody = true
+		item.BaseToolItem.suppressHeader = true
+		return item
 	case catLSP:
 		return newLspToolItem(id, displayName, ctx.Detail, status, styles)
 	default:
@@ -799,7 +1004,7 @@ func (a *AgentToolItem) Render(width int) string {
 	if len(taskDisplay) > width-15 {
 		taskDisplay = taskDisplay[:width-16] + "…"
 	}
-	header := a.styles.ToolHeader(a.status, "Agent", width, taskDisplay)
+	header := a.styles.ToolHeader(a.status, "Starting subagent", width, taskDisplay)
 
 	if len(a.nestedItems) == 0 {
 		rendered := header

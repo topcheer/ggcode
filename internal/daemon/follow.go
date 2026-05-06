@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -88,6 +89,7 @@ const (
 	ansiBold      = "\033[1m"
 	ansiFgYellow  = "\033[33m"
 	ansiFgGreen   = "\033[32m"
+	ansiFgRed     = "\033[31m"
 	ansiBgBlue    = "\033[44m"
 	// In raw terminal mode, \n only moves cursor down without returning to
 	// column 0. We must use \r\n for proper line breaks.
@@ -241,6 +243,32 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 		displayName = prettifyToolName(toolName)
 	}
 
+	// Completely hide certain tools (no header/body)
+	hiddenTools := map[string]bool{
+		"read_command_output": true,
+		"wait_command":        true,
+		"stop_command":        true,
+		"write_command_input": true,
+		"list_commands":       true,
+		"list_agents":         true,
+		"wait_agent":          true,
+		"git_show":            true,
+		"git_blame":           true,
+		"git_branch_list":     true,
+		"git_remote":          true,
+		"git_stash_list":      true,
+		"git_add":             true,
+		"git_commit":          true,
+		"git_stash":           true,
+	}
+	if hiddenTools[toolName] {
+		return
+	}
+	// LSP tools → skip
+	if strings.HasPrefix(toolName, "lsp_") {
+		return
+	}
+
 	// Render header
 	header := d.styles.ToolHeader(status, displayName, d.termWidth, detail)
 	fmt.Fprint(d.out, header+nl)
@@ -354,12 +382,32 @@ func (d *TerminalFollowDisplay) formatSpecialBody(toolName, rawArgs, result stri
 	}
 
 	switch toolName {
-	case "read_file", "edit_file", "write_file":
+	case "read_file", "write_file":
 		return formatFileBody(d.lang, result, isError)
+	case "edit_file":
+		return formatEditBody(d.lang, rawArgs, isError)
+	case "list_directory":
+		return ""
+	case "search_files", "grep", "glob":
+		return formatSearchCount(d.lang, result, isError)
+	case "git_status":
+		return formatGitStatus(result, isError)
+	case "git_diff":
+		return formatGitDiff(result, isError)
+	case "git_log":
+		return formatGitLog(result, isError)
+	case "git_show", "git_blame", "git_branch_list", "git_remote",
+		"git_stash_list", "git_add", "git_commit", "git_stash":
+		return ""
+	case "skill":
+		return ""
 	case "todo_write":
 		return formatTodoResult(d.lang, rawArgs)
-	case "run_command", "bash", "powershell", "start_command":
-		return formatCommandBody(d.lang, rawArgs, result, isError)
+	case "run_command", "bash", "powershell":
+		return ""
+	case "read_command_output", "wait_command", "stop_command",
+		"write_command_input", "list_commands":
+		return ""
 	default:
 		if strings.Contains(toolName, "_") || strings.Contains(toolName, ".") {
 			return formatMCPToolBody(d.lang, toolName, rawArgs, result, isError)
@@ -431,6 +479,73 @@ func formatFileBody(lang Lang, result string, isError bool) string {
 		text = fmt.Sprintf("%d lines", lines)
 	}
 	return ansiFgGreen + "    " + text + ansiReset + nl
+}
+
+// formatEditBody shows +added/-removed in green/red for edit operations.
+func formatEditBody(lang Lang, rawArgs string, isError bool) string {
+	if isError {
+		return ""
+	}
+	var args struct {
+		OldText string `json:"old_text"`
+		NewText string `json:"new_text"`
+		Edits   []struct {
+			OldText string `json:"old_text"`
+			NewText string `json:"new_text"`
+		} `json:"edits"`
+	}
+	_ = json.Unmarshal([]byte(rawArgs), &args)
+
+	var added, removed int
+	if len(args.Edits) > 0 {
+		for _, e := range args.Edits {
+			removed += strings.Count(e.OldText, "\n")
+			added += strings.Count(e.NewText, "\n")
+		}
+	} else {
+		removed = strings.Count(args.OldText, "\n")
+		added = strings.Count(args.NewText, "\n")
+	}
+
+	return "    " + ansiFgGreen + fmt.Sprintf("+%d", added) + ansiReset + " " + ansiFgRed + fmt.Sprintf("-%d", removed) + ansiReset + nl
+}
+
+func formatSearchCount(lang Lang, result string, isError bool) string {
+	if isError {
+		return ""
+	}
+	re := regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|of (\d+) results?`)
+	m := re.FindStringSubmatch(result)
+	n := ""
+	if len(m) >= 4 {
+		if m[1] != "" {
+			n = m[1]
+		} else if m[2] != "" {
+			n = m[2]
+		} else if len(m) >= 4 && m[3] != "" {
+			n = m[3]
+		}
+	}
+	// Fallback: count non-empty lines
+	if n == "" && result != "" {
+		lines := 0
+		for _, l := range strings.Split(result, "\n") {
+			if strings.TrimSpace(l) != "" {
+				lines++
+			}
+		}
+		n = fmt.Sprintf("%d", lines)
+	}
+	if n == "" || n == "0" {
+		return ""
+	}
+	var text string
+	if strings.HasPrefix(string(lang), "zh") {
+		text = fmt.Sprintf("%s 个匹配", n)
+	} else {
+		text = fmt.Sprintf("%s matches", n)
+	}
+	return "    " + ansiFgGreen + text + ansiReset + nl
 }
 
 // formatCommandBody renders command execution body (without header).
@@ -552,4 +667,83 @@ func truncateForTerminal(text string, maxLen int) string {
 		return text
 	}
 	return text[:maxLen-3] + "..."
+}
+
+func formatGitStatus(result string, isError bool) string {
+	if isError || result == "" {
+		return ""
+	}
+	modified, added, deleted, untracked := 0, 0, 0, 0
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'M':
+			modified++
+		case 'A':
+			added++
+		case 'D':
+			deleted++
+		case '?':
+			untracked++
+		}
+	}
+	if modified == 0 && added == 0 && deleted == 0 && untracked == 0 {
+		return ""
+	}
+	parts := []string{}
+	if modified > 0 {
+		parts = append(parts, ansiFgYellow+fmt.Sprintf("%d modified", modified)+ansiReset)
+	}
+	if added > 0 {
+		parts = append(parts, ansiFgGreen+fmt.Sprintf("%d added", added)+ansiReset)
+	}
+	if deleted > 0 {
+		parts = append(parts, ansiFgRed+fmt.Sprintf("%d deleted", deleted)+ansiReset)
+	}
+	if untracked > 0 {
+		parts = append(parts, ansiFgYellow+fmt.Sprintf("%d untracked", untracked)+ansiReset)
+	}
+	return "    " + strings.Join(parts, " ") + nl
+}
+
+func formatGitDiff(result string, isError bool) string {
+	if isError || result == "" {
+		return ""
+	}
+	added, removed := 0, 0
+	for _, line := range strings.Split(result, "\n") {
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] == '+' && !strings.HasPrefix(line, "+++") {
+			added++
+		} else if line[0] == '-' && !strings.HasPrefix(line, "---") {
+			removed++
+		}
+	}
+	return "    " + ansiFgGreen + fmt.Sprintf("+%d", added) + ansiReset + " " + ansiFgRed + fmt.Sprintf("-%d", removed) + ansiReset + nl
+}
+
+func formatGitLog(result string, isError bool) string {
+	if isError || result == "" {
+		return ""
+	}
+	lines := []string{}
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+		if len(lines) >= 3 {
+			break
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "    " + ansiFgGreen + strings.Join(lines, nl+"    ") + ansiReset + nl
 }

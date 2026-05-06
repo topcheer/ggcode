@@ -240,14 +240,15 @@ func TestBashToolItem(t *testing.T) {
 
 	item.SetResult("ok  github.com/example  1.234s", false)
 	rendered = item.Render(80)
-	if !strings.Contains(rendered, "1.234s") {
-		t.Fatalf("expected result in render: %s", rendered)
+	// Bash tool body is suppressed — only header visible
+	if strings.Contains(rendered, "1.234s") {
+		t.Fatalf("Bash tool body should be suppressed: %s", rendered)
 	}
 }
 
 func TestFileToolItem(t *testing.T) {
 	styles := DefaultStyles()
-	item := NewFileToolItem("t2", "Edit", "internal/tui/model.go", StatusSuccess, styles, "en")
+	item := NewFileToolItem("t2", "Edit", "internal/tui/model.go", StatusSuccess, styles, "en", "")
 	rendered := item.Render(80)
 	if !strings.Contains(rendered, "Edit") {
 		t.Fatalf("expected Edit in render: %s", rendered)
@@ -281,8 +282,8 @@ func TestAgentToolItem(t *testing.T) {
 	agent.AppendNested(bash)
 
 	rendered := agent.Render(80)
-	if !strings.Contains(rendered, "Agent") {
-		t.Fatalf("expected Agent in render: %s", rendered)
+	if !strings.Contains(rendered, "Starting subagent") {
+		t.Fatalf("expected Starting subagent in render: %s", rendered)
 	}
 	if !strings.Contains(rendered, "auth") {
 		t.Fatalf("expected task in render: %s", rendered)
@@ -514,7 +515,7 @@ func TestToolHeaderShowsParams(t *testing.T) {
 	}
 
 	// FileToolItem — should show path in header
-	file := NewFileToolItem("t2", "Read", "internal/config/config.go", StatusSuccess, styles, "en")
+	file := NewFileToolItem("t2", "Read", "internal/config/config.go", StatusSuccess, styles, "en", "")
 	rendered2 := file.Render(80)
 	firstLine2 := strings.SplitN(rendered2, "\n", 2)[0]
 	clean2 := stripTestAnsi(firstLine2)
