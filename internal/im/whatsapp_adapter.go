@@ -237,7 +237,7 @@ func (a *whatsappAdapter) run(ctx context.Context) {
 // On failure or logout, the caller (reconnectLoop) retries.
 func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 	dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
-	container, err := sqlstore.New(ctx, "sqlite3", fmt.Sprintf("file:%s?_foreign_keys=on", dbPath), waLog.Noop)
+	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), waLog.Noop)
 	if err != nil {
 		debug.Log("whatsapp", "adapter %q: open store: %v", a.name, err)
 		a.publishState(false, "error", fmt.Sprintf("store: %v", err))
