@@ -425,19 +425,19 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "stop_command":
 		return true, formatIMStopCommandResult(tr)
 	case "read_command_output":
-		return true, formatIMReadCmdOutputResult(tr)
+		return true, "" // hidden — result consumed internally
 	case "wait_command":
-		return true, formatIMWaitCommandResult(tr)
+		return true, "" // hidden
 	case "write_command_input":
-		return true, formatIMWriteCmdInputResult(tr)
+		return true, "" // hidden
 	case "list_commands":
-		return true, formatIMListCommandsResult(tr)
+		return true, "" // hidden
 	case "spawn_agent":
 		return true, formatIMSpawnAgentResult(tr)
 	case "wait_agent":
-		return true, formatIMWaitAgentResult(tr)
+		return true, "" // hidden — result consumed by LLM
 	case "list_agents":
-		return true, formatIMListAgentsResult(tr)
+		return true, "" // hidden
 	case "list_mcp_capabilities":
 		return true, formatIMMCPCapabilitiesResult(tr)
 	case "get_mcp_prompt":
@@ -445,9 +445,9 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "read_mcp_resource":
 		return true, formatIMMCPResourceResult(tr)
 	case "skill":
-		return true, formatIMSkillResult(tr)
+		return true, "" // hidden
 	case "save_memory":
-		return true, formatIMSaveMemoryResult(tr)
+		return true, "" // hidden
 	case "sleep":
 		return true, formatIMSleepResult(tr)
 	case "cron_create":
@@ -468,8 +468,15 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		if strings.Contains(tr.ToolName, "_") || strings.Contains(tr.ToolName, ".") {
 			return true, formatIMMCPToolResult(tr)
 		}
-		return false, ""
+	case "git_show", "git_blame", "git_branch_list", "git_remote",
+		"git_stash_list", "git_add", "git_commit", "git_stash":
+		return true, "" // hidden — secondary git tools
 	}
+	// LSP tools → hidden
+	if strings.HasPrefix(tr.ToolName, "lsp_") {
+		return true, ""
+	}
+	return false, ""
 }
 
 // formatIMAskUserResult renders ask_user result.
@@ -561,15 +568,12 @@ func formatIMListCommandsResult(tr *ToolResultInfo) string {
 
 // formatIMSpawnAgentResult renders spawn_agent result.
 func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
-	lang := toolLang(tr.Lang)
-	output := strings.TrimSpace(tr.Result)
+	task := extractArgValue(tr.Args, "task")
 	if tr.IsError {
-		return fmt.Sprintf("🤖 %s\n```\n%s\n```", imLabel(lang, "sub_task"), output)
+		output := strings.TrimSpace(tr.Result)
+		return fmt.Sprintf("🤖 Starting subagent %s\n```\n%s\n```", truncate(task, 60), output)
 	}
-	if output == "" {
-		return fmt.Sprintf("🤖 %s", imLabel(lang, "sub_task_started"))
-	}
-	return fmt.Sprintf("🤖\n```\n%s\n```", output)
+	return fmt.Sprintf("🤖 Starting subagent %s", truncate(task, 60))
 }
 
 // formatIMWaitAgentResult renders wait_agent result.
@@ -928,16 +932,11 @@ func formatIMGlobResult(tr *ToolResultInfo) string {
 		}
 		return fmt.Sprintf("🔍 Glob\n```\n%s\n```", output)
 	}
-	if output == "" {
-		if pattern != "" {
-			return fmt.Sprintf("🔍 `%s`: %s", pattern, imLabel(lang, "no_matches"))
-		}
-		return "🔍 Glob"
-	}
+	matches := countResultLines(output)
 	if pattern != "" {
-		return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
+		return fmt.Sprintf("🔍 `%s` — %d %s", pattern, matches, imLabel(lang, "matches"))
 	}
-	return fmt.Sprintf("🔍\n```\n%s\n```", output)
+	return fmt.Sprintf("🔍 %d %s", matches, imLabel(lang, "matches"))
 }
 
 // formatIMEditResult renders edit_file result — show emoji icon + path.
@@ -946,34 +945,41 @@ func formatIMEditResult(tr *ToolResultInfo) string {
 	if path == "" {
 		path = tr.Detail
 	}
+	baseName := filepath.Base(path)
+	icon := "✏️"
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("✏️ %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(tr.Result))
 		}
-		return fmt.Sprintf("✏️ Edit\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("%s Edit\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
 	}
+	added, deleted := countDiffLines(tr.Result)
 	if path == "" {
-		return "✏️ Edit"
+		return fmt.Sprintf("%s Edit (+%d -%d)", icon, added, deleted)
 	}
-	return fmt.Sprintf("✏️ %s", path)
+	return fmt.Sprintf("%s %s (+%d -%d)", icon, baseName, added, deleted)
 }
 
 // formatIMWriteResult renders write_file result.
 func formatIMWriteResult(tr *ToolResultInfo) string {
+	lang := toolLang(tr.Lang)
 	path := extractFilePathFromArgs(tr.Args)
 	if path == "" {
 		path = tr.Detail
 	}
+	baseName := filepath.Base(path)
+	icon := "📝"
 	if tr.IsError {
 		if path != "" {
-			return fmt.Sprintf("📝 %s\n```\n%s\n```", path, strings.TrimSpace(tr.Result))
+			return fmt.Sprintf("%s %s\n```\n%s\n```", icon, baseName, strings.TrimSpace(tr.Result))
 		}
-		return fmt.Sprintf("📝 Write\n```\n%s\n```", strings.TrimSpace(tr.Result))
+		return fmt.Sprintf("%s Write\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
 	}
+	lines := countResultLines(tr.Result)
 	if path == "" {
-		return "📝 Write"
+		return fmt.Sprintf("%s Write (%d %s)", icon, lines, imLabel(lang, "lines"))
 	}
-	return fmt.Sprintf("📝 %s", path)
+	return fmt.Sprintf("%s %s (%d %s)", icon, baseName, lines, imLabel(lang, "lines"))
 }
 
 // formatIMSearchResult renders search/grep result with full output in code block.
@@ -990,16 +996,11 @@ func formatIMSearchResult(tr *ToolResultInfo) string {
 		}
 		return fmt.Sprintf("🔍 Search\n```\n%s\n```", output)
 	}
-	if output == "" {
-		if pattern != "" {
-			return fmt.Sprintf("🔍 `%s`: 0 %s", pattern, imLabel(lang, "results"))
-		}
-		return "🔍 Search"
-	}
+	matches := countResultLines(output)
 	if pattern != "" {
-		return fmt.Sprintf("🔍 `%s`\n```\n%s\n```", pattern, output)
+		return fmt.Sprintf("🔍 `%s` — %d %s", pattern, matches, imLabel(lang, "matches"))
 	}
-	return fmt.Sprintf("🔍\n```\n%s\n```", output)
+	return fmt.Sprintf("🔍 %d %s", matches, imLabel(lang, "matches"))
 }
 
 // formatIMWebResult renders web fetch/search result with full output in code block.
@@ -1014,17 +1015,25 @@ func formatIMWebResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🌐\n```\n%s\n```", output)
 }
 
-// formatIMGitResult renders git tool results with full output in code block.
+// formatIMGitResult renders git tool results with concise summary.
 func formatIMGitResult(tr *ToolResultInfo) string {
-	pretty := prettifyToolName(tr.ToolName)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
+		pretty := prettifyToolName(tr.ToolName)
 		return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 	}
-	if output == "" {
+	switch tr.ToolName {
+	case "git_status":
+		return fmt.Sprintf("🔧 Git Status\n%s", formatIMGitStatusSummary(output))
+	case "git_diff":
+		added, deleted := countDiffLines(output)
+		return fmt.Sprintf("🔧 Git Diff (+%d -%d)", added, deleted)
+	case "git_log":
+		return fmt.Sprintf("🔧 Git Log\n%s", formatIMGitLogSummary(output))
+	default:
+		pretty := prettifyToolName(tr.ToolName)
 		return fmt.Sprintf("🔧 %s", pretty)
 	}
-	return fmt.Sprintf("🔧 %s\n```\n%s\n```", pretty, output)
 }
 
 // formatIMMCPToolResult renders MCP tool results with full output in code block.
@@ -1289,7 +1298,78 @@ func countResultLines(result string) int {
 	return lines
 }
 
-// imFormatReadRange formats a read range hint from args (e.g. "[100-200]").
+// countDiffLines counts added (+) and deleted (-) lines in unified diff output.
+func countDiffLines(result string) (added, deleted int) {
+	for _, line := range strings.Split(result, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			added++
+		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			deleted++
+		}
+	}
+	return
+}
+
+// formatIMGitStatusSummary renders a concise git status summary for IM.
+func formatIMGitStatusSummary(output string) string {
+	modified, added, deleted, untracked := 0, 0, 0, 0
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 3 {
+			continue
+		}
+		x := line[0]
+		y := line[1]
+		path := line[2:]
+		if strings.HasPrefix(path, " ") {
+			path = path[1:]
+		}
+		_ = path
+		switch {
+		case x == '?' && y == '?':
+			untracked++
+		case x == 'A' || y == 'A':
+			added++
+		case x == 'D' || y == 'D':
+			deleted++
+		case (x == 'M' || y == 'M') && x != 'D' && y != 'D':
+			modified++
+		}
+	}
+	var parts []string
+	if modified > 0 {
+		parts = append(parts, fmt.Sprintf("%d modified", modified))
+	}
+	if added > 0 {
+		parts = append(parts, fmt.Sprintf("%d added", added))
+	}
+	if deleted > 0 {
+		parts = append(parts, fmt.Sprintf("%d deleted", deleted))
+	}
+	if untracked > 0 {
+		parts = append(parts, fmt.Sprintf("%d untracked", untracked))
+	}
+	if len(parts) == 0 {
+		return "clean"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatIMGitLogSummary renders up to 3 recent commits for IM.
+func formatIMGitLogSummary(output string) string {
+	var lines []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+		if len(lines) >= 3 {
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 // Returns empty string if no offset/limit specified.
 func imFormatReadRange(lang ToolLanguage, rawArgs string) string {
 	offset := extractArgIntValue(rawArgs, "offset")
