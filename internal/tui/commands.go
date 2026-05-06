@@ -301,8 +301,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			m.openNostrPanel()
 			return nil
 		case "/whatsapp", "/wa":
-			m.openWhatsAppPanel()
-			return nil
+			return m.openWhatsAppPanel()
 		case "/twitch":
 			m.openTwitchPanel()
 			return nil
