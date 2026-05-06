@@ -196,6 +196,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.twitchPanel.createInput += msg.Content
 			return m, nil
 		}
+		if m.whatsappPanel != nil && m.whatsappPanel.createMode {
+			m.whatsappPanel.createInput += msg.Content
+			return m, nil
+		}
 		// Forward paste to PC panel create-input.
 		if m.pcPanel != nil && m.pcPanel.createMode {
 			m.pcPanel.createInput += msg.Content
@@ -252,6 +256,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.twitchPanel != nil && m.twitchPanel.editState.mode == imEditInput {
 			m.twitchPanel.editState.editInput += msg.Content
+			return m, nil
+		}
+		if m.whatsappPanel != nil && m.whatsappPanel.editState.mode == imEditInput {
+			m.whatsappPanel.editState.editInput += msg.Content
 			return m, nil
 		}
 		if m.pcPanel != nil && m.pcPanel.editState.mode == imEditInput {
@@ -337,6 +345,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleProviderPanelKey(msg)
 		}
 
+		// QR overlay takes priority over all IM panels — Esc/q returns to the panel behind it.
+		if m.qrOverlay != nil {
+			return m.handleQROverlayKey(msg)
+		}
+
 		if m.qqPanel != nil {
 			return m.handleQQPanelKey(msg)
 		}
@@ -390,6 +403,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleTwitchPanelKey(msg)
 		}
 
+		if m.whatsappPanel != nil {
+			return m.handleWhatsAppPanelKey(msg)
+		}
+
 		if m.imPanel != nil {
 			return m.handleIMPanelKey(msg)
 		}
@@ -412,10 +429,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.skillsPanel != nil {
 			return m.handleSkillsPanelKey(msg)
-		}
-
-		if m.qrOverlay != nil {
-			return m.handleQROverlayKey(msg)
 		}
 
 		if m.inspectorPanel != nil {
@@ -1711,6 +1724,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case whatsappBindResultMsg:
+		if m.whatsappPanel != nil {
+			if msg.err != nil {
+				m.whatsappPanel.message = msg.err.Error()
+			} else {
+				m.whatsappPanel.message = msg.message
+			}
+		}
+		return m, nil
+
 	case dingtalkBindResultMsg:
 		if m.dingtalkPanel != nil {
 			if msg.err != nil {
@@ -1879,6 +1902,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyIMEditResult(&m.nostrPanel.editState, msg)
 		} else if m.twitchPanel != nil && m.twitchPanel.editState.mode != imEditNone {
 			m.applyIMEditResult(&m.twitchPanel.editState, msg)
+		} else if m.whatsappPanel != nil && m.whatsappPanel.editState.mode != imEditNone {
+			m.applyIMEditResult(&m.whatsappPanel.editState, msg)
 		}
 		return m, nil
 

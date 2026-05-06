@@ -23,10 +23,7 @@ const (
 // Format: ~/.ggcode/instances/{sha256(abs-workspace)[:16]}
 // Returns empty string if the home directory cannot be resolved.
 func InstanceDir(workspace string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
+	home := HomeDir()
 	abs, err := filepath.Abs(workspace)
 	if err != nil {
 		abs = workspace

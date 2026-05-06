@@ -79,9 +79,10 @@ func (m Model) renderQROverlay() string {
 		body = append(body, hint, "")
 	}
 
-	// QR code
+	// QR code (indented for visual padding)
 	if o.qrText != "" {
-		body = append(body, o.qrText, "")
+		indentedQR := indentLines(o.qrText, 2)
+		body = append(body, indentedQR, "")
 	}
 
 	// Footer (URI or extra info)
@@ -106,4 +107,18 @@ func (m *Model) handleQROverlayKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.qrOverlay = nil
 	}
 	return *m, nil
+}
+
+// indentLines prefixes each line with n spaces for visual padding.
+func indentLines(s string, n int) string {
+	pad := strings.Repeat(" ", n)
+	var b strings.Builder
+	for i, line := range strings.Split(s, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(pad)
+		b.WriteString(line)
+	}
+	return b.String()
 }

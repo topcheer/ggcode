@@ -76,6 +76,7 @@ type feishuAdapter struct {
 	connected   bool
 	token       string
 	tokenExpire time.Time
+	botOpenID   string // set from bot/v3/info
 	httpServer  *http.Server
 	stt         imstt.Transcriber
 
@@ -182,6 +183,12 @@ func (a *feishuAdapter) run(ctx context.Context) {
 	a.mu.Lock()
 	a.connected = true
 	a.mu.Unlock()
+
+	// Fetch bot info (open_id) for ContactURI
+	if err := a.fetchBotInfo(ctx); err != nil {
+		debug.Log("feishu", "adapter=%s fetchBotInfo error (non-fatal): %v", a.name, err)
+	}
+
 	a.publishState(true, "connected", "")
 	debug.Log("feishu", "adapter=%s connected (token obtained)", a.name)
 
@@ -1195,14 +1202,65 @@ func (a *feishuAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	a.mu.RLock()
+	botOpenID := a.botOpenID
+	a.mu.RUnlock()
+	contactURI := ""
+	if botOpenID != "" {
+		contactURI = "https://applink.feishu.cn/client/chat/open?openId=" + botOpenID
+	}
 	a.manager.PublishAdapterState(AdapterState{
-		Name:      a.name,
-		Platform:  PlatformFeishu,
-		Healthy:   healthy,
-		Status:    status,
-		LastError: lastErr,
-		UpdatedAt: time.Now(),
+		Name:       a.name,
+		Platform:   PlatformFeishu,
+		Healthy:    healthy,
+		Status:     status,
+		LastError:  lastErr,
+		ContactURI: contactURI,
+		UpdatedAt:  time.Now(),
 	})
+}
+
+// fetchBotInfo calls bot/v3/info to get the bot's open_id.
+// API response: {"code":0,"bot":{"open_id":"ou_xxx","app_name":"..."}}
+func (a *feishuAdapter) fetchBotInfo(ctx context.Context) error {
+	apiBase := a.resolveAPIBase()
+	url := apiBase + "/bot/v3/info"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	a.mu.RLock()
+	tok := a.token
+	a.mu.RUnlock()
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var payload struct {
+		Code int `json:"code"`
+		Bot  struct {
+			OpenID string `json:"open_id"`
+		} `json:"bot"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("parse bot info: %w", err)
+	}
+	if payload.Code != 0 {
+		return fmt.Errorf("bot info API returned code %d", payload.Code)
+	}
+	if payload.Bot.OpenID != "" {
+		a.mu.Lock()
+		a.botOpenID = payload.Bot.OpenID
+		a.mu.Unlock()
+		debug.Log("feishu", "adapter=%s bot open_id=%s", a.name, payload.Bot.OpenID)
+	}
+	return nil
 }
 
 // sendExtractedImage resolves and sends an extracted image via Feishu.

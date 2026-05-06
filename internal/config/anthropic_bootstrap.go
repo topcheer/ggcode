@@ -101,8 +101,8 @@ func loadClaudeEnv() map[string]string {
 }
 
 func knownClaudeSettingsPaths() []string {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
+	home := HomeDir()
+	if strings.TrimSpace(home) == "" {
 		return nil
 	}
 	return []string{

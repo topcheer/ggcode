@@ -9,6 +9,8 @@ import (
 )
 
 func TestStartPCAdapterOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := config.IMConfig{Enabled: false}
 	mgr := NewManager()
 	controller, err := StartPCAdapterOnly(context.Background(), cfg, mgr)
@@ -44,6 +46,8 @@ func TestStartPCAdapterOnly(t *testing.T) {
 }
 
 func TestStartPCAdapterWithExplicitConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	cfg := config.IMConfig{
 		Enabled: true,
 		Adapters: map[string]config.IMAdapterConfig{

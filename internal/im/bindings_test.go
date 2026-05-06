@@ -288,6 +288,76 @@ func TestDefaultBindingsPath(t *testing.T) {
 	}
 }
 
+func TestDefaultBindingsPath_RespectsHomeOverride(t *testing.T) {
+	orig := os.Getenv("HOME")
+	defer os.Setenv("HOME", orig)
+
+	tmp := t.TempDir()
+	os.Setenv("HOME", tmp)
+
+	path, err := DefaultBindingsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tmp + "/.ggcode/im-bindings.json"
+	if path != want {
+		t.Errorf("DefaultBindingsPath() = %q, want %q", path, want)
+	}
+}
+
+func TestDefaultBindingsPath_WriteReadUnderOverrideHome(t *testing.T) {
+	orig := os.Getenv("HOME")
+	defer os.Setenv("HOME", orig)
+
+	tmp := t.TempDir()
+	os.Setenv("HOME", tmp)
+	os.MkdirAll(tmp+"/.ggcode", 0755)
+
+	bindingsPath, err := DefaultBindingsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewJSONFileBindingStore(bindingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binding := ChannelBinding{
+		Workspace: "/test/workspace",
+		Platform:  "qq",
+		Adapter:   "test-bot",
+		TargetID:  "test-target",
+		ChannelID: "test-channel",
+	}
+
+	// Save
+	if err := store.Save(binding); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Read back via ListByWorkspace
+	all, err := store.ListByWorkspace(binding.Workspace)
+	if err != nil {
+		t.Fatalf("ListByWorkspace: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(all))
+	}
+	if all[0].ChannelID != binding.ChannelID {
+		t.Errorf("ChannelID = %q, want %q", all[0].ChannelID, binding.ChannelID)
+	}
+
+	// Confirm file exists under tmpdir
+	data, err := os.ReadFile(tmp + "/.ggcode/im-bindings.json")
+	if err != nil {
+		t.Fatalf("file should exist under tmpdir: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("bindings file is empty")
+	}
+}
+
 func TestCompositeKey(t *testing.T) {
 	key := compositeKey("/ws1", "bot1")
 	ws, adapter := splitCompositeKey(key)
@@ -396,5 +466,41 @@ func TestJSONFileBindingStore_OldFileWithoutContextToken(t *testing.T) {
 	}
 	if all[0].ChannelID != "user-123" {
 		t.Errorf("ChannelID preserved: got %q", all[0].ChannelID)
+	}
+}
+
+// --- Home override for pairing and pc_session_store paths ---
+
+func TestDefaultPairingStatePath_RespectsHomeOverride(t *testing.T) {
+	orig := os.Getenv("HOME")
+	defer os.Setenv("HOME", orig)
+
+	tmp := t.TempDir()
+	os.Setenv("HOME", tmp)
+
+	path, err := DefaultPairingStatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tmp + "/.ggcode/im-pairing.json"
+	if path != want {
+		t.Errorf("DefaultPairingStatePath() = %q, want %q", path, want)
+	}
+}
+
+func TestDefaultPCSessionStorePath_RespectsHomeOverride(t *testing.T) {
+	orig := os.Getenv("HOME")
+	defer os.Setenv("HOME", orig)
+
+	tmp := t.TempDir()
+	os.Setenv("HOME", tmp)
+
+	path, err := DefaultPCSessionStorePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tmp + "/.ggcode/im-pc-sessions.json"
+	if path != want {
+		t.Errorf("DefaultPCSessionStorePath() = %q, want %q", path, want)
 	}
 }

@@ -37,6 +37,7 @@ func e2eInitRepo(t *testing.T) (string, *InitResult) {
 	t.Helper()
 	root := t.TempDir()
 	e2eGit(t, root, "init")
+	disableGitAutoMaintenance(t, root)
 	e2eGit(t, root, "config", "user.name", "E2E Test")
 	e2eGit(t, root, "config", "user.email", "e2e@test.com")
 	os.WriteFile(filepath.Join(root, "README.md"), []byte("# e2e project"), 0644)
@@ -56,6 +57,7 @@ func e2eInitRepoWithContexts(t *testing.T) (string, *InitResult) {
 	t.Helper()
 	root := t.TempDir()
 	e2eGit(t, root, "init")
+	disableGitAutoMaintenance(t, root)
 	e2eGit(t, root, "config", "user.name", "E2E Test")
 	e2eGit(t, root, "config", "user.email", "e2e@test.com")
 

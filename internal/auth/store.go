@@ -152,13 +152,3 @@ func (s *Store) saveAll(all map[string]Info) error {
 	}
 	return os.Rename(tmp, s.path)
 }
-
-func homeDir() string {
-	if home := os.Getenv("HOME"); strings.TrimSpace(home) != "" {
-		return home
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		return home
-	}
-	return "/tmp"
-}

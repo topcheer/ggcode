@@ -135,11 +135,15 @@ func (a *tgAdapter) connectAndServe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("getMe: %w", err)
 	}
-	if username, ok := me["username"].(string); ok {
-		a.mu.Lock()
-		a.botUsername = username
-		a.mu.Unlock()
-		debug.Log("tg", "adapter=%s bot username=%s", a.name, username)
+	// Telegram getMe returns {"ok":true,"result":{"id":...,"username":"botname"}}
+	// apiRequest stores the full payload, so extract result.username.
+	if result, _ := me["result"].(map[string]any); result != nil {
+		if username, ok := result["username"].(string); ok {
+			a.mu.Lock()
+			a.botUsername = username
+			a.mu.Unlock()
+			debug.Log("tg", "adapter=%s bot username=%s", a.name, username)
+		}
 	}
 	a.mu.Lock()
 	a.connected = true

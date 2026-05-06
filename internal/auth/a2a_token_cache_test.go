@@ -204,3 +204,17 @@ func TestTokenCacheMultiClientIsolation(t *testing.T) {
 		t.Errorf("expected token-for-bbb, got %v", loadedB)
 	}
 }
+
+func TestDefaultTokenCacheDir_RespectsHomeOverride(t *testing.T) {
+	orig := os.Getenv("HOME")
+	defer os.Setenv("HOME", orig)
+
+	tmp := t.TempDir()
+	os.Setenv("HOME", tmp)
+
+	got := DefaultTokenCacheDir()
+	want := tmp + "/.ggcode/oauth-tokens"
+	if got != want {
+		t.Errorf("DefaultTokenCacheDir() = %q, want %q", got, want)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -111,10 +112,7 @@ func NewJSONFileBindingStore(path string) (*JSONFileBindingStore, error) {
 }
 
 func DefaultBindingsPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+	home := config.HomeDir()
 	return filepath.Join(home, ".ggcode", "im-bindings.json"), nil
 }
 

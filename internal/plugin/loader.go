@@ -20,10 +20,7 @@ func (m *Manager) LoadAll(entries []config.PluginConfigEntry) {
 		m.loadEntry(entry)
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
+	home := config.HomeDir()
 	pluginDir := filepath.Join(home, ".ggcode", "plugins")
 	m.scanDir(pluginDir)
 }
@@ -59,7 +56,7 @@ func (m *Manager) loadGoPlugin(entry config.PluginConfigEntry) {
 
 	p := entry.Path
 	if strings.HasPrefix(p, "~/") {
-		home, _ := os.UserHomeDir()
+		home := config.HomeDir()
 		p = filepath.Join(home, p[2:])
 	}
 

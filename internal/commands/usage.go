@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 const (
@@ -136,10 +138,7 @@ func saveUsageLocked(usage map[string]skillUsageEntry) error {
 }
 
 func usagePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
+	home := config.HomeDir()
 	return filepath.Join(home, ".ggcode", "skill_usage.json"), nil
 }
 

@@ -50,7 +50,7 @@ type Handler struct {
 // NewHandler creates a new ACP handler.
 func NewHandler(cfg *config.Config, registry *tool.Registry, transport *Transport, prov provider.Provider) *Handler {
 	// Set up sessions directory
-	homeDir, _ := os.UserHomeDir()
+	homeDir := config.HomeDir()
 	sessionsDir := filepath.Join(homeDir, ".ggcode", "acp-sessions")
 	os.MkdirAll(sessionsDir, 0o755)
 

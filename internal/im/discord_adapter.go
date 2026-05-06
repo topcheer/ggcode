@@ -192,8 +192,13 @@ func (a *discordAdapter) connectAndServe(ctx context.Context) error {
 				d, _ := payload["d"].(map[string]any)
 				if d != nil {
 					sid, _ := d["session_id"].(string)
+					var botID string
+					if user, _ := d["user"].(map[string]any); user != nil {
+						botID, _ = user["id"].(string)
+					}
 					a.mu.Lock()
 					a.sessionID = sid
+					a.botUserID = botID
 					a.connected = true
 					a.mu.Unlock()
 				}

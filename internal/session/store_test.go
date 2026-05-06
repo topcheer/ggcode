@@ -616,3 +616,20 @@ func TestListCleansUpEmptySessions(t *testing.T) {
 		t.Error("empty session file should have been cleaned up")
 	}
 }
+
+func TestDefaultDir_RespectsHomeOverride(t *testing.T) {
+	orig := os.Getenv("HOME")
+	defer os.Setenv("HOME", orig)
+
+	tmp := t.TempDir()
+	os.Setenv("HOME", tmp)
+
+	dir, err := DefaultDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tmp + "/.ggcode/sessions"
+	if dir != want {
+		t.Errorf("DefaultDir() = %q, want %q", dir, want)
+	}
+}
