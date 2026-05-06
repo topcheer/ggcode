@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -26,6 +27,14 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
+
+func init() {
+	// Configure device identity to appear as WhatsApp Web (Chrome browser).
+	// The default PlatformType=UNKNOWN causes "unable to link device" errors from
+	// WhatsApp servers during QR code pairing.
+	store.SetOSInfo("ggcode", [3]uint32{2, 3000, 15})
+	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
+}
 
 const (
 	waMaxTextLen   = 4096
@@ -371,6 +380,28 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 
 		case *events.Message:
 			a.handleInbound(v)
+
+		case *events.HistorySync:
+			debug.Log("whatsapp", "adapter %q: history sync (progress=%d, items=%d)", a.name, v.Data.GetProgress(), len(v.Data.GetConversations()))
+
+		case *events.OfflineSyncPreview:
+			debug.Log("whatsapp", "adapter %q: offline sync preview (total=%d, messages=%d)", a.name, v.Total, v.Messages)
+
+		case *events.OfflineSyncCompleted:
+			debug.Log("whatsapp", "adapter %q: offline sync completed (count=%d)", a.name, v.Count)
+
+		case *events.JoinedGroup:
+			debug.Log("whatsapp", "adapter %q: joined group (JID=%s)", a.name, v.JID)
+
+		case *events.GroupInfo:
+			debug.Log("whatsapp", "adapter %q: group info update (JID=%s)", a.name, v.JID)
+
+		case *events.PairError:
+			debug.Log("whatsapp", "adapter %q: pair error: %v", a.name, v)
+
+		default:
+			// Log all unhandled events so we can diagnose missing handlers
+			debug.Log("whatsapp", "adapter %q: unhandled event %T", a.name, evt)
 		}
 	}
 }
