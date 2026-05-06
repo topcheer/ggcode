@@ -351,6 +351,19 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 			debug.Log("whatsapp", "adapter %q: connected (jid=%s)", a.name, jid)
 			a.publishState(true, "connected", "")
 
+			// Mark ourselves as available so the server starts pushing messages.
+			// Without this, WhatsApp may not deliver inbound messages to linked devices.
+			if a.client != nil {
+				if a.client.Store.PushName == "" {
+					a.client.Store.PushName = "ggcode"
+				}
+				if err := a.client.SendPresence(context.Background(), types.PresenceAvailable); err != nil {
+					debug.Log("whatsapp", "adapter %q: send presence available failed: %v", a.name, err)
+				} else {
+					debug.Log("whatsapp", "adapter %q: presence set to available", a.name)
+				}
+			}
+
 		case *events.Disconnected:
 			a.mu.Lock()
 			a.connected = false
