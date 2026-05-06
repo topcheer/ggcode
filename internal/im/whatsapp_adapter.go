@@ -99,6 +99,25 @@ func newWhatsAppAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdap
 // Sink interface
 // ---------------------------------------------------------------------------
 
+// waDebugLogger bridges whatsmeow's internal logger to our debug log system.
+type waDebugLogger struct{ prefix string }
+
+func (l *waDebugLogger) Debugf(msg string, args ...interface{}) {
+	debug.Log("whatsapp", l.prefix+": "+msg, args...)
+}
+func (l *waDebugLogger) Infof(msg string, args ...interface{}) {
+	debug.Log("whatsapp", l.prefix+": "+msg, args...)
+}
+func (l *waDebugLogger) Warnf(msg string, args ...interface{}) {
+	debug.Log("whatsapp", l.prefix+": "+msg, args...)
+}
+func (l *waDebugLogger) Errorf(msg string, args ...interface{}) {
+	debug.Log("whatsapp", l.prefix+": "+msg, args...)
+}
+func (l *waDebugLogger) Sub(module string) waLog.Logger {
+	return &waDebugLogger{prefix: l.prefix + "/" + module}
+}
+
 func (a *whatsappAdapter) Name() string { return a.name }
 
 func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
@@ -247,7 +266,7 @@ func (a *whatsappAdapter) run(ctx context.Context) {
 // On failure or logout, the caller (reconnectLoop) retries.
 func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 	dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
-	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), waLog.Noop)
+	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), &waDebugLogger{prefix: "store"})
 	if err != nil {
 		debug.Log("whatsapp", "adapter %q: open store: %v", a.name, err)
 		a.publishState(false, "error", fmt.Sprintf("store: %v", err))
@@ -267,7 +286,7 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		a.device = container.NewDevice()
 	}
 
-	a.client = whatsmeow.NewClient(a.device, waLog.Noop)
+	a.client = whatsmeow.NewClient(a.device, &waDebugLogger{prefix: "client"})
 	a.client.AddEventHandler(a.eventHandler())
 	done := make(chan error, 1)
 	a.mu.Lock()
@@ -454,10 +473,6 @@ func (a *whatsappAdapter) signalSessionDone(err error) {
 // ---------------------------------------------------------------------------
 
 func (a *whatsappAdapter) handleInbound(msg *events.Message) {
-	if msg.Info.IsFromMe {
-		return
-	}
-
 	text := ""
 	if conv := msg.Message.GetConversation(); conv != "" {
 		text = conv
@@ -465,12 +480,27 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 		text = ext.GetText()
 	}
 	text = strings.TrimSpace(text)
+
+	debug.Log("whatsapp", "adapter %q: inbound message from=%s chat=%s isFromMe=%v text=%q", a.name, msg.Info.Sender, msg.Info.Chat, msg.Info.IsFromMe, text)
+
 	if text == "" {
 		return
 	}
 
 	sender := msg.Info.Sender.String()
 	chatID := msg.Info.Chat.String()
+
+	// After pairing, only accept messages from the bound channel.
+	// Messages from other groups/chats are silently dropped.
+	if a.manager != nil {
+		snap := a.manager.Snapshot()
+		if binding := snap.BindingByAdapter(a.name); binding != nil {
+			if binding.ChannelID != "" && binding.ChannelID != chatID {
+				debug.Log("whatsapp", "adapter %q: dropping message from unbound channel %q (bound=%q)", a.name, chatID, binding.ChannelID)
+				return
+			}
+		}
+	}
 	debug.Log("whatsapp", "adapter %q: inbound chat=%s sender=%s len=%d", a.name, chatID, sender, len(text))
 
 	waMsg := InboundMessage{
