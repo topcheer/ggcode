@@ -1,4 +1,4 @@
-//go:build integration_local
+//go:build integration
 
 package a2a
 

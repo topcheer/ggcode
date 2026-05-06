@@ -26,7 +26,7 @@ LDFLAGS=(
 pushd "${ROOT_DIR}" >/dev/null
 for arch in amd64 arm64; do
   CGO_ENABLED=0 GOOS=darwin GOARCH="${arch}" \
-    go build -ldflags "${LDFLAGS[*]}" -o "${WORK_DIR}/ggcode-${arch}" ./cmd/ggcode
+    go build -tags goolm -ldflags "${LDFLAGS[*]}" -o "${WORK_DIR}/ggcode-${arch}" ./cmd/ggcode
 done
 popd >/dev/null
 

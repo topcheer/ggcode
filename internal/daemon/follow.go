@@ -87,6 +87,7 @@ const (
 	ansiClearLine = "\033[2K\r"
 	ansiBold      = "\033[1m"
 	ansiFgYellow  = "\033[33m"
+	ansiFgGreen   = "\033[32m"
 	ansiBgBlue    = "\033[44m"
 	// In raw terminal mode, \n only moves cursor down without returning to
 	// column 0. We must use \r\n for proper line breaks.
@@ -353,6 +354,8 @@ func (d *TerminalFollowDisplay) formatSpecialBody(toolName, rawArgs, result stri
 	}
 
 	switch toolName {
+	case "read_file", "edit_file", "write_file":
+		return formatFileBody(d.lang, result, isError)
 	case "todo_write":
 		return formatTodoResult(d.lang, rawArgs)
 	case "run_command", "bash", "powershell", "start_command":
@@ -407,6 +410,27 @@ func formatTodoResult(lang Lang, rawArgs string) string {
 	}
 
 	return sb.String()
+}
+
+// formatFileBody shows only the line count (green) for file read/write/edit.
+func formatFileBody(lang Lang, result string, isError bool) string {
+	if isError || result == "" {
+		return ""
+	}
+	lines := strings.Count(result, "\n")
+	if strings.HasSuffix(result, "\n") {
+		lines--
+	}
+	if lines < 0 {
+		lines = 0
+	}
+	var text string
+	if lang == LangZhCN {
+		text = fmt.Sprintf("%d行", lines)
+	} else {
+		text = fmt.Sprintf("%d lines", lines)
+	}
+	return ansiFgGreen + "    " + text + ansiReset + nl
 }
 
 // formatCommandBody renders command execution body (without header).

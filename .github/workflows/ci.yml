@@ -23,7 +23,6 @@ jobs:
       - run: go vet -tags goolm ./...
       - run: git config --global user.name "CI" && git config --global user.email "ci@ggcode.dev"
       - run: go test -tags "goolm,integration" ./...
-
   lint:
     name: Format
     runs-on: ubuntu-latest

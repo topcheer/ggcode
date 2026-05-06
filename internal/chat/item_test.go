@@ -247,7 +247,7 @@ func TestBashToolItem(t *testing.T) {
 
 func TestFileToolItem(t *testing.T) {
 	styles := DefaultStyles()
-	item := NewFileToolItem("t2", "Edit", "internal/tui/model.go", StatusSuccess, styles)
+	item := NewFileToolItem("t2", "Edit", "internal/tui/model.go", StatusSuccess, styles, "en")
 	rendered := item.Render(80)
 	if !strings.Contains(rendered, "Edit") {
 		t.Fatalf("expected Edit in render: %s", rendered)
@@ -514,7 +514,7 @@ func TestToolHeaderShowsParams(t *testing.T) {
 	}
 
 	// FileToolItem — should show path in header
-	file := NewFileToolItem("t2", "Read", "internal/config/config.go", StatusSuccess, styles)
+	file := NewFileToolItem("t2", "Read", "internal/config/config.go", StatusSuccess, styles, "en")
 	rendered2 := file.Render(80)
 	firstLine2 := strings.SplitN(rendered2, "\n", 2)[0]
 	clean2 := stripTestAnsi(firstLine2)

@@ -117,6 +117,7 @@ func (m *Model) renderConversationAssistantBlocks(blocks []provider.ContentBlock
 				DisplayName: present.DisplayName,
 				Detail:      present.Detail,
 				RawArgs:     string(block.Input),
+				Lang:        string(m.currentLanguage()),
 			}, chat.StatusSuccess, m.chatStyles)
 			m.chatList.Append(item)
 			if block.ToolID != "" {
