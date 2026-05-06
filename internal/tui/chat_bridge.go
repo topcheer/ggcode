@@ -99,6 +99,7 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 			DisplayName: present.DisplayName,
 			Detail:      present.Detail,
 			RawArgs:     ts.RawArgs,
+			Lang:        string(m.currentLanguage()),
 		}
 		status := chat.StatusRunning
 		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
@@ -139,6 +140,7 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		DisplayName: displayName,
 		Detail:      detail,
 		RawArgs:     ts.RawArgs,
+		Lang:        string(m.currentLanguage()),
 	}
 	item := chat.NewToolItem(id, ctx, chat.StatusRunning, m.chatStyles)
 	m.chatList.Append(item)
@@ -209,6 +211,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 			DisplayName: displayName,
 			Detail:      detail,
 			RawArgs:     ts.RawArgs,
+			Lang:        string(m.currentLanguage()),
 		}
 		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
 		result := suppressToolResult(ts.ToolName, ts.Result)

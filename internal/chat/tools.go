@@ -265,20 +265,43 @@ type FileToolItem struct {
 	BaseToolItem
 	filePath string
 	toolType string // "Read", "Write", "Edit", "MultiEdit"
+	lang     string // "zh-CN", "en"
 }
 
 // NewFileToolItem creates a new file operation tool item.
-func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles) *FileToolItem {
+func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles, lang string) *FileToolItem {
 	b := NewBaseToolItem(id, displayName, status, filePath, styles)
 	return &FileToolItem{
 		BaseToolItem: *b,
 		filePath:     filePath,
 		toolType:     displayName,
+		lang:         lang,
 	}
 }
 
 func (t *FileToolItem) RenderParams() string {
 	return t.filePath
+}
+
+// RenderBody shows only the line count (green) instead of file contents.
+func (t *FileToolItem) RenderBody(width int) string {
+	if t.result == "" || t.isError {
+		return ""
+	}
+	lines := strings.Count(t.result, "\n")
+	if strings.HasSuffix(t.result, "\n") {
+		lines--
+	}
+	if lines < 0 {
+		lines = 0
+	}
+	var lineText string
+	if strings.HasPrefix(t.lang, "zh") {
+		lineText = fmt.Sprintf("%d行", lines)
+	} else {
+		lineText = fmt.Sprintf("%d lines", lines)
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render("    " + lineText)
 }
 
 func (t *FileToolItem) Render(width int) string {
@@ -521,6 +544,7 @@ type ToolContext struct {
 	DisplayName string // prettified name, e.g. "Bash"
 	Detail      string // extracted detail, e.g. "go build ./..."
 	RawArgs     string // raw JSON input (for body rendering / fallback)
+	Lang        string // language code, e.g. "zh-CN", "en"
 }
 
 // toolCategory classifies a tool for rendering purposes.
@@ -583,7 +607,7 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 	case catBash:
 		return NewBashToolItem(id, displayName, ctx.Detail, status, styles)
 	case catFile:
-		return NewFileToolItem(id, displayName, ctx.Detail, status, styles)
+		return NewFileToolItem(id, displayName, ctx.Detail, status, styles, ctx.Lang)
 	case catSearch:
 		return NewSearchToolItem(id, displayName, ctx.Detail, status, styles)
 	case catList:
