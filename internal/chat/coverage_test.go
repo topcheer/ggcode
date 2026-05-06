@@ -117,7 +117,7 @@ func TestBashToolItem_Coverage(t *testing.T) {
 }
 
 func TestFileToolItem_Coverage(t *testing.T) {
-	item := NewFileToolItem("id-1", "Edit", "/tmp/test.go", StatusPending, Styles{}, "en")
+	item := NewFileToolItem("id-1", "Edit", "/tmp/test.go", StatusPending, Styles{}, "en", "")
 	if item.ID() != "id-1" {
 		t.Errorf("expected 'id-1', got %q", item.ID())
 	}

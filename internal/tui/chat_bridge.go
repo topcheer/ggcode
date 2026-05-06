@@ -84,31 +84,29 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	}
 
 	// wait_agent / list_agents → update spawn_agent status (old behavior, keep for now)
-	if ts.ToolName == "list_agents" {
-		return
-	}
-	if ts.ToolName == "wait_agent" {
-		// Create standalone tool item for wait_agent
-		id := ts.ToolID
-		if id == "" {
-			id = nextChatID()
-		}
-		present := describeTool(m.currentLanguage(), ts.ToolName, ts.RawArgs)
-		ctx := chat.ToolContext{
-			ToolName:    ts.ToolName,
-			DisplayName: present.DisplayName,
-			Detail:      present.Detail,
-			RawArgs:     ts.RawArgs,
-			Lang:        string(m.currentLanguage()),
-		}
-		status := chat.StatusRunning
-		item := chat.NewToolItem(id, ctx, status, m.chatStyles)
-		m.chatList.Append(item)
+	if ts.ToolName == "list_agents" || ts.ToolName == "wait_agent" {
 		return
 	}
 
 	// todo_write → skip creating a tool item; handled in chatFinishTool
 	if ts.ToolName == "todo_write" {
+		return
+	}
+
+	// Background cmd tools → skip (no header/body needed)
+	switch ts.ToolName {
+	case "read_command_output", "wait_command", "stop_command",
+		"write_command_input", "list_commands":
+		return
+	}
+	// Secondary git tools → skip (no header/body needed)
+	switch ts.ToolName {
+	case "git_show", "git_blame", "git_branch_list", "git_remote",
+		"git_stash_list", "git_add", "git_commit", "git_stash":
+		return
+	}
+	// LSP tools → skip (no header/body needed)
+	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
 	}
 
@@ -177,8 +175,24 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// list_agents finish → skip (query only, no body needed)
-	if ts.ToolName == "list_agents" {
+	// list_agents / wait_agent finish → skip
+	if ts.ToolName == "list_agents" || ts.ToolName == "wait_agent" {
+		return
+	}
+	// Background cmd tools → skip (no header/body needed)
+	switch ts.ToolName {
+	case "read_command_output", "wait_command", "stop_command",
+		"write_command_input", "list_commands":
+		return
+	}
+	// Secondary git tools → skip (no header/body needed)
+	switch ts.ToolName {
+	case "git_show", "git_blame", "git_branch_list", "git_remote",
+		"git_stash_list", "git_add", "git_commit", "git_stash":
+		return
+	}
+	// LSP tools → skip (no header/body needed)
+	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
 	}
 	id := ts.ToolID

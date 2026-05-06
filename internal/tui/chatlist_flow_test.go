@@ -157,8 +157,8 @@ func TestChatListAgentToolItem(t *testing.T) {
 	}
 
 	rendered := stripAnsiCodes(agent.Render(100))
-	if !strings.Contains(rendered, "Agent") {
-		t.Errorf("agent item missing 'Agent': %q", rendered)
+	if !strings.Contains(rendered, "Starting subagent") {
+		t.Errorf("agent item missing 'Starting subagent': %q", rendered)
 	}
 
 	// wait_agent finishes

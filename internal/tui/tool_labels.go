@@ -54,11 +54,19 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			argString(args, "path"),
 			argString(args, "directory"),
 		)))
-	case "run_command", "bash", "powershell", "start_command":
+	case "run_command", "bash", "powershell":
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
 		}
 		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
+			argString(args, "command"),
+			argString(args, "cmd"),
+		)))
+	case "start_command":
+		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
+			return present
+		}
+		return toolPresentationFor(lang, "run_in_background", displayToolTarget(firstNonEmpty(
 			argString(args, "command"),
 			argString(args, "cmd"),
 		)))
@@ -471,6 +479,8 @@ func localizedToolLabel(lang Language, action string) string {
 			return "列出"
 		case "run":
 			return "执行"
+		case "run_in_background":
+			return "后台运行"
 		case "fetch":
 			return "抓取"
 		case "todo":
@@ -556,11 +566,11 @@ func localizedToolLabel(lang Language, action string) string {
 		case "commit":
 			return "提交"
 		case "spawn_agent":
-			return "启动子代理"
+			return "Starting subagent"
 		case "list_agents":
 			return "获取子代理列表"
 		case "wait_agent":
-			return "等待子代理结果"
+			return "Checking subagent progress"
 		}
 	default:
 		switch action {
@@ -580,6 +590,8 @@ func localizedToolLabel(lang Language, action string) string {
 			return "List"
 		case "run":
 			return "Run"
+		case "run_in_background":
+			return "Run in background"
 		case "fetch":
 			return "Fetch"
 		case "todo":
@@ -665,11 +677,11 @@ func localizedToolLabel(lang Language, action string) string {
 		case "commit":
 			return "Commit"
 		case "spawn_agent":
-			return "Spawn Agent"
+			return "Starting subagent"
 		case "list_agents":
 			return "List Agents"
 		case "wait_agent":
-			return "Wait Agent"
+			return "Checking subagent progress"
 		}
 	}
 	return localizedGenericToolName(lang, action)
@@ -696,6 +708,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "列出目录"
 			case "run":
 				return "执行命令"
+			case "run_in_background":
+				return "后台运行命令"
 			case "fetch":
 				return "抓取网页"
 			case "todo":
@@ -781,6 +795,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Listing directory"
 			case "run":
 				return "Running command"
+			case "run_in_background":
+				return "Running command in background"
 			case "fetch":
 				return "Fetching page"
 			case "todo":
@@ -870,6 +886,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 			return "列出 " + target
 		case "run":
 			return "执行 " + target
+		case "run_in_background":
+			return "后台运行 " + target
 		case "fetch":
 			return "抓取 " + target
 		case "task":
@@ -899,6 +917,8 @@ func localizedToolActivity(lang Language, action, target string) string {
 			return "Listing " + target
 		case "run":
 			return "Running " + target
+		case "run_in_background":
+			return "Running in background " + target
 		case "fetch":
 			return "Fetching " + target
 		case "task":
