@@ -146,6 +146,10 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	}
 	item := chat.NewToolItem(id, ctx, chat.StatusRunning, m.chatStyles)
 	m.chatList.Append(item)
+	// enter_plan_mode → notify IM
+	if ts.ToolName == "enter_plan_mode" {
+		m.emitIMText("📝 Planning...")
+	}
 }
 
 // chatFinishTool marks a tool item as finished with result.
