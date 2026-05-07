@@ -897,6 +897,7 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 			item := NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
 			if ctx.ToolName == "exit_plan_mode" {
 				item.suppressHeader = true
+				item.rawArgs = ctx.RawArgs
 			}
 			return item
 		}
