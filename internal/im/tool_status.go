@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ToolLanguage represents the language for tool status formatting.
@@ -472,9 +474,11 @@ func firstNonEmptyStr(values ...string) string {
 
 func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
-	value = strings.TrimPrefix(value, "./")
 	value = compactSingleLine(value)
-	return truncateStr(value, 80)
+	if cwd, err := os.Getwd(); err == nil {
+		value = util.RelativizePaths(value, cwd)
+	}
+	return truncateStr(value, 120)
 }
 
 func displayToolFileTarget(value string) string {
@@ -492,22 +496,12 @@ func displayToolFileTarget(value string) string {
 		if filepath.IsAbs(value) {
 			normCWD := normalizeDisplayPath(cwd)
 			normValue := normalizeDisplayPath(value)
-			if rel, relErr := filepath.Rel(normCWD, normValue); relErr == nil && !strings.HasPrefix(rel, "..") && rel != "." {
-				return displayToolTarget(filepath.ToSlash(rel))
-			}
-		} else if !strings.HasPrefix(value, "..") {
-			clean := filepath.Clean(value)
-			if clean != "." {
-				return displayToolTarget(filepath.ToSlash(clean))
+			if rel, relErr := filepath.Rel(normCWD, normValue); relErr == nil && !strings.HasPrefix(rel, "..") {
+				return truncateStr(filepath.ToSlash(rel), 120)
 			}
 		}
 	}
-
-	base := filepath.Base(value)
-	if base == "." || base == string(filepath.Separator) {
-		base = value
-	}
-	return displayToolTarget(base)
+	return truncateStr(filepath.ToSlash(value), 120)
 }
 
 func normalizeDisplayPath(value string) string {
