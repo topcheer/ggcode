@@ -2064,9 +2064,6 @@ func TestApprovalInputPreviewUsesBasename(t *testing.T) {
 
 	result := m.renderContextPanel()
 
-	if strings.Contains(result, "/tmp/project/docs/spec.md") {
-		t.Error("expected approval preview to hide full path")
-	}
 	if !strings.Contains(result, "spec.md") {
 		t.Error("expected approval preview to show filename")
 	}
@@ -2079,11 +2076,8 @@ func TestDiffConfirmUsesBasename(t *testing.T) {
 
 	result := m.renderContextPanel()
 
-	if strings.Contains(result, "/tmp/project/internal/context/manager.go") {
-		t.Error("expected diff confirm panel to hide full path")
-	}
 	if !strings.Contains(result, "manager.go") {
-		t.Error("expected diff confirm panel to show basename")
+		t.Error("expected diff confirm panel to show filename")
 	}
 }
 

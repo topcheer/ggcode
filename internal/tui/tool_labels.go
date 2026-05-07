@@ -1311,10 +1311,11 @@ func displayToolFileTarget(value string) string {
 	value = strings.TrimPrefix(value, "./")
 	// Try to make absolute paths relative to cwd
 	if filepath.IsAbs(value) {
-		if cwd, err := os.Getwd(); err == nil {
-			if rel, relErr := filepath.Rel(cwd, value); relErr == nil && !strings.HasPrefix(rel, "..") {
-				value = filepath.ToSlash(rel)
-			}
+		cwd, _ := os.Getwd()
+		normCWD := normalizeDisplayPath(cwd)
+		normValue := normalizeDisplayPath(value)
+		if rel, relErr := filepath.Rel(normCWD, normValue); relErr == nil && !strings.HasPrefix(rel, "..") {
+			value = filepath.ToSlash(rel)
 		}
 	}
 	cwd, _ := os.Getwd()

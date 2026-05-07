@@ -488,7 +488,15 @@ func displayToolFileTarget(value string) string {
 	if value == "" {
 		return ""
 	}
-
+	// Try to make absolute paths relative to cwd
+	if filepath.IsAbs(value) {
+		cwd, _ := os.Getwd()
+		normCWD := normalizeDisplayPath(cwd)
+		normValue := normalizeDisplayPath(value)
+		if rel, relErr := filepath.Rel(normCWD, normValue); relErr == nil && !strings.HasPrefix(rel, "..") {
+			return truncateStr(filepath.ToSlash(rel), 120)
+		}
+	}
 	cwd, _ := os.Getwd()
 	return util.FormatToolDetail(filepath.ToSlash(value), cwd, 120)
 }
