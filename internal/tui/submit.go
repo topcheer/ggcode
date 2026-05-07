@@ -293,7 +293,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 					Activity:    m.t("status.thinking"),
 					Running:     true,
 					RawArgs:     string(event.Tool.Arguments),
-					Args:        truncateString(present.Detail, 100),
+					Args:        present.Detail,
 					DisplayName: present.DisplayName,
 				}})
 				return
@@ -331,7 +331,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 					Running:     false,
 					Result:      event.Result,
 					RawArgs:     string(event.Tool.Arguments),
-					Args:        truncateString(present.Detail, 100),
+					Args:        present.Detail,
 					IsError:     event.IsError,
 					DisplayName: present.DisplayName,
 				}})
