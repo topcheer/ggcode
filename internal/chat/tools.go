@@ -704,8 +704,14 @@ func (t *CmdToolItem) Render(width int) string {
 		return cached
 	}
 	if t.suppressHeader {
-		rendered := ""
-		t.SetCached(rendered, width, 0)
+		// Only hide header, still render body
+		body := t.RenderBody(width - 4)
+		if strings.TrimSpace(body) == "" {
+			t.SetCached("", width, 0)
+			return ""
+		}
+		rendered := t.styles.ToolBody.Render(body)
+		t.SetCached(rendered, width, measureHeight(rendered))
 		return rendered
 	}
 	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
