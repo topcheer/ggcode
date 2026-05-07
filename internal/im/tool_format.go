@@ -494,12 +494,8 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, "" // hidden — result consumed by LLM
 	case "list_agents":
 		return true, "" // hidden
-	case "list_mcp_capabilities":
-		return true, formatIMMCPCapabilitiesResult(tr)
-	case "get_mcp_prompt":
-		return true, formatIMMCPPromptResult(tr)
-	case "read_mcp_resource":
-		return true, formatIMMCPResourceResult(tr)
+	case "list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource":
+		return true, "" // hidden — internal MCP inspection tools
 	case "skill":
 		return true, formatIMSkillResult(tr)
 	case "save_memory":
@@ -1177,21 +1173,15 @@ func formatIMGitResult(tr *ToolResultInfo) string {
 	}
 }
 
-// formatIMMCPToolResult renders MCP tool results with full output in code block.
+// formatIMMCPToolResult renders MCP tool results — header only (result consumed by LLM).
 func formatIMMCPToolResult(tr *ToolResultInfo) string {
 	pretty := prettifyToolName(tr.ToolName)
 	argSummary := summarizeMCPArgs(tr.Args, 50)
-	output := strings.TrimSpace(tr.Result)
 
-	header := "🔧 " + pretty
 	if argSummary != "" {
-		header = fmt.Sprintf("🔧 %s(%s)", pretty, argSummary)
+		return fmt.Sprintf("🔧 %s(%s)", pretty, argSummary)
 	}
-
-	if output == "" {
-		return header
-	}
-	return fmt.Sprintf("%s\n```\n%s\n```", header, output)
+	return "🔧 " + pretty
 }
 
 // summarizeIMResult extracts a brief summary from a tool result string.
