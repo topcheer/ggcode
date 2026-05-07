@@ -114,6 +114,10 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		m.emitIMText("📝 Planning...")
 		return
 	}
+	// exit_plan_mode → skip tool item (plan rendered as assistant message in chatFinishTool)
+	if ts.ToolName == "exit_plan_mode" {
+		return
+	}
 	// LSP tools → skip (no header/body needed)
 	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
@@ -202,10 +206,6 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	}
 	// cron_list / cron_delete → skip (internal inspection/management tools)
 	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
-		return
-	}
-	// enter_plan_mode → skip (no tool card needed)
-	if ts.ToolName == "enter_plan_mode" {
 		return
 	}
 	// exit_plan_mode → render plan as assistant message (not a tool card)
