@@ -467,6 +467,10 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 	case "teammate_results", "wait_agent":
 		return BodyMarkdown
 	default:
+		// MCP dynamic tools (mcp__server__tool) → header only
+		if strings.HasPrefix(toolName, "mcp__") {
+			return BodySuppress
+		}
 		return BodyDefault
 	}
 }
