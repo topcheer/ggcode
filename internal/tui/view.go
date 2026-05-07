@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -1444,6 +1445,27 @@ func (m Model) renderComposerPanel() string {
 
 	body := m.renderComposerInput() + "\n" +
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
+
+	// Show loop timer in bottom-right when agent is running
+	if m.loading && !m.loopStart.IsZero() {
+		elapsed := time.Since(m.loopStart).Truncate(time.Second)
+		var timerLabel string
+		if m.currentLanguage() == LangZhCN {
+			timerLabel = "🧪 酿造 " + formatDuration(elapsed)
+		} else {
+			timerLabel = "🧪 brewing " + formatDuration(elapsed)
+		}
+		timerStr := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel)
+		// Place timer at the right edge of the hint line
+		hintLine := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
+		hintW := lipgloss.Width(hintLine)
+		boxW := m.boxInnerWidth(m.mainColumnWidth())
+		gap := boxW - hintW - lipgloss.Width(timerStr)
+		if gap > 1 {
+			body = m.renderComposerInput() + "\n" + hintLine + strings.Repeat(" ", gap) + timerStr
+		}
+	}
+
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -1614,6 +1636,22 @@ func (m Model) mainColumnWidth() int {
 		width = 1
 	}
 	return width
+}
+
+// formatDuration renders a duration in a compact form: 5s, 1m12s, 2h03m
+func formatDuration(d time.Duration) string {
+	d = d.Truncate(time.Second)
+	if d < time.Minute {
+		return d.String()
+	}
+	if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm%02ds", m, s)
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh%02dm", h, m)
 }
 
 func truncateLines(s string, maxLines int) string {
