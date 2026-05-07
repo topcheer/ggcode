@@ -106,7 +106,7 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		return
 	}
 	// cron_list / cron_delete → skip (internal inspection/management tools)
-	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" {
+	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
 		return
 	}
 	// LSP tools → skip (no header/body needed)
@@ -196,7 +196,7 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		return
 	}
 	// cron_list / cron_delete → skip (internal inspection/management tools)
-	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" {
+	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
 		return
 	}
 	// LSP tools → skip (no header/body needed)

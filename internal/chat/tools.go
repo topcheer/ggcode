@@ -442,13 +442,12 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 		"swarm_task_create", "swarm_task_claim", "swarm_task_complete",
 		"send_message", "config",
 		"enter_plan_mode", "exit_plan_mode",
-		"task_update", "task_stop",
 		"skill":
 		return BodySuppress
 	case "cron_create":
 		return BodyFormatJSON
-	case "task_create", "task_get":
-		return BodyFormatJSON
+	case "task_create", "task_get", "task_update", "task_list", "task_stop":
+		return BodySuppress
 	case "teammate_results", "wait_agent":
 		return BodyMarkdown
 	default:
