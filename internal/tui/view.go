@@ -1114,10 +1114,21 @@ func (m Model) renderStatusBar() string {
 			}
 		}
 		if m.statusToolName != "" {
-			sb.WriteString(m.statusToolName)
+			toolLabel := m.statusToolName
 			if m.statusToolArg != "" {
-				sb.WriteString(fmt.Sprintf(": %s", m.statusToolArg))
+				toolLabel = fmt.Sprintf("%s: %s", toolLabel, m.statusToolArg)
 			}
+			// Truncate tool label to 30 rendered characters
+			if lipgloss.Width(toolLabel) > 30 {
+				runes := []rune(toolLabel)
+				for i := len(runes); i > 0; i-- {
+					if lipgloss.Width(string(runes[:i])) <= 29 {
+						toolLabel = string(runes[:i]) + "…"
+						break
+					}
+				}
+			}
+			sb.WriteString(toolLabel)
 		}
 	}
 
