@@ -405,7 +405,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "read_file":
 		return true, formatIMReadFileResult(tr)
 	case "list_directory":
-		return true, "" // hidden
+		return true, formatIMListDirResult(tr)
 	case "glob":
 		return true, formatIMGlobResult(tr)
 	case "edit_file":
@@ -414,8 +414,10 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMWriteResult(tr)
 	case "search_files", "grep":
 		return true, formatIMSearchResult(tr)
-	case "web_fetch", "web_search":
-		return true, "" // hidden
+	case "web_fetch":
+		return true, formatIMWebFetchResult(tr)
+	case "web_search":
+		return true, formatIMWebSearchResult(tr)
 	case "git_diff", "git_status", "git_log":
 		return true, formatIMGitResult(tr)
 	case "ask_user":
@@ -445,9 +447,9 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "read_mcp_resource":
 		return true, formatIMMCPResourceResult(tr)
 	case "skill":
-		return true, "" // hidden
+		return true, formatIMSkillResult(tr)
 	case "save_memory":
-		return true, "" // hidden
+		return true, formatIMSaveMemoryResult(tr)
 	case "sleep":
 		return true, formatIMSleepResult(tr)
 	case "cron_create":
@@ -897,23 +899,18 @@ func formatIMListDirResult(tr *ToolResultInfo) string {
 	if path == "" {
 		path = tr.Detail
 	}
-	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
+		output := strings.TrimSpace(tr.Result)
 		if path != "" {
 			return fmt.Sprintf("📂 %s\n```\n%s\n```", path, output)
 		}
 		return fmt.Sprintf("📂 List\n```\n%s\n```", output)
 	}
-	if output == "" {
-		if path != "" {
-			return fmt.Sprintf("📂 %s", path)
-		}
-		return "📂 List"
-	}
+	count := countResultLines(strings.TrimSpace(tr.Result))
 	if path != "" {
-		return fmt.Sprintf("📂 %s\n```\n%s\n```", path, output)
+		return fmt.Sprintf("📂 %s (%d items)", path, count)
 	}
-	return fmt.Sprintf("📂\n```\n%s\n```", output)
+	return fmt.Sprintf("📂 List (%d items)", count)
 }
 
 // formatIMGlobResult renders glob result with full output in code block.
@@ -1002,15 +999,32 @@ func formatIMSearchResult(tr *ToolResultInfo) string {
 }
 
 // formatIMWebResult renders web fetch/search result with full output in code block.
-func formatIMWebResult(tr *ToolResultInfo) string {
-	output := strings.TrimSpace(tr.Result)
+func formatIMWebFetchResult(tr *ToolResultInfo) string {
+	url := extractArgValue(tr.Args, "url")
+	if url == "" {
+		url = tr.Detail
+	}
 	if tr.IsError {
-		return fmt.Sprintf("🌐\n```\n%s\n```", output)
+		return fmt.Sprintf("🌐 %s\n```\n%s\n```", truncate(url, 60), strings.TrimSpace(tr.Result))
 	}
-	if output == "" {
-		return "🌐 Web"
+	if url != "" {
+		return fmt.Sprintf("🌐 %s", truncate(url, 60))
 	}
-	return fmt.Sprintf("🌐\n```\n%s\n```", output)
+	return "🌐 Fetch"
+}
+
+func formatIMWebSearchResult(tr *ToolResultInfo) string {
+	query := extractArgValue(tr.Args, "query")
+	if query == "" {
+		query = tr.Detail
+	}
+	if tr.IsError {
+		return fmt.Sprintf("🔍 %s\n```\n%s\n```", truncate(query, 60), strings.TrimSpace(tr.Result))
+	}
+	if query != "" {
+		return fmt.Sprintf("🔍 %s", truncate(query, 60))
+	}
+	return "🔍 Search"
 }
 
 // formatIMGitResult renders git tool results with concise summary.
