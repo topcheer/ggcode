@@ -335,9 +335,6 @@ func nonEmptyLines(s string) []string {
 func compactSingleLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 120 {
-		return s[:120] + "..."
-	}
 	return s
 }
 
