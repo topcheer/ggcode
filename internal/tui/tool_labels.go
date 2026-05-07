@@ -1297,8 +1297,8 @@ func shortenPath(path string) string {
 
 func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
-	value = strings.TrimPrefix(value, "./")
 	value = compactSingleLine(value)
+	value = relativizeResult(value)
 	return util.Truncate(value, 120)
 }
 
