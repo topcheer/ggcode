@@ -262,6 +262,11 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 		"git_stash":           true,
 		"cron_list":           true,
 		"cron_delete":         true,
+		"task_create":         true,
+		"task_get":            true,
+		"task_update":         true,
+		"task_list":           true,
+		"task_stop":           true,
 	}
 	if hiddenTools[toolName] {
 		return
