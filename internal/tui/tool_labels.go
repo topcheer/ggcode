@@ -1299,7 +1299,7 @@ func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "./")
 	value = compactSingleLine(value)
-	return util.Truncate(value, 60)
+	return util.Truncate(value, 120)
 }
 
 func displayToolFileTarget(value string) string {
@@ -1320,7 +1320,7 @@ func displayToolFileTarget(value string) string {
 			}
 		}
 	}
-	return util.Truncate(value, 60)
+	return util.Truncate(value, 120)
 }
 
 func buildCommandPreview(rawCommand string) commandPreview {
