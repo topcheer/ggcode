@@ -131,8 +131,8 @@ func (t *BaseToolItem) RenderBody(width int) string {
 
 	if t.markdownBody {
 		result := t.result
-		// exit_plan_mode: render only the plan field from args as markdown
-		if t.toolName == "exit_plan_mode" {
+		// If rawArgs contains a plan field, extract and render it as markdown
+		if t.rawArgs != "" {
 			var args struct {
 				Plan string `json:"plan"`
 			}
