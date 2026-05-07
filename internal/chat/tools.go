@@ -193,12 +193,12 @@ func (t *BaseToolItem) renderEditDiff() string {
 	var added, removed int
 	if len(args.Edits) > 0 {
 		for _, e := range args.Edits {
-			removed += strings.Count(e.OldText, "\n")
-			added += strings.Count(e.NewText, "\n")
+			removed += len(strings.Split(e.OldText, "\n"))
+			added += len(strings.Split(e.NewText, "\n"))
 		}
 	} else {
-		removed = strings.Count(args.OldText, "\n")
-		added = strings.Count(args.NewText, "\n")
+		removed = len(strings.Split(args.OldText, "\n"))
+		added = len(strings.Split(args.NewText, "\n"))
 	}
 
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
