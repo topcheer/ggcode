@@ -1382,6 +1382,7 @@ func formatIMGitLogSummary(output string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
 // Returns empty string if no offset/limit specified.
 func imFormatReadRange(lang ToolLanguage, rawArgs string) string {
 	offset := extractArgIntValue(rawArgs, "offset")
