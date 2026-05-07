@@ -279,7 +279,12 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 	case chat.BodySuppress:
 		// No body at all
 	case chat.BodyFormatJSON:
-		formatted := chat.FormatJSONResult(result)
+		var formatted string
+		if toolName == "cron_create" {
+			formatted = formatDaemonCronBody(result, d.lang)
+		} else {
+			formatted = chat.FormatJSONResult(result)
+		}
 		if formatted != "" {
 			for _, line := range strings.Split(formatted, "\n") {
 				fmt.Fprintf(d.out, "%s    %s%s"+nl, ansiDim, truncateForTerminal(line, 100), ansiReset)
@@ -746,4 +751,50 @@ func formatGitLog(result string, isError bool) string {
 		return ""
 	}
 	return "    " + ansiFgGreen + strings.Join(lines, nl+"    ") + ansiReset + nl
+}
+
+func formatDaemonCronBody(result string, lang Lang) string {
+	var data map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result)), &data); err != nil {
+		return ""
+	}
+	zh := lang == LangZhCN
+	var parts []string
+	if v, ok := data["Recurring"]; ok {
+		label := "Recurring"
+		if zh {
+			label = "循环执行"
+		}
+		if b, ok2 := v.(bool); ok2 {
+			val := "No"
+			if zh {
+				val = "否"
+			}
+			if b {
+				val = "Yes"
+				if zh {
+					val = "是"
+				}
+			}
+			parts = append(parts, label+": "+val)
+		}
+	}
+	if v, ok := data["Prompt"]; ok {
+		label := "Prompt"
+		if zh {
+			label = "任务"
+		}
+		parts = append(parts, label+": "+fmt.Sprintf("%v", v))
+	}
+	if v, ok := data["NextFire"]; ok {
+		label := "Next Fire"
+		if zh {
+			label = "下次触发"
+		}
+		parts = append(parts, label+": "+fmt.Sprintf("%v", v))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, nl)
 }
