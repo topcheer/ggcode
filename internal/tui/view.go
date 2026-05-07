@@ -1451,9 +1451,9 @@ func (m Model) renderComposerPanel() string {
 		elapsed := time.Since(m.loopStart).Truncate(time.Second)
 		var timerLabel string
 		if m.currentLanguage() == LangZhCN {
-			timerLabel = "🧪 酿造 " + formatDuration(elapsed)
+			timerLabel = "酿造 " + formatDuration(elapsed)
 		} else {
-			timerLabel = "🧪 brewing " + formatDuration(elapsed)
+			timerLabel = "brewing " + formatDuration(elapsed)
 		}
 		timerStr := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel)
 		// Place timer at the right edge of the hint line
