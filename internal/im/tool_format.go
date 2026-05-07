@@ -457,7 +457,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "cron_delete":
 		return true, formatIMCronDeleteResult(tr)
 	case "cron_list":
-		return true, formatIMCronListResult(tr)
+		return true, "" // hidden
 	case "enter_worktree":
 		return true, formatIMWorktreeResult("🌿", tr)
 	case "exit_worktree":

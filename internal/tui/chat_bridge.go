@@ -105,6 +105,10 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		"git_stash_list", "git_add", "git_commit", "git_stash":
 		return
 	}
+	// cron_list → skip (internal inspection tool)
+	if ts.ToolName == "cron_list" {
+		return
+	}
 	// LSP tools → skip (no header/body needed)
 	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
@@ -191,10 +195,15 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		"git_stash_list", "git_add", "git_commit", "git_stash":
 		return
 	}
+	// cron_list → skip (internal inspection tool)
+	if ts.ToolName == "cron_list" {
+		return
+	}
 	// LSP tools → skip (no header/body needed)
 	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
 	}
+
 	id := ts.ToolID
 	if id == "" {
 		return

@@ -3172,7 +3172,7 @@ func TestDescribeToolConfigShowsSetting(t *testing.T) {
 
 func TestDescribeToolCronShowsExpression(t *testing.T) {
 	present := describeTool(LangEnglish, "cron_create", `{"cron":"*/5 * * * *","prompt":"check status"}`)
-	if present.DisplayName != "Schedule" {
+	if present.DisplayName != "Create Cron" {
 		t.Errorf("expected DisplayName=Schedule, got %q", present.DisplayName)
 	}
 	if !strings.Contains(present.Detail, "*/5") {
