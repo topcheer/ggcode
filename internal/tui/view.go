@@ -1452,7 +1452,7 @@ func (m Model) renderComposerPanel() string {
 		} else {
 			timerLabel = "brewing " + formatDuration(elapsed)
 		}
-		hints = append(hints, timerLabel)
+		hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel))
 	}
 
 	hintLine := strings.Join(hints, " • ")
