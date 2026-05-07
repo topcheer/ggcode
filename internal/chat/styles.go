@@ -141,8 +141,8 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 
 	paramWidth := lipgloss.Width(paramStr)
 	if paramWidth > remaining {
-		// For file paths, truncate the head (keep filename visible)
-		if strings.Contains(paramStr, "/") {
+		// For file paths (no spaces, contains /), truncate the head to keep filename visible
+		if strings.Contains(paramStr, "/") && !strings.Contains(paramStr, " ") {
 			paramStr = "…" + truncateHeadByWidth(paramStr, remaining-1)
 		} else {
 			paramStr = truncateTailByWidth(paramStr, remaining-1) + "…"
