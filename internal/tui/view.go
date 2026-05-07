@@ -1444,7 +1444,7 @@ func (m Model) renderComposerPanel() string {
 	}
 
 	// Show loop timer as last hint when agent is running
-	if m.loading && !m.loopStart.IsZero() {
+	if m.loading {
 		elapsed := time.Since(m.loopStart).Truncate(time.Second)
 		var timerLabel string
 		if m.currentLanguage() == LangZhCN {
@@ -1452,11 +1452,11 @@ func (m Model) renderComposerPanel() string {
 		} else {
 			timerLabel = "brewing " + formatDuration(elapsed)
 		}
-		hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel))
+		hints = append(hints, timerLabel)
 	}
 
-	body := m.renderComposerInput() + "\n" +
-		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
+	hintLine := strings.Join(hints, " • ")
+	body := m.renderComposerInput() + "\n" + hintLine
 
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
