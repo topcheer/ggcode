@@ -207,8 +207,8 @@ func TestTGOutboundText_English(t *testing.T) {
 		// MCP / Skill / Memory — English
 		{"tool_result_skill_loaded", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "skill", Lang: "en", Result: ""}}, "🔧 Skill loaded"},
 		{"tool_result_memory_saved", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "save_memory", Lang: "en", Result: ""}}, "💾 Memory saved"},
-		{"tool_result_mcp_capabilities", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_mcp_capabilities", Lang: "en", Result: ""}}, "🔗 MCP service list"},
-		{"tool_result_mcp_resource", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_mcp_resource", Lang: "en", Result: ""}}, "🔗 Resource content"},
+		{"tool_result_mcp_capabilities", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_mcp_capabilities", Lang: "en", Result: ""}}, ""},
+		{"tool_result_mcp_resource", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_mcp_resource", Lang: "en", Result: ""}}, ""},
 		{"tool_result_ask_user", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "ask_user", Lang: "en", Result: ""}}, "💬 Reply received"},
 
 		// Todo — English

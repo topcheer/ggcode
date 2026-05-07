@@ -19,7 +19,7 @@ func TestDescribeTool(t *testing.T) {
 			toolName:     "read_file",
 			rawArgs:      `{"file_path": "/tmp/test.go"}`,
 			wantDisplay:  "读",
-			wantActivity: "读取 test.go",
+			wantActivity: "读取 /tmp/test.go",
 		},
 		{
 			name:         "read_file_en",
@@ -27,7 +27,7 @@ func TestDescribeTool(t *testing.T) {
 			toolName:     "read_file",
 			rawArgs:      `{"file_path": "/tmp/test.go"}`,
 			wantDisplay:  "Read",
-			wantActivity: "Reading test.go",
+			wantActivity: "Reading /tmp/test.go",
 		},
 		{
 			name:         "write_file_zh",
@@ -35,7 +35,7 @@ func TestDescribeTool(t *testing.T) {
 			toolName:     "write_file",
 			rawArgs:      `{"file_path": "/tmp/chart.html"}`,
 			wantDisplay:  "写",
-			wantActivity: "写入 chart.html",
+			wantActivity: "写入 /tmp/chart.html",
 		},
 		{
 			name:         "run_command_zh",
@@ -83,7 +83,7 @@ func TestDescribeTool(t *testing.T) {
 			toolName:     "edit_file",
 			rawArgs:      `{"file_path": "/tmp/new.go"}`,
 			wantDisplay:  "创建",
-			wantActivity: "创建 new.go",
+			wantActivity: "创建 /tmp/new.go",
 		},
 		{
 			name:         "edit_file_modify",
@@ -91,7 +91,7 @@ func TestDescribeTool(t *testing.T) {
 			toolName:     "edit_file",
 			rawArgs:      `{"file_path": "/tmp/existing.go", "old_text": "foo"}`,
 			wantDisplay:  "编辑",
-			wantActivity: "编辑 existing.go",
+			wantActivity: "编辑 /tmp/existing.go",
 		},
 	}
 
@@ -232,7 +232,7 @@ func TestDescribeToolPipeline(t *testing.T) {
 	t.Logf("write_file → status: %q (display=%q detail=%q activity=%q)", status, present.DisplayName, present.Detail, present.Activity)
 
 	// Expected: "正在写入 chart.html..." (localizeIMProgress("写入 chart.html"))
-	if status != "正在写入 chart.html..." {
-		t.Errorf("expected '正在写入 chart.html...', got %q", status)
+	if status != "正在写入 /tmp/chart.html..." {
+		t.Errorf("expected '正在写入 /tmp/chart.html...', got %q", status)
 	}
 }
