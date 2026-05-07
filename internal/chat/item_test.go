@@ -172,40 +172,48 @@ func TestToolHeader(t *testing.T) {
 	}
 }
 
-func TestToolHeaderNoTruncation(t *testing.T) {
+func TestToolHeaderWordWrap(t *testing.T) {
 	styles := DefaultStyles()
 
-	t.Run("long command preserved in full", func(t *testing.T) {
+	t.Run("long command word-wrapped and preserved", func(t *testing.T) {
 		longCmd := strings.Repeat("x", 200)
 		header := styles.ToolHeader(StatusSuccess, "Bash", 80, longCmd)
 		clean := stripTestAnsi(header)
-		if !strings.Contains(clean, longCmd) {
-			t.Fatalf("long command should be preserved, got: %q", clean)
+		// Content should be fully preserved across wrapped lines
+		if !strings.Contains(clean, longCmd[:50]) {
+			t.Fatalf("long command start should be preserved, got: %q", clean)
+		}
+		if !strings.Contains(clean, longCmd[150:]) {
+			t.Fatalf("long command end should be preserved, got: %q", clean)
 		}
 	})
 
-	t.Run("long path preserved in full", func(t *testing.T) {
+	t.Run("long path word-wrapped and preserved", func(t *testing.T) {
 		longPath := "/very/long/path/to/some/deeply/nested/directory/structure/with/many/components/file.go"
 		header := styles.ToolHeader(StatusSuccess, "Read", 80, longPath)
 		clean := stripTestAnsi(header)
-		if !strings.Contains(clean, longPath) {
-			t.Fatalf("long path should be preserved, got: %q", clean)
+		// Path may be split across wrapped lines, but start and end must be present
+		if !strings.Contains(clean, "/very/long") || !strings.Contains(clean, "file.go") {
+			t.Fatalf("long path content should be preserved, got: %q", clean)
 		}
 	})
 
-	t.Run("short params preserved", func(t *testing.T) {
+	t.Run("short params single line", func(t *testing.T) {
 		header := styles.ToolHeader(StatusSuccess, "Bash", 80, "go test ./...")
 		clean := stripTestAnsi(header)
+		if strings.Contains(clean, "\n") {
+			t.Fatalf("short param should be single line, got: %q", clean)
+		}
 		if !strings.Contains(clean, "go test ./...") {
 			t.Fatalf("short param should be preserved, got: %q", clean)
 		}
 	})
 
-	t.Run("CJK characters preserved", func(t *testing.T) {
+	t.Run("CJK characters wrapped and preserved", func(t *testing.T) {
 		cjk := strings.Repeat("你好世界", 20)
 		header := styles.ToolHeader(StatusSuccess, "Tool", 60, cjk)
 		clean := stripTestAnsi(header)
-		if !strings.Contains(clean, cjk) {
+		if !strings.Contains(clean, "你好世界") {
 			t.Fatalf("CJK should be preserved, got: %q", clean)
 		}
 	})

@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 // ToolStatus represents the current state of a tool call.
@@ -125,12 +126,76 @@ func (s Styles) ToolIconStyle(status ToolStatus) string {
 	}
 }
 
-// ToolHeader builds the standard tool header line: "✓ ToolName  params..."
+// ToolHeader builds the standard tool header line: "✓ ToolName  params".
+// If the header exceeds width, params are word-wrapped onto continuation lines
+// indented to align with the first param.
 func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...string) string {
 	icon := s.ToolIconStyle(status)
 	toolName := s.ToolName.Render(name)
 	paramStr := strings.Join(params, " ")
-	return fmt.Sprintf("%s %s %s", icon, toolName, paramStr)
+
+	prefix := fmt.Sprintf("%s %s ", icon, toolName)
+	prefixW := lipgloss.Width(prefix)
+
+	fullLine := prefix + paramStr
+	if lipgloss.Width(fullLine) <= width {
+		return fullLine
+	}
+
+	// Word-wrap params onto continuation lines aligned with prefix
+	indent := strings.Repeat(" ", prefixW)
+	var lines []string
+	remaining := paramStr
+	first := true
+	for remaining != "" {
+		var linePrefix string
+		var avail int
+		if first {
+			linePrefix = prefix
+			avail = width - prefixW
+			first = false
+		} else {
+			linePrefix = indent
+			avail = width - prefixW
+		}
+		if avail < 10 {
+			avail = 10
+		}
+		// Find how many chars fit
+		fit, rest := splitAtWidth(remaining, avail)
+		lines = append(lines, linePrefix+fit)
+		remaining = rest
+	}
+	return strings.Join(lines, "\n")
+}
+
+// splitAtWidth splits s at the maximum visual width that fits in maxW.
+// Returns (fit, rest). Tries to break at a space boundary.
+func splitAtWidth(s string, maxW int) (string, string) {
+	if lipgloss.Width(s) <= maxW {
+		return s, ""
+	}
+	// Walk runes, tracking visual width
+	runes := []rune(s)
+	totalW := 0
+	breakIdx := len(runes)
+	spaceIdx := -1
+	for i, r := range runes {
+		rw := runewidth.RuneWidth(r)
+		if totalW+rw > maxW && i > 0 {
+			breakIdx = i
+			break
+		}
+		totalW += rw
+		if r == ' ' {
+			spaceIdx = i
+		}
+	}
+	// Prefer breaking at last space before break point
+	if spaceIdx > 0 && spaceIdx < breakIdx {
+		return string(runes[:spaceIdx]), string(runes[spaceIdx+1:])
+	}
+	return string(runes[:breakIdx]), string(runes[breakIdx:])
 }
 
 // truncateTailByWidth truncates a string from the tail so that its visual
