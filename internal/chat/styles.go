@@ -129,6 +129,8 @@ func (s Styles) ToolIconStyle(status ToolStatus) string {
 // ToolHeader builds the standard tool header line: "✓ ToolName  params".
 // If the header exceeds width, params are word-wrapped onto continuation lines
 // indented to align with the first param.
+const toolHeaderMaxRenderWidth = 120
+
 func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...string) string {
 	icon := s.ToolIconStyle(status)
 	toolName := s.ToolName.Render(name)
@@ -138,7 +140,19 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 	prefixW := lipgloss.Width(prefix)
 
 	fullLine := prefix + paramStr
-	if lipgloss.Width(fullLine) <= width {
+
+	// Cap at max render width — truncate params if necessary
+	renderW := lipgloss.Width(fullLine)
+	if renderW > toolHeaderMaxRenderWidth {
+		avail := toolHeaderMaxRenderWidth - prefixW - 1 // 1 for "…"
+		if avail < 10 {
+			avail = 10
+		}
+		truncated, _ := splitAtWidth(paramStr, avail)
+		return prefix + truncated + "…"
+	}
+
+	if renderW <= width {
 		return fullLine
 	}
 

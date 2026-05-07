@@ -1079,6 +1079,17 @@ func (m Model) renderStatusBar() string {
 		}
 	}
 
+	// Truncate activity to 30 rendered characters for status bar
+	if lipgloss.Width(activity) > 30 {
+		runes := []rune(activity)
+		for i := len(runes); i > 0; i-- {
+			if lipgloss.Width(string(runes[:i])) <= 29 {
+				activity = string(runes[:i]) + "…"
+				break
+			}
+		}
+	}
+
 	spinnerChar := spinnerFrameGlyph(m.spinner.CurrentFrame())
 
 	line1 := fmt.Sprintf(" %s %s", spinnerChar, activity)

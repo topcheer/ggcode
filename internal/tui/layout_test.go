@@ -1592,8 +1592,8 @@ func TestStatusBarShowsActiveTodo(t *testing.T) {
 
 	bar := m.renderStatusBar()
 
-	if !strings.Contains(bar, "Working on Polish TUI activity flow") {
-		t.Fatalf("expected active todo in status bar, got %q", bar)
+	if !strings.Contains(bar, "Working on Polish TUI activit") {
+		t.Fatalf("expected truncated active todo in status bar, got %q", bar)
 	}
 	if !strings.Contains(bar, "🎯") {
 		t.Fatalf("expected todo marker in status bar, got %q", bar)

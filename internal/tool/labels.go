@@ -50,7 +50,7 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 	case "run_command", "bash", "powershell", "start_command":
 		cmd := firstNonEmpty(argStr(args, "command"), argStr(args, "cmd"))
 		if cmd != "" {
-			return toolPres(compactSingleLine(cmd), "")
+			return toolPres(compactSingleLineNoTruncate(cmd), "")
 		}
 		return toolPres("Run", "")
 	case "write_command_input":
@@ -277,6 +277,12 @@ func compactSingleLine(s string) string {
 		return s[:120] + "..."
 	}
 	return s
+}
+
+// compactSingleLineNoTruncate compacts but never truncates (for command display).
+func compactSingleLineNoTruncate(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func isTrivialDetail(value string) bool {
