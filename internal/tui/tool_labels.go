@@ -1296,7 +1296,7 @@ func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = compactSingleLine(value)
 	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(value, cwd, 120)
+	return util.FormatToolDetail(value, cwd)
 }
 
 func displayToolFileTarget(value string) string {
@@ -1319,7 +1319,7 @@ func displayToolFileTarget(value string) string {
 		}
 	}
 	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(value, cwd, 120)
+	return util.FormatToolDetail(value, cwd)
 }
 
 func buildCommandPreview(rawCommand string) commandPreview {
