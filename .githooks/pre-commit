@@ -15,5 +15,9 @@ if ((${#staged_go_files[@]} > 0)); then
   git add -- "${staged_go_files[@]}"
 fi
 
-echo "[pre-commit] running CI-aligned checks"
-exec ./scripts/dev/verify-ci.sh
+# Quick checks only (no full test suite)
+echo "[pre-commit] running go vet"
+go vet -tags goolm ./...
+
+echo "[pre-commit] running go build"
+CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode
