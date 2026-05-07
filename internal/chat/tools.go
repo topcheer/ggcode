@@ -18,6 +18,7 @@ type BaseToolItem struct {
 	CachedItem
 	id             string
 	toolName       string
+	params         string // display params for header (set at creation, never truncated)
 	status         ToolStatus
 	input          string // raw JSON input
 	result         string // result text (may contain error)
@@ -39,6 +40,7 @@ func NewBaseToolItem(id, toolName string, status ToolStatus, input string, style
 		toolName: toolName,
 		status:   status,
 		input:    input,
+		params:   input, // default: use input as params
 		styles:   styles,
 	}
 }
@@ -69,35 +71,9 @@ func (t *BaseToolItem) Status() ToolStatus { return t.status }
 // Input returns the raw input JSON.
 func (t *BaseToolItem) Input() string { return t.input }
 
-// RenderParams extracts display parameters from the tool input.
-// Override in concrete types for better param extraction.
+// RenderParams returns the display parameters for the tool header.
 func (t *BaseToolItem) RenderParams() string {
-	// Default: try to extract a "path" or "command" field
-	var m map[string]any
-	if err := json.Unmarshal([]byte(t.input), &m); err == nil {
-		if path, ok := m["path"].(string); ok && path != "" {
-			return path
-		}
-		if fp, ok := m["file_path"].(string); ok && fp != "" {
-			return fp
-		}
-		if cmd, ok := m["command"].(string); ok && cmd != "" {
-			return cmd
-		}
-		if query, ok := m["query"].(string); ok && query != "" {
-			return query
-		}
-		if pattern, ok := m["pattern"].(string); ok && pattern != "" {
-			return pattern
-		}
-	}
-	// Fallback: first N chars of input
-	s := strings.TrimSpace(t.input)
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 60 {
-		return s[:59] + "…"
-	}
-	return s
+	return t.params
 }
 
 // RenderBody renders the tool output body.
@@ -398,6 +374,16 @@ func (t *BaseToolItem) Render(width int) string {
 	if cached, _, ok := t.GetCached(width); ok {
 		return cached
 	}
+	if t.suppressHeader {
+		body := t.RenderBody(width - 4)
+		if strings.TrimSpace(body) == "" {
+			t.SetCached("", width, 0)
+			return ""
+		}
+		rendered := t.styles.ToolBody.Render(body)
+		t.SetCached(rendered, width, measureHeight(rendered))
+		return rendered
+	}
 	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
 	t.SetCached(rendered, width, measureHeight(rendered))
 	return rendered
@@ -428,9 +414,9 @@ func (t *BaseToolItem) Height(width int) int {
 // --- Specific Tool Types ---
 
 // BashToolItem renders bash command execution.
+// BashToolItem renders bash command execution.
 type BashToolItem struct {
 	BaseToolItem
-	command string
 }
 
 // NewBashToolItem creates a new bash tool item.
@@ -515,28 +501,14 @@ func PrettifyToolName(name string) string {
 func NewBashToolItem(id, displayName, command string, status ToolStatus, styles Styles) *BashToolItem {
 	b := NewBaseToolItem(id, displayName, status, command, styles)
 	b.suppressBody = true
-	result := &BashToolItem{BaseToolItem: *b, command: command}
-	return result
-}
-
-func (t *BashToolItem) RenderParams() string {
-	return t.command
+	return &BashToolItem{BaseToolItem: *b}
 }
 
 // RenderBody uses BashBody style for command output.
-func (t *BashToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
-}
 
 // FileToolItem renders file read/write/edit operations.
 type FileToolItem struct {
 	BaseToolItem
-	filePath string
 }
 
 // NewFileToolItem creates a new file operation tool item.
@@ -551,40 +523,19 @@ func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles
 	default:
 		b.fileBodyMode = "linecount"
 	}
-	return &FileToolItem{
-		BaseToolItem: *b,
-		filePath:     filePath,
-	}
-}
-
-func (t *FileToolItem) RenderParams() string {
-	return t.filePath
+	return &FileToolItem{BaseToolItem: *b}
 }
 
 // SearchToolItem renders grep/glob/ls operations.
 type SearchToolItem struct {
 	BaseToolItem
-	pattern string
 }
 
 // NewSearchToolItem creates a new search tool item.
 func NewSearchToolItem(id, displayName, pattern string, status ToolStatus, styles Styles) *SearchToolItem {
 	b := NewBaseToolItem(id, displayName, status, pattern, styles)
 	b.fileBodyMode = "searchcount"
-	return &SearchToolItem{BaseToolItem: *b, pattern: pattern}
-}
-
-func (t *SearchToolItem) RenderParams() string {
-	return t.pattern
-}
-
-func (t *SearchToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
+	return &SearchToolItem{BaseToolItem: *b}
 }
 
 // --- ListToolItem (list_directory) ---
@@ -592,24 +543,12 @@ func (t *SearchToolItem) Render(width int) string {
 // ListToolItem renders directory listing operations.
 type ListToolItem struct {
 	BaseToolItem
-	path string
 }
 
 func newListToolItem(id, displayName, path string, status ToolStatus, styles Styles) *ListToolItem {
 	b := NewBaseToolItem(id, displayName, status, path, styles)
 	b.suppressBody = true
-	return &ListToolItem{BaseToolItem: *b, path: path}
-}
-
-func (t *ListToolItem) RenderParams() string { return t.path }
-
-func (t *ListToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	rendered := t.renderCore(width, t.RenderParams(), "")
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
+	return &ListToolItem{BaseToolItem: *b}
 }
 
 // --- WebToolItem (web_fetch, web_search) ---
@@ -617,24 +556,11 @@ func (t *ListToolItem) Render(width int) string {
 // WebToolItem renders web fetch/search operations.
 type WebToolItem struct {
 	BaseToolItem
-	url string // or query
 }
 
 func newWebToolItem(id, displayName, url string, status ToolStatus, styles Styles) *WebToolItem {
 	b := NewBaseToolItem(id, displayName, status, url, styles)
-	return &WebToolItem{BaseToolItem: *b, url: url}
-}
-
-func (t *WebToolItem) RenderParams() string { return t.url }
-
-func (t *WebToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	// WebToolItem: suppress body — only show header
-	rendered := t.renderCore(width, t.RenderParams(), "")
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
+	return &WebToolItem{BaseToolItem: *b}
 }
 
 // --- GitToolItem (git_status, git_diff, git_log) ---
@@ -642,36 +568,14 @@ func (t *WebToolItem) Render(width int) string {
 // GitToolItem renders git operations with command-output body.
 type GitToolItem struct {
 	BaseToolItem
-	subCmd string // "status", "diff", "log"
 }
 
 func newGitToolItem(id, displayName, subCmd string, status ToolStatus, styles Styles) *GitToolItem {
 	b := NewBaseToolItem(id, displayName, status, subCmd, styles)
-	return &GitToolItem{BaseToolItem: *b, subCmd: subCmd}
+	return &GitToolItem{BaseToolItem: *b}
 }
-
-func (t *GitToolItem) RenderParams() string { return t.subCmd }
 
 // RenderBody uses BashBody style for git output (same dark background).
-func (t *GitToolItem) RenderBody(width int) string {
-	if t.result == "" {
-		return ""
-	}
-	if t.isError {
-		return t.styles.ErrorStyle.Render(t.result)
-	}
-	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
-	return t.styles.BashBody.Render(body)
-}
-
-func (t *GitToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
-}
 
 // --- CmdToolItem (background command management) ---
 
@@ -685,46 +589,11 @@ func (t *GitToolItem) Render(width int) string {
 //   - list_commands: "" (no params)
 type CmdToolItem struct {
 	BaseToolItem
-	detail string // pre-formatted from describeTool
 }
 
 func newCmdToolItem(id, displayName, detail string, status ToolStatus, styles Styles) *CmdToolItem {
 	b := NewBaseToolItem(id, displayName, status, detail, styles)
-	return &CmdToolItem{BaseToolItem: *b, detail: detail}
-}
-
-func (t *CmdToolItem) RenderParams() string { return t.detail }
-
-// RenderBody uses BashBody style for command output.
-func (t *CmdToolItem) RenderBody(width int) string {
-	if t.result == "" {
-		return ""
-	}
-	if t.isError {
-		return t.styles.ErrorStyle.Render(t.result)
-	}
-	body, _ := FormatBody(t.result, width, ToolBodyMaxLines)
-	return t.styles.BashBody.Render(body)
-}
-
-func (t *CmdToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	if t.suppressHeader {
-		// Only hide header, still render body
-		body := t.RenderBody(width - 4)
-		if strings.TrimSpace(body) == "" {
-			t.SetCached("", width, 0)
-			return ""
-		}
-		rendered := t.styles.ToolBody.Render(body)
-		t.SetCached(rendered, width, measureHeight(rendered))
-		return rendered
-	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
+	return &CmdToolItem{BaseToolItem: *b}
 }
 
 // --- LspToolItem (language server protocol) ---
@@ -732,23 +601,11 @@ func (t *CmdToolItem) Render(width int) string {
 // LspToolItem renders LSP operations (hover, definition, references, etc.)
 type LspToolItem struct {
 	BaseToolItem
-	location string // "file:line" or "file"
 }
 
 func newLspToolItem(id, displayName, location string, status ToolStatus, styles Styles) *LspToolItem {
 	b := NewBaseToolItem(id, displayName, status, location, styles)
-	return &LspToolItem{BaseToolItem: *b, location: location}
-}
-
-func (t *LspToolItem) RenderParams() string { return t.location }
-
-func (t *LspToolItem) Render(width int) string {
-	if cached, _, ok := t.GetCached(width); ok {
-		return cached
-	}
-	rendered := t.renderCore(width, t.RenderParams(), t.RenderBody(width-4))
-	t.SetCached(rendered, width, measureHeight(rendered))
-	return rendered
+	return &LspToolItem{BaseToolItem: *b}
 }
 
 // GenericToolItem is a fallback for unrecognized tools.

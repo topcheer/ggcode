@@ -1105,11 +1105,7 @@ func (m Model) renderStatusBar() string {
 		if m.statusToolName != "" {
 			sb.WriteString(m.statusToolName)
 			if m.statusToolArg != "" {
-				arg := m.statusToolArg
-				if len(arg) > 50 {
-					arg = arg[:50] + "..."
-				}
-				sb.WriteString(fmt.Sprintf(": %s", arg))
+				sb.WriteString(fmt.Sprintf(": %s", m.statusToolArg))
 			}
 		}
 	}
