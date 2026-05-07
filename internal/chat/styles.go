@@ -139,20 +139,19 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 	prefix := fmt.Sprintf("%s %s ", icon, toolName)
 	prefixW := lipgloss.Width(prefix)
 
-	fullLine := prefix + paramStr
-
-	// Cap at max render width — truncate params if necessary
-	renderW := lipgloss.Width(fullLine)
+	// Cap params at max render width
+	renderW := lipgloss.Width(prefix + paramStr)
 	if renderW > toolHeaderMaxRenderWidth {
 		avail := toolHeaderMaxRenderWidth - prefixW - 1 // 1 for "…"
 		if avail < 10 {
 			avail = 10
 		}
 		truncated, _ := splitAtWidth(paramStr, avail)
-		return prefix + truncated + "…"
+		paramStr = truncated + "…"
 	}
 
-	if renderW <= width {
+	fullLine := prefix + paramStr
+	if lipgloss.Width(fullLine) <= width {
 		return fullLine
 	}
 
@@ -175,7 +174,6 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 		if avail < 10 {
 			avail = 10
 		}
-		// Find how many chars fit
 		fit, rest := splitAtWidth(remaining, avail)
 		lines = append(lines, linePrefix+fit)
 		remaining = rest
