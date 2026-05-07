@@ -140,14 +140,24 @@ func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...
 	prefixW := lipgloss.Width(prefix)
 
 	// Cap params at max render width
-	renderW := lipgloss.Width(prefix + paramStr)
-	if renderW > toolHeaderMaxRenderWidth {
+	if lipgloss.Width(prefix+paramStr) > toolHeaderMaxRenderWidth {
 		avail := toolHeaderMaxRenderWidth - prefixW - 1 // 1 for "…"
 		if avail < 10 {
 			avail = 10
 		}
-		truncated, _ := splitAtWidth(paramStr, avail)
-		paramStr = truncated + "…"
+		// Truncate by visual width, no word-break — just cut at rune boundary
+		runes := []rune(paramStr)
+		w := 0
+		cut := len(runes)
+		for i, r := range runes {
+			rw := runewidth.RuneWidth(r)
+			if w+rw > avail {
+				cut = i
+				break
+			}
+			w += rw
+		}
+		paramStr = string(runes[:cut]) + "…"
 	}
 
 	fullLine := prefix + paramStr
