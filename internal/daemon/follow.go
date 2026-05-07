@@ -276,7 +276,17 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 		return
 	}
 
-	// Render header
+	// Render header (exit_plan_mode skips header, renders plan as markdown)
+	if toolName == "exit_plan_mode" {
+		var args struct {
+			Plan string `json:"plan"`
+		}
+		if json.Unmarshal([]byte(rawArgs), &args) == nil && args.Plan != "" {
+			rendered := renderMarkdown(args.Plan)
+			fmt.Fprint(d.out, rendered+nl)
+		}
+		return
+	}
 	header := d.styles.ToolHeader(status, displayName, d.termWidth, detail)
 	fmt.Fprint(d.out, header+nl)
 

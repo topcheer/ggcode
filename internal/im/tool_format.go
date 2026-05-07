@@ -143,6 +143,10 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		return "⏰ List cron jobs"
 	case "task_create", "task_get", "task_update", "task_list", "task_stop":
 		return "" // hidden
+	case "enter_plan_mode":
+		return "📝 Planning..."
+	case "exit_plan_mode":
+		return "" // plan content sent as separate text via result
 	case "enter_worktree":
 		name := extractArgValue(args, "name")
 		if name == "" {
@@ -462,6 +466,17 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, "" // hidden
 	case "task_create", "task_get", "task_update", "task_list", "task_stop":
 		return true, "" // hidden — internal LLM task tracking
+	case "enter_plan_mode":
+		return true, "" // hidden — shows system message instead
+	case "exit_plan_mode":
+		plan := extractArgValue(tr.Args, "plan")
+		if plan == "" {
+			plan = extractArgValue(tr.Detail, "plan")
+		}
+		if plan != "" {
+			return true, plan
+		}
+		return true, ""
 	case "enter_worktree":
 		return true, formatIMWorktreeResult("🌿", tr)
 	case "exit_worktree":

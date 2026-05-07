@@ -504,9 +504,9 @@ func localizedToolLabel(lang Language, action string) string {
 		case "send_message":
 			return "发送消息"
 		case "enter_plan":
-			return "计划模式"
+			return "制定计划"
 		case "exit_plan":
-			return "退出计划"
+			return "计划"
 		case "team_create":
 			return "创建团队"
 		case "team_delete":
@@ -615,9 +615,9 @@ func localizedToolLabel(lang Language, action string) string {
 		case "send_message":
 			return "Message"
 		case "enter_plan":
-			return "Plan Mode"
+			return "Planning"
 		case "exit_plan":
-			return "Exit Plan"
+			return "Plan"
 		case "team_create":
 			return "Create Team"
 		case "team_delete":
@@ -733,9 +733,9 @@ func localizedToolActivity(lang Language, action, target string) string {
 			case "send_message":
 				return "发送消息..."
 			case "enter_plan":
-				return "进入计划模式..."
+				return "制定计划中..."
 			case "exit_plan":
-				return "退出计划模式..."
+				return "完成计划..."
 			case "team_create":
 				return "创建团队中..."
 			case "team_delete":
@@ -820,9 +820,9 @@ func localizedToolActivity(lang Language, action, target string) string {
 			case "send_message":
 				return "Sending message..."
 			case "enter_plan":
-				return "Entering plan mode..."
+				return "Planning..."
 			case "exit_plan":
-				return "Exiting plan mode..."
+				return "Completing plan..."
 			case "team_create":
 				return "Creating team..."
 			case "team_delete":
