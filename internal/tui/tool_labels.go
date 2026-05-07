@@ -494,7 +494,7 @@ func localizedToolLabel(lang Language, action string) string {
 		case "sleep":
 			return "等待"
 		case "cron_create":
-			return "创建定时任务"
+			return "创建定时"
 		case "config":
 			return "配置"
 		case "enter_worktree":
@@ -605,7 +605,7 @@ func localizedToolLabel(lang Language, action string) string {
 		case "sleep":
 			return "Sleep"
 		case "cron_create":
-			return "Schedule"
+			return "Create Cron"
 		case "config":
 			return "Config"
 		case "enter_worktree":
