@@ -172,34 +172,28 @@ func TestToolHeader(t *testing.T) {
 	}
 }
 
-func TestToolHeaderTruncation(t *testing.T) {
+func TestToolHeaderNoTruncation(t *testing.T) {
 	styles := DefaultStyles()
 
-	t.Run("long command truncated with ellipsis", func(t *testing.T) {
+	t.Run("long command preserved in full", func(t *testing.T) {
 		longCmd := strings.Repeat("x", 200)
 		header := styles.ToolHeader(StatusSuccess, "Bash", 80, longCmd)
-		if w := lipgloss.Width(header); w > 80 {
-			t.Fatalf("header width %d exceeds 80", w)
-		}
 		clean := stripTestAnsi(header)
-		if !strings.HasSuffix(clean, "…") {
-			t.Fatalf("long command should end with …, got: %q", clean)
+		if !strings.Contains(clean, longCmd) {
+			t.Fatalf("long command should be preserved, got: %q", clean)
 		}
 	})
 
-	t.Run("long path truncated from head", func(t *testing.T) {
+	t.Run("long path preserved in full", func(t *testing.T) {
 		longPath := "/very/long/path/to/some/deeply/nested/directory/structure/with/many/components/file.go"
 		header := styles.ToolHeader(StatusSuccess, "Read", 80, longPath)
-		if w := lipgloss.Width(header); w > 80 {
-			t.Fatalf("header width %d exceeds 80", w)
-		}
 		clean := stripTestAnsi(header)
-		if !strings.Contains(clean, "file.go") {
-			t.Fatalf("should keep filename, got: %q", clean)
+		if !strings.Contains(clean, longPath) {
+			t.Fatalf("long path should be preserved, got: %q", clean)
 		}
 	})
 
-	t.Run("short params not truncated", func(t *testing.T) {
+	t.Run("short params preserved", func(t *testing.T) {
 		header := styles.ToolHeader(StatusSuccess, "Bash", 80, "go test ./...")
 		clean := stripTestAnsi(header)
 		if !strings.Contains(clean, "go test ./...") {
@@ -207,19 +201,17 @@ func TestToolHeaderTruncation(t *testing.T) {
 		}
 	})
 
-	t.Run("CJK characters truncated correctly", func(t *testing.T) {
-		cjk := strings.Repeat("你好世界", 20) // 80 CJK chars, each ~2 cells wide
+	t.Run("CJK characters preserved", func(t *testing.T) {
+		cjk := strings.Repeat("你好世界", 20)
 		header := styles.ToolHeader(StatusSuccess, "Tool", 60, cjk)
-		if w := lipgloss.Width(header); w > 60 {
-			t.Fatalf("CJK header width %d exceeds 60", w)
+		clean := stripTestAnsi(header)
+		if !strings.Contains(clean, cjk) {
+			t.Fatalf("CJK should be preserved, got: %q", clean)
 		}
 	})
 
 	t.Run("narrow width still renders", func(t *testing.T) {
 		header := styles.ToolHeader(StatusSuccess, "Bash", 30, "go build ./...")
-		if w := lipgloss.Width(header); w > 30 {
-			t.Fatalf("narrow header width %d exceeds 30", w)
-		}
 		clean := stripTestAnsi(header)
 		if !strings.Contains(clean, "Bash") {
 			t.Fatalf("should contain tool name, got: %q", clean)

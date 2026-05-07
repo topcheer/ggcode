@@ -476,7 +476,7 @@ func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = compactSingleLine(value)
 	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(value, cwd, 120)
+	return util.FormatToolDetail(value, cwd)
 }
 
 func displayToolFileTarget(value string) string {
@@ -494,11 +494,11 @@ func displayToolFileTarget(value string) string {
 		normCWD := normalizeDisplayPath(cwd)
 		normValue := normalizeDisplayPath(value)
 		if rel, relErr := filepath.Rel(normCWD, normValue); relErr == nil && !strings.HasPrefix(rel, "..") {
-			return truncateStr(filepath.ToSlash(rel), 120)
+			return filepath.ToSlash(rel)
 		}
 	}
 	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(filepath.ToSlash(value), cwd, 120)
+	return util.FormatToolDetail(filepath.ToSlash(value), cwd)
 }
 
 func normalizeDisplayPath(value string) string {

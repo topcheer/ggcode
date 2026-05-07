@@ -126,30 +126,11 @@ func (s Styles) ToolIconStyle(status ToolStatus) string {
 }
 
 // ToolHeader builds the standard tool header line: "✓ ToolName  params..."
-// Params are joined and truncated to fit within width.
 func (s Styles) ToolHeader(status ToolStatus, name string, width int, params ...string) string {
 	icon := s.ToolIconStyle(status)
 	toolName := s.ToolName.Render(name)
 	paramStr := strings.Join(params, " ")
-
-	prefix := fmt.Sprintf("%s %s ", icon, toolName)
-	prefixWidth := lipgloss.Width(prefix)
-	remaining := width - prefixWidth - 1 // 1 for trailing space
-	if remaining < 10 {
-		remaining = 10
-	}
-
-	paramWidth := lipgloss.Width(paramStr)
-	if paramWidth > remaining {
-		// For file paths (no spaces, contains /), truncate the head to keep filename visible
-		if strings.Contains(paramStr, "/") && !strings.Contains(paramStr, " ") {
-			paramStr = "…" + truncateHeadByWidth(paramStr, remaining-1)
-		} else {
-			paramStr = truncateTailByWidth(paramStr, remaining-1) + "…"
-		}
-	}
-
-	return prefix + paramStr
+	return fmt.Sprintf("%s %s %s", icon, toolName, paramStr)
 }
 
 // truncateTailByWidth truncates a string from the tail so that its visual
