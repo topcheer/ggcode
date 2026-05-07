@@ -1515,7 +1515,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cronPromptMsg:
 		m.queuePendingSubmissionHidden(msg.Prompt)
-		m.chatWriteSystem(nextSystemID(), m.t("cron.firing"))
+		sysMsg := m.t("cron.firing")
+		m.chatWriteSystem(nextSystemID(), sysMsg)
+		m.emitIMText(sysMsg)
 		return m, nil
 
 	case skillsChangedMsg:
