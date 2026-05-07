@@ -448,8 +448,8 @@ const (
 func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 	switch toolName {
 	case "save_memory", "team_create", "team_delete",
-		"teammate_spawn", "teammate_shutdown",
-		"swarm_task_create", "swarm_task_claim", "swarm_task_complete",
+		"teammate_spawn", "teammate_shutdown", "teammate_list",
+		"swarm_task_create", "swarm_task_claim", "swarm_task_complete", "swarm_task_list",
 		"send_message", "config",
 		"enter_plan_mode",
 		"skill":
@@ -458,7 +458,9 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 		return BodyMarkdown
 	case "cron_create":
 		return BodyFormatJSON
-	case "task_create", "task_get", "task_update", "task_list", "task_stop":
+	case "task_create", "task_get", "task_update", "task_list", "task_stop",
+		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task",
+		"a2a_remote", "a2a_send_task":
 		return BodySuppress
 	case "teammate_results", "wait_agent":
 		return BodyMarkdown
@@ -838,6 +840,9 @@ func classifyTool(name string) toolCategory {
 	case "start_command", "read_command_output", "wait_command",
 		"stop_command", "write_command_input", "list_commands":
 		return catCmd
+	case "a2a_remote", "a2a_discover", "a2a_send_task",
+		"a2a_get_task", "a2a_list_tasks", "a2a_cancel_task":
+		return catGeneric
 	default:
 		// LSP tools (lsp_hover, lsp_definition, etc.)
 		if strings.HasPrefix(name, "lsp_") {
