@@ -73,6 +73,7 @@ type Model struct {
 	chatStyles                      chat.Styles
 	shellMode                       bool
 	loading                         bool
+	loopStart                       time.Time // when current agent loop started (user sent message)
 	quitting                        bool
 	restartRequested                bool
 	restartDebug                    bool

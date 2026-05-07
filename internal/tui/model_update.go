@@ -952,6 +952,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shellBuffer = nil
 			m.streamPrefixWritten = false
 			m.loading = true
+			m.loopStart = time.Now()
 			m.statusActivity = m.t("status.thinking")
 			m.statusToolName = ""
 			m.statusToolArg = ""
