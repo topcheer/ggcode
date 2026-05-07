@@ -475,10 +475,8 @@ func firstNonEmptyStr(values ...string) string {
 func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = compactSingleLine(value)
-	if cwd, err := os.Getwd(); err == nil {
-		value = util.RelativizePaths(value, cwd)
-	}
-	return truncateStr(value, 120)
+	cwd, _ := os.Getwd()
+	return util.FormatToolDetail(value, cwd, 120)
 }
 
 func displayToolFileTarget(value string) string {
@@ -491,17 +489,8 @@ func displayToolFileTarget(value string) string {
 		return ""
 	}
 
-	cwd, err := os.Getwd()
-	if err == nil {
-		if filepath.IsAbs(value) {
-			normCWD := normalizeDisplayPath(cwd)
-			normValue := normalizeDisplayPath(value)
-			if rel, relErr := filepath.Rel(normCWD, normValue); relErr == nil && !strings.HasPrefix(rel, "..") {
-				return truncateStr(filepath.ToSlash(rel), 120)
-			}
-		}
-	}
-	return truncateStr(filepath.ToSlash(value), 120)
+	cwd, _ := os.Getwd()
+	return util.FormatToolDetail(filepath.ToSlash(value), cwd, 120)
 }
 
 func normalizeDisplayPath(value string) string {

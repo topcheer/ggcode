@@ -1298,8 +1298,8 @@ func shortenPath(path string) string {
 func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = compactSingleLine(value)
-	value = relativizeResult(value)
-	return util.Truncate(value, 120)
+	cwd, _ := os.Getwd()
+	return util.FormatToolDetail(value, cwd, 120)
 }
 
 func displayToolFileTarget(value string) string {
@@ -1320,7 +1320,8 @@ func displayToolFileTarget(value string) string {
 			}
 		}
 	}
-	return util.Truncate(value, 120)
+	cwd, _ := os.Getwd()
+	return util.FormatToolDetail(value, cwd, 120)
 }
 
 func buildCommandPreview(rawCommand string) commandPreview {

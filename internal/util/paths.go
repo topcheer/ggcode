@@ -56,3 +56,11 @@ func isPathChar(c byte) bool {
 		(c >= '0' && c <= '9') ||
 		c == '_' || c == '-' || c == '.'
 }
+
+// FormatToolDetail prepares a tool detail string for display.
+// It first relativizes absolute paths under baseDir, then truncates to maxChars.
+// This is the single entry point for all tool detail formatting.
+func FormatToolDetail(text, baseDir string, maxChars int) string {
+	text = RelativizePaths(text, baseDir)
+	return Truncate(text, maxChars)
+}
