@@ -129,18 +129,18 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_call_read_limit_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"log.txt","limit":10}`}}, "📖 读取文件: `log.txt` [前 10 行]"},
 		{"tool_result_read_offset", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"log.txt","offset":100,"limit":50}`, Result: "line100\nline101"}}, "📖 log.txt [行 100-149]"},
 		{"tool_result_read_no_range", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"full.txt"}`, Result: "line1\nline2"}}, "📖 full.txt"},
-		{"tool_result_edit_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`, Result: "ok"}}, "✏️ main.go"},
+		{"tool_result_edit_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`, Result: "ok"}}, "✏️ main.go (+0 -0)"},
 		{"tool_result_edit_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`, Result: "conflict", IsError: true}}, "✏️ main.go\n```\nconflict\n```"},
-		{"tool_result_write_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_file", Args: `{"file_path":"output.md"}`, Result: "ok"}}, "📝 output.md"},
+		{"tool_result_write_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_file", Args: `{"file_path":"output.md"}`, Result: "ok"}}, "📝 output.md (1 行)"},
 		{"tool_result_write_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_file", Args: `{"file_path":"out.md"}`, Result: "permission denied", IsError: true}}, "📝 out.md\n```\npermission denied\n```"},
 		{"tool_result_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: ""}}, ""},
 		{"tool_result_empty_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"echo ok"}`, Result: ""}}, "```bash\necho ok\n```\n```\n(无输出)\n```"},
-		{"tool_result_listdir", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"src"}`, Result: "main.go\ntypes.go"}}, "📂 src\n```\nmain.go\ntypes.go\n```"},
-		{"tool_result_listdir_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"empty"}`, Result: ""}}, "📂 empty"},
-		{"tool_result_glob", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"**/*.go"}`, Result: "main.go\ntypes.go\nutils.go"}}, "🔍 `**/*.go`\n```\nmain.go\ntypes.go\nutils.go\n```"},
-		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "🔍 `*.xyz`: 无匹配"},
-		{"tool_result_search", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"TODO"}`, Result: "main.go:1:TODO fix\nutils.go:5:TODO refactor"}}, "🔍 `TODO`\n```\nmain.go:1:TODO fix\nutils.go:5:TODO refactor\n```"},
-		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "🔍 `NONEXIST`: 0 条结果"},
+		{"tool_result_listdir", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"src"}`, Result: "main.go\ntypes.go"}}, ""},
+		{"tool_result_listdir_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"empty"}`, Result: ""}}, ""},
+		{"tool_result_glob", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"**/*.go"}`, Result: "main.go\ntypes.go\nutils.go"}}, "🔍 `**/*.go` — 3 matches"},
+		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "🔍 `*.xyz` — 0 matches"},
+		{"tool_result_search", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"TODO"}`, Result: "main.go:1:TODO fix\nutils.go:5:TODO refactor"}}, "🔍 `TODO` — 2 matches"},
+		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "🔍 `NONEXIST` — 0 matches"},
 		{"unknown", OutboundEvent{Kind: "unknown"}, ""},
 	}
 	for _, tc := range tests {
@@ -183,8 +183,8 @@ func TestTGOutboundText_English(t *testing.T) {
 		{"tool_result_read_docx", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"doc.docx"}`, Result: "[Extracted from docx]\n     1\thello world"}}, "📄 doc.docx (1 lines extracted)"},
 		{"tool_result_read_zip", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"src.zip"}`, Result: "[Archive: zip format, 15 files]\n\n--- README.md ---\nhello"}}, "📦 src.zip (15 files)"},
 		{"tool_result_read_zip_truncated", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"big.tar.gz"}`, Result: "[Archive: tar.gz format, 500 files]\n[Showing first 500 of 1000 files]\n--- main.go ---\npackage main"}}, "📦 big.tar.gz (1000 files, showing first 500)"},
-		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Lang: "en", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "🔍 `*.xyz`: no matches"},
-		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Lang: "en", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "🔍 `NONEXIST`: 0 results"},
+		{"tool_result_glob_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Lang: "en", Args: `{"pattern":"*.xyz"}`, Result: ""}}, "🔍 `*.xyz` — 0 matches"},
+		{"tool_result_search_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "search_files", Lang: "en", Args: `{"pattern":"NONEXIST"}`, Result: ""}}, "🔍 `NONEXIST` — 0 matches"},
 
 		// Read range — English
 		{"tool_call_read_offset", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"log.txt","offset":100,"limit":50}`}}, "📖 Reading file: `log.txt` [lines 100-149]"},
@@ -194,19 +194,19 @@ func TestTGOutboundText_English(t *testing.T) {
 
 		// Background commands — English
 		{"tool_result_start_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "start_command", Lang: "en", Result: ""}}, "⚡ Background command started"},
-		{"tool_result_stop_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "stop_command", Lang: "en", Result: ""}}, "🛑 Command stopped"},
-		{"tool_result_wait_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_command", Lang: "en", Result: ""}}, "⏳ Command completed"},
-		{"tool_result_write_input", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_command_input", Lang: "en", Result: ""}}, "⌨️ Input sent"},
-		{"tool_result_list_cmds", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_commands", Lang: "en", Result: ""}}, "📋 no active commands"},
+		{"tool_result_stop_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "stop_command", Lang: "en", Result: ""}}, ""},
+		{"tool_result_wait_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_command", Lang: "en", Result: ""}}, ""},
+		{"tool_result_write_input", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_command_input", Lang: "en", Result: ""}}, ""},
+		{"tool_result_list_cmds", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_commands", Lang: "en", Result: ""}}, ""},
 
 		// Agent tools — English
-		{"tool_result_spawn_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "spawn_agent", Lang: "en", Result: ""}}, "🤖 Sub-task started"},
-		{"tool_result_wait_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_agent", Lang: "en", Result: ""}}, "🤖 Sub-task completed"},
-		{"tool_result_list_agents", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_agents", Lang: "en", Result: ""}}, "🤖 no active agents"},
+		{"tool_result_spawn_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "spawn_agent", Lang: "en", Result: ""}}, "🤖 Starting subagent "},
+		{"tool_result_wait_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_agent", Lang: "en", Result: ""}}, ""},
+		{"tool_result_list_agents", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_agents", Lang: "en", Result: ""}}, ""},
 
 		// MCP / Skill / Memory — English
-		{"tool_result_skill_loaded", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "skill", Lang: "en", Result: ""}}, "🔧 Skill loaded"},
-		{"tool_result_memory_saved", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "save_memory", Lang: "en", Result: ""}}, "💾 Memory saved"},
+		{"tool_result_skill_loaded", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "skill", Lang: "en", Result: ""}}, ""},
+		{"tool_result_memory_saved", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "save_memory", Lang: "en", Result: ""}}, ""},
 		{"tool_result_mcp_capabilities", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_mcp_capabilities", Lang: "en", Result: ""}}, "🔗 MCP service list"},
 		{"tool_result_mcp_resource", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_mcp_resource", Lang: "en", Result: ""}}, "🔗 Resource content"},
 		{"tool_result_ask_user", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "ask_user", Lang: "en", Result: ""}}, "💬 Reply received"},
