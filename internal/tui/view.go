@@ -1456,13 +1456,18 @@ func (m Model) renderComposerPanel() string {
 			timerLabel = "brewing " + formatDuration(elapsed)
 		}
 		timerStr := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel)
-		// Place timer at the right edge of the hint line
 		hintLine := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
 		hintW := lipgloss.Width(hintLine)
 		boxW := m.boxInnerWidth(m.mainColumnWidth())
 		gap := boxW - hintW - lipgloss.Width(timerStr)
 		if gap > 1 {
 			body = m.renderComposerInput() + "\n" + hintLine + strings.Repeat(" ", gap) + timerStr
+		} else {
+			pad := boxW - lipgloss.Width(timerStr)
+			if pad < 0 {
+				pad = 0
+			}
+			body = m.renderComposerInput() + "\n" + hintLine + "\n" + strings.Repeat(" ", pad) + timerStr
 		}
 	}
 
