@@ -203,8 +203,17 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
 		return
 	}
-	// LSP tools → skip (no header/body needed)
-	if strings.HasPrefix(ts.ToolName, "lsp_") {
+	// exit_plan_mode → render plan as assistant message (not a tool card)
+	if ts.ToolName == "exit_plan_mode" {
+		var args struct {
+			Plan string `json:"plan"`
+		}
+		if json.Unmarshal([]byte(ts.RawArgs), &args) == nil && args.Plan != "" {
+			item := chat.NewAssistantItem(ts.ToolID, m.chatStyles)
+			item.SetText(args.Plan)
+			item.SetFinished()
+			m.chatList.Append(item)
+		}
 		return
 	}
 
