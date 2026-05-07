@@ -106,9 +106,9 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_call_todo", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "todo_write"}}, "📋 更新待办列表"},
 		{"tool_result_nil", OutboundEvent{Kind: OutboundEventToolResult}, ""},
 		// Tool results — new style
-		{"tool_result_bash", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "file1.txt\nfile2.txt"}}, "```\nfile1.txt\nfile2.txt\n```"},
-		{"tool_result_bash_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"ls"}`, Result: "file1.txt\nfile2.txt"}}, "```bash\nls\n```\n```\nfile1.txt\nfile2.txt\n```"},
-		{"tool_result_bash_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"bad_cmd"}`, Result: "command not found", IsError: true}}, "```bash\nbad_cmd\n```\n```\ncommand not found\n```"},
+		{"tool_result_bash", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: "file1.txt\nfile2.txt"}}, "✅ 命令完成"},
+		{"tool_result_bash_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"ls"}`, Result: "file1.txt\nfile2.txt"}}, "✅ `ls`"},
+		{"tool_result_bash_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"bad_cmd"}`, Result: "command not found", IsError: true}}, "❌ `bad_cmd`\n```\ncommand not found\n```"},
 		{"tool_result_read_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"chart.html"}`, Result: "file content..."}}, "📖 chart.html"},
 		{"tool_result_read_ok_nopath", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Result: "content"}}, "📖 Read"},
 		{"tool_result_read_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"missing.txt"}`, Result: "no such file", IsError: true}}, "📖 missing.txt\n```\nno such file\n```"},
@@ -133,8 +133,8 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_result_edit_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`, Result: "conflict", IsError: true}}, "✏️ main.go\n```\nconflict\n```"},
 		{"tool_result_write_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_file", Args: `{"file_path":"output.md"}`, Result: "ok"}}, "📝 output.md (1 行)"},
 		{"tool_result_write_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_file", Args: `{"file_path":"out.md"}`, Result: "permission denied", IsError: true}}, "📝 out.md\n```\npermission denied\n```"},
-		{"tool_result_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: ""}}, ""},
-		{"tool_result_empty_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"echo ok"}`, Result: ""}}, "```bash\necho ok\n```\n```\n(无输出)\n```"},
+		{"tool_result_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Result: ""}}, "✅ 命令完成"},
+		{"tool_result_empty_with_cmd", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Args: `{"command":"echo ok"}`, Result: ""}}, "✅ `echo ok`"},
 		{"tool_result_listdir", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"src"}`, Result: "main.go\ntypes.go"}}, ""},
 		{"tool_result_listdir_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_directory", Args: `{"path":"empty"}`, Result: ""}}, ""},
 		{"tool_result_glob", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "glob", Args: `{"pattern":"**/*.go"}`, Result: "main.go\ntypes.go\nutils.go"}}, "🔍 `**/*.go` — 3 matches"},
@@ -178,7 +178,7 @@ func TestTGOutboundText_English(t *testing.T) {
 		{"tool_call_skill", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "skill", Lang: "en", Detail: "commit"}}, "🔧 Load skill: `commit`"},
 
 		// Tool results — English
-		{"tool_result_bash_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Lang: "en", Args: `{"command":"echo ok"}`, Result: ""}}, "```bash\necho ok\n```\n```\n(no output)\n```"},
+		{"tool_result_bash_empty", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "bash", Lang: "en", Args: `{"command":"echo ok"}`, Result: ""}}, "✅ `echo ok`"},
 		{"tool_result_read_pdf", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"report.pdf"}`, Result: "[Extracted from pdf, 3 pages]\n     1\tline1\n     2\tline2"}}, "📄 report.pdf (3 pages, 2 lines)"},
 		{"tool_result_read_docx", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"doc.docx"}`, Result: "[Extracted from docx]\n     1\thello world"}}, "📄 doc.docx (1 lines extracted)"},
 		{"tool_result_read_zip", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"src.zip"}`, Result: "[Archive: zip format, 15 files]\n\n--- README.md ---\nhello"}}, "📦 src.zip (15 files)"},

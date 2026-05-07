@@ -405,7 +405,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "read_file":
 		return true, formatIMReadFileResult(tr)
 	case "list_directory":
-		return true, formatIMListDirResult(tr)
+		return true, "" // hidden
 	case "glob":
 		return true, formatIMGlobResult(tr)
 	case "edit_file":
@@ -415,7 +415,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "search_files", "grep":
 		return true, formatIMSearchResult(tr)
 	case "web_fetch", "web_search":
-		return true, formatIMWebResult(tr)
+		return true, "" // hidden
 	case "git_diff", "git_status", "git_log":
 		return true, formatIMGitResult(tr)
 	case "ask_user":
@@ -423,7 +423,7 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "start_command":
 		return true, formatIMStartCommandResult(tr)
 	case "stop_command":
-		return true, formatIMStopCommandResult(tr)
+		return true, "" // hidden
 	case "read_command_output":
 		return true, "" // hidden — result consumed internally
 	case "wait_command":
@@ -758,27 +758,25 @@ func formatIMErrorResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔧 %s", pretty)
 }
 
-// formatIMCommandResult renders command execution with full output.
-// Command is shown in a bash code block; result in a plain code block.
+// formatIMCommandResult renders command execution result as success/failure.
 func formatIMCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	cmd := extractCommand(tr.Args)
 	if cmd == "" {
 		cmd = tr.Detail
 	}
-
-	output := strings.TrimSpace(tr.Result)
-	if output == "" {
-		if cmd == "" {
-			return ""
+	cmd = truncate(cmd, 60)
+	if tr.IsError {
+		output := strings.TrimSpace(tr.Result)
+		if cmd != "" {
+			return fmt.Sprintf("❌ `%s`\n```\n%s\n```", cmd, output)
 		}
-		return fmt.Sprintf("```bash\n%s\n```\n```\n(%s)\n```", cmd, imLabel(lang, "no_output"))
+		return fmt.Sprintf("❌ %s", imLabel(lang, "command_failed"))
 	}
-
-	if cmd == "" {
-		return fmt.Sprintf("```\n%s\n```", output)
+	if cmd != "" {
+		return fmt.Sprintf("✅ `%s`", cmd)
 	}
-	return fmt.Sprintf("```bash\n%s\n```\n```\n%s\n```", cmd, output)
+	return fmt.Sprintf("✅ %s", imLabel(lang, "command_done"))
 }
 
 // formatIMTodoResult renders todo_write as a visual checklist.
