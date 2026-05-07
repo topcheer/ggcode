@@ -1443,10 +1443,7 @@ func (m Model) renderComposerPanel() string {
 		}
 	}
 
-	body := m.renderComposerInput() + "\n" +
-		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
-
-	// Show loop timer in bottom-right when agent is running
+	// Show loop timer as last hint when agent is running
 	if m.loading && !m.loopStart.IsZero() {
 		elapsed := time.Since(m.loopStart).Truncate(time.Second)
 		var timerLabel string
@@ -1455,21 +1452,11 @@ func (m Model) renderComposerPanel() string {
 		} else {
 			timerLabel = "brewing " + formatDuration(elapsed)
 		}
-		timerStr := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel)
-		hintLine := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
-		hintW := lipgloss.Width(hintLine)
-		boxW := m.boxInnerWidth(m.mainColumnWidth())
-		gap := boxW - hintW - lipgloss.Width(timerStr)
-		if gap > 1 {
-			body = m.renderComposerInput() + "\n" + hintLine + strings.Repeat(" ", gap) + timerStr
-		} else {
-			pad := boxW - lipgloss.Width(timerStr)
-			if pad < 0 {
-				pad = 0
-			}
-			body = m.renderComposerInput() + "\n" + hintLine + "\n" + strings.Repeat(" ", pad) + timerStr
-		}
+		hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel))
 	}
+
+	body := m.renderComposerInput() + "\n" +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(strings.Join(hints, " • "))
 
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().
