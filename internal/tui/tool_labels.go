@@ -1299,7 +1299,7 @@ func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "./")
 	value = compactSingleLine(value)
-	return shortenPath(value)
+	return util.Truncate(value, 60)
 }
 
 func displayToolFileTarget(value string) string {
@@ -1311,7 +1311,16 @@ func displayToolFileTarget(value string) string {
 	if value == "" {
 		return ""
 	}
-	return shortenPath(value)
+	value = strings.TrimPrefix(value, "./")
+	// Try to make absolute paths relative to cwd
+	if filepath.IsAbs(value) {
+		if cwd, err := os.Getwd(); err == nil {
+			if rel, relErr := filepath.Rel(cwd, value); relErr == nil && !strings.HasPrefix(rel, "..") {
+				value = filepath.ToSlash(rel)
+			}
+		}
+	}
+	return util.Truncate(value, 60)
 }
 
 func buildCommandPreview(rawCommand string) commandPreview {
