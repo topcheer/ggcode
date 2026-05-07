@@ -99,7 +99,7 @@ func TestTGOutboundText(t *testing.T) {
 		{"approval_request_nil", OutboundEvent{Kind: OutboundEventApprovalRequest}, ""},
 		{"approval_result_nil", OutboundEvent{Kind: OutboundEventApprovalResult}, ""},
 		{"tool_call_nil", OutboundEvent{Kind: OutboundEventToolCall}, ""},
-		{"tool_call_bash", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "bash", Args: `{"command":"ls -la"}`}}, "⚡ 执行命令:\n```\nls -la\n```"},
+		{"tool_call_bash", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "bash", Args: `{"command":"ls -la"}`}}, "⚡ 执行命令: `ls -la`"},
 		{"tool_call_read", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"file_path":"chart.html"}`}}, "📖 读取文件: `chart.html`"},
 		{"tool_call_write", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "write_file", Args: `{"file_path":"output.md"}`}}, "📝 写入文件: `output.md`"},
 		{"tool_call_edit", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`}}, "✏️ 编辑文件: `main.go`"},
@@ -162,7 +162,7 @@ func TestTGOutboundText_English(t *testing.T) {
 		want  string
 	}{
 		// Tool calls — English
-		{"tool_call_bash", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "bash", Lang: "en", Args: `{"command":"ls -la"}`}}, "⚡ Run command:\n```\nls -la\n```"},
+		{"tool_call_bash", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "bash", Lang: "en", Args: `{"command":"ls -la"}`}}, "⚡ Run command: `ls -la`"},
 		{"tool_call_read", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"file_path":"chart.html"}`}}, "📖 Reading file: `chart.html`"},
 		{"tool_call_read_pdf", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"report.pdf"}`}}, "📄 Reading PDF: `report.pdf`"},
 		{"tool_call_read_xlsx", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Lang: "en", Args: `{"path":"data.xlsx"}`}}, "📊 Reading Excel: `data.xlsx`"},

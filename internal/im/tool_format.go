@@ -59,7 +59,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		if cmd == "" {
 			cmd = tc.Detail
 		}
-		return fmt.Sprintf("⚡ %s:\n```\n%s\n```", imLabel(lang, "run_command"), cmd)
+		return fmt.Sprintf("⚡ %s: `%s`", imLabel(lang, "run_command"), truncate(cmd, 60))
 	case "read_file":
 		path := extractFilePathFromArgs(args)
 		if path == "" {
