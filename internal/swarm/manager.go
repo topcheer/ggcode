@@ -424,9 +424,11 @@ func (m *Manager) emit(ev Event) {
 func buildTeammateSystemPrompt(name, teamName string) string {
 	return fmt.Sprintf(
 		"You are a teammate named %q in team %q. "+
-			"Complete tasks assigned to you via messages. "+
-			"Use send_message to communicate results or ask questions. "+
-			"Do not spawn further sub-agents or teammates.",
+			"Complete tasks assigned to you via messages or the task board. "+
+			"Only claim tasks that match your role and capabilities. "+
+			"If a task does not match your role, leave it for another teammate. "+
+			"Do not spawn further sub-agents or teammates. "+
+			"Report results concisely when done.",
 		name, teamName,
 	)
 }

@@ -21,7 +21,9 @@ type SwarmTaskCreateTool struct {
 
 func (t SwarmTaskCreateTool) Name() string { return "swarm_task_create" }
 func (t SwarmTaskCreateTool) Description() string {
-	return "Create a task on a team's shared task board. Teammates can claim and complete tasks."
+	return "Create a task on a team's shared task board. Teammates can claim and complete tasks. " +
+		"IMPORTANT: Always set assignee to the teammate ID that should do this task. " +
+		"Without assignee, any idle teammate may claim it regardless of suitability."
 }
 func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

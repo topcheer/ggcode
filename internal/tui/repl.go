@@ -272,6 +272,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	tools.Register(tool.SwarmTaskCompleteTool{Manager: mgr})
 
 	// Re-register send_message with SwarmMgr so it can route to swarm teammates.
+	tools.Unregister("send_message")
 	tools.Register(tool.SendMessageTool{Manager: r.model.subAgentMgr, SwarmMgr: mgr})
 
 	// Notify TUI on swarm state changes.
