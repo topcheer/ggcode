@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
+	"time"
 )
 
 func (m *Model) updateAutoComplete() {
@@ -397,6 +398,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 					m.chatWriteSystem(nextSystemID(), m.t("command.custom", cmdName))
 					m.chatWriteSystem(nextSystemID(), expanded)
 					m.loading = true
+					m.loopStart = time.Now()
 					// Reset status bar state
 					m.statusActivity = m.t("status.thinking")
 					m.statusToolName = ""
@@ -439,6 +441,7 @@ func (m *Model) continueDisplayedNormalTextRun(text string) tea.Cmd {
 	m.shellBuffer = nil
 	m.streamPrefixWritten = false
 	m.loading = true
+	m.loopStart = time.Now()
 	// Reset status bar state
 	m.statusActivity = m.t("status.thinking")
 	m.statusToolName = ""
@@ -472,6 +475,7 @@ func (m *Model) handleInitCommand() tea.Cmd {
 	m.streamBuffer = &bytes.Buffer{}
 	m.streamPrefixWritten = false
 	m.loading = true
+	m.loopStart = time.Now()
 	m.statusActivity = m.t("init.collecting")
 	m.statusToolName = ""
 	m.statusToolArg = ""
@@ -508,6 +512,7 @@ func (m *Model) startAutoRunCheck(text string, displayText string) tea.Cmd {
 	}
 
 	m.loading = true
+	m.loopStart = time.Now()
 	m.statusActivity = "Checking harness routing..."
 	m.statusToolName = ""
 	m.statusToolArg = ""
@@ -571,6 +576,7 @@ func (m *Model) executeAutoHarnessRun(goal string, project harness.Project, cfg 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 	m.loading = true
+	m.loopStart = time.Now()
 	m.runCanceled = false
 	m.runFailed = false
 	m.statusActivity = m.t("command.harness_status_starting_run")
