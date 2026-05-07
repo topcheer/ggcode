@@ -125,6 +125,8 @@ func (t *BaseToolItem) RenderBody(width int) string {
 		return t.renderGitDiff()
 	case "gitlog":
 		return t.renderGitLog()
+	case "cronbody":
+		return t.renderCronBody()
 	}
 
 	if t.markdownBody {
@@ -333,6 +335,52 @@ func (t *BaseToolItem) renderGitLog() string {
 	return "    " + green.Render(strings.Join(lines, "\n    "))
 }
 
+func (t *BaseToolItem) renderCronBody() string {
+	var data map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(t.result)), &data); err != nil {
+		return ""
+	}
+	zh := strings.HasPrefix(t.lang, "zh")
+	labelRecurring := "Recurring"
+	labelPrompt := "Prompt"
+	labelNextFire := "Next Fire"
+	yesNo := func(b bool) string {
+		if b {
+			if zh {
+				return "是"
+			}
+			return "Yes"
+		}
+		if zh {
+			return "否"
+		}
+		return "No"
+	}
+	if zh {
+		labelRecurring = "循环执行"
+		labelPrompt = "任务"
+		labelNextFire = "下次触发"
+	}
+	var parts []string
+	if v, ok := data["Recurring"]; ok {
+		if b, ok2 := v.(bool); ok2 {
+			parts = append(parts, labelRecurring+": "+yesNo(b))
+		} else {
+			parts = append(parts, formatKVPair(labelRecurring, v))
+		}
+	}
+	if v, ok := data["Prompt"]; ok {
+		parts = append(parts, formatKVPair(labelPrompt, v))
+	}
+	if v, ok := data["NextFire"]; ok {
+		parts = append(parts, formatKVPair(labelNextFire, v))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "    " + strings.Join(parts, "\n    ")
+}
+
 // Render produces the full tool output: header + optional body.
 // This is the base implementation. Concrete types should call renderCore
 // with their own params/body overrides.
@@ -397,7 +445,9 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 		"task_update", "task_stop",
 		"skill":
 		return BodySuppress
-	case "cron_create", "task_create", "task_get":
+	case "cron_create":
+		return BodyFormatJSON
+	case "task_create", "task_get":
 		return BodyFormatJSON
 	case "teammate_results", "wait_agent":
 		return BodyMarkdown
@@ -835,8 +885,10 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 			item.suppressBody = true
 		case BodyFormatJSON:
 			item.formatJSON = true
-		case BodyMarkdown:
-			item.markdownBody = true
+		}
+		if ctx.ToolName == "cron_create" {
+			item.formatJSON = false
+			item.fileBodyMode = "cronbody"
 		}
 		return item
 	}
