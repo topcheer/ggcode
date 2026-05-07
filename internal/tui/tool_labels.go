@@ -358,6 +358,44 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Detail:      uri,
 			Activity:    localizedToolActivity(lang, "read_mcp_resource", ""),
 		}
+	case "a2a_remote":
+		target := argString(args, "target")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "a2a_remote"),
+			Detail:      target,
+			Activity:    localizedToolActivity(lang, "a2a_remote", target),
+		}
+	case "a2a_discover":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "a2a_discover"),
+			Detail:      "",
+			Activity:    localizedToolActivity(lang, "a2a_discover", ""),
+		}
+	case "a2a_send_task":
+		target := argString(args, "target")
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "a2a_send_task"),
+			Detail:      target,
+			Activity:    localizedToolActivity(lang, "a2a_send_task", target),
+		}
+	case "a2a_get_task":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "a2a_get_task"),
+			Detail:      "",
+			Activity:    localizedToolActivity(lang, "a2a_get_task", ""),
+		}
+	case "a2a_list_tasks":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "a2a_list_tasks"),
+			Detail:      "",
+			Activity:    localizedToolActivity(lang, "a2a_list_tasks", ""),
+		}
+	case "a2a_cancel_task":
+		return toolPresentation{
+			DisplayName: localizedToolLabel(lang, "a2a_cancel_task"),
+			Detail:      "",
+			Activity:    localizedToolActivity(lang, "a2a_cancel_task", ""),
+		}
 	default:
 		// LSP tools share a common pattern: show file:line
 		if strings.HasPrefix(toolName, "lsp_") {
@@ -571,6 +609,18 @@ func localizedToolLabel(lang Language, action string) string {
 			return "获取子代理列表"
 		case "wait_agent":
 			return "Checking subagent progress"
+		case "a2a_remote":
+			return "远程调用"
+		case "a2a_discover":
+			return "发现代理"
+		case "a2a_send_task":
+			return "发送任务"
+		case "a2a_get_task":
+			return "获取任务"
+		case "a2a_list_tasks":
+			return "任务列表"
+		case "a2a_cancel_task":
+			return "取消任务"
 		}
 	default:
 		switch action {
@@ -682,6 +732,18 @@ func localizedToolLabel(lang Language, action string) string {
 			return "List Agents"
 		case "wait_agent":
 			return "Checking subagent progress"
+		case "a2a_remote":
+			return "Remote Call"
+		case "a2a_discover":
+			return "Discover"
+		case "a2a_send_task":
+			return "Send Task"
+		case "a2a_get_task":
+			return "Get Task"
+		case "a2a_list_tasks":
+			return "List Tasks"
+		case "a2a_cancel_task":
+			return "Cancel Task"
 		}
 	}
 	return localizedGenericToolName(lang, action)
@@ -776,6 +838,18 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "停止命令"
 			case "list_jobs":
 				return "列出后台任务"
+			case "a2a_remote":
+				return "正在远程调用..."
+			case "a2a_discover":
+				return "正在发现..."
+			case "a2a_send_task":
+				return "正在发送任务..."
+			case "a2a_get_task":
+				return "正在获取任务..."
+			case "a2a_list_tasks":
+				return "正在列出任务..."
+			case "a2a_cancel_task":
+				return "正在取消任务..."
 			}
 		default:
 			switch action {
@@ -863,6 +937,18 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Stopping command"
 			case "list_jobs":
 				return "Listing background jobs"
+			case "a2a_remote":
+				return "Calling remote..."
+			case "a2a_discover":
+				return "Discovering..."
+			case "a2a_send_task":
+				return "Sending task..."
+			case "a2a_get_task":
+				return "Getting task..."
+			case "a2a_list_tasks":
+				return "Listing tasks..."
+			case "a2a_cancel_task":
+				return "Canceling task..."
 			}
 		}
 	}

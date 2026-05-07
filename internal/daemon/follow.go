@@ -267,6 +267,13 @@ func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, i
 		"task_update":         true,
 		"task_list":           true,
 		"task_stop":           true,
+		"teammate_list":       true,
+		"swarm_task_list":     true,
+		"swarm_task_claim":    true,
+		"a2a_discover":        true,
+		"a2a_list_tasks":      true,
+		"a2a_cancel_task":     true,
+		"a2a_get_task":        true,
 	}
 	if hiddenTools[toolName] {
 		return

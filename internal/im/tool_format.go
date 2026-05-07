@@ -156,6 +156,54 @@ func formatToolCallText(tc *ToolCallInfo) string {
 	case "exit_worktree":
 		action := extractArgValue(args, "action")
 		return fmt.Sprintf("🌿 Exit worktree (%s)", action)
+	// Team/swarm/a2a tools
+	case "teammate_list", "swarm_task_list", "swarm_task_claim",
+		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task":
+		return "" // hidden
+	case "team_create":
+		name := extractArgValue(args, "name")
+		if name == "" {
+			name = tc.Detail
+		}
+		return fmt.Sprintf("👥 创建团队: %s", name)
+	case "team_delete":
+		return "👥 删除团队"
+	case "teammate_spawn":
+		name := extractArgValue(args, "name")
+		if name == "" {
+			name = tc.Detail
+		}
+		return fmt.Sprintf("🤖 创建队友: %s", name)
+	case "teammate_shutdown":
+		return "🤖 关闭队友"
+	case "send_message":
+		to := extractArgValue(args, "to")
+		if to == "" {
+			to = tc.Detail
+		}
+		return fmt.Sprintf("📨 发送消息 → %s", to)
+	case "teammate_results":
+		return "📋 收集团队结果"
+	case "swarm_task_create":
+		subject := extractArgValue(args, "subject")
+		if subject == "" {
+			subject = tc.Detail
+		}
+		return fmt.Sprintf("📋 创建任务: %s", subject)
+	case "swarm_task_complete":
+		return "✅ 完成任务"
+	case "a2a_remote":
+		target := extractArgValue(args, "target")
+		if target == "" {
+			target = tc.Detail
+		}
+		return fmt.Sprintf("🔗 远程调用 → %s", target)
+	case "a2a_send_task":
+		target := extractArgValue(args, "target")
+		if target == "" {
+			target = tc.Detail
+		}
+		return fmt.Sprintf("🔗 发送任务 → %s", target)
 	default:
 		if tc.Detail != "" {
 			return fmt.Sprintf("🔧 %s: `%s`", name, tc.Detail)
@@ -481,6 +529,56 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 		return true, formatIMWorktreeResult("🌿", tr)
 	case "exit_worktree":
 		return true, formatIMWorktreeResult("🌿", tr)
+	// Team/swarm/a2a tools — hidden
+	case "teammate_list", "swarm_task_list", "swarm_task_claim",
+		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task":
+		return true, ""
+	// Team/swarm/a2a tools — header only
+	case "team_create":
+		name := extractArgValue(tr.Args, "name")
+		if name == "" {
+			name = tr.Detail
+		}
+		return true, fmt.Sprintf("👥 团队已创建 %s", name)
+	case "team_delete":
+		return true, "👥 团队已删除"
+	case "teammate_spawn":
+		name := extractArgValue(tr.Args, "name")
+		if name == "" {
+			name = tr.Detail
+		}
+		return true, fmt.Sprintf("🤖 队友 %s 已创建", name)
+	case "teammate_shutdown":
+		return true, "🤖 队友已关闭"
+	case "send_message":
+		to := extractArgValue(tr.Args, "to")
+		if to == "" {
+			to = tr.Detail
+		}
+		return true, fmt.Sprintf("📨 消息已发送 → %s", to)
+	case "swarm_task_create":
+		subject := extractArgValue(tr.Args, "subject")
+		if subject == "" {
+			subject = tr.Detail
+		}
+		return true, fmt.Sprintf("📋 任务已创建: %s", subject)
+	case "swarm_task_complete":
+		return true, "✅ 任务已完成"
+	case "a2a_remote":
+		target := extractArgValue(tr.Args, "target")
+		if target == "" {
+			target = tr.Detail
+		}
+		return true, fmt.Sprintf("🔗 远程调用 → %s", target)
+	case "a2a_send_task":
+		target := extractArgValue(tr.Args, "target")
+		if target == "" {
+			target = tr.Detail
+		}
+		return true, fmt.Sprintf("🔗 任务已发送 → %s", target)
+	// Team/swarm/a2a tools — body markdown
+	case "teammate_results":
+		return true, formatIMTeammateResultsResult(tr)
 	default:
 		if tr.IsError {
 			return true, formatIMErrorResult(tr)
@@ -738,6 +836,18 @@ func formatIMCronListResult(tr *ToolResultInfo) string {
 		return "⏰ No scheduled cron jobs"
 	}
 	return fmt.Sprintf("⏰\n```\n%s\n```", output)
+}
+
+// formatIMTeammateResultsResult renders teammate_results result with body markdown.
+func formatIMTeammateResultsResult(tr *ToolResultInfo) string {
+	output := strings.TrimSpace(tr.Result)
+	if tr.IsError {
+		return fmt.Sprintf("📋 收集团队结果\n```\n%s\n```", output)
+	}
+	if output == "" {
+		return "📋 收集团队结果"
+	}
+	return fmt.Sprintf("📋\n```\n%s\n```", output)
 }
 
 // formatIMWorktreeResult renders enter_worktree/exit_worktree results.
