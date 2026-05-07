@@ -38,6 +38,19 @@ func (l *List) Append(items ...Item) {
 	l.mu.Unlock()
 }
 
+// RemoveByID removes an item by ID. No-op if not found.
+func (l *List) RemoveByID(id string) {
+	l.mu.Lock()
+	for i, item := range l.items {
+		if item.ID() == id {
+			l.items = append(l.items[:i], l.items[i+1:]...)
+			l.dirty = true
+			break
+		}
+	}
+	l.mu.Unlock()
+}
+
 // SetItems replaces all items.
 func (l *List) SetItems(items []Item) {
 	l.mu.Lock()

@@ -109,6 +109,11 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	if ts.ToolName == "cron_list" || ts.ToolName == "cron_delete" || strings.HasPrefix(ts.ToolName, "task_") {
 		return
 	}
+	// enter_plan_mode → skip tool item, emit IM text only
+	if ts.ToolName == "enter_plan_mode" {
+		m.emitIMText("📝 Planning...")
+		return
+	}
 	// LSP tools → skip (no header/body needed)
 	if strings.HasPrefix(ts.ToolName, "lsp_") {
 		return
@@ -146,10 +151,6 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	}
 	item := chat.NewToolItem(id, ctx, chat.StatusRunning, m.chatStyles)
 	m.chatList.Append(item)
-	// enter_plan_mode → notify IM
-	if ts.ToolName == "enter_plan_mode" {
-		m.emitIMText("📝 Planning...")
-	}
 }
 
 // chatFinishTool marks a tool item as finished with result.
