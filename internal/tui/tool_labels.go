@@ -475,9 +475,6 @@ func commandToolPresentation(lang Language, rawCommand string) (toolPresentation
 	var detailParts []string
 	for _, line := range preview.CommandLines {
 		part := compactSingleLine(strings.TrimRight(line, " \t"))
-		if len(part) > 50 {
-			part = part[:47] + "…"
-		}
 		detailParts = append(detailParts, part)
 	}
 	// Show at most 2 command lines in detail to avoid header bloat
