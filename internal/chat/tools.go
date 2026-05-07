@@ -130,7 +130,17 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	}
 
 	if t.markdownBody {
-		rendered := markdown.Render(t.result, width)
+		result := t.result
+		// exit_plan_mode: render only the plan field from args as markdown
+		if t.toolName == "exit_plan_mode" {
+			var args struct {
+				Plan string `json:"plan"`
+			}
+			if json.Unmarshal([]byte(t.rawArgs), &args) == nil && args.Plan != "" {
+				result = args.Plan
+			}
+		}
+		rendered := markdown.Render(result, width)
 		return t.styles.ToolBody.Render(strings.TrimSuffix(rendered, "\n"))
 	}
 
@@ -441,9 +451,11 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 		"teammate_spawn", "teammate_shutdown",
 		"swarm_task_create", "swarm_task_claim", "swarm_task_complete",
 		"send_message", "config",
-		"enter_plan_mode", "exit_plan_mode",
+		"enter_plan_mode",
 		"skill":
 		return BodySuppress
+	case "exit_plan_mode":
+		return BodyMarkdown
 	case "cron_create":
 		return BodyFormatJSON
 	case "task_create", "task_get", "task_update", "task_list", "task_stop":
@@ -876,7 +888,11 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 		return newLspToolItem(id, displayName, ctx.Detail, status, styles)
 	default:
 		if GetToolBodyBehavior(ctx.ToolName) == BodyMarkdown {
-			return NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
+			item := NewMarkdownToolItem(id, displayName, status, ctx.Detail, styles)
+			if ctx.ToolName == "exit_plan_mode" {
+				item.suppressHeader = true
+			}
+			return item
 		}
 		item := NewGenericToolItem(id, displayName, status, ctx.Detail, styles)
 		switch GetToolBodyBehavior(ctx.ToolName) {
