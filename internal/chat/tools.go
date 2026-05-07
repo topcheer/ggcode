@@ -452,6 +452,8 @@ func GetToolBodyBehavior(toolName string) ToolBodyBehavior {
 		"swarm_task_create", "swarm_task_claim", "swarm_task_complete", "swarm_task_list",
 		"send_message", "config",
 		"enter_plan_mode",
+		"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource",
+		"enter_worktree", "exit_worktree",
 		"skill":
 		return BodySuppress
 	case "exit_plan_mode":
