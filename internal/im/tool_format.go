@@ -1058,7 +1058,7 @@ func formatIMGlobResult(tr *ToolResultInfo) string {
 	return fmt.Sprintf("🔍 %d %s", matches, imLabel(lang, "matches"))
 }
 
-// formatIMEditResult renders edit_file result — show emoji icon + path.
+// formatIMEditResult renders edit_file result — show emoji icon + path + diff stats.
 func formatIMEditResult(tr *ToolResultInfo) string {
 	path := extractFilePathFromArgs(tr.Args)
 	if path == "" {
@@ -1072,11 +1072,12 @@ func formatIMEditResult(tr *ToolResultInfo) string {
 		}
 		return fmt.Sprintf("%s Edit\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
 	}
-	added, deleted := countDiffLines(tr.Result)
+	// Parse added/removed from rawArgs (same logic as TUI renderEditDiff)
+	added, removed := countEditLines(tr.Args)
 	if path == "" {
-		return fmt.Sprintf("%s Edit (+%d -%d)", icon, added, deleted)
+		return fmt.Sprintf("%s Edit (+%d -%d)", icon, added, removed)
 	}
-	return fmt.Sprintf("%s %s (+%d -%d)", icon, baseName, added, deleted)
+	return fmt.Sprintf("%s %s (+%d -%d)", icon, baseName, added, removed)
 }
 
 // formatIMWriteResult renders write_file result.
@@ -1094,7 +1095,8 @@ func formatIMWriteResult(tr *ToolResultInfo) string {
 		}
 		return fmt.Sprintf("%s Write\n```\n%s\n```", icon, strings.TrimSpace(tr.Result))
 	}
-	lines := countResultLines(tr.Result)
+	// Count lines from content arg in rawArgs (same logic as TUI renderFileLineCount)
+	lines := countWriteLines(tr.Args)
 	if path == "" {
 		return fmt.Sprintf("%s Write (%d %s)", icon, lines, imLabel(lang, "lines"))
 	}
@@ -1424,6 +1426,48 @@ func countResultLines(result string) int {
 		if trimmed != "" && !strings.HasPrefix(trimmed, "[") {
 			lines++
 		}
+	}
+	return lines
+}
+
+// countEditLines counts added/removed lines from edit_file rawArgs JSON.
+// Same logic as TUI renderEditDiff.
+func countEditLines(rawArgs string) (added, removed int) {
+	var args struct {
+		OldText string `json:"old_text"`
+		NewText string `json:"new_text"`
+		Edits   []struct {
+			OldText string `json:"old_text"`
+			NewText string `json:"new_text"`
+		} `json:"edits"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return 0, 0
+	}
+	if len(args.Edits) > 0 {
+		for _, e := range args.Edits {
+			removed += len(strings.Split(e.OldText, "\n"))
+			added += len(strings.Split(e.NewText, "\n"))
+		}
+	} else {
+		removed = len(strings.Split(args.OldText, "\n"))
+		added = len(strings.Split(args.NewText, "\n"))
+	}
+	return
+}
+
+// countWriteLines counts lines from write_file rawArgs JSON content.
+// Same logic as TUI renderFileLineCount.
+func countWriteLines(rawArgs string) int {
+	var args struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil || args.Content == "" {
+		return 1
+	}
+	lines := strings.Count(args.Content, "\n")
+	if !strings.HasSuffix(args.Content, "\n") {
+		lines++
 	}
 	return lines
 }

@@ -129,7 +129,7 @@ func TestTGOutboundText(t *testing.T) {
 		{"tool_call_read_limit_only", OutboundEvent{Kind: OutboundEventToolCall, ToolCall: &ToolCallInfo{ToolName: "read_file", Args: `{"path":"log.txt","limit":10}`}}, "📖 读取文件: `log.txt` [前 10 行]"},
 		{"tool_result_read_offset", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"log.txt","offset":100,"limit":50}`, Result: "line100\nline101"}}, "📖 log.txt [行 100-149]"},
 		{"tool_result_read_no_range", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "read_file", Args: `{"path":"full.txt"}`, Result: "line1\nline2"}}, "📖 full.txt"},
-		{"tool_result_edit_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`, Result: "ok"}}, "✏️ main.go (+0 -0)"},
+		{"tool_result_edit_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Args: `{"file_path":"main.go","old_text":"foo","new_text":"bar"}`, Result: "ok"}}, "✏️ main.go (+1 -1)"},
 		{"tool_result_edit_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "edit_file", Args: `{"file_path":"main.go"}`, Result: "conflict", IsError: true}}, "✏️ main.go\n```\nconflict\n```"},
 		{"tool_result_write_ok", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_file", Args: `{"file_path":"output.md"}`, Result: "ok"}}, "📝 output.md (1 行)"},
 		{"tool_result_write_err", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "write_file", Args: `{"file_path":"out.md"}`, Result: "permission denied", IsError: true}}, "📝 out.md\n```\npermission denied\n```"},
