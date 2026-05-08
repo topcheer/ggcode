@@ -25,6 +25,7 @@ type EndpointPreset struct {
 	ID           string
 	DisplayName  string
 	Protocol     string
+	BaseURL      string
 	DefaultModel string
 	Models       []string
 }
@@ -87,6 +88,7 @@ func VendorPresets() []VendorPreset {
 				ID:           epID,
 				DisplayName:  ep.DisplayName,
 				Protocol:     ep.Protocol,
+				BaseURL:      ep.BaseURL,
 				DefaultModel: ep.DefaultModel,
 				Models:       ep.Models,
 			})

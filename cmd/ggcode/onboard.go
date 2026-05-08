@@ -41,13 +41,24 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		cfg.Vendors[result.VendorID].Endpoints[result.EndpointID] = ep
 	}
 
-	// Apply optional settings.
+	// Apply optional settings — only set when user explicitly opted in.
 	cfg.DefaultMode = result.Mode
 	if result.Knight {
 		cfg.KnightConfig = config.KnightConfig{Enabled: true}
 	}
-	if !result.A2A {
-		cfg.A2A = config.A2AConfig{Disabled: true}
+	if result.A2A {
+		cfg.A2A = config.A2AConfig{Disabled: false}
+	}
+
+	// Apply IM adapters from onboard.
+	if len(result.IMAdapters) > 0 {
+		if cfg.IM.Adapters == nil {
+			cfg.IM.Adapters = make(map[string]config.IMAdapterConfig)
+		}
+		for name, acfg := range result.IMAdapters {
+			cfg.IM.Adapters[name] = acfg
+		}
+		cfg.IM.Enabled = true
 	}
 
 	// Ensure config file path is set.

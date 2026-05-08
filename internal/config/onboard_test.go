@@ -279,3 +279,54 @@ func TestNeedsOnboardPartialConfig(t *testing.T) {
 		t.Error("config with set env var should NOT need onboard")
 	}
 }
+
+func TestVendorPresetsZaiNeedsKey(t *testing.T) {
+	presets := VendorPresets()
+	for _, p := range presets {
+		if p.ID == "zai" {
+			if !p.NeedsAPIKey {
+				t.Errorf("zai vendor NeedsAPIKey=false, want true")
+			}
+			return
+		}
+	}
+	t.Fatal("zai vendor not found in presets")
+}
+
+func TestDefaultConfigZaiAPIKey(t *testing.T) {
+	dc := DefaultConfig()
+	vc, ok := dc.Vendors["zai"]
+	if !ok {
+		t.Fatal("zai vendor not in DefaultConfig")
+	}
+	if vc.APIKey == "" {
+		t.Error("zai vendor APIKey is empty")
+	}
+	t.Logf("zai APIKey=%q", vc.APIKey)
+}
+
+func TestVendorPresetsNeedsAPIKey(t *testing.T) {
+	presets := VendorPresets()
+	known := map[string]bool{
+		"openai":    true,
+		"anthropic": true,
+		"deepseek":  true,
+		"zai":       true,
+		"groq":      true,
+	}
+	for _, p := range presets {
+		if expected, ok := known[p.ID]; ok {
+			if p.NeedsAPIKey != expected {
+				t.Errorf("vendor %q NeedsAPIKey=%v, want %v", p.ID, p.NeedsAPIKey, expected)
+			}
+		}
+	}
+	// github-copilot should NOT need API key
+	for _, p := range presets {
+		if p.ID == "github-copilot" {
+			if p.NeedsAPIKey {
+				t.Error("github-copilot should not need API key")
+			}
+		}
+	}
+}
