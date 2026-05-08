@@ -180,6 +180,9 @@ func ApplyReleasePlan(project Project, plan *ReleasePlan, note string) (*Release
 	if len(plan.Tasks) == 0 {
 		return nil, fmt.Errorf("no harness tasks are ready for release")
 	}
+
+	// Phase 1: Validate all tasks are release-ready before mutating anything.
+	loadedTasks := make([]*Task, len(plan.Tasks))
 	for i, task := range plan.Tasks {
 		if task == nil {
 			continue
@@ -191,15 +194,30 @@ func ApplyReleasePlan(project Project, plan *ReleasePlan, note string) (*Release
 		if !taskReleaseReady(loaded) {
 			return nil, fmt.Errorf("task %s is no longer release-ready", loaded.ID)
 		}
-		now := time.Now().UTC()
+		loadedTasks[i] = loaded
+	}
+
+	// Phase 2: Apply mutations and save. Track written tasks for rollback.
+	now := time.Now().UTC()
+	var written []int
+	for i, loaded := range loadedTasks {
+		if loaded == nil {
+			continue
+		}
 		loaded.ReleaseBatchID = plan.BatchID
 		loaded.ReleaseNotes = strings.TrimSpace(note)
 		loaded.ReleasedAt = &now
 		if err := SaveTask(project, loaded); err != nil {
-			return nil, err
+			// Rollback: restore all previously written tasks to pre-mutation state.
+			for _, wi := range written {
+				SaveTask(project, loadedTasks[wi]) // best-effort
+			}
+			return nil, fmt.Errorf("save task %s: %w (rolled back %d tasks)", loaded.ID, err, len(written))
 		}
+		written = append(written, i)
 		plan.Tasks[i] = loaded
 	}
+
 	reportPath, err := writeReleasePlan(project, plan)
 	if err != nil {
 		return nil, err
@@ -516,17 +534,28 @@ func AdvanceReleaseWaveRollout(project Project, rolloutID string) (*ReleaseWaveP
 	if activeIndex >= 0 {
 		target.Groups[activeIndex].WaveStatus = ReleaseWaveCompleted
 		target.Groups[activeIndex].CompletedAt = &now
-		if _, err := persistReleasePlan(project, target.Groups[activeIndex]); err != nil {
-			return nil, err
-		}
 	}
 	if nextPlanned >= 0 {
 		target.Groups[nextPlanned].WaveStatus = ReleaseWaveActive
 		if target.Groups[nextPlanned].ActivatedAt == nil {
 			target.Groups[nextPlanned].ActivatedAt = &now
 		}
+	}
+	// Persist both waves atomically: write new state first, rollback on failure.
+	if activeIndex >= 0 {
+		if _, err := persistReleasePlan(project, target.Groups[activeIndex]); err != nil {
+			return nil, fmt.Errorf("persist completed wave: %w", err)
+		}
+	}
+	if nextPlanned >= 0 {
 		if _, err := persistReleasePlan(project, target.Groups[nextPlanned]); err != nil {
-			return nil, err
+			// Rollback: restore the previously completed wave back to active.
+			if activeIndex >= 0 {
+				target.Groups[activeIndex].WaveStatus = ReleaseWaveActive
+				target.Groups[activeIndex].CompletedAt = nil
+				persistReleasePlan(project, target.Groups[activeIndex]) // best-effort
+			}
+			return nil, fmt.Errorf("persist active wave: %w", err)
 		}
 		return target, nil
 	}

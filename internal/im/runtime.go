@@ -44,7 +44,8 @@ type Manager struct {
 
 	// Dedup inbound messages by adapter+messageID to prevent platforms
 	// from delivering the same event twice (e.g. Feishu SDK retries).
-	seenMessages map[string]time.Time
+	seenMessages     map[string]time.Time
+	seenMessageCount int
 
 	// disabledBindings stores adapters that have been temporarily disabled.
 	// The binding is moved out of currentBindings so Emit/HandleInbound skip it,
@@ -496,10 +497,14 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		}
 		m.seenMessages[dedupKey] = time.Now()
 		// Prune entries older than 5 minutes to bound memory.
-		now := time.Now()
-		for k, t := range m.seenMessages {
-			if now.Sub(t) > 5*time.Minute {
-				delete(m.seenMessages, k)
+		// Only prune every 100 messages to avoid O(n) on every inbound.
+		m.seenMessageCount++
+		if m.seenMessageCount%100 == 0 {
+			now := time.Now()
+			for k, t := range m.seenMessages {
+				if now.Sub(t) > 5*time.Minute {
+					delete(m.seenMessages, k)
+				}
 			}
 		}
 	}
@@ -531,31 +536,39 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		msg.Envelope.ReceivedAt = time.Now()
 	}
 	if binding.ChannelID == "" && strings.TrimSpace(msg.Envelope.ChannelID) != "" {
-		binding.ChannelID = strings.TrimSpace(msg.Envelope.ChannelID)
-		changed = true
+		newChannelID := strings.TrimSpace(msg.Envelope.ChannelID)
 		if m.bindingStore != nil {
-			if err := m.persistBinding(*binding); err != nil {
+			probe := *binding
+			probe.ChannelID = newChannelID
+			if err := m.persistBinding(probe); err != nil {
 				m.mu.Unlock()
 				return err
 			}
 		}
+		binding.ChannelID = newChannelID
+		changed = true
 	}
 	if binding.ChannelID != "" && msg.Envelope.ChannelID != binding.ChannelID {
 		m.mu.Unlock()
 		return ErrInboundChannelDenied
 	}
 	if inboundID := strings.TrimSpace(msg.Envelope.MessageID); inboundID != "" {
+		if m.bindingStore != nil {
+			probe := *binding
+			probe.LastInboundMessageID = inboundID
+			probe.LastInboundAt = msg.Envelope.ReceivedAt
+			probe.PassiveReplyCount = 0
+			probe.PassiveReplyStartedAt = time.Time{}
+			if err := m.persistBinding(probe); err != nil {
+				m.mu.Unlock()
+				return err
+			}
+		}
 		binding.LastInboundMessageID = inboundID
 		binding.LastInboundAt = msg.Envelope.ReceivedAt
 		binding.PassiveReplyCount = 0
 		binding.PassiveReplyStartedAt = time.Time{}
 		changed = true
-		if m.bindingStore != nil {
-			if err := m.persistBinding(*binding); err != nil {
-				m.mu.Unlock()
-				return err
-			}
-		}
 	}
 	var snapshot StatusSnapshot
 	var cb func(StatusSnapshot)

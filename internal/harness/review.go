@@ -64,7 +64,7 @@ func RejectTaskReview(project Project, id, note string) (*Task, error) {
 	task.ReviewNotes = strings.TrimSpace(note)
 	now := time.Now().UTC()
 	task.ReviewedAt = &now
-	task.Status = TaskFailed
+	task.Status = TaskRejected
 	task.Error = "review rejected"
 	if task.ReviewNotes != "" {
 		task.Error = fmt.Sprintf("review rejected: %s", task.ReviewNotes)

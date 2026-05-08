@@ -787,8 +787,8 @@ func TestRejectTaskReviewReturnsTaskToRetryFlow(t *testing.T) {
 	if task.ReviewStatus != ReviewRejected {
 		t.Fatalf("ReviewStatus = %q, want %q", task.ReviewStatus, ReviewRejected)
 	}
-	if task.Status != TaskFailed {
-		t.Fatalf("Status = %q, want %q", task.Status, TaskFailed)
+	if task.Status != TaskRejected {
+		t.Fatalf("Status = %q, want %q", task.Status, TaskRejected)
 	}
 	if !strings.Contains(task.Error, "review rejected") {
 		t.Fatalf("unexpected task error: %q", task.Error)

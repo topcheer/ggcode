@@ -167,11 +167,10 @@ func mergeQueuedCandidate(existing, incoming SkillCandidate, now time.Time) Skil
 	}
 	merged.FirstQueuedAt = firstSeen
 	merged.LastQueuedAt = now
-	merged.QueueTouchCount = maxInt(existing.QueueTouchCount, incoming.QueueTouchCount)
-	if merged.QueueTouchCount == 0 {
-		merged.QueueTouchCount = 1
+	merged.QueueTouchCount = existing.QueueTouchCount + 1
+	if incoming.QueueTouchCount > 0 {
+		merged.QueueTouchCount = maxInt(existing.QueueTouchCount, incoming.QueueTouchCount) + 1
 	}
-	merged.QueueTouchCount++
 	return merged
 }
 
