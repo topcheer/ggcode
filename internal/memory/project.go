@@ -33,11 +33,14 @@ func LoadProjectMemory(workingDir string) (content string, files []string, err e
 }
 
 // walkUpProjectMemory walks from dir upward looking for supported project docs.
+// Stops at the user's HOME directory to avoid expensive traversal when launched
+// from HOME or /.
 func walkUpProjectMemory(dir string) []string {
 	var found []string
 	visited := make(map[string]bool)
+	home := config.HomeDir()
 	for {
-		if dir == "" || dir == "/" {
+		if dir == "" || dir == "/" || dir == home {
 			break
 		}
 		if visited[dir] {
@@ -129,9 +132,10 @@ func ResolveProjectMemoryInitTarget(workingDir string) (targetPath string, exist
 }
 
 func findProjectMemoryRoot(dir string) string {
+	home := config.HomeDir()
 	current := dir
 	for {
-		if current == "" || current == string(filepath.Separator) {
+		if current == "" || current == string(filepath.Separator) || current == home {
 			break
 		}
 		if hasProjectMemoryFiles(current) || hasGitRootMarker(current) {
