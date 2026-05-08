@@ -1,7 +1,9 @@
 package im
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -162,5 +164,48 @@ func TestIntValueStr(t *testing.T) {
 		if ok != tc.ok || got != tc.want {
 			t.Errorf("intValueStr(%q) = (%d, %v), want (%d, %v)", tc.input, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+func TestFeishuStartSetsCtxAndCancel(t *testing.T) {
+	a, err := newFeishuAdapter("test", config.IMConfig{}, config.IMAdapterConfig{
+		Extra: map[string]any{
+			"app_id":       "test-app",
+			"app_secret":   "test-secret",
+			"encrypt_key":  "test-key",
+			"verification": "test-verification",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("newFeishuAdapter: %v", err)
+	}
+
+	ctx := context.Background()
+	a.Start(ctx)
+
+	// After Start, ctx and cancel should be set
+	if a.ctx == nil {
+		t.Error("ctx should be set after Start")
+	}
+	if a.cancel == nil {
+		t.Error("cancel should be set after Start")
+	}
+
+	// Verify context is not done yet
+	select {
+	case <-a.ctx.Done():
+		t.Error("ctx should not be done yet")
+	default:
+	}
+
+	// Close should cancel the context
+	a.Close()
+
+	// After close, context should be cancelled
+	select {
+	case <-a.ctx.Done():
+		// expected
+	case <-time.After(200 * time.Millisecond):
+		t.Error("ctx should be cancelled after Close")
 	}
 }
