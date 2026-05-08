@@ -691,12 +691,18 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		textBuf.Reset()
 	}
 
+	var reasoningBuf strings.Builder
+
 	for event := range stream {
 		switch event.Type {
 		case provider.StreamEventText:
 			onEvent(event)
 			textBuf.WriteString(event.Text)
 			assistantTextBuf.WriteString(event.Text)
+		case provider.StreamEventReasoning:
+			// Collect reasoning content but don't show in TUI.
+			// It will be stored in the assistant message for echo-back to reasoning models (DeepSeek).
+			reasoningBuf.WriteString(event.Text)
 		case provider.StreamEventToolCallChunk:
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
@@ -717,12 +723,29 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 
 	flushText()
 
+	// Build response message with optional reasoning content for echo-back.
+	respMsg := provider.Message{
+		Role:    "assistant",
+		Content: content,
+	}
+	if reasoningBuf.Len() > 0 {
+		rc := reasoningBuf.String()
+		// Store reasoning in the first content block so convertMessages can find it.
+		// If no content blocks exist, add a text block.
+		if len(respMsg.Content) == 0 {
+			respMsg.Content = append(respMsg.Content, provider.ContentBlock{
+				Type:             "text",
+				Text:             "",
+				ReasoningContent: rc,
+			})
+		} else {
+			respMsg.Content[0].ReasoningContent = rc
+		}
+	}
+
 	return &provider.ChatResponse{
-		Message: provider.Message{
-			Role:    "assistant",
-			Content: content,
-		},
-		Usage: usage,
+		Message: respMsg,
+		Usage:   usage,
 	}, assistantTextBuf.String(), toolCalls, nil
 }
 
