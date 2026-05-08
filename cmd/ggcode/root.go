@@ -724,7 +724,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Wire IM status for webui config page
 	if imMgr != nil {
 		webuiSrv.SetIMStatusFn(func() []webui.IMRuntimeStatus {
-			return imSnapshotToWebUI(imMgr.Snapshot())
+			return imSnapshotToWebUI(imMgr.Snapshot(), cfg)
 		})
 	}
 

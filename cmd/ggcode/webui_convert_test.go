@@ -108,7 +108,7 @@ func TestIMSnapshotToWebUI(t *testing.T) {
 		},
 	}
 
-	result := imSnapshotToWebUI(snap)
+	result := imSnapshotToWebUI(snap, nil)
 	if len(result) != 2 {
 		t.Fatalf("expected 2, got %d", len(result))
 	}
@@ -135,7 +135,7 @@ func TestIMSnapshotToWebUI(t *testing.T) {
 }
 
 func TestIMSnapshotToWebUI_Empty(t *testing.T) {
-	result := imSnapshotToWebUI(im.StatusSnapshot{})
+	result := imSnapshotToWebUI(im.StatusSnapshot{}, nil)
 	if result == nil {
 		t.Error("expected non-nil slice")
 	}

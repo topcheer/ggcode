@@ -773,6 +773,15 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		for _, b := range snap.DisabledBindings {
 			disabledSet[b.Adapter] = true
 		}
+		// Config is the source of truth for disabled state.
+		configDisabledSet := map[string]bool{}
+		if cfg != nil {
+			for name, acfg := range cfg.IM.Adapters {
+				if !acfg.Enabled {
+					configDisabledSet[name] = true
+				}
+			}
+		}
 		mutedSet := map[string]bool{}
 		for _, b := range snap.MutedBindings {
 			mutedSet[b.Adapter] = true
@@ -802,7 +811,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			s := webui.IMRuntimeStatus{
 				Adapter: b.Adapter, Platform: string(b.Platform), Healthy: st.Healthy, Status: st.Status,
 				BoundDir: b.Workspace, ChannelID: b.ChannelID, TargetID: b.TargetID,
-				Muted: mutedSet[b.Adapter], Disabled: disabledSet[b.Adapter], AllDirs: allDirsMap[b.Adapter],
+				Muted: !configDisabledSet[b.Adapter] && mutedSet[b.Adapter], Disabled: configDisabledSet[b.Adapter] || disabledSet[b.Adapter], AllDirs: allDirsMap[b.Adapter],
 			}
 			if st.LastError != "" {
 				s.LastError = st.LastError
@@ -820,7 +829,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			s := webui.IMRuntimeStatus{
 				Adapter: adapter, Platform: string(st.Platform), Healthy: st.Healthy, Status: st.Status,
 				LastError: st.LastError, BoundDir: pb.workspace, ChannelID: pb.channel, TargetID: pb.targetID,
-				Muted: mutedSet[adapter], Disabled: disabledSet[adapter], AllDirs: allDirsMap[adapter],
+				Muted: !configDisabledSet[adapter] && mutedSet[adapter], Disabled: configDisabledSet[adapter] || disabledSet[adapter], AllDirs: allDirsMap[adapter],
 			}
 			out = append(out, s)
 			seen[adapter] = true
@@ -832,7 +841,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			out = append(out, webui.IMRuntimeStatus{
 				Adapter: name, Platform: string(st.Platform), Healthy: st.Healthy,
 				Status: st.Status, LastError: st.LastError,
-				Muted: mutedSet[name], Disabled: disabledSet[name],
+				Muted: !configDisabledSet[name] && mutedSet[name], Disabled: configDisabledSet[name] || disabledSet[name],
 			})
 		}
 		return out

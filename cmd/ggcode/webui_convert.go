@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/topcheer/ggcode/internal/a2a"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/webui"
@@ -38,8 +39,25 @@ func a2aInstancesToWebUI(instances []a2a.InstanceInfo) []webui.A2ADiscoveredInst
 }
 
 // imSnapshotToWebUI converts IM adapter states to webui status list.
-func imSnapshotToWebUI(snap im.StatusSnapshot) []webui.IMRuntimeStatus {
+func imSnapshotToWebUI(snap im.StatusSnapshot, cfg *config.Config) []webui.IMRuntimeStatus {
 	out := make([]webui.IMRuntimeStatus, 0, len(snap.Adapters))
+	disabledSet := map[string]bool{}
+	for _, b := range snap.DisabledBindings {
+		disabledSet[b.Adapter] = true
+	}
+	// Config is the source of truth for disabled state.
+	configDisabledSet := map[string]bool{}
+	if cfg != nil {
+		for name, acfg := range cfg.IM.Adapters {
+			if !acfg.Enabled {
+				configDisabledSet[name] = true
+			}
+		}
+	}
+	mutedSet := map[string]bool{}
+	for _, b := range snap.MutedBindings {
+		mutedSet[b.Adapter] = true
+	}
 	for _, a := range snap.Adapters {
 		out = append(out, webui.IMRuntimeStatus{
 			Adapter:   a.Name,
@@ -47,6 +65,8 @@ func imSnapshotToWebUI(snap im.StatusSnapshot) []webui.IMRuntimeStatus {
 			Healthy:   a.Healthy,
 			Status:    a.Status,
 			LastError: a.LastError,
+			Muted:     !configDisabledSet[a.Name] && mutedSet[a.Name],
+			Disabled:  configDisabledSet[a.Name] || disabledSet[a.Name],
 		})
 	}
 	return out
