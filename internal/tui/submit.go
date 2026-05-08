@@ -60,6 +60,11 @@ func (m *Model) appendUserMessage(text string) {
 
 func (m *Model) startAgent(text string) tea.Cmd {
 	debug.Log("tui", "startAgent called: text=%s", truncateStr(text, 200))
+	// Ensure the agent's provider is in sync with the current config.
+	// This handles the case where the user set an API key in the provider
+	// panel but hasn't explicitly activated — the key should still take effect.
+	m.ensureProviderSync()
+
 	// Capture and clear pending image
 	img := m.pendingImage
 	m.pendingImage = nil

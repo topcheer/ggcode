@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/knight"
@@ -561,6 +562,39 @@ func (m *Model) tryActivateCurrentSelection() error {
 	}
 	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	return nil
+}
+
+// ensureProviderSync rebuilds the agent's provider from the current config
+// if it's not already in sync. This guarantees that API key changes made in
+// the provider panel take effect immediately on the next message, even if
+// the user hasn't explicitly activated the vendor/endpoint.
+func (m *Model) ensureProviderSync() {
+	if m.config == nil || m.agent == nil {
+		return
+	}
+	resolved, err := m.config.ResolveActiveEndpoint()
+	if err != nil {
+		debug.Log("provider", "ensureProviderSync: resolve failed: %v", err)
+		return
+	}
+	if resolved.APIKey == "" {
+		debug.Log("provider", "ensureProviderSync: no API key for %s/%s", resolved.VendorID, resolved.EndpointID)
+		return
+	}
+	prov, err := provider.NewProvider(resolved)
+	if err != nil {
+		debug.Log("provider", "ensureProviderSync: new provider failed: %v", err)
+		return
+	}
+	m.agent.SetProvider(prov)
+	if resolved.ContextWindow > 0 {
+		m.agent.ContextManager().SetMaxTokens(resolved.ContextWindow)
+	}
+	if resolved.MaxTokens > 0 {
+		m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
+	}
+	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+	m.syncSessionSelection()
 }
 
 func (m *Model) syncSessionSelection() {
