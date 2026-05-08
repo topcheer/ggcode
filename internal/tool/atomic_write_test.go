@@ -1,8 +1,10 @@
 package tool
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -117,4 +119,57 @@ func TestCheckpointSaverUndo(t *testing.T) {
 	}
 
 	SetPreWriteHook(nil)
+}
+
+func TestPreWriteHookAbortsOnError(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "abort.txt")
+	os.WriteFile(fp, []byte("original"), 0644)
+
+	// Set a hook that returns an error
+	SetPreWriteHook(func(_, _, _, _ string) error {
+		return fmt.Errorf("hook denied write")
+	})
+	defer SetPreWriteHook(nil)
+
+	err := atomicWriteFile(fp, []byte("new content"), 0644)
+	if err == nil {
+		t.Fatal("expected error from hook-aborted write")
+	}
+	if !strings.Contains(err.Error(), "hook denied write") {
+		t.Errorf("error = %q, want hook denied write", err.Error())
+	}
+
+	// File should not have changed
+	data, _ := os.ReadFile(fp)
+	if string(data) != "original" {
+		t.Errorf("file should be unchanged, got %q", string(data))
+	}
+}
+
+func TestPreWriteHookAllowsOnNilError(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "allow.txt")
+	os.WriteFile(fp, []byte("old"), 0644)
+
+	var capturedPath string
+	SetPreWriteHook(func(p, _, _, _ string) error {
+		capturedPath = p
+		return nil
+	})
+	defer SetPreWriteHook(nil)
+
+	err := atomicWriteFile(fp, []byte("new"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedPath != fp {
+		t.Errorf("hook received path = %q, want %q", capturedPath, fp)
+	}
+
+	data, _ := os.ReadFile(fp)
+	if string(data) != "new" {
+		t.Errorf("file = %q, want %q", string(data), "new")
+	}
 }
