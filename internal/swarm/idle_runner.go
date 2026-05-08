@@ -51,7 +51,7 @@ func runTeammateLoop(
 	// Poll ticker: how often to check the task board for pending tasks.
 	pollInterval := mgr.cfg.PollInterval
 	if pollInterval <= 0 {
-		pollInterval = 1 * time.Second
+		pollInterval = 5 * time.Second
 	}
 	poller := time.NewTicker(pollInterval)
 	defer poller.Stop()
@@ -69,6 +69,11 @@ func runTeammateLoop(
 			switch msg.Type {
 			case "shutdown":
 				return
+			case "task_available":
+				// Hint: try claiming immediately instead of waiting for poller.
+				if tm.getStatus() == TeammateIdle {
+					tryClaimPendingTask(ctx, tm, team, agent, mgr, onEvent, taskTimeout)
+				}
 			case "task", "message", "":
 				handleMessage(ctx, tm, team, agent, mgr, onEvent, taskTimeout, msg)
 			}
