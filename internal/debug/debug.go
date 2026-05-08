@@ -21,13 +21,16 @@ func init() {
 	safego.SetLogger(Log)
 }
 
+var (
+	defaultLogDir string // resolved once in Init() via resolveDebugDir()
+)
+
 const (
-	defaultLogDir       = "" // resolved in newAsyncFileSink: ~/.ggcode/debug/ or /tmp/ggcode-debug-{uid}
-	defaultMaxLogSize   = 50 * 1024 * 1024
-	defaultMaxLogFiles  = 3
-	defaultAsyncBufSize = 1024
-	maxMessageLen       = 4096
-	envKey              = "GGCODE_DEBUG"
+	defaultMaxLogSize   int64 = 50 * 1024 * 1024
+	defaultMaxLogFiles        = 3
+	defaultAsyncBufSize       = 1024
+	maxMessageLen             = 4096
+	envKey                    = "GGCODE_DEBUG"
 )
 
 // Category represents a debug log output channel. Each category maps to its
@@ -261,6 +264,11 @@ func Init() {
 		}
 
 		pid := os.Getpid()
+
+		// Resolve debug log directory once for all sinks
+		if defaultLogDir == "" {
+			defaultLogDir = resolveDebugDir()
+		}
 
 		// Create main sink (all messages combined)
 		mainPath := filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid))
