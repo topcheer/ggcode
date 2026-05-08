@@ -3,6 +3,7 @@ package debug
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -385,4 +386,62 @@ func waitFor(t *testing.T, timeout time.Duration, fn func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met before timeout")
+}
+
+func TestResolveDebugDirReturnsUserPrivateDir(t *testing.T) {
+	dir := resolveDebugDir()
+	if dir == "" {
+		t.Fatal("resolveDebugDir should not return empty")
+	}
+
+	// Should be under ~/.ggcode/debug/ on most systems
+	home, _ := os.UserHomeDir()
+	expectedDefault := filepath.Join(home, ".ggcode", "debug")
+	if dir == expectedDefault {
+		// Verify the directory was created with restrictive permissions
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("stat debug dir: %v", err)
+		}
+		perm := info.Mode().Perm()
+		if perm != 0o700 {
+			t.Errorf("debug dir permissions = %04o, want 0700", perm)
+		}
+	}
+	// If fallback to /tmp, should contain UID
+	if strings.HasPrefix(dir, os.TempDir()) {
+		uid := "0"
+		if u, err := user.Current(); err == nil {
+			uid = u.Uid
+		}
+		if !strings.Contains(dir, uid) {
+			t.Errorf("fallback dir %q should contain UID %q", dir, uid)
+		}
+	}
+}
+
+func TestDebugLogFilePermissions(t *testing.T) {
+	Init()
+	defer Close()
+
+	dir := resolveDebugDir()
+	// Find the log file
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Skipf("no debug dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".log") {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			perm := info.Mode().Perm()
+			if perm != 0o600 {
+				t.Errorf("log file %s permissions = %04o, want 0600", e.Name(), perm)
+			}
+			return
+		}
+	}
+	t.Log("no log file found yet (async writer)")
 }

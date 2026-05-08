@@ -56,6 +56,26 @@ or:
 GGCODE_INSTALL_VERSION=X.Y.Z ggcode
 ```
 
+## TLS / Corporate proxy
+
+The installer verifies TLS certificates by default.
+
+If you are behind a corporate proxy with a custom CA certificate that Node.js does not trust, you have two options:
+
+1. **Recommended** — add your CA to Node's trust store:
+
+   ```bash
+   NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem npm install -g @ggcode-cli/ggcode
+   ```
+
+2. **Not recommended** — disable TLS verification entirely:
+
+   ```bash
+   GGCODE_INSECURE_TLS=1 npm install -g @ggcode-cli/ggcode
+   ```
+
+   This prints a security warning and makes the download vulnerable to man-in-the-middle attacks.
+
 ## Native installers
 
 Prefer a native package? Download directly from [GitHub Releases](https://github.com/topcheer/ggcode/releases/latest):
