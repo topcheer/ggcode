@@ -1234,7 +1234,8 @@ func TestRemoveEndpointNonExistent(t *testing.T) {
 
 func TestEndpointAPIKeyFallbackToVendor(t *testing.T) {
 	cfg := testConfigWithVendor()
-	// Set vendor-level key
+	// Set vendor-level key with env var
+	t.Setenv("ZAI_API_KEY", "sk-vendor-test-key")
 	vc := cfg.Vendors["zai"]
 	vc.APIKey = "${ZAI_API_KEY}"
 	// Create endpoint without key
@@ -1248,8 +1249,9 @@ func TestEndpointAPIKeyFallbackToVendor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.APIKey != "${ZAI_API_KEY}" {
-		t.Errorf("expected vendor fallback key, got %s", resolved.APIKey)
+	// Resolved key should be the expanded value, not the ${VAR} reference
+	if resolved.APIKey != "sk-vendor-test-key" {
+		t.Errorf("expected expanded vendor key, got %s", resolved.APIKey)
 	}
 }
 
@@ -1273,13 +1275,15 @@ func TestEndpointAPIKeyOverridesVendor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.APIKey != "${ENDPOINT_OVERRIDDEN_KEY}" {
-		t.Errorf("expected endpoint-specific key, got %s", resolved.APIKey)
+	// Resolved key should be expanded, not the reference
+	if resolved.APIKey != "sk-endpoint-override-value" {
+		t.Errorf("expected expanded endpoint key, got %s", resolved.APIKey)
 	}
 }
 
 func TestEndpointAPIKeyUnresolvableFallsBackToVendor(t *testing.T) {
 	cfg := testConfigWithVendor()
+	t.Setenv("ZAI_API_KEY", "sk-vendor-fallback-key")
 	vc := cfg.Vendors["zai"]
 	vc.APIKey = "${ZAI_API_KEY}"
 	// Create endpoint with an unresolvable key (env var not set)
@@ -1297,9 +1301,10 @@ func TestEndpointAPIKeyUnresolvableFallsBackToVendor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should fall back to vendor key since endpoint key is unresolvable
-	if resolved.APIKey != "${ZAI_API_KEY}" {
-		t.Errorf("expected vendor fallback key, got %s", resolved.APIKey)
+	// Should fall back to vendor key since endpoint key is unresolvable,
+	// and the vendor key should be expanded to its actual value.
+	if resolved.APIKey != "sk-vendor-fallback-key" {
+		t.Errorf("expected expanded vendor fallback key, got %s", resolved.APIKey)
 	}
 }
 
@@ -1364,5 +1369,162 @@ func TestMergeDefaultEndpoints_PreservesRealURL(t *testing.T) {
 	ep := cfg.Vendors["zai"].Endpoints["global-api-openai"]
 	if ep.BaseURL != "https://my-custom-proxy.example.com/v1" {
 		t.Fatalf("expected custom URL to be preserved, got %s", ep.BaseURL)
+	}
+}
+
+// --- API Key edge case tests ---
+
+func TestResolveEndpointExpandsEnvRef(t *testing.T) {
+	// After SetEndpointAPIKey stores a ${VAR} reference, ResolveEndpointSelection
+	// must expand it so the provider gets the actual key value.
+	cfg := testConfigWithVendor()
+	t.Setenv("MY_TEST_EP_KEY", "sk-actual-ep-value")
+	vc := cfg.Vendors["zai"]
+	vc.Endpoints["test-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+		APIKey:   "${MY_TEST_EP_KEY}",
+	}
+	cfg.Vendors["zai"] = vc
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "test-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "sk-actual-ep-value" {
+		t.Errorf("expected expanded key, got %q", resolved.APIKey)
+	}
+}
+
+func TestResolveEndpointEmptyEndpointKeyUsesVendorKey(t *testing.T) {
+	// Empty endpoint key should fall back to vendor key (expanded).
+	cfg := testConfigWithVendor()
+	t.Setenv("VENDOR_KEY_TEST", "sk-vendor-expanded")
+	vc := cfg.Vendors["zai"]
+	vc.APIKey = "${VENDOR_KEY_TEST}"
+	vc.Endpoints["no-key-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+		// APIKey is empty — should use vendor key
+	}
+	cfg.Vendors["zai"] = vc
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "no-key-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "sk-vendor-expanded" {
+		t.Errorf("expected expanded vendor key, got %q", resolved.APIKey)
+	}
+}
+
+func TestResolveEndpointBothKeysUnresolvable(t *testing.T) {
+	// Both endpoint and vendor keys are ${VAR} refs where VAR is not set.
+	// ExpandEnv leaves them as-is, so the key will be the unexpanded ref.
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.APIKey = "${TOTALLY_MISSING_VENDOR_KEY}"
+	vc.Endpoints["bad-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+		APIKey:   "${TOTALLY_MISSING_EP_KEY}",
+	}
+	cfg.Vendors["zai"] = vc
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "bad-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should still contain the unexpanded ref (will fail at API call time)
+	if resolved.APIKey == "" {
+		t.Error("expected non-empty key ref, got empty string")
+	}
+	if resolved.APIKey == "${TOTALLY_MISSING_EP_KEY}" {
+		// This is the endpoint ref that was returned by resolveEffectiveAPIKeyRef
+		// since neither resolves. ExpandEnv leaves it as-is.
+		t.Logf("unresolvable key remains as ref: %s", resolved.APIKey)
+	}
+}
+
+func TestResolveEndpointPlaintextKeyNotExpanded(t *testing.T) {
+	// A plaintext key (no ${} wrapping) should pass through unchanged.
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.Endpoints["plain-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+		APIKey:   "sk-plain-text-key-12345",
+	}
+	cfg.Vendors["zai"] = vc
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "plain-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "sk-plain-text-key-12345" {
+		t.Errorf("expected plain key, got %q", resolved.APIKey)
+	}
+}
+
+func TestResolveEndpointSetEndpointAPIKeyThenResolve(t *testing.T) {
+	// Simulate the full flow: SetEndpointAPIKey stores a ref, then resolve
+	// must expand it to the actual value.
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.Endpoints["live-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+	}
+	cfg.Vendors["zai"] = vc
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "live-ep"
+
+	// User sets key via panel
+	err := cfg.SetEndpointAPIKey("zai", "live-ep", "sk-user-input-key", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve should return the expanded actual key
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "sk-user-input-key" {
+		t.Errorf("expected expanded user key, got %q", resolved.APIKey)
+	}
+}
+
+func TestResolveEndpointSetVendorAPIKeyThenResolve(t *testing.T) {
+	// Same but for vendor-level key
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.Endpoints["vendor-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+	}
+	cfg.Vendors["zai"] = vc
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "vendor-ep"
+
+	err := cfg.SetEndpointAPIKey("zai", "vendor-ep", "sk-vendor-input-key", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.APIKey != "sk-vendor-input-key" {
+		t.Errorf("expected expanded vendor key, got %q", resolved.APIKey)
 	}
 }

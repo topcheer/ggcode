@@ -1178,6 +1178,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	// Resolve API key: endpoint key first, but if it's an unresolvable ${VAR}
 	// reference (env var not set), fall back to vendor key.
 	apiKey := resolveEffectiveAPIKeyRef(ep.APIKey, vc.APIKey)
+	// Expand any remaining ${VAR} references so the resolved endpoint always
+	// contains the actual key value, not a reference string.
+	apiKey = ExpandEnv(apiKey)
 	authType := strings.TrimSpace(ep.AuthType)
 	if authType == "" {
 		authType = "api_key"
