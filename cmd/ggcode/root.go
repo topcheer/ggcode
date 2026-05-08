@@ -100,6 +100,21 @@ func NewRootCmd() *cobra.Command {
 				return nil
 			}
 
+			// Warn if launched from HOME directory.
+			if !bypassFlag {
+				wd, _ := os.Getwd()
+				if home, err := os.UserHomeDir(); err == nil && wd == home {
+					lang := tui.LangEnglish
+					if cfg.Language != "" {
+						lang = tui.NormalizeLanguage(cfg.Language)
+					}
+					if !tui.ConfirmHomeDir(lang) {
+						fmt.Fprintln(os.Stderr, "Please cd into a project directory and run ggcode again.")
+						return nil
+					}
+				}
+			}
+
 			// Onboard wizard for first-time users without a working LLM config.
 			if !bypassFlag && cfg.NeedsOnboard() {
 				if err := runOnboardAndRestart(cfg); err != nil {
