@@ -173,9 +173,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	autoMem := memory.NewAutoMemory()
-	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
+	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
+	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
 
-	autoContent, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem)
+	autoContent, _, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
 	commandMgr.SetExtraProviders(func() []*commands.Command {
 		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
 	})

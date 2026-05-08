@@ -15,10 +15,20 @@ type AutoMemory struct {
 	dir string
 }
 
-// NewAutoMemory creates an AutoMemory instance.
+// NewAutoMemory creates an AutoMemory instance for global memory (~/.ggcode/memory/).
 func NewAutoMemory() *AutoMemory {
 	home := config.HomeDir()
 	dir := filepath.Join(home, ".ggcode", "memory")
+	_ = os.MkdirAll(dir, 0755)
+	return &AutoMemory{dir: dir}
+}
+
+// NewProjectAutoMemory creates an AutoMemory instance for project-scoped memory.
+// It locates the project root (git root or directory with project memory files)
+// and uses <project-root>/.ggcode/memory/ as the storage directory.
+func NewProjectAutoMemory(workingDir string) *AutoMemory {
+	root := findProjectMemoryRoot(workingDir)
+	dir := filepath.Join(root, ".ggcode", "memory")
 	_ = os.MkdirAll(dir, 0755)
 	return &AutoMemory{dir: dir}
 }
