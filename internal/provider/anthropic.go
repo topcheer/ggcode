@@ -142,11 +142,31 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					switch event.Type {
 					case "content_block_start":
 						cb := event.ContentBlock
-						if cb.Type == "tool_use" {
+						switch cb.Type {
+						case "tool_use":
 							idx := int(event.Index)
 							tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
 							toolCalls[idx] = tc
 							debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
+						case "thinking":
+							debug.Log("anthropic", "content_block_start thinking idx=%d sig_len=%d", event.Index, len(cb.Signature))
+							toolCalls[int(event.Index)] = &ToolCallDelta{
+								Index: int(event.Index),
+								ID:    cb.Signature, // carries signature for echo-back
+							}
+							// Emit reasoning event with signature so agent can store it
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: cb.Signature}
+						case "redacted_thinking":
+							debug.Log("anthropic", "content_block_start redacted_thinking idx=%d data_len=%d", event.Index, len(cb.Data))
+							toolCalls[int(event.Index)] = &ToolCallDelta{
+								Index: int(event.Index),
+								Name:  "__redacted_thinking__", // sentinel
+								ID:    cb.Data,                 // carries redacted data for echo-back
+							}
+							// Emit reasoning event with redacted data for echo-back
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventReasoning, Text: "__redacted_thinking__", ThinkingSignature: cb.Data}
 						}
 
 					case "content_block_delta":
@@ -164,11 +184,14 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 								toolCalls[int(event.Index)] = tc
 							}
 							tc.Arguments = append(tc.Arguments, delta.PartialJSON...)
+						case "thinking_delta":
+							emitted = true
+							ch <- StreamEvent{Type: StreamEventReasoning, Text: delta.Thinking}
 						}
 
 					case "content_block_stop":
 						idx := int(event.Index)
-						if tc, ok := toolCalls[idx]; ok {
+						if tc, ok := toolCalls[idx]; ok && tc.Name != "" {
 							debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 							outputChars += len(tc.Name) + len(tc.Arguments)
 							emitted = true
@@ -274,6 +297,16 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			case "tool_use":
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
 			case "tool_result":
+			case "thinking":
+				// Anthropic extended thinking: must echo back with signature
+				if b.ThinkingSignature != "" {
+					blocks = append(blocks, anthropic.NewThinkingBlock(b.ThinkingSignature, b.ReasoningContent))
+				}
+			case "redacted_thinking":
+				// Anthropic redacted thinking: must echo back with data
+				if b.ThinkingData != "" {
+					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.ThinkingData))
+				}
 				if len(b.Images) > 0 && !b.IsError {
 					var content []anthropic.ToolResultBlockParamContentUnion
 					for _, img := range b.Images {
@@ -361,6 +394,19 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 			result = append(result, TextBlock(b.Text))
 		case "tool_use":
 			result = append(result, ToolUseBlock(b.ID, b.Name, b.Input))
+		case "thinking":
+			tb := b.AsThinking()
+			result = append(result, ContentBlock{
+				Type:              "thinking",
+				ReasoningContent:  tb.Thinking,
+				ThinkingSignature: tb.Signature,
+			})
+		case "redacted_thinking":
+			rb := b.AsRedactedThinking()
+			result = append(result, ContentBlock{
+				Type:         "redacted_thinking",
+				ThinkingData: rb.Data,
+			})
 		}
 	}
 	return result
