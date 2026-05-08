@@ -213,3 +213,69 @@ func TestNeedsOnboardWithRealConfig(t *testing.T) {
 		t.Error("fully configured config should not need onboard")
 	}
 }
+
+func TestNeedsOnboardEmptyHome(t *testing.T) {
+	// Simulate a completely fresh user: no env vars, no config.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	// Clear all known API key env vars.
+	for _, key := range []string{
+		"ZAI_API_KEY", "GGCODE_ZAI_API_KEY", "OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
+		"OPENROUTER_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
+	} {
+		os.Unsetenv(key)
+	}
+
+	// Simulate what DefaultConfig returns — vendor set but no working API key.
+	cfg := DefaultConfig()
+	cfg.FilePath = filepath.Join(tmpHome, ".ggcode", "ggcode.yaml")
+
+	if !cfg.NeedsOnboard() {
+		t.Error("DefaultConfig with all env vars cleared should need onboard")
+	}
+
+	// Save and reload to verify round-trip.
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+	if !cfg.NeedsOnboard() {
+		t.Error("saved config with no env vars should still need onboard")
+	}
+}
+
+func TestNeedsOnboardPartialConfig(t *testing.T) {
+	// Config has vendor set but env var not set.
+	tmpHome := t.TempDir()
+	cfgPath := filepath.Join(tmpHome, ".ggcode", "ggcode.yaml")
+	os.Unsetenv("ANTHROPIC_API_KEY")
+
+	cfg := &Config{
+		FilePath: cfgPath,
+		Vendor:   "anthropic",
+		Endpoint: "api",
+		Vendors: map[string]VendorConfig{
+			"anthropic": {
+				DisplayName: "Anthropic",
+				APIKey:      "${ANTHROPIC_API_KEY}",
+				Endpoints: map[string]EndpointConfig{
+					"api": {
+						DisplayName:  "Anthropic API",
+						Protocol:     "anthropic",
+						BaseURL:      "https://api.anthropic.com",
+						DefaultModel: "claude-sonnet-4-20250514",
+					},
+				},
+			},
+		},
+	}
+	if !cfg.NeedsOnboard() {
+		t.Error("config with unset env var should need onboard")
+	}
+
+	// Set the env var — should NOT need onboard anymore.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-123")
+	if cfg.NeedsOnboard() {
+		t.Error("config with set env var should NOT need onboard")
+	}
+}

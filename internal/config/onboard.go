@@ -1,9 +1,14 @@
 package config
 
 import (
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+// envRefPattern matches ${VAR} style environment variable references.
+var envRefPattern = regexp.MustCompile(`^\$\{[^}]+\}$`)
 
 // VendorPreset describes a built-in vendor template for the onboard wizard.
 type VendorPreset struct {
@@ -39,11 +44,24 @@ func (c *Config) NeedsOnboard() bool {
 	if err != nil {
 		return true
 	}
-	// Resolved but no API key (env var not set or empty string).
-	if strings.TrimSpace(resolved.APIKey) == "" {
-		return true
+	// Resolved but no usable API key.
+	return !hasUsableAPIKey(resolved.APIKey)
+}
+
+// hasUsableAPIKey returns true if the key is a real value (not empty and not
+// an unresolvable ${VAR} reference).
+func hasUsableAPIKey(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
 	}
-	return false
+	// If it looks like a ${VAR} reference, check whether the env var exists.
+	if envRefPattern.MatchString(key) {
+		varName := key[2 : len(key)-1]
+		_, ok := os.LookupEnv(varName)
+		return ok
+	}
+	return true // plain key, usable
 }
 
 // VendorPresets returns all built-in vendor templates from DefaultConfig,
