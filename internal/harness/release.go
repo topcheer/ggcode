@@ -858,7 +858,7 @@ func persistReleasePlan(project Project, plan *ReleasePlan) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal release plan: %w", err)
 	}
-	if err := atomicWriteFile(path, data, 0o644); err != nil {
+	if err := atomicWriteJSON(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("write release plan: %w", err)
 	}
 	plan.ReportPath = path
@@ -899,7 +899,7 @@ func loadReleasePlans(project Project) ([]*ReleasePlan, error) {
 
 // atomicWriteFile writes data to a temporary file in the same directory,
 // then renames it to the final path. This prevents partial writes on crash.
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+func atomicWriteJSON(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

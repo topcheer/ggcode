@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -238,5 +239,32 @@ func TestSwarmWorkflow(t *testing.T) {
 	result, _ = teamDelete.Execute(context.Background(), input)
 	if result.IsError {
 		t.Fatalf("step 4 failed: %s", result.Content)
+	}
+}
+
+func TestSwarmTaskCreateTool_NoAssigneeNotifiesIdleRunners(t *testing.T) {
+	// When no assignee is specified, the tool should call NotifyIdleRunners
+	// so idle teammates can claim immediately instead of waiting for poller.
+	mgr := swarmTestManager(t)
+	team := mgr.CreateTeam("test", "leader")
+
+	tool := SwarmTaskCreateTool{Manager: mgr}
+	input, _ := json.Marshal(map[string]interface{}{
+		"team_id":     team.ID,
+		"subject":     "Unassigned task",
+		"description": "No assignee, should trigger NotifyIdleRunners",
+	})
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+
+	// Verify the task was created (no panic from NotifyIdleRunners)
+	if !strings.Contains(result.Content, "Unassigned task") {
+		t.Errorf("result should contain task subject, got: %s", result.Content)
 	}
 }

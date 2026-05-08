@@ -129,7 +129,7 @@ func SaveTask(project Project, task *Task) error {
 	if err := os.MkdirAll(project.TasksDir, 0755); err != nil {
 		return fmt.Errorf("create tasks dir: %w", err)
 	}
-	if err := atomicWriteFile(taskPath(project, task.ID), data, 0644); err != nil {
+	if err := atomicWriteJSON(taskPath(project, task.ID), data, 0644); err != nil {
 		return err
 	}
 	// Event log is append-only audit trail; failure should not fail the operation.
