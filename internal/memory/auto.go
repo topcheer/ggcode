@@ -32,7 +32,7 @@ func NewProjectAutoMemory(workingDir string) *AutoMemory {
 	root := findProjectMemoryRoot(workingDir)
 	home := config.HomeDir()
 	// Never treat HOME as a project root to avoid polluting ~/.ggcode/
-	if root == home {
+	if strings.EqualFold(root, home) {
 		return nil
 	}
 	dir := filepath.Join(root, ".ggcode", "memory")

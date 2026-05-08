@@ -40,7 +40,7 @@ func walkUpProjectMemory(dir string) []string {
 	visited := make(map[string]bool)
 	home := config.HomeDir()
 	for {
-		if dir == "" || dir == "/" || dir == home {
+		if dir == "" || dir == "/" || strings.EqualFold(dir, home) {
 			break
 		}
 		if visited[dir] {
@@ -135,7 +135,7 @@ func findProjectMemoryRoot(dir string) string {
 	home := config.HomeDir()
 	current := dir
 	for {
-		if current == "" || current == string(filepath.Separator) || current == home {
+		if current == "" || current == string(filepath.Separator) || strings.EqualFold(current, home) {
 			break
 		}
 		if hasProjectMemoryFiles(current) || hasGitRootMarker(current) {
