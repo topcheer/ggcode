@@ -12,6 +12,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -558,6 +559,18 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			if err := m.saveConfig(); err != nil {
 				panel.message = err.Error()
 				return *m, nil
+			}
+			// If the user just saved an API key for the currently active
+			// vendor/endpoint, try to rebuild the provider immediately so
+			// the new key takes effect without a manual re-activate.
+			if editedField == "vendor api key" || editedField == "endpoint api key" {
+				if panel.selectedVendor() == m.config.Vendor && panel.selectedEndpoint() == m.config.Endpoint {
+					if actErr := m.tryActivateCurrentSelection(); actErr != nil {
+						debug.Log("provider", "auto-activate after key save: %v", actErr)
+					} else {
+						m.syncSessionSelection()
+					}
+				}
 			}
 			panel.editingField = ""
 			panel.message = m.t("panel.provider.saved")
