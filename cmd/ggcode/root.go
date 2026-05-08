@@ -1125,7 +1125,9 @@ func loadInteractiveStartupAssets(
 
 	safego.Go("root.interactive.projectAutoMem", func() {
 		defer wg.Done()
-		projectAutoContent, _, _ = projectAutoMem.LoadAll()
+		if projectAutoMem != nil {
+			projectAutoContent, _, _ = projectAutoMem.LoadAll()
+		}
 	})
 
 	safego.Go("root.interactive.commands", func() {

@@ -10,12 +10,25 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 )
 
-func TestSaveMemoryTool(t *testing.T) {
+// createTestProjectDir creates a temp dir with .git so NewProjectAutoMemory recognizes it.
+func createTestProjectDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestSaveMemoryTool_DefaultProjectScope(t *testing.T) {
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
-	pm := memory.NewProjectAutoMemory(am.Dir())
-	defer os.RemoveAll(pm.Dir())
+	projectDir := createTestProjectDir(t)
+	pm := memory.NewProjectAutoMemory(projectDir)
+	if pm == nil {
+		t.Fatal("expected non-nil project memory")
+	}
 
 	tol := NewSaveMemoryTool(am, pm)
 
@@ -46,8 +59,8 @@ func TestSaveMemoryTool_GlobalScope(t *testing.T) {
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
-	pm := memory.NewProjectAutoMemory(am.Dir())
-	defer os.RemoveAll(pm.Dir())
+	projectDir := createTestProjectDir(t)
+	pm := memory.NewProjectAutoMemory(projectDir)
 
 	tol := NewSaveMemoryTool(am, pm)
 
@@ -74,12 +87,12 @@ func TestSaveMemoryTool_GlobalScope(t *testing.T) {
 	}
 }
 
-func TestSaveMemoryTool_ProjectScope(t *testing.T) {
+func TestSaveMemoryTool_ExplicitProjectScope(t *testing.T) {
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
-	pm := memory.NewProjectAutoMemory(am.Dir())
-	defer os.RemoveAll(pm.Dir())
+	projectDir := createTestProjectDir(t)
+	pm := memory.NewProjectAutoMemory(projectDir)
 
 	tol := NewSaveMemoryTool(am, pm)
 
@@ -110,8 +123,8 @@ func TestSaveMemoryTool_InvalidScope(t *testing.T) {
 	am := memory.NewAutoMemory()
 	defer os.RemoveAll(am.Dir())
 
-	pm := memory.NewProjectAutoMemory(am.Dir())
-	defer os.RemoveAll(pm.Dir())
+	projectDir := createTestProjectDir(t)
+	pm := memory.NewProjectAutoMemory(projectDir)
 
 	tol := NewSaveMemoryTool(am, pm)
 
@@ -127,5 +140,82 @@ func TestSaveMemoryTool_InvalidScope(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatal("expected error for invalid scope")
+	}
+}
+
+func TestSaveMemoryTool_NoProjectRoot(t *testing.T) {
+	am := memory.NewAutoMemory()
+	defer os.RemoveAll(am.Dir())
+
+	// HOME dir — NewProjectAutoMemory returns nil
+	pm := memory.NewProjectAutoMemory(os.Getenv("HOME"))
+	if pm != nil {
+		t.Fatal("expected nil project memory for HOME dir")
+	}
+
+	tol := NewSaveMemoryTool(am, pm)
+
+	// Default scope is project — should fail gracefully
+	input, _ := json.Marshal(map[string]string{
+		"key":     "test",
+		"content": "should fail",
+	})
+
+	result, err := tol.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error when project memory is nil")
+	}
+
+	// Global scope should still work
+	input2, _ := json.Marshal(map[string]string{
+		"key":     "global-ok",
+		"content": "works fine",
+		"scope":   "global",
+	})
+
+	result2, err := tol.Execute(context.Background(), input2)
+	if err != nil {
+		t.Fatalf("Execute global: %v", err)
+	}
+	if result2.IsError {
+		t.Fatalf("global should work: %s", result2.Content)
+	}
+}
+
+func TestSaveMemoryTool_NoGitStillWorks(t *testing.T) {
+	am := memory.NewAutoMemory()
+	defer os.RemoveAll(am.Dir())
+
+	// No .git — should still get project memory (just a plain directory)
+	projectDir := t.TempDir()
+	pm := memory.NewProjectAutoMemory(projectDir)
+	if pm == nil {
+		t.Fatal("expected non-nil project memory even without .git")
+	}
+
+	tol := NewSaveMemoryTool(am, pm)
+
+	input, _ := json.Marshal(map[string]string{
+		"key":     "no-git-pattern",
+		"content": "Still works without git",
+	})
+
+	result, err := tol.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+
+	data, err := os.ReadFile(filepath.Join(pm.Dir(), "no-git-pattern.md"))
+	if err != nil {
+		t.Fatalf("project file not found: %v", err)
+	}
+	if string(data) != "Still works without git" {
+		t.Errorf("wrong content: %q", string(data))
 	}
 }
