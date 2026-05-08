@@ -252,6 +252,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			}
 
 			toolCalls := make(map[int]*ToolCallDelta)
+			var reasoningBuf strings.Builder
 			emitted := false
 			retry := false
 			normalEnd := false
@@ -333,6 +334,14 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 					choice := resp.Choices[0]
 					delta := choice.Delta
+
+					// Reasoning content (DeepSeek v4, etc.)
+					if delta.ReasoningContent != "" {
+						reasoningBuf.WriteString(delta.ReasoningContent)
+						debug.Log("openai", "chunk reasoning len=%d", len(delta.ReasoningContent))
+						emitted = true
+						ch <- StreamEvent{Type: StreamEventReasoning, Text: delta.ReasoningContent}
+					}
 
 					// Text content
 					if delta.Content != "" {
@@ -600,6 +609,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				Content: "",
 			}
 			var toolCalls []openai.ToolCall
+			var reasoningContent string
 			for _, b := range m.Content {
 				switch b.Type {
 				case "text":
@@ -614,8 +624,16 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 						},
 					})
 				}
+				// Collect reasoning content from any block that has it
+				if b.ReasoningContent != "" {
+					reasoningContent = b.ReasoningContent
+				}
 			}
 			msg.ToolCalls = toolCalls
+			// DeepSeek reasoning models require reasoning_content to be echoed back.
+			if reasoningContent != "" {
+				msg.ReasoningContent = reasoningContent
+			}
 			result = append(result, msg)
 		case "tool":
 			// Tool results - each tool_result block becomes a separate message

@@ -13,16 +13,17 @@ type Message struct {
 
 // ContentBlock is a union type: text, image, tool call, or tool result.
 type ContentBlock struct {
-	Type      string          `json:"type"` // "text", "image", "tool_use", "tool_result"
-	Text      string          `json:"text,omitempty"`
-	ImageMIME string          `json:"image_mime,omitempty"` // MIME type for image blocks
-	ImageData string          `json:"image_data,omitempty"` // base64-encoded image data
-	ToolName  string          `json:"tool_name,omitempty"`
-	ToolID    string          `json:"tool_id,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	Output    string          `json:"output,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
-	Images    []ContentImage  `json:"images,omitempty"` // images within a tool_result
+	Type             string          `json:"type"` // "text", "image", "tool_use", "tool_result"
+	Text             string          `json:"text,omitempty"`
+	ImageMIME        string          `json:"image_mime,omitempty"` // MIME type for image blocks
+	ImageData        string          `json:"image_data,omitempty"` // base64-encoded image data
+	ToolName         string          `json:"tool_name,omitempty"`
+	ToolID           string          `json:"tool_id,omitempty"`
+	Input            json.RawMessage `json:"input,omitempty"`
+	Output           string          `json:"output,omitempty"`
+	IsError          bool            `json:"is_error,omitempty"`
+	Images           []ContentImage  `json:"images,omitempty"`            // images within a tool_result
+	ReasoningContent string          `json:"reasoning_content,omitempty"` // DeepSeek reasoning content (must be echoed back)
 }
 
 // ImageBlock creates an image content block with base64-encoded data.
@@ -96,6 +97,7 @@ const (
 	StreamEventToolResult
 	StreamEventDone
 	StreamEventError
+	StreamEventReasoning // thinking/reasoning content (DeepSeek, etc.)
 )
 
 // ToolCallDelta represents a (possibly partial) tool call from a streaming response.
