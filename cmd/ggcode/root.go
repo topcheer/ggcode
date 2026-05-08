@@ -345,28 +345,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
-	resolved, err := cfg.ResolveActiveEndpoint()
-	if err != nil {
-		return err
-	}
-	if resolved.APIKey == "" {
-		return fmt.Errorf("no API key for vendor %q endpoint %q. Set the api_key in config or /provider", resolved.VendorID, resolved.EndpointID)
-	}
-
-	// Apply impersonation settings from config before creating provider
-	if imp := cfg.Impersonation; imp.Preset != "" {
-		var preset *provider.ImpersonationPreset
-		if imp.Preset != "none" {
-			preset = provider.FindPresetByID(imp.Preset)
-		}
-		customHeaders := make(map[string]string, len(imp.CustomHeaders))
-		for k, v := range imp.CustomHeaders {
-			customHeaders[k] = v
-		}
-		provider.SetActiveImpersonation(preset, imp.CustomVersion, customHeaders)
-	}
-
-	prov, err := provider.NewProvider(resolved)
+	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		return err
 	}

@@ -125,28 +125,7 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
-	resolved, err := cfg.ResolveActiveEndpoint()
-	if err != nil {
-		return err
-	}
-	if resolved.APIKey == "" {
-		return fmt.Errorf("no API key for vendor %q endpoint %q", resolved.VendorID, resolved.EndpointID)
-	}
-
-	// Apply impersonation
-	if imp := cfg.Impersonation; imp.Preset != "" {
-		var preset *provider.ImpersonationPreset
-		if imp.Preset != "none" {
-			preset = provider.FindPresetByID(imp.Preset)
-		}
-		customHeaders := make(map[string]string, len(imp.CustomHeaders))
-		for k, v := range imp.CustomHeaders {
-			customHeaders[k] = v
-		}
-		provider.SetActiveImpersonation(preset, imp.CustomVersion, customHeaders)
-	}
-
-	prov, err := provider.NewProvider(resolved)
+	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		return err
 	}
