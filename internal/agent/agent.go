@@ -692,6 +692,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	}
 
 	var reasoningBuf strings.Builder
+	var thinkingSignature string
 
 	for event := range stream {
 		switch event.Type {
@@ -701,8 +702,14 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			assistantTextBuf.WriteString(event.Text)
 		case provider.StreamEventReasoning:
 			// Collect reasoning content but don't show in TUI.
-			// It will be stored in the assistant message for echo-back to reasoning models (DeepSeek).
-			reasoningBuf.WriteString(event.Text)
+			// It will be stored in the assistant message for echo-back.
+			if event.Text != "" {
+				reasoningBuf.WriteString(event.Text)
+			}
+			// Anthropic sends signature at block_start, before any text deltas.
+			if event.ThinkingSignature != "" {
+				thinkingSignature = event.ThinkingSignature
+			}
 		case provider.StreamEventToolCallChunk:
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
@@ -728,19 +735,24 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		Role:    "assistant",
 		Content: content,
 	}
-	if reasoningBuf.Len() > 0 {
+	// Store reasoning/thinking content for echo-back to reasoning models.
+	// - DeepSeek: reasoning_content (plain text)
+	// - Anthropic: thinking block with signature
+	if reasoningBuf.Len() > 0 || thinkingSignature != "" {
 		rc := reasoningBuf.String()
-		// Store reasoning in the first content block so convertMessages can find it.
-		// If no content blocks exist, add a text block.
-		if len(respMsg.Content) == 0 {
-			respMsg.Content = append(respMsg.Content, provider.ContentBlock{
-				Type:             "text",
-				Text:             "",
-				ReasoningContent: rc,
-			})
-		} else {
-			respMsg.Content[0].ReasoningContent = rc
+		block := provider.ContentBlock{
+			ReasoningContent:  rc,
+			ThinkingSignature: thinkingSignature,
 		}
+		if thinkingSignature != "" {
+			// Anthropic extended thinking
+			block.Type = "thinking"
+		} else {
+			// DeepSeek reasoning
+			block.Type = "text"
+		}
+		// Prepend thinking block so it appears before tool_use blocks
+		respMsg.Content = append([]provider.ContentBlock{block}, respMsg.Content...)
 	}
 
 	return &provider.ChatResponse{
