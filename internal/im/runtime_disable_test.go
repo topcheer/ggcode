@@ -134,9 +134,7 @@ func TestDisableBindingEmitSkips(t *testing.T) {
 	// Emit should return ErrNoChannelBound because no sinks are registered,
 	// but verify that it only looks at the remaining active binding (tg-bot-1).
 	// The important thing is that qq-bot-1 is not in currentBindings.
-	err = mgr.Emit(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hello"})
-	// Emit will fail because there are no sinks, but that's expected.
-	// The key test is that qq-bot-1 is not in the active set.
+	_ = mgr.Emit(context.Background(), OutboundEvent{Kind: OutboundEventText, Text: "hello"})
 
 	snapshot := mgr.Snapshot()
 	for _, b := range snapshot.CurrentBindings {
@@ -179,5 +177,248 @@ func TestDisableBindingUnbindSessionClears(t *testing.T) {
 	}
 	if len(mgr.DisabledBindings()) != 0 {
 		t.Fatal("disabled bindings should be empty after UnbindSession")
+	}
+}
+
+func TestApplyAdapterConfig_DisablesConfiguredAdapters(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	// Bind two adapters
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformTelegram,
+		Adapter:   "tg-bot-1",
+		ChannelID: "channel-2",
+	})
+
+	// Both should be active
+	if len(mgr.CurrentBindings()) != 2 {
+		t.Fatalf("expected 2 active bindings, got %d", len(mgr.CurrentBindings()))
+	}
+
+	// Apply config: qq disabled, tg enabled
+	mgr.ApplyAdapterConfig(map[string]bool{
+		"qq-bot-1": false,
+		"tg-bot-1": true,
+	})
+
+	// qq should be disabled
+	if !mgr.IsBindingDisabled("qq-bot-1") {
+		t.Fatal("qq-bot-1 should be disabled after ApplyAdapterConfig")
+	}
+	// tg should still be active
+	if mgr.IsBindingDisabled("tg-bot-1") {
+		t.Fatal("tg-bot-1 should NOT be disabled")
+	}
+	// Active count should be 1
+	if len(mgr.CurrentBindings()) != 1 {
+		t.Fatalf("expected 1 active binding, got %d", len(mgr.CurrentBindings()))
+	}
+	// Disabled count should be 1
+	if len(mgr.DisabledBindings()) != 1 {
+		t.Fatalf("expected 1 disabled binding, got %d", len(mgr.DisabledBindings()))
+	}
+}
+
+func TestApplyAdapterConfig_AllDisabled(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformTelegram,
+		Adapter:   "tg-bot-1",
+		ChannelID: "channel-2",
+	})
+
+	// Disable all
+	mgr.ApplyAdapterConfig(map[string]bool{
+		"qq-bot-1": false,
+		"tg-bot-1": false,
+	})
+
+	if len(mgr.CurrentBindings()) != 0 {
+		t.Fatalf("expected 0 active bindings, got %d", len(mgr.CurrentBindings()))
+	}
+	if len(mgr.DisabledBindings()) != 2 {
+		t.Fatalf("expected 2 disabled bindings, got %d", len(mgr.DisabledBindings()))
+	}
+}
+
+func TestApplyAdapterConfig_NoBindings(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	// No bindings — should not panic
+	mgr.ApplyAdapterConfig(map[string]bool{
+		"qq-bot-1": false,
+	})
+
+	if len(mgr.CurrentBindings()) != 0 {
+		t.Fatalf("expected 0 active bindings, got %d", len(mgr.CurrentBindings()))
+	}
+}
+
+func TestApplyAdapterConfig_Idempotent(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+
+	// Apply twice
+	mgr.ApplyAdapterConfig(map[string]bool{"qq-bot-1": false})
+	mgr.ApplyAdapterConfig(map[string]bool{"qq-bot-1": false})
+
+	if !mgr.IsBindingDisabled("qq-bot-1") {
+		t.Fatal("should still be disabled after double apply")
+	}
+	if len(mgr.DisabledBindings()) != 1 {
+		t.Fatalf("expected 1 disabled binding, got %d", len(mgr.DisabledBindings()))
+	}
+}
+
+// TestApplyAdapterConfig_EnablePreviouslyDisabled verifies that ApplyAdapterConfig
+// does NOT re-enable adapters that are already disabled — enabling requires EnableBinding.
+func TestApplyAdapterConfig_DoesNotReEnable(t *testing.T) {
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+
+	// First disable
+	mgr.ApplyAdapterConfig(map[string]bool{"qq-bot-1": false})
+	if !mgr.IsBindingDisabled("qq-bot-1") {
+		t.Fatal("should be disabled")
+	}
+
+	// Apply config with enabled=true should NOT move it back
+	// (ApplyAdapterConfig only disables, doesn't enable)
+	mgr.ApplyAdapterConfig(map[string]bool{"qq-bot-1": true})
+	if !mgr.IsBindingDisabled("qq-bot-1") {
+		t.Fatal("ApplyAdapterConfig should not re-enable disabled adapters")
+	}
+}
+
+// TestSimulateRestartFlow simulates the full restart scenario:
+// 1. User disables an adapter
+// 2. App restarts (new Manager, fresh bindings from store)
+// 3. ApplyAdapterConfig reads the persisted config and re-disables the adapter
+func TestSimulateRestartFlow(t *testing.T) {
+	// Step 1: Initial setup with all adapters enabled
+	mgr := NewManager()
+	mgr.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+	_, _ = mgr.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformTelegram,
+		Adapter:   "tg-bot-1",
+		ChannelID: "channel-2",
+	})
+
+	// Verify all active
+	if len(mgr.CurrentBindings()) != 2 {
+		t.Fatalf("expected 2 active, got %d", len(mgr.CurrentBindings()))
+	}
+
+	// Step 2: User disables qq via UI (DisableBinding + config persist)
+	if err := mgr.DisableBinding("qq-bot-1"); err != nil {
+		t.Fatalf("DisableBinding: %v", err)
+	}
+	// Simulate config.SetIMAdapterEnabled("qq-bot-1", false) — tested separately
+
+	// Verify in-memory state
+	if !mgr.IsBindingDisabled("qq-bot-1") {
+		t.Fatal("qq should be disabled")
+	}
+	if mgr.IsBindingDisabled("tg-bot-1") {
+		t.Fatal("tg should be active")
+	}
+
+	// Step 3: Simulate restart — new Manager, bindings loaded from store
+	mgr2 := NewManager()
+	mgr2.BindSession(SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+	// Bindings come from store (both, since store doesn't know about disabled)
+	_, _ = mgr2.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+	_, _ = mgr2.BindChannel(ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  PlatformTelegram,
+		Adapter:   "tg-bot-1",
+		ChannelID: "channel-2",
+	})
+
+	// Before ApplyAdapterConfig, both are active (simulating fresh load)
+	if len(mgr2.CurrentBindings()) != 2 {
+		t.Fatalf("expected 2 active before apply, got %d", len(mgr2.CurrentBindings()))
+	}
+
+	// Step 4: Apply config (which was persisted: qq=false, tg=true)
+	mgr2.ApplyAdapterConfig(map[string]bool{
+		"qq-bot-1": false,
+		"tg-bot-1": true,
+	})
+
+	// Now qq should be disabled again, tg active
+	if !mgr2.IsBindingDisabled("qq-bot-1") {
+		t.Fatal("qq should be disabled after restart + ApplyAdapterConfig")
+	}
+	if mgr2.IsBindingDisabled("tg-bot-1") {
+		t.Fatal("tg should remain active")
+	}
+	if len(mgr2.CurrentBindings()) != 1 {
+		t.Fatalf("expected 1 active after apply, got %d", len(mgr2.CurrentBindings()))
 	}
 }

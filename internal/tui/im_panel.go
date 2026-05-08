@@ -261,7 +261,7 @@ func (m *Model) handleIMPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, m.muteAllIMChannels()
 	case "U":
 		return *m, m.unmuteAllIMChannels()
-	case "esc":
+	case "esc", "ctrl+c":
 		m.closeIMPanel()
 	}
 	return *m, nil
@@ -275,6 +275,11 @@ func (m *Model) disableIMChannel(entry imChannelEntry) tea.Cmd {
 		if err := m.imManager.DisableBinding(entry.Adapter); err != nil {
 			return imPanelResultMsg{err: err}
 		}
+		if m.config != nil {
+			if err := m.config.SetIMAdapterEnabled(entry.Adapter, false); err != nil {
+				return imPanelResultMsg{err: fmt.Errorf("persist disable failed: %w", err)}
+			}
+		}
 		return imPanelResultMsg{message: m.t("panel.im.message.disabled", entry.Adapter)}
 	}
 }
@@ -286,6 +291,11 @@ func (m *Model) enableIMChannel(entry imChannelEntry) tea.Cmd {
 		}
 		if err := m.imManager.EnableBinding(entry.Adapter); err != nil {
 			return imPanelResultMsg{err: err}
+		}
+		if m.config != nil {
+			if err := m.config.SetIMAdapterEnabled(entry.Adapter, true); err != nil {
+				return imPanelResultMsg{err: fmt.Errorf("persist enable failed: %w", err)}
+			}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.enabled", entry.Adapter)}
 	}
@@ -359,6 +369,13 @@ func (m *Model) disableAllIMChannels() tea.Cmd {
 		if err != nil {
 			return imPanelResultMsg{err: err}
 		}
+		if m.config != nil {
+			for name := range m.config.IM.Adapters {
+				if err := m.config.SetIMAdapterEnabled(name, false); err != nil {
+					return imPanelResultMsg{err: fmt.Errorf("persist disable %s failed: %w", name, err)}
+				}
+			}
+		}
 		return imPanelResultMsg{message: m.t("panel.im.message.disable_all", count)}
 	}
 }
@@ -372,10 +389,47 @@ func (m *Model) enableAllIMChannels() tea.Cmd {
 		if err != nil {
 			return imPanelResultMsg{err: err}
 		}
+		if m.config != nil {
+			for name := range m.config.IM.Adapters {
+				if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+					return imPanelResultMsg{err: fmt.Errorf("persist enable %s failed: %w", name, err)}
+				}
+			}
+		}
 		return imPanelResultMsg{message: m.t("panel.im.message.enable_all", count)}
 	}
 }
 
+// toggleIMAdapterEnabled disables or enables an adapter with config persistence.
+// Shared by all channel-specific panels.
+func (m *Model) toggleIMAdapterEnabled(adapterName string) tea.Cmd {
+	return func() tea.Msg {
+		if m.imManager == nil {
+			return imPanelResultMsg{err: fmt.Errorf("%s", m.t("panel.im.message.no_runtime"))}
+		}
+		disabled := m.imManager.IsBindingDisabled(adapterName)
+		if disabled {
+			if err := m.imManager.EnableBinding(adapterName); err != nil {
+				return imPanelResultMsg{err: err}
+			}
+			if m.config != nil {
+				if err := m.config.SetIMAdapterEnabled(adapterName, true); err != nil {
+					return imPanelResultMsg{err: fmt.Errorf("persist enable failed: %w", err)}
+				}
+			}
+			return imPanelResultMsg{message: m.t("panel.im.message.enabled", adapterName)}
+		}
+		if err := m.imManager.DisableBinding(adapterName); err != nil {
+			return imPanelResultMsg{err: err}
+		}
+		if m.config != nil {
+			if err := m.config.SetIMAdapterEnabled(adapterName, false); err != nil {
+				return imPanelResultMsg{err: fmt.Errorf("persist disable failed: %w", err)}
+			}
+		}
+		return imPanelResultMsg{message: m.t("panel.im.message.disabled", adapterName)}
+	}
+}
 func (m Model) imChannelEntries() []imChannelEntry {
 	if m.imManager == nil {
 		return nil
@@ -419,6 +473,16 @@ func (m Model) imChannelEntries() []imChannelEntry {
 		info := allBindings[adapterName]
 		state := adapterStates[adapterName]
 
+		// Config is the source of truth for disabled state.
+		// Runtime disabledBindings may not reflect config if another
+		// instance changed it, or ApplyAdapterConfig hasn't run yet.
+		configDisabled := false
+		if m.config != nil {
+			if ac, ok := m.config.IM.Adapters[adapterName]; ok {
+				configDisabled = !ac.Enabled
+			}
+		}
+
 		entries = append(entries, imChannelEntry{
 			Adapter:   adapterName,
 			Platform:  info.binding.Platform,
@@ -426,8 +490,8 @@ func (m Model) imChannelEntries() []imChannelEntry {
 			Healthy:   state.Healthy,
 			Status:    state.Status,
 			LastError: state.LastError,
-			Disabled:  info.disabled,
-			Muted:     info.muted,
+			Disabled:  configDisabled || info.disabled,
+			Muted:     !configDisabled && info.muted,
 			Bound:     strings.TrimSpace(info.binding.ChannelID) != "",
 		})
 	}

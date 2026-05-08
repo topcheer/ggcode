@@ -393,6 +393,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Bind session
 	imMgr.BindSession(im.SessionBinding{Workspace: workingDir})
+	if cfg != nil {
+		adapters := make(map[string]bool)
+		for name, acfg := range cfg.IM.Adapters {
+			adapters[name] = acfg.Enabled
+		}
+		imMgr.ApplyAdapterConfig(adapters)
+	}
 
 	// Determine language
 	lang := daemon.ResolveLang(cfg.Language)

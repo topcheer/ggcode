@@ -39,6 +39,7 @@ type wechatBindingEntry struct {
 	ChannelID    string
 	OccupiedBy   string
 	AdapterState *im.AdapterState
+	Disabled     bool
 	Muted        bool
 	Bound        bool
 }
@@ -109,11 +110,15 @@ func (m Model) renderWechatPanel() string {
 					stateStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" ○")
 				}
 			}
+			disabledStr := ""
+			if entry.Disabled {
+				disabledStr = " [disabled]"
+			}
 			mutedStr := ""
 			if entry.Muted {
 				mutedStr = " [muted]"
 			}
-			body = append(body, fmt.Sprintf("%s%s%s%s", cursor, entry.Adapter, stateStr, mutedStr))
+			body = append(body, fmt.Sprintf("%s%s%s%s%s", cursor, entry.Adapter, stateStr, disabledStr, mutedStr))
 			if entry.OccupiedBy != "" {
 				body = append(body, fmt.Sprintf("   → %s", entry.OccupiedBy))
 			}
@@ -154,7 +159,17 @@ func (m *Model) handleWechatPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	entries := m.wechatBindingEntries()
 
 	switch msg.String() {
-	case "esc":
+	case "d":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.wechat.message.no_bot")
+			return *m, nil
+		}
+		if panel.selected < len(entries) {
+			entry := entries[panel.selected]
+			return *m, m.toggleIMAdapterEnabled(entry.Adapter)
+		}
+		return *m, nil
+	case "esc", "ctrl+c":
 		m.closeWechatPanel()
 		return *m, nil
 	case "q":
@@ -558,7 +573,7 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 	// List all wechat adapters from config (not just bound ones)
 	keys := make([]string, 0, len(m.config.IM.Adapters))
 	for name, adapter := range m.config.IM.Adapters {
-		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformWechat)) {
+		if strings.EqualFold(adapter.Platform, string(im.PlatformWechat)) {
 			keys = append(keys, name)
 		}
 	}
@@ -571,6 +586,7 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 		}
 		entries = append(entries, wechatBindingEntry{
 			Adapter:      name,
+			Disabled:     !m.config.IM.Adapters[name].Enabled,
 			OccupiedBy:   occupied[name],
 			AdapterState: state,
 			Bound:        bound[name],

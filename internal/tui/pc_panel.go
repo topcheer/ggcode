@@ -156,7 +156,7 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	// Create mode
 	if panel.createMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.createMode = false
 			panel.createInput = ""
 			return *m, nil
@@ -242,7 +242,7 @@ func (m *Model) handlePCPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.editState = edit
 		panel.message = ""
 		return *m, nil
-	case "esc":
+	case "esc", "ctrl+c":
 		m.closePCPanel()
 	}
 	return *m, nil
@@ -284,6 +284,13 @@ func (m *Model) ensurePCReady() error {
 			return fmt.Errorf("loading IM pairing state: %w", err)
 		}
 		imMgr.BindSession(im.SessionBinding{Workspace: m.currentWorkspacePath()})
+		if m.config != nil {
+			adapters := make(map[string]bool)
+			for n, acfg := range m.config.IM.Adapters {
+				adapters[n] = acfg.Enabled
+			}
+			imMgr.ApplyAdapterConfig(adapters)
+		}
 		imMgr.SetBridge(newTUIIMBridge(func() *tea.Program { return m.program }))
 		m.SetIMManager(imMgr)
 	}

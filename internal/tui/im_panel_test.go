@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/im"
 )
 
 func TestIMPanelOpenClose(t *testing.T) {
@@ -189,5 +191,137 @@ func TestIMPanelOutputModeDisplayContainsHint(t *testing.T) {
 	// Should contain output mode hint (en or zh-CN depending on default lang)
 	if !strings.Contains(panel, "v verbose") && !strings.Contains(panel, "v 详细") {
 		t.Errorf("expected output mode hint in panel, got:\n%s", panel)
+	}
+}
+
+func TestIMPanelEntries_ConfigDisabled(t *testing.T) {
+	// Verify that imChannelEntries reads disabled state from config,
+	// not just from runtime disabledBindings.
+	cfg := &config.Config{
+		IM: config.IMConfig{
+			Enabled: true,
+			Adapters: map[string]config.IMAdapterConfig{
+				"qq-bot-1": {Platform: "qq", Enabled: false},
+				"tg-bot-1": {Platform: "telegram", Enabled: true},
+			},
+		},
+	}
+
+	mgr := im.NewManager()
+	mgr.BindSession(im.SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+	_, _ = mgr.BindChannel(im.ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  im.PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+	_, _ = mgr.BindChannel(im.ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  im.PlatformTelegram,
+		Adapter:   "tg-bot-1",
+		ChannelID: "channel-2",
+	})
+
+	m := Model{config: cfg, imManager: mgr}
+
+	entries := m.imChannelEntries()
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+
+	for _, e := range entries {
+		if e.Adapter == "qq-bot-1" {
+			if !e.Disabled {
+				t.Error("qq-bot-1 should be disabled (config enabled=false)")
+			}
+		}
+		if e.Adapter == "tg-bot-1" {
+			if e.Disabled {
+				t.Error("tg-bot-1 should NOT be disabled (config enabled=true)")
+			}
+		}
+	}
+}
+
+func TestIMPanelEntries_ConfigDisabledOverridesRuntime(t *testing.T) {
+	// Verify that config disabled=true overrides runtime disabled=false.
+	// This simulates the scenario where a second instance reads config
+	// but runtime hasn't run ApplyAdapterConfig yet.
+	cfg := &config.Config{
+		IM: config.IMConfig{
+			Enabled: true,
+			Adapters: map[string]config.IMAdapterConfig{
+				"qq-bot-1": {Platform: "qq", Enabled: false},
+			},
+		},
+	}
+
+	mgr := im.NewManager()
+	mgr.BindSession(im.SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+	_, _ = mgr.BindChannel(im.ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  im.PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+	// NOT calling ApplyAdapterConfig — runtime still has qq-bot-1 active
+
+	m := Model{config: cfg, imManager: mgr}
+
+	entries := m.imChannelEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if !entries[0].Disabled {
+		t.Error("qq-bot-1 should show disabled from config even when runtime has it active")
+	}
+	if entries[0].Muted {
+		t.Error("qq-bot-1 should NOT be muted when disabled")
+	}
+}
+
+func TestIMPanelEntries_MutedNotShownWhenDisabled(t *testing.T) {
+	// When an adapter is disabled, muted should be false —
+	// disabled takes precedence.
+	cfg := &config.Config{
+		IM: config.IMConfig{
+			Enabled: true,
+			Adapters: map[string]config.IMAdapterConfig{
+				"qq-bot-1": {Platform: "qq", Enabled: false},
+			},
+		},
+	}
+
+	mgr := im.NewManager()
+	mgr.BindSession(im.SessionBinding{
+		SessionID: "test-session",
+		Workspace: "/workspace/test",
+	})
+	_, _ = mgr.BindChannel(im.ChannelBinding{
+		Workspace: "/workspace/test",
+		Platform:  im.PlatformQQ,
+		Adapter:   "qq-bot-1",
+		ChannelID: "channel-1",
+	})
+	_ = mgr.MuteBinding("qq-bot-1") // mute in runtime
+
+	m := Model{config: cfg, imManager: mgr}
+
+	entries := m.imChannelEntries()
+	for _, e := range entries {
+		if e.Adapter == "qq-bot-1" {
+			if !e.Disabled {
+				t.Error("should be disabled")
+			}
+			if e.Muted {
+				t.Error("should NOT show muted when disabled takes precedence")
+			}
+		}
 	}
 }

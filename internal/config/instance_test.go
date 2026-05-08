@@ -2096,3 +2096,138 @@ func TestHasInstanceConfigFile(t *testing.T) {
 		t.Error("should be true when instance file exists")
 	}
 }
+
+// --- SetIMAdapterEnabled: global scope ---
+
+func TestSetIMAdapterEnabled_Global(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(cfgPath, []byte("language: en\nim:\n  enabled: true\n  adapters:\n    mybot:\n      platform: telegram\n      enabled: true\n"), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Disable
+	if err := cfg.SetIMAdapterEnabled("mybot", false); err != nil {
+		t.Fatalf("SetIMAdapterEnabled(false): %v", err)
+	}
+
+	// Reload and verify persisted
+	reloaded, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	adapter, ok := reloaded.IM.Adapters["mybot"]
+	if !ok {
+		t.Fatal("adapter mybot should exist after reload")
+	}
+	if adapter.Enabled != false {
+		t.Errorf("adapter should be disabled, got enabled=%v", adapter.Enabled)
+	}
+
+	// Re-enable
+	if err := reloaded.SetIMAdapterEnabled("mybot", true); err != nil {
+		t.Fatalf("SetIMAdapterEnabled(true): %v", err)
+	}
+
+	reloaded2, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Reload2: %v", err)
+	}
+	adapter2, ok := reloaded2.IM.Adapters["mybot"]
+	if !ok {
+		t.Fatal("adapter mybot should exist after reload2")
+	}
+	if adapter2.Enabled != true {
+		t.Errorf("adapter should be enabled, got enabled=%v", adapter2.Enabled)
+	}
+}
+
+func TestSetIMAdapterEnabled_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(cfgPath, []byte("language: en\nim:\n  adapters: {}\n"), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	err = cfg.SetIMAdapterEnabled("nonexistent", false)
+	if err == nil {
+		t.Fatal("expected error for nonexistent adapter")
+	}
+}
+
+func TestSetIMAdapterEnabled_NilConfig(t *testing.T) {
+	var cfg *Config
+	err := cfg.SetIMAdapterEnabled("mybot", false)
+	if err == nil {
+		t.Fatal("expected error for nil config")
+	}
+}
+
+func TestSetIMAdapterEnabled_NilAdapters(t *testing.T) {
+	cfg := &Config{}
+	err := cfg.SetIMAdapterEnabled("mybot", false)
+	if err == nil {
+		t.Fatal("expected error for nil adapters map")
+	}
+}
+
+// TestSetIMAdapterEnabled_FullCycle tests the complete cycle:
+// disable → persist → reload → verify disabled → enable → persist → reload → verify enabled
+func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "ggcode.yaml")
+	os.WriteFile(cfgPath, []byte("language: en\nim:\n  enabled: true\n  adapters:\n    qq1:\n      platform: qq\n      enabled: true\n    tg1:\n      platform: telegram\n      enabled: true\n"), 0644)
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Disable qq1
+	if err := cfg.SetIMAdapterEnabled("qq1", false); err != nil {
+		t.Fatalf("SetIMAdapterEnabled qq1 false: %v", err)
+	}
+
+	// Reload — qq1 should be disabled, tg1 enabled
+	cfg2, _ := Load(cfgPath)
+	if cfg2.IM.Adapters["qq1"].Enabled != false {
+		t.Error("qq1 should be disabled after reload")
+	}
+	if cfg2.IM.Adapters["tg1"].Enabled != true {
+		t.Error("tg1 should remain enabled")
+	}
+
+	// Disable tg1 too
+	if err := cfg2.SetIMAdapterEnabled("tg1", false); err != nil {
+		t.Fatalf("SetIMAdapterEnabled tg1 false: %v", err)
+	}
+
+	// Reload — both disabled
+	cfg3, _ := Load(cfgPath)
+	if cfg3.IM.Adapters["qq1"].Enabled != false {
+		t.Error("qq1 should still be disabled")
+	}
+	if cfg3.IM.Adapters["tg1"].Enabled != false {
+		t.Error("tg1 should be disabled")
+	}
+
+	// Re-enable qq1
+	if err := cfg3.SetIMAdapterEnabled("qq1", true); err != nil {
+		t.Fatalf("SetIMAdapterEnabled qq1 true: %v", err)
+	}
+
+	// Reload — qq1 enabled, tg1 disabled
+	cfg4, _ := Load(cfgPath)
+	if cfg4.IM.Adapters["qq1"].Enabled != true {
+		t.Error("qq1 should be re-enabled")
+	}
+	if cfg4.IM.Adapters["tg1"].Enabled != false {
+		t.Error("tg1 should remain disabled")
+	}
+}

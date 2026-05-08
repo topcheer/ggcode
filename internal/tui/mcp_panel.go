@@ -183,7 +183,7 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if panel.installMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.installMode = false
 			panel.installInput = ""
 			return *m, nil
@@ -271,7 +271,7 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		name := m.mcpServers[panel.selected].Name
 		panel.message = m.t("panel.mcp.uninstalling", name)
 		return *m, m.uninstallMCPServer(name)
-	case "esc":
+	case "esc", "ctrl+c":
 		m.closeMCPPanel()
 	}
 	return *m, nil

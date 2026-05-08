@@ -540,6 +540,13 @@ func (m *Model) bindIMSession() {
 		SessionID: m.session.ID,
 		Workspace: m.session.Workspace,
 	})
+	if m.config != nil {
+		adapters := make(map[string]bool)
+		for name, cfg := range m.config.IM.Adapters {
+			adapters[name] = cfg.Enabled
+		}
+		m.imManager.ApplyAdapterConfig(adapters)
+	}
 }
 
 func (m Model) pendingPairingChallenge() *im.PairingChallenge {
@@ -593,6 +600,7 @@ func (m *Model) closeActivePanel() bool {
 	case m.dingtalkPanel != nil:
 		m.closeDingtalkPanel()
 	case m.imPanel != nil:
+		m.closeIMPanel()
 	case m.wechatPanel != nil:
 		m.closeWechatPanel()
 		m.closeIMPanel()
@@ -605,8 +613,6 @@ func (m *Model) closeActivePanel() bool {
 		m.closeMatrixPanel()
 	case m.signalPanel != nil:
 		m.closeSignalPanel()
-		m.closeIMPanel()
-		m.closeIMPanel()
 	case m.ircPanel != nil:
 		m.closeIRCPanel()
 	case m.nostrPanel != nil:
@@ -831,4 +837,43 @@ type imageAttachedMsg struct {
 	img         image.Image
 	filename    string
 	sourcePath  string
+}
+
+// activeIMPanel returns a pointer to the message field of the currently active
+// IM channel panel (if any). Used to forward imPanelResultMsg feedback.
+func (m Model) activeIMPanel() *string {
+	switch {
+	case m.qqPanel != nil:
+		return &m.qqPanel.message
+	case m.tgPanel != nil:
+		return &m.tgPanel.message
+	case m.discordPanel != nil:
+		return &m.discordPanel.message
+	case m.slackPanel != nil:
+		return &m.slackPanel.message
+	case m.dingtalkPanel != nil:
+		return &m.dingtalkPanel.message
+	case m.feishuPanel != nil:
+		return &m.feishuPanel.message
+	case m.wecomPanel != nil:
+		return &m.wecomPanel.message
+	case m.wechatPanel != nil:
+		return &m.wechatPanel.message
+	case m.ircPanel != nil:
+		return &m.ircPanel.message
+	case m.matrixPanel != nil:
+		return &m.matrixPanel.message
+	case m.whatsappPanel != nil:
+		return &m.whatsappPanel.message
+	case m.mattermostPanel != nil:
+		return &m.mattermostPanel.message
+	case m.signalPanel != nil:
+		return &m.signalPanel.message
+	case m.nostrPanel != nil:
+		return &m.nostrPanel.message
+	case m.twitchPanel != nil:
+		return &m.twitchPanel.message
+	default:
+		return nil
+	}
 }

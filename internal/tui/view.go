@@ -1355,6 +1355,8 @@ func platformDisplayName(p im.Platform) string {
 		return "Nostr"
 	case im.PlatformTwitch:
 		return "Twitch"
+	case im.PlatformWhatsApp:
+		return "WhatsApp"
 	default:
 		return "IM"
 	}
@@ -1388,6 +1390,8 @@ func platformCNName(p im.Platform) string {
 		return "Nostr"
 	case im.PlatformTwitch:
 		return "Twitch"
+	case im.PlatformWhatsApp:
+		return "WhatsApp"
 	default:
 		return "IM"
 	}

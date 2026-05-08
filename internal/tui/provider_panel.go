@@ -510,7 +510,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	if panel.editingField != "" {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.editingField = ""
 			panel.message = ""
 			return *m, nil
@@ -584,7 +584,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	cfgView := m.configView()
 	switch msg.String() {
-	case "esc":
+	case "esc", "ctrl+c":
 		if panel.modelFilter.Focused() {
 			panel.modelFilter.Blur()
 			return *m, nil

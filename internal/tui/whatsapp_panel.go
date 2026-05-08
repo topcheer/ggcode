@@ -31,6 +31,7 @@ type whatsappBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Disabled         bool
 	Muted            bool
 }
 
@@ -141,7 +142,9 @@ func (m Model) renderWhatsAppPanel() string {
 
 		entry := entries[selected]
 		status := "available"
-		if entry.OccupiedBy != "" {
+		if entry.Disabled {
+			status = "disabled"
+		} else if entry.OccupiedBy != "" {
 			status = "bound"
 		}
 
@@ -237,7 +240,7 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	// Create mode takes priority
 	if panel.createMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.createMode = false
 			panel.createInput = ""
 			return *m, nil
@@ -334,7 +337,14 @@ func (m *Model) handleWhatsAppPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = "No QR code or contact available yet"
 		}
 		return *m, nil
-	case "esc":
+	case "d":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.whatsapp.message.no_bot")
+			return *m, nil
+		}
+		entry := entries[clampWASelection(panel.selected, len(entries))]
+		return *m, m.toggleIMAdapterEnabled(entry.Adapter)
+	case "esc", "ctrl+c":
 		m.closeWhatsAppPanel()
 	}
 	return *m, nil
@@ -454,6 +464,13 @@ func (m *Model) ensureWARuntime() error {
 		return fmt.Errorf("loading IM pairing state: %w", err)
 	}
 	imMgr.BindSession(im.SessionBinding{Workspace: m.currentWorkspacePath()})
+	if m.config != nil {
+		adapters := make(map[string]bool)
+		for n, acfg := range m.config.IM.Adapters {
+			adapters[n] = acfg.Enabled
+		}
+		imMgr.ApplyAdapterConfig(adapters)
+	}
 	if _, err := im.StartCurrentBindingAdapter(context.Background(), m.config.IM, imMgr); err != nil {
 		return fmt.Errorf("starting current workspace IM adapter: %w", err)
 	}
@@ -513,7 +530,7 @@ func (m Model) waBindingEntries() []whatsappBindingEntry {
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
 	for name, adapter := range m.config.IM.Adapters {
-		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformWhatsApp)) {
+		if strings.EqualFold(adapter.Platform, string(im.PlatformWhatsApp)) {
 			keys = append(keys, name)
 		}
 	}
@@ -536,6 +553,7 @@ func (m Model) waBindingEntries() []whatsappBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
+			Disabled:         !m.config.IM.Adapters[name].Enabled,
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
@@ -548,6 +566,8 @@ func (m Model) waBindingLabels(entries []whatsappBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
+		case entry.Disabled:
+			status = "disabled"
 		case entry.Muted:
 			status = "muted"
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:

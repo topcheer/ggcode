@@ -1,6 +1,7 @@
 package im
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -54,5 +55,73 @@ func TestFormatToolResultText_Sleep_Suppressed(t *testing.T) {
 	got := formatToolResultText(tr)
 	if got != "" {
 		t.Errorf("sleep success result should be suppressed, got %q", got)
+	}
+}
+
+func TestFormatToolCallText_CommandCodeBlock(t *testing.T) {
+	tc := &ToolCallInfo{
+		ToolName: "run_command",
+		Args:     `{"command": "go test ./..."}`,
+		Lang:     "zh-CN",
+	}
+	got := formatToolCallText(tc)
+	if !strings.Contains(got, "```\ngo test ./...\n```") {
+		t.Errorf("expected command in code block, got: %s", got)
+	}
+}
+
+func TestFormatToolCallText_StartCommandCodeBlock(t *testing.T) {
+	tc := &ToolCallInfo{
+		ToolName: "start_command",
+		Args:     `{"command": "npm run dev"}`,
+		Lang:     "en",
+	}
+	got := formatToolCallText(tc)
+	if !strings.Contains(got, "```\nnpm run dev\n```") {
+		t.Errorf("expected command in code block, got: %s", got)
+	}
+}
+
+func TestFormatIMCommandResult_SuccessCodeBlock(t *testing.T) {
+	tr := &ToolResultInfo{
+		ToolName: "run_command",
+		Args:     `{"command": "make build"}`,
+		IsError:  false,
+		Lang:     "zh-CN",
+	}
+	got := formatIMCommandResult(tr)
+	if !strings.Contains(got, "```\nmake build\n```") {
+		t.Errorf("expected command in code block, got: %s", got)
+	}
+}
+
+func TestFormatIMCommandResult_ErrorCodeBlock(t *testing.T) {
+	tr := &ToolResultInfo{
+		ToolName: "run_command",
+		Args:     `{"command": "go build ."}`,
+		Result:   "undefined: foo",
+		IsError:  true,
+		Lang:     "en",
+	}
+	got := formatIMCommandResult(tr)
+	if !strings.Contains(got, "```\ngo build .\n```") {
+		t.Errorf("expected command in code block, got: %s", got)
+	}
+	if !strings.Contains(got, "```\nundefined: foo\n```") {
+		t.Errorf("expected error output in code block, got: %s", got)
+	}
+}
+
+func TestFormatIMStartCommandResult_WithCommand(t *testing.T) {
+	tr := &ToolResultInfo{
+		ToolName: "start_command",
+		Args:     `{"command": "npm run dev"}`,
+		Result:   "",
+		IsError:  false,
+		Lang:     "en",
+	}
+	got := formatIMStartCommandResult(tr)
+	if !strings.Contains(got, "```\nnpm run dev\n```") {
+		t.Errorf("expected command in code block, got: %s", got)
 	}
 }

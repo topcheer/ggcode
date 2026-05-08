@@ -32,6 +32,7 @@ type slackBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Disabled         bool
 	Muted            bool
 }
 
@@ -90,9 +91,15 @@ func (m Model) renderSlackPanel() string {
 		selected := clampSlackSelection(panel.selected, len(entries))
 		body = append(body, m.renderProviderList(m.slackBindingLabels(entries), selected, true))
 		entry := entries[selected]
-		status := m.t("panel.slack.entry.available")
-		if entry.OccupiedBy != "" {
-			status = m.t("panel.slack.entry.bound")
+		status := m.t("panel.slack.entry.disabled")
+		if !entry.Disabled {
+			if entry.Muted {
+				status = m.t("panel.slack.entry.muted")
+			} else if entry.OccupiedBy != "" {
+				status = m.t("panel.slack.entry.bound")
+			} else {
+				status = m.t("panel.slack.entry.available")
+			}
 		}
 		body = append(body,
 			"",
@@ -148,7 +155,7 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	entries := m.slackBindingEntries()
 	if panel.createMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.createMode = false
 			panel.createInput = ""
 			return *m, nil
@@ -224,7 +231,14 @@ func (m *Model) handleSlackPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.openQROverlayFromStates("Slack", states) {
 			return *m, nil
 		}
-	case "esc":
+	case "d":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.slack.message.no_bot")
+			return *m, nil
+		}
+		entry := entries[clampSlackSelection(panel.selected, len(entries))]
+		return *m, m.toggleIMAdapterEnabled(entry.Adapter)
+	case "esc", "ctrl+c":
 		m.closeSlackPanel()
 	}
 	return *m, nil
@@ -359,7 +373,7 @@ func (m Model) slackBindingEntries() []slackBindingEntry {
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
 	for name, adapter := range m.config.IM.Adapters {
-		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformSlack)) {
+		if strings.EqualFold(adapter.Platform, string(im.PlatformSlack)) {
 			keys = append(keys, name)
 		}
 	}
@@ -379,6 +393,7 @@ func (m Model) slackBindingEntries() []slackBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     slackStatePtr(adapterStates[name]),
+			Disabled:         !m.config.IM.Adapters[name].Enabled,
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
@@ -391,6 +406,10 @@ func (m Model) slackBindingLabels(entries []slackBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
+		case entry.Disabled:
+			status = m.t("panel.slack.entry.disabled")
+		case entry.Disabled:
+			status = m.t("panel.slack.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.slack.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
@@ -506,6 +525,13 @@ func (m *Model) ensureSlackRuntime() error {
 		return fmt.Errorf("loading IM pairing state: %w", err)
 	}
 	imMgr.BindSession(im.SessionBinding{Workspace: m.currentWorkspacePath()})
+	if m.config != nil {
+		adapters := make(map[string]bool)
+		for n, acfg := range m.config.IM.Adapters {
+			adapters[n] = acfg.Enabled
+		}
+		imMgr.ApplyAdapterConfig(adapters)
+	}
 	if _, err := im.StartCurrentBindingAdapter(context.Background(), m.config.IM, imMgr); err != nil {
 		return fmt.Errorf("starting current workspace IM adapter: %w", err)
 	}

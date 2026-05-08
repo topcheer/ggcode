@@ -288,7 +288,7 @@ func (m *Model) handlePreviewKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 	switch msg.String() {
-	case "esc":
+	case "esc", "ctrl+c":
 		m.closePreviewPanel()
 	case "up", "k":
 		m.previewPanel.viewport.ScrollUp(1)

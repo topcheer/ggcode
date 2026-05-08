@@ -32,6 +32,7 @@ type feishuBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Disabled         bool
 	Muted            bool
 }
 
@@ -91,7 +92,9 @@ func (m Model) renderFeishuPanel() string {
 		body = append(body, m.renderProviderList(m.feishuBindingLabels(entries), selected, true))
 		entry := entries[selected]
 		status := m.t("panel.feishu.entry.available")
-		if entry.OccupiedBy != "" {
+		if entry.Disabled {
+			status = m.t("panel.feishu.entry.disabled")
+		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.feishu.entry.bound")
 		}
 		body = append(body,
@@ -148,7 +151,7 @@ func (m *Model) handleFeishuPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	entries := m.feishuBindingEntries()
 	if panel.createMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.createMode = false
 			panel.createInput = ""
 			return *m, nil
@@ -220,7 +223,14 @@ func (m *Model) handleFeishuPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.openQROverlayFromStates("Feishu", states) {
 			return *m, nil
 		}
-	case "esc":
+	case "d":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.feishu.message.no_bot")
+			return *m, nil
+		}
+		entry := entries[clampFeishuSelection(panel.selected, len(entries))]
+		return *m, m.toggleIMAdapterEnabled(entry.Adapter)
+	case "esc", "ctrl+c":
 		m.closeFeishuPanel()
 	}
 	return *m, nil
@@ -355,7 +365,7 @@ func (m Model) feishuBindingEntries() []feishuBindingEntry {
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
 	for name, adapter := range m.config.IM.Adapters {
-		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformFeishu)) {
+		if strings.EqualFold(adapter.Platform, string(im.PlatformFeishu)) {
 			keys = append(keys, name)
 		}
 	}
@@ -375,6 +385,7 @@ func (m Model) feishuBindingEntries() []feishuBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     feishuStatePtr(adapterStates[name]),
+			Disabled:         !m.config.IM.Adapters[name].Enabled,
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
@@ -387,6 +398,10 @@ func (m Model) feishuBindingLabels(entries []feishuBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
+		case entry.Disabled:
+			status = m.t("panel.feishu.entry.disabled")
+		case entry.Disabled:
+			status = m.t("panel.feishu.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.feishu.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
@@ -502,6 +517,13 @@ func (m *Model) ensureFeishuRuntime() error {
 		return fmt.Errorf("loading IM pairing state: %w", err)
 	}
 	imMgr.BindSession(im.SessionBinding{Workspace: m.currentWorkspacePath()})
+	if m.config != nil {
+		adapters := make(map[string]bool)
+		for n, acfg := range m.config.IM.Adapters {
+			adapters[n] = acfg.Enabled
+		}
+		imMgr.ApplyAdapterConfig(adapters)
+	}
 	if _, err := im.StartCurrentBindingAdapter(context.Background(), m.config.IM, imMgr); err != nil {
 		return fmt.Errorf("starting current workspace IM adapter: %w", err)
 	}
