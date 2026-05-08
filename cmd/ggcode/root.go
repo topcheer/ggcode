@@ -412,9 +412,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 
 	autoMem := memory.NewAutoMemory()
-	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
+	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
+	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
 
-	autoContent, autoFiles, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem)
+	autoContent, autoFiles, projectAutoContent, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
 	commandMgr.SetExtraProviders(func() []*commands.Command {
 		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
 	})
@@ -491,7 +492,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
 		}
 		if autoContent != "" {
-			prompt += "\n\n## Auto Memory\n" + autoContent
+			prompt += "\n\n## Auto Memory (Global)\n" + autoContent
+		}
+		if projectAutoContent != "" {
+			prompt += "\n\n## Auto Memory (Project)\n" + projectAutoContent
 		}
 		return prompt, promptSkillRefs
 	}
@@ -1102,19 +1106,26 @@ func loadStartupAssets(
 func loadInteractiveStartupAssets(
 	workingDir string,
 	autoMem *memory.AutoMemory,
-) (string, []string, *commands.Manager) {
+	projectAutoMem *memory.AutoMemory,
+) (string, []string, string, *commands.Manager) {
 	var (
-		autoContent string
-		autoFiles   []string
-		commandMgr  *commands.Manager
+		autoContent        string
+		autoFiles          []string
+		projectAutoContent string
+		commandMgr         *commands.Manager
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	safego.Go("root.interactive.autoMem", func() {
 		defer wg.Done()
 		autoContent, autoFiles, _ = autoMem.LoadAll()
+	})
+
+	safego.Go("root.interactive.projectAutoMem", func() {
+		defer wg.Done()
+		projectAutoContent, _, _ = projectAutoMem.LoadAll()
 	})
 
 	safego.Go("root.interactive.commands", func() {
@@ -1128,7 +1139,7 @@ func loadInteractiveStartupAssets(
 		commandMgr = commands.NewManager(workingDir)
 	}
 
-	return autoContent, autoFiles, commandMgr
+	return autoContent, autoFiles, projectAutoContent, commandMgr
 }
 
 func buildSkillsSystemPrompt(skills []*commands.Command) string {

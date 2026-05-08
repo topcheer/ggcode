@@ -94,8 +94,9 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	// Load auto memory
 	autoMem := memory.NewAutoMemory()
+	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
 	autoContent, _, _ := autoMem.LoadAll()
-	_ = registry.Register(tool.NewSaveMemoryTool(autoMem))
+	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
 	commandMgr := commands.NewManager(workingDir)
 	commandMgr.SetExtraProviders(func() []*commands.Command {
 		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
