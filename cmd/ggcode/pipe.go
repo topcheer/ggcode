@@ -28,20 +28,9 @@ import (
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
 func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, noHarness bool, readOnlyAllowedDirs []string) int {
-	resolved, err := cfg.ResolveActiveEndpoint()
+	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolving endpoint: %v\n", err)
-		return 1
-	}
-	if resolved.APIKey == "" {
-		fmt.Fprintf(os.Stderr, "missing api key for vendor %s endpoint %s\n", resolved.VendorID, resolved.EndpointID)
-		return 1
-	}
-
-	// Setup provider
-	prov, err := provider.NewProvider(resolved)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "creating provider: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
 
