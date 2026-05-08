@@ -9,8 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+// taskSaveMu protects SaveTask from concurrent read-modify-write on the same task.
+var taskSaveMu sync.Mutex // coarse-grained; sufficient for harness CLI usage
 
 type TaskStatus string
 
@@ -20,6 +24,7 @@ const (
 	TaskRunning   TaskStatus = "running"
 	TaskCompleted TaskStatus = "completed"
 	TaskFailed    TaskStatus = "failed"
+	TaskRejected  TaskStatus = "rejected"
 	TaskAbandoned TaskStatus = "abandoned"
 )
 
@@ -108,6 +113,8 @@ func SaveTask(project Project, task *Task) error {
 	if task == nil {
 		return fmt.Errorf("nil task")
 	}
+	taskSaveMu.Lock()
+	defer taskSaveMu.Unlock()
 	previous, err := loadTaskSnapshot(taskPath(project, task.ID))
 	if err != nil {
 		return err
@@ -274,7 +281,7 @@ func refreshTaskStatusWithIndex(project Project, task *Task, index map[string]*T
 		return nil
 	}
 	switch task.Status {
-	case TaskRunning, TaskCompleted, TaskFailed, TaskAbandoned:
+	case TaskRunning, TaskCompleted, TaskFailed, TaskRejected, TaskAbandoned:
 		return nil
 	}
 	if len(task.DependsOn) == 0 {

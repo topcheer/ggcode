@@ -117,7 +117,11 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 		return nil
 	}
 	safego.Go("tui.commands.approvalRespond", func() {
-		pa.Response <- d
+		select {
+		case pa.Response <- d:
+		default:
+			// Receiver already gone; drop to avoid goroutine leak.
+		}
 	})
 	return nil
 }
@@ -137,7 +141,10 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 	}
 	if pa != nil && pa.Response != nil {
 		safego.Go("tui.commands.approvalAlwaysAllow", func() {
-			pa.Response <- permission.Allow
+			select {
+			case pa.Response <- permission.Allow:
+			default:
+			}
 		})
 	}
 	return nil
@@ -150,7 +157,10 @@ func (m *Model) handleDiffConfirm(approved bool) tea.Cmd {
 		return nil
 	}
 	safego.Go("tui.commands.diffConfirm", func() {
-		pd.Response <- approved
+		select {
+		case pd.Response <- approved:
+		default:
+		}
 	})
 	if !approved {
 		m.chatWriteSystem(nextSystemID(), m.t("approval.rejected"))
@@ -165,7 +175,10 @@ func (m *Model) handleHarnessCheckpointConfirm(approved bool) tea.Cmd {
 		return nil
 	}
 	safego.Go("tui.commands.harnessCheckpoint", func() {
-		pc.Response <- approved
+		select {
+		case pc.Response <- approved:
+		default:
+		}
 	})
 	if !approved {
 		m.chatWriteSystem(nextSystemID(), m.t("command.harness_cancelled"))
