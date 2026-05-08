@@ -2,6 +2,20 @@
 
 This document describes the authentication mechanisms supported by ggcode's A2A (Agent-to-Agent) server, their applicable scenarios, and configuration examples.
 
+## Security Default
+
+When **no authentication scheme** is configured, the A2A server only accepts requests from **localhost** (`127.0.0.1`, `::1`). This is safe for single-user development.
+
+To expose A2A to **remote agents**, you **must** configure at least one authentication scheme (see below), or explicitly set `allow_unauthenticated: true`:
+
+```yaml
+a2a:
+  auth:
+    allow_unauthenticated: true  # NOT recommended for production
+```
+
+> ⚠️ `allow_unauthenticated: true` allows any network client to access the A2A server. Only use this in isolated test environments.
+
 ## Authentication Schemes Overview
 
 | Scheme | Spec Type | Secret Required | Best For | User Interaction |

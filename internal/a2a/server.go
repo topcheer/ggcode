@@ -21,18 +21,19 @@ import (
 
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
 type Server struct {
-	handler        *TaskHandler
-	card           AgentCard
-	extendedCard   json.RawMessage // optional extended agent card
-	apiKeys        []string
-	server         *http.Server
-	port           int
-	done           chan struct{}
-	pushConfigs    map[string]PushNotificationConfig // by ID
-	pushMu         sync.RWMutex
-	tokenValidator *auth.TokenValidator // OAuth2/OIDC token validation
-	mtlsEnabled    bool
-	tlsConfig      *tls.Config // TLS config for mTLS (set via SetTLSConfig)
+	handler              *TaskHandler
+	card                 AgentCard
+	extendedCard         json.RawMessage // optional extended agent card
+	apiKeys              []string
+	server               *http.Server
+	port                 int
+	done                 chan struct{}
+	pushConfigs          map[string]PushNotificationConfig // by ID
+	pushMu               sync.RWMutex
+	tokenValidator       *auth.TokenValidator // OAuth2/OIDC token validation
+	mtlsEnabled          bool
+	tlsConfig            *tls.Config // TLS config for mTLS (set via SetTLSConfig)
+	allowUnauthenticated bool        // explicit opt-in to allow all origins without auth
 }
 
 // ServerConfig holds A2A server configuration.
@@ -256,9 +257,14 @@ func (s *Server) authenticate(r *http.Request) bool {
 		return false
 	}
 
-	// 4) No auth configured at all → allow
+	// 4) No auth configured: allow only localhost, reject remote.
+	// Set allow_unauthenticated: true in config to explicitly allow all origins.
 	if len(s.apiKeys) == 0 && s.tokenValidator == nil && !s.mtlsEnabled {
-		return true
+		if s.allowUnauthenticated {
+			return true
+		}
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		return host == "127.0.0.1" || host == "::1" || host == "localhost"
 	}
 
 	return false
@@ -670,6 +676,12 @@ func (s *Server) SetExtendedCard(card json.RawMessage) {
 	if len(card) > 0 {
 		s.card.Capabilities.ExtendedAgentCard = true
 	}
+}
+
+// SetAllowUnauthenticated allows remote unauthenticated access.
+// By default, only localhost requests are allowed without auth.
+func (s *Server) SetAllowUnauthenticated(v bool) {
+	s.allowUnauthenticated = v
 }
 
 // SetTokenValidator installs an OAuth2/OIDC token validator.

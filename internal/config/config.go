@@ -339,6 +339,11 @@ type A2AAuthConfig struct {
 
 	// Mutual TLS for machine-to-machine. No secrets needed.
 	MTLS *A2AMTLSConfig `yaml:"mtls,omitempty"`
+
+	// AllowUnauthenticated allows all requests without authentication.
+	// By default, unauthenticated requests are only allowed from localhost.
+	// Set to true to allow remote unauthenticated access (NOT recommended for production).
+	AllowUnauthenticated bool `yaml:"allow_unauthenticated,omitempty"`
 }
 
 // A2AOAuth2Config for OAuth2 Authorization Code + PKCE or Device Flow.

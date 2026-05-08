@@ -48,6 +48,10 @@ npm install -g @ggcode-cli/ggcode
 The npm wrapper downloads the latest ggcode GitHub Release by default. Set `GGCODE_INSTALL_VERSION`
 if you need to pin a specific release.
 
+> **TLS verification:** The npm installer verifies TLS certificates by default. If you are behind
+> a corporate proxy with a custom CA, set `GGCODE_INSECURE_TLS=1` to disable verification
+> (at your own risk), or prefer `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` for custom CAs.
+
 ### pip
 
 ```bash
@@ -438,11 +442,14 @@ Five schemes can be enabled individually or combined:
 
 | Scheme | Config Key | Best For |
 |--------|-----------|----------|
+| **Localhost (default)** | *(none required)* | Single-user development |
 | **API Key** | `a2a.auth.api_key` | Development, trusted networks |
 | **OAuth2 + PKCE** | `a2a.auth.oauth2` | Human-driven agents |
 | **Device Flow** | `a2a.auth.oauth2` with `flow: "device"` | Headless servers, SSH |
 | **OpenID Connect** | `a2a.auth.oidc` | Enterprise SSO |
 | **Mutual TLS** | `a2a.auth.mtls` | Machine-to-machine, zero-trust |
+
+> **Security default:** When no authentication is configured, only `localhost` (`127.0.0.1`, `::1`) requests are allowed. To expose A2A to remote agents, you **must** configure at least one auth scheme, or explicitly set `allow_unauthenticated: true` (not recommended for production).
 
 ```yaml
 # Simplest: shared API key
