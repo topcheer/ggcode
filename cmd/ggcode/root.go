@@ -100,6 +100,15 @@ func NewRootCmd() *cobra.Command {
 				return nil
 			}
 
+			// Onboard wizard for first-time users without a working LLM config.
+			if !bypassFlag && cfg.NeedsOnboard() {
+				if err := runOnboardAndRestart(cfg); err != nil {
+					fmt.Fprintf(os.Stderr, "Onboard failed: %v\n", err)
+					os.Exit(1)
+				}
+				return nil
+			}
+
 			resumePicker, _ := cmd.Flags().GetBool("resume-picker")
 			if resumePicker {
 				return run(cfg, cfgFile, "picker", bypassFlag)
