@@ -197,20 +197,25 @@ func ApplyReleasePlan(project Project, plan *ReleasePlan, note string) (*Release
 		loadedTasks[i] = loaded
 	}
 
-	// Phase 2: Apply mutations and save. Track written tasks for rollback.
+	// Phase 2: Apply mutations and save. Use snapshots for rollback.
 	now := time.Now().UTC()
+	snapshots := make([]*Task, len(loadedTasks))
 	var written []int
 	for i, loaded := range loadedTasks {
 		if loaded == nil {
 			continue
 		}
+		// Save a pre-mutation snapshot for rollback.
+		snap := *loaded
+		snapshots[i] = &snap
+
 		loaded.ReleaseBatchID = plan.BatchID
 		loaded.ReleaseNotes = strings.TrimSpace(note)
 		loaded.ReleasedAt = &now
 		if err := SaveTask(project, loaded); err != nil {
-			// Rollback: restore all previously written tasks to pre-mutation state.
+			// Rollback: restore all previously written tasks from snapshots.
 			for _, wi := range written {
-				SaveTask(project, loadedTasks[wi]) // best-effort
+				SaveTask(project, snapshots[wi]) // best-effort
 			}
 			return nil, fmt.Errorf("save task %s: %w (rolled back %d tasks)", loaded.ID, err, len(written))
 		}
@@ -531,35 +536,53 @@ func AdvanceReleaseWaveRollout(project Project, rolloutID string) (*ReleaseWaveP
 	if nextPlanned >= 0 && releaseWaveGateStatus(target.Groups[nextPlanned]) != ReleaseGateApproved {
 		return nil, fmt.Errorf("release rollout %s wave %d is not approved; approve it before advancing", rolloutID, target.Groups[nextPlanned].WaveOrder)
 	}
+
+	// Prepare mutations in memory first, then persist in safe order.
+	// Snapshot the current state for rollback.
+	var activeSnap, nextSnap *ReleasePlan
 	if activeIndex >= 0 {
-		target.Groups[activeIndex].WaveStatus = ReleaseWaveCompleted
-		target.Groups[activeIndex].CompletedAt = &now
+		snap := *target.Groups[activeIndex]
+		activeSnap = &snap
 	}
+	if nextPlanned >= 0 {
+		snap := *target.Groups[nextPlanned]
+		nextSnap = &snap
+	}
+
+	// Apply mutations to in-memory state.
 	if nextPlanned >= 0 {
 		target.Groups[nextPlanned].WaveStatus = ReleaseWaveActive
 		if target.Groups[nextPlanned].ActivatedAt == nil {
 			target.Groups[nextPlanned].ActivatedAt = &now
 		}
 	}
-	// Persist both waves atomically: write new state first, rollback on failure.
 	if activeIndex >= 0 {
-		if _, err := persistReleasePlan(project, target.Groups[activeIndex]); err != nil {
-			return nil, fmt.Errorf("persist completed wave: %w", err)
-		}
+		target.Groups[activeIndex].WaveStatus = ReleaseWaveCompleted
+		target.Groups[activeIndex].CompletedAt = &now
 	}
+
+	// Persist: activate next wave FIRST (it's the one that matters for continuity).
+	// If this fails, nothing has been written — fully safe.
 	if nextPlanned >= 0 {
 		if _, err := persistReleasePlan(project, target.Groups[nextPlanned]); err != nil {
-			// Rollback: restore the previously completed wave back to active.
+			// Revert in-memory state from snapshot.
+			target.Groups[nextPlanned] = nextSnap
 			if activeIndex >= 0 {
-				target.Groups[activeIndex].WaveStatus = ReleaseWaveActive
-				target.Groups[activeIndex].CompletedAt = nil
-				persistReleasePlan(project, target.Groups[activeIndex]) // best-effort
+				target.Groups[activeIndex] = activeSnap
 			}
-			return nil, fmt.Errorf("persist active wave: %w", err)
+			return nil, fmt.Errorf("persist next wave: %w", err)
 		}
-		return target, nil
 	}
+	// Then mark current wave completed.
 	if activeIndex >= 0 {
+		if _, err := persistReleasePlan(project, target.Groups[activeIndex]); err != nil {
+			// Next wave is already active — this is the better half-failure state.
+			// The old wave stays "active" on disk but the new wave is also active.
+			// This is recoverable: re-running advance will complete the old wave.
+			return target, fmt.Errorf("persist completed wave: %w (next wave already activated; re-run to complete)", err)
+		}
+	}
+	if nextPlanned >= 0 || activeIndex >= 0 {
 		return target, nil
 	}
 	return nil, fmt.Errorf("release rollout %s has no waves left to advance", rolloutID)
@@ -833,7 +856,7 @@ func persistReleasePlan(project Project, plan *ReleasePlan) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal release plan: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := atomicWriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("write release plan: %w", err)
 	}
 	plan.ReportPath = path
@@ -869,4 +892,37 @@ func loadReleasePlans(project Project) ([]*ReleasePlan, error) {
 		plans = append(plans, &plan)
 	}
 	return plans, nil
+}
+
+// atomicWriteFile writes data to a temporary file in the same directory,
+// then renames it to the final path. This prevents partial writes on crash.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".release-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
