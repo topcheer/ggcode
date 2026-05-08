@@ -415,7 +415,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
 
-	autoContent, autoFiles, projectAutoContent, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
+	_, autoFiles, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
 	commandMgr.SetExtraProviders(func() []*commands.Command {
 		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
 	})
@@ -491,11 +491,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if mode == permission.AutopilotMode {
 			prompt += "\n\n## Autopilot\nDo not stop to ask the user for preferences or confirmation if a reasonable default exists. Choose the safest reversible assumption, explain it briefly if useful, and keep going until there is no meaningful work left. If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly instead of reporting that you are blocked and waiting. If you can perform the next step yourself with the available tools, do it instead of asking."
 		}
-		if autoContent != "" {
-			prompt += "\n\n## Auto Memory (Global)\n" + autoContent
+		// Reload auto memory from disk on every rebuild so runtime saves
+		// are visible after compaction.
+		if globalAutoContent, _, _ := autoMem.LoadAll(); globalAutoContent != "" {
+			prompt += "\n\n## Auto Memory (Global)\n" + globalAutoContent
 		}
-		if projectAutoContent != "" {
-			prompt += "\n\n## Auto Memory (Project)\n" + projectAutoContent
+		if projectAutoMem != nil {
+			if projContent, _, _ := projectAutoMem.LoadAll(); projContent != "" {
+				prompt += "\n\n## Auto Memory (Project)\n" + projContent
+			}
 		}
 		return prompt, promptSkillRefs
 	}
