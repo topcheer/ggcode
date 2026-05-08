@@ -116,6 +116,7 @@ Key concepts:
   - **`a2a.auth.oauth2`**: OAuth2 + PKCE or Device Flow (`provider`, `client_id`, `client_secret`, `issuer_url`, `flow`, `scopes`)
   - **`a2a.auth.oidc`**: OpenID Connect layer on OAuth2 (same fields + `openid` scope)
   - **`a2a.auth.mtls`**: Mutual TLS (`cert_file`, `key_file`, `ca_file`)
+  - **`a2a.auth.allow_unauthenticated`**: Explicitly allow all origins without auth (default: false). Without this, only localhost is allowed when no auth is configured.
 - **`a2a.lan_discovery`**: Enable mDNS broadcast for LAN peer discovery (default `false`). Requires auth to be configured.
 - **`a2a.host`**: Auto — `0.0.0.0` when auth is configured (LAN accessible), `127.0.0.1` without auth (localhost only). Override with explicit value.
 - **`a2a.api_key`**: Legacy API key field (still works, `a2a.auth.api_key` takes priority)

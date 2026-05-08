@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,7 +22,7 @@ func init() {
 }
 
 const (
-	defaultLogDir       = "/tmp/ggcode-debug"
+	defaultLogDir       = "" // resolved in newAsyncFileSink: ~/.ggcode/debug/ or /tmp/ggcode-debug-{uid}
 	defaultMaxLogSize   = 50 * 1024 * 1024
 	defaultMaxLogFiles  = 3
 	defaultAsyncBufSize = 1024
@@ -521,6 +522,23 @@ type asyncFileSink struct {
 	size int64
 }
 
+// resolveDebugDir returns the debug log directory.
+// Prefers ~/.ggcode/debug/ (user-private); falls back to /tmp/ggcode-debug-{uid}.
+func resolveDebugDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		dir := filepath.Join(home, ".ggcode", "debug")
+		if os.MkdirAll(dir, 0o700) == nil {
+			return dir
+		}
+	}
+	// Fallback: use UID-scoped dir in /tmp
+	uid := "0"
+	if u, err := user.Current(); err == nil {
+		uid = u.Uid
+	}
+	return filepath.Join(os.TempDir(), "ggcode-debug-"+uid)
+}
+
 func newAsyncFileSink(basePath, compatPath string, maxSize int64, maxFiles, buffer int) (*asyncFileSink, error) {
 	if maxFiles < 1 {
 		maxFiles = 1
@@ -535,7 +553,7 @@ func newAsyncFileSink(basePath, compatPath string, maxSize int64, maxFiles, buff
 		maxFiles:   maxFiles,
 		ch:         make(chan []byte, buffer),
 	}
-	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(basePath), 0o700); err != nil {
 		return nil, err
 	}
 	if err := s.openFreshFile(); err != nil {
@@ -636,7 +654,7 @@ func (s *asyncFileSink) rotate() error {
 }
 
 func (s *asyncFileSink) openFreshFile() error {
-	f, err := os.OpenFile(s.basePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(s.basePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -667,18 +685,19 @@ func (s *asyncFileSink) cleanup() {
 }
 
 func resolveLogPaths(requestedPath string, pid int) (basePath, compatPath string) {
+	logDir := resolveDebugDir()
 	compatDefault := "/tmp/ggcode-debug.log"
 	if requestedPath != compatDefault {
 		return requestedPath, ""
 	}
-	return filepath.Join(defaultLogDir, fmt.Sprintf("ggcode-debug-%d.log", pid)), compatDefault
+	return filepath.Join(logDir, fmt.Sprintf("ggcode-debug-%d.log", pid)), compatDefault
 }
 
 func (s *asyncFileSink) refreshCompatPath() {
 	if s.compatPath == "" {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(s.compatPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.compatPath), 0o700); err != nil {
 		return
 	}
 	_ = os.Remove(s.compatPath)

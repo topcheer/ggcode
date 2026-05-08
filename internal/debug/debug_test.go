@@ -313,8 +313,11 @@ func TestResolveLogPathsUsesPerProcessFileForDefaultPath(t *testing.T) {
 	if compatPath != "/tmp/ggcode-debug.log" {
 		t.Fatalf("expected compat path %q, got %q", "/tmp/ggcode-debug.log", compatPath)
 	}
-	if basePath != filepath.Join(defaultLogDir, "ggcode-debug-4321.log") {
-		t.Fatalf("unexpected resolved base path %q", basePath)
+	// Default path is now under ~/.ggcode/debug/ (user-private)
+	expectedDir := resolveDebugDir()
+	expected := filepath.Join(expectedDir, "ggcode-debug-4321.log")
+	if basePath != expected {
+		t.Fatalf("expected base path %q, got %q", expected, basePath)
 	}
 }
 

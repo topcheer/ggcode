@@ -375,10 +375,23 @@ function getProxyURL() {
   );
 }
 
+// GGCODE_INSECURE_TLS=1 disables TLS certificate verification.
+// Use ONLY behind a corporate proxy with a custom CA.
+const INSECURE_TLS = process.env.GGCODE_INSECURE_TLS === "1";
+if (INSECURE_TLS) {
+  console.warn(
+    "\x1b[31mWARNING: GGCODE_INSECURE_TLS=1 is set. TLS certificate verification is DISABLED.\x1b[0m\n" +
+    "This makes the download vulnerable to man-in-the-middle attacks.\n" +
+    "Only use this in trusted networks with a corporate proxy.\n" +
+    "For custom CAs, prefer NODE_EXTRA_CA_CERTS=/path/to/ca.pem instead."
+  );
+}
+const TLS_OPTS = { rejectUnauthorized: !INSECURE_TLS };
+
 function httpsGetViaProxy(targetUrl, callback) {
   const proxyURL = getProxyURL();
   if (!proxyURL) {
-    return https.get(targetUrl, { rejectUnauthorized: false }, callback);
+    return https.get(targetUrl, TLS_OPTS, callback);
   }
 
   const parsed = new URL(targetUrl);
@@ -401,7 +414,7 @@ function httpsGetViaProxy(targetUrl, callback) {
     const tlsSocket = tls.connect({
       socket: socket,
       servername: parsed.hostname,
-      rejectUnauthorized: false,
+      rejectUnauthorized: !INSECURE_TLS,
     }, () => {
       const req = https.request(
         {
@@ -409,7 +422,7 @@ function httpsGetViaProxy(targetUrl, callback) {
           port: 443,
           path: parsed.pathname + (parsed.search || ""),
           method: "GET",
-          rejectUnauthorized: false,
+          rejectUnauthorized: !INSECURE_TLS,
           createConnection: () => tlsSocket,
         },
         callback,

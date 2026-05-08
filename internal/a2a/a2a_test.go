@@ -2269,10 +2269,17 @@ func TestOAuthFlowsSerialization(t *testing.T) {
 func TestServerAuthenticateNoAuth(t *testing.T) {
 	handler := NewTaskHandler(".", nil, nil)
 	srv := NewServer(ServerConfig{Port: 0}, handler)
-	// No auth configured → all requests pass
+	// No auth configured → localhost allowed, remote denied
 	req, _ := http.NewRequest("POST", "/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	if !srv.authenticate(req) {
-		t.Error("expected no-auth to allow")
+		t.Error("expected no-auth + localhost to allow")
+	}
+
+	req2, _ := http.NewRequest("POST", "/", nil)
+	req2.RemoteAddr = "10.0.0.1:12345"
+	if srv.authenticate(req2) {
+		t.Error("expected no-auth + remote to deny")
 	}
 }
 

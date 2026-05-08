@@ -936,6 +936,9 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		APIKey:  a2aAPIKey(cfg),
 		APIKeys: cfg.A2A.Auth.APIKeys,
 	}, handler)
+	if cfg.A2A.Auth.AllowUnauthenticated {
+		srv.SetAllowUnauthenticated(true)
+	}
 
 	// Wire OAuth2/OIDC token validation if configured
 	if cfg.A2A.Auth.OAuth2 != nil {

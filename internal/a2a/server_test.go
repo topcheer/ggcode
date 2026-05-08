@@ -63,10 +63,32 @@ func TestAuthenticateNoKeys(t *testing.T) {
 		apiKeys: nil,
 	}
 
-	// No keys → no API key auth, but no auth at all means open access → allow
+	// No auth configured + localhost → allow (default localhost-only policy)
 	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "127.0.0.1:12345"
 	if !srv.authenticate(r) {
-		t.Error("no auth configured should allow (open mode)")
+		t.Error("no auth configured + localhost should allow")
+	}
+
+	// No auth configured + remote → deny
+	r2 := httptest.NewRequest("POST", "/", nil)
+	r2.RemoteAddr = "192.168.1.100:12345"
+	if srv.authenticate(r2) {
+		t.Error("no auth configured + remote should deny")
+	}
+}
+
+func TestAuthenticateNoKeysAllowUnauthenticated(t *testing.T) {
+	srv := &Server{
+		apiKeys:              nil,
+		allowUnauthenticated: true,
+	}
+
+	// Explicit opt-in: allow all
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "192.168.1.100:12345"
+	if !srv.authenticate(r) {
+		t.Error("allowUnauthenticated=true should allow remote")
 	}
 }
 

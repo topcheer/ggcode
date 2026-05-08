@@ -46,6 +46,8 @@ npm install -g @ggcode-cli/ggcode
 
 npm 包装器默认下载最新的 ggcode GitHub Release。如果需要指定版本，设置 `GGCODE_INSTALL_VERSION`。
 
+> **TLS 验证：** npm 安装器默认启用 TLS 证书校验。如果你在企业代理后面使用自定义 CA，可以设置 `GGCODE_INSECURE_TLS=1` 禁用校验（风险自负），或优先使用 `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` 配置自定义 CA。
+
 ### pip
 
 ```bash
@@ -423,15 +425,18 @@ im:
 
 ### 认证方式
 
-五种认证方案可单独或组合启用：
+六种认证方案可单独或组合启用：
 
 | 方案 | 配置键 | 适用场景 |
 |------|--------|---------|
+| **Localhost（默认）** | *(无需配置)* | 单用户开发 |
 | **API Key** | `a2a.auth.api_key` | 开发环境、可信网络 |
 | **OAuth2 + PKCE** | `a2a.auth.oauth2` | 需人工触发的 agent |
 | **Device Flow** | `a2a.auth.oauth2` + `flow: "device"` | 无头服务器、SSH |
 | **OpenID Connect** | `a2a.auth.oidc` | 企业 SSO |
 | **双向 TLS** | `a2a.auth.mtls` | 机器对机器、零信任网络 |
+
+> **安全默认值：** 未配置认证时，仅允许 `localhost`（`127.0.0.1`、`::1`）访问。如需暴露给远程 agent，**必须**配置至少一种认证方案，或显式设置 `allow_unauthenticated: true`（不推荐用于生产环境）。
 
 ```yaml
 # 最简：共享 API Key

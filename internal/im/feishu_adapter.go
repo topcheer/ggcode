@@ -71,6 +71,8 @@ type feishuAdapter struct {
 	verifyToken string
 	domain      string
 	webhookPort int // legacy: only used when transport=webhook
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	mu          sync.RWMutex
 	connected   bool
@@ -158,11 +160,17 @@ func (a *feishuAdapter) Name() string { return a.name }
 
 func (a *feishuAdapter) Start(ctx context.Context) {
 	debug.Log("feishu", "adapter=%s start domain=%s webhookPort=%d", a.name, a.domain, a.webhookPort)
+	ctx, cancel := context.WithCancel(ctx)
+	a.ctx = ctx
+	a.cancel = cancel
 	a.publishState(false, "connecting", "")
 	safego.Go("im.feishu.run", func() { a.run(ctx) })
 }
 
 func (a *feishuAdapter) Close() error {
+	if a.cancel != nil {
+		a.cancel()
+	}
 	a.mu.Lock()
 	srv := a.httpServer
 	a.httpServer = nil
@@ -572,14 +580,14 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			// event in a detached goroutine. Use background ctx because the
 			// HTTP request ctx is cancelled the moment we return.
 			w.WriteHeader(http.StatusOK)
-			safego.Go("im.feishu.handleMessageEvent", func() { a.handleMessageEvent(context.Background(), event) })
+			safego.Go("im.feishu.handleMessageEvent", func() { a.handleMessageEvent(a.ctx, event) })
 			return
 		}
 	}
 	// Handle card action callbacks (button clicks from interactive messages)
 	if eventType == "card.action.trigger" {
 		w.WriteHeader(http.StatusOK)
-		safego.Go("im.feishu.handleCardAction", func() { a.handleCardAction(context.Background(), payload) })
+		safego.Go("im.feishu.handleCardAction", func() { a.handleCardAction(a.ctx, payload) })
 		return
 	}
 	w.WriteHeader(http.StatusOK)
