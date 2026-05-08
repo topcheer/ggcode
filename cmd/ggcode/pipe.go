@@ -95,11 +95,6 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Load auto memory
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
-	autoContent, _, _ := autoMem.LoadAll()
-	projectAutoContent, _, _ := "", []string(nil), error(nil)
-	if projectAutoMem != nil {
-		projectAutoContent, _, _ = projectAutoMem.LoadAll()
-	}
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
 	commandMgr := commands.NewManager(workingDir)
 	commandMgr.SetExtraProviders(func() []*commands.Command {
@@ -135,11 +130,13 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	if projectMem != "" {
 		systemPrompt += "\n\n## Project Memory\n" + projectMem
 	}
-	if projectAutoContent != "" {
-		systemPrompt += "\n\n## Auto Memory (Project)\n" + projectAutoContent
+	if projectAutoMem != nil {
+		if projContent, _, _ := projectAutoMem.LoadAll(); projContent != "" {
+			systemPrompt += "\n\n## Auto Memory (Project)\n" + projContent
+		}
 	}
-	if autoContent != "" {
-		systemPrompt += "\n\n## Auto Memory (Global)\n" + autoContent
+	if globalAutoContent, _, _ := autoMem.LoadAll(); globalAutoContent != "" {
+		systemPrompt += "\n\n## Auto Memory (Global)\n" + globalAutoContent
 	}
 
 	// Setup agent
