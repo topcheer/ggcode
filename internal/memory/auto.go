@@ -26,8 +26,15 @@ func NewAutoMemory() *AutoMemory {
 // NewProjectAutoMemory creates an AutoMemory instance for project-scoped memory.
 // It locates the project root (git root or directory with project memory files)
 // and uses <project-root>/.ggcode/memory/ as the storage directory.
+// Falls back to workingDir itself as project root (every directory is a valid project).
+// Returns nil only if workingDir is the user's HOME directory.
 func NewProjectAutoMemory(workingDir string) *AutoMemory {
 	root := findProjectMemoryRoot(workingDir)
+	home := config.HomeDir()
+	// Never treat HOME as a project root to avoid polluting ~/.ggcode/
+	if root == home {
+		return nil
+	}
 	dir := filepath.Join(root, ".ggcode", "memory")
 	_ = os.MkdirAll(dir, 0755)
 	return &AutoMemory{dir: dir}
