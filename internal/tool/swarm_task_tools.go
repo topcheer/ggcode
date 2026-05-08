@@ -83,6 +83,12 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 		}
 	}
 
+	// No specific assignee: notify idle runners so they can claim immediately
+	// instead of waiting for the next poller tick.
+	if args.Assignee == "" {
+		t.Manager.NotifyIdleRunners(args.TeamID)
+	}
+
 	out, _ := json.Marshal(created)
 	return Result{Content: string(out) + "\n"}, nil
 }

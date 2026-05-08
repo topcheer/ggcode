@@ -96,3 +96,36 @@ func TestSaveTaskUsesAtomicWriteNoTempFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveTaskDoesNotUseToolPreWriteHook(t *testing.T) {
+	// Verify that SaveTask uses the harness-local atomicWriteJSON (no pre-write hook),
+	// not the tool package's atomicWriteFile (which has the global hook).
+	// This is correct: task state files should not participate in user undo/checkpoint.
+	root := t.TempDir()
+	git(t, root, "init")
+	git(t, root, "init")
+
+	result, err := Init(root, InitOptions{})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	summary, err := RunTask(context.Background(), result.Project, result.Config, "Hook test", fakeRunner{
+		result: &RunResult{Output: "done"},
+	})
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+
+	// SaveTask should work fine — it uses its own atomicWriteJSON, not tool's version
+	task, _ := LoadTask(result.Project, summary.Task.ID)
+	task.Error = "no hook involved"
+	if err := SaveTask(result.Project, task); err != nil {
+		t.Fatalf("SaveTask: %v", err)
+	}
+
+	loaded, _ := LoadTask(result.Project, task.ID)
+	if loaded.Error != "no hook involved" {
+		t.Errorf("task.Error = %q, want %q", loaded.Error, "no hook involved")
+	}
+}

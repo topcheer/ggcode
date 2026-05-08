@@ -618,8 +618,8 @@ func (r *REPL) Run() error {
 		}
 		if r.mcpMgr != nil {
 			mcpCtx, mcpCancel := context.WithCancel(context.Background())
+			r.mcpCancel = mcpCancel // assign before StartBackground to avoid fast-exit race
 			r.mcpMgr.StartBackground(mcpCtx)
-			r.mcpCancel = mcpCancel
 		}
 	})
 
