@@ -297,16 +297,6 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			case "tool_use":
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
 			case "tool_result":
-			case "thinking":
-				// Anthropic extended thinking: must echo back with signature
-				if b.ThinkingSignature != "" {
-					blocks = append(blocks, anthropic.NewThinkingBlock(b.ThinkingSignature, b.ReasoningContent))
-				}
-			case "redacted_thinking":
-				// Anthropic redacted thinking: must echo back with data
-				if b.ThinkingData != "" {
-					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.ThinkingData))
-				}
 				if len(b.Images) > 0 && !b.IsError {
 					var content []anthropic.ToolResultBlockParamContentUnion
 					for _, img := range b.Images {
@@ -334,6 +324,16 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 					})
 				} else {
 					blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolID, b.Output, b.IsError))
+				}
+			case "thinking":
+				// Anthropic extended thinking: must echo back with signature
+				if b.ThinkingSignature != "" {
+					blocks = append(blocks, anthropic.NewThinkingBlock(b.ThinkingSignature, b.ReasoningContent))
+				}
+			case "redacted_thinking":
+				// Anthropic redacted thinking: must echo back with data
+				if b.ThinkingData != "" {
+					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.ThinkingData))
 				}
 			}
 		}
