@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 	"unicode"
 )
 
@@ -860,8 +862,9 @@ func persistReleasePlan(project Project, plan *ReleasePlan) (string, error) {
 		return "", fmt.Errorf("write release plan: %w", err)
 	}
 	plan.ReportPath = path
+	// Event log is append-only audit trail; failure should not fail the operation.
 	if err := recordReleasePlanEvent(project, previous, plan); err != nil {
-		return "", fmt.Errorf("record release event: %w", err)
+		debug.Log("harness", "release event recording failed for %s: %v", plan.BatchID, err)
 	}
 	return path, nil
 }

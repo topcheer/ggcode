@@ -45,6 +45,7 @@ type REPL struct {
 	store               session.Store
 	resumeID            string
 	mcpMgr              *plugin.MCPManager
+	mcpCancel           context.CancelFunc
 	commandMgr          *commands.Manager
 	skillsChangedHook   func()
 	imManager           *im.Manager
@@ -489,6 +490,9 @@ func (r *REPL) Run() error {
 			}
 		})
 		defer r.mcpMgr.Close()
+		if r.mcpCancel != nil {
+			defer r.mcpCancel()
+		}
 	}
 	if r.commandMgr != nil {
 		stop := make(chan struct{})
@@ -613,7 +617,9 @@ func (r *REPL) Run() error {
 			})
 		}
 		if r.mcpMgr != nil {
-			r.mcpMgr.StartBackground(context.Background())
+			mcpCtx, mcpCancel := context.WithCancel(context.Background())
+			r.mcpMgr.StartBackground(mcpCtx)
+			r.mcpCancel = mcpCancel
 		}
 	})
 

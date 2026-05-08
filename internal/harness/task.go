@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // taskSaveMu protects SaveTask from concurrent read-modify-write on the same task.
@@ -127,11 +129,12 @@ func SaveTask(project Project, task *Task) error {
 	if err := os.MkdirAll(project.TasksDir, 0755); err != nil {
 		return fmt.Errorf("create tasks dir: %w", err)
 	}
-	if err := os.WriteFile(taskPath(project, task.ID), data, 0644); err != nil {
+	if err := atomicWriteFile(taskPath(project, task.ID), data, 0644); err != nil {
 		return err
 	}
+	// Event log is append-only audit trail; failure should not fail the operation.
 	if err := recordTaskEvent(project, previous, task); err != nil {
-		return fmt.Errorf("record task event: %w", err)
+		debug.Log("harness", "task event recording failed for %s: %v", task.ID, err)
 	}
 	return nil
 }

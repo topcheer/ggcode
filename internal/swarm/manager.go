@@ -302,15 +302,19 @@ func (m *Manager) BroadcastToTeam(teamID string, msg MailMessage) []string {
 	m.mu.Unlock()
 
 	var sent []string
+	var dropped []string
 	for _, tm := range team.listTeammates() {
 		if tm.getStatus() == TeammateIdle || tm.getStatus() == TeammateWorking {
 			select {
 			case tm.Inbox <- msg:
 				sent = append(sent, tm.ID)
 			default:
-				// inbox full, skip
+				dropped = append(dropped, tm.ID)
 			}
 		}
+	}
+	if len(dropped) > 0 {
+		debug.Log("swarm", "broadcast dropped %d messages for teammates %v (inbox full)", len(dropped), dropped)
 	}
 	return sent
 }
@@ -418,6 +422,27 @@ func (m *Manager) emit(ev Event) {
 
 	if m.onUpdate != nil {
 		m.onUpdate(ev)
+	}
+}
+
+// NotifyIdleRunners sends a task-available hint to all idle teammates,
+// triggering them to poll the task board immediately instead of waiting
+// for the next poller tick.
+func (m *Manager) NotifyIdleRunners(teamID string) {
+	m.mu.Lock()
+	team, ok := m.teams[teamID]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	hint := MailMessage{Type: "task_available"}
+	for _, tm := range team.listTeammates() {
+		if tm.getStatus() == TeammateIdle {
+			select {
+			case tm.Inbox <- hint:
+			default:
+			}
+		}
 	}
 }
 
