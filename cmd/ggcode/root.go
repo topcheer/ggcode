@@ -636,6 +636,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			return fmt.Errorf("loading IM pairing state: %w", err)
 		}
 		imMgr.BindSession(im.SessionBinding{Workspace: workingDir})
+		adapters := make(map[string]bool)
+		for name, acfg := range cfg.IM.Adapters {
+			adapters[name] = acfg.Enabled
+		}
+		imMgr.ApplyAdapterConfig(adapters)
 		if knightAgent != nil {
 			knightAgent.SetEmitter(im.NewIMEmitter(imMgr, cfg.Language, workingDir))
 		}

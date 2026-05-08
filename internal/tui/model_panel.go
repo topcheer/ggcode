@@ -144,7 +144,7 @@ func (m *Model) handleModelPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "r", "R":
 		panel.filter.Blur()
 		return *m, m.refreshActiveModelList()
-	case "esc":
+	case "esc", "ctrl+c":
 		if panel.filter.Focused() {
 			panel.filter.Blur()
 			return *m, nil

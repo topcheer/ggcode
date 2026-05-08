@@ -44,6 +44,7 @@ type signalBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Disabled         bool
 	Muted            bool
 }
 
@@ -226,7 +227,9 @@ func (m Model) renderSignalPanel() string {
 		body = append(body, m.renderProviderList(m.signalBindingLabels(entries), selected, true))
 		entry := entries[selected]
 		status := m.t("panel.signal.entry.available")
-		if entry.OccupiedBy != "" {
+		if entry.Disabled {
+			status = m.t("panel.signal.entry.disabled")
+		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.signal.entry.bound")
 		}
 		body = append(body,
@@ -318,7 +321,7 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	if panel.createMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.createMode = false
 			panel.createInput = ""
 			return *m, nil
@@ -399,7 +402,14 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		panel.editState = edit
 		panel.message = ""
 		return *m, nil
-	case "esc":
+	case "t":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.signal.message.no_bot")
+			return *m, nil
+		}
+		entry := entries[clampSignalSelection(panel.selected, len(entries))]
+		return *m, m.toggleIMAdapterEnabled(entry.Adapter)
+	case "esc", "ctrl+c":
 		m.closeSignalPanel()
 		return *m, nil
 	}
@@ -612,7 +622,7 @@ func (m Model) signalBindingEntries() []signalBindingEntry {
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
 	for name, adapter := range m.config.IM.Adapters {
-		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformSignal)) {
+		if strings.EqualFold(adapter.Platform, string(im.PlatformSignal)) {
 			keys = append(keys, name)
 		}
 	}
@@ -636,6 +646,7 @@ func (m Model) signalBindingEntries() []signalBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
+			Disabled:         !m.config.IM.Adapters[name].Enabled,
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
@@ -648,6 +659,10 @@ func (m Model) signalBindingLabels(entries []signalBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
+		case entry.Disabled:
+			status = m.t("panel.signal.entry.disabled")
+		case entry.Disabled:
+			status = m.t("panel.signal.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.signal.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:

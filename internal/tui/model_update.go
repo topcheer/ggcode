@@ -1697,12 +1697,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case imPanelResultMsg:
+		msgText := msg.message
+		if msg.err != nil {
+			msgText = msg.err.Error()
+		}
 		if m.imPanel != nil {
-			if msg.err != nil {
-				m.imPanel.message = msg.err.Error()
-			} else {
-				m.imPanel.message = msg.message
-			}
+			m.imPanel.message = msgText
+		}
+		// Forward to the currently active channel panel so the user sees
+		// feedback when toggling disable/enable from within a panel.
+		if p := m.activeIMPanel(); p != nil {
+			*p = msgText
 		}
 		return m, nil
 

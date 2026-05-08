@@ -1460,6 +1460,23 @@ func (m *Manager) EnableAll() (int, error) {
 	return count, nil
 }
 
+// ApplyAdapterConfig moves adapters marked as disabled in config from
+// currentBindings to disabledBindings. Call this after BindSession and
+// reloadBindingLocked during startup.
+func (m *Manager) ApplyAdapterConfig(adapters map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, enabled := range adapters {
+		if !enabled {
+			if binding, ok := m.currentBindings[name]; ok {
+				m.disabledBindings[name] = binding
+				delete(m.currentBindings, name)
+				m.stopAdapter(name)
+			}
+		}
+	}
+}
+
 // MutedBindings returns a snapshot of currently muted bindings.
 func (m *Manager) MutedBindings() []ChannelBinding {
 	m.mu.RLock()

@@ -36,6 +36,7 @@ type qqBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Disabled         bool
 	Muted            bool
 }
 
@@ -105,6 +106,8 @@ func (m Model) renderQQPanel() string {
 		currentWS := m.currentWorkspacePath()
 		var status string
 		switch {
+		case entry.Disabled:
+			status = m.t("panel.qq.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.qq.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
@@ -168,7 +171,7 @@ func (m *Model) handleQQPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	entries := m.qqBindingEntries()
 	if panel.createMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.createMode = false
 			panel.createInput = ""
 			return *m, nil
@@ -249,7 +252,14 @@ func (m *Model) handleQQPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.openQROverlayFromStates("QQ", states) {
 			return *m, nil
 		}
-	case "esc":
+	case "d":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.qq.message.no_bot")
+			return *m, nil
+		}
+		entry := entries[clampQQSelection(panel.selected, len(entries))]
+		return *m, m.toggleIMAdapterEnabled(entry.Adapter)
+	case "esc", "ctrl+c":
 		m.closeQQPanel()
 	}
 	return *m, nil
@@ -407,7 +417,7 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
 	for name, adapter := range m.config.IM.Adapters {
-		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformQQ)) {
+		if strings.EqualFold(adapter.Platform, string(im.PlatformQQ)) {
 			keys = append(keys, name)
 		}
 	}
@@ -427,6 +437,7 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     qqStatePtr(adapterStates[name]),
+			Disabled:         !m.config.IM.Adapters[name].Enabled,
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
@@ -439,6 +450,8 @@ func (m Model) qqBindingLabels(entries []qqBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
+		case entry.Disabled:
+			status = m.t("panel.qq.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.qq.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:
@@ -664,6 +677,13 @@ func (m *Model) ensureQQRuntime(autoEnable bool) error {
 		return fmt.Errorf("loading IM pairing state: %w", err)
 	}
 	imMgr.BindSession(im.SessionBinding{Workspace: m.currentWorkspacePath()})
+	if m.config != nil {
+		adapters := make(map[string]bool)
+		for n, acfg := range m.config.IM.Adapters {
+			adapters[n] = acfg.Enabled
+		}
+		imMgr.ApplyAdapterConfig(adapters)
+	}
 	if _, err := im.StartCurrentBindingAdapter(context.Background(), m.config.IM, imMgr); err != nil {
 		return fmt.Errorf("starting current workspace IM adapter: %w", err)
 	}

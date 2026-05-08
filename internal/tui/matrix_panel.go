@@ -31,6 +31,7 @@ type matrixBindingEntry struct {
 	WorkspaceChannel string
 	OccupiedBy       string
 	AdapterState     *im.AdapterState
+	Disabled         bool
 	Muted            bool
 }
 
@@ -135,7 +136,9 @@ func (m Model) renderMatrixPanel() string {
 		body = append(body, m.renderProviderList(m.matrixBindingLabels(entries), selected, true))
 		entry := entries[selected]
 		status := m.t("panel.matrix.entry.available")
-		if entry.OccupiedBy != "" {
+		if entry.Disabled {
+			status = m.t("panel.matrix.entry.disabled")
+		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.matrix.entry.bound")
 		}
 		body = append(body,
@@ -209,7 +212,7 @@ func (m *Model) handleMatrixPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	if panel.createMode {
 		switch msg.String() {
-		case "esc":
+		case "esc", "ctrl+c":
 			panel.createMode = false
 			panel.createInput = ""
 			return *m, nil
@@ -286,7 +289,14 @@ func (m *Model) handleMatrixPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.openQROverlayFromStates("Matrix", states) {
 			return *m, nil
 		}
-	case "esc":
+	case "d":
+		if len(entries) == 0 {
+			panel.message = m.t("panel.matrix.message.no_bot")
+			return *m, nil
+		}
+		entry := entries[clampMatSelection(panel.selected, len(entries))]
+		return *m, m.toggleIMAdapterEnabled(entry.Adapter)
+	case "esc", "ctrl+c":
 		m.closeMatrixPanel()
 		return *m, nil
 	}
@@ -472,7 +482,7 @@ func (m Model) matrixBindingEntries() []matrixBindingEntry {
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
 	for name, adapter := range m.config.IM.Adapters {
-		if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformMatrix)) {
+		if strings.EqualFold(adapter.Platform, string(im.PlatformMatrix)) {
 			keys = append(keys, name)
 		}
 	}
@@ -496,6 +506,7 @@ func (m Model) matrixBindingEntries() []matrixBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
+			Disabled:         !m.config.IM.Adapters[name].Enabled,
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
@@ -508,6 +519,10 @@ func (m Model) matrixBindingLabels(entries []matrixBindingEntry) []string {
 	for _, entry := range entries {
 		var status string
 		switch {
+		case entry.Disabled:
+			status = m.t("panel.matrix.entry.disabled")
+		case entry.Disabled:
+			status = m.t("panel.matrix.entry.disabled")
 		case entry.Muted:
 			status = m.t("panel.matrix.entry.muted")
 		case entry.OccupiedBy != "" && entry.OccupiedBy == currentWS:

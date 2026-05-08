@@ -59,7 +59,7 @@ func formatToolCallText(tc *ToolCallInfo) string {
 		if cmd == "" {
 			cmd = tc.Detail
 		}
-		return fmt.Sprintf("⚡ %s: `%s`", imLabel(lang, "run_command"), cmd)
+		return fmt.Sprintf("⚡ %s:\n```\n%s\n```", imLabel(lang, "run_command"), cmd)
 	case "read_file":
 		path := extractFilePathFromArgs(args)
 		if path == "" {
@@ -604,12 +604,22 @@ func formatIMAskUserResult(tr *ToolResultInfo) string {
 // formatIMStartCommandResult renders start_command result.
 func formatIMStartCommandResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
+	cmd := extractCommand(tr.Args)
 	output := strings.TrimSpace(tr.Result)
 	if tr.IsError {
+		if cmd != "" {
+			return fmt.Sprintf("⚡ %s: %s\n```\n%s\n```", imLabel(lang, "bg_command"), cmd, output)
+		}
 		return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
 	}
 	if output == "" {
+		if cmd != "" {
+			return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command_started"), cmd)
+		}
 		return fmt.Sprintf("⚡ %s", imLabel(lang, "bg_command_started"))
+	}
+	if cmd != "" {
+		return fmt.Sprintf("⚡ %s: %s\n```\n%s\n```", imLabel(lang, "bg_command"), cmd, output)
 	}
 	return fmt.Sprintf("⚡ %s\n```\n%s\n```", imLabel(lang, "bg_command"), output)
 }
@@ -895,12 +905,12 @@ func formatIMCommandResult(tr *ToolResultInfo) string {
 	if tr.IsError {
 		output := strings.TrimSpace(tr.Result)
 		if cmd != "" {
-			return fmt.Sprintf("❌ `%s`\n```\n%s\n```", cmd, output)
+			return fmt.Sprintf("❌\n```\n%s\n```\n```\n%s\n```", cmd, output)
 		}
 		return fmt.Sprintf("❌ %s", imLabel(lang, "command_failed"))
 	}
 	if cmd != "" {
-		return fmt.Sprintf("✅ `%s`", cmd)
+		return fmt.Sprintf("✅\n```\n%s\n```", cmd)
 	}
 	return fmt.Sprintf("✅ %s", imLabel(lang, "command_done"))
 }
