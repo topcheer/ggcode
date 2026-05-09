@@ -195,7 +195,7 @@ var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
-	"/image", "/mode", "/init", "/harness", "/exit", "/quit",
+	"/image", "/init", "/harness", "/exit", "/quit",
 	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
 }
 
@@ -239,7 +239,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/allow":       "Always allow a tool",
 	"/plugins":     "List loaded plugins",
 	"/image":       "Attach an image",
-	"/mode":        "Set agent mode",
 	"/init":        "Create GGCODE.md",
 	"/harness":     "Run harness workflow commands",
 	"/exit":        "Exit ggcode",
@@ -267,7 +266,6 @@ var SlashCommandPlaceholders = map[string]string{
 	"/impersonate": "<cli-tool>",
 	"/harness":     "<subcommand>",
 	"/knight":      "<subcommand>",
-	"/mode":        "<mode>",
 	"/allow":       "<tool-name>",
 	"/resume":      "<session-id>",
 	"/export":      "<session-id>",
