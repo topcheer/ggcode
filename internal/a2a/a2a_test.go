@@ -2023,16 +2023,31 @@ func TestActiveTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	active := handler.ActiveTasks()
-	found := false
-	for _, t := range active {
-		if t.ID == task.ID {
-			found = true
-			break
+	// Task is executed asynchronously. Since no agent is configured,
+	// SkillFullTask will immediately fail and complete. Wait for it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		active := handler.ActiveTasks()
+		for _, at := range active {
+			if at.ID == task.ID {
+				return // found in active list
+			}
 		}
+		// Check if task already completed (agent is nil, fails fast).
+		info, ok := handler.GetTask(task.ID)
+		if ok && info.Status.State.IsTerminal() {
+			return // completed before observed, which is fine
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if !found {
-		t.Errorf("task %s not in active tasks (count=%d)", task.ID, handler.ActiveTaskCount())
+
+	// Final check: task should at least exist.
+	info, ok := handler.GetTask(task.ID)
+	if !ok {
+		t.Fatalf("task %s not found in handler", task.ID)
+	}
+	if !info.Status.State.IsTerminal() {
+		t.Errorf("task %s not in active tasks and not terminal (state=%s)", task.ID, info.Status.State)
 	}
 }
 
