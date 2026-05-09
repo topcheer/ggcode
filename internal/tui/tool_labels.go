@@ -33,13 +33,22 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 
 	switch toolName {
 	case "read_file":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: fileTarget, Activity: desc}
+		}
 		return toolPresentationFor(lang, "read", fileTarget)
 	case "edit_file":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: fileTarget, Activity: desc}
+		}
 		if strings.TrimSpace(argString(args, "old_text")) == "" && fileTarget != "" {
 			return toolPresentationFor(lang, "create", fileTarget)
 		}
 		return toolPresentationFor(lang, "edit", fileTarget)
 	case "write_file":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: fileTarget, Activity: desc}
+		}
 		return toolPresentationFor(lang, "write", fileTarget)
 	case "glob":
 		return toolPresentationFor(lang, "find", displayToolTarget(argString(args, "pattern")))
@@ -50,10 +59,14 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			argString(args, "path"),
 		)))
 	case "list_directory":
-		return toolPresentationFor(lang, "list", displayToolFileTarget(firstNonEmpty(
+		listTarget := displayToolFileTarget(firstNonEmpty(
 			argString(args, "path"),
 			argString(args, "directory"),
-		)))
+		))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: listTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "list", listTarget)
 	case "run_command", "bash", "powershell":
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
