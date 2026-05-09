@@ -68,7 +68,6 @@ type ExitPlanModeTool struct {
 func (t ExitPlanModeTool) Name() string { return "exit_plan_mode" }
 func (t ExitPlanModeTool) Description() string {
 	return "Exit plan mode and return to normal coding mode. Provide the plan content generated during exploration. " +
-		"Automatically restores the permission mode that was active before entering plan mode. " +
 		"After exiting, break the plan into structured tasks using task_create with dependencies (addBlocks/addBlockedBy) " +
 		"to track progress, then execute each task step by step."
 }
