@@ -85,7 +85,10 @@ type projectMemoryLoadedMsg struct {
 	Err     error
 }
 
-type subAgentUpdateMsg struct{}
+type subAgentUpdateMsg struct {
+	AgentID string // empty for general update
+}
+type subAgentFollowRefreshMsg struct{}
 
 type skillsChangedMsg struct{}
 

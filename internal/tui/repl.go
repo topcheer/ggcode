@@ -200,12 +200,12 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	// Notify TUI on live updates and completion.
 	mgr.SetOnUpdate(func(sa *subagent.SubAgent) {
 		if r.program != nil {
-			r.program.Send(subAgentUpdateMsg{})
+			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
 		}
 	})
 	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
 		if r.program != nil {
-			r.program.Send(subAgentUpdateMsg{})
+			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
 		}
 	})
 }
@@ -279,7 +279,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	// Notify TUI on swarm state changes.
 	mgr.SetOnUpdate(func(ev swarm.Event) {
 		if r.program != nil {
-			r.program.Send(subAgentUpdateMsg{}) // reuse existing update message
+			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID}) // reuse existing update message
 		}
 	})
 }

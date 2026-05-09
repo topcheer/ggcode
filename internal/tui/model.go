@@ -117,6 +117,7 @@ type Model struct {
 	autoMemFiles                    []string
 	pluginMgr                       *plugin.Manager
 	subAgentMgr                     *subagent.Manager
+	subAgentFollow                  subAgentFollowState
 	knight                          *knight.Knight
 	mcpManager                      mcpManager
 	mode                            permission.PermissionMode
