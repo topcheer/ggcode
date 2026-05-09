@@ -768,6 +768,58 @@ func TestDetectWorkspaceMeta(t *testing.T) {
 	}
 }
 
+func TestDetectWorkspaceMetaSkipsRecursiveHomeScan(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "projects", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "projects", "deep", "main_test.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := detectWorkspaceMeta(home)
+	if len(meta.Languages) != 0 {
+		t.Fatalf("HOME metadata should not recursively detect languages, got %v", meta.Languages)
+	}
+	if meta.HasTests {
+		t.Fatal("HOME metadata should not recursively detect tests")
+	}
+}
+
+func TestDetectWorkspaceMetaScansProjectSignals(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte("module example.com/project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(project, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "pkg", "main_test.go"), []byte("package pkg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := detectWorkspaceMeta(project)
+	if !containsString(meta.Frameworks, "go-modules") {
+		t.Fatalf("expected go-modules framework, got %v", meta.Frameworks)
+	}
+	if !containsString(meta.Languages, "go") {
+		t.Fatalf("expected go language, got %v", meta.Languages)
+	}
+	if !meta.HasTests {
+		t.Fatal("expected project test files to be detected")
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // Concurrent safety
 // ---------------------------------------------------------------------------

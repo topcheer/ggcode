@@ -89,22 +89,26 @@ func (si *SkillIndex) Scan() ([]*SkillEntry, error) {
 	si.mu.RUnlock()
 
 	var entries []*SkillEntry
+	seen := make(map[string]struct{}, 4)
+	scan := func(dir, scope string, staging bool) {
+		if !markSkillDirSeen(seen, dir) {
+			return
+		}
+		found, _ := si.scanDir(dir, scope, staging)
+		entries = append(entries, found...)
+	}
 
 	// Global active skills
-	globals, _ := si.scanDir(si.globalDir, "global", false)
-	entries = append(entries, globals...)
+	scan(si.globalDir, "global", false)
 
 	// Global staging skills
-	globalStaging, _ := si.scanDir(si.globalStaging, "global", true)
-	entries = append(entries, globalStaging...)
+	scan(si.globalStaging, "global", true)
 
 	// Project active skills
-	projects, _ := si.scanDir(si.projectDir, "project", false)
-	entries = append(entries, projects...)
+	scan(si.projectDir, "project", false)
 
 	// Project staging skills
-	projectStaging, _ := si.scanDir(si.projectStaging, "project", true)
-	entries = append(entries, projectStaging...)
+	scan(si.projectStaging, "project", true)
 
 	// Cache result
 	si.mu.Lock()
@@ -150,11 +154,18 @@ func (si *SkillIndex) StagingSkills() ([]*SkillEntry, error) {
 // ggcode's standard skill loader, which only accepts <name>/SKILL.md.
 func (si *SkillIndex) LooseActiveSkillFiles() ([]*SkillEntry, error) {
 	var entries []*SkillEntry
+	seen := make(map[string]struct{}, 2)
+	if !markSkillDirSeen(seen, si.globalDir) {
+		return entries, nil
+	}
 	globals, err := si.scanLooseActiveDir(si.globalDir, "global")
 	if err != nil {
 		return nil, err
 	}
 	entries = append(entries, globals...)
+	if !markSkillDirSeen(seen, si.projectDir) {
+		return entries, nil
+	}
 	projects, err := si.scanLooseActiveDir(si.projectDir, "project")
 	if err != nil {
 		return nil, err
@@ -165,21 +176,50 @@ func (si *SkillIndex) LooseActiveSkillFiles() ([]*SkillEntry, error) {
 
 // FindActiveByName finds an active skill by name.
 func (si *SkillIndex) FindActiveByName(name string) *SkillEntry {
-	// Project-level takes priority
-	if e := si.findInDir(si.projectDir, "project", false, name); e != nil {
-		return e
+	if canonicalSkillDir(si.projectDir) != canonicalSkillDir(si.globalDir) {
+		// Project-level takes priority only when it is a distinct directory.
+		if e := si.findInDir(si.projectDir, "project", false, name); e != nil {
+			return e
+		}
 	}
 	return si.findInDir(si.globalDir, "global", false, name)
 }
 
 // Directories returns all skill directories for display purposes.
 func (si *SkillIndex) Directories() []string {
-	return []string{
+	dirs := []string{
 		si.globalDir,
 		si.globalStaging,
 		si.projectDir,
 		si.projectStaging,
 	}
+	out := make([]string, 0, len(dirs))
+	seen := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		if !markSkillDirSeen(seen, dir) {
+			continue
+		}
+		out = append(out, dir)
+	}
+	return out
+}
+
+func markSkillDirSeen(seen map[string]struct{}, dir string) bool {
+	key := canonicalSkillDir(dir)
+	if _, ok := seen[key]; ok {
+		return false
+	}
+	seen[key] = struct{}{}
+	return true
+}
+
+func canonicalSkillDir(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	} else if abs, absErr := filepath.Abs(dir); absErr == nil {
+		dir = abs
+	}
+	return filepath.Clean(dir)
 }
 
 // scanDir scans a directory for SKILL.md files (active) or .md files (staging).
