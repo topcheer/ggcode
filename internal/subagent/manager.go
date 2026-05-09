@@ -99,6 +99,12 @@ func (s *SubAgent) RecordEvent(ev AgentEvent) {
 	s.appendEvent(ev)
 }
 
+// AppendEvent adds an event to the sub-agent's history (thread-safe).
+// Used for testing and for external event injection.
+func (s *SubAgent) AppendEvent(ev AgentEvent) {
+	s.appendEvent(ev)
+}
+
 func (s *SubAgent) appendEvent(ev AgentEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
