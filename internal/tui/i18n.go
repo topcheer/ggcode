@@ -211,8 +211,30 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.slack")
 	case "/dingtalk", "/ding":
 		return tr(lang, "slash.dingtalk")
+	case "/wechat", "/wecom":
+		return tr(lang, "slash.wechat")
+	case "/mattermost", "/mm":
+		return tr(lang, "slash.mattermost")
+	case "/matrix":
+		return tr(lang, "slash.matrix")
+	case "/signal":
+		return tr(lang, "slash.signal")
+	case "/irc":
+		return tr(lang, "slash.irc")
+	case "/nostr":
+		return tr(lang, "slash.nostr")
+	case "/twitch":
+		return tr(lang, "slash.twitch")
+	case "/whatsapp", "/wa":
+		return tr(lang, "slash.whatsapp")
 	case "/im":
 		return tr(lang, "slash.im")
+	case "/impersonate":
+		return tr(lang, "slash.impersonate")
+	case "/knight":
+		return tr(lang, "slash.knight")
+	case "/stream":
+		return tr(lang, "slash.stream")
 	default:
 		return cmd
 	}
@@ -1257,6 +1279,28 @@ func enCatalog(key string) string {
 		return "Manage Slack channel binding"
 	case "slash.dingtalk":
 		return "Manage DingTalk channel binding"
+	case "slash.wechat":
+		return "Manage WeChat (iLink) channel binding"
+	case "slash.mattermost":
+		return "Manage Mattermost channel binding"
+	case "slash.matrix":
+		return "Manage Matrix channel binding"
+	case "slash.signal":
+		return "Manage Signal channel binding"
+	case "slash.irc":
+		return "Manage IRC channel binding"
+	case "slash.nostr":
+		return "Manage Nostr channel binding"
+	case "slash.twitch":
+		return "Manage Twitch channel binding"
+	case "slash.whatsapp":
+		return "Manage WhatsApp channel binding"
+	case "slash.impersonate":
+		return "Impersonate a CLI tool for shell prompt display"
+	case "slash.knight":
+		return "Manage autonomous background agent"
+	case "slash.stream":
+		return "Configure streaming output mode"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
