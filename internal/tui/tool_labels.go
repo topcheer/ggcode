@@ -58,6 +58,10 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
 		}
+		// Fallback: use description field if present
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentationFor(lang, "run", displayToolTarget(desc))
+		}
 		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
 			argString(args, "command"),
 			argString(args, "cmd"),
@@ -65,6 +69,10 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "start_command":
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
+		}
+		// Fallback: use description field if present
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentationFor(lang, "run_in_background", displayToolTarget(desc))
 		}
 		return toolPresentationFor(lang, "run_in_background", displayToolTarget(firstNonEmpty(
 			argString(args, "command"),
