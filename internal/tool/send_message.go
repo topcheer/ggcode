@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
@@ -19,10 +18,11 @@ type SendMessageTool struct {
 
 func (t SendMessageTool) Name() string { return "send_message" }
 func (t SendMessageTool) Description() string {
-	return "Send a message to a running sub-agent or swarm teammate. " +
+	return "Send a message or task to a running sub-agent or swarm teammate. " +
+		"Messages are sent asynchronously — the tool returns immediately after delivery. " +
+		"For swarm teammates, use teammate_results to collect the output when the teammate finishes. " +
 		"Use to='*' to broadcast to all agents and teammates. " +
-		"IMPORTANT: When sending to a swarm teammate (ID starts with 'tm-'), always provide team_id. " +
-		"If team_id is omitted and to looks like a teammate ID, the system will try to find it automatically."
+		"When sending to a swarm teammate (ID starts with 'tm-'), always provide team_id."
 }
 func (t SendMessageTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -152,22 +152,11 @@ func (t SendMessageTool) sendToSwarm(to, message, summary, teamID string) (Resul
 		return Result{Content: fmt.Sprintf("Broadcast sent to %d teammate(s): %s\n", len(sent), strings.Join(sent, ", "))}, nil
 	}
 
-	// For targeted messages, block until the teammate finishes and return its result.
-	replyCh := make(chan swarm.TaskResult, 1)
-	msg.ReplyTo = replyCh
-
+	// Fire-and-forget: send message asynchronously. Teammate executes in its own goroutine.
+	// Use teammate_results to collect the output later.
 	if err := t.SwarmMgr.SendToTeammate(teamID, to, msg); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
-	// Wait up to 5 minutes for the teammate to finish.
-	select {
-	case result := <-replyCh:
-		if result.Error != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("Teammate %s error: %v\n", to, result.Error)}, nil
-		}
-		return Result{Content: result.Output}, nil
-	case <-time.After(5 * time.Minute):
-		return Result{Content: fmt.Sprintf("Message sent to teammate %s (still executing after 5 min timeout)\n", to)}, nil
-	}
+	return Result{Content: fmt.Sprintf("Message sent to teammate %s. Use teammate_results to collect the output when ready.\n", to)}, nil
 }

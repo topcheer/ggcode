@@ -319,7 +319,9 @@ func (t TeammateResultsTool) Name() string { return "teammate_results" }
 func (t TeammateResultsTool) Description() string {
 	return "Collect task results from teammates in a team. " +
 		"Returns the most recent output from each teammate that has completed a task. " +
-		"Use this after teammates finish their work to gather and review outputs."
+		"Use this after send_message to check if a teammate has finished and retrieve its output. " +
+		"If no result is available yet, the teammate may still be working — try again later. " +
+		"Optionally specify teammate_id to get a specific teammate's result."
 }
 func (t TeammateResultsTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

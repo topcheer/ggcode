@@ -342,8 +342,8 @@ func TestManager_DefaultConfig(t *testing.T) {
 	if m.cfg.MaxTeammatesPerTeam != 8 {
 		t.Errorf("expected default max 8, got %d", m.cfg.MaxTeammatesPerTeam)
 	}
-	if m.cfg.TeammateTimeout != 30*time.Minute {
-		t.Errorf("expected default timeout 30m, got %v", m.cfg.TeammateTimeout)
+	if m.cfg.TeammateTimeout != 0 {
+		t.Errorf("expected default timeout 0 (no timeout), got %v", m.cfg.TeammateTimeout)
 	}
 	if m.cfg.InboxSize != 32 {
 		t.Errorf("expected default inbox 32, got %d", m.cfg.InboxSize)

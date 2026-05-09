@@ -273,11 +273,14 @@ func executeTask(
 	team *Team,
 	timeout time.Duration,
 ) string {
-	// Create sub-context with configured timeout (default 30 min via Manager)
-	if timeout <= 0 {
-		timeout = 30 * time.Minute
+	// When timeout > 0, create a sub-context with deadline. When timeout == 0, no deadline.
+	var subCtx context.Context
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		subCtx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		subCtx, cancel = context.WithCancel(ctx)
 	}
-	subCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	prompt := msg.Content

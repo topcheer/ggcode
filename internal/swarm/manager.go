@@ -49,9 +49,7 @@ func NewManager(cfg config.SwarmConfig, prov provider.Provider, factory AgentFac
 	if cfg.MaxTeammatesPerTeam <= 0 {
 		cfg.MaxTeammatesPerTeam = 8
 	}
-	if cfg.TeammateTimeout <= 0 {
-		cfg.TeammateTimeout = 30 * time.Minute
-	}
+	// TeammateTimeout defaults to 0 (no timeout). Set in config to enforce a deadline.
 	if cfg.InboxSize <= 0 {
 		cfg.InboxSize = 32
 	}
