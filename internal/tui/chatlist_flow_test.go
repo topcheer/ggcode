@@ -141,10 +141,10 @@ func TestChatListAgentToolItem(t *testing.T) {
 
 	// spawn_agent
 	m.chatStartTool(ToolStatusMsg{
-		ToolID:   "agent-1",
-		ToolName: "spawn_agent",
-		Detail:   "fix the bug",
-		Running:  true,
+		ToolID:      "agent-1",
+		ToolName:    "spawn_agent",
+		DisplayName: "fix the bug",
+		Running:     true,
 	})
 
 	if m.chatList.Len() != 1 {
@@ -157,8 +157,8 @@ func TestChatListAgentToolItem(t *testing.T) {
 	}
 
 	rendered := stripAnsiCodes(agent.Render(100))
-	if !strings.Contains(rendered, "Starting subagent") {
-		t.Errorf("agent item missing 'Starting subagent': %q", rendered)
+	if !strings.Contains(rendered, "fix the bug") {
+		t.Errorf("agent item missing name 'fix the bug': %q", rendered)
 	}
 
 	// wait_agent finishes

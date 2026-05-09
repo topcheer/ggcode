@@ -200,7 +200,7 @@ func TestTGOutboundText_English(t *testing.T) {
 		{"tool_result_list_cmds", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_commands", Lang: "en", Result: ""}}, ""},
 
 		// Agent tools — English
-		{"tool_result_spawn_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "spawn_agent", Lang: "en", Result: ""}}, "🤖 Starting subagent "},
+		{"tool_result_spawn_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "spawn_agent", Lang: "en", Result: ""}}, "🤖 sub-agent"},
 		{"tool_result_wait_agent", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "wait_agent", Lang: "en", Result: ""}}, ""},
 		{"tool_result_list_agents", OutboundEvent{Kind: OutboundEventToolResult, ToolRes: &ToolResultInfo{ToolName: "list_agents", Lang: "en", Result: ""}}, ""},
 

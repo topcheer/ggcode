@@ -896,10 +896,12 @@ func (t *TodoToolItem) Height(width int) int {
 // --- AgentToolItem ---
 
 // AgentToolItem renders a subagent with nested tool calls.
+// AgentToolItem displays a sub-agent's lifecycle in the main chat.
+// The label field holds the sub-agent's name (from description param).
 type AgentToolItem struct {
 	CachedItem
 	id          string
-	task        string
+	label       string // sub-agent name for display
 	status      ToolStatus
 	nestedItems []Item
 	result      string
@@ -907,10 +909,11 @@ type AgentToolItem struct {
 }
 
 // NewAgentToolItem creates a new agent tool item.
-func NewAgentToolItem(id, task string, status ToolStatus, styles Styles) *AgentToolItem {
+// The label parameter is the sub-agent name shown in the header.
+func NewAgentToolItem(id, label string, status ToolStatus, styles Styles) *AgentToolItem {
 	return &AgentToolItem{
 		id:     id,
-		task:   task,
+		label:  label,
 		status: status,
 		styles: styles,
 	}
@@ -954,12 +957,12 @@ func (a *AgentToolItem) Render(width int) string {
 		return cached
 	}
 
-	// Header
-	taskDisplay := a.task
-	if len(taskDisplay) > width-15 {
-		taskDisplay = taskDisplay[:width-16] + "…"
+	// Header: use label (sub-agent name)
+	labelDisplay := a.label
+	if labelDisplay == "" {
+		labelDisplay = "sub-agent"
 	}
-	header := a.styles.ToolHeader(a.status, "Starting subagent", width, taskDisplay)
+	header := a.styles.ToolHeader(a.status, labelDisplay, width)
 
 	if len(a.nestedItems) == 0 {
 		rendered := header

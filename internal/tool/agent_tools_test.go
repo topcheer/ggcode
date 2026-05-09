@@ -116,7 +116,7 @@ func TestWaitAgent_NotFound(t *testing.T) {
 
 func TestWaitAgentToolReturnsRunningSnapshot(t *testing.T) {
 	mgr := subagent.NewManager(config.SubAgentConfig{})
-	id := mgr.Spawn("watch background test job", "watch background test job", nil, context.Background())
+	id := mgr.Spawn("test", "watch background test job", "watch background test job", nil, context.Background())
 	mgr.SetCancel(id, func() {})
 	sa, _ := mgr.Get(id)
 	sa.CurrentPhase = "tool"
@@ -143,7 +143,7 @@ func TestWaitAgentToolReturnsRunningSnapshot(t *testing.T) {
 
 func TestListAgentsToolShowsProgressSummary(t *testing.T) {
 	mgr := subagent.NewManager(config.SubAgentConfig{})
-	id := mgr.Spawn("watch background test job", "watch background test job", nil, context.Background())
+	id := mgr.Spawn("test", "watch background test job", "watch background test job", nil, context.Background())
 	mgr.SetCancel(id, func() {})
 	sa, _ := mgr.Get(id)
 	sa.ProgressSummary = "Job ID: cmd-1 • Status: running • Total lines: 42"

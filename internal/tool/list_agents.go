@@ -69,8 +69,13 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 func formatSubAgentSnapshot(snap subagent.Snapshot) string {
 	var sb strings.Builder
 	duration := formatSubAgentDuration(snap)
+	name := snap.Name
+	if name == "" {
+		name = snap.ID
+	}
+	sb.WriteString(fmt.Sprintf("  %s [%s]%s\n", name, snap.Status, duration))
+	sb.WriteString(fmt.Sprintf("    ID: %s\n", snap.ID))
 	task := firstNonEmptyNonSpace(snap.DisplayTask, snap.Task)
-	sb.WriteString(fmt.Sprintf("  %s [%s]%s\n", snap.ID, snap.Status, duration))
 	if task != "" {
 		sb.WriteString(fmt.Sprintf("    Task: %s\n", truncate(task, 80)))
 	}
@@ -86,7 +91,7 @@ func formatSubAgentSnapshot(snap subagent.Snapshot) string {
 		sb.WriteString(fmt.Sprintf("    Phase: %s\n", snap.CurrentPhase))
 	}
 	if snap.Status == subagent.StatusCompleted && strings.TrimSpace(snap.Result) != "" {
-		sb.WriteString(fmt.Sprintf("    Result: %s\n", truncate(snap.Result, 120)))
+		sb.WriteString(fmt.Sprintf("    Result: %s\n", snap.Result))
 	}
 	if snap.Error != "" {
 		sb.WriteString(fmt.Sprintf("    Error: %s\n", truncate(snap.Error, 120)))

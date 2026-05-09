@@ -1502,7 +1502,7 @@ func TestRenderOutputShowsSubAgentAsIndependentState(t *testing.T) {
 	m.handleResize(120, 40)
 	m.loading = true
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
-	id := m.subAgentMgr.Spawn("context\n\nInvestigate parser behavior", "Investigate parser behavior", nil, context.Background())
+	id := m.subAgentMgr.Spawn("investigate", "context\n\nInvestigate parser behavior", "Investigate parser behavior", nil, context.Background())
 	sa, ok := m.subAgentMgr.Get(id)
 	if !ok {
 		t.Fatal("expected spawned subagent")
@@ -1534,7 +1534,7 @@ func TestRenderOutputShowsSubAgentProgressSummary(t *testing.T) {
 	m.handleResize(120, 40)
 	m.loading = true
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
-	id := m.subAgentMgr.Spawn("context\n\nBuild release", "Build release", nil, context.Background())
+	id := m.subAgentMgr.Spawn("build", "context\n\nBuild release", "Build release", nil, context.Background())
 	sa, ok := m.subAgentMgr.Get(id)
 	if !ok {
 		t.Fatal("expected spawned subagent")
@@ -1555,7 +1555,7 @@ func TestRenderOutputHidesCompletedSubAgentState(t *testing.T) {
 	m.handleResize(120, 40)
 	m.loading = true
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
-	id := m.subAgentMgr.Spawn("context\n\nInvestigate parser behavior", "Investigate parser behavior", nil, context.Background())
+	id := m.subAgentMgr.Spawn("investigate", "context\n\nInvestigate parser behavior", "Investigate parser behavior", nil, context.Background())
 	sa, ok := m.subAgentMgr.Get(id)
 	if !ok {
 		t.Fatal("expected spawned subagent")

@@ -562,7 +562,7 @@ func TestSubAgentUpdateDoesNotEmitIMStatus(t *testing.T) {
 	m.SetSession(&session.Session{ID: "session-1", Workspace: "/tmp/project"}, nil)
 	m.loading = true
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
-	id := m.subAgentMgr.Spawn("review-1", "Review core architecture", nil, context.Background())
+	id := m.subAgentMgr.Spawn("review", "review-1", "Review core architecture", nil, context.Background())
 	sa, ok := m.subAgentMgr.Get(id)
 	if !ok {
 		t.Fatal("expected spawned sub-agent to exist")

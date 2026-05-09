@@ -462,6 +462,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		Provider:     prov,
 		Tools:        registry,
 		AgentFactory: skillAgentFactory,
+		WorkingDir:   workingDir,
 		OnSkillUsed: func(ref string) {
 			if knightAgent != nil {
 				knightAgent.RecordSkillUse(ref)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -16,6 +17,7 @@ type SpawnAgentTool struct {
 	Provider     provider.Provider
 	Tools        *Registry
 	AgentFactory subagent.AgentFactory
+	WorkingDir   string // working directory to propagate to sub-agent
 }
 
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
@@ -78,6 +80,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		Context      string   `json:"context"`
 		Model        string   `json:"model"`
 		SubagentType string   `json:"subagent_type"`
+		Description  string   `json:"description"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -87,12 +90,17 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: "task is required"}, nil
 	}
 
+	name := strings.TrimSpace(args.Description)
+	if name == "" {
+		name = "sub-agent"
+	}
+
 	displayTask := args.Task
 	if args.Context != "" {
 		args.Task = args.Context + "\n\n" + args.Task
 	}
 
-	id := t.Manager.Spawn(args.Task, displayTask, args.Tools, ctx)
+	id := t.Manager.Spawn(name, args.Task, displayTask, args.Tools, ctx)
 
 	// Build tool info list for sub-agent
 	var allToolInfo []subagent.ToolInfo
@@ -127,6 +135,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			AgentFactory: t.AgentFactory,
 			Model:        model,
 			AgentType:    subagentType,
+			WorkingDir:   t.WorkingDir,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				subReg := NewRegistry()
 				if len(allowedTools) == 0 {

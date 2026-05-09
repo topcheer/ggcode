@@ -46,6 +46,7 @@ type SkillTool struct {
 	Provider         provider.Provider
 	Tools            *Registry
 	AgentFactory     subagent.AgentFactory
+	WorkingDir       string                          // working directory to propagate to sub-agent
 	OnSkillUsed      func(ref string)                // optional callback when a skill is loaded by the agent
 	OnSkillCompleted func(event SkillExecutionEvent) // optional callback when execution finishes
 }
@@ -165,7 +166,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 	}
 
 	mgr := subagent.NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: 5 * time.Minute})
-	id := mgr.Spawn(task, cmd.Name, cmd.AllowedTools, ctx)
+	id := mgr.Spawn(cmd.Name, task, cmd.Name, cmd.AllowedTools, ctx)
 	allToolInfo := make([]subagent.ToolInfo, 0, len(t.Tools.List()))
 	for _, tl := range t.Tools.List() {
 		allToolInfo = append(allToolInfo, tl)
@@ -179,6 +180,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 			Manager:      mgr,
 			SubAgentID:   id,
 			AgentFactory: t.AgentFactory,
+			WorkingDir:   t.WorkingDir,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				subReg := NewRegistry()
 				registerTool := func(name string) {

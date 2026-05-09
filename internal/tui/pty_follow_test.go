@@ -436,21 +436,18 @@ func TestPTY_SubAgentFollowDeepWorkout(t *testing.T) {
 	output := recentOutput(h, 1500)
 	t.Logf("Phase 3 — Recent output:\n%s", output)
 
-	// The strip should show sub-agent name/task with slot key "!" and "Esc"
-	if !strings.Contains(output, "!") {
-		t.Error("Phase 3 FAILED: expected '!' in follow strip")
-		goto phase4
+	// The strip should show Ctrl+N and Esc hints
+	if !strings.Contains(output, "Ctrl+N") {
+		t.Error("Phase 3 FAILED: expected 'Ctrl+N' in follow strip")
 	}
-	if !strings.Contains(output, "Esc") {
-		t.Error("Phase 3 FAILED: expected 'Esc' in follow strip")
-		goto phase4
+	if !strings.Contains(output, "Esc close") {
+		t.Error("Phase 3 FAILED: expected 'Esc close' in follow strip")
 	}
-	t.Log("━━━ Phase 3: Follow strip visible — slot keys and Esc hint present ━━━")
+	t.Log("━━━ Phase 3: Follow strip visible — Ctrl+N and Esc hints present ━━━")
 
-	// ━━ Phase 4: Enter follow mode ━━
-phase4:
-	t.Log("━━━ Phase 4: Pressing '!' to enter follow mode... ━━━")
-	h.sendKey("!")
+	// ━━ Phase 4: Enter follow mode with Ctrl+N ━━
+	t.Log("━━━ Phase 4: Pressing Ctrl+N to enter follow mode... ━━━")
+	h.sendKey("ctrl+n")
 	time.Sleep(5 * time.Second)
 
 	output = recentOutput(h, 1500)

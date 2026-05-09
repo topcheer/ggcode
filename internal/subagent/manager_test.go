@@ -31,7 +31,7 @@ func TestManager_SetCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.SetCancel(id, cancel)
 
 	sa, ok := m.Get(id)
@@ -47,7 +47,7 @@ func TestManager_Complete(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.Complete(id, "done", nil)
 
 	sa, ok := m.Get(id)
@@ -66,7 +66,7 @@ func TestManager_Complete_WithError(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.Complete(id, "", context.Canceled)
 
 	sa, _ := m.Get(id)
@@ -87,7 +87,7 @@ func TestManager_Complete_WithCallback(t *testing.T) {
 		completed = true
 	})
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.Complete(id, "ok", nil)
 
 	if !completed {
@@ -104,7 +104,7 @@ func TestManager_UpdateProgress(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.UpdateProgress(id, "halfway done")
 
 	sa, _ := m.Get(id)
@@ -122,7 +122,7 @@ func TestManager_UpdateActivity(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.UpdateActivity(id, "thinking", "read_file", "/tmp/test.go")
 
 	sa, _ := m.Get(id)
@@ -143,7 +143,7 @@ func TestManager_UpdateActivity_WithCallback(t *testing.T) {
 		updated = true
 	})
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.UpdateActivity(id, "writing", "write_file", "/tmp/out.go")
 
 	if !updated {
@@ -175,7 +175,7 @@ func TestManager_Cancel_RunningAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.SetCancel(id, cancel)
 
 	ok := m.Cancel(id)
@@ -193,7 +193,7 @@ func TestManager_Cancel_AlreadyDone(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
 
-	id := m.Spawn("test", "do something", nil, ctx)
+	id := m.Spawn("test", "test", "do something", nil, ctx)
 	m.Complete(id, "done", nil)
 
 	ok := m.Cancel(id)

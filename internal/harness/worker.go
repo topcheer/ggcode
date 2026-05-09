@@ -43,7 +43,7 @@ func executeTaskViaWorker(ctx context.Context, project Project, cfg *Config, tas
 	if strings.TrimSpace(workerTask) == "" {
 		workerTask = task.ID
 	}
-	workerID := mgr.Spawn(workerTask, workerTask, []string{"harness-worker"}, ctx)
+	workerID := mgr.Spawn("harness-worker", workerTask, workerTask, []string{"harness-worker"}, ctx)
 	task.WorkerID = workerID
 	task.WorkerStatus = string(subagent.StatusPending)
 	task.WorkerPhase = "pending"

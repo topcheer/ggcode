@@ -37,6 +37,7 @@ type RunnerConfig struct {
 	BuildToolSet func(allowedTools []string, allTools []ToolInfo) interface{} // returns opaque tool set for agent
 	Model        string                                                       // optional model override (e.g., "sonnet", "opus", "haiku")
 	AgentType    string                                                       // optional agent type hint (e.g., "Explore", "Plan")
+	WorkingDir   string                                                       // working directory for the sub-agent
 }
 
 // Run starts the sub-agent in a goroutine, running a complete agentic loop.
@@ -92,19 +93,39 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	}
 	subAgent := cfg.AgentFactory(cfg.Provider, toolSet, systemPrompt, 0)
 
+	// Propagate working directory so sub-agent tools operate in the right directory
+	if cfg.WorkingDir != "" {
+		if wd, ok := subAgent.(interface{ SetWorkingDir(string) }); ok {
+			wd.SetWorkingDir(cfg.WorkingDir)
+		}
+	}
+
 	// Run the agentic loop, capturing output
 	var output strings.Builder
 	lastToolName := ""
+	var textBuf strings.Builder // accumulate text chunks into turn-level events
+	flushText := func() {
+		if textBuf.Len() == 0 {
+			return
+		}
+		text := textBuf.String()
+		textBuf.Reset()
+		if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+			sa.appendEvent(AgentEvent{Type: AgentEventText, Text: text})
+		}
+	}
 	err := subAgent.RunStream(subCtx, cfg.Task, func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
 			output.WriteString(event.Text)
+			textBuf.WriteString(event.Text)
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("writing", "", "")
-				sa.appendEvent(AgentEvent{Type: AgentEventText, Text: truncateStr(event.Text, 500)})
 			}
 			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventToolCallDone:
+			// Flush accumulated text before recording tool call
+			flushText()
 			// Increment tool call count for this subagent
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.IncrementToolCalls()
@@ -118,6 +139,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			lastToolName = event.Tool.Name
 			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventToolResult:
+			flushText()
 			if summary := subagentToolProgressSummary(lastToolName, event.Result); summary != "" {
 				cfg.Manager.UpdateProgress(cfg.SubAgentID, summary)
 			} else {
@@ -132,6 +154,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				})
 			}
 		case provider.StreamEventError:
+			flushText()
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("failed", "", "")
@@ -144,6 +167,8 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			cfg.Manager.Notify(cfg.SubAgentID)
 		}
 	})
+	// Flush any remaining text at the end of the stream
+	flushText()
 
 	result := output.String()
 	if err != nil {
