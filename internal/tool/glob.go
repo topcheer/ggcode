@@ -33,7 +33,11 @@ func (t Glob) Parameters() json.RawMessage {
 					"description": "Base directory to search in (default: current directory)"
 				}
 			},
-			"required": ["pattern"]
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
+			},
+						"required": ["pattern"]
 		}`)
 }
 

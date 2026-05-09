@@ -28,6 +28,10 @@ func (t GitRemote) Parameters() json.RawMessage {
 					"type": "boolean",
 					"description": "Show remote URLs (default: true)"
 				}
+			,
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Checking git status', '查看仓库状态')."
 			}
 		}`)
 }

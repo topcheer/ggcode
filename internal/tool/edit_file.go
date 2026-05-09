@@ -40,7 +40,11 @@ func (t EditFile) Parameters() json.RawMessage {
 					"description": "Replace all occurrences of old_text (default false)"
 				}
 			},
-			"required": ["file_path", "old_text", "new_text"]
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
+			},
+						"required": ["file_path", "old_text", "new_text"]
 		}`)
 }
 

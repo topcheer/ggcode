@@ -32,7 +32,7 @@ func (t StartCommandTool) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "Clear, concise description of what this command does in active voice."
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Starting dev server', '启动开发服务器')."
 			},
 			"timeout": {
 				"description": "Timeout in seconds before the job is cancelled (default: 1800)"

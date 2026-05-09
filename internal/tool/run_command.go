@@ -156,7 +156,7 @@ func (t RunCommand) Parameters() json.RawMessage {
 			},
 			"description": {
 				"type": "string",
-				"description": "Clear, concise description of what this command does in active voice."
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Running tests', '运行测试')."
 			}
 		},
 		"required": ["command"]

@@ -32,7 +32,11 @@ func (t GitAdd) Parameters() json.RawMessage {
 					"description": "File paths to stage. Use [\".\"] to stage all changes."
 				}
 			},
-			"required": ["files"]
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
+			},
+						"required": ["files"]
 		}`)
 }
 
