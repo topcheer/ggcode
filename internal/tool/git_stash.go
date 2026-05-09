@@ -37,6 +37,10 @@ func (t GitStash) Parameters() json.RawMessage {
 					"type": "integer",
 					"description": "Stash index for pop/apply/drop (default: 0, meaning latest)"
 				}
+			,
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Checking git status', '查看仓库状态')."
 			}
 		}`)
 }

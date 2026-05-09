@@ -33,7 +33,11 @@ func (t GitCommit) Parameters() json.RawMessage {
 					"description": "Automatically stage modified/deleted files before committing (git commit -a)"
 				}
 			},
-			"required": ["message"]
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
+			},
+						"required": ["message"]
 		}`)
 }
 

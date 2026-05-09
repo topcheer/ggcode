@@ -47,7 +47,11 @@ func (t WebFetch) Parameters() json.RawMessage {
 				"description": "A prompt to apply to the fetched content for extraction or analysis"
 			}
 		},
-		"required": ["url"]
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
+			},
+					"required": ["url"]
 	}`)
 }
 

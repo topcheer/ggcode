@@ -43,7 +43,11 @@ func (t WebSearch) Parameters() json.RawMessage {
 				"description": "Never include results from these domains"
 			}
 		},
-		"required": ["query"]
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
+			},
+					"required": ["query"]
 	}`)
 }
 

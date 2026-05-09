@@ -31,6 +31,10 @@ func (t GitDiff) Parameters() json.RawMessage {
 			"file": {
 				"type": "string",
 				"description": "Specific file to diff (optional)"
+			,
+			"description": {
+				"type": "string",
+				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Checking git status', '查看仓库状态')."
 			}
 		}
 	}`)
