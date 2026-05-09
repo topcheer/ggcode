@@ -78,8 +78,6 @@ func (t ExitPlanModeTool) Parameters() json.RawMessage {
 			"type": "object",
 			"properties": {
 				"plan": {"type": "string", "description": "The implementation plan content generated during plan mode"},
-				"mode": {"type": "string", "enum": ["supervised", "auto", "bypass", "autopilot"], "description": "Permission mode to switch back to. If omitted, restores the mode from before entering plan mode."}
-			},
 			"required": ["plan"]
 		}`)
 }
@@ -89,7 +87,6 @@ func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Res
 	}
 	var args struct {
 		Plan string `json:"plan"`
-		Mode string `json:"mode"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -98,17 +95,8 @@ func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: "plan content is required"}, nil
 	}
 
-	var mode permission.PermissionMode
-	if args.Mode != "" {
-		if !permission.IsValidPermissionMode(args.Mode) {
-			return Result{IsError: true, Content: fmt.Sprintf("unknown mode %q (use supervised, plan, auto, bypass, or autopilot)", args.Mode)}, nil
-		}
-		mode = permission.ParsePermissionMode(args.Mode)
-	} else {
-		// Restore the mode from before entering plan mode.
-		// Fall back to DefaultMode if nothing was remembered.
-		mode = t.Switcher.RestoreMode(t.DefaultMode)
-	}
+	// Always restore the mode from before entering plan mode.
+	mode := t.Switcher.RestoreMode(t.DefaultMode)
 
 	t.Switcher.SetMode(mode)
 
