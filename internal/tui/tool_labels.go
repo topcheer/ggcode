@@ -58,26 +58,34 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
 		}
-		// Fallback: use description field if present
-		if desc := argString(args, "description"); desc != "" {
-			return toolPresentationFor(lang, "run", displayToolTarget(desc))
-		}
-		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmpty(
+		target := displayToolTarget(firstNonEmpty(
 			argString(args, "command"),
 			argString(args, "cmd"),
-		)))
+		))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{
+				DisplayName: desc,
+				Detail:      target,
+				Activity:    localizedCommandActivity(lang, desc),
+			}
+		}
+		return toolPresentationFor(lang, "run", target)
 	case "start_command":
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
 		}
-		// Fallback: use description field if present
-		if desc := argString(args, "description"); desc != "" {
-			return toolPresentationFor(lang, "run_in_background", displayToolTarget(desc))
-		}
-		return toolPresentationFor(lang, "run_in_background", displayToolTarget(firstNonEmpty(
+		target := displayToolTarget(firstNonEmpty(
 			argString(args, "command"),
 			argString(args, "cmd"),
-		)))
+		))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{
+				DisplayName: desc,
+				Detail:      target,
+				Activity:    localizedCommandActivity(lang, desc),
+			}
+		}
+		return toolPresentationFor(lang, "run_in_background", target)
 	case "write_command_input":
 		// The input text being sent to the process is the most important detail
 		inputText := argString(args, "input")
