@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -13,6 +12,18 @@ import (
 )
 
 const maxReactiveCompactRetries = 3
+
+type microcompacter interface {
+	Microcompact() bool
+}
+
+type promptBudgeter interface {
+	PromptBudget() int
+}
+
+type oldestGroupTruncater interface {
+	TruncateOldestGroupForRetry() bool
+}
 
 // isPromptTooLongError detects context-length errors from any provider.
 func isPromptTooLongError(err error) bool {
@@ -52,6 +63,20 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	tokens := a.contextManager.TokenCount()
 	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d attempting compact", tokens)
 
+	if a.consumeReadyPreCompact() {
+		debug.Log("agent", "reactive compact: consumed completed precompact")
+		if retries != nil {
+			*retries = *retries + 1
+		}
+		return true
+	}
+	if a.compactLocallyForSendBudget("reactive compact") {
+		if retries != nil {
+			*retries = *retries + 1
+		}
+		return true
+	}
+
 	debug.Log("agent", "reactive compact: compacting conversation")
 	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if compactErr != nil {
@@ -79,7 +104,11 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	return true
 }
 
-// maybeAutoCompact triggers auto-compaction if token usage exceeds the threshold.
+// maybeAutoCompact keeps the hot LLM path non-blocking. It may perform local
+// microcompaction, but full LLM summarization is scheduled through background
+// pre-compaction and only adopted later when ready. Prompt-too-long recovery
+// remains synchronous in tryReactiveCompact because the current request cannot
+// proceed without shrinking context.
 func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
 	threshold := a.contextManager.AutoCompactThreshold()
 	tokens := a.contextManager.TokenCount()
@@ -91,37 +120,85 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	}
 
 	debug.Log("agent", "maybeAutoCompact: TRIGGERED (tokens=%d >= threshold=%d)", tokens, threshold)
-	changed, err := a.contextManager.CheckAndSummarize(ctx, a.provider)
-	if err != nil {
-		if shouldIgnoreAutoCompactError(err) {
-			debug.Log("agent", "ignoring transient auto-compact failure: %v", err)
-			if transientWarned == nil || !*transientWarned {
-				debug.Log("agent", "transient compact error details: %s", compactErrorReason(err))
-				if transientWarned != nil {
-					*transientWarned = true
-				}
-			}
-			return nil
+	changed := false
+	if cm, ok := a.contextManager.(microcompacter); ok {
+		changed = cm.Microcompact()
+	}
+	newTokens := a.contextManager.TokenCount()
+	if changed {
+		debug.Log("agent", "auto-microcompact: conversation compacted locally (%d → %d tokens)", tokens, newTokens)
+		if transientWarned != nil {
+			*transientWarned = false
 		}
-		return fmt.Errorf("auto-summarize failed: %w", err)
+		if newTokens < tokens*7/10 {
+			a.maybeSaveCheckpoint()
+		}
 	}
-	if transientWarned != nil {
-		*transientWarned = false
-	}
-	if !changed {
+
+	if newTokens < threshold {
 		return nil
 	}
 
-	newTokens := a.contextManager.TokenCount()
-	debug.Log("agent", "auto-compact: conversation compacted successfully (%d → %d tokens)", tokens, newTokens)
+	debug.Log("agent", "maybeAutoCompact: scheduling background precompact after microcompact tokens=%d threshold=%d", newTokens, threshold)
+	a.StartPreCompact()
+	return nil
+}
 
-	// If token reduction is significant (>30%), likely a summarize happened.
-	// Persist checkpoint so --resume won't need to re-compact.
-	if newTokens < tokens*7/10 {
-		a.maybeSaveCheckpoint()
+func (a *Agent) ensurePromptSendable() {
+	if a.promptBudget() <= 0 {
+		return
+	}
+	if a.contextManager.TokenCount() < a.promptBudget() {
+		return
+	}
+	if a.consumeReadyPreCompact() && a.contextManager.TokenCount() < a.promptBudget() {
+		return
+	}
+	a.compactLocallyForSendBudget("pre-send hard guard")
+}
+
+func (a *Agent) promptBudget() int {
+	if cm, ok := a.contextManager.(promptBudgeter); ok {
+		return cm.PromptBudget()
+	}
+	return a.contextManager.MaxTokens()
+}
+
+func (a *Agent) compactLocallyForSendBudget(reason string) bool {
+	budget := a.promptBudget()
+	if budget <= 0 {
+		return false
+	}
+	before := a.contextManager.TokenCount()
+	if before < budget {
+		return false
 	}
 
-	return nil
+	changed := false
+	if cm, ok := a.contextManager.(microcompacter); ok && cm.Microcompact() {
+		changed = true
+	}
+
+	tokens := a.contextManager.TokenCount()
+	dropped := 0
+	if tokens >= budget {
+		if cm, ok := a.contextManager.(oldestGroupTruncater); ok {
+			for tokens >= budget && cm.TruncateOldestGroupForRetry() {
+				changed = true
+				dropped++
+				tokens = a.contextManager.TokenCount()
+			}
+		}
+	}
+
+	if changed {
+		debug.Log("agent", "%s: local compaction reduced context %d→%d tokens budget=%d dropped_groups=%d",
+			reason, before, tokens, budget, dropped)
+		a.maybeSaveCheckpoint()
+	} else {
+		debug.Log("agent", "%s: local compaction unavailable/ineffective tokens=%d budget=%d", reason, before, budget)
+	}
+	return changed
 }
 
 // shouldIgnoreAutoCompactError returns true for transient network/timeout errors

@@ -38,6 +38,24 @@ type ContextManager interface {
 	AutoCompactThreshold() int
 }
 
+// CompactSnapshot is an immutable point-in-time view used by background
+// compaction. It lets callers summarize a stable copy without mutating the live
+// conversation while an LLM turn may still be running.
+type CompactSnapshot struct {
+	Messages      []provider.Message
+	OrigLen       int
+	MaxTokens     int
+	OutputReserve int
+	TodoPath      string
+}
+
+// CompactResult is the output of compacting a CompactSnapshot.
+type CompactResult struct {
+	Messages   []provider.Message
+	TokenCount int
+	Changed    bool
+}
+
 const (
 	summarizeThresholdWithUsage = 0.75
 	summarizeThresholdFallback  = 0.65
@@ -161,6 +179,72 @@ func (m *Manager) MessagesAndTokenCount() ([]provider.Message, int) {
 	return out, m.tokenCountLocked()
 }
 
+func (m *Manager) CompactSnapshot() CompactSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	msgs := make([]provider.Message, len(m.messages))
+	copy(msgs, m.messages)
+	return CompactSnapshot{
+		Messages:      msgs,
+		OrigLen:       len(msgs),
+		MaxTokens:     m.maxTokens,
+		OutputReserve: m.outputReserve,
+		TodoPath:      m.todoPath,
+	}
+}
+
+func (s CompactSnapshot) Compact(ctx context.Context, prov provider.Provider) (CompactResult, error) {
+	scratch := NewManager(s.MaxTokens)
+	scratch.SetOutputReserve(s.OutputReserve)
+	scratch.SetProvider(prov)
+	scratch.SetTodoFilePath(s.TodoPath)
+	scratch.mu.Lock()
+	scratch.messages = append([]provider.Message(nil), s.Messages...)
+	scratch.recalcTokens()
+	scratch.mu.Unlock()
+
+	before := scratch.Messages()
+	changed, err := scratch.CheckAndSummarize(ctx, prov)
+	if err != nil {
+		return CompactResult{}, err
+	}
+	after, tokens := scratch.MessagesAndTokenCount()
+	if !changed {
+		changed = !reflect.DeepEqual(before, after)
+	}
+	return CompactResult{
+		Messages:   after,
+		TokenCount: tokens,
+		Changed:    changed,
+	}, nil
+}
+
+func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactResult) (bool, int) {
+	if !result.Changed || len(result.Messages) == 0 {
+		return false, m.TokenCount()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if snapshot.OrigLen < 0 || len(m.messages) < snapshot.OrigLen {
+		return false, m.tokenCountLocked()
+	}
+	if !reflect.DeepEqual(m.messages[:snapshot.OrigLen], snapshot.Messages) {
+		debug.Log("ctx", "ApplyCompactResult: stale snapshot skipped live_msgs=%d snapshot_msgs=%d",
+			len(m.messages), snapshot.OrigLen)
+		return false, m.tokenCountLocked()
+	}
+
+	extra := append([]provider.Message(nil), m.messages[snapshot.OrigLen:]...)
+	newMsgs := append([]provider.Message(nil), result.Messages...)
+	newMsgs = append(newMsgs, extra...)
+	m.messages = newMsgs
+	m.recalcTokens()
+	debug.Log("ctx", "ApplyCompactResult: applied snapshot msgs=%d compacted=%d extra=%d tokens=%d",
+		snapshot.OrigLen, len(result.Messages), len(extra), m.tokenCountLocked())
+	return true, m.tokenCountLocked()
+}
+
 func (m *Manager) TokenCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -231,6 +315,12 @@ func (m *Manager) AutoCompactThreshold() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.autoCompactThresholdLocked()
+}
+
+func (m *Manager) PromptBudget() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.usablePromptBudgetLocked()
 }
 
 // Summarize compresses old messages into a summary while retaining an adaptive
@@ -837,11 +927,19 @@ func truncateGroupsForPTLRetry(msgs []provider.Message) ([]provider.Message, boo
 	if len(msgs) < 2 {
 		return nil, false
 	}
-	groups := buildMessageGroups(msgs, 0)
+	start := 0
+	var prefix []provider.Message
+	if msgs[0].Role == "system" {
+		start = 1
+		prefix = append(prefix, msgs[0])
+	}
+	groups := buildMessageGroups(msgs, start)
 	if len(groups) < 2 {
 		return nil, false
 	}
-	return append([]provider.Message(nil), msgs[groups[1].start:]...), true
+	truncated := append([]provider.Message(nil), prefix...)
+	truncated = append(truncated, msgs[groups[1].start:]...)
+	return truncated, true
 }
 
 func isPromptTooLongError(err error) bool {
