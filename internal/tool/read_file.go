@@ -48,7 +48,7 @@ func (t ReadFile) Parameters() json.RawMessage {
 				"type": "string",
 				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
 			},
-					"required": ["path"]
+					"required": ["path", "description"]
 	}`)
 }
 
