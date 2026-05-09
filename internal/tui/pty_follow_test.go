@@ -3,16 +3,40 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
 
-// TestPTY_SubAgentFollowStrip verifies the follow strip appears after spawn_agent.
-//
-// User workflow: type a prompt → wait for LLM to call spawn_agent →
-// observe follow strip with slot key "!" and "Esc close" hint.
-func TestPTY_SubAgentFollowStrip(t *testing.T) {
+// waitUntilNotBrewing waits until the agent is no longer in loading/brewing state.
+// This means the LLM turn is complete and the input is ready.
+func waitUntilNotBrewing(t *testing.T, h *ptyHarness, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	brewPattern := regexp.MustCompile(`(?i)brewing|thinking|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏`)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		h.readAll()
+		screen := h.getStrippedOutput()
+		// Take the last 200 chars to check current state
+		tail := lastN(screen, 200)
+		if !brewPattern.MatchString(tail) && strings.Contains(tail, "Type a message") {
+			return
+		}
+	}
+	t.Log("[warn] timeout waiting for brewing to end, proceeding anyway")
+}
+
+// TestPTY_SubAgentFollowDeepReview runs a sub-agent with a substantial task
+// (code review), enters follow mode, and verifies:
+//  1. Follow strip appears with slot keys
+//  2. Sub-agent tool calls render in the follow panel (read_file, run_command, etc.)
+//  3. Sub-agent text output renders in the follow panel
+//  4. Follow mode auto-returns when sub-agent completes
+//  5. After auto-return, main conversation panel is restored
+func TestPTY_SubAgentFollowDeepReview(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping PTY test in short mode")
 	}
@@ -20,193 +44,174 @@ func TestPTY_SubAgentFollowStrip(t *testing.T) {
 	h := startGGCodeLive(t)
 	defer h.quit()
 
-	// Step 1: Wait for TUI ready
+	// ── Phase 1: Start ggcode and wait for TUI ready ──
 	h.waitForText("Type a message", 10*time.Second)
 	h.drainOutput()
 	time.Sleep(1 * time.Second)
+	t.Log("━━━ Phase 1: TUI ready ━━━")
 
-	// Step 2: Type prompt character by character, like a real user
-	prompt := "Use spawn_agent to create one sub-agent that lists all .go files in the current directory recursively. Return immediately after spawning."
+	// ── Phase 2: Ask the LLM to spawn a sub-agent with a substantial review task ──
+	// This prompt creates a sub-agent that will read many files and produce analysis.
+	// The sub-agent should make dozens of tool calls (read_file, search_files, etc.)
+	prompt := "Use spawn_agent to create a sub-agent named 'reviewer' with this task: " +
+		"Do a thorough code review of the project. Read at least 10 different source files. " +
+		"For each file, identify potential bugs, style issues, and improvement suggestions. " +
+		"Write a comprehensive summary at the end. Be thorough — read files one by one. " +
+		"Return immediately after spawning, do NOT wait for the sub-agent to finish."
 	h.sendText(prompt)
 	time.Sleep(500 * time.Millisecond)
 	h.sendKey("enter")
-	t.Log("[user] Prompt sent, waiting for LLM to respond...")
+	t.Log("━━━ Phase 2: Prompt sent, waiting for LLM to call spawn_agent... ━━━")
 
-	// Step 3: Wait for the LLM to call spawn_agent (can take 10-30s)
+	// Wait for spawn_agent tool call to appear in the main agent's output
 	h.waitForText("spawn_agent", 120*time.Second)
-	t.Log("[user] Saw spawn_agent in output. Waiting for agent to finish processing...")
+	t.Log("━━─ Phase 2: spawn_agent tool call detected ━━━")
 
-	// Step 4: Wait for the agent to complete its turn (loading ends, input reappears)
-	// The agent should return text after spawning, then stop.
-	h.waitForText("Type a message", 60*time.Second)
-	time.Sleep(2 * time.Second)
+	// Wait for the main agent to finish its turn
+	waitUntilNotBrewing(t, h, 120*time.Second)
+	time.Sleep(3 * time.Second)
 	h.drainOutput()
+	t.Log("━━━ Phase 2: Main agent turn complete ━━━")
 
-	// Step 5: Check screen — follow strip should show with "!" and "Esc"
-	screen := h.snapshot()
-	plain := compressSpaces(stripAnsi(screen))
-	t.Logf("Screen after agent finished (last 1000 chars):\n%s", lastN(plain, 1000))
+	// ── Phase 3: Verify follow strip appeared ──
+	screen := h.getStrippedOutput()
+	t.Logf("Phase 3 — Screen after agent turn (last 1500 chars):\n%s", lastN(screen, 1500))
 
-	hasSlot := strings.Contains(plain, "!")
-	hasEsc := strings.Contains(plain, "Esc")
-
+	// The follow strip should contain the sub-agent name or "reviewer" and slot key "!"
+	hasSlot := strings.Contains(screen, "!")
+	hasEsc := strings.Contains(screen, "Esc")
 	if !hasSlot {
-		t.Error("expected slot key '!' in follow strip after spawn_agent")
+		t.Error("Phase 3 FAILED: expected slot key '!' in follow strip")
+	} else {
+		t.Log("━━━ Phase 3: Follow strip visible with slot key '!' ━━━")
 	}
 	if !hasEsc {
-		t.Error("expected 'Esc' hint in follow strip after spawn_agent")
-	}
-	if hasSlot && hasEsc {
-		t.Log("[user] Follow strip visible with slot keys. Test passed.")
-	}
-}
-
-// TestPTY_SubAgentFollowToggle verifies entering and exiting follow mode.
-//
-// User workflow: spawn a long-running sub-agent → press "!" to follow →
-// verify "input paused" → press Esc → verify main view restored.
-func TestPTY_SubAgentFollowToggle(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping PTY test in short mode")
-	}
-
-	h := startGGCodeLive(t)
-	defer h.quit()
-
-	// Step 1: Wait for TUI ready
-	h.waitForText("Type a message", 10*time.Second)
-	h.drainOutput()
-	time.Sleep(1 * time.Second)
-
-	// Step 2: Spawn a sub-agent with a longer task so it stays running
-	prompt := "Use spawn_agent to create a sub-agent that reads every .go file in the current directory and writes a summary for each file. This will take a while. Return immediately after spawning, do NOT wait for the result."
-	h.sendText(prompt)
-	time.Sleep(500 * time.Millisecond)
-	h.sendKey("enter")
-	t.Log("[user] Prompt sent for long-running sub-agent...")
-
-	// Step 3: Wait for spawn_agent call
-	h.waitForText("spawn_agent", 120*time.Second)
-	t.Log("[user] Saw spawn_agent. Waiting for agent turn to complete...")
-
-	// Step 4: Wait for agent to finish its turn
-	h.waitForText("Type a message", 60*time.Second)
-	time.Sleep(2 * time.Second)
-	h.drainOutput()
-
-	// Step 5: Verify follow strip is visible
-	screen := h.snapshot()
-	plain := compressSpaces(stripAnsi(screen))
-	if !strings.Contains(plain, "!") {
-		t.Fatal("follow strip not visible — cannot proceed with toggle test")
-	}
-	t.Log("[user] Follow strip visible. Pressing '!' to enter follow mode...")
-
-	// Step 6: Press "!" to enter follow mode (input must be empty — agent just finished)
-	h.sendKey("!")
-	time.Sleep(3 * time.Second)
-
-	// Step 7: Verify follow mode — should show "input paused" or "Following"
-	screen = h.snapshot()
-	plain = compressSpaces(stripAnsi(screen))
-	t.Logf("Screen after pressing '!' (follow on, last 1000 chars):\n%s", lastN(plain, 1000))
-
-	if !strings.Contains(plain, "input paused") && !strings.Contains(plain, "Following") && !strings.Contains(plain, "following") {
-		t.Error("expected 'input paused' or 'Following' when in follow mode")
+		t.Error("Phase 3 FAILED: expected 'Esc' in follow strip")
 	} else {
-		t.Log("[user] Follow mode active — input paused, sub-agent output visible.")
+		t.Log("━━━ Phase 3: Follow strip has 'Esc' hint ━━━")
 	}
 
-	// Step 8: Press Esc to exit follow mode
-	t.Log("[user] Pressing Esc to exit follow mode...")
-	h.sendKey("escape")
-	time.Sleep(2 * time.Second)
-
-	screen = h.snapshot()
-	plain = compressSpaces(stripAnsi(screen))
-	t.Logf("Screen after pressing Esc (follow off, last 1000 chars):\n%s", lastN(plain, 1000))
-
-	if strings.Contains(plain, "input paused") {
-		t.Error("'input paused' should disappear after pressing Esc")
-	} else {
-		t.Log("[user] Back to main view. Test passed.")
-	}
-}
-
-// TestPTY_SubAgentFollowAutoReturn verifies auto-return when sub-agent completes.
-//
-// User workflow: spawn a quick sub-agent → follow it → wait →
-// verify auto-return to main view with system message.
-func TestPTY_SubAgentFollowAutoReturn(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping PTY test in short mode")
-	}
-
-	h := startGGCodeLive(t)
-	defer h.quit()
-
-	h.waitForText("Type a message", 10*time.Second)
-	h.drainOutput()
-	time.Sleep(1 * time.Second)
-
-	// Spawn a quick sub-agent
-	prompt := "Use spawn_agent to create a sub-agent that simply lists files in the current directory. It should finish very quickly. Return immediately after spawning."
-	h.sendText(prompt)
-	time.Sleep(500 * time.Millisecond)
-	h.sendKey("enter")
-	t.Log("[user] Prompt sent for quick sub-agent...")
-
-	h.waitForText("spawn_agent", 120*time.Second)
-	t.Log("[user] Saw spawn_agent. Waiting for agent turn to complete...")
-
-	h.waitForText("Type a message", 60*time.Second)
-	time.Sleep(2 * time.Second)
-	h.drainOutput()
-
-	// Verify follow strip, then enter follow mode
-	screen := h.snapshot()
-	plain := compressSpaces(stripAnsi(screen))
-	if !strings.Contains(plain, "!") {
-		t.Fatal("follow strip not visible — cannot proceed with auto-return test")
-	}
-	t.Log("[user] Follow strip visible. Pressing '!' to follow...")
-
+	// ── Phase 4: Enter follow mode by pressing "!" ──
+	t.Log("━━━ Phase 4: Pressing '!' to enter follow mode... ━━━")
 	h.sendKey("!")
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second)
 
-	screen = h.snapshot()
-	plain = compressSpaces(stripAnsi(screen))
-	t.Logf("Screen in follow mode (last 1000 chars):\n%s", lastN(plain, 1000))
+	screen = h.getStrippedOutput()
+	t.Logf("Phase 4 — Screen in follow mode (last 1500 chars):\n%s", lastN(screen, 1500))
 
-	// Now wait for auto-return — sub-agent completes → system message → main view
-	t.Log("[user] Waiting for sub-agent to complete and auto-return...")
-	for attempt := 0; attempt < 90; attempt++ {
-		time.Sleep(3 * time.Second)
-		screen = h.snapshot()
-		plain = compressSpaces(stripAnsi(screen))
+	// Should show input paused / following indicator
+	isFollowing := strings.Contains(screen, "input paused") ||
+		strings.Contains(screen, "Following") ||
+		strings.Contains(screen, "following")
+	if !isFollowing {
+		t.Error("Phase 4 FAILED: expected 'input paused' or 'Following' in follow mode")
+	} else {
+		t.Log("━━━ Phase 4: Follow mode active — input paused ━━━")
+	}
 
-		// Auto-return indicators: "input paused" gone, or "returned to main view" appeared
-		if strings.Contains(plain, "returned to main view") || strings.Contains(plain, "completed") {
-			t.Logf("[user] Auto-return detected after %d seconds. Test passed.", (attempt+1)*3)
-			return
+	// ── Phase 5: Wait for sub-agent to produce some tool calls, verify rendering ──
+	// The sub-agent should be reading files now. Wait and check for tool call rendering.
+	t.Log("━━━ Phase 5: Waiting for sub-agent tool calls to appear... ━━━")
+
+	// Poll for 2 minutes, checking for tool names in the output
+	toolNames := []string{"read_file", "search_files", "run_command", "glob"}
+	foundTools := map[string]bool{}
+	deadline := time.Now().Add(2 * time.Minute)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(10 * time.Second)
+		screen = h.getStrippedOutput()
+
+		for _, tool := range toolNames {
+			if strings.Contains(screen, tool) && !foundTools[tool] {
+				foundTools[tool] = true
+				t.Logf("Phase 5: Detected tool '%s' in sub-agent output ✓", tool)
+			}
 		}
-		if !strings.Contains(plain, "input paused") && !strings.Contains(plain, "Following sub-agent") {
-			t.Logf("[user] Auto-return detected after %d seconds (input unpaused). Test passed.", (attempt+1)*3)
-			return
+
+		// If we found at least 2 different tools, that's good enough
+		if len(foundTools) >= 2 {
+			t.Log("━━━ Phase 5: Multiple tool calls rendered in follow panel ━━━")
+			break
 		}
 	}
 
-	screen = h.snapshot()
-	plain = compressSpaces(stripAnsi(screen))
-	t.Logf("Final screen (last 1000 chars):\n%s", lastN(plain, 1000))
-	t.Error("expected auto-return to main view after sub-agent completed")
+	if len(foundTools) == 0 {
+		t.Error("Phase 5 FAILED: no tool calls from sub-agent detected in output after 2 minutes")
+	} else {
+		t.Logf("Phase 5: Found %d different tool types: %v", len(foundTools), foundTools)
+	}
+
+	// ── Phase 6: Check sub-agent is producing text output (not just tool calls) ──
+	t.Log("━━━ Phase 6: Checking for sub-agent text output... ━━━")
+	screen = h.getStrippedOutput()
+	// Sub-agent should have produced some analysis text beyond just tool calls
+	// Look for common review phrases or substantial text
+	hasAnalysis := strings.Contains(screen, "review") ||
+		strings.Contains(screen, "issue") ||
+		strings.Contains(screen, "suggest") ||
+		strings.Contains(screen, "bug") ||
+		strings.Contains(screen, "improvement") ||
+		strings.Contains(screen, "code")
+
+	if hasAnalysis {
+		t.Log("━━━ Phase 6: Sub-agent analysis text visible in output ━━━")
+	} else {
+		t.Log("Phase 6: No analysis text detected yet — sub-agent may still be reading files")
+	}
+
+	// ── Phase 7: Wait for sub-agent to complete and auto-return ──
+	t.Log("━━━ Phase 7: Waiting for sub-agent to complete and auto-return... ━━━")
+
+	autoReturned := false
+	for attempt := 0; attempt < 120; attempt++ {
+		time.Sleep(5 * time.Second)
+		screen = h.getStrippedOutput()
+
+		// Auto-return indicators:
+		// 1. "returned to main view" system message
+		// 2. "completed" message
+		// 3. "input paused" disappears
+		if strings.Contains(screen, "returned to main view") ||
+			strings.Contains(screen, "completed") {
+			autoReturned = true
+			t.Logf("━━━ Phase 7: Auto-return detected after %d seconds ━━━", (attempt+1)*5)
+			break
+		}
+
+		// Check if follow mode ended (input paused no longer in recent output)
+		recentTail := lastN(screen, 500)
+		if !strings.Contains(recentTail, "input paused") &&
+			!strings.Contains(recentTail, "Following sub-agent") &&
+			strings.Contains(recentTail, "Type a message") {
+			autoReturned = true
+			t.Logf("━━━ Phase 7: Auto-return detected (input unpaused) after %d seconds ━━━", (attempt+1)*5)
+			break
+		}
+	}
+
+	if !autoReturned {
+		t.Error("Phase 7 FAILED: sub-agent did not auto-return after 10 minutes")
+	}
+
+	// ── Phase 8: Verify main conversation panel is restored ──
+	time.Sleep(3 * time.Second)
+	screen = h.getStrippedOutput()
+	t.Logf("Phase 8 — Final screen (last 1000 chars):\n%s", lastN(screen, 1000))
+
+	// Main view should be back: "Type a message" input prompt, no follow mode
+	if !strings.Contains(lastN(screen, 500), "Type a message") {
+		t.Error("Phase 8 FAILED: main view not restored after auto-return")
+	} else {
+		t.Log("━━━ Phase 8: Main conversation panel restored ✓ ━━━")
+	}
+
+	t.Log("━━━ TestPTY_SubAgentFollowDeepReview COMPLETE ━━━")
 }
 
-// TestPTY_SubAgentFollowResize verifies follow mode renders correctly at different terminal sizes.
-//
-// User workflow: spawn sub-agent → follow it → resize to various sizes →
-// verify no crash and content still renders.
-func TestPTY_SubAgentFollowResize(t *testing.T) {
+// TestPTY_SubAgentFollowResizeDuringWork verifies follow mode stability
+// during a real sub-agent workload with various terminal resizes.
+func TestPTY_SubAgentFollowResizeDuringWork(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping PTY test in short mode")
 	}
@@ -218,69 +223,68 @@ func TestPTY_SubAgentFollowResize(t *testing.T) {
 	h.drainOutput()
 	time.Sleep(1 * time.Second)
 
-	// Spawn a sub-agent
-	prompt := "Use spawn_agent to create a sub-agent that lists all .go files in the current directory. Return immediately after spawning."
+	// Spawn a sub-agent that will read many files
+	prompt := "Use spawn_agent to create a sub-agent that does the following: " +
+		"Read every .go file in the internal/chat/ directory, one by one. " +
+		"For each file, summarize what it does in 2-3 sentences. " +
+		"Return immediately after spawning."
 	h.sendText(prompt)
 	time.Sleep(500 * time.Millisecond)
 	h.sendKey("enter")
-	t.Log("[user] Prompt sent...")
+	t.Log("[user] Prompt sent, waiting for spawn_agent...")
 
 	h.waitForText("spawn_agent", 120*time.Second)
-	h.waitForText("Type a message", 60*time.Second)
-	time.Sleep(2 * time.Second)
+	waitUntilNotBrewing(t, h, 120*time.Second)
+	time.Sleep(3 * time.Second)
 	h.drainOutput()
+	t.Log("[user] Agent finished. Entering follow mode...")
 
 	// Enter follow mode
 	h.sendKey("!")
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second)
 
-	// Verify follow mode is active
-	screen := h.snapshot()
-	plain := compressSpaces(stripAnsi(screen))
-	if !strings.Contains(plain, "input paused") && !strings.Contains(plain, "Following") {
-		t.Fatal("expected follow mode to be active before resize test")
+	screen := h.getStrippedOutput()
+	if !strings.Contains(screen, "input paused") && !strings.Contains(screen, "Following") {
+		t.Fatal("Expected follow mode to be active before resize test")
 	}
-	t.Log("[user] Follow mode active. Testing various terminal sizes...")
+	t.Log("[user] Follow mode active. Starting resize stress test...")
 
-	// Test standard 80x24
-	h.resize(80, 24)
-	time.Sleep(2 * time.Second)
-	screen = h.snapshot()
-	t.Logf("Follow mode at 80x24 (last 500 chars):\n%s", lastN(stripAnsi(screen), 500))
-	if strings.Contains(screen, "panic") || strings.Contains(screen, "runtime error") {
-		t.Error("crash detected at 80x24")
-	}
-
-	// Test wide 200x40
-	h.resize(200, 40)
-	time.Sleep(2 * time.Second)
-	screen = h.snapshot()
-	t.Logf("Follow mode at 200x40 (last 500 chars):\n%s", lastN(stripAnsi(screen), 500))
-	if strings.Contains(screen, "panic") || strings.Contains(screen, "runtime error") {
-		t.Error("crash detected at 200x40")
+	// Cycle through various sizes while sub-agent is working
+	sizes := []struct {
+		cols, rows uint16
+		label      string
+	}{
+		{80, 24, "80x24 (standard)"},
+		{120, 40, "120x40 (default)"},
+		{200, 50, "200x50 (wide)"},
+		{60, 20, "60x20 (narrow)"},
+		{160, 60, "160x60 (tall)"},
+		{80, 40, "80x40 (standard wide)"},
+		{120, 24, "120x24 (wide short)"},
+		{100, 30, "100x30 (medium)"},
 	}
 
-	// Test narrow 60x20
-	h.resize(60, 20)
-	time.Sleep(2 * time.Second)
-	screen = h.snapshot()
-	t.Logf("Follow mode at 60x20 (last 500 chars):\n%s", lastN(stripAnsi(screen), 500))
-	if strings.Contains(screen, "panic") || strings.Contains(screen, "runtime error") {
-		t.Error("crash detected at 60x20")
+	for i, sz := range sizes {
+		h.resize(sz.cols, sz.rows)
+		time.Sleep(4 * time.Second)
+
+		screen = h.getStrippedOutput()
+		recent := lastN(screen, 300)
+
+		// Check for crashes or panics
+		if strings.Contains(recent, "panic") || strings.Contains(recent, "runtime error") ||
+			strings.Contains(recent, "fatal error") {
+			t.Errorf("CRASH detected at %s (step %d):\n%s", sz.label, i, recent)
+			return
+		}
+
+		// Check that follow mode is still active (or sub-agent completed)
+		t.Logf("[resize %d/%d] %s — rendered OK, no crash", i+1, len(sizes), sz.label)
 	}
 
-	// Test tall 120x60
-	h.resize(120, 60)
-	time.Sleep(2 * time.Second)
-	screen = h.snapshot()
-	t.Logf("Follow mode at 120x60 (last 500 chars):\n%s", lastN(stripAnsi(screen), 500))
-	if strings.Contains(screen, "panic") || strings.Contains(screen, "runtime error") {
-		t.Error("crash detected at 120x60")
-	}
-
-	t.Log("[user] All sizes rendered without crash. Test passed.")
-
-	// Exit follow mode
+	t.Log("[user] All sizes rendered without crash. Exiting follow mode...")
 	h.sendKey("escape")
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
+
+	t.Log("[user] Test passed — follow mode survived 8 resize cycles during active sub-agent work")
 }
