@@ -332,7 +332,7 @@ func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command
 // DetectSlashCommand returns true if the cursor is at a slash command position.
 // It returns the command fragment after "/" for completion.
 func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
-	if cursor < 1 {
+	if cursor < 1 || cursor > len(value) {
 		return false, ""
 	}
 
@@ -352,6 +352,9 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 		return false, ""
 	}
 
+	if cursor > len(value) {
+		cursor = len(value)
+	}
 	prefix = value[wordStart+1 : cursor]
 	return true, prefix
 }
