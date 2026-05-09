@@ -192,11 +192,11 @@ func CompleteMention(prefix string, workDir string) []string {
 
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
-	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
+	"/help", "/?", "/sessions", "/resume", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/plugins",
 	"/image", "/init", "/harness", "/exit", "/quit",
-	"/compact", "/todo", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
+	"/compact", "/todo", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -205,7 +205,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/?":           "Show help message",
 	"/sessions":    "List saved sessions",
 	"/resume":      "Resume a previous session",
-	"/export":      "Export session to markdown",
 	"/model":       "Open model panel",
 	"/impersonate": "Set client identity (impersonate CLI tools)",
 	"/provider":    "Open provider manager",
@@ -244,7 +243,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/quit":        "Exit ggcode",
 	"/compact":     "Compress conversation history",
 	"/todo":        "View/manage todo list",
-	"/config":      "View/modify configuration",
 	"/status":      "Show current status",
 	"/knight":      "Knight auto-evolution commands",
 	"/update":      "Update ggcode to the latest release",
@@ -265,11 +263,9 @@ var SlashCommandPlaceholders = map[string]string{
 	"/harness":     "<subcommand>",
 	"/knight":      "<subcommand>",
 	"/resume":      "<session-id>",
-	"/export":      "<session-id>",
 	"/lang":        "<en|zh-CN>",
 	"/memory":      "<subcommand>",
 	"/image":       "<path>",
-	"/config":      "<key> [value]",
 	"/skills":      "<skill-name>",
 	"/init":        "[path]",
 	"/im":          "<subcommand>",
