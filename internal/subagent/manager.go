@@ -68,6 +68,7 @@ type SubAgent struct {
 	EndedAt         time.Time
 	Mailbox         chan AgentMessage
 	events          []AgentEvent
+	eventsDropped   int
 	cancel          context.CancelFunc
 	mu              sync.Mutex
 }
@@ -85,6 +86,7 @@ type Snapshot struct {
 	ProgressSummary string
 	Result          string
 	Error           string
+	EventsDropped   int
 	CreatedAt       time.Time
 	StartedAt       time.Time
 	EndedAt         time.Time
@@ -102,6 +104,7 @@ func (s *SubAgent) appendEvent(ev AgentEvent) {
 	defer s.mu.Unlock()
 	if len(s.events) >= maxAgentEvents {
 		s.events = s.events[1:]
+		s.eventsDropped++
 	}
 	s.events = append(s.events, ev)
 }
@@ -166,6 +169,7 @@ func (s *SubAgent) snapshot() Snapshot {
 		StartedAt:       s.StartedAt,
 		EndedAt:         s.EndedAt,
 		Events:          append([]AgentEvent(nil), s.events...),
+		EventsDropped:   s.eventsDropped,
 	}
 	if s.Error != nil {
 		snap.Error = s.Error.Error()

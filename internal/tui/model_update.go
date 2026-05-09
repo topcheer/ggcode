@@ -693,6 +693,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.autoCompleteItems = nil
 				return m, nil
 			}
+			// Sub-agent follow mode: Esc exits follow
+			if m.subAgentFollow.isActive() {
+				m.subAgentFollow.deactivate()
+				return m, nil
+			}
 			if m.shellMode && !m.loading {
 				m.setShellMode(false)
 				m.input.Reset()
@@ -1507,7 +1512,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case subAgentUpdateMsg:
+		// Refresh follow mode slots and handle auto-return
+		m.subAgentFollow.refreshSlots(m.subAgentMgr)
+		m.subAgentFollow.cleanup(m.subAgentMgr)
+		m.subAgentFollow.markDirty(msg.AgentID)
+
+		// Auto-return if the followed sub-agent completed
+		if returnedID := m.subAgentFollow.autoReturnIfNeeded(m.subAgentMgr); returnedID != "" {
+			m.subAgentFollow.deactivate()
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Sub-agent %s completed; returned to main view.", shortID(returnedID)))
+		}
+
+		// Throttle active view rebuild
+		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
+			m.subAgentFollow.markRebuilt(m.subAgentFollow.activeID)
+		}
+
 		m.chatListScrollToBottom()
+		return m, nil
+
+	case subAgentFollowRefreshMsg:
+		// Delayed rebuild after throttle window
+		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
+			m.subAgentFollow.markRebuilt(m.subAgentFollow.activeID)
+		}
 		return m, nil
 
 	case modeChangeMsg:

@@ -912,6 +912,27 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
 
+	// Sub-agent follow mode: render sub-agent view instead of main conversation
+	if m.subAgentFollow.isActive() && m.subAgentMgr != nil {
+		snap, ok := m.subAgentMgr.Snapshot(m.subAgentFollow.activeID)
+		if ok {
+			entry := m.subAgentFollow.getOrCreateView(m.subAgentFollow.activeID, innerW, innerH)
+			entry.list.SetSize(innerW, innerH)
+			buildSubAgentFollowList(snap, entry.list, m.chatStyles)
+			rendered := entry.list.Render()
+			width := m.boxInnerWidth(m.mainColumnWidth())
+			return lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("208")).
+				Padding(0, 1).
+				Width(width).
+				Height(panelHeight).
+				MaxHeight(panelHeight).
+				Render(rendered)
+		}
+		// Sub-agent not found — fall through to main view
+	}
+
 	debug.Log("layout", "panel ph=%d iw=%d ih=%d n=%d",
 		panelHeight, innerW, innerH, m.chatList.Len())
 
@@ -1460,7 +1481,21 @@ func (m Model) renderComposerPanel() string {
 	}
 
 	hintLine := strings.Join(hints, " • ")
-	body := m.renderComposerInput() + "\n" + hintLine
+
+	// Sub-agent follow strip and disabled input
+	var followStrip string
+	if m.subAgentFollow.slots != nil && len(m.subAgentFollow.slots) > 0 {
+		followStrip = m.renderSubAgentFollowStrip() + "\n"
+	}
+
+	var inputPart string
+	if m.subAgentFollow.isActive() {
+		inputPart = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
+			fmt.Sprintf("Following sub-agent %s — input paused. Press Esc or slot key to return.", shortID(m.subAgentFollow.activeID)))
+	} else {
+		inputPart = m.renderComposerInput()
+	}
+	body := followStrip + inputPart + "\n" + hintLine
 
 	width := m.boxInnerWidth(m.mainColumnWidth())
 	return lipgloss.NewStyle().

@@ -340,7 +340,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 					IsError:     event.IsError,
 					DisplayName: present.DisplayName,
 				}})
-				m.program.Send(subAgentUpdateMsg{})
+				m.program.Send(subAgentUpdateMsg{AgentID: extractAgentID(string(event.Tool.Arguments))})
 				return
 			}
 			if event.IsError {
