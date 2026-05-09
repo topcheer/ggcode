@@ -68,8 +68,7 @@ type ExitPlanModeTool struct {
 func (t ExitPlanModeTool) Name() string { return "exit_plan_mode" }
 func (t ExitPlanModeTool) Description() string {
 	return "Exit plan mode and return to normal coding mode. Provide the plan content generated during exploration. " +
-		"Optionally specify which mode to return to (supervised, auto, bypass, autopilot). If not specified, " +
-		"restores the mode that was active before entering plan mode. " +
+		"Automatically restores the permission mode that was active before entering plan mode. " +
 		"After exiting, break the plan into structured tasks using task_create with dependencies (addBlocks/addBlockedBy) " +
 		"to track progress, then execute each task step by step."
 }
@@ -77,7 +76,8 @@ func (t ExitPlanModeTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"plan": {"type": "string", "description": "The implementation plan content generated during plan mode"},
+				"plan": {"type": "string", "description": "The implementation plan content generated during plan mode"}
+			},
 			"required": ["plan"]
 		}`)
 }
