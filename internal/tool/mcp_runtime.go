@@ -55,14 +55,21 @@ func (t ListMCPCapabilitiesTool) Description() string {
 }
 func (t ListMCPCapabilitiesTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"server": {
-				"type": "string",
-				"description": "Optional MCP server name to filter to a single server"
-			}
+	"type": "object",
+	"properties": {
+		"server": {
+			"type": "string",
+			"description": "Optional MCP server name to filter to a single server"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
 		}
-	}`)
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 func (t ListMCPCapabilitiesTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
@@ -116,14 +123,31 @@ func (t GetMCPPromptTool) Description() string {
 }
 func (t GetMCPPromptTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"server": {"type": "string", "description": "MCP server name"},
-			"name": {"type": "string", "description": "Prompt name"},
-			"arguments": {"type": "object", "description": "Optional prompt arguments"}
+	"type": "object",
+	"properties": {
+		"server": {
+			"type": "string",
+			"description": "MCP server name"
 		},
-		"required": ["server", "name"]
-	}`)
+		"name": {
+			"type": "string",
+			"description": "Prompt name"
+		},
+		"arguments": {
+			"type": "object",
+			"description": "Optional prompt arguments"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"server",
+		"name",
+		"description"
+	]
+}`)
 }
 func (t GetMCPPromptTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
@@ -173,13 +197,27 @@ func (t ReadMCPResourceTool) Description() string {
 }
 func (t ReadMCPResourceTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"server": {"type": "string", "description": "MCP server name"},
-			"uri": {"type": "string", "description": "Resource URI"}
+	"type": "object",
+	"properties": {
+		"server": {
+			"type": "string",
+			"description": "MCP server name"
 		},
-		"required": ["server", "uri"]
-	}`)
+		"uri": {
+			"type": "string",
+			"description": "Resource URI"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"server",
+		"uri",
+		"description"
+	]
+}`)
 }
 func (t ReadMCPResourceTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {

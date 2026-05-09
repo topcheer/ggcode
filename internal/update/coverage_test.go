@@ -151,6 +151,51 @@ func TestCopyFile_MissingSrc(t *testing.T) {
 	}
 }
 
+func TestHelperCommandPreservesTerminal(t *testing.T) {
+	workDir := t.TempDir()
+	svc := NewService("v1.0.0", "/tmp/ggcode", "", workDir)
+
+	cmd := svc.helperCommand(PreparedUpdate{
+		HelperPath:   "/tmp/ggcode-update-helper",
+		ManifestPath: "/tmp/manifest.json",
+	})
+
+	if cmd.Stdin != os.Stdin {
+		t.Fatal("expected helper command to inherit stdin")
+	}
+	if cmd.Stdout != os.Stdout {
+		t.Fatal("expected helper command to inherit stdout")
+	}
+	if cmd.Stderr != os.Stderr {
+		t.Fatal("expected helper command to inherit stderr")
+	}
+	if cmd.Dir != workDir {
+		t.Fatalf("expected helper command dir %q, got %q", workDir, cmd.Dir)
+	}
+}
+
+func TestRestartCommandPreservesTerminal(t *testing.T) {
+	workDir := t.TempDir()
+	cmd := restartCommand(HelperManifest{
+		RestartPath: "/tmp/ggcode",
+		RestartArgs: []string{"--resume", "session-123"},
+		WorkingDir:  workDir,
+	})
+
+	if cmd.Stdin != os.Stdin {
+		t.Fatal("expected restart command to inherit stdin")
+	}
+	if cmd.Stdout != os.Stdout {
+		t.Fatal("expected restart command to inherit stdout")
+	}
+	if cmd.Stderr != os.Stderr {
+		t.Fatal("expected restart command to inherit stderr")
+	}
+	if cmd.Dir != workDir {
+		t.Fatalf("expected restart command dir %q, got %q", workDir, cmd.Dir)
+	}
+}
+
 func TestVersionStringOrDev(t *testing.T) {
 	got := versionStringOrDev("")
 	if got == "" {

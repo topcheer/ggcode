@@ -23,23 +23,26 @@ func (t StartCommandTool) Description() string {
 
 func (t StartCommandTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"command": {
-				"type": "string",
-				"description": "Shell command to execute in the background. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Start dev server' or '# Run linter'). This comment is shown as the activity label in the UI."
-				"description": "Shell command to execute in the background. Start with a '# ' comment line describing its purpose (e.g. '# Start dev server')."
-			},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Starting dev server', '启动开发服务器')."
-			},
-			"timeout": {
-				"description": "Timeout in seconds before the job is cancelled (default: 1800)"
-			}
+	"type": "object",
+	"properties": {
+		"command": {
+			"type": "string",
+			"description": "Shell command to execute in the background. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Start dev server' or '# Run linter'). This comment is shown as the activity label in the UI."
 		},
-		"required": ["command"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		},
+		"timeout": {
+			"type": "integer",
+			"description": "Timeout in seconds before the job is cancelled (default: 1800)"
+		}
+	},
+	"required": [
+		"command",
+		"description"
+	]
+}`)
 }
 
 // isBypassMode returns true when the permission policy allows
@@ -104,23 +107,30 @@ func (t ReadCommandOutputTool) Description() string {
 
 func (t ReadCommandOutputTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"job_id": {
-				"type": "string",
-				"description": "The command job ID returned by start_command"
-			},
-			"tail_lines": {
-				"type": "integer",
-				"description": "How many recent lines to return (default: 20)"
-			},
-			"since_line": {
-				"type": "integer",
-				"description": "Only return lines after this 1-based line number"
-			}
+	"type": "object",
+	"properties": {
+		"job_id": {
+			"type": "string",
+			"description": "The command job ID returned by start_command"
 		},
-		"required": ["job_id"]
-	}`)
+		"tail_lines": {
+			"type": "integer",
+			"description": "How many recent lines to return (default: 20)"
+		},
+		"since_line": {
+			"type": "integer",
+			"description": "Only return lines after this 1-based line number"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"job_id",
+		"description"
+	]
+}`)
 }
 
 func (t ReadCommandOutputTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -154,27 +164,34 @@ func (t WaitCommandTool) Description() string {
 
 func (t WaitCommandTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"job_id": {
-				"type": "string",
-				"description": "The command job ID returned by start_command"
-			},
-			"wait_seconds": {
-				"type": "integer",
-				"description": "How long to wait before returning (default: 30)"
-			},
-			"tail_lines": {
-				"type": "integer",
-				"description": "How many recent lines to return (default: 20)"
-			},
-			"since_line": {
-				"type": "integer",
-				"description": "Only return lines after this 1-based line number"
-			}
+	"type": "object",
+	"properties": {
+		"job_id": {
+			"type": "string",
+			"description": "The command job ID returned by start_command"
 		},
-		"required": ["job_id"]
-	}`)
+		"wait_seconds": {
+			"type": "integer",
+			"description": "How long to wait before returning (default: 30)"
+		},
+		"tail_lines": {
+			"type": "integer",
+			"description": "How many recent lines to return (default: 20)"
+		},
+		"since_line": {
+			"type": "integer",
+			"description": "Only return lines after this 1-based line number"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"job_id",
+		"description"
+	]
+}`)
 }
 
 func (t WaitCommandTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -210,15 +227,22 @@ func (t StopCommandTool) Description() string {
 
 func (t StopCommandTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"job_id": {
-				"type": "string",
-				"description": "The command job ID returned by start_command"
-			}
+	"type": "object",
+	"properties": {
+		"job_id": {
+			"type": "string",
+			"description": "The command job ID returned by start_command"
 		},
-		"required": ["job_id"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"job_id",
+		"description"
+	]
+}`)
 }
 
 func (t StopCommandTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -250,23 +274,31 @@ func (t WriteCommandInputTool) Description() string {
 
 func (t WriteCommandInputTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"job_id": {
-				"type": "string",
-				"description": "The command job ID returned by start_command"
-			},
-			"input": {
-				"type": "string",
-				"description": "Text to write to the command's stdin"
-			},
-			"append_newline": {
-				"type": "boolean",
-				"description": "Whether to append a trailing newline after the input (default: true)"
-			}
+	"type": "object",
+	"properties": {
+		"job_id": {
+			"type": "string",
+			"description": "The command job ID returned by start_command"
 		},
-		"required": ["job_id", "input"]
-	}`)
+		"input": {
+			"type": "string",
+			"description": "Text to write to the command's stdin"
+		},
+		"append_newline": {
+			"type": "boolean",
+			"description": "Whether to append a trailing newline after the input (default: true)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"job_id",
+		"input",
+		"description"
+	]
+}`)
 }
 
 func (t WriteCommandInputTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -303,7 +335,18 @@ func (t ListCommandsTool) Description() string {
 }
 
 func (t ListCommandsTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{}}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 
 func (t ListCommandsTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

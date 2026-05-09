@@ -22,19 +22,26 @@ func (t WaitAgentTool) Description() string {
 
 func (t WaitAgentTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"agent_id": {
-				"type": "string",
-				"description": "The ID of the sub-agent to wait for (returned by spawn_agent)"
-			},
-			"wait_seconds": {
-				"type": "integer",
-				"description": "How long to wait before returning a status snapshot (default: 30)"
-			}
+	"type": "object",
+	"properties": {
+		"agent_id": {
+			"type": "string",
+			"description": "The ID of the sub-agent to wait for (returned by spawn_agent)"
 		},
-		"required": ["agent_id"]
-	}`)
+		"wait_seconds": {
+			"type": "integer",
+			"description": "How long to wait before returning a status snapshot (default: 30)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"agent_id",
+		"description"
+	]
+}`)
 }
 
 func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

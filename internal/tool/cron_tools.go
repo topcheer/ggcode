@@ -24,15 +24,35 @@ func (t CronCreateTool) Description() string {
 }
 func (t CronCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"cron": {"type": "string", "description": "Cron expression (e.g. '*/5 * * * *' for every 5 minutes)"},
-			"prompt": {"type": "string", "description": "Prompt to enqueue when the job fires"},
-			"recurring": {"type": "boolean", "description": "Whether to repeat (default true)"},
-			"durable": {"type": "boolean", "description": "Whether to persist across sessions (default false, V1 ignores this)"}
+	"type": "object",
+	"properties": {
+		"cron": {
+			"type": "string",
+			"description": "Cron expression (e.g. '*/5 * * * *' for every 5 minutes)"
 		},
-		"required": ["cron", "prompt"]
-	}`)
+		"prompt": {
+			"type": "string",
+			"description": "Prompt to enqueue when the job fires"
+		},
+		"recurring": {
+			"type": "boolean",
+			"description": "Whether to repeat (default true)"
+		},
+		"durable": {
+			"type": "boolean",
+			"description": "Whether to persist across sessions (default false, V1 ignores this)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"cron",
+		"prompt",
+		"description"
+	]
+}`)
 }
 func (t CronCreateTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Scheduler == nil {
@@ -77,12 +97,22 @@ func (t CronDeleteTool) Description() string {
 }
 func (t CronDeleteTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"jobId": {"type": "string", "description": "Job ID to delete"}
+	"type": "object",
+	"properties": {
+		"jobId": {
+			"type": "string",
+			"description": "Job ID to delete"
 		},
-		"required": ["jobId"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"jobId",
+		"description"
+	]
+}`)
 }
 func (t CronDeleteTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Scheduler == nil {
@@ -110,7 +140,18 @@ func (t CronListTool) Description() string {
 	return "List all scheduled cron jobs."
 }
 func (t CronListTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type": "object", "properties": {}}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 func (t CronListTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) {
 	if t.Scheduler == nil {

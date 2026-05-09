@@ -36,23 +36,26 @@ func (t WebFetch) Description() string {
 
 func (t WebFetch) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"url": {
-				"type": "string",
-				"description": "The URL to fetch"
-			},
-			"prompt": {
-				"type": "string",
-				"description": "A prompt to apply to the fetched content for extraction or analysis"
-			}
+	"type": "object",
+	"properties": {
+		"url": {
+			"type": "string",
+			"description": "The URL to fetch"
 		},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-					"required": ["url"]
-	}`)
+		"prompt": {
+			"type": "string",
+			"description": "A prompt to apply to the fetched content for extraction or analysis"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"url",
+		"description"
+	]
+}`)
 }
 
 func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

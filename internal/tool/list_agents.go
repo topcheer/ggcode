@@ -24,7 +24,18 @@ func (t ListAgentsTool) Description() string {
 }
 
 func (t ListAgentsTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type": "object", "properties": {}}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 
 func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

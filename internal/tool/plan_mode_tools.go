@@ -35,7 +35,18 @@ func (t EnterPlanModeTool) Description() string {
 		"Prefer this for non-trivial implementation tasks to get user alignment before writing code."
 }
 func (t EnterPlanModeTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type": "object", "properties": {}}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 func (t EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) {
 	if t.Switcher == nil {
@@ -73,12 +84,22 @@ func (t ExitPlanModeTool) Description() string {
 }
 func (t ExitPlanModeTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"plan": {"type": "string", "description": "The implementation plan content generated during plan mode"}
-			},
-			"required": ["plan"]
-		}`)
+	"type": "object",
+	"properties": {
+		"plan": {
+			"type": "string",
+			"description": "The implementation plan content generated during plan mode"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"plan",
+		"description"
+	]
+}`)
 }
 func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Switcher == nil {

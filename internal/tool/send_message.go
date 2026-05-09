@@ -26,15 +26,35 @@ func (t SendMessageTool) Description() string {
 }
 func (t SendMessageTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"to": {"type": "string", "description": "Recipient ID or '*' for broadcast. Swarm teammate IDs start with 'tm-' (e.g., 'tm-2'). Sub-agent IDs start with 'agent-'."},
-				"message": {"type": "string", "description": "The message or task content to send"},
-				"summary": {"type": "string", "description": "Optional short summary of the message"},
-				"team_id": {"type": "string", "description": "REQUIRED for swarm teammates. The team ID (e.g., 'team-1'). Always include this when sending to teammates."}
-			},
-			"required": ["to", "message"]
-		}`)
+	"type": "object",
+	"properties": {
+		"to": {
+			"type": "string",
+			"description": "Recipient ID or '*' for broadcast. Swarm teammate IDs start with 'tm-' (e.g., 'tm-2'). Sub-agent IDs start with 'agent-'."
+		},
+		"message": {
+			"type": "string",
+			"description": "The message or task content to send"
+		},
+		"summary": {
+			"type": "string",
+			"description": "Optional short summary of the message"
+		},
+		"team_id": {
+			"type": "string",
+			"description": "REQUIRED for swarm teammates. The team ID (e.g., 'team-1'). Always include this when sending to teammates."
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"to",
+		"message",
+		"description"
+	]
+}`)
 }
 func (t SendMessageTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil && t.SwarmMgr == nil {

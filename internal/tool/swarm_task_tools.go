@@ -27,15 +27,31 @@ func (t SwarmTaskCreateTool) Description() string {
 }
 func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID"},
-			"subject": {"type": "string", "description": "Brief actionable title"},
-			"description": {"type": "string", "description": "Detailed requirements"},
-			"assignee": {"type": "string", "description": "Optional teammate ID to assign to"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID"
 		},
-		"required": ["team_id", "subject"]
-	}`)
+		"subject": {
+			"type": "string",
+			"description": "Brief actionable title"
+		},
+		"description": {
+			"type": "string",
+			"description": "Detailed requirements"
+		},
+		"assignee": {
+			"type": "string",
+			"description": "Optional teammate ID to assign to"
+		}
+	},
+	"required": [
+		"team_id",
+		"subject",
+		"description"
+	]
+}`)
 }
 func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -118,12 +134,22 @@ func (t SwarmTaskListTool) Description() string {
 }
 func (t SwarmTaskListTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID"
 		},
-		"required": ["team_id"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"description"
+	]
+}`)
 }
 func (t SwarmTaskListTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -177,14 +203,32 @@ func (t SwarmTaskClaimTool) Description() string {
 }
 func (t SwarmTaskClaimTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID"},
-			"task_id": {"type": "string", "description": "Task ID to claim"},
-			"owner": {"type": "string", "description": "Teammate ID claiming the task"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID"
 		},
-		"required": ["team_id", "task_id", "owner"]
-	}`)
+		"task_id": {
+			"type": "string",
+			"description": "Task ID to claim"
+		},
+		"owner": {
+			"type": "string",
+			"description": "Teammate ID claiming the task"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"task_id",
+		"owner",
+		"description"
+	]
+}`)
 }
 func (t SwarmTaskClaimTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -230,13 +274,27 @@ func (t SwarmTaskCompleteTool) Description() string {
 }
 func (t SwarmTaskCompleteTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID"},
-			"task_id": {"type": "string", "description": "Task ID to complete"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID"
 		},
-		"required": ["team_id", "task_id"]
-	}`)
+		"task_id": {
+			"type": "string",
+			"description": "Task ID to complete"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"task_id",
+		"description"
+	]
+}`)
 }
 func (t SwarmTaskCompleteTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {

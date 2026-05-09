@@ -20,24 +20,29 @@ func (t GitAdd) Description() string {
 
 func (t GitAdd) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {
-					"type": "string",
-					"description": "Repository path (default: current directory)"
-				},
-				"files": {
-					"type": "array",
-					"items": {"type": "string"},
-					"description": "File paths to stage. Use [\".\"] to stage all changes."
-				}
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"files": {
+			"type": "array",
+			"items": {
+				"type": "string"
 			},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-						"required": ["files"]
-		}`)
+			"description": "File paths to stage. Use [\".\"] to stage all changes."
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"files",
+		"description"
+	]
+}`)
 }
 
 func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

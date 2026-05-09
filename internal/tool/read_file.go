@@ -29,27 +29,30 @@ func (t ReadFile) Description() string {
 
 func (t ReadFile) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"path": {
-				"type": "string",
-				"description": "Absolute path to the file to read"
-			},
-			"offset": {
-				"type": "integer",
-				"description": "Line number to start reading from (1-based). Only applies to text files and extracted documents."
-			},
-			"limit": {
-				"type": "integer",
-				"description": "Maximum number of lines to read."
-			}
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Absolute path to the file to read"
 		},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-					"required": ["path", "description"]
-	}`)
+		"offset": {
+			"type": "integer",
+			"description": "Line number to start reading from (1-based). Only applies to text files and extracted documents."
+		},
+		"limit": {
+			"type": "integer",
+			"description": "Maximum number of lines to read."
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"path",
+		"description"
+	]
+}`)
 }
 
 const maxFileSize = 10 * 1024 * 1024 // 10MB pre-check limit

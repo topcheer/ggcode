@@ -18,22 +18,25 @@ func (t GitBranchList) Description() string {
 
 func (t GitBranchList) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {
-					"type": "string",
-					"description": "Repository path (default: current directory)"
-				},
-				"remote": {
-					"type": "boolean",
-					"description": "Show remote-tracking branches (default: false, local only)"
-				}
-			,
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Checking git status', '查看仓库状态')."
-			}
-		}`)
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"remote": {
+			"type": "boolean",
+			"description": "Show remote-tracking branches (default: false, local only)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 
 func (t GitBranchList) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

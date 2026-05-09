@@ -22,23 +22,26 @@ func (t Glob) Description() string {
 
 func (t Glob) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"pattern": {
-					"type": "string",
-					"description": "Glob pattern (e.g., '**/*.go', 'src/**/*.js')"
-				},
-				"directory": {
-					"type": "string",
-					"description": "Base directory to search in (default: current directory)"
-				}
-			},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-						"required": ["pattern", "description"]
-		}`)
+	"type": "object",
+	"properties": {
+		"pattern": {
+			"type": "string",
+			"description": "Glob pattern (e.g., '**/*.go', 'src/**/*.js')"
+		},
+		"directory": {
+			"type": "string",
+			"description": "Base directory to search in (default: current directory)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"pattern",
+		"description"
+	]
+}`)
 }
 
 func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

@@ -18,31 +18,39 @@ func (t GitStash) Description() string {
 
 func (t GitStash) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {
-					"type": "string",
-					"description": "Repository path (default: current directory)"
-				},
-				"action": {
-					"type": "string",
-					"description": "Stash action: push, pop, apply, drop (default: push)",
-					"enum": ["push", "pop", "apply", "drop"]
-				},
-				"message": {
-					"type": "string",
-					"description": "Stash message (only used with push action)"
-				},
-				"index": {
-					"type": "integer",
-					"description": "Stash index for pop/apply/drop (default: 0, meaning latest)"
-				}
-			,
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Checking git status', '查看仓库状态')."
-			}
-		}`)
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"action": {
+			"type": "string",
+			"description": "Stash action: push, pop, apply, drop (default: push)",
+			"enum": [
+				"push",
+				"pop",
+				"apply",
+				"drop"
+			]
+		},
+		"message": {
+			"type": "string",
+			"description": "Stash message (only used with push action)"
+		},
+		"index": {
+			"type": "integer",
+			"description": "Stash index for pop/apply/drop (default: 0, meaning latest)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 
 func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

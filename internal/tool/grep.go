@@ -34,74 +34,81 @@ func (t Grep) Description() string {
 
 func (t Grep) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"pattern": {
-				"type": "string",
-				"description": "The regular expression pattern to search for in file contents."
-			},
-			"path": {
-				"type": "string",
-				"description": "File or directory to search in. Defaults to current working directory."
-			},
-			"glob": {
-				"type": "string",
-				"description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\")"
-			},
-			"type": {
-				"type": "string",
-				"description": "File type to search. Common types: js, ts, py, go, rust, java, rb, c, cpp, css, html, sql. More efficient than glob for type filtering."
-			},
-			"output_mode": {
-				"type": "string",
-				"enum": ["content", "files_with_matches", "count"],
-				"description": "Output mode. 'content' shows matching lines with line numbers. 'files_with_matches' shows only file paths. 'count' shows match counts per file. Default: files_with_matches."
-			},
-			"-A": {
-				"type": "integer",
-				"description": "Number of lines to show after each match.",
-				"minimum": 0
-			},
-			"-B": {
-				"type": "integer",
-				"description": "Number of lines to show before each match.",
-				"minimum": 0
-			},
-			"-C": {
-				"type": "integer",
-				"description": "Alias for 'context'. Number of lines to show before and after each match.",
-				"minimum": 0
-			},
-			"context": {
-				"type": "integer",
-				"description": "Number of lines to show before and after each match. -C is an alias for this.",
-				"minimum": 0
-			},
-			"head_limit": {
-				"type": "integer",
-				"description": "Limit output to first N entries. Default 250. Use 0 for unlimited.",
-				"minimum": 0
-			},
-			"offset": {
-				"type": "integer",
-				"description": "Skip first N entries for pagination. Default 0.",
-				"minimum": 0
-			},
-			"multiline": {
-				"type": "boolean",
-				"description": "Enable multiline mode where . matches newlines. Default false."
-			},
-			"-i": {
-				"type": "boolean",
-				"description": "Case insensitive search. Default false."
-			}
+	"type": "object",
+	"properties": {
+		"pattern": {
+			"type": "string",
+			"description": "The regular expression pattern to search for in file contents."
 		},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-					"required": ["pattern", "description"]
-	}`)
+		"path": {
+			"type": "string",
+			"description": "File or directory to search in. Defaults to current working directory."
+		},
+		"glob": {
+			"type": "string",
+			"description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\")"
+		},
+		"type": {
+			"type": "string",
+			"description": "File type to search. Common types: js, ts, py, go, rust, java, rb, c, cpp, css, html, sql. More efficient than glob for type filtering."
+		},
+		"output_mode": {
+			"type": "string",
+			"enum": [
+				"content",
+				"files_with_matches",
+				"count"
+			],
+			"description": "Output mode. 'content' shows matching lines with line numbers. 'files_with_matches' shows only file paths. 'count' shows match counts per file. Default: files_with_matches."
+		},
+		"-A": {
+			"type": "integer",
+			"description": "Number of lines to show after each match.",
+			"minimum": 0
+		},
+		"-B": {
+			"type": "integer",
+			"description": "Number of lines to show before each match.",
+			"minimum": 0
+		},
+		"-C": {
+			"type": "integer",
+			"description": "Alias for 'context'. Number of lines to show before and after each match.",
+			"minimum": 0
+		},
+		"context": {
+			"type": "integer",
+			"description": "Number of lines to show before and after each match. -C is an alias for this.",
+			"minimum": 0
+		},
+		"head_limit": {
+			"type": "integer",
+			"description": "Limit output to first N entries. Default 250. Use 0 for unlimited.",
+			"minimum": 0
+		},
+		"offset": {
+			"type": "integer",
+			"description": "Skip first N entries for pagination. Default 0.",
+			"minimum": 0
+		},
+		"multiline": {
+			"type": "boolean",
+			"description": "Enable multiline mode where . matches newlines. Default false."
+		},
+		"-i": {
+			"type": "boolean",
+			"description": "Case insensitive search. Default false."
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"pattern",
+		"description"
+	]
+}`)
 }
 
 // grepArgs holds all parsed arguments.

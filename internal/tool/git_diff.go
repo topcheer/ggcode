@@ -18,26 +18,29 @@ func (t GitDiff) Description() string {
 
 func (t GitDiff) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"path": {
-				"type": "string",
-				"description": "Repository path (default: current directory)"
-			},
-			"cached": {
-				"type": "boolean",
-				"description": "Show staged changes only (default: false)"
-			},
-			"file": {
-				"type": "string",
-				"description": "Specific file to diff (optional)"
-			,
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Checking git status', '查看仓库状态')."
-			}
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"cached": {
+			"type": "boolean",
+			"description": "Show staged changes only (default: false)"
+		},
+		"file": {
+			"type": "string",
+			"description": "Specific file to diff (optional)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
 		}
-	}`)
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 
 func (t GitDiff) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

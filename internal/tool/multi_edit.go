@@ -23,27 +23,44 @@ func (t MultiEditFile) Description() string {
 
 func (t MultiEditFile) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"file_path": {
-				"type": "string",
-				"description": "Path to the file to edit"
-			},
-			"edits": {
-				"type": "array",
-				"items": {
-					"type": "object",
-					"properties": {
-						"old_text": {"type": "string", "description": "Exact text to find"},
-						"new_text": {"type": "string", "description": "Replacement text"}
-					},
-					"required": ["old_text", "new_text"]
-				},
-				"description": "Array of edit operations to apply"
-			}
+	"type": "object",
+	"properties": {
+		"file_path": {
+			"type": "string",
+			"description": "Path to the file to edit"
 		},
-		"required": ["file_path", "edits"]
-	}`)
+		"edits": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {
+					"old_text": {
+						"type": "string",
+						"description": "Exact text to find"
+					},
+					"new_text": {
+						"type": "string",
+						"description": "Replacement text"
+					}
+				},
+				"required": [
+					"old_text",
+					"new_text"
+				]
+			},
+			"description": "Array of edit operations to apply"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"file_path",
+		"edits",
+		"description"
+	]
+}`)
 }
 
 func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

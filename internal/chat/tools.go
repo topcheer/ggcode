@@ -158,6 +158,11 @@ func (t *BaseToolItem) renderFileLineCount() string {
 	matches := re.FindAllString(t.result, -1)
 	lines = len(matches)
 
+	if lines == 0 {
+		// No numbered lines — likely an error result (file not found, etc.)
+		return ""
+	}
+
 	var text string
 	if strings.HasPrefix(t.lang, "zh") {
 		text = fmt.Sprintf("%d行", lines)
@@ -181,12 +186,20 @@ func (t *BaseToolItem) renderEditDiff() string {
 	var added, removed int
 	if len(args.Edits) > 0 {
 		for _, e := range args.Edits {
-			removed += len(strings.Split(e.OldText, "\n"))
-			added += len(strings.Split(e.NewText, "\n"))
+			if e.OldText != "" {
+				removed += len(strings.Split(e.OldText, "\n"))
+			}
+			if e.NewText != "" {
+				added += len(strings.Split(e.NewText, "\n"))
+			}
 		}
 	} else {
-		removed = len(strings.Split(args.OldText, "\n"))
-		added = len(strings.Split(args.NewText, "\n"))
+		if args.OldText != "" {
+			removed = len(strings.Split(args.OldText, "\n"))
+		}
+		if args.NewText != "" {
+			added = len(strings.Split(args.NewText, "\n"))
+		}
 	}
 
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
@@ -512,13 +525,13 @@ type FileToolItem struct {
 }
 
 // NewFileToolItem creates a new file operation tool item.
-func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles, lang string, rawArgs string) *FileToolItem {
+func NewFileToolItem(id, displayName, filePath string, status ToolStatus, styles Styles, lang string, rawArgs string, toolName string) *FileToolItem {
 	b := NewBaseToolItem(id, displayName, status, filePath, styles)
 	b.lang = lang
 	b.rawArgs = rawArgs
-	// Determine body mode based on display name
-	switch displayName {
-	case "Edit", "编辑", "MultiEdit", "批量编辑":
+	// Determine body mode based on tool name (not displayName, which may be a description string)
+	switch toolName {
+	case "edit_file", "multi_edit_file":
 		b.fileBodyMode = "editdiff"
 	default:
 		b.fileBodyMode = "linecount"
@@ -728,7 +741,7 @@ func NewToolItem(id string, ctx ToolContext, status ToolStatus, styles Styles) I
 	case catBash:
 		return NewBashToolItem(id, displayName, ctx.Detail, status, styles)
 	case catFile:
-		return NewFileToolItem(id, displayName, ctx.Detail, status, styles, ctx.Lang, ctx.RawArgs)
+		return NewFileToolItem(id, displayName, ctx.Detail, status, styles, ctx.Lang, ctx.RawArgs, ctx.ToolName)
 	case catSearch:
 		return NewSearchToolItem(id, displayName, ctx.Detail, status, styles)
 	case catList:

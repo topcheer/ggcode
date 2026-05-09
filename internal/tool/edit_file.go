@@ -21,31 +21,36 @@ func (t EditFile) Description() string {
 
 func (t EditFile) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"file_path": {
-					"type": "string",
-					"description": "Path to the file to edit"
-				},
-				"old_text": {
-					"type": "string",
-					"description": "Exact text to find and replace"
-				},
-				"new_text": {
-					"type": "string",
-					"description": "Replacement text"
-				},
-				"replace_all": {
-					"type": "boolean",
-					"description": "Replace all occurrences of old_text (default false)"
-				}
-			},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-						"required": ["file_path", "old_text", "new_text", "description"]
-		}`)
+	"type": "object",
+	"properties": {
+		"file_path": {
+			"type": "string",
+			"description": "Path to the file to edit"
+		},
+		"old_text": {
+			"type": "string",
+			"description": "Exact text to find and replace"
+		},
+		"new_text": {
+			"type": "string",
+			"description": "Replacement text"
+		},
+		"replace_all": {
+			"type": "boolean",
+			"description": "Replace all occurrences of old_text (default false)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"file_path",
+		"old_text",
+		"new_text",
+		"description"
+	]
+}`)
 }
 
 func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

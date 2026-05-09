@@ -171,12 +171,7 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 }
 
 func (s *Service) LaunchHelper(prepared PreparedUpdate) error {
-	cmd := exec.Command(prepared.HelperPath, "update-helper", "--manifest", prepared.ManifestPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = nil
-	cmd.Dir = firstNonEmpty(s.WorkDir, mustGetwd())
-	cmd.Env = os.Environ()
+	cmd := s.helperCommand(prepared)
 	return cmd.Start()
 }
 
@@ -213,13 +208,30 @@ func RunHelper(manifestPath string) error {
 	_ = os.Remove(manifest.SourceBinary)
 	_ = os.Remove(manifestPath)
 
+	cmd := restartCommand(manifest)
+	return cmd.Start()
+}
+
+func (s *Service) helperCommand(prepared PreparedUpdate) *exec.Cmd {
+	cmd := exec.Command(prepared.HelperPath, "update-helper", "--manifest", prepared.ManifestPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	// Keep the original terminal attached so the restarted TUI can reacquire it
+	// after the helper swaps binaries and spawns the fresh process.
+	cmd.Stdin = os.Stdin
+	cmd.Dir = firstNonEmpty(s.WorkDir, mustGetwd())
+	cmd.Env = os.Environ()
+	return cmd
+}
+
+func restartCommand(manifest HelperManifest) *exec.Cmd {
 	cmd := exec.Command(manifest.RestartPath, manifest.RestartArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	cmd.Dir = firstNonEmpty(manifest.WorkingDir, mustGetwd())
 	cmd.Env = os.Environ()
-	return cmd.Start()
+	return cmd
 }
 
 func (s *Service) restartArgs(resumeID string) []string {

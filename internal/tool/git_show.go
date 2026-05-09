@@ -18,31 +18,34 @@ func (t GitShow) Description() string {
 
 func (t GitShow) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {
-					"type": "string",
-					"description": "Repository path (default: current directory)"
-				},
-				"revision": {
-					"type": "string",
-					"description": "Commit SHA, branch name, or tag name"
-				},
-				"file": {
-					"type": "string",
-					"description": "Specific file path to show (optional)"
-				},
-				"stat": {
-					"type": "boolean",
-					"description": "Show diffstat instead of full diff (default: false)"
-				}
-			},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-						"required": ["revision"]
-		}`)
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"revision": {
+			"type": "string",
+			"description": "Commit SHA, branch name, or tag name"
+		},
+		"file": {
+			"type": "string",
+			"description": "Specific file path to show (optional)"
+		},
+		"stat": {
+			"type": "boolean",
+			"description": "Show diffstat instead of full diff (default: false)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"revision",
+		"description"
+	]
+}`)
 }
 
 func (t GitShow) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
