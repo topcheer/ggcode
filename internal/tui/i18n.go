@@ -211,8 +211,10 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.slack")
 	case "/dingtalk", "/ding":
 		return tr(lang, "slash.dingtalk")
-	case "/wechat", "/wecom":
+	case "/wechat":
 		return tr(lang, "slash.wechat")
+	case "/wecom":
+		return tr(lang, "slash.wecom")
 	case "/mattermost", "/mm":
 		return tr(lang, "slash.mattermost")
 	case "/matrix":
@@ -1280,7 +1282,9 @@ func enCatalog(key string) string {
 	case "slash.dingtalk":
 		return "Manage DingTalk channel binding"
 	case "slash.wechat":
-		return "Manage WeChat (iLink) channel binding"
+		return "Manage WeChat channel binding"
+	case "slash.wecom":
+		return "Manage WeCom (Enterprise WeChat) channel binding"
 	case "slash.mattermost":
 		return "Manage Mattermost channel binding"
 	case "slash.matrix":
