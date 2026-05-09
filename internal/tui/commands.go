@@ -88,7 +88,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 		}
 		// Fillable commands: put command in input with placeholder hint.
 		// User can press Enter (no args) or type arguments.
-		if placeholder, ok := SlashCommandPlaceholders[selected]; ok {
+		if placeholder, ok := SlashCommandPlaceholders[selected]; ok && placeholder != "" {
 			m.input.SetValue(selected + " ")
 			m.input.CursorEnd()
 			m.inputHint = placeholder
