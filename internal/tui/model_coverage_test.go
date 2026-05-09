@@ -626,3 +626,82 @@ func TestSessionMutexLazyInit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Cron prompt dispatch tests
+// ---------------------------------------------------------------------------
+
+// TestCronPromptIdleSubmitsImmediately verifies that when the agent is idle,
+// a cronPromptMsg triggers submitText immediately instead of just queuing.
+func TestCronPromptIdleSubmitsImmediately(t *testing.T) {
+	m := newTestModel()
+	m.loading = false // agent is idle
+
+	msg := cronPromptMsg{Prompt: "check progress"}
+	next, cmd := m.Update(msg)
+	m2 := next.(Model)
+
+	// When idle, submitText should be called immediately.
+	// submitText returns a non-nil tea.Cmd (the agent start command).
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd when cron fires while agent is idle — prompt should be submitted immediately")
+	}
+
+	// The system message "Cron job triggered" should be written.
+	if m2.chatList == nil || m2.chatList.Len() == 0 {
+		t.Fatal("expected cron.firing system message in chatList")
+	}
+
+	// Loading should now be true (agent starting).
+	if !m2.loading {
+		t.Error("expected loading=true after cron prompt submission")
+	}
+}
+
+// TestCronPromptBusyQueuesForLater verifies that when the agent is busy,
+// a cronPromptMsg queues the prompt without starting a new run.
+func TestCronPromptBusyQueuesForLater(t *testing.T) {
+	m := newTestModel()
+	m.loading = true // agent is busy
+	m.activeAgentRunID = 1
+
+	msg := cronPromptMsg{Prompt: "check progress"}
+	next, cmd := m.Update(msg)
+	m2 := next.(Model)
+
+	// When busy, no new cmd should be issued (prompt is queued for later).
+	if cmd != nil {
+		t.Fatal("expected nil cmd when cron fires while agent is busy — prompt should be queued")
+	}
+
+	// The prompt should be in the pending queue.
+	if m2.pendingSubmissionCount() != 1 {
+		t.Fatalf("expected 1 pending submission, got %d", m2.pendingSubmissionCount())
+	}
+
+	// The system message should still be written.
+	if m2.chatList == nil || m2.chatList.Len() == 0 {
+		t.Fatal("expected cron.firing system message in chatList")
+	}
+
+	// Loading should remain true.
+	if !m2.loading {
+		t.Error("expected loading=true to remain unchanged")
+	}
+}
+
+// TestCronPromptEmptyPromptDoesNothing verifies that an empty cron prompt
+// doesn't crash or trigger unexpected behavior.
+func TestCronPromptEmptyPromptDoesNothing(t *testing.T) {
+	m := newTestModel()
+	m.loading = false
+
+	msg := cronPromptMsg{Prompt: ""}
+	next, _ := m.Update(msg)
+	m2 := next.(Model)
+
+	// System message should still be written.
+	if m2.chatList == nil || m2.chatList.Len() == 0 {
+		t.Fatal("expected cron.firing system message even for empty prompt")
+	}
+}
