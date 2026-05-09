@@ -193,6 +193,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Provider:     prov,
 		Tools:        tools,
 		AgentFactory: factory,
+		WorkingDir:   r.model.agent.WorkingDir(),
 	})
 	tools.Register(tool.WaitAgentTool{Manager: mgr})
 	tools.Register(tool.ListAgentsTool{Manager: mgr})

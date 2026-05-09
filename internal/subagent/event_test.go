@@ -94,7 +94,7 @@ func TestEventsReturnsCopy(t *testing.T) {
 
 func TestSnapshotIncludesEvents(t *testing.T) {
 	mgr := NewManager(config.SubAgentConfig{})
-	id := mgr.Spawn("task", "display task", nil, nil)
+	id := mgr.Spawn("test", "task", "display task", nil, nil)
 	sa, _ := mgr.Get(id)
 	sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "hello"})
 	sa.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "read_file", ToolArgs: `{}`})

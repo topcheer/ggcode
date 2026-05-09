@@ -282,11 +282,8 @@ func TestAgentToolItem(t *testing.T) {
 	agent.AppendNested(bash)
 
 	rendered := agent.Render(80)
-	if !strings.Contains(rendered, "Starting subagent") {
-		t.Fatalf("expected Starting subagent in render: %s", rendered)
-	}
-	if !strings.Contains(rendered, "auth") {
-		t.Fatalf("expected task in render: %s", rendered)
+	if !strings.Contains(rendered, "implement auth") {
+		t.Fatalf("expected agent label 'implement auth' in render: %s", rendered)
 	}
 	if !strings.Contains(rendered, "└") || !strings.Contains(rendered, "Bash") {
 		t.Fatalf("expected nested tool with tree line: %s", rendered)

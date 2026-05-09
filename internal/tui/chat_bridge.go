@@ -74,7 +74,10 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		if id == "" {
 			id = nextChatID()
 		}
-		taskDisplay := ts.Detail
+		taskDisplay := ts.DisplayName
+		if taskDisplay == "" {
+			taskDisplay = ts.Detail
+		}
 		if taskDisplay == "" {
 			taskDisplay = ts.Args
 		}

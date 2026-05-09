@@ -693,12 +693,15 @@ func formatIMListCommandsResult(tr *ToolResultInfo) string {
 
 // formatIMSpawnAgentResult renders spawn_agent result.
 func formatIMSpawnAgentResult(tr *ToolResultInfo) string {
-	task := extractArgValue(tr.Args, "task")
+	name := extractArgValue(tr.Args, "description")
+	if name == "" {
+		name = "sub-agent"
+	}
 	if tr.IsError {
 		output := strings.TrimSpace(tr.Result)
-		return fmt.Sprintf("🤖 Starting subagent %s\n```\n%s\n```", truncate(task, 60), output)
+		return fmt.Sprintf("🤖 %s\n```\n%s\n```", name, output)
 	}
-	return fmt.Sprintf("🤖 Starting subagent %s", truncate(task, 60))
+	return fmt.Sprintf("🤖 %s", name)
 }
 
 // formatIMWaitAgentResult renders wait_agent result.

@@ -362,10 +362,15 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		)))
 	case "spawn_agent":
 		task := argString(args, "task")
+		desc := argString(args, "description")
+		name := desc
+		if name == "" {
+			name = toolLabelFor(lang, "spawn_agent")
+		}
 		return toolPresentation{
-			DisplayName: toolLabelFor(lang, "spawn_agent"),
+			DisplayName: name,
 			Detail:      compactSingleLine(task),
-			Activity:    toolLabelFor(lang, "spawn_agent"),
+			Activity:    name,
 		}
 	case "list_agents":
 		return toolPresentation{

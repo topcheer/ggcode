@@ -585,56 +585,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if msg.String() == "esc" && m.previewPanel != nil {
+		if msg.String() == "esc" && m.previewPanel != nil && !m.subAgentFollow.isActive() {
 			m.closePreviewPanel()
 			return m, nil
 		}
 
-		if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") {
+		if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") && !m.subAgentFollow.isActive() {
 			m.resetExitConfirm()
 			m.cancelActiveRun()
 			return m, nil
 		}
 
 		switch msg.String() {
-		case "$":
-			if !m.shellMode && !m.loading && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
-				m.setShellMode(true)
+		case "ctrl+n":
+			// Sub-agent follow mode: cycle to next slot (or enter first slot)
+			if len(m.subAgentFollow.slots) > 0 {
+				if !m.subAgentFollow.isActive() {
+					m.subAgentFollow.activate(0)
+				} else {
+					currentIdx := m.subAgentFollow.currentSlotIndex()
+					// Find next non-terminal slot
+					for i := 1; i <= len(m.subAgentFollow.slots); i++ {
+						nextIdx := (currentIdx + i) % len(m.subAgentFollow.slots)
+						if !isTerminalStatus(m.subAgentFollow.slots[nextIdx].Status) {
+							m.subAgentFollow.activate(nextIdx)
+							break
+						}
+						// If all are terminal, wrap back to current
+						if i == len(m.subAgentFollow.slots) {
+							m.subAgentFollow.activate(currentIdx)
+						}
+					}
+				}
 				return m, nil
 			}
-		case "!":
-			// Sub-agent follow mode takes priority when sub-agents are running
-			if len(m.subAgentFollow.slots) > 0 && m.input.Value() == "" &&
-				!m.autoCompleteActive && !m.loading && m.pendingHarnessReview == nil &&
-				m.pendingHarnessPromote == nil {
-				// Slot 0 for "!"
-				if m.subAgentFollow.activeID == m.subAgentFollow.slots[0].ID {
+		case "ctrl+p":
+			// Sub-agent follow mode: cycle to previous slot (or exit if at start)
+			if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
+				currentIdx := m.subAgentFollow.currentSlotIndex()
+				if currentIdx == 0 {
 					m.subAgentFollow.deactivate()
 				} else {
-					m.subAgentFollow.activate(0)
+					m.subAgentFollow.activate(currentIdx - 1)
 				}
 				return m, nil
 			}
-			// Fall through to shell mode if no sub-agents
+		case "$", "!":
 			if !m.shellMode && !m.loading && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
 				m.setShellMode(true)
 				return m, nil
-			}
-		case "@", "#", "%", "^", "&", "*", "(":
-			// Sub-agent follow mode slots 2-9
-			slotMap := map[string]int{"@": 1, "#": 2, "%": 3, "^": 4, "&": 5, "*": 6, "(": 7}
-			if len(m.subAgentFollow.slots) > 0 && m.input.Value() == "" &&
-				!m.autoCompleteActive && !m.loading && m.pendingHarnessReview == nil &&
-				m.pendingHarnessPromote == nil {
-				idx := slotMap[msg.String()]
-				if idx < len(m.subAgentFollow.slots) {
-					if m.subAgentFollow.activeID == m.subAgentFollow.slots[idx].ID {
-						m.subAgentFollow.deactivate()
-					} else {
-						m.subAgentFollow.activate(idx)
-					}
-					return m, nil
-				}
 			}
 		case "ctrl+c":
 			if m.autoCompleteActive {
@@ -1546,16 +1545,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case subAgentUpdateMsg:
-		// Refresh follow mode slots and handle auto-return
+		// Refresh follow mode slots
 		m.subAgentFollow.refreshSlots(m.subAgentMgr)
 		m.subAgentFollow.cleanup(m.subAgentMgr)
 		m.subAgentFollow.markDirty(msg.AgentID)
-
-		// Auto-return if the followed sub-agent completed
-		if returnedID := m.subAgentFollow.autoReturnIfNeeded(m.subAgentMgr); returnedID != "" {
-			m.subAgentFollow.deactivate()
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Sub-agent %s completed; returned to main view.", shortID(returnedID)))
-		}
 
 		// Throttle active view rebuild
 		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {

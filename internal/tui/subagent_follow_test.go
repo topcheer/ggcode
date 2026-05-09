@@ -16,7 +16,7 @@ func newFollowTestModel(n int) (Model, []*subagent.SubAgent) {
 	var agents []*subagent.SubAgent
 	for i := 0; i < n; i++ {
 		task := "task-" + string(rune('A'+i))
-		id := m.subAgentMgr.Spawn(task, task, nil, context.Background())
+		id := m.subAgentMgr.Spawn(task, task, task, nil, context.Background())
 		sa, _ := m.subAgentMgr.Get(id)
 		agents = append(agents, sa)
 	}
@@ -33,6 +33,35 @@ func TestFollowSlotRefresh(t *testing.T) {
 	}
 	if m.subAgentFollow.slots[0].ID == "" {
 		t.Error("expected slot 0 to have an ID")
+	}
+}
+
+// TestFollowSlotRefreshStableOrder verifies slots are sorted by ID.
+func TestFollowSlotRefreshStableOrder(t *testing.T) {
+	m, _ := newFollowTestModel(5)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// Verify slots are in ascending ID order
+	for i := 1; i < len(m.subAgentFollow.slots); i++ {
+		if m.subAgentFollow.slots[i].ID < m.subAgentFollow.slots[i-1].ID {
+			t.Errorf("slots not sorted: slot[%d]=%s > slot[%d]=%s",
+				i-1, m.subAgentFollow.slots[i-1].ID, i, m.subAgentFollow.slots[i].ID)
+		}
+	}
+
+	// Verify order is stable across multiple refreshes
+	firstOrder := make([]string, len(m.subAgentFollow.slots))
+	for i, s := range m.subAgentFollow.slots {
+		firstOrder[i] = s.ID
+	}
+	for attempt := 0; attempt < 10; attempt++ {
+		m.subAgentFollow.refreshSlots(m.subAgentMgr)
+		for i, s := range m.subAgentFollow.slots {
+			if s.ID != firstOrder[i] {
+				t.Errorf("slot order unstable on attempt %d: expected %v, got slot[%d]=%s",
+					attempt, firstOrder, i, s.ID)
+			}
+		}
 	}
 }
 
@@ -79,8 +108,8 @@ func TestFollowActivateOutOfBounds(t *testing.T) {
 	}
 }
 
-// TestFollowAutoReturnOnCompletion verifies auto-return when agent completes.
-func TestFollowAutoReturnOnCompletion(t *testing.T) {
+// TestFollowAutoReturnDisabled verifies auto-return is disabled (user presses Esc to exit).
+func TestFollowAutoReturnDisabled(t *testing.T) {
 	m, agents := newFollowTestModel(2)
 	m.subAgentFollow.refreshSlots(m.subAgentMgr)
 
@@ -90,12 +119,13 @@ func TestFollowAutoReturnOnCompletion(t *testing.T) {
 	// Mark agent 0 as completed
 	agents[0].Status = subagent.StatusCompleted
 
+	// autoReturnIfNeeded should NOT return — user must press Esc
 	returnedID := m.subAgentFollow.autoReturnIfNeeded(m.subAgentMgr)
-	if returnedID == "" {
-		t.Error("expected auto-return when followed agent completes")
+	if returnedID != "" {
+		t.Error("auto-return should be disabled; user controls exit via Esc")
 	}
-	if m.subAgentFollow.isActive() {
-		t.Error("should not be active after auto-return")
+	if !m.subAgentFollow.isActive() {
+		t.Error("should still be active after agent completes — user views result")
 	}
 }
 
@@ -116,6 +146,26 @@ func TestFollowAutoReturnNoopWhileRunning(t *testing.T) {
 	}
 }
 
+// TestFollowActivateSkipsCompleted verifies activate skips completed agents.
+func TestFollowActivateSkipsCompleted(t *testing.T) {
+	m, agents := newFollowTestModel(3)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// Mark agents 0 and 1 as completed
+	agents[0].Status = subagent.StatusCompleted
+	agents[1].Status = subagent.StatusCompleted
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// activate(0) should skip to agent 2 (still pending)
+	m.subAgentFollow.activate(0)
+	if !m.subAgentFollow.isActive() {
+		t.Fatal("should be active after activate(0) with completed agents")
+	}
+	if m.subAgentFollow.activeID != agents[2].ID {
+		t.Errorf("expected to skip to agent 2 (%s), got %s", agents[2].ID, m.subAgentFollow.activeID)
+	}
+}
+
 // TestFollowStripRendering verifies strip renders when slots exist.
 func TestFollowStripRendering(t *testing.T) {
 	m, _ := newFollowTestModel(2)
@@ -125,14 +175,11 @@ func TestFollowStripRendering(t *testing.T) {
 	if strip == "" {
 		t.Error("expected non-empty strip when sub-agents are running")
 	}
-	if !containsPlain(strip, "!") {
-		t.Error("expected slot key '!' in strip")
+	if !containsPlain(strip, "Ctrl+N") {
+		t.Error("expected 'Ctrl+N' hint in strip")
 	}
-	if !containsPlain(strip, "@") {
-		t.Error("expected slot key '@' in strip")
-	}
-	if !containsPlain(strip, "Esc") {
-		t.Error("expected 'Esc' hint in strip")
+	if !containsPlain(strip, "Esc close") {
+		t.Error("expected 'Esc close' hint in strip")
 	}
 }
 
@@ -151,7 +198,7 @@ func TestFollowStripEmptyWhenNoSlots(t *testing.T) {
 // TestBuildSubAgentFollowList verifies event-to-chat-item mapping.
 func TestBuildSubAgentFollowList(t *testing.T) {
 	mgr := subagent.NewManager(config.SubAgentConfig{})
-	id := mgr.Spawn("test-task", "Test Task", nil, context.Background())
+	id := mgr.Spawn("test", "test-task", "Test Task", nil, context.Background())
 	sa, _ := mgr.Get(id)
 
 	// Simulate some events
@@ -172,10 +219,37 @@ func TestBuildSubAgentFollowList(t *testing.T) {
 	}
 }
 
+// TestBuildSubAgentFollowListMergesText verifies consecutive text events are merged.
+func TestBuildSubAgentFollowListMergesText(t *testing.T) {
+	mgr := subagent.NewManager(config.SubAgentConfig{})
+	id := mgr.Spawn("test", "test-task", "Test Task", nil, context.Background())
+	sa, _ := mgr.Get(id)
+
+	// Simulate streaming: multiple text chunks, then a tool call, then more text
+	sa.AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "Hello "})
+	sa.AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "world"})
+	sa.AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "!"})
+	sa.AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventToolCall, ToolName: "read_file", ToolArgs: "/tmp/test.txt"})
+	sa.AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventToolResult, ToolName: "read_file", Result: "contents"})
+	sa.AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "Done"})
+	sa.AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: " here"})
+
+	snap, _ := mgr.Snapshot(id)
+	list := chat.NewList(80, 20)
+	buildSubAgentFollowList(snap, list, chat.DefaultStyles())
+
+	// Expected items: header + merged-text("Hello world!") + tool-call + merged-text("Done here") = 4
+	expectedItems := 4
+	if list.Len() != expectedItems {
+		t.Errorf("expected %d items (header + 2 merged text blocks + 1 tool), got %d",
+			expectedItems, list.Len())
+	}
+}
+
 // TestBuildSubAgentFollowListTruncation verifies truncation notice.
 func TestBuildSubAgentFollowListTruncation(t *testing.T) {
 	mgr := subagent.NewManager(config.SubAgentConfig{})
-	id := mgr.Spawn("test-task", "Test Task", nil, context.Background())
+	id := mgr.Spawn("test", "test-task", "Test Task", nil, context.Background())
 	sa, _ := mgr.Get(id)
 
 	// Fill beyond max to trigger drops

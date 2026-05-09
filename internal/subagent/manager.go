@@ -52,6 +52,7 @@ type AgentMessage struct {
 // SubAgent represents a spawned child agent.
 type SubAgent struct {
 	ID              string
+	Name            string // short, meaningful label (required)
 	Task            string
 	DisplayTask     string
 	Tools           []string
@@ -75,6 +76,7 @@ type SubAgent struct {
 
 type Snapshot struct {
 	ID              string
+	Name            string // short, meaningful label
 	Task            string
 	DisplayTask     string
 	Tools           []string
@@ -161,6 +163,7 @@ func (s *SubAgent) snapshot() Snapshot {
 	defer s.mu.Unlock()
 	snap := Snapshot{
 		ID:              s.ID,
+		Name:            s.Name,
 		Task:            s.Task,
 		DisplayTask:     s.DisplayTask,
 		Tools:           append([]string(nil), s.Tools...),
@@ -239,7 +242,7 @@ func (m *Manager) Shutdown() {
 }
 
 // Spawn creates a new sub-agent with the given task and returns its ID.
-func (m *Manager) Spawn(task, displayTask string, tools []string, ctx context.Context) string {
+func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx context.Context) string {
 	m.mu.Lock()
 	m.nextID++
 	id := fmt.Sprintf("sa-%d", m.nextID)
@@ -247,6 +250,7 @@ func (m *Manager) Spawn(task, displayTask string, tools []string, ctx context.Co
 
 	sa := &SubAgent{
 		ID:           id,
+		Name:         name,
 		Task:         task,
 		DisplayTask:  displayTask,
 		Tools:        tools,
