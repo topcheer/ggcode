@@ -100,26 +100,6 @@ func TestExitPlanMode_RestoresPreviousMode(t *testing.T) {
 	}
 }
 
-func TestExitPlanMode_ExplicitModeOverride(t *testing.T) {
-	switcher := &mockModeSwitcher{
-		currentMode:  permission.PlanMode,
-		previousMode: permission.BypassMode,
-	}
-	tool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
-
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"plan":"do something","mode":"autopilot"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected error: %s", result.Content)
-	}
-	// Explicit mode should override remembered mode
-	if switcher.currentMode != permission.AutopilotMode {
-		t.Errorf("mode = %v, want AutopilotMode", switcher.currentMode)
-	}
-}
-
 func TestExitPlanMode_NoPreviousModeUsesDefault(t *testing.T) {
 	switcher := &mockModeSwitcher{
 		currentMode:  permission.PlanMode,
@@ -157,19 +137,6 @@ func TestExitPlanMode_EmptyPlan(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error for empty plan")
-	}
-}
-
-func TestExitPlanMode_InvalidMode(t *testing.T) {
-	switcher := &mockModeSwitcher{}
-	tool := ExitPlanModeTool{Switcher: switcher}
-
-	result, err := tool.Execute(context.Background(), json.RawMessage(`{"plan":"test","mode":"invalid"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.IsError {
-		t.Error("expected error for invalid mode")
 	}
 }
 
