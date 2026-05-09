@@ -267,7 +267,7 @@ type SubAgentConfig struct {
 // SwarmConfig holds swarm/team multi-agent configuration.
 type SwarmConfig struct {
 	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 5
-	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`       // default: 30m
+	TeammateTimeout     time.Duration `yaml:"teammate_timeout"`       // default: 0 (no timeout, run until task completes)
 	InboxSize           int           `yaml:"inbox_size"`             // default: 32
 	PollInterval        time.Duration `yaml:"poll_interval"`          // default: 1s — how often idle teammates check the task board
 }
