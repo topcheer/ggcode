@@ -29,14 +29,21 @@ func (t EnterWorktree) Description() string {
 
 func (t EnterWorktree) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"name": {
-				"type": "string",
-				"description": "Name for the worktree (used as directory and branch name). Defaults to a random name."
-			}
+	"type": "object",
+	"properties": {
+		"name": {
+			"type": "string",
+			"description": "Name for the worktree (used as directory and branch name). Defaults to a random name."
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
 		}
-	}`)
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 
 func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
@@ -106,21 +113,31 @@ func (t ExitWorktree) Description() string {
 
 func (t ExitWorktree) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"action": {
-				"type": "string",
-				"enum": ["keep", "remove"],
-				"description": "'keep' leaves the worktree directory and branch intact. 'remove' deletes both."
-			},
-			"discard_changes": {
-				"type": "boolean",
-				"default": false,
-				"description": "If true, discard uncommitted changes when removing. Required when there are uncommitted changes."
-			}
+	"type": "object",
+	"properties": {
+		"action": {
+			"type": "string",
+			"enum": [
+				"keep",
+				"remove"
+			],
+			"description": "'keep' leaves the worktree directory and branch intact. 'remove' deletes both."
 		},
-		"required": ["action"]
-	}`)
+		"discard_changes": {
+			"type": "boolean",
+			"default": false,
+			"description": "If true, discard uncommitted changes when removing. Required when there are uncommitted changes."
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"action",
+		"description"
+	]
+}`)
 }
 
 func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

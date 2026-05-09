@@ -51,13 +51,21 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 		return toolPresentationFor(lang, "write", fileTarget)
 	case "glob":
-		return toolPresentationFor(lang, "find", displayToolTarget(argString(args, "pattern")))
+		pattern := displayToolTarget(argString(args, "pattern"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: pattern, Activity: desc}
+		}
+		return toolPresentationFor(lang, "find", pattern)
 	case "grep", "search_files":
-		return toolPresentationFor(lang, "search", displayToolTarget(firstNonEmpty(
+		searchTarget := displayToolTarget(firstNonEmpty(
 			argString(args, "pattern"),
 			argString(args, "query"),
 			argString(args, "path"),
-		)))
+		))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: searchTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "search", searchTarget)
 	case "list_directory":
 		listTarget := displayToolFileTarget(firstNonEmpty(
 			argString(args, "path"),
@@ -136,9 +144,17 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "list_commands":
 		return toolPresentationFor(lang, "list_jobs", "")
 	case "web_fetch":
-		return toolPresentationFor(lang, "fetch", displayToolTarget(argString(args, "url")))
+		fetchTarget := displayToolTarget(argString(args, "url"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: fetchTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "fetch", fetchTarget)
 	case "web_search":
-		return toolPresentationFor(lang, "search", displayToolTarget(argString(args, "query")))
+		searchTarget := displayToolTarget(argString(args, "query"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: searchTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "search", searchTarget)
 	case "todo_write":
 		return toolPresentationFor(lang, "todo", "")
 	case "task", "agent":
@@ -148,11 +164,19 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			argString(args, "agent_type"),
 		)))
 	case "skill":
-		return toolPresentationFor(lang, "skill", displayToolTarget(argString(args, "skill")))
+		skillTarget := displayToolTarget(argString(args, "skill"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: skillTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "skill", skillTarget)
 	case "ask_user":
 		return toolPresentationFor(lang, "ask", displayToolTarget(askUserToolTarget(args)))
 	case "git_status":
-		return toolPresentationFor(lang, "inspect", displayToolFileTarget(argString(args, "path")))
+		statusTarget := displayToolFileTarget(argString(args, "path"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: statusTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "inspect", statusTarget)
 	case "git_diff":
 		detail := ""
 		if argString(args, "cached") == "true" {
@@ -164,32 +188,66 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			}
 			detail += displayToolFileTarget(f)
 		}
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: detail, Activity: desc}
+		}
 		return toolPresentationFor(lang, "diff", detail)
 	case "git_log":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentationFor(lang, "log", "")
 	case "git_show":
-		return toolPresentationFor(lang, "show", displayToolTarget(argString(args, "revision")))
+		showTarget := displayToolTarget(argString(args, "revision"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: showTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "show", showTarget)
 	case "git_blame":
-		return toolPresentationFor(lang, "blame", displayToolFileTarget(argString(args, "file")))
+		blameTarget := displayToolFileTarget(argString(args, "file"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: blameTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "blame", blameTarget)
 	case "git_branch_list":
 		detail := ""
 		if argString(args, "remote") == "true" {
 			detail = "--remote"
 		}
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: detail, Activity: desc}
+		}
 		return toolPresentationFor(lang, "branches", detail)
 	case "git_remote":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentationFor(lang, "remote", "")
 	case "git_stash_list":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "list", Activity: desc}
+		}
 		return toolPresentationFor(lang, "stash", "list")
 	case "git_add":
 		files := parseStringSlice(args, "files")
-		return toolPresentationFor(lang, "stage", displayToolFileTarget(strings.Join(files, ", ")))
+		stageTarget := displayToolFileTarget(strings.Join(files, ", "))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: stageTarget, Activity: desc}
+		}
+		return toolPresentationFor(lang, "stage", stageTarget)
 	case "git_commit":
-		return toolPresentationFor(lang, "commit", compactSingleLine(argString(args, "message")))
+		commitDetail := compactSingleLine(argString(args, "message"))
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: commitDetail, Activity: desc}
+		}
+		return toolPresentationFor(lang, "commit", commitDetail)
 	case "git_stash":
 		action := argString(args, "action")
 		if action == "" {
 			action = "push"
+		}
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: action, Activity: desc}
 		}
 		return toolPresentationFor(lang, "stash", action)
 	case "sleep":
@@ -199,6 +257,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		if d <= 0 {
 			d = 0
 		}
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: d.String(), Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "sleep"),
 			Detail:      d.String(),
@@ -206,6 +267,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "cron_create":
 		cronExpr := argString(args, "cron")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: cronExpr, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "cron_create"),
 			Detail:      cronExpr,
@@ -217,6 +281,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		return toolPresentationFor(lang, "inspect", "cron jobs")
 	case "enter_worktree":
 		name := argString(args, "name")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: name, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "enter_worktree"),
 			Detail:      name,
@@ -224,6 +291,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "exit_worktree":
 		action := argString(args, "action")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: action, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "exit_worktree"),
 			Detail:      action,
@@ -231,6 +301,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "save_memory":
 		key := argString(args, "key")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: key, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "save_memory"),
 			Detail:      key,
@@ -242,6 +315,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		detail := setting
 		if value != "" {
 			detail = setting + " = " + value
+		}
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: detail, Activity: desc}
 		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "config"),
@@ -257,6 +333,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 				msg = msg[:37] + "…"
 			}
 			detail = to + ": " + msg
+		}
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: detail, Activity: desc}
 		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "send_message"),
@@ -303,12 +382,18 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "team_create":
 		name := argString(args, "name")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: name, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "team_create"),
 			Detail:      name,
 			Activity:    localizedToolActivity(lang, "team_create", name),
 		}
 	case "team_delete":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: argString(args, "team_id"), Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "team_delete"),
 			Detail:      argString(args, "team_id"),
@@ -316,12 +401,18 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "teammate_spawn":
 		name := argString(args, "name")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: name, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "teammate_spawn"),
 			Detail:      name,
 			Activity:    localizedToolActivity(lang, "teammate_spawn", name),
 		}
 	case "teammate_list":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: argString(args, "team_id"), Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "teammate_list"),
 			Detail:      argString(args, "team_id"),
@@ -329,6 +420,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "teammate_shutdown":
 		id := argString(args, "teammate_id")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: id, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "teammate_shutdown"),
 			Detail:      id,
@@ -336,6 +430,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "teammate_results":
 		id := argString(args, "teammate_id")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: displayToolTarget(firstNonEmpty(id, argString(args, "team_id"))), Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "teammate_results"),
 			Detail:      displayToolTarget(firstNonEmpty(id, argString(args, "team_id"))),
@@ -343,24 +440,36 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "swarm_task_create":
 		subject := argString(args, "subject")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: subject, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "swarm_task_create"),
 			Detail:      subject,
 			Activity:    localizedToolActivity(lang, "swarm_task_create", subject),
 		}
 	case "swarm_task_claim":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: displayToolTarget(firstNonEmpty(argString(args, "subject"), argString(args, "task_id"))), Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "swarm_task_claim"),
 			Detail:      displayToolTarget(firstNonEmpty(argString(args, "subject"), argString(args, "task_id"))),
 			Activity:    localizedToolActivity(lang, "swarm_task_claim", ""),
 		}
 	case "swarm_task_complete":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: argString(args, "task_id"), Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "swarm_task_complete"),
 			Detail:      argString(args, "task_id"),
 			Activity:    localizedToolActivity(lang, "swarm_task_complete", ""),
 		}
 	case "swarm_task_list":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "swarm_task_list"),
 			Detail:      "",
@@ -368,6 +477,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "list_mcp_capabilities":
 		server := argString(args, "server")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: server, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "list_mcp_capabilities"),
 			Detail:      server,
@@ -375,6 +487,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "get_mcp_prompt":
 		name := argString(args, "name")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: name, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "get_mcp_prompt"),
 			Detail:      name,
@@ -382,6 +497,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "read_mcp_resource":
 		uri := argString(args, "uri")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: uri, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "read_mcp_resource"),
 			Detail:      uri,
@@ -389,12 +507,18 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "a2a_remote":
 		target := argString(args, "target")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: target, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "a2a_remote"),
 			Detail:      target,
 			Activity:    localizedToolActivity(lang, "a2a_remote", target),
 		}
 	case "a2a_discover":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "a2a_discover"),
 			Detail:      "",
@@ -402,24 +526,36 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "a2a_send_task":
 		target := argString(args, "target")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: target, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "a2a_send_task"),
 			Detail:      target,
 			Activity:    localizedToolActivity(lang, "a2a_send_task", target),
 		}
 	case "a2a_get_task":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "a2a_get_task"),
 			Detail:      "",
 			Activity:    localizedToolActivity(lang, "a2a_get_task", ""),
 		}
 	case "a2a_list_tasks":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "a2a_list_tasks"),
 			Detail:      "",
 			Activity:    localizedToolActivity(lang, "a2a_list_tasks", ""),
 		}
 	case "a2a_cancel_task":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "a2a_cancel_task"),
 			Detail:      "",

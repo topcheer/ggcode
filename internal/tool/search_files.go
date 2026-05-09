@@ -29,27 +29,34 @@ func (t SearchFiles) Description() string {
 
 func (t SearchFiles) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"pattern": {
-					"type": "string",
-					"description": "Regular expression to search for"
-				},
-				"directory": {
-					"type": "string",
-					"description": "Directory to search in (default: current directory)"
-				},
-				"include_pattern": {
-					"type": "string",
-					"description": "Glob pattern to filter files (e.g., '*.go')"
-				},
-				"max_results": {
-					"type": "integer",
-					"description": "Maximum number of matches to return (default: 50)"
-				}
-			},
-			"required": ["pattern"]
-		}`)
+	"type": "object",
+	"properties": {
+		"pattern": {
+			"type": "string",
+			"description": "Regular expression to search for"
+		},
+		"directory": {
+			"type": "string",
+			"description": "Directory to search in (default: current directory)"
+		},
+		"include_pattern": {
+			"type": "string",
+			"description": "Glob pattern to filter files (e.g., '*.go')"
+		},
+		"max_results": {
+			"type": "integer",
+			"description": "Maximum number of matches to return (default: 50)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"pattern",
+		"description"
+	]
+}`)
 }
 
 func (t SearchFiles) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

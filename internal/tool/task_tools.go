@@ -25,17 +25,47 @@ func (t TaskCreateTool) Description() string {
 }
 func (t TaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"subject": {"type": "string", "description": "Brief actionable title for the task"},
-			"description": {"type": "string", "description": "Detailed requirements and context"},
-			"activeForm": {"type": "string", "description": "Present continuous form shown in spinner (e.g. 'Running tests')"},
-			"addBlocks": {"type": "array", "items": {"type": "string"}, "description": "Task IDs this task blocks (this task must finish before those can start)"},
-			"addBlockedBy": {"type": "array", "items": {"type": "string"}, "description": "Task IDs that block this task (those must finish before this can start)"},
-			"metadata": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Arbitrary key-value metadata"}
+	"type": "object",
+	"properties": {
+		"subject": {
+			"type": "string",
+			"description": "Brief actionable title for the task"
 		},
-		"required": ["subject"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "Detailed requirements and context"
+		},
+		"activeForm": {
+			"type": "string",
+			"description": "Present continuous form shown in spinner (e.g. 'Running tests')"
+		},
+		"addBlocks": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Task IDs this task blocks (this task must finish before those can start)"
+		},
+		"addBlockedBy": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Task IDs that block this task (those must finish before this can start)"
+		},
+		"metadata": {
+			"type": "object",
+			"additionalProperties": {
+				"type": "string"
+			},
+			"description": "Arbitrary key-value metadata"
+		}
+	},
+	"required": [
+		"subject",
+		"description"
+	]
+}`)
 }
 func (t TaskCreateTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -84,12 +114,22 @@ func (t TaskGetTool) Description() string {
 }
 func (t TaskGetTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"taskId": {"type": "string", "description": "Task ID returned by task_create"}
+	"type": "object",
+	"properties": {
+		"taskId": {
+			"type": "string",
+			"description": "Task ID returned by task_create"
 		},
-		"required": ["taskId"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"taskId",
+		"description"
+	]
+}`)
 }
 func (t TaskGetTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -122,7 +162,18 @@ func (t TaskListTool) Description() string {
 	return "List all tasks in the session with ID, subject, status, and blockedBy info."
 }
 func (t TaskListTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type": "object", "properties": {}}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 func (t TaskListTool) Execute(_ context.Context, _ json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -165,20 +216,64 @@ func (t TaskUpdateTool) Description() string {
 }
 func (t TaskUpdateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"taskId": {"type": "string", "description": "Task ID to update"},
-			"status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "New status"},
-			"subject": {"type": "string", "description": "New subject"},
-			"description": {"type": "string", "description": "New description"},
-			"owner": {"type": "string", "description": "Agent ID owning this task"},
-			"activeForm": {"type": "string", "description": "New spinner text"},
-			"addBlocks": {"type": "array", "items": {"type": "string"}, "description": "Task IDs this task blocks"},
-			"addBlockedBy": {"type": "array", "items": {"type": "string"}, "description": "Task IDs that block this task"},
-			"metadata": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Metadata to merge into the task"}
+	"type": "object",
+	"properties": {
+		"taskId": {
+			"type": "string",
+			"description": "Task ID to update"
 		},
-		"required": ["taskId"]
-	}`)
+		"status": {
+			"type": "string",
+			"enum": [
+				"pending",
+				"in_progress",
+				"completed"
+			],
+			"description": "New status"
+		},
+		"subject": {
+			"type": "string",
+			"description": "New subject"
+		},
+		"description": {
+			"type": "string",
+			"description": "New description"
+		},
+		"owner": {
+			"type": "string",
+			"description": "Agent ID owning this task"
+		},
+		"activeForm": {
+			"type": "string",
+			"description": "New spinner text"
+		},
+		"addBlocks": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Task IDs this task blocks"
+		},
+		"addBlockedBy": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Task IDs that block this task"
+		},
+		"metadata": {
+			"type": "object",
+			"additionalProperties": {
+				"type": "string"
+			},
+			"description": "Metadata to merge into the task"
+		}
+	},
+	"required": [
+		"taskId",
+		"description"
+	]
+}`)
 }
 func (t TaskUpdateTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -235,12 +330,22 @@ func (t TaskStopTool) Description() string {
 }
 func (t TaskStopTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"taskId": {"type": "string", "description": "Task ID to stop"}
+	"type": "object",
+	"properties": {
+		"taskId": {
+			"type": "string",
+			"description": "Task ID to stop"
 		},
-		"required": ["taskId"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"taskId",
+		"description"
+	]
+}`)
 }
 func (t TaskStopTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -286,12 +391,22 @@ func (t TaskOutputTool) Description() string {
 }
 func (t TaskOutputTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"task_id": {"type": "string", "description": "ID of the background task"}
+	"type": "object",
+	"properties": {
+		"task_id": {
+			"type": "string",
+			"description": "ID of the background task"
 		},
-		"required": ["task_id"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"task_id",
+		"description"
+	]
+}`)
 }
 func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	var args struct {

@@ -140,27 +140,30 @@ func (t RunCommand) Description() string {
 
 func (t RunCommand) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"command": {
-				"type": "string",
-				"description": "Shell command to execute. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Run tests' or '# Install dependencies'). This comment is shown as the activity label in the UI."
-			},
-			"working_dir": {
-				"type": "string",
-				"description": "Working directory for the command (default: current directory)"
-			},
-			"timeout": {
-				"type": "integer",
-				"description": "Timeout in seconds (default: 1800)"
-			},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Running tests', '运行测试')."
-			}
+	"type": "object",
+	"properties": {
+		"command": {
+			"type": "string",
+			"description": "Shell command to execute. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Run tests' or '# Install dependencies'). This comment is shown as the activity label in the UI."
 		},
-		"required": ["command"]
-	}`)
+		"working_dir": {
+			"type": "string",
+			"description": "Working directory for the command (default: current directory)"
+		},
+		"timeout": {
+			"type": "integer",
+			"description": "Timeout in seconds (default: 1800)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"command",
+		"description"
+	]
+}`)
 }
 
 // isBypassMode returns true when the permission policy allows

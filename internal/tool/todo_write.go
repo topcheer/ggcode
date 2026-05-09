@@ -51,7 +51,7 @@ func NewWorkspaceTodoWrite(workspace string) *TodoWrite {
 
 func (t *TodoWrite) Name() string { return "todo_write" }
 func (t *TodoWrite) Description() string {
-	return "Create, update, or complete todo items. Persists to the current workspace .ggcode/todos.json when available."
+	return "Track work progress with a persistent todo list. IMPORTANT: Once you create todos, you MUST update their status as work progresses — mark tasks `in_progress` when starting, and `done` when completed. Do NOT create todos and then forget to update them. Keep the list current at every meaningful milestone."
 }
 
 func (t *TodoWrite) Parameters() json.RawMessage {

@@ -18,27 +18,30 @@ func (t GitCommit) Description() string {
 
 func (t GitCommit) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {
-					"type": "string",
-					"description": "Repository path (default: current directory)"
-				},
-				"message": {
-					"type": "string",
-					"description": "Commit message"
-				},
-				"all": {
-					"type": "boolean",
-					"description": "Automatically stage modified/deleted files before committing (git commit -a)"
-				}
-			},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-						"required": ["message"]
-		}`)
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Repository path (default: current directory)"
+		},
+		"message": {
+			"type": "string",
+			"description": "Commit message"
+		},
+		"all": {
+			"type": "boolean",
+			"description": "Automatically stage modified/deleted files before committing (git commit -a)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"message",
+		"description"
+	]
+}`)
 }
 
 func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

@@ -18,13 +18,26 @@ func (t SleepTool) Description() string {
 }
 func (t SleepTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"seconds": {"type": "integer", "description": "Seconds to sleep"},
-			"milliseconds": {"type": "integer", "description": "Additional milliseconds to sleep (combined with seconds)"}
+	"type": "object",
+	"properties": {
+		"seconds": {
+			"type": "integer",
+			"description": "Seconds to sleep"
 		},
-		"required": ["seconds"]
-	}`)
+		"milliseconds": {
+			"type": "integer",
+			"description": "Additional milliseconds to sleep (combined with seconds)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"seconds",
+		"description"
+	]
+}`)
 }
 func (t SleepTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {

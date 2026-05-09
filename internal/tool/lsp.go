@@ -80,27 +80,168 @@ func (t lspCallHierarchyTool) Name() string         { return t.name }
 func (t lspCallHierarchyTool) Description() string  { return t.description }
 
 func (t lspPathTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the source file"}},"required":["path"]}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Path to the source file"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"path",
+		"description"
+	]
+}`)
 }
 
 func (t lspPositionTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the source file"},"line":{"type":"integer","description":"1-based line number"},"character":{"type":"integer","description":"1-based character number"}},"required":["path","line","character"]}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Path to the source file"
+		},
+		"line": {
+			"type": "integer",
+			"description": "1-based line number"
+		},
+		"character": {
+			"type": "integer",
+			"description": "1-based character number"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"path",
+		"line",
+		"character",
+		"description"
+	]
+}`)
 }
 
 func (t lspRangeTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the source file"},"start_line":{"type":"integer","description":"1-based start line"},"start_character":{"type":"integer","description":"1-based start character"},"end_line":{"type":"integer","description":"1-based end line"},"end_character":{"type":"integer","description":"1-based end character"}},"required":["path","start_line","start_character","end_line","end_character"]}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Path to the source file"
+		},
+		"start_line": {
+			"type": "integer",
+			"description": "1-based start line"
+		},
+		"start_character": {
+			"type": "integer",
+			"description": "1-based start character"
+		},
+		"end_line": {
+			"type": "integer",
+			"description": "1-based end line"
+		},
+		"end_character": {
+			"type": "integer",
+			"description": "1-based end character"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"path",
+		"start_line",
+		"start_character",
+		"end_line",
+		"end_character",
+		"description"
+	]
+}`)
 }
 
 func (t lspWorkspaceQueryTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Workspace symbol query"}},"required":["query"]}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"query": {
+			"type": "string",
+			"description": "Workspace symbol query"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"query",
+		"description"
+	]
+}`)
 }
 
 func (t lspRenameTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Path to the source file"},"line":{"type":"integer","description":"1-based line number"},"character":{"type":"integer","description":"1-based character number"},"new_name":{"type":"string","description":"Replacement symbol name"}},"required":["path","line","character","new_name"]}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Path to the source file"
+		},
+		"line": {
+			"type": "integer",
+			"description": "1-based line number"
+		},
+		"character": {
+			"type": "integer",
+			"description": "1-based character number"
+		},
+		"new_name": {
+			"type": "string",
+			"description": "Replacement symbol name"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"path",
+		"line",
+		"character",
+		"new_name",
+		"description"
+	]
+}`)
 }
 
 func (t lspCallHierarchyTool) Parameters() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"item":{"type":"string","description":"JSON-encoded call hierarchy item from a previous lsp_prepare_call_hierarchy result"}},"required":["item"]}`)
+	return json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"item": {
+			"type": "string",
+			"description": "JSON-encoded call hierarchy item from a previous lsp_prepare_call_hierarchy result"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"item",
+		"description"
+	]
+}`)
 }
 
 func (t lspPathTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

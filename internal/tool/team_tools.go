@@ -25,13 +25,26 @@ func (t TeamCreateTool) Description() string {
 }
 func (t TeamCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"name": {"type": "string", "description": "Team name (e.g., 'research-team', 'build-squad')"},
-			"leader_id": {"type": "string", "description": "ID of the leader agent (defaults to current agent)"}
+	"type": "object",
+	"properties": {
+		"name": {
+			"type": "string",
+			"description": "Team name (e.g., 'research-team', 'build-squad')"
 		},
-		"required": ["name"]
-	}`)
+		"leader_id": {
+			"type": "string",
+			"description": "ID of the leader agent (defaults to current agent)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"name",
+		"description"
+	]
+}`)
 }
 func (t TeamCreateTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -67,12 +80,22 @@ func (t TeamDeleteTool) Description() string {
 }
 func (t TeamDeleteTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID to delete"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID to delete"
 		},
-		"required": ["team_id"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"description"
+	]
+}`)
 }
 func (t TeamDeleteTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -105,15 +128,38 @@ func (t TeammateSpawnTool) Description() string {
 }
 func (t TeammateSpawnTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID to spawn the teammate in"},
-			"name": {"type": "string", "description": "Teammate name (e.g., 'researcher', 'coder', 'tester')"},
-			"color": {"type": "string", "description": "ANSI color code for TUI display (e.g., '32' for green)"},
-			"tools": {"type": "array", "items": {"type": "string"}, "description": "Allowed tool names (defaults to all non-swarm tools)"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID to spawn the teammate in"
 		},
-		"required": ["team_id", "name"]
-	}`)
+		"name": {
+			"type": "string",
+			"description": "Teammate name (e.g., 'researcher', 'coder', 'tester')"
+		},
+		"color": {
+			"type": "string",
+			"description": "ANSI color code for TUI display (e.g., '32' for green)"
+		},
+		"tools": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Allowed tool names (defaults to all non-swarm tools)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"name",
+		"description"
+	]
+}`)
 }
 func (t TeammateSpawnTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -157,12 +203,22 @@ func (t TeammateListTool) Description() string {
 }
 func (t TeammateListTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID"
 		},
-		"required": ["team_id"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"description"
+	]
+}`)
 }
 func (t TeammateListTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -212,13 +268,27 @@ func (t TeammateShutdownTool) Description() string {
 }
 func (t TeammateShutdownTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"team_id": {"type": "string", "description": "Team ID"},
-			"teammate_id": {"type": "string", "description": "Teammate ID to shutdown"}
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID"
 		},
-		"required": ["team_id", "teammate_id"]
-	}`)
+		"teammate_id": {
+			"type": "string",
+			"description": "Teammate ID to shutdown"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"teammate_id",
+		"description"
+	]
+}`)
 }
 func (t TeammateShutdownTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {
@@ -253,13 +323,26 @@ func (t TeammateResultsTool) Description() string {
 }
 func (t TeammateResultsTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"team_id": {"type": "string", "description": "Team ID"},
-				"teammate_id": {"type": "string", "description": "Optional: get result for a specific teammate only"}
-			},
-			"required": ["team_id"]
-		}`)
+	"type": "object",
+	"properties": {
+		"team_id": {
+			"type": "string",
+			"description": "Team ID"
+		},
+		"teammate_id": {
+			"type": "string",
+			"description": "Optional: get result for a specific teammate only"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"team_id",
+		"description"
+	]
+}`)
 }
 func (t TeammateResultsTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	if t.Manager == nil {

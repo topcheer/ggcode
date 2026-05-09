@@ -26,33 +26,46 @@ func (t SpawnAgentTool) Description() string {
 
 func (t SpawnAgentTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"task": {
-				"type": "string",
-				"description": "The task description for the sub-agent"
-			},
-			"tools": {
-				"type": "array",
-				"items": {"type": "string"},
-				"description": "Optional list of tool names the sub-agent can use (defaults to all parent tools except sub-agent tools)"
-			},
-			"context": {
-				"type": "string",
-				"description": "Optional additional context for the sub-agent"
-			},
-			"model": {
-				"type": "string",
-				"enum": ["sonnet", "opus", "haiku"],
-				"description": "Optional model override for the sub-agent"
-			},
-			"subagent_type": {
-				"type": "string",
-				"description": "Optional type of specialized agent (e.g., 'Explore', 'Plan')"
-			}
+	"type": "object",
+	"properties": {
+		"task": {
+			"type": "string",
+			"description": "The task description for the sub-agent"
 		},
-		"required": ["task"]
-	}`)
+		"tools": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Optional list of tool names the sub-agent can use (defaults to all parent tools except sub-agent tools)"
+		},
+		"context": {
+			"type": "string",
+			"description": "Optional additional context for the sub-agent"
+		},
+		"model": {
+			"type": "string",
+			"enum": [
+				"sonnet",
+				"opus",
+				"haiku"
+			],
+			"description": "Optional model override for the sub-agent"
+		},
+		"subagent_type": {
+			"type": "string",
+			"description": "Optional type of specialized agent (e.g., 'Explore', 'Plan')"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"task",
+		"description"
+	]
+}`)
 }
 
 func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

@@ -22,33 +22,40 @@ func (t WebSearch) Description() string {
 
 func (t WebSearch) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"query": {
-				"type": "string",
-				"description": "The search query"
-			},
-			"max_results": {
-				"type": "integer",
-				"description": "Maximum number of results (default 5, max 10)"
-			},
-			"allowed_domains": {
-				"type": "array",
-				"items": {"type": "string"},
-				"description": "Only include results from these domains"
-			},
-			"blocked_domains": {
-				"type": "array",
-				"items": {"type": "string"},
-				"description": "Never include results from these domains"
-			}
+	"type": "object",
+	"properties": {
+		"query": {
+			"type": "string",
+			"description": "The search query"
 		},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
+		"max_results": {
+			"type": "integer",
+			"description": "Maximum number of results (default 5, max 10)"
+		},
+		"allowed_domains": {
+			"type": "array",
+			"items": {
+				"type": "string"
 			},
-					"required": ["query"]
-	}`)
+			"description": "Only include results from these domains"
+		},
+		"blocked_domains": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Never include results from these domains"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"query",
+		"description"
+	]
+}`)
 }
 
 func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

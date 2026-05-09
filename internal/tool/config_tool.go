@@ -29,13 +29,29 @@ func (t ConfigTool) Description() string {
 }
 func (t ConfigTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"setting": {"type": "string", "description": "Configuration key to read or write"},
-			"value": {"type": "string", "description": "Value to set (omit to read)"},
-			"list": {"type": "boolean", "description": "List all configuration settings (ignores other params)"}
+	"type": "object",
+	"properties": {
+		"setting": {
+			"type": "string",
+			"description": "Configuration key to read or write"
+		},
+		"value": {
+			"type": "string",
+			"description": "Value to set (omit to read)"
+		},
+		"list": {
+			"type": "boolean",
+			"description": "List all configuration settings (ignores other params)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
 		}
-	}`)
+	},
+	"required": [
+		"description"
+	]
+}`)
 }
 func (t ConfigTool) Execute(_ context.Context, input json.RawMessage) (Result, error) {
 	var args struct {

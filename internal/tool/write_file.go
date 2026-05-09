@@ -19,23 +19,27 @@ func (t WriteFile) Description() string {
 
 func (t WriteFile) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"path": {
-				"type": "string",
-				"description": "Path to the file to write"
-			},
-			"content": {
-				"type": "string",
-				"description": "Content to write to the file"
-			}
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Path to the file to write"
 		},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-					"required": ["path", "content", "description"]
-	}`)
+		"content": {
+			"type": "string",
+			"description": "Content to write to the file"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"path",
+		"content",
+		"description"
+	]
+}`)
 }
 
 func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

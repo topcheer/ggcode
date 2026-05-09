@@ -23,19 +23,22 @@ func (t ListDir) Description() string {
 
 func (t ListDir) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"path": {
-				"type": "string",
-				"description": "Directory path to list (default: current directory)"
-			}
+	"type": "object",
+	"properties": {
+		"path": {
+			"type": "string",
+			"description": "Directory path to list (default: current directory)"
 		},
-			"description": {
-				"type": "string",
-				"description": "Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置')."
-			},
-					"required": ["path", "description"]
-	}`)
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"path",
+		"description"
+	]
+}`)
 }
 
 func (t ListDir) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

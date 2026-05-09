@@ -58,19 +58,26 @@ func (t SkillTool) Description() string {
 
 func (t SkillTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"skill": {
-				"type": "string",
-				"description": "Skill name to load"
-			},
-			"args": {
-				"type": "string",
-				"description": "Optional user arguments passed to the skill"
-			}
+	"type": "object",
+	"properties": {
+		"skill": {
+			"type": "string",
+			"description": "Skill name to load"
 		},
-		"required": ["skill"]
-	}`)
+		"args": {
+			"type": "string",
+			"description": "Optional user arguments passed to the skill"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"skill",
+		"description"
+	]
+}`)
 }
 
 func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {

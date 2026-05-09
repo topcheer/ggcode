@@ -23,33 +23,49 @@ func (t NotebookEdit) Description() string {
 
 func (t NotebookEdit) Parameters() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"notebook_path": {
-				"type": "string",
-				"description": "Path to the .ipynb file"
-			},
-			"cell_number": {
-				"type": "integer",
-				"description": "Cell index (0-based) to edit. For 'add' operation, inserts before this index."
-			},
-			"operation": {
-				"type": "string",
-				"enum": ["replace", "add", "delete"],
-				"description": "Operation to perform: replace cell source, add a new cell, or delete a cell"
-			},
-			"source": {
-				"type": "string",
-				"description": "New cell source content (for replace and add operations)"
-			},
-			"cell_type": {
-				"type": "string",
-				"enum": ["code", "markdown", "raw"],
-				"description": "Cell type for add operation (default: code)"
-			}
+	"type": "object",
+	"properties": {
+		"notebook_path": {
+			"type": "string",
+			"description": "Path to the .ipynb file"
 		},
-		"required": ["notebook_path", "operation"]
-	}`)
+		"cell_number": {
+			"type": "integer",
+			"description": "Cell index (0-based) to edit. For 'add' operation, inserts before this index."
+		},
+		"operation": {
+			"type": "string",
+			"enum": [
+				"replace",
+				"add",
+				"delete"
+			],
+			"description": "Operation to perform: replace cell source, add a new cell, or delete a cell"
+		},
+		"source": {
+			"type": "string",
+			"description": "New cell source content (for replace and add operations)"
+		},
+		"cell_type": {
+			"type": "string",
+			"enum": [
+				"code",
+				"markdown",
+				"raw"
+			],
+			"description": "Cell type for add operation (default: code)"
+		},
+		"description": {
+			"type": "string",
+			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		}
+	},
+	"required": [
+		"notebook_path",
+		"operation",
+		"description"
+	]
+}`)
 }
 
 func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
