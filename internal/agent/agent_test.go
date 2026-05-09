@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -77,6 +78,175 @@ type mockProvider struct {
 	tokenCount    int
 	chatCalls     int
 	streamCalls   int
+}
+
+type blockingSummaryProvider struct {
+	mu           sync.Mutex
+	chatStarted  chan struct{}
+	streamEvents [][]provider.StreamEvent
+	chatCalls    int
+	streamCalls  int
+}
+
+func newBlockingSummaryProvider() *blockingSummaryProvider {
+	return &blockingSummaryProvider{chatStarted: make(chan struct{})}
+}
+
+func (m *blockingSummaryProvider) Name() string { return "blocking-summary" }
+
+func (m *blockingSummaryProvider) Chat(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	m.mu.Lock()
+	m.chatCalls++
+	m.mu.Unlock()
+	select {
+	case <-m.chatStarted:
+	default:
+		close(m.chatStarted)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *blockingSummaryProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
+	m.mu.Lock()
+	m.streamCalls++
+	var events []provider.StreamEvent
+	if len(m.streamEvents) > 0 {
+		events = m.streamEvents[0]
+		m.streamEvents = m.streamEvents[1:]
+	} else {
+		events = streamEventsFromResponse(&provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("answered without waiting")},
+			},
+		})
+	}
+	m.mu.Unlock()
+
+	ch := make(chan provider.StreamEvent, len(events))
+	for _, event := range events {
+		ch <- event
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *blockingSummaryProvider) CountTokens(ctx context.Context, messages []provider.Message) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *blockingSummaryProvider) calls() (int, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.chatCalls, m.streamCalls
+}
+
+type delayedSummaryProvider struct {
+	mu              sync.Mutex
+	releaseSummary  chan struct{}
+	summaryReturned chan struct{}
+	streamCalls     int
+	streamMessages  [][]provider.Message
+}
+
+func newDelayedSummaryProvider() *delayedSummaryProvider {
+	return &delayedSummaryProvider{
+		releaseSummary:  make(chan struct{}),
+		summaryReturned: make(chan struct{}),
+	}
+}
+
+func (m *delayedSummaryProvider) Name() string { return "delayed-summary" }
+
+func (m *delayedSummaryProvider) Chat(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	select {
+	case <-m.releaseSummary:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer close(m.summaryReturned)
+	return &provider.ChatResponse{
+		Message: provider.Message{
+			Role:    "assistant",
+			Content: []provider.ContentBlock{provider.TextBlock("compressed summary")},
+		},
+	}, nil
+}
+
+func (m *delayedSummaryProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
+	m.mu.Lock()
+	m.streamCalls++
+	call := m.streamCalls
+	snapshot := append([]provider.Message(nil), messages...)
+	m.streamMessages = append(m.streamMessages, snapshot)
+	m.mu.Unlock()
+
+	var events []provider.StreamEvent
+	if call == 1 {
+		events = streamEventsFromResponse(&provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.ToolUseBlock("release-compact", "release_compact", []byte(`{}`))},
+			},
+		})
+	} else {
+		events = streamEventsFromResponse(&provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("final after loop-boundary compaction")},
+			},
+		})
+	}
+	ch := make(chan provider.StreamEvent, len(events))
+	for _, event := range events {
+		ch <- event
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *delayedSummaryProvider) CountTokens(ctx context.Context, messages []provider.Message) (int, error) {
+	return 0, errors.New("not implemented")
+}
+
+func (m *delayedSummaryProvider) messagesForStreamCall(call int) []provider.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if call <= 0 || call > len(m.streamMessages) {
+		return nil
+	}
+	return append([]provider.Message(nil), m.streamMessages[call-1]...)
+}
+
+type releaseCompactTool struct {
+	release chan struct{}
+	done    <-chan struct{}
+	wait    func()
+}
+
+func (t releaseCompactTool) Name() string                { return "release_compact" }
+func (t releaseCompactTool) Description() string         { return "release compact" }
+func (t releaseCompactTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t releaseCompactTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	if t.release != nil {
+		select {
+		case <-t.release:
+		default:
+			close(t.release)
+		}
+	}
+	if t.done != nil {
+		select {
+		case <-t.done:
+		case <-ctx.Done():
+			return tool.Result{Content: ctx.Err().Error(), IsError: true}, nil
+		}
+	}
+	if t.wait != nil {
+		t.wait()
+	}
+	return tool.Result{Content: "tool output created while async compaction ran"}, nil
 }
 
 func (m *mockProvider) Chat(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
@@ -353,6 +523,151 @@ func TestRunStreamWithContent_CompactsSilentlyAndProducesResponse(t *testing.T) 
 	if !strings.Contains(joined, "Final answer.") {
 		t.Fatalf("expected assistant response after silent compaction, got %q", joined)
 	}
+}
+
+func TestRunStreamDoesNotWaitForInFlightPreCompact(t *testing.T) {
+	mp := newBlockingSummaryProvider()
+	a := NewAgent(mp, tool.NewRegistry(), "", 1)
+	defer a.Close()
+	a.ContextManager().SetMaxTokens(80)
+	for i := 0; i < 6; i++ {
+		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))}})
+		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 8))}})
+	}
+
+	a.StartPreCompact()
+	select {
+	case <-mp.chatStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected background precompact to start summarization")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	var texts []string
+	if err := a.RunStream(ctx, "continue without waiting", func(event provider.StreamEvent) {
+		if event.Type == provider.StreamEventText {
+			texts = append(texts, event.Text)
+		}
+	}); err != nil {
+		t.Fatalf("RunStream should not wait for background precompact: %v", err)
+	}
+	if !strings.Contains(strings.Join(texts, ""), "answered without waiting") {
+		t.Fatalf("expected normal response while precompact is still running, got %q", strings.Join(texts, ""))
+	}
+	_, streamCalls := mp.calls()
+	if streamCalls != 1 {
+		t.Fatalf("expected one LLM stream call, got %d", streamCalls)
+	}
+}
+
+func TestPreCompactAppliesCompletedSnapshotAtRunBoundary(t *testing.T) {
+	mp := &mockProvider{
+		chatResp: &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("compressed summary")},
+			},
+		},
+		streamEvents: [][]provider.StreamEvent{streamEventsFromResponse(&provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: []provider.ContentBlock{provider.TextBlock("response after applying compacted context")},
+			},
+		})},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 1)
+	defer a.Close()
+	a.ContextManager().SetMaxTokens(80)
+	for i := 0; i < 6; i++ {
+		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))}})
+		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 8))}})
+	}
+	before := a.ContextManager().TokenCount()
+
+	a.StartPreCompact()
+	waitForPrecompactDone(t, a)
+	if got := a.ContextManager().TokenCount(); got != before {
+		t.Fatalf("background precompact should not mutate live context before a run boundary: before=%d got=%d", before, got)
+	}
+
+	if err := a.RunStream(context.Background(), "next request", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+	after := a.ContextManager().TokenCount()
+	if after >= before {
+		t.Fatalf("expected completed precompact snapshot to reduce live context at run boundary: before=%d after=%d", before, after)
+	}
+	if !messagesContainText(a.ContextManager().Messages(), "[Previous conversation summary]") {
+		t.Fatal("expected compacted summary to be present after run-boundary apply")
+	}
+}
+
+func TestPreCompactAppliesBetweenLLMTurnsAndPreservesNewDialogue(t *testing.T) {
+	mp := newDelayedSummaryProvider()
+	reg := tool.NewRegistry()
+	var a *Agent
+	reg.Register(releaseCompactTool{release: mp.releaseSummary, done: mp.summaryReturned, wait: func() {
+		waitForPrecompactDone(t, a)
+	}})
+	a = NewAgent(mp, reg, "", 2)
+	defer a.Close()
+	a.ContextManager().SetMaxTokens(2000)
+	for i := 0; i < 6; i++ {
+		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 25))}})
+		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 25))}})
+	}
+
+	a.StartPreCompact()
+	if err := a.RunStream(context.Background(), "first user message while compacting", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+
+	secondTurnMessages := mp.messagesForStreamCall(2)
+	if len(secondTurnMessages) == 0 {
+		t.Fatal("expected second LLM turn")
+	}
+	if !messagesContainText(secondTurnMessages, "[Previous conversation summary]") {
+		t.Fatal("expected completed compacted context to be applied before second LLM turn")
+	}
+	if !messagesContainText(secondTurnMessages, "first user message while compacting") {
+		t.Fatal("expected user message appended after snapshot to be preserved")
+	}
+	if !messagesContainText(secondTurnMessages, "tool output created while async compaction ran") {
+		t.Fatal("expected tool result from dialogue created while compacting to be preserved")
+	}
+}
+
+func waitForPrecompactDone(t *testing.T, a *Agent) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		a.mu.RLock()
+		pc := a.precompact
+		a.mu.RUnlock()
+		if pc == nil {
+			t.Fatal("expected precompact state")
+		}
+		select {
+		case <-pc.done:
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for precompact")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func messagesContainText(messages []provider.Message, want string) bool {
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if strings.Contains(block.Text, want) || strings.Contains(block.Output, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestReplaceFirst(t *testing.T) {

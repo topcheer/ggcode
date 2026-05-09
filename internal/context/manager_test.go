@@ -274,17 +274,18 @@ func TestContextManager_Microcompact_ReducesOldToolResults(t *testing.T) {
 }
 
 func TestContextManager_CheckAndSummarize_UsesMicrocompactBeforeSummary(t *testing.T) {
-	cm := NewManager(600)
+	cm := NewManager(4000)
 	ctx := context.Background()
 	prov := &mockProvider{}
 
 	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Show me the tool output"}}})
-	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "tool-1", Output: strings.Repeat("B", 1600)}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "tool-1", Output: strings.Repeat("B", 10000)}}})
 	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Processed."}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Recent question"}}})
 	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "Recent answer"}}})
 
+	before := cm.TokenCount()
 	summarized, err := cm.CheckAndSummarize(ctx, prov)
 	if err != nil {
 		t.Fatalf("CheckAndSummarize failed: %v", err)
@@ -292,7 +293,57 @@ func TestContextManager_CheckAndSummarize_UsesMicrocompactBeforeSummary(t *testi
 	if !summarized {
 		t.Fatal("expected CheckAndSummarize to compact context")
 	}
-	// Verify that compaction happened — token count should have decreased.
+	if cm.TokenCount() >= before {
+		t.Fatalf("expected microcompact to reduce token count: before=%d after=%d", before, cm.TokenCount())
+	}
+	if prov.chatCalls != 0 {
+		t.Fatalf("expected microcompact to avoid LLM summarization when sufficient, got %d summary calls", prov.chatCalls)
+	}
+}
+
+func TestContextManager_ApplyCompactResultPreservesMessagesAppendedAfterSnapshot(t *testing.T) {
+	cm := NewManager(1000)
+	ctx := context.Background()
+	prov := &mockProvider{}
+
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "System prompt."}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("old question ", 80)}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("old answer ", 80)}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "recent snapshot question"}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "recent snapshot answer"}}})
+
+	snapshot := cm.CompactSnapshot()
+	result, err := snapshot.Compact(ctx, prov)
+	if err != nil {
+		t.Fatalf("snapshot compact failed: %v", err)
+	}
+
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.ToolUseBlock("call-1", "read", []byte(`{}`))}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "tool_result", ToolID: "call-1", Output: "tool output created while compacting"}}})
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if !applied {
+		t.Fatal("expected compact result to apply")
+	}
+	msgs := cm.Messages()
+	if !messageContainsTextInList(msgs, "[Previous conversation summary]") {
+		t.Fatal("expected compacted summary to be inserted")
+	}
+	if !messageContainsTextInList(msgs, "recent snapshot question") || !messageContainsTextInList(msgs, "recent snapshot answer") {
+		t.Fatal("expected recent snapshot messages to be preserved")
+	}
+	if !messageContainsTextInList(msgs, "tool output created while compacting") {
+		t.Fatal("expected messages appended during async compaction to be preserved")
+	}
+}
+
+func messageContainsTextInList(messages []provider.Message, want string) bool {
+	for _, msg := range messages {
+		if messageContainsText(msg, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestContextManager_Microcompact_ExtendsToRecentGroupWhenOverBudget(t *testing.T) {

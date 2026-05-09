@@ -391,18 +391,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Content: content,
 	})
 
-	// If a background pre-compact is in flight, drain it (or fail-fast on
-	// cancellation). When it succeeded, maybeAutoCompact below will see
-	// tokens<threshold and become a no-op, eliminating the inline 2-30s
-	// summarize stall on the user's critical path.
-	a.waitForPreCompact(ctx)
-
 	transientCompactWarned := false
-	if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
-		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
-		return err
-	}
-
 	toolDefs := a.tools.ToDefinitions()
 	reactiveCompactRetries := 0
 	idleAutopilotContinuations := 0
@@ -412,6 +401,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// Adopt a completed background pre-compact only at an LLM turn
+		// boundary. If it is still running, do not wait; this ChatStream uses
+		// the current context and a later LLM turn can consume the result.
+		a.consumeReadyPreCompact()
 		if a.injectPendingInterruptions() {
 			continue
 		}
@@ -419,6 +412,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 			return err
 		}
+		a.ensurePromptSendable()
 		msgs := a.contextManager.Messages()
 		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
 			i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.MaxTokens())

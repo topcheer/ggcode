@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 )
@@ -14,21 +15,28 @@ import (
 //
 //	idle ──► StartPreCompact() creates state, launches goroutine ──► COMPACTING
 //	COMPACTING ──► goroutine writes err then closes done ──► DONE
-//	next RunStreamWithContent ──► waitForPreCompact consumes ──► cleared
+//	next RunStreamWithContent ──► consumeReadyPreCompact applies if done ──► cleared
 //
 // All field reads on this struct are guarded by either:
 //   - holding Agent.mu (for the *precompactState pointer itself), or
 //   - having observed the close of `done` (happens-before via channel close).
 type precompactState struct {
-	done      chan struct{}      // closed when the goroutine exits
-	cancel    context.CancelFunc // cancels this pre-compact's own bgCtx
-	startedAt time.Time          // when the goroutine started; for status display
-	startTok  int                // token count snapshot when started
-	err       error              // populated before close(done) — read only after <-done
-	cancelled bool               // set if CancelPreCompact was called externally
+	done      chan struct{}          // closed when the goroutine exits
+	cancel    context.CancelFunc     // cancels this pre-compact's own bgCtx
+	startedAt time.Time              // when the goroutine started; for status display
+	startTok  int                    // token count snapshot when started
+	snapshot  ctxpkg.CompactSnapshot // immutable live-context snapshot compacted in background
+	result    ctxpkg.CompactResult   // populated before close(done) — read only after <-done
+	err       error                  // populated before close(done) — read only after <-done
+	cancelled bool                   // set if CancelPreCompact was called externally
 }
 
 const precompactBackgroundTimeout = 60 * time.Second
+
+type snapshotCompactManager interface {
+	CompactSnapshot() ctxpkg.CompactSnapshot
+	ApplyCompactResult(ctxpkg.CompactSnapshot, ctxpkg.CompactResult) (bool, int)
+}
 
 // PreCompactStatus is a UI-friendly snapshot of any in-flight pre-compact.
 // Returned by Agent.PreCompactStatus(). All fields are zero-valued when none
@@ -43,10 +51,10 @@ type PreCompactStatus struct {
 // Returns immediately. Safe to call after every agent run; it self-skips when
 // tokens are below threshold or a compact is already in flight.
 //
-// The background goroutine uses its own context.WithTimeout(60s) — independent
-// of any user request — so a user pressing ctrl+c during the next prompt does
-// NOT abort this work. The result is consumed by waitForPreCompact on the next
-// RunStreamWithContent call.
+// The background goroutine compacts an immutable snapshot with its own
+// context.WithTimeout(60s). It never mutates the live context directly; the
+// result is applied later by consumeReadyPreCompact only if it has already
+// finished at a safe run boundary.
 func (a *Agent) StartPreCompact() {
 	a.mu.Lock()
 	if a.precompact != nil {
@@ -60,6 +68,12 @@ func (a *Agent) StartPreCompact() {
 		a.mu.Unlock()
 		return
 	}
+	snapshotMgr, ok := cm.(snapshotCompactManager)
+	if !ok {
+		a.mu.Unlock()
+		debug.Log("precompact", "SKIP: context manager does not support snapshot compaction")
+		return
+	}
 	threshold := cm.AutoCompactThreshold()
 	tokens := cm.TokenCount()
 	if threshold <= 0 || tokens < threshold {
@@ -67,6 +81,7 @@ func (a *Agent) StartPreCompact() {
 		debug.Log("precompact", "SKIP: tokens=%d threshold=%d", tokens, threshold)
 		return
 	}
+	snapshot := snapshotMgr.CompactSnapshot()
 
 	// Use the agent's shutdown context as base so precompact is cancelled
 	// when the agent is closed, not just on timeout.
@@ -76,6 +91,7 @@ func (a *Agent) StartPreCompact() {
 		cancel:    cancel,
 		startedAt: time.Now(),
 		startTok:  tokens,
+		snapshot:  snapshot,
 	}
 	a.precompact = pc
 	a.mu.Unlock()
@@ -84,35 +100,28 @@ func (a *Agent) StartPreCompact() {
 
 	safego.Go("agent.precompact.run", func() {
 		// Capture pc locally — never touch a.precompact directly from this
-		// goroutine, otherwise a concurrent waitForPreCompact + StartPreCompact
-		// pair could redirect our writes/close to a NEW state struct and
-		// corrupt the channel close invariant.
+		// goroutine, otherwise a concurrent consumeReadyPreCompact +
+		// StartPreCompact pair could redirect our writes/close to a NEW state
+		// struct and corrupt the channel close invariant.
 		defer close(pc.done)
 		defer cancel()
 
-		changed, err := cm.CheckAndSummarize(bgCtx, prov)
+		result, err := snapshot.Compact(bgCtx, prov)
 		if err != nil {
 			pc.err = err
 			debug.Log("precompact", "FAILED: %v", err)
 			return
 		}
-		if changed {
-			a.maybeSaveCheckpoint()
-		}
-		newTokens := cm.TokenCount()
-		debug.Log("precompact", "DONE: %d → %d tokens (elapsed=%s)",
-			tokens, newTokens, time.Since(pc.startedAt).Round(time.Millisecond))
+		pc.result = result
+		debug.Log("precompact", "DONE: %d → %d tokens changed=%t (elapsed=%s)",
+			tokens, result.TokenCount, result.Changed, time.Since(pc.startedAt).Round(time.Millisecond))
 	})
 }
 
-// waitForPreCompact waits for an in-flight pre-compact to finish, respecting
-// the caller's ctx. Returns true if the pre-compact had a successful, usable
-// result; false otherwise (no pre-compact, or it failed/was cancelled).
-//
-// On ctx cancellation: returns false immediately, but does NOT clear
-// a.precompact — the goroutine keeps running on its own bgCtx, and the next
-// RunStreamWithContent will pick up the result.
-func (a *Agent) waitForPreCompact(ctx context.Context) bool {
+// consumeReadyPreCompact applies a completed background pre-compact without
+// waiting. If compaction is still running, the current LLM turn proceeds with
+// the existing context; a later turn can apply the result.
+func (a *Agent) consumeReadyPreCompact() bool {
 	a.mu.RLock()
 	pc := a.precompact
 	a.mu.RUnlock()
@@ -121,7 +130,6 @@ func (a *Agent) waitForPreCompact(ctx context.Context) bool {
 		return false
 	}
 
-	debug.Log("precompact", "WAITING for background compaction")
 	select {
 	case <-pc.done:
 		// Clear the slot. Safe under lock — the goroutine no longer touches
@@ -132,12 +140,23 @@ func (a *Agent) waitForPreCompact(ctx context.Context) bool {
 		}
 		a.mu.Unlock()
 		ok := pc.err == nil && !pc.cancelled
-		debug.Log("precompact", "WAIT resolved ok=%v err=%v cancelled=%v", ok, pc.err, pc.cancelled)
-		return ok
-	case <-ctx.Done():
-		// User cancelled their request. Leave a.precompact intact; the
-		// goroutine will finish on its own bgCtx and the next call benefits.
-		debug.Log("precompact", "WAIT interrupted by ctx: %v", ctx.Err())
+		if !ok {
+			debug.Log("precompact", "READY but unusable err=%v cancelled=%v", pc.err, pc.cancelled)
+			return false
+		}
+		snapshotMgr, ok := a.contextManager.(snapshotCompactManager)
+		if !ok {
+			debug.Log("precompact", "READY but context manager cannot apply snapshots")
+			return false
+		}
+		applied, newTokens := snapshotMgr.ApplyCompactResult(pc.snapshot, pc.result)
+		debug.Log("precompact", "READY consumed applied=%t tokens=%d", applied, newTokens)
+		if applied {
+			a.maybeSaveCheckpoint()
+		}
+		return applied
+	default:
+		debug.Log("precompact", "still running; continuing without waiting")
 		return false
 	}
 }
@@ -146,8 +165,7 @@ func (a *Agent) waitForPreCompact(ctx context.Context) bool {
 // session-clear, /clear, /compact, SetContextManager or app shutdown.
 //
 // The goroutine sees its bgCtx cancelled, marks the state as cancelled, then
-// closes done. Any concurrent waitForPreCompact will see ok=false and fall
-// back to inline maybeAutoCompact.
+// closes done. A later consumeReadyPreCompact will discard the result.
 func (a *Agent) CancelPreCompact() {
 	a.mu.Lock()
 	pc := a.precompact
