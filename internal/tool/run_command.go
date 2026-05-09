@@ -144,7 +144,7 @@ func (t RunCommand) Parameters() json.RawMessage {
 		"properties": {
 			"command": {
 				"type": "string",
-				"description": "Shell command to execute"
+				"description": "Shell command to execute. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Run tests' or '# Install dependencies'). This comment is shown as the activity label in the UI."
 			},
 			"working_dir": {
 				"type": "string",

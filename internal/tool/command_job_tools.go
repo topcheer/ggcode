@@ -27,7 +27,7 @@ func (t StartCommandTool) Parameters() json.RawMessage {
 		"properties": {
 			"command": {
 				"type": "string",
-				"description": "Shell command to execute in the background"
+				"description": "Shell command to execute in the background. IMPORTANT: Start the command with a '# ' comment line describing its purpose (e.g. '# Start dev server' or '# Run linter'). This comment is shown as the activity label in the UI."
 			},
 			"timeout": {
 				"type": "integer",
