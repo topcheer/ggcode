@@ -275,7 +275,10 @@ func (s *JSONLStore) Save(ses *Session) error {
 
 	// No user interaction — remove the file and index entry instead of saving.
 	if !ses.HasUserInteraction() {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return fmt.Errorf("removing empty session file: %w", err)
 		}
 		return s.removeFromIndex(ses.ID)

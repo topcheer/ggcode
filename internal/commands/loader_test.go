@@ -183,3 +183,35 @@ func TestLoad_GGCodeSkillsOverrideSharedAgentsSkills(t *testing.T) {
 		t.Fatalf("template = %q, want %q", cmd.Template, "GGCode deploy")
 	}
 }
+
+func TestNewLoaderDedupesHomeProjectTargets(t *testing.T) {
+	tmpDir := t.TempDir()
+	home := filepath.Join(tmpDir, "home")
+	t.Setenv("HOME", home)
+	skillDir := filepath.Join(home, ".ggcode", "skills", "home-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("Home skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader(home)
+	dirs := loader.CommandDirs()
+	seen := make(map[string]bool)
+	for _, dir := range dirs {
+		if seen[dir] {
+			t.Fatalf("duplicate command dir %q in %v", dir, dirs)
+		}
+		seen[dir] = true
+	}
+
+	cmds := loader.Load()
+	cmd, ok := cmds["home-skill"]
+	if !ok {
+		t.Fatal("missing home skill")
+	}
+	if cmd.Source != SourceUser {
+		t.Fatalf("home skill source = %s, want %s", cmd.Source, SourceUser)
+	}
+}

@@ -37,15 +37,39 @@ type Loader struct {
 // NewLoader creates a loader scanning global and project-local skills and commands.
 func NewLoader(projectDir string) *Loader {
 	home := config.HomeDir()
+	targets := dedupeLoadTargets([]loadTarget{
+		{Dir: filepath.Join(home, ".agents", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
+		{Dir: filepath.Join(home, ".ggcode", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
+		{Dir: filepath.Join(home, ".ggcode", "commands"), Source: SourceUser, LoadedFrom: LoadedFromCommands},
+		{Dir: filepath.Join(projectDir, ".ggcode", "skills"), Source: SourceProject, LoadedFrom: LoadedFromSkills},
+		{Dir: filepath.Join(projectDir, ".ggcode", "commands"), Source: SourceProject, LoadedFrom: LoadedFromCommands},
+	})
 	return &Loader{
-		targets: []loadTarget{
-			{Dir: filepath.Join(home, ".agents", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
-			{Dir: filepath.Join(home, ".ggcode", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
-			{Dir: filepath.Join(home, ".ggcode", "commands"), Source: SourceUser, LoadedFrom: LoadedFromCommands},
-			{Dir: filepath.Join(projectDir, ".ggcode", "skills"), Source: SourceProject, LoadedFrom: LoadedFromSkills},
-			{Dir: filepath.Join(projectDir, ".ggcode", "commands"), Source: SourceProject, LoadedFrom: LoadedFromCommands},
-		},
+		targets: targets,
 	}
+}
+
+func dedupeLoadTargets(targets []loadTarget) []loadTarget {
+	out := make([]loadTarget, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		key := canonicalTargetDir(target.Dir)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, target)
+	}
+	return out
+}
+
+func canonicalTargetDir(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	} else if abs, absErr := filepath.Abs(dir); absErr == nil {
+		dir = abs
+	}
+	return filepath.Clean(dir)
 }
 
 // Load scans all command directories and returns loaded commands.

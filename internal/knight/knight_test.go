@@ -301,6 +301,66 @@ created_by: user
 	}
 }
 
+func TestSkillIndexDedupesHomeAsProject(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "knight-index-*")
+	defer os.RemoveAll(dir)
+
+	homeDir := filepath.Join(dir, "home")
+	activeDir := filepath.Join(homeDir, ".ggcode", "skills", "home-skill")
+	if err := os.MkdirAll(activeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activeDir, "SKILL.md"), []byte(`---
+name: home-skill
+description: Home skill
+scope: global
+created_by: user
+---
+# Home Skill`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stagingDir := filepath.Join(homeDir, ".ggcode", "skills-staging")
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagingDir, "knight-20260419-home.md"), []byte(`---
+name: home-staging
+description: Home staging
+scope: global
+created_by: knight
+---
+# Home Staging`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := NewSkillIndex(homeDir, homeDir)
+	entries, err := idx.Scan()
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 unique entries, got %d", len(entries))
+	}
+	scopes := map[string]string{}
+	for _, entry := range entries {
+		scopes[entry.Name] = entry.Scope
+	}
+	if scopes["home-skill"] != "global" {
+		t.Fatalf("home-skill scope = %s, want global", scopes["home-skill"])
+	}
+	if scopes["home-staging"] != "global" {
+		t.Fatalf("home-staging scope = %s, want global", scopes["home-staging"])
+	}
+	dirs := idx.Directories()
+	seen := make(map[string]bool)
+	for _, dir := range dirs {
+		if seen[dir] {
+			t.Fatalf("duplicate skill index dir %q in %v", dir, dirs)
+		}
+		seen[dir] = true
+	}
+}
+
 func TestSkillIndexScanWithStaging(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "knight-index-*")
 	defer os.RemoveAll(dir)

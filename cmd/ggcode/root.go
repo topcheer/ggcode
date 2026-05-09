@@ -360,14 +360,20 @@ func firstNonEmpty(values ...string) string {
 }
 
 func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
+	trace := newStartupTrace("root.run")
+	defer trace.Mark("return")
+
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		return err
 	}
+	trace.Mark("resolve provider")
+
 	_, knightProv, err := resolveKnightProvider(cfg, resolved, prov)
 	if err != nil {
 		return err
 	}
+	trace.Mark("resolve knight provider")
 
 	// Setup permission policy
 	allowedDirs := cfg.ExpandAllowedDirs(".")
@@ -389,20 +395,26 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		mode = permission.BypassMode
 	}
 	policy := permission.NewConfigPolicyWithMode(rules, allowedDirs, mode)
+	trace.Mark("permission policy")
 
 	var ag *agent.Agent // declared early so closures can capture it
 
 	// Setup tools (after policy so sandbox checks can be wired)
 	workingDir, _ := os.Getwd()
+	trace.Mark("working directory")
+
 	registry := tool.NewRegistry()
 	if err := tool.RegisterBuiltinTools(registry, policy, workingDir); err != nil {
 		return err
 	}
+	trace.Mark("register built-in tools")
+
 	mergedMCPServers, _ := mcp.MergeStartupServers(workingDir, cfg.MCPServers)
 	mcpMgr := plugin.NewMCPManager(mergedMCPServers, registry)
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
+	trace.Mark("merge mcp servers")
 
 	// Load plugins
 	pluginMgr := plugin.NewManager()
@@ -410,15 +422,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if err := pluginMgr.RegisterTools(registry); err != nil {
 		return err
 	}
+	trace.Mark("load plugins")
 
 	autoMem := memory.NewAutoMemory()
 	projectAutoMem := memory.NewProjectAutoMemory(workingDir)
 	_ = registry.Register(tool.NewSaveMemoryTool(autoMem, projectAutoMem))
+	trace.Mark("init auto memory")
 
 	_, autoFiles, _, commandMgr := loadInteractiveStartupAssets(workingDir, autoMem, projectAutoMem)
+	trace.Mark("load interactive startup assets")
+
 	commandMgr.SetExtraProviders(func() []*commands.Command {
 		return buildMCPSkillCommands(mcpMgr.SnapshotMCP())
 	})
+	trace.Mark("wire command providers")
+
 	projectMemoryLoader := func() (string, []string, error) {
 		return memory.LoadProjectMemory(workingDir)
 	}
@@ -464,8 +482,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			knightAgent.RecordSkillEffectiveness(event.Ref, 3)
 		},
 	})
+	trace.Mark("register skill tool")
+
 	// Detect git status
 	gitStatus := detectGitStatus(workingDir)
+	trace.Mark("detect git status")
 
 	// Collect tool names
 	tools := registry.List()
@@ -473,6 +494,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	for i, t := range tools {
 		toolNames[i] = t.Name()
 	}
+	trace.Mark("collect tool names")
 
 	buildCurrentSystemPrompt := func() (string, []string) {
 		// Collect user-facing slash shortcuts separately from the full skill registry.
@@ -504,6 +526,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		return prompt, promptSkillRefs
 	}
 	systemPrompt, promptSkillRefs := buildCurrentSystemPrompt()
+	trace.Mark(fmt.Sprintf("build initial system prompt skills=%d bytes=%d", len(promptSkillRefs), len(systemPrompt)))
+
 	var promptSkillRefsMu sync.RWMutex
 	currentPromptSkillRefs := func() []string {
 		promptSkillRefsMu.RLock()
@@ -514,6 +538,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Setup sub-agent manager
 	subMgr := subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
+	trace.Mark("setup sub-agent manager")
 
 	// Setup agent
 	maxIter := cfg.MaxIterations
@@ -554,22 +579,28 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
+	trace.Mark("setup agent")
 
 	// Setup session store
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		return fmt.Errorf("creating session store: %w", err)
 	}
+	trace.Mark("create session store")
+
 	if resumeID == "picker" {
 		selectedID, err := pickResumeSession(store, session.CurrentWorkspacePath())
 		if err != nil {
 			return err
 		}
 		resumeID = selectedID
+		trace.Mark("pick resume session")
 	}
 	homeDir, _ := os.UserHomeDir()
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
+	trace.Mark("create knight")
+
 	var knightConflictHint string
 	if cfg.Knight().Enabled {
 		if err := knightAgent.Start(context.Background()); err != nil {
@@ -588,9 +619,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			}
 		}
 	}
+	trace.Mark("start knight")
 
 	// Build MCP info for TUI
 	mcpInfos := toTuiMCPInfos(mcpMgr.Snapshot())
+	trace.Mark("build tui mcp info")
 
 	// Start A2A server if enabled.
 	var a2aServer *a2a.Server
@@ -615,12 +648,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			}()
 		}
 	}
+	trace.Mark("start a2a")
 
 	// Start TUI REPL
 	repl := tui.NewREPL(ag, policy)
 	if a2aTaskHandler != nil {
 		repl.SetA2AHandler(a2aTaskHandler)
 	}
+	trace.Mark("create repl")
+
 	var imMgr *im.Manager
 	{
 		imMgr = im.NewManager()
@@ -664,9 +700,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 		repl.SetIMManager(imMgr)
 	}
+	trace.Mark("setup im")
+
 	if execPath, err := os.Executable(); err == nil {
 		repl.SetUpdateService(update.NewService(version.Display(), execPath, cfgFile, workingDir))
 	}
+	trace.Mark("setup update service")
+
 	repl.SetConfig(cfg)
 	repl.SetSessionStore(store)
 	repl.SetMCPServers(mcpInfos)
@@ -683,6 +723,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if knightConflictHint != "" {
 		repl.SetKnightStartupHint(knightConflictHint)
 	}
+	trace.Mark("wire repl dependencies")
 
 	// Register task, cron, plan mode, config, and send_message tools
 	taskMgr := task.NewManager()
@@ -694,6 +735,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetConfigTool(registry)
 	repl.SetSendMessageTool(subMgr, registry)
 	repl.SetTaskOutputTool(subMgr, registry)
+	trace.Mark("register repl tools")
 
 	// Register swarm tools
 	swarmAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
@@ -710,10 +752,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
 	repl.SetSwarmManager(swarmMgr, registry)
+	trace.Mark("setup swarm")
 
 	// Start webui for TUI mode (session browser + webchat)
 	webuiSrv := webui.NewServer(cfg)
 	webuiSrv.SetSessionStore(store, workingDir)
+	trace.Mark("create webui")
 
 	// Wire MCP status for webui config page
 	webuiSrv.SetMCPStatusFn(func() map[string]webui.MCPRuntimeStatus {
@@ -864,6 +908,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
+	trace.Mark("wire webui callbacks")
 
 	actualAddr, webuiErr := webuiSrv.Start("127.0.0.1:0")
 	if webuiErr != nil {
@@ -874,11 +919,34 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		// Schedule the URL display for after TUI is ready (see repl startup goroutine)
 		repl.SetWebUIReadyAddr(actualAddr)
 	}
+	trace.Mark("start webui")
 
 	if resumeID != "" {
 		repl.SetResumeID(resumeID)
 	}
+	trace.Mark("before repl run")
 	return repl.Run()
+}
+
+type startupTrace struct {
+	name  string
+	start time.Time
+	last  time.Time
+}
+
+func newStartupTrace(name string) *startupTrace {
+	now := time.Now()
+	debug.Log("root", "startup timing %s start pid=%d", name, os.Getpid())
+	return &startupTrace{name: name, start: now, last: now}
+}
+
+func (t *startupTrace) Mark(label string) {
+	if t == nil {
+		return
+	}
+	now := time.Now()
+	debug.Log("root", "startup timing %s %-44s delta=%s total=%s", t.name, label, now.Sub(t.last).Round(time.Millisecond), now.Sub(t.start).Round(time.Millisecond))
+	t.last = now
 }
 
 // tuiWebchatSender implements webui.WebchatMessageSender by routing webchat
@@ -1112,6 +1180,9 @@ func loadInteractiveStartupAssets(
 	autoMem *memory.AutoMemory,
 	projectAutoMem *memory.AutoMemory,
 ) (string, []string, string, *commands.Manager) {
+	trace := newStartupTrace("root.startup-assets")
+	defer trace.Mark("return")
+
 	var (
 		autoContent        string
 		autoFiles          []string
@@ -1124,25 +1195,38 @@ func loadInteractiveStartupAssets(
 
 	safego.Go("root.interactive.autoMem", func() {
 		defer wg.Done()
+		start := time.Now()
 		autoContent, autoFiles, _ = autoMem.LoadAll()
+		debug.Log("root", "startup timing root.startup-assets autoMem.LoadAll files=%d duration=%s", len(autoFiles), time.Since(start).Round(time.Millisecond))
 	})
 
 	safego.Go("root.interactive.projectAutoMem", func() {
 		defer wg.Done()
+		start := time.Now()
 		if projectAutoMem != nil {
 			projectAutoContent, _, _ = projectAutoMem.LoadAll()
 		}
+		debug.Log("root", "startup timing root.startup-assets projectAutoMem.LoadAll enabled=%v bytes=%d duration=%s", projectAutoMem != nil, len(projectAutoContent), time.Since(start).Round(time.Millisecond))
 	})
 
 	safego.Go("root.interactive.commands", func() {
 		defer wg.Done()
+		start := time.Now()
 		commandMgr = commands.NewManager(workingDir)
+		cmdCount := 0
+		if commandMgr != nil {
+			cmdCount = len(commandMgr.Commands())
+		}
+		debug.Log("root", "startup timing root.startup-assets commands.NewManager commands=%d duration=%s", cmdCount, time.Since(start).Round(time.Millisecond))
 	})
 
 	wg.Wait()
+	trace.Mark("wait parallel assets")
 
 	if commandMgr == nil {
+		start := time.Now()
 		commandMgr = commands.NewManager(workingDir)
+		debug.Log("root", "startup timing root.startup-assets commands.NewManager fallback duration=%s", time.Since(start).Round(time.Millisecond))
 	}
 
 	return autoContent, autoFiles, projectAutoContent, commandMgr

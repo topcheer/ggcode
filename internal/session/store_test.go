@@ -490,6 +490,9 @@ func TestSaveSkipsEmptySession(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("empty session file should not exist")
 	}
+	if _, err := os.Stat(filepath.Join(dir, "index.json")); !os.IsNotExist(err) {
+		t.Errorf("empty session save should not create an index file")
+	}
 	// List should not include it
 	list, _ := store.List()
 	if len(list) != 0 {

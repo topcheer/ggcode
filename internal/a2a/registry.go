@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -335,41 +336,6 @@ func detectWorkspaceMeta(dir string) WorkspaceMeta {
 		meta.HasGit = true
 	}
 
-	// Detect languages by file extension.
-	langSet := make(map[string]bool)
-	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		// Skip hidden dirs and common non-project dirs.
-		base := filepath.Base(path)
-		if d.IsDir() && (strings.HasPrefix(base, ".") || base == "vendor" || base == "node_modules") {
-			return filepath.SkipDir
-		}
-		if d.IsDir() {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		switch ext {
-		case ".go":
-			langSet["go"] = true
-		case ".ts", ".tsx":
-			langSet["typescript"] = true
-		case ".js", ".jsx":
-			langSet["javascript"] = true
-		case ".py":
-			langSet["python"] = true
-		case ".rs":
-			langSet["rust"] = true
-		case ".java":
-			langSet["java"] = true
-		}
-		return nil
-	})
-	for lang := range langSet {
-		meta.Languages = append(meta.Languages, lang)
-	}
-
 	// Detect frameworks.
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 		meta.Frameworks = append(meta.Frameworks, "go-modules")
@@ -384,26 +350,105 @@ func detectWorkspaceMeta(dir string) WorkspaceMeta {
 		meta.Frameworks = append(meta.Frameworks, "cargo")
 	}
 
-	// Check for tests.
-	meta.HasTests = hasTestFiles(dir)
+	if shouldSkipRecursiveWorkspaceMeta(dir) {
+		return meta
+	}
+
+	meta.Languages, meta.HasTests = scanWorkspaceSignals(dir)
 
 	return meta
 }
 
-func hasTestFiles(dir string) bool {
-	found := false
-	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+const (
+	workspaceMetaMaxScanDepth = 3
+	workspaceMetaMaxEntries   = 5000
+)
+
+func scanWorkspaceSignals(dir string) ([]string, bool) {
+	rootDepth := strings.Count(filepath.Clean(dir), string(filepath.Separator))
+	langSet := make(map[string]bool)
+	hasTests := false
+	visited := 0
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		visited++
+		if visited > workspaceMetaMaxEntries {
+			return filepath.SkipAll
+		}
+		if d.IsDir() {
+			base := strings.ToLower(d.Name())
+			if shouldSkipWorkspaceMetaDir(base) {
+				return filepath.SkipDir
+			}
+			depth := strings.Count(filepath.Clean(path), string(filepath.Separator)) - rootDepth
+			if depth > workspaceMetaMaxScanDepth {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		name := strings.ToLower(d.Name())
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".go":
+			langSet["go"] = true
+		case ".ts", ".tsx":
+			langSet["typescript"] = true
+		case ".js", ".jsx":
+			langSet["javascript"] = true
+		case ".py":
+			langSet["python"] = true
+		case ".rs":
+			langSet["rust"] = true
+		case ".java":
+			langSet["java"] = true
+		}
 		if strings.Contains(name, "_test.") || strings.Contains(name, "test.") || strings.HasSuffix(name, "_test.go") || strings.Contains(name, ".test.") || strings.Contains(name, ".spec.") {
-			found = true
-			return filepath.SkipAll
+			hasTests = true
 		}
 		return nil
 	})
-	return found
+	langs := make([]string, 0, len(langSet))
+	for lang := range langSet {
+		langs = append(langs, lang)
+	}
+	sort.Strings(langs)
+	return langs, hasTests
+}
+
+func shouldSkipRecursiveWorkspaceMeta(dir string) bool {
+	absDir := canonicalWorkspacePath(dir)
+	home := canonicalWorkspacePath(config.HomeDir())
+	return absDir == string(filepath.Separator) || (home != "" && strings.EqualFold(absDir, home))
+}
+
+func canonicalWorkspacePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(path)
+}
+
+func shouldSkipWorkspaceMetaDir(name string) bool {
+	if name == "" {
+		return false
+	}
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	switch name {
+	case "vendor", "node_modules", "dist", "build", "target", "coverage", "tmp", "temp", "cache", "logs", "bin", "obj", "__pycache__", "venv":
+		return true
+	default:
+		return false
+	}
 }
 
 // GenerateInstanceID creates a unique ID for this ggcode process.

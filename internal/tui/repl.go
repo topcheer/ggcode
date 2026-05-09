@@ -439,16 +439,27 @@ type cronPromptMsg struct {
 
 // Run starts the REPL event loop.
 func (r *REPL) Run() error {
+	traceStart := time.Now()
+	traceLast := traceStart
+	traceMark := func(label string) {
+		now := time.Now()
+		debug.Log("repl", "startup timing repl.Run %-40s delta=%s total=%s", label, now.Sub(traceLast).Round(time.Millisecond), now.Sub(traceStart).Round(time.Millisecond))
+		traceLast = now
+	}
 	debug.Log("repl", "Run() START resumeID=%q", r.resumeID)
+	traceMark("start")
 	// Initialize session
 	if r.store != nil {
 		if r.resumeID != "" {
 			r.loadSession(r.resumeID)
+			traceMark("load session")
 		} else {
 			r.createSession()
+			traceMark("create session")
 		}
 	}
 	r.primeInitialWindowSize(term.GetSize)
+	traceMark("prime initial window size")
 
 	// TTY hygiene: drain any pending stdin bytes (e.g. terminal probe responses
 	// from the previous shell, paste residue) before bubbletea grabs the TTY.
@@ -456,15 +467,18 @@ func (r *REPL) Run() error {
 	// cancelReader activity in the next debug bundle.
 	enableBubbleteaTrace()
 	drainStdinResidual()
+	traceMark("tty hygiene")
 
 	// Pre-initialize the glamour markdown renderer so the first LLM response
 	// doesn't freeze the TUI while glamour initializes its parser/highlighter.
 	markdown.Warmup()
+	traceMark("markdown warmup")
 
 	r.program = tea.NewProgram(r.model)
 	if r.planSwitcher != nil {
 		r.planSwitcher.program = r.program
 	}
+	traceMark("new bubbletea program")
 	debug.Log("repl", "program created stdin_is_term=%v stdout_is_term=%v",
 		term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()))
 
@@ -478,6 +492,7 @@ func (r *REPL) Run() error {
 			r.program.Send(msg)
 		}
 	})
+	traceMark("start tty monitors")
 	defer func() {
 		stopWatchdog()
 		stopStdoutMonitor()
@@ -494,6 +509,7 @@ func (r *REPL) Run() error {
 			defer r.mcpCancel()
 		}
 	}
+	traceMark("wire mcp callbacks")
 	if r.commandMgr != nil {
 		stop := make(chan struct{})
 		defer close(stop)
@@ -515,6 +531,7 @@ func (r *REPL) Run() error {
 			}
 		})
 	}
+	traceMark("start command reload loop")
 
 	// Wire the agent's approval handler into the TUI via channel bridge.
 	// Honors ctx — if the TUI exits or the run is cancelled while waiting
@@ -537,6 +554,7 @@ func (r *REPL) Run() error {
 			return permission.Deny
 		}
 	})
+	traceMark("wire approval handler")
 
 	// Wire checkpoint handler — persist compacted state after summarize.
 	// Acquires the model's sessionMutex while reading m.session and calling
@@ -578,6 +596,7 @@ func (r *REPL) Run() error {
 			mu.Unlock()
 		}
 	})
+	traceMark("wire checkpoint handler")
 
 	// NewProgram copies the model, so SetProgram on r.model is useless.
 	// We can't Send before Run (deadlock). Instead, run in a goroutine and
@@ -595,12 +614,14 @@ func (r *REPL) Run() error {
 		modelName = r.model.config.Model
 	}
 	safego.Go("tui.repl.startupMsg", func() {
+		start := time.Now()
 		// Wait for Bubble Tea to complete initialization (raw mode, alt screen,
 		// mouse mode, renderer start, readLoop start) before sending any messages.
 		// Too short and messages arrive before the event loop is ready.
 		time.Sleep(100 * time.Millisecond)
 		r.program.Send(setProgramMsg{Program: r.program})
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
+		debug.Log("repl", "startup timing repl.startupMsg sent initial messages duration=%s", time.Since(start).Round(time.Millisecond))
 		if r.webuiAddr != "" {
 			r.program.Send(webuiReadyMsg{Addr: r.webuiAddr})
 		}
@@ -610,20 +631,27 @@ func (r *REPL) Run() error {
 		if r.projectMemoryLoader != nil {
 			loader := r.projectMemoryLoader
 			safego.Go("tui.repl.projectMemory", func() {
+				start := time.Now()
 				content, files, err := loader()
+				debug.Log("repl", "startup timing repl.projectMemory files=%d bytes=%d err=%v duration=%s", len(files), len(content), err, time.Since(start).Round(time.Millisecond))
 				if r.program != nil {
 					r.program.Send(projectMemoryLoadedMsg{Content: content, Files: files, Err: err})
 				}
 			})
 		}
 		if r.mcpMgr != nil {
+			start := time.Now()
 			mcpCtx, mcpCancel := context.WithCancel(context.Background())
 			r.mcpCancel = mcpCancel // assign before StartBackground to avoid fast-exit race
 			r.mcpMgr.StartBackground(mcpCtx)
+			debug.Log("repl", "startup timing repl.mcp StartBackground duration=%s", time.Since(start).Round(time.Millisecond))
 		}
 	})
+	traceMark("schedule startup messages")
 
+	traceMark("before bubbletea Run")
 	finalModel, err := r.program.Run()
+	traceMark("after bubbletea Run")
 	debug.Log("repl", "program.Run() returned err=%v", err)
 	if errors.Is(err, tea.ErrInterrupted) {
 		err = nil
@@ -667,6 +695,7 @@ func (r *REPL) primeInitialWindowSize(getSize func(fd uintptr) (int, int, error)
 
 // createSession creates a fresh session and wires it into the model.
 func (r *REPL) createSession() {
+	start := time.Now()
 	vendor := ""
 	endpoint := ""
 	model := ""
@@ -676,15 +705,23 @@ func (r *REPL) createSession() {
 		model = r.model.config.Model
 	}
 	ses := session.NewSession(vendor, endpoint, model)
+	debug.Log("repl", "startup timing repl.createSession session.NewSession workspace=%q duration=%s", ses.Workspace, time.Since(start).Round(time.Millisecond))
+	saveStart := time.Now()
 	if err := r.store.Save(ses); err == nil {
+		debug.Log("repl", "startup timing repl.createSession store.Save duration=%s", time.Since(saveStart).Round(time.Millisecond))
 		r.model.SetSession(ses, r.store)
 		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.new", ses.ID))
+		debug.Log("repl", "startup timing repl.createSession total=%s", time.Since(start).Round(time.Millisecond))
+	} else {
+		debug.Log("repl", "startup timing repl.createSession store.Save err=%v duration=%s", err, time.Since(saveStart).Round(time.Millisecond))
 	}
 }
 
 // loadSession loads a previous session and restores messages into the agent.
 func (r *REPL) loadSession(id string) {
+	start := time.Now()
 	ses, err := r.store.Load(id)
+	debug.Log("repl", "startup timing repl.loadSession store.Load id=%q messages=%d err=%v duration=%s", id, messageCount(ses), err, time.Since(start).Round(time.Millisecond))
 	if err != nil {
 		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume_failed", id, err))
 		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume_fallback"))
@@ -702,6 +739,14 @@ func (r *REPL) loadSession(id string) {
 		title = r.model.t("session.untitled")
 	}
 	r.model.chatWriteSystem(nextSystemID(), r.model.t("session.resume", ses.ID, title, len(ses.Messages)))
+	debug.Log("repl", "startup timing repl.loadSession total=%s", time.Since(start).Round(time.Millisecond))
+}
+
+func messageCount(ses *session.Session) int {
+	if ses == nil {
+		return 0
+	}
+	return len(ses.Messages)
 }
 
 // execRestart replaces the current process with a fresh ggcode binary.
