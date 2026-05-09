@@ -203,8 +203,11 @@ func TestPlanModeRoundTrip_Supervised(t *testing.T) {
 func TestExitPlanMode_Description(t *testing.T) {
 	tool := ExitPlanModeTool{}
 	desc := tool.Description()
-	if !contains(desc, "restores") {
-		t.Errorf("description should mention restoring mode: %q", desc)
+	if !contains(desc, "Exit plan mode") {
+		t.Errorf("description should mention exiting plan mode: %q", desc)
+	}
+	if contains(desc, "mode") && contains(desc, "restore") {
+		t.Errorf("description should not expose internal mode restore logic: %q", desc)
 	}
 }
 
