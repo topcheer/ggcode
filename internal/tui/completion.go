@@ -194,9 +194,9 @@ func CompleteMention(prefix string, workDir string) []string {
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/export", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
-	"/mcp", "/memory", "/undo", "/checkpoints", "/allow", "/plugins",
+	"/mcp", "/memory", "/undo", "/checkpoints", "/plugins",
 	"/image", "/init", "/harness", "/exit", "/quit",
-	"/compact", "/todo", "/bug", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
+	"/compact", "/todo", "/config", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -236,7 +236,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/memory":      "Manage memory",
 	"/undo":        "Undo last file edit",
 	"/checkpoints": "List checkpoints",
-	"/allow":       "Always allow a tool",
 	"/plugins":     "List loaded plugins",
 	"/image":       "Attach an image",
 	"/init":        "Create GGCODE.md",
@@ -245,7 +244,6 @@ var SlashCommandDescriptions = map[string]string{
 	"/quit":        "Exit ggcode",
 	"/compact":     "Compress conversation history",
 	"/todo":        "View/manage todo list",
-	"/bug":         "Report a bug",
 	"/config":      "View/modify configuration",
 	"/status":      "Show current status",
 	"/knight":      "Knight auto-evolution commands",
@@ -266,7 +264,6 @@ var SlashCommandPlaceholders = map[string]string{
 	"/impersonate": "<cli-tool>",
 	"/harness":     "<subcommand>",
 	"/knight":      "<subcommand>",
-	"/allow":       "<tool-name>",
 	"/resume":      "<session-id>",
 	"/export":      "<session-id>",
 	"/lang":        "<en|zh-CN>",
