@@ -336,10 +336,33 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 		return false, ""
 	}
 
-	// Must start with "/" at position 0 (or after a space at position 0)
-	// Find the start of the current word
+	// Clamp cursor to a valid byte boundary (may land mid-UTF8 if caller
+	// uses rune offsets). Walk backwards past any continuation bytes.
+	for cursor < len(value) && value[cursor]&0xC0 == 0x80 {
+		cursor++
+	}
+	if cursor > len(value) {
+		cursor = len(value)
+	}
+	if cursor < 1 {
+		return false, ""
+	}
+
+	// Find the start of the current word by scanning backwards for whitespace.
+	// Since whitespace chars (space, tab) are single-byte ASCII, we can safely
+	// compare individual bytes — but we must not stop mid-UTF8 sequence.
 	wordStart := cursor
-	for wordStart > 0 && value[wordStart-1] != ' ' && value[wordStart-1] != '\t' {
+	for wordStart > 0 {
+		b := value[wordStart-1]
+		if b == ' ' || b == '\t' {
+			break
+		}
+		// Skip over UTF-8 continuation bytes (0x80-0xBF) so we don't
+		// misidentify a continuation byte as a non-whitespace char.
+		if b&0xC0 == 0x80 {
+			wordStart--
+			continue
+		}
 		wordStart--
 	}
 
@@ -347,15 +370,23 @@ func DetectSlashCommand(value string, cursor int) (active bool, prefix string) {
 		return false, ""
 	}
 
-	// Ensure "/" is at the start of input or after whitespace
-	if wordStart > 0 && value[wordStart-1] != ' ' && value[wordStart-1] != '\t' {
-		return false, ""
+	// Ensure "/" is at the start of input or after whitespace.
+	if wordStart > 0 {
+		prev := value[wordStart-1]
+		if prev != ' ' && prev != '\t' {
+			return false, ""
+		}
 	}
 
-	if cursor > len(value) {
-		cursor = len(value)
+	// Extract the prefix after "/".
+	end := cursor
+	if end > len(value) {
+		end = len(value)
 	}
-	prefix = value[wordStart+1 : cursor]
+	if wordStart+1 > end {
+		return false, ""
+	}
+	prefix = value[wordStart+1 : end]
 	return true, prefix
 }
 

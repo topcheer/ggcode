@@ -216,3 +216,57 @@ func searchString(s, substr string) bool {
 	}
 	return false
 }
+
+func TestDetectSlashCommandBoundaries(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  string
+		cursor int
+		active bool
+		prefix string
+	}{
+		{"empty", "", 0, false, ""},
+		{"cursor_negative", "/h", -1, false, ""},
+		{"cursor_zero", "/h", 0, false, ""},
+		{"cursor_beyond_len", "/h", 10, false, ""},
+		{"cursor_at_len", "/help", 5, true, "help"},
+		{"cursor_at_slash", "/", 1, true, ""},
+		{"middle_of_command", "/he", 3, true, "he"},
+		{"after_space", "/help me", 8, false, ""},            // cursor is on "me" not command
+		{"multi_byte_with_space", "你好 /he", 10, true, "he"},  // byte len=10, cursor at end
+		{"multi_byte_cursor_on_char", "你好/he", 2, false, ""}, // cursor on Chinese char
+		{"cursor_equals_len", "x", 1, false, ""},             // no slash
+		{"slash_only_cursor_1", "/", 1, true, ""},
+		{"slash_with_space", " /he", 4, true, "he"},
+		{"no_slash", "hello", 5, false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			active, prefix := DetectSlashCommand(tt.value, tt.cursor)
+			if active != tt.active || prefix != tt.prefix {
+				t.Errorf("DetectSlashCommand(%q, %d) = (%v, %q), want (%v, %q)",
+					tt.value, tt.cursor, active, prefix, tt.active, tt.prefix)
+			}
+		})
+	}
+}
+
+// TestDetectSlashCommandNoPanic ensures no cursor value causes a panic.
+func TestDetectSlashCommandNoPanic(t *testing.T) {
+	value := "你好世界/test"
+	for cursor := -10; cursor <= len(value)+10; cursor++ {
+		// Should never panic
+		DetectSlashCommand(value, cursor)
+	}
+
+	// Empty string
+	for cursor := -5; cursor <= 5; cursor++ {
+		DetectSlashCommand("", cursor)
+	}
+
+	// Only multi-byte chars
+	for cursor := -5; cursor <= 20; cursor++ {
+		DetectSlashCommand("你好世界", cursor)
+	}
+}
