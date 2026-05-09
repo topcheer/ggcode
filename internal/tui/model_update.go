@@ -1515,10 +1515,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case cronPromptMsg:
-		m.queuePendingSubmissionHidden(msg.Prompt)
 		sysMsg := m.t("cron.firing")
 		m.chatWriteSystem(nextSystemID(), sysMsg)
 		m.emitIMText(sysMsg)
+		// If agent is idle, submit the cron prompt immediately.
+		// Otherwise queue it for processing after the current run finishes.
+		if !m.loading {
+			return m, m.submitText(msg.Prompt, true)
+		}
+		m.queuePendingSubmissionHidden(msg.Prompt)
 		return m, nil
 
 	case skillsChangedMsg:
