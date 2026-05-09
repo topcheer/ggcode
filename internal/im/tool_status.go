@@ -55,11 +55,32 @@ func DescribeTool(lang ToolLanguage, toolName, rawArgs string) ToolPresentation 
 			argString(args, "path"),
 			argString(args, "directory"),
 		)))
-	case "run_command", "bash", "powershell", "start_command":
-		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmptyStr(
+	case "run_command", "bash", "powershell":
+		target := displayToolTarget(firstNonEmptyStr(
 			argString(args, "command"),
 			argString(args, "cmd"),
-		)))
+		))
+		if desc := argString(args, "description"); desc != "" {
+			return ToolPresentation{
+				DisplayName: desc,
+				Detail:      target,
+				Activity:    localizedCommandActivity(lang, desc),
+			}
+		}
+		return toolPresentationFor(lang, "run", target)
+	case "start_command":
+		target := displayToolTarget(firstNonEmptyStr(
+			argString(args, "command"),
+			argString(args, "cmd"),
+		))
+		if desc := argString(args, "description"); desc != "" {
+			return ToolPresentation{
+				DisplayName: desc,
+				Detail:      target,
+				Activity:    localizedCommandActivity(lang, desc),
+			}
+		}
+		return toolPresentationFor(lang, "run", target)
 	case "write_command_input":
 		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmptyStr(
 			argString(args, "job_id"),
@@ -404,6 +425,13 @@ func localizedToolActivity(lang ToolLanguage, action, target string) string {
 		}
 	}
 	return localizedGenericActivity(lang, target)
+}
+
+func localizedCommandActivity(lang ToolLanguage, desc string) string {
+	if lang == ToolLangZhCN {
+		return "正在" + desc
+	}
+	return desc
 }
 
 func localizedGenericActivity(lang ToolLanguage, label string) string {
