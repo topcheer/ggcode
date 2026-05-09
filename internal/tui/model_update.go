@@ -597,10 +597,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "$", "!":
+		case "$":
 			if !m.shellMode && !m.loading && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
 				m.setShellMode(true)
 				return m, nil
+			}
+		case "!":
+			// Sub-agent follow mode takes priority when sub-agents are running
+			if len(m.subAgentFollow.slots) > 0 && m.input.Value() == "" &&
+				!m.autoCompleteActive && !m.loading && m.pendingHarnessReview == nil &&
+				m.pendingHarnessPromote == nil {
+				// Slot 0 for "!"
+				if m.subAgentFollow.activeID == m.subAgentFollow.slots[0].ID {
+					m.subAgentFollow.deactivate()
+				} else {
+					m.subAgentFollow.activate(0)
+				}
+				return m, nil
+			}
+			// Fall through to shell mode if no sub-agents
+			if !m.shellMode && !m.loading && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
+				m.setShellMode(true)
+				return m, nil
+			}
+		case "@", "#", "%", "^", "&", "*", "(":
+			// Sub-agent follow mode slots 2-9
+			slotMap := map[string]int{"@": 1, "#": 2, "%": 3, "^": 4, "&": 5, "*": 6, "(": 7}
+			if len(m.subAgentFollow.slots) > 0 && m.input.Value() == "" &&
+				!m.autoCompleteActive && !m.loading && m.pendingHarnessReview == nil &&
+				m.pendingHarnessPromote == nil {
+				idx := slotMap[msg.String()]
+				if idx < len(m.subAgentFollow.slots) {
+					if m.subAgentFollow.activeID == m.subAgentFollow.slots[idx].ID {
+						m.subAgentFollow.deactivate()
+					} else {
+						m.subAgentFollow.activate(idx)
+					}
+					return m, nil
+				}
 			}
 		case "ctrl+c":
 			if m.autoCompleteActive {
