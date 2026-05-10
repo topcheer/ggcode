@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/version"
 )
 
 var (
@@ -209,7 +210,7 @@ func (m Model) renderSidebar() string {
 		"",
 		renderSidebarLogo(m.sidebarWidth()-4, sidebarHomepageURL),
 		"",
-		m.styles.title.Render("ggcode"),
+		m.styles.title.Render("ggcode (" + version.Version + ")"),
 		m.renderSidebarDetailRow(m.t("label.model"), vendor+"/"+model, m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.branch"), util.FirstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
