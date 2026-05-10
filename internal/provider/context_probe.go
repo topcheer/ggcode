@@ -230,40 +230,56 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 	}()
 }
 
-// probeInBackground does the actual probing. It first tries a simple
-// request to see if the API response or error reveals the context limit.
-// If not, it does tiered probing from largest to smallest.
+// probeInBackground does the actual probing. The strategy, in order:
+//
+//  1. Models API — query the provider's models endpoint for the model's
+//     token limit. Only works for Gemini (returns inputTokenLimit).
+//     OpenAI and Anthropic models API does NOT include context window info.
+//
+//  2. Simple probe — send "hi", check if the API error message reveals
+//     the context limit (some APIs include it in error responses).
+//
+//  3. Tiered probing — send padded messages from 1M down to 64K to find
+//     the actual limit by trial. Padding matches tier size (no scaling down).
+//
+// If all phases return 0, the caller keeps the existing context window
+// (from config/inferContextWindow or the 128K default).
+//
+// No artificial timeout — this runs in a background goroutine and will
+// complete at its own pace without blocking the user.
 func probeInBackground(ctx context.Context, p Provider, key string) int {
-	// Overall timeout: 60 seconds (generous for slow networks)
-	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	// Try a simple short request first — many APIs return the limit in
-	// error messages even for successful requests via headers/metadata.
-	window := trySimpleProbe(probeCtx, p)
-	if window > 0 {
+	// Phase 1: Try models API (Gemini only — others don't return token limits)
+	if window := tryModelsAPI(ctx, p); window > 0 {
+		debug.Log("probe", "models API returned context_window=%d", window)
 		SetProbeCache(key, window)
 		return window
 	}
 
-	// If simple probe returned 0 because of non-overflow error (auth,
-	// network, etc.), skip tiered probing entirely.
-	if probeCtx.Err() != nil {
-		debug.Log("probe", "aborting tiered probe: context error: %v", probeCtx.Err())
+	if ctx.Err() != nil {
+		debug.Log("probe", "aborting: context error after models API: %v", ctx.Err())
+		return 0
+	}
+
+	// Phase 2: Try simple probe — send "hi", check if error reveals the limit
+	if window := trySimpleProbe(ctx, p); window > 0 {
+		SetProbeCache(key, window)
+		return window
+	}
+
+	if ctx.Err() != nil {
+		debug.Log("probe", "aborting: context error after simple probe: %v", ctx.Err())
 		return 0
 	}
 
 	debug.Log("probe", "simple probe inconclusive, starting tiered probing with %d tiers", len(probeTiers))
 
-	// Tiered probing: send padded messages from largest tier downward.
-	// Each tier gets its own 10-second timeout to avoid a single slow
-	// tier consuming the entire budget.
+	// Phase 3: Tiered probing — send padded messages from largest tier downward.
 	for i, tier := range probeTiers {
-		if probeCtx.Err() != nil {
-			debug.Log("probe", "tiered probe cancelled at tier[%d]=%d: %v", i, tier, probeCtx.Err())
+		if ctx.Err() != nil {
+			debug.Log("probe", "tiered probe cancelled at tier[%d]=%d: %v", i, tier, ctx.Err())
 			break
 		}
-		w := tryTierProbe(probeCtx, p, tier)
+		w := tryTierProbe(ctx, p, tier)
 		if w > 0 {
 			SetProbeCache(key, w)
 			return w
@@ -273,7 +289,32 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 	return 0
 }
 
-// trySimpleProbe sends a minimal message and checks if the response or
+// tryModelsAPI queries the provider's models endpoint to extract the
+// context window limit from the model metadata.
+//
+// Known API response formats:
+//   - Gemini GET /v1beta/models/{model}: returns {"inputTokenLimit": N, "outputTokenLimit": M}
+//   - OpenAI GET /v1/models/{model}: returns {"id", "object", "created", "owned_by"} — NO token limit
+//   - Anthropic GET /v1/models/{model}: returns {"id", "display_name", "created_at", "type"} — NO token limit
+//
+// So this is only effective for Gemini. For others it returns 0 quickly.
+func tryModelsAPI(ctx context.Context, p Provider) int {
+	// Only Gemini's models API returns inputTokenLimit.
+	if p.Name() != "gemini" {
+		debug.Log("probe", "models API: skipped — %s does not expose token limits", p.Name())
+		return 0
+	}
+
+	gp, ok := p.(*GeminiProvider)
+	if !ok {
+		debug.Log("probe", "models API: skipped — cannot cast to GeminiProvider")
+		return 0
+	}
+
+	debug.Log("probe", "models API: querying Gemini models endpoint for %s", gp.model)
+	return gp.probeModelsAPI(ctx, gp.model)
+}
+
 // error reveals the context window limit.
 func trySimpleProbe(ctx context.Context, p Provider) int {
 	msgs := []Message{
@@ -312,40 +353,46 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 }
 
 // tryTierProbe sends a message padded to approximately `tier` tokens.
+// The padding is sized to match the tier — we want to test the REAL limit,
+// not a scaled-down version. If the model truly supports 1M tokens, the 1M
+// tier must send ~1M tokens of padding.
+//
+// Token approximation: in most tokenizers (GPT, Claude, Gemini), each
+// "a " is approximately 1 token. So strings.Repeat("a ", tier) ≈ tier tokens.
+// This is an approximation — actual count depends on the tokenizer — but
+// it's close enough for boundary detection.
+//
 // Returns the confirmed context window if the request succeeds, or 0 if it
-// fails with a context overflow error. Non-overflow errors also return 0
-// but signal the caller to stop probing.
+// fails with a context overflow error.
 func tryTierProbe(ctx context.Context, p Provider, tier int) int {
-	// Build a padding message. We don't need exact token counts — just
-	// enough to exceed the tier's token limit if the model can't handle it.
-	// Use tier/4 repetitions of "a " (each "a " ≈ 1 token), giving ~tier/4
-	// tokens from padding. Combined with system prompt and framing overhead
-	// (~4-8K tokens), this reliably overflows models below the tier.
-	// Cap at 50K chars (≈25K tokens) to keep payloads small for slow networks.
-	paddingLen := tier / 4
-	if paddingLen > 50_000 {
-		paddingLen = 50_000
-	}
-	padding := strings.Repeat("a ", paddingLen)
+	// Padding must approximate the tier size to properly test the boundary.
+	// Each "a " ≈ 1 token, so tier repetitions ≈ tier tokens.
+	padding := strings.Repeat("a ", tier)
 
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: padding}}},
 	}
 
-	debug.Log("probe", "sending tier probe: target=%dK padding_chars=%d", tier/1000, len(padding))
+	debug.Log("probe", "sending tier probe: target=%dK padding_chars=%d padding_tokens≈%d",
+		tier/1000, len(padding), tier)
 
+	start := time.Now()
 	_, err := p.Chat(ctx, msgs, nil)
+	elapsed := time.Since(start)
+
 	if err == nil {
 		// Request succeeded — context window >= tier
-		debug.Log("probe", "tier %dK SUCCEEDED — context window >= %dK", tier/1000, tier/1000)
+		debug.Log("probe", "tier %dK SUCCEEDED in %s — context window >= %dK", tier/1000, elapsed, tier/1000)
 		return tier
 	}
 
-	// Check if parent context timed out — stop probing entirely
+	// Check if context was cancelled (app shutdown, etc.)
 	if ctx.Err() != nil {
-		debug.Log("probe", "tier %dK aborted: %v", tier/1000, ctx.Err())
+		debug.Log("probe", "tier %dK aborted after %s: %v", tier/1000, elapsed, ctx.Err())
 		return 0
 	}
+
+	debug.Log("probe", "tier %dK FAILED in %s: %s", tier/1000, elapsed, err.Error())
 
 	// Check for context overflow error
 	errMsg := strings.ToLower(err.Error())

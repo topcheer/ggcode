@@ -387,3 +387,19 @@ func geminiFinishReasonError(reason genai.FinishReason) error {
 		return fmt.Errorf("gemini stream ended with FinishReason=%s", reason)
 	}
 }
+
+// probeModelsAPI queries the Gemini models endpoint for the model's
+// inputTokenLimit, which is the context window size.
+func (p *GeminiProvider) probeModelsAPI(ctx context.Context, model string) int {
+	modelInfo, err := p.client.Models.Get(ctx, model, nil)
+	if err != nil {
+		debug.Log("probe", "gemini models API error: %v", err)
+		return 0
+	}
+	if modelInfo.InputTokenLimit > 0 {
+		debug.Log("probe", "gemini models API: inputTokenLimit=%d for %s", modelInfo.InputTokenLimit, model)
+		return int(modelInfo.InputTokenLimit)
+	}
+	debug.Log("probe", "gemini models API: InputTokenLimit is 0 for %s", model)
+	return 0
+}
