@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ToolInfo is the minimal interface needed from a tool for sub-agent registration.
@@ -68,7 +69,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	if sa != nil {
 		sa.setStatus(StatusRunning)
 		sa.setActivity("thinking", "", "")
-		sa.StartedAt = time.Now()
+		sa.setStartedAt(time.Now())
 	}
 
 	// Build tool subset for this sub-agent
@@ -83,7 +84,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		rolePrefix = fmt.Sprintf("You are a %s sub-agent.", cfg.AgentType)
 	}
 	systemPrompt := fmt.Sprintf(
-		"%s Complete the following task independently:\n%s\n\nProvide a concise result. Do not spawn further agents.",
+		"%s Complete the following task independently:\n%s\n\nProvide a concise result. Do not spawn further agents. Do not use emoji with Variation Selector-16 (U+FE0F, e.g. ⚠️ ✨️ ⚙️) — use plain text instead to avoid terminal rendering issues.",
 		rolePrefix,
 		cfg.Task,
 	)
@@ -136,7 +137,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolCall,
 					ToolName: event.Tool.Name,
-					ToolArgs: truncateStr(string(event.Tool.Arguments), 300),
+					ToolArgs: util.Truncate(string(event.Tool.Arguments), 300),
 				})
 			}
 			lastToolName = event.Tool.Name
@@ -152,7 +153,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolResult,
 					ToolName: lastToolName,
-					Result:   truncateStr(event.Result, 500),
+					Result:   util.Truncate(event.Result, 500),
 					IsError:  event.IsError,
 				})
 			}
@@ -280,11 +281,4 @@ func compactProgressSummary(result string) string {
 		return ""
 	}
 	return strings.Join(parts, " • ")
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

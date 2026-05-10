@@ -1487,7 +1487,7 @@ func TestHandleCommandShellPrefixEntersModeAndStartsCommand(t *testing.T) {
 	}
 }
 
-func TestShellCommandMessagesRenderOutputAndKeepMode(t *testing.T) {
+func TestShellCommandMessagesRenderOutputAndExitMode(t *testing.T) {
 	m := newTestModel()
 	m.setShellMode(true)
 	if cmd := m.submitShellCommand("printf hi", true); cmd == nil {
@@ -1509,8 +1509,8 @@ func TestShellCommandMessagesRenderOutputAndKeepMode(t *testing.T) {
 	if m.loading {
 		t.Fatal("expected shell command to finish loading state")
 	}
-	if !m.shellMode {
-		t.Fatal("expected shell mode to remain enabled after command completion")
+	if m.shellMode {
+		t.Fatal("expected shell mode to be disabled after command completion")
 	}
 	plain := stripAnsi(renderedOutput(&m))
 	if !strings.Contains(plain, "printf hi") {

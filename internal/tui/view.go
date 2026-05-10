@@ -1520,8 +1520,12 @@ func (m Model) renderComposerPanel() string {
 
 	var inputPart string
 	if m.subAgentFollow.isActive() {
+		kind := "agent"
+		if m.subAgentFollow.activeID != "" && len(m.subAgentFollow.activeID) >= 3 && m.subAgentFollow.activeID[:3] == "tm-" {
+			kind = "teammate"
+		}
 		inputPart = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
-			fmt.Sprintf("Following sub-agent %s — input paused. Press Esc or slot key to return.", shortID(m.subAgentFollow.activeID)))
+			fmt.Sprintf("Following %s %s — input paused. Press Esc to return.", kind, shortID(m.subAgentFollow.activeID)))
 	} else {
 		inputPart = m.renderComposerInput()
 	}

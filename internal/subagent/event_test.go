@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func TestAppendEventRecordsText(t *testing.T) {
@@ -122,14 +123,15 @@ func TestTruncateStr(t *testing.T) {
 		want   string
 	}{
 		{"short", 10, "short"},
-		{"exact10!", 8, "exact10!"},
-		{"this is a longer string", 10, "this is a ..."},
+		{"exactly8", 8, "exactly8"},
+		{"this is a longer string", 10, "this is..."},
 		{"", 5, ""},
+		{"中文测试字符串", 4, "中..."},
 	}
 	for _, tt := range tests {
-		got := truncateStr(tt.input, tt.maxLen)
+		got := util.Truncate(tt.input, tt.maxLen)
 		if got != tt.want {
-			t.Errorf("truncateStr(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+			t.Errorf("util.Truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 		}
 	}
 }

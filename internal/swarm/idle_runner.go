@@ -10,6 +10,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/task"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // runTeammateLoop is the core idle loop for a teammate.
@@ -113,7 +114,7 @@ func handleMessage(
 	}
 
 	tm.setStatus(TeammateWorking)
-	tm.setCurrentTask(truncate(msg.Content, 100))
+	tm.setCurrentTask(util.Truncate(msg.Content, 100))
 
 	if onEvent != nil {
 		onEvent(Event{
@@ -145,7 +146,7 @@ func handleMessage(
 			TeamID:       team.ID,
 			TeammateID:   tm.ID,
 			TeammateName: tm.Name,
-			Result:       truncate(result, 500),
+			Result:       util.Truncate(result, 500),
 			Timestamp:    time.Now(),
 		})
 	}
@@ -204,7 +205,7 @@ func tryClaimPendingTask(
 		prompt := buildTaskPrompt(claimed)
 
 		tm.setStatus(TeammateWorking)
-		tm.setCurrentTask(truncate(claimed.Subject, 100))
+		tm.setCurrentTask(util.Truncate(claimed.Subject, 100))
 
 		if onEvent != nil {
 			onEvent(Event{
@@ -235,7 +236,7 @@ func tryClaimPendingTask(
 				TeamID:       team.ID,
 				TeammateID:   tm.ID,
 				TeammateName: tm.Name,
-				Result:       truncate(result, 500),
+				Result:       util.Truncate(result, 500),
 				Timestamp:    time.Now(),
 			})
 		}
@@ -355,22 +356,4 @@ func executeTask(
 
 	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
 	return output.String()
-}
-
-func truncate(s string, maxRunes int) string {
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	if maxRunes <= 3 {
-		return string(runes[:maxRunes])
-	}
-	return string(runes[:maxRunes-3]) + "..."
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

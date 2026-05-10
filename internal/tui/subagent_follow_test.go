@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,14 +263,14 @@ func TestFollowCleanup(t *testing.T) {
 		t.Fatal("expected stale view to exist")
 	}
 
-	m.subAgentFollow.cleanup(m.subAgentMgr)
+	m.subAgentFollow.cleanup(m.subAgentMgr, nil)
 	if _, ok := m.subAgentFollow.views[staleID]; ok {
 		t.Error("expected stale view to be cleaned up")
 	}
 
 	activeID := agents[0].ID
 	m.subAgentFollow.getOrCreateView(activeID, 80, 20)
-	m.subAgentFollow.cleanup(m.subAgentMgr)
+	m.subAgentFollow.cleanup(m.subAgentMgr, nil)
 	if _, ok := m.subAgentFollow.views[activeID]; !ok {
 		t.Error("expected active agent view to survive cleanup")
 	}
@@ -483,7 +484,7 @@ func TestMixedSubAgentAndTeammateSlots(t *testing.T) {
 }
 
 func containsPlain(s, substr string) bool {
-	return len(s) > 0 && len(s) >= len(substr)
+	return strings.Contains(s, substr)
 }
 
 func TestRefreshSlots_FiltersCompleted(t *testing.T) {

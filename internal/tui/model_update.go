@@ -1127,6 +1127,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusToolName = ""
 		m.statusToolArg = ""
 		m.statusToolCount = 0
+		// Auto-exit shell mode so user returns to the prompt
+		m.setShellMode(false)
 		if msg.Status == toolpkg.CommandJobFailed || msg.Status == toolpkg.CommandJobTimedOut {
 			m.runFailed = true
 			if m.pendingSubmissionCount() > 0 {
@@ -1569,7 +1571,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Refresh follow mode slots (sub-agents + swarm teammates)
 		m.subAgentFollow.refreshSlots(m.subAgentMgr)
 		m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
-		m.subAgentFollow.cleanup(m.subAgentMgr)
+		m.subAgentFollow.cleanup(m.subAgentMgr, m.swarmMgr)
 		m.subAgentFollow.markDirty(msg.AgentID)
 
 		// Auto-deactivate if the followed agent completed and was removed from slots
@@ -1577,9 +1579,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.subAgentFollow.deactivate()
 		}
 
-		// Throttle active view rebuild
+		// Rebuild active view in Update() instead of View()
 		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
-			m.subAgentFollow.markRebuilt(m.subAgentFollow.activeID)
+			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
+		} else if m.subAgentFollow.isActive() {
+			// Schedule delayed rebuild to guarantee eventual rendering
+			m.chatListScrollToBottom()
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return subAgentFollowRefreshMsg{}
+			})
 		}
 
 		m.chatListScrollToBottom()
@@ -1588,7 +1596,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case subAgentFollowRefreshMsg:
 		// Delayed rebuild after throttle window
 		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
-			m.subAgentFollow.markRebuilt(m.subAgentFollow.activeID)
+			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
+		} else if m.subAgentFollow.isActive() {
+			// Still throttled — reschedule
+			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+				return subAgentFollowRefreshMsg{}
+			})
 		}
 		return m, nil
 

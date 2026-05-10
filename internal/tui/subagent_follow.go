@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ---------------------------------------------------------------------------
@@ -312,7 +313,7 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 					setter.SetResult(ev.Result, ev.IsError)
 				}
 			} else {
-				item := chat.NewGenericToolItem("result", ev.ToolName, status, truncate(ev.Result, 200), styles)
+				item := chat.NewGenericToolItem("result", ev.ToolName, status, util.Truncate(ev.Result, 200), styles)
 				list.Append(item)
 			}
 
@@ -398,6 +399,35 @@ func teammateSnapshotToFollowData(snap swarm.TeammateSnapshot) followEventData {
 }
 
 // ---------------------------------------------------------------------------
+// rebuildActiveView: called from Update(), NOT from View()
+// ---------------------------------------------------------------------------
+
+// rebuildActiveView rebuilds the follow list for the currently active slot.
+// Must be called from Update(), NOT from View().
+func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *swarm.Manager, styles chat.Styles) {
+	if !f.isActive() {
+		return
+	}
+	entry := f.getOrCreateView(f.activeID, 0, 0) // width/height set later in View()
+
+	// Try sub-agent first
+	if saMgr != nil {
+		if snap, ok := saMgr.Snapshot(f.activeID); ok {
+			buildFollowList(subagentSnapshotToFollowData(snap), entry.list, styles)
+			f.markRebuilt(f.activeID)
+			return
+		}
+	}
+	// Try swarm teammate
+	if swMgr != nil {
+		if snap, ok := swMgr.TeammateSnapshot(f.activeID); ok {
+			buildFollowList(teammateSnapshotToFollowData(snap), entry.list, styles)
+			f.markRebuilt(f.activeID)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Throttle & cleanup
 // ---------------------------------------------------------------------------
 
@@ -427,8 +457,8 @@ func (f *subAgentFollowState) markRebuilt(agentID string) {
 	f.lastRebuild[agentID] = time.Now()
 }
 
-// cleanup removes cached views for agents that no longer exist.
-func (f *subAgentFollowState) cleanup(saMgr *subagent.Manager) {
+// cleanup removes cached views for agents/teammates that no longer exist.
+func (f *subAgentFollowState) cleanup(saMgr *subagent.Manager, swMgr *swarm.Manager) {
 	if f.views == nil || len(f.views) == 0 {
 		return
 	}
@@ -436,6 +466,13 @@ func (f *subAgentFollowState) cleanup(saMgr *subagent.Manager) {
 	if saMgr != nil {
 		for _, sa := range saMgr.List() {
 			active[sa.ID] = true
+		}
+	}
+	if swMgr != nil {
+		for _, ts := range swMgr.ListTeams() {
+			for _, tm := range ts.Teammates {
+				active[tm.ID] = true
+			}
 		}
 	}
 	for id := range f.views {
@@ -523,11 +560,4 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
 }
