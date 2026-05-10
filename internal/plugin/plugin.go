@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -115,6 +116,15 @@ func (c *CommandTool) Execute(ctx context.Context, input json.RawMessage) (tool.
 	}
 
 	cmd := exec.CommandContext(ctx, c.execute, args...)
+	cmd.SysProcAttr = sysProcAttr()
+	// Override the default cancel behavior: instead of just killing the direct
+	// child process (which leaves orphaned grandchildren holding the pipe open),
+	// kill the entire process group. Setpgid ensures the child and its
+	// descendants share a group, so cancelProcessGroup reaches all of them.
+	cmd.Cancel = func() error {
+		return cancelProcessGroup(cmd.Process.Pid)
+	}
+	cmd.WaitDelay = 3 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return tool.Result{
