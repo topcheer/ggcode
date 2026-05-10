@@ -366,12 +366,18 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Activity:    localizedToolActivity(lang, "send_message", to),
 		}
 	case "enter_plan_mode":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "enter_plan"),
 			Detail:      "",
 			Activity:    localizedToolActivity(lang, "enter_plan", ""),
 		}
 	case "exit_plan_mode":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: "", Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "exit_plan"),
 			Detail:      "",
