@@ -1576,18 +1576,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case subAgentUpdateMsg:
 		if m.subAgentFollow.isActive() {
-			// Follow panel is open — only rebuild the currently-followed view.
-			// Skip expensive refreshSlots (Snapshot per agent) during streaming;
-			// slot list only changes on spawn/complete, handled elsewhere.
+			// Follow panel is open — only care about the active agent.
+			if msg.AgentID != m.subAgentFollow.activeID {
+				// Non-active agent update: just mark dirty, skip expensive rebuild.
+				m.subAgentFollow.markDirty(msg.AgentID)
+				return m, nil
+			}
 			m.subAgentFollow.markDirty(msg.AgentID)
 			if m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
 				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-			} else {
-				return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-					return subAgentFollowRefreshMsg{}
-				})
+				m.chatListScrollToBottom()
 			}
-			m.chatListScrollToBottom()
+			// If throttled, subAgentFollowRefreshMsg will pick it up.
 		} else {
 			// No follow panel — lightweight: just update the strip slot list.
 			m.subAgentFollow.refreshSlots(m.subAgentMgr)
