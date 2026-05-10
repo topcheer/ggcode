@@ -315,22 +315,39 @@ func tryModelsAPI(ctx context.Context, p Provider) int {
 	return gp.probeModelsAPI(ctx, gp.model)
 }
 
-// error reveals the context window limit.
+// prober is an internal interface for sending lightweight chat requests
+// without retry, adaptive cap tracking, or token counting. Each provider
+// implements this for context window probing.
+type prober interface {
+	probeChat(ctx context.Context, messages []Message) error
+}
+
+// chatNoRetry calls the provider's probeChat if available (bypasses retry),
+// otherwise falls back to the normal Chat method.
+func chatNoRetry(ctx context.Context, p Provider, msgs []Message) error {
+	if pr, ok := p.(prober); ok {
+		return pr.probeChat(ctx, msgs)
+	}
+	// Fallback: use normal Chat (has retry, but not all providers have probeChat)
+	err := chatNoRetry(ctx, p, msgs)
+	return err
+}
+
+// trySimpleProbe sends a minimal message to verify the API is working.
 func trySimpleProbe(ctx context.Context, p Provider) int {
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}},
 	}
 
-	debug.Log("probe", "sending simple probe (1 token message)")
-	resp, err := p.Chat(ctx, msgs, nil)
+	debug.Log("probe", "sending simple probe (no-retry)")
+	err := chatNoRetry(ctx, p, msgs)
 	if err != nil {
 		// Check if error contains context limit info
 		if w := parseContextWindowFromError(err); w > 0 {
 			return w
 		}
 
-		// Distinguish between "context overflow" (keep probing) and
-		// other errors (stop probing — auth, network, etc.)
+		// Non-context error (auth, network, etc.) — stop probing entirely
 		errMsg := strings.ToLower(err.Error())
 		isContextError := strings.Contains(errMsg, "context") ||
 			strings.Contains(errMsg, "token limit") ||
@@ -346,9 +363,8 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 		debug.Log("probe", "simple probe hit context limit but couldn't parse exact value")
 		return 0
 	}
-	_ = resp
 
-	debug.Log("probe", "simple probe succeeded (no limit info in response)")
+	debug.Log("probe", "simple probe succeeded (no-retry)")
 	return 0
 }
 
@@ -374,7 +390,7 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 		tier/1000, len(padding), tier)
 
 	start := time.Now()
-	_, err := p.Chat(ctx, msgs, nil)
+	err := chatNoRetry(ctx, p, msgs)
 	elapsed := time.Since(start)
 
 	if err == nil {

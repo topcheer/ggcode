@@ -24,6 +24,14 @@ type AnthropicProvider struct {
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 
+// probeChat sends a single messages request without retry or adaptive
+// cap tracking. Used by context window probing.
+func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) error {
+	params := p.buildParams(messages, nil)
+	_, err := p.client.Messages.New(ctx, params)
+	return err
+}
+
 func (p *AnthropicProvider) effectiveMaxTokens() int {
 	if p.cap != nil {
 		if v := p.cap.Get(); v > 0 {

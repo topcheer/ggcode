@@ -403,3 +403,11 @@ func (p *GeminiProvider) probeModelsAPI(ctx context.Context, model string) int {
 	debug.Log("probe", "gemini models API: InputTokenLimit is 0 for %s", model)
 	return 0
 }
+
+// probeChat sends a single generate-content request without retry or
+// adaptive cap tracking. Used by context window probing.
+func (p *GeminiProvider) probeChat(ctx context.Context, messages []Message) error {
+	contents, _ := p.convertMessages(messages)
+	_, err := p.client.Models.GenerateContent(ctx, p.model, contents, nil)
+	return err
+}

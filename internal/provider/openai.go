@@ -36,6 +36,17 @@ type OpenAIProvider struct {
 // Used by NewProvider to share learned state across reconstructions.
 func (p *OpenAIProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 
+// probeChat sends a single chat request without retry, adaptive cap
+// tracking, or token counting. Used by context window probing.
+func (p *OpenAIProvider) probeChat(ctx context.Context, messages []Message) error {
+	req := openai.ChatCompletionRequest{
+		Model:    p.model,
+		Messages: p.convertMessages(messages),
+	}
+	_, err := p.client.CreateChatCompletion(ctx, req)
+	return err
+}
+
 // effectiveMaxTokens returns the value to send on the next request.
 // Priority: adaptive cap > static maxTokens > 0 (omit).
 func (p *OpenAIProvider) effectiveMaxTokens() int {
