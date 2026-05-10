@@ -273,6 +273,7 @@ var (
 	mainSink  *asyncFileSink            // writes all logs (compat)
 	loggers   map[string]*log.Logger    // category name → logger
 	tagFilter map[string]bool           // nil = all; non-nil = only these categories
+	verbose   map[string]bool           // categories with verbose (level 2) logging
 )
 
 // Init initializes the debug logging system.
@@ -307,12 +308,12 @@ func Init() {
 		cleanupStaleLogs()
 
 		// Check per-category env vars first
-		perCategoryEnvs := scanPerCategoryEnvs()
+		perCategoryEnvs, verbCats := scanPerCategoryEnvs()
 
 		var filter map[string]bool
 		globalVal := os.Getenv(envKey)
 
-		if len(perCategoryEnvs) > 0 {
+		if perCategoryEnvs != nil {
 			// Per-category env vars take precedence; ignore global GGCODE_DEBUG
 			filter = perCategoryEnvs
 		} else if globalVal != "" {
@@ -359,26 +360,39 @@ func Init() {
 		sinks = sinkMap
 		loggers = loggerMap
 		tagFilter = filter
+		verbose = verbCats
 		mu.Unlock()
 	})
 }
 
 // scanPerCategoryEnvs checks for GGCODE_DEBUG_<SUFFIX> env vars.
 // Returns a set of enabled category names, or nil if none found.
-func scanPerCategoryEnvs() map[string]bool {
-	enabled := make(map[string]bool)
-	found := false
+func scanPerCategoryEnvs() (enabled map[string]bool, verb map[string]bool) {
+	enabled = make(map[string]bool)
+	verb = make(map[string]bool)
 	for _, cat := range Categories {
 		envName := envKey + "_" + cat.EnvSuffix
-		if isTruthy(os.Getenv(envName)) {
+		val := os.Getenv(envName)
+		if val == "" {
+			continue
+		}
+		if isVerbose(val) {
 			enabled[cat.Name] = true
-			found = true
+			verb[cat.Name] = true
+		} else if isTruthy(val) {
+			enabled[cat.Name] = true
 		}
 	}
-	if !found {
-		return nil
+	if len(enabled) == 0 {
+		return nil, nil
 	}
-	return enabled
+	return enabled, verb
+}
+
+// isVerbose returns true for "2", "verbose", "trace" (case-insensitive).
+func isVerbose(val string) bool {
+	v := strings.TrimSpace(strings.ToLower(val))
+	return v == "2" || v == "verbose" || v == "trace"
 }
 
 // isTruthy returns true for "1", "true", "yes", "on" (case-insensitive).
@@ -411,6 +425,22 @@ func Active() bool {
 	mu.RLock()
 	defer mu.RUnlock()
 	return enabled
+}
+
+// IsVerbose reports whether verbose (level 2) logging is enabled for the
+// given category. Use this to gate high-volume trace logs:
+//
+//	if debug.IsVerbose("openai") { debug.Log("openai", ...) }
+//
+// Enabled via GGCODE_DEBUG_OPENAI=2, GGCODE_DEBUG_OPENAI=verbose, or GGCODE_DEBUG_OPENAI=trace.
+func IsVerbose(pkg string) bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	if !enabled {
+		return false
+	}
+	cat := tagToCategory[pkg]
+	return verbose[cat]
 }
 
 // Log writes a formatted message with a package tag to the appropriate
