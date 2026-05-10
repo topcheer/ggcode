@@ -1575,33 +1575,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case subAgentUpdateMsg:
-		// Refresh follow mode slots (sub-agents + swarm teammates)
-		m.subAgentFollow.refreshSlots(m.subAgentMgr)
-		m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
-		m.subAgentFollow.cleanup(m.subAgentMgr, m.swarmMgr)
-		m.subAgentFollow.markDirty(msg.AgentID)
+		if m.subAgentFollow.isActive() {
+			// Follow panel is open — only rebuild the currently-followed view.
+			// Skip expensive refreshSlots (Snapshot per agent) during streaming;
+			// slot list only changes on spawn/complete, handled elsewhere.
+			m.subAgentFollow.markDirty(msg.AgentID)
+			if m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
+				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
+			} else {
+				return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+					return subAgentFollowRefreshMsg{}
+				})
+			}
+			m.chatListScrollToBottom()
+		} else {
+			// No follow panel — lightweight: just update the strip slot list.
+			m.subAgentFollow.refreshSlots(m.subAgentMgr)
+			m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
+		}
 
-		// Auto-deactivate if the followed agent completed and was removed from slots
 		if m.subAgentFollow.isActive() && m.subAgentFollow.currentSlotIndex() == -1 {
 			m.subAgentFollow.deactivate()
 		}
-
-		// Rebuild active view in Update() instead of View()
-		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
-			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-		} else if m.subAgentFollow.isActive() {
-			// Schedule delayed rebuild to guarantee eventual rendering
-			m.chatListScrollToBottom()
-			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-				return subAgentFollowRefreshMsg{}
-			})
-		}
-
-		m.chatListScrollToBottom()
-
-		// If terminal slots exist (completed/failed agents in grace period),
-		// ensure the grace-period cleanup timer is running so they get removed
-		// after subAgentGracePeriod (1 minute) even without new subAgentUpdateMsg.
 		if m.subAgentFollow.hasTerminalSlots() {
 			return m, tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
 				return followGraceTickMsg{}
