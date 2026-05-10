@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ func (m Model) subAgentActivitySummary(sa *subagent.SubAgent) string {
 	}
 	if sa.CurrentTool != "" {
 		present := describeTool(m.currentLanguage(), sa.CurrentTool, sa.CurrentArgs)
-		return firstNonEmpty(present.Activity, formatToolInline(present.DisplayName, present.Detail))
+		return util.FirstNonEmpty(present.Activity, formatToolInline(present.DisplayName, present.Detail))
 	}
 	switch sa.CurrentPhase {
 	case "writing":
@@ -268,7 +269,7 @@ func summarizeTodoChanges(lang Language, changes []string) string {
 }
 
 func localizeTodoChange(lang Language, kind string, td todoStateItem) string {
-	label := truncateString(compactSingleLine(td.Content), 48)
+	label := util.Truncate(compactSingleLine(td.Content), 48)
 	if label == "" {
 		label = td.ID
 	}
@@ -303,7 +304,7 @@ func localizeTodoChange(lang Language, kind string, td todoStateItem) string {
 }
 
 func localizeTodoHeading(lang Language, content string) string {
-	content = truncateString(compactSingleLine(content), 72)
+	content = util.Truncate(compactSingleLine(content), 72)
 	if lang == LangZhCN {
 		return "任务: " + content
 	}
@@ -311,7 +312,7 @@ func localizeTodoHeading(lang Language, content string) string {
 }
 
 func localizeTodoFocus(lang Language, content string) string {
-	content = truncateString(compactSingleLine(content), 60)
+	content = util.Truncate(compactSingleLine(content), 60)
 	if lang == LangZhCN {
 		return "当前任务 " + content
 	}

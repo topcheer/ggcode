@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"sync"
 
@@ -20,7 +21,7 @@ func (m *Model) promptExitConfirm() {
 
 func (m *Model) queuePendingSubmission(text string) {
 	count := m.pending.enqueue(text)
-	debug.Log("tui", "queuePendingSubmission: count=%d text=%s", count, truncateStr(text, 100))
+	debug.Log("tui", "queuePendingSubmission: count=%d text=%s", count, util.Truncate(text, 100))
 	if count == 0 {
 		return
 	}
@@ -34,7 +35,7 @@ func (m *Model) queuePendingSubmission(text string) {
 // rendering it as a user message in the chat panel (e.g., cron triggers).
 func (m *Model) queuePendingSubmissionHidden(text string) {
 	count := m.pending.enqueue(text)
-	debug.Log("tui", "queuePendingSubmissionHidden: count=%d text=%s", count, truncateStr(text, 100))
+	debug.Log("tui", "queuePendingSubmissionHidden: count=%d text=%s", count, util.Truncate(text, 100))
 }
 
 func (m *Model) pendingSubmissionCount() int {
@@ -122,7 +123,7 @@ func (m *Model) drainPendingInterrupt(runID int) string {
 	if text == "" {
 		return ""
 	}
-	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, truncateStr(text, 100))
+	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, util.Truncate(text, 100))
 	m.appendUserMessage(text)
 	// Don't send agentInterruptMsg — the user already saw their input rendered
 	// in the conversation when it was queued. No extra "[delivered]" hint needed.

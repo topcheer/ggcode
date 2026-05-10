@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"slices"
 	"strings"
@@ -408,9 +409,9 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "session_id"), ses.ID),
 			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "updated"), formatInspectorTime(ses.UpdatedAt)),
 			fmt.Sprintf("%s: %d", inspectorText(m.currentLanguage(), "messages"), len(ses.Messages)),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "vendor"), firstNonEmpty(ses.Vendor, "-")),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "endpoint"), firstNonEmpty(ses.Endpoint, "-")),
-			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "model"), firstNonEmpty(ses.Model, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "vendor"), util.FirstNonEmpty(ses.Vendor, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "endpoint"), util.FirstNonEmpty(ses.Endpoint, "-")),
+			fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "model"), util.FirstNonEmpty(ses.Model, "-")),
 		}
 		if workspace != "" {
 			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "workspace"), workspace))
@@ -484,12 +485,12 @@ func (m Model) inspectorTodoItems() []inspectorPanelItem {
 		}
 		items = append(items, inspectorPanelItem{
 			ID:      td.ID,
-			Title:   firstNonEmpty(td.Content, td.ID),
+			Title:   util.FirstNonEmpty(td.Content, td.ID),
 			Summary: summary,
 			Detail: strings.Join([]string{
-				firstNonEmpty(td.Content, td.ID),
+				util.FirstNonEmpty(td.Content, td.ID),
 				"",
-				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "todo_id"), firstNonEmpty(td.ID, "-")),
+				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "todo_id"), util.FirstNonEmpty(td.ID, "-")),
 				fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "status"), td.Status),
 			}, "\n"),
 		})
@@ -670,7 +671,7 @@ func (m Model) inspectorLSPStatusItems() []inspectorPanelItem {
 		if !lang.Available {
 			switch len(lang.InstallOptions) {
 			case 0:
-				if label := firstNonEmpty(lang.Binary, lang.DisplayName); label != "" {
+				if label := util.FirstNonEmpty(lang.Binary, lang.DisplayName); label != "" {
 					detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), label))
 				}
 			case 1:
@@ -710,7 +711,7 @@ func (m Model) inspectorLSPInstallItems() []inspectorPanelItem {
 			}
 		}
 		detailLines := []string{
-			firstNonEmpty(title, m.inspectorPanel.lspLanguageName),
+			util.FirstNonEmpty(title, m.inspectorPanel.lspLanguageName),
 			"",
 		}
 		if option.Binary != "" {
@@ -739,7 +740,7 @@ func lspInstallLabels(options []lsp.InstallOption) []string {
 }
 
 func lspInstallOptionDetailLabel(option lsp.InstallOption, lang Language) string {
-	label := firstNonEmpty(option.Label, option.Binary, option.ID)
+	label := util.FirstNonEmpty(option.Label, option.Binary, option.ID)
 	if option.Recommended && label != "" {
 		return fmt.Sprintf("%s (%s)", label, inspectorText(lang, "lsp_recommended"))
 	}

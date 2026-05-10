@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"strings"
 	"sync"
@@ -59,7 +60,7 @@ func (m *Model) appendUserMessage(text string) {
 }
 
 func (m *Model) startAgent(text string) tea.Cmd {
-	debug.Log("tui", "startAgent called: text=%s", truncateStr(text, 200))
+	debug.Log("tui", "startAgent called: text=%s", util.Truncate(text, 200))
 	// Ensure the agent's provider is in sync with the current config.
 	// This handles the case where the user set an API key in the provider
 	// panel but hasn't explicitly activated — the key should still take effect.
@@ -319,7 +320,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				Activity:    present.Activity,
 				Running:     true,
 				RawArgs:     string(event.Tool.Arguments),
-				Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+				Args:        util.Truncate(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 			}})
 			batchMu.Unlock()
 		case provider.StreamEventToolResult:
@@ -388,7 +389,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 				Running:     false,
 				Result:      event.Result,
 				RawArgs:     string(event.Tool.Arguments),
-				Args:        truncateString(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
+				Args:        util.Truncate(compactToolArgsPreview(string(event.Tool.Arguments)), 100),
 				IsError:     event.IsError,
 			}})
 			batchMu.Unlock()

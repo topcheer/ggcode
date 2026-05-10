@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -46,15 +47,6 @@ func (m *Model) openWeComPanel() {
 
 func (m *Model) closeWeComPanel() {
 	m.wecomPanel = nil
-}
-
-func firstNonEmptyWeCom(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func maxWeCom(v, min int) int {
@@ -101,7 +93,7 @@ func (m Model) renderWeComPanel() string {
 
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.wecom.directory")),
-		fmt.Sprintf(" %s", firstNonEmptyWeCom(m.currentWorkspacePath(), m.t("panel.wecom.none"))),
+		fmt.Sprintf(" %s", util.FirstNonEmpty(m.currentWorkspacePath(), m.t("panel.wecom.none"))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.wecom.bots")),
 		fmt.Sprintf(" %s", m.t("panel.wecom.created", len(entries))),
@@ -117,8 +109,8 @@ func (m Model) renderWeComPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.wecom.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.wecom.target", firstNonEmptyWeCom(current.TargetID, m.t("panel.wecom.default")))),
-				fmt.Sprintf(" %s", m.t("panel.wecom.channel", firstNonEmptyWeCom(current.ChannelID, m.t("panel.wecom.none")))),
+				fmt.Sprintf(" %s", m.t("panel.wecom.target", util.FirstNonEmpty(current.TargetID, m.t("panel.wecom.default")))),
+				fmt.Sprintf(" %s", m.t("panel.wecom.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.wecom.none")))),
 			)
 		}
 	}
@@ -142,9 +134,9 @@ func (m Model) renderWeComPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.wecom.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.wecom.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.wecom.transport", m.wecomAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.wecom.bound_directory", firstNonEmptyWeCom(entry.OccupiedBy, m.t("panel.wecom.none")))),
-			fmt.Sprintf(" %s", m.t("panel.wecom.current_directory_target", firstNonEmptyWeCom(entry.TargetID, defaultWeComTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.wecom.current_directory_channel", firstNonEmptyWeCom(entry.WorkspaceChannel, m.t("panel.wecom.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.wecom.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.wecom.none")))),
+			fmt.Sprintf(" %s", m.t("panel.wecom.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultWeComTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.wecom.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.wecom.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.wecom.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -487,7 +479,7 @@ func (m Model) wecomBindingEntries() []wecomBindingEntry {
 		targetID := defaultWeComTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyWeCom(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

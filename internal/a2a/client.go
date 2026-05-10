@@ -185,7 +185,7 @@ func (c *Client) NegotiateAuth() error {
 // tryBearerToken checks if we have a valid bearer token, or tries to obtain one.
 func (c *Client) tryBearerToken() bool {
 	// Already have a non-expired token
-	if c.bearerToken != "" && c.tokenExpiry.IsZero() || time.Now().Before(c.tokenExpiry) {
+	if c.bearerToken != "" && (c.tokenExpiry.IsZero() || time.Now().Before(c.tokenExpiry)) {
 		c.authMethod = "bearer"
 		return true
 	}
@@ -280,25 +280,31 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 		Skill: skill,
 	}
 
-	paramsJSON, _ := json.Marshal(params)
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("a2a stream: marshal params: %w", err)
+	}
 	rpcReq := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`1`),
 		Method:  "message/stream",
 		Params:  paramsJSON,
 	}
-	body, _ := json.Marshal(rpcReq)
+	body, err := json.Marshal(rpcReq)
+	if err != nil {
+		return nil, fmt.Errorf("a2a stream: marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("a2a stream: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("a2a stream: http request: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -403,25 +409,31 @@ func (c *Client) DeletePushConfig(ctx context.Context, id string) error {
 // SendMessageStream connection was interrupted.
 func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPCResponse, error) {
 	params := TaskSubscriptionParams{ID: taskID}
-	paramsJSON, _ := json.Marshal(params)
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("a2a resubscribe: marshal params: %w", err)
+	}
 	rpcReq := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`1`),
 		Method:  "tasks/resubscribe",
 		Params:  paramsJSON,
 	}
-	body, _ := json.Marshal(rpcReq)
+	body, err := json.Marshal(rpcReq)
+	if err != nil {
+		return nil, fmt.Errorf("a2a resubscribe: marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("a2a resubscribe: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("a2a resubscribe: http request: %w", err)
 	}
 
 	// Check Content-Type: if JSON (not SSE), this is a sync error response.
@@ -456,14 +468,20 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 // ---------------------------------------------------------------------------
 
 func (c *Client) rpc(ctx context.Context, method string, params interface{}, result interface{}) error {
-	paramsJSON, _ := json.Marshal(params)
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("a2a %s: marshal params: %w", method, err)
+	}
 	rpcReq := JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`1`),
 		Method:  method,
 		Params:  paramsJSON,
 	}
-	body, _ := json.Marshal(rpcReq)
+	body, err := json.Marshal(rpcReq)
+	if err != nil {
+		return fmt.Errorf("a2a %s: marshal request: %w", method, err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
@@ -493,7 +511,10 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 	}
 
 	if result != nil && rpcResp.Result != nil {
-		resultJSON, _ := json.Marshal(rpcResp.Result)
+		resultJSON, err := json.Marshal(rpcResp.Result)
+		if err != nil {
+			return fmt.Errorf("a2a %s: re-marshal result: %w", method, err)
+		}
 		if err := json.Unmarshal(resultJSON, result); err != nil {
 			return fmt.Errorf("a2a %s: unmarshal result: %w", method, err)
 		}

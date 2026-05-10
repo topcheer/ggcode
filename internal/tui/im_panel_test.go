@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func TestIMPanelOpenClose(t *testing.T) {
@@ -139,13 +140,13 @@ func TestClampIMSelection(t *testing.T) {
 }
 
 func TestFirstNonEmptyIM(t *testing.T) {
-	if got := firstNonEmptyIM("", "  ", "hello"); got != "hello" {
+	if got := util.FirstNonEmpty("", "  ", "hello"); got != "hello" {
 		t.Errorf("firstNonEmptyIM = %q, want %q", got, "hello")
 	}
-	if got := firstNonEmptyIM(""); got != "" {
+	if got := util.FirstNonEmpty(""); got != "" {
 		t.Errorf("firstNonEmptyIM = %q, want empty", got)
 	}
-	if got := firstNonEmptyIM("first", "second"); got != "first" {
+	if got := util.FirstNonEmpty("first", "second"); got != "first" {
 		t.Errorf("firstNonEmptyIM = %q, want %q", got, "first")
 	}
 }

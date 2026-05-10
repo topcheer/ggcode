@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,16 +48,6 @@ func (m *Model) openIRCPanel() {
 func (m *Model) closeIRCPanel() {
 	m.ircPanel = nil
 }
-
-func firstNonEmptyIRC(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func maxIRC(v, min int) int {
 	if v > min {
 		return v
@@ -122,8 +113,8 @@ func (m Model) renderIRCPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.irc.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.irc.target", firstNonEmptyIRC(current.TargetID, m.t("panel.irc.default")))),
-				fmt.Sprintf(" %s", m.t("panel.irc.channel", firstNonEmptyIRC(current.ChannelID, m.t("panel.irc.none")))),
+				fmt.Sprintf(" %s", m.t("panel.irc.target", util.FirstNonEmpty(current.TargetID, m.t("panel.irc.default")))),
+				fmt.Sprintf(" %s", m.t("panel.irc.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.irc.none")))),
 			)
 		}
 	}
@@ -147,9 +138,9 @@ func (m Model) renderIRCPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.irc.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.irc.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.irc.transport", m.ircAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.irc.bound_directory", firstNonEmptyIRC(entry.OccupiedBy, m.t("panel.irc.none")))),
-			fmt.Sprintf(" %s", m.t("panel.irc.current_directory_target", firstNonEmptyIRC(entry.TargetID, defaultIRCTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.irc.current_directory_channel", firstNonEmptyIRC(entry.WorkspaceChannel, m.t("panel.irc.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.irc.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.irc.none")))),
+			fmt.Sprintf(" %s", m.t("panel.irc.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultIRCTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.irc.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.irc.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.irc.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -485,7 +476,7 @@ func (m Model) ircBindingEntries() []ircBindingEntry {
 		targetID := defaultIRCTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyIRC(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

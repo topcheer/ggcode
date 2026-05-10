@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"io"
 	"os"
 	"path/filepath"
@@ -1115,7 +1116,7 @@ func formatHarnessInitResult(result *harness.InitResult) string {
 	if result.Config != nil && len(result.Config.Contexts) > 0 {
 		b.WriteString("- contexts:\n")
 		for _, contextCfg := range result.Config.Contexts {
-			label := firstNonEmptyHarness(contextCfg.Path, contextCfg.Name)
+			label := util.FirstNonEmpty(contextCfg.Path, contextCfg.Name)
 			if label == "" {
 				continue
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,16 +51,6 @@ func (m *Model) openWhatsAppPanel() tea.Cmd {
 func (m *Model) closeWhatsAppPanel() {
 	m.whatsappPanel = nil
 }
-
-func firstNonEmptyWA(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func defaultWATargetID(workspace string) string {
 	base := filepath.Base(strings.TrimSpace(workspace))
 	if base == "" || base == "." || base == string(filepath.Separator) {
@@ -125,8 +116,8 @@ func (m Model) renderWhatsAppPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" Adapter:  %s", current.Adapter),
-				fmt.Sprintf(" Target:   %s", firstNonEmptyWA(current.TargetID, "(default)")),
-				fmt.Sprintf(" Channel:  %s", firstNonEmptyWA(current.ChannelID, "(none)")),
+				fmt.Sprintf(" Target:   %s", util.FirstNonEmpty(current.TargetID, "(default)")),
+				fmt.Sprintf(" Channel:  %s", util.FirstNonEmpty(current.ChannelID, "(none)")),
 			)
 		}
 	}
@@ -154,9 +145,9 @@ func (m Model) renderWhatsAppPanel() string {
 			fmt.Sprintf(" Adapter:   %s", entry.Adapter),
 			fmt.Sprintf(" Status:    %s", status),
 			fmt.Sprintf(" Transport: %s", m.waAdapterStatus(entry.AdapterState)),
-			fmt.Sprintf(" Bound to:  %s", firstNonEmptyWA(entry.OccupiedBy, "(none)")),
-			fmt.Sprintf(" Target:    %s", firstNonEmptyWA(entry.TargetID, defaultWATargetID(m.currentWorkspacePath()))),
-			fmt.Sprintf(" Channel:   %s", firstNonEmptyWA(entry.WorkspaceChannel, "(waiting for pairing)")),
+			fmt.Sprintf(" Bound to:  %s", util.FirstNonEmpty(entry.OccupiedBy, "(none)")),
+			fmt.Sprintf(" Target:    %s", util.FirstNonEmpty(entry.TargetID, defaultWATargetID(m.currentWorkspacePath()))),
+			fmt.Sprintf(" Channel:   %s", util.FirstNonEmpty(entry.WorkspaceChannel, "(waiting for pairing)")),
 		)
 
 		// Show QR / contact status
@@ -540,7 +531,7 @@ func (m Model) waBindingEntries() []whatsappBindingEntry {
 		targetID := defaultWATargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyWA(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

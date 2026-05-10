@@ -47,7 +47,7 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 		}
 		if err := registry.Register(t); err != nil {
 			// Log but continue — name collision is non-fatal
-			debug.Log("mcp", "warning: %v", err)
+			debug.Log("mcp", "tool %q from server %q conflicts with existing tool, skipping: %v", name, a.serverName, err)
 		}
 	}
 	return nil

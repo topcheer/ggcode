@@ -423,6 +423,7 @@ func (a *dingtalkAdapter) sendFrameResponse(conn *websocket.Conn, reqFrame dingt
 
 	respBytes, err := json.Marshal(resp)
 	if err != nil {
+		debug.Log("dingtalk", "adapter=%s marshal frame response: %v", a.name, err)
 		return
 	}
 
@@ -466,7 +467,10 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 		"appKey":    a.appKey,
 		"appSecret": a.appSecret,
 	}
-	bodyJSON, _ := json.Marshal(body)
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal token request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
 	if err != nil {
@@ -526,7 +530,10 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 			},
 		},
 	}
-	bodyJSON, _ := json.Marshal(body)
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal stream open request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
 	if err != nil {
@@ -618,7 +625,10 @@ func (a *dingtalkAdapter) sendTextViaWebhook(ctx context.Context, webhookURL, te
 		},
 		"robotCode": robotCode,
 	}
-	bodyJSON, _ := json.Marshal(body)
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal webhook request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(bodyJSON))
 	if err != nil {
@@ -661,7 +671,10 @@ func (a *dingtalkAdapter) sendTextViaAPI(ctx context.Context, binding ChannelBin
 		"msgKey":    "sampleText",
 		"msgParam":  fmt.Sprintf(`{"content":"%s"}`, escapeJSONString(text)),
 	}
-	bodyJSON, _ := json.Marshal(body)
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal api send request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dingtalkAPIBase+"/v1.0/robot/oToMessages/batchSend", bytes.NewReader(bodyJSON))
 	if err != nil {

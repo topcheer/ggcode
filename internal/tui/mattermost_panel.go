@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,16 +48,6 @@ func (m *Model) openMattermostPanel() {
 func (m *Model) closeMattermostPanel() {
 	m.mattermostPanel = nil
 }
-
-func firstNonEmptyMM(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func maxMM(v, min int) int {
 	if v > min {
 		return v
@@ -122,8 +113,8 @@ func (m Model) renderMattermostPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.mattermost.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.mattermost.target", firstNonEmptyMM(current.TargetID, m.t("panel.mattermost.default")))),
-				fmt.Sprintf(" %s", m.t("panel.mattermost.channel", firstNonEmptyMM(current.ChannelID, m.t("panel.mattermost.none")))),
+				fmt.Sprintf(" %s", m.t("panel.mattermost.target", util.FirstNonEmpty(current.TargetID, m.t("panel.mattermost.default")))),
+				fmt.Sprintf(" %s", m.t("panel.mattermost.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.mattermost.none")))),
 			)
 		}
 	}
@@ -147,9 +138,9 @@ func (m Model) renderMattermostPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.mattermost.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.mattermost.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.mattermost.transport", m.mmAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.mattermost.bound_directory", firstNonEmptyMM(entry.OccupiedBy, m.t("panel.mattermost.none")))),
-			fmt.Sprintf(" %s", m.t("panel.mattermost.current_directory_target", firstNonEmptyMM(entry.TargetID, defaultMMTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.mattermost.current_directory_channel", firstNonEmptyMM(entry.WorkspaceChannel, m.t("panel.mattermost.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.mattermost.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.mattermost.none")))),
+			fmt.Sprintf(" %s", m.t("panel.mattermost.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultMMTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.mattermost.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.mattermost.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.mattermost.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -482,7 +473,7 @@ func (m Model) mattermostBindingEntries() []mattermostBindingEntry {
 		targetID := defaultMMTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyMM(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

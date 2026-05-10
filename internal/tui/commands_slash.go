@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -711,7 +712,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				age = fmt.Sprintf("%dd", int(time.Since(item.FirstQueuedAt).Hours()/24))
 			}
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("  • %s:%s [priority=%.1f, touches=%d, age=%s, category=%s, evidence=%d] %s — %s",
-				item.Scope, item.Name, item.QueuePriority, item.QueueTouchCount, age, item.Category, item.EvidenceCount, item.Description, truncateStr(item.QueuePriorityReason, 120)))
+				item.Scope, item.Name, item.QueuePriority, item.QueueTouchCount, age, item.Category, item.EvidenceCount, item.Description, util.Truncate(item.QueuePriorityReason, 120)))
 		}
 	case "review":
 		staging, _ := m.knight.Index().StagingSkills()
@@ -779,7 +780,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		m.spinner.Start("Knight task")
 		m.statusActivity = "Knight task"
 		m.statusToolName = "knight"
-		m.statusToolArg = truncateStr(goal, 80)
+		m.statusToolArg = util.Truncate(goal, 80)
 		m.statusToolCount = 1
 		return func() tea.Msg {
 			result, err := m.knight.RunAdhocTask(context.Background(), goal)
@@ -804,7 +805,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		m.spinner.Start("Knight proposal")
 		m.statusActivity = "Knight proposal"
 		m.statusToolName = "knight"
-		m.statusToolArg = truncateStr(goal, 80)
+		m.statusToolArg = util.Truncate(goal, 80)
 		m.statusToolCount = 1
 		return func() tea.Msg {
 			proposal, result, err := m.knight.GenerateProjectImprovementProposal(context.Background(), goal)
@@ -1089,7 +1090,7 @@ func formatAutoPromoteEval(eval knight.AutoPromoteEvalLogEntry) string {
 		reason = strings.TrimSpace(eval.FailureMode)
 	}
 	if reason != "" {
-		reason = " — " + truncateStr(reason, 100)
+		reason = " — " + util.Truncate(reason, 100)
 	}
 	return fmt.Sprintf("%s%s:%s %s (replay=%s)%s", when, eval.Scope, eval.Skill, decision, replay, reason)
 }
@@ -1107,10 +1108,10 @@ func formatSkillScenario(scenario knight.SkillScenarioLogEntry) string {
 	if refs != "" {
 		refs = " refs=" + refs
 	}
-	task := truncateStr(strings.ReplaceAll(strings.TrimSpace(scenario.Task), "\n", " "), 120)
+	task := util.Truncate(strings.ReplaceAll(strings.TrimSpace(scenario.Task), "\n", " "), 120)
 	errText := ""
 	if scenario.Error != "" {
-		errText = " error=" + truncateStr(strings.TrimSpace(scenario.Error), 80)
+		errText = " error=" + util.Truncate(strings.TrimSpace(scenario.Error), 80)
 	}
 	return fmt.Sprintf("%s%s:%s%s%s", when, outcome, task, refs, errText)
 }
@@ -1125,7 +1126,7 @@ func formatProjectProposal(proposal knight.ProjectImprovementProposal) string {
 		summary = strings.TrimSpace(proposal.Goal)
 	}
 	if summary != "" {
-		summary = " — " + truncateStr(summary, 100)
+		summary = " — " + util.Truncate(summary, 100)
 	}
 	status := strings.TrimSpace(proposal.Status)
 	if status == "" {

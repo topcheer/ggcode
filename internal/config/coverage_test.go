@@ -2,6 +2,8 @@ package config
 
 import (
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // --- anthropic_bootstrap.go 0% functions ---
@@ -258,7 +260,7 @@ func TestSetIMAdapterExtra(t *testing.T) {
 }
 
 func TestConfigFirstNonEmpty(t *testing.T) {
-	got := firstNonEmpty("", "", "hello", "world")
+	got := util.FirstNonEmpty("", "", "hello", "world")
 	if got != "hello" {
 		t.Errorf("expected 'hello', got %q", got)
 	}

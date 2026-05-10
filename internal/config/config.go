@@ -1241,9 +1241,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	}
 	return &ResolvedEndpoint{
 		VendorID:       vendor,
-		VendorName:     firstNonEmpty(vc.DisplayName, vendor),
+		VendorName:     util.FirstNonEmpty(vc.DisplayName, vendor),
 		EndpointID:     endpoint,
-		EndpointName:   firstNonEmpty(ep.DisplayName, endpoint),
+		EndpointName:   util.FirstNonEmpty(ep.DisplayName, endpoint),
 		Protocol:       ep.Protocol,
 		AuthType:       authType,
 		BaseURL:        baseURL,
@@ -1318,7 +1318,7 @@ func (c *Config) SetActiveSelection(vendor, endpoint, model string) error {
 		return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
 	}
 	if model == "" {
-		model = firstNonEmpty(ep.SelectedModel, ep.DefaultModel)
+		model = util.FirstNonEmpty(ep.SelectedModel, ep.DefaultModel)
 	}
 	if model == "" {
 		return fmt.Errorf("endpoint %q for vendor %q has no model configured", endpoint, vendor)
@@ -1832,15 +1832,6 @@ func resolveEffectiveAPIKeyRef(epKey, vcKey string) string {
 	}
 
 	return epKey
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func uniqueNonEmptyStrings(values ...string) []string {

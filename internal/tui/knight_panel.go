@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
 
@@ -440,7 +441,7 @@ func (m *Model) renderKnightQueue(w int) string {
 		sb.WriteString(line + "\n")
 		if m.knightPanel.detailIndex == i {
 			sb.WriteString(fmt.Sprintf("    Evidence: %d | %s\n", item.EvidenceCount,
-				truncateStr(item.QueuePriorityReason, w-6)))
+				util.Truncate(item.QueuePriorityReason, w-6)))
 		}
 	}
 	return sb.String()
@@ -564,9 +565,9 @@ func (m *Model) renderKnightMemory(w int) string {
 		if m.knightPanel.detailIndex == i {
 			prefix = "▶ "
 		}
-		sb.WriteString(fmt.Sprintf("%s[%s] %s\n", prefix, e.Kind, truncateStr(e.Summary, w-10)))
+		sb.WriteString(fmt.Sprintf("%s[%s] %s\n", prefix, e.Kind, util.Truncate(e.Summary, w-10)))
 		if m.knightPanel.detailIndex == i {
-			sb.WriteString(fmt.Sprintf("    Source: %s | Session: %s\n", e.Source, truncateStr(e.SessionID, 12)))
+			sb.WriteString(fmt.Sprintf("    Source: %s | Session: %s\n", e.Source, util.Truncate(e.SessionID, 12)))
 			if len(e.Refs) > 0 {
 				sb.WriteString(fmt.Sprintf("    Refs: %s\n", strings.Join(e.Refs, ", ")))
 			}

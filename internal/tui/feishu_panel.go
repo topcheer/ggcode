@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,7 +65,7 @@ func (m Model) renderFeishuPanel() string {
 	}
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.feishu.directory")),
-		fmt.Sprintf(" %s", firstNonEmptyFeishu(m.currentWorkspacePath(), m.t("panel.feishu.none"))),
+		fmt.Sprintf(" %s", util.FirstNonEmpty(m.currentWorkspacePath(), m.t("panel.feishu.none"))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.feishu.bots")),
 		fmt.Sprintf(" %s", m.t("panel.feishu.created", len(entries))),
@@ -79,8 +80,8 @@ func (m Model) renderFeishuPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.feishu.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.feishu.target", firstNonEmptyFeishu(current.TargetID, m.t("panel.feishu.default")))),
-				fmt.Sprintf(" %s", m.t("panel.feishu.channel", firstNonEmptyFeishu(current.ChannelID, m.t("panel.feishu.none")))),
+				fmt.Sprintf(" %s", m.t("panel.feishu.target", util.FirstNonEmpty(current.TargetID, m.t("panel.feishu.default")))),
+				fmt.Sprintf(" %s", m.t("panel.feishu.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.feishu.none")))),
 			)
 		}
 	}
@@ -103,9 +104,9 @@ func (m Model) renderFeishuPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.feishu.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.feishu.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.feishu.transport", m.feishuAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.feishu.bound_directory", firstNonEmptyFeishu(entry.OccupiedBy, m.t("panel.feishu.none")))),
-			fmt.Sprintf(" %s", m.t("panel.feishu.current_directory_target", firstNonEmptyFeishu(entry.TargetID, defaultFeishuTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.feishu.current_directory_channel", firstNonEmptyFeishu(entry.WorkspaceChannel, m.t("panel.feishu.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.feishu.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.feishu.none")))),
+			fmt.Sprintf(" %s", m.t("panel.feishu.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultFeishuTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.feishu.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.feishu.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.feishu.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -375,7 +376,7 @@ func (m Model) feishuBindingEntries() []feishuBindingEntry {
 		targetID := defaultFeishuTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyFeishu(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, feishuBindingEntry{
@@ -441,16 +442,6 @@ func currentFeishuBindings(mgr *im.Manager) []im.ChannelBinding {
 	}
 	return result
 }
-
-func firstNonEmptyFeishu(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func defaultFeishuTargetID(workspace string) string {
 	base := filepath.Base(strings.TrimSpace(workspace))
 	if base == "" || base == "." || base == string(filepath.Separator) {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"image/color"
 	"os"
 	"path/filepath"
@@ -165,7 +166,7 @@ func (m Model) renderHeader() string {
 	vendor, endpoint, model := m.currentSelection()
 	sessionLine := m.t("label.session") + " " + m.t("session.ephemeral")
 	if m.session != nil && m.session.ID != "" {
-		sessionLine = fmt.Sprintf("%s %s", m.t("label.session"), truncateString(m.session.ID, 18))
+		sessionLine = fmt.Sprintf("%s %s", m.t("label.session"), util.Truncate(m.session.ID, 18))
 	}
 	agentLine := fmt.Sprintf("%s  %s", m.t("label.agents"), m.t("agents.idle"))
 
@@ -210,7 +211,7 @@ func (m Model) renderSidebar() string {
 		"",
 		m.styles.title.Render("ggcode"),
 		m.renderSidebarDetailRow(m.t("label.model"), vendor+"/"+model, m.sidebarWidth()-4),
-		m.renderSidebarDetailRow(m.t("label.branch"), firstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.branch"), util.FirstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
 		"",
 		m.renderSidebarModeSection(),
@@ -247,7 +248,7 @@ func (m Model) renderSidebarContextSection() string {
 	rows := []string{m.renderSidebarSectionTitle(m.t("panel.context"))}
 	stats, ok := m.sidebarContextStats()
 	if !ok {
-		rows = append(rows, truncateString(m.t("context.unavailable"), width))
+		rows = append(rows, util.Truncate(m.t("context.unavailable"), width))
 		return strings.Join(rows, "\n")
 	}
 
@@ -270,7 +271,7 @@ func (m Model) renderSidebarMCPSection() string {
 		}
 	}
 	if len(activeServers) == 0 {
-		rows = append(rows, truncateString(m.t("mcp.none"), width))
+		rows = append(rows, util.Truncate(m.t("mcp.none"), width))
 		return strings.Join(rows, "\n")
 	}
 	connected, pending, failed := 0, 0, 0
@@ -284,7 +285,7 @@ func (m Model) renderSidebarMCPSection() string {
 			failed++
 		}
 	}
-	rows = append(rows, truncateString(fmt.Sprintf("%d up • %d pending • %d failed", connected, pending, failed), width))
+	rows = append(rows, util.Truncate(fmt.Sprintf("%d up • %d pending • %d failed", connected, pending, failed), width))
 	visibleServers := activeServers
 	if len(visibleServers) > 5 {
 		visibleServers = visibleServers[:5]
@@ -297,16 +298,16 @@ func (m Model) renderSidebarMCPSection() string {
 		case srv.Pending:
 			icon = "…"
 		}
-		label := fmt.Sprintf("%s %s (%s)", icon, srv.Name, firstNonEmpty(srv.Transport, "stdio"))
-		rows = append(rows, truncateString(label, width))
+		label := fmt.Sprintf("%s %s (%s)", icon, srv.Name, util.FirstNonEmpty(srv.Transport, "stdio"))
+		rows = append(rows, util.Truncate(label, width))
 	}
 	if hidden := len(activeServers) - len(visibleServers); hidden > 0 {
-		rows = append(rows, truncateString(m.t("mcp.more", hidden), width))
+		rows = append(rows, util.Truncate(m.t("mcp.more", hidden), width))
 	}
 	if active := m.activeMCPToolSummaries(); len(active) > 0 {
-		rows = append(rows, "", truncateString(m.t("mcp.active_tools"), width))
+		rows = append(rows, "", util.Truncate(m.t("mcp.active_tools"), width))
 		for _, item := range active {
-			rows = append(rows, truncateString("• "+item, width))
+			rows = append(rows, util.Truncate("• "+item, width))
 		}
 	}
 	return strings.Join(rows, "\n")
@@ -376,12 +377,12 @@ func (m Model) renderSidebarIMSection() string {
 	width := max(12, m.sidebarWidth()-4)
 	rows := []string{m.renderSidebarSectionTitle(m.t("panel.im"))}
 	if m.imManager == nil && (m.config == nil || !m.config.IM.Enabled) {
-		rows = append(rows, truncateString(m.sidebarIMRuntimeStatus(), width))
+		rows = append(rows, util.Truncate(m.sidebarIMRuntimeStatus(), width))
 		return strings.Join(rows, "\n")
 	}
 	adapters := m.sidebarIMAdapters()
 	if len(adapters) == 0 {
-		rows = append(rows, truncateString(m.t("im.none"), width))
+		rows = append(rows, util.Truncate(m.t("im.none"), width))
 		return strings.Join(rows, "\n")
 	}
 	healthy := 0
@@ -390,16 +391,16 @@ func (m Model) renderSidebarIMSection() string {
 			healthy++
 		}
 	}
-	rows = append(rows, truncateString(m.t("im.summary", len(adapters), healthy), width))
+	rows = append(rows, util.Truncate(m.t("im.summary", len(adapters), healthy), width))
 	visible := adapters
 	if len(visible) > 5 {
 		visible = visible[:5]
 	}
 	for _, state := range visible {
-		rows = append(rows, truncateString(sidebarIMAdapterLabel(state), width))
+		rows = append(rows, util.Truncate(sidebarIMAdapterLabel(state), width))
 	}
 	if hidden := len(adapters) - len(visible); hidden > 0 {
-		rows = append(rows, truncateString(m.t("im.more", hidden), width))
+		rows = append(rows, util.Truncate(m.t("im.more", hidden), width))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -480,7 +481,7 @@ func sidebarIMAdapterLabel(state im.AdapterState) string {
 	case strings.TrimSpace(state.LastError) == "":
 		icon = "…"
 	}
-	status := compactSingleLine(firstNonEmpty(strings.TrimSpace(state.Status), strings.TrimSpace(state.LastError), "unknown"))
+	status := compactSingleLine(util.FirstNonEmpty(strings.TrimSpace(state.Status), strings.TrimSpace(state.LastError), "unknown"))
 	if status == "" {
 		status = "unknown"
 	}
@@ -488,7 +489,7 @@ func sidebarIMAdapterLabel(state im.AdapterState) string {
 	if platform == "" {
 		platform = "im"
 	}
-	return fmt.Sprintf("%s %s (%s) %s", icon, firstNonEmpty(strings.TrimSpace(state.Name), "adapter"), platform, status)
+	return fmt.Sprintf("%s %s (%s) %s", icon, util.FirstNonEmpty(strings.TrimSpace(state.Name), "adapter"), platform, status)
 }
 
 func (m Model) renderSidebarTaskTracker() string {
@@ -533,7 +534,7 @@ func (m Model) renderSidebarTaskRow(task todoStateItem, width int) []string {
 	titleWidth := max(8, width-2)
 	title := compactSingleLine(task.Content)
 	if title == "" {
-		title = firstNonEmpty(task.ID, "-")
+		title = util.FirstNonEmpty(task.ID, "-")
 	}
 	wrapped := wordwrap.String(title, titleWidth)
 	lines := strings.Split(wrapped, "\n")
@@ -1137,7 +1138,7 @@ func (m Model) renderStatusBar() string {
 		sb.WriteString("\n ")
 		if m.activeTodo != nil {
 			sb.WriteString("🎯 ")
-			sb.WriteString(truncateString(compactSingleLine(m.activeTodo.Content), 56))
+			sb.WriteString(util.Truncate(compactSingleLine(m.activeTodo.Content), 56))
 			if m.statusToolCount > 0 || m.statusToolName != "" {
 				sb.WriteString(" │ ")
 			}
@@ -1172,7 +1173,7 @@ func (m Model) renderStatusBar() string {
 
 func (m Model) sidebarActivity() string {
 	if m.activeTodo != nil {
-		return truncateString(localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content), m.sidebarWidth()-12)
+		return util.Truncate(localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content), m.sidebarWidth()-12)
 	}
 	if m.statusActivity != "" {
 		return m.statusActivity
@@ -1256,7 +1257,7 @@ func (m Model) renderContextPanel() string {
 			m.t("label.tool"),
 			toolLine,
 			m.t("label.input"),
-			truncateString(compactToolArgsPreview(strings.ReplaceAll(m.pendingApproval.Input, "\n", " ")), 220),
+			util.Truncate(compactToolArgsPreview(strings.ReplaceAll(m.pendingApproval.Input, "\n", " ")), 220),
 			m.renderApprovalOptions(m.approvalOptions, m.approvalCursor),
 			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" Tab/j/k move • Enter confirm • y/n/a shortcuts"),
 		)
@@ -1346,7 +1347,7 @@ func (m Model) renderIMPairingPanel() string {
 		Render(codeDigits)
 
 	lines := []string{bodyText, ""}
-	lines = append(lines, fmt.Sprintf(" %s   %s", channelLabel, firstNonEmpty(strings.TrimSpace(challenge.ChannelID), "-")))
+	lines = append(lines, fmt.Sprintf(" %s   %s", channelLabel, util.FirstNonEmpty(strings.TrimSpace(challenge.ChannelID), "-")))
 	if challenge.ExistingBinding != nil && strings.TrimSpace(challenge.ExistingBinding.ChannelID) != "" {
 		lines = append(lines, fmt.Sprintf(" %s   %s", boundLabel, challenge.ExistingBinding.ChannelID))
 	}
@@ -1584,9 +1585,9 @@ func (m Model) isAnyPanelOpen() bool {
 }
 
 func (m Model) currentSelection() (string, string, string) {
-	vendor := firstNonEmptyValue(m.activeVendor, m.startupVendor)
-	endpoint := firstNonEmptyValue(m.activeEndpoint, m.startupEndpoint)
-	model := firstNonEmptyValue(m.activeModel, m.startupModel)
+	vendor := util.FirstNonEmpty(m.activeVendor, m.startupVendor)
+	endpoint := util.FirstNonEmpty(m.activeEndpoint, m.startupEndpoint)
+	model := util.FirstNonEmpty(m.activeModel, m.startupModel)
 	if vendor == "" {
 		vendor = "unknown"
 	}

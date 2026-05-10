@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,7 +65,7 @@ func (m Model) renderDingtalkPanel() string {
 	}
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.directory")),
-		fmt.Sprintf(" %s", firstNonEmptyDingtalk(m.currentWorkspacePath(), m.t("panel.dingtalk.none"))),
+		fmt.Sprintf(" %s", util.FirstNonEmpty(m.currentWorkspacePath(), m.t("panel.dingtalk.none"))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.bots")),
 		fmt.Sprintf(" %s", m.t("panel.dingtalk.created", len(entries))),
@@ -79,8 +80,8 @@ func (m Model) renderDingtalkPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.dingtalk.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.dingtalk.target", firstNonEmptyDingtalk(current.TargetID, m.t("panel.dingtalk.default")))),
-				fmt.Sprintf(" %s", m.t("panel.dingtalk.channel", firstNonEmptyDingtalk(current.ChannelID, m.t("panel.dingtalk.none")))),
+				fmt.Sprintf(" %s", m.t("panel.dingtalk.target", util.FirstNonEmpty(current.TargetID, m.t("panel.dingtalk.default")))),
+				fmt.Sprintf(" %s", m.t("panel.dingtalk.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.dingtalk.none")))),
 			)
 		}
 	}
@@ -103,9 +104,9 @@ func (m Model) renderDingtalkPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.dingtalk.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.dingtalk.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.dingtalk.transport", m.dingtalkAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.dingtalk.bound_directory", firstNonEmptyDingtalk(entry.OccupiedBy, m.t("panel.dingtalk.none")))),
-			fmt.Sprintf(" %s", m.t("panel.dingtalk.current_directory_target", firstNonEmptyDingtalk(entry.TargetID, defaultDingtalkTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.dingtalk.current_directory_channel", firstNonEmptyDingtalk(entry.WorkspaceChannel, m.t("panel.dingtalk.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.dingtalk.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.dingtalk.none")))),
+			fmt.Sprintf(" %s", m.t("panel.dingtalk.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultDingtalkTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.dingtalk.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.dingtalk.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.dingtalk.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -379,7 +380,7 @@ func (m Model) dingtalkBindingEntries() []dingtalkBindingEntry {
 		targetID := defaultDingtalkTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyDingtalk(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, dingtalkBindingEntry{
@@ -445,16 +446,6 @@ func currentDingtalkBindings(mgr *im.Manager) []im.ChannelBinding {
 	}
 	return result
 }
-
-func firstNonEmptyDingtalk(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func defaultDingtalkTargetID(workspace string) string {
 	base := filepath.Base(strings.TrimSpace(workspace))
 	if base == "" || base == "." || base == string(filepath.Separator) {

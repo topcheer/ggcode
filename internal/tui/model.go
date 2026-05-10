@@ -32,7 +32,6 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/update"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // logoMsg is sent on startup to display the ASCII art logo.
@@ -822,14 +821,6 @@ func (m *Model) vendorNames() string {
 		return ""
 	}
 	return strings.Join(m.config.VendorNames(), ", ")
-}
-
-func truncateString(s string, maxLen int) string {
-	return util.Truncate(s, maxLen)
-}
-
-func truncateStr(s string, max int) string {
-	return util.Truncate(s, max)
 }
 
 // imageAttachedMsg is sent when an image is successfully loaded.

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
 
@@ -226,16 +227,6 @@ func indexOf(values []string, target string) int {
 	}
 	return -1
 }
-
-func firstNonEmptyValue(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func (m *Model) openProviderPanel() {
 	if m.config == nil {
 		return
@@ -324,7 +315,7 @@ func (m *Model) renderProviderPanel() string {
 
 	footer := []string{
 		fmt.Sprintf(" %s: %s / %s / %s", m.t("panel.provider.active_draft"), panel.selectedVendor(), panel.selectedEndpoint(), model),
-		fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), firstNonEmptyValue(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
+		fmt.Sprintf(" %s: %s", m.t("panel.provider.protocol"), util.FirstNonEmpty(ep.Protocol, m.t("panel.provider.protocol.unknown"))),
 		fmt.Sprintf(" %s: %s", m.t("panel.provider.auth"), apiKeyState),
 	}
 	if envVar != "" {
@@ -938,7 +929,7 @@ func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConf
 // resolveAPIKey picks the effective API key: endpoint key first,
 // but falls back to vendor key if the endpoint key is an unresolvable ${VAR} reference.
 func resolveAPIKey(epKey, vcKey string) string {
-	key := firstNonEmptyValue(epKey, vcKey)
+	key := util.FirstNonEmpty(epKey, vcKey)
 	if !providerHasUsableAPIKey(key) && vcKey != "" {
 		key = vcKey
 	}

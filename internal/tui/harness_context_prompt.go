@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"path/filepath"
 	"strings"
@@ -536,7 +537,7 @@ func (m *Model) renderHarnessContextPrompt() string {
 		case harnessContextPromptStepPersist:
 			label := ""
 			if state.selectedRunContext != nil {
-				label = firstNonEmptyHarness(state.selectedRunContext.Name, state.selectedRunContext.Path)
+				label = util.FirstNonEmpty(state.selectedRunContext.Name, state.selectedRunContext.Path)
 			}
 			fmt.Fprintf(&body, "New context: %s\n\nPersist it to .ggcode/harness.yaml?\n\n", label)
 			yes := "Yes"
@@ -565,7 +566,7 @@ func renderHarnessContextList(contexts []harness.ContextConfig, cursor int, sele
 	}
 	lines := make([]string, 0, len(contexts))
 	for idx, item := range contexts {
-		label := firstNonEmptyHarness(item.Name, item.Path)
+		label := util.FirstNonEmpty(item.Name, item.Path)
 		desc := strings.TrimSpace(item.Description)
 		prefix := "  "
 		if idx == cursor {
