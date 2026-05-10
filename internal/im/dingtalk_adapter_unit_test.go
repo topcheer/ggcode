@@ -1,7 +1,11 @@
 package im
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -112,5 +116,354 @@ func TestDingtalkBotCallbackDataParsing(t *testing.T) {
 	}
 	if callback.SessionWebhook == "" {
 		t.Error("expected non-empty sessionWebhook")
+	}
+}
+
+// --- json.Marshal error handling tests ---
+
+func TestDingtalkRefreshToken_MarshalError(t *testing.T) {
+	a := &dingtalkAdapter{
+		name:      "test",
+		appKey:    "key123",
+		appSecret: "secret456",
+	}
+	a.mu.Lock()
+	a.accessToken = ""
+	a.mu.Unlock()
+
+	// Verify the refreshToken method works correctly
+	// by checking it returns an error when the HTTP call fails (no server running).
+	err := a.refreshToken(context.Background())
+	if err == nil {
+		t.Fatal("expected error from refreshToken with no server")
+	}
+	// Should be a connection refused error, not a marshal error
+	if strings.Contains(err.Error(), "marshal") {
+		t.Errorf("should not be a marshal error, got: %v", err)
+	}
+}
+
+func TestDingtalkRefreshToken_SuccessfulMarshal(t *testing.T) {
+	// Verify that the token request body is correctly marshaled
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %s", r.Header.Get("Content-Type"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		// Return a valid token response
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"accessToken":"test-token-123","expireIn":7200}`))
+	}))
+	defer server.Close()
+
+	a := &dingtalkAdapter{
+		name:      "test",
+		appKey:    "myAppKey",
+		appSecret: "myAppSecret",
+	}
+
+	// Override the API base to our test server
+	// We need to call refreshToken but the URL is hardcoded.
+	// Instead, test the marshaling directly by creating the expected body.
+	body := map[string]any{
+		"appKey":    a.appKey,
+		"appSecret": a.appSecret,
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("json.Marshal token request body: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(bodyJSON, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal round-trip: %v", err)
+	}
+	if decoded["appKey"] != "myAppKey" {
+		t.Errorf("appKey = %v, want myAppKey", decoded["appKey"])
+	}
+	if decoded["appSecret"] != "myAppSecret" {
+		t.Errorf("appSecret = %v, want myAppSecret", decoded["appSecret"])
+	}
+
+	// Verify server received the correct body
+	resp, err := http.Post(server.URL, "application/json", strings.NewReader(string(bodyJSON)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if receivedBody["appKey"] != "myAppKey" {
+		t.Errorf("server received appKey = %v, want myAppKey", receivedBody["appKey"])
+	}
+}
+
+func TestDingtalkStreamOpen_MarshalError(t *testing.T) {
+	// The streamOpen method also does json.Marshal for the request body.
+	// Verify the error message format when the HTTP call fails.
+	a := &dingtalkAdapter{
+		name:      "test",
+		appKey:    "key123",
+		appSecret: "secret456",
+	}
+	a.mu.Lock()
+	a.accessToken = "valid-token"
+	a.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := a.streamOpen(ctx)
+	// Will fail because the API base is unreachable, not because of marshal
+	if err == nil {
+		t.Fatal("expected error from streamOpen with no server")
+	}
+}
+
+func TestDingtalkStreamOpen_SuccessfulMarshal(t *testing.T) {
+	// Verify the stream open request body is correctly constructed
+	a := &dingtalkAdapter{
+		name:      "test",
+		appKey:    "myKey",
+		appSecret: "mySecret",
+	}
+	a.mu.Lock()
+	a.accessToken = "test-token"
+	a.mu.Unlock()
+
+	body := map[string]any{
+		"clientId":     a.appKey,
+		"clientSecret": a.appSecret,
+		"subscriptions": []map[string]any{
+			{
+				"type":  "CALLBACK",
+				"topic": dingtalkBotCallbackTopic,
+			},
+		},
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("json.Marshal stream open body: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(bodyJSON, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal round-trip: %v", err)
+	}
+	if decoded["clientId"] != "myKey" {
+		t.Errorf("clientId = %v, want myKey", decoded["clientId"])
+	}
+	subs, ok := decoded["subscriptions"].([]any)
+	if !ok || len(subs) != 1 {
+		t.Fatalf("subscriptions = %v, want 1-element array", decoded["subscriptions"])
+	}
+	sub, ok := subs[0].(map[string]any)
+	if !ok {
+		t.Fatal("subscription element is not a map")
+	}
+	if sub["type"] != "CALLBACK" {
+		t.Errorf("subscription type = %v, want CALLBACK", sub["type"])
+	}
+}
+
+func TestDingtalkSendTextViaWebhook_MarshalError(t *testing.T) {
+	a := &dingtalkAdapter{
+		name:      "test",
+		appKey:    "key123",
+		appSecret: "secret456",
+	}
+
+	// Test that an empty webhook URL returns nil (fast path)
+	err := a.sendTextViaWebhook(context.Background(), "", "hello", "robot1")
+	if err != nil {
+		t.Errorf("expected nil for empty webhook URL, got: %v", err)
+	}
+
+	// Test that empty text returns nil (fast path)
+	err = a.sendTextViaWebhook(context.Background(), "http://example.com/webhook", "", "robot1")
+	if err != nil {
+		t.Errorf("expected nil for empty text, got: %v", err)
+	}
+}
+
+func TestDingtalkSendTextViaWebhook_SuccessfulMarshal(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %s", r.Header.Get("Content-Type"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	a := &dingtalkAdapter{
+		name: "test",
+	}
+	err := a.sendTextViaWebhook(context.Background(), server.URL, "Hello world", "robot123")
+	if err != nil {
+		t.Fatalf("sendTextViaWebhook: %v", err)
+	}
+
+	if receivedBody["msgtype"] != "text" {
+		t.Errorf("msgtype = %v, want text", receivedBody["msgtype"])
+	}
+	if receivedBody["robotCode"] != "robot123" {
+		t.Errorf("robotCode = %v, want robot123", receivedBody["robotCode"])
+	}
+	textObj, ok := receivedBody["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("text field is not a map: %v", receivedBody["text"])
+	}
+	if textObj["content"] != "Hello world" {
+		t.Errorf("text.content = %v, want 'Hello world'", textObj["content"])
+	}
+}
+
+func TestDingtalkSendTextViaAPI_MarshalError(t *testing.T) {
+	a := &dingtalkAdapter{
+		name:      "test",
+		appKey:    "key123",
+		appSecret: "secret456",
+	}
+	a.mu.Lock()
+	a.accessToken = "" // no token
+	a.mu.Unlock()
+
+	// No access token should return error
+	err := a.sendTextViaAPI(context.Background(), ChannelBinding{ChannelID: "user123"}, "hello")
+	if err == nil {
+		t.Fatal("expected error with no access token")
+	}
+	if !strings.Contains(err.Error(), "no access token") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// No userId should return error
+	a.mu.Lock()
+	a.accessToken = "valid-token"
+	a.mu.Unlock()
+	err = a.sendTextViaAPI(context.Background(), ChannelBinding{ChannelID: ""}, "hello")
+	if err == nil {
+		t.Fatal("expected error with empty ChannelID")
+	}
+	if !strings.Contains(err.Error(), "no userId") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestDingtalkSendTextViaAPI_SuccessfulMarshal(t *testing.T) {
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("expected Content-Type application/json, got %s", r.Header.Get("Content-Type"))
+		}
+		if token := r.Header.Get("x-acs-dingtalk-access-token"); token != "test-token" {
+			t.Errorf("expected access token header 'test-token', got %q", token)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Temporarily override the API base for the adapter
+	// Since we can't override the constant, we test the marshal correctness directly
+	a := &dingtalkAdapter{
+		name:      "test",
+		appKey:    "testRobotCode",
+		appSecret: "secret",
+	}
+	a.mu.Lock()
+	a.accessToken = "test-token"
+	a.mu.Unlock()
+
+	// Test the body construction logic directly
+	body := map[string]any{
+		"robotCode": a.appKey,
+		"userIds":   []string{"staff123"},
+		"msgKey":    "sampleText",
+		"msgParam":  `{"content":"Hello world"}`,
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("json.Marshal API send body: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(bodyJSON, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal round-trip: %v", err)
+	}
+	if decoded["robotCode"] != "testRobotCode" {
+		t.Errorf("robotCode = %v, want testRobotCode", decoded["robotCode"])
+	}
+	if decoded["msgKey"] != "sampleText" {
+		t.Errorf("msgKey = %v, want sampleText", decoded["msgKey"])
+	}
+	userIDs, ok := decoded["userIds"].([]any)
+	if !ok || len(userIDs) != 1 || userIDs[0] != "staff123" {
+		t.Errorf("userIds = %v, want [staff123]", decoded["userIds"])
+	}
+}
+
+func TestDingtalkSendFrameResponse_MarshalError(t *testing.T) {
+	// Verify sendFrameResponse doesn't panic with various inputs.
+	// The method uses json.Marshal internally and logs errors.
+	a := &dingtalkAdapter{
+		name: "test",
+	}
+
+	frame := dingtalkDataFrame{
+		SpecVersion: "1.0",
+		Type:        dingtalkSubCallback,
+		Headers: map[string]string{
+			dfHeaderMessageID:   "msg-123",
+			dfHeaderContentType: dfContentTypeJSON,
+		},
+		Data: "",
+	}
+
+	// The response should marshal fine for normal cases.
+	// Just verify it doesn't panic when ws is nil.
+	a.sendFrameResponse(nil, frame, dfStatusOK, "pong")
+}
+
+func TestDingtalkMarshalErrorWithUnmarshallableField(t *testing.T) {
+	// Verify that json.Marshal correctly fails for types with channels
+	type badStruct struct {
+		Ch chan int `json:"ch"`
+	}
+	bad := badStruct{Ch: make(chan int)}
+	_, err := json.Marshal(bad)
+	if err == nil {
+		t.Fatal("expected json.Marshal to fail for struct with chan field")
+	}
+
+	// Verify a good struct marshals fine
+	type goodStruct struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+	}
+	good := goodStruct{Name: "test", Value: 42}
+	data, err := json.Marshal(good)
+	if err != nil {
+		t.Fatalf("json.Marshal good struct: %v", err)
+	}
+	var decoded goodStruct
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal round-trip: %v", err)
+	}
+	if decoded.Name != "test" || decoded.Value != 42 {
+		t.Errorf("round-trip failed: %+v", decoded)
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -236,5 +238,169 @@ func TestCommandTool(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatal("expected no error")
+	}
+}
+
+func TestCommandTool_Execute_Success(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("echo-test", "Echo test", "echo", nil)
+	result, err := ct.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected IsError=false, got error content: %s", result.Content)
+	}
+	// echo with no args prints a newline
+	if !strings.Contains(result.Content, "\n") {
+		t.Fatalf("expected output to contain newline, got %q", result.Content)
+	}
+}
+
+func TestCommandTool_Execute_WithArgs(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("echo-hello", "Echo hello", "echo", []string{"hello", "world"})
+	result, err := ct.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected IsError=false, got error content: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "hello world") {
+		t.Fatalf("expected output to contain 'hello world', got %q", result.Content)
+	}
+}
+
+func TestCommandTool_Execute_JSONInputWithArgs(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("echo-args", "Echo with args", "echo", nil)
+	input := json.RawMessage(`{"args": "hello world"}`)
+	result, err := ct.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected IsError=false, got error content: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "hello world") {
+		t.Fatalf("expected output to contain 'hello world', got %q", result.Content)
+	}
+}
+
+func TestCommandTool_Execute_EmptyInput(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("echo-empty", "Echo empty", "echo", []string{"default"})
+
+	// nil input should work using default args
+	result, err := ct.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Execute with nil input returned unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected IsError=false, got error content: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "default") {
+		t.Fatalf("expected output to contain 'default', got %q", result.Content)
+	}
+
+	// Empty byte slice should also work
+	result2, err := ct.Execute(context.Background(), json.RawMessage{})
+	if err != nil {
+		t.Fatalf("Execute with empty raw message returned unexpected error: %v", err)
+	}
+	if result2.IsError {
+		t.Fatalf("expected IsError=false, got error content: %s", result2.Content)
+	}
+}
+
+func TestCommandTool_Execute_InvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("bad-json", "Bad JSON test", "echo", nil)
+	result, err := ct.Execute(context.Background(), json.RawMessage(`{bad`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected go error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true for invalid JSON input")
+	}
+	if !strings.Contains(result.Content, "invalid character") && !strings.Contains(result.Content, "cannot unmarshal") {
+		t.Fatalf("expected error message about JSON parsing, got %q", result.Content)
+	}
+}
+
+func TestCommandTool_Execute_CommandFailure(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("fail-cmd", "Always fails", "sh", []string{"-c", "echo 'oops' >&2 && exit 1"})
+	result, err := ct.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected go error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true for command failure")
+	}
+	if !strings.Contains(result.Content, "failed") {
+		t.Fatalf("expected error message to contain 'failed', got %q", result.Content)
+	}
+	// stderr output should be captured in the error message
+	if !strings.Contains(result.Content, "oops") {
+		t.Fatalf("expected error message to contain stderr output 'oops', got %q", result.Content)
+	}
+}
+
+func TestCommandTool_Execute_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("slow-cmd", "Slow command", "sh", []string{"-c", "sleep 30"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so the command context is already done
+	cancel()
+
+	result, err := ct.Execute(ctx, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected go error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError=true for cancelled context")
+	}
+	if !strings.Contains(result.Content, "failed") {
+		t.Fatalf("expected error message to contain 'failed', got %q", result.Content)
+	}
+}
+
+func TestCommandTool_Execute_ContextCancelDuringRun(t *testing.T) {
+	t.Parallel()
+
+	ct := NewCommandTool("slow-cmd2", "Slow command 2", "sh", []string{"-c", "sleep 30"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	resultCh := make(chan tool.Result)
+	go func() {
+		r, execErr := ct.Execute(ctx, json.RawMessage(`{}`))
+		if execErr != nil {
+			r = tool.Result{Content: execErr.Error(), IsError: true}
+		}
+		resultCh <- r
+	}()
+
+	select {
+	case result := <-resultCh:
+		if !result.IsError {
+			t.Fatal("expected IsError=true for cancelled context")
+		}
+		if !strings.Contains(result.Content, "failed") {
+			t.Fatalf("expected error message to contain 'failed', got %q", result.Content)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("test timed out waiting for command to be cancelled")
 	}
 }
