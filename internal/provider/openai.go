@@ -494,9 +494,11 @@ func finishReasonError(finishReason string) error {
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
 	result := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for idx, m := range messages {
-		debug.Log("openai", "convertMessages[%d]: role=%s content_blocks=%d", idx, m.Role, len(m.Content))
-		for ci, cb := range m.Content {
-			debug.Log("openai", "  content[%d]: type=%s tool_id=%q", ci, cb.Type, cb.ToolID)
+		if debug.IsVerbose("openai") {
+			debug.Log("openai", "convertMessages[%d]: role=%s content_blocks=%d", idx, m.Role, len(m.Content))
+			for ci, cb := range m.Content {
+				debug.Log("openai", "  content[%d]: type=%s tool_id=%q", ci, cb.Type, cb.ToolID)
+			}
 		}
 		switch m.Role {
 		case "system":
@@ -514,13 +516,17 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		case "user":
 			// Check for tool_result blocks (agent stores tool results as role="user")
 			hasToolResult := false
-			debug.Log("openai", "convert user msg: content_blocks=%d", len(m.Content))
+			if debug.IsVerbose("openai") {
+				debug.Log("openai", "convert user msg: content_blocks=%d", len(m.Content))
+			}
 			for i, b := range m.Content {
-				out := b.Output
-				if len(out) > 100 {
-					out = util.Truncate(out, 100)
+				if debug.IsVerbose("openai") {
+					out := b.Output
+					if len(out) > 100 {
+						out = util.Truncate(out, 100)
+					}
+					debug.Log("openai", "  block[%d]: type=%s tool_id=%s output=%s", i, b.Type, b.ToolID, out)
 				}
-				debug.Log("openai", "  block[%d]: type=%s tool_id=%s output=%s", i, b.Type, b.ToolID, out)
 				if b.Type == "tool_result" {
 					hasToolResult = true
 					break
