@@ -201,6 +201,7 @@ type Manager struct {
 	showOutput bool
 	onUpdate   func(*SubAgent)
 	onComplete func(*SubAgent)
+	lastNotify time.Time // throttle: last time onUpdate was called
 	nextID     int
 	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
 	// per-call/per-submit ctx so that sub-agents survive the parent agent
@@ -534,11 +535,23 @@ func (m *Manager) ShowOutput() bool {
 	return m.showOutput
 }
 
+// notifyUpdate invokes the onUpdate callback. This is called frequently
+// during streaming (every token), so we throttle to ~10 Hz to avoid
+// flooding Bubble Tea's unbuffered message channel, which would starve
+// the spinner and other UI updates.
 func (m *Manager) notifyUpdate(sa *SubAgent) {
 	m.mu.Lock()
 	fn := m.onUpdate
+	now := time.Now()
+	lastNotify := m.lastNotify
+	m.lastNotify = now
 	m.mu.Unlock()
-	if fn != nil {
-		fn(sa)
+	if fn == nil {
+		return
 	}
+	// Throttle: skip if we notified less than 100ms ago.
+	if !lastNotify.IsZero() && now.Sub(lastNotify) < 100*time.Millisecond {
+		return
+	}
+	fn(sa)
 }

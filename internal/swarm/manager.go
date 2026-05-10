@@ -281,24 +281,16 @@ func (m *Manager) CancelAll() {
 	m.mu.Unlock()
 
 	for _, team := range teams {
-		for _, tm := range team.listTeammates() {
-			if tm.getStatus() == TeammateWorking {
-				tm.mu.Lock()
+		team.mu.Lock()
+		for _, tm := range team.Teammates {
+			if tm.Status == TeammateWorking {
 				if tm.cancel != nil {
 					tm.cancel()
 				}
 				tm.Status = TeammateShuttingDown
-				tm.EndedAt = time.Now()
-				tm.mu.Unlock()
-
-				m.emit(Event{
-					Type:       "teammate_shutdown",
-					TeamID:     team.ID,
-					TeammateID: tm.ID,
-					Timestamp:  time.Now(),
-				})
 			}
 		}
+		team.mu.Unlock()
 	}
 }
 

@@ -126,7 +126,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("writing", "", "")
 			}
-			cfg.Manager.Notify(cfg.SubAgentID)
+			// No Notify for per-token text events — same as swarm teammates.
 		case provider.StreamEventToolCallDone:
 			// Flush accumulated text before recording tool call
 			flushText()
