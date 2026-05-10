@@ -46,41 +46,46 @@ type Category struct {
 // Categories is the ordered list of all debug log categories.
 // Order matters: listed first = checked first when building tag routing.
 var Categories = []Category{
+	// ── Agent ──────────────────────────────────────────────────────────
 	{
 		Name: "agent", EnvSuffix: "AGENT",
-		Description: "Agent loop, tool execution, autopilot, compaction",
-		Tags:        []string{"agent", "precompact"},
+		Description: "Agent loop, tool execution, autopilot, compaction, sub-agents",
+		Tags:        []string{"agent", "precompact", "subagent", "acp"},
 	},
 	{
 		Name: "context", EnvSuffix: "CONTEXT",
 		Description: "Context window management, summarize, microcompact",
 		Tags:        []string{"ctx"},
 	},
+
+	// ── LLM Providers (by platform) ───────────────────────────────────
 	{
 		Name: "openai", EnvSuffix: "OPENAI",
-		Description: "OpenAI provider streaming and message conversion",
-		Tags:        []string{"openai"},
+		Description: "OpenAI provider — chat, streaming, message conversion",
+		Tags:        []string{"openai", "openai-stream", "openai-chat", "openai-probe"},
 	},
 	{
 		Name: "anthropic", EnvSuffix: "ANTHROPIC",
-		Description: "Anthropic provider streaming",
-		Tags:        []string{"anthropic"},
+		Description: "Anthropic provider — chat, streaming, message conversion",
+		Tags:        []string{"anthropic", "anthropic-stream", "anthropic-chat", "anthropic-probe"},
 	},
 	{
 		Name: "gemini", EnvSuffix: "GEMINI",
-		Description: "Gemini provider",
-		Tags:        []string{"gemini"},
+		Description: "Gemini provider — chat, streaming, message conversion",
+		Tags:        []string{"gemini", "gemini-stream", "gemini-chat", "gemini-probe"},
 	},
 	{
 		Name: "provider", EnvSuffix: "PROVIDER",
-		Description: "Provider creation, token estimation, adaptive cap",
-		Tags:        []string{"provider", "adaptive_cap"},
+		Description: "Provider registry, token estimation, adaptive cap, generic streaming",
+		Tags:        []string{"provider", "adaptive_cap", "stream", "llm-classifier"},
 	},
 	{
 		Name: "probe", EnvSuffix: "PROBE",
 		Description: "Context window probing and cache",
 		Tags:        []string{"probe"},
 	},
+
+	// ── IM Adapters (one category per platform) ───────────────────────
 	{
 		Name: "qq", EnvSuffix: "QQ",
 		Description: "QQ IM adapter",
@@ -122,6 +127,41 @@ var Categories = []Category{
 		Tags:        []string{"matrix"},
 	},
 	{
+		Name: "wechat", EnvSuffix: "WECHAT",
+		Description: "WeChat (微信) IM adapter",
+		Tags:        []string{"wechat"},
+	},
+	{
+		Name: "wecom", EnvSuffix: "WECOM",
+		Description: "WeCom (企业微信) IM adapter",
+		Tags:        []string{"wecom"},
+	},
+	{
+		Name: "signal", EnvSuffix: "SIGNAL",
+		Description: "Signal IM adapter",
+		Tags:        []string{"signal"},
+	},
+	{
+		Name: "mattermost", EnvSuffix: "MATTERMOST",
+		Description: "Mattermost IM adapter",
+		Tags:        []string{"mattermost"},
+	},
+	{
+		Name: "twitch", EnvSuffix: "TWITCH",
+		Description: "Twitch IM adapter",
+		Tags:        []string{"twitch"},
+	},
+	{
+		Name: "nostr", EnvSuffix: "NOSTR",
+		Description: "Nostr IM adapter",
+		Tags:        []string{"nostr"},
+	},
+	{
+		Name: "irc", EnvSuffix: "IRC",
+		Description: "IRC IM adapter",
+		Tags:        []string{"irc"},
+	},
+	{
 		Name: "pc", EnvSuffix: "PC",
 		Description: "PC relay adapter and client",
 		Tags:        []string{"pc", "pc_adapter", "pc_relay"},
@@ -131,6 +171,25 @@ var Categories = []Category{
 		Description: "IM runtime, emitter, STT, dummy adapter",
 		Tags:        []string{"im", "emitter", "stt", "dummy", "im-send"},
 	},
+
+	// ── UI ─────────────────────────────────────────────────────────────
+	{
+		Name: "tui", EnvSuffix: "TUI",
+		Description: "TUI model updates, repl, completion, submit",
+		Tags:        []string{"tui", "repl", "completion", "command-gate", "layout"},
+	},
+	{
+		Name: "webui", EnvSuffix: "WEBUI",
+		Description: "WebUI HTTP server, WebSocket chat, bridges",
+		Tags:        []string{"webui", "tui-bridge"},
+	},
+	{
+		Name: "daemon", EnvSuffix: "DAEMON",
+		Description: "Daemon mode, daemon bridge, restart",
+		Tags:        []string{"daemon", "daemon-bridge", "restart"},
+	},
+
+	// ── Infrastructure ─────────────────────────────────────────────────
 	{
 		Name: "knight", EnvSuffix: "KNIGHT",
 		Description: "Knight scheduler, analyzer, runner",
@@ -142,9 +201,9 @@ var Categories = []Category{
 		Tags:        []string{"swarm"},
 	},
 	{
-		Name: "tui", EnvSuffix: "TUI",
-		Description: "TUI model updates, repl, completion, submit",
-		Tags:        []string{"tui", "repl", "completion", "command-gate", "layout"},
+		Name: "harness", EnvSuffix: "HARNESS",
+		Description: "Harness workflow engine, tasks, worktrees, review",
+		Tags:        []string{"harness", "auto-run"},
 	},
 	{
 		Name: "mcp", EnvSuffix: "MCP",
@@ -158,13 +217,8 @@ var Categories = []Category{
 	},
 	{
 		Name: "a2a", EnvSuffix: "A2A",
-		Description: "Agent-to-agent server and handler",
-		Tags:        []string{"a2a"},
-	},
-	{
-		Name: "daemon", EnvSuffix: "DAEMON",
-		Description: "Daemon mode checkpointing",
-		Tags:        []string{"daemon"},
+		Description: "Agent-to-agent server, OAuth, mDNS, registry",
+		Tags:        []string{"a2a", "a2a.oauth", "a2a.mdns", "a2a.registry"},
 	},
 	{
 		Name: "config", EnvSuffix: "CONFIG",
