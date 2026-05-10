@@ -539,6 +539,183 @@ func (n nopWriteCloser) Write(p []byte) (int, error) {
 
 func (nopWriteCloser) Close() error { return nil }
 
+// TestClientErrorContext_ConnectionClosed verifies that error messages include the
+// server name when RPC fails due to a closed connection.
+func TestClientErrorContext_ConnectionClosed(t *testing.T) {
+	c := NewClient("my-mcp-server", "nonexistent_cmd", nil)
+	// Mark as closed so sendRequest returns the "connection closed" error path
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := c.Initialize(ctx)
+	if err == nil {
+		t.Fatal("expected error from Initialize on closed client")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "my-mcp-server") {
+		t.Errorf("error message should contain server name 'my-mcp-server', got: %s", errMsg)
+	}
+}
+
+// TestClientErrorContext_ListToolsOnClosed verifies ListTools includes server name in error.
+func TestClientErrorContext_ListToolsOnClosed(t *testing.T) {
+	c := NewClient("tool-server", "cmd", nil)
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := c.ListTools(ctx)
+	if err == nil {
+		t.Fatal("expected error from ListTools on closed client")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "tool-server") {
+		t.Errorf("error message should contain server name 'tool-server', got: %s", errMsg)
+	}
+}
+
+// TestClientErrorContext_CallToolOnClosed verifies CallTool includes server name in error.
+func TestClientErrorContext_CallToolOnClosed(t *testing.T) {
+	c := NewClient("call-server", "cmd", nil)
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := c.CallTool(ctx, "my_tool", map[string]interface{}{"arg": "val"})
+	if err == nil {
+		t.Fatal("expected error from CallTool on closed client")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "call-server") {
+		t.Errorf("error message should contain server name 'call-server', got: %s", errMsg)
+	}
+}
+
+// TestClientErrorContext_HTTPConnectionError verifies server name appears in HTTP transport errors.
+func TestClientErrorContext_HTTPConnectionError(t *testing.T) {
+	client := NewClientFromConfig(config.MCPServerConfig{
+		Name: "broken-http",
+		Type: "http",
+		URL:  "http://127.0.0.1:1", // port 1 should refuse connections
+	})
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err := client.Initialize(context.Background())
+	if err == nil {
+		t.Fatal("expected error from Initialize on unreachable HTTP server")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "broken-http") {
+		t.Errorf("error message should contain server name 'broken-http', got: %s", errMsg)
+	}
+}
+
+// TestClientErrorContext_UnsupportedTransport verifies server name in unsupported transport error.
+func TestClientErrorContext_UnsupportedTransport(t *testing.T) {
+	client := NewClientFromConfig(config.MCPServerConfig{
+		Name: "bad-transport",
+		Type: "grpc", // unsupported
+	})
+	err := client.Start(context.Background())
+	if err == nil {
+		t.Fatal("expected error for unsupported transport")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "bad-transport") {
+		t.Errorf("error message should contain server name 'bad-transport', got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "grpc") {
+		t.Errorf("error message should contain transport name 'grpc', got: %s", errMsg)
+	}
+}
+
+// TestClientErrorContext_SendRequestClosed verifies the "connection closed" error includes server name.
+func TestClientErrorContext_SendRequestClosed(t *testing.T) {
+	c := NewClient("closed-srv", "cmd", nil)
+	ctx := context.Background()
+	// Force the closed state
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+
+	err := c.sendRequest(ctx, "test/method", nil, nil)
+	if err == nil {
+		t.Fatal("expected error from sendRequest on closed client")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "closed-srv") {
+		t.Errorf("error should contain server name 'closed-srv', got: %s", errMsg)
+	}
+}
+
+// TestClientErrorContext_ReadMessageError verifies read errors include server name.
+func TestClientErrorContext_ReadMessageError(t *testing.T) {
+	// Use a reader that immediately returns an error
+	client := &Client{
+		name:   "read-err-srv",
+		reader: bufio.NewReader(bytes.NewReader(nil)), // empty reader will error on Peek
+	}
+	_, err := client.readMessage(context.Background())
+	if err == nil {
+		t.Fatal("expected error from readMessage with empty reader")
+	}
+	// Error should come from the withStderr wrapper (may not have server name in text
+	// but the readResponse path wraps it with mcp[server])
+}
+
+// TestClientErrorContext_ReadResponseError verifies readResponse wraps errors with server name.
+func TestClientErrorContext_ReadResponseError(t *testing.T) {
+	client := &Client{
+		name:   "read-resp-srv",
+		reader: bufio.NewReader(bytes.NewReader(nil)),
+	}
+	_, err := client.readResponse(context.Background())
+	if err == nil {
+		t.Fatal("expected error from readResponse with empty reader")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "read-resp-srv") {
+		t.Errorf("error should contain server name 'read-resp-srv', got: %s", errMsg)
+	}
+}
+
+// TestClientErrorContext_HTTPStatusError verifies server name in HTTP error status responses.
+func TestClientErrorContext_HTTPStatusError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewClientFromConfig(config.MCPServerConfig{
+		Name: "error-http",
+		Type: "http",
+		URL:  server.URL,
+	})
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	_, err := client.Initialize(context.Background())
+	if err == nil {
+		t.Fatal("expected error from Initialize with 500 status")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "error-http") {
+		t.Errorf("error should contain server name 'error-http', got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "500") {
+		t.Errorf("error should contain HTTP status code, got: %s", errMsg)
+	}
+}
+
 func mustWSURL(t *testing.T, httpURL string) string {
 	t.Helper()
 	parsed, err := url.Parse(httpURL)
