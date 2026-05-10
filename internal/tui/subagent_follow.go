@@ -275,6 +275,7 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 
 	toolCalls := make(map[string]int)
 	toolCallCount := make(map[string]int)
+	toolResultCount := make(map[string]int)
 	var textBuf strings.Builder
 
 	for _, ev := range data.Events {
@@ -284,8 +285,9 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 
 		case followEventToolCall:
 			flushText(&textBuf)
-			toolCalls[ev.ToolName] = list.Len()
 			toolCallCount[ev.ToolName]++
+			key := fmt.Sprintf("%s-%d", ev.ToolName, toolCallCount[ev.ToolName])
+			toolCalls[key] = list.Len()
 			present := describeTool("en", ev.ToolName, ev.ToolArgs)
 			item := chat.NewToolItem(
 				fmt.Sprintf("%s-%d", ev.ToolName, toolCallCount[ev.ToolName]),
@@ -307,10 +309,17 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 			if ev.IsError {
 				status = chat.StatusError
 			}
-			if idx, ok := toolCalls[ev.ToolName]; ok {
+			// Match tool results to calls sequentially (read_file-1, read_file-2, ...)
+			// toolResultCount tracks how many results we've matched for each tool name.
+			toolResultCount[ev.ToolName]++
+			key := fmt.Sprintf("%s-%d", ev.ToolName, toolResultCount[ev.ToolName])
+			if idx, ok := toolCalls[key]; ok {
 				existing := list.ItemAt(idx)
 				if setter, ok := existing.(interface{ SetResult(string, bool) }); ok {
 					setter.SetResult(ev.Result, ev.IsError)
+				}
+				if statusSetter, ok := existing.(interface{ SetStatus(chat.ToolStatus) }); ok {
+					statusSetter.SetStatus(status)
 				}
 			} else {
 				item := chat.NewGenericToolItem("result", ev.ToolName, status, util.Truncate(ev.Result, 200), styles)
