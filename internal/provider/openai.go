@@ -29,6 +29,7 @@ type OpenAIProvider struct {
 	maxTokens int
 	cap       *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
 	name      string
+	baseURL   string                    // endpoint URL, for logging
 	transport *headerInjectingTransport // kept for runtime header updates
 }
 
@@ -138,6 +139,7 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, model string, maxTo
 		model:     model,
 		maxTokens: maxTokens,
 		name:      name,
+		baseURL:   config.BaseURL,
 		transport: transport,
 	}
 }
@@ -230,7 +232,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			if attempt > 0 {
-				debug.Log("openai", "Stream retry attempt %d/%d model=%s", attempt+1, providerRetryAttempts, p.model)
+				debug.Log("openai", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, providerRetryAttempts, p.model, p.baseURL)
 			}
 
 			// (Re-)establish the stream for each attempt
@@ -246,14 +248,14 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				}
 				if isRetryable(err) && attempt < providerRetryAttempts-1 {
 					delay := retryDelay(err, attempt)
-					debug.Log("openai", "CONNECT FAILED model=%s attempt=%d/%d delay=%v: %T: %v", p.model, attempt+1, providerRetryAttempts, delay, err, err)
+					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, delay, err, err)
 					if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 						return
 					}
 					continue
 				}
-				debug.Log("openai", "CONNECT FATAL model=%s attempt=%d/%d: %T: %v", p.model, attempt+1, providerRetryAttempts, err, err)
+				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, err, err)
 				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}
 				return
 			}
@@ -312,7 +314,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 							return
 						}
-						debug.Log("openai", "STREAM ERROR model=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, attempt+1, providerRetryAttempts, emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
+						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
 						// Retry if no content emitted yet and error is retryable
 						if !emitted && isRetryable(recvErr) && attempt < providerRetryAttempts-1 {
 							if sleepErr := retrySleep(ctx, retryDelay(recvErr, attempt)); sleepErr != nil {
