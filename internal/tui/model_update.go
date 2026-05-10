@@ -1575,21 +1575,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case subAgentUpdateMsg:
+		m.subAgentFollow.markDirty(msg.AgentID)
+
 		if m.subAgentFollow.isActive() {
-			// Follow panel is open — only care about the active agent.
-			if msg.AgentID != m.subAgentFollow.activeID {
-				// Non-active agent update: just mark dirty, skip expensive rebuild.
-				m.subAgentFollow.markDirty(msg.AgentID)
-				return m, nil
-			}
-			m.subAgentFollow.markDirty(msg.AgentID)
-			if m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
+			// Follow panel open: only rebuild the active agent's view.
+			// Strip is refreshed less frequently (on spawn/complete via other paths).
+			if msg.AgentID == m.subAgentFollow.activeID && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
 				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 				m.chatListScrollToBottom()
+			} else if msg.AgentID == m.subAgentFollow.activeID {
+				// Throttled — schedule delayed retry to ensure eventual render.
+				return m, tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
+					return subAgentFollowRefreshMsg{}
+				})
 			}
-			// If throttled, subAgentFollowRefreshMsg will pick it up.
 		} else {
-			// No follow panel — lightweight: just update the strip slot list.
+			// No follow panel — refresh strip slot list.
 			m.subAgentFollow.refreshSlots(m.subAgentMgr)
 			m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
 		}

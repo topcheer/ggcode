@@ -443,7 +443,7 @@ func (f *subAgentFollowState) shouldRebuild(agentID string) bool {
 	if !ok {
 		return true
 	}
-	return time.Since(last) >= 200*time.Millisecond
+	return time.Since(last) >= 100*time.Millisecond
 }
 
 // markRebuilt clears the dirty flag and records the rebuild time.
