@@ -555,6 +555,17 @@ func (m *Model) renderSubAgentFollowStrip() string {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// hasTerminalSlots returns true if any slot is in a terminal state (completed/failed/cancelled/idle).
+// Used to decide whether the grace-period cleanup timer should be running.
+func (f *subAgentFollowState) hasTerminalSlots() bool {
+	for _, s := range f.slots {
+		if s.Terminal {
+			return true
+		}
+	}
+	return false
+}
+
 func shortID(id string) string {
 	if len(id) > 8 {
 		return id[:8]
