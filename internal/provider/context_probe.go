@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +38,10 @@ type ProbeResult struct {
 	ContextWindow int    // discovered value, 0 if probe failed
 	FromCache     bool   // true if value came from persistent cache
 }
+
+// ErrNotProber is returned when a provider does not implement the prober
+// interface (i.e., lacks probeChat). Probing is skipped for such providers.
+var ErrNotProber = errors.New("provider not probeable")
 
 // ─── persistent cache ──────────────────────────────────────────────────────
 
@@ -191,9 +196,9 @@ func GetCachedContextWindow(vendor, baseURL, model string) int {
 // Edge cases handled:
 //   - nil provider → no probe, no callback
 //   - empty vendor/baseURL/model → no probe, no callback
+//   - provider doesn't implement prober → no probe, no callback
 //   - API call failure → onResult called with ContextWindow=0
 //   - All tiers fail → onResult called with ContextWindow=0
-//   - Timeout (30s) → context cancellation stops probing
 func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model string, onResult func(ProbeResult)) {
 	if p == nil {
 		debug.Log("probe", "skipped: provider is nil")
@@ -261,9 +266,15 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 	}
 
 	// Phase 2: Try simple probe — send "hi", check if error reveals the limit
-	if window := trySimpleProbe(ctx, p); window > 0 {
-		SetProbeCache(key, window)
-		return window
+	simpleResult := trySimpleProbe(ctx, p)
+	if simpleResult > 0 {
+		SetProbeCache(key, simpleResult)
+		return simpleResult
+	}
+	if simpleResult < 0 {
+		// Sentinel: provider doesn't support probing or has non-context error
+		debug.Log("probe", "simple probe signalled abort, stopping all probing")
+		return 0
 	}
 
 	if ctx.Err() != nil {
@@ -315,6 +326,8 @@ func tryModelsAPI(ctx context.Context, p Provider) int {
 	return gp.probeModelsAPI(ctx, gp.model)
 }
 
+// ─── prober interface ──────────────────────────────────────────────────────
+
 // prober is an internal interface for sending lightweight chat requests
 // without retry, adaptive cap tracking, or token counting. Each provider
 // implements this for context window probing.
@@ -322,18 +335,22 @@ type prober interface {
 	probeChat(ctx context.Context, messages []Message) error
 }
 
-// chatNoRetry calls the provider's probeChat if available (bypasses retry),
-// otherwise falls back to the normal Chat method.
+// chatNoRetry calls the provider's probeChat. If the provider does not
+// implement the prober interface, returns ErrNotProber — the caller should
+// skip probing entirely rather than falling back to the retry-enabled Chat().
 func chatNoRetry(ctx context.Context, p Provider, msgs []Message) error {
-	if pr, ok := p.(prober); ok {
-		return pr.probeChat(ctx, msgs)
+	pr, ok := p.(prober)
+	if !ok {
+		return fmt.Errorf("%w: provider %T does not implement probeChat", ErrNotProber, p)
 	}
-	// Fallback: use normal Chat (has retry, but not all providers have probeChat)
-	err := chatNoRetry(ctx, p, msgs)
-	return err
+	return pr.probeChat(ctx, msgs)
 }
 
+// ─── probe phases ──────────────────────────────────────────────────────────
+
 // trySimpleProbe sends a minimal message to verify the API is working.
+// Uses probeChat (no retry). If the provider doesn't implement prober,
+// returns 0 immediately (probing is not possible).
 func trySimpleProbe(ctx context.Context, p Provider) int {
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}},
@@ -342,6 +359,12 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 	debug.Log("probe", "sending simple probe (no-retry)")
 	err := chatNoRetry(ctx, p, msgs)
 	if err != nil {
+		// Provider doesn't support probing at all — skip entirely
+		if errors.Is(err, ErrNotProber) {
+			debug.Log("probe", "simple probe skipped: %v", err)
+			return -1 // sentinel: abort all probing
+		}
+
 		// Check if error contains context limit info
 		if w := parseContextWindowFromError(err); w > 0 {
 			return w
@@ -356,7 +379,7 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 
 		if !isContextError {
 			debug.Log("probe", "simple probe non-context error (auth/network?): %v", err)
-			return 0
+			return -1 // sentinel: abort all probing
 		}
 
 		// Context error but couldn't parse the limit — continue to tiered probing
