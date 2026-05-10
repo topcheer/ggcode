@@ -602,6 +602,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Follow mode: open panel (navigate with arrow keys)
 			if len(m.subAgentFollow.slots) > 0 && !m.subAgentFollow.isActive() {
 				m.subAgentFollow.activate(0)
+				// Immediately rebuild the follow view so View() has content
+				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 				return m, nil
 			}
 		case "ctrl+p":
@@ -659,6 +661,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.subAgentFollow.activate(len(m.subAgentFollow.slots) - 1)
 				}
+				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 				return m, nil
 			}
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
@@ -677,6 +680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.subAgentFollow.activate(0)
 				}
+				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 				return m, nil
 			}
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
@@ -695,6 +699,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.subAgentFollow.activate(len(m.subAgentFollow.slots) - 1)
 				}
+				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 				return m, nil
 			}
 		case "right":
@@ -706,6 +711,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.subAgentFollow.activate(0)
 				}
+				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 				return m, nil
 			}
 		case "tab":
