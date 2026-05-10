@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,10 +37,6 @@ type ProbeResult struct {
 	ContextWindow int    // discovered value, 0 if probe failed
 	FromCache     bool   // true if value came from persistent cache
 }
-
-// ErrNotProber is returned when a provider does not implement the prober
-// interface (i.e., lacks probeChat). Probing is skipped for such providers.
-var ErrNotProber = errors.New("provider not probeable")
 
 // ─── persistent cache ──────────────────────────────────────────────────────
 
@@ -192,13 +187,6 @@ func GetCachedContextWindow(vendor, baseURL, model string) int {
 // The onResult callback may be called from any goroutine. The caller must
 // ensure any shared state access within onResult is thread-safe.
 // ContextManager.SetMaxTokens is already mutex-protected, so it's safe.
-//
-// Edge cases handled:
-//   - nil provider → no probe, no callback
-//   - empty vendor/baseURL/model → no probe, no callback
-//   - provider doesn't implement prober → no probe, no callback
-//   - API call failure → onResult called with ContextWindow=0
-//   - All tiers fail → onResult called with ContextWindow=0
 func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model string, onResult func(ProbeResult)) {
 	if p == nil {
 		debug.Log("probe", "skipped: provider is nil")
@@ -237,23 +225,19 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 
 // probeInBackground does the actual probing. The strategy, in order:
 //
-//  1. Models API — query the provider's models endpoint for the model's
-//     token limit. Only works for Gemini (returns inputTokenLimit).
-//     OpenAI and Anthropic models API does NOT include context window info.
+//  1. Models API — query the provider's models endpoint (Gemini only,
+//     others don't return token limits).
 //
-//  2. Simple probe — send "hi", check if the API error message reveals
-//     the context limit (some APIs include it in error responses).
+//  2. Simple probe — send "hi" to verify API connectivity, check if
+//     the error message reveals the context limit.
 //
-//  3. Tiered probing — send padded messages from 1M down to 64K to find
-//     the actual limit by trial. Padding matches tier size (no scaling down).
-//
-// If all phases return 0, the caller keeps the existing context window
-// (from config/inferContextWindow or the 128K default).
+//  3. Tiered probing — send padded messages from 1M down to 64K.
+//     Padding matches tier size to test the real limit.
 //
 // No artificial timeout — this runs in a background goroutine and will
 // complete at its own pace without blocking the user.
 func probeInBackground(ctx context.Context, p Provider, key string) int {
-	// Phase 1: Try models API (Gemini only — others don't return token limits)
+	// Phase 1: Try models API (Gemini only)
 	if window := tryModelsAPI(ctx, p); window > 0 {
 		debug.Log("probe", "models API returned context_window=%d", window)
 		SetProbeCache(key, window)
@@ -265,14 +249,14 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 		return 0
 	}
 
-	// Phase 2: Try simple probe — send "hi", check if error reveals the limit
+	// Phase 2: Try simple probe
 	simpleResult := trySimpleProbe(ctx, p)
 	if simpleResult > 0 {
 		SetProbeCache(key, simpleResult)
 		return simpleResult
 	}
 	if simpleResult < 0 {
-		// Sentinel: provider doesn't support probing or has non-context error
+		// Provider not probeable or non-context error (auth, network) — stop
 		debug.Log("probe", "simple probe signalled abort, stopping all probing")
 		return 0
 	}
@@ -284,7 +268,7 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 
 	debug.Log("probe", "simple probe inconclusive, starting tiered probing with %d tiers", len(probeTiers))
 
-	// Phase 3: Tiered probing — send padded messages from largest tier downward.
+	// Phase 3: Tiered probing
 	for i, tier := range probeTiers {
 		if ctx.Err() != nil {
 			debug.Log("probe", "tiered probe cancelled at tier[%d]=%d: %v", i, tier, ctx.Err())
@@ -301,16 +285,8 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 }
 
 // tryModelsAPI queries the provider's models endpoint to extract the
-// context window limit from the model metadata.
-//
-// Known API response formats:
-//   - Gemini GET /v1beta/models/{model}: returns {"inputTokenLimit": N, "outputTokenLimit": M}
-//   - OpenAI GET /v1/models/{model}: returns {"id", "object", "created", "owned_by"} — NO token limit
-//   - Anthropic GET /v1/models/{model}: returns {"id", "display_name", "created_at", "type"} — NO token limit
-//
-// So this is only effective for Gemini. For others it returns 0 quickly.
+// context window limit. Only effective for Gemini (returns inputTokenLimit).
 func tryModelsAPI(ctx context.Context, p Provider) int {
-	// Only Gemini's models API returns inputTokenLimit.
 	if p.Name() != "gemini" {
 		debug.Log("probe", "models API: skipped — %s does not expose token limits", p.Name())
 		return 0
@@ -328,29 +304,22 @@ func tryModelsAPI(ctx context.Context, p Provider) int {
 
 // ─── prober interface ──────────────────────────────────────────────────────
 
-// prober is an internal interface for sending lightweight chat requests
-// without retry, adaptive cap tracking, or token counting. Each provider
-// implements this for context window probing.
+// prober is implemented by all provider types (OpenAI, Anthropic, Gemini).
+// It sends a single chat request without retry, adaptive cap tracking,
+// or token counting.
 type prober interface {
 	probeChat(ctx context.Context, messages []Message) error
 }
 
-// chatNoRetry calls the provider's probeChat. If the provider does not
-// implement the prober interface, returns ErrNotProber — the caller should
-// skip probing entirely rather than falling back to the retry-enabled Chat().
+// chatNoRetry calls the provider's probeChat directly.
 func chatNoRetry(ctx context.Context, p Provider, msgs []Message) error {
-	pr, ok := p.(prober)
-	if !ok {
-		return fmt.Errorf("%w: provider %T does not implement probeChat", ErrNotProber, p)
-	}
-	return pr.probeChat(ctx, msgs)
+	return p.(prober).probeChat(ctx, msgs)
 }
 
 // ─── probe phases ──────────────────────────────────────────────────────────
 
-// trySimpleProbe sends a minimal message to verify the API is working.
-// Uses probeChat (no retry). If the provider doesn't implement prober,
-// returns 0 immediately (probing is not possible).
+// trySimpleProbe sends "hi" to verify the API is working.
+// Returns: >0 = found context limit in error, 0 = continue probing, -1 = abort.
 func trySimpleProbe(ctx context.Context, p Provider) int {
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}},
@@ -359,12 +328,6 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 	debug.Log("probe", "sending simple probe (no-retry)")
 	err := chatNoRetry(ctx, p, msgs)
 	if err != nil {
-		// Provider doesn't support probing at all — skip entirely
-		if errors.Is(err, ErrNotProber) {
-			debug.Log("probe", "simple probe skipped: %v", err)
-			return -1 // sentinel: abort all probing
-		}
-
 		// Check if error contains context limit info
 		if w := parseContextWindowFromError(err); w > 0 {
 			return w
@@ -379,7 +342,7 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 
 		if !isContextError {
 			debug.Log("probe", "simple probe non-context error (auth/network?): %v", err)
-			return -1 // sentinel: abort all probing
+			return -1
 		}
 
 		// Context error but couldn't parse the limit — continue to tiered probing
@@ -392,17 +355,9 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 }
 
 // tryTierProbe sends a message padded to approximately `tier` tokens.
-// The padding is sized to match the tier — we want to test the REAL limit.
-//
-// Key insight: the caller guarantees that a simple probe ("hi") already
-// succeeded with this provider. So auth, network, and API key are all fine.
-// If a padded request fails, it's almost certainly because the padding
-// exceeded the model's context window — not because of auth or network.
-// We no longer try to match specific error keywords. Any non-success
-// response is treated as context overflow. We still try to extract the
-// exact numeric limit from the error for precision.
+// Since simple probe already succeeded, any failure here is almost certainly
+// a context overflow. No keyword matching — any error = overflow.
 func tryTierProbe(ctx context.Context, p Provider, tier int) int {
-	// Each "a " ≈ 1 token, so tier repetitions ≈ tier tokens.
 	padding := strings.Repeat("a ", tier)
 
 	msgs := []Message{
@@ -421,7 +376,6 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 		return tier
 	}
 
-	// Context cancelled (app shutdown) — stop entirely
 	if ctx.Err() != nil {
 		debug.Log("probe", "tier %dK aborted after %s: %v", tier/1000, elapsed, ctx.Err())
 		return 0
@@ -429,14 +383,13 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 
 	debug.Log("probe", "tier %dK FAILED in %s: %s", tier/1000, elapsed, err.Error())
 
-	// Since simple probe succeeded, this failure is almost certainly
-	// context overflow. Try to extract the exact limit for precision.
+	// Try to extract exact limit from error message
 	if w := parseContextWindowFromError(err); w > 0 {
 		debug.Log("probe", "tier %dK overflow — extracted exact limit=%dK from error", tier/1000, w/1000)
 		return w
 	}
 
-	// No exact value in error, but still overflow — try next lower tier.
+	// Overflow but no exact value — try next lower tier
 	debug.Log("probe", "tier %dK overflow (no exact value) — trying next tier", tier/1000)
 	return 0
 }
