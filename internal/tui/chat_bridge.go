@@ -114,7 +114,14 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 	}
 	// enter_plan_mode → skip tool item, emit IM text only
 	if ts.ToolName == "enter_plan_mode" {
-		m.emitIMText("📝 Planning...")
+		label := "Planning..."
+		var args struct {
+			Description string `json:"description"`
+		}
+		if json.Unmarshal([]byte(ts.RawArgs), &args) == nil && args.Description != "" {
+			label = args.Description
+		}
+		m.emitIMText(label)
 		return
 	}
 	// exit_plan_mode → skip tool item (plan rendered as assistant message in chatFinishTool)
