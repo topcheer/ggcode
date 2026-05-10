@@ -87,6 +87,9 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 		rolePrefix,
 		cfg.Task,
 	)
+	if cfg.WorkingDir != "" {
+		systemPrompt += fmt.Sprintf("\n\nWorking directory: %s", cfg.WorkingDir)
+	}
 	if cfg.AgentFactory == nil {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("AgentFactory not configured"))
 		return

@@ -752,6 +752,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		return registry // all teammates share the same tool registry
 	}
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
+	swarmMgr.SetWorkingDir(ag.WorkingDir())
 	repl.SetSwarmManager(swarmMgr, registry)
 	trace.Mark("setup swarm")
 

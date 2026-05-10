@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -113,8 +114,19 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		jobID := argString(args, "job_id")
 		if inputText != "" {
 			// Truncate long input for display
-			if len(inputText) > 60 {
-				inputText = inputText[:57] + "…"
+			if runewidth.StringWidth(inputText) > 60 {
+				runes := []rune(inputText)
+				w := 0
+				cut := len(runes)
+				for i, r := range runes {
+					rw := runewidth.RuneWidth(r)
+					if w+rw > 57 {
+						cut = i
+						break
+					}
+					w += rw
+				}
+				inputText = string(runes[:cut]) + "…"
 			}
 			detail := fmt.Sprintf("→ %s", inputText)
 			if jobID != "" {
@@ -329,8 +341,19 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		msg := argString(args, "message")
 		detail := to
 		if msg != "" {
-			if len(msg) > 40 {
-				msg = msg[:37] + "…"
+			if runewidth.StringWidth(msg) > 40 {
+				runes := []rune(msg)
+				w := 0
+				cut := len(runes)
+				for i, r := range runes {
+					rw := runewidth.RuneWidth(r)
+					if w+rw > 37 {
+						cut = i
+						break
+					}
+					w += rw
+				}
+				msg = string(runes[:cut]) + "…"
 			}
 			detail = to + ": " + msg
 		}
@@ -445,8 +468,20 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "swarm_task_create":
 		subject := argString(args, "subject")
+		assignee := argString(args, "assignee")
 		if desc := argString(args, "description"); desc != "" {
-			return toolPresentation{DisplayName: desc, Detail: subject, Activity: desc}
+			// Keep DisplayName short: only the description field (first line).
+			// Put assignee + subject in Detail.
+			displayName := firstLine(desc)
+			var detailParts []string
+			if assignee != "" {
+				detailParts = append(detailParts, assignee)
+			}
+			if subject != "" {
+				detailParts = append(detailParts, subject)
+			}
+			detail := strings.Join(detailParts, ": ")
+			return toolPresentation{DisplayName: displayName, Detail: detail, Activity: displayName}
 		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "swarm_task_create"),
@@ -1567,6 +1602,14 @@ func normalizeDisplayPath(value string) string {
 		return filepath.Join(resolvedDir, base)
 	}
 	return value
+}
+
+// firstLine returns the first line of a multi-line string.
+func firstLine(s string) string {
+	if idx := strings.Index(s, "\n"); idx >= 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 func prettifyToolName(name string) string {

@@ -21,9 +21,12 @@ type SwarmTaskCreateTool struct {
 
 func (t SwarmTaskCreateTool) Name() string { return "swarm_task_create" }
 func (t SwarmTaskCreateTool) Description() string {
-	return "Create a task on a team's shared task board. Teammates can claim and complete tasks. " +
-		"IMPORTANT: Always set assignee to the teammate ID that should do this task. " +
-		"Without assignee, any idle teammate may claim it regardless of suitability."
+	return "Create a task on a team's shared task board and assign it to a specific teammate for execution. " +
+		"CRITICAL: You MUST always set 'assignee' to the teammate ID best suited for this task. " +
+		"Only leave 'assignee' empty when you genuinely cannot determine who should do it — in that case " +
+		"any idle teammate may claim it regardless of suitability. " +
+		"When assignee is set, the task is pushed directly to that teammate's inbox for immediate execution. " +
+		"Do NOT use send_message to follow up on a task with an assignee — the task is already delivered automatically."
 }
 func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -43,7 +46,7 @@ func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 		},
 		"assignee": {
 			"type": "string",
-			"description": "Optional teammate ID to assign to"
+			"description": "The teammate ID to assign this task to (e.g. tm-2). STRONGLY RECOMMENDED — always set this when you know who should do the task. Only leave empty when no specific teammate can be determined."
 		}
 	},
 	"required": [

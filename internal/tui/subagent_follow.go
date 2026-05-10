@@ -10,26 +10,28 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
 )
 
 // ---------------------------------------------------------------------------
-// Follow state
+// Follow state (unified for sub-agents and swarm teammates)
 // ---------------------------------------------------------------------------
 
-// subAgentFollowState tracks the TUI follow-mode for sub-agents.
-type subAgentFollowState struct {
-	activeID    string                      // agent ID being followed ("" = main view)
-	slots       []subAgentFollowSlot        // ordered list of running sub-agents
-	views       map[string]*followViewEntry // cached chat lists per agent
-	dirty       map[string]bool             // which views need rebuild
-	lastRebuild map[string]time.Time        // throttle: last rebuild time per view
-}
+// followSlotKind distinguishes sub-agent slots from swarm teammate slots.
+type followSlotKind int
 
-type subAgentFollowSlot struct {
-	ID     string
-	Name   string
-	Phase  string
-	Status subagent.Status
+const (
+	followSlotSubAgent followSlotKind = iota
+	followSlotTeammate
+)
+
+// followSlot is a unified slot for both sub-agents and swarm teammates.
+type followSlot struct {
+	ID       string
+	Name     string
+	Kind     followSlotKind
+	Phase    string
+	Terminal bool // completed/failed/cancelled/idle
 }
 
 type followViewEntry struct {
@@ -37,33 +39,97 @@ type followViewEntry struct {
 	dropped int
 }
 
+// subAgentFollowState tracks the TUI follow-mode for sub-agents AND swarm teammates.
+// Ctrl+N cycles through all slots regardless of kind.
+type subAgentFollowState struct {
+	activeID    string                      // agent/teammate ID being followed ("" = main view)
+	slots       []followSlot                // ordered list of all followable agents
+	views       map[string]*followViewEntry // cached chat lists per agent
+	dirty       map[string]bool             // which views need rebuild
+	lastRebuild map[string]time.Time        // throttle: last rebuild time per view
+}
+
 // ---------------------------------------------------------------------------
 // Slot management
 // ---------------------------------------------------------------------------
 
-// refreshSlots rebuilds the slot list from the manager.
+// refreshSlots rebuilds the slot list from the sub-agent manager.
+// Completed/failed/cancelled sub-agents are excluded — they accumulate
+// over time and would clutter the strip. Teammates are handled separately
+// in refreshSwarmSlots (they have lifecycle management via team deletion).
 // Slots are sorted by ID for stable ordering across refreshes.
-func (f *subAgentFollowState) refreshSlots(mgr *subagent.Manager) {
-	if mgr == nil {
-		f.slots = nil
+// subAgentGracePeriod is how long a completed/failed/cancelled sub-agent
+// remains visible in the follow strip before being removed.
+const subAgentGracePeriod = 1 * time.Minute
+
+func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
+	var newSlots []followSlot
+
+	// Sub-agent slots: keep running agents and recently-completed ones (grace period)
+	if saMgr != nil {
+		agents := saMgr.List()
+		slices.SortFunc(agents, func(a, b *subagent.SubAgent) int {
+			return cmp.Compare(a.ID, b.ID)
+		})
+		now := time.Now()
+		for _, sa := range agents {
+			snap, _ := saMgr.Snapshot(sa.ID)
+			isTerminal := snap.Status == subagent.StatusCompleted || snap.Status == subagent.StatusFailed || snap.Status == subagent.StatusCancelled
+			if isTerminal {
+				// Keep in strip during grace period so user can see the result
+				if !snap.EndedAt.IsZero() && now.Sub(snap.EndedAt) < subAgentGracePeriod {
+					newSlots = append(newSlots, followSlot{
+						ID:       snap.ID,
+						Name:     snap.Name,
+						Kind:     followSlotSubAgent,
+						Phase:    "done",
+						Terminal: true,
+					})
+				}
+				continue
+			}
+			newSlots = append(newSlots, followSlot{
+				ID:       snap.ID,
+				Name:     snap.Name,
+				Kind:     followSlotSubAgent,
+				Phase:    snap.CurrentPhase,
+				Terminal: false,
+			})
+		}
+	}
+
+	f.slots = newSlots
+}
+
+// refreshSwarmSlots appends swarm teammate slots.
+func (f *subAgentFollowState) refreshSwarmSlots(swMgr *swarm.Manager) {
+	if swMgr == nil {
 		return
 	}
-	agents := mgr.List()
-	// Sort by ID for stable ordering (IDs are sa-1, sa-2, ...)
-	slices.SortFunc(agents, func(a, b *subagent.SubAgent) int {
+	// Remove existing teammate slots, keep sub-agent ones
+	var subOnly []followSlot
+	for _, s := range f.slots {
+		if s.Kind == followSlotSubAgent {
+			subOnly = append(subOnly, s)
+		}
+	}
+	f.slots = subOnly
+
+	for _, ts := range swMgr.ListTeams() {
+		for _, tm := range ts.Teammates {
+			f.slots = append(f.slots, followSlot{
+				ID:       tm.ID,
+				Name:     tm.Name,
+				Kind:     followSlotTeammate,
+				Phase:    string(tm.Status),
+				Terminal: tm.Status == swarm.TeammateIdle || tm.Status == swarm.TeammateShuttingDown,
+			})
+		}
+	}
+	// Sort all slots by ID for stable ordering
+	slices.SortFunc(f.slots, func(a, b followSlot) int {
 		return cmp.Compare(a.ID, b.ID)
 	})
-	newSlots := make([]subAgentFollowSlot, 0, len(agents))
-	for _, sa := range agents {
-		snap, _ := mgr.Snapshot(sa.ID)
-		newSlots = append(newSlots, subAgentFollowSlot{
-			ID:     snap.ID,
-			Name:   snap.Name,
-			Phase:  snap.CurrentPhase,
-			Status: snap.Status,
-		})
-	}
-	f.slots = newSlots
 }
 
 // markDirty marks a view as needing rebuild.
@@ -74,39 +140,20 @@ func (f *subAgentFollowState) markDirty(agentID string) {
 	f.dirty[agentID] = true
 }
 
-// isActive returns true if we're following a specific sub-agent.
+// isActive returns true if we're following a specific agent.
 func (f *subAgentFollowState) isActive() bool {
 	return f.activeID != ""
 }
 
 // activate enters follow mode for the given slot index.
-// Skips terminal-status (completed/failed/cancelled) agents.
 func (f *subAgentFollowState) activate(index int) {
 	if index < 0 || index >= len(f.slots) {
-		return
-	}
-	if isTerminalStatus(f.slots[index].Status) {
-		// Find next non-terminal slot
-		for i := 1; i <= len(f.slots); i++ {
-			idx := (index + i) % len(f.slots)
-			if !isTerminalStatus(f.slots[idx].Status) {
-				f.activeID = f.slots[idx].ID
-				return
-			}
-		}
-		// All terminal — activate anyway so user can see the completed view
-		f.activeID = f.slots[index].ID
 		return
 	}
 	f.activeID = f.slots[index].ID
 }
 
-// isTerminalStatus returns true if the agent has finished.
-func isTerminalStatus(s subagent.Status) bool {
-	return s == subagent.StatusCompleted || s == subagent.StatusFailed || s == subagent.StatusCancelled
-}
-
-// deactivate exits follow mode and returns the previously active agent ID.
+// deactivate exits follow mode and returns the previously active ID.
 func (f *subAgentFollowState) deactivate() string {
 	prev := f.activeID
 	f.activeID = ""
@@ -126,28 +173,20 @@ func (f *subAgentFollowState) currentSlotIndex() int {
 	return -1
 }
 
-// autoReturnIfNeeded checks if the active sub-agent finished and auto-returns.
-// This is now only used for agents that were running when follow mode was entered.
+// autoReturnIfNeeded is a no-op — user must press Esc to exit follow mode.
 func (f *subAgentFollowState) autoReturnIfNeeded(mgr *subagent.Manager) (returnedID string) {
 	if f.activeID == "" || mgr == nil {
 		return ""
 	}
 	_, ok := mgr.Snapshot(f.activeID)
 	if !ok {
-		// Agent removed entirely
 		id := f.activeID
 		f.activeID = ""
 		return id
 	}
-	// Don't auto-return — let the user view completed agents and press Esc manually.
 	return ""
 }
 
-// ---------------------------------------------------------------------------
-// View building
-// ---------------------------------------------------------------------------
-
-// getOrCreateView returns the cached view for an agent, creating if needed.
 func (f *subAgentFollowState) getOrCreateView(agentID string, width, height int) *followViewEntry {
 	if f.views == nil {
 		f.views = make(map[string]*followViewEntry)
@@ -162,37 +201,66 @@ func (f *subAgentFollowState) getOrCreateView(agentID string, width, height int)
 	return entry
 }
 
-// buildSubAgentFollowList rebuilds the chat list for an agent from its snapshot events.
-// Consecutive AgentEventText events are merged into a single AssistantItem so that
-// streaming chunks render as one coherent message with proper markdown formatting.
-func buildSubAgentFollowList(snap subagent.Snapshot, list *chat.List, styles chat.Styles) {
+// ---------------------------------------------------------------------------
+// Follow list building (unified for sub-agents and teammates)
+// ---------------------------------------------------------------------------
+
+// followEventData is the common data needed to build a follow list.
+type followEventData struct {
+	ID            string
+	Name          string
+	Task          string
+	Status        string // "running", "completed", "failed", "idle", "working"
+	Events        []followEvent
+	EventsDropped int
+}
+
+// followEvent is a unified event type for both sub-agent and teammate events.
+type followEvent struct {
+	Type     int // 0=text, 1=toolCall, 2=toolResult, 3=error
+	Text     string
+	ToolName string
+	ToolArgs string
+	Result   string
+	IsError  bool
+}
+
+const (
+	followEventText       = 0
+	followEventToolCall   = 1
+	followEventToolResult = 2
+	followEventError      = 3
+)
+
+// buildFollowList builds a chat list from followEventData.
+// This is the unified renderer for both sub-agents and teammates.
+func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) {
 	list.SetItems(nil)
 
 	// Header: name + status
-	name := snap.Name
+	name := data.Name
 	if name == "" {
-		name = shortID(snap.ID)
+		name = shortID(data.ID)
 	}
-	header := fmt.Sprintf("Sub-agent %s  ·  %s", name, snap.DisplayTask)
-	if snap.Status == subagent.StatusCompleted {
+	header := fmt.Sprintf("%s  ·  %s", name, data.Task)
+	switch data.Status {
+	case "completed":
 		header += "  ✓ completed"
-	} else if snap.Status == subagent.StatusFailed {
+	case "failed":
 		header += "  ✗ failed"
-	} else if snap.Status == subagent.StatusRunning {
+	case "running", "working":
 		header += "  ● running"
 	}
-	list.Append(chat.NewSystemItem("sa-header", header, styles))
+	list.Append(chat.NewSystemItem("header", header, styles))
 
-	// Truncation notice
-	if snap.EventsDropped > 0 {
-		list.Append(chat.NewSystemItem("sa-trunc",
-			fmt.Sprintf("⚠ Early output truncated (%d events dropped)", snap.EventsDropped),
+	if data.EventsDropped > 0 {
+		list.Append(chat.NewSystemItem("trunc",
+			fmt.Sprintf("⚠ Early output truncated (%d events dropped)", data.EventsDropped),
 			styles,
 		))
 	}
 
-	// Helper: flush accumulated text as a single AssistantItem.
-	// This merges streaming chunks into one coherent block for proper markdown rendering.
+	// Text flush helper
 	flushText := func(buf *strings.Builder) {
 		text := buf.String()
 		buf.Reset()
@@ -204,21 +272,17 @@ func buildSubAgentFollowList(snap subagent.Snapshot, list *chat.List, styles cha
 		list.Append(ai)
 	}
 
-	// Build a map to pair tool calls with results
-	toolCalls := make(map[string]int)     // toolName → list index
-	toolCallCount := make(map[string]int) // toolName → count for unique keys
+	toolCalls := make(map[string]int)
+	toolCallCount := make(map[string]int)
 	var textBuf strings.Builder
 
-	for _, ev := range snap.Events {
+	for _, ev := range data.Events {
 		switch ev.Type {
-		case subagent.AgentEventText:
-			// Accumulate text chunks; flush on non-text events
+		case followEventText:
 			textBuf.WriteString(ev.Text)
 
-		case subagent.AgentEventToolCall:
-			// Flush any pending text before adding a tool item
+		case followEventToolCall:
 			flushText(&textBuf)
-
 			toolCalls[ev.ToolName] = list.Len()
 			toolCallCount[ev.ToolName]++
 			present := describeTool("en", ev.ToolName, ev.ToolArgs)
@@ -236,43 +300,106 @@ func buildSubAgentFollowList(snap subagent.Snapshot, list *chat.List, styles cha
 			)
 			list.Append(item)
 
-		case subagent.AgentEventToolResult:
-			// Flush any pending text before handling result
+		case followEventToolResult:
 			flushText(&textBuf)
-
 			status := chat.StatusSuccess
 			if ev.IsError {
 				status = chat.StatusError
 			}
 			if idx, ok := toolCalls[ev.ToolName]; ok {
-				// Update existing tool item
 				existing := list.ItemAt(idx)
 				if setter, ok := existing.(interface{ SetResult(string, bool) }); ok {
 					setter.SetResult(ev.Result, ev.IsError)
 				}
 			} else {
-				// Orphan result — add as standalone
-				item := chat.NewGenericToolItem(
-					"result",
-					ev.ToolName,
-					status,
-					truncate(ev.Result, 200),
-					styles,
-				)
+				item := chat.NewGenericToolItem("result", ev.ToolName, status, truncate(ev.Result, 200), styles)
 				list.Append(item)
 			}
 
-		case subagent.AgentEventError:
-			// Flush any pending text before adding error
+		case followEventError:
 			flushText(&textBuf)
-
-			list.Append(chat.NewSystemItem("sa-error", "Error: "+ev.Text, styles))
+			list.Append(chat.NewSystemItem("error", "Error: "+ev.Text, styles))
 		}
 	}
-
-	// Flush any remaining text
 	flushText(&textBuf)
 }
+
+// subagentSnapshotToFollowData converts a subagent.Snapshot to followEventData.
+func subagentSnapshotToFollowData(snap subagent.Snapshot) followEventData {
+	events := make([]followEvent, len(snap.Events))
+	for i, ev := range snap.Events {
+		var t int
+		switch ev.Type {
+		case subagent.AgentEventText:
+			t = followEventText
+		case subagent.AgentEventToolCall:
+			t = followEventToolCall
+		case subagent.AgentEventToolResult:
+			t = followEventToolResult
+		case subagent.AgentEventError:
+			t = followEventError
+		}
+		events[i] = followEvent{
+			Type:     t,
+			Text:     ev.Text,
+			ToolName: ev.ToolName,
+			ToolArgs: ev.ToolArgs,
+			Result:   ev.Result,
+			IsError:  ev.IsError,
+		}
+	}
+	status := string(snap.Status)
+	return followEventData{
+		ID:            snap.ID,
+		Name:          snap.Name,
+		Task:          snap.DisplayTask,
+		Status:        status,
+		Events:        events,
+		EventsDropped: snap.EventsDropped,
+	}
+}
+
+// teammateSnapshotToFollowData converts a swarm.TeammateSnapshot to followEventData.
+func teammateSnapshotToFollowData(snap swarm.TeammateSnapshot) followEventData {
+	events := make([]followEvent, len(snap.Events))
+	for i, ev := range snap.Events {
+		var t int
+		switch ev.Type {
+		case swarm.TeammateEventText:
+			t = followEventText
+		case swarm.TeammateEventToolCall:
+			t = followEventToolCall
+		case swarm.TeammateEventToolResult:
+			t = followEventToolResult
+		case swarm.TeammateEventError:
+			t = followEventError
+		}
+		events[i] = followEvent{
+			Type:     t,
+			Text:     ev.Text,
+			ToolName: ev.ToolName,
+			ToolArgs: ev.ToolArgs,
+			Result:   ev.Result,
+			IsError:  ev.IsError,
+		}
+	}
+	status := string(snap.Status)
+	if status == "working" {
+		status = "running"
+	}
+	return followEventData{
+		ID:            snap.ID,
+		Name:          snap.Name,
+		Task:          snap.CurrentTask,
+		Status:        status,
+		Events:        events,
+		EventsDropped: snap.EventsDropped,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Throttle & cleanup
+// ---------------------------------------------------------------------------
 
 // shouldRebuild checks throttle and dirty state.
 func (f *subAgentFollowState) shouldRebuild(agentID string) bool {
@@ -286,11 +413,10 @@ func (f *subAgentFollowState) shouldRebuild(agentID string) bool {
 	if !ok {
 		return true
 	}
-	// Throttle: at least 100ms between rebuilds
 	return time.Since(last) >= 100*time.Millisecond
 }
 
-// markRebuilt records that a view was rebuilt.
+// markRebuilt clears the dirty flag and records the rebuild time.
 func (f *subAgentFollowState) markRebuilt(agentID string) {
 	if f.dirty != nil {
 		delete(f.dirty, agentID)
@@ -301,22 +427,24 @@ func (f *subAgentFollowState) markRebuilt(agentID string) {
 	f.lastRebuild[agentID] = time.Now()
 }
 
-// cleanup removes views for agents that no longer exist.
-func (f *subAgentFollowState) cleanup(mgr *subagent.Manager) {
-	if mgr == nil || f.views == nil {
+// cleanup removes cached views for agents that no longer exist.
+func (f *subAgentFollowState) cleanup(saMgr *subagent.Manager) {
+	if f.views == nil || len(f.views) == 0 {
 		return
 	}
 	active := make(map[string]bool)
-	for _, slot := range f.slots {
-		active[slot.ID] = true
+	if saMgr != nil {
+		for _, sa := range saMgr.List() {
+			active[sa.ID] = true
+		}
 	}
-	// Also keep recently completed agents for a short time
 	for id := range f.views {
 		if !active[id] {
-			_, exists := mgr.Get(id)
-			if !exists {
-				delete(f.views, id)
+			delete(f.views, id)
+			if f.dirty != nil {
 				delete(f.dirty, id)
+			}
+			if f.lastRebuild != nil {
 				delete(f.lastRebuild, id)
 			}
 		}
@@ -324,10 +452,9 @@ func (f *subAgentFollowState) cleanup(mgr *subagent.Manager) {
 }
 
 // ---------------------------------------------------------------------------
-// Follow strip rendering
+// Strip rendering
 // ---------------------------------------------------------------------------
 
-// renderSubAgentFollowStrip renders the strip above the composer showing active sub-agents.
 func (m *Model) renderSubAgentFollowStrip() string {
 	if m.subAgentFollow.slots == nil || len(m.subAgentFollow.slots) == 0 {
 		return ""
@@ -344,21 +471,28 @@ func (m *Model) renderSubAgentFollowStrip() string {
 	for i := 0; i < maxShow; i++ {
 		slot := m.subAgentFollow.slots[i]
 
-		// Use Name as label
 		label := slot.Name
 		if label == "" {
 			label = shortID(slot.ID)
 		}
 
-		// Activity hint
 		activity := slot.Phase
 		if activity == "" {
-			activity = string(slot.Status)
+			if slot.Terminal {
+				activity = "done"
+			} else {
+				activity = "running"
+			}
 		}
 
-		chip := fmt.Sprintf("%s · %s", label, activity)
+		// Kind prefix
+		prefix := ""
+		if slot.Kind == followSlotTeammate {
+			prefix = "👤 "
+		}
 
-		// Active slot gets accent color
+		chip := fmt.Sprintf("%s%s · %s", prefix, label, activity)
+
 		if m.subAgentFollow.activeID == slot.ID {
 			style := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
 			chip = fmt.Sprintf("▶ %s", chip)
@@ -376,8 +510,7 @@ func (m *Model) renderSubAgentFollowStrip() string {
 		b.WriteString(fmt.Sprintf("  +%d more", len(m.subAgentFollow.slots)-maxShow))
 	}
 
-	// Control hints
-	b.WriteString("   Ctrl+N next  Ctrl+P prev  Esc close")
+	b.WriteString("   ↑↓←→ switch  Esc close")
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(b.String())
 }
 

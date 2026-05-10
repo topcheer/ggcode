@@ -11,7 +11,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.2.2`](docs/releases/v1.2.2.md) |
+| Latest documented release | [`v1.2.3`](docs/releases/v1.2.3.md) |
 
 ## Build & Validation
 
@@ -86,9 +86,10 @@ config/                MCP preset configuration (mcporter.json)
 - **IM runtime** (`internal/im/`): Workspace-bound IM routing with multi-adapter support (QQ, Telegram, Discord, Slack, DingTalk, Feishu). Handles pairing, persisted bindings, per-channel echo suppression, and mirrored outbound delivery for remote chat surfaces. Configurable output modes (verbose/quiet/summary) control tool result granularity. Daemon bridge provides IM slash commands for adapter management (`/listim`, `/muteim <name>`, `/muteall`, `/muteself`, `/restart`, `/help`).
 - **TUI** (`internal/tui/`): Bubble Tea program with multiple panels (model picker, provider picker, MCP panel, IM panel, inspector, harness panel, skills panel, preview panel). Supports i18n (`en` / `zh-CN`). Includes a fullscreen file browser with side-by-side preview, live markdown rendering, and status-bar-first loading feedback.
 - **WebUI** (`internal/webui/`): HTTP server with REST API for config/session management + WebSocket chat. Works in both TUI and daemon modes via `ChatBridge` interface. In daemon mode, `DaemonBridge` injects webchat messages through `pendingInterruptions` into the agent loop. In TUI mode, `TUIChatBridge` routes messages through `program.Send()` into the bubbletea event loop — identical to keyboard input. Agent streaming events are broadcast to all connected WebSocket clients. SPA (frontend) served from embedded `dist/` or fallback to index.html.
-- **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances.
+- **Sub-agents** (`internal/subagent/`): Manager with semaphore-based concurrency, configurable timeout (default 30 min), progress tracking. Runner executes tasks in isolated agent instances. Sub-agent system prompts include the working directory so agents know their project root without discovery. Manager exposes `CancelAll()` to cancel all running sub-agents at once.
 - **Daemon mode** (`internal/daemon/` + `cmd/ggcode/daemon.go`): Headless agent with terminal follow display, background forking, keyboard shortcuts (v/q/s output mode, M/U mute, f follow toggle, r restart). Uses same tool label system as TUI.
 - **Knight** (`internal/knight/`): Background autonomous agent with daily token budget, activity-driven code monitoring.
+- **Swarm/Teammates** (`internal/swarm/`): Team-based multi-agent coordination. Teammates are spawned with their own agent loop and inbox. System prompts include the working directory via `SetWorkingDir()`. `CancelAll()` cancels all working teammates across all teams (used on interrupt). Task board supports assignee-based direct delivery.
 - **A2A** (`internal/a2a/`): Agent-to-Agent protocol with multi-auth server (apiKey, OAuth2+PKCE, Device Flow, OIDC+JWKS, mTLS), auto-negotiating client, local registry with PID-based instance detection, MCP bridge for transparent cross-instance tool calls. Instance-level config override via `.ggcode/a2a.yaml`.
 - **Auth stack** (`internal/auth/`): Full authentication subsystem — OAuth2 PKCE and Device Flow flows, OIDC Discovery with JWKS key rotation, JWT validation (HS256/RS256/ECDSA), opaque token introspection, token cache with per-`{provider}-{clientID}` isolation (`~/.ggcode/oauth-tokens/`). Provider presets for GitHub, Google, Auth0, Azure.
 
@@ -289,3 +290,7 @@ Scan order: `~/.ggcode/<file>` → walk up from working dir → recursively scan
 - TUI mode webchat messages go through `program.Send(webchatUserMsg)` → TUI's normal submit flow (idle → `startAgent`, busy → `queuePendingSubmission`). This avoids any direct agent access from webui, preventing concurrency issues
 - WebUI WebSocket uses per-connection write goroutines (buffered channel of 256) to prevent concurrent read/write on gorilla/websocket
 - `DaemonBridge.SendUserMessage` claims the run slot under a single mutex lock (TOCTOU-safe). The existing `SubmitInboundMessage` has the same pattern but was not fixed as daemon IM messages are typically serialized by the adapter
+- **Interrupt/exit cascading**: ctrl+c/esc (single) calls `cancelActiveRun()` which now also calls `subAgentMgr.CancelAll()` and `swarmMgr.CancelAll()`, so all running sub-agents and swarm teammates are cancelled on interrupt, not just the main agent. Double ctrl+c, ctrl+d, and other exit paths call `shutdownAll()` with the same cascading cancel.
+- **Follow strip grace period**: Completed/failed/cancelled sub-agents remain visible in the TUI follow strip for 1 minute (`subAgentGracePeriod`) so users can review results, then are removed to prevent clutter. Swarm teammate slots are managed separately (lifecycle via team deletion).
+- **swarm_task_create assignee**: The `assignee` parameter is strongly recommended — always set it when you know which teammate should do the task. When set, the task is pushed directly to the assignee's inbox for immediate execution. Only leave empty when no specific teammate can be determined.
+- **send_message vs swarm_task_create**: `send_message` is for unstructured follow-ups, clarifications, or non-tracked communication. For assigning tracked tasks to teammates, prefer `swarm_task_create` (which auto-delivers to the assignee's inbox). Do NOT use `send_message` to follow up on an already-assigned task.

@@ -289,12 +289,30 @@ func executeTask(
 	}
 
 	var output strings.Builder
+	var textBuf strings.Builder // accumulate text chunks into turn-level events
+	lastToolName := ""
+	flushText := func() {
+		if textBuf.Len() == 0 {
+			return
+		}
+		text := textBuf.String()
+		textBuf.Reset()
+		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: text})
+	}
 	err := agent.RunStream(subCtx, prompt, func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
 			output.WriteString(event.Text)
+			textBuf.WriteString(event.Text)
 		case provider.StreamEventToolCallDone:
+			flushText()
 			debug.Log("swarm", "teammate %s tool call done", tm.ID)
+			lastToolName = event.Tool.Name
+			tm.appendEvent(TeammateEvent{
+				Type:     TeammateEventToolCall,
+				ToolName: event.Tool.Name,
+				ToolArgs: string(event.Tool.Arguments),
+			})
 			if onEvent != nil {
 				onEvent(Event{
 					Type:         "teammate_working",
@@ -304,10 +322,25 @@ func executeTask(
 					Timestamp:    time.Now(),
 				})
 			}
+		case provider.StreamEventToolResult:
+			flushText()
+			tm.appendEvent(TeammateEvent{
+				Type:     TeammateEventToolResult,
+				ToolName: lastToolName,
+				Result:   event.Result,
+				IsError:  event.IsError,
+			})
 		case provider.StreamEventError:
+			flushText()
 			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
+			tm.appendEvent(TeammateEvent{
+				Type:    TeammateEventError,
+				Text:    fmt.Sprintf("%v", event.Error),
+				IsError: true,
+			})
 		}
 	})
+	flushText()
 
 	if err != nil {
 		debug.Log("swarm", "teammate %s RunStream error: %v output_len=%d", tm.ID, err, output.Len())
@@ -333,4 +366,11 @@ func truncate(s string, maxRunes int) string {
 		return string(runes[:maxRunes])
 	}
 	return string(runes[:maxRunes-3]) + "..."
+}
+
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

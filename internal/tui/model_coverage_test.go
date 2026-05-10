@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/subagent"
 )
 
 // ---------------------------------------------------------------------------
@@ -703,5 +705,55 @@ func TestCronPromptEmptyPromptDoesNothing(t *testing.T) {
 	// System message should still be written.
 	if m2.chatList == nil || m2.chatList.Len() == 0 {
 		t.Fatal("expected cron.firing system message even for empty prompt")
+	}
+}
+
+func TestShutdownAll_NilManagers(t *testing.T) {
+	m := newTestModel()
+	// subAgentMgr and swarmMgr are nil — should be no-op
+	m.shutdownAll()
+}
+
+func TestShutdownAll_WithSubAgents(t *testing.T) {
+	m := newTestModel()
+	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	m.subAgentMgr.Spawn("a1", "a1", "task1", nil, ctx1)
+	m.subAgentMgr.Spawn("a2", "a2", "task2", nil, ctx2)
+	m.subAgentMgr.SetCancel("sa-1", cancel1)
+	m.subAgentMgr.SetCancel("sa-2", cancel2)
+
+	m.shutdownAll()
+
+	sa1, _ := m.subAgentMgr.Get("sa-1")
+	sa2, _ := m.subAgentMgr.Get("sa-2")
+	if sa1.Status != subagent.StatusCancelled {
+		t.Errorf("expected sa-1 cancelled, got %s", sa1.Status)
+	}
+	if sa2.Status != subagent.StatusCancelled {
+		t.Errorf("expected sa-2 cancelled, got %s", sa2.Status)
+	}
+}
+
+func TestCancelActiveRun_CancelsSubAgents(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.cancelFunc = func() {}
+
+	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.subAgentMgr.Spawn("a1", "a1", "task1", nil, ctx)
+	m.subAgentMgr.SetCancel("sa-1", cancel)
+
+	m.cancelActiveRun()
+
+	sa, _ := m.subAgentMgr.Get("sa-1")
+	if sa.Status != subagent.StatusCancelled {
+		t.Errorf("expected sub-agent cancelled after cancelActiveRun, got %s", sa.Status)
 	}
 }

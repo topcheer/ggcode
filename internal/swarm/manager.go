@@ -38,6 +38,10 @@ type Manager struct {
 	// Written on teammate_idle events, cleared on teammate shutdown.
 	results map[string]string
 
+	// workingDir is the project directory injected into teammate system prompts
+	// so teammates know where they are without having to discover it via pwd/ls.
+	workingDir string
+
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
 	mu         sync.Mutex
@@ -212,7 +216,7 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	}
 
 	// Create independent agent for this teammate
-	systemPrompt := buildTeammateSystemPrompt(name, team.Name)
+	systemPrompt := buildTeammateSystemPrompt(name, team.Name, m.workingDir)
 	var agent AgentRunner
 	if m.agentFactory != nil {
 		agent = m.agentFactory(m.provider, toolSet, systemPrompt, 0)
@@ -264,6 +268,38 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 		Timestamp:  time.Now(),
 	})
 	return nil
+}
+
+// CancelAll cancels all running teammates across all teams.
+// Used when the main agent is interrupted (ctrl+c/esc) to avoid orphaned work.
+func (m *Manager) CancelAll() {
+	m.mu.Lock()
+	teams := make([]*Team, 0, len(m.teams))
+	for _, t := range m.teams {
+		teams = append(teams, t)
+	}
+	m.mu.Unlock()
+
+	for _, team := range teams {
+		for _, tm := range team.listTeammates() {
+			if tm.getStatus() == TeammateWorking {
+				tm.mu.Lock()
+				if tm.cancel != nil {
+					tm.cancel()
+				}
+				tm.Status = TeammateShuttingDown
+				tm.EndedAt = time.Now()
+				tm.mu.Unlock()
+
+				m.emit(Event{
+					Type:       "teammate_shutdown",
+					TeamID:     team.ID,
+					TeammateID: tm.ID,
+					Timestamp:  time.Now(),
+				})
+			}
+		}
+	}
 }
 
 // SendToTeammate sends a message to a specific teammate's inbox.
@@ -352,6 +388,11 @@ func (m *Manager) GetTaskManager(teamID string) *task.Manager {
 // SetOnUpdate sets the callback for swarm state changes (used by TUI).
 func (m *Manager) SetOnUpdate(fn func(Event)) {
 	m.onUpdate = fn
+}
+
+// SetWorkingDir sets the working directory injected into teammate system prompts.
+func (m *Manager) SetWorkingDir(dir string) {
+	m.workingDir = dir
 }
 
 // GetTeammateResult returns the most recent task output for a teammate.
@@ -444,8 +485,8 @@ func (m *Manager) NotifyIdleRunners(teamID string) {
 	}
 }
 
-func buildTeammateSystemPrompt(name, teamName string) string {
-	return fmt.Sprintf(
+func buildTeammateSystemPrompt(name, teamName, workingDir string) string {
+	prompt := fmt.Sprintf(
 		"You are a teammate named %q in team %q. "+
 			"Complete tasks assigned to you via messages or the task board. "+
 			"Only claim tasks that match your role and capabilities. "+
@@ -454,4 +495,20 @@ func buildTeammateSystemPrompt(name, teamName string) string {
 			"Report results concisely when done.",
 		name, teamName,
 	)
+	if workingDir != "" {
+		prompt += fmt.Sprintf("\n\nWorking directory: %s", workingDir)
+	}
+	return prompt
+}
+
+// TeammateSnapshot returns a snapshot of a teammate by ID across all teams.
+func (m *Manager) TeammateSnapshot(tmID string) (TeammateSnapshot, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, team := range m.teams {
+		if tm, ok := team.Teammates[tmID]; ok {
+			return tm.snapshot(), true
+		}
+	}
+	return TeammateSnapshot{}, false
 }

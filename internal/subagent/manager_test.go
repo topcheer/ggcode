@@ -201,3 +201,49 @@ func TestManager_Cancel_AlreadyDone(t *testing.T) {
 		t.Error("expected cancel to fail for completed agent")
 	}
 }
+
+func TestManager_CancelAll(t *testing.T) {
+	m := newTestManager()
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	defer cancel3()
+
+	id1 := m.Spawn("a1", "a1", "task1", nil, ctx1)
+	id2 := m.Spawn("a2", "a2", "task2", nil, ctx2)
+	id3 := m.Spawn("a3", "a3", "task3", nil, ctx3)
+
+	// Set two as running
+	m.SetCancel(id1, cancel1)
+	m.SetCancel(id2, cancel2)
+	// id3 stays pending
+
+	cancelled := m.CancelAll()
+	if cancelled != 2 {
+		t.Fatalf("expected 2 cancelled, got %d", cancelled)
+	}
+
+	sa1, _ := m.Get(id1)
+	sa2, _ := m.Get(id2)
+	sa3, _ := m.Get(id3)
+
+	if sa1.Status != StatusCancelled {
+		t.Errorf("expected a1 cancelled, got %s", sa1.Status)
+	}
+	if sa2.Status != StatusCancelled {
+		t.Errorf("expected a2 cancelled, got %s", sa2.Status)
+	}
+	if sa3.Status == StatusCancelled {
+		t.Errorf("expected a3 NOT cancelled (was pending), got %s", sa3.Status)
+	}
+}
+
+func TestManager_CancelAll_Empty(t *testing.T) {
+	m := newTestManager()
+	cancelled := m.CancelAll()
+	if cancelled != 0 {
+		t.Errorf("expected 0 cancelled for empty manager, got %d", cancelled)
+	}
+}

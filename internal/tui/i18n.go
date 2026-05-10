@@ -786,6 +786,8 @@ func enCatalog(key string) string {
 		return "Ctrl+C clear/exit"
 	case "hint.image_attached":
 		return "image attached"
+	case "hint.follow_panel":
+		return "Ctrl+N follow"
 	case "queued.count":
 		return "%d queued"
 	case "queued.output":
@@ -2060,6 +2062,8 @@ func zhCatalog(key string) string {
 		return "Ctrl+C 清空/退出"
 	case "hint.image_attached":
 		return "已附加图片"
+	case "hint.follow_panel":
+		return "Ctrl+N 跟随"
 	case "queued.count":
 		return "%d 条排队中"
 	case "queued.output":

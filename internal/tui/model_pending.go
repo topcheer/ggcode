@@ -57,6 +57,15 @@ func (m *Model) cancelActiveRun() {
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 	}
+
+	// Cancel all running sub-agents and swarm teammates
+	if m.subAgentMgr != nil {
+		m.subAgentMgr.CancelAll()
+	}
+	if m.swarmMgr != nil {
+		m.swarmMgr.CancelAll()
+	}
+
 	m.spinner.Stop()
 	if m.harnessRunProject != nil {
 		m.statusActivity = m.t("status.cancelling")
@@ -78,6 +87,17 @@ func (m *Model) cancelActiveRun() {
 
 func (m *Model) consumePendingSubmission() string {
 	return m.pending.consume()
+}
+
+// shutdownAll cancels all running sub-agents and swarm teammates.
+// Called on exit (double ctrl+c, ctrl+d) to avoid orphaned background work.
+func (m *Model) shutdownAll() {
+	if m.subAgentMgr != nil {
+		m.subAgentMgr.CancelAll()
+	}
+	if m.swarmMgr != nil {
+		m.swarmMgr.CancelAll()
+	}
 }
 
 func (m *Model) restorePendingInput() {
