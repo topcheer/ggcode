@@ -910,6 +910,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	tuiBridge := webui.NewTUIChatBridge(ag, &tuiWebchatSender{repl: repl})
 	webuiSrv.SetChatBridge(tuiBridge)
 	repl.SetWebUIBridge(tuiBridge)
+
+	// Wire WebUI restart: send remoteRestartMsg into the Bubble Tea event
+	// loop so the TUI cleanly shuts down and execRestarts (same mechanism
+	// as IM /restart and TUI /restart slash command).
+	webuiSrv.SetRestartFn(func() {
+		repl.InjectRestart()
+	})
+
 	trace.Mark("wire webui callbacks")
 
 	actualAddr, webuiErr := webuiSrv.Start("127.0.0.1:0")
