@@ -87,18 +87,14 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
-	if v := p.effectiveMaxTokens(); v > 0 {
-		config.MaxOutputTokens = int32(v)
-	}
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
 	}
 	dumpRequestJSON("gemini", "Chat", struct {
 		Contents          []*genai.Content
 		SystemInstruction *genai.Content
-		MaxOutputTokens   int32
 		Tools             []*genai.Tool
-	}{contents, systemInstruction, config.MaxOutputTokens, config.Tools})
+	}{contents, systemInstruction, config.Tools})
 
 	var resp *genai.GenerateContentResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -129,18 +125,14 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: systemInstruction,
 	}
-	if v := p.effectiveMaxTokens(); v > 0 {
-		config.MaxOutputTokens = int32(v)
-	}
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
 	}
 	dumpRequestJSON("gemini", "ChatStream", struct {
 		Contents          []*genai.Content
 		SystemInstruction *genai.Content
-		MaxOutputTokens   int32
 		Tools             []*genai.Tool
-	}{contents, systemInstruction, config.MaxOutputTokens, config.Tools})
+	}{contents, systemInstruction, config.Tools})
 
 	ch := make(chan StreamEvent, 64)
 
