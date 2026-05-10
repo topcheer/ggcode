@@ -230,7 +230,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			if attempt > 0 {
-				debug.Log("openai", "Stream retry attempt %d", attempt)
+				debug.Log("openai", "Stream retry attempt %d/%d model=%s", attempt+1, providerRetryAttempts, p.model)
 			}
 
 			// (Re-)establish the stream for each attempt
@@ -245,13 +245,15 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					p.cap.OnRejected(parsed)
 				}
 				if isRetryable(err) && attempt < providerRetryAttempts-1 {
-					if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
+					delay := retryDelay(err, attempt)
+					debug.Log("openai", "CONNECT FAILED model=%s attempt=%d/%d delay=%v: %T: %v", p.model, attempt+1, providerRetryAttempts, delay, err, err)
+					if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 						return
 					}
 					continue
 				}
-				debug.Log("openai", "ChatStream ERROR model=%s: %v", p.model, err)
+				debug.Log("openai", "CONNECT FATAL model=%s attempt=%d/%d: %T: %v", p.model, attempt+1, providerRetryAttempts, err, err)
 				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}
 				return
 			}
@@ -301,7 +303,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					if recvErr != nil {
 						// Stream ended normally
 						if errors.Is(recvErr, io.EOF) || recvErr == context.Canceled || recvErr == context.DeadlineExceeded {
-							debug.Log("openai", "Stream ended normally: %v", recvErr)
+							debug.Log("openai", "Stream ended normally: %v reasoning_total=%d emitted=%v", recvErr, reasoningBuf.Len(), emitted)
 							if errors.Is(recvErr, io.EOF) {
 								normalEnd = true
 							}
@@ -310,7 +312,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 							return
 						}
-						debug.Log("openai", "Stream ERROR: %v", recvErr)
+						debug.Log("openai", "STREAM ERROR model=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, attempt+1, providerRetryAttempts, emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
 						// Retry if no content emitted yet and error is retryable
 						if !emitted && isRetryable(recvErr) && attempt < providerRetryAttempts-1 {
 							if sleepErr := retrySleep(ctx, retryDelay(recvErr, attempt)); sleepErr != nil {
@@ -343,7 +345,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// Reasoning content (DeepSeek v4, etc.)
 					if delta.ReasoningContent != "" {
 						reasoningBuf.WriteString(delta.ReasoningContent)
-						debug.Log("openai", "chunk reasoning len=%d", len(delta.ReasoningContent))
+						debug.Log("openai", "chunk reasoning len=%d total=%d", len(delta.ReasoningContent), reasoningBuf.Len())
 						emitted = true
 						ch <- StreamEvent{Type: StreamEventReasoning, Text: delta.ReasoningContent}
 					}
