@@ -635,9 +635,14 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				}
 			}
 			msg.ToolCalls = toolCalls
-			// DeepSeek reasoning models require reasoning_content to be echoed back.
+			// DeepSeek reasoning models require reasoning_content when tool_calls
+			// are present in a message. If the previous model (e.g. GLM-5.1) did not
+			// generate reasoning content, supply an empty string to avoid 400 errors
+			// when switching to DeepSeek V4 mid-session.
 			if reasoningContent != "" {
 				msg.ReasoningContent = reasoningContent
+			} else if len(toolCalls) > 0 {
+				msg.ReasoningContent = ""
 			}
 			result = append(result, msg)
 		case "tool":
