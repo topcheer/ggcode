@@ -3,16 +3,15 @@
 package plugin
 
 import (
+	"os/exec"
 	"syscall"
+	"time"
 )
 
-func sysProcAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{Setpgid: true}
-}
-
-// cancelProcessGroup kills the entire process group (negative PID) so that
-// orphaned grandchildren (e.g., "sh -c sleep 30" → sh + sleep) are cleaned
-// up and CombinedOutput can return instead of blocking forever.
-func cancelProcessGroup(pid int) error {
-	return syscall.Kill(-pid, syscall.SIGKILL)
+func setupProcessGroupCancel(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = 3 * time.Second
 }

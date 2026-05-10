@@ -2,16 +2,8 @@
 
 package plugin
 
-import (
-	"syscall"
-)
+import "os/exec"
 
-func sysProcAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{}
-}
-
-// On Windows there is no process-group kill with negative PID.
-// Fall back to killing the direct child process.
-func cancelProcessGroup(pid int) error {
-	return syscall.Kill(pid, syscall.SIGKILL)
-}
+// On Windows, CommandContext already handles cancellation correctly via
+// TerminateProcess, so no process-group setup is needed.
+func setupProcessGroupCancel(_ *exec.Cmd) {}
