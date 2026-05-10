@@ -146,6 +146,14 @@ func (r *REPL) InjectWebchatMessage(text string) {
 	}
 }
 
+// InjectRestart triggers a clean restart via the Bubble Tea event loop.
+// This is the same mechanism used by IM /restart and the TUI /restart slash command.
+func (r *REPL) InjectRestart() {
+	if r.program != nil {
+		r.program.Send(remoteRestartMsg{})
+	}
+}
+
 // SetWebUIReadyAddr stores the webui address to be displayed in the TUI
 // after startup. The actual program.Send happens in the startup goroutine
 // alongside logoMsg to ensure the TUI is ready.
