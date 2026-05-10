@@ -255,13 +255,19 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	case SkillFileSearch, SkillGitOps, SkillCommandExec:
 		// If agent is available, use agent for all skills (smarter routing).
 		// Fall back to direct tool execution only if no agent.
-		if h.agent != nil {
+		if h.agent != nil && len(t.History) > 0 {
 			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
-		} else {
+		} else if len(t.History) > 0 {
 			result, err = h.executeDirectTool(ctx, perm, t.Skill, t.History[0])
+		} else {
+			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
 	case SkillCodeEdit, SkillCodeReview, SkillFullTask:
-		result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
+		if len(t.History) > 0 {
+			result, err = h.executeAgent(ctx, perm, t.Skill, t.History[0])
+		} else {
+			err = fmt.Errorf("no message history for skill %s", t.Skill)
+		}
 	default:
 		err = fmt.Errorf("unsupported skill: %s", t.Skill)
 	}
@@ -410,7 +416,11 @@ func (h *TaskHandler) updateStatus(t *Task, state TaskState, message string) {
 			}
 			switch eventType {
 			case "start":
-				msg.Message = fmt.Sprintf("A2A task started [%s] %s", t.Skill, truncateText(extractText(t.History[0]), 60))
+				startMsg := ""
+				if len(t.History) > 0 {
+					startMsg = truncateText(extractText(t.History[0]), 60)
+				}
+				msg.Message = fmt.Sprintf("A2A task started [%s] %s", t.Skill, startMsg)
 			case "complete":
 				msg.Message = fmt.Sprintf("A2A task completed [%s]", t.Skill)
 			case "fail":

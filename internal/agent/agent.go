@@ -542,7 +542,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			debug.Log("agent", "executeToolWithPermission: tool=%s", tc.Name)
 			result := a.executeToolWithPermission(ctx, tc)
-			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, truncateStr(result.Content, 200), len(result.Images))
+			debug.Log("agent", "tool result: tool=%s is_error=%v output=%s images=%d", tc.Name, result.IsError, util.Truncate(result.Content, 200), len(result.Images))
 
 			// Collect follow-up messages from tools (e.g., inline skills).
 			if len(result.FollowUpMessages) > 0 {
@@ -770,8 +770,4 @@ func (a *Agent) emitUsage(usage provider.TokenUsage) {
 func isJSON(data json.RawMessage) bool {
 	var v interface{}
 	return json.Unmarshal(data, &v) == nil
-}
-
-func truncateStr(s string, maxLen int) string {
-	return util.Truncate(s, maxLen)
 }

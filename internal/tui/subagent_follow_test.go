@@ -514,17 +514,21 @@ func TestRenderConversationPanel_FollowNoFallThrough(t *testing.T) {
 
 func TestRenderConversationPanel_FollowPlaceholder(t *testing.T) {
 	// When follow mode is active and the entry list has no items yet,
-	// a placeholder should be rendered.
+	// a placeholder must be rendered — never the main view empty state.
 	m, _ := newFollowTestModel(1)
 	m.subAgentFollow.refreshSlots(m.subAgentMgr)
 	m.subAgentFollow.activate(0)
 
 	panel := m.renderConversationPanel(20)
+	plain := stripAnsi(panel)
 
-	if containsPlain(stripAnsi(panel), "Loading follow view") {
-		// Expected: placeholder shown
-	} else if containsPlain(stripAnsi(panel), "Empty") || containsPlain(stripAnsi(panel), "Ask") {
-		t.Error("should not render main-view empty state in follow mode")
+	if !containsPlain(plain, "Loading follow view") {
+		t.Error("expected 'Loading follow view' placeholder when follow list is empty")
+	}
+
+	// Must NOT contain main-view empty state text ("Ask" or "Tips")
+	if containsPlain(plain, "Tips") || containsPlain(plain, "Empty") {
+		t.Error("must not render main-view empty state in follow mode")
 	}
 }
 
@@ -605,6 +609,66 @@ func TestActivateTriggersRebuild(t *testing.T) {
 	}
 	if !containsPlain(rendered, "working...") {
 		t.Error("expected follow view content in rendered output")
+	}
+}
+
+func TestRenderConversationPanel_DeactivateReturnsToMainView(t *testing.T) {
+	// After deactivate (Esc key), the main chat list must render correctly
+	// in the conversation panel again. No follow view content should remain.
+	m, agents := newFollowTestModel(1)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// Populate main chat list with a marker
+	m.chatList = chat.NewList(80, 20)
+	m.chatList.Append(chat.NewSystemItem("main-back", "MAIN_VIEW_RETURNED_MARKER", chat.DefaultStyles()))
+
+	// Populate follow view with its own marker
+	agents[0].AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "FOLLOW_ONLY_MARKER"})
+
+	// Enter follow mode
+	m.subAgentFollow.activate(0)
+	m.subAgentFollow.rebuildActiveView(m.subAgentMgr, nil, chat.DefaultStyles())
+
+	// Confirm follow view is active
+	followPanel := m.renderConversationPanel(20)
+	if !containsPlain(stripAnsi(followPanel), "FOLLOW_ONLY_MARKER") {
+		t.Fatal("expected follow view before deactivate")
+	}
+
+	// Deactivate (same as Esc key handler)
+	m.subAgentFollow.deactivate()
+
+	// Now renderConversationPanel should show the main chat list
+	mainPanel := m.renderConversationPanel(20)
+	mainPlain := stripAnsi(mainPanel)
+
+	if !containsPlain(mainPlain, "MAIN_VIEW_RETURNED_MARKER") {
+		t.Error("expected main chat list content after deactivate")
+	}
+	if containsPlain(mainPlain, "FOLLOW_ONLY_MARKER") {
+		t.Error("follow view content should not appear after deactivate")
+	}
+}
+
+func TestRenderConversationPanel_DeactivateWithEmptyMainView(t *testing.T) {
+	// After deactivate, even with an empty main chat list, the empty-state
+	// prompt should render (not the follow placeholder).
+	m, agents := newFollowTestModel(1)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	agents[0].AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "follow content"})
+	m.subAgentFollow.activate(0)
+	m.subAgentFollow.rebuildActiveView(m.subAgentMgr, nil, chat.DefaultStyles())
+
+	// Deactivate with no main chat items
+	m.subAgentFollow.deactivate()
+
+	panel := m.renderConversationPanel(20)
+	plain := stripAnsi(panel)
+
+	// Main view empty state should appear, NOT follow placeholder
+	if containsPlain(plain, "Loading follow view") {
+		t.Error("follow placeholder should not appear after deactivate")
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const defaultBootstrapAnthropicModel = "opus-4.6"
@@ -37,7 +39,7 @@ func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
 	}
 
 	claudeEnv := loadClaudeEnv()
-	model := firstNonEmpty(
+	model := util.FirstNonEmpty(
 		strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")),
 		strings.TrimSpace(claudeEnv["ANTHROPIC_MODEL"]),
 		strings.TrimSpace(claudeEnv["ANTHROPIC_DEFAULT_OPUS_MODEL"]),

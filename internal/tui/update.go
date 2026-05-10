@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
 
@@ -72,9 +73,9 @@ func (m Model) renderSidebarUpdateSection() string {
 		rows = append(rows, m.renderSidebarDetailRow(m.t("label.latest"), latest, width))
 	}
 	if m.updateInfo.HasUpdate {
-		rows = append(rows, truncateString(m.t("update.sidebar_hint"), width))
+		rows = append(rows, util.Truncate(m.t("update.sidebar_hint"), width))
 	} else {
-		rows = append(rows, truncateString(m.t("update.up_to_date"), width))
+		rows = append(rows, util.Truncate(m.t("update.up_to_date"), width))
 	}
 	return strings.Join(rows, "\n")
 }

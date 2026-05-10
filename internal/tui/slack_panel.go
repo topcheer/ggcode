@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,7 +65,7 @@ func (m Model) renderSlackPanel() string {
 	}
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.slack.directory")),
-		fmt.Sprintf(" %s", firstNonEmptySlack(m.currentWorkspacePath(), m.t("panel.slack.none"))),
+		fmt.Sprintf(" %s", util.FirstNonEmpty(m.currentWorkspacePath(), m.t("panel.slack.none"))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.slack.bots")),
 		fmt.Sprintf(" %s", m.t("panel.slack.created", len(entries))),
@@ -79,8 +80,8 @@ func (m Model) renderSlackPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.slack.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.slack.target", firstNonEmptySlack(current.TargetID, m.t("panel.slack.default")))),
-				fmt.Sprintf(" %s", m.t("panel.slack.channel", firstNonEmptySlack(current.ChannelID, m.t("panel.slack.none")))),
+				fmt.Sprintf(" %s", m.t("panel.slack.target", util.FirstNonEmpty(current.TargetID, m.t("panel.slack.default")))),
+				fmt.Sprintf(" %s", m.t("panel.slack.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.slack.none")))),
 			)
 		}
 	}
@@ -107,9 +108,9 @@ func (m Model) renderSlackPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.slack.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.slack.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.slack.transport", m.slackAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.slack.bound_directory", firstNonEmptySlack(entry.OccupiedBy, m.t("panel.slack.none")))),
-			fmt.Sprintf(" %s", m.t("panel.slack.current_directory_target", firstNonEmptySlack(entry.TargetID, defaultSlackTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.slack.current_directory_channel", firstNonEmptySlack(entry.WorkspaceChannel, m.t("panel.slack.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.slack.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.slack.none")))),
+			fmt.Sprintf(" %s", m.t("panel.slack.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultSlackTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.slack.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.slack.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.slack.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -383,7 +384,7 @@ func (m Model) slackBindingEntries() []slackBindingEntry {
 		targetID := defaultSlackTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptySlack(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, slackBindingEntry{
@@ -449,16 +450,6 @@ func currentSlackBindings(mgr *im.Manager) []im.ChannelBinding {
 	}
 	return result
 }
-
-func firstNonEmptySlack(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func defaultSlackTargetID(workspace string) string {
 	base := filepath.Base(strings.TrimSpace(workspace))
 	if base == "" || base == "." || base == string(filepath.Separator) {

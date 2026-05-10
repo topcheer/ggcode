@@ -15,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ---------------------------------------------------------------------------
@@ -315,10 +316,10 @@ func TestIsJSON(t *testing.T) {
 }
 
 func TestTruncateStr(t *testing.T) {
-	if got := truncateStr("hello", 3); got != "hel" {
+	if got := util.Truncate("hello", 3); got != "hel" {
 		t.Fatalf("expected 'hel', got %q", got)
 	}
-	if got := truncateStr("hi", 10); got != "hi" {
+	if got := util.Truncate("hi", 10); got != "hi" {
 		t.Fatalf("expected 'hi', got %q", got)
 	}
 }

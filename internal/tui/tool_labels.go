@@ -58,7 +58,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 		return toolPresentationFor(lang, "find", pattern)
 	case "grep", "search_files":
-		searchTarget := displayToolTarget(firstNonEmpty(
+		searchTarget := displayToolTarget(util.FirstNonEmpty(
 			argString(args, "pattern"),
 			argString(args, "query"),
 			argString(args, "path"),
@@ -68,7 +68,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 		return toolPresentationFor(lang, "search", searchTarget)
 	case "list_directory":
-		listTarget := displayToolFileTarget(firstNonEmpty(
+		listTarget := displayToolFileTarget(util.FirstNonEmpty(
 			argString(args, "path"),
 			argString(args, "directory"),
 		))
@@ -80,7 +80,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
 		}
-		target := displayToolTarget(firstNonEmpty(
+		target := displayToolTarget(util.FirstNonEmpty(
 			argString(args, "command"),
 			argString(args, "cmd"),
 		))
@@ -96,7 +96,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
 			return present
 		}
-		target := displayToolTarget(firstNonEmpty(
+		target := displayToolTarget(util.FirstNonEmpty(
 			argString(args, "command"),
 			argString(args, "cmd"),
 		))
@@ -135,7 +135,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			}
 			return toolPresentationFor(lang, "input", detail)
 		}
-		return toolPresentationFor(lang, "input", displayToolTarget(firstNonEmpty(
+		return toolPresentationFor(lang, "input", displayToolTarget(util.FirstNonEmpty(
 			jobID,
 			"background command",
 		)))
@@ -170,7 +170,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "todo_write":
 		return toolPresentationFor(lang, "todo", "")
 	case "task", "agent":
-		return toolPresentationFor(lang, "task", displayToolTarget(firstNonEmpty(
+		return toolPresentationFor(lang, "task", displayToolTarget(util.FirstNonEmpty(
 			argString(args, "description"),
 			argString(args, "prompt"),
 			argString(args, "agent_type"),
@@ -378,7 +378,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Activity:    localizedToolActivity(lang, "exit_plan", ""),
 		}
 	case "task_create", "task_update", "task_get", "task_list", "task_stop", "task_output":
-		return toolPresentationFor(lang, "task", displayToolTarget(firstNonEmpty(
+		return toolPresentationFor(lang, "task", displayToolTarget(util.FirstNonEmpty(
 			argString(args, "subject"),
 			argString(args, "description"),
 			argString(args, "taskId"),
@@ -459,11 +459,11 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 	case "teammate_results":
 		id := argString(args, "teammate_id")
 		if desc := argString(args, "description"); desc != "" {
-			return toolPresentation{DisplayName: desc, Detail: displayToolTarget(firstNonEmpty(id, argString(args, "team_id"))), Activity: desc}
+			return toolPresentation{DisplayName: desc, Detail: displayToolTarget(util.FirstNonEmpty(id, argString(args, "team_id"))), Activity: desc}
 		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "teammate_results"),
-			Detail:      displayToolTarget(firstNonEmpty(id, argString(args, "team_id"))),
+			Detail:      displayToolTarget(util.FirstNonEmpty(id, argString(args, "team_id"))),
 			Activity:    localizedToolActivity(lang, "teammate_results", id),
 		}
 	case "swarm_task_create":
@@ -490,11 +490,11 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "swarm_task_claim":
 		if desc := argString(args, "description"); desc != "" {
-			return toolPresentation{DisplayName: desc, Detail: displayToolTarget(firstNonEmpty(argString(args, "subject"), argString(args, "task_id"))), Activity: desc}
+			return toolPresentation{DisplayName: desc, Detail: displayToolTarget(util.FirstNonEmpty(argString(args, "subject"), argString(args, "task_id"))), Activity: desc}
 		}
 		return toolPresentation{
 			DisplayName: localizedToolLabel(lang, "swarm_task_claim"),
-			Detail:      displayToolTarget(firstNonEmpty(argString(args, "subject"), argString(args, "task_id"))),
+			Detail:      displayToolTarget(util.FirstNonEmpty(argString(args, "subject"), argString(args, "task_id"))),
 			Activity:    localizedToolActivity(lang, "swarm_task_claim", ""),
 		}
 	case "swarm_task_complete":
@@ -609,7 +609,7 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		pretty := prettifyToolName(toolName)
 		return toolPresentation{
 			DisplayName: pretty,
-			Detail: displayToolTarget(firstNonEmpty(
+			Detail: displayToolTarget(util.FirstNonEmpty(
 				fileTarget,
 				displayToolFileTarget(argString(args, "path")),
 				displayToolFileTarget(argString(args, "file_path")),
@@ -639,7 +639,7 @@ func askUserToolTarget(args map[string]any) string {
 	if !ok {
 		return ""
 	}
-	title := strings.TrimSpace(firstNonEmpty(
+	title := strings.TrimSpace(util.FirstNonEmpty(
 		argAnyString(first["title"]),
 		argAnyString(first["prompt"]),
 	))
@@ -1353,19 +1353,10 @@ func rawArgString(args map[string]any, key string) string {
 }
 
 func rawCommandArg(args map[string]any) string {
-	return firstNonEmpty(
+	return util.FirstNonEmpty(
 		rawArgString(args, "command"),
 		rawArgString(args, "cmd"),
 	)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func shortenJobID(id string) string {

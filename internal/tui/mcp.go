@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/topcheer/ggcode/internal/util"
 	"sort"
 	"strings"
 
@@ -74,7 +75,7 @@ func (m Model) activeMCPToolSummaries() []string {
 	out := make([]string, 0, len(keys))
 	for _, key := range keys {
 		ts := m.activeMCPTools[key]
-		out = append(out, truncateString(formatToolInline(toolDisplayName(ts), toolDetail(ts)), max(12, m.sidebarWidth()-6)))
+		out = append(out, util.Truncate(formatToolInline(toolDisplayName(ts), toolDetail(ts)), max(12, m.sidebarWidth()-6)))
 	}
 	return out
 }

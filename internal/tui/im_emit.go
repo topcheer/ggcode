@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"slices"
 	"strings"
 	"time"
@@ -143,7 +144,7 @@ func (m *Model) currentSubAgentIMStatus() string {
 	if summary == "" {
 		return ""
 	}
-	task := strings.TrimSpace(firstNonEmpty(sa.DisplayTask, sa.Task))
+	task := strings.TrimSpace(util.FirstNonEmpty(sa.DisplayTask, sa.Task))
 	switch m.currentLanguage() {
 	case LangZhCN:
 		if task == "" {
@@ -218,7 +219,7 @@ func (m *Model) formatIMAskUserQuestion(title string, question toolpkg.AskUserQu
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
-		return strings.TrimSpace(firstNonEmpty(question.Prompt, question.Title))
+		return strings.TrimSpace(util.FirstNonEmpty(question.Prompt, question.Title))
 	}
 	return m.formatIMAskUserPrompt(string(data))
 }
@@ -298,7 +299,7 @@ func (m *Model) emitIMQuestionnaireSummary(req toolpkg.AskUserRequest, resp tool
 				answer = a.FreeformText
 			}
 		}
-		sb.WriteString(fmt.Sprintf("**%d. %s**\n", i+1, firstNonEmpty(q.Prompt, q.Title)))
+		sb.WriteString(fmt.Sprintf("**%d. %s**\n", i+1, util.FirstNonEmpty(q.Prompt, q.Title)))
 		if answer != "" {
 			sb.WriteString(fmt.Sprintf("  → %s\n", answer))
 		} else {

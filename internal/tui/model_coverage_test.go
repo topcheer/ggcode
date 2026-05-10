@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ---------------------------------------------------------------------------
@@ -130,16 +131,16 @@ func TestCombineCmds(t *testing.T) {
 func TestTruncateString_Model(t *testing.T) {
 	// These are wrappers around util.Truncate which appends "..." when truncating.
 	// len=5 → 2 chars + "..." = "he..."
-	if got := truncateString("hello world", 5); got != "he..." {
+	if got := util.Truncate("hello world", 5); got != "he..." {
 		t.Errorf("truncateString = %q, want %q", got, "he...")
 	}
-	if got := truncateString("hi", 100); got != "hi" {
+	if got := util.Truncate("hi", 100); got != "hi" {
 		t.Errorf("truncateString = %q, want %q", got, "hi")
 	}
-	if got := truncateStr("hello world", 5); got != "he..." {
+	if got := util.Truncate("hello world", 5); got != "he..." {
 		t.Errorf("truncateStr = %q, want %q", got, "he...")
 	}
-	if got := truncateStr("", 5); got != "" {
+	if got := util.Truncate("", 5); got != "" {
 		t.Errorf("truncateStr = %q, want %q", got, "")
 	}
 }

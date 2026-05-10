@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -55,16 +56,6 @@ func (m *Model) openNostrPanel() {
 func (m *Model) closeNostrPanel() {
 	m.nostrPanel = nil
 }
-
-func firstNonEmptyNostr(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func maxNostr(v, min int) int {
 	if v > min {
 		return v
@@ -132,8 +123,8 @@ func (m Model) renderNostrPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.nostr.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.nostr.target", firstNonEmptyNostr(current.TargetID, m.t("panel.nostr.default")))),
-				fmt.Sprintf(" %s", m.t("panel.nostr.channel", firstNonEmptyNostr(current.ChannelID, m.t("panel.nostr.none")))),
+				fmt.Sprintf(" %s", m.t("panel.nostr.target", util.FirstNonEmpty(current.TargetID, m.t("panel.nostr.default")))),
+				fmt.Sprintf(" %s", m.t("panel.nostr.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.nostr.none")))),
 			)
 		}
 	}
@@ -157,9 +148,9 @@ func (m Model) renderNostrPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.nostr.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.nostr.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.nostr.transport", m.nostrAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.nostr.bound_directory", firstNonEmptyNostr(entry.OccupiedBy, m.t("panel.nostr.none")))),
-			fmt.Sprintf(" %s", m.t("panel.nostr.current_directory_target", firstNonEmptyNostr(entry.TargetID, defaultNostrTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.nostr.current_directory_channel", firstNonEmptyNostr(entry.WorkspaceChannel, m.t("panel.nostr.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.nostr.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.nostr.none")))),
+			fmt.Sprintf(" %s", m.t("panel.nostr.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultNostrTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.nostr.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.nostr.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.nostr.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -541,7 +532,7 @@ func (m Model) nostrBindingEntries() []nostrBindingEntry {
 		targetID := defaultNostrTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyNostr(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

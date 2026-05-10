@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"image/png"
 	"os/exec"
 	"path/filepath"
@@ -108,15 +109,6 @@ func (m *Model) installSignalDaemon() tea.Cmd {
 	}
 }
 
-func firstNonEmptySignal(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // renderQRCodeASCII converts a PNG QR code image to Unicode block-character ASCII art.
 func renderQRCodeASCII(pngData []byte) string {
 	// Step 1: Decode PNG image
@@ -213,8 +205,8 @@ func (m Model) renderSignalPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.signal.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.signal.target", firstNonEmptySignal(current.TargetID, m.t("panel.signal.default")))),
-				fmt.Sprintf(" %s", m.t("panel.signal.channel", firstNonEmptySignal(current.ChannelID, m.t("panel.signal.none")))),
+				fmt.Sprintf(" %s", m.t("panel.signal.target", util.FirstNonEmpty(current.TargetID, m.t("panel.signal.default")))),
+				fmt.Sprintf(" %s", m.t("panel.signal.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.signal.none")))),
 			)
 		}
 	}
@@ -238,9 +230,9 @@ func (m Model) renderSignalPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.signal.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.signal.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.signal.transport", m.sigAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.signal.bound_directory", firstNonEmptySignal(entry.OccupiedBy, m.t("panel.signal.none")))),
-			fmt.Sprintf(" %s", m.t("panel.signal.current_directory_target", firstNonEmptySignal(entry.TargetID, defaultSignalTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.signal.current_directory_channel", firstNonEmptySignal(entry.WorkspaceChannel, m.t("panel.signal.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.signal.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.signal.none")))),
+			fmt.Sprintf(" %s", m.t("panel.signal.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultSignalTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.signal.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.signal.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.signal.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -632,7 +624,7 @@ func (m Model) signalBindingEntries() []signalBindingEntry {
 		targetID := defaultSignalTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptySignal(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

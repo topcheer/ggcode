@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -72,7 +73,7 @@ func (m Model) renderQQPanel() string {
 	}
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.directory")),
-		fmt.Sprintf(" %s", firstNonEmptyQQ(currentWS, m.t("panel.qq.none"))),
+		fmt.Sprintf(" %s", util.FirstNonEmpty(currentWS, m.t("panel.qq.none"))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.bots")),
 		fmt.Sprintf(" %s", m.t("panel.qq.created", len(entries))),
@@ -91,8 +92,8 @@ func (m Model) renderQQPanel() string {
 			}
 			body = append(body,
 				fmt.Sprintf(" %s (%s)", current.Adapter, status),
-				fmt.Sprintf(" %s", m.t("panel.qq.target", firstNonEmptyQQ(current.TargetID, m.t("panel.qq.default")))),
-				fmt.Sprintf(" %s", m.t("panel.qq.channel", firstNonEmptyQQ(current.ChannelID, m.t("panel.qq.none")))),
+				fmt.Sprintf(" %s", m.t("panel.qq.target", util.FirstNonEmpty(current.TargetID, m.t("panel.qq.default")))),
+				fmt.Sprintf(" %s", m.t("panel.qq.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.qq.none")))),
 			)
 		}
 	}
@@ -123,9 +124,9 @@ func (m Model) renderQQPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.qq.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.qq.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.qq.transport", m.qqAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.qq.bound_directory", firstNonEmptyQQ(entry.OccupiedBy, m.t("panel.qq.none")))),
-			fmt.Sprintf(" %s", m.t("panel.qq.current_directory_target", firstNonEmptyQQ(entry.TargetID, defaultQQTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.qq.current_directory_channel", firstNonEmptyQQ(entry.WorkspaceChannel, m.t("panel.qq.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.qq.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.qq.none")))),
+			fmt.Sprintf(" %s", m.t("panel.qq.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultQQTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.qq.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.qq.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.qq.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -427,7 +428,7 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 		targetID := defaultQQTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyQQ(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, qqBindingEntry{
@@ -498,16 +499,6 @@ func (m Model) currentWorkspacePath() string {
 	}
 	return ""
 }
-
-func firstNonEmptyQQ(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func defaultQQTargetID(workspace string) string {
 	base := filepath.Base(strings.TrimSpace(workspace))
 	if base == "" || base == "." || base == string(filepath.Separator) {

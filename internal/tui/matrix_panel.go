@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,16 +48,6 @@ func (m *Model) openMatrixPanel() {
 func (m *Model) closeMatrixPanel() {
 	m.matrixPanel = nil
 }
-
-func firstNonEmptyMat(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func maxMat(v, min int) int {
 	if v > min {
 		return v
@@ -122,8 +113,8 @@ func (m Model) renderMatrixPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.matrix.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.matrix.target", firstNonEmptyMat(current.TargetID, m.t("panel.matrix.default")))),
-				fmt.Sprintf(" %s", m.t("panel.matrix.channel", firstNonEmptyMat(current.ChannelID, m.t("panel.matrix.none")))),
+				fmt.Sprintf(" %s", m.t("panel.matrix.target", util.FirstNonEmpty(current.TargetID, m.t("panel.matrix.default")))),
+				fmt.Sprintf(" %s", m.t("panel.matrix.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.matrix.none")))),
 			)
 		}
 	}
@@ -147,9 +138,9 @@ func (m Model) renderMatrixPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.matrix.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.matrix.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.matrix.transport", m.matAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.matrix.bound_directory", firstNonEmptyMat(entry.OccupiedBy, m.t("panel.matrix.none")))),
-			fmt.Sprintf(" %s", m.t("panel.matrix.current_directory_target", firstNonEmptyMat(entry.TargetID, defaultMatTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.matrix.current_directory_channel", firstNonEmptyMat(entry.WorkspaceChannel, m.t("panel.matrix.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.matrix.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.matrix.none")))),
+			fmt.Sprintf(" %s", m.t("panel.matrix.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultMatTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.matrix.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.matrix.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.matrix.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -492,7 +483,7 @@ func (m Model) matrixBindingEntries() []matrixBindingEntry {
 		targetID := defaultMatTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyMat(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

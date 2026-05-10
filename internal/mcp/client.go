@@ -295,7 +295,7 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
-		return err
+		return fmt.Errorf("mcp[%s]: marshal params for %s: %w", c.name, method, err)
 	}
 
 	req := Request{
@@ -307,7 +307,7 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 
 	resp, err := c.send(req, ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("mcp[%s]: send %s: %w", c.name, method, err)
 	}
 
 	if resp.IsError() {
@@ -316,7 +316,7 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 
 	if result != nil && resp.Result != nil {
 		if err := json.Unmarshal(resp.Result, result); err != nil {
-			return fmt.Errorf("unmarshaling result: %w", err)
+			return fmt.Errorf("mcp[%s]: unmarshal result: %w", c.name, err)
 		}
 	}
 
@@ -341,7 +341,7 @@ func (c *Client) send(msg interface{}, ctx context.Context) (*Response, error) {
 		return c.sendWS(ctx, msg)
 	case "", "stdio":
 		if err := c.writeMessage(msg); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("mcp[%s]: write message: %w", c.name, err)
 		}
 		switch msg.(type) {
 		case Notification:
@@ -383,7 +383,7 @@ func (c *Client) readResponseWithCancel(ctx context.Context) (*Response, error) 
 func (c *Client) writeMessage(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return err
+		return fmt.Errorf("mcp[%s]: marshal message: %w", c.name, err)
 	}
 	if c.transport == "" || c.transport == "stdio" {
 		data = append(data, '\n')
@@ -401,7 +401,7 @@ func (c *Client) writeMessage(msg interface{}) error {
 func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, error) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mcp[%s]: marshal http message: %w", c.name, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(data))
 	if err != nil {
@@ -459,7 +459,7 @@ func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, erro
 func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mcp[%s]: marshal ws message: %w", c.name, err)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.wsConn.SetWriteDeadline(deadline)
@@ -474,7 +474,7 @@ func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error)
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("mcp[%s]: context cancelled: %w", c.name, err)
 		}
 		_, payload, err := c.wsConn.ReadMessage()
 		if err != nil {
@@ -482,7 +482,7 @@ func (c *Client) sendWS(ctx context.Context, msg interface{}) (*Response, error)
 		}
 		parsed, err := ParseMessage(payload)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("mcp[%s]: parse ws message: %w", c.name, err)
 		}
 		if resp, ok := parsed.(*Response); ok {
 			return resp, nil
@@ -501,7 +501,7 @@ func parseHTTPResponse(body []byte, contentType string) (*Response, error) {
 	}
 	msg, err := ParseMessage(payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse message: %w", err)
 	}
 	resp, ok := msg.(*Response)
 	if !ok {
@@ -557,7 +557,7 @@ func (c *Client) readResponse(ctx context.Context) (*Response, error) {
 	for {
 		msg, err := c.readMessage(ctx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("mcp[%s]: read message: %w", c.name, err)
 		}
 		switch typed := msg.(type) {
 		case *Response:
@@ -566,7 +566,7 @@ func (c *Client) readResponse(ctx context.Context) (*Response, error) {
 			continue
 		case *Request:
 			if err := c.handleServerRequest(typed); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("mcp[%s]: handle server request: %w", c.name, err)
 			}
 		default:
 			return nil, c.withStderr(fmt.Errorf("unexpected MCP message type %T", msg))

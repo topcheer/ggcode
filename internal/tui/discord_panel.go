@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,7 +65,7 @@ func (m Model) renderDiscordPanel() string {
 	}
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.discord.directory")),
-		fmt.Sprintf(" %s", firstNonEmptyDiscord(m.currentWorkspacePath(), m.t("panel.discord.none"))),
+		fmt.Sprintf(" %s", util.FirstNonEmpty(m.currentWorkspacePath(), m.t("panel.discord.none"))),
 		"",
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.discord.bots")),
 		fmt.Sprintf(" %s", m.t("panel.discord.created", len(entries))),
@@ -79,8 +80,8 @@ func (m Model) renderDiscordPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.discord.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.discord.target", firstNonEmptyDiscord(current.TargetID, m.t("panel.discord.default")))),
-				fmt.Sprintf(" %s", m.t("panel.discord.channel", firstNonEmptyDiscord(current.ChannelID, m.t("panel.discord.none")))),
+				fmt.Sprintf(" %s", m.t("panel.discord.target", util.FirstNonEmpty(current.TargetID, m.t("panel.discord.default")))),
+				fmt.Sprintf(" %s", m.t("panel.discord.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.discord.none")))),
 			)
 		}
 	}
@@ -107,9 +108,9 @@ func (m Model) renderDiscordPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.discord.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.discord.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.discord.transport", m.discordAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.discord.bound_directory", firstNonEmptyDiscord(entry.OccupiedBy, m.t("panel.discord.none")))),
-			fmt.Sprintf(" %s", m.t("panel.discord.current_directory_target", firstNonEmptyDiscord(entry.TargetID, defaultDiscordTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.discord.current_directory_channel", firstNonEmptyDiscord(entry.WorkspaceChannel, m.t("panel.discord.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.discord.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.discord.none")))),
+			fmt.Sprintf(" %s", m.t("panel.discord.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultDiscordTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.discord.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.discord.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.discord.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -381,7 +382,7 @@ func (m Model) discordBindingEntries() []discordBindingEntry {
 		targetID := defaultDiscordTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyDiscord(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		entries = append(entries, discordBindingEntry{
@@ -447,16 +448,6 @@ func currentDiscordBindings(mgr *im.Manager) []im.ChannelBinding {
 	}
 	return result
 }
-
-func firstNonEmptyDiscord(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func defaultDiscordTargetID(workspace string) string {
 	base := filepath.Base(strings.TrimSpace(workspace))
 	if base == "" || base == "." || base == string(filepath.Separator) {

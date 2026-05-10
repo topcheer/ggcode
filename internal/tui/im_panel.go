@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"sort"
 	"strings"
 
@@ -55,7 +56,7 @@ func (m Model) renderIMPanel() string {
 	body := []string{
 		lipgloss.NewStyle().Bold(true).Render(m.t("panel.im.title")),
 		fmt.Sprintf(" %s", m.t("panel.im.directory")),
-		fmt.Sprintf("  %s", firstNonEmptyIM(m.currentWorkspacePath(), m.t("panel.im.none"))),
+		fmt.Sprintf("  %s", util.FirstNonEmpty(m.currentWorkspacePath(), m.t("panel.im.none"))),
 		"",
 	}
 
@@ -147,7 +148,7 @@ func (m Model) renderIMPanel() string {
 		)
 		if entry.Bound {
 			body = append(body,
-				fmt.Sprintf("  %s", m.t("panel.im.channel_id", firstNonEmptyIM(entry.ChannelID, m.t("panel.im.none")))),
+				fmt.Sprintf("  %s", m.t("panel.im.channel_id", util.FirstNonEmpty(entry.ChannelID, m.t("panel.im.none")))),
 			)
 		}
 		if entry.LastError != "" {
@@ -539,15 +540,6 @@ func clampIMSelection(selected, total int) int {
 		return total - 1
 	}
 	return selected
-}
-
-func firstNonEmptyIM(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 // renderContactQRCode renders a QR code string from a contact URI.

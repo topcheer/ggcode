@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
 
@@ -127,7 +128,7 @@ func (m Model) renderMCPPanel() string {
 				}
 				return ""
 			}(),
-			fmt.Sprintf(" Transport: %s", firstNonEmptyValue(srv.Transport, "stdio")),
+			fmt.Sprintf(" Transport: %s", util.FirstNonEmpty(srv.Transport, "stdio")),
 			fmt.Sprintf(" Tools: %d", len(srv.ToolNames)),
 			fmt.Sprintf(" Prompts: %d", len(srv.PromptNames)),
 			fmt.Sprintf(" Resources: %d", len(srv.ResourceNames)),
@@ -338,7 +339,7 @@ func mcpServerLabels(servers []MCPInfo) []string {
 		if srv.Disabled {
 			status = "✗"
 		}
-		out = append(out, fmt.Sprintf("%s %s (%s)", status, srv.Name, firstNonEmptyValue(srv.Transport, "stdio")))
+		out = append(out, fmt.Sprintf("%s %s (%s)", status, srv.Name, util.FirstNonEmpty(srv.Transport, "stdio")))
 	}
 	return out
 }

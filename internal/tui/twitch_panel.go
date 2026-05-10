@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,16 +48,6 @@ func (m *Model) openTwitchPanel() {
 func (m *Model) closeTwitchPanel() {
 	m.twitchPanel = nil
 }
-
-func firstNonEmptyTwitch(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func maxTwitch(v, min int) int {
 	if v > min {
 		return v
@@ -122,8 +113,8 @@ func (m Model) renderTwitchPanel() string {
 		for _, current := range currentBindings {
 			body = append(body,
 				fmt.Sprintf(" %s", m.t("panel.twitch.adapter", current.Adapter)),
-				fmt.Sprintf(" %s", m.t("panel.twitch.target", firstNonEmptyTwitch(current.TargetID, m.t("panel.twitch.default")))),
-				fmt.Sprintf(" %s", m.t("panel.twitch.channel", firstNonEmptyTwitch(current.ChannelID, m.t("panel.twitch.none")))),
+				fmt.Sprintf(" %s", m.t("panel.twitch.target", util.FirstNonEmpty(current.TargetID, m.t("panel.twitch.default")))),
+				fmt.Sprintf(" %s", m.t("panel.twitch.channel", util.FirstNonEmpty(current.ChannelID, m.t("panel.twitch.none")))),
 			)
 		}
 	}
@@ -147,9 +138,9 @@ func (m Model) renderTwitchPanel() string {
 			fmt.Sprintf(" %s", m.t("panel.twitch.adapter", entry.Adapter)),
 			fmt.Sprintf(" %s", m.t("panel.twitch.status", status)),
 			fmt.Sprintf(" %s", m.t("panel.twitch.transport", m.twitchAdapterStatus(entry.AdapterState))),
-			fmt.Sprintf(" %s", m.t("panel.twitch.bound_directory", firstNonEmptyTwitch(entry.OccupiedBy, m.t("panel.twitch.none")))),
-			fmt.Sprintf(" %s", m.t("panel.twitch.current_directory_target", firstNonEmptyTwitch(entry.TargetID, defaultTwitchTargetID(m.currentWorkspacePath())))),
-			fmt.Sprintf(" %s", m.t("panel.twitch.current_directory_channel", firstNonEmptyTwitch(entry.WorkspaceChannel, m.t("panel.twitch.waiting_for_pairing")))),
+			fmt.Sprintf(" %s", m.t("panel.twitch.bound_directory", util.FirstNonEmpty(entry.OccupiedBy, m.t("panel.twitch.none")))),
+			fmt.Sprintf(" %s", m.t("panel.twitch.current_directory_target", util.FirstNonEmpty(entry.TargetID, defaultTwitchTargetID(m.currentWorkspacePath())))),
+			fmt.Sprintf(" %s", m.t("panel.twitch.current_directory_channel", util.FirstNonEmpty(entry.WorkspaceChannel, m.t("panel.twitch.waiting_for_pairing")))),
 		)
 		if entry.AdapterState != nil && strings.TrimSpace(entry.AdapterState.LastError) != "" {
 			body = append(body, fmt.Sprintf(" %s", m.t("panel.twitch.last_error", strings.TrimSpace(entry.AdapterState.LastError))))
@@ -484,7 +475,7 @@ func (m Model) twitchBindingEntries() []twitchBindingEntry {
 		targetID := defaultTwitchTargetID(currentWorkspace)
 		workspaceChannel := ""
 		if b, ok := bindingByAdapter[name]; ok && strings.TrimSpace(b.Workspace) == currentWorkspace {
-			targetID = firstNonEmptyTwitch(b.TargetID, targetID)
+			targetID = util.FirstNonEmpty(b.TargetID, targetID)
 			workspaceChannel = strings.TrimSpace(b.ChannelID)
 		}
 		var statePtr *im.AdapterState

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"path/filepath"
 	"strings"
@@ -829,8 +830,8 @@ func (m *Model) harnessPanelItems() []string {
 		}
 		items := make([]string, 0, len(panel.contexts.Summaries))
 		for _, summary := range panel.contexts.Summaries {
-			label := firstNonEmptyHarness(summary.Path, summary.Name, m.t("harness.unscoped"))
-			items = append(items, truncateString(fmt.Sprintf("%s • %d %s", label, summary.TaskCount, m.t("harness.tasks_count")), 52))
+			label := util.FirstNonEmpty(summary.Path, summary.Name, m.t("harness.unscoped"))
+			items = append(items, util.Truncate(fmt.Sprintf("%s • %d %s", label, summary.TaskCount, m.t("harness.tasks_count")), 52))
 		}
 		return items
 	case harnessSectionTasks:
@@ -839,7 +840,7 @@ func (m *Model) harnessPanelItems() []string {
 			if task == nil {
 				continue
 			}
-			items = append(items, truncateString(fmt.Sprintf("%s • %s • %s", task.ID, task.Status, compactSingleLine(task.Goal)), 52))
+			items = append(items, util.Truncate(fmt.Sprintf("%s • %s • %s", task.ID, task.Status, compactSingleLine(task.Goal)), 52))
 		}
 		return items
 	case harnessSectionInbox:
@@ -848,25 +849,25 @@ func (m *Model) harnessPanelItems() []string {
 		}
 		items := make([]string, 0, len(panel.inbox.Entries))
 		for _, entry := range panel.inbox.Entries {
-			items = append(items, truncateString(fmt.Sprintf("%s • %s %d • %s %d", entry.Owner, m.t("harness.review_ready_short"), len(entry.ReviewReady), m.t("harness.promote_ready_short"), len(entry.PromotionReady)), 52))
+			items = append(items, util.Truncate(fmt.Sprintf("%s • %s %d • %s %d", entry.Owner, m.t("harness.review_ready_short"), len(entry.ReviewReady), m.t("harness.promote_ready_short"), len(entry.PromotionReady)), 52))
 		}
 		return items
 	case harnessSectionReview:
 		items := make([]string, 0, len(panel.review))
 		for _, task := range panel.review {
-			items = append(items, truncateString(fmt.Sprintf("%s • %s", task.ID, compactSingleLine(task.Goal)), 52))
+			items = append(items, util.Truncate(fmt.Sprintf("%s • %s", task.ID, compactSingleLine(task.Goal)), 52))
 		}
 		return items
 	case harnessSectionPromote:
 		items := make([]string, 0, len(panel.promote))
 		for _, task := range panel.promote {
-			items = append(items, truncateString(fmt.Sprintf("%s • %s", task.ID, compactSingleLine(task.Goal)), 52))
+			items = append(items, util.Truncate(fmt.Sprintf("%s • %s", task.ID, compactSingleLine(task.Goal)), 52))
 		}
 		return items
 	case harnessSectionRollouts:
 		items := make([]string, 0, len(panel.rollouts))
 		for _, rollout := range panel.rollouts {
-			items = append(items, truncateString(fmt.Sprintf("%s • %s", rollout.RolloutID, harnessRolloutLabel(m.currentLanguage(), rollout)), 52))
+			items = append(items, util.Truncate(fmt.Sprintf("%s • %s", rollout.RolloutID, harnessRolloutLabel(m.currentLanguage(), rollout)), 52))
 		}
 		return items
 	default:
@@ -894,7 +895,7 @@ func (m *Model) renderHarnessPanelList(items []string, selected int, focused boo
 	contentWidth := max(8, width-4)
 	clipped := make([]string, 0, len(items))
 	for _, item := range items {
-		clipped = append(clipped, truncateString(item, contentWidth))
+		clipped = append(clipped, util.Truncate(item, contentWidth))
 	}
 	return m.renderProviderList(clipped, selected, focused)
 }
@@ -1066,7 +1067,7 @@ func renderHarnessContextSummary(lang Language, summary *harness.ContextSummary)
 	if summary == nil {
 		return tr(lang, "harness.preview.no_context")
 	}
-	label := firstNonEmptyHarness(summary.Path, summary.Name, tr(lang, "harness.unscoped"))
+	label := util.FirstNonEmpty(summary.Path, summary.Name, tr(lang, "harness.unscoped"))
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.context_title"), label)
 	if summary.Name != "" && summary.Name != label {
@@ -1110,7 +1111,7 @@ func renderHarnessTask(lang Language, task *harness.Task, root string) string {
 		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.depends_on"), strings.Join(task.DependsOn, ", "))
 	}
 	if task.ContextName != "" || task.ContextPath != "" {
-		label := firstNonEmptyHarness(task.ContextName, harnessPanelPathLabel(root, task.ContextPath))
+		label := util.FirstNonEmpty(task.ContextName, harnessPanelPathLabel(root, task.ContextPath))
 		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.context"), label)
 	}
 	if task.WorkspacePath != "" {
@@ -1120,7 +1121,7 @@ func renderHarnessTask(lang Language, task *harness.Task, root string) string {
 		fmt.Fprintf(&b, "%s: %s\n", tr(lang, "harness.label.branch"), task.BranchName)
 	}
 	if task.WorkerID != "" {
-		status := firstNonEmptyHarness(task.WorkerStatus, tr(lang, "harness.unknown"))
+		status := util.FirstNonEmpty(task.WorkerStatus, tr(lang, "harness.unknown"))
 		if strings.TrimSpace(task.WorkerPhase) != "" && task.WorkerPhase != status {
 			fmt.Fprintf(&b, "%s: %s [%s, %s]\n", tr(lang, "harness.label.worker"), task.WorkerID, status, task.WorkerPhase)
 		} else {
@@ -1213,7 +1214,7 @@ func renderHarnessDoctorPreview(lang Language, report *harness.DoctorReport) str
 	}
 	if report.LastTask != nil {
 		fmt.Fprintf(&b, "\n%s\n- %s [%s]\n", tr(lang, "harness.latest_task"), report.LastTask.ID, report.LastTask.Status)
-		if label := firstNonEmptyHarness(report.LastTask.ContextName, report.LastTask.ContextPath); label != "" {
+		if label := util.FirstNonEmpty(report.LastTask.ContextName, report.LastTask.ContextPath); label != "" {
 			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.context"), label)
 		}
 		if report.LastTask.WorkerID != "" {
@@ -1264,11 +1265,11 @@ func renderHarnessMonitorPreview(lang Language, project *harness.Project, report
 		report.RolloutTotals.GatesPending, report.RolloutTotals.GatesApproved, report.RolloutTotals.GatesRejected)
 	if len(report.FocusTasks) > 0 {
 		task := report.FocusTasks[0]
-		fmt.Fprintf(&b, "\n%s\n- %s [%s]\n", tr(lang, "harness.focus"), task.ID, firstNonEmptyHarness(task.Status, tr(lang, "harness.unknown")))
+		fmt.Fprintf(&b, "\n%s\n- %s [%s]\n", tr(lang, "harness.focus"), task.ID, util.FirstNonEmpty(task.Status, tr(lang, "harness.unknown")))
 		if task.Goal != "" {
 			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.goal"), compactSingleLine(task.Goal))
 		}
-		if context := firstNonEmptyHarness(task.ContextPath, task.ContextName); context != "" {
+		if context := util.FirstNonEmpty(task.ContextPath, task.ContextName); context != "" {
 			fmt.Fprintf(&b, "- %s: %s\n", tr(lang, "harness.label.context"), context)
 		}
 	}
@@ -1324,11 +1325,11 @@ func (m Model) renderHarnessActionLines(width int) []string {
 	if harnessPanelNeedsInput(panel.selectedSection) {
 		return []string{
 			renderHarnessPanelInput(panel.actionInput, panel.focus == harnessPanelFocusInput, width),
-			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(truncateString(harnessPanelPrimaryHint(panel.selectedSection, m.currentLanguage()), width)),
+			lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(util.Truncate(harnessPanelPrimaryHint(panel.selectedSection, m.currentLanguage()), width)),
 		}
 	}
 	return []string{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(truncateString(harnessPanelPrimaryHint(panel.selectedSection, m.currentLanguage()), width)),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(util.Truncate(harnessPanelPrimaryHint(panel.selectedSection, m.currentLanguage()), width)),
 	}
 }
 
@@ -1342,7 +1343,7 @@ func (m Model) renderHarnessPanelFooterLines(width int) []string {
 		lines = append(lines, msg)
 	}
 	if hints := strings.TrimSpace(m.harnessPanelHints()); hints != "" {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(truncateString(hints, width)))
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(util.Truncate(hints, width)))
 	}
 	return lines
 }
@@ -1362,7 +1363,7 @@ func renderHarnessPlainList(items []string, selected int, focused bool, width, m
 				prefix = "* "
 			}
 		}
-		lines = append(lines, prefix+truncateString(items[i], max(1, width-len(prefix))))
+		lines = append(lines, prefix+util.Truncate(items[i], max(1, width-len(prefix))))
 	}
 	return lines
 }
@@ -1707,7 +1708,7 @@ func clipHarnessPanelText(content string, width, height int) string {
 	content = truncateLines(content, height)
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		lines[i] = truncateString(line, width)
+		lines[i] = util.Truncate(line, width)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1750,16 +1751,6 @@ func isHarnessPanelInputKey(msg tea.KeyPressMsg) bool {
 		return false
 	}
 }
-
-func firstNonEmptyHarness(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func clampHarnessIndex(value, size int) int {
 	if size <= 0 {
 		return 0

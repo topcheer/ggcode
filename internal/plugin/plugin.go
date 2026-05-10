@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -100,9 +102,28 @@ func (c *CommandTool) Parameters() json.RawMessage {
 }
 
 func (c *CommandTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
-	// Input is optional; tool can work with no input
+	var params struct {
+		Args string `json:"args"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil && len(input) > 0 {
+		return tool.Result{Content: err.Error(), IsError: true}, nil
+	}
+
+	args := c.args
+	if params.Args != "" {
+		args = append(args, strings.Fields(params.Args)...)
+	}
+
+	cmd := exec.CommandContext(ctx, c.execute, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return tool.Result{
+			Content: fmt.Sprintf("Command %q failed: %s\n%s", c.name, err, string(out)),
+			IsError: true,
+		}, nil
+	}
 	return tool.Result{
-		Content: fmt.Sprintf("Command tool %q executed (placeholder)", c.name),
+		Content: string(out),
 		IsError: false,
 	}, nil
 }

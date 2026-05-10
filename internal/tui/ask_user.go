@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -172,7 +173,7 @@ func (m Model) renderQuestionnaireTabs() string {
 	}
 	tabs := make([]string, 0, len(qs.request.Questions)+2)
 	for i, question := range qs.request.Questions {
-		label := fmt.Sprintf("%s %s", questionnaireStateBadge(qs.answerCompletionStatus(i)), truncateString(strings.TrimSpace(question.Title), 18))
+		label := fmt.Sprintf("%s %s", questionnaireStateBadge(qs.answerCompletionStatus(i)), util.Truncate(strings.TrimSpace(question.Title), 18))
 		tabs = append(tabs, m.renderQuestionnaireTab(label, qs.tabIndex == i))
 	}
 	tabs = append(tabs, m.renderQuestionnaireTab(questionnaireSubmitLabel(m.currentLanguage()), qs.onSubmitTab()))
@@ -354,7 +355,7 @@ func (qs *questionnaireState) loadActiveQuestion(lang Language) {
 	}
 	question := qs.request.Questions[idx]
 	qs.choiceCursor = 0
-	qs.input.Placeholder = firstNonEmpty(strings.TrimSpace(question.Placeholder), questionnaireFreeformPlaceholder(lang))
+	qs.input.Placeholder = util.FirstNonEmpty(strings.TrimSpace(question.Placeholder), questionnaireFreeformPlaceholder(lang))
 	qs.input.SetValue(qs.answers[idx].freeform)
 	if question.AllowFreeform {
 		qs.input.Focus()
