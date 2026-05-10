@@ -89,6 +89,7 @@ type subAgentUpdateMsg struct {
 	AgentID string // empty for general update
 }
 type subAgentFollowRefreshMsg struct{}
+type followGraceTickMsg struct{}
 
 type skillsChangedMsg struct{}
 

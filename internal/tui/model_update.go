@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
 
@@ -306,7 +307,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() != "ctrl+c" {
 			m.resetExitConfirm()
 		}
-		debug.Log("tui", "KEYPRESS str=%q text=%q mod=%v code=%v input_before=%q", msg.String(), msg.Text, msg.Mod, msg.Code, truncateStr(m.input.Value(), 80))
+		debug.Log("tui", "KEYPRESS str=%q text=%q mod=%v code=%v input_before=%q", msg.String(), msg.Text, msg.Mod, msg.Code, util.Truncate(m.input.Value(), 80))
 		if msg.String() == "ctrl+r" {
 			m.sidebarVisible = !m.sidebarVisible
 			if m.config != nil {
@@ -1597,6 +1598,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.chatListScrollToBottom()
+
+		// If terminal slots exist (completed/failed agents in grace period),
+		// ensure the grace-period cleanup timer is running so they get removed
+		// after subAgentGracePeriod (1 minute) even without new subAgentUpdateMsg.
+		if m.subAgentFollow.hasTerminalSlots() {
+			return m, tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
+				return followGraceTickMsg{}
+			})
+		}
 		return m, nil
 
 	case subAgentFollowRefreshMsg:
@@ -1607,6 +1617,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Still throttled — reschedule
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return subAgentFollowRefreshMsg{}
+			})
+		}
+		return m, nil
+
+	case followGraceTickMsg:
+		// Re-evaluate grace period: refresh slots and remove expired terminal ones
+		m.subAgentFollow.refreshSlots(m.subAgentMgr)
+		m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
+		m.subAgentFollow.cleanup(m.subAgentMgr, m.swarmMgr)
+
+		// Auto-deactivate if the followed agent was removed
+		if m.subAgentFollow.isActive() && m.subAgentFollow.currentSlotIndex() == -1 {
+			m.subAgentFollow.deactivate()
+		}
+
+		// Continue ticking only while terminal slots still exist
+		if m.subAgentFollow.hasTerminalSlots() {
+			return m, tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
+				return followGraceTickMsg{}
 			})
 		}
 		return m, nil
@@ -1670,7 +1699,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer(true)
 			}
-			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
+			startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
 			m.chatFinishTool(ts)
@@ -1710,7 +1739,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 					m.renderStreamBuffer(true)
 				}
-				startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
+				startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
 				spinnerCmd = combineCmds(spinnerCmd, startCmd)
 			} else {
 				m.chatFinishTool(ts.ToolStatusMsg)
@@ -1737,7 +1766,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 				m.renderStreamBuffer(true)
 			}
-			startCmd := m.spinner.Start(firstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
+			startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
 			m.chatFinishTool(ts)
@@ -2221,7 +2250,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (contains ;, :, /, digits etc.) to avoid wiping legitimate input
 		// set programmatically by callers (e.g. IM tests).
 		if val := m.input.Value(); val != "" && looksLikeStartupGarbage(val) {
-			debug.Log("tui", "clearing pre-drain input garbage: %q", truncateStr(val, 80))
+			debug.Log("tui", "clearing pre-drain input garbage: %q", util.Truncate(val, 80))
 			m.input.Reset()
 		}
 		// Start the input drain window. Terminal responses (OSC 11 color
@@ -2324,7 +2353,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	newValue := m.input.Value()
 	if oldValue != newValue {
-		debug.Log("tui", "CATCHALL input changed old=%q new=%q", truncateStr(oldValue, 80), truncateStr(newValue, 80))
+		debug.Log("tui", "CATCHALL input changed old=%q new=%q", util.Truncate(oldValue, 80), util.Truncate(newValue, 80))
 	}
 
 	// Update autocomplete state based on current input
