@@ -648,6 +648,13 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			} else if len(toolCalls) > 0 {
 				msg.ReasoningContent = ""
 			}
+			// DeepSeek V4 strictly requires assistant messages to have content or
+			// tool_calls. If both are empty (e.g. from a previous model that produced
+			// an empty response), skip the message entirely.
+			if msg.Content == "" && len(msg.ToolCalls) == 0 {
+				debug.Log("openai", "WARNING: skipping empty assistant message (idx=%d, content_blocks=%d)", idx, len(m.Content))
+				continue
+			}
 			result = append(result, msg)
 		case "tool":
 			// Tool results - each tool_result block becomes a separate message
