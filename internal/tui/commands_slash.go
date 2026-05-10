@@ -560,6 +560,8 @@ func (m *Model) tryActivateCurrentSelection() error {
 		if resolved.MaxTokens > 0 {
 			m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
 		}
+		// Silently probe actual context window in background
+		m.startContextProbe()
 	}
 	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	return nil
@@ -596,6 +598,8 @@ func (m *Model) ensureProviderSync() {
 	}
 	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
 	m.syncSessionSelection()
+	// Silently probe actual context window in background
+	m.startContextProbe()
 }
 
 func (m *Model) syncSessionSelection() {

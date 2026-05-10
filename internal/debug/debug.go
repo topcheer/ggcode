@@ -77,6 +77,11 @@ var Categories = []Category{
 		Tags:        []string{"provider", "adaptive_cap"},
 	},
 	{
+		Name: "probe", EnvSuffix: "PROBE",
+		Description: "Context window probing and cache",
+		Tags:        []string{"probe"},
+	},
+	{
 		Name: "qq", EnvSuffix: "QQ",
 		Description: "QQ IM adapter",
 		Tags:        []string{"qq"},
