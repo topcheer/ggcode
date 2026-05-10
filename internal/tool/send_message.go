@@ -22,7 +22,9 @@ func (t SendMessageTool) Description() string {
 		"Messages are sent asynchronously — the tool returns immediately after delivery. " +
 		"For swarm teammates, use teammate_results to collect the output when the teammate finishes. " +
 		"Use to='*' to broadcast to all agents and teammates. " +
-		"When sending to a swarm teammate (ID starts with 'tm-'), always provide team_id."
+		"When sending to a swarm teammate (ID starts with 'tm-'), always provide team_id. " +
+		"NOTE: For assigning tracked tasks to teammates, prefer swarm_task_create (which auto-delivers to the assignee's inbox). " +
+		"Use send_message only for unstructured follow-ups, clarifications, or when no task tracking is needed."
 }
 func (t SendMessageTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

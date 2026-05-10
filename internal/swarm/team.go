@@ -37,6 +37,28 @@ type TaskResult struct {
 	Error  error
 }
 
+// TeammateEventType identifies the kind of teammate event.
+type TeammateEventType int
+
+const (
+	TeammateEventText       TeammateEventType = iota // LLM text output
+	TeammateEventToolCall                            // tool invocation started
+	TeammateEventToolResult                          // tool execution result
+	TeammateEventError                               // error encountered
+)
+
+// TeammateEvent is a single recorded event from a teammate's execution.
+type TeammateEvent struct {
+	Type     TeammateEventType
+	Text     string // TeammateEventText / TeammateEventError
+	ToolName string // TeammateEventToolCall / TeammateEventToolResult
+	ToolArgs string // TeammateEventToolCall
+	Result   string // TeammateEventToolResult
+	IsError  bool   // TeammateEventToolResult / TeammateEventError
+}
+
+const maxTeammateEvents = 200
+
 // Teammate represents a worker agent within a team.
 type Teammate struct {
 	ID          string
@@ -49,6 +71,9 @@ type Teammate struct {
 	CreatedAt   time.Time
 	StartedAt   time.Time
 	EndedAt     time.Time
+
+	events        []TeammateEvent
+	eventsDropped int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -79,6 +104,16 @@ func (t *Teammate) setLastResult(result string) {
 	t.LastResult = result
 }
 
+func (t *Teammate) appendEvent(ev TeammateEvent) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.events) >= maxTeammateEvents {
+		t.events = t.events[1:]
+		t.eventsDropped++
+	}
+	t.events = append(t.events, ev)
+}
+
 func (t *Teammate) getResults() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -87,30 +122,36 @@ func (t *Teammate) getResults() string {
 
 // TeammateSnapshot is a read-only copy of a Teammate for external consumption.
 type TeammateSnapshot struct {
-	ID          string
-	Name        string
-	Color       string
-	Status      TeammateStatus
-	CurrentTask string
-	LastResult  string // most recent task output (truncated)
-	CreatedAt   time.Time
-	StartedAt   time.Time
-	EndedAt     time.Time
+	ID            string
+	Name          string
+	Color         string
+	Status        TeammateStatus
+	CurrentTask   string
+	LastResult    string // most recent task output (truncated)
+	CreatedAt     time.Time
+	StartedAt     time.Time
+	EndedAt       time.Time
+	Events        []TeammateEvent
+	EventsDropped int
 }
 
 func (t *Teammate) snapshot() TeammateSnapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	events := make([]TeammateEvent, len(t.events))
+	copy(events, t.events)
 	return TeammateSnapshot{
-		ID:          t.ID,
-		Name:        t.Name,
-		Color:       t.Color,
-		Status:      t.Status,
-		CurrentTask: t.CurrentTask,
-		LastResult:  t.LastResult,
-		CreatedAt:   t.CreatedAt,
-		StartedAt:   t.StartedAt,
-		EndedAt:     t.EndedAt,
+		ID:            t.ID,
+		Name:          t.Name,
+		Color:         t.Color,
+		Status:        t.Status,
+		CurrentTask:   t.CurrentTask,
+		LastResult:    t.LastResult,
+		CreatedAt:     t.CreatedAt,
+		StartedAt:     t.StartedAt,
+		EndedAt:       t.EndedAt,
+		Events:        events,
+		EventsDropped: t.eventsDropped,
 	}
 }
 

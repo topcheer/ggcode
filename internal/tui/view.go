@@ -912,25 +912,44 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
 
-	// Sub-agent follow mode: render sub-agent view instead of main conversation
-	if m.subAgentFollow.isActive() && m.subAgentMgr != nil {
-		snap, ok := m.subAgentMgr.Snapshot(m.subAgentFollow.activeID)
-		if ok {
-			entry := m.subAgentFollow.getOrCreateView(m.subAgentFollow.activeID, innerW, innerH)
-			entry.list.SetSize(innerW, innerH)
-			buildSubAgentFollowList(snap, entry.list, m.chatStyles)
-			rendered := entry.list.Render()
-			width := m.boxInnerWidth(m.mainColumnWidth())
-			return lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("208")).
-				Padding(0, 1).
-				Width(width).
-				Height(panelHeight).
-				MaxHeight(panelHeight).
-				Render(rendered)
+	// Follow mode: render followed agent/teammate view instead of main conversation
+	if m.subAgentFollow.isActive() {
+		entry := m.subAgentFollow.getOrCreateView(m.subAgentFollow.activeID, innerW, innerH)
+		entry.list.SetSize(innerW, innerH)
+
+		// Try sub-agent first
+		if m.subAgentMgr != nil {
+			if snap, ok := m.subAgentMgr.Snapshot(m.subAgentFollow.activeID); ok {
+				buildFollowList(subagentSnapshotToFollowData(snap), entry.list, m.chatStyles)
+				rendered := entry.list.Render()
+				width := m.boxInnerWidth(m.mainColumnWidth())
+				return lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("208")).
+					Padding(0, 1).
+					Width(width).
+					Height(panelHeight).
+					MaxHeight(panelHeight).
+					Render(rendered)
+			}
 		}
-		// Sub-agent not found — fall through to main view
+		// Try swarm teammate
+		if m.swarmMgr != nil {
+			if snap, ok := m.swarmMgr.TeammateSnapshot(m.subAgentFollow.activeID); ok {
+				buildFollowList(teammateSnapshotToFollowData(snap), entry.list, m.chatStyles)
+				rendered := entry.list.Render()
+				width := m.boxInnerWidth(m.mainColumnWidth())
+				return lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("208")).
+					Padding(0, 1).
+					Width(width).
+					Height(panelHeight).
+					MaxHeight(panelHeight).
+					Render(rendered)
+			}
+		}
+		// Not found — fall through to main view
 	}
 
 	debug.Log("layout", "panel ph=%d iw=%d ih=%d n=%d",
@@ -1478,6 +1497,17 @@ func (m Model) renderComposerPanel() string {
 			timerLabel = "brewing " + formatDuration(elapsed)
 		}
 		hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel))
+	}
+
+	// Ctrl+N follow hint when subagent/teammate slots exist — highlighted to stand out
+	if len(m.subAgentFollow.slots) > 0 && !m.subAgentFollow.isActive() {
+		followHint := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00FFFF")).
+			Background(lipgloss.Color("#333333")).
+			Bold(true).
+			Padding(0, 1).
+			Render(m.t("hint.follow_panel"))
+		hints = append(hints, followHint)
 	}
 
 	hintLine := strings.Join(hints, " • ")

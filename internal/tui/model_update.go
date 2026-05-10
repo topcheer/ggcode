@@ -455,6 +455,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if m.exitConfirmPending {
 					m.quitting = true
+					m.shutdownAll()
 					return m, tea.Quit
 				}
 				m.promptExitConfirm()
@@ -598,38 +599,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "ctrl+n":
-			// Sub-agent follow mode: cycle to next slot (or enter first slot)
-			if len(m.subAgentFollow.slots) > 0 {
-				if !m.subAgentFollow.isActive() {
-					m.subAgentFollow.activate(0)
-				} else {
-					currentIdx := m.subAgentFollow.currentSlotIndex()
-					// Find next non-terminal slot
-					for i := 1; i <= len(m.subAgentFollow.slots); i++ {
-						nextIdx := (currentIdx + i) % len(m.subAgentFollow.slots)
-						if !isTerminalStatus(m.subAgentFollow.slots[nextIdx].Status) {
-							m.subAgentFollow.activate(nextIdx)
-							break
-						}
-						// If all are terminal, wrap back to current
-						if i == len(m.subAgentFollow.slots) {
-							m.subAgentFollow.activate(currentIdx)
-						}
-					}
-				}
+			// Follow mode: open panel (navigate with arrow keys)
+			if len(m.subAgentFollow.slots) > 0 && !m.subAgentFollow.isActive() {
+				m.subAgentFollow.activate(0)
 				return m, nil
 			}
 		case "ctrl+p":
-			// Sub-agent follow mode: cycle to previous slot (or exit if at start)
-			if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
-				currentIdx := m.subAgentFollow.currentSlotIndex()
-				if currentIdx == 0 {
-					m.subAgentFollow.deactivate()
-				} else {
-					m.subAgentFollow.activate(currentIdx - 1)
-				}
-				return m, nil
-			}
+			// Removed: use arrow keys to navigate in follow mode
 		case "$", "!":
 			if !m.shellMode && !m.loading && !m.projectMemoryLoading && strings.TrimSpace(m.input.Value()) == "" {
 				m.setShellMode(true)
@@ -644,6 +620,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.exitConfirmPending {
 				m.quitting = true
+				m.shutdownAll()
 				return m, tea.Quit
 			}
 			m.promptExitConfirm()
@@ -654,6 +631,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleClipboardPaste()
 		case "ctrl+d":
 			m.quitting = true
+			m.shutdownAll()
 			return m, tea.Quit
 		case "shift+tab":
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
@@ -671,7 +649,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatList.ScrollDown(m.chatList.Height() / 2)
 			}
 			return m, nil
+
 		case "up":
+			// Follow mode: navigate to previous slot
+			if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
+				currentIdx := m.subAgentFollow.currentSlotIndex()
+				if currentIdx > 0 {
+					m.subAgentFollow.activate(currentIdx - 1)
+				} else {
+					m.subAgentFollow.activate(len(m.subAgentFollow.slots) - 1)
+				}
+				return m, nil
+			}
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 				m.autoCompleteIndex = (m.autoCompleteIndex - 1 + len(m.autoCompleteItems)) % len(m.autoCompleteItems)
 				var cmd tea.Cmd
@@ -680,6 +669,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.handleHistoryUp()
 		case "down":
+			// Follow mode: navigate to next slot
+			if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
+				currentIdx := m.subAgentFollow.currentSlotIndex()
+				if currentIdx < len(m.subAgentFollow.slots)-1 {
+					m.subAgentFollow.activate(currentIdx + 1)
+				} else {
+					m.subAgentFollow.activate(0)
+				}
+				return m, nil
+			}
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 				m.autoCompleteIndex = (m.autoCompleteIndex + 1) % len(m.autoCompleteItems)
 				var cmd tea.Cmd
@@ -687,6 +686,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			return m.handleHistoryDown()
+		case "left":
+			// Follow mode: navigate to previous slot (same as up)
+			if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
+				currentIdx := m.subAgentFollow.currentSlotIndex()
+				if currentIdx > 0 {
+					m.subAgentFollow.activate(currentIdx - 1)
+				} else {
+					m.subAgentFollow.activate(len(m.subAgentFollow.slots) - 1)
+				}
+				return m, nil
+			}
+		case "right":
+			// Follow mode: navigate to next slot (same as down)
+			if m.subAgentFollow.isActive() && len(m.subAgentFollow.slots) > 0 {
+				currentIdx := m.subAgentFollow.currentSlotIndex()
+				if currentIdx < len(m.subAgentFollow.slots)-1 {
+					m.subAgentFollow.activate(currentIdx + 1)
+				} else {
+					m.subAgentFollow.activate(0)
+				}
+				return m, nil
+			}
 		case "tab":
 			if m.autoCompleteActive && len(m.autoCompleteItems) > 0 {
 				if len(m.autoCompleteItems) == 1 {
@@ -1545,10 +1566,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case subAgentUpdateMsg:
-		// Refresh follow mode slots
+		// Refresh follow mode slots (sub-agents + swarm teammates)
 		m.subAgentFollow.refreshSlots(m.subAgentMgr)
+		m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
 		m.subAgentFollow.cleanup(m.subAgentMgr)
 		m.subAgentFollow.markDirty(msg.AgentID)
+
+		// Auto-deactivate if the followed agent completed and was removed from slots
+		if m.subAgentFollow.isActive() && m.subAgentFollow.currentSlotIndex() == -1 {
+			m.subAgentFollow.deactivate()
+		}
 
 		// Throttle active view rebuild
 		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {

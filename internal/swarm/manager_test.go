@@ -534,3 +534,84 @@ func containsSubstr(s, sub string) bool {
 	}
 	return false
 }
+
+func TestManager_CancelAll(t *testing.T) {
+	// Create a manager where we can directly access internal teams
+	ma := newMockAgent()
+	m := NewManager(
+		config.SwarmConfig{},
+		nil,
+		func(_ provider.Provider, _ interface{}, _ string, _ int) AgentRunner {
+			return ma
+		},
+		func(_ []string) interface{} { return nil },
+	)
+
+	teamSnap := m.CreateTeam("cancel-team", "leader-1")
+	m.SpawnTeammate(teamSnap.ID, "w1", "", nil)
+	m.SpawnTeammate(teamSnap.ID, "w2", "", nil)
+	m.SpawnTeammate(teamSnap.ID, "w3", "", nil)
+
+	// Directly set w1 and w2 to Working status via internal team access
+	m.mu.Lock()
+	team := m.teams[teamSnap.ID]
+	m.mu.Unlock()
+	for _, tm := range team.listTeammates() {
+		if tm.Name == "w1" || tm.Name == "w2" {
+			tm.setStatus(TeammateWorking)
+		}
+	}
+
+	// CancelAll should find and stop the two working ones
+	m.CancelAll()
+
+	snap := m.ListTeams()
+	for _, tm := range snap[0].Teammates {
+		if tm.Name == "w1" || tm.Name == "w2" {
+			if tm.Status != TeammateShuttingDown {
+				t.Errorf("expected %s shutting_down, got %s", tm.Name, tm.Status)
+			}
+		}
+		// w3 was idle — should stay idle
+		if tm.Name == "w3" && tm.Status == TeammateShuttingDown {
+			t.Errorf("expected %s to remain idle, got %s", tm.Name, tm.Status)
+		}
+	}
+}
+
+func TestManager_CancelAll_Empty(t *testing.T) {
+	m, _ := testManager(t)
+	// No teams — should be no-op
+	m.CancelAll()
+}
+
+func TestBuildTeammateSystemPrompt_WithWorkingDir(t *testing.T) {
+	prompt := buildTeammateSystemPrompt("researcher", "review-team", "/home/user/project")
+	if !containsSubstr(prompt, `researcher`) {
+		t.Error("expected teammate name in prompt")
+	}
+	if !containsSubstr(prompt, "review-team") {
+		t.Error("expected team name in prompt")
+	}
+	if !containsSubstr(prompt, "/home/user/project") {
+		t.Error("expected working directory in prompt")
+	}
+	if !containsSubstr(prompt, "Working directory:") {
+		t.Error("expected 'Working directory:' label in prompt")
+	}
+}
+
+func TestBuildTeammateSystemPrompt_NoWorkingDir(t *testing.T) {
+	prompt := buildTeammateSystemPrompt("researcher", "review-team", "")
+	if containsSubstr(prompt, "Working directory:") {
+		t.Error("should not contain 'Working directory:' when empty")
+	}
+}
+
+func TestManager_SetWorkingDir(t *testing.T) {
+	m, _ := testManager(t)
+	m.SetWorkingDir("/test/dir")
+	if m.workingDir != "/test/dir" {
+		t.Errorf("expected /test/dir, got %s", m.workingDir)
+	}
+}

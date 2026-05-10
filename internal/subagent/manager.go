@@ -350,6 +350,26 @@ func (m *Manager) Cancel(id string) bool {
 	return true
 }
 
+// CancelAll cancels all running sub-agents. Returns the number cancelled.
+func (m *Manager) CancelAll() int {
+	m.mu.Lock()
+	ids := make([]string, 0)
+	for id, sa := range m.agents {
+		if sa.getStatus() == StatusRunning {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+
+	cancelled := 0
+	for _, id := range ids {
+		if m.Cancel(id) {
+			cancelled++
+		}
+	}
+	return cancelled
+}
+
 // SetCancel stores the cancel function for a sub-agent.
 func (m *Manager) SetCancel(id string, cancel context.CancelFunc) {
 	m.mu.Lock()
