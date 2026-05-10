@@ -387,7 +387,9 @@ func (m *Manager) GetTaskManager(teamID string) *task.Manager {
 
 // SetOnUpdate sets the callback for swarm state changes (used by TUI).
 func (m *Manager) SetOnUpdate(fn func(Event)) {
+	m.mu.Lock()
 	m.onUpdate = fn
+	m.mu.Unlock()
 }
 
 // SetWorkingDir sets the working directory injected into teammate system prompts.
@@ -459,8 +461,11 @@ func (m *Manager) emit(ev Event) {
 		// leader can still retrieve it via GetTeammateResult.
 	}
 
-	if m.onUpdate != nil {
-		m.onUpdate(ev)
+	m.mu.Lock()
+	fn := m.onUpdate
+	m.mu.Unlock()
+	if fn != nil {
+		fn(ev)
 	}
 }
 
@@ -492,6 +497,7 @@ func buildTeammateSystemPrompt(name, teamName, workingDir string) string {
 			"Only claim tasks that match your role and capabilities. "+
 			"If a task does not match your role, leave it for another teammate. "+
 			"Do not spawn further sub-agents or teammates. "+
+			"Do not use emoji with Variation Selector-16 (U+FE0F, e.g. warning_sign+VS16) — use plain text instead to avoid terminal rendering issues. "+
 			"Report results concisely when done.",
 		name, teamName,
 	)

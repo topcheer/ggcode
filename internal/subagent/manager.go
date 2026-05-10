@@ -158,6 +158,12 @@ func (s *SubAgent) setProgressSummary(summary string) {
 	s.ProgressSummary = summary
 }
 
+func (s *SubAgent) setStartedAt(t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.StartedAt = t
+}
+
 func (s *SubAgent) snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
