@@ -118,24 +118,6 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			sa.appendEvent(AgentEvent{Type: AgentEventText, Text: text})
 		}
 	}
-	// Periodically flush accumulated text to follow view (every 500ms).
-	// Avoids per-token Notify (floods event loop) while still showing
-	// text progress during long pure-text responses.
-	flushDone := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(80 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				flushText()
-				cfg.Manager.Notify(cfg.SubAgentID)
-			case <-flushDone:
-				return
-			}
-		}
-	}()
-
 	err := subAgent.RunStream(subCtx, cfg.Task, func(event provider.StreamEvent) {
 		switch event.Type {
 		case provider.StreamEventText:
@@ -143,6 +125,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			textBuf.WriteString(event.Text)
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("writing", "", "")
+			}
+			// Flush and notify every ~200 tokens to keep follow panel responsive
+			// during long pure-text output (e.g. summary rounds).
+			if textBuf.Len() >= 800 {
+				flushText()
+				cfg.Manager.Notify(cfg.SubAgentID)
 			}
 		case provider.StreamEventToolCallDone:
 			// Flush accumulated text before recording tool call
@@ -188,7 +176,6 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			cfg.Manager.Notify(cfg.SubAgentID)
 		}
 	})
-	close(flushDone) // stop periodic flush ticker
 	// Flush any remaining text at the end of the stream
 	flushText()
 
