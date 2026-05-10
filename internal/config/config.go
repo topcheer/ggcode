@@ -191,6 +191,7 @@ type Config struct {
 	A2A            A2AConfig                 `yaml:"a2a,omitempty" json:"a2a,omitempty"`
 	Harness        HarnessConfig             `yaml:"harness,omitempty" json:"harness,omitempty"`
 	Stream         stream.StreamConfig       `yaml:"stream,omitempty" json:"stream,omitempty"`
+	ProbeContext   bool                      `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
 	FilePath       string                    `yaml:"-" json:"-"`
 	FirstRun       bool                      `yaml:"-" json:"-"`
 	instanceDir    string                    `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
