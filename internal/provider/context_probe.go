@@ -353,19 +353,16 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 }
 
 // tryTierProbe sends a message padded to approximately `tier` tokens.
-// The padding is sized to match the tier — we want to test the REAL limit,
-// not a scaled-down version. If the model truly supports 1M tokens, the 1M
-// tier must send ~1M tokens of padding.
+// The padding is sized to match the tier — we want to test the REAL limit.
 //
-// Token approximation: in most tokenizers (GPT, Claude, Gemini), each
-// "a " is approximately 1 token. So strings.Repeat("a ", tier) ≈ tier tokens.
-// This is an approximation — actual count depends on the tokenizer — but
-// it's close enough for boundary detection.
-//
-// Returns the confirmed context window if the request succeeds, or 0 if it
-// fails with a context overflow error.
+// Key insight: the caller guarantees that a simple probe ("hi") already
+// succeeded with this provider. So auth, network, and API key are all fine.
+// If a padded request fails, it's almost certainly because the padding
+// exceeded the model's context window — not because of auth or network.
+// We no longer try to match specific error keywords. Any non-success
+// response is treated as context overflow. We still try to extract the
+// exact numeric limit from the error for precision.
 func tryTierProbe(ctx context.Context, p Provider, tier int) int {
-	// Padding must approximate the tier size to properly test the boundary.
 	// Each "a " ≈ 1 token, so tier repetitions ≈ tier tokens.
 	padding := strings.Repeat("a ", tier)
 
@@ -381,12 +378,11 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 	elapsed := time.Since(start)
 
 	if err == nil {
-		// Request succeeded — context window >= tier
 		debug.Log("probe", "tier %dK SUCCEEDED in %s — context window >= %dK", tier/1000, elapsed, tier/1000)
 		return tier
 	}
 
-	// Check if context was cancelled (app shutdown, etc.)
+	// Context cancelled (app shutdown) — stop entirely
 	if ctx.Err() != nil {
 		debug.Log("probe", "tier %dK aborted after %s: %v", tier/1000, elapsed, ctx.Err())
 		return 0
@@ -394,27 +390,15 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 
 	debug.Log("probe", "tier %dK FAILED in %s: %s", tier/1000, elapsed, err.Error())
 
-	// Check for context overflow error
-	errMsg := strings.ToLower(err.Error())
-	isOverflow := strings.Contains(errMsg, "context") ||
-		strings.Contains(errMsg, "token limit") ||
-		strings.Contains(errMsg, "too many") ||
-		strings.Contains(errMsg, "too long") ||
-		strings.Contains(errMsg, "exceeds") ||
-		strings.Contains(errMsg, "maximum")
-
-	if isOverflow {
-		// Try to extract the exact limit from the error
-		if w := parseContextWindowFromError(err); w > 0 {
-			debug.Log("probe", "tier %dK overflow — extracted exact limit=%dK from error", tier/1000, w/1000)
-			return w
-		}
-		debug.Log("probe", "tier %dK overflow — no exact limit in error, trying next tier", tier/1000)
-		return 0
+	// Since simple probe succeeded, this failure is almost certainly
+	// context overflow. Try to extract the exact limit for precision.
+	if w := parseContextWindowFromError(err); w > 0 {
+		debug.Log("probe", "tier %dK overflow — extracted exact limit=%dK from error", tier/1000, w/1000)
+		return w
 	}
 
-	// Non-overflow error (rate limit, auth, network) — stop probing
-	debug.Log("probe", "tier %dK non-overflow error (stopping): %s", tier/1000, errMsg)
+	// No exact value in error, but still overflow — try next lower tier.
+	debug.Log("probe", "tier %dK overflow (no exact value) — trying next tier", tier/1000)
 	return 0
 }
 
