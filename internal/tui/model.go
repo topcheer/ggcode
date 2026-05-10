@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/image"
@@ -440,6 +441,50 @@ func (m *Model) SetProgram(p *tea.Program) {
 	m.refreshCachedGitBranch()
 }
 
+// startContextProbe silently probes the context window for the current
+// provider+model and applies the result to the agent's ContextManager.
+// Completely invisible to the user — no UI feedback at all.
+// Safe to call at any time; no-ops if agent/provider/config are not ready.
+func (m *Model) startContextProbe() {
+	if m.agent == nil {
+		debug.Log("probe", "startContextProbe skipped: agent is nil")
+		return
+	}
+	if m.config == nil {
+		debug.Log("probe", "startContextProbe skipped: config is nil")
+		return
+	}
+	prov := m.agent.Provider()
+	if prov == nil {
+		debug.Log("probe", "startContextProbe skipped: provider is nil (no active LLM configured)")
+		return
+	}
+	resolved, err := m.config.ResolveActiveEndpoint()
+	if err != nil {
+		debug.Log("probe", "startContextProbe skipped: resolve failed: %v", err)
+		return
+	}
+	if resolved.Model == "" {
+		debug.Log("probe", "startContextProbe skipped: no model selected")
+		return
+	}
+
+	debug.Log("probe", "startContextProbe: vendor=%s model=%s baseURL=%s",
+		resolved.VendorID, resolved.Model, resolved.BaseURL)
+
+	provider.ProbeContextWindow(context.Background(), prov,
+		resolved.VendorID, resolved.BaseURL, resolved.Model,
+		func(r provider.ProbeResult) {
+			if r.ContextWindow > 0 {
+				debug.Log("probe", "applying context_window=%d fromCache=%v to agent",
+					r.ContextWindow, r.FromCache)
+				m.agent.ContextManager().SetMaxTokens(r.ContextWindow)
+			} else {
+				debug.Log("probe", "probe returned 0 (no result), keeping current context window setting")
+			}
+		})
+}
+
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
@@ -728,6 +773,8 @@ func (m *Model) SetConfig(cfg *config.Config) {
 			m.openLanguageSelector(true)
 		}
 	}
+	// Silently probe context window in background
+	m.startContextProbe()
 }
 
 // SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt.
