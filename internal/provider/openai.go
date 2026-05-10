@@ -154,9 +154,6 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 			IncludeUsage: true,
 		},
 	}
-	if v := p.effectiveMaxTokens(); v > 0 {
-		req.MaxCompletionTokens = v
-	}
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
@@ -199,9 +196,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	req := openai.ChatCompletionRequest{
 		Model:    p.model,
 		Messages: chatMsgs,
-	}
-	if v := p.effectiveMaxTokens(); v > 0 {
-		req.MaxCompletionTokens = v
 	}
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
