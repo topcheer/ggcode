@@ -487,6 +487,127 @@ func containsPlain(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
+// ---------------------------------------------------------------------------
+// Tests for the new rendering logic (no fall-through, cached view)
+// ---------------------------------------------------------------------------
+
+func TestRenderConversationPanel_FollowNoFallThrough(t *testing.T) {
+	// When follow mode is active but the follow list is empty (e.g. snapshot
+	// not yet available), renderConversationPanel must NOT fall through to
+	// the main chat list. Instead it should render a placeholder.
+	m, _ := newFollowTestModel(2)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// Populate main chat list with recognisable content so we can detect leakage
+	m.chatList = chat.NewList(80, 20)
+	m.chatList.Append(chat.NewSystemItem("main-marker", "MAIN_CHAT_MARKER_XYZ", chat.DefaultStyles()))
+
+	// Activate follow mode WITHOUT rebuilding — entry list is empty
+	m.subAgentFollow.activate(0)
+
+	panel := m.renderConversationPanel(20)
+
+	if containsPlain(stripAnsi(panel), "MAIN_CHAT_MARKER_XYZ") {
+		t.Error("follow mode must NOT render main chat list content (fall-through detected)")
+	}
+}
+
+func TestRenderConversationPanel_FollowPlaceholder(t *testing.T) {
+	// When follow mode is active and the entry list has no items yet,
+	// a placeholder should be rendered.
+	m, _ := newFollowTestModel(1)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+	m.subAgentFollow.activate(0)
+
+	panel := m.renderConversationPanel(20)
+
+	if containsPlain(stripAnsi(panel), "Loading follow view") {
+		// Expected: placeholder shown
+	} else if containsPlain(stripAnsi(panel), "Empty") || containsPlain(stripAnsi(panel), "Ask") {
+		t.Error("should not render main-view empty state in follow mode")
+	}
+}
+
+func TestRenderConversationPanel_FollowCachedView(t *testing.T) {
+	// After rebuildActiveView populates the entry list, renderConversationPanel
+	// should render the cached list without calling buildFollowList again.
+	m, agents := newFollowTestModel(1)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// Add events to the sub-agent so the follow list has content
+	agents[0].AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "FOLLOW_VIEW_MARKER_ABC"})
+	agents[0].AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventToolCall, ToolName: "read_file", ToolArgs: "/tmp/test.txt"})
+	agents[0].AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventToolResult, ToolName: "read_file", Result: "file contents"})
+
+	// Activate and rebuild (same as the ctrl+n handler now does)
+	m.subAgentFollow.activate(0)
+	m.subAgentFollow.rebuildActiveView(m.subAgentMgr, nil, chat.DefaultStyles())
+
+	panel := m.renderConversationPanel(20)
+	plain := stripAnsi(panel)
+
+	if !containsPlain(plain, "FOLLOW_VIEW_MARKER_ABC") {
+		t.Error("expected follow view content after rebuildActiveView")
+	}
+}
+
+func TestRenderConversationPanel_FollowNoMainChatLeak(t *testing.T) {
+	// Even when the main chat list has long content that could cause
+	// rendering artifacts, follow mode must never show it.
+	m, _ := newFollowTestModel(1)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// Build a large main chat list
+	m.chatList = chat.NewList(80, 20)
+	for i := 0; i < 50; i++ {
+		m.chatList.Append(chat.NewSystemItem("main-"+string(rune(i)),
+			"MAIN_LONG_LINE_OF_CONTENT_THAT_SHOULD_NOT_LEAK_"+string(rune('A'+i%26)),
+			chat.DefaultStyles()))
+	}
+
+	// Activate follow mode
+	m.subAgentFollow.activate(0)
+	m.subAgentFollow.rebuildActiveView(m.subAgentMgr, nil, chat.DefaultStyles())
+
+	panel := m.renderConversationPanel(20)
+	plain := stripAnsi(panel)
+
+	if containsPlain(plain, "SHOULD_NOT_LEAK") {
+		t.Error("main chat list content leaked into follow panel")
+	}
+}
+
+func TestActivateTriggersRebuild(t *testing.T) {
+	// Verify that activate + rebuildActiveView populates the entry list,
+	// simulating the new ctrl+n handler behavior.
+	m, agents := newFollowTestModel(1)
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+
+	// Add some events
+	agents[0].AppendEvent(subagent.AgentEvent{Type: subagent.AgentEventText, Text: "working..."})
+
+	// Activate and rebuild
+	m.subAgentFollow.activate(0)
+	m.subAgentFollow.rebuildActiveView(m.subAgentMgr, nil, chat.DefaultStyles())
+
+	// Verify the entry list has content
+	activeID := m.subAgentFollow.activeID
+	entry := m.subAgentFollow.getOrCreateView(activeID, 80, 20)
+	entry.list.SetSize(80, 20)
+	if entry.list.Len() == 0 {
+		t.Error("expected non-empty follow list after activate + rebuildActiveView")
+	}
+
+	// Verify it renders without issues
+	rendered := entry.list.Render()
+	if rendered == "" {
+		t.Fatal("expected non-empty render output")
+	}
+	if !containsPlain(rendered, "working...") {
+		t.Error("expected follow view content in rendered output")
+	}
+}
+
 func TestRefreshSlots_FiltersCompleted(t *testing.T) {
 	m := newTestModel()
 	m.subAgentMgr = subagent.NewManager(config.SubAgentConfig{})

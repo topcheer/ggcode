@@ -912,44 +912,38 @@ func (m Model) renderConversationPanel(panelHeight int) string {
 	innerW := m.conversationInnerWidth()
 	innerH := conversationInnerHeight(panelHeight)
 
-	// Follow mode: render followed agent/teammate view instead of main conversation
+	// Follow mode: render followed agent/teammate view instead of main conversation.
+	// IMPORTANT: We only render the cached entry.list here — the actual list rebuild
+	// happens in Update() via rebuildActiveView(). This avoids rebuilding on every
+	// View() frame and prevents the "fall through to main view" path that causes
+	// rendering artifacts when the snapshot is temporarily unavailable.
 	if m.subAgentFollow.isActive() {
+		width := m.boxInnerWidth(m.mainColumnWidth())
+		style := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("208")).
+			Padding(0, 1).
+			Width(width).
+			Height(panelHeight).
+			MaxHeight(panelHeight)
+
 		entry := m.subAgentFollow.getOrCreateView(m.subAgentFollow.activeID, innerW, innerH)
 		entry.list.SetSize(innerW, innerH)
 
-		// Try sub-agent first
-		if m.subAgentMgr != nil {
-			if snap, ok := m.subAgentMgr.Snapshot(m.subAgentFollow.activeID); ok {
-				buildFollowList(subagentSnapshotToFollowData(snap), entry.list, m.chatStyles)
-				rendered := entry.list.Render()
-				width := m.boxInnerWidth(m.mainColumnWidth())
-				return lipgloss.NewStyle().
-					Border(lipgloss.RoundedBorder()).
-					BorderForeground(lipgloss.Color("208")).
-					Padding(0, 1).
-					Width(width).
-					Height(panelHeight).
-					MaxHeight(panelHeight).
-					Render(rendered)
-			}
+		// If the entry list has been populated (by rebuildActiveView in Update()),
+		// render it. Otherwise show a loading placeholder.
+		if entry.list.Len() > 0 {
+			return style.Render(entry.list.Render())
 		}
-		// Try swarm teammate
-		if m.swarmMgr != nil {
-			if snap, ok := m.swarmMgr.TeammateSnapshot(m.subAgentFollow.activeID); ok {
-				buildFollowList(teammateSnapshotToFollowData(snap), entry.list, m.chatStyles)
-				rendered := entry.list.Render()
-				width := m.boxInnerWidth(m.mainColumnWidth())
-				return lipgloss.NewStyle().
-					Border(lipgloss.RoundedBorder()).
-					BorderForeground(lipgloss.Color("208")).
-					Padding(0, 1).
-					Width(width).
-					Height(panelHeight).
-					MaxHeight(panelHeight).
-					Render(rendered)
-			}
-		}
-		// Not found — fall through to main view
+
+		// List hasn't been built yet (first frame before Update fires) —
+		// show a placeholder instead of falling through to the main chat list.
+		// Falling through causes rendering artifacts because the main chat content
+		// has different line widths than the follow view content.
+		placeholder := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Render("  Loading follow view...")
+		return style.Render(placeholder)
 	}
 
 	debug.Log("layout", "panel ph=%d iw=%d ih=%d n=%d",
