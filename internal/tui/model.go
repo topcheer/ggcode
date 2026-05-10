@@ -446,6 +446,9 @@ func (m *Model) SetProgram(p *tea.Program) {
 // Completely invisible to the user — no UI feedback at all.
 // Safe to call at any time; no-ops if agent/provider/config are not ready.
 func (m *Model) startContextProbe() {
+	if m.config == nil || !m.config.ProbeContext {
+		return
+	}
 	if m.agent == nil {
 		debug.Log("probe", "startContextProbe skipped: agent is nil")
 		return
