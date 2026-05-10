@@ -234,7 +234,8 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 // request to see if the API response or error reveals the context limit.
 // If not, it does tiered probing from largest to smallest.
 func probeInBackground(ctx context.Context, p Provider, key string) int {
-	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Overall timeout: 60 seconds (generous for slow networks)
+	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	// Try a simple short request first — many APIs return the limit in
@@ -254,7 +255,9 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 
 	debug.Log("probe", "simple probe inconclusive, starting tiered probing with %d tiers", len(probeTiers))
 
-	// Tiered probing: send padding messages from largest tier downward.
+	// Tiered probing: send padded messages from largest tier downward.
+	// Each tier gets its own 10-second timeout to avoid a single slow
+	// tier consuming the entire budget.
 	for i, tier := range probeTiers {
 		if probeCtx.Err() != nil {
 			debug.Log("probe", "tiered probe cancelled at tier[%d]=%d: %v", i, tier, probeCtx.Err())
@@ -313,14 +316,17 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 // fails with a context overflow error. Non-overflow errors also return 0
 // but signal the caller to stop probing.
 func tryTierProbe(ctx context.Context, p Provider, tier int) int {
-	// Build a padding message. Each "a " is roughly 1 token in most tokenizers.
-	// We use tier/2 repetitions to get roughly tier/2 tokens, plus system prompt
-	// and message framing overhead should bring it close to tier tokens.
-	padding := strings.Repeat("a ", tier/2)
-	// Cap at 500K chars to avoid memory issues on very large tiers
-	if len(padding) > 500_000 {
-		padding = padding[:500_000]
+	// Build a padding message. We don't need exact token counts — just
+	// enough to exceed the tier's token limit if the model can't handle it.
+	// Use tier/4 repetitions of "a " (each "a " ≈ 1 token), giving ~tier/4
+	// tokens from padding. Combined with system prompt and framing overhead
+	// (~4-8K tokens), this reliably overflows models below the tier.
+	// Cap at 50K chars (≈25K tokens) to keep payloads small for slow networks.
+	paddingLen := tier / 4
+	if paddingLen > 50_000 {
+		paddingLen = 50_000
 	}
+	padding := strings.Repeat("a ", paddingLen)
 
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: padding}}},
@@ -333,6 +339,12 @@ func tryTierProbe(ctx context.Context, p Provider, tier int) int {
 		// Request succeeded — context window >= tier
 		debug.Log("probe", "tier %dK SUCCEEDED — context window >= %dK", tier/1000, tier/1000)
 		return tier
+	}
+
+	// Check if parent context timed out — stop probing entirely
+	if ctx.Err() != nil {
+		debug.Log("probe", "tier %dK aborted: %v", tier/1000, ctx.Err())
+		return 0
 	}
 
 	// Check for context overflow error
