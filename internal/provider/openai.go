@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -117,7 +119,14 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, model string, maxTo
 		baseTransport = hc.Transport
 	}
 	if baseTransport == nil {
-		baseTransport = http.DefaultTransport
+		baseTransport = &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		}
 	}
 	transport := &headerInjectingTransport{
 		base:    baseTransport,

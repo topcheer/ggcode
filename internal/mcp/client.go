@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -87,7 +88,16 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 func (c *Client) Start(ctx context.Context) error {
 	switch c.transport {
 	case "http":
-		c.httpClient = &http.Client{}
+		c.httpClient = &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		}
 		return nil
 	case "ws", "websocket":
 		headers := http.Header{}
