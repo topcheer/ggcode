@@ -13,7 +13,11 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/sashabaranov/go-openai"
 	"github.com/spf13/cobra"
+	"google.golang.org/genai"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -126,14 +130,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter string, verbose bool, tim
 
 	results := make([]*probeResult, 0, len(refs))
 
-	// Default models per protocol when not configured
-	defaultModels := map[string]string{
-		"openai":    "gpt-4o-mini",
-		"anthropic": "claude-sonnet-4-20250514",
-		"gemini":    "gemini-2.0-flash",
-		"copilot":   "gpt-4o",
-	}
-
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Say exactly: Hello world"}}},
 	}
@@ -155,7 +151,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter string, verbose bool, tim
 		}
 
 		if resolved.Model == "" {
-			resolved.Model = defaultModels[resolved.Protocol]
 		}
 		if resolved.Model == "" {
 			results = append(results, &probeResult{
@@ -268,6 +263,113 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter string, verbose bool, tim
 	// Print results
 	printProbeResults(results, verbose)
 	return nil
+}
+
+// fetchFirstModel calls the provider's ListModels API and returns the first available model.
+// Falls back to a protocol-specific default if the API call fails.
+func fetchFirstModel(ctx context.Context, resolved *config.ResolvedEndpoint) (string, error) {
+	switch resolved.Protocol {
+	case "openai", "copilot":
+		return fetchOpenAIModel(ctx, resolved)
+	case "anthropic":
+		return fetchAnthropicModel(ctx, resolved)
+	case "gemini":
+		return fetchGeminiModel(ctx, resolved)
+	default:
+		return "", fmt.Errorf("unsupported protocol: %s", resolved.Protocol)
+	}
+}
+
+func fetchOpenAIModel(ctx context.Context, resolved *config.ResolvedEndpoint) (string, error) {
+	cfg := openai.DefaultConfig(resolved.APIKey)
+	if resolved.BaseURL != "" {
+		cfg.BaseURL = resolved.BaseURL
+	}
+	client := openai.NewClientWithConfig(cfg)
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return "", fmt.Errorf("openai ListModels: %w", err)
+	}
+	for _, m := range models.Models {
+		// Prefer chat-capable models, skip embedding/tts/whisper etc.
+		id := m.ID
+		if strings.Contains(id, "gpt") || strings.Contains(id, "chat") || strings.Contains(id, "claude") || strings.Contains(id, "deepseek") || strings.Contains(id, "qwen") || strings.Contains(id, "glm") || strings.Contains(id, "doubao") {
+			return id, nil
+		}
+	}
+	// Fallback to first non-embedding model
+	for _, m := range models.Models {
+		if !strings.Contains(m.ID, "embed") && !strings.Contains(m.ID, "tts") && !strings.Contains(m.ID, "whisper") && !strings.Contains(m.ID, "dall-e") {
+			return m.ID, nil
+		}
+	}
+	if len(models.Models) > 0 {
+		return models.Models[0].ID, nil
+	}
+	return "", fmt.Errorf("no models returned by API")
+}
+
+func fetchAnthropicModel(ctx context.Context, resolved *config.ResolvedEndpoint) (string, error) {
+	opts := []option.RequestOption{option.WithAPIKey(resolved.APIKey)}
+	if resolved.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(resolved.BaseURL))
+	}
+	client := anthropic.NewClient(opts...)
+	page, err := client.Models.List(ctx, anthropic.ModelListParams{}, opts...)
+	if err != nil {
+		return "", fmt.Errorf("anthropic ListModels: %w", err)
+	}
+	for _, m := range page.Data {
+		// Prefer claude models
+		if strings.Contains(m.ID, "claude") {
+			return m.ID, nil
+		}
+	}
+	if len(page.Data) > 0 {
+		return page.Data[0].ID, nil
+	}
+	return "", fmt.Errorf("no models returned by API")
+}
+
+func fetchGeminiModel(ctx context.Context, resolved *config.ResolvedEndpoint) (string, error) {
+	clientCfg := &genai.ClientConfig{
+		APIKey:  resolved.APIKey,
+		Backend: genai.BackendGeminiAPI,
+	}
+	if resolved.BaseURL != "" {
+		clientCfg.HTTPOptions.BaseURL = resolved.BaseURL
+	}
+	client, err := genai.NewClient(ctx, clientCfg)
+	if err != nil {
+		return "", fmt.Errorf("gemini client: %w", err)
+	}
+	page, err := client.Models.List(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("gemini ListModels: %w", err)
+	}
+	// Prefer gemini flash models (fast, cheap for probing)
+	for _, m := range page.Items {
+		if strings.Contains(m.Name, "gemini") && strings.Contains(m.Name, "flash") {
+			return extractModelID(m.Name), nil
+		}
+	}
+	// Fallback to any gemini model
+	for _, m := range page.Items {
+		if strings.Contains(m.Name, "gemini") {
+			return extractModelID(m.Name), nil
+		}
+	}
+	if len(page.Items) > 0 {
+		return extractModelID(page.Items[0].Name), nil
+	}
+	return "", fmt.Errorf("no models returned by API")
+}
+
+func extractModelID(name string) string {
+	if strings.HasPrefix(name, "models/") {
+		return name[len("models/"):]
+	}
+	return name
 }
 
 func printProbeResults(results []*probeResult, verbose bool) {
