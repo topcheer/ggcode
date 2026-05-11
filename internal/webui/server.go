@@ -1818,8 +1818,15 @@ func sanitizeMap(m map[string]interface{}) {
 			}
 			delete(m, key)
 		default:
-			if sub, ok := val.(map[string]interface{}); ok {
-				sanitizeMap(sub)
+			switch v := val.(type) {
+			case map[string]interface{}:
+				sanitizeMap(v)
+			case []interface{}:
+				for _, item := range v {
+					if sub, ok := item.(map[string]interface{}); ok {
+						sanitizeMap(sub)
+					}
+				}
 			}
 		}
 	}
