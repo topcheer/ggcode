@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,50 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
+
+// authGet is like http.Get but adds Bearer auth token from the test server.
+func authGet(serverURL string, token string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", serverURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return http.DefaultClient.Do(req)
+}
+
+// authPost is like http.Post but adds Bearer auth token.
+func authPost(serverURL, token, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest("POST", serverURL, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	return http.DefaultClient.Do(req)
+}
+
+// authPut is like http.NewRequest("PUT", ...) with Bearer auth token.
+func authPut(serverURL, token string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest("PUT", serverURL, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
+}
+
+// authDelete is like http.NewRequest("DELETE", ...) with Bearer auth token.
+func authDelete(serverURL, token string) (*http.Request, error) {
+	req, err := http.NewRequest("DELETE", serverURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return req, nil
+}
 
 // ============================================================
 // Section 1: REST API — Config
@@ -33,7 +78,7 @@ func TestE2EConfigGetStructure(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/config")
+	resp, err := authGet(srv.URL+"/api/config", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +109,7 @@ func TestE2EActiveSelectionGetPut(t *testing.T) {
 	defer srv.Close()
 
 	// GET — should return initial values
-	resp, err := http.Get(srv.URL + "/api/config/active")
+	resp, err := authGet(srv.URL+"/api/config/active", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +136,7 @@ func TestE2EVendorsList(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/vendors")
+	resp, err := authGet(srv.URL+"/api/vendors", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +165,7 @@ func TestE2EVendorDetail(t *testing.T) {
 	defer srv.Close()
 
 	// Get vendors first to find a valid name
-	resp, err := http.Get(srv.URL + "/api/vendors")
+	resp, err := authGet(srv.URL+"/api/vendors", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +179,7 @@ func TestE2EVendorDetail(t *testing.T) {
 	vendorName := vendors[0]["id"].(string)
 
 	// GET detail
-	resp, err = http.Get(srv.URL + "/api/vendors/" + vendorName)
+	resp, err = authGet(srv.URL+"/api/vendors/"+vendorName, s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +202,7 @@ func TestE2EMCPConfig(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/mcp")
+	resp, err := authGet(srv.URL+"/api/mcp", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +230,7 @@ func TestE2EIMConfig(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/im")
+	resp, err := authGet(srv.URL+"/api/im", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +254,7 @@ func TestE2EA2AConfig(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/a2a")
+	resp, err := authGet(srv.URL+"/api/a2a", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +283,7 @@ func TestE2EGeneralConfig(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/general")
+	resp, err := authGet(srv.URL+"/api/general", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +307,7 @@ func TestE2EImpersonateGet(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/impersonate")
+	resp, err := authGet(srv.URL+"/api/impersonate", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +351,7 @@ func TestE2EMethodNotAllowed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		req, _ := http.NewRequest(tc.method, srv.URL+tc.path, nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Logf("%s %s: %v", tc.method, tc.path, err)
@@ -332,7 +378,7 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 	defer srv.Close()
 
 	// 1. Empty list
-	resp, err := http.Get(srv.URL + "/api/sessions")
+	resp, err := authGet(srv.URL+"/api/sessions", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +408,7 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 	}
 
 	// 3. List shows all 5
-	resp, err = http.Get(srv.URL + "/api/sessions")
+	resp, err = authGet(srv.URL+"/api/sessions", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +419,7 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 	}
 
 	// 4. Detail of first session
-	resp, err = http.Get(srv.URL + "/api/sessions/20260401-000000")
+	resp, err = authGet(srv.URL+"/api/sessions/20260401-000000", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +438,7 @@ func TestE2ESessionsLifecycle(t *testing.T) {
 	}
 
 	// 5. Non-existent session
-	resp, err = http.Get(srv.URL + "/api/sessions/nonexistent")
+	resp, err = authGet(srv.URL+"/api/sessions/nonexistent", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +474,7 @@ func TestE2ESessionsWorkspaceFiltering(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/sessions")
+	resp, err := authGet(srv.URL+"/api/sessions", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +521,7 @@ func TestE2EChatWSFullLifecycle(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
 	// 1. Connect
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -594,7 +640,7 @@ func TestE2EChatWSErrorEvent(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -646,7 +692,7 @@ func TestE2EChatWSThreeConnectionBroadcast(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
 	// Connect 3 clients
 	conns := make([]*websocket.Conn, 3)
@@ -710,7 +756,7 @@ func TestE2EChatWSSequentialMessages(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -750,7 +796,7 @@ func TestE2EChatWSMultipleImages(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 	defer ws.Close()
 
@@ -791,7 +837,7 @@ func TestE2EChatWSInvalidBase64File(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 	defer ws.Close()
 
@@ -831,7 +877,7 @@ func TestE2EChatWSMixedAttachments(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
 	defer ws.Close()
 
@@ -873,7 +919,7 @@ func TestE2EChatWSDisconnectCleanup(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
 	// Connect and immediately close
 	ws, _, _ := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -911,7 +957,7 @@ func TestE2EChatWSConcurrentSends(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
 	// 5 connections all send at once
 	var wg sync.WaitGroup
@@ -972,7 +1018,7 @@ func TestE2EChatHistoryToolContent(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/chat/history")
+	resp, err := authGet(srv.URL+"/api/chat/history", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1022,7 +1068,7 @@ func TestE2EChatHistoryEmpty(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/chat/history")
+	resp, err := authGet(srv.URL+"/api/chat/history", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1046,6 +1092,7 @@ func TestE2ERestartEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/restart", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -1061,7 +1108,7 @@ func TestE2ERestartEndpoint(t *testing.T) {
 	}
 
 	// GET should fail
-	resp, err = http.Get(srv.URL + "/api/restart")
+	resp, err = authGet(srv.URL+"/api/restart", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1084,7 +1131,7 @@ func TestE2ESPAFallback(t *testing.T) {
 	// Non-API paths should serve the SPA (index.html)
 	paths := []string{"/", "/sessions", "/chat", "/config/general"}
 	for _, path := range paths {
-		resp, err := http.Get(srv.URL + path)
+		resp, err := authGet(srv.URL+path, s.Token())
 		if err != nil {
 			t.Logf("GET %s: %v", path, err)
 			continue
@@ -1113,7 +1160,7 @@ func TestE2EMCPStatusCallback(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/mcp/status")
+	resp, err := authGet(srv.URL+"/api/mcp/status", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1143,7 +1190,7 @@ func TestE2EIMStatusCallback(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/im/status")
+	resp, err := authGet(srv.URL+"/api/im/status", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
