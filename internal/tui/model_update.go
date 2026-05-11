@@ -1621,6 +1621,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case systemNotifyMsg:
+		m.chatWriteSystem(nextSystemID(), msg.Text)
+		m.chatListScrollToBottom()
+		return m, nil
+
 	case followGraceTickMsg:
 		// Re-evaluate grace period: refresh slots and remove expired terminal ones
 		m.subAgentFollow.refreshSlots(m.subAgentMgr)

@@ -282,6 +282,10 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 					Activity: m.t("status.writing"),
 				}})
 			}
+		case provider.StreamEventSystem:
+			// System notification (retry status, etc.) — render as system message.
+			flushBatch()
+			m.program.Send(systemNotifyMsg{Text: event.Text})
 		case provider.StreamEventToolCallDone:
 			// Flush any pending text before tool events to keep output ordering correct.
 			flushBatch()

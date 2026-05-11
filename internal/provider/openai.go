@@ -256,7 +256,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					delay := retryDelay(err, attempt)
 					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, delay, err, err)
 					// Notify user about retry
-					ch <- StreamEvent{Type: StreamEventText, Text: fmt.Sprintf("\n[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
 					if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 						return

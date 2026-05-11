@@ -101,6 +101,7 @@ const (
 	StreamEventDone
 	StreamEventError
 	StreamEventReasoning // thinking/reasoning content (DeepSeek, etc.)
+	StreamEventSystem    // system notification (retry status, etc.)
 )
 
 // ToolCallDelta represents a (possibly partial) tool call from a streaming response.

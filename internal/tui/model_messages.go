@@ -101,6 +101,12 @@ type subAgentDoneMsg struct {
 type subAgentFollowRefreshMsg struct{}
 type followGraceTickMsg struct{}
 
+// systemNotifyMsg displays a provider system notification (e.g. retry status)
+// as a system message in the chat area.
+type systemNotifyMsg struct {
+	Text string
+}
+
 type skillsChangedMsg struct{}
 
 // toolStatusMsg wraps a tool status update.
