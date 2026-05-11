@@ -202,6 +202,12 @@ func TestIsRetryableRecognizesProviderErrors(t *testing.T) {
 	if isRetryable(&openai.APIError{HTTPStatusCode: http.StatusNotFound, Message: "not found"}) {
 		t.Fatal("expected openai 404 not to be retryable")
 	}
+	if !isRetryable(context.DeadlineExceeded) {
+		t.Fatal("expected deadline exceeded to be retryable when caller context is still active")
+	}
+	if isRetryable(context.Canceled) {
+		t.Fatal("expected context cancellation not to be retryable")
+	}
 }
 
 func TestRetryAfterDelayFromAnthropicHeader(t *testing.T) {
@@ -255,6 +261,52 @@ func TestRetryWithBackoffCtxHonorsRetryAfter(t *testing.T) {
 	}
 	if len(slept) != 2 || slept[0] != 2*time.Second || slept[1] != 2*time.Second {
 		t.Fatalf("expected retry-after sleeps [2s 2s], got %+v", slept)
+	}
+}
+
+func TestRetryWithBackoffCtxRetriesDeadlineExceededWhenContextActive(t *testing.T) {
+	originalSleep := retrySleep
+	defer func() { retrySleep = originalSleep }()
+
+	var slept []time.Duration
+	retrySleep = func(ctx context.Context, delay time.Duration) error {
+		slept = append(slept, delay)
+		return nil
+	}
+
+	attempts := 0
+	err := retryWithBackoffCtx(context.Background(), func() error {
+		attempts++
+		if attempts == 1 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}, providerRetryAttempts)
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	if len(slept) != 1 || slept[0] != time.Second {
+		t.Fatalf("expected one 1s backoff, got %+v", slept)
+	}
+}
+
+func TestRetryWithBackoffCtxDoesNotRetryExpiredCallerContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	attempts := 0
+	err := retryWithBackoffCtx(ctx, func() error {
+		attempts++
+		return context.DeadlineExceeded
+	}, providerRetryAttempts)
+	if err == nil {
+		t.Fatal("expected deadline error")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected no retry after caller context ends, got %d attempts", attempts)
 	}
 }
 
