@@ -23,6 +23,12 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
+// endpointRef identifies a vendor/endpoint pair for testing.
+type endpointRef struct {
+	vendor   string
+	endpoint string
+}
+
 type probeResult struct {
 	Vendor   string
 	Endpoint string
@@ -55,6 +61,7 @@ type probeResult struct {
 func newLLMProbeCmd(cfgFile *string) *cobra.Command {
 	var vendorFilter, endpointFilter, modelOverride string
 	var verbose bool
+	var listModels bool
 	var timeoutSec int
 
 	cmd := &cobra.Command{
@@ -69,10 +76,12 @@ Examples:
   ggcode llm-probe                   # Test all endpoints
   ggcode llm-probe --vendor zai      # Test only zai vendor
   ggcode llm-probe -v                # Verbose: show request/response bodies
-  ggcode llm-probe --model gpt-4o    # Use specific model for all endpoints
-  ggcode llm-probe --timeout 30      # Use 30s timeout per endpoint`,
+  ggcode llm-probe --list-models                # List models for all endpoints
+  ggcode llm-probe --list-models --vendor zai    # List models for zai only
+  ggcode llm-probe --model gpt-4o                # Use specific model for all endpoints
+  ggcode llm-probe --timeout 30                  # Use 30s timeout per endpoint`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLLMProbe(*cfgFile, vendorFilter, endpointFilter, modelOverride, verbose, timeoutSec)
+			return runLLMProbe(*cfgFile, vendorFilter, endpointFilter, modelOverride, listModels, verbose, timeoutSec)
 		},
 	}
 
@@ -80,12 +89,13 @@ Examples:
 	cmd.Flags().StringVar(&endpointFilter, "endpoint", "", "Test only this endpoint")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full request/response headers and bodies")
 	cmd.Flags().StringVar(&modelOverride, "model", "", "Override model for all endpoints (skips ListModels)")
+	cmd.Flags().BoolVar(&listModels, "list-models", false, "List available models from endpoints (no API call tests)")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 20, "Timeout per API call in seconds")
 
 	return cmd
 }
 
-func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, verbose bool, timeoutSec int) error {
+func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, listModels bool, verbose bool, timeoutSec int) error {
 	// Load keys into environment
 	if err := config.LoadKeysEnv(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: LoadKeysEnv: %v\n", err)
@@ -97,10 +107,6 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, ve
 	}
 
 	// Collect all endpoints to test
-	type endpointRef struct {
-		vendor   string
-		endpoint string
-	}
 	var refs []endpointRef
 
 	for vname, vendor := range cfg.Vendors {
@@ -129,6 +135,11 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, ve
 		}
 		return refs[i].endpoint < refs[j].endpoint
 	})
+
+	// --list-models mode: just list models, don't run API call tests
+	if listModels {
+		return runListModels(cfg, refs, timeoutSec)
+	}
 
 	results := make([]*probeResult, 0, len(refs))
 
@@ -269,6 +280,122 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, ve
 
 // fetchFirstModel calls the provider's ListModels API and returns the first available model.
 // Falls back to a protocol-specific default if the API call fails.
+
+// runListModels lists available models for each endpoint using the provider's ListModels API.
+func runListModels(cfg *config.Config, refs []endpointRef, timeoutSec int) error {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "VENDOR/ENDPOINT	PROTOCOL	STATUS	MODEL_ID	DISPLAY_NAME")
+
+	for i, ref := range refs {
+		label := fmt.Sprintf("%s/%s", ref.vendor, ref.endpoint)
+		fmt.Fprintf(os.Stderr, "\r[%d/%d] Fetching models for %s ...", i+1, len(refs), label)
+
+		resolved, err := cfg.ResolveEndpoint(ref.vendor, ref.endpoint)
+		if err != nil || resolved.APIKey == "" {
+			fmt.Fprintf(w, "%s	?	NO_KEY		\n", label)
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+
+		models, err := listModelsFromAPI(ctx, resolved)
+		if err != nil {
+			fmt.Fprintf(w, "%s	%s	ERROR: %s		\n", label, resolved.Protocol, truncateErr(err.Error(), 60))
+			cancel()
+			continue
+		}
+
+		if len(models) == 0 {
+			fmt.Fprintf(w, "%s	%s	EMPTY		\n", label, resolved.Protocol)
+		} else {
+			for _, m := range models {
+				fmt.Fprintf(w, "%s	%s	OK	%s	%s\n", label, resolved.Protocol, m.ID, m.DisplayName)
+			}
+		}
+		cancel()
+	}
+	w.Flush()
+	fmt.Fprintln(os.Stderr, "\r"+strings.Repeat(" ", 80)+"\r")
+	return nil
+}
+
+// modelInfo is a simplified model representation.
+type modelInfo struct {
+	ID          string
+	DisplayName string
+}
+
+// listModelsFromAPI calls the appropriate ListModels API based on protocol.
+func listModelsFromAPI(ctx context.Context, resolved *config.ResolvedEndpoint) ([]modelInfo, error) {
+	switch resolved.Protocol {
+	case "openai", "copilot":
+		return listOpenAIModels(ctx, resolved)
+	case "anthropic":
+		return listAnthropicModels(ctx, resolved)
+	case "gemini":
+		return listGeminiModels(ctx, resolved)
+	default:
+		return nil, fmt.Errorf("unsupported protocol: %s", resolved.Protocol)
+	}
+}
+
+func listOpenAIModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]modelInfo, error) {
+	cfg := openai.DefaultConfig(resolved.APIKey)
+	if resolved.BaseURL != "" {
+		cfg.BaseURL = resolved.BaseURL
+	}
+	client := openai.NewClientWithConfig(cfg)
+	resp, err := client.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []modelInfo
+	for _, m := range resp.Models {
+		result = append(result, modelInfo{ID: m.ID, DisplayName: m.OwnedBy})
+	}
+	return result, nil
+}
+
+func listAnthropicModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]modelInfo, error) {
+	opts := []option.RequestOption{option.WithAPIKey(resolved.APIKey)}
+	if resolved.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(resolved.BaseURL))
+	}
+	client := anthropic.NewClient(opts...)
+	page, err := client.Models.List(ctx, anthropic.ModelListParams{}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	var result []modelInfo
+	for _, m := range page.Data {
+		result = append(result, modelInfo{ID: m.ID, DisplayName: m.DisplayName})
+	}
+	return result, nil
+}
+
+func listGeminiModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]modelInfo, error) {
+	clientCfg := &genai.ClientConfig{
+		APIKey:  resolved.APIKey,
+		Backend: genai.BackendGeminiAPI,
+	}
+	if resolved.BaseURL != "" {
+		clientCfg.HTTPOptions.BaseURL = resolved.BaseURL
+	}
+	client, err := genai.NewClient(ctx, clientCfg)
+	if err != nil {
+		return nil, err
+	}
+	page, err := client.Models.List(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result []modelInfo
+	for _, m := range page.Items {
+		result = append(result, modelInfo{ID: extractModelID(m.Name), DisplayName: m.DisplayName})
+	}
+	return result, nil
+}
+
 func fetchFirstModel(ctx context.Context, resolved *config.ResolvedEndpoint) (string, error) {
 	switch resolved.Protocol {
 	case "openai", "copilot":
