@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -18,7 +20,14 @@ type CopilotProvider struct {
 func NewCopilotProvider(apiKey, model string, maxTokens int, baseURL string) *CopilotProvider {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = strings.TrimSpace(baseURL)
-	baseTransport := http.DefaultTransport
+	baseTransport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
 	config.HTTPClient = &http.Client{
 		Transport: &copilotHeaderRoundTripper{
 			base:  baseTransport,

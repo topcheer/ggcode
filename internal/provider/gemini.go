@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -43,7 +45,14 @@ func NewGeminiProvider(apiKey string, model string, maxTokens int) (*GeminiProvi
 func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) (*GeminiProvider, error) {
 	headers := BuildHeadersForProvider("gemini")
 	transport := &headerInjectingTransport{
-		base:    http.DefaultTransport,
+		base: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
 		headers: headers,
 	}
 	clientConfig := &genai.ClientConfig{
