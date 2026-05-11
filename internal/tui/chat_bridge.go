@@ -193,10 +193,6 @@ func (m *Model) chatFinishTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// list_agents / wait_agent finish → skip
-	if ts.ToolName == "list_agents" || ts.ToolName == "wait_agent" {
-		return
-	}
 	// Background cmd tools → skip (no header/body needed)
 	switch ts.ToolName {
 	case "read_command_output", "wait_command", "stop_command",
