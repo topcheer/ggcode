@@ -3,6 +3,7 @@ package provider
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"google.golang.org/genai"
 )
@@ -114,6 +115,22 @@ func TestNewCopilotProvider(t *testing.T) {
 	}
 	if p.Name() != "github-copilot" {
 		t.Errorf("expected 'copilot', got %q", p.Name())
+	}
+}
+
+func TestNewProviderHTTPTransportUsesLLMHeaderTimeout(t *testing.T) {
+	tr := newProviderHTTPTransport()
+	if tr == nil {
+		t.Fatal("expected non-nil transport")
+	}
+	if tr.DialContext == nil {
+		t.Fatal("expected DialContext timeout to be configured")
+	}
+	if tr.TLSHandshakeTimeout != 10*time.Second {
+		t.Fatalf("expected TLS handshake timeout 10s, got %v", tr.TLSHandshakeTimeout)
+	}
+	if tr.ResponseHeaderTimeout != 5*time.Minute {
+		t.Fatalf("expected response header timeout 5m, got %v", tr.ResponseHeaderTimeout)
 	}
 }
 
