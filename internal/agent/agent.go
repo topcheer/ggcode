@@ -528,8 +528,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		var deferredMemoryFiles []string
 		var deferredMemoryTarget string
 
-		for _, tc := range toolCalls {
+		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
+				// Context cancelled mid-tool-execution. The assistant message
+				// (with tool_use blocks) was already added to contextManager above.
+				// Without matching tool_results, the next LLM API call will fail
+				// because tool_use has no corresponding tool_result (protocol violation).
+				// Fill in "cancelled" results for all tool_calls that have not run yet.
+				a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 				return err
 			}
 			// Check for project memory but defer injection
@@ -575,11 +581,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 
 			if err := ctx.Err(); err != nil {
+				// Context cancelled after completing some tools. Fill "cancelled"
+				// results for remaining tool_calls that have not run yet.
+				a.fillCancelledToolResults(toolCalls[idx+1:], &toolResults)
 				return err
 			}
 		}
 
 		if err := ctx.Err(); err != nil {
+			// Context cancelled after all tools executed. toolResults has been
+			// populated but not yet added to contextManager. We MUST add them
+			// before returning to keep tool_use/tool_result pairs balanced.
+			if len(toolResults) > 0 {
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: toolResults,
+				})
+			}
 			return err
 		}
 		if len(toolResults) == 0 {
@@ -763,6 +781,45 @@ func (a *Agent) emitUsage(usage provider.TokenUsage) {
 	a.mu.Unlock()
 	if fn != nil {
 		fn(usage)
+	}
+}
+
+// fillCancelledToolResults appends "cancelled" tool_result entries for tool_calls
+// that were not executed due to context cancellation.
+//
+// Background: The LLM API protocol (OpenAI/Anthropic) requires that every tool_use
+// block in an assistant message has a matching tool_result in the subsequent user
+// message. If the agent loop is cancelled (e.g. user pressed Ctrl+C) while tools
+// are being executed, some tool_calls will have results and some won't. Without
+// this function, the contextManager would contain:
+//
+//	assistant: [tool_use(id=1), tool_use(id=2), tool_use(id=3)]
+//	user:      [tool_result(id=1), tool_result(id=2)]       ← missing id=3!
+//
+// The next LLM API call would fail with a 400 error because tool_use(id=3) has no
+// matching tool_result. This function fills in the gaps:
+//
+//	user: [tool_result(id=1), tool_result(id=2), tool_result(id=3, "cancelled")]
+//
+// This keeps the session valid for both in-memory continuation and JSONL resume.
+//
+// Parameters:
+//   - pending: tool_calls that have NOT yet produced a result
+//   - results: existing results slice to append to (modified in-place via pointer)
+func (a *Agent) fillCancelledToolResults(pending []provider.ToolCallDelta, results *[]provider.ContentBlock) {
+	for _, tc := range pending {
+		debug.Log("agent", "Filling cancelled tool_result for tool=%s id=%s", tc.Name, tc.ID)
+		*results = append(*results, provider.ToolResultNamedBlock(
+			tc.ID, tc.Name,
+			"operation cancelled by user",
+			true, // mark as error so LLM knows it did not succeed
+		))
+	}
+	if len(pending) > 0 {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: *results,
+		})
 	}
 }
 
