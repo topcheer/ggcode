@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	providerRetryAttempts   = 10
+	providerRetryAttempts   = 20
 	providerRetryBackoffCap = 30 * time.Second
 )
 
