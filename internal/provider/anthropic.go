@@ -236,6 +236,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					}
 					// Retry if no content has been emitted yet and the error is retryable.
 					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
+						// Notify user about retry
+						ch <- StreamEvent{Type: StreamEventText, Text: fmt.Sprintf("\n[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, retryDelay(err, attempt))}
 						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
 							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 							return
