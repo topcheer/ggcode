@@ -402,6 +402,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			Activity:    name,
 		}
 	case "list_agents":
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: toolLabelFor(lang, "list_agents"),
 			Detail:      "",
@@ -409,6 +412,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 		}
 	case "wait_agent":
 		agentID := argString(args, "agent_id")
+		if desc := argString(args, "description"); desc != "" {
+			return toolPresentation{DisplayName: desc, Detail: shortenJobID(agentID), Activity: desc}
+		}
 		return toolPresentation{
 			DisplayName: toolLabelFor(lang, "wait_agent"),
 			Detail:      shortenJobID(agentID),
