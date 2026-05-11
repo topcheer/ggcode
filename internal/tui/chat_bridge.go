@@ -86,11 +86,6 @@ func (m *Model) chatStartTool(ts ToolStatusMsg) {
 		return
 	}
 
-	// wait_agent / list_agents → update spawn_agent status (old behavior, keep for now)
-	if ts.ToolName == "list_agents" || ts.ToolName == "wait_agent" {
-		return
-	}
-
 	// todo_write → skip creating a tool item; handled in chatFinishTool
 	if ts.ToolName == "todo_write" {
 		return
