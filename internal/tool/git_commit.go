@@ -81,3 +81,8 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	return Result{Content: trimmed}, nil
 }
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitCommit) Clone() Tool {
+	return &GitCommit{WorkingDir: t.WorkingDir}
+}

@@ -127,3 +127,35 @@ func (r *Registry) ToolNames() []string {
 	}
 	return names
 }
+
+// Cloner is an optional interface that tools can implement to provide a deep copy.
+// Tools that hold mutable state (e.g., WorkingDir) MUST implement Clone so that
+// each agent gets its own independent tool instances. Tools without mutable state
+// can safely skip this interface — they will be shared between agents.
+//
+// This is critical for correctness in concurrent scenarios (sub-agents, swarm
+// teammates using different worktrees). Without cloning, syncToolWorkingDir would
+// mutate a shared WorkingDir field, causing tool executions to land in the wrong
+// directory.
+type Cloner interface {
+	Clone() Tool
+}
+
+// Clone creates a deep copy of the registry. Tools implementing the Cloner
+// interface are individually cloned; others are shared (they are stateless).
+// This is used when creating sub-agents and swarm teammates so each agent
+// has its own independent tool instances with separate WorkingDir fields.
+func (r *Registry) Clone() *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	newReg := &Registry{tools: make(map[string]Tool, len(r.tools))}
+	for name, t := range r.tools {
+		if c, ok := t.(Cloner); ok {
+			newReg.tools[name] = c.Clone()
+		} else {
+			// Stateless tool — safe to share the same instance.
+			newReg.tools[name] = t
+		}
+	}
+	return newReg
+}

@@ -93,3 +93,8 @@ func (t GitShow) Execute(ctx context.Context, input json.RawMessage) (Result, er
 
 	return Result{Content: trimmed}, nil
 }
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitShow) Clone() Tool {
+	return &GitShow{WorkingDir: t.WorkingDir}
+}

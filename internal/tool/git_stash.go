@@ -110,3 +110,8 @@ func (t GitStash) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	return Result{Content: trimmed}, nil
 }
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitStash) Clone() Tool {
+	return &GitStash{WorkingDir: t.WorkingDir}
+}

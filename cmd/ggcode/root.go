@@ -749,7 +749,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		return a
 	}
 	swarmToolBuilder := func(_ []string) interface{} {
-		return registry // all teammates share the same tool registry
+		return registry.Clone() // each teammate gets independent tool instances
 	}
 	swarmMgr := swarm.NewManager(cfg.Swarm, prov, swarmAgentFactory, swarmToolBuilder)
 	swarmMgr.SetWorkingDir(ag.WorkingDir())

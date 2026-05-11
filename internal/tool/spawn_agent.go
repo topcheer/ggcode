@@ -137,27 +137,52 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			AgentType:    subagentType,
 			WorkingDir:   t.WorkingDir,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
-				subReg := NewRegistry()
+				// Clone the registry so each sub-agent gets its own tool
+				// instances with independent WorkingDir fields. This prevents
+				// data races when multiple sub-agents run concurrently in
+				// different worktrees.
+				cloned := tools.Clone()
 				if len(allowedTools) == 0 {
-					for _, ti := range allToolInfo {
-						name := ti.Name()
-						if name != "spawn_agent" && name != "wait_agent" && name != "list_agents" {
-							if tl, ok := tools.Get(name); ok {
-								subReg.Register(tl)
-							}
-						}
-					}
+					// Remove agent lifecycle tools from sub-agent's set
+					cloned.Unregister("spawn_agent")
+					cloned.Unregister("wait_agent")
+					cloned.Unregister("list_agents")
 				} else {
-					for _, name := range allowedTools {
-						if tl, ok := tools.Get(name); ok {
-							subReg.Register(tl)
+					// Keep only allowed tools
+					all := cloned.ToolNames()
+					for _, name := range all {
+						if !sliceContains(allowedTools, name) {
+							cloned.Unregister(name)
 						}
 					}
 				}
-				return subReg
+				return cloned
 			},
 		})
 	})
 
 	return Result{Content: fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)}, nil
+}
+
+// Clone returns an independent copy of SpawnAgentTool for use by a different agent.
+// Manager, Provider, AgentFactory, and Tools are intentionally shared across agents
+// (they coordinate sub-agent lifecycle). Only WorkingDir is agent-specific.
+func (t SpawnAgentTool) Clone() Tool {
+	return SpawnAgentTool{
+		Manager:      t.Manager,
+		Provider:     t.Provider,
+		Tools:        t.Tools,
+		AgentFactory: t.AgentFactory,
+		WorkingDir:   t.WorkingDir,
+	}
+}
+
+// contains checks if a string slice contains a given string.
+func sliceContains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

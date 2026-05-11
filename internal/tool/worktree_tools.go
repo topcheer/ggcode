@@ -284,3 +284,13 @@ func findGitRootFromWorktree(worktreePath string) (string, error) {
 	gitDir := filepath.Dir(filepath.Dir(filepath.Dir(gitdir)))
 	return gitDir, nil
 }
+
+// Clone returns an independent copy of EnterWorktree for use by a different agent.
+func (t EnterWorktree) Clone() Tool {
+	return &EnterWorktree{WorkingDir: t.WorkingDir}
+}
+
+// Clone returns an independent copy of ExitWorktree for use by a different agent.
+func (t ExitWorktree) Clone() Tool {
+	return &ExitWorktree{WorkingDir: t.WorkingDir}
+}

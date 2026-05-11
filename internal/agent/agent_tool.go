@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	runtimedebug "runtime/debug"
+	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
@@ -248,10 +249,22 @@ func indexOf(s, substr string) int {
 	return -1
 }
 
+// toolWorkingDirMu is a safety-net mutex for syncToolWorkingDir. With Registry.Clone(),
+// each agent has its own tool instances and this mutex should never be contended.
+// It exists as a last resort in case a tool without a Clone() implementation is
+// shared between agents and has a WorkingDir field that needs mutation.
+var toolWorkingDirMu sync.Mutex
+
 // syncToolWorkingDir uses reflection to set the WorkingDir field on tools
 // that have one. This ensures tools always use the agent's current working
 // directory, even after it changes (e.g., after enter_worktree).
+//
+// Note: With Registry.Clone(), each agent has independent tool instances, so
+// this reflection is only mutating per-agent copies. The mutex is a safety net.
 func syncToolWorkingDir(t tool.Tool, dir string) {
+	toolWorkingDirMu.Lock()
+	defer toolWorkingDirMu.Unlock()
+
 	// Dereference pointer if needed
 	v := reflect.ValueOf(t)
 	if v.Kind() == reflect.Ptr {

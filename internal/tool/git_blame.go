@@ -82,3 +82,8 @@ func (t GitBlame) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	return Result{Content: trimmed}, nil
 }
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitBlame) Clone() Tool {
+	return &GitBlame{WorkingDir: t.WorkingDir}
+}

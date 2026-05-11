@@ -385,3 +385,8 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cmd *exec.Cmd
 		)}, nil
 	}
 }
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t RunCommand) Clone() Tool {
+	return &RunCommand{WorkingDir: t.WorkingDir, Policy: t.Policy}
+}
