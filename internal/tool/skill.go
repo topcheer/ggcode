@@ -182,27 +182,22 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 			AgentFactory: t.AgentFactory,
 			WorkingDir:   t.WorkingDir,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
-				subReg := NewRegistry()
-				registerTool := func(name string) {
-					if tl, ok := t.Tools.Get(name); ok {
-						_ = subReg.Register(tl)
-					}
-				}
+				// Clone the registry so each skill sub-agent gets its own tool
+				// instances with independent WorkingDir fields.
+				cloned := t.Tools.Clone()
 				if len(allowedTools) > 0 {
-					for _, name := range allowedTools {
-						registerTool(name)
+					all := cloned.ToolNames()
+					for _, name := range all {
+						if !sliceContains(allowedTools, name) {
+							cloned.Unregister(name)
+						}
 					}
-					return subReg
+				} else {
+					cloned.Unregister("spawn_agent")
+					cloned.Unregister("wait_agent")
+					cloned.Unregister("list_agents")
 				}
-				for _, tl := range t.Tools.List() {
-					switch tl.Name() {
-					case "spawn_agent", "wait_agent", "list_agents":
-						continue
-					default:
-						registerTool(tl.Name())
-					}
-				}
-				return subReg
+				return cloned
 			},
 		})
 	})
@@ -323,4 +318,20 @@ func skillScopeForCommand(cmd *commands.Command) string {
 		return "global"
 	}
 	return ""
+}
+
+// Clone returns an independent copy of SkillTool for use by a different agent.
+// Skills, Runtime, Provider, Tools, AgentFactory, and callbacks are shared.
+// Only WorkingDir is agent-specific.
+func (t SkillTool) Clone() Tool {
+	return SkillTool{
+		Skills:           t.Skills,
+		Runtime:          t.Runtime,
+		Provider:         t.Provider,
+		Tools:            t.Tools,
+		AgentFactory:     t.AgentFactory,
+		WorkingDir:       t.WorkingDir,
+		OnSkillUsed:      t.OnSkillUsed,
+		OnSkillCompleted: t.OnSkillCompleted,
+	}
 }

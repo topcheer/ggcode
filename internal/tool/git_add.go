@@ -76,3 +76,8 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 
 	return Result{Content: trimmed}, nil
 }
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitAdd) Clone() Tool {
+	return &GitAdd{WorkingDir: t.WorkingDir}
+}

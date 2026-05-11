@@ -68,3 +68,8 @@ func (t GitBranchList) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 	return Result{Content: trimmed}, nil
 }
+
+// Clone returns an independent copy of this tool for use by a different agent.
+func (t GitBranchList) Clone() Tool {
+	return &GitBranchList{WorkingDir: t.WorkingDir}
+}
