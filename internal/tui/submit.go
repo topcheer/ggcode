@@ -3,8 +3,10 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/topcheer/ggcode/internal/util"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -400,7 +402,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		case provider.StreamEventError:
 			if !errors.Is(event.Error, context.Canceled) {
 				streamErrSent = true
-				m.program.Send(agentErrMsg{RunID: runID, Err: event.Error})
+				m.program.Send(agentErrMsg{RunID: runID, Err: sanitizeAPIError(event.Error)})
 			}
 		case provider.StreamEventDone:
 			// Flush any remaining text/tool events synchronously before
@@ -508,4 +510,20 @@ func (m *Model) activeEndpointSupportsVision() bool {
 		return false
 	}
 	return resolved.SupportsVision
+}
+
+// sanitizeAPIError removes API keys from error messages to prevent
+// accidental leakage through TUI display, session JSONL, or debug logs.
+var apiKeyPatterns = regexp.MustCompile(`(?i)(sk-|Bearer\s+)[\w\-.]{20,}`)
+
+func sanitizeAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	cleaned := apiKeyPatterns.ReplaceAllString(msg, "${1}***")
+	if cleaned == msg {
+		return err
+	}
+	return fmt.Errorf("%s", cleaned)
 }
