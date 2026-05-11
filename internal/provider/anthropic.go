@@ -235,7 +235,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						p.cap.OnRejected(parsed)
 					}
 					// Retry if no content has been emitted yet and the error is retryable.
-					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
+					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
 						// Notify user about retry
 						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, retryDelay(err, attempt))}
 						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {
@@ -391,7 +391,6 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 
 	// Dump full request JSON for debugging protocol violations.
 	// Covers both Chat() (e.g. summarization) and ChatStream() (normal flow).
-	dumpRequestJSON("anthropic", "buildParams", params)
 
 	return params
 }
