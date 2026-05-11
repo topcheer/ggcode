@@ -464,3 +464,16 @@ func extractAgentID(rawArgs string) string {
 	}
 	return args.AgentID
 }
+
+// formatSubAgentDoneNotice returns a human-readable notice for TUI display
+// when a sub-agent or teammate completes its task.
+func (m *Model) formatSubAgentDoneNotice(msg subAgentDoneMsg) string {
+	name := msg.AgentName
+	if name == "" {
+		name = msg.AgentID
+	}
+	if msg.IsError {
+		return name + " failed"
+	}
+	return name + " completed"
+}

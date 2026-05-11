@@ -215,6 +215,12 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
 		if r.program != nil {
 			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
+			r.program.Send(subAgentDoneMsg{
+				AgentID:   sa.ID,
+				AgentName: sa.Name,
+				IsError:   sa.Status == subagent.StatusFailed,
+				Kind:      "subagent",
+			})
 		}
 	})
 }
@@ -288,7 +294,16 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	// Notify TUI on swarm state changes.
 	mgr.SetOnUpdate(func(ev swarm.Event) {
 		if r.program != nil {
-			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID}) // reuse existing update message
+			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
+			// When a teammate finishes a task, notify the main agent.
+			if ev.Type == "teammate_idle" && ev.Result != "" {
+				r.program.Send(subAgentDoneMsg{
+					AgentID:   ev.TeammateID,
+					AgentName: ev.TeammateName,
+					IsError:   ev.Error != nil,
+					Kind:      "teammate",
+				})
+			}
 		}
 	})
 }
