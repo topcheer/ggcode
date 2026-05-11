@@ -283,12 +283,15 @@ func (m *Manager) CancelAll() {
 	for _, team := range teams {
 		team.mu.Lock()
 		for _, tm := range team.Teammates {
+			tm.mu.Lock()
 			if tm.Status == TeammateWorking {
 				if tm.cancel != nil {
 					tm.cancel()
 				}
 				tm.Status = TeammateShuttingDown
+				tm.EndedAt = time.Now()
 			}
+			tm.mu.Unlock()
 		}
 		team.mu.Unlock()
 	}

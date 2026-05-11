@@ -94,14 +94,12 @@ func DefaultStyles() Styles {
 // ToolIcon returns the icon for a given tool status.
 func (s Styles) ToolIcon(status ToolStatus) string {
 	switch status {
-	case StatusPending:
-		return "⏳"
-	case StatusRunning:
-		return "⏳"
+	case StatusPending, StatusRunning:
+		return "○"
 	case StatusSuccess:
-		return "✓"
+		return "●"
 	case StatusError:
-		return "✗"
+		return "●"
 	case StatusCanceled:
 		return "⊘"
 	default:
@@ -114,13 +112,13 @@ func (s Styles) ToolIconStyle(status ToolStatus) string {
 	icon := s.ToolIcon(status)
 	switch status {
 	case StatusSuccess:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Render(icon) // green
 	case StatusError:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(icon) // red
 	case StatusPending, StatusRunning:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(icon) // orange
 	case StatusCanceled:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(icon)
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(icon) // gray
 	default:
 		return icon
 	}

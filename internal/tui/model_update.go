@@ -1609,8 +1609,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Delayed rebuild after throttle window
 		if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
 			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
-		} else if m.subAgentFollow.isActive() {
-			// Still throttled — reschedule
+		} else if m.subAgentFollow.isActive() && m.subAgentFollow.dirty[m.subAgentFollow.activeID] {
+			// Still dirty but throttled — reschedule
 			return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
 				return subAgentFollowRefreshMsg{}
 			})

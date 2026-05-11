@@ -75,10 +75,10 @@ func TestChatListFullFlow(t *testing.T) {
 	if !strings.Contains(rendered, "main.go") {
 		t.Errorf("tool item missing 'main.go': %q", rendered)
 	}
-	if strings.Contains(rendered, "⏳") {
+	if strings.Contains(rendered, "○") {
 		t.Errorf("tool should be finished, not running: %q", rendered)
 	}
-	if !strings.Contains(rendered, "✓") {
+	if !strings.Contains(rendered, "●") {
 		t.Errorf("tool should show success icon: %q", rendered)
 	}
 
@@ -170,7 +170,7 @@ func TestChatListAgentToolItem(t *testing.T) {
 	})
 
 	rendered = stripAnsiCodes(agent.Render(100))
-	if !strings.Contains(rendered, "✓") {
+	if !strings.Contains(rendered, "●") {
 		t.Errorf("agent should show success after finish: %q", rendered)
 	}
 }
