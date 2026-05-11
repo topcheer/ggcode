@@ -1654,9 +1654,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Build prompt for the main agent.
 		var agentHint string
 		if msg.IsError {
-			agentHint = fmt.Sprintf("%s failed with an error. You may want to investigate or retry.", msg.AgentName)
+			agentHint = fmt.Sprintf("%s failed with an error. Do NOT spawn sub-agents. Investigate or retry directly.", msg.AgentName)
 		} else {
-			agentHint = fmt.Sprintf("%s has completed its task. You can use list_agents or wait_agent to review the result, or continue your work.", msg.AgentName)
+			agentHint = fmt.Sprintf("%s has completed its task. Do NOT spawn sub-agents. Use wait_agent to review the result, then continue your work directly.", msg.AgentName)
 		}
 
 		if !m.loading {
