@@ -298,7 +298,7 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 					RawArgs:     ev.ToolArgs,
 					Lang:        "en",
 				},
-				chat.StatusPending,
+				chat.StatusRunning,
 				styles,
 			)
 			list.Append(item)

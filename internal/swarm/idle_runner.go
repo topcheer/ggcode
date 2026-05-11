@@ -137,6 +137,11 @@ func handleMessage(
 
 	debug.Log("swarm", "teammate %s setLastResult len=%d", tm.ID, len(result))
 
+	// If context was cancelled (e.g. CancelAll), don't revert to idle.
+	if ctx.Err() != nil {
+		tm.setStatus(TeammateShuttingDown)
+		return
+	}
 	tm.setStatus(TeammateIdle)
 	tm.setCurrentTask("")
 
@@ -227,6 +232,10 @@ func tryClaimPendingTask(
 
 		tm.setLastResult(result)
 
+		if ctx.Err() != nil {
+			tm.setStatus(TeammateShuttingDown)
+			return
+		}
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
 

@@ -167,7 +167,7 @@ func TestToolHeader(t *testing.T) {
 	if !strings.Contains(header, "go build") {
 		t.Fatalf("expected params in header: %s", header)
 	}
-	if !strings.Contains(header, "✓") {
+	if !strings.Contains(header, "●") {
 		t.Fatalf("expected success icon: %s", header)
 	}
 }
