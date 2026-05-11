@@ -50,7 +50,8 @@ type REPL struct {
 	skillsChangedHook   func()
 	imManager           *im.Manager
 	projectMemoryLoader func() (string, []string, error)
-	webuiAddr           string // webui listen address, displayed after TUI ready
+	webuiAddr           string // webui listen address
+	webuiToken          string // webui auth token, displayed in URL fragment
 	knightStartupHint   string // one-time hint shown at startup (e.g. lock conflict)
 }
 
@@ -154,11 +155,12 @@ func (r *REPL) InjectRestart() {
 	}
 }
 
-// SetWebUIReadyAddr stores the webui address to be displayed in the TUI
-// after startup. The actual program.Send happens in the startup goroutine
-// alongside logoMsg to ensure the TUI is ready.
-func (r *REPL) SetWebUIReadyAddr(addr string) {
+// SetWebUIReadyAddr stores the webui address and auth token to be displayed
+// in the TUI after startup. The actual program.Send happens in the startup
+// goroutine alongside logoMsg to ensure the TUI is ready.
+func (r *REPL) SetWebUIReadyAddr(addr, token string) {
 	r.webuiAddr = addr
+	r.webuiToken = token
 }
 
 // SetSystemPromptRebuilder sets a callback that rebuilds the full system prompt
@@ -647,7 +649,7 @@ func (r *REPL) Run() error {
 		r.program.Send(logoMsg{Vendor: vendorName, Endpoint: endpointName, Model: modelName})
 		debug.Log("repl", "startup timing repl.startupMsg sent initial messages duration=%s", time.Since(start).Round(time.Millisecond))
 		if r.webuiAddr != "" {
-			r.program.Send(webuiReadyMsg{Addr: r.webuiAddr})
+			r.program.Send(webuiReadyMsg{Addr: r.webuiAddr, Token: r.webuiToken})
 		}
 		if r.knightStartupHint != "" {
 			r.program.Send(knightStartupHintMsg{Hint: r.knightStartupHint})

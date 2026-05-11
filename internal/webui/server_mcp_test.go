@@ -24,6 +24,7 @@ func TestMCPWithRuntime(t *testing.T) {
 
 	// Test merged MCP endpoint
 	req := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
@@ -69,6 +70,7 @@ func TestMCPWithoutRuntime(t *testing.T) {
 	// No MCPStatusFn set — simulates no runtime
 
 	req := httptest.NewRequest(http.MethodGet, "/api/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 

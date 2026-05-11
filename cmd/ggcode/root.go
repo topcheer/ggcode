@@ -927,7 +927,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	} else {
 		defer webuiSrv.Close()
 		// Schedule the URL display for after TUI is ready (see repl startup goroutine)
-		repl.SetWebUIReadyAddr(actualAddr)
+		repl.SetWebUIReadyAddr(actualAddr, webuiSrv.Token())
 	}
 	trace.Mark("start webui")
 

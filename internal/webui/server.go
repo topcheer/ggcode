@@ -144,6 +144,7 @@ type AgentRunner interface {
 // Server provides a built-in WebUI for configuration and chat.
 type Server struct {
 	cfg             *config.Config
+	authToken       string // random token generated at startup
 	mcpStatusFn     MCPStatusFunc
 	imStatusFn      IMStatusFunc
 	imActionFn      IMActionFunc
@@ -229,10 +230,14 @@ func NewServer(cfg *config.Config) *Server {
 		cfg:       cfg,
 		mux:       http.NewServeMux(),
 		saveScope: "global",
+		authToken: generateAuthToken(),
 	}
 	s.routes()
 	return s
 }
+
+// Token returns the server's auth token for display in the TUI/daemon.
+func (s *Server) Token() string { return s.authToken }
 
 // saveConfig persists config using the current save scope.
 func (s *Server) saveConfig() error {
@@ -277,39 +282,40 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) routes() {
-	// Static SPA
+	// Static SPA (no auth required — serves static HTML/JS)
 	s.mux.HandleFunc("/", s.serveSPA)
 
-	// Config REST API
-	s.mux.HandleFunc("/api/config", s.handleConfig)
-	s.mux.HandleFunc("/api/config/scope", s.handleConfigScope)
-	s.mux.HandleFunc("/api/config/active", s.handleActiveSelection)
-	s.mux.HandleFunc("/api/vendors", s.handleVendors)
-	s.mux.HandleFunc("/api/vendors/", s.handleVendorDetail)
-	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints", s.handleEndpoints)
-	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints/{endpoint}", s.handleEndpointDetail)
-	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints/{endpoint}/apikey", s.handleAPIKey)
-	s.mux.HandleFunc("/api/mcp", s.handleMCP)
-	s.mux.HandleFunc("/api/mcp/status", s.handleMCPStatus)
-	s.mux.HandleFunc("/api/mcp/", s.handleMCPDetail)
-	s.mux.HandleFunc("/api/im", s.handleIM)
-	s.mux.HandleFunc("/api/im/status", s.handleIMStatus)
-	s.mux.HandleFunc("/api/im/action", s.handleIMAction)
-	s.mux.HandleFunc("/api/im/adapters", s.handleIMAdapters)
-	s.mux.HandleFunc("/api/im/adapters/", s.handleIMAdapterDetail)
-	s.mux.HandleFunc("/api/general", s.handleGeneral)
-	s.mux.HandleFunc("/api/impersonate", s.handleImpersonate)
-	s.mux.HandleFunc("/api/a2a", s.handleA2A)
-	s.mux.HandleFunc("/api/a2a/discover", s.handleA2ADiscover)
-	s.mux.HandleFunc("/api/sessions", s.handleSessions)
-	s.mux.HandleFunc("/api/sessions/", s.handleSessionDetail)
-	s.mux.HandleFunc("/api/chat/ws", s.handleChatWS)
-	s.mux.HandleFunc("/api/chat/history", s.handleChatHistory)
-	s.mux.HandleFunc("/api/restart", s.handleRestart)
-	s.mux.HandleFunc("/api/knight", s.handleKnight)
-	s.mux.HandleFunc("/api/knight/skills", s.handleKnightSkills)
-	s.mux.HandleFunc("/api/knight/action", s.handleKnightAction)
-	s.mux.HandleFunc("/api/knight/skill-content", s.handleKnightSkillContent)
+	// All API endpoints require auth token via Bearer header or ?token= query param.
+	a := s.requireAuth
+	s.mux.HandleFunc("/api/config", a(s.handleConfig))
+	s.mux.HandleFunc("/api/config/scope", a(s.handleConfigScope))
+	s.mux.HandleFunc("/api/config/active", a(s.handleActiveSelection))
+	s.mux.HandleFunc("/api/vendors", a(s.handleVendors))
+	s.mux.HandleFunc("/api/vendors/", a(s.handleVendorDetail))
+	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints", a(s.handleEndpoints))
+	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints/{endpoint}", a(s.handleEndpointDetail))
+	s.mux.HandleFunc("/api/vendors/{vendor}/endpoints/{endpoint}/apikey", a(s.handleAPIKey))
+	s.mux.HandleFunc("/api/mcp", a(s.handleMCP))
+	s.mux.HandleFunc("/api/mcp/status", a(s.handleMCPStatus))
+	s.mux.HandleFunc("/api/mcp/", a(s.handleMCPDetail))
+	s.mux.HandleFunc("/api/im", a(s.handleIM))
+	s.mux.HandleFunc("/api/im/status", a(s.handleIMStatus))
+	s.mux.HandleFunc("/api/im/action", a(s.handleIMAction))
+	s.mux.HandleFunc("/api/im/adapters", a(s.handleIMAdapters))
+	s.mux.HandleFunc("/api/im/adapters/", a(s.handleIMAdapterDetail))
+	s.mux.HandleFunc("/api/general", a(s.handleGeneral))
+	s.mux.HandleFunc("/api/impersonate", a(s.handleImpersonate))
+	s.mux.HandleFunc("/api/a2a", a(s.handleA2A))
+	s.mux.HandleFunc("/api/a2a/discover", a(s.handleA2ADiscover))
+	s.mux.HandleFunc("/api/sessions", a(s.handleSessions))
+	s.mux.HandleFunc("/api/sessions/", a(s.handleSessionDetail))
+	s.mux.HandleFunc("/api/chat/ws", a(s.handleChatWS))
+	s.mux.HandleFunc("/api/chat/history", a(s.handleChatHistory))
+	s.mux.HandleFunc("/api/restart", a(s.handleRestart))
+	s.mux.HandleFunc("/api/knight", a(s.handleKnight))
+	s.mux.HandleFunc("/api/knight/skills", a(s.handleKnightSkills))
+	s.mux.HandleFunc("/api/knight/action", a(s.handleKnightAction))
+	s.mux.HandleFunc("/api/knight/skill-content", a(s.handleKnightSkillContent))
 }
 
 // --- Static SPA ---
@@ -984,11 +990,12 @@ func (s *Server) handleA2A(w http.ResponseWriter, r *http.Request) {
 			"max_tasks":    a2a.MaxTasks,
 			"task_timeout": a2a.TaskTimeout,
 			"auth": map[string]interface{}{
-				"has_api_key": strings.TrimSpace(a2a.Auth.APIKey) != "",
-				"api_keys":    a2a.Auth.APIKeys,
-				"oauth2":      sanitizeOAuth2(a2a.Auth.OAuth2),
-				"oidc":        sanitizeOIDC(a2a.Auth.OIDC),
-				"mtls":        sanitizeMTLS(a2a.Auth.MTLS),
+				"has_api_key":   strings.TrimSpace(a2a.Auth.APIKey) != "",
+				"has_api_keys":  len(a2a.Auth.APIKeys) > 0,
+				"api_key_count": len(a2a.Auth.APIKeys),
+				"oauth2":        sanitizeOAuth2(a2a.Auth.OAuth2),
+				"oidc":          sanitizeOIDC(a2a.Auth.OIDC),
+				"mtls":          sanitizeMTLS(a2a.Auth.MTLS),
 			},
 			"has_legacy_api_key": strings.TrimSpace(a2a.APIKey) != "",
 			"presets":            a2aAuthPresets(),
@@ -1765,9 +1772,11 @@ func readJSON(r *http.Request, v interface{}) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// sanitizeConfigForAPI returns a JSON-safe copy with API keys masked.
+// sanitizeConfigForAPI returns a JSON-safe copy with sensitive fields masked.
+// API keys, OAuth secrets, MCP env/headers are replaced with has_* booleans.
 func sanitizeConfigForAPI(cfg *config.Config) map[string]interface{} {
-	return map[string]interface{}{
+	// Marshal and unmarshal through JSON to get generic maps for mutation.
+	raw, _ := json.Marshal(map[string]interface{}{
 		"vendor":         cfg.Vendor,
 		"endpoint":       cfg.Endpoint,
 		"model":          cfg.Model,
@@ -1784,5 +1793,34 @@ func sanitizeConfigForAPI(cfg *config.Config) map[string]interface{} {
 			"port":     cfg.A2A.Port,
 			"host":     cfg.A2A.Host,
 		},
+	})
+
+	var result map[string]interface{}
+	_ = json.Unmarshal(raw, &result)
+
+	sanitizeMap(result)
+	return result
+}
+
+// sanitizeMap recursively removes sensitive fields from a config map.
+func sanitizeMap(m map[string]interface{}) {
+	for key, val := range m {
+		switch key {
+		case "api_key", "api_secret", "oauth_client_secret":
+			if str, ok := val.(string); ok && str != "" {
+				m[key] = "***"
+			} else {
+				delete(m, key)
+			}
+		case "env", "headers":
+			if val != nil {
+				m["has_"+key] = true
+			}
+			delete(m, key)
+		default:
+			if sub, ok := val.(map[string]interface{}); ok {
+				sanitizeMap(sub)
+			}
+		}
 	}
 }

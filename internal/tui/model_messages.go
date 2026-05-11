@@ -244,9 +244,10 @@ type webchatUserMsg struct {
 }
 
 // webuiReadyMsg is sent when the webui HTTP server is ready. The TUI
-// displays the URL as a system message in the chat area.
+// displays the URL (with token fragment) as a system message in the chat area.
 type webuiReadyMsg struct {
-	Addr string
+	Addr  string
+	Token string
 }
 
 // harnessPanelRefreshResultMsg carries the result of an async harness panel

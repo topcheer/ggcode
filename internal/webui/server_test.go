@@ -27,6 +27,7 @@ func TestMCPSerialization(t *testing.T) {
 
 	s := NewServer(cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.handleConfig(w, req)
 
@@ -78,6 +79,7 @@ func TestIMSerialization(t *testing.T) {
 
 	s := NewServer(cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.handleConfig(w, req)
 
@@ -126,6 +128,7 @@ func TestA2ASerialization(t *testing.T) {
 	s := NewServer(cfg)
 	// Test GET
 	req := httptest.NewRequest(http.MethodGet, "/api/a2a", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 	if w.Code != 200 {
@@ -156,6 +159,7 @@ func TestSessionsListNoStore(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 	if w.Code != 200 {
@@ -225,6 +229,7 @@ func TestSessionsListWithSessions(t *testing.T) {
 	s.SetSessionStore(store, "/home/user/project-a")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
@@ -305,6 +310,7 @@ func TestSessionDetail(t *testing.T) {
 	s.SetSessionStore(store, "/home/user/project")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/20260401-120000", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
@@ -359,6 +365,7 @@ func TestSessionDetailNotFound(t *testing.T) {
 	s.SetSessionStore(store, "/tmp")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/nonexistent", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
@@ -372,6 +379,7 @@ func TestSessionDetailNoStore(t *testing.T) {
 	s := NewServer(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/123", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
@@ -386,6 +394,7 @@ func TestSessionMethodNotAllowed(t *testing.T) {
 
 	// POST to /api/sessions
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 	if w.Code != 405 {
@@ -394,6 +403,7 @@ func TestSessionMethodNotAllowed(t *testing.T) {
 
 	// POST to /api/sessions/123
 	req = httptest.NewRequest(http.MethodPost, "/api/sessions/123", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w = httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 	if w.Code != 405 {
@@ -495,7 +505,7 @@ func TestChatWSNoBridge(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	_, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err == nil {
 		t.Fatal("expected error when no bridge, got connection")
@@ -511,7 +521,7 @@ func TestChatWSBridgeSimple(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -574,7 +584,7 @@ func TestChatWSBridgeBroadcast(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 
 	ws1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -623,7 +633,7 @@ func TestChatWSBridgeInvalidMessage(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -647,7 +657,7 @@ func TestChatWSBridgeEmptyText(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -671,7 +681,7 @@ func TestChatWSBridgeWithImage(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -710,7 +720,7 @@ func TestChatWSBridgeWithFile(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws"
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/chat/ws?token=" + s.Token()
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -750,7 +760,7 @@ func TestChatHistoryBridge(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/chat/history")
+	resp, err := authGet(srv.URL+"/api/chat/history", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,7 +782,7 @@ func TestChatHistoryNoBridge(t *testing.T) {
 	srv := httptest.NewServer(s.mux)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/chat/history")
+	resp, err := authGet(srv.URL+"/api/chat/history", s.Token())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,6 +801,7 @@ func TestHandleConfigScope_GET(t *testing.T) {
 	s := NewServer(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config/scope", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.handleConfigScope(w, req)
 
@@ -860,6 +871,7 @@ func TestHandleConfigScope_MethodNotAllowed(t *testing.T) {
 	s := NewServer(cfg)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/config/scope", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.handleConfigScope(w, req)
 
@@ -873,6 +885,7 @@ func TestHandleConfig_IncludesScope(t *testing.T) {
 	s := NewServer(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.handleConfig(w, req)
 
@@ -936,6 +949,7 @@ func TestKnightAPI(t *testing.T) {
 
 	t.Run("no knight fn returns disabled", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/knight", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnight(w, req)
 		if w.Code != 200 {
@@ -968,6 +982,7 @@ func TestKnightAPI(t *testing.T) {
 		})
 
 		req := httptest.NewRequest(http.MethodGet, "/api/knight", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnight(w, req)
 		if w.Code != 200 {
@@ -991,6 +1006,7 @@ func TestKnightAPI(t *testing.T) {
 
 	t.Run("skills endpoint returns only skills", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/knight/skills", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnightSkills(w, req)
 		if w.Code != 200 {
@@ -1007,6 +1023,7 @@ func TestKnightAPI(t *testing.T) {
 
 	t.Run("method not allowed", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/knight", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnight(w, req)
 		if w.Code != http.StatusMethodNotAllowed {
@@ -1093,6 +1110,7 @@ func TestKnightSkillContentAPI(t *testing.T) {
 
 	t.Run("get content", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content?name=my-skill&staging=true", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnightSkillContent(w, req)
 		if w.Code != 200 {
@@ -1107,6 +1125,7 @@ func TestKnightSkillContentAPI(t *testing.T) {
 
 	t.Run("not found", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content?name=missing", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnightSkillContent(w, req)
 		if w.Code != 404 {
@@ -1121,6 +1140,7 @@ func TestKnightSkillsNoFn(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
 	req := httptest.NewRequest(http.MethodGet, "/api/knight/skills", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.handleKnightSkills(w, req)
 	if w.Code != 200 {
@@ -1139,6 +1159,7 @@ func TestKnightSkillsMethodNotAllowed(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s := NewServer(cfg)
 	req := httptest.NewRequest(http.MethodPost, "/api/knight/skills", nil)
+	req.Header.Set("Authorization", "Bearer "+s.Token())
 	w := httptest.NewRecorder()
 	s.handleKnightSkills(w, req)
 	if w.Code != 405 {
@@ -1198,6 +1219,7 @@ func TestKnightContentEdgeCases(t *testing.T) {
 
 	t.Run("missing name param", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnightSkillContent(w, req)
 		if w.Code != 400 {
@@ -1209,6 +1231,7 @@ func TestKnightContentEdgeCases(t *testing.T) {
 		cfg2 := config.DefaultConfig()
 		s2 := NewServer(cfg2)
 		req := httptest.NewRequest(http.MethodGet, "/api/knight/skill-content?name=x", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s2.handleKnightSkillContent(w, req)
 		if w.Code != 503 {
@@ -1218,6 +1241,7 @@ func TestKnightContentEdgeCases(t *testing.T) {
 
 	t.Run("method not allowed", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/knight/skill-content?name=x", nil)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
 		w := httptest.NewRecorder()
 		s.handleKnightSkillContent(w, req)
 		if w.Code != 405 {

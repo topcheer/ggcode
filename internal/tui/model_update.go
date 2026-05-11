@@ -1033,7 +1033,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case webuiReadyMsg:
 		// Display webui URL as a subtle system message in the chat area
 		if msg.Addr != "" {
-			m.chatWriteSystem(nextSystemID(), "⬡ WebUI: http://"+msg.Addr)
+			url := "http://" + msg.Addr
+			if msg.Token != "" {
+				url += "#token=" + msg.Token
+			}
+			m.chatWriteSystem(nextSystemID(), "\u2B21 WebUI: "+url)
 			m.chatListScrollToBottom()
 		}
 		return m, nil

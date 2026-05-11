@@ -1007,7 +1007,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	webuiAddr := "127.0.0.1:0" // auto port
 	actualAddr, webuiErr := webuiSrv.Start(webuiAddr)
 	if webuiErr == nil {
-		fmt.Fprintf(os.Stderr, "\x1b[34m⬡ WebUI:\x1b[0m \x1b[32mhttp://%s\x1b[0m\r\n", actualAddr)
+		url := "http://" + actualAddr
+		if tk := webuiSrv.Token(); tk != "" {
+			url += "#token=" + tk
+		}
+		fmt.Fprintf(os.Stderr, "\x1b[34m\u2B21 WebUI:\x1b[0m \x1b[32m%s\x1b[0m\r\n", url)
 	} else {
 		fmt.Fprintf(os.Stderr, "WebUI start failed: %v\r\n", webuiErr)
 	}
