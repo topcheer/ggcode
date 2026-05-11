@@ -6,11 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -119,14 +117,7 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, model string, maxTo
 		baseTransport = hc.Transport
 	}
 	if baseTransport == nil {
-		baseTransport = &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-		}
+		baseTransport = newProviderHTTPTransport()
 	}
 	transport := &headerInjectingTransport{
 		base:    baseTransport,
@@ -179,7 +170,6 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
-	dumpRequestJSON("openai", "Chat", req)
 
 	var resp openai.ChatCompletionResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -224,7 +214,6 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	}
 
 	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
-	dumpRequestJSON("openai", "ChatStream", req)
 	if len(req.Tools) > 0 {
 		if toolJSON, err := json.Marshal(req.Tools); err == nil {
 			debug.Log("openai", "Tools: %s", string(toolJSON))
@@ -252,7 +241,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				if rejected, parsed := maxTokensRejection(err); rejected {
 					p.cap.OnRejected(parsed)
 				}
-				if isRetryable(err) && attempt < providerRetryAttempts-1 {
+				if isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
 					delay := retryDelay(err, attempt)
 					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, delay, err, err)
 					// Notify user about retry
@@ -312,20 +301,22 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					resp, recvErr := localStreamer.Recv()
 					if recvErr != nil {
 						// Stream ended normally
-						if errors.Is(recvErr, io.EOF) || recvErr == context.Canceled || recvErr == context.DeadlineExceeded {
+						if errors.Is(recvErr, io.EOF) || errors.Is(recvErr, context.Canceled) {
 							debug.Log("openai", "Stream ended normally: %v reasoning_total=%d emitted=%v", recvErr, reasoningBuf.Len(), emitted)
 							if errors.Is(recvErr, io.EOF) {
 								normalEnd = true
 							}
-							if recvErr == context.Canceled {
+							if errors.Is(recvErr, context.Canceled) {
 								cancelledCleanly = true
 							}
 							return
 						}
 						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
 						// Retry if no content emitted yet and error is retryable
-						if !emitted && isRetryable(recvErr) && attempt < providerRetryAttempts-1 {
-							if sleepErr := retrySleep(ctx, retryDelay(recvErr, attempt)); sleepErr != nil {
+						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < providerRetryAttempts-1 {
+							delay := retryDelay(recvErr, attempt)
+							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+							if sleepErr := retrySleep(ctx, delay); sleepErr != nil {
 								ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 								return
 							}

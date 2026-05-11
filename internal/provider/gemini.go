@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -45,14 +43,7 @@ func NewGeminiProvider(apiKey string, model string, maxTokens int) (*GeminiProvi
 func NewGeminiProviderWithBaseURL(apiKey string, model string, maxTokens int, baseURL string) (*GeminiProvider, error) {
 	headers := BuildHeadersForProvider("gemini")
 	transport := &headerInjectingTransport{
-		base: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-		},
+		base:    newProviderHTTPTransport(),
 		headers: headers,
 	}
 	clientConfig := &genai.ClientConfig{
@@ -99,11 +90,6 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
 	}
-	dumpRequestJSON("gemini", "Chat", struct {
-		Contents          []*genai.Content
-		SystemInstruction *genai.Content
-		Tools             []*genai.Tool
-	}{contents, systemInstruction, config.Tools})
 
 	var resp *genai.GenerateContentResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -137,11 +123,6 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	if len(tools) > 0 {
 		config.Tools = p.convertTools(tools)
 	}
-	dumpRequestJSON("gemini", "ChatStream", struct {
-		Contents          []*genai.Content
-		SystemInstruction *genai.Content
-		Tools             []*genai.Tool
-	}{contents, systemInstruction, config.Tools})
 
 	ch := make(chan StreamEvent, 64)
 
@@ -158,7 +139,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					if rejected, parsed := maxTokensRejection(err); rejected {
 						p.cap.OnRejected(parsed)
 					}
-					if !emitted && isRetryable(err) && attempt < providerRetryAttempts-1 {
+					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
 						// Notify user about retry
 						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, retryDelay(err, attempt))}
 						if sleepErr := retrySleep(ctx, retryDelay(err, attempt)); sleepErr != nil {

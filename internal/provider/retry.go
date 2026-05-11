@@ -2,18 +2,13 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/topcheer/ggcode/internal/debug"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/sashabaranov/go-openai"
@@ -43,8 +38,9 @@ func isRetryable(err error) bool {
 		return false
 	}
 
-	// Context cancellation/deadline is never retryable.
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// User/session cancellation is never retryable. DeadlineExceeded is handled
+	// below as a retryable timeout unless the caller context has already ended.
+	if errors.Is(err, context.Canceled) {
 		return false
 	}
 
@@ -107,6 +103,13 @@ func isRetryable(err error) bool {
 	return true
 }
 
+func isRetryableForContext(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	return isRetryable(err)
+}
+
 // isRetryableHTTPStatus returns true unless the status code is a permanent
 // client error (401, 403, 404). All other codes — including 429, 5xx, and
 // unexpected 4xx — are retried.
@@ -137,7 +140,7 @@ func retryWithBackoffCtx(ctx context.Context, fn func() error, maxAttempts int) 
 			return nil
 		}
 		lastErr = err
-		if !isRetryable(err) || i == maxAttempts-1 {
+		if !isRetryableForContext(ctx, err) || i == maxAttempts-1 {
 			return err
 		}
 		if sleepErr := retrySleep(ctx, retryDelay(err, i)); sleepErr != nil {
@@ -230,19 +233,4 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// dumpRequestJSON serializes v to JSON and writes it to a temp file for
-// debugging protocol violations (e.g. malformed messages causing API 500s).
-func dumpRequestJSON(provider, method string, v any) {
-	jsonBytes, err := json.Marshal(v)
-	if err != nil {
-		debug.Log(provider, "%s request dump marshal FAILED: %v", method, err)
-		return
-	}
-	debug.Log(provider, "%s request JSON len=%d", method, len(jsonBytes))
-	dumpPath := filepath.Join(os.TempDir(), "ggcode-"+provider+"-last-request.json")
-	if writeErr := os.WriteFile(dumpPath, jsonBytes, 0644); writeErr != nil {
-		debug.Log(provider, "%s request dump write failed: %v", method, writeErr)
-	}
 }
