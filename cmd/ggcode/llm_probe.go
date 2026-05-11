@@ -53,7 +53,7 @@ type probeResult struct {
 }
 
 func newLLMProbeCmd(cfgFile *string) *cobra.Command {
-	var vendorFilter, endpointFilter string
+	var vendorFilter, endpointFilter, modelOverride string
 	var verbose bool
 	var timeoutSec int
 
@@ -69,21 +69,23 @@ Examples:
   ggcode llm-probe                   # Test all endpoints
   ggcode llm-probe --vendor zai      # Test only zai vendor
   ggcode llm-probe -v                # Verbose: show request/response bodies
+  ggcode llm-probe --model gpt-4o    # Use specific model for all endpoints
   ggcode llm-probe --timeout 30      # Use 30s timeout per endpoint`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLLMProbe(*cfgFile, vendorFilter, endpointFilter, verbose, timeoutSec)
+			return runLLMProbe(*cfgFile, vendorFilter, endpointFilter, modelOverride, verbose, timeoutSec)
 		},
 	}
 
 	cmd.Flags().StringVar(&vendorFilter, "vendor", "", "Test only this vendor")
 	cmd.Flags().StringVar(&endpointFilter, "endpoint", "", "Test only this endpoint")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show full request/response headers and bodies")
+	cmd.Flags().StringVar(&modelOverride, "model", "", "Override model for all endpoints (skips ListModels)")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 20, "Timeout per API call in seconds")
 
 	return cmd
 }
 
-func runLLMProbe(cfgFile, vendorFilter, endpointFilter string, verbose bool, timeoutSec int) error {
+func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, verbose bool, timeoutSec int) error {
 	// Load keys into environment
 	if err := config.LoadKeysEnv(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: LoadKeysEnv: %v\n", err)
