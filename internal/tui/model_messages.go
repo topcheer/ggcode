@@ -88,6 +88,16 @@ type projectMemoryLoadedMsg struct {
 type subAgentUpdateMsg struct {
 	AgentID string // empty for general update
 }
+
+// subAgentDoneMsg is sent when a sub-agent or swarm teammate completes its task.
+// It triggers a system message in the chat and optionally wakes the main agent.
+type subAgentDoneMsg struct {
+	AgentID   string
+	AgentName string
+	IsError   bool
+	Kind      string // "subagent" or "teammate"
+}
+
 type subAgentFollowRefreshMsg struct{}
 type followGraceTickMsg struct{}
 

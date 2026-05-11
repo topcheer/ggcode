@@ -1636,6 +1636,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case subAgentDoneMsg:
+		// A sub-agent or swarm teammate finished its task.
+		// Show a human-readable system message and wake the main agent.
+		m.chatWriteSystem(nextSystemID(), m.formatSubAgentDoneNotice(msg))
+		m.chatListScrollToBottom()
+
+		// Build prompt for the main agent.
+		var agentHint string
+		if msg.IsError {
+			agentHint = fmt.Sprintf("%s failed with an error. You may want to investigate or retry.", msg.AgentName)
+		} else {
+			agentHint = fmt.Sprintf("%s has completed its task. You can use list_agents or wait_agent to review the result, or continue your work.", msg.AgentName)
+		}
+
+		if !m.loading {
+			// Agent is idle — start a new loop to process the notification.
+			return m, m.submitText(agentHint, true)
+		}
+		// Agent is busy — queue for processing after current run.
+		m.queuePendingSubmissionHidden(agentHint)
+		return m, nil
 	case modeChangeMsg:
 		m.mode = msg.Mode
 		return m, nil
