@@ -238,6 +238,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 		var usage *TokenUsage
 		var outputChars int
+		var err error
 
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			if attempt > 0 {
@@ -246,11 +247,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 			// (Re-)establish the stream for each attempt
 			var localStreamer *openai.ChatCompletionStream
-			err := retryWithBackoffCtx(ctx, func() error {
-				var sErr error
-				localStreamer, sErr = p.client.CreateChatCompletionStream(ctx, req)
-				return sErr
-			}, providerRetryAttempts)
+			localStreamer, err = p.client.CreateChatCompletionStream(ctx, req)
 			if err != nil {
 				if rejected, parsed := maxTokensRejection(err); rejected {
 					p.cap.OnRejected(parsed)

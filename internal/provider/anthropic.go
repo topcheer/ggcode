@@ -68,7 +68,7 @@ func NewAnthropicProviderWithBaseURL(apiKey string, model string, maxTokens int,
 func anthropicProviderOptions(apiKey, baseURL string) []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
-		option.WithMaxRetries(providerRetryAttempts - 1),
+		option.WithMaxRetries(0), // retry handled by our outer loop, not SDK
 	}
 	// Inject identity headers from impersonation state or protocol defaults.
 	headers := BuildHeadersForProvider("anthropic")
