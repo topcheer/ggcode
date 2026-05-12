@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type CopilotProvider struct {
@@ -43,7 +44,7 @@ func (rt *copilotHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Respons
 	}
 	clone := req.Clone(req.Context())
 	if req.Body != nil {
-		body, err := io.ReadAll(req.Body)
+		body, err := util.ReadAll(req.Body, util.ReadLimitAPI)
 		if err != nil {
 			return nil, err
 		}

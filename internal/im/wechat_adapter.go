@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -216,7 +217,7 @@ func (a *WechatAdapter) AuthenticateQRCode(ctx context.Context) (qrcode string, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return "", "", fmt.Errorf("qrcode request failed: status=%d body=%s", resp.StatusCode, string(body))
 	}
 	var result ilinkQRCodeResponse
@@ -327,7 +328,7 @@ func (a *WechatAdapter) pollLoop(ctx context.Context) error {
 		return fmt.Errorf("unauthorized — bot_token may be expired, re-scan required")
 	}
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return fmt.Errorf("getupdates failed: status=%d body=%s", resp.StatusCode, string(respBody))
 	}
 

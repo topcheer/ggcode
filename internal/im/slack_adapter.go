@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -22,6 +21,7 @@ import (
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -205,7 +205,7 @@ func (a *slackAdapter) authTest(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func (a *slackAdapter) appsConnectionsOpen(ctx context.Context) (string, error) 
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return "", err
 	}
@@ -419,10 +419,10 @@ func (a *slackAdapter) downloadSlackFile(ctx context.Context, url string) ([]byt
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return nil, "", fmt.Errorf("Slack download [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return nil, "", err
 	}
@@ -567,7 +567,7 @@ func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 		return err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil
@@ -600,7 +600,7 @@ func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, conten
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return err
 	}
@@ -655,7 +655,7 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID string,
 		if resp.StatusCode >= 400 {
 			return a.sendChannelMessage(ctx, channelID, img.Data)
 		}
-		data, err := io.ReadAll(resp.Body)
+		data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		if err != nil {
 			return a.sendChannelMessage(ctx, channelID, img.Data)
 		}
@@ -727,7 +727,7 @@ func (a *slackAdapter) uploadFile(ctx context.Context, channelID, filename strin
 		return err
 	}
 	defer resp.Body.Close()
-	respData, _ := io.ReadAll(resp.Body)
+	respData, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 
 	var result map[string]any
 	if err := json.Unmarshal(respData, &result); err != nil {

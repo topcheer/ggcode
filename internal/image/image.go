@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -115,7 +116,7 @@ func ReadFile(path string) (Image, error) {
 
 // ReadFromReader reads an image from an io.Reader.
 func ReadFromReader(r io.Reader) (Image, error) {
-	data, err := io.ReadAll(r)
+	data, err := util.ReadAll(r, util.ReadLimitGeneral)
 	if err != nil {
 		return Image{}, fmt.Errorf("reading image data: %w", err)
 	}

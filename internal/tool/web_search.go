@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"github.com/topcheer/ggcode/internal/util"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -93,7 +93,7 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("read body failed: %v", err)}, nil
 	}

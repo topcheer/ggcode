@@ -4,7 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
-	"io"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 )
 
@@ -38,7 +38,7 @@ func (e *iworkExtractor) Extract(data []byte) (TextResult, error) {
 		if err != nil {
 			continue
 		}
-		content, err := io.ReadAll(rc)
+		content, err := util.ReadAll(rc, util.ReadLimitGeneral)
 		rc.Close()
 		if err != nil {
 			continue

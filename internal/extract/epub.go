@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/util"
 	"golang.org/x/net/html"
 )
 
@@ -76,7 +77,7 @@ func findOPFPath(r *zip.Reader) (string, error) {
 				return "", fmt.Errorf("open container.xml: %w", err)
 			}
 			defer rc.Close()
-			data, err := io.ReadAll(rc)
+			data, err := util.ReadAll(rc, util.ReadLimitGeneral)
 			if err != nil {
 				return "", fmt.Errorf("read container.xml: %w", err)
 			}
@@ -114,7 +115,7 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 				return nil, fmt.Errorf("open OPF: %w", err)
 			}
 			defer rc.Close()
-			opfData, err = io.ReadAll(rc)
+			opfData, err = util.ReadAll(rc, util.ReadLimitGeneral)
 			if err != nil {
 				return nil, fmt.Errorf("read OPF: %w", err)
 			}
@@ -197,7 +198,7 @@ func extractHTMLFromZip(r *zip.Reader, path string) (string, error) {
 				return "", err
 			}
 			defer rc.Close()
-			data, err := io.ReadAll(rc)
+			data, err := util.ReadAll(rc, util.ReadLimitGeneral)
 			if err != nil {
 				return "", err
 			}
@@ -213,7 +214,7 @@ func extractHTMLFromZip(r *zip.Reader, path string) (string, error) {
 				return "", err
 			}
 			defer rc.Close()
-			data, err := io.ReadAll(rc)
+			data, err := util.ReadAll(rc, util.ReadLimitGeneral)
 			if err != nil {
 				return "", err
 			}

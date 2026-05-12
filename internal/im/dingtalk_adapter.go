@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -483,7 +484,7 @@ func (a *dingtalkAdapter) refreshToken(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return err
 	}
@@ -547,7 +548,7 @@ func (a *dingtalkAdapter) streamOpen(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return "", err
 	}

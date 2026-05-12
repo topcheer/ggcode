@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +46,7 @@ type CompactSnapshot struct {
 	MaxTokens     int
 	OutputReserve int
 	TodoPath      string
+	Version       int64
 }
 
 // CompactResult is the output of compacting a CompactSnapshot.
@@ -94,6 +94,7 @@ func AutoCompactThresholdTokens(maxTokens int) int {
 type Manager struct {
 	mu                sync.Mutex
 	messages          []provider.Message
+	version           int64 // incremented on every mutation, enables cheap change detection
 	tokens            int
 	maxTokens         int
 	outputReserve     int
@@ -131,6 +132,7 @@ func (m *Manager) Add(msg provider.Message) {
 	defer m.mu.Unlock()
 	msgTokens := m.countTokens(msg)
 	m.messages = append(m.messages, msg)
+	m.version++
 	m.tokens += msgTokens
 	if m.baselineAvailable {
 		m.baselineDelta += msgTokens
@@ -160,6 +162,7 @@ func (m *Manager) UpdateFirstSystemMessage(msg provider.Message) {
 	// No system message found, prepend
 	newTokens := m.countTokens(msg)
 	m.messages = append([]provider.Message{msg}, m.messages...)
+	m.version++
 	m.tokens += newTokens
 }
 
@@ -183,13 +186,17 @@ func (m *Manager) CompactSnapshot() CompactSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	msgs := make([]provider.Message, len(m.messages))
-	copy(msgs, m.messages)
+	for i, msg := range m.messages {
+		msgs[i] = msg
+		msgs[i].Content = append([]provider.ContentBlock(nil), msg.Content...)
+	}
 	return CompactSnapshot{
 		Messages:      msgs,
 		OrigLen:       len(msgs),
 		MaxTokens:     m.maxTokens,
 		OutputReserve: m.outputReserve,
 		TodoPath:      m.todoPath,
+		Version:       m.version,
 	}
 }
 
@@ -203,20 +210,33 @@ func (s CompactSnapshot) Compact(ctx context.Context, prov provider.Provider) (C
 	scratch.recalcTokens()
 	scratch.mu.Unlock()
 
-	before := scratch.Messages()
 	changed, err := scratch.CheckAndSummarize(ctx, prov)
 	if err != nil {
 		return CompactResult{}, err
 	}
 	after, tokens := scratch.MessagesAndTokenCount()
 	if !changed {
-		changed = !reflect.DeepEqual(before, after)
+		changed = scratch.version != 0
 	}
 	return CompactResult{
 		Messages:   after,
 		TokenCount: tokens,
 		Changed:    changed,
 	}, nil
+}
+
+// contentFingerprint returns a lightweight hash of message content for cheap
+// change detection. Much faster than reflect.DeepEqual for large tool outputs.
+func contentFingerprint(m provider.Message) uint64 {
+	h := uint64(0x9e3779b9) // golden ratio
+	for _, b := range m.Content {
+		h ^= uint64(len(b.Text))
+		h ^= uint64(len(b.Output))
+		if b.ToolID != "" {
+			h = h*31 ^ uint64(len(b.ToolID))
+		}
+	}
+	return h
 }
 
 func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactResult) (bool, int) {
@@ -229,16 +249,24 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	if snapshot.OrigLen < 0 || len(m.messages) < snapshot.OrigLen {
 		return false, m.tokenCountLocked()
 	}
-	if !reflect.DeepEqual(m.messages[:snapshot.OrigLen], snapshot.Messages) {
-		debug.Log("ctx", "ApplyCompactResult: stale snapshot skipped live_msgs=%d snapshot_msgs=%d",
-			len(m.messages), snapshot.OrigLen)
-		return false, m.tokenCountLocked()
+	// If version unchanged, the first OrigLen messages are guaranteed identical.
+	// If version changed, messages may have been appended (allowed) or
+	// modified within the first OrigLen (stale snapshot - reject).
+	if m.version != snapshot.Version {
+		for i := range snapshot.Messages {
+			live := m.messages[i]
+			snap := snapshot.Messages[i]
+			if live.Role != snap.Role || contentFingerprint(live) != contentFingerprint(snap) {
+				return false, m.tokenCountLocked()
+			}
+		}
 	}
 
 	extra := append([]provider.Message(nil), m.messages[snapshot.OrigLen:]...)
 	newMsgs := append([]provider.Message(nil), result.Messages...)
 	newMsgs = append(newMsgs, extra...)
 	m.messages = newMsgs
+	m.version++
 	m.recalcTokens()
 	debug.Log("ctx", "ApplyCompactResult: applied snapshot msgs=%d compacted=%d extra=%d tokens=%d",
 		snapshot.OrigLen, len(result.Messages), len(extra), m.tokenCountLocked())
@@ -294,9 +322,11 @@ func (m *Manager) Clear() {
 	if len(m.messages) > 0 && m.messages[0].Role == "system" {
 		sys := m.messages[0]
 		m.messages = []provider.Message{sys}
+		m.version++
 		m.tokens = m.countTokens(sys)
 	} else {
 		m.messages = nil
+		m.version++
 		m.tokens = 0
 	}
 	m.invalidateUsageBaselineLocked()
@@ -379,6 +409,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 
 		oldLen := len(m.messages)
 		m.messages = newMsgs
+		m.version++
 		m.recalcTokens()
 		done := m.tokens <= m.compactTargetTokens()
 		debug.Log("ctx", "Summarize: pass=%d msgs=%d→%d tokens=%d target=%d done=%t",
@@ -424,16 +455,15 @@ func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider)
 	}
 
 	debug.Log("ctx", "CheckAndSummarize: Microcompact not enough, calling Summarize (tokens=%d)", m.TokenCount())
-	before := m.Messages()
+	beforeVersion := m.version
 	err := m.Summarize(ctx, prov)
 	if err != nil {
 		debug.Log("ctx", "CheckAndSummarize: Summarize FAILED: %v", err)
 		return changed, err
 	}
-	after := m.Messages()
-	summaryChanged := !reflect.DeepEqual(before, after)
+	summaryChanged := m.version != beforeVersion
 	debug.Log("ctx", "CheckAndSummarize: done tokens=%d msgs=%d→%d changed=%t",
-		m.TokenCount(), len(before), len(after), summaryChanged)
+		m.TokenCount(), len(m.Messages()), summaryChanged)
 	return changed || summaryChanged, nil
 }
 
@@ -445,6 +475,7 @@ func (m *Manager) TruncateOldestGroupForRetry() bool {
 		return false
 	}
 	m.messages = truncated
+	m.version++
 	m.recalcTokens()
 	return true
 }
@@ -591,6 +622,7 @@ func (m *Manager) Microcompact() bool {
 	}
 
 	if changed {
+		m.version++
 		m.recalcTokens()
 		debug.Log("ctx", "Microcompact: DONE compacted=%d blocks tokens=%d→%d", compactedCount, currentTokens, m.tokenCountLocked())
 	} else {

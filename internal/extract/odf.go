@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"io"
 	"strings"
 )
@@ -40,7 +41,7 @@ func (e *odfExtractor) Extract(data []byte) (TextResult, error) {
 	}
 	defer rc.Close()
 
-	content, err := io.ReadAll(rc)
+	content, err := util.ReadAll(rc, util.ReadLimitGeneral)
 	if err != nil {
 		return TextResult{}, fmt.Errorf("read content.xml: %w", err)
 	}
