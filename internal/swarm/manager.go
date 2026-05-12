@@ -507,7 +507,10 @@ func (m *Manager) TeammateSnapshot(tmID string) (TeammateSnapshot, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, team := range m.teams {
-		if tm, ok := team.Teammates[tmID]; ok {
+		team.mu.RLock()
+		tm, ok := team.Teammates[tmID]
+		team.mu.RUnlock()
+		if ok {
 			return tm.snapshot(), true
 		}
 	}
