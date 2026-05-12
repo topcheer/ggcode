@@ -282,13 +282,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 }
 
 func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
-	total := 0
-	for _, msg := range messages {
-		for _, block := range msg.Content {
-			total += len(block.Text)
-		}
-	}
-	return total / 4, nil
+	return estimateTokensForMessages(messages), nil
 }
 
 func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
