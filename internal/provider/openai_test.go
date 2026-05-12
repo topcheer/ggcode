@@ -363,3 +363,143 @@ func TestHeaderInjectingTransportConcurrentUpdate(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+func TestEstimateTokensForMessages(t *testing.T) {
+	tests := []struct {
+		name  string
+		msgs  []Message
+		check func(t *testing.T, got int)
+	}{
+		{
+			name: "empty messages",
+			msgs: []Message{},
+			check: func(t *testing.T, got int) {
+				if got != 0 {
+					t.Fatalf("expected 0, got %d", got)
+				}
+			},
+		},
+		{
+			name: "text only",
+			msgs: []Message{
+				{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello world"}}},
+			},
+			check: func(t *testing.T, got int) {
+				if got == 0 {
+					t.Fatal("expected non-zero token count for text")
+				}
+				// "hello world" = 11 chars / 3 = 3.67 → 3 tokens
+				if got != 3 {
+					t.Fatalf("expected 3, got %d", got)
+				}
+			},
+		},
+		{
+			name: "tool_result output is counted",
+			msgs: []Message{
+				{Role: "user", Content: []ContentBlock{
+					{Type: "text", Text: "run this"},
+				}},
+				{Role: "assistant", Content: []ContentBlock{
+					{Type: "tool_use", ToolName: "run_command", ToolID: "c1"},
+				}},
+				{Role: "user", Content: []ContentBlock{
+					{Type: "tool_result", ToolID: "c1", Output: strings.Repeat("x", 300)},
+				}},
+			},
+			check: func(t *testing.T, got int) {
+				// "run this" = 8 chars, output = 300 chars, total = 308 / 3 = 102
+				if got < 100 {
+					t.Fatalf("expected ~102 tokens (output counted), got %d", got)
+				}
+			},
+		},
+		{
+			name: "text + output + input all counted",
+			msgs: []Message{
+				{Role: "user", Content: []ContentBlock{
+					{Type: "text", Text: "hello"},                                    // 5 chars
+					{Type: "tool_result", Output: "world"},                           // 5 chars
+					{Type: "image", Input: json.RawMessage(strings.Repeat("a", 30))}, // 30 chars
+				}},
+			},
+			check: func(t *testing.T, got int) {
+				// total = 5 + 5 + 30 = 40 chars / 3 = 13 tokens
+				if got != 13 {
+					t.Fatalf("expected 13, got %d", got)
+				}
+			},
+		},
+		{
+			name: "large output dominates token count",
+			msgs: []Message{
+				{Role: "user", Content: []ContentBlock{
+					{Type: "text", Text: "list files"},
+				}},
+				{Role: "user", Content: []ContentBlock{
+					{Type: "tool_result", ToolID: "c1", Output: strings.Repeat("file.txt\n", 1000)}, // 9000 chars
+				}},
+			},
+			check: func(t *testing.T, got int) {
+				// "list files" = 10 + 9000 = 9010 / 3 = 3003
+				if got < 2900 {
+					t.Fatalf("expected ~3003 tokens (output dominates), got %d", got)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := estimateTokensForMessages(tc.msgs)
+			tc.check(t, got)
+		})
+	}
+}
+
+func TestCountTokens_AllProvidersCountOutput(t *testing.T) {
+	// Verify Anthropic and Gemini now count tool_result Output (not just Text).
+	messages := []Message{
+		{Role: "user", Content: []ContentBlock{
+			{Type: "text", Text: "short"},
+		}},
+		{Role: "user", Content: []ContentBlock{
+			{Type: "tool_result", ToolID: "c1", Output: strings.Repeat("x", 9000)},
+		}},
+	}
+
+	// All providers should return roughly the same count now.
+	providers := []struct {
+		name string
+		prov Provider
+	}{
+		{"openai", &OpenAIProvider{}},
+		{"anthropic", &AnthropicProvider{}},
+		{"gemini", &GeminiProvider{}},
+	}
+
+	counts := make(map[string]int)
+	for _, p := range providers {
+		count, err := p.prov.CountTokens(context.Background(), messages)
+		if err != nil {
+			t.Fatalf("%s CountTokens failed: %v", p.name, err)
+		}
+		counts[p.name] = count
+		t.Logf("%s: %d tokens", p.name, count)
+	}
+
+	// All should be > 2900 (the output dominates at 9000 chars / 3 = 3000).
+	for name, count := range counts {
+		if count < 2900 {
+			t.Errorf("%s: expected >= 2900 tokens (output should be counted), got %d", name, count)
+		}
+	}
+
+	// All should agree (they all use the same estimateTokensForMessages now).
+	openaiCount := counts["openai"]
+	for name, count := range counts {
+		if count != openaiCount {
+			t.Errorf("%s count %d differs from openai %d", name, count, openaiCount)
+		}
+	}
+}
