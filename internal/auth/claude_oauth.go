@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -253,7 +253,7 @@ func ExchangeClaudeCodeForTokens(ctx context.Context, code, codeVerifier string,
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return nil, fmt.Errorf("reading token response: %w", err)
 	}
@@ -300,7 +300,7 @@ func RefreshClaudeToken(ctx context.Context, refreshToken string) (*Info, error)
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return nil, fmt.Errorf("reading refresh response: %w", err)
 	}
@@ -349,7 +349,7 @@ func CreateClaudeAPIKey(ctx context.Context, accessToken string) (string, error)
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return "", fmt.Errorf("reading API key response: %w", err)
 	}
@@ -389,7 +389,7 @@ func FetchClaudeProfile(ctx context.Context, accessToken string) (*ClaudeProfile
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return nil, fmt.Errorf("reading profile response: %w", err)
 	}

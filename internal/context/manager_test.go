@@ -337,6 +337,245 @@ func TestContextManager_ApplyCompactResultPreservesMessagesAppendedAfterSnapshot
 	}
 }
 
+func TestContextManager_VersionCounter_IncrementsOnMutation(t *testing.T) {
+	cm := NewManager(1000)
+
+	// Initial version is 0.
+	if v := cm.version; v != 0 {
+		t.Fatalf("initial version = %d, want 0", v)
+	}
+
+	// Add increments version.
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "hello"}}})
+	if v := cm.version; v != 1 {
+		t.Fatalf("after Add: version = %d, want 1", v)
+	}
+
+	// PrependSystem (via UpdateFirstSystemMessage when no system exists) increments version.
+	cm.UpdateFirstSystemMessage(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "sys prompt"}}})
+	if v := cm.version; v != 2 {
+		t.Fatalf("after UpdateFirstSystemMessage prepend: version = %d, want 2", v)
+	}
+
+	// UpdateFirstSystemMessage replacing existing system message does NOT increment version.
+	cm.UpdateFirstSystemMessage(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "new sys"}}})
+	if v := cm.version; v != 2 {
+		t.Fatalf("after UpdateFirstSystemMessage replace: version = %d, want 2 (no increment)", v)
+	}
+
+	// Clear increments version.
+	cm.Clear()
+	if v := cm.version; v != 3 {
+		t.Fatalf("after Clear: version = %d, want 3", v)
+	}
+}
+
+func TestContextManager_ApplyCompactResult_VersionMatch_FastPath(t *testing.T) {
+	// When version matches snapshot exactly, ApplyCompactResult should
+	// succeed without any deep inspection of messages.
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x ", 50)}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("y ", 50)}}})
+
+	snapshot := cm.CompactSnapshot()
+	// snapshot.Version == cm.version, no messages appended after snapshot.
+
+	result := CompactResult{
+		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
+		TokenCount: 5,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if !applied {
+		t.Fatal("expected compact result to apply when version matches")
+	}
+}
+
+func TestContextManager_ApplyCompactResult_VersionMismatch_AppendAllowed(t *testing.T) {
+	// If version changed only because messages were appended after snapshot,
+	// the snapshot is still valid and should apply.
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "a1"}}})
+
+	snapshot := cm.CompactSnapshot()
+
+	// Append after snapshot — version changes but first OrigLen messages unchanged.
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2"}}})
+	if cm.version == snapshot.Version {
+		t.Fatal("expected version to change after Add")
+	}
+
+	result := CompactResult{
+		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
+		TokenCount: 5,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if !applied {
+		t.Fatal("expected compact result to apply when only append happened after snapshot")
+	}
+	msgs := cm.Messages()
+	// Should have: [summary, q2]
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages after apply, got %d", len(msgs))
+	}
+	if msgs[1].Content[0].Text != "q2" {
+		t.Fatal("expected appended message q2 to be preserved")
+	}
+}
+
+func TestContextManager_ApplyCompactResult_StaleSnapshot_Rejected(t *testing.T) {
+	// If messages within the snapshot range are modified (not just appended),
+	// the snapshot is stale and should be rejected.
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "a1"}}})
+
+	snapshot := cm.CompactSnapshot()
+
+	// Simulate stale snapshot: clear and re-add with different roles.
+	cm.Clear()
+	cm.Add(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "new system"}}})
+
+	result := CompactResult{
+		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
+		TokenCount: 5,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if applied {
+		t.Fatal("expected stale snapshot to be rejected")
+	}
+}
+
+func TestContextManager_ApplyCompactResult_AppendAfterSnapshot_RoleFallback(t *testing.T) {
+	// Version mismatch but roles match within OrigLen range → should apply.
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "a1"}}})
+
+	snapshot := cm.CompactSnapshot()
+
+	// Append changes version, but first 2 messages still have same roles.
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2"}}})
+
+	result := CompactResult{
+		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
+		TokenCount: 5,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if !applied {
+		t.Fatal("expected snapshot to apply when roles match within OrigLen range")
+	}
+}
+
+func TestContextManager_Compact_VersionDetectsChange(t *testing.T) {
+	// Compact() on a scratch manager should detect changes via version counter
+	// instead of reflect.DeepEqual.
+	ctx := context.Background()
+	prov := &mockProvider{}
+
+	cm := NewManager(200)
+	cm.SetOutputReserve(50)
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("old question ", 30)}}})
+	cm.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("old answer ", 30)}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "recent q"}}})
+
+	snapshot := cm.CompactSnapshot()
+	result, err := snapshot.Compact(ctx, prov)
+	if err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Compact to detect changes via version counter")
+	}
+}
+
+func TestContextManager_CheckAndSummarize_VersionDetectsChange(t *testing.T) {
+	// CheckAndSummarize should detect changes via version counter.
+	ctx := context.Background()
+	prov := &mockProvider{}
+
+	cm := NewManager(300)
+	cm.SetOutputReserve(50)
+	cm.SetProvider(prov)
+
+	// Add enough messages to exceed the auto-compact threshold.
+	// threshold = (300-50) * 0.75 ≈ 187 tokens
+	// Each message ~ 30*9/4 ≈ 67 tokens, need at least 3 pairs (6 messages ≈ 400 tokens).
+	for i := 0; i < 6; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		cm.Add(provider.Message{Role: role, Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat(fmt.Sprintf("message%d ", i), 30)}}})
+	}
+
+	changed, err := cm.CheckAndSummarize(ctx, prov)
+	if err != nil {
+		t.Fatalf("CheckAndSummarize failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected CheckAndSummarize to detect changes via version counter")
+	}
+}
+
+func TestContextManager_CompactSnapshot_CapturesVersion(t *testing.T) {
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+
+	snapshot := cm.CompactSnapshot()
+	if snapshot.Version != 1 {
+		t.Fatalf("snapshot.Version = %d, want 1", snapshot.Version)
+	}
+
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2"}}})
+	snapshot2 := cm.CompactSnapshot()
+	if snapshot2.Version != 2 {
+		t.Fatalf("snapshot2.Version = %d, want 2", snapshot2.Version)
+	}
+}
+
+func TestContextManager_ApplyCompactResult_MicrocompactInvalidatesSnapshot(t *testing.T) {
+	// If Microcompact modifies a tool_result within the snapshot range after
+	// the snapshot was taken, the snapshot is stale and should be rejected.
+	cm := NewManager(1000)
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
+		{Type: "tool_result", ToolID: "c1", Output: strings.Repeat("long output ", 100)},
+	}})
+	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2"}}})
+
+	snapshot := cm.CompactSnapshot()
+
+	// Manually compact the tool result in-place (simulating Microcompact).
+	cm.mu.Lock()
+	msg := cm.messages[1]
+	msg.Content[0].Output = "[compacted]"
+	cm.messages[1] = msg
+	cm.version++
+	cm.recalcTokens()
+	cm.mu.Unlock()
+
+	// snapshot is now stale — the tool_result at index 1 was modified.
+	result := CompactResult{
+		Messages:   []provider.Message{{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "summary"}}}},
+		TokenCount: 5,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if applied {
+		t.Fatal("expected snapshot to be rejected after Microcompact modified content within range")
+	}
+}
+
 func messageContainsTextInList(messages []provider.Message, want string) bool {
 	for _, msg := range messages {
 		if messageContainsText(msg, want) {

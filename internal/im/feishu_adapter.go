@@ -32,7 +32,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -53,6 +52,7 @@ import (
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -435,7 +435,7 @@ func (a *feishuAdapter) refreshToken(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return err
 	}
@@ -497,7 +497,7 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Cap body size to prevent OOM DoS via Content-Length: 5G style attacks.
 	// 1 MiB is generous for Feishu event envelopes (typical size is <10 KiB).
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, err := util.ReadAll(r.Body, util.ReadLimitGeneral)
 	if err != nil {
 		http.Error(w, "read body error", http.StatusRequestEntityTooLarge)
 		return
@@ -907,10 +907,10 @@ func (a *feishuAdapter) downloadFeishuFile(ctx context.Context, url string) ([]b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return nil, "", fmt.Errorf("Feishu download [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1154,7 +1154,7 @@ func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content str
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return fmt.Errorf("Feishu API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
@@ -1191,7 +1191,7 @@ func (a *feishuAdapter) TriggerTyping(ctx context.Context, binding ChannelBindin
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		debug.Log("feishu", "adapter=%s typing reaction [%d]: %s", a.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
@@ -1246,7 +1246,7 @@ func (a *feishuAdapter) fetchBotInfo(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return err
 	}
@@ -1295,7 +1295,7 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 			if resp.StatusCode >= 400 {
 				return fmt.Errorf("download image [%d]", resp.StatusCode)
 			}
-			d, err := io.ReadAll(resp.Body)
+			d, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 			if err != nil {
 				return fmt.Errorf("read image data: %w", err)
 			}
@@ -1382,7 +1382,7 @@ func (a *feishuAdapter) uploadImage(ctx context.Context, data []byte, filename s
 		return "", err
 	}
 	defer resp.Body.Close()
-	respData, _ := io.ReadAll(resp.Body)
+	respData, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 
 	var result map[string]any
 	if err := json.Unmarshal(respData, &result); err != nil {
@@ -1433,7 +1433,7 @@ func (a *feishuAdapter) sendImageMessage(ctx context.Context, chatID, imageKey s
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return fmt.Errorf("Feishu send image [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
@@ -1526,7 +1526,7 @@ func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content str
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return fmt.Errorf("Feishu card API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
@@ -1681,7 +1681,7 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return "", fmt.Errorf("Feishu interactive API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 

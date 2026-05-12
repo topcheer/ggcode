@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -794,10 +795,10 @@ func FetchSignalQRCode(baseURL, deviceName string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return nil, fmt.Errorf("QR code request failed (status %d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	return io.ReadAll(resp.Body)
+	return util.ReadAll(resp.Body, util.ReadLimitGeneral)
 }
 
 // SignalDaemonInstallCommand returns a shell command string that installs

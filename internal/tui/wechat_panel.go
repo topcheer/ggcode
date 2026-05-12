@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const wechatILinkBaseURL = "https://ilinkai.weixin.qq.com"
@@ -237,7 +237,7 @@ func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error)
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	return util.ReadAll(resp.Body, util.ReadLimitGeneral)
 }
 
 // requestWechatQRCode requests a QR code directly from iLink (no adapter needed).

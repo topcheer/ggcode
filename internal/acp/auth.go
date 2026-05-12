@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/auth"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // GitHub Device Flow constants
@@ -111,7 +111,7 @@ func (ah *AuthHandler) requestDeviceCode() (*DeviceCodeResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 		return nil, fmt.Errorf("device/code returned %d: %s", resp.StatusCode, string(body))
 	}
 

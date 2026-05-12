@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const PlatformPrivateClaw Platform = "privateclaw"
@@ -698,7 +698,7 @@ func (a *pcAdapter) resolvePCAttachment(ctx context.Context, img ExtractedImage,
 			if resp.StatusCode >= 400 {
 				return nil, fmt.Errorf("download image [%d]", resp.StatusCode)
 			}
-			data, err := io.ReadAll(resp.Body)
+			data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 			if err != nil {
 				return nil, fmt.Errorf("read image data: %w", err)
 			}

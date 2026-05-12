@@ -25,6 +25,7 @@ import (
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -472,7 +473,7 @@ func (a *tgAdapter) downloadTGFile(ctx context.Context, fileID string) ([]byte, 
 	if resp.StatusCode >= 400 {
 		return nil, "", fmt.Errorf("download Telegram file [%d]", resp.StatusCode)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return nil, "", err
 	}
@@ -788,7 +789,7 @@ func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data [
 	}
 	defer resp.Body.Close()
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return err
 	}
@@ -954,7 +955,7 @@ func (a *tgAdapter) apiRequest(ctx context.Context, method, path string, body an
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return nil, err
 	}

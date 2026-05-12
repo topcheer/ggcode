@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -22,6 +21,7 @@ import (
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -431,7 +431,7 @@ func (a *discordAdapter) downloadDiscordAttachment(ctx context.Context, url stri
 	if resp.StatusCode >= 400 {
 		return nil, "", fmt.Errorf("Discord download [%d]", resp.StatusCode)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return nil, "", err
 	}
@@ -561,7 +561,7 @@ func (a *discordAdapter) sendChannelMessage(ctx context.Context, channelID, cont
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return fmt.Errorf("Discord API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
@@ -586,7 +586,7 @@ func (a *discordAdapter) TriggerTyping(ctx context.Context, binding ChannelBindi
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		debug.Log("discord", "adapter=%s typing failed [%d]: %s", a.name, resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
@@ -604,7 +604,7 @@ func (a *discordAdapter) getGatewayBotURL(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return "", err
 	}
@@ -720,7 +720,7 @@ func (a *discordAdapter) sendFileMessage(ctx context.Context, channelID, filenam
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		return fmt.Errorf("Discord file upload [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil

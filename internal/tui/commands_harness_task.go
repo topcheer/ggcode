@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/harness"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func (m *Model) runTrackedHarnessGoal(commandText, goal string, project harness.Project, cfg *harness.Config, opts harness.RunTaskOptions) tea.Cmd {
@@ -216,7 +217,7 @@ func readHarnessRunLogChunk(path string, offset int64) (string, int64) {
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return "", offset
 	}
-	data, err := io.ReadAll(file)
+	data, err := util.ReadAll(file, util.ReadLimitGeneral)
 	if err != nil {
 		return "", offset
 	}

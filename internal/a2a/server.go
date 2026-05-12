@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Server is an A2A protocol server that handles JSON-RPC requests over HTTP.
@@ -205,7 +206,7 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	// Cap body to prevent OOM via huge Content-Length. 4 MiB is enough for
 	// even very large JSON-RPC payloads with embedded artifacts.
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
-	body, err := io.ReadAll(r.Body)
+	body, err := util.ReadAll(r.Body, util.ReadLimitGeneral)
 	if err != nil {
 		writeRPCError(w, nil, ErrParseError)
 		return

@@ -26,6 +26,7 @@ import (
 	imstt "github.com/topcheer/ggcode/internal/im/stt"
 	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -736,7 +737,7 @@ func (a *qqAdapter) downloadAttachment(ctx context.Context, url string) ([]byte,
 	if resp.StatusCode >= 400 {
 		return nil, "", fmt.Errorf("download QQ attachment [%d]", resp.StatusCode)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return nil, "", err
 	}
@@ -843,7 +844,7 @@ func (a *qqAdapter) apiRequestWithRetry(ctx context.Context, method, path string
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
+		data, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		if !retried && isQQTokenExpiredBody(resp.StatusCode, data) {
 			debug.Log("qq", "adapter=%s request %s %s hit expired token, refreshing and retrying", a.name, method, path)
 			a.clearToken()

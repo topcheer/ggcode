@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ProtectedResourceMetadata represents RFC 9728 protected resource metadata.
@@ -171,7 +171,7 @@ func (h *OAuthHandler) refreshToken(ctx context.Context, refreshToken string) (*
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +310,7 @@ func (h *OAuthHandler) discoverProtectedResource(ctx context.Context, metadataUR
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return err
 	}
@@ -373,7 +373,7 @@ func (h *OAuthHandler) fetchAuthorizationServerMeta(ctx context.Context, url str
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +431,7 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return err
 	}
@@ -616,7 +616,7 @@ func (h *OAuthHandler) ExchangeCode(ctx context.Context, code string) (*TokenRes
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -740,7 +740,7 @@ func (h *OAuthHandler) StartDeviceFlow(ctx context.Context, scopes []string) (*D
 		return nil, fmt.Errorf("device flow request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -816,7 +816,7 @@ func (h *OAuthHandler) PollDeviceToken(ctx context.Context) (*TokenResponse, err
 			if err != nil {
 				return nil, fmt.Errorf("device token poll failed: %w", err)
 			}
-			body, _ := io.ReadAll(resp.Body)
+			body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 			resp.Body.Close()
 
 			debug.Log("mcp-oauth", "device_poll server=%s status=%d body=%s", h.serverName, resp.StatusCode, string(body))

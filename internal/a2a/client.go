@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // TokenProvider obtains an OAuth2/OIDC access token interactively.
@@ -440,7 +441,7 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "application/json") {
 		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		var rpcResp JSONRPCResponse
 		if json.Unmarshal(respBody, &rpcResp) == nil && rpcResp.Error != nil {
 			return nil, rpcResp.Error
@@ -496,7 +497,7 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
 		return fmt.Errorf("a2a %s: read: %w", method, err)
 	}

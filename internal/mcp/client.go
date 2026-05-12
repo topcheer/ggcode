@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Client connects to an MCP server via stdio transport.
@@ -441,7 +442,7 @@ func (c *Client) sendHTTP(ctx context.Context, msg interface{}) (*Response, erro
 	if sessionID := strings.TrimSpace(resp.Header.Get("Mcp-Session-Id")); sessionID != "" {
 		c.sessionID = sessionID
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := util.ReadAll(resp.Body, util.ReadLimitMCP)
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: read http body: %w", c.name, err)
 	}

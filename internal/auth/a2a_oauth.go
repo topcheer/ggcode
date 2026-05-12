@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -26,6 +25,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ func exchangeCodeForToken(ctx context.Context, cfg A2AOAuth2Config, code, redire
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	contentType := resp.Header.Get("Content-Type")
 
 	if resp.StatusCode != 200 {
@@ -247,7 +247,7 @@ func StartDeviceFlow(ctx context.Context, cfg A2AOAuth2Config) (*PKCEToken, erro
 		Interval        int    `json:"interval"`
 		ExpiresIn       int    `json:"expires_in"`
 	}
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 
 	// Check for error response first
 	var errResp struct {
@@ -324,7 +324,7 @@ func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
 	_ = data // suppress unused
 	var raw map[string]interface{}
 	json.Unmarshal(body, &raw)
