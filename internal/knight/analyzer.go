@@ -100,7 +100,10 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 	// Filter: only current project's sessions, not yet analyzed (or updated since last analysis).
 	var eligible []*session.Session
 	for _, s := range sessions {
-		if lastAnalyzed, ok := sa.knight.analyzedSessions[s.ID]; ok {
+		sa.knight.mu.Lock()
+		lastAnalyzed, alreadyAnalyzed := sa.knight.analyzedSessions[s.ID]
+		sa.knight.mu.Unlock()
+		if alreadyAnalyzed {
 			// Already analyzed — skip unless the session has new activity since then
 			if !s.UpdatedAt.After(lastAnalyzed) {
 				continue
@@ -147,7 +150,9 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 		for _, candidate := range candidates {
 			aggregateCandidate(aggregated, candidate, eligible[i].ID)
 		}
+		sa.knight.mu.Lock()
 		sa.knight.analyzedSessions[eligible[i].ID] = time.Now()
+		sa.knight.mu.Unlock()
 		result.SessionsAnalyzed++
 	}
 	result.SkillCandidates = finalizeCandidates(aggregated)
@@ -157,6 +162,7 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 
 	// Trim dedup set to prevent unbounded growth.
 	// Keep only IDs that appear in the current session list.
+	sa.knight.mu.Lock()
 	if len(sa.knight.analyzedSessions) > 1000 {
 		current := make(map[string]time.Time, len(sessions))
 		for _, s := range sessions {
@@ -166,6 +172,7 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 		}
 		sa.knight.analyzedSessions = current
 	}
+	sa.knight.mu.Unlock()
 
 	return result, nil
 }

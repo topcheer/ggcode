@@ -195,7 +195,7 @@ func writeTaskSnapshot(project Project, task *Task) error {
 		return fmt.Errorf("marshal task snapshot: %w", err)
 	}
 	path := taskSnapshotPath(project, task.ID)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := atomicWriteJSON(path, data, 0o644); err != nil {
 		return fmt.Errorf("write task snapshot %s: %w", task.ID, err)
 	}
 	return nil
@@ -211,7 +211,7 @@ func writeReleasePlanSnapshot(project Project, plan *ReleasePlan) error {
 		return fmt.Errorf("marshal release snapshot: %w", err)
 	}
 	path := releaseSnapshotPath(project, plan.BatchID)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := atomicWriteJSON(path, data, 0o644); err != nil {
 		return fmt.Errorf("write release snapshot %s: %w", plan.BatchID, err)
 	}
 	return nil
