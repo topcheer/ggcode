@@ -213,7 +213,7 @@ func (c *Config) SetEndpointModels(vendor, endpoint string, models []string) err
 	if !ok {
 		return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
 	}
-	ep.Models = uniqueNonEmptyStrings(append(models, ep.SelectedModel, ep.DefaultModel)...)
+	ep.Models = uniqueNonEmptyStrings(append(models, ep.SelectedModel)...)
 	vc.Endpoints[endpoint] = ep
 	c.Vendors[vendor] = vc
 	if c.Vendor == vendor && c.Endpoint == endpoint {

@@ -135,8 +135,8 @@ func TestPopulateDefaultModels_MergesMultipleCatwalkSources(t *testing.T) {
 func TestPopulateDefaultModels_AllKnownVendorsHaveModels(t *testing.T) {
 	cfg := DefaultConfig()
 
-	// Only check vendors that have catwalk data (listed in desiredConfigs).
-	knownVendors := []string{"openai", "anthropic", "google", "deepseek", "groq", "xai"}
+	// Only check vendors that have catwalk or OpenRouter data.
+	knownVendors := []string{"openai", "anthropic", "google", "deepseek", "groq", "xai", "mistral", "perplexity", "nvidia", "ark"}
 	for _, vendor := range knownVendors {
 		vc, ok := cfg.Vendors[vendor]
 		if !ok {
