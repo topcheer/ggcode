@@ -7,6 +7,7 @@ import (
 )
 
 func TestLoadParsesIMConfig(t *testing.T) {
+	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	if err := os.WriteFile(path, []byte(`
 vendor: zai
@@ -80,6 +81,7 @@ im:
 }
 
 func TestAddIMTargetPersistsTarget(t *testing.T) {
+	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	cfg := DefaultConfig()
 	cfg.FilePath = path
@@ -114,6 +116,7 @@ func TestAddIMTargetPersistsTarget(t *testing.T) {
 }
 
 func TestAddIMAdapterPersistsAdapter(t *testing.T) {
+	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	cfg := DefaultConfig()
 	cfg.FilePath = path

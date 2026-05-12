@@ -9,6 +9,7 @@ import (
 )
 
 func TestLoad_KnightDailyBudgetZeroDisablesBudgetChecking(t *testing.T) {
+	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	content := `
 vendor: zai
@@ -165,6 +166,7 @@ func TestDefaultSystemPromptEncouragesBatchingAndSparseTodoWrites(t *testing.T) 
 }
 
 func TestLoad_NonExistent(t *testing.T) {
+	withTestHome(t)
 	cfg, err := Load("/nonexistent/path/ggcode.yaml")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -181,6 +183,7 @@ func TestLoad_NonExistent(t *testing.T) {
 }
 
 func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
+	withTestHome(t)
 	t.Setenv("ZAI_API_KEY", "test-key")
 	cfg, err := Load("/nonexistent/path/ggcode.yaml")
 	if err != nil {
@@ -192,6 +195,7 @@ func TestLoad_NonExistentExpandsEnvDefaults(t *testing.T) {
 }
 
 func TestLoad_ExpandsEnvFromShellFilesWhenProcessEnvMissing(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	original, hadOriginal := os.LookupEnv("ZAI_API_KEY")
@@ -311,6 +315,7 @@ func TestPlaintextAPIKeyWarningIgnoreState(t *testing.T) {
 }
 
 func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
@@ -347,6 +352,7 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorFromEnv(t *testing.T) {
 }
 
 func TestLoad_NonExistentBootstrapsAnthropicVendorPrefersAuthToken(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
@@ -370,6 +376,7 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorPrefersAuthToken(t *testing.T)
 }
 
 func TestLoad_NonExistentBootstrapsAnthropicVendorDefaultsModel(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
@@ -389,6 +396,7 @@ func TestLoad_NonExistentBootstrapsAnthropicVendorDefaultsModel(t *testing.T) {
 }
 
 func TestLoad_ExistingLanguageOnlyFileStillBootstrapsAnthropicVendor(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
@@ -416,6 +424,7 @@ func TestLoad_ExistingLanguageOnlyFileStillBootstrapsAnthropicVendor(t *testing.
 }
 
 func TestSaveLanguagePreferenceCreatesMinimalConfig(t *testing.T) {
+	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	cfg := DefaultConfig()
 	cfg.FilePath = path
@@ -441,6 +450,7 @@ func TestSaveLanguagePreferenceCreatesMinimalConfig(t *testing.T) {
 }
 
 func TestLoad_BigmodelBaseURLReusesZaiAnthropicEndpoint(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic/v1")
@@ -464,6 +474,7 @@ func TestLoad_BigmodelBaseURLReusesZaiAnthropicEndpoint(t *testing.T) {
 }
 
 func TestLoad_BigmodelBaseURLExactMatch(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
@@ -484,6 +495,7 @@ func TestLoad_BigmodelBaseURLExactMatch(t *testing.T) {
 }
 
 func TestLoad_NonBigmodelURLDoesNotBootstrap(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ANTHROPIC_BASE_URL", "https://api.example.ai")
@@ -505,6 +517,7 @@ func TestLoad_NonBigmodelURLDoesNotBootstrap(t *testing.T) {
 }
 
 func TestSaveSidebarPreferenceCreatesUIConfig(t *testing.T) {
+	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	cfg := DefaultConfig()
 	cfg.FilePath = path
@@ -526,6 +539,7 @@ func TestSaveSidebarPreferenceCreatesUIConfig(t *testing.T) {
 }
 
 func TestSaveDefaultModePreferenceCreatesMinimalConfig(t *testing.T) {
+	withTestHome(t)
 	path := filepath.Join(t.TempDir(), "ggcode.yaml")
 	cfg := DefaultConfig()
 	cfg.FilePath = path
@@ -547,6 +561,7 @@ func TestSaveDefaultModePreferenceCreatesMinimalConfig(t *testing.T) {
 }
 
 func TestLoad_InvalidYAML(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	os.WriteFile(path, []byte(":\n  - invalid: ["), 0644)
@@ -558,6 +573,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 }
 
 func TestLoad_ValidYAML(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
@@ -580,6 +596,7 @@ allowed_dirs:
 }
 
 func TestLoad_LegacyProviderRejected(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
@@ -598,6 +615,7 @@ providers:
 }
 
 func TestLoad_InvalidMaxIterations(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
@@ -622,6 +640,7 @@ vendors:
 }
 
 func TestLoad_ZeroMaxIterationsMeansUnlimited(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
@@ -651,6 +670,7 @@ vendors:
 }
 
 func TestLoad_DefaultUserConfigMigratesLegacyMaxIterations50ToUnlimited(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	configDir := filepath.Join(home, ".ggcode")
@@ -685,6 +705,7 @@ vendors:
 }
 
 func TestLoad_ProjectConfigPreservesExplicitMaxIterations50(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
@@ -714,6 +735,7 @@ vendors:
 }
 
 func TestLoad_InvalidDefaultMode(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ggcode.yaml")
 	content := `
@@ -1004,6 +1026,7 @@ func TestDefaultConfigIncludesAdditionalOpenAICompatibleVendors(t *testing.T) {
 }
 
 func TestResolveActiveEndpointLoadsCopilotOAuthState(t *testing.T) {
+	withTestHome(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	store := auth.DefaultStore()
@@ -1475,6 +1498,7 @@ func TestResolveEndpointPlaintextKeyNotExpanded(t *testing.T) {
 }
 
 func TestResolveEndpointSetEndpointAPIKeyThenResolve(t *testing.T) {
+	withTestHome(t)
 	// Simulate the full flow: SetEndpointAPIKey stores a ref, then resolve
 	// must expand it to the actual value.
 	cfg := testConfigWithVendor()
@@ -1504,6 +1528,7 @@ func TestResolveEndpointSetEndpointAPIKeyThenResolve(t *testing.T) {
 }
 
 func TestResolveEndpointSetVendorAPIKeyThenResolve(t *testing.T) {
+	withTestHome(t)
 	// Same but for vendor-level key
 	cfg := testConfigWithVendor()
 	vc := cfg.Vendors["zai"]

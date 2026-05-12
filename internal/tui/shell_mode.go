@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -78,7 +79,9 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		m.history = append(m.history, "$ "+command)
 		m.historyIdx = len(m.history)
 	}
-	m.chatWriteUser(nextChatID(), "$ "+command)
+	item := chat.NewUserItem(nextChatID(), command, m.chatStyles)
+	item.SetPrefix("$ ")
+	m.chatWrite(item)
 	m.appendUserMessage("$ " + command)
 	m.loading = true
 	m.runCanceled = false
@@ -89,6 +92,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 	m.statusToolCount = 0
 	m.streamBuffer = nil
 	m.shellBuffer = &bytes.Buffer{}
+	m.shellOutputID = ""
 	m.streamPrefixWritten = false
 	return tea.Batch(m.startLoadingSpinner(m.statusActivity), m.startShellCommand(command))
 }
@@ -101,10 +105,17 @@ func (m *Model) appendShellChunk(chunk string) {
 	if m.shellBuffer == nil {
 		m.shellBuffer = &bytes.Buffer{}
 	}
-	if m.shellBuffer.Len() == 0 {
-	}
 	m.shellBuffer.WriteString(chunk)
-	m.chatWriteSystem(nextSystemID(), strings.TrimRight(chunk, "\n"))
+	// First chunk → create the system message.
+	// Subsequent chunks → append to the same message so the output
+	// grows incrementally like a terminal, not as separate bubbles.
+	if m.shellOutputID == "" {
+		m.shellOutputID = nextSystemID()
+		m.chatWriteSystem(m.shellOutputID, strings.TrimRight(chunk, "\n"))
+	} else {
+		// Append only the new incremental chunk text.
+		m.chatAppendSystemText(m.shellOutputID, "\n"+strings.TrimRight(chunk, "\n"))
+	}
 	m.chatListScrollToBottom()
 }
 

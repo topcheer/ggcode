@@ -175,6 +175,7 @@ func TestExtractEnvVarName(t *testing.T) {
 }
 
 func TestNeedsOnboardWithRealConfig(t *testing.T) {
+	withTestHome(t)
 	// Test that DefaultConfig does NOT need onboard (has ZAI key)
 	cfg := DefaultConfig()
 	if cfg.NeedsOnboard() {
@@ -215,6 +216,7 @@ func TestNeedsOnboardWithRealConfig(t *testing.T) {
 }
 
 func TestNeedsOnboardEmptyHome(t *testing.T) {
+	withTestHome(t)
 	// Simulate a completely fresh user: no env vars, no config.
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

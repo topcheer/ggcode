@@ -801,7 +801,7 @@ func enCatalog(key string) string {
 	case "status.cancelling":
 		return "Cancelling..."
 	case "status.compacting":
-		return "[compacting conversation to stay within context window]"
+		return "Compressing context..."
 	case "status.compacted":
 		return "[conversation compacted]"
 	case "status.tools_used":
@@ -1101,6 +1101,8 @@ func enCatalog(key string) string {
 		return "Compact failed: %v\n\n"
 	case "compact.done":
 		return "Conversation history compacted.\n\n"
+	case "compact.done_with_stats":
+		return "Conversation history compacted (%d → %d tokens).\n\n"
 	case "todo.cleared":
 		return "Todo list cleared.\n\n"
 	case "todo.clear_failed":
@@ -2077,7 +2079,7 @@ func zhCatalog(key string) string {
 	case "status.cancelling":
 		return "取消中..."
 	case "status.compacting":
-		return "[正在压缩会话以保持在上下文窗口内]"
+		return "压缩中..."
 	case "status.compacted":
 		return "[会话已压缩]"
 	case "status.tools_used":
@@ -2377,6 +2379,8 @@ func zhCatalog(key string) string {
 		return "压缩失败：%v\n\n"
 	case "compact.done":
 		return "已压缩对话历史。\n\n"
+	case "compact.done_with_stats":
+		return "已压缩对话历史（%d → %d tokens）。\n\n"
 	case "todo.cleared":
 		return "已清空 todo 列表。\n\n"
 	case "todo.clear_failed":

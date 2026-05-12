@@ -807,6 +807,28 @@ func TestIsPromptTooLongError(t *testing.T) {
 		{errors.New("input is too long for model"), true},
 		{errors.New("exceeds the model's context window"), true},
 		{errors.New("maximum input tokens reached"), true},
+		// Real vendor error messages (from API documentation)
+		{errors.New("This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens."), true},   // OpenAI
+		{errors.New("prompt is too long: 204521 > 200000"), true},                                                                       // Anthropic
+		{errors.New("The input token count (1632254) exceeds the maximum number of tokens allowed (1048576)."), true},                   // Gemini
+		{errors.New("Request too large for model `llama-3.3-70b-versatile` Limit 131072, content 140000"), true},                        // Groq
+		{errors.New("Prompt contains 66385 tokens, too large for model with 32768 maximum context length"), true},                       // Mistral
+		{errors.New("Input token count + max_tokens parameter must be less than the context length of the model being queried."), true}, // Together AI
+		{errors.New("Invalid request: Your request exceeded model token limit: 262144 (requested: 270000)"), true},                      // Moonshot
+		{errors.New("Prompt exceeds max length"), true},                                                                                 // ZAI/GLM English
+		{fmt.Errorf("error code: %s, message: %s", "1261", "Prompt 超长"), true},                                                          // ZAI/GLM Chinese
+		{errors.New("prompt token count exceeds the limit of 128000"), true},                                                            // GitHub Copilot
+		{errors.New("Requested token count exceeds the model's maximum context length of 163840 tokens."), true},                        // Volcengine Ark
+		{errors.New("Token limit exceeded, please try again later."), true},                                                             // Novita
+		// Future vendor support
+		{errors.New("Input is too long for requested model"), true},                                                     // AWS Bedrock (Claude)
+		{errors.New("the input length exceeds the context length of 4096"), true},                                       // Ollama
+		{errors.New("too many tokens: total number of tokens in the prompt cannot exceed 8192 - received 9000."), true}, // Cohere
+		{errors.New("Input validation error: `inputs` must have less than 4096 tokens. Given: 5000."), true},            // HuggingFace TGI
+		{errors.New("error_code: 336103, error_msg: Prompt tokens too long"), true},                                     // Baidu ERNIE
+		{errors.New("Range of input length should be [1, 6000]"), true},                                                 // Alibaba Qwen/DashScope
+		{errors.New("超出了模型最大token限制。"), true},                                                                           // Huawei Pangu
+		// Negative cases
 		{errors.New("connection reset by peer"), false},
 		{errors.New("rate limited"), false},
 		{nil, false},

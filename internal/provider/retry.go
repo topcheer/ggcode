@@ -33,6 +33,57 @@ var retrySleep = func(ctx context.Context, delay time.Duration) error {
 // We retry aggressively: only 401 (auth), 403 (forbidden), and 404 (not found)
 // are considered permanent failures. Everything else — rate limits, server
 // errors, timeouts, network glitches, bad gateway, etc. — gets retried.
+// IsContextOverflowError checks whether the error indicates the input prompt
+// exceeds the model's context window. These errors are never retryable — the
+// same request will always fail until the context is compacted.
+func IsContextOverflowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Guard against SDK error types whose .Error() panics on nil internals
+	// (e.g., anthropic.Error with nil Response).
+	msg := func() string {
+		defer func() { recover() }()
+		return err.Error()
+	}()
+	s := strings.ToLower(msg)
+	keywords := []string{
+		"context_length_exceeded",
+		"maximum context",
+		"context length",
+		"prompt is too long",
+		"prompt too long",
+		"prompt exceeds",
+		"max length",
+		"超长",
+		"exceeds the maximum",
+		"request too large",
+		"too many tokens",
+		"input is too long",
+		"exceeds the model's context",
+		"token limit",
+		"exceeds the limit",
+		"token count exceeds",
+		"input is too long for",
+		"input length exceeds",
+		"prompt tokens too long",
+		"prompt tokens exceeds",
+		"must have less than",
+		"range of input length",
+		"超出了模型最大",
+		"token限制",
+		"maximum input tokens",
+		"input tokens exceeded",
+		"context window",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(s, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func isRetryable(err error) bool {
 	if err == nil {
 		return false
@@ -41,6 +92,12 @@ func isRetryable(err error) bool {
 	// User/session cancellation is never retryable. DeadlineExceeded is handled
 	// below as a retryable timeout unless the caller context has already ended.
 	if errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	// Prompt-too-long errors are permanent: retrying the same oversized request
+	// will never succeed. Let the agent layer handle reactive compaction instead.
+	if IsContextOverflowError(err) {
 		return false
 	}
 

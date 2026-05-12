@@ -8,6 +8,7 @@ import (
 )
 
 func TestMigratePlaintextAPIKeys_NoPlaintext(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
 
@@ -32,6 +33,7 @@ func TestMigratePlaintextAPIKeys_NoPlaintext(t *testing.T) {
 }
 
 func TestMigratePlaintextAPIKeys_VendorLevelKey(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
 
@@ -81,6 +83,7 @@ func TestMigratePlaintextAPIKeys_VendorLevelKey(t *testing.T) {
 }
 
 func TestMigratePlaintextAPIKeys_EndpointLevelKey(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
 
@@ -118,6 +121,7 @@ func TestMigratePlaintextAPIKeys_EndpointLevelKey(t *testing.T) {
 }
 
 func TestMigratePlaintextAPIKeys_ConfigFilePermission(t *testing.T) {
+	withTestHome(t)
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "ggcode.yaml")
 
@@ -334,6 +338,7 @@ mcp_servers:
 }
 
 func TestMigrateIMSecrets(t *testing.T) {
+	withTestHome(t)
 	yaml := `
 vendors:
   zai:
@@ -396,6 +401,7 @@ im:
 }
 
 func TestMigrateMCPSecrets(t *testing.T) {
+	withTestHome(t)
 	yaml := `
 vendors:
   zai:
