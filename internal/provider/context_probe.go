@@ -117,6 +117,87 @@ func SetProbeCache(key string, window int) {
 	debug.Log("probe", "cached context_window=%d for key=%s", window, key)
 }
 
+// ─── error-based context window inference ───────────────────────────────────
+
+// contextOverflowTiers are used when inferring context window from an overflow
+// error. Ordered from largest to smallest. We pick the largest tier that does
+// not exceed the estimated token count.
+var contextOverflowTiers = []int{
+	2_000_000, // 2M  — Gemini 2.5, etc.
+	1_000_000, // 1M
+	512_000,   // 512K
+	256_000,   // 256K
+	200_000,   // 200K — Claude 3.5/4
+	168_000,   // 168K
+	128_000,   // 128K — default fallback
+	64_000,    // 64K  — minimum tier
+}
+
+// matchOverflowTier returns the largest contextOverflowTiers entry that is <=
+// tokenCount. Returns 64_000 (minimum tier) if tokenCount is smaller than all
+// tiers.
+func matchOverflowTier(tokenCount int) int {
+	for _, tier := range contextOverflowTiers {
+		if tier <= tokenCount {
+			return tier
+		}
+	}
+	return contextOverflowTiers[len(contextOverflowTiers)-1]
+}
+
+// InferContextWindowFromError is called when a context overflow error is
+// received. It attempts to determine the model's actual context window:
+//
+//   - First, tries to parse an exact limit from the error message.
+//   - If that fails, uses currentTokenCount as an upper-bound estimate.
+//   - Matches the result to the nearest tier from contextOverflowTiers.
+//   - If the inferred tier is strictly smaller than currentMaxTokens, updates
+//     the context manager via setMaxTokens and persists to the probe cache.
+//
+// Returns the inferred context window (0 if no update was needed/possible).
+func InferContextWindowFromError(
+	err error,
+	currentTokenCount int,
+	currentMaxTokens int,
+	probeKey string,
+	setMaxTokens func(int),
+) int {
+	if probeKey == "" {
+		return 0
+	}
+
+	// Step 1: try to extract exact value from error message.
+	exactWindow := parseContextWindowFromError(err)
+
+	// Step 2: determine the estimate to match against.
+	estimate := exactWindow
+	if estimate == 0 {
+		// No exact value — the current token count is a lower bound for the
+		// actual limit (the request exceeded it). Use it as-is for matching.
+		estimate = currentTokenCount
+	}
+	if estimate <= 0 {
+		return 0
+	}
+
+	// Step 3: match to nearest tier.
+	tier := matchOverflowTier(estimate)
+
+	// Step 4: only update if we'd be reducing the context window.
+	if tier == 0 || tier >= currentMaxTokens {
+		debug.Log("probe", "overflow inference: tier=%d >= current=%d, no update needed",
+			tier, currentMaxTokens)
+		return 0
+	}
+
+	// Step 5: apply and persist.
+	debug.Log("probe", "overflow inference: parsed=%d estimate=%d tier=%d (was %d, key=%s)",
+		exactWindow, estimate, tier, currentMaxTokens, probeKey)
+	setMaxTokens(tier)
+	SetProbeCache(probeKey, tier)
+	return tier
+}
+
 // ─── error message parsing ─────────────────────────────────────────────────
 
 // parseContextWindowFromError tries to extract the actual context window

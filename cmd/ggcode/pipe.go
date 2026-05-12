@@ -147,6 +147,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	if resolved.ContextWindow > 0 {
 		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
 	}
+	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	if resolved.MaxTokens > 0 {
 		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)
 	}
