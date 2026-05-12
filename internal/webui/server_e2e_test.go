@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -778,7 +779,17 @@ func TestE2EChatWSSequentialMessages(t *testing.T) {
 		}
 	}
 
-	// Bridge should have received all 3
+	// Bridge should have received all 3.
+	// The WS handler writes the ack before calling SendUserMessage, so
+	// receiving the ack on the client side does NOT guarantee the bridge
+	// has been updated yet. Poll until the last message arrives.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(bridge.lastContent) == 1 && bridge.lastContent[0].Text == "third" {
+			break
+		}
+		runtime.Gosched()
+	}
 	if len(bridge.lastContent) != 1 || bridge.lastContent[0].Text != "third" {
 		t.Errorf("bridge should have last message, got %v", bridge.lastContent)
 	}

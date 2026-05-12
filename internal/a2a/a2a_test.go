@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/auth"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -891,9 +892,24 @@ func TestContinueTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for async execution to complete (no agent → fails quickly)
-	time.Sleep(200 * time.Millisecond)
-
+	// Wait for async execution to complete (no agent → fails quickly).
+	// Poll the done channel instead of sleeping to avoid race conditions.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		handler.mu.Lock()
+		internal := handler.tasks[task.ID]
+		done := internal.done
+		handler.mu.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+				goto done
+			default:
+			}
+		}
+		runtime.Gosched()
+	}
+done:
 	// Put task into input-required state directly on the internal task.
 	handler.mu.Lock()
 	internal := handler.tasks[task.ID]

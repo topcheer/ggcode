@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -606,7 +607,19 @@ func TestChatWSBridgeBroadcast(t *testing.T) {
 		t.Fatalf("ws1 should get user_ack, got %v", ack1["type"])
 	}
 
-	// Broadcast event — both should receive via subscription
+	// Broadcast event — both should receive via subscription.
+	// Wait for both WS connections to complete Subscribe() before broadcasting,
+	// otherwise the broadcast may fire before ws2's subscription is registered.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		bridge.subMu.RLock()
+		count := len(bridge.subs)
+		bridge.subMu.RUnlock()
+		if count >= 2 {
+			break
+		}
+		runtime.Gosched()
+	}
 	bridge.broadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "response"})
 
 	var r1 map[string]interface{}
