@@ -161,7 +161,14 @@ func isRetryable(err error) bool {
 }
 
 func isRetryableForContext(ctx context.Context, err error) bool {
-	if ctx != nil && ctx.Err() != nil {
+	// User cancellation is never retryable.
+	if ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	// DeadlineExceeded from the caller context means the agent turn
+	// timed out — not retryable. But DeadlineExceeded from an HTTP
+	// client timeout (where ctx is still alive) IS retryable.
+	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return false
 	}
 	return isRetryable(err)

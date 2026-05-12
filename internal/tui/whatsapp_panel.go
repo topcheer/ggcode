@@ -489,7 +489,13 @@ func (m *Model) startWAAdapterIfNeeded(name string) error {
 		return fmt.Errorf("adapter %q not configured", name)
 	}
 	if !adapterCfg.Enabled {
-		return fmt.Errorf("adapter %q is disabled", name)
+		// Auto-enable when user explicitly tries to bind from panel.
+		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+			return fmt.Errorf("enable %s: %w", name, err)
+		}
+		if m.imManager != nil {
+			_ = m.imManager.EnableBinding(name)
+		}
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformWhatsApp)) {
 		return fmt.Errorf("adapter %q is not a WhatsApp adapter", name)

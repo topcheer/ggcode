@@ -339,7 +339,13 @@ func (m *Model) startIRCAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.irc.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		return fmt.Errorf(m.t("panel.irc.error.disabled"), name)
+		// Auto-enable when user explicitly tries to bind from panel.
+		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+			return fmt.Errorf("enable %s: %w", name, err)
+		}
+		if m.imManager != nil {
+			_ = m.imManager.EnableBinding(name)
+		}
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformIRC)) {
 		return fmt.Errorf(m.t("panel.irc.error.not_irc_adapter"), name)

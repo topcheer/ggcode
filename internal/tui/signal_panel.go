@@ -461,7 +461,13 @@ func (m *Model) startSigAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.signal.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		return fmt.Errorf(m.t("panel.signal.error.disabled"), name)
+		// Auto-enable when user explicitly tries to bind from panel.
+		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+			return fmt.Errorf("enable %s: %w", name, err)
+		}
+		if m.imManager != nil {
+			_ = m.imManager.EnableBinding(name)
+		}
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformSignal)) {
 		return fmt.Errorf(m.t("panel.signal.error.not_signal_adapter"), name)
@@ -526,7 +532,13 @@ func (m *Model) startSignalAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.signal.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		return fmt.Errorf(m.t("panel.signal.error.disabled"), name)
+		// Auto-enable when user explicitly tries to bind from panel.
+		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+			return fmt.Errorf("enable %s: %w", name, err)
+		}
+		if m.imManager != nil {
+			_ = m.imManager.EnableBinding(name)
+		}
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformSignal)) {
 		return fmt.Errorf(m.t("panel.signal.error.not_signal_adapter"), name)
