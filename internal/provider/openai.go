@@ -420,6 +420,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			ch <- StreamEvent{Type: StreamEventDone, Usage: usage}
 			return
 		}
+		// All retry attempts exhausted without success.
+		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", providerRetryAttempts)}
 	})
 
 	return ch, nil
