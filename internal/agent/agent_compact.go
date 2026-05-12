@@ -43,7 +43,22 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return false
 	}
 	tokens := a.contextManager.TokenCount()
-	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d attempting compact", tokens)
+	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d maxTokens=%d attempting compact", tokens, a.contextManager.MaxTokens())
+
+	// Infer actual context window from the overflow error.
+	a.mu.Lock()
+	pk := a.probeKey
+	a.mu.Unlock()
+	if window := provider.InferContextWindowFromError(
+		err,
+		tokens,
+		a.contextManager.MaxTokens(),
+		pk,
+		func(n int) { a.contextManager.SetMaxTokens(n) },
+	); window > 0 {
+		debug.Log("agent", "inferred context window from overflow error: %d", window)
+	}
+
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Context overflow detected, compressing...] "})
 
 	if a.consumeReadyPreCompact() {

@@ -58,6 +58,7 @@ type Agent struct {
 	precompact     *precompactState
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc // cancels on Close()
+	probeKey       string             // "vendor|baseURL|model" for context window auto-detection
 	mu             sync.RWMutex
 }
 
@@ -98,6 +99,14 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		})
 	}
 	return a
+}
+
+// SetProbeKey sets the probe cache key ("vendor|baseURL|model") used for
+// context window auto-detection from overflow errors.
+func (a *Agent) SetProbeKey(key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.probeKey = key
 }
 
 // SetPermissionPolicy sets the permission policy for tool checks.

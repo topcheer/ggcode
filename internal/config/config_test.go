@@ -881,11 +881,11 @@ func TestResolveActiveEndpointInfersGLMCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
 	}
-	if resolved.ContextWindow != 200000 {
-		t.Fatalf("expected GLM context window 200000, got %d", resolved.ContextWindow)
+	if resolved.ContextWindow != 204800 {
+		t.Fatalf("expected GLM context window 204800, got %d", resolved.ContextWindow)
 	}
-	if resolved.MaxTokens != 128000 {
-		t.Fatalf("expected GLM max output 128000, got %d", resolved.MaxTokens)
+	if resolved.MaxTokens != 65536 {
+		t.Fatalf("expected GLM max output 65536, got %d", resolved.MaxTokens)
 	}
 	if resolved.SupportsVision {
 		t.Fatal("expected GLM coding endpoint to default to non-vision")
@@ -1068,11 +1068,11 @@ func TestDefaultConfigIncludesMiniMaxTokenPlanCapabilities(t *testing.T) {
 	if ep.DefaultModel != "MiniMax-M2.7" {
 		t.Fatalf("expected minimax default model MiniMax-M2.7, got %q", ep.DefaultModel)
 	}
-	if ep.ContextWindow != 204800 {
-		t.Fatalf("expected minimax context window 204800, got %d", ep.ContextWindow)
+	if ep.ContextWindow != 200000 {
+		t.Fatalf("expected minimax context window 200000, got %d", ep.ContextWindow)
 	}
-	if ep.MaxTokens != 2048 {
-		t.Fatalf("expected minimax max output 2048, got %d", ep.MaxTokens)
+	if ep.MaxTokens != 128000 {
+		t.Fatalf("expected minimax max output 128000, got %d", ep.MaxTokens)
 	}
 	global := cfg.Vendors["minimax"].Endpoints["global-openai"]
 	if global.BaseURL != "https://api.minimax.io/v1" {
@@ -1081,11 +1081,11 @@ func TestDefaultConfigIncludesMiniMaxTokenPlanCapabilities(t *testing.T) {
 	if global.DefaultModel != "MiniMax-M2.7" {
 		t.Fatalf("expected minimax global default model MiniMax-M2.7, got %q", global.DefaultModel)
 	}
-	if global.ContextWindow != 204800 {
-		t.Fatalf("expected minimax global context window 204800, got %d", global.ContextWindow)
+	if global.ContextWindow != 200000 {
+		t.Fatalf("expected minimax global context window 200000, got %d", global.ContextWindow)
 	}
-	if global.MaxTokens != 2048 {
-		t.Fatalf("expected minimax global max output 2048, got %d", global.MaxTokens)
+	if global.MaxTokens != 128000 {
+		t.Fatalf("expected minimax global max output 128000, got %d", global.MaxTokens)
 	}
 }
 

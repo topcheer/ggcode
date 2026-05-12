@@ -245,6 +245,8 @@ func (m *Model) tryActivateCurrentSelection() error {
 		if resolved.MaxTokens > 0 {
 			m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
 		}
+		// Unconditionally set probe key for context window inference from overflow errors.
+		m.agent.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 		// Silently probe actual context window in background
 		m.startContextProbe()
 	}
