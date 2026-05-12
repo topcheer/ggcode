@@ -154,14 +154,37 @@ func TestSetEndpointModels(t *testing.T) {
 	cfg := &Config{
 		Vendors: map[string]VendorConfig{
 			"anthropic": {Endpoints: map[string]EndpointConfig{
-				"default": {},
+				"default": {
+					Models:        []string{"claude-old-1", "claude-old-2", "claude-3"},
+					SelectedModel: "claude-3",
+					DefaultModel:  "claude-old-1",
+				},
 			}},
 		},
 	}
-	cfg.SetEndpointModels("anthropic", "default", []string{"claude-4"})
+	// API refresh returns new models — should REPLACE pre-built list, only keeping SelectedModel.
+	cfg.SetEndpointModels("anthropic", "default", []string{"claude-4", "claude-4.5"})
 	ep := cfg.Vendors["anthropic"].Endpoints["default"]
-	if len(ep.Models) != 1 || ep.Models[0] != "claude-4" {
-		t.Errorf("unexpected models: %v", ep.Models)
+	// Should have the 2 API models + the selected model (claude-3), but NOT the old pre-built models.
+	if len(ep.Models) != 3 {
+		t.Fatalf("expected 3 models, got %d: %v", len(ep.Models), ep.Models)
+	}
+	for _, unwanted := range []string{"claude-old-1", "claude-old-2"} {
+		for _, m := range ep.Models {
+			if m == unwanted {
+				t.Errorf("pre-built model %q should have been replaced by API refresh", unwanted)
+			}
+		}
+	}
+	// SelectedModel should be preserved.
+	found := false
+	for _, m := range ep.Models {
+		if m == "claude-3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("SelectedModel 'claude-3' should be preserved")
 	}
 }
 

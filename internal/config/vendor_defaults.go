@@ -14,6 +14,59 @@ type defaultModelInfo struct {
 
 // vendorModels maps provider ID to its available model list.
 var vendorModels = map[string]vendorModelInfo{
+	"aliyun": {Models: []string{
+		"qwen3.5-plus-20260420",
+		"qwen3.6-flash",
+		"qwen3.6-35b-a3b",
+		"qwen3.6-max-preview",
+		"qwen3.6-27b",
+		"qwen3.6-plus",
+		"qwen3.5-9b",
+		"qwen3.5-35b-a3b",
+		"qwen3.5-27b",
+		"qwen3.5-122b-a10b",
+		"qwen3.5-flash-02-23",
+		"qwen3.5-plus-02-15",
+		"qwen3.5-397b-a17b",
+		"qwen3-max-thinking",
+		"qwen3-coder-next",
+		"qwen3-vl-32b-instruct",
+		"qwen3-vl-8b-thinking",
+		"qwen3-vl-8b-instruct",
+		"qwen3-vl-30b-a3b-thinking",
+		"qwen3-vl-30b-a3b-instruct",
+		"qwen3-vl-235b-a22b-thinking",
+		"qwen3-vl-235b-a22b-instruct",
+		"qwen3-max",
+		"qwen3-coder-plus",
+		"qwen3-coder-flash",
+		"qwen3-next-80b-a3b-thinking",
+		"qwen3-next-80b-a3b-instruct:free",
+		"qwen3-next-80b-a3b-instruct",
+		"qwen-plus-2025-07-28:thinking",
+		"qwen-plus-2025-07-28",
+		"qwen3-30b-a3b-thinking-2507",
+		"qwen3-coder-30b-a3b-instruct",
+		"qwen3-30b-a3b-instruct-2507",
+		"qwen3-235b-a22b-thinking-2507",
+		"qwen3-coder:free",
+		"qwen3-coder",
+		"qwen3-235b-a22b-2507",
+		"qwen3-30b-a3b",
+		"qwen3-8b",
+		"qwen3-14b",
+		"qwen3-32b",
+		"qwen3-235b-a22b",
+		"qwen-vl-plus",
+		"qwen-vl-max",
+		"qwen-turbo",
+		"qwen2.5-vl-72b-instruct",
+		"qwen-plus",
+		"qwen-max",
+		"qwen-2.5-coder-32b-instruct",
+		"qwen-2.5-7b-instruct",
+		"qwen-2.5-72b-instruct",
+	}},
 	"anthropic": {Models: []string{
 		"claude-sonnet-4-6",
 		"claude-sonnet-4-5-20250929",
@@ -24,6 +77,13 @@ var vendorModels = map[string]vendorModelInfo{
 		"claude-opus-4-1-20250805",
 		"claude-opus-4-20250514",
 		"claude-sonnet-4-20250514",
+	}},
+	"ark": {Models: []string{
+		"seed-2.0-lite",
+		"seed-2.0-mini",
+		"seed-1.6-flash",
+		"seed-1.6",
+		"ui-tars-1.5-7b",
 	}},
 	"azure": {Models: []string{
 		"gpt-5",
@@ -166,6 +226,39 @@ var vendorModels = map[string]vendorModelInfo{
 		"MiniMax-M2.1",
 		"MiniMax-M2",
 	}},
+	"mistral": {Models: []string{
+		"mistral-medium-3-5",
+		"mistral-small-2603",
+		"devstral-2512",
+		"ministral-14b-2512",
+		"ministral-8b-2512",
+		"ministral-3b-2512",
+		"mistral-large-2512",
+		"voxtral-small-24b-2507",
+		"mistral-medium-3.1",
+		"codestral-2508",
+		"devstral-medium",
+		"devstral-small",
+		"mistral-small-3.2-24b-instruct",
+		"mistral-medium-3",
+		"mistral-small-3.1-24b-instruct",
+		"mistral-saba",
+		"mistral-small-24b-instruct-2501",
+		"mistral-large-2411",
+		"mistral-large-2407",
+		"pixtral-large-2411",
+		"mistral-nemo",
+		"mixtral-8x22b-instruct",
+		"mistral-large",
+		"mistral-7b-instruct-v0.1",
+	}},
+	"moonshot": {Models: []string{
+		"kimi-k2.6",
+		"kimi-k2.5",
+		"kimi-k2-thinking",
+		"kimi-k2-0905",
+		"kimi-k2",
+	}},
 	"nebius": {Models: []string{
 		"deepseek-ai/DeepSeek-V3.2",
 		"deepseek-ai/DeepSeek-V3.2-fast",
@@ -191,6 +284,17 @@ var vendorModels = map[string]vendorModelInfo{
 		"Qwen/Qwen3.5-397B-A17B-fast",
 		"openai/gpt-oss-120b",
 		"openai/gpt-oss-120b-fast",
+	}},
+	"nvidia": {Models: []string{
+		"nemotron-3-nano-omni-30b-a3b-reasoning:free",
+		"nemotron-3-super-120b-a12b:free",
+		"nemotron-3-super-120b-a12b",
+		"nemotron-3-nano-30b-a3b:free",
+		"nemotron-3-nano-30b-a3b",
+		"nemotron-nano-12b-v2-vl:free",
+		"llama-3.3-nemotron-super-49b-v1.5",
+		"nemotron-nano-9b-v2:free",
+		"nemotron-nano-9b-v2",
 	}},
 	"openai": {Models: []string{
 		"gpt-5.5",
@@ -471,6 +575,13 @@ var vendorModels = map[string]vendorModelInfo{
 		"x-ai/grok-4.20",
 		"x-ai/grok-4.3",
 		"x-ai/grok-code-fast-1",
+	}},
+	"perplexity": {Models: []string{
+		"sonar-pro-search",
+		"sonar-reasoning-pro",
+		"sonar-pro",
+		"sonar-deep-research",
+		"sonar",
 	}},
 	"venice": {Models: []string{
 		"claude-opus-4-5",
@@ -814,12 +925,9 @@ func lookupVendorDefaultModel(providerID string) string {
 	return info.LargeModel
 }
 
-// populateDefaultModels fills endpoint Models lists from the catwalk data.
+// populateDefaultModels fills endpoint Models lists from the catwalk/OpenRouter data.
 // Only sets Models on endpoints that don't already have user-defined models.
-// It maps each ggcode vendor name to the corresponding catwalk provider ID(s)
-// and merges all matching model lists.
 func populateDefaultModels(cfg *Config) {
-	// vendorToCatwalk maps ggcode vendor name → catwalk provider IDs to source models from.
 	vendorToCatwalk := map[string][]string{
 		"zai":            {"zai", "zhipu-coding"},
 		"zhipu":          {"zhipu"},
@@ -830,14 +938,16 @@ func populateDefaultModels(cfg *Config) {
 		"groq":           {"groq"},
 		"mistral":        {"mistral"},
 		"deepseek":       {"deepseek"},
-		"moonshot":       {"kimi"},
+		"moonshot":       {"kimi", "moonshot"},
 		"kimi":           {"kimi"},
-		"minimax":        {"minimax"},
+		"minimax":        {"minimax", "minimax-china"},
 		"perplexity":     {"perplexity"},
 		"github-copilot": {"copilot"},
 		"xai":            {"xai"},
 		"together":       {"together"},
 		"nvidia":         {"nvidia"},
+		"ark":            {"ark"},
+		"aliyun":         {"aliyun"},
 	}
 
 	for vendorName, vc := range cfg.Vendors {
@@ -846,7 +956,6 @@ func populateDefaultModels(cfg *Config) {
 			continue
 		}
 		for epName, ep := range vc.Endpoints {
-			// Only fill if user hasn't set models.
 			if len(ep.Models) > 0 {
 				continue
 			}
