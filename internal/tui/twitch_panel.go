@@ -339,7 +339,13 @@ func (m *Model) startTwitchAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.twitch.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		return fmt.Errorf(m.t("panel.twitch.error.disabled"), name)
+		// Auto-enable when user explicitly tries to bind from panel.
+		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+			return fmt.Errorf("enable %s: %w", name, err)
+		}
+		if m.imManager != nil {
+			_ = m.imManager.EnableBinding(name)
+		}
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformTwitch)) {
 		return fmt.Errorf(m.t("panel.twitch.error.not_twitch_adapter"), name)

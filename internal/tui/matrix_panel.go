@@ -347,7 +347,13 @@ func (m *Model) startMatAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.matrix.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		return fmt.Errorf(m.t("panel.matrix.error.disabled"), name)
+		// Auto-enable when user explicitly tries to bind from panel.
+		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+			return fmt.Errorf("enable %s: %w", name, err)
+		}
+		if m.imManager != nil {
+			_ = m.imManager.EnableBinding(name)
+		}
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformMatrix)) {
 		return fmt.Errorf(m.t("panel.matrix.error.not_matrix_adapter"), name)
