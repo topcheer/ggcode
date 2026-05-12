@@ -263,6 +263,13 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			break
 		}
 
+		// If the loop exited without a successful stream (all retries exhausted),
+		// report the failure instead of sending a Done event with empty usage.
+		if usage == nil && outputChars == 0 {
+			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("anthropic stream: %d retry attempts exhausted", providerRetryAttempts)}
+			return
+		}
+
 		if usage == nil {
 			usage = &TokenUsage{
 				OutputTokens: estimateTokensFromChars(outputChars),
