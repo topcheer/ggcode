@@ -28,6 +28,12 @@ type knightTaskEventMsg struct {
 // errMsg signals an error.
 type errMsg struct{ err error }
 
+// compactResultMsg is sent by /compact when summarization completes.
+type compactResultMsg struct {
+	text string // success message
+	err  string // error message (mutually exclusive with text)
+}
+
 type startupReadyMsg struct{}
 
 type autoRunCheckResultMsg struct {

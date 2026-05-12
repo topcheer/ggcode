@@ -530,7 +530,8 @@ func TestCompactionBulletUsesDedicatedStyle(t *testing.T) {
 	m.handleResize(120, 40)
 	m.appendStreamStatusLine("[compacting conversation to stay within context window]")
 	got := stripAnsi(renderedOutput(&m))
-	if !strings.Contains(got, "compacting conversation") {
+	// appendStreamStatusLine writes raw text without localization
+	if !strings.Contains(got, "[compacting conversation to stay within context window]") {
 		t.Fatalf("expected compaction text in output, got %q", got)
 	}
 }

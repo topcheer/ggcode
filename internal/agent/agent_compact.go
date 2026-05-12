@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -27,26 +28,7 @@ type oldestGroupTruncater interface {
 
 // isPromptTooLongError detects context-length errors from any provider.
 func isPromptTooLongError(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := strings.ToLower(err.Error())
-	keywords := []string{
-		"prompt too long",
-		"context length",
-		"context window",
-		"maximum context",
-		"too many tokens",
-		"input is too long",
-		"exceeds the model's context",
-		"maximum input tokens",
-	}
-	for _, keyword := range keywords {
-		if strings.Contains(s, keyword) {
-			return true
-		}
-	}
-	return false
+	return provider.IsContextOverflowError(err)
 }
 
 // tryReactiveCompact attempts compaction after a prompt-too-long error.
@@ -62,9 +44,11 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	}
 	tokens := a.contextManager.TokenCount()
 	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d attempting compact", tokens)
+	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Context overflow detected, compressing...] "})
 
 	if a.consumeReadyPreCompact() {
 		debug.Log("agent", "reactive compact: consumed completed precompact")
+		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Context compressed via pre-compact] "})
 		if retries != nil {
 			*retries = *retries + 1
 		}
@@ -78,6 +62,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	}
 
 	debug.Log("agent", "reactive compact: compacting conversation")
+	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Compressing conversation via summarization...] "})
 	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
 	if compactErr != nil {
 		return false
@@ -93,6 +78,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return false
 	}
 	debug.Log("agent", "reactive compact: conversation compacted successfully")
+	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Context compressed (%d → %d tokens), retrying...] ", tokens, a.contextManager.TokenCount())})
 	newTokens := a.contextManager.TokenCount()
 	if newTokens < tokens*7/10 {
 		a.maybeSaveCheckpoint()
@@ -120,6 +106,7 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	}
 
 	debug.Log("agent", "maybeAutoCompact: TRIGGERED (tokens=%d >= threshold=%d)", tokens, threshold)
+	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context (%d tokens)...] ", tokens)})
 	changed := false
 	if cm, ok := a.contextManager.(microcompacter); ok {
 		changed = cm.Microcompact()

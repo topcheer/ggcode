@@ -850,6 +850,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendStreamChunk(string(msg))
 		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 
+	case compactResultMsg:
+		if msg.err != "" {
+			m.chatWriteSystem(nextSystemID(), msg.err)
+		} else {
+			m.chatWriteSystem(nextSystemID(), msg.text)
+		}
+		m.loading = false
+		m.spinner.Stop()
+		m.statusActivity = ""
+		m.chatListScrollToBottom()
+		return m, nil
+
 	case remoteRestartMsg:
 		m.quitting = true
 		m.restartRequested = true
@@ -1127,6 +1139,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		hadShellOutput := m.shellBuffer != nil && m.shellBuffer.Len() > 0
+		m.shellBuffer = nil
+		m.shellOutputID = ""
 		m.loading = false
 		m.spinner.Stop()
 		m.cancelFunc = nil

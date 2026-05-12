@@ -25,6 +25,30 @@ func (m *Model) chatWriteSystem(id, text string) {
 	m.chatWrite(chat.NewSystemItem(id, text, m.chatStyles))
 }
 
+// chatUpdateSystemText updates the text of an existing system message.
+func (m *Model) chatUpdateSystemText(id, text string) {
+	if m.chatList == nil {
+		return
+	}
+	if item := m.chatList.FindByID(id); item != nil {
+		if s, ok := item.(*chat.SystemItem); ok {
+			s.SetText(text)
+		}
+	}
+}
+
+// chatAppendSystemText appends text to an existing system message.
+func (m *Model) chatAppendSystemText(id, text string) {
+	if m.chatList == nil {
+		return
+	}
+	if item := m.chatList.FindByID(id); item != nil {
+		if s, ok := item.(*chat.SystemItem); ok {
+			s.AppendText(text)
+		}
+	}
+}
+
 // chatUpdateAssistantText updates the streaming assistant text.
 func (m *Model) chatUpdateAssistantText(id, text string) {
 	if m.chatList == nil {

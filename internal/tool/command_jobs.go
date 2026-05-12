@@ -420,7 +420,9 @@ func selectCommandLines(lines []string, bufferedFrom, tailLines, sinceLine int) 
 	truncated := false
 	if sinceLine > 0 {
 		if sinceLine >= bufferedFrom {
-			start = sinceLine - bufferedFrom
+			// sinceLine is the last line the caller has already seen.
+			// We want lines AFTER sinceLine, so add 1 to skip it.
+			start = sinceLine - bufferedFrom + 1
 			if start < 0 {
 				start = 0
 			}

@@ -9,7 +9,17 @@ import (
 	"github.com/topcheer/ggcode/internal/hooks"
 )
 
+// withTestHome redirects HOME to a temp dir to prevent test pollution of ~/.ggcode/.
+func withTestHome(t *testing.T) {
+	t.Helper()
+	tmpHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	t.Setenv("HOME", tmpHome)
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+}
+
 func TestInstanceDir(t *testing.T) {
+	withTestHome(t)
 	tests := []struct {
 		name      string
 		workspace string
@@ -68,6 +78,7 @@ func TestInstanceConfigPath(t *testing.T) {
 }
 
 func TestLoadInstanceConfig_NotExists(t *testing.T) {
+	withTestHome(t)
 	cfg := LoadInstanceConfig("/nonexistent/workspace/path")
 	if cfg != nil {
 		t.Error("LoadInstanceConfig should return nil for nonexistent workspace")
@@ -75,6 +86,7 @@ func TestLoadInstanceConfig_NotExists(t *testing.T) {
 }
 
 func TestLoadInstanceConfig_Exists(t *testing.T) {
+	withTestHome(t)
 	// Create a temp instance config
 	tmpDir := t.TempDir()
 	workspace := filepath.Join(tmpDir, "project")
@@ -105,6 +117,7 @@ func TestLoadInstanceConfig_Exists(t *testing.T) {
 }
 
 func TestHasInstanceConfig(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(workspace, 0755)
@@ -281,6 +294,7 @@ func TestMergeInstance_Slices(t *testing.T) {
 }
 
 func TestSaveInstance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(workspace, 0755)
@@ -315,6 +329,7 @@ func TestSaveInstance(t *testing.T) {
 }
 
 func TestSaveGlobalNoLeak(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 
 	// Create a global config file (minimal)
@@ -351,6 +366,7 @@ func TestSaveGlobalNoLeak(t *testing.T) {
 }
 
 func TestSaveGlobalPreservesRuntimeChanges(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 
 	// Create a global config file
@@ -397,6 +413,7 @@ func min(a, b int) int {
 }
 
 func TestLoadWithInstance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 
 	// Create global config (minimal, no vendor/endpoint)
@@ -483,6 +500,7 @@ func TestInstanceAccessors_NoInstance(t *testing.T) {
 }
 
 func TestInstanceAccessors_WithInstance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(workspace, 0755)
@@ -504,6 +522,7 @@ func TestInstanceAccessors_WithInstance(t *testing.T) {
 // --- Coverage: SaveScoped ---
 
 func TestSaveScoped_Global(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -515,6 +534,7 @@ func TestSaveScoped_Global(t *testing.T) {
 }
 
 func TestSaveScoped_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -539,6 +559,7 @@ func TestSaveScoped_Instance(t *testing.T) {
 // --- Coverage: InstanceSummary ---
 
 func TestInstanceSummary(t *testing.T) {
+	withTestHome(t)
 	cfg := &Config{}
 	if cfg.InstanceSummary() != "no instance config" {
 		t.Errorf("InstanceSummary without instance = %q", cfg.InstanceSummary())
@@ -838,6 +859,7 @@ func TestMergeInstance_NilInstance(t *testing.T) {
 // --- Coverage: marshalGlobalOnly edge cases ---
 
 func TestMarshalGlobalOnly_NoInstanceFields(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -856,6 +878,7 @@ func TestMarshalGlobalOnly_NoInstanceFields(t *testing.T) {
 }
 
 func TestMarshalGlobalOnly_WithInstanceFields(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -878,6 +901,7 @@ func TestMarshalGlobalOnly_WithInstanceFields(t *testing.T) {
 // --- Coverage: LoadWithInstance no instance config ---
 
 func TestLoadWithInstance_NoInstanceConfig(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -915,6 +939,7 @@ func TestLoadWithInstance_NoInstanceConfig(t *testing.T) {
 // --- Coverage: LoadWithInstance with legacy a2a.yaml ---
 
 func TestLoadWithInstance_LegacyA2A(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -936,6 +961,7 @@ func TestLoadWithInstance_LegacyA2A(t *testing.T) {
 // --- Coverage: writeFileAtomic error paths ---
 
 func TestWriteFileAtomic_BadPath(t *testing.T) {
+	withTestHome(t)
 	err := writeFileAtomic("/nonexistent/dir/file.yaml", []byte("test"), 0644)
 	if err == nil {
 		t.Error("writeFileAtomic should fail for nonexistent directory")
@@ -1048,6 +1074,7 @@ func TestMergeInstance_EmptyInstance(t *testing.T) {
 // --- Coverage: SaveGlobalNoLeak end-to-end via LoadWithInstance ---
 
 func TestSaveGlobalNoLeak_EndToEnd(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1105,6 +1132,7 @@ func TestMigrateA2AYaml_NoLegacyFile(t *testing.T) {
 }
 
 func TestMigrateA2AYaml_AlreadyMigrated(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
@@ -1121,6 +1149,7 @@ func TestMigrateA2AYaml_AlreadyMigrated(t *testing.T) {
 }
 
 func TestMigrateA2AYaml_Success(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	workspace := filepath.Join(tmpDir, "project")
 	os.MkdirAll(filepath.Join(workspace, ".ggcode"), 0755)
@@ -1185,6 +1214,7 @@ func TestEffectiveFilePath_InstanceFallback(t *testing.T) {
 }
 
 func TestPatchConfigFile_Global(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1205,6 +1235,7 @@ func TestPatchConfigFile_Global(t *testing.T) {
 }
 
 func TestPatchConfigFile_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1241,6 +1272,7 @@ func TestPatchConfigFile_Instance(t *testing.T) {
 }
 
 func TestPatchConfigFile_NewFile(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	fp := filepath.Join(tmpDir, "newdir", "ggcode.yaml")
 
@@ -1259,6 +1291,7 @@ func TestPatchConfigFile_NewFile(t *testing.T) {
 }
 
 func TestSaveLanguagePreference_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1292,6 +1325,7 @@ func TestSaveLanguagePreference_Instance(t *testing.T) {
 }
 
 func TestSaveDefaultModePreference_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1317,6 +1351,7 @@ func TestSaveDefaultModePreference_Instance(t *testing.T) {
 }
 
 func TestSaveDefaultModePreference_Invalid(t *testing.T) {
+	withTestHome(t)
 	cfg := &Config{FilePath: "/tmp/test.yaml"}
 	err := cfg.SaveDefaultModePreference("invalid-mode")
 	if err == nil {
@@ -1327,6 +1362,7 @@ func TestSaveDefaultModePreference_Invalid(t *testing.T) {
 // --- Instance keys.env isolation tests ---
 
 func TestMigrateInstanceKeys_DoesNotOverwriteGlobal(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 
 	// Set up global keys.env with an existing key
@@ -1430,6 +1466,7 @@ func TestLoadInstanceKeysEnv_NoFile(t *testing.T) {
 // --- SaveImpersonation: instance scope ---
 
 func TestSaveImpersonation_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1462,6 +1499,7 @@ func TestSaveImpersonation_Instance(t *testing.T) {
 }
 
 func TestSaveImpersonation_ClearInstance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1492,6 +1530,7 @@ func TestSaveImpersonation_ClearInstance(t *testing.T) {
 // --- SaveSidebarPreference: instance scope ---
 
 func TestSaveSidebarPreference_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1518,6 +1557,7 @@ func TestSaveSidebarPreference_Instance(t *testing.T) {
 // --- patchConfigFile: instance key migration ---
 
 func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
 	os.WriteFile(globalKeysEnv, []byte("export GGCODE_OPENAI_API_KEY='sk-global-key'\n"), 0600)
@@ -1577,6 +1617,7 @@ func TestPatchConfigFile_InstanceKeyMigration(t *testing.T) {
 // --- AddIMAdapter: instance scope with token ---
 
 func TestAddIMAdapter_Instance_TokenIsolation(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
 	os.WriteFile(globalKeysEnv, []byte("export GGCODE_IM_mybot_bot_token='global-bot-token'\n"), 0600)
@@ -1631,6 +1672,7 @@ func TestAddIMAdapter_Instance_TokenIsolation(t *testing.T) {
 // --- SetIMAdapterExtra: instance scope ---
 
 func TestSetIMAdapterExtra_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters: {}\n"), 0644)
@@ -1664,6 +1706,7 @@ func TestSetIMAdapterExtra_Instance(t *testing.T) {
 // --- RemoveIMAdapter: instance scope ---
 
 func TestRemoveIMAdapter_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters:\n    globalbot:\n      platform: slack\n      enabled: true\n"), 0644)
@@ -1697,6 +1740,7 @@ func TestRemoveIMAdapter_Instance(t *testing.T) {
 // --- SetIMAdapterEnabled: instance scope ---
 
 func TestSetIMAdapterEnabled_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters: {}\n"), 0644)
@@ -1732,6 +1776,7 @@ func TestSetIMAdapterEnabled_Instance(t *testing.T) {
 // --- AddIMTarget: instance scope ---
 
 func TestAddIMTarget_Instance(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\nim:\n  enabled: true\n  adapters: {}\n"), 0644)
@@ -1770,6 +1815,7 @@ func TestAddIMTarget_Instance(t *testing.T) {
 // then global saves again — global key must survive.
 
 func TestDisaster_InstanceThenGlobalSave_KeySurvival(t *testing.T) {
+	withTestHome(t)
 	// LoadWithInstance merges instance config, then Save() must not leak
 	// instance fields into the global file.
 	tmpDir := t.TempDir()
@@ -1806,6 +1852,7 @@ func TestDisaster_InstanceThenGlobalSave_KeySurvival(t *testing.T) {
 }
 
 func TestDisaster_TwoWorkspaces_SameVendor_Isolation(t *testing.T) {
+	withTestHome(t)
 	// Two workspaces with different instance configs — verify no cross-contamination
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
@@ -1856,6 +1903,7 @@ func TestDisaster_TwoWorkspaces_SameVendor_Isolation(t *testing.T) {
 }
 
 func TestDisaster_RapidScopeToggle_NoCorruption(t *testing.T) {
+	withTestHome(t)
 	// LoadWithInstance records instanceFields. Then Save() excludes them.
 	// This tests the core guarantee: instance fields never appear in global file.
 	tmpDir := t.TempDir()
@@ -1901,6 +1949,7 @@ func TestDisaster_RapidScopeToggle_NoCorruption(t *testing.T) {
 }
 
 func TestSave_LeakPrevention_MultipleInstanceFields(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -1942,6 +1991,7 @@ func TestSave_LeakPrevention_MultipleInstanceFields(t *testing.T) {
 	}
 }
 func TestMigrateInstanceKeys_IMAdapterToken(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
 	os.WriteFile(globalKeysEnv, []byte("export GGCODE_IM_mybot_bot_token='global-tg-token'\n"), 0600)
@@ -2033,6 +2083,7 @@ func TestMergeInstance_IMAdapterExtraMerge(t *testing.T) {
 // --- MCP server instance migration ---
 
 func TestMigrateInstanceKeys_MCPServerEnv(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalKeysEnv := filepath.Join(tmpDir, "keys.env")
 	os.WriteFile(globalKeysEnv, []byte("export GGCODE_MCP_myserver_api_key='global-mcp-key'\n"), 0600)
@@ -2069,6 +2120,7 @@ func TestMigrateInstanceKeys_MCPServerEnv(t *testing.T) {
 }
 
 func TestHasInstanceConfigFile(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	globalPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(globalPath, []byte("language: en\n"), 0644)
@@ -2100,6 +2152,7 @@ func TestHasInstanceConfigFile(t *testing.T) {
 // --- SetIMAdapterEnabled: global scope ---
 
 func TestSetIMAdapterEnabled_Global(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(cfgPath, []byte("language: en\nim:\n  enabled: true\n  adapters:\n    mybot:\n      platform: telegram\n      enabled: true\n"), 0644)
@@ -2146,6 +2199,7 @@ func TestSetIMAdapterEnabled_Global(t *testing.T) {
 }
 
 func TestSetIMAdapterEnabled_NotFound(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(cfgPath, []byte("language: en\nim:\n  adapters: {}\n"), 0644)
@@ -2162,6 +2216,7 @@ func TestSetIMAdapterEnabled_NotFound(t *testing.T) {
 }
 
 func TestSetIMAdapterEnabled_NilConfig(t *testing.T) {
+	withTestHome(t)
 	var cfg *Config
 	err := cfg.SetIMAdapterEnabled("mybot", false)
 	if err == nil {
@@ -2170,6 +2225,7 @@ func TestSetIMAdapterEnabled_NilConfig(t *testing.T) {
 }
 
 func TestSetIMAdapterEnabled_NilAdapters(t *testing.T) {
+	withTestHome(t)
 	cfg := &Config{}
 	err := cfg.SetIMAdapterEnabled("mybot", false)
 	if err == nil {
@@ -2180,6 +2236,7 @@ func TestSetIMAdapterEnabled_NilAdapters(t *testing.T) {
 // TestSetIMAdapterEnabled_FullCycle tests the complete cycle:
 // disable → persist → reload → verify disabled → enable → persist → reload → verify enabled
 func TestSetIMAdapterEnabled_FullCycle(t *testing.T) {
+	withTestHome(t)
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "ggcode.yaml")
 	os.WriteFile(cfgPath, []byte("language: en\nim:\n  enabled: true\n  adapters:\n    qq1:\n      platform: qq\n      enabled: true\n    tg1:\n      platform: telegram\n      enabled: true\n"), 0644)

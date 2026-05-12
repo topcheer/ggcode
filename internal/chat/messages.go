@@ -30,6 +30,11 @@ func NewUserItem(id, text string, styles Styles) *UserItem {
 
 func (u *UserItem) ID() string { return u.id }
 
+func (u *UserItem) SetPrefix(prefix string) {
+	u.prefix = prefix
+	u.Invalidate()
+}
+
 func (u *UserItem) Render(width int) string {
 	if cached, h, ok := u.GetCached(width); ok {
 		_ = h
@@ -209,6 +214,16 @@ func NewSystemItem(id, text string, styles Styles) *SystemItem {
 }
 
 func (s *SystemItem) ID() string { return s.id }
+
+func (s *SystemItem) SetText(text string) {
+	s.text = text
+	s.Invalidate()
+}
+
+func (s *SystemItem) AppendText(text string) {
+	s.text += text
+	s.Invalidate()
+}
 
 func (s *SystemItem) Render(width int) string {
 	if cached, _, ok := s.GetCached(width); ok {

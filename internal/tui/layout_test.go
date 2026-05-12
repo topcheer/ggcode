@@ -2783,10 +2783,10 @@ func TestCompactionStatusRendersOnOwnLine(t *testing.T) {
 	m.streamBuffer = &bytes.Buffer{}
 
 	m.appendStreamChunk("partial reply")
-	m.appendStreamChunk("[compacting conversation to stay within context window]\n")
+	m.appendStreamChunk("Compressing context...\n")
 
 	got := stripAnsi(renderedOutput(&m))
-	if !strings.Contains(got, "partial reply") || !strings.Contains(got, "[compacting conversation to stay within context window]") {
+	if !strings.Contains(got, "partial reply") || !strings.Contains(got, "Compressing context...") {
 		t.Fatalf("expected compaction status in output, got %q", got)
 	}
 }

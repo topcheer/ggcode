@@ -344,19 +344,28 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 }
 
 func (m *Model) handleCompactCommand() tea.Cmd {
-	return func() tea.Msg {
-		// Cancel any background pre-compact so the manual /compact owns the
-		// summarize call and we don't double-compact.
-		m.agent.CancelPreCompact()
-		cm := m.agent.ContextManager()
-		if cm == nil {
-			return streamMsg(m.t("compact.unavailable"))
-		}
-		if err := cm.Summarize(context.Background(), m.agent.Provider()); err != nil {
-			return streamMsg(m.t("compact.failed", err))
-		}
-		return streamMsg(m.t("compact.done"))
-	}
+	// Enter loading state and start spinner immediately.
+	m.loading = true
+	m.statusActivity = m.t("status.compacting")
+
+	return tea.Batch(
+		m.startLoadingSpinner(m.statusActivity),
+		func() tea.Msg {
+			// Cancel any background pre-compact so the manual /compact owns the
+			// summarize call and we don't double-compact.
+			m.agent.CancelPreCompact()
+			cm := m.agent.ContextManager()
+			if cm == nil {
+				return compactResultMsg{err: m.t("compact.unavailable")}
+			}
+			tokens := cm.TokenCount()
+			if err := cm.Summarize(context.Background(), m.agent.Provider()); err != nil {
+				return compactResultMsg{err: fmt.Sprintf(m.t("compact.failed"), err)}
+			}
+			newTokens := cm.TokenCount()
+			return compactResultMsg{text: fmt.Sprintf(m.t("compact.done_with_stats"), tokens, newTokens)}
+		},
+	)
 }
 
 func (m *Model) handleTodoCommand(parts []string) tea.Cmd {

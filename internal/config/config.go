@@ -895,6 +895,14 @@ func Load(path string) (*Config, error) {
 		debug.Log("config", "  vendor %s: api_key_set=%t endpoints=%d", vendorName, vc.APIKey != "", len(vc.Endpoints))
 	}
 
+	// Re-save to apply compact format (strip default vendors, inline models/tags).
+	// Idempotent: compact files stay compact.
+	cfg.globalSnap = nil
+	cfg.instanceFields = nil
+	if saveErr := cfg.Save(); saveErr != nil {
+		return nil, fmt.Errorf("compact migration save: %w", saveErr)
+	}
+
 	return cfg, nil
 }
 
@@ -1493,6 +1501,8 @@ func (c *Config) Save() error {
 			return fmt.Errorf("marshaling config: %w", err)
 		}
 	}
+	// Strip fields identical to DefaultConfig() to keep the file minimal.
+	data = stripDefaultsFromYAML(data)
 	if err := os.MkdirAll(filepath.Dir(c.FilePath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
@@ -1504,6 +1514,7 @@ func (c *Config) Save() error {
 		debug.Log("config", "Save: post-save migration error: %v", migrateErr)
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: re-migrated %d plaintext secret(s)", len(migrated))
+		recompactConfigFile(c.FilePath)
 	}
 	return nil
 }
@@ -2129,4 +2140,127 @@ func rewriteYAML(path string, raw map[string]interface{}) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0600)
+}
+
+// recompactConfigFile reads a config file, strips defaults, and rewrites it.
+func recompactConfigFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	data = stripDefaultsFromYAML(data)
+	return os.WriteFile(path, data, 0644)
+}
+
+// stripDefaultsFromYAML removes top-level YAML entries that are identical to
+// DefaultConfig(). This prevents 22 built-in vendors from bloating the config.
+func stripDefaultsFromYAML(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	raw := map[string]interface{}{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return data
+	}
+	defaults := DefaultConfig()
+	defaultsData, err := yaml.Marshal(defaults)
+	if err != nil {
+		return data
+	}
+	defaultsRaw := map[string]interface{}{}
+	if err := yaml.Unmarshal(defaultsData, &defaultsRaw); err != nil {
+		return data
+	}
+	if vendorsRaw, ok := raw["vendors"].(map[string]interface{}); ok {
+		if defaultVendors, ok := defaultsRaw["vendors"].(map[string]interface{}); ok {
+			for vName, vVal := range vendorsRaw {
+				if defaultV, exists := defaultVendors[vName]; exists {
+					if yamlEqual(vVal, defaultV) {
+						delete(vendorsRaw, vName)
+					}
+				}
+			}
+			if len(vendorsRaw) == 0 {
+				delete(raw, "vendors")
+			}
+		}
+	}
+	for _, key := range []string{"mcp_servers", "plugins", "tool_permissions"} {
+		if val, ok := raw[key]; ok {
+			if defaultVal, ok := defaultsRaw[key]; ok {
+				if yamlEqual(val, defaultVal) {
+					delete(raw, key)
+				}
+			}
+		}
+	}
+	if ad, ok := raw["allowed_dirs"].([]interface{}); ok {
+		if dad, ok := defaultsRaw["allowed_dirs"].([]interface{}); ok {
+			if yamlEqual(ad, dad) {
+				delete(raw, "allowed_dirs")
+			}
+		}
+	}
+	cleaned, err := yaml.Marshal(raw)
+	if err != nil {
+		return data
+	}
+	return compactArraysInYAML(cleaned)
+}
+
+func compactArraysInYAML(data []byte) []byte {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return data
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return data
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return data
+	}
+	compactKeys := map[string]bool{"models": true, "tags": true}
+	for i := 0; i < len(root.Content); i += 2 {
+		key := root.Content[i]
+		val := root.Content[i+1]
+		if key.Value == "vendors" && val.Kind == yaml.MappingNode {
+			for j := 0; j < len(val.Content); j += 2 {
+				vendorVal := val.Content[j+1]
+				if vendorVal.Kind != yaml.MappingNode {
+					continue
+				}
+				for k := 0; k < len(vendorVal.Content); k += 2 {
+					if vendorVal.Content[k].Value == "endpoints" && vendorVal.Content[k+1].Kind == yaml.MappingNode {
+						endpoints := vendorVal.Content[k+1]
+						for m := 0; m < len(endpoints.Content); m += 2 {
+							epVal := endpoints.Content[m+1]
+							if epVal.Kind != yaml.MappingNode {
+								continue
+							}
+							for n := 0; n < len(epVal.Content); n += 2 {
+								if compactKeys[epVal.Content[n].Value] && epVal.Content[n+1].Kind == yaml.SequenceNode {
+									epVal.Content[n+1].Style = yaml.FlowStyle
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
+func yamlEqual(a, b interface{}) bool {
+	aData, errA := yaml.Marshal(a)
+	bData, errB := yaml.Marshal(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return string(aData) == string(bData)
 }

@@ -220,6 +220,7 @@ func TestExpandEnvRecursive(t *testing.T) {
 // --- IM adapter methods ---
 
 func TestRemoveIMAdapter(t *testing.T) {
+	withTestHome(t)
 	cfg := &Config{
 		IM: IMConfig{
 			Adapters: map[string]IMAdapterConfig{
@@ -234,6 +235,7 @@ func TestRemoveIMAdapter(t *testing.T) {
 }
 
 func TestSetIMAdapterEnabled(t *testing.T) {
+	withTestHome(t)
 	cfg := &Config{
 		IM: IMConfig{
 			Adapters: map[string]IMAdapterConfig{
@@ -248,6 +250,7 @@ func TestSetIMAdapterEnabled(t *testing.T) {
 }
 
 func TestSetIMAdapterExtra(t *testing.T) {
+	withTestHome(t)
 	// Requires config path, just test it handles missing adapter gracefully
 	cfg := &Config{
 		IM: IMConfig{
