@@ -392,7 +392,7 @@ type A2AMTLSConfig struct {
 	CAFile   string `yaml:"ca_file"`   // CA to verify client certs
 }
 
-func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, models []string, tags ...string) EndpointConfig {
+func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, tags ...string) EndpointConfig {
 	ep := EndpointConfig{
 		DisplayName:   displayName,
 		Protocol:      protocol,
@@ -401,7 +401,6 @@ func defaultEndpoint(displayName, protocol, baseURL, defaultModel string, models
 		ContextWindow: inferContextWindow(defaultModel, protocol),
 		MaxTokens:     inferMaxOutputTokens(defaultModel, protocol),
 		DefaultModel:  defaultModel,
-		Models:        append([]string(nil), models...),
 		Tags:          append([]string(nil), tags...),
 	}
 	if defaultModel != "" {
@@ -434,7 +433,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://open.bigmodel.cn/api/coding/paas/v4",
 					"glm-5-turbo",
-					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"coding", "cn",
 				),
 				"cn-coding-anthropic": defaultEndpoint(
@@ -442,7 +440,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://open.bigmodel.cn/api/anthropic",
 					"glm-5-turbo",
-					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"coding", "cn", "anthropic",
 				),
 				"global-coding-openai": defaultEndpoint(
@@ -450,7 +447,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.z.ai/api/coding/paas/v4",
 					"glm-5-turbo",
-					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"coding", "global",
 				),
 				"global-coding-anthropic": defaultEndpoint(
@@ -458,7 +454,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://api.z.ai/api/anthropic",
 					"glm-5-turbo",
-					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"coding", "global", "anthropic",
 				),
 				"cn-api-openai": defaultEndpoint(
@@ -466,7 +461,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://open.bigmodel.cn/api/paas/v4",
 					"glm-4.5-air",
-					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"api", "cn",
 				),
 				"global-api-openai": defaultEndpoint(
@@ -474,7 +468,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.z.ai/api/paas/v4",
 					"glm-4.5-air",
-					[]string{"glm-5", "glm-5-turbo", "glm-5.1", "glm-4.7", "glm-4.7-flashx", "glm-4.6", "glm-4.5-air"},
 					"api", "global",
 				),
 			}),
@@ -484,7 +477,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://api.anthropic.com",
 					"claude-3-5-sonnet-latest",
-					[]string{"claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"},
 					"official", "anthropic",
 				),
 				"oauth": func() EndpointConfig {
@@ -493,7 +485,6 @@ func DefaultConfig() *Config {
 						"anthropic",
 						"https://api.anthropic.com",
 						"claude-sonnet-4-20250514",
-						[]string{"claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"},
 						"official", "anthropic", "oauth",
 					)
 					ep.AuthType = "oauth"
@@ -506,7 +497,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.openai.com/v1",
 					"gpt-4o-mini",
-					[]string{"gpt-4o-mini", "gpt-4o"},
 					"official", "openai",
 				),
 			}),
@@ -516,7 +506,6 @@ func DefaultConfig() *Config {
 					"gemini",
 					"https://generativelanguage.googleapis.com",
 					"gemini-1.5-flash",
-					[]string{"gemini-1.5-flash", "gemini-1.5-pro"},
 					"official", "gemini",
 				),
 			}),
@@ -526,7 +515,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://openrouter.ai/api/v1",
 					"openai/gpt-4o-mini",
-					[]string{"openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "google/gemini-flash-1.5"},
 					"router", "openai-compatible",
 				),
 			}),
@@ -536,7 +524,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://aihubmix.com/v1",
 					"gpt-4o-mini",
-					[]string{"gpt-4o-mini"},
 					"official", "openai-compatible", "router",
 				),
 			}),
@@ -546,7 +533,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.getgoapi.com/v1",
 					"gpt-4o-mini",
-					[]string{"gpt-4o-mini"},
 					"official", "openai-compatible", "router",
 				),
 			}),
@@ -556,7 +542,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.groq.com/openai/v1",
 					"llama-3.1-8b-instant",
-					[]string{"llama-3.1-8b-instant", "llama-3.1-70b-versatile"},
 					"official", "openai-compatible", "fast",
 				),
 			}),
@@ -566,7 +551,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.mistral.ai/v1",
 					"mistral-small-latest",
-					[]string{"mistral-small-latest", "mistral-large-latest"},
 					"official", "openai-compatible",
 				),
 			}),
@@ -576,7 +560,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.deepseek.com/v1",
 					"deepseek-chat",
-					[]string{"deepseek-chat", "deepseek-reasoner"},
 					"official", "openai-compatible", "reasoning",
 				),
 			}),
@@ -586,7 +569,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.moonshot.cn/v1",
 					"moonshot-v1-8k",
-					[]string{"moonshot-v1-8k", "moonshot-v1-32k"},
 					"official", "openai-compatible", "cn",
 				),
 			}),
@@ -596,7 +578,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.novita.ai/openai/v1",
 					"gpt-4o-mini",
-					[]string{"gpt-4o-mini"},
 					"official", "openai-compatible", "router",
 				),
 			}),
@@ -606,7 +587,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://coding.dashscope.aliyuncs.com/v1",
 					"qwen3-coder-plus",
-					[]string{"qwen3-coder-plus"},
 					"official", "coding", "cn", "openai-compatible",
 				),
 				"coding-anthropic": defaultEndpoint(
@@ -614,7 +594,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://coding.dashscope.aliyuncs.com/apps/anthropic",
 					"qwen3-coder-plus",
-					[]string{"qwen3-coder-plus"},
 					"official", "coding", "cn", "anthropic",
 				),
 			}),
@@ -624,7 +603,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.poe.com/v1",
 					"gpt-4o-mini",
-					[]string{"gpt-4o-mini"},
 					"official", "openai-compatible", "router",
 				),
 			}),
@@ -634,7 +612,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://router.requesty.ai/v1",
 					"gpt-4o-mini",
-					[]string{"gpt-4o-mini"},
 					"official", "openai-compatible", "router",
 				),
 			}),
@@ -644,7 +621,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://ai-gateway.vercel.sh/v1",
 					"gpt-4o-mini",
-					[]string{"gpt-4o-mini"},
 					"official", "openai-compatible", "gateway",
 				),
 			}),
@@ -654,7 +630,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.kimi.com/coding/v1",
 					"kimi-for-coding",
-					[]string{"kimi-for-coding"},
 					"official", "coding", "openai-compatible",
 				),
 				"coding-anthropic": defaultEndpoint(
@@ -662,7 +637,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://api.kimi.com/coding/",
 					"kimi-for-coding",
-					[]string{"kimi-for-coding"},
 					"official", "coding", "anthropic",
 				),
 			}),
@@ -672,7 +646,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.minimaxi.com/v1",
 					"MiniMax-M2.7",
-					[]string{"MiniMax-M2.7"},
 					"official", "coding", "openai-compatible",
 				),
 				"token-plan-anthropic": defaultEndpoint(
@@ -680,7 +653,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://api.minimaxi.com/anthropic",
 					"MiniMax-M2.7",
-					[]string{"MiniMax-M2.7"},
 					"official", "coding", "anthropic",
 				),
 				"global-openai": defaultEndpoint(
@@ -688,7 +660,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.minimax.io/v1",
 					"MiniMax-M2.7",
-					[]string{"MiniMax-M2.7"},
 					"official", "coding", "openai-compatible", "global",
 				),
 				"global-anthropic": defaultEndpoint(
@@ -696,7 +667,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://api.minimax.io/anthropic",
 					"MiniMax-M2.7",
-					[]string{"MiniMax-M2.7"},
 					"official", "coding", "anthropic", "global",
 				),
 			}),
@@ -706,7 +676,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://ark.cn-beijing.volces.com/api/coding/v3",
 					"ark-code-latest",
-					[]string{"ark-code-latest"},
 					"official", "coding", "cn", "openai-compatible",
 				),
 				"coding-anthropic": defaultEndpoint(
@@ -714,7 +683,6 @@ func DefaultConfig() *Config {
 					"anthropic",
 					"https://ark.cn-beijing.volces.com/api/coding",
 					"ark-code-latest",
-					[]string{"ark-code-latest"},
 					"official", "coding", "cn", "anthropic",
 				),
 			}),
@@ -724,14 +692,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://integrate.api.nvidia.com/v1",
 					"moonshotai/kimi-k2.5",
-					[]string{
-						"moonshotai/kimi-k2.5",
-						"minimaxai/minimax-m2.5",
-						"z-ai/glm-5.1",
-						"minimaxai/minimax-m2.7",
-						"qwen/qwen3.5-397b-a17b",
-						"deepseek-ai/deepseek-v3.2",
-					},
 					"official", "openai-compatible", "open-models",
 				),
 			}),
@@ -741,10 +701,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.together.xyz/v1",
 					"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-					[]string{
-						"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-						"meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-					},
 					"official", "openai-compatible", "open-models",
 				),
 			}),
@@ -754,7 +710,6 @@ func DefaultConfig() *Config {
 					"openai",
 					"https://api.perplexity.ai",
 					"llama-3.1-sonar-small-128k-online",
-					[]string{"llama-3.1-sonar-small-128k-online", "llama-3.1-sonar-large-128k-online"},
 					"official", "openai-compatible", "search",
 				),
 			}),
@@ -765,7 +720,6 @@ func DefaultConfig() *Config {
 						"copilot",
 						auth.CopilotAPIBaseURL(""),
 						"gpt-4o",
-						[]string{"gpt-4o", "claude-3.5-sonnet", "gemini-2.0-flash-001"},
 						"official", "oauth", "copilot",
 					)
 					ep.AuthType = "oauth"
@@ -777,7 +731,6 @@ func DefaultConfig() *Config {
 						"copilot",
 						auth.CopilotAPIBaseURL("github.example.com"),
 						"gpt-4o",
-						[]string{"gpt-4o", "claude-3.5-sonnet", "gemini-2.0-flash-001"},
 						"official", "oauth", "copilot", "enterprise",
 					)
 					ep.AuthType = "oauth"
@@ -787,6 +740,7 @@ func DefaultConfig() *Config {
 		},
 	}
 	cfg.expandEnv()
+	populateDefaultModels(cfg)
 	cfg.normalizeActiveModel()
 	return cfg
 }
