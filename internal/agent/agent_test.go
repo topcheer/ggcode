@@ -466,8 +466,8 @@ func TestAgent_ContextManager(t *testing.T) {
 	if cm == nil {
 		t.Fatal("ContextManager is nil")
 	}
-	if cm.MaxTokens() != 128000 {
-		t.Errorf("expected default MaxTokens 128000, got %d", cm.MaxTokens())
+	if cm.ContextWindow() != 128000 {
+		t.Errorf("expected default MaxTokens 128000, got %d", cm.ContextWindow())
 	}
 }
 
@@ -496,7 +496,7 @@ func TestRunStreamWithContent_CompactsSilentlyAndProducesResponse(t *testing.T) 
 		}},
 	}
 	a := NewAgent(mp, tool.NewRegistry(), "System prompt", 1)
-	a.ContextManager().SetMaxTokens(80)
+	a.ContextManager().SetContextWindow(80)
 	a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("a", 120)}}})
 	a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("b", 120)}}})
 	a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("c", 120)}}})
@@ -529,7 +529,7 @@ func TestRunStreamDoesNotWaitForInFlightPreCompact(t *testing.T) {
 	mp := newBlockingSummaryProvider()
 	a := NewAgent(mp, tool.NewRegistry(), "", 1)
 	defer a.Close()
-	a.ContextManager().SetMaxTokens(80)
+	a.ContextManager().SetContextWindow(80)
 	for i := 0; i < 6; i++ {
 		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))}})
 		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 8))}})
@@ -578,7 +578,7 @@ func TestPreCompactAppliesCompletedSnapshotAtRunBoundary(t *testing.T) {
 	}
 	a := NewAgent(mp, tool.NewRegistry(), "", 1)
 	defer a.Close()
-	a.ContextManager().SetMaxTokens(80)
+	a.ContextManager().SetContextWindow(80)
 	for i := 0; i < 6; i++ {
 		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 8))}})
 		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 8))}})
@@ -612,7 +612,7 @@ func TestPreCompactAppliesBetweenLLMTurnsAndPreservesNewDialogue(t *testing.T) {
 	}})
 	a = NewAgent(mp, reg, "", 2)
 	defer a.Close()
-	a.ContextManager().SetMaxTokens(2000)
+	a.ContextManager().SetContextWindow(2000)
 	for i := 0; i < 6; i++ {
 		a.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("old context ", 25))}})
 		a.AddMessage(provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock(strings.Repeat("assistant reply ", 25))}})
@@ -1397,7 +1397,7 @@ func TestRunStreamReactiveCompactRetriesPromptTooLong(t *testing.T) {
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "", 3)
-	a.ContextManager().SetMaxTokens(80)
+	a.ContextManager().SetContextWindow(80)
 	for i := 0; i < 6; i++ {
 		a.ContextManager().Add(provider.Message{
 			Role:    "user",
@@ -1446,7 +1446,7 @@ func TestRunStreamIgnoresTransientAutoCompactFailure(t *testing.T) {
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "", 2)
-	a.ContextManager().SetMaxTokens(80)
+	a.ContextManager().SetContextWindow(80)
 	for i := 0; i < 6; i++ {
 		a.ContextManager().Add(provider.Message{
 			Role:    "user",
@@ -1509,7 +1509,7 @@ func TestRunStreamAutopilotLoopGuardCompactsAndPauses(t *testing.T) {
 
 	a := NewAgent(mp, tool.NewRegistry(), "", 5)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
-	a.ContextManager().SetMaxTokens(80)
+	a.ContextManager().SetContextWindow(80)
 	for i := 0; i < 6; i++ {
 		a.ContextManager().Add(provider.Message{
 			Role:    "user",

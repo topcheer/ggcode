@@ -43,7 +43,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		return false
 	}
 	tokens := a.contextManager.TokenCount()
-	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d maxTokens=%d attempting compact", tokens, a.contextManager.MaxTokens())
+	debug.Log("agent", "tryReactiveCompact: PTL detected, tokens=%d maxTokens=%d attempting compact", tokens, a.contextManager.ContextWindow())
 
 	// Infer actual context window from the overflow error.
 	a.mu.Lock()
@@ -52,9 +52,9 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	if window := provider.InferContextWindowFromError(
 		err,
 		tokens,
-		a.contextManager.MaxTokens(),
+		a.contextManager.ContextWindow(),
 		pk,
-		func(n int) { a.contextManager.SetMaxTokens(n) },
+		func(n int) { a.contextManager.SetContextWindow(n) },
 	); window > 0 {
 		debug.Log("agent", "inferred context window from overflow error: %d", window)
 	}
@@ -115,8 +115,18 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 	tokens := a.contextManager.TokenCount()
 	ratio := a.contextManager.UsageRatio()
 	debug.Log("agent", "maybeAutoCompact: tokens=%d threshold=%d ratio=%.3f maxTokens=%d",
-		tokens, threshold, ratio, a.contextManager.MaxTokens())
+		tokens, threshold, ratio, a.contextManager.ContextWindow())
 	if threshold <= 0 || tokens < threshold {
+		return nil
+	}
+
+	// If a precompact is already running, skip entirely — it will inject
+	// results when it completes and reduce the token count.
+	a.mu.Lock()
+	precompactRunning := a.precompact != nil
+	a.mu.Unlock()
+	if precompactRunning {
+		debug.Log("agent", "maybeAutoCompact: SKIP (precompact already running, tokens=%d)", tokens)
 		return nil
 	}
 
@@ -163,7 +173,7 @@ func (a *Agent) promptBudget() int {
 	if cm, ok := a.contextManager.(promptBudgeter); ok {
 		return cm.PromptBudget()
 	}
-	return a.contextManager.MaxTokens()
+	return a.contextManager.ContextWindow()
 }
 
 func (a *Agent) compactLocallyForSendBudget(reason string) bool {

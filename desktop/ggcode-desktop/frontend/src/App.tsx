@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Send, Plus, PanelLeftClose, PanelRightClose, X,
+import { Send, Plus, PanelLeftClose, PanelRightClose, X, FolderOpen,
   MessageSquare, Radio, Sliders, RefreshCw, Bot, ChevronRight } from 'lucide-react';
 import { MessageBubble } from './components/MessageBubble';
 import { useChatStore } from './store';
@@ -8,7 +8,7 @@ import './App.css';
 // @ts-ignore
 import * as ChatService from '../bindings/github.com/topcheer/ggcode/desktop/chatservice.js';
 // @ts-ignore
-import { Events } from '@wailsio/runtime';
+import { Events, Dialogs } from '@wailsio/runtime';
 
 type AppPhase = 'loading' | 'welcome' | 'onboard' | 'chat';
 type RightTab = 'context' | 'provider' | 'im' | 'settings';
@@ -17,7 +17,6 @@ type OnboardStep = 'language' | 'vendor' | 'endpoint' | 'model' | 'optional' | '
 function App() {
   const [phase, setPhase] = useState<AppPhase>('loading');
   const [onboardStep, setOnboardStep] = useState<OnboardStep>('language');
-  const [workDirInput, setWorkDirInput] = useState('');
   const [workDirError, setWorkDirError] = useState('');
 
   // Onboard state
@@ -121,11 +120,17 @@ function App() {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // ─── Welcome: Set WorkDir ────────────────────
-  const handleSetWorkDir = async () => {
-    setWorkDirError('');
+  // ─── Welcome: Select Directory ─────────────────
+  const handleSelectDir = async () => {
     try {
-      await ChatService.SetWorkDir(workDirInput.trim());
+      const result = await Dialogs.OpenFile({
+        CanChooseDirectories: true,
+        CanChooseFiles: false,
+      });
+      // result is a string (filepath) or empty string if cancelled
+      const dir = (typeof result === 'string') ? result : (Array.isArray(result) ? result[0] : '');
+      if (!dir) return;
+      await ChatService.SetWorkDir(dir);
       const needs = await ChatService.NeedsOnboard();
       if (needs) {
         const p = await ChatService.GetVendorPresets();
@@ -219,17 +224,11 @@ function App() {
         <div className="onboard-card">
           <h1>Welcome to ggcode</h1>
           <p>Select your project directory to get started.</p>
-          <div style={{ marginTop: 24 }}>
-            <label className="config-label">Project Directory</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input className="config-input" value={workDirInput} onChange={e => setWorkDirInput(e.target.value)}
-                placeholder="/path/to/your/project" style={{ flex: 1 }} />
-              <button className="config-btn" style={{ width: 'auto', padding: '6px 16px' }} onClick={handleSetWorkDir}>
-                Continue
-              </button>
-            </div>
-            {workDirError && <div style={{ color: 'var(--error)', fontSize: 12, marginTop: 4 }}>{workDirError}</div>}
-          </div>
+          <button className="config-btn" style={{ marginTop: 24 }} onClick={handleSelectDir}>
+            <FolderOpen size={16} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />
+            Choose Directory
+          </button>
+          {workDirError && <div style={{ color: 'var(--error)', fontSize: 12, marginTop: 8 }}>{workDirError}</div>}
         </div>
       </div>
     );

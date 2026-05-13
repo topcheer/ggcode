@@ -570,7 +570,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 	})
 	if resolved.ContextWindow > 0 {
-		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
+		ag.ContextManager().SetContextWindow(resolved.ContextWindow)
 	}
 	if resolved.MaxTokens > 0 {
 		ag.ContextManager().SetOutputReserve(resolved.MaxTokens)

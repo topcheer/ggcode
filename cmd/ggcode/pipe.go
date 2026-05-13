@@ -145,7 +145,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
 	ag.SetProjectMemoryFiles(projectMemFiles)
 	if resolved.ContextWindow > 0 {
-		ag.ContextManager().SetMaxTokens(resolved.ContextWindow)
+		ag.ContextManager().SetContextWindow(resolved.ContextWindow)
 	}
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	if resolved.MaxTokens > 0 {

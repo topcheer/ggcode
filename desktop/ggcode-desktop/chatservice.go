@@ -94,8 +94,11 @@ func (c *ChatService) SaveDesktopConfig(dc DesktopConfig) error {
 // This mirrors: resolveConfigFilePath → config.LoadWithInstance.
 func (c *ChatService) InitFromWorkDir(dir string) error {
 	cfgPath := resolveConfigFilePath(dir)
+	log.Printf("[desktop] InitFromWorkDir: dir=%s cfgPath=%s", dir, cfgPath)
+
 	cfg, err := config.LoadWithInstance(cfgPath, dir)
 	if err != nil {
+		log.Printf("[desktop] LoadWithInstance error: %v", err)
 		return fmt.Errorf("load config: %w", err)
 	}
 
@@ -130,7 +133,7 @@ func (c *ChatService) NeedsOnboard() bool {
 }
 
 // SelectWorkDir opens a native directory picker.
-// SetWorkDir sets the working directory. Validates that the directory exists.
+// SelectWorkDir is called from frontend after directory is chosen.
 func (c *ChatService) SetWorkDir(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {

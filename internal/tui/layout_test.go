@@ -970,7 +970,7 @@ func TestSidebarHidesContextSection(t *testing.T) {
 	m := newTestModel()
 	m.handleResize(128, 28)
 	m.agent = agent.NewAgent(nil, tool.NewRegistry(), "", 1)
-	m.agent.ContextManager().SetMaxTokens(1000)
+	m.agent.ContextManager().SetContextWindow(1000)
 	m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: strings.Repeat("x", 400)}}})
 
 	view := m.View().Content

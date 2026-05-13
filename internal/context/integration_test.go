@@ -58,8 +58,8 @@ func TestAutoSummarize_AtThreshold(t *testing.T) {
 func TestSetMaxTokens(t *testing.T) {
 	cm := NewManager(1000)
 
-	if cm.MaxTokens() != 1000 {
-		t.Errorf("Expected MaxTokens=1000, got %d", cm.MaxTokens())
+	if cm.ContextWindow() != 1000 {
+		t.Errorf("Expected MaxTokens=1000, got %d", cm.ContextWindow())
 	}
 
 	// Add a message with known token count
@@ -69,9 +69,9 @@ func TestSetMaxTokens(t *testing.T) {
 	ratio1000 := cm.UsageRatio()
 
 	// Double the max tokens
-	cm.SetMaxTokens(2000)
-	if cm.MaxTokens() != 2000 {
-		t.Errorf("Expected MaxTokens=2000 after update, got %d", cm.MaxTokens())
+	cm.SetContextWindow(2000)
+	if cm.ContextWindow() != 2000 {
+		t.Errorf("Expected MaxTokens=2000 after update, got %d", cm.ContextWindow())
 	}
 
 	// Get ratio with maxTokens=2000 - should be half
