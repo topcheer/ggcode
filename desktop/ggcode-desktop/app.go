@@ -318,7 +318,7 @@ func (a *App) startChat() {
 	bridge := NewAgentBridge(a.cfg, prov, resolved, a.dc.WorkDir, a.ui)
 	a.agentBridge = bridge
 
-	chatView := NewChatView(a, bridge, a.ui)
+	chatView := NewChatView(bridge, a.ui)
 	sidebar := NewSidebar(a, bridge, a.ui)
 
 	split := container.NewHSplit(chatView.Render(), sidebar.Render())

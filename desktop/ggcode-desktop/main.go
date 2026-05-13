@@ -6,6 +6,8 @@ import (
 
 func main() {
 	a := app.NewWithID("com.ggcode.desktop")
+	a.Settings().SetTheme(newModernTheme())
+
 	desktop := NewApp(a)
 	desktop.Run()
 }

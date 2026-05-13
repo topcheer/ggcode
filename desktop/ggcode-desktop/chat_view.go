@@ -6,33 +6,33 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
-// ChatView renders the chat area using a polling model.
-// Background goroutine writes to UIState. pollRefresh reads via fyne.Do()
-// which safely runs on the main Fyne goroutine.
+// ChatView renders the chat area. Background goroutines write to UIState.
+// pollRefresh reads via fyne.Do() on the main Fyne goroutine.
 type ChatView struct {
-	app    *App
 	bridge *AgentBridge
 	ui     *UIState
 
 	entry     *widget.Entry
 	sendBtn   *widget.Button
 	cancelBtn *widget.Button
-	list      *widget.List
+	scroll    *container.Scroll
+	vbox      *fyne.Container
 }
 
-func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
-	cv := &ChatView{app: app, bridge: bridge, ui: ui}
+func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
+	cv := &ChatView{bridge: bridge, ui: ui}
 
 	cv.entry = widget.NewMultiLineEntry()
-	cv.entry.PlaceHolder = "Type a message... (Enter to send)"
+	cv.entry.PlaceHolder = "Message ggcode... (Enter to send)"
 	cv.entry.Wrapping = fyne.TextWrapWord
-	cv.entry.SetMinRowsVisible(3)
-	cv.entry.OnSubmitted = func(_ string) { cv.onSend() }
+	cv.entry.SetMinRowsVisible(2)
 
 	cv.sendBtn = widget.NewButtonWithIcon("Send", theme.MailSendIcon(), cv.onSend)
 	cv.sendBtn.Importance = widget.HighImportance
@@ -40,59 +40,52 @@ func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 	cv.cancelBtn = widget.NewButtonWithIcon("Stop", theme.CancelIcon(), func() {
 		cv.bridge.Cancel()
 	})
+	cv.cancelBtn.Importance = widget.DangerImportance
 	cv.cancelBtn.Hide()
 
 	return cv
 }
 
 func (cv *ChatView) Render() fyne.CanvasObject {
-	btnStack := container.NewStack(cv.sendBtn, cv.cancelBtn)
-	inputBox := container.NewBorder(nil, nil, nil, btnStack, cv.entry)
+	// Input bar at bottom.
+	btnRow := container.NewHBox(cv.cancelBtn, cv.sendBtn)
+	inputBar := container.NewBorder(nil, nil, nil, btnRow, cv.entry)
 
-	cv.list = widget.NewList(
-		func() int { return cv.ui.CountMessages() },
-		func() fyne.CanvasObject { return widget.NewRichText() },
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			msgs := cv.ui.TakeMessages()
-			if id >= len(msgs) {
-				return
-			}
-			cv.renderMessage(obj.(*widget.RichText), msgs[id])
-		},
-	)
+	// Message area.
+	cv.vbox = container.NewVBox()
+	cv.scroll = container.NewVScroll(cv.vbox)
 
-	// Poll UIState for dirty flag and refresh on the main Fyne goroutine.
 	go cv.pollRefresh()
 
-	return container.NewBorder(
-		nil,
-		container.NewPadded(inputBox),
-		nil, nil,
-		cv.list,
-	)
+	return container.NewBorder(nil, container.NewPadded(inputBar), nil, nil, cv.scroll)
 }
 
-// pollRefresh checks IsDirty periodically and schedules a widget refresh
-// via fyne.Do which runs on the main Fyne thread.
 func (cv *ChatView) pollRefresh() {
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		if !cv.ui.IsDirty() && !cv.bridge.IsWorking() {
+		dirty := cv.ui.IsDirty()
+		working := cv.bridge.IsWorking()
+		if !dirty && !working {
 			continue
 		}
-		// Schedule UI update on main Fyne goroutine.
 		fyne.Do(func() {
-			cv.list.Refresh()
-			working := cv.bridge.IsWorking()
-			if working {
-				cv.sendBtn.Disable()
-				cv.cancelBtn.Show()
-			} else {
-				cv.sendBtn.Enable()
-				cv.cancelBtn.Hide()
+			if dirty {
+				cv.rebuildMessages()
 			}
+			cv.updateButtons(working)
 		})
+	}
+}
+
+func (cv *ChatView) updateButtons(working bool) {
+	if working {
+		cv.sendBtn.Hide()
+		cv.cancelBtn.Show()
+	} else {
+		cv.sendBtn.Show()
+		cv.cancelBtn.Hide()
+		cv.sendBtn.Enable()
 	}
 }
 
@@ -102,7 +95,6 @@ func (cv *ChatView) onSend() {
 		return
 	}
 	cv.entry.SetText("")
-	logf("onSend: sending message, len=%d", len(text))
 
 	cv.ui.AppendChat(ChatMessage{
 		Role:    "user",
@@ -119,66 +111,145 @@ func (cv *ChatView) onSend() {
 	}
 }
 
-func (cv *ChatView) renderMessage(rt *widget.RichText, msg ChatMessage) {
-	var segs []widget.RichTextSegment
-	ts := msg.Time.Format("15:04:05")
+// rebuildMessages recreates all message widgets from the UIState snapshot.
+func (cv *ChatView) rebuildMessages() {
+	msgs := cv.ui.TakeMessages()
+	objects := make([]fyne.CanvasObject, 0, len(msgs))
 
-	switch msg.Role {
-	case "user":
-		segs = append(segs,
-			&widget.TextSegment{Style: widget.RichTextStyle{
-				TextStyle: fyne.TextStyle{Bold: true},
-				ColorName: theme.ColorNamePrimary,
-			}, Text: fmt.Sprintf("You [%s]", ts)},
-			&widget.TextSegment{Style: widget.RichTextStyle{}, Text: "\n" + msg.Content},
-		)
-	case "assistant":
-		label := "Assistant"
-		if msg.Streaming {
-			label += " ..."
+	for i := range msgs {
+		w := cv.buildMessageWidget(&msgs[i])
+		if w != nil {
+			objects = append(objects, w)
 		}
-		segs = append(segs,
-			&widget.TextSegment{Style: widget.RichTextStyle{
-				TextStyle: fyne.TextStyle{Bold: true},
-			}, Text: fmt.Sprintf("%s [%s]", label, ts)},
-			&widget.TextSegment{Style: widget.RichTextStyle{}, Text: "\n" + msg.Content},
-		)
-	case "tool":
-		args := msg.ToolArgs
-		if args != "" {
-			args = " " + args
-		}
-		segs = append(segs,
-			&widget.TextSegment{Style: widget.RichTextStyle{
-				TextStyle: fyne.TextStyle{Bold: true},
-				ColorName: theme.ColorNameWarning,
-			}, Text: fmt.Sprintf("[Tool] %s%s", msg.ToolName, args)},
-			&widget.TextSegment{Style: widget.RichTextStyle{
-				ColorName: theme.ColorNameDisabled,
-			}, Text: "\n" + msg.Content},
-		)
-	case "system":
-		segs = append(segs,
-			&widget.TextSegment{Style: widget.RichTextStyle{
-				ColorName: theme.ColorNameDisabled,
-				TextStyle: fyne.TextStyle{Italic: true},
-			}, Text: msg.Content},
-		)
-	case "reasoning":
-		segs = append(segs,
-			&widget.TextSegment{Style: widget.RichTextStyle{
-				ColorName: theme.ColorNamePlaceHolder,
-				TextStyle: fyne.TextStyle{Italic: true},
-			}, Text: fmt.Sprintf("[Thinking] %s", msg.Content)},
-		)
-	case "error":
-		segs = append(segs,
-			&widget.TextSegment{Style: widget.RichTextStyle{
-				ColorName: theme.ColorNameError,
-			}, Text: fmt.Sprintf("Error: %s", msg.Content)},
-		)
 	}
 
-	rt.Segments = segs
-	rt.Refresh()
+	cv.vbox.Objects = objects
+	cv.vbox.Refresh()
+	cv.scroll.ScrollToBottom()
+}
+
+// ── Message widgets ──────────────────────────────────
+
+func (cv *ChatView) buildMessageWidget(msg *ChatMessage) fyne.CanvasObject {
+	switch msg.Role {
+	case "user":
+		return cv.userBubble(msg)
+	case "assistant":
+		return cv.assistantBubble(msg)
+	case "tool":
+		return cv.toolItem(msg)
+	case "system":
+		return cv.systemNotice(msg)
+	case "reasoning":
+		return cv.reasoningNotice(msg)
+	case "error":
+		return cv.errorNotice(msg)
+	}
+	return nil
+}
+
+// userBubble — right-aligned, accent background.
+func (cv *ChatView) userBubble(msg *ChatMessage) fyne.CanvasObject {
+	content := widget.NewRichText(&widget.TextSegment{
+		Style: widget.RichTextStyle{},
+		Text:  msg.Content,
+	})
+	content.Wrapping = fyne.TextWrapWord
+
+	inner := container.NewVBox(
+		container.NewPadded(content),
+	)
+
+	// Use a card with no title for visual grouping.
+	return container.NewPadded(widget.NewCard("", "", inner))
+}
+
+// assistantBubble — left-aligned, subtle.
+func (cv *ChatView) assistantBubble(msg *ChatMessage) fyne.CanvasObject {
+	text := msg.Content
+	if text == "" && msg.Streaming {
+		text = "..."
+	}
+
+	content := widget.NewRichText(&widget.TextSegment{
+		Style: widget.RichTextStyle{},
+		Text:  text,
+	})
+	content.Wrapping = fyne.TextWrapWord
+
+	inner := container.NewVBox(
+		container.NewPadded(content),
+	)
+
+	return container.NewPadded(widget.NewCard("", "", inner))
+}
+
+// toolItem — compact, collapsible accordion.
+func (cv *ChatView) toolItem(msg *ChatMessage) fyne.CanvasObject {
+	// Display: description > "toolName args"
+	displayTitle := msg.ToolDesc
+	if displayTitle == "" || displayTitle == msg.ToolName {
+		displayTitle = msg.ToolName
+	}
+	if msg.ToolArgs != "" {
+		displayTitle = fmt.Sprintf("%s  %s", displayTitle, msg.ToolArgs)
+	}
+
+	// Status indicator.
+	status := "done"
+	if msg.Content == "" {
+		status = "running..."
+	}
+
+	header := fmt.Sprintf("%s  (%s)", displayTitle, status)
+
+	// Truncate result for display.
+	result := msg.Content
+	if len(result) > 1000 {
+		result = result[:1000] + "\n...(truncated)"
+	}
+
+	var detail fyne.CanvasObject
+	if result == "" {
+		spinner := canvas.NewText("running...", theme.DisabledColor())
+		spinner.TextStyle = fyne.TextStyle{Italic: true}
+		detail = container.NewPadded(spinner)
+	} else {
+		resultLabel := widget.NewLabel(result)
+		resultLabel.Wrapping = fyne.TextWrapWord
+		resultLabel.TextStyle = fyne.TextStyle{Monospace: true}
+		detail = container.NewPadded(resultLabel)
+	}
+
+	acc := widget.NewAccordion(widget.NewAccordionItem(header, detail))
+	acc.MultiOpen = true
+
+	// Make it compact.
+	return container.New(layout.NewGridWrapLayout(fyne.NewSize(0, 0)),
+		container.NewPadded(acc),
+	)
+}
+
+// systemNotice — subtle, centered.
+func (cv *ChatView) systemNotice(msg *ChatMessage) fyne.CanvasObject {
+	text := canvas.NewText(msg.Content, theme.DisabledColor())
+	text.TextStyle = fyne.TextStyle{Italic: true}
+	text.TextSize = theme.Size(theme.SizeNameCaptionText)
+	text.Alignment = fyne.TextAlignCenter
+	return container.NewPadded(text)
+}
+
+// reasoningNotice — subtle, italic.
+func (cv *ChatView) reasoningNotice(msg *ChatMessage) fyne.CanvasObject {
+	text := canvas.NewText("Thinking: "+msg.Content, theme.DisabledColor())
+	text.TextStyle = fyne.TextStyle{Italic: true}
+	text.TextSize = theme.Size(theme.SizeNameCaptionText)
+	return container.NewPadded(text)
+}
+
+// errorNotice — red, prominent.
+func (cv *ChatView) errorNotice(msg *ChatMessage) fyne.CanvasObject {
+	text := canvas.NewText("Error: "+msg.Content, theme.ErrorColor())
+	text.TextSize = theme.TextSize()
+	return container.NewPadded(text)
 }
