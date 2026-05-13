@@ -98,6 +98,7 @@ html, body, #root {
 
 .sidebar {
   grid-row: 1 / 3;
+  grid-column: 1;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border);
   display: flex;
@@ -106,6 +107,8 @@ html, body, #root {
 }
 
 .chat-area {
+  grid-row: 1;
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -113,12 +116,17 @@ html, body, #root {
 
 .context-panel {
   grid-row: 1 / 3;
+  grid-column: 3;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border);
-  overflow-y: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .provider-bar {
+  grid-row: 2;
+  grid-column: 2;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);
   padding: 8px 16px;
@@ -867,3 +875,202 @@ html, body, #root {
   gap: 4px;
   padding-bottom: 4px;
 }
+
+/* ─── Right Panel Tabs ───────────────────────── */
+
+.right-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+}
+
+.right-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 10px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.right-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.right-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.right-tab-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* ─── Config Controls ────────────────────────── */
+
+.config-select {
+  width: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.config-select:focus {
+  border-color: var(--accent);
+}
+
+.config-input {
+  width: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.config-input:focus {
+  border-color: var(--accent);
+}
+
+.config-btn {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.15s;
+}
+
+.config-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.im-adapter-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: var(--bg-primary);
+}
+
+.remove-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.remove-btn:hover {
+  color: var(--error);
+  background: var(--bg-hover);
+}
+
+/* ─── Onboard ────────────────────────────────── */
+
+.app-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.onboard-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--bg-primary);
+}
+
+.onboard-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 40px;
+  max-width: 520px;
+  width: 90%;
+  color: var(--text-primary);
+}
+
+.onboard-card h1 { font-size: 22px; margin: 0 0 8px; }
+.onboard-card p { color: var(--text-secondary); margin: 0 0 8px; font-size: 14px; }
+
+.onboard-list {
+  margin-top: 12px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.onboard-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+
+.onboard-item:hover { border-color: var(--accent); background: var(--bg-hover); }
+.onboard-item.selected { border-color: var(--accent); background: var(--bg-surface); }
+.onboard-item-name { font-weight: 500; }
+.onboard-item-arrow { color: var(--text-muted); }
+
+.onboard-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 14px;
+}
+
+.config-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.config-btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.config-btn-secondary:hover { border-color: var(--text-muted); }

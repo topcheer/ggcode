@@ -13,6 +13,22 @@ var assets embed.FS
 
 func main() {
 	chatService := NewChatService()
+	dc := chatService.GetDesktopConfig()
+
+	// Auto-initialize if we have a saved workDir.
+	if dc.WorkDir != "" {
+		if err := chatService.InitFromWorkDir(dc.WorkDir); err != nil {
+			log.Printf("[desktop] Auto-load workdir %s failed: %v", dc.WorkDir, err)
+		}
+	}
+
+	w, h := dc.WinW, dc.WinH
+	if w == 0 {
+		w = 1200
+	}
+	if h == 0 {
+		h = 800
+	}
 
 	app := application.New(application.Options{
 		Name:        "ggcode",
@@ -30,11 +46,10 @@ func main() {
 
 	chatService.SetApp(app)
 
-	// ─── Main Window ────────────────────────────────
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "ggcode",
-		Width:  1200,
-		Height: 800,
+		Width:  w,
+		Height: h,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTranslucent,
@@ -44,12 +59,11 @@ func main() {
 		URL:              "/",
 	})
 
-	// Handle window close → hide instead of quit (keep in tray)
 	mainWindow.OnWindowEvent(events.Common.WindowClosing, func(_ *application.WindowEvent) {
 		mainWindow.Hide()
 	})
 
-	// ─── Application Menu ───────────────────────────
+	// ─── Menu ──────────────────────────────────────────
 	menu := app.NewMenu()
 
 	fileMenu := menu.AddSubmenu("File")
@@ -109,8 +123,7 @@ func main() {
 		mainWindow.Show().Focus()
 	})
 
-	err := app.Run()
-	if err != nil {
+	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
