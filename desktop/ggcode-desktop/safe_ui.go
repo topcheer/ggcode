@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"fyne.io/fyne/v2/data/binding"
@@ -18,6 +19,9 @@ type UIState struct {
 	TokenUsage binding.String
 	ContextWin binding.String
 	TokenPct   binding.Float
+
+	// Assistant streaming buffer.
+	assistantBuf strings.Builder
 
 	// Non-bound state: chat messages.
 	ChatMsgs  []ChatMessage
@@ -67,21 +71,24 @@ func (u *UIState) AppendChat(msg ChatMessage) bool {
 	return true
 }
 
-// UpdateLastAssistant updates the last assistant message (streaming).
-func (u *UIState) UpdateLastAssistant(content string) {
+// AppendAssistantText appends a streaming text chunk to the assistant buffer
+// and updates (or creates) the last assistant message with the full accumulated text.
+func (u *UIState) AppendAssistantText(chunk string) {
 	u.ChatMu.Lock()
 	defer u.ChatMu.Unlock()
+	u.assistantBuf.WriteString(chunk)
+	full := u.assistantBuf.String()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
-		if u.ChatMsgs[i].Role == "assistant" {
-			u.ChatMsgs[i].Content = content
+		if u.ChatMsgs[i].Role == "assistant" && u.ChatMsgs[i].Streaming {
+			u.ChatMsgs[i].Content = full
 			u.ChatDirty = true
 			return
 		}
 	}
-	// No assistant message yet, create one.
+	// No streaming assistant message yet, create one.
 	u.ChatMsgs = append(u.ChatMsgs, ChatMessage{
 		Role:      "assistant",
-		Content:   content,
+		Content:   full,
 		Streaming: true,
 	})
 	u.ChatDirty = true
@@ -100,10 +107,12 @@ func (u *UIState) UpdateLastToolResult(toolName, result string) {
 	}
 }
 
-// FinalizeStreaming marks the last streaming assistant message as done.
+// FinalizeStreaming marks the last streaming assistant message as done
+// and resets the streaming buffer.
 func (u *UIState) FinalizeStreaming() {
 	u.ChatMu.Lock()
 	defer u.ChatMu.Unlock()
+	u.assistantBuf.Reset()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
 		if u.ChatMsgs[i].Role == "assistant" && u.ChatMsgs[i].Streaming {
 			u.ChatMsgs[i].Streaming = false

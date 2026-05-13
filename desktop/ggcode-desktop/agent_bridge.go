@@ -44,26 +44,33 @@ func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config
 }
 
 func (b *AgentBridge) setupAgent() error {
+	logf("setupAgent: start")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.agent != nil {
+		logf("setupAgent: agent already exists")
 		return nil
 	}
 
 	b.registry = tool.NewRegistry()
+	logf("setupAgent: registering builtin tools...")
 	if err := tool.RegisterBuiltinTools(b.registry, nil, b.workingDir); err != nil {
+		logf("setupAgent: RegisterBuiltinTools error: %v", err)
 		return fmt.Errorf("register builtin tools: %w", err)
 	}
+	logf("setupAgent: builtin tools registered")
 
 	mergedServers, _ := mcp.MergeStartupServers(b.workingDir, b.cfg.MCPServers)
 	mcpMgr := plugin.NewMCPManager(mergedServers, b.registry)
 	_ = b.registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
 	_ = b.registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
 	_ = b.registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
+	logf("setupAgent: MCP tools registered")
 
 	pluginMgr := plugin.NewManager()
 	pluginMgr.LoadAll(b.cfg.Plugins)
 	_ = pluginMgr.RegisterTools(b.registry)
+	logf("setupAgent: plugins loaded")
 
 	autoMem := memory.NewAutoMemory()
 	_ = b.registry.Register(tool.NewSaveMemoryTool(autoMem, nil))
@@ -74,17 +81,21 @@ func (b *AgentBridge) setupAgent() error {
 		maxIter = 200
 	}
 	b.agent = agent.NewAgent(b.prov, b.registry, systemPrompt, maxIter)
+	logf("setupAgent: agent created")
 	if b.resolved.ContextWindow > 0 {
 		b.agent.ContextManager().SetContextWindow(b.resolved.ContextWindow)
 	}
 	if b.resolved.MaxTokens > 0 {
 		b.agent.ContextManager().SetOutputReserve(b.resolved.MaxTokens)
 	}
+	logf("setupAgent: done, contextWindow=%d", b.resolved.ContextWindow)
 	return nil
 }
 
 func (b *AgentBridge) Send(userMsg string) error {
+	logf("Send: start, msgLen=%d", len(userMsg))
 	if err := b.setupAgent(); err != nil {
+		logf("Send: setupAgent error: %v", err)
 		return err
 	}
 
@@ -93,9 +104,11 @@ func (b *AgentBridge) Send(userMsg string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.mu.Unlock()
+	logf("Send: goroutine starting")
 
 	go func() {
 		defer func() {
+			logf("Send: goroutine done")
 			cancel()
 			b.mu.Lock()
 			b.working = false
@@ -104,11 +117,11 @@ func (b *AgentBridge) Send(userMsg string) error {
 		}()
 
 		onEvent := func(ev provider.StreamEvent) {
-			defer safeRecover("agent event handler")
+			defer logPanic("agent event handler")
 
 			switch ev.Type {
 			case provider.StreamEventText:
-				b.ui.UpdateLastAssistant(ev.Text)
+				b.ui.AppendAssistantText(ev.Text)
 
 			case provider.StreamEventToolCallDone:
 				name := ev.Tool.Name
