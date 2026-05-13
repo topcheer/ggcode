@@ -12,8 +12,8 @@ import (
 )
 
 // ChatView renders the chat area using a polling model.
-// The background goroutine writes messages to UIState (thread-safe).
-// A periodic ticker on the main goroutine reads from UIState and refreshes.
+// Background goroutine writes to UIState. pollRefresh reads via fyne.Do()
+// which safely runs on the main Fyne goroutine.
 type ChatView struct {
 	app    *App
 	bridge *AgentBridge
@@ -26,11 +26,7 @@ type ChatView struct {
 }
 
 func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
-	cv := &ChatView{
-		app:    app,
-		bridge: bridge,
-		ui:     ui,
-	}
+	cv := &ChatView{app: app, bridge: bridge, ui: ui}
 
 	cv.entry = widget.NewMultiLineEntry()
 	cv.entry.PlaceHolder = "Type a message... (Enter to send)"
@@ -61,13 +57,11 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 			if id >= len(msgs) {
 				return
 			}
-			rt := obj.(*widget.RichText)
-			cv.renderMessage(rt, msgs[id])
+			cv.renderMessage(obj.(*widget.RichText), msgs[id])
 		},
 	)
 
-	// Start a ticker to poll UIState for changes and refresh the list.
-	// This runs on the main goroutine via widget.Refresh which is safe.
+	// Poll UIState for dirty flag and refresh on the main Fyne goroutine.
 	go cv.pollRefresh()
 
 	return container.NewBorder(
@@ -78,26 +72,27 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	)
 }
 
-// pollRefresh periodically checks if the chat data is dirty and refreshes.
+// pollRefresh checks IsDirty periodically and schedules a widget refresh
+// via fyne.Do which runs on the main Fyne thread.
 func (cv *ChatView) pollRefresh() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		if cv.ui.IsDirty() {
-			cv.list.Refresh()
-			cv.updateButtons()
+		if !cv.ui.IsDirty() && !cv.bridge.IsWorking() {
+			continue
 		}
-	}
-}
-
-func (cv *ChatView) updateButtons() {
-	working := cv.bridge.IsWorking()
-	if working {
-		cv.sendBtn.Disable()
-		cv.cancelBtn.Show()
-	} else {
-		cv.sendBtn.Enable()
-		cv.cancelBtn.Hide()
+		// Schedule UI update on main Fyne goroutine.
+		fyne.Do(func() {
+			cv.list.Refresh()
+			working := cv.bridge.IsWorking()
+			if working {
+				cv.sendBtn.Disable()
+				cv.cancelBtn.Show()
+			} else {
+				cv.sendBtn.Enable()
+				cv.cancelBtn.Hide()
+			}
+		})
 	}
 }
 
@@ -107,6 +102,7 @@ func (cv *ChatView) onSend() {
 		return
 	}
 	cv.entry.SetText("")
+	logf("onSend: sending message, len=%d", len(text))
 
 	cv.ui.AppendChat(ChatMessage{
 		Role:    "user",
