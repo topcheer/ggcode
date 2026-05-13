@@ -29,8 +29,12 @@ type App struct {
 	ui *UIState
 
 	// UI components.
-	content   *fyne.Container
-	statusBar *widget.Label
+	content       *fyne.Container
+	statusBar     *widget.Label
+	split         fyne.CanvasObject
+	chatViewObj   fyne.CanvasObject
+	sidebarObj    fyne.CanvasObject
+	sidebarHidden bool
 
 	// Agent state.
 	agentBridge *AgentBridge
@@ -109,6 +113,7 @@ func (a *App) setupMenu() {
 		fyne.NewMenuItem("Quit", func() { a.fyneApp.Quit() }),
 	)
 	viewMenu := fyne.NewMenu("View",
+		fyne.NewMenuItem("Toggle Sidebar", func() { a.toggleSidebar() }),
 		fyne.NewMenuItem("Refresh Stats", func() { a.refreshSidebar() }),
 	)
 	a.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu))
@@ -322,9 +327,15 @@ func (a *App) startChat() {
 
 	chatView := NewChatView(bridge, a.ui)
 	sidebar := NewSidebar(a, bridge, a.ui)
+	sidebarObj := sidebar.Render()
+	chatViewObj := chatView.Render()
 
-	split := container.NewHSplit(chatView.Render(), sidebar.Render())
-	split.SetOffset(0.7)
+	split := container.NewHSplit(chatViewObj, sidebarObj)
+	split.SetOffset(0.75)
+	a.split = split
+	a.chatViewObj = chatViewObj
+	a.sidebarObj = sidebarObj
+	a.sidebarHidden = false
 
 	a.content.Objects = []fyne.CanvasObject{split}
 	a.content.Refresh()
@@ -372,6 +383,16 @@ func (a *App) refreshSidebar() {
 
 func (a *App) setTitle(title string) {
 	a.window.SetTitle(title)
+}
+
+func (a *App) toggleSidebar() {
+	a.sidebarHidden = !a.sidebarHidden
+	if a.sidebarHidden {
+		a.content.Objects = []fyne.CanvasObject{a.chatViewObj}
+	} else {
+		a.content.Objects = []fyne.CanvasObject{a.split}
+	}
+	a.content.Refresh()
 }
 
 func resolveConfigFilePath(workDir string) string {
