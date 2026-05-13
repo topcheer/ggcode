@@ -27,6 +27,8 @@ func main() {
 		},
 	})
 
+	chatService.SetApp(app)
+
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:  "ggcode",
 		Width:  1200,
