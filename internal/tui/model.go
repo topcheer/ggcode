@@ -482,7 +482,7 @@ func (m *Model) startContextProbe() {
 			if r.ContextWindow > 0 {
 				debug.Log("probe", "applying context_window=%d fromCache=%v to agent",
 					r.ContextWindow, r.FromCache)
-				m.agent.ContextManager().SetMaxTokens(r.ContextWindow)
+				m.agent.ContextManager().SetContextWindow(r.ContextWindow)
 			} else {
 				debug.Log("probe", "probe returned 0 (no result), keeping current context window setting")
 			}

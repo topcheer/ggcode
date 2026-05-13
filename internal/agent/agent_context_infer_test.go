@@ -37,7 +37,7 @@ func TestContextOverflowInfersWindow(t *testing.T) {
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "System", 5)
-	a.ContextManager().SetMaxTokens(200_000)
+	a.ContextManager().SetContextWindow(200_000)
 	a.SetProbeKey("testvendor|https://api.test.com|test-model")
 
 	// Add messages to have some token count (will be small in test)
@@ -55,7 +55,7 @@ func TestContextOverflowInfersWindow(t *testing.T) {
 	}
 
 	// Verify MaxTokens was reduced from 200K to 128K (inferred from error message)
-	newMax := a.ContextManager().MaxTokens()
+	newMax := a.ContextManager().ContextWindow()
 	if newMax != 128_000 {
 		t.Errorf("expected MaxTokens reduced to 128000, got %d", newMax)
 	}
@@ -89,7 +89,7 @@ func TestContextOverflowInferFromEstimate(t *testing.T) {
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "System", 5)
-	a.ContextManager().SetMaxTokens(512_000)
+	a.ContextManager().SetContextWindow(512_000)
 	a.SetProbeKey("vendor|url|model")
 
 	for i := 0; i < 10; i++ {
@@ -106,7 +106,7 @@ func TestContextOverflowInferFromEstimate(t *testing.T) {
 	}
 
 	// Without exact value, uses currentTokenCount (~287) → matches to 64K (minimum tier)
-	newMax := a.ContextManager().MaxTokens()
+	newMax := a.ContextManager().ContextWindow()
 	if newMax >= 512_000 {
 		t.Errorf("expected MaxTokens reduced below 512000, got %d", newMax)
 	}
@@ -136,7 +136,7 @@ func TestContextOverflowNoProbeKey(t *testing.T) {
 	}
 
 	a := NewAgent(mp, tool.NewRegistry(), "System", 5)
-	a.ContextManager().SetMaxTokens(200_000)
+	a.ContextManager().SetContextWindow(200_000)
 	// Deliberately NOT calling SetProbeKey
 
 	for i := 0; i < 10; i++ {
@@ -153,7 +153,7 @@ func TestContextOverflowNoProbeKey(t *testing.T) {
 	}
 
 	// Without probeKey, MaxTokens should remain unchanged
-	newMax := a.ContextManager().MaxTokens()
+	newMax := a.ContextManager().ContextWindow()
 	if newMax != 200_000 {
 		t.Errorf("expected MaxTokens unchanged at 200000 (no probe key), got %d", newMax)
 	}

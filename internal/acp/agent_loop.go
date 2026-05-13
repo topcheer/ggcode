@@ -64,7 +64,7 @@ func NewAgentLoop(
 	}
 	if resolveErr == nil {
 		if resolved.ContextWindow > 0 {
-			a.ContextManager().SetMaxTokens(resolved.ContextWindow)
+			a.ContextManager().SetContextWindow(resolved.ContextWindow)
 		}
 		if resolved.MaxTokens > 0 {
 			a.ContextManager().SetOutputReserve(resolved.MaxTokens)

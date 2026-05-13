@@ -544,7 +544,7 @@ func (m Model) sidebarContextStats() (sidebarContextStatLine, bool) {
 	if cm == nil {
 		return sidebarContextStatLine{}, false
 	}
-	maxTokens := cm.MaxTokens()
+	maxTokens := cm.ContextWindow()
 	tokenCount := cm.TokenCount()
 	threshold := cm.AutoCompactThreshold()
 	if maxTokens <= 0 || threshold <= 0 {

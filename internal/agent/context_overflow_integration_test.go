@@ -157,7 +157,7 @@ func TestIntegration_DirectOverflowInfersFromRealError(t *testing.T) {
 		500_000, // estimate: roughly the token count of our oversized prompt
 		512_000,
 		probeKey,
-		func(n int) { cm.SetMaxTokens(n) },
+		func(n int) { cm.SetContextWindow(n) },
 	)
 
 	t.Logf("Inferred context window: %d (from real error)", inferred)
@@ -190,7 +190,7 @@ func TestIntegration_AgentLoopNormalMultiTurnWithRealLLM(t *testing.T) {
 
 	a := NewAgent(prov, tool.NewRegistry(), "You are a helpful assistant. Be concise.", 5)
 	a.SetProbeKey(probeKey)
-	a.ContextManager().SetMaxTokens(128_000)
+	a.ContextManager().SetContextWindow(128_000)
 
 	// Turn 1
 	err := a.RunStreamWithContent(context.Background(),
@@ -220,7 +220,7 @@ func TestIntegration_AgentLoopNormalMultiTurnWithRealLLM(t *testing.T) {
 	}
 
 	t.Logf("3-turn conversation completed successfully")
-	t.Logf("MaxTokens: %d (should be unchanged at 128000)", a.ContextManager().MaxTokens())
+	t.Logf("MaxTokens: %d (should be unchanged at 128000)", a.ContextManager().ContextWindow())
 	t.Logf("TokenCount: %d", a.ContextManager().TokenCount())
 	t.Logf("UsageRatio: %.2f%%", a.ContextManager().UsageRatio()*100)
 }
@@ -254,7 +254,7 @@ func TestIntegration_PersistAndReloadAcrossSessions(t *testing.T) {
 	cm := ctxpkg.NewManager(512_000)
 	inferred := provider.InferContextWindowFromError(
 		streamErr, 500_000, 512_000, probeKey,
-		func(n int) { cm.SetMaxTokens(n) },
+		func(n int) { cm.SetContextWindow(n) },
 	)
 	if inferred == 0 {
 		t.Skip("Inference returned 0 — cannot test persist/reload")
@@ -270,14 +270,14 @@ func TestIntegration_PersistAndReloadAcrossSessions(t *testing.T) {
 	// --- Step 2: New agent loads from cache ---
 	a2 := NewAgent(prov, tool.NewRegistry(), "You are helpful.", 3)
 	a2.SetProbeKey(probeKey)
-	a2.ContextManager().SetMaxTokens(128_000)
+	a2.ContextManager().SetContextWindow(128_000)
 
 	// Simulate what TUI/daemon does on startup.
 	if probeCachedValue := provider.LookupProbeCache(probeKey); probeCachedValue > 0 {
-		a2.ContextManager().SetMaxTokens(probeCachedValue)
+		a2.ContextManager().SetContextWindow(probeCachedValue)
 	}
 
-	session2Max := a2.ContextManager().MaxTokens()
+	session2Max := a2.ContextManager().ContextWindow()
 	t.Logf("Step 2: New agent MaxTokens from cache = %d", session2Max)
 
 	if session2Max != cached {
@@ -322,14 +322,14 @@ func TestIntegration_NoProbeKeyNoInference(t *testing.T) {
 	cm := ctxpkg.NewManager(512_000)
 	inferred := provider.InferContextWindowFromError(
 		streamErr, 500_000, 512_000, "", // empty probe key
-		func(n int) { cm.SetMaxTokens(n) },
+		func(n int) { cm.SetContextWindow(n) },
 	)
 
 	if inferred != 0 {
 		t.Errorf("expected 0 (no probe key), got %d — inference should be skipped", inferred)
 	}
-	if cm.MaxTokens() != 512_000 {
-		t.Errorf("MaxTokens changed from 512000 to %d — should not change without probe key", cm.MaxTokens())
+	if cm.ContextWindow() != 512_000 {
+		t.Errorf("MaxTokens changed from 512000 to %d — should not change without probe key", cm.ContextWindow())
 	}
 	t.Logf("No probe key test passed — inference correctly skipped")
 }

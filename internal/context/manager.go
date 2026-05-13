@@ -25,8 +25,8 @@ type ContextManager interface {
 	// MessagesAndTokenCount returns both values under a single lock,
 	// guaranteeing a consistent snapshot.
 	MessagesAndTokenCount() ([]provider.Message, int)
-	MaxTokens() int
-	SetMaxTokens(n int)
+	ContextWindow() int
+	SetContextWindow(n int)
 	SetOutputReserve(n int)
 	RecordUsage(usage provider.TokenUsage)
 	Summarize(ctx context.Context, prov provider.Provider) error
@@ -43,7 +43,7 @@ type ContextManager interface {
 type CompactSnapshot struct {
 	Messages      []provider.Message
 	OrigLen       int
-	MaxTokens     int
+	ContextWindow int
 	OutputReserve int
 	TodoPath      string
 	Version       int64
@@ -83,11 +83,11 @@ func AutoCompactThresholdRatio() float64 {
 	return summarizeThresholdWithUsage
 }
 
-func AutoCompactThresholdTokens(maxTokens int) int {
-	if maxTokens <= 0 {
+func AutoCompactThresholdTokens(contextWindow int) int {
+	if contextWindow <= 0 {
 		return 0
 	}
-	return int(float64(maxTokens) * summarizeThresholdFallback)
+	return int(float64(contextWindow) * summarizeThresholdFallback)
 }
 
 // Manager implements ContextManager.
@@ -96,7 +96,7 @@ type Manager struct {
 	messages          []provider.Message
 	version           int64 // incremented on every mutation, enables cheap change detection
 	tokens            int
-	maxTokens         int
+	contextWindow     int
 	outputReserve     int
 	baselineTokens    int
 	baselineDelta     int
@@ -106,8 +106,8 @@ type Manager struct {
 }
 
 // NewManager creates a ContextManager with the given context window limit.
-func NewManager(maxTokens int) *Manager {
-	return &Manager{maxTokens: maxTokens, todoPath: toolpkg.TodoFilePath("")}
+func NewManager(contextWindow int) *Manager {
+	return &Manager{contextWindow: contextWindow, todoPath: toolpkg.TodoFilePath("")}
 }
 
 func (m *Manager) SetTodoFilePath(path string) {
@@ -138,11 +138,11 @@ func (m *Manager) Add(msg provider.Message) {
 		m.baselineDelta += msgTokens
 	}
 	ratio := 0.0
-	if m.maxTokens > 0 {
-		ratio = float64(m.tokenCountLocked()) / float64(m.maxTokens)
+	if m.contextWindow > 0 {
+		ratio = float64(m.tokenCountLocked()) / float64(m.contextWindow)
 	}
 	debug.Log("ctx", "Add: role=%s blocks=%d msg_tokens=%d total=%d max=%d ratio=%.3f baseline=%t",
-		msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.maxTokens, ratio, m.baselineAvailable)
+		msg.Role, len(msg.Content), msgTokens, m.tokenCountLocked(), m.contextWindow, ratio, m.baselineAvailable)
 }
 
 // UpdateFirstSystemMessage replaces the first system message in the context.
@@ -193,7 +193,7 @@ func (m *Manager) CompactSnapshot() CompactSnapshot {
 	return CompactSnapshot{
 		Messages:      msgs,
 		OrigLen:       len(msgs),
-		MaxTokens:     m.maxTokens,
+		ContextWindow: m.contextWindow,
 		OutputReserve: m.outputReserve,
 		TodoPath:      m.todoPath,
 		Version:       m.version,
@@ -201,7 +201,7 @@ func (m *Manager) CompactSnapshot() CompactSnapshot {
 }
 
 func (s CompactSnapshot) Compact(ctx context.Context, prov provider.Provider) (CompactResult, error) {
-	scratch := NewManager(s.MaxTokens)
+	scratch := NewManager(s.ContextWindow)
 	scratch.SetOutputReserve(s.OutputReserve)
 	scratch.SetProvider(prov)
 	scratch.SetTodoFilePath(s.TodoPath)
@@ -279,17 +279,17 @@ func (m *Manager) TokenCount() int {
 	return m.tokenCountLocked()
 }
 
-func (m *Manager) MaxTokens() int {
+func (m *Manager) ContextWindow() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.maxTokens
+	return m.contextWindow
 }
 
-func (m *Manager) SetMaxTokens(n int) {
+func (m *Manager) SetContextWindow(n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	debug.Log("ctx", "SetMaxTokens: %d→%d", m.maxTokens, n)
-	m.maxTokens = n
+	debug.Log("ctx", "SetContextWindow: %d→%d", m.contextWindow, n)
+	m.contextWindow = n
 }
 
 func (m *Manager) SetOutputReserve(n int) {
@@ -298,7 +298,7 @@ func (m *Manager) SetOutputReserve(n int) {
 	if n < 0 {
 		n = 0
 	}
-	debug.Log("ctx", "SetOutputReserve: raw=%d effective=%d (ceiling=%d)", n, m.effectiveOutputReserveLocked(), int(float64(m.maxTokens)*maxOutputReserveRatio))
+	debug.Log("ctx", "SetOutputReserve: raw=%d effective=%d (ceiling=%d)", n, m.effectiveOutputReserveLocked(), int(float64(m.contextWindow)*maxOutputReserveRatio))
 	m.outputReserve = n
 }
 
@@ -333,12 +333,12 @@ func (m *Manager) Clear() {
 }
 
 func (m *Manager) UsageRatio() float64 {
-	if m.maxTokens <= 0 {
+	if m.contextWindow <= 0 {
 		return 0
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return float64(m.tokenCountLocked()) / float64(m.maxTokens)
+	return float64(m.tokenCountLocked()) / float64(m.contextWindow)
 }
 
 func (m *Manager) AutoCompactThreshold() int {
@@ -435,8 +435,8 @@ func (m *Manager) CheckAndSummarize(ctx context.Context, prov provider.Provider)
 		return m.usablePromptBudgetLocked()
 	}()
 	ratio := m.UsageRatio()
-	debug.Log("ctx", "CheckAndSummarize: tokens=%d threshold=%d budget=%d ratio=%.3f maxTokens=%d — %s",
-		tokenCount, threshold, budget, ratio, m.MaxTokens(),
+	debug.Log("ctx", "CheckAndSummarize: tokens=%d threshold=%d budget=%d ratio=%.3f contextWindow=%d — %s",
+		tokenCount, threshold, budget, ratio, m.ContextWindow(),
 		func() string {
 			if tokenCount < threshold {
 				return "SKIP (below threshold)"
@@ -819,28 +819,28 @@ func (m *Manager) autoCompactThresholdLocked() int {
 }
 
 func (m *Manager) usablePromptBudgetLocked() int {
-	if m.maxTokens <= 0 {
+	if m.contextWindow <= 0 {
 		return 0
 	}
 	reserve := m.effectiveOutputReserveLocked()
 	safety := m.effectiveSafetyMarginLocked()
-	budget := m.maxTokens - reserve - safety
+	budget := m.contextWindow - reserve - safety
 	if budget < minSummaryReserve {
 		return minSummaryReserve
 	}
-	debug.Log("ctx", "usableBudget: max=%d - reserve=%d - safety=%d = %d", m.maxTokens, reserve, safety, budget)
+	debug.Log("ctx", "usableBudget: max=%d - reserve=%d - safety=%d = %d", m.contextWindow, reserve, safety, budget)
 	return budget
 }
 
 func (m *Manager) effectiveOutputReserveLocked() int {
-	if m.maxTokens <= 0 {
+	if m.contextWindow <= 0 {
 		return 0
 	}
-	floor := minInt(8192, maxInt(512, m.maxTokens/10))
-	ceiling := maxInt(floor, int(float64(m.maxTokens)*maxOutputReserveRatio))
+	floor := minInt(8192, maxInt(512, m.contextWindow/10))
+	ceiling := maxInt(floor, int(float64(m.contextWindow)*maxOutputReserveRatio))
 	reserve := m.outputReserve
 	if reserve <= 0 {
-		reserve = int(float64(m.maxTokens) * defaultOutputReserveRatio)
+		reserve = int(float64(m.contextWindow) * defaultOutputReserveRatio)
 	}
 	if reserve < floor {
 		reserve = floor
@@ -852,11 +852,11 @@ func (m *Manager) effectiveOutputReserveLocked() int {
 }
 
 func (m *Manager) effectiveSafetyMarginLocked() int {
-	if m.maxTokens <= 0 {
+	if m.contextWindow <= 0 {
 		return minSummaryReserve
 	}
-	safety := int(float64(m.maxTokens) * safetyMarginRatio)
-	safetyFloor := minInt(4096, maxInt(minSummaryReserve, m.maxTokens/20))
+	safety := int(float64(m.contextWindow) * safetyMarginRatio)
+	safetyFloor := minInt(4096, maxInt(minSummaryReserve, m.contextWindow/20))
 	if safety < safetyFloor {
 		safety = safetyFloor
 	}

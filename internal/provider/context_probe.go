@@ -262,12 +262,12 @@ func GetCachedContextWindow(vendor, baseURL, model string) int {
 // provider. It runs asynchronously and calls onResult when done.
 //
 // This is fully non-blocking:
-//   - Cache hit → onResult called synchronously (O(1) read + SetMaxTokens under lock)
+//   - Cache hit → onResult called synchronously (O(1) read + SetContextWindow under lock)
 //   - Cache miss → onResult called from a background goroutine
 //
 // The onResult callback may be called from any goroutine. The caller must
 // ensure any shared state access within onResult is thread-safe.
-// ContextManager.SetMaxTokens is already mutex-protected, so it's safe.
+// ContextManager.SetContextWindow is already mutex-protected, so it's safe.
 func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model string, onResult func(ProbeResult)) {
 	if p == nil {
 		debug.Log("probe", "skipped: provider is nil")

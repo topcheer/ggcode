@@ -240,7 +240,7 @@ func (m *Model) tryActivateCurrentSelection() error {
 	if m.agent != nil {
 		m.agent.SetProvider(prov)
 		if resolved.ContextWindow > 0 {
-			m.agent.ContextManager().SetMaxTokens(resolved.ContextWindow)
+			m.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
 		}
 		if resolved.MaxTokens > 0 {
 			m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
@@ -278,7 +278,7 @@ func (m *Model) ensureProviderSync() {
 	}
 	m.agent.SetProvider(prov)
 	if resolved.ContextWindow > 0 {
-		m.agent.ContextManager().SetMaxTokens(resolved.ContextWindow)
+		m.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
 	}
 	if resolved.MaxTokens > 0 {
 		m.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
