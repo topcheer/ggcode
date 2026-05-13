@@ -61,7 +61,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Context overflow detected, compressing...] "})
 
-	if a.consumeReadyPreCompact() {
+	if a.consumeReadyPreCompact(nil) {
 		debug.Log("agent", "reactive compact: consumed completed precompact")
 		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Context compressed via pre-compact] "})
 		if retries != nil {
@@ -163,7 +163,7 @@ func (a *Agent) ensurePromptSendable() {
 	if a.contextManager.TokenCount() < a.promptBudget() {
 		return
 	}
-	if a.consumeReadyPreCompact() && a.contextManager.TokenCount() < a.promptBudget() {
+	if a.consumeReadyPreCompact(nil) && a.contextManager.TokenCount() < a.promptBudget() {
 		return
 	}
 	a.compactLocallyForSendBudget("pre-send hard guard")

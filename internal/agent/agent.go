@@ -413,7 +413,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
 		// the current context and a later LLM turn can consume the result.
-		a.consumeReadyPreCompact()
+		a.consumeReadyPreCompact(onEvent)
 		if a.injectPendingInterruptions() {
 			continue
 		}
