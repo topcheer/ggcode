@@ -11,42 +11,32 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// ChatMessage represents a single message in the conversation.
-type ChatMessage struct {
-	Role      string // "user", "assistant", "system", "tool", "reasoning", "error"
-	Content   string
-	ToolName  string
-	ToolArgs  string
-	Time      time.Time
-	Streaming bool
-}
-
-// ChatView renders the chat area: message list + input.
+// ChatView renders the chat area using a polling model.
+// The background goroutine writes messages to UIState (thread-safe).
+// A periodic ticker on the main goroutine reads from UIState and refreshes.
 type ChatView struct {
-	app       *App
-	bridge    *AgentBridge
-	msgs      []ChatMessage
+	app    *App
+	bridge *AgentBridge
+	ui     *UIState
+
 	entry     *widget.Entry
 	sendBtn   *widget.Button
 	cancelBtn *widget.Button
 	list      *widget.List
 }
 
-func NewChatView(app *App, bridge *AgentBridge) *ChatView {
+func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 	cv := &ChatView{
 		app:    app,
 		bridge: bridge,
+		ui:     ui,
 	}
 
 	cv.entry = widget.NewMultiLineEntry()
 	cv.entry.PlaceHolder = "Type a message... (Enter to send)"
 	cv.entry.Wrapping = fyne.TextWrapWord
 	cv.entry.SetMinRowsVisible(3)
-
-	// Submit on Enter (single-line behavior).
-	cv.entry.OnSubmitted = func(text string) {
-		cv.onSend()
-	}
+	cv.entry.OnSubmitted = func(_ string) { cv.onSend() }
 
 	cv.sendBtn = widget.NewButtonWithIcon("Send", theme.MailSendIcon(), cv.onSend)
 	cv.sendBtn.Importance = widget.HighImportance
@@ -59,28 +49,26 @@ func NewChatView(app *App, bridge *AgentBridge) *ChatView {
 	return cv
 }
 
-// Render returns the fyne widget tree for this view.
 func (cv *ChatView) Render() fyne.CanvasObject {
-	// Input area at bottom: entry + send/cancel buttons.
 	btnStack := container.NewStack(cv.sendBtn, cv.cancelBtn)
 	inputBox := container.NewBorder(nil, nil, nil, btnStack, cv.entry)
 
-	// Message list.
 	cv.list = widget.NewList(
-		func() int { return len(cv.msgs) },
-		func() fyne.CanvasObject {
-			return widget.NewRichText()
-		},
+		func() int { return cv.ui.CountMessages() },
+		func() fyne.CanvasObject { return widget.NewRichText() },
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			if id >= len(cv.msgs) {
+			msgs := cv.ui.TakeMessages()
+			if id >= len(msgs) {
 				return
 			}
 			rt := obj.(*widget.RichText)
-			cv.renderMessage(rt, cv.msgs[id])
+			cv.renderMessage(rt, msgs[id])
 		},
 	)
 
-	go cv.consumeEvents()
+	// Start a ticker to poll UIState for changes and refresh the list.
+	// This runs on the main goroutine via widget.Refresh which is safe.
+	go cv.pollRefresh()
 
 	return container.NewBorder(
 		nil,
@@ -90,146 +78,50 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	)
 }
 
+// pollRefresh periodically checks if the chat data is dirty and refreshes.
+func (cv *ChatView) pollRefresh() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		if cv.ui.IsDirty() {
+			cv.list.Refresh()
+			cv.updateButtons()
+		}
+	}
+}
+
+func (cv *ChatView) updateButtons() {
+	working := cv.bridge.IsWorking()
+	if working {
+		cv.sendBtn.Disable()
+		cv.cancelBtn.Show()
+	} else {
+		cv.sendBtn.Enable()
+		cv.cancelBtn.Hide()
+	}
+}
+
 func (cv *ChatView) onSend() {
 	text := strings.TrimSpace(cv.entry.Text)
 	if text == "" || cv.bridge.IsWorking() {
 		return
 	}
 	cv.entry.SetText("")
-	cv.sendBtn.Disable()
-	cv.cancelBtn.Show()
 
-	cv.appendMessage(ChatMessage{
+	cv.ui.AppendChat(ChatMessage{
 		Role:    "user",
 		Content: text,
 		Time:    time.Now(),
 	})
 
 	if err := cv.bridge.Send(text); err != nil {
-		cv.appendMessage(ChatMessage{
+		cv.ui.AppendChat(ChatMessage{
 			Role:    "error",
-			Content: fmt.Sprintf("Failed to send: %v", err),
+			Content: err.Error(),
 			Time:    time.Now(),
 		})
-		cv.resetButtons()
 	}
 }
-
-func (cv *ChatView) consumeEvents() {
-	var assistantBuf strings.Builder
-
-	for ev := range cv.bridge.Events() {
-		switch ev.Type {
-		case "text":
-			assistantBuf.WriteString(ev.Content)
-			cv.updateOrAppend(ChatMessage{
-				Role:      "assistant",
-				Content:   assistantBuf.String(),
-				Time:      time.Now(),
-				Streaming: true,
-			})
-
-		case "reasoning":
-			cv.appendMessage(ChatMessage{
-				Role:    "reasoning",
-				Content: ev.Content,
-				Time:    time.Now(),
-			})
-
-		case "tool_call":
-			assistantBuf.Reset()
-			args := ev.ToolArgs
-			if len(args) > 100 {
-				args = args[:100] + "..."
-			}
-			cv.appendMessage(ChatMessage{
-				Role:     "tool",
-				ToolName: ev.ToolName,
-				ToolArgs: args,
-				Content:  fmt.Sprintf("Running %s...", ev.ToolName),
-				Time:     time.Now(),
-			})
-
-		case "tool_result":
-			result := ev.Content
-			if result == "" {
-				result = "(done)"
-			}
-			cv.updateLastToolResult(ev.ToolName, result)
-
-		case "system":
-			assistantBuf.Reset()
-			cv.appendMessage(ChatMessage{
-				Role:    "system",
-				Content: ev.Content,
-				Time:    time.Now(),
-			})
-
-		case "error":
-			assistantBuf.Reset()
-			cv.appendMessage(ChatMessage{
-				Role:    "error",
-				Content: ev.Content,
-				Time:    time.Now(),
-			})
-			cv.resetButtons()
-
-		case "done":
-			cv.finalizeStreaming()
-			assistantBuf.Reset()
-			cv.resetButtons()
-		}
-	}
-}
-
-// ── Message list helpers ─────────────────────────────
-
-func (cv *ChatView) appendMessage(msg ChatMessage) {
-	cv.msgs = append(cv.msgs, msg)
-	cv.refreshList()
-}
-
-func (cv *ChatView) updateOrAppend(msg ChatMessage) {
-	if len(cv.msgs) > 0 && cv.msgs[len(cv.msgs)-1].Role == "assistant" && cv.msgs[len(cv.msgs)-1].Streaming {
-		cv.msgs[len(cv.msgs)-1].Content = msg.Content
-	} else {
-		cv.msgs = append(cv.msgs, msg)
-	}
-	cv.refreshList()
-}
-
-func (cv *ChatView) updateLastToolResult(toolName, result string) {
-	for i := len(cv.msgs) - 1; i >= 0; i-- {
-		if cv.msgs[i].Role == "tool" && cv.msgs[i].ToolName == toolName {
-			cv.msgs[i].Content = result
-			break
-		}
-	}
-	cv.refreshList()
-}
-
-func (cv *ChatView) finalizeStreaming() {
-	for i := len(cv.msgs) - 1; i >= 0; i-- {
-		if cv.msgs[i].Role == "assistant" && cv.msgs[i].Streaming {
-			cv.msgs[i].Streaming = false
-			break
-		}
-	}
-}
-
-func (cv *ChatView) resetButtons() {
-	cv.sendBtn.Enable()
-	cv.cancelBtn.Hide()
-}
-
-func (cv *ChatView) refreshList() {
-	cv.list.Refresh()
-	if len(cv.msgs) > 0 {
-		cv.list.ScrollToBottom()
-	}
-}
-
-// ── Message rendering ────────────────────────────────
 
 func (cv *ChatView) renderMessage(rt *widget.RichText, msg ChatMessage) {
 	var segs []widget.RichTextSegment
@@ -244,7 +136,6 @@ func (cv *ChatView) renderMessage(rt *widget.RichText, msg ChatMessage) {
 			}, Text: fmt.Sprintf("You [%s]", ts)},
 			&widget.TextSegment{Style: widget.RichTextStyle{}, Text: "\n" + msg.Content},
 		)
-
 	case "assistant":
 		label := "Assistant"
 		if msg.Streaming {
@@ -256,7 +147,6 @@ func (cv *ChatView) renderMessage(rt *widget.RichText, msg ChatMessage) {
 			}, Text: fmt.Sprintf("%s [%s]", label, ts)},
 			&widget.TextSegment{Style: widget.RichTextStyle{}, Text: "\n" + msg.Content},
 		)
-
 	case "tool":
 		args := msg.ToolArgs
 		if args != "" {
@@ -271,7 +161,6 @@ func (cv *ChatView) renderMessage(rt *widget.RichText, msg ChatMessage) {
 				ColorName: theme.ColorNameDisabled,
 			}, Text: "\n" + msg.Content},
 		)
-
 	case "system":
 		segs = append(segs,
 			&widget.TextSegment{Style: widget.RichTextStyle{
@@ -279,7 +168,6 @@ func (cv *ChatView) renderMessage(rt *widget.RichText, msg ChatMessage) {
 				TextStyle: fyne.TextStyle{Italic: true},
 			}, Text: msg.Content},
 		)
-
 	case "reasoning":
 		segs = append(segs,
 			&widget.TextSegment{Style: widget.RichTextStyle{
@@ -287,7 +175,6 @@ func (cv *ChatView) renderMessage(rt *widget.RichText, msg ChatMessage) {
 				TextStyle: fyne.TextStyle{Italic: true},
 			}, Text: fmt.Sprintf("[Thinking] %s", msg.Content)},
 		)
-
 	case "error":
 		segs = append(segs,
 			&widget.TextSegment{Style: widget.RichTextStyle{

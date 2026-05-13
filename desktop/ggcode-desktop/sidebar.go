@@ -18,6 +18,7 @@ import (
 type Sidebar struct {
 	app    *App
 	bridge *AgentBridge
+	ui     *UIState
 	tabs   *container.AppTabs
 
 	// Widgets that need live updates.
@@ -35,8 +36,8 @@ type sessionMeta struct {
 	Time time.Time
 }
 
-func NewSidebar(app *App, bridge *AgentBridge) *Sidebar {
-	return &Sidebar{app: app, bridge: bridge}
+func NewSidebar(app *App, bridge *AgentBridge, ui *UIState) *Sidebar {
+	return &Sidebar{app: app, bridge: bridge, ui: ui}
 }
 
 // Render returns the fyne widget tree for this sidebar.
@@ -134,7 +135,10 @@ func (s *Sidebar) loadSessions() {
 	}
 	s.sessions = make([]sessionMeta, 0, len(sessions))
 	for _, sess := range sessions {
-		name := sess.ID[:8]
+		name := sess.ID
+		if len(name) > 8 {
+			name = name[:8]
+		}
 		if sess.Title != "" {
 			name = sess.Title
 			if len(name) > 40 {
