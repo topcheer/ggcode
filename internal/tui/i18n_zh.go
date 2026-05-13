@@ -72,6 +72,8 @@ func zhCatalog(key string) string {
 		return "目录"
 	case "label.branch":
 		return "分支"
+	case "label.context":
+		return "上下文"
 	case "label.skills":
 		return "技能"
 	case "label.activity":

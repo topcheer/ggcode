@@ -30,6 +30,7 @@ func (m Model) renderSidebar() string {
 		"",
 		m.styles.title.Render("ggcode (" + version.Version + ")"),
 		m.renderSidebarDetailRow(m.t("label.model"), vendor+"/"+model, m.sidebarWidth()-4),
+		m.renderSidebarDetailRow(m.t("label.context"), m.sidebarContextWindowLabel(), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.branch"), util.FirstNonEmpty(m.sidebarGitBranch(), "-"), m.sidebarWidth()-4),
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
 		"",
@@ -590,6 +591,23 @@ func (m Model) sidebarWorkingDirectory() string {
 		return "unknown"
 	}
 	return shortenSidebarPath(cwd)
+}
+
+// sidebarContextWindowLabel returns a human-readable label for the current
+// model's context window size, e.g. "128K" or "204.8K".
+func (m Model) sidebarContextWindowLabel() string {
+	if m.agent == nil {
+		return "-"
+	}
+	cm := m.agent.ContextManager()
+	if cm == nil {
+		return "-"
+	}
+	cw := cm.ContextWindow()
+	if cw <= 0 {
+		return "-"
+	}
+	return humanizeTokenCount(cw)
 }
 
 func (m Model) sidebarGitBranch() string {
