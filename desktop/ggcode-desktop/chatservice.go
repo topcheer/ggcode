@@ -197,6 +197,13 @@ func (c *ChatService) GetMessages() []map[string]interface{} {
 	return result
 }
 
+// ClearMessages resets the conversation by reinitializing the agent.
+func (c *ChatService) ClearMessages() {
+	c.mu.Lock()
+	c.agent = nil
+	c.mu.Unlock()
+}
+
 // emitStreamEvent pushes a stream event to the frontend via Wails Events.
 func (c *ChatService) emitStreamEvent(event provider.StreamEvent) {
 	if c.app == nil {
