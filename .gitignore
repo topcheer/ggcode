@@ -37,3 +37,9 @@ ggcode-*.log
 -e 
 # Sync tool (not committed)
 scripts/sync-model-caps.go
+
+# Desktop app
+desktop/ggcode-desktop/frontend/node_modules/
+desktop/ggcode-desktop/frontend/dist/
+desktop/ggcode-desktop/frontend/bindings/
+desktop/ggcode-desktop/build/
