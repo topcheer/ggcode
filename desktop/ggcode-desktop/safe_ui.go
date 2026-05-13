@@ -27,6 +27,11 @@ type UIState struct {
 	ChatMsgs  []ChatMessage
 	ChatMu    sync.Mutex
 	ChatDirty bool
+
+	// Agent panel state (sub-agents + teammates).
+	agentMu     sync.Mutex
+	agentPanels map[string]AgentPanelData
+	agentDirty  bool
 }
 
 func NewUIState() *UIState {
@@ -158,4 +163,40 @@ func safeRecover(context string) {
 	if r := recover(); r != nil {
 		fmt.Printf("[desktop] panic in %s: %v\n%s", context, r, debug.Stack())
 	}
+}
+
+// ── Agent panel state ────────────────────────────────
+
+// agentPanels stores sub-agent/teammate panel data keyed by ID.
+// Protected by its own mutex since updates come from callbacks.
+func (u *UIState) UpdateAgentPanel(id string, data AgentPanelData) {
+	u.agentMu.Lock()
+	defer u.agentMu.Unlock()
+	if u.agentPanels == nil {
+		u.agentPanels = make(map[string]AgentPanelData)
+	}
+	u.agentPanels[id] = data
+	u.agentDirty = true
+}
+
+func (u *UIState) GetAgentPanels() []AgentPanelData {
+	u.agentMu.Lock()
+	defer u.agentMu.Unlock()
+	out := make([]AgentPanelData, 0, len(u.agentPanels))
+	for _, p := range u.agentPanels {
+		out = append(out, p)
+	}
+	return out
+}
+
+func (u *UIState) IsAgentDirty() bool {
+	u.agentMu.Lock()
+	defer u.agentMu.Unlock()
+	return u.agentDirty
+}
+
+func (u *UIState) ClearAgentDirty() {
+	u.agentMu.Lock()
+	defer u.agentMu.Unlock()
+	u.agentDirty = false
 }
