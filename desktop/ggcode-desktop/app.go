@@ -51,6 +51,9 @@ func (a *App) Run() {
 	a.buildUI()
 	a.setupMenu()
 
+	// Apply dark titlebar matching the app theme.
+	setupNativeTitlebar(a.window)
+
 	w := float32(1200)
 	h := float32(800)
 	if a.dc.WindowW > 0 {
@@ -88,10 +91,8 @@ func (a *App) buildUI() {
 	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
 
 	statusBox := container.NewHBox(
-		widget.NewIcon(theme.ComputerIcon()),
 		a.statusBar,
 		layout.NewSpacer(),
-		widget.NewIcon(theme.InfoIcon()),
 	)
 
 	a.content = container.NewStack(widget.NewLabel(""))
@@ -144,7 +145,7 @@ func (a *App) showWelcome() {
 	a.content.Objects = []fyne.CanvasObject{welcomeContent}
 	a.content.Refresh()
 	a.ui.SetStatus("Select a project directory")
-	a.window.SetTitle("ggcode — Welcome")
+	a.setTitle("ggcode — Welcome")
 }
 
 func (a *App) showFolderPicker() {
@@ -367,6 +368,10 @@ func (a *App) refreshSidebar() {
 }
 
 // ── Helpers ──────────────────────────────────────────
+
+func (a *App) setTitle(title string) {
+	a.window.SetTitle(title)
+}
 
 func resolveConfigFilePath(workDir string) string {
 	for _, p := range []string{
