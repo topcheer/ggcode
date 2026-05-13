@@ -96,20 +96,26 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	s.sessionList = widget.NewList(
 		func() int { return len(s.sessions) },
 		func() fyne.CanvasObject {
-			return container.NewBorder(nil, nil, nil, widget.NewLabel("time"), widget.NewLabel("session"))
+			nameLabel := widget.NewLabel("session")
+			nameLabel.Wrapping = fyne.TextWrapWord
+			timeLabel := widget.NewLabel("time")
+			timeLabel.TextStyle = fyne.TextStyle{Monospace: true}
+			return container.NewBorder(nil, nil, nil, timeLabel, nameLabel)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id >= len(s.sessions) {
 				return
 			}
 			box := obj.(*fyne.Container)
-			label := box.Objects[0].(*widget.Label)
+			// Border layout: center=label, right=timeLabel
+			nameLabel := box.Objects[0].(*widget.Label)
 			timeLabel := box.Objects[1].(*widget.Label)
 			sess := s.sessions[id]
-			label.SetText(sess.Name)
-			timeLabel.SetText(sess.Time.Format("2006-01-02 15:04"))
+			nameLabel.SetText(sess.Name)
+			timeLabel.SetText(sess.Time.Format("01-02 15:04"))
 		},
 	)
+	s.sessionList.Resize(fyne.NewSize(200, 200))
 
 	sessionCard := widget.NewCard("Sessions", "", s.sessionList)
 
@@ -121,27 +127,48 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 }
 
 func (s *Sidebar) loadSessions() {
+	workspace := s.app.dc.WorkDir
+
 	store, err := session.NewDefaultStore()
 	if err != nil {
 		s.sessions = nil
 		return
 	}
-	sessions, err := store.List()
+	allSessions, err := store.List()
 	if err != nil {
 		s.sessions = nil
 		return
 	}
-	s.sessions = make([]sessionMeta, 0, len(sessions))
-	for _, sess := range sessions {
-		name := sess.ID
-		if len(name) > 8 {
-			name = name[:8]
+
+	// Filter by current workspace.
+	var filtered []*session.Session
+	for _, sess := range allSessions {
+		if sess.Workspace == workspace {
+			filtered = append(filtered, sess)
 		}
-		if sess.Title != "" {
-			name = sess.Title
-			if len(name) > 40 {
-				name = name[:40] + "..."
+	}
+
+	// Sort newest first.
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
+	})
+
+	// Take latest 5.
+	if len(filtered) > 5 {
+		filtered = filtered[:5]
+	}
+
+	s.sessions = make([]sessionMeta, 0, len(filtered))
+	for _, sess := range filtered {
+		name := sess.Title
+		if name == "" {
+			name = sess.ID
+			if len(name) > 8 {
+				name = name[:8]
 			}
+		}
+		if len(name) > 50 {
+			name = name[:50] + "..."
 		}
 		s.sessions = append(s.sessions, sessionMeta{
 			ID:   sess.ID,
@@ -149,10 +176,6 @@ func (s *Sidebar) loadSessions() {
 			Time: sess.UpdatedAt,
 		})
 	}
-	// Sort newest first.
-	sort.Slice(s.sessions, func(i, j int) bool {
-		return s.sessions[i].Time.After(s.sessions[j].Time)
-	})
 }
 
 // ── Provider tab ─────────────────────────────────────
