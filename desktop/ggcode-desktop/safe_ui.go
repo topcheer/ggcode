@@ -94,21 +94,22 @@ func (u *UIState) AppendAssistantText(chunk string) {
 	u.ChatDirty = true
 }
 
-// UpdateLastToolResult updates the last tool message with matching name.
-func (u *UIState) UpdateLastToolResult(toolName, result string) {
+// UpdateToolResult updates the tool message with matching tool call ID.
+func (u *UIState) UpdateToolResult(toolID, result string, isError bool) {
 	u.ChatMu.Lock()
 	defer u.ChatMu.Unlock()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
-		if u.ChatMsgs[i].Role == "tool" && u.ChatMsgs[i].ToolName == toolName {
+		if u.ChatMsgs[i].Role == "tool" && u.ChatMsgs[i].ToolID == toolID {
 			u.ChatMsgs[i].Content = result
+			u.ChatMsgs[i].IsError = isError
 			u.ChatDirty = true
 			return
 		}
 	}
 }
 
-// FinalizeStreaming marks the last streaming assistant message as done
-// and resets the streaming buffer.
+// FinalizeStreaming marks the last streaming assistant message as done,
+// resets the streaming buffer, and marks any still-running tool calls as cancelled.
 func (u *UIState) FinalizeStreaming() {
 	u.ChatMu.Lock()
 	defer u.ChatMu.Unlock()
@@ -116,9 +117,16 @@ func (u *UIState) FinalizeStreaming() {
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
 		if u.ChatMsgs[i].Role == "assistant" && u.ChatMsgs[i].Streaming {
 			u.ChatMsgs[i].Streaming = false
-			return
 		}
 	}
+	// Mark any tool messages still showing "running" (empty content) as cancelled.
+	for i := range u.ChatMsgs {
+		if u.ChatMsgs[i].Role == "tool" && u.ChatMsgs[i].Content == "" {
+			u.ChatMsgs[i].Content = "cancelled"
+			u.ChatMsgs[i].IsError = true
+		}
+	}
+	u.ChatDirty = true
 }
 
 // TakeMessages returns a snapshot of all messages and clears the dirty flag.
