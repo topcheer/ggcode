@@ -8,28 +8,70 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
-// autoScrollPause is how long to pause auto-scroll after user interaction.
 const autoScrollPause = 30 * time.Second
+
+// sendEntry is a MultiLineEntry where Enter sends and Ctrl+Enter inserts newline.
+type sendEntry struct {
+	widget.Entry
+	onSend func()
+}
+
+func newSendEntry() *sendEntry {
+	e := &sendEntry{}
+	e.MultiLine = true
+	e.ExtendBaseWidget(e)
+	return e
+}
+
+// KeyDown intercepts Enter key: plain Enter = send, Ctrl/Shift+Enter = newline.
+func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
+	switch key.Name {
+	case fyne.KeyReturn, fyne.KeyEnter:
+		// Check modifier keys.
+		if e.isCtrlOrShiftHeld() {
+			// Ctrl+Enter or Shift+Enter → insert newline.
+			e.Entry.KeyDown(key)
+			return
+		}
+		// Plain Enter → send.
+		if e.onSend != nil {
+			e.onSend()
+		}
+		return
+	}
+	e.Entry.KeyDown(key)
+}
+
+func (e *sendEntry) isCtrlOrShiftHeld() bool {
+	// Check if Ctrl or Shift is held via desktop hints.
+	if d, ok := fyne.CurrentApp().Driver().(desktop.Driver); ok {
+		m := d.CurrentKeyModifiers()
+		if m&fyne.KeyModifierControl != 0 || m&fyne.KeyModifierShift != 0 {
+			return true
+		}
+	}
+	return false
+}
 
 // ChatView renders the chat area with smart auto-scroll.
 type ChatView struct {
 	bridge *AgentBridge
 	ui     *UIState
 
-	entry     *widget.Entry
+	entry     *sendEntry
 	sendBtn   *widget.Button
 	cancelBtn *widget.Button
 	scroll    *container.Scroll
 	vbox      *fyne.Container
 
-	// Auto-scroll state.
 	scrollMu    sync.Mutex
 	autoScroll  bool
-	lastUserAct time.Time // when user last scrolled/clicked
+	lastUserAct time.Time
 }
 
 func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
@@ -39,11 +81,11 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 		autoScroll: true,
 	}
 
-	cv.entry = widget.NewMultiLineEntry()
-	cv.entry.PlaceHolder = "Message ggcode... (Enter to send)"
+	cv.entry = newSendEntry()
+	cv.entry.PlaceHolder = "Message ggcode... (Enter to send, Ctrl+Enter for newline)"
 	cv.entry.Wrapping = fyne.TextWrapWord
 	cv.entry.SetMinRowsVisible(2)
-	cv.entry.OnSubmitted = func(_ string) { cv.onSend() }
+	cv.entry.onSend = cv.onSend
 
 	cv.sendBtn = widget.NewButtonWithIcon("Send", theme.MailSendIcon(), cv.onSend)
 	cv.sendBtn.Importance = widget.HighImportance
@@ -64,7 +106,6 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	cv.vbox = container.NewVBox()
 	cv.scroll = container.NewVScroll(cv.vbox)
 
-	// Detect user scroll/click → pause auto-scroll.
 	cv.scroll.OnScrolled = func(_ fyne.Position) {
 		cv.scrollMu.Lock()
 		cv.autoScroll = false
@@ -77,8 +118,6 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	return container.NewBorder(nil, container.NewPadded(inputBar), nil, nil, cv.scroll)
 }
 
-// shouldAutoScroll returns true if we should auto-scroll to bottom.
-// Resumes auto-scroll after autoScrollPause since last user interaction.
 func (cv *ChatView) shouldAutoScroll() bool {
 	cv.scrollMu.Lock()
 	defer cv.scrollMu.Unlock()
@@ -96,11 +135,9 @@ func (cv *ChatView) pollRefresh() {
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		dirty := cv.ui.IsDirty()
 		working := cv.bridge.IsWorking()
-		if !dirty && !working {
-			continue
-		}
+		dirty := cv.ui.IsDirty()
+
 		fyne.Do(func() {
 			if dirty {
 				cv.rebuildMessages()
@@ -119,8 +156,8 @@ func (cv *ChatView) updateButtons(working bool) {
 		cv.cancelBtn.Show()
 	} else {
 		cv.sendBtn.Show()
-		cv.cancelBtn.Hide()
 		cv.sendBtn.Enable()
+		cv.cancelBtn.Hide()
 	}
 }
 
@@ -131,7 +168,6 @@ func (cv *ChatView) onSend() {
 	}
 	cv.entry.SetText("")
 
-	// Sending a message always re-enables auto-scroll.
 	cv.scrollMu.Lock()
 	cv.autoScroll = true
 	cv.scrollMu.Unlock()
@@ -151,7 +187,8 @@ func (cv *ChatView) onSend() {
 	}
 }
 
-// rebuildMessages recreates all message widgets from the UIState snapshot.
+// ── Message rebuild ──────────────────────────────────
+
 func (cv *ChatView) rebuildMessages() {
 	msgs := cv.ui.TakeMessages()
 	objects := make([]fyne.CanvasObject, 0, len(msgs))
