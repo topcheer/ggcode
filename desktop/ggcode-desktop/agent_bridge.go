@@ -235,11 +235,8 @@ func toolArgSummary(toolName, rawArgs string) string {
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
-	case "run_command":
+	case "run_command", "start_command":
 		if c, ok := args["command"].(string); ok {
-			if len(c) > 80 {
-				return c[:80] + "..."
-			}
 			return c
 		}
 	case "search_files", "grep":
