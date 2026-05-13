@@ -282,3 +282,15 @@ func buildSystemPrompt(workingDir string) string {
 - Read before you edit, and inspect results before claiming success.
 `, hostname, cwd)
 }
+
+// extractJSONField returns a string field from raw JSON args.
+func extractJSONField(rawArgs, field string) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return ""
+	}
+	if v, ok := args[field].(string); ok {
+		return v
+	}
+	return ""
+}
