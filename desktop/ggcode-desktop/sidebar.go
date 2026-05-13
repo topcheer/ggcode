@@ -128,17 +128,22 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 
 func (s *Sidebar) loadSessions() {
 	workspace := s.app.dc.WorkDir
+	logf("sidebar", "loadSessions: workspace=%s", workspace)
 
 	store, err := session.NewDefaultStore()
 	if err != nil {
+		logf("sidebar", "loadSessions: store error: %v", err)
 		s.sessions = nil
 		return
 	}
 	allSessions, err := store.List()
 	if err != nil {
+		logf("sidebar", "loadSessions: list error: %v", err)
 		s.sessions = nil
 		return
 	}
+
+	logf("sidebar", "loadSessions: total=%d", len(allSessions))
 
 	// Filter by current workspace.
 	var filtered []*session.Session
@@ -146,6 +151,12 @@ func (s *Sidebar) loadSessions() {
 		if sess.Workspace == workspace {
 			filtered = append(filtered, sess)
 		}
+	}
+	logf("sidebar", "loadSessions: workspace=%s filtered=%d", workspace, len(filtered))
+
+	// If no sessions for this workspace, show latest from all workspaces.
+	if len(filtered) == 0 {
+		filtered = allSessions
 	}
 
 	// Sort newest first.
