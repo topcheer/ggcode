@@ -14,3 +14,25 @@ type ChatMessage struct {
 	Streaming bool
 	IsError   bool // tool result was an error
 }
+
+// AgentPanelData holds the state for a sub-agent or teammate panel.
+type AgentPanelData struct {
+	ID     string // agent-xxx or tm-xxx
+	Name   string // display name
+	Kind   string // "subagent" or "teammate"
+	Status string // "running", "completed", "failed", "idle", "working"
+	Task   string // task description
+	Result string // final result text
+	Error  string // error message if any
+	TeamID string // swarm team ID (for teammates)
+
+	Events []AgentEventEntry // ordered event stream
+}
+
+// AgentEventEntry is a single event in an agent's event stream.
+type AgentEventEntry struct {
+	Type     string // "text", "tool_call", "tool_result", "error"
+	Content  string
+	ToolName string
+	ToolArgs string
+}

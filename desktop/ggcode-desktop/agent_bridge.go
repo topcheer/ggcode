@@ -14,10 +14,12 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// AgentBridge wraps the agent loop. All UI updates go through UIState.
+// AgentBridge wraps the agent loop with sub-agent and swarm support.
 type AgentBridge struct {
 	cfg      *config.Config
 	prov     provider.Provider
@@ -31,6 +33,10 @@ type AgentBridge struct {
 
 	registry   *tool.Registry
 	workingDir string
+
+	// Sub-agent and swarm managers.
+	subAgentMgr *subagent.Manager
+	swarmMgr    *swarm.Manager
 }
 
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
@@ -67,6 +73,56 @@ func (b *AgentBridge) setupAgent() error {
 
 	autoMem := memory.NewAutoMemory()
 	_ = b.registry.Register(tool.NewSaveMemoryTool(autoMem, nil))
+
+	// Sub-agent manager.
+	b.subAgentMgr = subagent.NewManager(b.cfg.SubAgents)
+	agentFactory := func(prov provider.Provider, t interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
+		return agent.NewAgent(prov, t.(*tool.Registry), systemPrompt, maxTurns)
+	}
+	b.registry.Register(tool.SpawnAgentTool{
+		Manager:      b.subAgentMgr,
+		Provider:     b.prov,
+		Tools:        b.registry,
+		AgentFactory: agentFactory,
+		WorkingDir:   b.workingDir,
+	})
+	b.registry.Register(tool.WaitAgentTool{Manager: b.subAgentMgr})
+	b.registry.Register(tool.ListAgentsTool{Manager: b.subAgentMgr})
+
+	// Forward sub-agent events to UI.
+	b.subAgentMgr.SetOnUpdate(func(sa *subagent.SubAgent) {
+		b.ui.UpdateAgentPanel(sa.ID, agentPanelFromSubAgent(sa))
+	})
+
+	// Swarm manager.
+	swarmFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
+		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
+	}
+	toolBuilder := func(allowedTools []string) interface{} {
+		reg := tool.NewRegistry()
+		_ = tool.RegisterBuiltinTools(reg, nil, b.workingDir)
+		return reg
+	}
+	b.swarmMgr = swarm.NewManager(b.cfg.Swarm, b.prov, swarmFactory, toolBuilder)
+
+	b.registry.Register(tool.TeamCreateTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.TeamDeleteTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.TeammateSpawnTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.TeammateListTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.TeammateShutdownTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.TeammateResultsTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.SwarmTaskCreateTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.SwarmTaskListTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.SwarmTaskClaimTool{Manager: b.swarmMgr})
+	b.registry.Register(tool.SwarmTaskCompleteTool{Manager: b.swarmMgr})
+
+	// Re-register send_message with both managers.
+	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
+
+	// Forward swarm events to UI.
+	b.swarmMgr.SetOnUpdate(func(ev swarm.Event) {
+		b.ui.UpdateAgentPanel(ev.TeammateID, agentPanelFromSwarmEvent(b.swarmMgr, ev))
+	})
 
 	systemPrompt := buildSystemPrompt(b.workingDir)
 	maxIter := b.cfg.MaxIterations
@@ -109,11 +165,9 @@ func (b *AgentBridge) Send(userMsg string) error {
 
 			switch ev.Type {
 			case provider.StreamEventText:
-				// Append text chunk to the current assistant message.
 				b.ui.AppendAssistantText(ev.Text)
 
 			case provider.StreamEventToolCallDone:
-				// Finalize any in-progress assistant text before showing tool.
 				b.ui.FinalizeStreaming()
 
 				name := ev.Tool.Name
@@ -139,6 +193,11 @@ func (b *AgentBridge) Send(userMsg string) error {
 					content = content[:2000] + "\n...(truncated)"
 				}
 				b.ui.UpdateToolResult(ev.Tool.ID, content, ev.IsError)
+
+				// After spawn_agent completes, sync agent panels.
+				if ev.Tool.Name == "spawn_agent" && b.subAgentMgr != nil {
+					b.syncAgentPanels()
+				}
 
 			case provider.StreamEventSystem:
 				b.ui.FinalizeStreaming()
@@ -172,6 +231,16 @@ func (b *AgentBridge) Send(userMsg string) error {
 	return nil
 }
 
+// syncAgentPanels reads all sub-agents and updates UIState.
+func (b *AgentBridge) syncAgentPanels() {
+	if b.subAgentMgr == nil {
+		return
+	}
+	for _, sa := range b.subAgentMgr.List() {
+		b.ui.UpdateAgentPanel(sa.ID, agentPanelFromSubAgent(sa))
+	}
+}
+
 func (b *AgentBridge) Cancel() {
 	b.mu.Lock()
 	if b.cancel != nil {
@@ -180,7 +249,9 @@ func (b *AgentBridge) Cancel() {
 	b.mu.Unlock()
 }
 
-func (b *AgentBridge) Close() { b.Cancel() }
+func (b *AgentBridge) Close() {
+	b.Cancel()
+}
 
 func (b *AgentBridge) IsWorking() bool {
 	b.mu.Lock()
@@ -206,8 +277,36 @@ func (b *AgentBridge) Resolved() *config.ResolvedEndpoint {
 	return b.resolved
 }
 
-// toolDescription extracts a human-readable description from tool arguments.
-// For tools like read_file/edit_file, the "description" field is the user-visible label.
+// SubAgentPanels returns a snapshot of all active/finished agent panels.
+func (b *AgentBridge) SubAgentPanels() []AgentPanelData {
+	if b.subAgentMgr == nil {
+		return nil
+	}
+	agents := b.subAgentMgr.List()
+	panels := make([]AgentPanelData, 0, len(agents))
+	for _, sa := range agents {
+		panels = append(panels, agentPanelFromSubAgent(sa))
+	}
+	return panels
+}
+
+// SwarmPanels returns a snapshot of all teammate panels.
+func (b *AgentBridge) SwarmPanels() []AgentPanelData {
+	if b.swarmMgr == nil {
+		return nil
+	}
+	panels := b.ui.GetAgentPanels()
+	result := make([]AgentPanelData, 0)
+	for _, p := range panels {
+		if p.Kind == "teammate" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// ── Helpers ──────────────────────────────────────────
+
 func toolDescription(toolName, rawArgs string) string {
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
@@ -222,14 +321,11 @@ func toolDescription(toolName, rawArgs string) string {
 	return toolName
 }
 
-// toolArgSummary creates a short summary of tool arguments for display.
 func toolArgSummary(toolName, rawArgs string) string {
 	var args map[string]interface{}
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return ""
 	}
-
-	// Show key argument depending on tool type.
 	switch toolName {
 	case "read_file", "write_file", "edit_file":
 		if p, ok := args["path"].(string); ok {
@@ -252,7 +348,6 @@ func toolArgSummary(toolName, rawArgs string) string {
 			return p
 		}
 	}
-	// Generic: show first string arg.
 	for _, v := range args {
 		if s, ok := v.(string); ok && len(s) > 0 {
 			if len(s) > 60 {
@@ -262,6 +357,110 @@ func toolArgSummary(toolName, rawArgs string) string {
 		}
 	}
 	return ""
+}
+
+func extractJSONField(rawArgs, field string) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return ""
+	}
+	if v, ok := args[field].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
+	name := sa.Name
+	if name == "" {
+		name = "agent"
+	}
+	task := sa.Task
+	if sa.DisplayTask != "" {
+		task = sa.DisplayTask
+	}
+	events := make([]AgentEventEntry, 0)
+	for _, ev := range sa.Events() {
+		events = append(events, AgentEventEntry{
+			Type:     agentEventTypeStr(ev.Type),
+			Content:  ev.Text,
+			ToolName: ev.ToolName,
+			ToolArgs: ev.ToolArgs,
+		})
+	}
+	errStr := ""
+	if sa.Error != nil {
+		errStr = sa.Error.Error()
+	}
+	return AgentPanelData{
+		ID:     sa.ID,
+		Name:   name,
+		Kind:   "subagent",
+		Status: string(sa.Status),
+		Task:   task,
+		Result: sa.Result,
+		Error:  errStr,
+		Events: events,
+	}
+}
+
+func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData {
+	snap, ok := mgr.TeammateSnapshot(ev.TeammateID)
+	if !ok {
+		return AgentPanelData{ID: ev.TeammateID, Name: ev.TeammateName, Kind: "teammate", TeamID: ev.TeamID}
+	}
+	events := make([]AgentEventEntry, 0, len(snap.Events))
+	for _, e := range snap.Events {
+		events = append(events, AgentEventEntry{
+			Type:     teammateEventTypeStr(e.Type),
+			Content:  e.Text,
+			ToolName: e.ToolName,
+			ToolArgs: e.ToolArgs,
+		})
+	}
+	errStr := ""
+	if ev.Error != nil {
+		errStr = ev.Error.Error()
+	}
+	return AgentPanelData{
+		ID:     snap.ID,
+		Name:   snap.Name,
+		Kind:   "teammate",
+		Status: string(snap.Status),
+		Task:   snap.CurrentTask,
+		Result: snap.LastResult,
+		Error:  errStr,
+		TeamID: ev.TeamID,
+		Events: events,
+	}
+}
+
+func teammateEventTypeStr(t swarm.TeammateEventType) string {
+	switch t {
+	case swarm.TeammateEventText:
+		return "text"
+	case swarm.TeammateEventToolCall:
+		return "tool_call"
+	case swarm.TeammateEventToolResult:
+		return "tool_result"
+	case swarm.TeammateEventError:
+		return "error"
+	}
+	return "unknown"
+}
+
+func agentEventTypeStr(t subagent.AgentEventType) string {
+	switch t {
+	case subagent.AgentEventText:
+		return "text"
+	case subagent.AgentEventToolCall:
+		return "tool_call"
+	case subagent.AgentEventToolResult:
+		return "tool_result"
+	case subagent.AgentEventError:
+		return "error"
+	}
+	return "unknown"
 }
 
 func buildSystemPrompt(workingDir string) string {
@@ -281,16 +480,4 @@ func buildSystemPrompt(workingDir string) string {
 - Prefer small, reversible changes over broad rewrites.
 - Read before you edit, and inspect results before claiming success.
 `, hostname, cwd)
-}
-
-// extractJSONField returns a string field from raw JSON args.
-func extractJSONField(rawArgs, field string) string {
-	var args map[string]interface{}
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return ""
-	}
-	if v, ok := args[field].(string); ok {
-		return v
-	}
-	return ""
 }
