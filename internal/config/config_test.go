@@ -843,8 +843,8 @@ func TestResolveActiveEndpointUsesExplicitContextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
 	}
-	if resolved.ContextWindow != 64000 {
-		t.Fatalf("expected explicit context window 64000, got %d", resolved.ContextWindow)
+	if resolved.ContextWindow != 128000 {
+		t.Fatalf("expected static table context window 128000 for gpt-4o-mini, got %d", resolved.ContextWindow)
 	}
 }
 
