@@ -481,8 +481,8 @@ func (cv *ChatView) commandToolItem(msg *ChatMessage, displayTitle, status strin
 
 	if msg.Content != "" {
 		result := msg.Content
-		if len(result) > 3000 {
-			result = result[:3000] + "\n...(truncated)"
+		if len([]rune(result)) > 3000 {
+			result = truncateRunes(result, 3000, "\n...(truncated)")
 		}
 		resultMd := "```\n" + result + "\n```"
 		resultBlock := widget.NewRichTextFromMarkdown(resultMd)
@@ -505,8 +505,8 @@ func (cv *ChatView) genericToolItem(msg *ChatMessage, displayTitle, status strin
 	header := fmt.Sprintf("%s  (%s)", displayTitle, status)
 
 	result := msg.Content
-	if len(result) > 1000 {
-		result = result[:1000] + "\n...(truncated)"
+	if len([]rune(result)) > 1000 {
+		result = truncateRunes(result, 1000, "\n...(truncated)")
 	}
 
 	var detail fyne.CanvasObject
@@ -535,8 +535,8 @@ func (cv *ChatView) agentItem(msg *ChatMessage) fyne.CanvasObject {
 		agentName = "sub-agent"
 	}
 	taskDesc := extractJSONField(msg.ToolArgs, "task")
-	if len(taskDesc) > 120 {
-		taskDesc = taskDesc[:120] + "..."
+	if len([]rune(taskDesc)) > 120 {
+		taskDesc = truncateRunes(taskDesc, 120, "...")
 	}
 
 	header := widget.NewRichText(
@@ -553,8 +553,8 @@ func (cv *ChatView) agentItem(msg *ChatMessage) fyne.CanvasObject {
 	}
 	if msg.Content != "" {
 		result := msg.Content
-		if len(result) > 2000 {
-			result = result[:2000] + "\n...(truncated)"
+		if len([]rune(result)) > 2000 {
+			result = truncateRunes(result, 2000, "\n...(truncated)")
 		}
 		resultMd := "```\n" + result + "\n```"
 		resultBlock := widget.NewRichTextFromMarkdown(resultMd)
@@ -604,8 +604,8 @@ func (cv *ChatView) waitAgentItem(msg *ChatMessage) fyne.CanvasObject {
 	parts = append(parts, header)
 	if msg.Content != "" {
 		result := msg.Content
-		if len(result) > 2000 {
-			result = result[:2000] + "\n...(truncated)"
+		if len([]rune(result)) > 2000 {
+			result = truncateRunes(result, 2000, "\n...(truncated)")
 		}
 		resultMd := "```\n" + result + "\n```"
 		resultBlock := widget.NewRichTextFromMarkdown(resultMd)
@@ -724,6 +724,7 @@ func (cv *ChatView) todoWriteItem(msg *ChatMessage) fyne.CanvasObject {
 }
 
 // truncateTabName shortens a tab name based on total agent count.
+// Uses rune counting to avoid breaking multi-byte characters (Chinese, etc.).
 func truncateTabName(name string, totalAgents int) string {
 	maxLen := 25
 	switch {
@@ -736,17 +737,34 @@ func truncateTabName(name string, totalAgents int) string {
 	default:
 		maxLen = 8
 	}
-	if len(name) <= maxLen {
+	runes := []rune(name)
+	if len(runes) <= maxLen {
 		return name
 	}
-	return name[:maxLen-1] + "…"
+	return string(runes[:maxLen-1]) + "…"
 }
 
+// lastStatusText avoids unnecessary label updates (prevents flicker).
+var lastStatusText string
+
 func (cv *ChatView) updateStatusBar(working bool) {
+	tc := cv.bridge.TokenCount()
+	cw := cv.bridge.ContextWindow()
+	tokenInfo := fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw))
+
+	var text string
 	if working {
 		elapsed := cv.bridge.Elapsed()
-		cv.ui.SetStatus(fmt.Sprintf("⏵ Working (%s)", elapsed.Round(time.Second)))
+		text = fmt.Sprintf(">> Working (%s) | %s", elapsed.Round(time.Second), tokenInfo)
 	} else {
-		cv.ui.SetStatus("Ready")
+		text = tokenInfo
+	}
+
+	// Only update if text actually changed.
+	if text != lastStatusText {
+		lastStatusText = text
+		// Update the status bar label directly (not via binding).
+		// Find it through the bridge's app reference.
+		cv.ui.SetStatus(text)
 	}
 }

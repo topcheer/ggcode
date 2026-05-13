@@ -86,10 +86,10 @@ func (a *App) Run() {
 // ── UI construction ──────────────────────────────────
 
 func (a *App) buildUI() {
-	// Status bar — updated by pollRefresh via UIState.
-	a.statusBar = widget.NewLabelWithData(a.ui.StatusText)
+	// Status bar — updated directly by pollRefresh.
+	a.statusBar = widget.NewLabel("Ready")
 	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
-	a.statusBar.Wrapping = fyne.TextWrapWord
+	a.ui.SetStatusLabel(a.statusBar)
 
 	statusBox := container.NewHBox(
 		a.statusBar,
