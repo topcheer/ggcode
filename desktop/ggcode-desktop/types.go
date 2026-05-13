@@ -7,7 +7,8 @@ type ChatMessage struct {
 	Role      string // "user", "assistant", "system", "tool", "reasoning", "error"
 	Content   string
 	ToolName  string
-	ToolArgs  string
+	ToolDesc  string // human-readable description (from args.description or derived)
+	ToolArgs  string // short summary of key arguments
 	Time      time.Time
 	Streaming bool
 }
