@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/widget"
 )
 
 // UIState holds bindings for cross-goroutine UI updates.
@@ -33,6 +34,9 @@ type UIState struct {
 	agentMu     sync.Mutex
 	agentPanels map[string]AgentPanelData
 	agentDirty  bool
+
+	// Status bar label reference (set once during buildUI).
+	statusLabel *widget.Label
 }
 
 func NewUIState() *UIState {
@@ -50,9 +54,17 @@ func NewUIState() *UIState {
 	return s
 }
 
-// SetStatus safely updates the status bar text.
+// SetStatus updates the status bar label directly.
 func (u *UIState) SetStatus(text string) {
 	_ = u.StatusText.Set(text)
+	if u.statusLabel != nil {
+		u.statusLabel.SetText(text)
+	}
+}
+
+// SetStatusLabel stores a reference to the status bar label for direct updates.
+func (u *UIState) SetStatusLabel(lbl *widget.Label) {
+	u.statusLabel = lbl
 }
 
 // SetModelInfo safely updates model info bindings.
@@ -72,6 +84,20 @@ func (u *UIState) SetTokenUsage(usage string, pct float64) {
 func (u *UIState) AppendChat(msg ChatMessage) bool {
 	u.ChatMu.Lock()
 	defer u.ChatMu.Unlock()
+
+	// Merge consecutive system messages (e.g. repeated auto-compress notices).
+	if msg.Role == "system" && len(u.ChatMsgs) > 0 {
+		last := &u.ChatMsgs[len(u.ChatMsgs)-1]
+		if last.Role == "system" {
+			// Replace the last system message with the new one
+			// (auto-compress messages are progress updates, not cumulative).
+			last.Content = msg.Content
+			last.Time = msg.Time
+			u.ChatDirty = true
+			return true
+		}
+	}
+
 	u.ChatMsgs = append(u.ChatMsgs, msg)
 	u.ChatDirty = true
 	return true

@@ -171,11 +171,11 @@ func (s *Sidebar) loadSessions() {
 		if name == "" {
 			name = sess.ID
 			if len(name) > 8 {
-				name = name[:8]
+				name = string([]rune(name)[:8])
 			}
 		}
-		if len(name) > 50 {
-			name = name[:50] + "..."
+		if len([]rune(name)) > 50 {
+			name = string([]rune(name)[:50]) + "..."
 		}
 		s.sessions = append(s.sessions, sessionMeta{
 			ID:   sess.ID,

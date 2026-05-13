@@ -37,3 +37,13 @@ type AgentEventEntry struct {
 	ToolName string
 	ToolArgs string
 }
+
+// truncateRunes truncates a string to maxChars runes, appending suffix if truncated.
+// Safe for multi-byte characters (Chinese, Japanese, etc.).
+func truncateRunes(s string, maxChars int, suffix string) string {
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return s
+	}
+	return string(runes[:maxChars]) + suffix
+}

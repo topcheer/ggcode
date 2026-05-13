@@ -206,8 +206,8 @@ func (b *AgentBridge) Send(userMsg string) error {
 
 			case provider.StreamEventToolResult:
 				content := ev.Result
-				if len(content) > 2000 {
-					content = content[:2000] + "\n...(truncated)"
+				if len([]rune(content)) > 2000 {
+					content = truncateRunes(content, 2000, "\n...(truncated)")
 				}
 				b.ui.UpdateToolResult(ev.Tool.ID, content, ev.IsError)
 
@@ -395,8 +395,8 @@ func toolArgSummary(toolName, rawArgs string) string {
 	}
 	for _, v := range args {
 		if s, ok := v.(string); ok && len(s) > 0 {
-			if len(s) > 60 {
-				return s[:60] + "..."
+			if len([]rune(s)) > 60 {
+				return truncateRunes(s, 60, "...")
 			}
 			return s
 		}
