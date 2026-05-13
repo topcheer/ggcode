@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -345,6 +346,9 @@ func (a *App) startChat() {
 		resolved.VendorID, resolved.Model, humanizeTokens(resolved.ContextWindow)))
 	a.window.SetTitle(fmt.Sprintf("ggcode — %s [%s]", filepath.Base(a.dc.WorkDir), resolved.Model))
 
+	// Register global keyboard shortcuts.
+	a.registerShortcuts()
+
 	// Background poll for stats (writes only to bindings — safe).
 	go a.pollStats(bridge)
 }
@@ -393,6 +397,21 @@ func (a *App) toggleSidebar() {
 		a.content.Objects = []fyne.CanvasObject{a.split}
 	}
 	a.content.Refresh()
+}
+
+func (a *App) registerShortcuts() {
+	if a.window == nil || a.window.Canvas() == nil {
+		return
+	}
+	c := a.window.Canvas()
+
+	// Ctrl+B / Cmd+B: Toggle sidebar
+	c.AddShortcut(&desktop.CustomShortcut{
+		KeyName:  fyne.KeyB,
+		Modifier: fyne.KeyModifierShortcutDefault,
+	}, func(fyne.Shortcut) {
+		a.toggleSidebar()
+	})
 }
 
 func resolveConfigFilePath(workDir string) string {
