@@ -339,20 +339,8 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 
 func (cv *ChatView) renderToolFromEvent(toolEv *AgentEventEntry, result string) fyne.CanvasObject {
 	msg := &ChatMessage{ToolName: toolEv.ToolName, ToolArgs: toolEv.ToolArgs, Content: result, ToolDesc: toolEv.Content}
-	switch msg.ToolName {
-	case "run_command", "start_command":
-		return cv.commandToolItem(msg, msg.ToolDesc, statusText(msg), statusColor(msg))
-	case "swarm_task_create":
-		return cv.swarmTaskCreateItem(msg)
-	case "todo_write":
-		return cv.todoWriteItem(msg)
-	default:
-		displayTitle := msg.ToolDesc
-		if displayTitle == "" || displayTitle == msg.ToolName {
-			displayTitle = msg.ToolName
-		}
-		return cv.genericToolItem(msg, displayTitle, statusText(msg), statusColor(msg))
-	}
+	// Reuse the same toolItem renderer as the main chat for consistent styling.
+	return cv.toolItem(msg)
 }
 
 // ── Shared helpers ───────────────────────────────────
