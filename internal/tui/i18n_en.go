@@ -74,6 +74,8 @@ func enCatalog(key string) string {
 		return "cwd"
 	case "label.branch":
 		return "branch"
+	case "label.context":
+		return "context"
 	case "label.skills":
 		return "skills"
 	case "label.activity":
