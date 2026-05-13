@@ -115,16 +115,11 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 			timeLabel.SetText(sess.Time.Format("01-02 15:04"))
 		},
 	)
-	// Sessions fill remaining space below info/stats.
+	// Sessions list fills remaining space.
 	sessionHeader := widget.NewLabel("Sessions")
 	sessionHeader.TextStyle = fyne.TextStyle{Bold: true}
-	topSection := container.NewVBox(infoCard, statsCard)
-	return container.NewBorder(topSection, nil, nil, nil,
-		container.NewVBox(
-			container.NewPadded(sessionHeader),
-			s.sessionList,
-		),
-	)
+	topSection := container.NewVBox(infoCard, statsCard, container.NewPadded(sessionHeader))
+	return container.NewBorder(topSection, nil, nil, nil, s.sessionList)
 }
 
 func (s *Sidebar) loadSessions() {

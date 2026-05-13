@@ -154,24 +154,24 @@ func (cv *ChatView) pollRefresh() {
 			}
 			cv.updateButtons(working)
 			cv.rebuildAgentTabs()
+			cv.updateStatusBar(working)
 		})
 	}
 }
 
 func (cv *ChatView) updateButtons(working bool) {
 	if working {
-		cv.sendBtn.Hide()
 		cv.cancelBtn.Show()
 	} else {
-		cv.sendBtn.Show()
-		cv.sendBtn.Enable()
 		cv.cancelBtn.Hide()
 	}
+	cv.sendBtn.Show()
+	cv.sendBtn.Enable()
 }
 
 func (cv *ChatView) onSend() {
 	text := strings.TrimSpace(cv.entry.Text)
-	if text == "" || cv.bridge.IsWorking() {
+	if text == "" {
 		return
 	}
 	cv.entry.SetText("")
@@ -185,6 +185,17 @@ func (cv *ChatView) onSend() {
 		Content: text,
 		Time:    time.Now(),
 	})
+
+	if cv.bridge.IsWorking() {
+		// Agent busy — queue as pending message (sent after current turn).
+		cv.bridge.QueueMessage(text)
+		cv.ui.AppendChat(ChatMessage{
+			Role:    "system",
+			Content: "(queued — will be sent after current response)",
+			Time:    time.Now(),
+		})
+		return
+	}
 
 	if err := cv.bridge.Send(text); err != nil {
 		cv.ui.AppendChat(ChatMessage{
@@ -237,12 +248,12 @@ func (cv *ChatView) rebuildAgentTabs() {
 			scr.Refresh()
 		}
 
-		tabName := panel.Name
+		tabName := truncateTabName(panel.Name, len(panels))
 		if tabName == "" {
-			tabName = panel.ID
+			tabName = truncateTabName(panel.ID, len(panels))
 		}
 		if panel.Status == "running" || panel.Status == "working" {
-			tabName += " *"
+			tabName += "*"
 		}
 
 		item, exists := cv.tabMap[panel.ID]
@@ -710,4 +721,32 @@ func (cv *ChatView) todoWriteItem(msg *ChatMessage) fyne.CanvasObject {
 	rt := widget.NewRichTextFromMarkdown(sb.String())
 	rt.Wrapping = fyne.TextWrapWord
 	return cv.iconRow(theme.CheckButtonCheckedIcon(), rt)
+}
+
+// truncateTabName shortens a tab name based on total agent count.
+func truncateTabName(name string, totalAgents int) string {
+	maxLen := 25
+	switch {
+	case totalAgents <= 3:
+		maxLen = 25
+	case totalAgents <= 6:
+		maxLen = 18
+	case totalAgents <= 10:
+		maxLen = 12
+	default:
+		maxLen = 8
+	}
+	if len(name) <= maxLen {
+		return name
+	}
+	return name[:maxLen-1] + "…"
+}
+
+func (cv *ChatView) updateStatusBar(working bool) {
+	if working {
+		elapsed := cv.bridge.Elapsed()
+		cv.ui.SetStatus(fmt.Sprintf("⏵ Working (%s)", elapsed.Round(time.Second)))
+	} else {
+		cv.ui.SetStatus("Ready")
+	}
 }
