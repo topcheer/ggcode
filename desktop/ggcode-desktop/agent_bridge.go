@@ -392,7 +392,7 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 	if sa.Error != nil {
 		errStr = sa.Error.Error()
 	}
-	return AgentPanelData{
+	p := AgentPanelData{
 		ID:     sa.ID,
 		Name:   name,
 		Kind:   "subagent",
@@ -402,6 +402,14 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 		Error:  errStr,
 		Events: events,
 	}
+	if sa.Status == subagent.StatusCompleted || sa.Status == subagent.StatusFailed {
+		if !sa.EndedAt.IsZero() {
+			p.CompletedAt = sa.EndedAt
+		} else {
+			p.CompletedAt = time.Now()
+		}
+	}
+	return p
 }
 
 func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData {
@@ -422,7 +430,7 @@ func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData
 	if ev.Error != nil {
 		errStr = ev.Error.Error()
 	}
-	return AgentPanelData{
+	p := AgentPanelData{
 		ID:     snap.ID,
 		Name:   snap.Name,
 		Kind:   "teammate",
@@ -433,6 +441,10 @@ func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData
 		TeamID: ev.TeamID,
 		Events: events,
 	}
+	if snap.Status == swarm.TeammateIdle && !snap.EndedAt.IsZero() {
+		p.CompletedAt = snap.EndedAt
+	}
+	return p
 }
 
 func teammateEventTypeStr(t swarm.TeammateEventType) string {
