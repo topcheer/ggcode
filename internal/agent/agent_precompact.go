@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -121,7 +123,7 @@ func (a *Agent) StartPreCompact() {
 // consumeReadyPreCompact applies a completed background pre-compact without
 // waiting. If compaction is still running, the current LLM turn proceeds with
 // the existing context; a later turn can apply the result.
-func (a *Agent) consumeReadyPreCompact() bool {
+func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool {
 	a.mu.RLock()
 	pc := a.precompact
 	a.mu.RUnlock()
@@ -153,6 +155,9 @@ func (a *Agent) consumeReadyPreCompact() bool {
 		debug.Log("precompact", "READY consumed applied=%t tokens=%d", applied, newTokens)
 		if applied {
 			a.maybeSaveCheckpoint()
+			if onEvent != nil {
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... done (%d → %d tokens)] ", pc.startTok, newTokens)})
+			}
 		}
 		return applied
 	default:
