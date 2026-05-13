@@ -31,6 +31,12 @@ type AgentBridge struct {
 	cancel  context.CancelFunc
 	working bool
 
+	pendingMu  sync.Mutex
+	pendingMsg string
+	hasPending bool
+
+	startTime time.Time // when current agent loop started
+
 	registry   *tool.Registry
 	workingDir string
 
@@ -146,6 +152,7 @@ func (b *AgentBridge) Send(userMsg string) error {
 
 	b.mu.Lock()
 	b.working = true
+	b.startTime = time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	b.mu.Unlock()
@@ -158,6 +165,16 @@ func (b *AgentBridge) Send(userMsg string) error {
 			b.working = false
 			b.cancel = nil
 			b.mu.Unlock()
+
+			// Check for queued message from user while busy.
+			if msg, ok := b.drainPending(); ok {
+				b.ui.AppendChat(ChatMessage{
+					Role:    "system",
+					Content: "Processing queued message...",
+					Time:    time.Now(),
+				})
+				_ = b.Send(msg)
+			}
 		}()
 
 		onEvent := func(ev provider.StreamEvent) {
@@ -253,10 +270,38 @@ func (b *AgentBridge) Close() {
 	b.Cancel()
 }
 
+// QueueMessage stores a user message to be sent after the current agent turn.
+func (b *AgentBridge) QueueMessage(msg string) {
+	b.pendingMu.Lock()
+	b.pendingMsg = msg
+	b.hasPending = true
+	b.pendingMu.Unlock()
+}
+
+// drainPending returns and clears any queued message.
+func (b *AgentBridge) drainPending() (string, bool) {
+	b.pendingMu.Lock()
+	msg := b.pendingMsg
+	has := b.hasPending
+	b.pendingMsg = ""
+	b.hasPending = false
+	b.pendingMu.Unlock()
+	return msg, has
+}
+
 func (b *AgentBridge) IsWorking() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.working
+}
+
+func (b *AgentBridge) Elapsed() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.working {
+		return 0
+	}
+	return time.Since(b.startTime)
 }
 
 func (b *AgentBridge) ContextWindow() int {
