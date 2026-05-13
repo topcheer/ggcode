@@ -5,6 +5,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2/data/binding"
 )
@@ -199,4 +200,23 @@ func (u *UIState) ClearAgentDirty() {
 	u.agentMu.Lock()
 	defer u.agentMu.Unlock()
 	u.agentDirty = false
+}
+
+// RemoveStalePanels removes completed/failed panels older than 30 seconds.
+func (u *UIState) RemoveStalePanels() bool {
+	u.agentMu.Lock()
+	defer u.agentMu.Unlock()
+	changed := false
+	for id, p := range u.agentPanels {
+		if p.Status == "completed" || p.Status == "failed" {
+			if !p.CompletedAt.IsZero() && time.Since(p.CompletedAt) > 30*time.Second {
+				delete(u.agentPanels, id)
+				changed = true
+			}
+		}
+	}
+	if changed {
+		u.agentDirty = true
+	}
+	return changed
 }
