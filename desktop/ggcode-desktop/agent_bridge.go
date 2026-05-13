@@ -120,13 +120,13 @@ func (b *AgentBridge) Send(userMsg string) error {
 				if name == "" {
 					name = "tool"
 				}
-				// Try to extract a human-readable description from args.
 				description := toolDescription(name, string(ev.Tool.Arguments))
 				args := toolArgSummary(name, string(ev.Tool.Arguments))
 
 				b.ui.AppendChat(ChatMessage{
 					Role:     "tool",
 					ToolName: name,
+					ToolID:   ev.Tool.ID,
 					ToolDesc: description,
 					ToolArgs: args,
 					Content:  "",
@@ -134,15 +134,11 @@ func (b *AgentBridge) Send(userMsg string) error {
 				})
 
 			case provider.StreamEventToolResult:
-				name := ev.Tool.Name
-				if name == "" {
-					name = "tool"
-				}
 				content := ev.Result
 				if len(content) > 2000 {
 					content = content[:2000] + "\n...(truncated)"
 				}
-				b.ui.UpdateLastToolResult(name, content)
+				b.ui.UpdateToolResult(ev.Tool.ID, content, ev.IsError)
 
 			case provider.StreamEventSystem:
 				b.ui.FinalizeStreaming()

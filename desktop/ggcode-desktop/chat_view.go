@@ -258,6 +258,8 @@ func (cv *ChatView) toolItem(msg *ChatMessage) fyne.CanvasObject {
 	status := "done"
 	if msg.Content == "" {
 		status = "running..."
+	} else if msg.IsError {
+		status = "failed"
 	}
 	header := displayTitle + "  (" + status + ")"
 
