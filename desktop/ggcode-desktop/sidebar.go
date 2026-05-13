@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -10,23 +12,35 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
-// Sidebar renders the right panel with tabs: Context, Provider.
+// Sidebar renders the right panel with tabs: Context, Provider, IM.
 type Sidebar struct {
 	app    *App
 	bridge *AgentBridge
 	ui     *UIState
 	tabs   *container.AppTabs
 
-	// Widgets that need live updates.
+	// Context tab widgets.
 	contextLabel *widget.Label
 	tokenLabel   *widget.Label
 	tokenBar     *widget.ProgressBar
 	modelLabel   *widget.Label
 	sessionList  *widget.List
 	sessions     []sessionMeta
+
+	// Provider tab widgets.
+	vendorSelect   *widget.Select
+	epSelect       *widget.Select
+	apiKeyEntry    *widget.Entry
+	baseURLEntry   *widget.Entry
+	modelSelect    *widget.Select
+	modelLoading   *widget.Label
+	modelRefresh   *widget.Button
+	providerStatus *widget.Label
 }
 
 type sessionMeta struct {
@@ -39,16 +53,15 @@ func NewSidebar(app *App, bridge *AgentBridge, ui *UIState) *Sidebar {
 	return &Sidebar{app: app, bridge: bridge, ui: ui}
 }
 
-// Render returns the fyne widget tree for this sidebar.
 func (s *Sidebar) Render() fyne.CanvasObject {
 	s.tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Context", theme.InfoIcon(), s.buildContextTab()),
 		container.NewTabItemWithIcon("Provider", theme.ComputerIcon(), s.buildProviderTab()),
+		container.NewTabItemWithIcon("IM", theme.MailComposeIcon(), s.buildIMTab()),
 	)
 	return s.tabs
 }
 
-// RefreshStats updates the context usage display.
 func (s *Sidebar) RefreshStats() {
 	cw := s.bridge.ContextWindow()
 	tc := s.bridge.TokenCount()
@@ -62,10 +75,6 @@ func (s *Sidebar) RefreshStats() {
 	} else {
 		s.tokenBar.SetValue(0)
 	}
-	s.modelLabel.Refresh()
-	s.contextLabel.Refresh()
-	s.tokenLabel.Refresh()
-	s.tokenBar.Refresh()
 }
 
 // ── Context tab ──────────────────────────────────────
@@ -73,7 +82,6 @@ func (s *Sidebar) RefreshStats() {
 func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	resolved := s.bridge.Resolved()
 
-	// Model info section.
 	s.modelLabel = widget.NewLabel(resolved.Model)
 	s.contextLabel = widget.NewLabel(humanizeTokens(resolved.ContextWindow))
 	s.tokenLabel = widget.NewLabel("0 / " + humanizeTokens(resolved.ContextWindow))
@@ -107,7 +115,6 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 				return
 			}
 			box := obj.(*fyne.Container)
-			// Border layout: center=label, right=timeLabel
 			nameLabel := box.Objects[0].(*widget.Label)
 			timeLabel := box.Objects[1].(*widget.Label)
 			sess := s.sessions[id]
@@ -115,7 +122,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 			timeLabel.SetText(sess.Time.Format("01-02 15:04"))
 		},
 	)
-	// Sessions list fills remaining space.
+
 	sessionHeader := widget.NewLabel("Sessions")
 	sessionHeader.TextStyle = fyne.TextStyle{Bold: true}
 	topSection := container.NewVBox(infoCard, statsCard, container.NewPadded(sessionHeader))
@@ -141,7 +148,6 @@ func (s *Sidebar) loadSessions() {
 
 	logf("sidebar", "loadSessions: total=%d", len(allSessions))
 
-	// Filter by current workspace.
 	var filtered []*session.Session
 	for _, sess := range allSessions {
 		if sess.Workspace == workspace {
@@ -150,17 +156,14 @@ func (s *Sidebar) loadSessions() {
 	}
 	logf("sidebar", "loadSessions: workspace=%s filtered=%d", workspace, len(filtered))
 
-	// If no sessions for this workspace, show latest from all workspaces.
 	if len(filtered) == 0 {
 		filtered = allSessions
 	}
 
-	// Sort newest first.
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
 	})
 
-	// Take latest 5.
 	if len(filtered) > 5 {
 		filtered = filtered[:5]
 	}
@@ -170,7 +173,7 @@ func (s *Sidebar) loadSessions() {
 		name := sess.Title
 		if name == "" {
 			name = sess.ID
-			if len(name) > 8 {
+			if len([]rune(name)) > 8 {
 				name = string([]rune(name)[:8])
 			}
 		}
@@ -189,55 +192,291 @@ func (s *Sidebar) loadSessions() {
 
 func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	cfg := s.app.cfg
+	resolved := s.bridge.Resolved()
 
 	// Vendor selection.
 	vendorNames := make([]string, 0, len(cfg.Vendors))
 	for name := range cfg.Vendors {
 		vendorNames = append(vendorNames, name)
 	}
-	vendorSelect := widget.NewSelect(vendorNames, nil)
-	vendorSelect.SetSelected(cfg.Vendor)
+	s.vendorSelect = widget.NewSelect(vendorNames, func(vendor string) {
+		s.updateEndpoints(vendor)
+	})
+	s.vendorSelect.SetSelected(cfg.Vendor)
 
 	// Endpoint selection.
-	epSelect := widget.NewSelect([]string{}, nil)
-	updateEndpoints := func(vendor string) {
-		if v, ok := cfg.Vendors[vendor]; ok {
-			eps := make([]string, 0, len(v.Endpoints))
-			for name := range v.Endpoints {
-				eps = append(eps, name)
-			}
-			epSelect.Options = eps
-			epSelect.Refresh()
-		}
-	}
-	updateEndpoints(cfg.Vendor)
-	epSelect.SetSelected(cfg.Endpoint)
+	s.epSelect = widget.NewSelect([]string{}, func(ep string) {
+		s.onEndpointChange(s.vendorSelect.Selected, ep)
+	})
+	s.updateEndpoints(cfg.Vendor)
+	s.epSelect.SetSelected(cfg.Endpoint)
 
-	// Model entry.
-	modelEntry := widget.NewEntry()
-	modelEntry.SetPlaceHolder("Model name")
-	modelEntry.SetText(cfg.Model)
+	// API Key.
+	s.apiKeyEntry = widget.NewPasswordEntry()
+	s.apiKeyEntry.PlaceHolder = "API Key"
+	s.apiKeyEntry.SetText(resolved.APIKey)
+
+	// Base URL.
+	s.baseURLEntry = widget.NewEntry()
+	s.baseURLEntry.PlaceHolder = "https://api.example.com/v1"
+	s.baseURLEntry.SetText(resolved.BaseURL)
+
+	// Model selection (from discovery).
+	s.modelLoading = widget.NewLabel("")
+	s.modelSelect = widget.NewSelect([]string{}, nil)
+	s.modelSelect.PlaceHolder = "Select model..."
+	if resolved.Model != "" {
+		s.modelSelect.SetSelected(resolved.Model)
+	}
+
+	s.modelRefresh = widget.NewButtonWithIcon("Refresh Models", theme.ViewRefreshIcon(), func() {
+		s.fetchModels()
+	})
+
+	// Status label.
+	s.providerStatus = widget.NewLabel("")
 
 	// Apply button.
-	applyBtn := widget.NewButtonWithIcon("Apply", theme.ConfirmIcon(), func() {
-		cfg.Vendor = vendorSelect.Selected
-		cfg.Endpoint = epSelect.Selected
-		cfg.Model = modelEntry.Text
-		_ = cfg.Save()
-
-		// Re-init with new settings.
-		s.app.startChat()
+	applyBtn := widget.NewButtonWithIcon("Apply & Restart", theme.ConfirmIcon(), func() {
+		s.applyProvider()
 	})
 	applyBtn.Importance = widget.HighImportance
 
 	return container.NewVScroll(container.NewVBox(
 		widget.NewCard("Provider", "", container.NewVBox(
 			widget.NewForm(
-				&widget.FormItem{Text: "Vendor", Widget: vendorSelect},
-				&widget.FormItem{Text: "Endpoint", Widget: epSelect},
-				&widget.FormItem{Text: "Model", Widget: modelEntry},
+				&widget.FormItem{Text: "Vendor", Widget: s.vendorSelect},
+				&widget.FormItem{Text: "Endpoint", Widget: s.epSelect},
+				&widget.FormItem{Text: "API Key", Widget: s.apiKeyEntry},
+				&widget.FormItem{Text: "Base URL", Widget: s.baseURLEntry},
 			),
-			applyBtn,
+		)),
+		widget.NewCard("Model", "", container.NewVBox(
+			s.modelSelect,
+			container.NewHBox(s.modelRefresh, s.modelLoading),
+		)),
+		s.providerStatus,
+		applyBtn,
+	))
+}
+
+func (s *Sidebar) updateEndpoints(vendor string) {
+	cfg := s.app.cfg
+	if v, ok := cfg.Vendors[vendor]; ok {
+		eps := make([]string, 0, len(v.Endpoints))
+		for name := range v.Endpoints {
+			eps = append(eps, name)
+		}
+		s.epSelect.Options = eps
+		s.epSelect.Refresh()
+
+		// Update API key from vendor.
+		if v.APIKey != "" {
+			s.apiKeyEntry.SetText(v.APIKey)
+		}
+	}
+}
+
+func (s *Sidebar) onEndpointChange(vendor, endpoint string) {
+	cfg := s.app.cfg
+	if v, ok := cfg.Vendors[vendor]; ok {
+		if ep, ok := v.Endpoints[endpoint]; ok {
+			if ep.BaseURL != "" {
+				s.baseURLEntry.SetText(ep.BaseURL)
+			}
+			if ep.APIKey != "" {
+				s.apiKeyEntry.SetText(ep.APIKey)
+			} else if v.APIKey != "" {
+				s.apiKeyEntry.SetText(v.APIKey)
+			}
+			// Set model from config if available.
+			model := ep.SelectedModel
+			if model == "" {
+				model = ep.DefaultModel
+			}
+			if model != "" {
+				s.modelSelect.SetSelected(model)
+			} else {
+				s.modelSelect.ClearSelected()
+			}
+		}
+	}
+}
+
+func (s *Sidebar) fetchModels() {
+	s.modelLoading.SetText("Loading...")
+	s.modelLoading.Refresh()
+
+	resolved := s.bridge.Resolved()
+	// Build a temporary resolved with current form values.
+	tmpResolved := &config.ResolvedEndpoint{
+		VendorID:   s.vendorSelect.Selected,
+		EndpointID: s.epSelect.Selected,
+		Protocol:   resolved.Protocol,
+		BaseURL:    s.baseURLEntry.Text,
+		APIKey:     s.apiKeyEntry.Text,
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		models, err := provider.DiscoverModels(ctx, tmpResolved)
+		fyne.Do(func() {
+			if err != nil {
+				s.modelLoading.SetText("Error: " + err.Error())
+				return
+			}
+			s.modelSelect.Options = models
+			s.modelSelect.Refresh()
+			s.modelLoading.SetText(fmt.Sprintf("%d models found", len(models)))
+		})
+	}()
+}
+
+func (s *Sidebar) applyProvider() {
+	cfg := s.app.cfg
+	vendor := s.vendorSelect.Selected
+	endpoint := s.epSelect.Selected
+	apiKey := s.apiKeyEntry.Text
+	baseURL := s.baseURLEntry.Text
+	model := s.modelSelect.Selected
+
+	// Update config.
+	cfg.Vendor = vendor
+	cfg.Endpoint = endpoint
+	cfg.Model = model
+
+	// Save API key securely.
+	if apiKey != "" {
+		_ = cfg.SetEndpointAPIKey(vendor, endpoint, apiKey, false)
+	}
+
+	// Update base URL in endpoint config.
+	if v, ok := cfg.Vendors[vendor]; ok {
+		if ep, ok := v.Endpoints[endpoint]; ok {
+			ep.BaseURL = baseURL
+			v.Endpoints[endpoint] = ep
+			cfg.Vendors[vendor] = v
+		}
+	}
+
+	// Save selected model.
+	if v, ok := cfg.Vendors[vendor]; ok {
+		if ep, ok := v.Endpoints[endpoint]; ok {
+			ep.SelectedModel = model
+			v.Endpoints[endpoint] = ep
+			cfg.Vendors[vendor] = v
+		}
+	}
+
+	_ = cfg.Save()
+	s.providerStatus.SetText("Saved. Restarting chat...")
+	s.providerStatus.Refresh()
+
+	// Restart chat with new settings.
+	s.app.startChat()
+}
+
+// ── IM tab ───────────────────────────────────────────
+
+func (s *Sidebar) buildIMTab() fyne.CanvasObject {
+	cfg := s.app.cfg
+
+	// Adapter list.
+	adapterNames := make([]string, 0, len(cfg.IM.Adapters))
+	for name := range cfg.IM.Adapters {
+		adapterNames = append(adapterNames, name)
+	}
+	sort.Strings(adapterNames)
+
+	adapterList := widget.NewList(
+		func() int { return len(adapterNames) },
+		func() fyne.CanvasObject {
+			return widget.NewLabel("adapter")
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			if id < len(adapterNames) {
+				name := adapterNames[id]
+				adapter := cfg.IM.Adapters[name]
+				status := "enabled"
+				if !adapter.Enabled {
+					status = "disabled"
+				}
+				obj.(*widget.Label).SetText(fmt.Sprintf("%s (%s, %s)", name, adapter.Platform, status))
+			}
+		},
+	)
+
+	// Add adapter form.
+	platforms := []string{"qq", "telegram", "discord", "feishu", "dingtalk", "slack", "wechat"}
+	transports := []string{"stdio", "webhook"}
+
+	nameEntry := widget.NewEntry()
+	nameEntry.PlaceHolder = "Adapter name"
+
+	platformSelect := widget.NewSelect(platforms, nil)
+	platformSelect.PlaceHolder = "Platform"
+
+	transportSelect := widget.NewSelect(transports, nil)
+	transportSelect.SetSelected("stdio")
+
+	cmdEntry := widget.NewEntry()
+	cmdEntry.PlaceHolder = "Command (e.g. npx @anthropic/claude-code-mcp-adapter)"
+
+	addBtn := widget.NewButton("Add Adapter", func() {
+		name := strings.TrimSpace(nameEntry.Text)
+		if name == "" || platformSelect.Selected == "" {
+			return
+		}
+		_ = cfg.AddIMAdapter(name, config.IMAdapterConfig{
+			Enabled:   true,
+			Platform:  platformSelect.Selected,
+			Transport: transportSelect.Selected,
+			Command:   cmdEntry.Text,
+		})
+		_ = cfg.Save()
+		// Refresh sidebar.
+		s.app.startChat()
+	})
+
+	// Track selected adapter.
+	selectedAdapter := -1
+
+	adapterList.OnSelected = func(id widget.ListItemID) {
+		selectedAdapter = int(id)
+	}
+
+	delBtn := widget.NewButton("Delete Selected", func() {
+		if selectedAdapter < 0 || selectedAdapter >= len(adapterNames) {
+			return
+		}
+		_ = cfg.RemoveIMAdapter(adapterNames[selectedAdapter])
+		_ = cfg.Save()
+		s.app.startChat()
+	})
+
+	toggleBtn := widget.NewButton("Toggle Selected", func() {
+		if selectedAdapter < 0 || selectedAdapter >= len(adapterNames) {
+			return
+		}
+		name := adapterNames[selectedAdapter]
+		adapter := cfg.IM.Adapters[name]
+		_ = cfg.SetIMAdapterEnabled(name, !adapter.Enabled)
+		_ = cfg.Save()
+		s.app.startChat()
+	})
+
+	return container.NewVScroll(container.NewVBox(
+		widget.NewCard("IM Adapters", "", adapterList),
+		widget.NewCard("Add Adapter", "", container.NewVBox(
+			widget.NewForm(
+				&widget.FormItem{Text: "Name", Widget: nameEntry},
+				&widget.FormItem{Text: "Platform", Widget: platformSelect},
+				&widget.FormItem{Text: "Transport", Widget: transportSelect},
+				&widget.FormItem{Text: "Command", Widget: cmdEntry},
+			),
+			container.NewHBox(addBtn, toggleBtn, delBtn),
 		)),
 	))
 }
