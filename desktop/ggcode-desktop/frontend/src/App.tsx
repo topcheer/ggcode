@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Send, Plus, Settings, PanelLeftClose, PanelRightClose } from 'lucide-react';
+import { Send, Plus, Settings, PanelLeftClose, PanelRightClose, FileText, X } from 'lucide-react';
 import { MessageBubble } from './components/MessageBubble';
 import { useChatStore } from './store';
 import './App.css';
@@ -28,12 +28,15 @@ function App() {
   const [input, setInput] = useState('');
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dragCounterRef = useRef(0);
 
   // Listen for Wails streaming events
   useEffect(() => {
-    // @ts-ignore - Wails event callback
+    // @ts-ignore
     const unregister = Events.On('ggcode:chat:stream', (ev: any) => {
       const data = typeof ev === 'string' ? ev : ev?.data;
       if (!data) return;
@@ -85,6 +88,7 @@ function App() {
       content: [{ type: 'text', text: userText }],
     });
     setInput('');
+    setAttachedFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     // Create assistant placeholder
@@ -119,16 +123,70 @@ function App() {
     }
   };
 
+  // ─── Drag & Drop ───────────────────────
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    dragCounterRef.current = 0;
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      const names = Array.from(files).map((f) => f.name);
+      setAttachedFiles((prev) => [...new Set([...prev, ...names])]);
+    }
+  };
+
+  const removeAttachedFile = (name: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f !== name));
+  };
+
   const currentVendor = vendors.find((v) => v.name === activeProvider.vendor);
   const currentEndpoint = currentVendor?.endpoints.find(
     (ep) => ep.name === activeProvider.endpoint
   );
 
   return (
-    <div className="app-layout" style={{
-      gridTemplateColumns: `${leftPanelOpen ? '260px' : '0px'} 1fr ${rightPanelOpen ? '280px' : '0px'}`
-    }}>
-      {/* ─── Left Sidebar: Session History ─── */}
+    <div
+      className="app-layout"
+      style={{ gridTemplateColumns: `${leftPanelOpen ? '260px' : '0px'} 1fr ${rightPanelOpen ? '280px' : '0px'}` }}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drop zone overlay */}
+      {isDragOver && (
+        <div className="drop-zone-overlay">
+          <div className="drop-zone-text">Drop files here to attach</div>
+        </div>
+      )}
+
+      {/* ─── Left Sidebar ─── */}
       {leftPanelOpen && (
         <div className="sidebar">
           <div className="sidebar-header">
@@ -167,33 +225,35 @@ function App() {
               <div className="logo">ggcode</div>
               <p>Your AI coding assistant</p>
               <div className="shortcuts">
-                <div className="shortcut">
-                  <kbd>Enter</kbd> Send message
-                </div>
-                <div className="shortcut">
-                  <kbd>Shift+Enter</kbd> New line
-                </div>
+                <div className="shortcut"><kbd>Enter</kbd> Send message</div>
+                <div className="shortcut"><kbd>Shift+Enter</kbd> New line</div>
+                <div className="shortcut"><kbd>Cmd+N</kbd> New chat</div>
+                <div className="shortcut"><kbd>Drag files</kbd> Attach to context</div>
               </div>
             </div>
           ) : (
             messages.map((msg, i) => (
-              <MessageBubble
-                key={i}
-                role={msg.role}
-                content={msg.content}
-                messageIndex={i}
-              />
+              <MessageBubble key={i} role={msg.role} content={msg.content} messageIndex={i} />
             ))
           )}
           {isStreaming && (
-            <div style={{ padding: '8px 0' }}>
-              <span className="streaming-dot" />
-            </div>
+            <div style={{ padding: '8px 0' }}><span className="streaming-dot" /></div>
           )}
           <div ref={messagesEndRef} />
         </div>
 
         <div className="input-area">
+          {attachedFiles.length > 0 && (
+            <div className="input-attachments">
+              {attachedFiles.map((f) => (
+                <span key={f} className="attached-file">
+                  <FileText size={12} />
+                  {f}
+                  <span className="remove-file" onClick={() => removeAttachedFile(f)}><X size={12} /></span>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="input-wrapper">
             <textarea
               ref={textareaRef}
@@ -212,7 +272,7 @@ function App() {
         </div>
       </div>
 
-      {/* ─── Right Sidebar: Context Panel ─── */}
+      {/* ─── Right Sidebar ─── */}
       {rightPanelOpen && (
         <div className="context-panel">
           <h3>Context</h3>
@@ -223,14 +283,27 @@ function App() {
               <span>Out: {totalOutputTokens.toLocaleString()}</span>
             </div>
           </div>
+          {attachedFiles.length > 0 && (
+            <div className="context-section">
+              <h4>Attached Files ({attachedFiles.length})</h4>
+              {attachedFiles.map((f) => (
+                <div key={f} className="file-item">
+                  <FileText size={12} style={{ display: 'inline', marginRight: 6 }} />
+                  {f}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="context-section">
-            <h4>Attached Files</h4>
-            <div className="file-item" style={{ color: 'var(--text-muted)' }}>No files attached</div>
+            <h4>Workspace</h4>
+            <div className="file-item" style={{ color: 'var(--text-muted)' }}>
+              No files attached
+            </div>
           </div>
         </div>
       )}
 
-      {/* ─── Bottom Bar: Provider Selection ─── */}
+      {/* ─── Bottom Bar ─── */}
       <div className="provider-bar">
         <span className="provider-label">Provider</span>
         <select
