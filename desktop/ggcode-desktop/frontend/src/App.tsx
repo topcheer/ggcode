@@ -1,12 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Send, Plus, Settings } from 'lucide-react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Send, Plus, Settings, PanelLeftClose, PanelRightClose } from 'lucide-react';
 import { MessageBubble } from './components/MessageBubble';
 import { useChatStore } from './store';
 import './App.css';
 
-// Wails bindings
 // @ts-ignore - Wails auto-generated bindings
 import * as ChatService from '../bindings/github.com/topcheer/ggcode/desktop/chatservice.js';
+// @ts-ignore
+import { Events } from '@wailsio/runtime';
 
 function App() {
   const {
@@ -25,8 +26,28 @@ function App() {
   } = useChatStore();
 
   const [input, setInput] = useState('');
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Listen for Wails streaming events
+  useEffect(() => {
+    // @ts-ignore - Wails event callback
+    const unregister = Events.On('ggcode:chat:stream', (ev: any) => {
+      const data = typeof ev === 'string' ? ev : ev?.data;
+      if (!data) return;
+      try {
+        const event = JSON.parse(data);
+        appendToLastAssistant(event);
+      } catch (e) {
+        console.error('Failed to parse stream event:', e);
+      }
+    });
+    return () => {
+      if (typeof unregister === 'function') unregister();
+    };
+  }, [appendToLastAssistant]);
 
   // Load vendors on mount
   useEffect(() => {
@@ -43,12 +64,11 @@ function App() {
     loadVendors();
   }, []);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Auto-resize textarea
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     const ta = e.target;
@@ -56,57 +76,31 @@ function App() {
     ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
   };
 
-  const handleSend = async () => {
+  const handleSend = useCallback(async () => {
     if (!input.trim() || isStreaming) return;
 
-    const userMessage = {
-      role: 'user' as const,
-      content: [{ type: 'text' as const, text: input.trim() }],
-    };
-    addMessage(userMessage);
+    const userText = input.trim();
+    addMessage({
+      role: 'user',
+      content: [{ type: 'text', text: userText }],
+    });
     setInput('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-    // Create assistant message placeholder
-    const assistantMessage = {
-      role: 'assistant' as const,
-      content: [] as any[],
-    };
-    addMessage(assistantMessage);
+    // Create assistant placeholder
+    addMessage({ role: 'assistant', content: [] });
     setStreaming(true);
 
-    // TODO: Connect to actual chat backend via Wails events
-    // For now, simulate a response for demo
-    setTimeout(() => {
+    try {
+      await ChatService.SendMessage(userText);
+    } catch (e) {
+      console.error('SendMessage error:', e);
       appendToLastAssistant({
-        type: 'text',
-        text: 'Hello! I am ggcode, your AI coding assistant. The desktop app is being initialized.\n\nOnce connected to the backend, I will be able to:\n- Read and edit your code\n- Run commands\n- Search your codebase\n- And much more!\n\n```go\nfmt.Println("Welcome to ggcode desktop!")\n```',
+        type: 'error',
+        error: String(e),
       });
-      appendToLastAssistant({
-        type: 'tool_call_done',
-        tool: {
-          id: 'demo-1',
-          name: 'read_file',
-          input: { path: '/src/main.go' },
-        },
-      });
-      appendToLastAssistant({
-        type: 'tool_result',
-        tool: { id: 'demo-1', name: 'read_file' },
-        result: 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Hello, World!")\n}',
-      });
-      appendToLastAssistant({
-        type: 'text',
-        text: '\nI found your `main.go` file. It looks like a simple Hello World program. Would you like me to help you modify it?',
-      });
-      appendToLastAssistant({
-        type: 'done',
-        usage: { input_tokens: 150, output_tokens: 200, cache_read_tokens: 0, cache_write_tokens: 0 },
-      });
-    }, 500);
-  };
+    }
+  }, [input, isStreaming, addMessage, setStreaming, appendToLastAssistant]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -115,29 +109,58 @@ function App() {
     }
   };
 
-  // Get current vendor/endpoint/model display names
+  const handleProviderChange = async (vendor: string, endpoint: string, model: string) => {
+    try {
+      await ChatService.SetActiveProvider(vendor, endpoint, model);
+      setActiveProvider({ vendor, endpoint, model });
+      clearMessages();
+    } catch (e) {
+      console.error('SetActiveProvider error:', e);
+    }
+  };
+
   const currentVendor = vendors.find((v) => v.name === activeProvider.vendor);
   const currentEndpoint = currentVendor?.endpoints.find(
     (ep) => ep.name === activeProvider.endpoint
   );
 
   return (
-    <div className="app-layout">
+    <div className="app-layout" style={{
+      gridTemplateColumns: `${leftPanelOpen ? '260px' : '0px'} 1fr ${rightPanelOpen ? '280px' : '0px'}`
+    }}>
       {/* ─── Left Sidebar: Session History ─── */}
-      <div className="sidebar">
-        <div className="sidebar-header">
-          <h2>ggcode</h2>
-          <button className="new-chat-btn" onClick={clearMessages}>
-            <Plus size={14} />
-          </button>
+      {leftPanelOpen && (
+        <div className="sidebar">
+          <div className="sidebar-header">
+            <h2>ggcode</h2>
+            <button className="new-chat-btn" onClick={clearMessages}>
+              <Plus size={14} />
+            </button>
+          </div>
+          <div className="session-list">
+            <div className="session-item active">Current Session</div>
+          </div>
         </div>
-        <div className="session-list">
-          <div className="session-item active">Current Session</div>
-        </div>
-      </div>
+      )}
 
       {/* ─── Main Chat Area ─── */}
       <div className="chat-area">
+        {/* Toolbar */}
+        <div style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', borderBottom: '1px solid var(--border)', gap: 8 }}>
+          <button className="toolbar-btn" onClick={() => setLeftPanelOpen(!leftPanelOpen)} title="Toggle sidebar">
+            <PanelLeftClose size={16} />
+          </button>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+            {currentVendor?.displayName || activeProvider.vendor}
+            {currentEndpoint && ` / ${currentEndpoint.displayName || currentEndpoint.name}`}
+            {activeProvider.model && ` / ${activeProvider.model}`}
+          </span>
+          <div style={{ flex: 1 }} />
+          <button className="toolbar-btn" onClick={() => setRightPanelOpen(!rightPanelOpen)} title="Toggle context panel">
+            <PanelRightClose size={16} />
+          </button>
+        </div>
+
         <div className="messages-container">
           {messages.length === 0 ? (
             <div className="empty-state">
@@ -149,9 +172,6 @@ function App() {
                 </div>
                 <div className="shortcut">
                   <kbd>Shift+Enter</kbd> New line
-                </div>
-                <div className="shortcut">
-                  <kbd>Cmd+Shift+G</kbd> Toggle window
                 </div>
               </div>
             </div>
@@ -185,11 +205,7 @@ function App() {
               rows={1}
               disabled={isStreaming}
             />
-            <button
-              className="send-btn"
-              onClick={handleSend}
-              disabled={!input.trim() || isStreaming}
-            >
+            <button className="send-btn" onClick={handleSend} disabled={!input.trim() || isStreaming}>
               <Send size={14} />
             </button>
           </div>
@@ -197,50 +213,55 @@ function App() {
       </div>
 
       {/* ─── Right Sidebar: Context Panel ─── */}
-      <div className="context-panel">
-        <h3>Context</h3>
-
-        <div className="context-section">
-          <h4>Token Usage</h4>
-          <div className="token-stats">
-            <span>In: {totalInputTokens.toLocaleString()}</span>
-            <span>Out: {totalOutputTokens.toLocaleString()}</span>
+      {rightPanelOpen && (
+        <div className="context-panel">
+          <h3>Context</h3>
+          <div className="context-section">
+            <h4>Token Usage</h4>
+            <div className="token-stats">
+              <span>In: {totalInputTokens.toLocaleString()}</span>
+              <span>Out: {totalOutputTokens.toLocaleString()}</span>
+            </div>
           </div>
-          <div className="usage-bar" style={{ marginTop: 8 }}>
-            <div
-              className="usage-bar-fill"
-              style={{ width: '0%' }}
-            />
-          </div>
-        </div>
-
-        <div className="context-section">
-          <h4>Attached Files</h4>
-          <div className="file-item" style={{ color: 'var(--text-muted)' }}>
-            No files attached
+          <div className="context-section">
+            <h4>Attached Files</h4>
+            <div className="file-item" style={{ color: 'var(--text-muted)' }}>No files attached</div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* ─── Bottom Bar: Provider Selection ─── */}
       <div className="provider-bar">
         <span className="provider-label">Provider</span>
-        <select className="provider-select" value={activeProvider.vendor}>
+        <select
+          className="provider-select"
+          value={activeProvider.vendor}
+          onChange={(e) => {
+            const v = vendors.find((v) => v.name === e.target.value);
+            const ep = v?.endpoints[0];
+            const model = ep?.selectedModel || ep?.models?.[0] || '';
+            handleProviderChange(e.target.value, ep?.name || '', model);
+          }}
+        >
           {vendors.map((v) => (
-            <option key={v.name} value={v.name}>
-              {v.displayName}
-            </option>
+            <option key={v.name} value={v.name}>{v.displayName}</option>
           ))}
         </select>
 
         {currentVendor && (
           <>
             <div className="provider-divider" />
-            <select className="provider-select" value={activeProvider.endpoint}>
+            <select
+              className="provider-select"
+              value={activeProvider.endpoint}
+              onChange={(e) => {
+                const ep = currentVendor.endpoints.find((ep) => ep.name === e.target.value);
+                const model = ep?.selectedModel || ep?.models?.[0] || '';
+                handleProviderChange(activeProvider.vendor, e.target.value, model);
+              }}
+            >
               {currentVendor.endpoints.map((ep) => (
-                <option key={ep.name} value={ep.name}>
-                  {ep.displayName || ep.name}
-                </option>
+                <option key={ep.name} value={ep.name}>{ep.displayName || ep.name}</option>
               ))}
             </select>
           </>
@@ -249,11 +270,13 @@ function App() {
         {currentEndpoint && (
           <>
             <div className="provider-divider" />
-            <select className="provider-select" value={activeProvider.model}>
+            <select
+              className="provider-select"
+              value={activeProvider.model}
+              onChange={(e) => handleProviderChange(activeProvider.vendor, activeProvider.endpoint, e.target.value)}
+            >
               {currentEndpoint.models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
+                <option key={m} value={m}>{m}</option>
               ))}
             </select>
           </>

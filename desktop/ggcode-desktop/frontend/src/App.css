@@ -734,3 +734,29 @@ html, body, #root {
   font-family: var(--font-mono);
   font-size: 11px;
 }
+
+/* ─── Toolbar ────────────────────────────────── */
+
+.toolbar-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  transition: all 0.15s;
+}
+
+.toolbar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ─── Transitions ────────────────────────────── */
+
+.sidebar, .context-panel {
+  transition: width 0.2s ease, opacity 0.2s ease;
+  overflow: hidden;
+}
