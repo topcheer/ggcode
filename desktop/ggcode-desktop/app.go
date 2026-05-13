@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"image/color"
 	"os"
 	"path/filepath"
 	"time"
@@ -24,13 +23,14 @@ type App struct {
 	fyneApp fyne.App
 	window  fyne.Window
 	dc      *DesktopConfig
-	cfg     *config.Config // ggcode config (nil before init)
+	cfg     *config.Config
+
+	// Shared UI state for cross-goroutine updates.
+	ui *UIState
 
 	// UI components.
 	content   *fyne.Container
 	statusBar *widget.Label
-	sidebar   *Sidebar
-	chatView  *ChatView
 
 	// Agent state.
 	agentBridge *AgentBridge
@@ -41,6 +41,7 @@ func NewApp(fyneApp fyne.App) *App {
 	return &App{
 		fyneApp: fyneApp,
 		dc:      LoadDesktopConfig(),
+		ui:      NewUIState(),
 	}
 }
 
@@ -60,7 +61,6 @@ func (a *App) Run() {
 	}
 	a.window.Resize(fyne.NewSize(w, h))
 
-	// Decide initial view.
 	if a.dc.WorkDir == "" {
 		a.showWelcome()
 	} else {
@@ -68,7 +68,6 @@ func (a *App) Run() {
 	}
 
 	a.window.SetOnClosed(func() {
-		// Save window size.
 		size := a.window.Canvas().Size()
 		a.dc.WindowW = int(size.Width)
 		a.dc.WindowH = int(size.Height)
@@ -84,7 +83,8 @@ func (a *App) Run() {
 // ── UI construction ──────────────────────────────────
 
 func (a *App) buildUI() {
-	a.statusBar = widget.NewLabel("Ready")
+	// Status bar bound to UIState.
+	a.statusBar = widget.NewLabelWithData(a.ui.StatusText)
 	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
 
 	statusBox := container.NewHBox(
@@ -96,35 +96,19 @@ func (a *App) buildUI() {
 
 	a.content = container.NewStack(widget.NewLabel(""))
 
-	root := container.NewBorder(
-		nil,       // top
-		statusBox, // bottom
-		nil,       // left
-		nil,       // right
-		a.content,
-	)
+	root := container.NewBorder(nil, statusBox, nil, nil, a.content)
 	a.window.SetContent(root)
 }
 
 func (a *App) setupMenu() {
 	fileMenu := fyne.NewMenu("File",
-		fyne.NewMenuItem("Open Project...", func() {
-			a.showFolderPicker()
-		}),
+		fyne.NewMenuItem("Open Project...", func() { a.showFolderPicker() }),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Quit", func() {
-			a.fyneApp.Quit()
-		}),
+		fyne.NewMenuItem("Quit", func() { a.fyneApp.Quit() }),
 	)
-
 	viewMenu := fyne.NewMenu("View",
-		fyne.NewMenuItem("Refresh Stats", func() {
-			if a.sidebar != nil {
-				a.sidebar.RefreshStats()
-			}
-		}),
+		fyne.NewMenuItem("Refresh Stats", func() { a.refreshSidebar() }),
 	)
-
 	a.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu))
 }
 
@@ -159,18 +143,17 @@ func (a *App) showWelcome() {
 
 	a.content.Objects = []fyne.CanvasObject{welcomeContent}
 	a.content.Refresh()
-	a.statusBar.SetText("Select a project directory")
+	a.ui.SetStatus("Select a project directory")
 	a.window.SetTitle("ggcode — Welcome")
 }
 
 func (a *App) showFolderPicker() {
 	dialog.ShowFolderOpen(func(u fyne.ListableURI, err error) {
 		if err != nil || u == nil {
-			return // cancelled
+			return
 		}
 		path := u.Path()
 		if path == "" {
-			// Fallback: try parsing the URI string.
 			path = filepath.Join(u.String())
 		}
 		if path != "" {
@@ -182,7 +165,9 @@ func (a *App) showFolderPicker() {
 // ── Init from workDir ────────────────────────────────
 
 func (a *App) initFromWorkDir(dir string) {
-	a.statusBar.SetText(fmt.Sprintf("Loading %s...", dir))
+	defer safeRecover("initFromWorkDir")
+
+	a.ui.SetStatus(fmt.Sprintf("Loading %s...", dir))
 	a.window.SetTitle(fmt.Sprintf("ggcode — %s", filepath.Base(dir)))
 
 	cfgPath := resolveConfigFilePath(dir)
@@ -192,8 +177,6 @@ func (a *App) initFromWorkDir(dir string) {
 		return
 	}
 	a.cfg = cfg
-
-	// Persist work dir.
 	a.dc.WorkDir = dir
 	_ = a.dc.Save()
 
@@ -209,20 +192,16 @@ func (a *App) initFromWorkDir(dir string) {
 func (a *App) showError(msg string) {
 	errLabel := widget.NewLabel(msg)
 	errLabel.Wrapping = fyne.TextWrapWord
-	errIcon := widget.NewIcon(theme.ErrorIcon())
-
-	retryBtn := widget.NewButton("Choose Another Directory", func() {
-		a.showFolderPicker()
-	})
+	retryBtn := widget.NewButton("Choose Another Directory", func() { a.showFolderPicker() })
 
 	card := widget.NewCard("Error", "", container.NewVBox(
-		container.NewHBox(errIcon, errLabel),
+		container.NewHBox(widget.NewIcon(theme.ErrorIcon()), errLabel),
 		retryBtn,
 	))
 
 	a.content.Objects = []fyne.CanvasObject{card}
 	a.content.Refresh()
-	a.statusBar.SetText("Error")
+	a.ui.SetStatus("Error")
 }
 
 // ── Onboard wizard ────────────────────────────────────
@@ -234,7 +213,6 @@ func (a *App) showOnboard() {
 		return
 	}
 
-	// Build vendor cards.
 	vendorNames := make([]string, len(presets))
 	for i, p := range presets {
 		vendorNames[i] = p.DisplayName
@@ -242,16 +220,13 @@ func (a *App) showOnboard() {
 
 	vendorSelect := widget.NewSelect(vendorNames, nil)
 	vendorSelect.PlaceHolder = "Choose a vendor..."
-
 	apiEntry := widget.NewPasswordEntry()
 	apiEntry.PlaceHolder = "Enter API key..."
-
 	modelSelect := widget.NewSelect([]string{}, nil)
 	modelSelect.PlaceHolder = "Select model..."
 
 	var selectedPreset *config.VendorPreset
 
-	// When vendor changes, update available models.
 	vendorSelect.OnChanged = func(name string) {
 		for i := range presets {
 			if presets[i].DisplayName == name {
@@ -266,15 +241,13 @@ func (a *App) showOnboard() {
 		if len(selectedPreset.Endpoints) > 0 {
 			epID = selectedPreset.Endpoints[0].ID
 		}
-
 		a.cfg.Vendor = selectedPreset.ID
 		a.cfg.Endpoint = epID
-
 		if apiEntry.Text != "" {
 			a.cfg.SetEndpointAPIKey(selectedPreset.ID, epID, apiEntry.Text, false)
 			resolved, err := a.cfg.ResolveActiveEndpoint()
 			if err != nil {
-				modelSelect.Options = []string{"(error: " + err.Error() + ")"}
+				modelSelect.Options = []string{"(error)"}
 				modelSelect.Refresh()
 				return
 			}
@@ -284,7 +257,6 @@ func (a *App) showOnboard() {
 			}
 			modelSelect.Options = models
 		} else {
-			// Show endpoint's default models without API key.
 			modelSelect.Options = []string{"(enter API key first)"}
 		}
 		modelSelect.Refresh()
@@ -305,41 +277,32 @@ func (a *App) showOnboard() {
 			if len(selectedPreset.Endpoints) > 0 {
 				epID = selectedPreset.Endpoints[0].ID
 			}
-			a.completeOnboard(selectedPreset.ID, epID, apiEntry.Text, modelSelect.Selected)
+			a.cfg.Vendor = selectedPreset.ID
+			a.cfg.Endpoint = epID
+			a.cfg.Model = modelSelect.Selected
+			a.cfg.SetEndpointAPIKey(selectedPreset.ID, epID, apiEntry.Text, true)
+			if err := a.cfg.Save(); err != nil {
+				a.showError(fmt.Sprintf("Failed to save config: %v", err))
+				return
+			}
+			a.startChat()
 		},
-		OnCancel: func() {
-			a.showWelcome()
-		},
+		OnCancel:   func() { a.showWelcome() },
 		SubmitText: "Start",
 		CancelText: "Back",
 	}
 
 	card := widget.NewCard("Setup ggcode", "Configure your AI provider", form)
-
-	a.content.Objects = []fyne.CanvasObject{
-		container.NewCenter(card),
-	}
+	a.content.Objects = []fyne.CanvasObject{container.NewCenter(card)}
 	a.content.Refresh()
-	a.statusBar.SetText("Setup required")
-}
-
-func (a *App) completeOnboard(vendorID, endpointID, apiKey, model string) {
-	a.cfg.Vendor = vendorID
-	a.cfg.Endpoint = endpointID
-	a.cfg.Model = model
-	a.cfg.SetEndpointAPIKey(vendorID, endpointID, apiKey, true)
-
-	if err := a.cfg.Save(); err != nil {
-		a.showError(fmt.Sprintf("Failed to save config: %v", err))
-		return
-	}
-
-	a.startChat()
+	a.ui.SetStatus("Setup required")
 }
 
 // ── Chat ─────────────────────────────────────────────
 
 func (a *App) startChat() {
+	defer safeRecover("startChat")
+
 	resolved, err := a.cfg.ResolveActiveEndpoint()
 	if err != nil {
 		a.showError(fmt.Sprintf("Failed to resolve endpoint: %v", err))
@@ -352,60 +315,60 @@ func (a *App) startChat() {
 		return
 	}
 
-	workDir := a.dc.WorkDir
-	bridge := NewAgentBridge(a.cfg, prov, resolved, workDir)
+	bridge := NewAgentBridge(a.cfg, prov, resolved, a.dc.WorkDir, a.ui)
 	a.agentBridge = bridge
 
-	a.chatView = NewChatView(a, bridge)
-	a.sidebar = NewSidebar(a, bridge)
+	chatView := NewChatView(a, bridge, a.ui)
+	sidebar := NewSidebar(a, bridge, a.ui)
 
-	// HSplit: 70% chat, 30% sidebar.
-	split := container.NewHSplit(
-		a.chatView.Render(),
-		a.sidebar.Render(),
-	)
+	split := container.NewHSplit(chatView.Render(), sidebar.Render())
 	split.SetOffset(0.7)
 
 	a.content.Objects = []fyne.CanvasObject{split}
 	a.content.Refresh()
 
-	// Update status bar.
-	a.statusBar.SetText(fmt.Sprintf("%s/%s | context %s",
+	a.ui.SetModelInfo(resolved.Model, humanizeTokens(resolved.ContextWindow))
+	a.ui.SetStatus(fmt.Sprintf("%s/%s | context %s",
 		resolved.VendorID, resolved.Model, humanizeTokens(resolved.ContextWindow)))
-	a.window.SetTitle(fmt.Sprintf("ggcode — %s [%s]", filepath.Base(workDir), resolved.Model))
+	a.window.SetTitle(fmt.Sprintf("ggcode — %s [%s]", filepath.Base(a.dc.WorkDir), resolved.Model))
 
-	// Periodically refresh sidebar stats.
-	go a.pollStats()
+	// Background poll for stats (writes only to bindings — safe).
+	go a.pollStats(bridge)
 }
 
-func (a *App) pollStats() {
+func (a *App) pollStats(bridge *AgentBridge) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		if a.sidebar == nil || a.agentBridge == nil {
+		if bridge == nil {
 			continue
 		}
-		a.sidebar.RefreshStats()
-
-		// Update status bar with token count.
-		tc := a.agentBridge.TokenCount()
-		cw := a.agentBridge.ContextWindow()
-		resolved := a.agentBridge.Resolved()
+		tc := bridge.TokenCount()
+		cw := bridge.ContextWindow()
+		resolved := bridge.Resolved()
 		working := ""
-		if a.agentBridge.IsWorking() {
+		if bridge.IsWorking() {
 			working = " | working..."
 		}
-		a.statusBar.SetText(fmt.Sprintf("%s/%s | %s/%s%s",
+		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)), float64(tc)/float64(max(cw, 1)))
+		a.ui.SetStatus(fmt.Sprintf("%s/%s | %s/%s%s",
 			resolved.VendorID, resolved.Model,
 			humanizeTokens(tc), humanizeTokens(cw),
 			working))
 	}
 }
 
+func (a *App) refreshSidebar() {
+	if a.agentBridge != nil {
+		tc := a.agentBridge.TokenCount()
+		cw := a.agentBridge.ContextWindow()
+		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)), float64(tc)/float64(max(cw, 1)))
+	}
+}
+
 // ── Helpers ──────────────────────────────────────────
 
 func resolveConfigFilePath(workDir string) string {
-	// Same resolution as TUI: ./ggcode.yaml → ./.ggcode/ggcode.yaml → global
 	for _, p := range []string{
 		filepath.Join(workDir, "ggcode.yaml"),
 		filepath.Join(workDir, ".ggcode", "ggcode.yaml"),
@@ -427,6 +390,9 @@ func humanizeTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func themeTextColor() color.Color {
-	return theme.ForegroundColor()
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
