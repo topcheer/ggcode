@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -379,6 +380,10 @@ func (cv *ChatView) renderToolFromEvent(toolEv *AgentEventEntry, result string) 
 	switch msg.ToolName {
 	case "run_command", "start_command":
 		return cv.commandToolItem(msg, msg.ToolDesc, statusText(msg), statusColor(msg))
+	case "swarm_task_create":
+		return cv.swarmTaskCreateItem(msg)
+	case "todo_write":
+		return cv.todoWriteItem(msg)
 	default:
 		displayTitle := msg.ToolDesc
 		if displayTitle == "" || displayTitle == msg.ToolName {
@@ -454,8 +459,12 @@ func (cv *ChatView) toolItem(msg *ChatMessage) fyne.CanvasObject {
 		return cv.waitAgentItem(msg)
 	case "teammate_spawn":
 		return cv.teammateSpawnItem(msg)
+	case "swarm_task_create":
+		return cv.swarmTaskCreateItem(msg)
 	case "teammate_list", "teammate_shutdown", "teammate_results":
 		return cv.genericToolItem(msg, msg.ToolName, statusText(msg), statusColor(msg))
+	case "todo_write":
+		return cv.todoWriteItem(msg)
 	}
 
 	isCommand := msg.ToolName == "run_command" || msg.ToolName == "start_command"
@@ -595,9 +604,11 @@ func (cv *ChatView) agentItem(msg *ChatMessage) fyne.CanvasObject {
 func (cv *ChatView) sendMessageItem(msg *ChatMessage) fyne.CanvasObject {
 	to := extractJSONField(msg.ToolArgs, "to")
 	summary := extractJSONField(msg.ToolArgs, "summary")
+	message := extractJSONField(msg.ToolArgs, "message")
+
 	headerText := "Send to: " + to
 	if summary != "" {
-		headerText = summary + "  →  " + to
+		headerText = summary
 	}
 	header := widget.NewRichText(
 		&widget.TextSegment{
@@ -609,7 +620,17 @@ func (cv *ChatView) sendMessageItem(msg *ChatMessage) fyne.CanvasObject {
 			Text:  "  " + statusText(msg),
 		},
 	)
-	return widget.NewCard("", "", container.NewVBox(container.NewPadded(header)))
+
+	var parts []fyne.CanvasObject
+	parts = append(parts, container.NewPadded(header))
+
+	if message != "" {
+		desc := widget.NewRichTextFromMarkdown(message)
+		desc.Wrapping = fyne.TextWrapWord
+		parts = append(parts, container.NewPadded(desc))
+	}
+
+	return widget.NewCard("", "", container.NewVBox(parts...))
 }
 
 func (cv *ChatView) waitAgentItem(msg *ChatMessage) fyne.CanvasObject {
@@ -664,6 +685,51 @@ func (cv *ChatView) teammateSpawnItem(msg *ChatMessage) fyne.CanvasObject {
 	return widget.NewCard("", "", container.NewVBox(container.NewPadded(header)))
 }
 
+// swarmTaskCreateItem renders swarm_task_create with subject as header
+// and description as markdown content.
+func (cv *ChatView) swarmTaskCreateItem(msg *ChatMessage) fyne.CanvasObject {
+	subject := extractJSONField(msg.ToolArgs, "subject")
+	description := extractJSONField(msg.ToolArgs, "description")
+	assignee := extractJSONField(msg.ToolArgs, "assignee")
+
+	headerText := "Task"
+	if subject != "" {
+		headerText = subject
+	}
+
+	header := widget.NewRichText(
+		&widget.TextSegment{
+			Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}},
+			Text:  headerText,
+		},
+		&widget.TextSegment{
+			Style: widget.RichTextStyle{ColorName: statusColor(msg)},
+			Text:  "  " + statusText(msg),
+		},
+	)
+
+	var parts []fyne.CanvasObject
+	parts = append(parts, container.NewPadded(header))
+
+	if assignee != "" {
+		assigneeLabel := widget.NewRichText(
+			&widget.TextSegment{
+				Style: widget.RichTextStyle{ColorName: theme.ColorNamePrimary},
+				Text:  "Assigned to: " + assignee,
+			},
+		)
+		parts = append(parts, container.NewPadded(assigneeLabel))
+	}
+
+	if description != "" {
+		desc := widget.NewRichTextFromMarkdown(description)
+		desc.Wrapping = fyne.TextWrapWord
+		parts = append(parts, container.NewPadded(desc))
+	}
+
+	return widget.NewCard("", "", container.NewVBox(parts...))
+}
+
 func (cv *ChatView) systemNotice(msg *ChatMessage) fyne.CanvasObject {
 	text := canvas.NewText(msg.Content, theme.DisabledColor())
 	text.TextStyle = fyne.TextStyle{Italic: true}
@@ -683,4 +749,50 @@ func (cv *ChatView) errorNotice(msg *ChatMessage) fyne.CanvasObject {
 	text := canvas.NewText("Error: "+msg.Content, theme.ErrorColor())
 	text.TextSize = theme.TextSize()
 	return container.NewPadded(text)
+}
+
+// todoWriteItem renders todo_write as plain markdown text — no tool name, no accordion.
+func (cv *ChatView) todoWriteItem(msg *ChatMessage) fyne.CanvasObject {
+	// Parse the todos from ToolArgs and render as markdown list.
+	var input struct {
+		Todos []struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"todos"`
+	}
+	if err := json.Unmarshal([]byte(msg.ToolArgs), &input); err != nil {
+		// Fallback: show raw content as markdown.
+		if msg.Content != "" {
+			rt := widget.NewRichTextFromMarkdown(msg.Content)
+			rt.Wrapping = fyne.TextWrapWord
+			return container.NewPadded(rt)
+		}
+		return nil
+	}
+
+	var sb strings.Builder
+	for _, t := range input.Todos {
+		switch t.Status {
+		case "done":
+			sb.WriteString("- [x] ")
+		case "in_progress":
+			sb.WriteString("- [ ] **")
+			sb.WriteString(t.Content)
+			sb.WriteString("** _(in progress)_")
+			continue
+		default:
+			sb.WriteString("- [ ] ")
+		}
+		sb.WriteString(t.Content)
+		sb.WriteString("\n")
+	}
+
+	if sb.Len() == 0 {
+		return nil
+	}
+
+	rt := widget.NewRichTextFromMarkdown(sb.String())
+	rt.Wrapping = fyne.TextWrapWord
+	return container.NewPadded(rt)
 }
