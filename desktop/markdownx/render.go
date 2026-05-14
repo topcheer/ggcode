@@ -93,35 +93,43 @@ func renderCodeBlock(b *mdBlock) fyne.CanvasObject {
 
 	numWidth := len(fmt.Sprintf("%d", len(b.lines)))
 
-	// Per-line rendering with syntax colors.
-	var lineObjs []fyne.CanvasObject
+	// Use a single RichText for the whole code block with wrapping.
+	var segs []widget.RichTextSegment
 	for i, line := range b.lines {
-		// Line number.
+		// Line number segment.
 		numText := fmt.Sprintf("%*d  ", numWidth, i+1)
-		numLabel := canvas.NewText(numText, color.RGBA{R: 100, G: 100, B: 100, A: 255})
-		numLabel.TextStyle = fyne.TextStyle{Monospace: true}
-		numLabel.TextSize = 13
-
-		// Code text.
-		codeColor := color.RGBA{R: 220, G: 220, B: 220, A: 255} // default
-		if b.colors != nil && i < len(b.colors) && b.colors[i] != nil {
-			codeColor = b.colors[i].(color.RGBA)
+		numSeg := &widget.TextSegment{
+			Style: widget.RichTextStyle{
+				TextStyle: fyne.TextStyle{Monospace: true},
+				ColorName: theme.ColorNameDisabled,
+			},
+			Text: numText,
 		}
-		codeLabel := canvas.NewText(line, codeColor)
-		codeLabel.TextStyle = fyne.TextStyle{Monospace: true}
-		codeLabel.TextSize = 13
 
-		row := container.NewHBox(numLabel, codeLabel)
-		lineObjs = append(lineObjs, row)
+		// Code segment with syntax color.
+		codeSeg := &widget.TextSegment{
+			Style: widget.RichTextStyle{
+				TextStyle: fyne.TextStyle{Monospace: true},
+			},
+			Text: line,
+		}
+
+		segs = append(segs, numSeg, codeSeg)
+		if i < len(b.lines)-1 {
+			segs = append(segs, &widget.TextSegment{Text: "\n"})
+		}
 	}
 
-	codeVBox := container.NewVBox(lineObjs...)
+	rt := widget.NewRichText(segs...)
+	rt.Wrapping = fyne.TextWrapBreak
+
+	codeWrapper := container.NewVBox(rt)
 
 	// Dark background.
 	bg := canvas.NewRectangle(colCodeBg)
 	bg.SetMinSize(fyne.NewSize(0, 0))
 
-	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), codeVBox))
+	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), codeWrapper))
 	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), inner)
 }
 

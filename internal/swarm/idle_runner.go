@@ -321,6 +321,7 @@ func executeTask(
 			tm.appendEvent(TeammateEvent{
 				Type:     TeammateEventToolCall,
 				ToolName: event.Tool.Name,
+				ToolID:   event.Tool.ID,
 				ToolArgs: string(event.Tool.Arguments),
 			})
 			if onEvent != nil {
