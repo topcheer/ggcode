@@ -91,45 +91,24 @@ func renderCodeBlock(b *mdBlock) fyne.CanvasObject {
 		return nil
 	}
 
-	numWidth := len(fmt.Sprintf("%d", len(b.lines)))
+	// Join all lines into a single text block for RichText rendering.
+	codeText := strings.Join(b.lines, "\n")
 
-	// Use a single RichText for the whole code block with wrapping.
-	var segs []widget.RichTextSegment
-	for i, line := range b.lines {
-		// Line number segment.
-		numText := fmt.Sprintf("%*d  ", numWidth, i+1)
-		numSeg := &widget.TextSegment{
-			Style: widget.RichTextStyle{
-				TextStyle: fyne.TextStyle{Monospace: true},
-				ColorName: theme.ColorNameDisabled,
-			},
-			Text: numText,
-		}
-
-		// Code segment with syntax color.
-		codeSeg := &widget.TextSegment{
-			Style: widget.RichTextStyle{
-				TextStyle: fyne.TextStyle{Monospace: true},
-			},
-			Text: line,
-		}
-
-		segs = append(segs, numSeg, codeSeg)
-		if i < len(b.lines)-1 {
-			segs = append(segs, &widget.TextSegment{Text: "\n"})
-		}
+	codeSeg := &widget.TextSegment{
+		Style: widget.RichTextStyle{
+			TextStyle: fyne.TextStyle{Monospace: true},
+		},
+		Text: codeText,
 	}
 
-	rt := widget.NewRichText(segs...)
+	rt := widget.NewRichText(codeSeg)
 	rt.Wrapping = fyne.TextWrapBreak
-
-	codeWrapper := container.NewVBox(rt)
 
 	// Dark background.
 	bg := canvas.NewRectangle(colCodeBg)
 	bg.SetMinSize(fyne.NewSize(0, 0))
 
-	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), codeWrapper))
+	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), rt))
 	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), inner)
 }
 
