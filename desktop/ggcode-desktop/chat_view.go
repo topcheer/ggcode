@@ -81,12 +81,22 @@ type ChatView struct {
 	tabs         *container.AppTabs
 	tabMap       map[string]*container.TabItem
 	agentScrolls map[string]*container.Scroll
-	agentPanelHashes map[string]string // panel ID → content hash for skip-rebuild
+	agentPanelHashes map[string]string
 
-	// Cached rendering: avoid full rebuild when only streaming text changes.
-	lastRenderHash string           // hash of last fully rendered message list
-	streamWidget   *markdownx.MarkdownWidget // persistent widget for streaming assistant
-	lastStreamText string           // last streaming text rendered
+	// Precise update tracking
+	msgWidgets  []fyne.CanvasObject
+	toolWidgets map[string]*toolWidgetRef
+	streamW     *markdownx.MarkdownWidget
+}
+
+// toolWidgetRef holds mutable refs for updating a tool call in place.
+type toolWidgetRef struct {
+	icon      *widget.Icon
+	body      *fyne.Container
+	acc       *widget.Accordion
+	toolName  string
+	rawArgs   string
+	hasResult bool
 }
 
 func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
@@ -96,6 +106,7 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 		tabMap:       make(map[string]*container.TabItem),
 		agentScrolls: make(map[string]*container.Scroll),
 		agentPanelHashes: make(map[string]string),
+		toolWidgets:  make(map[string]*toolWidgetRef),
 	}
 
 	cv.entry = newSendEntry()
@@ -126,48 +137,33 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	cv.tabs = container.NewAppTabs(mainTab)
 	cv.tabs.SetTabLocation(container.TabLocationTop)
 
-	go cv.pollRefresh()
+	// Event-driven: UI mutations call handleEvent directly via fyne.Do.
+	cv.ui.OnEvent = func(e UIEvent) {
+		fyne.Do(func() { cv.handleEvent(e) })
+	}
+
+	// Lightweight status bar updater.
+	go cv.statusLoop()
 
 	return container.NewBorder(nil, container.NewPadded(inputBar), nil, nil, cv.tabs)
 }
 
-// ── Poll loop ────────────────────────────────────────
+// ── Event handler ─────────────────────────────────────
 
-func (cv *ChatView) pollRefresh() {
-	ticker := time.NewTicker(150 * time.Millisecond)
-	defer ticker.Stop()
-	for range ticker.C {
-		working := cv.bridge.IsWorking()
-		dirty := cv.ui.IsDirty()
-		fyne.Do(func() {
-			if dirty {
-				cv.rebuildMessages()
+var lastStatusText string
+
+func extractMarkdownWidget(obj fyne.CanvasObject) (*markdownx.MarkdownWidget, bool) {
+	switch v := obj.(type) {
+	case *markdownx.MarkdownWidget:
+		return v, true
+	case *fyne.Container:
+		for _, child := range v.Objects {
+			if md, ok := extractMarkdownWidget(child); ok {
+				return md, true
 			}
-			// Always scroll to bottom when agent is working.
-			if working {
-				cv.scroll.ScrollToBottom()
-			}
-			cv.updateButtons(working)
-			cv.rebuildAgentTabs()
-			cv.updateStatusBar(working)
-		})
+		}
 	}
-}
-
-const placeholderIdle = "Message ggcode... (Enter to send, Shift+Enter for newline)"
-const placeholderBusy = "ggcode is working... (messages will be queued)"
-
-func (cv *ChatView) updateButtons(working bool) {
-	cv.entry.busy = working
-	if working {
-		cv.cancelBtn.Show()
-		cv.entry.PlaceHolder = placeholderBusy
-	} else {
-		cv.cancelBtn.Hide()
-		cv.entry.PlaceHolder = placeholderIdle
-	}
-	cv.sendBtn.Show()
-	cv.sendBtn.Enable()
+	return nil, false
 }
 
 func (cv *ChatView) onSend() {
@@ -188,7 +184,128 @@ func (cv *ChatView) onSend() {
 	}
 }
 
-var lastStatusText string
+func (cv *ChatView) handleEvent(e UIEvent) {
+	switch e.Type {
+	case EventAppend:
+		cv.onAppend(e.Msg)
+	case EventAssistantChunk:
+		cv.onAssistantChunk(e.Text)
+	case EventToolResultUpdate:
+		cv.onToolResult(e.ToolID, e.Result, e.IsError)
+	case EventStreamDone:
+		cv.onStreamDone()
+	case EventAgentUpdate:
+		cv.rebuildAgentTabs()
+	}
+	cv.updateButtons(cv.bridge.IsWorking())
+	if cv.bridge.IsWorking() {
+		cv.scroll.ScrollToBottom()
+	}
+}
+
+func (cv *ChatView) onAppend(msg ChatMessage) {
+	w := cv.renderMessage(&msg)
+	if w == nil {
+		return
+	}
+	cv.msgWidgets = append(cv.msgWidgets, w)
+
+	// Register tool ref.
+	if msg.Role == "tool" && msg.ToolID != "" {
+		ref := cv.buildToolRef(&msg, w)
+		if ref != nil {
+			cv.toolWidgets[msg.ToolID] = ref
+		}
+	}
+
+	// Track streaming assistant widget.
+	if msg.Role == "assistant" && msg.Streaming {
+		if md, ok := extractMarkdownWidget(w); ok {
+			cv.streamW = md
+		}
+	}
+
+	cv.vbox.Add(w)
+	cv.scroll.ScrollToBottom()
+}
+
+func (cv *ChatView) onAssistantChunk(text string) {
+	if cv.streamW != nil {
+		cv.streamW.SetMarkdown(text)
+		cv.scroll.ScrollToBottom()
+		return
+	}
+	// First chunk — onAppend already created the widget.
+	if len(cv.msgWidgets) > 0 {
+		if md, ok := extractMarkdownWidget(cv.msgWidgets[len(cv.msgWidgets)-1]); ok {
+			cv.streamW = md
+			md.SetMarkdown(text)
+			cv.scroll.ScrollToBottom()
+		}
+	}
+}
+
+func (cv *ChatView) onToolResult(toolID, result string, isError bool) {
+	ref, ok := cv.toolWidgets[toolID]
+	if !ok {
+		return
+	}
+	ref.hasResult = true
+
+	// Update icon.
+	if isError {
+		ref.icon.SetResource(theme.CancelIcon())
+	} else {
+		ref.icon.SetResource(theme.ConfirmIcon())
+	}
+	ref.icon.Refresh()
+
+	// Add result accordion if applicable.
+	cv.addToolResult(ref, result)
+	cv.scroll.ScrollToBottom()
+}
+
+func (cv *ChatView) onStreamDone() {
+	cv.streamW = nil
+	// Cancel any tools still pending.
+	for _, ref := range cv.toolWidgets {
+		if !ref.hasResult {
+			ref.icon.SetResource(theme.CancelIcon())
+			ref.icon.Refresh()
+		}
+	}
+}
+
+// statusLoop updates status bar periodically (lightweight).
+func (cv *ChatView) statusLoop() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		working := cv.bridge.IsWorking()
+		fyne.Do(func() {
+			cv.updateStatusBar(working)
+			cv.updateButtons(working)
+			if working {
+				cv.scroll.ScrollToBottom()
+			}
+		})
+	}
+}
+
+const placeholderIdle = "Message ggcode... (Enter to send, Shift+Enter for newline)"
+const placeholderBusy = "ggcode is working... (messages will be queued)"
+
+func (cv *ChatView) updateButtons(working bool) {
+	cv.entry.busy = working
+	if working {
+		cv.cancelBtn.Show()
+		cv.entry.PlaceHolder = placeholderBusy
+	} else {
+		cv.cancelBtn.Hide()
+		cv.entry.PlaceHolder = placeholderIdle
+	}
+	cv.sendBtn.Show()
+}
 
 func (cv *ChatView) updateStatusBar(working bool) {
 	resolved := cv.bridge.Resolved()
@@ -211,105 +328,61 @@ func (cv *ChatView) updateStatusBar(working bool) {
 	}
 }
 
-// ── Main chat rebuild ────────────────────────────────
+// ── Tool result live update ────────────────────────────
 
-func (cv *ChatView) rebuildMessages() {
-	msgs := cv.ui.TakeMessages()
-
-	// Merge consecutive assistant messages into one.
-	merged := make([]ChatMessage, 0, len(msgs))
-	for i := range msgs {
-		if i > 0 && msgs[i].Role == "assistant" && merged[len(merged)-1].Role == "assistant" {
-			merged[len(merged)-1].Content += "\n\n" + msgs[i].Content
-			continue
-		}
-		merged = append(merged, msgs[i])
+func (cv *ChatView) buildToolRef(msg *ChatMessage, w fyne.CanvasObject) *toolWidgetRef {
+	ref := &toolWidgetRef{
+		toolName: msg.ToolName,
+		rawArgs:  raw(msg),
 	}
-
-	// Check if we can do a lightweight streaming update.
-	if cv.tryStreamingUpdate(merged) {
-		return
-	}
-
-	// Full rebuild.
-	objs := make([]fyne.CanvasObject, 0, len(merged))
-	for i := range merged {
-		w := cv.renderMessage(&merged[i])
-		if w != nil {
-			objs = append(objs, w)
-		}
-	}
-	cv.vbox.Objects = objs
-	cv.vbox.Refresh()
-
-	// Cache for next streaming update.
-	cv.cacheRenderState(merged)
+	cv.extractToolRefs(w, ref)
+	return ref
 }
 
-// tryStreamingUpdate checks if only the last streaming assistant text changed.
-// If so, updates the streaming widget in place instead of full rebuild.
-func (cv *ChatView) tryStreamingUpdate(merged []ChatMessage) bool {
-	if len(merged) == 0 || cv.streamWidget == nil {
-		return false
-	}
-	last := &merged[len(merged)-1]
-	if !last.Streaming || last.Role != "assistant" {
-		return false
-	}
-	// Check that the message structure (count + non-streaming content) is the same.
-	hash := structHash(merged[:len(merged)-1])
-	if hash != cv.lastRenderHash {
-		return false
-	}
-	// Same structure, only streaming text changed — update in place.
-	if last.Content == cv.lastStreamText {
-		return true // nothing changed, skip
-	}
-	cv.streamWidget.SetMarkdown(last.Content)
-	cv.streamWidget.Refresh()
-	cv.lastStreamText = last.Content
-	return true
-}
-
-// cacheRenderState saves the current state for future streaming updates.
-func (cv *ChatView) cacheRenderState(merged []ChatMessage) {
-	if len(merged) == 0 {
-		return
-	}
-	last := merged[len(merged)-1]
-	if last.Streaming && last.Role == "assistant" {
-		cv.lastRenderHash = structHash(merged[:len(merged)-1])
-		cv.lastStreamText = last.Content
-		// Find the RichText widget from the last assistant message.
-		for i := len(cv.vbox.Objects) - 1; i >= 0; i-- {
-			if iconRow, ok := cv.vbox.Objects[i].(*fyne.Container); ok {
-				for _, child := range iconRow.Objects {
-					if md, ok := child.(*markdownx.MarkdownWidget); ok {
-						cv.streamWidget = md
-						return
-					}
-				}
+func (cv *ChatView) extractToolRefs(obj fyne.CanvasObject, ref *toolWidgetRef) {
+	switch v := obj.(type) {
+	case *widget.Icon:
+		if ref.icon == nil {
+			ref.icon = v
+		}
+	case *widget.Accordion:
+		ref.acc = v
+	case *fyne.Container:
+		// The first VBox child of the Border's content is the body.
+		if ref.body == nil && len(v.Objects) > 0 {
+			if inner, ok := v.Objects[0].(*fyne.Container); ok {
+				ref.body = inner
 			}
 		}
-	} else {
-		cv.streamWidget = nil
-		cv.lastStreamText = ""
-		cv.lastRenderHash = structHash(merged)
+		for _, child := range v.Objects {
+			cv.extractToolRefs(child, ref)
+		}
 	}
 }
 
-// structHash returns a quick hash of message structure (role + content of non-streaming msgs).
-func structHash(msgs []ChatMessage) string {
-	var sb strings.Builder
-	for _, m := range msgs {
-		sb.WriteString(m.Role)
-		sb.WriteString("|")
-		if !m.Streaming {
-			sb.WriteString(m.Content)
-		}
-		sb.WriteString("\n")
+func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
+	if result == "" || ref.body == nil {
+		return
 	}
-	return sb.String()
+	tc := classifyToolGUI(ref.toolName)
+	if tc == tcSearch || tc == tcList || tc == tcWeb || tc == tcCmd ||
+		tc == tcLSP || tc == tcWait || tc == tcTeammate || tc == tcSwarm ||
+		tc == tcSuppress || tc == tcAgent || tc == tcMessage {
+		return
+	}
+
+	resultBlock := newMD("```\n" + truncateRunes(result, 3000, "\n...(truncated)") + "\n```")
+	label := "Output"
+	if tc == tcFile {
+		label = "Content"
+	}
+
+	if ref.acc != nil {
+		ref.acc.Append(widget.NewAccordionItem(label, resultBlock))
+	} else {
+		ref.acc = widget.NewAccordion(widget.NewAccordionItem(label, resultBlock))
+		ref.body.Add(ref.acc)
+	}
 }
 
 // ── Message rendering ────────────────────────────────
@@ -444,7 +517,6 @@ func classifyToolGUI(name string) toolClass {
 		return tcGeneric
 	}
 }
-
 func (cv *ChatView) renderTool(msg *ChatMessage) fyne.CanvasObject {
 	switch classifyToolGUI(msg.ToolName) {
 	case tcBash:

@@ -11,6 +11,28 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+// ── Event-driven UI updates ────────────────────────
+
+type UIEventType int
+
+const (
+	EventAppend          UIEventType = iota // new message appended to ChatMsgs
+	EventAssistantChunk                    // streaming assistant text updated
+	EventToolResultUpdate                  // tool result received (by ToolID)
+	EventStreamDone                        // streaming finalized
+	EventAgentUpdate                       // agent panel data changed
+)
+
+type UIEvent struct {
+	Type    UIEventType
+	Msg     ChatMessage // for EventAppend
+	Text    string      // full accumulated streaming text for EventAssistantChunk
+	ToolID  string      // for EventToolResultUpdate
+	Result  string      // for EventToolResultUpdate
+	IsError bool        // for EventToolResultUpdate
+	AgentID string      // for EventAgentUpdate
+}
+
 // UIState holds bindings for cross-goroutine UI updates.
 // Goroutines write to bindings; widgets read from them automatically.
 type UIState struct {
@@ -22,13 +44,15 @@ type UIState struct {
 	ContextWin binding.String
 	TokenPct   binding.Float
 
+	// Event callback: ChatView registers this to receive precise UI events.
+	OnEvent func(UIEvent)
+
 	// Assistant streaming buffer.
 	assistantBuf strings.Builder
 
 	// Non-bound state: chat messages.
-	ChatMsgs  []ChatMessage
-	ChatMu    sync.Mutex
-	ChatDirty bool
+	ChatMsgs []ChatMessage
+	ChatMu   sync.Mutex
 
 	// Agent panel state (sub-agents + teammates).
 	agentMu     sync.Mutex
@@ -37,6 +61,12 @@ type UIState struct {
 
 	// Status bar label reference (set once during buildUI).
 	statusLabel *widget.Label
+}
+
+func (u *UIState) notify(e UIEvent) {
+	if u.OnEvent != nil {
+		u.OnEvent(e)
+	}
 }
 
 func NewUIState() *UIState {
@@ -85,40 +115,38 @@ func (u *UIState) SetTokenUsage(usage string, pct float64) {
 }
 
 // AppendChat appends a message to the chat list (thread-safe).
-// Returns true if the caller should trigger a UI refresh.
-func (u *UIState) AppendChat(msg ChatMessage) bool {
+// Fires EventAppend so the UI can render precisely.
+func (u *UIState) AppendChat(msg ChatMessage) {
 	u.ChatMu.Lock()
-	defer u.ChatMu.Unlock()
 
 	// Merge consecutive system messages (e.g. repeated auto-compress notices).
 	if msg.Role == "system" && len(u.ChatMsgs) > 0 {
 		last := &u.ChatMsgs[len(u.ChatMsgs)-1]
 		if last.Role == "system" {
-			// Replace the last system message with the new one
-			// (auto-compress messages are progress updates, not cumulative).
 			last.Content = msg.Content
 			last.Time = msg.Time
-			u.ChatDirty = true
-			return true
+			u.ChatMu.Unlock()
+			u.notify(UIEvent{Type: EventAppend, Msg: msg})
+			return
 		}
 	}
 
 	u.ChatMsgs = append(u.ChatMsgs, msg)
-	u.ChatDirty = true
-	return true
+	u.ChatMu.Unlock()
+	u.notify(UIEvent{Type: EventAppend, Msg: msg})
 }
 
 // AppendAssistantText appends a streaming text chunk to the assistant buffer
 // and updates (or creates) the last assistant message with the full accumulated text.
 func (u *UIState) AppendAssistantText(chunk string) {
 	u.ChatMu.Lock()
-	defer u.ChatMu.Unlock()
 	u.assistantBuf.WriteString(chunk)
 	full := u.assistantBuf.String()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
 		if u.ChatMsgs[i].Role == "assistant" && u.ChatMsgs[i].Streaming {
 			u.ChatMsgs[i].Content = full
-			u.ChatDirty = true
+			u.ChatMu.Unlock()
+			u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
 			return
 		}
 	}
@@ -128,28 +156,29 @@ func (u *UIState) AppendAssistantText(chunk string) {
 		Content:   full,
 		Streaming: true,
 	})
-	u.ChatDirty = true
+	u.ChatMu.Unlock()
+	u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
 }
 
 // UpdateToolResult updates the tool message with matching tool call ID.
 func (u *UIState) UpdateToolResult(toolID, result string, isError bool) {
 	u.ChatMu.Lock()
-	defer u.ChatMu.Unlock()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
 		if u.ChatMsgs[i].Role == "tool" && u.ChatMsgs[i].ToolID == toolID {
 			u.ChatMsgs[i].Content = result
 			u.ChatMsgs[i].IsError = isError
-			u.ChatDirty = true
+			u.ChatMu.Unlock()
+			u.notify(UIEvent{Type: EventToolResultUpdate, ToolID: toolID, Result: result, IsError: isError})
 			return
 		}
 	}
+	u.ChatMu.Unlock()
 }
 
 // FinalizeStreaming marks the last streaming assistant message as done,
 // resets the streaming buffer, and marks any still-running tool calls as cancelled.
 func (u *UIState) FinalizeStreaming() {
 	u.ChatMu.Lock()
-	defer u.ChatMu.Unlock()
 	u.assistantBuf.Reset()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
 		if u.ChatMsgs[i].Role == "assistant" && u.ChatMsgs[i].Streaming {
@@ -163,24 +192,20 @@ func (u *UIState) FinalizeStreaming() {
 			u.ChatMsgs[i].IsError = true
 		}
 	}
-	u.ChatDirty = true
+	u.ChatMu.Unlock()
+	u.notify(UIEvent{Type: EventStreamDone})
 }
 
-// TakeMessages returns a snapshot of all messages and clears the dirty flag.
+// IsDirty returns whether the chat has pending updates (kept for compatibility).
+func (u *UIState) IsDirty() bool { return false }
+
+// TakeMessages returns a snapshot of all messages (kept for compatibility).
 func (u *UIState) TakeMessages() []ChatMessage {
 	u.ChatMu.Lock()
 	defer u.ChatMu.Unlock()
-	u.ChatDirty = false
 	out := make([]ChatMessage, len(u.ChatMsgs))
 	copy(out, u.ChatMsgs)
 	return out
-}
-
-// IsDirty returns whether the chat has pending updates.
-func (u *UIState) IsDirty() bool {
-	u.ChatMu.Lock()
-	defer u.ChatMu.Unlock()
-	return u.ChatDirty
 }
 
 // CountMessages returns the current message count.
@@ -203,12 +228,13 @@ func safeRecover(context string) {
 // Protected by its own mutex since updates come from callbacks.
 func (u *UIState) UpdateAgentPanel(id string, data AgentPanelData) {
 	u.agentMu.Lock()
-	defer u.agentMu.Unlock()
 	if u.agentPanels == nil {
 		u.agentPanels = make(map[string]AgentPanelData)
 	}
 	u.agentPanels[id] = data
 	u.agentDirty = true
+	u.agentMu.Unlock()
+	u.notify(UIEvent{Type: EventAgentUpdate, AgentID: id})
 }
 
 func (u *UIState) GetAgentPanels() []AgentPanelData {
