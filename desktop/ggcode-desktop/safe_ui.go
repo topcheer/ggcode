@@ -151,12 +151,15 @@ func (u *UIState) AppendAssistantText(chunk string) {
 		}
 	}
 	// No streaming assistant message yet, create one.
-	u.ChatMsgs = append(u.ChatMsgs, ChatMessage{
+	msg := ChatMessage{
 		Role:      "assistant",
 		Content:   full,
 		Streaming: true,
-	})
+	}
+	u.ChatMsgs = append(u.ChatMsgs, msg)
 	u.ChatMu.Unlock()
+	// Notify UI to create a new widget for this message, then update it.
+	u.notify(UIEvent{Type: EventAppend, Msg: msg})
 	u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
 }
 
