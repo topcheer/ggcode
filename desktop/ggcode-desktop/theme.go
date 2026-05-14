@@ -59,6 +59,12 @@ func (m *modernTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant)
 	case theme.ColorNameHeaderBackground:
 		return color.NRGBA{R: 38, G: 38, B: 38, A: 255}
 
+	// Menu / Popup / Dropdown backgrounds
+	case theme.ColorNameMenuBackground:
+		return color.NRGBA{R: 45, G: 45, B: 45, A: 255}
+	case theme.ColorNameOverlayBackground:
+		return color.NRGBA{R: 40, G: 40, B: 40, A: 255}
+
 	// Focus / Hover
 	case theme.ColorNameFocus:
 		return color.NRGBA{R: 86, G: 154, B: 214, A: 100}
@@ -72,6 +78,10 @@ func (m *modernTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant)
 	// Shadow
 	case theme.ColorNameShadow:
 		return color.NRGBA{R: 0, G: 0, B: 0, A: 40}
+
+	// Selection highlight
+	case theme.ColorNameSelection:
+		return color.NRGBA{R: 86, G: 154, B: 214, A: 60}
 	}
 	return m.Theme.Color(name, variant)
 }
