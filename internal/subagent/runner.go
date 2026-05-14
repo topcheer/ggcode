@@ -106,7 +106,6 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	// Run the agentic loop, capturing output
 	var output strings.Builder
 	lastToolName := ""
-	lastToolID := ""
 	var textBuf strings.Builder // accumulate text chunks into turn-level events
 	flushText := func() {
 		if textBuf.Len() == 0 {
@@ -146,7 +145,6 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				})
 			}
 			lastToolName = event.Tool.Name
-			lastToolID = event.Tool.ID
 			cfg.Manager.Notify(cfg.SubAgentID)
 		case provider.StreamEventToolResult:
 			flushText()
@@ -159,7 +157,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolResult,
 					ToolName: lastToolName,
-					ToolID:   lastToolID,
+					ToolID:   event.Tool.ID,
 					Result:   event.Result,
 					IsError:  event.IsError,
 				})
