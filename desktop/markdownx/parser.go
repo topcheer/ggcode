@@ -1,18 +1,15 @@
 package markdownx
 
 import (
-	"net/url"
+	"image/color"
 	"strings"
 
 	"fyne.io/fyne/v2"
-	"image/color"
-
 	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	east "github.com/yuin/goldmark/extension/ast"
@@ -22,177 +19,163 @@ import (
 
 var mdEngine = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
-// renderMarkdown parses markdown and returns a list of CanvasObjects, one per block.
-func renderMarkdown(src string, r *nodeRenderers) []fyne.CanvasObject {
+// parseBlocks parses markdown source into a list of blocks.
+func parseBlocks(src string) []block {
 	reader := text.NewReader([]byte(src))
 	doc := mdEngine.Parser().Parse(reader)
 
-	var objects []fyne.CanvasObject
+	var blocks []block
 	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
-		obj := r.renderNode(child, src)
-		if obj != nil {
-			objects = append(objects, obj)
+		b := astToBlock(child, src)
+		if b != nil {
+			blocks = append(blocks, b)
 		}
 	}
-	return objects
+	return blocks
 }
 
-// ── nodeRenderers ──────────────────────────────────
-
-type nodeRenderers struct{}
-
-func newNodeRenderers() *nodeRenderers { return &nodeRenderers{} }
-
-func (r *nodeRenderers) renderNode(node ast.Node, src string) fyne.CanvasObject {
+func astToBlock(node ast.Node, src string) block {
 	switch n := node.(type) {
 	case *ast.Heading:
-		return r.renderHeading(n, src)
+		return &headingBlock{level: n.Level, runs: collectInlineRuns(n, src)}
 	case *ast.Paragraph:
-		return r.renderParagraph(n, src)
+		return &paragraphBlock{runs: collectInlineRuns(n, src)}
 	case *ast.FencedCodeBlock:
-		return r.renderCodeBlock(n, src)
+		return parseCodeBlock(n, src)
 	case *ast.CodeBlock:
-		return r.renderCodeBlockIndented(n, src)
+		return parsePlainCodeBlock(n, src)
 	case *ast.List:
-		return r.renderList(n, src)
+		return parseList(n, src)
 	case *ast.Blockquote:
-		return r.renderBlockquote(n, src)
+		return parseBlockquote(n, src)
 	case *ast.ThematicBreak:
-		return r.renderThematicBreak()
+		return &hrBlock{}
 	case *east.Table:
-		return r.renderTable(n, src)
-	default:
-		text := extractText(node, src)
-		if text != "" {
-			return newTextLabel(text, 0, false, false)
-		}
-		return nil
+		return parseTable(n, src)
 	}
+	return nil
 }
 
-// ── Heading ────────────────────────────────────────
+// ── Code block parsing ─────────────────────────────
 
-func (r *nodeRenderers) renderHeading(n *ast.Heading, src string) fyne.CanvasObject {
-	inline := r.renderInlineChildren(n, src)
-	if len(inline) == 0 {
-		return nil
-	}
-	rt := widget.NewRichText(inline...)
-	rt.Wrapping = fyne.TextWrapWord
-	return rt
-}
-
-// ── Paragraph ──────────────────────────────────────
-
-func (r *nodeRenderers) renderParagraph(n *ast.Paragraph, src string) fyne.CanvasObject {
-	inline := r.renderInlineChildren(n, src)
-	if len(inline) == 0 {
-		return nil
-	}
-	rt := widget.NewRichText(inline...)
-	rt.Wrapping = fyne.TextWrapWord
-	return rt
-}
-
-// ── Code Block ─────────────────────────────────────
-
-func (r *nodeRenderers) renderCodeBlock(n *ast.FencedCodeBlock, src string) fyne.CanvasObject {
+func parseCodeBlock(n *ast.FencedCodeBlock, src string) *codeBlock {
 	lang := ""
 	if n.Info != nil {
 		lang = string(n.Info.Text([]byte(src)))
 	}
 	var lines []string
 	for i := 0; i < n.Lines().Len(); i++ {
-		line := func() string { s := n.Lines().At(i); return string(s.Value([]byte(src))) }()
+		seg := n.Lines().At(i)
+		line := string(seg.Value([]byte(src)))
 		lines = append(lines, strings.TrimRight(line, "\n"))
 	}
-	return newCodeBlock(lang, lines)
+	colors := chromaLineColors(lang, lines)
+	return &codeBlock{lang: lang, lines: lines, color: colors}
 }
 
-func (r *nodeRenderers) renderCodeBlockIndented(n *ast.CodeBlock, src string) fyne.CanvasObject {
+func parsePlainCodeBlock(n *ast.CodeBlock, src string) *codeBlock {
 	var lines []string
 	for i := 0; i < n.Lines().Len(); i++ {
-		line := func() string { s := n.Lines().At(i); return string(s.Value([]byte(src))) }()
+		seg := n.Lines().At(i)
+		line := string(seg.Value([]byte(src)))
 		lines = append(lines, strings.TrimRight(line, "\n"))
 	}
-	return newCodeBlock("", lines)
+	return &codeBlock{lines: lines}
 }
 
-// ── List ───────────────────────────────────────────
+// chromaLineColors returns per-line dominant syntax colors.
+func chromaLineColors(lang string, lines []string) []color.Color {
+	result := make([]color.Color, len(lines))
+	if lang == "" {
+		return result
+	}
 
-func (r *nodeRenderers) renderList(n *ast.List, src string) fyne.CanvasObject {
-	ordered := n.IsOrdered()
-	var items []fyne.CanvasObject
-	idx := 0
+	lexer := lexers.Get(lang)
+	if lexer == nil {
+		return result
+	}
+	lexer = chroma.Coalesce(lexer)
+
+	code := strings.Join(lines, "\n")
+	iter, err := lexer.Tokenise(nil, code)
+	if err != nil {
+		return result
+	}
+
+	style := styles.Get("monokai")
+	if style == nil {
+		style = styles.Fallback
+	}
+
+	currentLine := 0
+	for tok := iter(); tok != chroma.EOF; tok = iter() {
+		entry := style.Get(tok.Type)
+		c := entry.Colour
+		if c.Red() > 0 || c.Green() > 0 || c.Blue() > 0 {
+			lastColor := color.RGBA{R: c.Red(), G: c.Green(), B: c.Blue(), A: 255}
+			newlines := strings.Count(tok.Value, "\n")
+			for i := currentLine; i <= currentLine+newlines && i < len(result); i++ {
+				if result[i] == nil {
+					result[i] = lastColor
+				}
+			}
+		}
+		currentLine += strings.Count(tok.Value, "\n")
+	}
+	return result
+}
+
+// ── List parsing ───────────────────────────────────
+
+func parseList(n *ast.List, src string) *listBlock {
+	lb := &listBlock{ordered: n.IsOrdered()}
 	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 		li, ok := child.(*ast.ListItem)
 		if !ok {
 			continue
 		}
-		var contentObjs []fyne.CanvasObject
+		item := listItem{}
 		for lc := li.FirstChild(); lc != nil; lc = lc.NextSibling() {
-			obj := r.renderNode(lc, src)
-			if obj != nil {
-				contentObjs = append(contentObjs, obj)
+			if para, ok := lc.(*ast.Paragraph); ok {
+				item.runs = collectInlineRuns(para, src)
+			} else {
+				b := astToBlock(lc, src)
+				if b != nil {
+					item.children = append(item.children, b)
+				}
 			}
 		}
-		prefix := "• "
-		if ordered {
-			idx++
-			prefix = numPrefix(idx) + ". "
-		}
-		bullet := canvas.NewText(prefix, color.RGBA{R: 200, G: 200, B: 200, A: 255})
-		bullet.TextStyle = fyne.TextStyle{Bold: true}
-		content := container.NewVBox(contentObjs...)
-		row := container.NewHBox(bullet, content)
-		items = append(items, row)
+		lb.items = append(lb.items, item)
 	}
-	return container.NewVBox(items...)
+	return lb
 }
 
-func numPrefix(n int) string { return strings.TrimSpace(strings.Repeat(" ", 0) + itoa(n)) }
-func itoa(n int) string {
-	if n < 10 {
-		return string(rune('0' + n))
-	}
-	return itoa(n/10) + string(rune('0'+n%10))
-}
+// ── Blockquote parsing ─────────────────────────────
 
-// ── Blockquote ─────────────────────────────────────
-
-func (r *nodeRenderers) renderBlockquote(n *ast.Blockquote, src string) fyne.CanvasObject {
-	var content []fyne.CanvasObject
+func parseBlockquote(n *ast.Blockquote, src string) *blockquoteBlock {
+	var children []block
 	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-		obj := r.renderNode(child, src)
-		if obj != nil {
-			content = append(content, obj)
+		b := astToBlock(child, src)
+		if b != nil {
+			children = append(children, b)
 		}
 	}
-	return newBlockquote(content)
+	return &blockquoteBlock{children: children}
 }
 
-// ── Thematic Break ─────────────────────────────────
+// ── Table parsing ──────────────────────────────────
 
-func (r *nodeRenderers) renderThematicBreak() fyne.CanvasObject {
-	line := canvas.NewLine(color.RGBA{R: 80, G: 80, B: 80, A: 255})
-	line.StrokeWidth = 1
-	return container.NewPadded(line)
-}
-
-// ── Table ──────────────────────────────────────────
-
-func (r *nodeRenderers) renderTable(n *east.Table, src string) fyne.CanvasObject {
-	var headers []string
-	var rows [][]string
+func parseTable(n *east.Table, src string) *tableBlock {
+	tb := &tableBlock{}
 	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 		switch row := child.(type) {
 		case *east.TableHeader:
-			headers = extractCells(row, src)
+			tb.headers = extractCells(row, src)
 		case *east.TableRow:
-			rows = append(rows, extractCells(row, src))
+			tb.rows = append(tb.rows, extractCells(row, src))
 		}
 	}
-	return newTable(headers, rows)
+	return tb
 }
 
 func extractCells(node ast.Node, src string) []string {
@@ -205,107 +188,66 @@ func extractCells(node ast.Node, src string) []string {
 	return cells
 }
 
-// ── Inline rendering ───────────────────────────────
+// ── Inline run collection ──────────────────────────
 
-// inlineStyle holds style context for inline traversal.
-type inlineStyle struct {
-	bold   bool
-	italic bool
-	code   bool
-	link   string
-}
-
-// renderInlineChildren renders all inline children of a block node into RichText segments.
-func (r *nodeRenderers) renderInlineChildren(node ast.Node, src string) []widget.RichTextSegment {
-	var segs []widget.RichTextSegment
+// collectInlineRuns extracts styled text runs from an inline container.
+func collectInlineRuns(node ast.Node, src string) []textRun {
+	var runs []textRun
 	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-		r.renderInline(child, src, &segs, inlineStyle{})
+		collectInline(child, src, &runs, normalStyle())
 	}
-	return segs
+	return runs
 }
 
-func (r *nodeRenderers) renderInline(node ast.Node, src string, out *[]widget.RichTextSegment, s inlineStyle) {
+func collectInline(node ast.Node, src string, runs *[]textRun, s textStyle) {
 	switch n := node.(type) {
 	case *ast.Text:
 		text := string(n.Segment.Value([]byte(src)))
-		if text == "" {
-			return
-		}
-		*out = append(*out, makeTextSeg(text, s))
-		if n.SoftLineBreak() {
-			*out = append(*out, makeTextSeg("\n", s))
-		}
-		if n.HardLineBreak() {
-			*out = append(*out, makeTextSeg("\n", s))
+		if text != "" {
+			*runs = append(*runs, textRun{text: text, style: s})
 		}
 	case *ast.String:
-		*out = append(*out, makeTextSeg(string(n.Value), s))
+		*runs = append(*runs, textRun{text: string(n.Value), style: s})
 	case *ast.CodeSpan:
 		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-			r.renderInline(child, src, out, inlineStyle{code: true})
+			collectInline(child, src, runs, codeSpanStyle())
 		}
 	case *ast.Emphasis:
-		em := inlineStyle{bold: s.bold, italic: s.italic, code: s.code, link: s.link}
+		em := s
 		if n.Level == 2 {
-			em.bold = true
+			em = boldStyle()
+			if s.italic {
+				em = textStyle{bold: true, italic: true, size: textSize, color: colFgBold}
+			}
 		} else {
-			em.italic = true
+			em = italicStyle()
+			if s.bold {
+				em = textStyle{bold: true, italic: true, size: textSize, color: colFgBold}
+			}
 		}
 		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-			r.renderInline(child, src, out, em)
+			collectInline(child, src, runs, em)
 		}
 	case *ast.Link:
 		linkText := extractText(n, src)
 		if linkText != "" {
-			u, _ := url.Parse(string(n.Destination))
-			if u != nil {
-				*out = append(*out, &widget.HyperlinkSegment{Text: linkText, URL: u})
-			} else {
-				*out = append(*out, makeTextSeg(linkText, s))
-			}
-		}
-	case *ast.AutoLink:
-		linkURL := string(n.URL([]byte(src)))
-		u, _ := url.Parse(linkURL)
-		if u != nil {
-			*out = append(*out, &widget.HyperlinkSegment{Text: linkURL, URL: u})
+			*runs = append(*runs, textRun{text: linkText, style: textStyle{size: textSize, color: color.RGBA{R: 100, G: 180, B: 255, A: 255}}})
 		}
 	case *ast.Image:
 		alt := extractText(n, src)
 		if alt == "" {
 			alt = string(n.Destination)
 		}
-		*out = append(*out, makeTextSeg("[🖼 "+alt+"]", s))
+		*runs = append(*runs, textRun{text: "[🖼 " + alt + "]", style: s})
 	default:
 		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-			r.renderInline(child, src, out, s)
+			collectInline(child, src, runs, s)
 		}
 	}
 }
 
-// makeTextSeg creates a properly styled TextSegment.
-func makeTextSeg(text string, s inlineStyle) *widget.TextSegment {
-	ts := &widget.TextSegment{Text: text}
-	sty := &ts.Style
+// ── Text extraction ────────────────────────────────
 
-	sty.Inline = true
-
-	if s.code {
-		sty.TextStyle = fyne.TextStyle{Monospace: true}
-		sty.ColorName = theme.ColorNamePrimary
-		return ts
-	}
-
-	sty.TextStyle = fyne.TextStyle{
-		Bold:   s.bold,
-		Italic: s.italic,
-	}
-	return ts
-}
-
-// ── Helper functions ───────────────────────────────
-
-// extractText recursively extracts plain text from a node.
 func extractText(node ast.Node, src string) string {
 	var sb strings.Builder
 	extractTextInto(node, src, &sb)
@@ -325,19 +267,6 @@ func extractTextInto(node ast.Node, src string, sb *strings.Builder) {
 	}
 }
 
-// newTextLabel creates a simple text label.
-func newTextLabel(text string, size float32, bold, monospace bool) *widget.Label {
-	l := widget.NewLabel(text)
-	l.Wrapping = fyne.TextWrapWord
-	if bold {
-		l.TextStyle = fyne.TextStyle{Bold: true}
-	}
-	if monospace {
-		l.TextStyle = fyne.TextStyle{Monospace: true}
-	}
-	return l
-}
-
 // closeOpenCodeBlocks ensures all ``` have matching closing ```.
 func closeOpenCodeBlocks(text string) string {
 	count := strings.Count(text, "```")
@@ -347,31 +276,6 @@ func closeOpenCodeBlocks(text string) string {
 	return text + "\n```"
 }
 
-// runeWidth returns display width of string (CJK chars = 2).
-func runeWidth(s string) int {
-	w := 0
-	for _, r := range s {
-		if isCJK(r) {
-			w += 2
-		} else {
-			w++
-		}
-	}
-	return w
-}
-
-func isCJK(r rune) bool {
-	return (r >= 0x4E00 && r <= 0x9FFF) ||
-		(r >= 0x3400 && r <= 0x4DBF) ||
-		(r >= 0x2E80 && r <= 0x2FDF) ||
-		(r >= 0xF900 && r <= 0xFAFF) ||
-		(r >= 0x3000 && r <= 0x303F) ||
-		(r >= 0x3040 && r <= 0x309F) ||
-		(r >= 0x30A0 && r <= 0x30FF) ||
-		(r >= 0xAC00 && r <= 0xD7AF) ||
-		(r >= 0x1100 && r <= 0x11FF) ||
-		(r >= 0xFF01 && r <= 0xFF60)
-}
-
-// Ensure layout import is used.
-var _ = layout.NewSpacer
+// Ensure imports used.
+var _ = canvas.NewLine
+var _ = fyne.MeasureText
