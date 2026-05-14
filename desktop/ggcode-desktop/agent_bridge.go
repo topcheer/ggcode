@@ -615,18 +615,6 @@ func (b *AgentBridge) saveSession() {
 	msgs := agent.Messages()
 	b.currentSes.Messages = msgs
 
-	// DEBUG: verify messages
-	if df, err := os.OpenFile("/tmp/ggcode-save-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-		for i, m := range msgs {
-			var types []string
-			for _, bl := range m.Content {
-				types = append(types, bl.Type)
-			}
-			fmt.Fprintf(df, "msg %d: role=%s blocks=%v\n", i, m.Role, types)
-		}
-		df.Close()
-	}
-
 	// If no user messages, delete the empty session.
 	if len(b.currentSes.Messages) == 0 {
 		_ = b.sessionStore.Delete(b.currentSes.ID)
