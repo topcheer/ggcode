@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/widget"
 )
@@ -54,11 +55,15 @@ func NewUIState() *UIState {
 	return s
 }
 
-// SetStatus updates the status bar label directly.
+// SetStatus updates the status bar label safely from any goroutine.
 func (u *UIState) SetStatus(text string) {
 	_ = u.StatusText.Set(text)
 	if u.statusLabel != nil {
-		u.statusLabel.SetText(text)
+		fyne.Do(func() {
+			if u.statusLabel != nil {
+				u.statusLabel.SetText(text)
+			}
+		})
 	}
 }
 
