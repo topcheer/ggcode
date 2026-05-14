@@ -922,15 +922,53 @@ func (cv *ChatView) renderAgentHeader(panel AgentPanelData, vbox *fyne.Container
 // appendAgentEvents renders only new events incrementally.
 // Uses the same renderTool as main panel for consistent look.
 func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState, fromIdx int) {
-	// Build tool_result lookup: ToolID → (result, isError)
-	// Scan ALL events (not just new ones) to find results for pending tool_calls.
-	toolResults := map[string]string{}
-	toolErrors := map[string]bool{}
+	// Build tool_result lookup: ToolID → (result, isError).
+	// For empty ToolID, use sequential matching like TUI: "toolName-N".
+	toolCallCount := map[string]int{}  // toolName → count seen so far (across ALL events)
+	toolResults := map[string]string{} // key → result
+	toolErrors := map[string]bool{}    // key → isError
+
 	for i := range panel.Events {
 		ev := &panel.Events[i]
-		if ev.Type == "tool_result" && ev.ToolID != "" {
-			toolResults[ev.ToolID] = ev.Content
-			toolErrors[ev.ToolID] = ev.IsError
+		switch ev.Type {
+		case "tool_call":
+			toolCallCount[ev.ToolName]++
+		case "tool_result":
+			key := ev.ToolID
+			if key == "" {
+				// Fallback: sequential match "toolName-N"
+				toolResults_counted := toolCallCount[ev.ToolName]
+				if toolResults_counted == 0 {
+					toolResults_counted = 1
+				}
+				key = fmt.Sprintf("%s-%d", ev.ToolName, toolResults_counted)
+			}
+			toolResults[key] = ev.Content
+			toolErrors[key] = ev.IsError
+		}
+	}
+
+	// Re-derive tool_call keys for matching.
+	toolCallKeys := make(map[int]string) // event index → key for result lookup
+	tc := map[string]int{}
+	for i := range panel.Events {
+		ev := &panel.Events[i]
+		if ev.Type == "tool_call" {
+			tc[ev.ToolName]++
+			key := ev.ToolID
+			if key == "" {
+				key = fmt.Sprintf("%s-%d", ev.ToolName, tc[ev.ToolName])
+			}
+			toolCallKeys[i] = key
+		}
+	}
+
+	// Also build a map from ToolID/sequentialKey to toolWidgetRef for live updates.
+	// We need to key refs by their lookup key, not by event index.
+	refsByKey := map[string]*toolWidgetRef{}
+	for idx, ref := range st.toolWidgets {
+		if key, ok := toolCallKeys[idx]; ok {
+			refsByKey[key] = ref
 		}
 	}
 
@@ -944,9 +982,9 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 			}
 
 		case "tool_call":
-			// Look up result if already available.
-			result := toolResults[ev.ToolID]
-			isErr := toolErrors[ev.ToolID]
+			key := toolCallKeys[i]
+			result := toolResults[key]
+			isErr := toolErrors[key]
 
 			msg := &ChatMessage{
 				Role:     "tool",
@@ -960,34 +998,37 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 			}
 			w := cv.renderTool(msg)
 
-			// Register toolWidgetRef for live updates.
-			if w != nil && ev.ToolID != "" {
+			if w != nil {
 				ref := cv.buildToolRef(msg, w)
 				if ref != nil {
 					st.toolWidgets[i] = ref
+					refsByKey[key] = ref
 				}
-			}
-
-			if w != nil {
 				st.vbox.Add(w)
 			}
 
 		case "tool_result":
-			// Update the corresponding tool_call widget by ToolID.
-			if ev.ToolID != "" {
-				for idx, ref := range st.toolWidgets {
-					_ = idx
-					if !ref.hasResult {
-						ref.hasResult = true
-						if ev.IsError {
-							ref.icon.SetResource(theme.CancelIcon())
-						} else {
-							ref.icon.SetResource(theme.ConfirmIcon())
-						}
-						ref.icon.Refresh()
-						cv.addToolResult(ref, ev.Content)
+			// Update the corresponding tool_call widget.
+			key := ev.ToolID
+			if key == "" {
+				// Find sequential key by counting results for this toolName
+				resultCount := 0
+				for j := 0; j <= i; j++ {
+					if panel.Events[j].Type == "tool_result" && panel.Events[j].ToolName == ev.ToolName {
+						resultCount++
 					}
 				}
+				key = fmt.Sprintf("%s-%d", ev.ToolName, resultCount)
+			}
+			if ref, ok := refsByKey[key]; ok && !ref.hasResult {
+				ref.hasResult = true
+				if ev.IsError {
+					ref.icon.SetResource(theme.CancelIcon())
+				} else {
+					ref.icon.SetResource(theme.ConfirmIcon())
+				}
+				ref.icon.Refresh()
+				cv.addToolResult(ref, ev.Content)
 			}
 
 		case "error":
