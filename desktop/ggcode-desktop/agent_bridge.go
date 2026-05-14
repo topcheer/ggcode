@@ -29,7 +29,8 @@ type AgentBridge struct {
 	ui       *UIState
 
 	mu      sync.Mutex
-	cancel  context.CancelFunc
+	cancel    context.CancelFunc
+	cancelled bool
 	working bool
 
 	pendingMu  sync.Mutex
@@ -185,9 +186,18 @@ func (b *AgentBridge) Send(userMsg string) error {
 			b.ui.FinalizeStreaming()
 			b.saveSession()
 			b.mu.Lock()
+			wasCancelled := b.cancelled
 			b.working = false
 			b.cancel = nil
+			b.cancelled = false
 			b.mu.Unlock()
+			if wasCancelled {
+				b.ui.AppendChat(ChatMessage{
+					Role:    "system",
+					Content: "(cancelled)",
+					Time:    time.Now(),
+				})
+			}
 
 			// Check for queued message from user while busy.
 			if msg, ok := b.drainPending(); ok {
@@ -261,11 +271,16 @@ func (b *AgentBridge) Send(userMsg string) error {
 
 		err := b.agent.RunStream(ctx, userMsg, onEvent)
 		if err != nil {
+			b.mu.Lock()
+			c := b.cancelled
+			b.mu.Unlock()
+			if !c {
 			b.ui.AppendChat(ChatMessage{
 				Role:    "error",
 				Content: err.Error(),
 				Time:    time.Now(),
-			})
+				})
+			}
 		}
 	}()
 
@@ -285,6 +300,7 @@ func (b *AgentBridge) syncAgentPanels() {
 func (b *AgentBridge) Cancel() {
 	b.mu.Lock()
 	if b.cancel != nil {
+		b.cancelled = true
 		b.cancel()
 	}
 	b.mu.Unlock()
