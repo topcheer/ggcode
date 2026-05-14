@@ -762,13 +762,17 @@ func (cv *ChatView) renderSendMessageTool(msg *ChatMessage) fyne.CanvasObject {
 	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
 }
 
-// renderSwarmTaskTool: subject + assignee + description.
+// renderSwarmTaskTool: subject > description > pretty name + assignee.
 func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
-	subject := extractJSONField(raw(msg), "subject")
-	assignee := extractJSONField(raw(msg), "assignee")
-	desc := "Task"
-	if subject != "" {
-		desc = subject
+	r := raw(msg)
+	subject := extractJSONField(r, "subject")
+	assignee := extractJSONField(r, "assignee")
+	desc := subject
+	if desc == "" {
+		desc = extractJSONField(r, "description")
+	}
+	if desc == "" {
+		desc = prettifyToolName(msg.ToolName)
 	}
 	if assignee != "" {
 		desc += " -> " + assignee
