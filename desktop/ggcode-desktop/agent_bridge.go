@@ -43,6 +43,7 @@ type AgentBridge struct {
 	workingDir string
 	sessionStore session.Store
 	currentSes  *session.Session
+	rebuildCB   func()
 
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
@@ -58,21 +59,9 @@ func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config
 		workingDir: workingDir,
 	}
 
-	// Initialize session store and create a new session.
+	// Initialize session store (session created lazily in ensureSession).
 	if store, err := session.NewDefaultStore(); err == nil {
 		b.sessionStore = store
-		vendor := ""
-		endpoint := ""
-		model := ""
-		if cfg != nil {
-			vendor = cfg.Vendor
-			endpoint = cfg.Endpoint
-			model = cfg.Model
-		}
-		ses := session.NewSession(vendor, endpoint, model)
-		if err := store.Save(ses); err == nil {
-			b.currentSes = ses
-		}
 	}
 
 	return b
@@ -640,4 +629,60 @@ func (b *AgentBridge) saveSession() {
 	}
 
 	_ = b.sessionStore.Save(b.currentSes)
+}
+
+// ensureSession creates a new session if one doesn't exist yet.
+func (b *AgentBridge) ensureSession() {
+	if b.currentSes != nil || b.sessionStore == nil {
+		return
+	}
+	vendor := ""
+	endpoint := ""
+	model := ""
+	if b.cfg != nil {
+		vendor = b.cfg.Vendor
+		endpoint = b.cfg.Endpoint
+		model = b.cfg.Model
+	}
+	ses := session.NewSession(vendor, endpoint, model)
+	_ = b.sessionStore.Save(ses)
+	b.currentSes = ses
+}
+
+// SessionStore returns the session store for external use (e.g., sidebar).
+func (b *AgentBridge) SessionStore() session.Store {
+	return b.sessionStore
+}
+
+// CurrentSession returns the current session.
+func (b *AgentBridge) CurrentSession() *session.Session {
+	return b.currentSes
+}
+
+// ResumeSession loads a session by ID and restores its messages into the agent.
+func (b *AgentBridge) ResumeSession(id string) error {
+	if b.sessionStore == nil {
+		return fmt.Errorf("no session store")
+	}
+	if err := b.setupAgent(); err != nil {
+		return err
+	}
+
+	ses, err := b.sessionStore.Load(id)
+	if err != nil {
+		return fmt.Errorf("load session: %w", err)
+	}
+
+	// Feed all messages into the agent context.
+	for _, msg := range ses.Messages {
+		b.agent.AddMessage(msg)
+	}
+
+	b.currentSes = ses
+	return nil
+}
+
+// RebuildCallback is set by the UI to rebuild the chat view after resume.
+func (b *AgentBridge) SetRebuildCallback(cb func()) {
+	b.rebuildCB = cb
 }
