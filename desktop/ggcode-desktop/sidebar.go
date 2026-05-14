@@ -9,6 +9,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -41,6 +42,11 @@ type Sidebar struct {
 	modelLoading   *widget.Label
 	modelRefresh   *widget.Button
 	providerStatus *widget.Label
+
+	// IM tab state
+	imVBox          *fyne.Container
+	imAdapterNames  *[]string
+	imDetailRefresh func()
 }
 
 type sessionMeta struct {
@@ -375,100 +381,257 @@ func (s *Sidebar) applyProvider() {
 func (s *Sidebar) buildIMTab() fyne.CanvasObject {
 	cfg := s.app.cfg
 
-	// Adapter list.
-	adapterNames := make([]string, 0, len(cfg.IM.Adapters))
-	for name := range cfg.IM.Adapters {
-		adapterNames = append(adapterNames, name)
+	// Ensure IM map initialized.
+	if cfg.IM.Adapters == nil {
+		cfg.IM.Adapters = make(map[string]config.IMAdapterConfig)
 	}
-	sort.Strings(adapterNames)
 
+	// Sorted adapter names.
+	adapterNames := sortedAdapterNames(cfg)
+
+	// Status label for feedback.
+	imStatus := widget.NewLabel("")
+
+	// ── Adapter list ──
 	adapterList := widget.NewList(
 		func() int { return len(adapterNames) },
 		func() fyne.CanvasObject {
-			return widget.NewLabel("adapter")
+			nameLbl := widget.NewLabel("adapter")
+			nameLbl.Wrapping = fyne.TextWrapWord
+			platLbl := widget.NewLabel("platform")
+			platLbl.TextStyle = fyne.TextStyle{Italic: true}
+			statusIcon := widget.NewIcon(theme.ConfirmIcon())
+			return container.NewBorder(nil, nil, statusIcon, platLbl, nameLbl)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			if id < len(adapterNames) {
-				name := adapterNames[id]
-				adapter := cfg.IM.Adapters[name]
-				status := "enabled"
-				if !adapter.Enabled {
-					status = "disabled"
+			if id >= len(adapterNames) {
+				return
+			}
+			box := obj.(*fyne.Container)
+			var nameLbl *widget.Label
+			var platLbl *widget.Label
+			var icon *widget.Icon
+			for _, o := range box.Objects {
+				switch v := o.(type) {
+				case *widget.Label:
+					if nameLbl == nil {
+						nameLbl = v
+					} else {
+						platLbl = v
+					}
+				case *widget.Icon:
+					icon = v
 				}
-				obj.(*widget.Label).SetText(fmt.Sprintf("%s (%s, %s)", name, adapter.Platform, status))
+			}
+			name := adapterNames[id]
+			adapter := cfg.IM.Adapters[name]
+			if nameLbl != nil {
+				nameLbl.SetText(name)
+			}
+			if platLbl != nil {
+				platLbl.SetText(platformDisplayName(adapter.Platform))
+			}
+			if icon != nil {
+				if adapter.Enabled {
+					icon.SetResource(theme.ConfirmIcon())
+				} else {
+					icon.SetResource(theme.CancelIcon())
+				}
 			}
 		},
 	)
 
-	// Add adapter form.
-	platforms := []string{"qq", "telegram", "discord", "feishu", "dingtalk", "slack", "wechat"}
-	transports := []string{"stdio", "webhook"}
+	// Track selected adapter index.
+	selectedIdx := -1
+	adapterList.OnSelected = func(id widget.ListItemID) {
+		selectedIdx = int(id)
+	}
 
+	// ── Detail panel for selected adapter ──
+	detailName := widget.NewLabel("")
+	detailName.TextStyle = fyne.TextStyle{Bold: true}
+	detailPlatform := widget.NewLabel("")
+	detailTransport := widget.NewLabel("")
+	detailCommand := widget.NewEntry()
+	detailCommand.PlaceHolder = "Command (optional)"
+	detailCommand.Wrapping = fyne.TextWrapWord
+	detailEnabled := widget.NewCheck("Enabled", nil)
+
+	refreshDetail := func() {
+		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
+			detailName.SetText("Select an adapter")
+			detailPlatform.SetText("")
+			detailTransport.SetText("")
+			detailCommand.SetText("")
+			detailEnabled.SetChecked(false)
+			return
+		}
+		name := adapterNames[selectedIdx]
+		adapter := cfg.IM.Adapters[name]
+		detailName.SetText(name)
+		detailPlatform.SetText("Platform: " + platformDisplayName(adapter.Platform))
+		detailTransport.SetText("Transport: " + adapter.Transport)
+		detailCommand.SetText(adapter.Command)
+		detailEnabled.SetChecked(adapter.Enabled)
+	}
+
+	// Save detail changes back to config.
+	saveDetail := func() {
+		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
+			return
+		}
+		name := adapterNames[selectedIdx]
+		adapter := cfg.IM.Adapters[name]
+		adapter.Command = detailCommand.Text
+		adapter.Enabled = detailEnabled.Checked
+		cfg.IM.Adapters[name] = adapter
+		_ = cfg.Save()
+		imStatus.SetText("Saved")
+	}
+
+	saveDetailBtn := widget.NewButton("Save Changes", func() {
+		saveDetail()
+	})
+
+	// ── Action buttons ──
+	delBtn := widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
+		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
+			return
+		}
+		_ = cfg.RemoveIMAdapter(adapterNames[selectedIdx])
+		_ = cfg.Save()
+		selectedIdx = -1
+		s.rebuildIMTab()
+	})
+
+	toggleBtn := widget.NewButtonWithIcon("Toggle", theme.MediaPlayIcon(), func() {
+		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
+			return
+		}
+		name := adapterNames[selectedIdx]
+		adapter := cfg.IM.Adapters[name]
+		_ = cfg.SetIMAdapterEnabled(name, !adapter.Enabled)
+		_ = cfg.Save()
+		s.rebuildIMTab()
+	})
+
+	// ── Add adapter form ──
 	nameEntry := widget.NewEntry()
-	nameEntry.PlaceHolder = "Adapter name"
+	nameEntry.PlaceHolder = "e.g. my-qq-bot"
 
+	platforms := []string{"qq", "telegram", "discord", "feishu", "dingtalk", "slack", "wechat", "wecom", "whatsapp", "mattermost"}
 	platformSelect := widget.NewSelect(platforms, nil)
-	platformSelect.PlaceHolder = "Platform"
+	platformSelect.PlaceHolder = "Select platform..."
 
+	transports := []string{"stdio", "webhook"}
 	transportSelect := widget.NewSelect(transports, nil)
 	transportSelect.SetSelected("stdio")
 
 	cmdEntry := widget.NewEntry()
-	cmdEntry.PlaceHolder = "Command (e.g. npx @anthropic/claude-code-mcp-adapter)"
+	cmdEntry.PlaceHolder = "Command (optional, for stdio transport)"
 
-	addBtn := widget.NewButton("Add Adapter", func() {
+	addBtn := widget.NewButtonWithIcon("Add Adapter", theme.ContentAddIcon(), func() {
 		name := strings.TrimSpace(nameEntry.Text)
 		if name == "" || platformSelect.Selected == "" {
+			imStatus.SetText("Name and platform required")
 			return
 		}
-		_ = cfg.AddIMAdapter(name, config.IMAdapterConfig{
+		cfg.IM.Enabled = true
+		err := cfg.AddIMAdapter(name, config.IMAdapterConfig{
 			Enabled:   true,
 			Platform:  platformSelect.Selected,
 			Transport: transportSelect.Selected,
 			Command:   cmdEntry.Text,
+			Extra:     map[string]interface{}{},
 		})
-		_ = cfg.Save()
-		// Refresh sidebar.
-		s.app.startChat()
-	})
-
-	// Track selected adapter.
-	selectedAdapter := -1
-
-	adapterList.OnSelected = func(id widget.ListItemID) {
-		selectedAdapter = int(id)
-	}
-
-	delBtn := widget.NewButton("Delete Selected", func() {
-		if selectedAdapter < 0 || selectedAdapter >= len(adapterNames) {
+		if err != nil {
+			imStatus.SetText("Error: " + err.Error())
 			return
 		}
-		_ = cfg.RemoveIMAdapter(adapterNames[selectedAdapter])
 		_ = cfg.Save()
-		s.app.startChat()
+		nameEntry.SetText("")
+		cmdEntry.SetText("")
+		imStatus.SetText("Adapter " + name + " added")
+		s.rebuildIMTab()
 	})
 
-	toggleBtn := widget.NewButton("Toggle Selected", func() {
-		if selectedAdapter < 0 || selectedAdapter >= len(adapterNames) {
-			return
-		}
-		name := adapterNames[selectedAdapter]
-		adapter := cfg.IM.Adapters[name]
-		_ = cfg.SetIMAdapterEnabled(name, !adapter.Enabled)
-		_ = cfg.Save()
-		s.app.startChat()
-	})
-
-	return container.NewVScroll(container.NewVBox(
-		widget.NewCard("IM Adapters", "", adapterList),
-		widget.NewCard("Add Adapter", "", container.NewVBox(
-			widget.NewForm(
-				&widget.FormItem{Text: "Name", Widget: nameEntry},
-				&widget.FormItem{Text: "Platform", Widget: platformSelect},
-				&widget.FormItem{Text: "Transport", Widget: transportSelect},
-				&widget.FormItem{Text: "Command", Widget: cmdEntry},
-			),
-			container.NewHBox(addBtn, toggleBtn, delBtn),
-		)),
+	// ── Layout ──
+	detailCard := widget.NewCard("Adapter Detail", "", container.NewVBox(
+		detailName,
+		container.NewHBox(detailPlatform, layout.NewSpacer(), detailTransport),
+		detailCommand,
+		detailEnabled,
+		container.NewHBox(saveDetailBtn, toggleBtn, delBtn),
 	))
+
+	addCard := widget.NewCard("Add Adapter", "", container.NewVBox(
+		widget.NewForm(
+			&widget.FormItem{Text: "Name", Widget: nameEntry},
+			&widget.FormItem{Text: "Platform", Widget: platformSelect},
+			&widget.FormItem{Text: "Transport", Widget: transportSelect},
+			&widget.FormItem{Text: "Command", Widget: cmdEntry},
+		),
+		addBtn,
+	))
+
+	// Full tab layout: adapter list + detail + add form.
+	vbox := container.NewVBox(
+		widget.NewCard("Adapters", "", adapterList),
+		detailCard,
+		addCard,
+		imStatus,
+	)
+
+	s.imVBox = vbox
+	s.imAdapterNames = &adapterNames
+	s.imDetailRefresh = refreshDetail
+
+	return container.NewVScroll(vbox)
+}
+
+func (s *Sidebar) rebuildIMTab() {
+	if s.tabs == nil {
+		return
+	}
+	// Rebuild the IM tab (index 2).
+	if len(s.tabs.Items) >= 3 {
+		s.tabs.Items[2].Content = s.buildIMTab()
+		s.tabs.Refresh()
+	}
+}
+
+func platformDisplayName(platform string) string {
+	switch platform {
+	case "qq":
+		return "QQ"
+	case "telegram":
+		return "Telegram"
+	case "discord":
+		return "Discord"
+	case "feishu":
+		return "Feishu"
+	case "dingtalk":
+		return "DingTalk"
+	case "slack":
+		return "Slack"
+	case "wechat":
+		return "WeChat"
+	case "wecom":
+		return "WeCom"
+	case "whatsapp":
+		return "WhatsApp"
+	case "mattermost":
+		return "Mattermost"
+	default:
+		return platform
+	}
+}
+
+func sortedAdapterNames(cfg *config.Config) []string {
+	names := make([]string, 0, len(cfg.IM.Adapters))
+	for name := range cfg.IM.Adapters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
