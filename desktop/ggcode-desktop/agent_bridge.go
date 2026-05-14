@@ -585,6 +585,7 @@ func buildSystemPrompt(workingDir string) string {
 }
 
 // saveSession persists the current conversation to the session store.
+// If the session has no messages, it is deleted instead.
 func (b *AgentBridge) saveSession() {
 	if b.sessionStore == nil || b.currentSes == nil {
 		return
@@ -596,5 +597,31 @@ func (b *AgentBridge) saveSession() {
 		return
 	}
 	b.currentSes.Messages = agent.Messages()
+
+	// If no user messages, delete the empty session.
+	if len(b.currentSes.Messages) == 0 {
+		_ = b.sessionStore.Delete(b.currentSes.ID)
+		return
+	}
+
+	// Auto-generate title from first user message if still default.
+	if b.currentSes.Title == "" || b.currentSes.Title == "New session" {
+		for _, m := range b.currentSes.Messages {
+			if m.Role == "user" {
+				for _, block := range m.Content {
+					if block.Type == "text" && block.Text != "" {
+						text := block.Text
+						if len([]rune(text)) > 60 {
+							text = string([]rune(text)[:57]) + "..."
+						}
+						b.currentSes.Title = text
+						break
+					}
+				}
+				break
+			}
+		}
+	}
+
 	_ = b.sessionStore.Save(b.currentSes)
 }
