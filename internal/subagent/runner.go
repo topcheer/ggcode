@@ -141,6 +141,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolCall,
 					ToolName: event.Tool.Name,
+					ToolID:   event.Tool.ID,
 					ToolArgs: string(event.Tool.Arguments),
 				})
 			}
