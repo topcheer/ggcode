@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -340,7 +341,16 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	if text == "" {
 		return nil
 	}
+	log.Printf("[MD] renderAssistant streaming=%v len=%d preview=%q", msg.Streaming, len(text), truncateStr(text, 100))
 	return cv.iconRow(theme.ComputerIcon(), newMD(text))
+}
+
+func truncateStr(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "..."
 }
 
 
