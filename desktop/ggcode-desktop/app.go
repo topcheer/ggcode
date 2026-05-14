@@ -176,6 +176,12 @@ func (a *App) showFolderPicker() {
 func (a *App) initFromWorkDir(dir string) {
 	defer safeRecover("initFromWorkDir")
 
+	// Set process working directory to the selected workspace so that all
+	// file tools (read_file, write_file, edit_file, glob, etc.) resolve
+	// relative paths correctly. In TUI/daemon mode this is naturally the
+	// cwd, but GUI apps launch from a different directory.
+	_ = os.Chdir(dir)
+
 	a.ui.SetStatus(fmt.Sprintf("Loading %s...", dir))
 	a.window.SetTitle(fmt.Sprintf("ggcode — %s", filepath.Base(dir)))
 
