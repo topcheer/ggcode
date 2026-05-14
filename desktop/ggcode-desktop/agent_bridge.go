@@ -432,10 +432,13 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 			ToolName: ev.ToolName,
 			ToolArgs: ev.ToolArgs,
 		}
-		// tool_result stores result in ev.Result, not ev.Text.
-		if ev.Type == subagent.AgentEventToolResult {
+		switch ev.Type {
+		case subagent.AgentEventToolResult:
 			entry.Content = ev.Result
-		} else {
+		case subagent.AgentEventToolCall:
+			// ToolCall has no Text field; use toolArgSummary as description.
+			entry.Content = toolArgSummary(ev.ToolName, ev.ToolArgs)
+		default:
 			entry.Content = ev.Text
 		}
 		events = append(events, entry)
@@ -476,9 +479,12 @@ func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData
 			ToolName: e.ToolName,
 			ToolArgs: e.ToolArgs,
 		}
-		if e.Type == swarm.TeammateEventToolResult {
+		switch e.Type {
+		case swarm.TeammateEventToolResult:
 			entry.Content = e.Result
-		} else {
+		case swarm.TeammateEventToolCall:
+			entry.Content = toolArgSummary(e.ToolName, e.ToolArgs)
+		default:
 			entry.Content = e.Text
 		}
 		events = append(events, entry)
