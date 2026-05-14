@@ -12,7 +12,17 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/topcheer/ggcode/desktop/markdownx"
 )
+
+
+// newMD creates a MarkdownWidget with the given text.
+func newMD(text string) *markdownx.MarkdownWidget {
+	w := markdownx.NewMarkdownWidget()
+	w.SetMarkdown(text)
+	return w
+}
 
 // ── sendEntry ────────────────────────────────────────
 
@@ -74,7 +84,7 @@ type ChatView struct {
 
 	// Cached rendering: avoid full rebuild when only streaming text changes.
 	lastRenderHash string           // hash of last fully rendered message list
-	streamWidget   *widget.RichText // persistent widget for streaming assistant
+	streamWidget   *markdownx.MarkdownWidget // persistent widget for streaming assistant
 	lastStreamText string           // last streaming text rendered
 }
 
@@ -249,9 +259,7 @@ func (cv *ChatView) tryStreamingUpdate(merged []ChatMessage) bool {
 	if last.Content == cv.lastStreamText {
 		return true // nothing changed, skip
 	}
-	text := last.Content
-	text = renderMarkdownTables(text)
-	cv.streamWidget.ParseMarkdown(text)
+	cv.streamWidget.SetMarkdown(last.Content)
 	cv.streamWidget.Refresh()
 	cv.lastStreamText = last.Content
 	return true
@@ -270,8 +278,8 @@ func (cv *ChatView) cacheRenderState(merged []ChatMessage) {
 		for i := len(cv.vbox.Objects) - 1; i >= 0; i-- {
 			if iconRow, ok := cv.vbox.Objects[i].(*fyne.Container); ok {
 				for _, child := range iconRow.Objects {
-					if rt, ok := child.(*widget.RichText); ok {
-						cv.streamWidget = rt
+					if md, ok := child.(*markdownx.MarkdownWidget); ok {
+						cv.streamWidget = md
 						return
 					}
 				}
@@ -332,13 +340,9 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	if text == "" {
 		return nil
 	}
-	// Pre-process: Fyne RichText doesn't support GFM tables.
-	// Replace table blocks with formatted text representation.
-	text = renderMarkdownTables(text)
-	rt := widget.NewRichTextFromMarkdown(text)
-	rt.Wrapping = fyne.TextWrapWord
-	return cv.iconRow(theme.ComputerIcon(), rt)
+	return cv.iconRow(theme.ComputerIcon(), newMD(text))
 }
+
 
 func (cv *ChatView) renderSystem(msg *ChatMessage) fyne.CanvasObject {
 	t := canvas.NewText(msg.Content, theme.DisabledColor())

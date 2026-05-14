@@ -8,135 +8,92 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
+	"fyne.io/fyne/v2/layout"
 
 	"github.com/alecthomas/chroma/v2"
-	chromaLexers "github.com/alecthomas/chroma/v2/lexers"
-	chromaStyles "github.com/alecthomas/chroma/v2/styles"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 )
 
-// codeBlockSegment renders a fenced code block with optional syntax highlighting.
-type codeBlockSegment struct {
-	lang  string
-	lines [][]byte
-}
+// newCodeBlock creates a styled code block with dark background and line numbers.
+func newCodeBlock(lang string, lines []string) fyne.CanvasObject {
+	if len(lines) == 0 {
+		return nil
+	}
 
-func newCodeBlockSegment(lang string, lines [][]byte) *codeBlockSegment {
-	return &codeBlockSegment{lang: lang, lines: lines}
-}
+	numWidth := len(itoa(len(lines)))
 
-func (s *codeBlockSegment) Inline() bool              { return false }
-func (s *codeBlockSegment) Textual() string           { return s.code() }
-func (s *codeBlockSegment) Update(fyne.CanvasObject)  {}
-func (s *codeBlockSegment) Select(_, _ fyne.Position) {}
-func (s *codeBlockSegment) SelectedText() string      { return "" }
-func (s *codeBlockSegment) Unselect()                 {}
+	// Try to get highlighted colors for the whole block.
+	lineColors := chromaLineColors(lang, lines)
 
-func (s *codeBlockSegment) Visual() fyne.CanvasObject {
-	if s.lang != "" {
-		if obj := s.highlighted(); obj != nil {
-			return obj
+	var lineObjs []fyne.CanvasObject
+	for i, line := range lines {
+		// Line number.
+		num := canvas.NewText(fmt.Sprintf("%*d ", numWidth, i+1), color.RGBA{R: 100, G: 100, B: 100, A: 255})
+		num.TextStyle = fyne.TextStyle{Monospace: true}
+		num.TextSize = 13
+
+		// Code text.
+		codeText := canvas.NewText(line, color.RGBA{R: 220, G: 220, B: 220, A: 255})
+		codeText.TextStyle = fyne.TextStyle{Monospace: true}
+		codeText.TextSize = 13
+		if i < len(lineColors) && lineColors[i] != nil {
+			codeText.Color = lineColors[i]
 		}
+
+		row := container.NewHBox(num, codeText)
+		lineObjs = append(lineObjs, row)
 	}
-	return s.plain()
+
+	codeVBox := container.NewVBox(lineObjs...)
+	bg := canvas.NewRectangle(color.RGBA{R: 30, G: 30, B: 30, A: 255})
+	padded := container.NewPadded(codeVBox)
+
+	content := container.NewStack(bg, padded)
+	return container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), content)
 }
 
-func (s *codeBlockSegment) code() string {
-	var sb strings.Builder
-	for _, line := range s.lines {
-		sb.WriteString(string(line))
-		sb.WriteString("\n")
+// chromaLineColors returns per-line dominant colors using chroma highlighting.
+func chromaLineColors(lang string, lines []string) []color.Color {
+	result := make([]color.Color, len(lines))
+	if lang == "" {
+		return result
 	}
-	return sb.String()
-}
 
-func (s *codeBlockSegment) plain() fyne.CanvasObject {
-	// Build text with line numbers.
-	var lines []string
-	for i, line := range s.lines {
-		lines = append(lines, padNum(i+1, len(s.lines))+" "+string(line))
-	}
-	text := widget.NewLabel(strings.Join(lines, "\n"))
-	text.TextStyle = fyne.TextStyle{Monospace: true}
-	text.Wrapping = fyne.TextWrapBreak
-
-	bg := canvas.NewRectangle(color.RGBA{R: 40, G: 40, B: 40, A: 255})
-	return container.NewStack(bg, container.NewPadded(text))
-}
-
-func (s *codeBlockSegment) highlighted() fyne.CanvasObject {
-	code := s.code()
-
-	lexer := chromaLexers.Get(s.lang)
+	lexer := lexers.Get(lang)
 	if lexer == nil {
-		lexer = chromaLexers.Fallback
+		return result
 	}
 	lexer = chroma.Coalesce(lexer)
 
+	code := strings.Join(lines, "\n")
 	iter, err := lexer.Tokenise(nil, code)
 	if err != nil {
-		return nil
+		return result
 	}
-	style := chromaStyles.Get("monokai")
+
+	style := styles.Get("monokai")
 	if style == nil {
-		style = chromaStyles.Fallback
+		style = styles.Fallback
 	}
 
-	// Build colored text segments.
-	type colorText struct {
-		color color.Color
-		text  string
-	}
-	var parts []colorText
-	var sb strings.Builder
-	lastColor := color.RGBA{R: 230, G: 230, B: 230, A: 255}
-
-	flush := func() {
-		if sb.Len() > 0 {
-			parts = append(parts, colorText{color: lastColor, text: sb.String()})
-			sb.Reset()
+	currentLine := 0
+	lastColor := color.Color(color.RGBA{R: 230, G: 230, B: 230, A: 255}) // default
+	for tok := iter(); tok != chroma.EOF; tok = iter() {
+		entry := style.Get(tok.Type)
+		if entry.Colour.Red() > 0 || entry.Colour.Green() > 0 || entry.Colour.Blue() > 0 {
+			lastColor = color.RGBA{R: entry.Colour.Red(), G: entry.Colour.Green(), B: entry.Colour.Blue(), A: 255}
 		}
-	}
-
-	for token := iter(); token != chroma.EOF; token = iter() {
-		entry := style.Get(token.Type)
-		c := chromaColourToRGBA(entry.Colour)
-		if c != lastColor {
-			flush()
-			lastColor = c
+		newlines := strings.Count(tok.Value, "\n")
+		for i := currentLine; i <= currentLine+newlines && i < len(result); i++ {
+			if result[i] == nil {
+				result[i] = lastColor
+			}
 		}
-		sb.WriteString(token.Value)
+		currentLine += newlines
 	}
-	flush()
-
-	// Build label-per-color for simple rendering.
-	var labels []fyne.CanvasObject
-	for _, p := range parts {
-		l := canvas.NewText(p.text, p.color)
-		l.TextStyle = fyne.TextStyle{Monospace: true}
-		l.TextSize = 13
-		labels = append(labels, l)
-	}
-
-	// If no highlighting worked, fall back to plain.
-	if len(labels) == 0 {
-		return nil
-	}
-
-	// Use a single label with concatenated text (no per-token coloring).
-	// For now, just use plain with background — proper multi-color needs custom layout.
-	return s.plain()
+	return result
 }
 
-func chromaColourToRGBA(c chroma.Colour) color.RGBA {
-	return color.RGBA{R: c.Red(), G: c.Green(), B: c.Blue(), A: 255}
-}
-
-func padNum(n, total int) string {
-	s := fmt.Sprintf("%d", n)
-	pad := len(fmt.Sprintf("%d", total)) - len(s)
-	if pad < 0 {
-		pad = 0
-	}
-	return strings.Repeat(" ", pad) + s
-}
+// Ensure styles import is used.
+var _ = styles.Fallback
