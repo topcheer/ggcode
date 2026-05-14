@@ -17,7 +17,8 @@ import (
 
 const autoScrollPause = 30 * time.Second
 
-// sendEntry: Enter sends, Ctrl/Shift+Enter inserts newline.
+// ── sendEntry ────────────────────────────────────────
+
 type sendEntry struct {
 	widget.Entry
 	onSend func()
@@ -55,7 +56,8 @@ func (e *sendEntry) isCtrlOrShiftHeld() bool {
 	return false
 }
 
-// ChatView renders the chat area with tabs for sub-agents/teammates.
+// ── ChatView ─────────────────────────────────────────
+
 type ChatView struct {
 	bridge *AgentBridge
 	ui     *UIState
@@ -125,18 +127,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	return container.NewBorder(nil, container.NewPadded(inputBar), nil, nil, cv.tabs)
 }
 
-func (cv *ChatView) shouldAutoScroll() bool {
-	cv.scrollMu.Lock()
-	defer cv.scrollMu.Unlock()
-	if cv.autoScroll {
-		return true
-	}
-	if time.Since(cv.lastUserAct) >= autoScrollPause {
-		cv.autoScroll = true
-		return true
-	}
-	return false
-}
+// ── Poll loop ────────────────────────────────────────
 
 func (cv *ChatView) pollRefresh() {
 	ticker := time.NewTicker(150 * time.Millisecond)
@@ -144,7 +135,6 @@ func (cv *ChatView) pollRefresh() {
 	for range ticker.C {
 		working := cv.bridge.IsWorking()
 		dirty := cv.ui.IsDirty()
-
 		fyne.Do(func() {
 			if dirty {
 				cv.rebuildMessages()
@@ -157,6 +147,19 @@ func (cv *ChatView) pollRefresh() {
 			cv.updateStatusBar(working)
 		})
 	}
+}
+
+func (cv *ChatView) shouldAutoScroll() bool {
+	cv.scrollMu.Lock()
+	defer cv.scrollMu.Unlock()
+	if cv.autoScroll {
+		return true
+	}
+	if time.Since(cv.lastUserAct) >= autoScrollPause {
+		cv.autoScroll = true
+		return true
+	}
+	return false
 }
 
 func (cv *ChatView) updateButtons(working bool) {
@@ -175,50 +178,465 @@ func (cv *ChatView) onSend() {
 		return
 	}
 	cv.entry.SetText("")
-
 	cv.scrollMu.Lock()
 	cv.autoScroll = true
 	cv.scrollMu.Unlock()
-
-	cv.ui.AppendChat(ChatMessage{
-		Role:    "user",
-		Content: text,
-		Time:    time.Now(),
-	})
-
+	cv.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
 	if cv.bridge.IsWorking() {
-		// Agent busy — queue as pending message (sent after current turn).
 		cv.bridge.QueueMessage(text)
-		cv.ui.AppendChat(ChatMessage{
-			Role:    "system",
-			Content: "(queued — will be sent after current response)",
-			Time:    time.Now(),
-		})
+		cv.ui.AppendChat(ChatMessage{Role: "system", Content: "(queued)", Time: time.Now()})
 		return
 	}
-
 	if err := cv.bridge.Send(text); err != nil {
-		cv.ui.AppendChat(ChatMessage{
-			Role:    "error",
-			Content: err.Error(),
-			Time:    time.Now(),
-		})
+		cv.ui.AppendChat(ChatMessage{Role: "error", Content: err.Error(), Time: time.Now()})
 	}
 }
 
-// ── Main chat messages ───────────────────────────────
+var lastStatusText string
+
+func (cv *ChatView) updateStatusBar(working bool) {
+	tc := cv.bridge.TokenCount()
+	cw := cv.bridge.ContextWindow()
+	info := fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw))
+	var text string
+	if working {
+		text = fmt.Sprintf(">> Working (%s) | %s", cv.bridge.Elapsed().Round(time.Second), info)
+	} else {
+		text = info
+	}
+	if text != lastStatusText {
+		lastStatusText = text
+		cv.ui.SetStatus(text)
+	}
+}
+
+// ── Main chat rebuild ────────────────────────────────
 
 func (cv *ChatView) rebuildMessages() {
 	msgs := cv.ui.TakeMessages()
-	objects := make([]fyne.CanvasObject, 0, len(msgs))
+	objs := make([]fyne.CanvasObject, 0, len(msgs))
 	for i := range msgs {
-		w := cv.buildMessageWidget(&msgs[i])
-		if w != nil {
-			objects = append(objects, w)
+		if w := cv.renderMessage(&msgs[i]); w != nil {
+			objs = append(objs, w)
 		}
 	}
-	cv.vbox.Objects = objects
+	cv.vbox.Objects = objs
 	cv.vbox.Refresh()
+}
+
+// ── Message rendering ────────────────────────────────
+
+func (cv *ChatView) renderMessage(msg *ChatMessage) fyne.CanvasObject {
+	switch msg.Role {
+	case "user":
+		return cv.renderUser(msg)
+	case "assistant":
+		return cv.renderAssistant(msg)
+	case "tool":
+		return cv.renderTool(msg)
+	case "system":
+		return cv.renderSystem(msg)
+	case "reasoning":
+		return cv.renderReasoning(msg)
+	case "error":
+		return cv.renderError(msg)
+	}
+	return nil
+}
+
+func (cv *ChatView) renderUser(msg *ChatMessage) fyne.CanvasObject {
+	rt := widget.NewRichTextFromMarkdown(msg.Content)
+	rt.Wrapping = fyne.TextWrapWord
+	return cv.iconRow(theme.AccountIcon(), rt)
+}
+
+func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
+	text := msg.Content
+	if text == "" && msg.Streaming {
+		text = "..."
+	}
+	if text == "" {
+		return nil
+	}
+	rt := widget.NewRichTextFromMarkdown(text)
+	rt.Wrapping = fyne.TextWrapWord
+	return cv.iconRow(theme.ComputerIcon(), rt)
+}
+
+func (cv *ChatView) renderSystem(msg *ChatMessage) fyne.CanvasObject {
+	t := canvas.NewText(msg.Content, theme.DisabledColor())
+	t.TextStyle = fyne.TextStyle{Italic: true}
+	t.TextSize = theme.Size(theme.SizeNameCaptionText)
+	t.Alignment = fyne.TextAlignCenter
+	return container.NewPadded(t)
+}
+
+func (cv *ChatView) renderReasoning(msg *ChatMessage) fyne.CanvasObject {
+	t := canvas.NewText("Thinking: "+msg.Content, theme.DisabledColor())
+	t.TextStyle = fyne.TextStyle{Italic: true}
+	t.TextSize = theme.Size(theme.SizeNameCaptionText)
+	return container.NewPadded(t)
+}
+
+func (cv *ChatView) renderError(msg *ChatMessage) fyne.CanvasObject {
+	t := canvas.NewText("Error: "+msg.Content, theme.ErrorColor())
+	t.TextSize = theme.TextSize()
+	return cv.iconRow(theme.CancelIcon(), t)
+}
+
+// ── Tool rendering (mirrors TUI classifyTool logic) ──
+
+// toolClass mirrors TUI's tool classification.
+type toolClass int
+
+const (
+	tcBash     toolClass = iota // run_command
+	tcFile                      // read/write/edit/notebook_edit
+	tcSearch                    // grep/glob/search_files
+	tcList                      // list_directory
+	tcWeb                       // web_fetch/web_search
+	tcGit                       // git_*
+	tcCmd                       // start_command, read_command_output, wait_command, etc.
+	tcLSP                       // lsp_*
+	tcTodo                      // todo_write (special)
+	tcAgent                     // spawn_agent
+	tcMessage                   // send_message
+	tcWait                      // wait_agent
+	tcTeammate                  // teammate_spawn/shutdown/list/results
+	tcSwarm                     // swarm_task_create/claim/complete/list
+	tcSuppress                  // header-only tools (save_memory, config, skill, etc.)
+	tcGeneric                   // fallback
+)
+
+func classifyToolGUI(name string) toolClass {
+	switch name {
+	case "run_command", "bash", "Bash":
+		return tcBash
+	case "read_file", "view", "write_file", "edit_file", "multi_edit_file", "notebook_edit":
+		return tcFile
+	case "search_files", "grep", "glob", "find":
+		return tcSearch
+	case "list_directory":
+		return tcList
+	case "web_fetch", "web_search":
+		return tcWeb
+	case "git_status", "git_diff", "git_log", "git_show", "git_blame",
+		"git_branch_list", "git_remote", "git_stash_list", "git_add",
+		"git_commit", "git_stash":
+		return tcGit
+	case "start_command", "read_command_output", "wait_command",
+		"stop_command", "write_command_input", "list_commands":
+		return tcCmd
+	case "todo_write":
+		return tcTodo
+	case "spawn_agent":
+		return tcAgent
+	case "send_message":
+		return tcMessage
+	case "wait_agent", "list_agents":
+		return tcWait
+	case "teammate_spawn", "teammate_shutdown", "teammate_list", "teammate_results":
+		return tcTeammate
+	case "swarm_task_create", "swarm_task_claim", "swarm_task_complete", "swarm_task_list",
+		"team_create", "team_delete":
+		return tcSwarm
+	case "save_memory", "config", "skill",
+		"enter_plan_mode", "enter_worktree", "exit_worktree",
+		"task_create", "task_get", "task_update", "task_list", "task_stop",
+		"cron_create", "cron_delete", "cron_list",
+		"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource",
+		"ask_user":
+		return tcSuppress
+	default:
+		if strings.HasPrefix(name, "lsp_") {
+			return tcLSP
+		}
+		if strings.HasPrefix(name, "mcp__") {
+			return tcSuppress
+		}
+		return tcGeneric
+	}
+}
+
+func (cv *ChatView) renderTool(msg *ChatMessage) fyne.CanvasObject {
+	switch classifyToolGUI(msg.ToolName) {
+	case tcBash:
+		return cv.renderBashTool(msg)
+	case tcFile:
+		return cv.renderFileTool(msg)
+	case tcSearch, tcList, tcWeb:
+		return cv.renderHeaderOnlyTool(msg)
+	case tcGit:
+		return cv.renderGitTool(msg)
+	case tcCmd:
+		return cv.renderHeaderOnlyTool(msg)
+	case tcLSP:
+		return cv.renderHeaderOnlyTool(msg)
+	case tcTodo:
+		return cv.renderTodoTool(msg)
+	case tcAgent:
+		return cv.renderAgentTool(msg)
+	case tcMessage:
+		return cv.renderSendMessageTool(msg)
+	case tcWait:
+		return cv.renderHeaderOnlyTool(msg)
+	case tcTeammate:
+		return cv.renderHeaderOnlyTool(msg)
+	case tcSwarm:
+		return cv.renderSwarmTaskTool(msg)
+	case tcSuppress:
+		return cv.renderHeaderOnlyTool(msg)
+	default:
+		return cv.renderGenericTool(msg)
+	}
+}
+
+// ── Tool renderers ───────────────────────────────────
+
+// renderBashTool: description header + command + result in accordion (collapsed by default).
+func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
+	desc := msg.ToolDesc
+	if desc == "" {
+		desc = "Bash"
+	}
+	header := cv.toolHeader(desc, msg)
+
+	var accItems []*widget.AccordionItem
+
+	if msg.ToolArgs != "" {
+		cmdBlock := widget.NewRichTextFromMarkdown("```bash\n" + msg.ToolArgs + "\n```")
+		cmdBlock.Wrapping = fyne.TextWrapWord
+		accItems = append(accItems, widget.NewAccordionItem("Command", cmdBlock))
+	}
+
+	if msg.Content != "" {
+		result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
+		resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
+		resultBlock.Wrapping = fyne.TextWrapWord
+		accItems = append(accItems, widget.NewAccordionItem("Output", resultBlock))
+	}
+
+	if len(accItems) > 0 {
+		acc := widget.NewAccordion(accItems...)
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	}
+	return cv.iconRow(toolIcon(msg), header)
+}
+
+// renderFileTool: header + line count / edit summary + result in accordion.
+func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
+	desc := msg.ToolDesc
+	if desc == "" {
+		desc = prettifyToolName(msg.ToolName)
+	}
+	header := cv.toolHeader(desc, msg)
+
+	if msg.Content == "" {
+		return cv.iconRow(toolIcon(msg), header)
+	}
+
+	// Show file result in accordion.
+	result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
+	resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
+	resultBlock.Wrapping = fyne.TextWrapWord
+	acc := widget.NewAccordion(widget.NewAccordionItem("Content", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+}
+
+// renderGitTool: header + result in accordion (for git_diff, git_log, git_status).
+func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
+	desc := msg.ToolDesc
+	if desc == "" {
+		desc = prettifyToolName(msg.ToolName)
+	}
+	header := cv.toolHeader(desc, msg)
+
+	// git_add, git_commit, git_stash — header only
+	switch msg.ToolName {
+	case "git_add", "git_commit", "git_stash":
+		return cv.iconRow(toolIcon(msg), header)
+	}
+
+	if msg.Content == "" {
+		return cv.iconRow(toolIcon(msg), header)
+	}
+
+	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
+	resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
+	resultBlock.Wrapping = fyne.TextWrapWord
+	acc := widget.NewAccordion(widget.NewAccordionItem("Output", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+}
+
+// renderHeaderOnlyTool: just the header line, no body.
+// For: suppress tools, teammate ops, task ops, search, list, web, cmd, LSP.
+func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
+	desc := msg.ToolDesc
+	if desc == "" {
+		desc = prettifyToolName(msg.ToolName)
+	}
+	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
+}
+
+// renderGenericTool: header + result in accordion.
+func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
+	desc := msg.ToolDesc
+	if desc == "" {
+		desc = prettifyToolName(msg.ToolName)
+	}
+	header := cv.toolHeader(desc, msg)
+
+	if msg.Content == "" {
+		return cv.iconRow(toolIcon(msg), header)
+	}
+
+	result := truncateRunes(msg.Content, 1000, "\n...(truncated)")
+	resultBlock := widget.NewLabel(result)
+	resultBlock.Wrapping = fyne.TextWrapWord
+	resultBlock.TextStyle = fyne.TextStyle{Monospace: true}
+	acc := widget.NewAccordion(widget.NewAccordionItem("Result", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+}
+
+// renderTodoTool: checkbox list, no tool name header.
+func (cv *ChatView) renderTodoTool(msg *ChatMessage) fyne.CanvasObject {
+	var input struct {
+		Todos []struct {
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"todos"`
+	}
+	args := msg.ToolArgs
+	if args == "" {
+		args = msg.Content
+	}
+	if err := json.Unmarshal([]byte(args), &input); err != nil || len(input.Todos) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	for _, t := range input.Todos {
+		switch t.Status {
+		case "done":
+			sb.WriteString("- [x] " + t.Content)
+		case "in_progress":
+			sb.WriteString("- [ ] **" + t.Content + "** _(in progress)_")
+		default:
+			sb.WriteString("- [ ] " + t.Content)
+		}
+		sb.WriteString("\n")
+	}
+	rt := widget.NewRichTextFromMarkdown(sb.String())
+	rt.Wrapping = fyne.TextWrapWord
+	return cv.iconRow(theme.CheckButtonCheckedIcon(), rt)
+}
+
+// renderAgentTool: agent name + task description.
+func (cv *ChatView) renderAgentTool(msg *ChatMessage) fyne.CanvasObject {
+	name := extractJSONField(msg.ToolArgs, "name")
+	if name == "" {
+		name = extractJSONField(msg.ToolArgs, "subagent_type")
+	}
+	if name == "" {
+		name = "agent"
+	}
+	task := truncateRunes(extractJSONField(msg.ToolArgs, "task"), 100, "...")
+	desc := "Agent: " + name
+	if task != "" {
+		desc += " — " + task
+	}
+	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
+}
+
+// renderSendMessageTool: to + summary + message preview.
+func (cv *ChatView) renderSendMessageTool(msg *ChatMessage) fyne.CanvasObject {
+	to := extractJSONField(msg.ToolArgs, "to")
+	summary := extractJSONField(msg.ToolArgs, "summary")
+	desc := "Send to: " + to
+	if summary != "" {
+		desc = summary
+	}
+	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
+}
+
+// renderSwarmTaskTool: subject + assignee + description.
+func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
+	subject := extractJSONField(msg.ToolArgs, "subject")
+	assignee := extractJSONField(msg.ToolArgs, "assignee")
+	desc := "Task"
+	if subject != "" {
+		desc = subject
+	}
+	if assignee != "" {
+		desc += " -> " + assignee
+	}
+	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
+}
+
+// ── Shared helpers ───────────────────────────────────
+
+func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.CanvasObject {
+	ic := widget.NewIcon(icon)
+	ic.Resize(fyne.NewSize(16, 16))
+	return container.NewBorder(nil, nil, ic, nil, content)
+}
+
+func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
+	badge := "done"
+	if msg.Content == "" {
+		badge = "running..."
+	} else if msg.IsError {
+		badge = "failed"
+	}
+	md := "**" + desc + "** `" + badge + "`"
+	rt := widget.NewRichTextFromMarkdown(md)
+	rt.Wrapping = fyne.TextWrapBreak
+	return rt
+}
+
+func toolIcon(msg *ChatMessage) fyne.Resource {
+	if msg.Content == "" {
+		return theme.MediaRecordIcon()
+	}
+	if msg.IsError {
+		return theme.CancelIcon()
+	}
+	return theme.ConfirmIcon()
+}
+
+func prettifyToolName(name string) string {
+	m := map[string]string{
+		"run_command": "Bash", "read_file": "Read", "write_file": "Write",
+		"edit_file": "Edit", "multi_edit_file": "Edit", "search_files": "Grep",
+		"glob": "Glob", "find": "Glob", "list_directory": "List",
+		"web_search": "Search", "web_fetch": "Fetch",
+		"start_command": "Bash", "stop_command": "Stop",
+		"read_command_output": "Output", "wait_command": "Wait",
+		"write_command_input": "Input", "list_commands": "Jobs",
+		"todo_write": "To-Do", "spawn_agent": "Agent",
+		"send_message": "Send", "wait_agent": "Wait",
+		"list_agents": "Agents", "teammate_spawn": "Teammate",
+		"teammate_shutdown": "Shutdown", "teammate_list": "Teammates",
+		"teammate_results": "Results", "swarm_task_create": "Task",
+		"swarm_task_claim": "Claim", "swarm_task_complete": "Complete",
+		"swarm_task_list": "Tasks", "team_create": "Team",
+		"save_memory": "Memory", "config": "Config", "skill": "Skill",
+		"git_status": "Git Status", "git_diff": "Git Diff",
+		"git_log": "Git Log", "git_show": "Git Show",
+		"git_blame": "Git Blame", "git_add": "Git Add",
+		"git_commit": "Git Commit", "git_stash": "Git Stash",
+		"git_branch_list": "Branches", "git_remote": "Remote",
+		"notebook_edit": "Notebook",
+	}
+	if v, ok := m[name]; ok {
+		return v
+	}
+	if strings.HasPrefix(name, "lsp_") {
+		return strings.Title(name[4:])
+	}
+	if len(name) > 0 {
+		return strings.ToUpper(name[:1]) + name[1:]
+	}
+	return name
 }
 
 // ── Agent tabs ───────────────────────────────────────
@@ -278,11 +696,10 @@ func (cv *ChatView) rebuildAgentTabs() {
 	cv.tabs.Refresh()
 }
 
-// renderAgentPanel renders all events in an agent panel using same message style.
 func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container) {
-	objects := make([]fyne.CanvasObject, 0, len(panel.Events)+2)
+	objs := make([]fyne.CanvasObject, 0, len(panel.Events)+2)
 
-	// Header with status.
+	statusStr := panel.Status
 	statusColor := theme.ColorNameSuccess
 	if panel.Status == "running" || panel.Status == "working" {
 		statusColor = theme.ColorNameWarning
@@ -291,20 +708,20 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 	}
 	header := widget.NewRichText(
 		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: panel.Task},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor}, Text: "  " + panel.Status},
+		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor}, Text: "  " + statusStr},
 	)
-	objects = append(objects, cv.iconRow(theme.ComputerIcon(), header))
+	objs = append(objs, cv.iconRow(theme.ComputerIcon(), header))
 
 	var pendingTool *AgentEventEntry
 	for i := range panel.Events {
 		ev := &panel.Events[i]
 		if pendingTool != nil && ev.Type == "tool_result" {
-			objects = append(objects, cv.renderToolFromEvent(pendingTool, ev.Content))
+			objs = append(objs, cv.renderToolFromAgentEvent(pendingTool, ev.Content))
 			pendingTool = nil
 			continue
 		}
 		if pendingTool != nil {
-			objects = append(objects, cv.renderToolFromEvent(pendingTool, ""))
+			objs = append(objs, cv.renderToolFromAgentEvent(pendingTool, ""))
 			pendingTool = nil
 		}
 		switch ev.Type {
@@ -312,407 +729,42 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 			if ev.Content != "" {
 				rt := widget.NewRichTextFromMarkdown(ev.Content)
 				rt.Wrapping = fyne.TextWrapWord
-				objects = append(objects, cv.iconRow(theme.ComputerIcon(), rt))
+				objs = append(objs, cv.iconRow(theme.ComputerIcon(), rt))
 			}
 		case "tool_call":
 			pendingTool = ev
 		case "error":
-			text := canvas.NewText(ev.Content, theme.ErrorColor())
-			text.TextSize = theme.TextSize()
-			objects = append(objects, cv.iconRow(theme.CancelIcon(), text))
+			t := canvas.NewText(ev.Content, theme.ErrorColor())
+			t.TextSize = theme.TextSize()
+			objs = append(objs, cv.iconRow(theme.CancelIcon(), t))
 		}
 	}
 	if pendingTool != nil {
-		objects = append(objects, cv.renderToolFromEvent(pendingTool, ""))
+		objs = append(objs, cv.renderToolFromAgentEvent(pendingTool, ""))
 	}
 
-	if panel.Result != "" && (panel.Status == "completed" || panel.Status == "failed" || panel.Status == "idle") {
-		resultMd := "```\n" + panel.Result + "\n```"
-		rt := widget.NewRichTextFromMarkdown(resultMd)
+	if panel.Result != "" {
+		rt := widget.NewRichTextFromMarkdown("```\n" + panel.Result + "\n```")
 		rt.Wrapping = fyne.TextWrapWord
-		objects = append(objects, cv.iconRow(theme.ComputerIcon(), rt))
+		objs = append(objs, cv.iconRow(theme.ComputerIcon(), rt))
 	}
 
-	vbox.Objects = objects
+	vbox.Objects = objs
 	vbox.Refresh()
 }
 
-func (cv *ChatView) renderToolFromEvent(toolEv *AgentEventEntry, result string) fyne.CanvasObject {
-	msg := &ChatMessage{ToolName: toolEv.ToolName, ToolArgs: toolEv.ToolArgs, Content: result, ToolDesc: toolEv.Content}
-	// Reuse the same toolItem renderer as the main chat for consistent styling.
-	return cv.toolItem(msg)
+func (cv *ChatView) renderToolFromAgentEvent(toolEv *AgentEventEntry, result string) fyne.CanvasObject {
+	msg := &ChatMessage{
+		ToolName: toolEv.ToolName,
+		ToolArgs: toolEv.ToolArgs,
+		Content:  result,
+		ToolDesc: toolEv.Content,
+	}
+	return cv.renderTool(msg)
 }
 
-// ── Shared helpers ───────────────────────────────────
+// ── Tab name truncation ──────────────────────────────
 
-// iconRow creates a compact row with an icon prefix and content.
-func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.CanvasObject {
-	ic := widget.NewIcon(icon)
-	ic.Resize(fyne.NewSize(16, 16))
-	row := container.NewBorder(nil, nil, ic, nil, content)
-	row.Refresh()
-	return row
-}
-
-// toolIcon returns the icon for a tool's current status.
-func toolIcon(msg *ChatMessage) fyne.Resource {
-	if msg.Content == "" {
-		return theme.MediaRecordIcon() // running (red dot)
-	}
-	if msg.IsError {
-		return theme.CancelIcon() // failed (X)
-	}
-	return theme.ConfirmIcon() // done (check)
-}
-
-func statusText(msg *ChatMessage) string {
-	if msg.Content == "" {
-		return "running..."
-	}
-	if msg.IsError {
-		return "failed"
-	}
-	return "done"
-}
-
-func statusColor(msg *ChatMessage) fyne.ThemeColorName {
-	if msg.Content == "" {
-		return theme.ColorNameWarning
-	}
-	if msg.IsError {
-		return theme.ColorNameError
-	}
-	return theme.ColorNameSuccess
-}
-
-// ── Message widgets ──────────────────────────────────
-
-func (cv *ChatView) buildMessageWidget(msg *ChatMessage) fyne.CanvasObject {
-	switch msg.Role {
-	case "user":
-		return cv.userBubble(msg)
-	case "assistant":
-		return cv.assistantBubble(msg)
-	case "tool":
-		return cv.toolItem(msg)
-	case "system":
-		return cv.systemNotice(msg)
-	case "reasoning":
-		return cv.reasoningNotice(msg)
-	case "error":
-		return cv.errorNotice(msg)
-	}
-	return nil
-}
-
-func (cv *ChatView) userBubble(msg *ChatMessage) fyne.CanvasObject {
-	rt := widget.NewRichTextFromMarkdown(msg.Content)
-	rt.Wrapping = fyne.TextWrapWord
-	return cv.iconRow(theme.AccountIcon(), rt)
-}
-
-func (cv *ChatView) assistantBubble(msg *ChatMessage) fyne.CanvasObject {
-	text := msg.Content
-	if text == "" && msg.Streaming {
-		text = "..."
-	}
-	rt := widget.NewRichTextFromMarkdown(text)
-	rt.Wrapping = fyne.TextWrapWord
-	return cv.iconRow(theme.ComputerIcon(), rt)
-}
-
-func (cv *ChatView) toolItem(msg *ChatMessage) fyne.CanvasObject {
-	switch msg.ToolName {
-	case "spawn_agent":
-		return cv.agentItem(msg)
-	case "send_message":
-		return cv.sendMessageItem(msg)
-	case "wait_agent":
-		return cv.waitAgentItem(msg)
-	case "teammate_spawn":
-		return cv.teammateSpawnItem(msg)
-	case "swarm_task_create":
-		return cv.swarmTaskCreateItem(msg)
-	case "todo_write":
-		return cv.todoWriteItem(msg)
-	case "teammate_list", "teammate_shutdown", "teammate_results":
-		return cv.genericToolItem(msg, msg.ToolName, statusText(msg), statusColor(msg))
-	}
-
-	isCommand := msg.ToolName == "run_command" || msg.ToolName == "start_command"
-	displayTitle := msg.ToolDesc
-	if displayTitle == "" || displayTitle == msg.ToolName {
-		displayTitle = msg.ToolName
-	}
-	if isCommand {
-		return cv.commandToolItem(msg, displayTitle, statusText(msg), statusColor(msg))
-	}
-	return cv.genericToolItem(msg, displayTitle, statusText(msg), statusColor(msg))
-}
-
-func (cv *ChatView) commandToolItem(msg *ChatMessage, displayTitle, status string, statusColor fyne.ThemeColorName) fyne.CanvasObject {
-	header := widget.NewRichText(
-		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: displayTitle},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor}, Text: "  " + status},
-	)
-	header.Wrapping = fyne.TextWrapBreak
-
-	var parts []fyne.CanvasObject
-	parts = append(parts, header)
-
-	if msg.ToolArgs != "" {
-		cmdMd := "```bash\n" + msg.ToolArgs + "\n```"
-		cmdBlock := widget.NewRichTextFromMarkdown(cmdMd)
-		cmdBlock.Wrapping = fyne.TextWrapWord
-		parts = append(parts, cmdBlock)
-	}
-
-	if msg.Content != "" {
-		result := msg.Content
-		if len([]rune(result)) > 3000 {
-			result = truncateRunes(result, 3000, "\n...(truncated)")
-		}
-		resultMd := "```\n" + result + "\n```"
-		resultBlock := widget.NewRichTextFromMarkdown(resultMd)
-		resultBlock.Wrapping = fyne.TextWrapWord
-		parts = append(parts, resultBlock)
-	} else {
-		spinner := canvas.NewText("running...", theme.DisabledColor())
-		spinner.TextStyle = fyne.TextStyle{Italic: true}
-		parts = append(parts, spinner)
-	}
-
-	vbox := container.NewVBox(parts...)
-	return cv.iconRow(toolIcon(msg), vbox)
-}
-
-func (cv *ChatView) genericToolItem(msg *ChatMessage, displayTitle, status string, statusColor fyne.ThemeColorName) fyne.CanvasObject {
-	if msg.ToolArgs != "" {
-		displayTitle = displayTitle + "  " + msg.ToolArgs
-	}
-	header := fmt.Sprintf("%s  (%s)", displayTitle, status)
-
-	result := msg.Content
-	if len([]rune(result)) > 1000 {
-		result = truncateRunes(result, 1000, "\n...(truncated)")
-	}
-
-	var detail fyne.CanvasObject
-	if result == "" {
-		spinner := canvas.NewText("running...", theme.DisabledColor())
-		spinner.TextStyle = fyne.TextStyle{Italic: true}
-		detail = spinner
-	} else {
-		resultLabel := widget.NewLabel(result)
-		resultLabel.Wrapping = fyne.TextWrapWord
-		resultLabel.TextStyle = fyne.TextStyle{Monospace: true}
-		detail = resultLabel
-	}
-
-	acc := widget.NewAccordion(widget.NewAccordionItem(header, detail))
-	acc.MultiOpen = true
-	return cv.iconRow(toolIcon(msg), acc)
-}
-
-func (cv *ChatView) agentItem(msg *ChatMessage) fyne.CanvasObject {
-	agentName := extractJSONField(msg.ToolArgs, "name")
-	if agentName == "" {
-		agentName = extractJSONField(msg.ToolArgs, "subagent_type")
-	}
-	if agentName == "" {
-		agentName = "sub-agent"
-	}
-	taskDesc := extractJSONField(msg.ToolArgs, "task")
-	if len([]rune(taskDesc)) > 120 {
-		taskDesc = truncateRunes(taskDesc, 120, "...")
-	}
-
-	header := widget.NewRichText(
-		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: "Agent: " + agentName},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor(msg)}, Text: "  " + statusText(msg)},
-	)
-
-	var parts []fyne.CanvasObject
-	parts = append(parts, header)
-	if taskDesc != "" {
-		taskLabel := widget.NewLabel(taskDesc)
-		taskLabel.Wrapping = fyne.TextWrapWord
-		parts = append(parts, taskLabel)
-	}
-	if msg.Content != "" {
-		result := msg.Content
-		if len([]rune(result)) > 2000 {
-			result = truncateRunes(result, 2000, "\n...(truncated)")
-		}
-		resultMd := "```\n" + result + "\n```"
-		resultBlock := widget.NewRichTextFromMarkdown(resultMd)
-		resultBlock.Wrapping = fyne.TextWrapWord
-		parts = append(parts, resultBlock)
-	} else {
-		spinner := canvas.NewText("running...", theme.DisabledColor())
-		spinner.TextStyle = fyne.TextStyle{Italic: true}
-		parts = append(parts, spinner)
-	}
-
-	return cv.iconRow(toolIcon(msg), container.NewVBox(parts...))
-}
-
-func (cv *ChatView) sendMessageItem(msg *ChatMessage) fyne.CanvasObject {
-	to := extractJSONField(msg.ToolArgs, "to")
-	summary := extractJSONField(msg.ToolArgs, "summary")
-	message := extractJSONField(msg.ToolArgs, "message")
-
-	headerText := "Send to: " + to
-	if summary != "" {
-		headerText = summary
-	}
-	header := widget.NewRichText(
-		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: headerText},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor(msg)}, Text: "  " + statusText(msg)},
-	)
-
-	var parts []fyne.CanvasObject
-	parts = append(parts, header)
-	if message != "" {
-		desc := widget.NewRichTextFromMarkdown(message)
-		desc.Wrapping = fyne.TextWrapWord
-		parts = append(parts, desc)
-	}
-
-	return cv.iconRow(toolIcon(msg), container.NewVBox(parts...))
-}
-
-func (cv *ChatView) waitAgentItem(msg *ChatMessage) fyne.CanvasObject {
-	agentID := extractJSONField(msg.ToolArgs, "agent_id")
-	header := widget.NewRichText(
-		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: "Waiting for: " + agentID},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor(msg)}, Text: "  " + statusText(msg)},
-	)
-	var parts []fyne.CanvasObject
-	parts = append(parts, header)
-	if msg.Content != "" {
-		result := msg.Content
-		if len([]rune(result)) > 2000 {
-			result = truncateRunes(result, 2000, "\n...(truncated)")
-		}
-		resultMd := "```\n" + result + "\n```"
-		resultBlock := widget.NewRichTextFromMarkdown(resultMd)
-		resultBlock.Wrapping = fyne.TextWrapWord
-		parts = append(parts, resultBlock)
-	}
-	return cv.iconRow(toolIcon(msg), container.NewVBox(parts...))
-}
-
-func (cv *ChatView) teammateSpawnItem(msg *ChatMessage) fyne.CanvasObject {
-	name := extractJSONField(msg.ToolArgs, "name")
-	if name == "" {
-		name = "teammate"
-	}
-	header := widget.NewRichText(
-		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: "Teammate: " + name},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor(msg)}, Text: "  " + statusText(msg)},
-	)
-	return cv.iconRow(toolIcon(msg), header)
-}
-
-func (cv *ChatView) swarmTaskCreateItem(msg *ChatMessage) fyne.CanvasObject {
-	subject := extractJSONField(msg.ToolArgs, "subject")
-	description := extractJSONField(msg.ToolArgs, "description")
-	assignee := extractJSONField(msg.ToolArgs, "assignee")
-
-	headerText := "Task"
-	if subject != "" {
-		headerText = subject
-	}
-	header := widget.NewRichText(
-		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: headerText},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor(msg)}, Text: "  " + statusText(msg)},
-	)
-
-	var parts []fyne.CanvasObject
-	parts = append(parts, header)
-	if assignee != "" {
-		assigneeLabel := widget.NewRichText(
-			&widget.TextSegment{Style: widget.RichTextStyle{ColorName: theme.ColorNamePrimary}, Text: "Assigned to: " + assignee},
-		)
-		parts = append(parts, assigneeLabel)
-	}
-	if description != "" {
-		desc := widget.NewRichTextFromMarkdown(description)
-		desc.Wrapping = fyne.TextWrapWord
-		parts = append(parts, desc)
-	}
-
-	return cv.iconRow(toolIcon(msg), container.NewVBox(parts...))
-}
-
-func (cv *ChatView) systemNotice(msg *ChatMessage) fyne.CanvasObject {
-	text := canvas.NewText(msg.Content, theme.DisabledColor())
-	text.TextStyle = fyne.TextStyle{Italic: true}
-	text.TextSize = theme.Size(theme.SizeNameCaptionText)
-	text.Alignment = fyne.TextAlignCenter
-	return container.NewPadded(text)
-}
-
-func (cv *ChatView) reasoningNotice(msg *ChatMessage) fyne.CanvasObject {
-	text := canvas.NewText("Thinking: "+msg.Content, theme.DisabledColor())
-	text.TextStyle = fyne.TextStyle{Italic: true}
-	text.TextSize = theme.Size(theme.SizeNameCaptionText)
-	return container.NewPadded(text)
-}
-
-func (cv *ChatView) errorNotice(msg *ChatMessage) fyne.CanvasObject {
-	text := canvas.NewText("Error: "+msg.Content, theme.ErrorColor())
-	text.TextSize = theme.TextSize()
-	return cv.iconRow(theme.CancelIcon(), text)
-}
-
-// todoWriteItem renders todo_write as plain markdown — no tool name, no accordion.
-func (cv *ChatView) todoWriteItem(msg *ChatMessage) fyne.CanvasObject {
-	var input struct {
-		Todos []struct {
-			ID      string `json:"id"`
-			Content string `json:"content"`
-			Status  string `json:"status"`
-		} `json:"todos"`
-	}
-	if err := json.Unmarshal([]byte(msg.ToolArgs), &input); err != nil {
-		if msg.Content != "" {
-			rt := widget.NewRichTextFromMarkdown(msg.Content)
-			rt.Wrapping = fyne.TextWrapWord
-			return cv.iconRow(theme.ConfirmIcon(), rt)
-		}
-		return nil
-	}
-
-	var sb strings.Builder
-	for _, t := range input.Todos {
-		switch t.Status {
-		case "done":
-			sb.WriteString("- [x] ")
-		case "in_progress":
-			sb.WriteString("- [ ] **")
-			sb.WriteString(t.Content)
-			sb.WriteString("** _(in progress)_")
-			sb.WriteString("\n")
-			continue
-		default:
-			sb.WriteString("- [ ] ")
-		}
-		sb.WriteString(t.Content)
-		sb.WriteString("\n")
-	}
-	if sb.Len() == 0 {
-		return nil
-	}
-
-	rt := widget.NewRichTextFromMarkdown(sb.String())
-	rt.Wrapping = fyne.TextWrapWord
-	return cv.iconRow(theme.CheckButtonCheckedIcon(), rt)
-}
-
-// truncateTabName shortens a tab name based on total agent count.
-// Uses rune counting to avoid breaking multi-byte characters (Chinese, etc.).
 func truncateTabName(name string, totalAgents int) string {
 	maxLen := 25
 	switch {
@@ -730,29 +782,4 @@ func truncateTabName(name string, totalAgents int) string {
 		return name
 	}
 	return string(runes[:maxLen-1]) + "…"
-}
-
-// lastStatusText avoids unnecessary label updates (prevents flicker).
-var lastStatusText string
-
-func (cv *ChatView) updateStatusBar(working bool) {
-	tc := cv.bridge.TokenCount()
-	cw := cv.bridge.ContextWindow()
-	tokenInfo := fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw))
-
-	var text string
-	if working {
-		elapsed := cv.bridge.Elapsed()
-		text = fmt.Sprintf(">> Working (%s) | %s", elapsed.Round(time.Second), tokenInfo)
-	} else {
-		text = tokenInfo
-	}
-
-	// Only update if text actually changed.
-	if text != lastStatusText {
-		lastStatusText = text
-		// Update the status bar label directly (not via binding).
-		// Find it through the bridge's app reference.
-		cv.ui.SetStatus(text)
-	}
 }
