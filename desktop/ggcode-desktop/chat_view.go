@@ -194,9 +194,18 @@ func (cv *ChatView) updateStatusBar(working bool) {
 
 func (cv *ChatView) rebuildMessages() {
 	msgs := cv.ui.TakeMessages()
-	objs := make([]fyne.CanvasObject, 0, len(msgs))
+	// Merge consecutive assistant messages into one.
+	merged := make([]ChatMessage, 0, len(msgs))
 	for i := range msgs {
-		w := cv.renderMessage(&msgs[i])
+		if i > 0 && msgs[i].Role == "assistant" && merged[len(merged)-1].Role == "assistant" {
+			merged[len(merged)-1].Content += "\n\n" + msgs[i].Content
+			continue
+		}
+		merged = append(merged, msgs[i])
+	}
+	objs := make([]fyne.CanvasObject, 0, len(merged))
+	for i := range merged {
+		w := cv.renderMessage(&merged[i])
 		if w != nil {
 			objs = append(objs, w)
 		}
@@ -861,7 +870,7 @@ func formatTable(lines []string) []string {
 		return lines
 	}
 
-	// Calculate column widths.
+	// Calculate column widths (use rune width for CJK).
 	numCols := 0
 	for _, r := range rows {
 		if len(r) > numCols {
@@ -871,40 +880,67 @@ func formatTable(lines []string) []string {
 	widths := make([]int, numCols)
 	for _, r := range rows {
 		for i, c := range r {
-			w := len([]rune(c))
+			w := runeWidth(c)
 			if w > widths[i] {
 				widths[i] = w
 			}
 		}
 	}
 
-	// Format rows.
-	var result []string
+	// Format rows as code block.
+	var sb strings.Builder
 	for ri, r := range rows {
-		var parts []string
 		for i := 0; i < numCols; i++ {
 			cell := ""
 			if i < len(r) {
 				cell = r[i]
 			}
-			pad := widths[i] - len([]rune(cell))
+			w := runeWidth(cell)
+			pad := widths[i] - w
 			if pad < 0 {
 				pad = 0
 			}
-			parts = append(parts, cell+strings.Repeat(" ", pad))
+			if i > 0 {
+				sb.WriteString("  ")
+			}
+			sb.WriteString(cell + strings.Repeat(" ", pad))
 		}
-		result = append(result, "  "+strings.Join(parts, "  "))
+		sb.WriteString("\n")
 
 		// Add separator after header row.
 		if ri == 0 {
-			var seps []string
 			for i := 0; i < numCols; i++ {
-				seps = append(seps, strings.Repeat("-", widths[i]))
+				if i > 0 {
+					sb.WriteString("  ")
+				}
+				sb.WriteString(strings.Repeat("─", widths[i]))
 			}
-			result = append(result, "  "+strings.Join(seps, "  "))
+			sb.WriteString("\n")
 		}
 	}
-	return result
+
+	return []string{"```\n" + sb.String() + "```"}
+}
+
+// runeWidth returns display width of string (CJK chars = 2).
+func runeWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		if r >= 0x1100 && (r <= 0x115F || r <= 0x11A2 ||
+			(r >= 0x2E80 && r <= 0xA4CF && r != 0x303F) ||
+			(r >= 0xAC00 && r <= 0xD7A3) ||
+			(r >= 0xF900 && r <= 0xFAFF) ||
+			(r >= 0xFE30 && r <= 0xFE6F) ||
+			(r >= 0xFF01 && r <= 0xFF60) ||
+			(r >= 0xFFE0 && r <= 0xFFE6) ||
+			(r >= 0x20000 && r <= 0x2FFFD) ||
+			(r >= 0x30000 && r <= 0x3FFFD)) {
+			w += 2
+		} else {
+			w++
+		}
+	}
+	return w
 }
 
 func isSeparatorRow(line string) bool {
