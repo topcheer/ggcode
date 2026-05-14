@@ -555,6 +555,12 @@ func (cv *ChatView) renderTool(msg *ChatMessage) fyne.CanvasObject {
 // renderBashTool: description header + command + result in accordion (collapsed by default).
 func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 	desc := msg.ToolDesc
+	cmd := extractJSONField(raw(msg), "command")
+
+	// Fallback: use first comment line from command as description.
+	if desc == "" && cmd != "" {
+		desc = firstCommentLine(cmd)
+	}
 	if desc == "" {
 		desc = "Bash"
 	}
@@ -562,8 +568,6 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 
 	var accItems []*widget.AccordionItem
 
-	// Extract command from raw JSON args.
-	cmd := extractJSONField(raw(msg), "command")
 	if cmd != "" {
 		cmdBlock := newMD("```bash\n" + cmd + "\n```")
 		accItems = append(accItems, widget.NewAccordionItem("Command", cmdBlock))
@@ -737,13 +741,7 @@ func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.
 }
 
 func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
-	badge := "done"
-	if msg.Content == "" {
-		badge = "running..."
-	} else if msg.IsError {
-		badge = "failed"
-	}
-	md := "**" + desc + "** `" + badge + "`"
+	md := "**" + desc + "**"
 	rt := widget.NewRichTextFromMarkdown(md)
 	return rt
 }
@@ -753,6 +751,17 @@ func raw(msg *ChatMessage) string {
 		return msg.ToolRaw
 	}
 	return msg.ToolArgs
+}
+
+// firstCommentLine extracts the first '# comment' line from a shell command.
+func firstCommentLine(cmd string) string {
+	for _, line := range strings.Split(cmd, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimPrefix(line, "# ")
+		}
+	}
+	return ""
 }
 
 func toolIcon(msg *ChatMessage) fyne.Resource {
