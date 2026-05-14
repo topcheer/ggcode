@@ -35,6 +35,7 @@ type App struct {
 	split         fyne.CanvasObject
 	chatViewObj   fyne.CanvasObject
 	sidebarObj    fyne.CanvasObject
+	sidebarRef    *Sidebar
 	sidebarHidden bool
 
 	// Agent state.
@@ -327,8 +328,8 @@ func (a *App) startChat() {
 	a.agentBridge = bridge
 
 	chatView := NewChatView(bridge, a.ui)
-	sidebar := NewSidebar(a, bridge, a.ui)
-	sidebarObj := sidebar.Render()
+	a.sidebarRef = NewSidebar(a, bridge, a.ui)
+	sidebarObj := a.sidebarRef.Render()
 	chatViewObj := chatView.Render()
 
 	split := container.NewHSplit(chatViewObj, sidebarObj)
@@ -354,10 +355,10 @@ func (a *App) startChat() {
 }
 
 func (a *App) pollStats(bridge *AgentBridge) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		if bridge == nil {
+		if bridge == nil || a.sidebarRef == nil {
 			continue
 		}
 		tc := bridge.TokenCount()
@@ -372,6 +373,12 @@ func (a *App) pollStats(bridge *AgentBridge) {
 			resolved.VendorID, resolved.Model,
 			humanizeTokens(tc), humanizeTokens(cw),
 			working))
+		// Refresh sidebar stats on UI thread.
+		fyne.Do(func() {
+			if a.sidebarRef != nil {
+				a.sidebarRef.RefreshStats()
+			}
+		})
 	}
 }
 

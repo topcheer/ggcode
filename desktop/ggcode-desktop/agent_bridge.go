@@ -427,12 +427,18 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 	}
 	events := make([]AgentEventEntry, 0)
 	for _, ev := range sa.Events() {
-		events = append(events, AgentEventEntry{
+		entry := AgentEventEntry{
 			Type:     agentEventTypeStr(ev.Type),
-			Content:  ev.Text,
 			ToolName: ev.ToolName,
 			ToolArgs: ev.ToolArgs,
-		})
+		}
+		// tool_result stores result in ev.Result, not ev.Text.
+		if ev.Type == subagent.AgentEventToolResult {
+			entry.Content = ev.Result
+		} else {
+			entry.Content = ev.Text
+		}
+		events = append(events, entry)
 	}
 	errStr := ""
 	if sa.Error != nil {
@@ -465,12 +471,17 @@ func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData
 	}
 	events := make([]AgentEventEntry, 0, len(snap.Events))
 	for _, e := range snap.Events {
-		events = append(events, AgentEventEntry{
+		entry := AgentEventEntry{
 			Type:     teammateEventTypeStr(e.Type),
-			Content:  e.Text,
 			ToolName: e.ToolName,
 			ToolArgs: e.ToolArgs,
-		})
+		}
+		if e.Type == swarm.TeammateEventToolResult {
+			entry.Content = e.Result
+		} else {
+			entry.Content = e.Text
+		}
+		events = append(events, entry)
 	}
 	errStr := ""
 	if ev.Error != nil {

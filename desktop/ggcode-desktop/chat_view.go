@@ -177,7 +177,8 @@ func (cv *ChatView) updateStatusBar(working bool) {
 	}
 	if text != lastStatusText {
 		lastStatusText = text
-		cv.ui.SetStatus(text)
+		// We're already on UI thread (inside fyne.Do from pollRefresh).
+		cv.ui.SetStatusDirect(text)
 	}
 }
 
@@ -187,7 +188,8 @@ func (cv *ChatView) rebuildMessages() {
 	msgs := cv.ui.TakeMessages()
 	objs := make([]fyne.CanvasObject, 0, len(msgs))
 	for i := range msgs {
-		if w := cv.renderMessage(&msgs[i]); w != nil {
+		w := cv.renderMessage(&msgs[i])
+		if w != nil {
 			objs = append(objs, w)
 		}
 	}
@@ -702,12 +704,16 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 	for i := range panel.Events {
 		ev := &panel.Events[i]
 		if pendingTool != nil && ev.Type == "tool_result" {
-			objs = append(objs, cv.renderToolFromAgentEvent(pendingTool, ev.Content))
+			if w := cv.renderToolFromAgentEvent(pendingTool, ev.Content); w != nil {
+				objs = append(objs, w)
+			}
 			pendingTool = nil
 			continue
 		}
 		if pendingTool != nil {
-			objs = append(objs, cv.renderToolFromAgentEvent(pendingTool, ""))
+			if w := cv.renderToolFromAgentEvent(pendingTool, ""); w != nil {
+				objs = append(objs, w)
+			}
 			pendingTool = nil
 		}
 		switch ev.Type {
@@ -726,7 +732,9 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 		}
 	}
 	if pendingTool != nil {
-		objs = append(objs, cv.renderToolFromAgentEvent(pendingTool, ""))
+		if w := cv.renderToolFromAgentEvent(pendingTool, ""); w != nil {
+			objs = append(objs, w)
+		}
 	}
 
 	if panel.Result != "" {
