@@ -91,32 +91,38 @@ func renderCodeBlock(b *mdBlock) fyne.CanvasObject {
 		return nil
 	}
 
-	// Build code text with line numbers.
-	var sb strings.Builder
 	numWidth := len(fmt.Sprintf("%d", len(b.lines)))
-	for i, line := range b.lines {
-		sb.WriteString(fmt.Sprintf("%*d  %s\n", numWidth, i+1, line))
-	}
-	codeText := sb.String()
 
-	// Use a monospace RichText for the code content.
-	label := widget.NewLabelWithStyle(codeText, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
-	label.Wrapping = fyne.TextWrapWord
+	// Per-line rendering with syntax colors.
+	var lineObjs []fyne.CanvasObject
+	for i, line := range b.lines {
+		// Line number.
+		numText := fmt.Sprintf("%*d  ", numWidth, i+1)
+		numLabel := canvas.NewText(numText, color.RGBA{R: 100, G: 100, B: 100, A: 255})
+		numLabel.TextStyle = fyne.TextStyle{Monospace: true}
+		numLabel.TextSize = 13
+
+		// Code text.
+		codeColor := color.RGBA{R: 220, G: 220, B: 220, A: 255} // default
+		if b.colors != nil && i < len(b.colors) && b.colors[i] != nil {
+			codeColor = b.colors[i].(color.RGBA)
+		}
+		codeLabel := canvas.NewText(line, codeColor)
+		codeLabel.TextStyle = fyne.TextStyle{Monospace: true}
+		codeLabel.TextSize = 13
+
+		row := container.NewHBox(numLabel, codeLabel)
+		lineObjs = append(lineObjs, row)
+	}
+
+	codeVBox := container.NewVBox(lineObjs...)
 
 	// Dark background.
 	bg := canvas.NewRectangle(colCodeBg)
 	bg.SetMinSize(fyne.NewSize(0, 0))
 
-	// Language label.
-	var contentObjs []fyne.CanvasObject
-	if b.lang != "" {
-		langLabel := widget.NewLabelWithStyle(b.lang, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true})
-		contentObjs = append(contentObjs, langLabel)
-	}
-	contentObjs = append(contentObjs, label)
-
-	inner := container.NewStack(bg, container.NewVBox(contentObjs...))
-	return container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4), inner)
+	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), codeVBox))
+	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), inner)
 }
 
 // ── List ───────────────────────────────────────────
