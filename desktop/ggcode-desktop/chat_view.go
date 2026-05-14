@@ -28,8 +28,8 @@ func newMD(text string) *markdownx.MarkdownWidget {
 
 type sendEntry struct {
 	widget.Entry
-	onSend     func()
-	busy       bool
+	onSend      func()
+	busy        bool
 	pendingText string
 }
 
@@ -50,18 +50,29 @@ func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
 			e.Entry.KeyDown(key)
 			return
 		}
-		// Capture text and clear entry BEFORE calling onSend to prevent
-		// the base Entry from inserting a newline after SetText("").
 		text := strings.TrimSpace(e.Text)
 		e.SetText("")
 		if text != "" && e.onSend != nil {
-			// Store text for onSend to pick up.
 			e.pendingText = text
 			e.onSend()
 		}
 		return
 	}
 	e.Entry.KeyDown(key)
+}
+
+// TypedKey intercepts the Return/Enter key to prevent the base Entry
+// from inserting a newline. Fyne calls TypedKey AFTER KeyDown, and
+// the base Entry.typedKeyReturn inserts "\n" if we don't block it here.
+func (e *sendEntry) TypedKey(key *fyne.KeyEvent) {
+	switch key.Name {
+	case fyne.KeyReturn, fyne.KeyEnter:
+		if e.busy || !e.isShiftHeld() {
+			// Already handled in KeyDown — swallow the event.
+			return
+		}
+	}
+	e.Entry.TypedKey(key)
 }
 
 func (e *sendEntry) isShiftHeld() bool {
