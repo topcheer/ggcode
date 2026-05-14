@@ -105,12 +105,39 @@ func TestParseUnorderedList(t *testing.T) {
 	if len(blocks[0].items) != 3 {
 		t.Errorf("items = %d", len(blocks[0].items))
 	}
+	if blocks[0].items[0].text != "item1" {
+		t.Errorf("item[0] = %q", blocks[0].items[0].text)
+	}
 }
 
 func TestParseOrderedList(t *testing.T) {
 	blocks := parseBlocks("1. first\n2. second\n")
 	if blocks[0].kind != blockList || !blocks[0].ordered {
 		t.Error("expected ordered list")
+	}
+}
+
+func TestParseNestedList(t *testing.T) {
+	input := "- item1\n  - sub1\n  - sub2\n- item2\n"
+	blocks := parseBlocks(input)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	l := blocks[0]
+	if len(l.items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(l.items))
+	}
+	if l.items[0].text != "item1" {
+		t.Errorf("item[0].text = %q", l.items[0].text)
+	}
+	if l.items[0].children == nil {
+		t.Fatal("expected nested list under item1")
+	}
+	if len(l.items[0].children.items) != 2 {
+		t.Errorf("nested items = %d", len(l.items[0].children.items))
+	}
+	if l.items[0].children.items[0].text != "sub1" {
+		t.Errorf("nested item[0] = %q", l.items[0].children.items[0].text)
 	}
 }
 

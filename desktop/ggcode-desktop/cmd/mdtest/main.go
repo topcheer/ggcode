@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -59,10 +58,10 @@ func main() {
 
 	// Streaming tests.
 	slowBtn := widget.NewButton("Slow Stream", func() {
-		go slowStream(md, status)
+		go tokenStream(md, status, 2000*time.Millisecond)
 	})
 	fastBtn := widget.NewButton("Fast Stream", func() {
-		go fastStream(md, status)
+		go tokenStream(md, status, 30*time.Millisecond)
 	})
 
 	buttons := container.NewGridWithColumns(4,
@@ -111,6 +110,18 @@ for i in range(10):
 2. Numbered item 2
 3. Numbered item 3
 
+## Nested List
+
+- Level 1 item A
+  - Level 2 sub-item 1
+  - Level 2 sub-item 2
+- Level 1 item B
+  - Level 2 sub-item 3
+    - Level 3 deep item
+    - Level 3 another
+  - Level 2 sub-item 4
+- Level 1 item C
+
 ## Table
 
 | Language | Year | Creator |
@@ -128,33 +139,37 @@ for i in range(10):
 
 End of test.`
 
-// slowStream simulates slow streaming (one char at a time, 20ms delay).
-func slowStream(md *markdownx.MarkdownWidget, status *widget.Label) {
-	text := "# Slow Stream\n\nThis text arrives **slowly**.\n\n- Item 1\n- Item 2\n\n```\ncode block\nline 2\n```\n"
-	for i := 1; i <= len(text); i++ {
-		chunk := string([]rune(text)[:i])
-		_ = chunk
-		// Append just the new character.
-		if i == 1 {
-			fyne.Do(func() { md.SetMarkdown(string([]rune(text)[0])) })
-		} else {
-			fyne.Do(func() { md.AppendChunk(string([]rune(text)[i-1])) })
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	fyne.Do(func() { status.SetText(fmt.Sprintf("Slow stream done (%d chars)", len(text))) })
-}
+// tokenStream simulates realistic LLM streaming: tokens of 2-5 chars arrive one by one.
+// delay controls interval between tokens (slow=2s, fast=30ms).
+func tokenStream(md *markdownx.MarkdownWidget, status *widget.Label, delay time.Duration) {
+	fullText := "# Streaming Test\n\nThis text arrives **token by token**, just like a real LLM.\n\n- First bullet\n- Second bullet\n- Third bullet\n\n```go\nfunc main() {\n    fmt.Println(\"hello world\")\n}\n```\n\n| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |\n\n> A quote that\n> spans lines\n\n---\n\nDone.\n"
 
-// fastStream simulates fast streaming (whole words, 5ms delay).
-func fastStream(md *markdownx.MarkdownWidget, status *widget.Label) {
-	words := strings.Split(allMarkdown, " ")
-	for i, word := range words {
-		chunk := word
-		if i > 0 {
-			chunk = " " + chunk
+	// Split into realistic token-sized chunks (2-5 chars).
+	var tokens []string
+	runes := []rune(fullText)
+	i := 0
+	for i < len(runes) {
+		// Token length: 2-5 chars, but don't break mid-newline.
+		n := 2 + (i % 4) // varies 2..5
+		end := i + n
+		if end > len(runes) {
+			end = len(runes)
 		}
-		fyne.Do(func() { md.AppendChunk(chunk) })
-		time.Sleep(5 * time.Millisecond)
+		tokens = append(tokens, string(runes[i:end]))
+		i = end
 	}
-	fyne.Do(func() { status.SetText(fmt.Sprintf("Fast stream done (%d words)", len(words))) })
+
+	for idx, tok := range tokens {
+		fyne.Do(func() {
+			if idx == 0 {
+				md.SetMarkdown(tok)
+			} else {
+				md.AppendChunk(tok)
+			}
+			status.SetText(fmt.Sprintf("Token %d/%d (%.0f%%)", idx+1, len(tokens),
+				float64(idx+1)/float64(len(tokens))*100))
+		})
+		time.Sleep(delay)
+	}
+	fyne.Do(func() { status.SetText(fmt.Sprintf("Done: %d tokens", len(tokens))) })
 }
