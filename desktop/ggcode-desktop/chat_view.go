@@ -28,8 +28,9 @@ func newMD(text string) *markdownx.MarkdownWidget {
 
 type sendEntry struct {
 	widget.Entry
-	onSend func()
-	busy   bool
+	onSend     func()
+	busy       bool
+	pendingText string
 }
 
 func newSendEntry() *sendEntry {
@@ -49,7 +50,13 @@ func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
 			e.Entry.KeyDown(key)
 			return
 		}
-		if e.onSend != nil {
+		// Capture text and clear entry BEFORE calling onSend to prevent
+		// the base Entry from inserting a newline after SetText("").
+		text := strings.TrimSpace(e.Text)
+		e.SetText("")
+		if text != "" && e.onSend != nil {
+			// Store text for onSend to pick up.
+			e.pendingText = text
 			e.onSend()
 		}
 		return
@@ -179,7 +186,11 @@ func extractMarkdownWidget(obj fyne.CanvasObject) (*markdownx.MarkdownWidget, bo
 }
 
 func (cv *ChatView) onSend() {
-	text := strings.TrimSpace(cv.entry.Text)
+	text := cv.entry.pendingText
+	cv.entry.pendingText = ""
+	if text == "" {
+		text = strings.TrimSpace(cv.entry.Text)
+	}
 	if text == "" {
 		return
 	}
