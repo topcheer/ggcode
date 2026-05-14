@@ -52,6 +52,7 @@ type TeammateEvent struct {
 	Type     TeammateEventType
 	Text     string // TeammateEventText / TeammateEventError
 	ToolName string // TeammateEventToolCall / TeammateEventToolResult
+	ToolID   string // TeammateEventToolCall / TeammateEventToolResult — unique ID for precise matching
 	ToolArgs string // TeammateEventToolCall
 	Result   string // TeammateEventToolResult
 	IsError  bool   // TeammateEventToolResult / TeammateEventError

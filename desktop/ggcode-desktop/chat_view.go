@@ -87,6 +87,9 @@ type ChatView struct {
 	msgWidgets  []fyne.CanvasObject
 	toolWidgets map[string]*toolWidgetRef
 	streamW     *markdownx.MarkdownWidget
+
+	// Per-agent incremental state
+	agentStates map[string]*agentPanelState
 }
 
 // toolWidgetRef holds mutable refs for updating a tool call in place.
@@ -99,6 +102,14 @@ type toolWidgetRef struct {
 	hasResult bool
 }
 
+// agentPanelState tracks incremental rendering per agent tab.
+type agentPanelState struct {
+	renderedEvents int                        // number of events already rendered
+	toolWidgets    map[int]*toolWidgetRef      // tool_call event index → ref
+	vbox           *fyne.Container
+	scroll         *container.Scroll
+}
+
 func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 	cv := &ChatView{
 		bridge:       bridge,
@@ -107,6 +118,7 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 		agentScrolls: make(map[string]*container.Scroll),
 		agentPanelHashes: make(map[string]string),
 		toolWidgets:  make(map[string]*toolWidgetRef),
+		agentStates:  make(map[string]*agentPanelState),
 	}
 
 	cv.entry = newSendEntry()
@@ -820,12 +832,11 @@ func prettifyToolName(name string) string {
 
 // ── Agent tabs ───────────────────────────────────────
 
+
+// ── Agent panel (incremental, same rendering as main) ──
+
 func (cv *ChatView) rebuildAgentTabs() {
 	cv.ui.RemoveStalePanels()
-	if !cv.ui.IsAgentDirty() {
-		return
-	}
-	cv.ui.ClearAgentDirty()
 
 	panels := cv.ui.GetAgentPanels()
 	activeIDs := make(map[string]bool)
@@ -833,67 +844,68 @@ func (cv *ChatView) rebuildAgentTabs() {
 	for _, panel := range panels {
 		activeIDs[panel.ID] = true
 
-		// Only rebuild panel content if it actually changed.
-		panelHash := agentPanelHash(panel)
-		if lastHash, ok := cv.agentPanelHashes[panel.ID]; ok && lastHash == panelHash {
-			// Content unchanged, just update tab name.
-			cv.updateAgentTabName(panel)
-			continue
-		}
-		cv.agentPanelHashes[panel.ID] = panelHash
-
-		vbox := container.NewVBox()
-		cv.renderAgentPanel(panel, vbox)
-
-		scr, exists := cv.agentScrolls[panel.ID]
+		st, exists := cv.agentStates[panel.ID]
 		if !exists {
-			scr = container.NewVScroll(vbox)
-			cv.agentScrolls[panel.ID] = scr
-		} else {
-			scr.Content = vbox
-			scr.Refresh()
-		}
+			// New agent — create state + tab.
+			st = &agentPanelState{
+				toolWidgets: make(map[int]*toolWidgetRef),
+			}
+			st.vbox = container.NewVBox()
+			st.scroll = container.NewVScroll(st.vbox)
+			cv.agentStates[panel.ID] = st
+			cv.agentScrolls[panel.ID] = st.scroll
 
-		tabName := truncateTabName(panel.Name, len(panels))
-		if tabName == "" {
-			tabName = truncateTabName(panel.ID, len(panels))
-		}
-		if panel.Status == "running" || panel.Status == "working" {
-			tabName += "*"
-		}
-
-		item, exists := cv.tabMap[panel.ID]
-		if !exists {
-			item = container.NewTabItem(tabName, scr)
+			tabName := agentTabName(panel, panels)
+			item := container.NewTabItem(tabName, st.scroll)
 			cv.tabMap[panel.ID] = item
 			cv.tabs.Append(item)
-		} else {
-			item.Text = tabName
-			item.Content = scr
+
+			// Render header.
+			cv.renderAgentHeader(panel, st.vbox)
 		}
-		scr.Refresh()
+
+		// Update tab name (status indicator).
+		if item, ok := cv.tabMap[panel.ID]; ok {
+			item.Text = agentTabName(panel, panels)
+		}
+
+		// Incremental: render only new events since last time.
+		if len(panel.Events) > st.renderedEvents {
+			cv.appendAgentEvents(panel, st, st.renderedEvents)
+			st.renderedEvents = len(panel.Events)
+		}
+
+		// Render final result if panel completed.
+		if panel.Result != "" && panel.Status != "running" && panel.Status != "working" {
+			if len(st.vbox.Objects) > 0 {
+				// Only add result once — check if last object is already the result.
+				last := st.vbox.Objects[len(st.vbox.Objects)-1]
+				if lbl, ok := last.(*widget.Label); !ok || lbl.Text != panel.Result {
+					objs := cv.renderAgentResult(panel)
+					for _, o := range objs {
+						st.vbox.Add(o)
+					}
+				}
+			}
+		}
+
+		st.scroll.ScrollToBottom()
 	}
 
+	// Remove stale tabs.
 	for id, item := range cv.tabMap {
 		if !activeIDs[id] {
 			cv.tabs.Remove(item)
 			delete(cv.tabMap, id)
 			delete(cv.agentScrolls, id)
 			delete(cv.agentPanelHashes, id)
+			delete(cv.agentStates, id)
 		}
 	}
 	cv.tabs.Refresh()
-
-	// Auto-scroll all agent panels to bottom.
-	for _, scr := range cv.agentScrolls {
-		scr.ScrollToBottom()
-	}
 }
 
-func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container) {
-	objs := make([]fyne.CanvasObject, 0, len(panel.Events)+2)
-
-	statusStr := panel.Status
+func (cv *ChatView) renderAgentHeader(panel AgentPanelData, vbox *fyne.Container) {
 	statusColor := theme.ColorNameSuccess
 	if panel.Status == "running" || panel.Status == "working" {
 		statusColor = theme.ColorNameWarning
@@ -902,70 +914,112 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 	}
 	header := widget.NewRichText(
 		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: panel.Task},
-		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor}, Text: "  " + statusStr},
+		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor}, Text: "  " + panel.Status},
 	)
-	objs = append(objs, cv.iconRow(theme.ComputerIcon(), header))
+	vbox.Add(cv.iconRow(theme.ComputerIcon(), header))
+}
 
-	var pendingTool *AgentEventEntry
+// appendAgentEvents renders only new events incrementally.
+// Uses the same renderTool as main panel for consistent look.
+func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState, fromIdx int) {
+	// Build tool_result lookup: ToolID → (result, isError)
+	// Scan ALL events (not just new ones) to find results for pending tool_calls.
+	toolResults := map[string]string{}
+	toolErrors := map[string]bool{}
 	for i := range panel.Events {
 		ev := &panel.Events[i]
-		if pendingTool != nil && ev.Type == "tool_result" {
-			if w := cv.renderToolFromAgentEvent(pendingTool, ev.Content); w != nil {
-				objs = append(objs, w)
-			}
-			pendingTool = nil
-			continue
+		if ev.Type == "tool_result" && ev.ToolID != "" {
+			toolResults[ev.ToolID] = ev.Content
+			toolErrors[ev.ToolID] = ev.IsError
 		}
-		if pendingTool != nil {
-			if w := cv.renderToolFromAgentEvent(pendingTool, ""); w != nil {
-				objs = append(objs, w)
-			}
-			pendingTool = nil
-		}
+	}
+
+	for i := fromIdx; i < len(panel.Events); i++ {
+		ev := &panel.Events[i]
+
 		switch ev.Type {
 		case "text":
 			if ev.Content != "" {
-				objs = append(objs, cv.iconRow(theme.ComputerIcon(), newMD(ev.Content)))
+				st.vbox.Add(cv.iconRow(theme.ComputerIcon(), newMD(ev.Content)))
 			}
+
 		case "tool_call":
-			pendingTool = ev
+			// Look up result if already available.
+			result := toolResults[ev.ToolID]
+			isErr := toolErrors[ev.ToolID]
+
+			msg := &ChatMessage{
+				Role:     "tool",
+				ToolName: ev.ToolName,
+				ToolDesc: toolDescription(ev.ToolName, ev.ToolArgs),
+				ToolArgs: toolArgSummary(ev.ToolName, ev.ToolArgs),
+				ToolRaw:  ev.ToolArgs,
+				ToolID:   ev.ToolID,
+				Content:  result,
+				IsError:  isErr,
+			}
+			w := cv.renderTool(msg)
+
+			// Register toolWidgetRef for live updates.
+			if w != nil && ev.ToolID != "" {
+				ref := cv.buildToolRef(msg, w)
+				if ref != nil {
+					st.toolWidgets[i] = ref
+				}
+			}
+
+			if w != nil {
+				st.vbox.Add(w)
+			}
+
+		case "tool_result":
+			// Update the corresponding tool_call widget by ToolID.
+			if ev.ToolID != "" {
+				for idx, ref := range st.toolWidgets {
+					_ = idx
+					if !ref.hasResult {
+						ref.hasResult = true
+						if ev.IsError {
+							ref.icon.SetResource(theme.CancelIcon())
+						} else {
+							ref.icon.SetResource(theme.ConfirmIcon())
+						}
+						ref.icon.Refresh()
+						cv.addToolResult(ref, ev.Content)
+					}
+				}
+			}
+
 		case "error":
 			t := canvas.NewText(ev.Content, theme.ErrorColor())
 			t.TextSize = theme.TextSize()
-			objs = append(objs, cv.iconRow(theme.CancelIcon(), t))
+			st.vbox.Add(cv.iconRow(theme.CancelIcon(), t))
 		}
 	}
-	if pendingTool != nil {
-		if w := cv.renderToolFromAgentEvent(pendingTool, ""); w != nil {
-			objs = append(objs, w)
-		}
-	}
-
-	if panel.Result != "" {
-		objs = append(objs, cv.iconRow(theme.ComputerIcon(), newMD("```\n" + panel.Result + "\n```")))
-	}
-
-	vbox.Objects = objs
-	vbox.Refresh()
 }
 
-func (cv *ChatView) renderToolFromAgentEvent(toolEv *AgentEventEntry, result string) fyne.CanvasObject {
-	// Build ChatMessage exactly like the main panel does in agent_bridge.go.
-	// Main panel: toolDescription(name, rawArgs) + toolArgSummary(name, rawArgs) + rawArgs
-	rawArgs := toolEv.ToolArgs
-	name := toolEv.ToolName
-	msg := &ChatMessage{
-		Role:     "tool",
-		ToolName: name,
-		ToolDesc: toolDescription(name, rawArgs),
-		ToolArgs: toolArgSummary(name, rawArgs),
-		ToolRaw:  rawArgs,
-		Content:  result,
+func (cv *ChatView) renderAgentResult(panel AgentPanelData) []fyne.CanvasObject {
+	if panel.Result == "" {
+		return nil
 	}
-	return cv.renderTool(msg)
+	if panel.Status == "failed" {
+		t := canvas.NewText(panel.Result, theme.ErrorColor())
+		t.TextSize = theme.TextSize()
+		return []fyne.CanvasObject{cv.iconRow(theme.ComputerIcon(), t)}
+	}
+	return []fyne.CanvasObject{cv.iconRow(theme.ComputerIcon(), newMD("```\n"+panel.Result+"\n```"))}
 }
 
-// ── Tab name truncation ──────────────────────────────
+func agentTabName(panel AgentPanelData, panels []AgentPanelData) string {
+	tabName := truncateTabName(panel.Name, len(panels))
+	if tabName == "" {
+		tabName = truncateTabName(panel.ID, len(panels))
+	}
+	if panel.Status == "running" || panel.Status == "working" {
+		tabName += "*"
+	}
+	return tabName
+}
 
 func truncateTabName(name string, totalAgents int) string {
 	maxLen := 25
@@ -1148,29 +1202,4 @@ func parseCells(line string) []string {
 		result = append(result, strings.TrimSpace(p))
 	}
 	return result
-}
-
-// agentPanelHash returns a quick content hash to detect changes.
-func agentPanelHash(p AgentPanelData) string {
-	h := p.Status + "|" + p.Name + "|" + p.Result + "|"
-	for _, ev := range p.Events {
-		h += ev.Type + ":" + ev.Content + "|"
-	}
-	return h
-}
-
-// updateAgentTabName updates only the tab label (no content rebuild).
-func (cv *ChatView) updateAgentTabName(panel AgentPanelData) {
-	item, exists := cv.tabMap[panel.ID]
-	if !exists {
-		return
-	}
-	tabName := truncateTabName(panel.Name, len(cv.ui.GetAgentPanels()))
-	if tabName == "" {
-		tabName = truncateTabName(panel.ID, len(cv.ui.GetAgentPanels()))
-	}
-	if panel.Status == "running" || panel.Status == "working" {
-		tabName += "*"
-	}
-	item.Text = tabName
 }
