@@ -335,36 +335,43 @@ func (cv *ChatView) buildToolRef(msg *ChatMessage, w fyne.CanvasObject) *toolWid
 		toolName: msg.ToolName,
 		rawArgs:  raw(msg),
 	}
-	cv.extractToolRefs(w, ref)
+	// Walk widget tree to find icon and the content VBox inside iconRow's Border.
+	findToolRefs(w, ref)
 	return ref
 }
 
-func (cv *ChatView) extractToolRefs(obj fyne.CanvasObject, ref *toolWidgetRef) {
+// findToolRefs walks the widget tree depth-first.
+// The structure is: Border(icon, VBox(header, [acc]))
+// We need: the Icon, and the VBox (body) to add children later.
+func findToolRefs(obj fyne.CanvasObject, ref *toolWidgetRef) {
 	switch v := obj.(type) {
 	case *widget.Icon:
-		if ref.icon == nil {
-			ref.icon = v
-		}
+		ref.icon = v
 	case *widget.Accordion:
 		ref.acc = v
 	case *fyne.Container:
-		// The first VBox child of the Border's content is the body.
-		if ref.body == nil && len(v.Objects) > 0 {
-			if inner, ok := v.Objects[0].(*fyne.Container); ok {
-				ref.body = inner
+		// Check if this is a VBox that contains a toolHeader (RichText).
+		// That VBox is our body for adding accordion items.
+		if ref.body == nil {
+			for _, child := range v.Objects {
+				if _, ok := child.(*widget.RichText); ok {
+					ref.body = v
+					break
+				}
 			}
 		}
 		for _, child := range v.Objects {
-			cv.extractToolRefs(child, ref)
+			findToolRefs(child, ref)
 		}
 	}
 }
 
 func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
-	if result == "" || ref.body == nil {
+	if result == "" {
 		return
 	}
 	tc := classifyToolGUI(ref.toolName)
+	// Header-only tools: no result display.
 	if tc == tcSearch || tc == tcList || tc == tcWeb || tc == tcCmd ||
 		tc == tcLSP || tc == tcWait || tc == tcTeammate || tc == tcSwarm ||
 		tc == tcSuppress || tc == tcAgent || tc == tcMessage {
@@ -379,7 +386,8 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 
 	if ref.acc != nil {
 		ref.acc.Append(widget.NewAccordionItem(label, resultBlock))
-	} else {
+	} else if ref.body != nil {
+		// No accordion yet — create one with the result.
 		ref.acc = widget.NewAccordion(widget.NewAccordionItem(label, resultBlock))
 		ref.body.Add(ref.acc)
 	}
@@ -583,7 +591,7 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 		acc := widget.NewAccordion(accItems...)
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 	}
-	return cv.iconRow(toolIcon(msg), header)
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 }
 
 // renderFileTool: header + line count / edit summary + result in accordion.
@@ -595,7 +603,7 @@ func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), header)
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
 	// Show file result in accordion.
@@ -616,11 +624,11 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 	// git_add, git_commit, git_stash — header only
 	switch msg.ToolName {
 	case "git_add", "git_commit", "git_stash":
-		return cv.iconRow(toolIcon(msg), header)
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), header)
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
 	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
@@ -648,7 +656,7 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), header)
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
 	result := truncateRunes(msg.Content, 1000, "\n...(truncated)")
