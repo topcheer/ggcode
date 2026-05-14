@@ -1,10 +1,3 @@
-// Package markdownx provides a streaming-capable Markdown rendering widget for Fyne.
-//
-// It parses Markdown text using goldmark and renders it as native Fyne widgets,
-// including syntax-highlighted code blocks, tables, block quotes, lists, and more.
-//
-// The widget supports streaming input with debounced re-rendering, making it
-// suitable for real-time LLM output display.
 package markdownx
 
 import (
@@ -13,143 +6,84 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
 
-// MarkdownWidget renders Markdown text as native Fyne widgets.
-// It supports streaming input with debounced re-rendering.
+// MarkdownWidget renders Markdown as beautiful native Fyne widgets.
+//
+// Each block element (heading, code block, table, list, blockquote, etc.)
+// is rendered as its own custom CanvasObject with full style control.
+// Inline elements (bold, italic, code span, links) within paragraphs use
+// properly styled TextSegments.
+//
+// Supports streaming input with debounced re-rendering.
 type MarkdownWidget struct {
 	widget.BaseWidget
 	mu sync.Mutex
 
 	buffer    strings.Builder
-	segments  []widget.RichTextSegment
 	renderers *nodeRenderers
+	vbox      *fyne.Container
 
-	// Streaming support
 	debounceMu    sync.Mutex
 	debounceTimer *time.Timer
-	wrapWidth     float32
 }
 
-// NewMarkdownWidget creates a new Markdown rendering widget.
 func NewMarkdownWidget() *MarkdownWidget {
 	w := &MarkdownWidget{
 		renderers: newNodeRenderers(),
+		vbox:      container.NewVBox(),
 	}
 	w.ExtendBaseWidget(w)
 	return w
 }
 
-// SetMarkdown replaces the widget content with new markdown text.
-// Must be called on the UI thread.
+// SetMarkdown replaces content. Must be called on UI thread.
 func (w *MarkdownWidget) SetMarkdown(text string) {
 	w.mu.Lock()
 	w.buffer.Reset()
 	w.buffer.WriteString(text)
-	text = closeOpenCodeBlocks(text)
-	segments := parseMarkdown(text, w.renderers)
-	w.segments = segments
 	w.mu.Unlock()
+	w.rebuild()
 }
 
-// AppendChunk appends a streaming text chunk and triggers debounced re-render.
-// Safe to call from any goroutine.
+// AppendChunk appends streaming text with debounced re-render.
 func (w *MarkdownWidget) AppendChunk(chunk string) {
 	w.mu.Lock()
 	w.buffer.WriteString(chunk)
 	w.mu.Unlock()
-
-	w.scheduleDebouncedReparse()
+	w.scheduleDebouncedRebuild()
 }
 
-// Content returns the current accumulated markdown text.
 func (w *MarkdownWidget) Content() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.buffer.String()
 }
 
-// CreateRenderer implements fyne.Widget.
 func (w *MarkdownWidget) CreateRenderer() fyne.WidgetRenderer {
-	rt := widget.NewRichText()
-	rt.Wrapping = fyne.TextWrapWord
-	w.mu.Lock()
-	rt.Segments = w.segments
-	w.mu.Unlock()
-	rt.Refresh()
-
-	return &markdownRenderer{
-		widget: w,
-		rt:     rt,
-	}
+	return widget.NewSimpleRenderer(w.vbox)
 }
 
-// reparse re-parses the buffer and refreshes the widget.
-// Must be called on the UI thread or via fyne.Do.
-func (w *MarkdownWidget) reparse() {
+func (w *MarkdownWidget) rebuild() {
 	w.mu.Lock()
 	text := w.buffer.String()
 	text = closeOpenCodeBlocks(text)
-	segments := parseMarkdown(text, w.renderers)
-	w.segments = segments
 	w.mu.Unlock()
 
-	// Trigger refresh on UI thread.
-	fyne.Do(func() {
-		w.BaseWidget.Refresh()
-	})
+	objects := renderMarkdown(text, w.renderers)
+	w.vbox.Objects = objects
+	w.vbox.Refresh()
 }
 
-func (w *MarkdownWidget) scheduleDebouncedReparse() {
+func (w *MarkdownWidget) scheduleDebouncedRebuild() {
 	w.debounceMu.Lock()
 	defer w.debounceMu.Unlock()
-
 	if w.debounceTimer != nil {
 		w.debounceTimer.Stop()
 	}
 	w.debounceTimer = time.AfterFunc(100*time.Millisecond, func() {
-		w.reparse()
+		fyne.Do(func() { w.rebuild() })
 	})
-}
-
-// MinSize returns the minimum size of the widget.
-func (w *MarkdownWidget) MinSize() fyne.Size {
-	w.ExtendBaseWidget(w)
-	return w.BaseWidget.MinSize()
-}
-
-// ── Renderer ────────────────────────────────────────
-
-type markdownRenderer struct {
-	widget *MarkdownWidget
-	rt     *widget.RichText
-}
-
-func (r *markdownRenderer) Destroy() {}
-
-func (r *markdownRenderer) Layout(size fyne.Size) {
-	r.rt.Resize(size)
-}
-
-func (r *markdownRenderer) MinSize() fyne.Size {
-	return r.rt.MinSize()
-}
-
-func (r *markdownRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.rt}
-}
-
-func (r *markdownRenderer) Refresh() {
-	r.widget.mu.Lock()
-	segments := make([]widget.RichTextSegment, len(r.widget.segments))
-	copy(segments, r.widget.segments)
-	r.widget.mu.Unlock()
-
-	r.rt.Segments = segments
-	r.rt.Refresh()
-	canvas := fyne.CurrentApp().Driver().CanvasForObject(r.widget)
-	if canvas != nil {
-		r.rt.Resize(r.rt.Size())
-	}
 }
