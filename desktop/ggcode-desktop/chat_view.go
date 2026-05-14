@@ -31,7 +31,7 @@ func newSendEntry() *sendEntry {
 func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
 	switch key.Name {
 	case fyne.KeyReturn, fyne.KeyEnter:
-		if e.isCtrlOrShiftHeld() {
+		if e.isShiftHeld() {
 			e.Entry.KeyDown(key)
 			return
 		}
@@ -43,12 +43,10 @@ func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
 	e.Entry.KeyDown(key)
 }
 
-func (e *sendEntry) isCtrlOrShiftHeld() bool {
+func (e *sendEntry) isShiftHeld() bool {
 	if d, ok := fyne.CurrentApp().Driver().(desktop.Driver); ok {
 		m := d.CurrentKeyModifiers()
-		if m&fyne.KeyModifierControl != 0 || m&fyne.KeyModifierShift != 0 {
-			return true
-		}
+		return m&fyne.KeyModifierShift != 0
 	}
 	return false
 }
@@ -80,7 +78,6 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 	}
 
 	cv.entry = newSendEntry()
-	cv.entry.PlaceHolder = "Message ggcode... (Enter to send, Ctrl+Enter for newline)"
 	cv.entry.Wrapping = fyne.TextWrapWord
 	cv.entry.SetMinRowsVisible(2)
 	cv.entry.onSend = cv.onSend
@@ -136,11 +133,16 @@ func (cv *ChatView) pollRefresh() {
 	}
 }
 
+const placeholderIdle = "Message ggcode... (Enter to send, Shift+Enter for newline)"
+const placeholderBusy = "ggcode is working... (messages will be queued)"
+
 func (cv *ChatView) updateButtons(working bool) {
 	if working {
 		cv.cancelBtn.Show()
+		cv.entry.PlaceHolder = placeholderBusy
 	} else {
 		cv.cancelBtn.Hide()
+		cv.entry.PlaceHolder = placeholderIdle
 	}
 	cv.sendBtn.Show()
 	cv.sendBtn.Enable()

@@ -142,7 +142,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolCall,
 					ToolName: event.Tool.Name,
-					ToolArgs: util.Truncate(string(event.Tool.Arguments), 300),
+					ToolArgs: string(event.Tool.Arguments),
 				})
 			}
 			lastToolName = event.Tool.Name
@@ -158,7 +158,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolResult,
 					ToolName: lastToolName,
-					Result:   util.Truncate(event.Result, 500),
+					Result:   util.Truncate(event.Result, 2000),
 					IsError:  event.IsError,
 				})
 			}
