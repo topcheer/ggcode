@@ -397,10 +397,10 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 	}
 
 	if ref.acc != nil {
-		ref.acc.Append(widget.NewAccordionItem(label, resultBlock))
+		ref.acc.Append(wrapAccordionItem(label, resultBlock))
 	} else if ref.body != nil {
 		// No accordion yet — create one with the result.
-		ref.acc = widget.NewAccordion(widget.NewAccordionItem(label, resultBlock))
+		ref.acc = widget.NewAccordion(wrapAccordionItem(label, resultBlock))
 		ref.body.Add(ref.acc)
 	}
 }
@@ -590,13 +590,13 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 
 	if cmd != "" {
 		cmdBlock := newMD("```bash\n" + cmd + "\n```")
-		accItems = append(accItems, widget.NewAccordionItem("Command", cmdBlock))
+		accItems = append(accItems, wrapAccordionItem("Command", cmdBlock))
 	}
 
 	if msg.Content != "" {
 		result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
 		resultBlock := newMD("```\n" + result + "\n```")
-		accItems = append(accItems, widget.NewAccordionItem("Output", resultBlock))
+		accItems = append(accItems, wrapAccordionItem("Output", resultBlock))
 	}
 
 	if len(accItems) > 0 {
@@ -621,7 +621,7 @@ func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 	// Show file result in accordion.
 	result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
 	resultBlock := newMD("```\n" + result + "\n```")
-	acc := widget.NewAccordion(widget.NewAccordionItem("Content", resultBlock))
+	acc := widget.NewAccordion(wrapAccordionItem("Content", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
@@ -645,7 +645,7 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 
 	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
 	resultBlock := newMD("```\n" + result + "\n```")
-	acc := widget.NewAccordion(widget.NewAccordionItem("Output", resultBlock))
+	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
@@ -675,7 +675,7 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	resultBlock := widget.NewLabel(result)
 	resultBlock.Wrapping = fyne.TextWrapWord
 	resultBlock.TextStyle = fyne.TextStyle{Monospace: true}
-	acc := widget.NewAccordion(widget.NewAccordionItem("Result", resultBlock))
+	acc := widget.NewAccordion(wrapAccordionItem("Result", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
@@ -764,6 +764,11 @@ func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
 	md := "**" + desc + "**"
 	rt := widget.NewRichTextFromMarkdown(md)
 	return rt
+}
+
+// wrapAccordionItem is an alias — MarkdownWidget already handles width via MinSize override.
+func wrapAccordionItem(label string, content fyne.CanvasObject) *widget.AccordionItem {
+	return widget.NewAccordionItem(label, content)
 }
 
 func raw(msg *ChatMessage) string {

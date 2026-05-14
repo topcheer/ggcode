@@ -59,9 +59,34 @@ func (w *MarkdownWidget) Content() string {
 	return w.buffer.String()
 }
 
-// CreateRenderer returns the VBox directly.
+// CreateRenderer returns a renderer that reports 0 min width so the
+// parent layout controls width. Content wraps to fit whatever width it gets.
 func (w *MarkdownWidget) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(w.vbox)
+	return &mdRenderer{widget: w}
+}
+
+// mdRenderer wraps the VBox and overrides MinSize to report 0 width.
+type mdRenderer struct {
+	widget *MarkdownWidget
+}
+
+func (r *mdRenderer) Destroy() {}
+
+func (r *mdRenderer) Layout(size fyne.Size) {
+	r.widget.vbox.Resize(size)
+}
+
+func (r *mdRenderer) MinSize() fyne.Size {
+	ms := r.widget.vbox.MinSize()
+	return fyne.NewSize(0, ms.Height)
+}
+
+func (r *mdRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.widget.vbox}
+}
+
+func (r *mdRenderer) Refresh() {
+	r.widget.vbox.Refresh()
 }
 
 // fullRebuild re-parses and re-renders everything.
