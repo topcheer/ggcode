@@ -12,16 +12,7 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-
-	"github.com/topcheer/ggcode/desktop/markdownx"
 )
-
-// newMD creates a MarkdownWidget with the given text.
-func newMD(text string) *markdownx.MarkdownWidget {
-	w := markdownx.NewMarkdownWidget()
-	w.SetMarkdown(text)
-	return w
-}
 
 // ── sendEntry ────────────────────────────────────────
 
@@ -259,7 +250,10 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	}
 	// Pre-process: Fyne RichText doesn't support GFM tables.
 	// Replace table blocks with formatted text representation.
-	return cv.iconRow(theme.ComputerIcon(), newMD(text))
+	text = renderMarkdownTables(text)
+	rt := widget.NewRichTextFromMarkdown(text)
+	rt.Wrapping = fyne.TextWrapWord
+	return cv.iconRow(theme.ComputerIcon(), rt)
 }
 
 func (cv *ChatView) renderSystem(msg *ChatMessage) fyne.CanvasObject {
@@ -405,13 +399,15 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 	// Extract command from raw JSON args.
 	cmd := extractJSONField(raw(msg), "command")
 	if cmd != "" {
-		cmdBlock := newMD("```bash\n" + cmd + "\n```")
+		cmdBlock := widget.NewRichTextFromMarkdown("```bash\n" + cmd + "\n```")
+		cmdBlock.Wrapping = fyne.TextWrapWord
 		accItems = append(accItems, widget.NewAccordionItem("Command", cmdBlock))
 	}
 
 	if msg.Content != "" {
 		result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
-		resultBlock := newMD("```\n" + result + "\n```")
+		resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
+		resultBlock.Wrapping = fyne.TextWrapWord
 		accItems = append(accItems, widget.NewAccordionItem("Output", resultBlock))
 	}
 
@@ -436,8 +432,8 @@ func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 
 	// Show file result in accordion.
 	result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
-	resultBlock := newMD("```\n" + result + "\n```")
-
+	resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
+	resultBlock.Wrapping = fyne.TextWrapWord
 	acc := widget.NewAccordion(widget.NewAccordionItem("Content", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
@@ -461,8 +457,8 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 	}
 
 	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
-	resultBlock := newMD("```\n" + result + "\n```")
-
+	resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
+	resultBlock.Wrapping = fyne.TextWrapWord
 	acc := widget.NewAccordion(widget.NewAccordionItem("Output", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
@@ -524,7 +520,8 @@ func (cv *ChatView) renderTodoTool(msg *ChatMessage) fyne.CanvasObject {
 		}
 		sb.WriteString("\n")
 	}
-	rt := newMD(sb.String())
+	rt := widget.NewRichTextFromMarkdown(sb.String())
+	rt.Wrapping = fyne.TextWrapWord
 	return cv.iconRow(theme.CheckButtonCheckedIcon(), rt)
 }
 
@@ -741,7 +738,9 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 		switch ev.Type {
 		case "text":
 			if ev.Content != "" {
-				objs = append(objs, cv.iconRow(theme.ComputerIcon(), newMD(ev.Content)))
+				rt := widget.NewRichTextFromMarkdown(ev.Content)
+				rt.Wrapping = fyne.TextWrapWord
+				objs = append(objs, cv.iconRow(theme.ComputerIcon(), rt))
 			}
 		case "tool_call":
 			pendingTool = ev
@@ -758,8 +757,9 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 	}
 
 	if panel.Result != "" {
-		objs = append(objs, cv.iconRow(theme.ComputerIcon(), newMD("```\n"+panel.Result+"\n```")))
-
+		rt := widget.NewRichTextFromMarkdown("```\n" + panel.Result + "\n```")
+		rt.Wrapping = fyne.TextWrapWord
+		objs = append(objs, cv.iconRow(theme.ComputerIcon(), rt))
 	}
 
 	vbox.Objects = objs
