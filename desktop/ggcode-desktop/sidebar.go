@@ -148,17 +148,18 @@ func (s *Sidebar) loadSessions() {
 
 	logf("sidebar", "loadSessions: total=%d", len(allSessions))
 
+	// Normalize workspace for comparison (resolve symlinks, clean path).
+	normalizedWS := session.NormalizeWorkspacePath(workspace)
+
 	var filtered []*session.Session
 	for _, sess := range allSessions {
-		if sess.Workspace == workspace {
+		if sess.Workspace == workspace || sess.Workspace == normalizedWS {
 			filtered = append(filtered, sess)
 		}
 	}
 	logf("sidebar", "loadSessions: workspace=%s filtered=%d", workspace, len(filtered))
 
-	if len(filtered) == 0 {
-		filtered = allSessions
-	}
+	// No fallback to all sessions — only show matching workspace sessions.
 
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt)
