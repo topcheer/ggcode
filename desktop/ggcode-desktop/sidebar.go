@@ -9,7 +9,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -42,11 +41,6 @@ type Sidebar struct {
 	modelLoading   *widget.Label
 	modelRefresh   *widget.Button
 	providerStatus *widget.Label
-
-	// IM tab state
-	imVBox          *fyne.Container
-	imAdapterNames  *[]string
-	imDetailRefresh func()
 }
 
 type sessionMeta struct {
@@ -380,24 +374,18 @@ func (s *Sidebar) applyProvider() {
 
 func (s *Sidebar) buildIMTab() fyne.CanvasObject {
 	cfg := s.app.cfg
-
-	// Ensure IM map initialized.
 	if cfg.IM.Adapters == nil {
 		cfg.IM.Adapters = make(map[string]config.IMAdapterConfig)
 	}
 
-	// Sorted adapter names.
-	adapterNames := sortedAdapterNames(cfg)
-
-	// Status label for feedback.
 	imStatus := widget.NewLabel("")
 
 	// ── Adapter list ──
+	adapterNames := sortedAdapterNames(cfg)
 	adapterList := widget.NewList(
 		func() int { return len(adapterNames) },
 		func() fyne.CanvasObject {
 			nameLbl := widget.NewLabel("adapter")
-			nameLbl.Wrapping = fyne.TextWrapWord
 			platLbl := widget.NewLabel("platform")
 			platLbl.TextStyle = fyne.TextStyle{Italic: true}
 			statusIcon := widget.NewIcon(theme.ConfirmIcon())
@@ -408,8 +396,7 @@ func (s *Sidebar) buildIMTab() fyne.CanvasObject {
 				return
 			}
 			box := obj.(*fyne.Container)
-			var nameLbl *widget.Label
-			var platLbl *widget.Label
+			var nameLbl, platLbl *widget.Label
 			var icon *widget.Icon
 			for _, o := range box.Objects {
 				switch v := o.(type) {
@@ -441,59 +428,12 @@ func (s *Sidebar) buildIMTab() fyne.CanvasObject {
 		},
 	)
 
-	// Track selected adapter index.
 	selectedIdx := -1
 	adapterList.OnSelected = func(id widget.ListItemID) {
 		selectedIdx = int(id)
 	}
 
-	// ── Detail panel for selected adapter ──
-	detailName := widget.NewLabel("")
-	detailName.TextStyle = fyne.TextStyle{Bold: true}
-	detailPlatform := widget.NewLabel("")
-	detailTransport := widget.NewLabel("")
-	detailCommand := widget.NewEntry()
-	detailCommand.PlaceHolder = "Command (optional)"
-	detailCommand.Wrapping = fyne.TextWrapWord
-	detailEnabled := widget.NewCheck("Enabled", nil)
-
-	refreshDetail := func() {
-		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
-			detailName.SetText("Select an adapter")
-			detailPlatform.SetText("")
-			detailTransport.SetText("")
-			detailCommand.SetText("")
-			detailEnabled.SetChecked(false)
-			return
-		}
-		name := adapterNames[selectedIdx]
-		adapter := cfg.IM.Adapters[name]
-		detailName.SetText(name)
-		detailPlatform.SetText("Platform: " + platformDisplayName(adapter.Platform))
-		detailTransport.SetText("Transport: " + adapter.Transport)
-		detailCommand.SetText(adapter.Command)
-		detailEnabled.SetChecked(adapter.Enabled)
-	}
-
-	// Save detail changes back to config.
-	saveDetail := func() {
-		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
-			return
-		}
-		name := adapterNames[selectedIdx]
-		adapter := cfg.IM.Adapters[name]
-		adapter.Command = detailCommand.Text
-		adapter.Enabled = detailEnabled.Checked
-		cfg.IM.Adapters[name] = adapter
-		_ = cfg.Save()
-		imStatus.SetText("Saved")
-	}
-
-	saveDetailBtn := widget.NewButton("Save Changes", func() {
-		saveDetail()
-	})
-
-	// ── Action buttons ──
+	// ── Delete / Toggle buttons ──
 	delBtn := widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
 		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
 			return
@@ -503,46 +443,60 @@ func (s *Sidebar) buildIMTab() fyne.CanvasObject {
 		selectedIdx = -1
 		s.rebuildIMTab()
 	})
-
-	toggleBtn := widget.NewButtonWithIcon("Toggle", theme.MediaPlayIcon(), func() {
+	toggleBtn := widget.NewButtonWithIcon("Toggle On/Off", theme.MediaPlayIcon(), func() {
 		if selectedIdx < 0 || selectedIdx >= len(adapterNames) {
 			return
 		}
 		name := adapterNames[selectedIdx]
-		adapter := cfg.IM.Adapters[name]
-		_ = cfg.SetIMAdapterEnabled(name, !adapter.Enabled)
+		a := cfg.IM.Adapters[name]
+		_ = cfg.SetIMAdapterEnabled(name, !a.Enabled)
 		_ = cfg.Save()
 		s.rebuildIMTab()
 	})
 
-	// ── Add adapter form ──
-	nameEntry := widget.NewEntry()
-	nameEntry.PlaceHolder = "e.g. my-qq-bot"
-
-	platforms := []string{"qq", "telegram", "discord", "feishu", "dingtalk", "slack", "wechat", "wecom", "whatsapp", "mattermost"}
+	// ── Add adapter: platform → dynamic fields ──
+	platforms := []string{"qq", "telegram", "discord", "feishu", "dingtalk", "slack", "wechat", "wecom", "whatsapp", "mattermost", "signal", "irc", "matrix", "nostr", "twitch"}
 	platformSelect := widget.NewSelect(platforms, nil)
 	platformSelect.PlaceHolder = "Select platform..."
 
-	transports := []string{"stdio", "webhook"}
-	transportSelect := widget.NewSelect(transports, nil)
-	transportSelect.SetSelected("stdio")
+	nameEntry := widget.NewEntry()
+	nameEntry.PlaceHolder = "e.g. my-bot"
 
-	cmdEntry := widget.NewEntry()
-	cmdEntry.PlaceHolder = "Command (optional, for stdio transport)"
+	// Dynamic fields container — rebuilt when platform changes.
+	fieldsBox := container.NewVBox()
+	fieldEntries := make(map[string]*widget.Entry)
 
-	addBtn := widget.NewButtonWithIcon("Add Adapter", theme.ContentAddIcon(), func() {
+	platformSelect.OnChanged = func(p string) {
+		fieldsBox.Objects = nil
+		fieldEntries = make(map[string]*widget.Entry)
+		for _, fieldName := range platformFields(p) {
+			entry := widget.NewEntry()
+			entry.PlaceHolder = fieldName
+			entry.Wrapping = fyne.TextWrapWord
+			fieldEntries[fieldName] = entry
+			fieldsBox.Add(widget.NewForm(&widget.FormItem{Text: fieldName, Widget: entry}))
+		}
+		fieldsBox.Refresh()
+	}
+
+	addBtn := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), func() {
 		name := strings.TrimSpace(nameEntry.Text)
-		if name == "" || platformSelect.Selected == "" {
+		plat := platformSelect.Selected
+		if name == "" || plat == "" {
 			imStatus.SetText("Name and platform required")
 			return
 		}
+		extra := make(map[string]interface{})
+		for k, e := range fieldEntries {
+			if strings.TrimSpace(e.Text) != "" {
+				extra[k] = strings.TrimSpace(e.Text)
+			}
+		}
 		cfg.IM.Enabled = true
 		err := cfg.AddIMAdapter(name, config.IMAdapterConfig{
-			Enabled:   true,
-			Platform:  platformSelect.Selected,
-			Transport: transportSelect.Selected,
-			Command:   cmdEntry.Text,
-			Extra:     map[string]interface{}{},
+			Enabled:  true,
+			Platform: plat,
+			Extra:    extra,
 		})
 		if err != nil {
 			imStatus.SetText("Error: " + err.Error())
@@ -550,43 +504,66 @@ func (s *Sidebar) buildIMTab() fyne.CanvasObject {
 		}
 		_ = cfg.Save()
 		nameEntry.SetText("")
-		cmdEntry.SetText("")
-		imStatus.SetText("Adapter " + name + " added")
+		platformSelect.SetSelected("")
+		for _, e := range fieldEntries {
+			e.SetText("")
+		}
+		imStatus.SetText("Added: " + name)
 		s.rebuildIMTab()
 	})
 
 	// ── Layout ──
-	detailCard := widget.NewCard("Adapter Detail", "", container.NewVBox(
-		detailName,
-		container.NewHBox(detailPlatform, layout.NewSpacer(), detailTransport),
-		detailCommand,
-		detailEnabled,
-		container.NewHBox(saveDetailBtn, toggleBtn, delBtn),
-	))
-
-	addCard := widget.NewCard("Add Adapter", "", container.NewVBox(
-		widget.NewForm(
-			&widget.FormItem{Text: "Name", Widget: nameEntry},
-			&widget.FormItem{Text: "Platform", Widget: platformSelect},
-			&widget.FormItem{Text: "Transport", Widget: transportSelect},
-			&widget.FormItem{Text: "Command", Widget: cmdEntry},
-		),
-		addBtn,
-	))
-
-	// Full tab layout: adapter list + detail + add form.
-	vbox := container.NewVBox(
+	return container.NewVScroll(container.NewVBox(
 		widget.NewCard("Adapters", "", adapterList),
-		detailCard,
-		addCard,
+		container.NewHBox(toggleBtn, delBtn),
+		widget.NewCard("Add Adapter", "", container.NewVBox(
+			widget.NewForm(
+				&widget.FormItem{Text: "Platform", Widget: platformSelect},
+				&widget.FormItem{Text: "Name", Widget: nameEntry},
+			),
+			fieldsBox,
+			addBtn,
+		)),
 		imStatus,
-	)
+	))
+}
 
-	s.imVBox = vbox
-	s.imAdapterNames = &adapterNames
-	s.imDetailRefresh = refreshDetail
-
-	return container.NewVScroll(vbox)
+// platformFields returns the Extra field names required for each platform.
+func platformFields(platform string) []string {
+	switch platform {
+	case "qq":
+		return []string{"appid", "appsecret"}
+	case "telegram":
+		return []string{"bot_token"}
+	case "discord":
+		return []string{"token"}
+	case "feishu":
+		return []string{"app_id", "app_secret"}
+	case "dingtalk":
+		return []string{"app_key", "app_secret"}
+	case "slack":
+		return []string{"bot_token", "app_token"}
+	case "wechat":
+		return []string{"bot_token"}
+	case "wecom":
+		return []string{"bot_id", "secret"}
+	case "whatsapp":
+		return []string{} // uses QR pairing
+	case "mattermost":
+		return []string{"url", "token"}
+	case "signal":
+		return []string{"account", "base_url"}
+	case "irc":
+		return []string{"host", "nick", "channels"}
+	case "matrix":
+		return []string{"homeserver", "access_token"}
+	case "nostr":
+		return []string{"private_key", "relays"}
+	case "twitch":
+		return []string{"nick", "token", "channels"}
+	default:
+		return nil
+	}
 }
 
 func (s *Sidebar) rebuildIMTab() {
