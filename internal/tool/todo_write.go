@@ -99,7 +99,6 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	// Validate
 	ids := make(map[string]struct{}, len(args.Todos))
-	inProgress := 0
 	for _, td := range args.Todos {
 		if td.ID == "" {
 			return Result{IsError: true, Content: "each todo must have an id"}, nil
@@ -110,15 +109,10 @@ func (t *TodoWrite) Execute(ctx context.Context, input json.RawMessage) (Result,
 		ids[td.ID] = struct{}{}
 		switch td.Status {
 		case "pending", "in_progress", "done":
-			if td.Status == "in_progress" {
-				inProgress++
-			}
+			// valid — multiple in_progress allowed for swarm/team workflows
 		default:
 			return Result{IsError: true, Content: fmt.Sprintf("invalid status %q for todo %q (must be pending, in_progress, or done)", td.Status, td.ID)}, nil
 		}
-	}
-	if inProgress > 1 {
-		return Result{IsError: true, Content: "only one todo may be in_progress at a time"}, nil
 	}
 
 	// Ensure directory exists

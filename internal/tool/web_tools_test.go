@@ -339,7 +339,7 @@ func TestTodoWrite_RejectsDuplicateIDs(t *testing.T) {
 	}
 }
 
-func TestTodoWrite_RejectsMultipleInProgress(t *testing.T) {
+func TestTodoWrite_AllowsMultipleInProgress(t *testing.T) {
 	dir := t.TempDir()
 	tw := NewTodoWrite(dir)
 
@@ -348,7 +348,7 @@ func TestTodoWrite_RejectsMultipleInProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.IsError {
-		t.Fatal("expected multiple in_progress error")
+	if result.IsError {
+		t.Fatalf("multiple in_progress should be allowed, got error: %s", result.Content)
 	}
 }
