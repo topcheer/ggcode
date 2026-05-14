@@ -149,7 +149,7 @@ func (cv *ChatView) pollRefresh() {
 			}
 			cv.updateButtons(working)
 			cv.rebuildAgentTabs()
-			cv.updateStatusBar(working)
+
 		})
 	}
 }

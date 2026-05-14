@@ -365,14 +365,16 @@ func (a *App) pollStats(bridge *AgentBridge) {
 		cw := bridge.ContextWindow()
 		resolved := bridge.Resolved()
 		working := ""
+		elapsed := ""
 		if bridge.IsWorking() {
-			working = " | working..."
+			working = " | working"
+			elapsed = fmt.Sprintf(" (%s)", bridge.Elapsed().Round(time.Second))
 		}
 		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)), float64(tc)/float64(max(cw, 1)))
-		a.ui.SetStatus(fmt.Sprintf("%s/%s | %s/%s%s",
+		a.ui.SetStatus(fmt.Sprintf("%s/%s | %s/%s%s%s",
 			resolved.VendorID, resolved.Model,
 			humanizeTokens(tc), humanizeTokens(cw),
-			working))
+			working, elapsed))
 		// Refresh sidebar stats on UI thread.
 		fyne.Do(func() {
 			if a.sidebarRef != nil {
