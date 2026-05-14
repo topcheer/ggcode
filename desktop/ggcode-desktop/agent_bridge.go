@@ -171,6 +171,9 @@ func (b *AgentBridge) Send(userMsg string) error {
 	b.cancel = cancel
 	b.mu.Unlock()
 
+	// Persist user message to disk immediately (incremental), same as TUI.
+	b.appendUserMessage(userMsg)
+
 	go func() {
 		defer func() {
 			cancel()
@@ -697,4 +700,34 @@ func (b *AgentBridge) ResumeSession(id string) error {
 // RebuildCallback is set by the UI to rebuild the chat view after resume.
 func (b *AgentBridge) SetRebuildCallback(cb func()) {
 	b.rebuildCB = cb
+}
+
+// appendUserMessage persists the user message to disk immediately (incremental),
+// matching TUI's appendUserMessage behavior.
+func (b *AgentBridge) appendUserMessage(text string) {
+	if b.sessionStore == nil || b.currentSes == nil {
+		return
+	}
+	msg := provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{{Type: "text", Text: text}},
+	}
+	b.currentSes.Messages = append(b.currentSes.Messages, msg)
+	b.currentSes.UpdatedAt = time.Now()
+
+	// Auto-generate title from first user message.
+	if b.currentSes.Title == "" || b.currentSes.Title == "New session" {
+		if len(text) > 60 {
+			b.currentSes.Title = text[:57] + "..."
+		} else {
+			b.currentSes.Title = text
+		}
+	}
+
+	// Incremental append to disk (same as TUI).
+	if jsonlStore, ok := b.sessionStore.(*session.JSONLStore); ok {
+		_ = jsonlStore.AppendMessageToDisk(b.currentSes, msg)
+	} else {
+		_ = b.sessionStore.Save(b.currentSes)
+	}
 }
