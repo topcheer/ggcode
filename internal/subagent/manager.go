@@ -24,6 +24,7 @@ type AgentEvent struct {
 	Type     AgentEventType
 	Text     string // AgentEventText / AgentEventError
 	ToolName string // AgentEventToolCall / AgentEventToolResult
+	ToolID   string // AgentEventToolCall / AgentEventToolResult — unique ID for precise matching
 	ToolArgs string // AgentEventToolCall
 	Result   string // AgentEventToolResult
 	IsError  bool   // AgentEventToolResult / AgentEventError

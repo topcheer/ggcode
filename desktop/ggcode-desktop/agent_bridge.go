@@ -430,11 +430,13 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 		entry := AgentEventEntry{
 			Type:     agentEventTypeStr(ev.Type),
 			ToolName: ev.ToolName,
+			ToolID:   ev.ToolID,
 			ToolArgs: ev.ToolArgs,
 		}
 		switch ev.Type {
 		case subagent.AgentEventToolResult:
 			entry.Content = ev.Result
+			entry.IsError = ev.IsError
 		case subagent.AgentEventToolCall:
 			// ToolCall has no Text field; use toolArgSummary as description.
 			entry.Content = toolArgSummary(ev.ToolName, ev.ToolArgs)
@@ -477,11 +479,13 @@ func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData
 		entry := AgentEventEntry{
 			Type:     teammateEventTypeStr(e.Type),
 			ToolName: e.ToolName,
+			ToolID:   e.ToolID,
 			ToolArgs: e.ToolArgs,
 		}
 		switch e.Type {
 		case swarm.TeammateEventToolResult:
 			entry.Content = e.Result
+			entry.IsError = e.IsError
 		case swarm.TeammateEventToolCall:
 			entry.Content = toolArgSummary(e.ToolName, e.ToolArgs)
 		default:

@@ -36,7 +36,9 @@ type AgentEventEntry struct {
 	Type     string // "text", "tool_call", "tool_result", "error"
 	Content  string
 	ToolName string
+	ToolID   string // unique tool call ID for precise matching
 	ToolArgs string
+	IsError  bool // for tool_result / error
 }
 
 // truncateRunes truncates a string to maxChars runes, appending suffix if truncated.

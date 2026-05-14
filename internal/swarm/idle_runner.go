@@ -301,6 +301,7 @@ func executeTask(
 	var output strings.Builder
 	var textBuf strings.Builder // accumulate text chunks into turn-level events
 	lastToolName := ""
+	lastToolID := ""
 	flushText := func() {
 		if textBuf.Len() == 0 {
 			return
@@ -337,6 +338,7 @@ func executeTask(
 			tm.appendEvent(TeammateEvent{
 				Type:     TeammateEventToolResult,
 				ToolName: lastToolName,
+				ToolID:   lastToolID,
 				Result:   event.Result,
 				IsError:  event.IsError,
 			})
