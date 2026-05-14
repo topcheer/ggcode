@@ -19,6 +19,7 @@ import (
 type sendEntry struct {
 	widget.Entry
 	onSend func()
+	busy   bool
 }
 
 func newSendEntry() *sendEntry {
@@ -31,6 +32,9 @@ func newSendEntry() *sendEntry {
 func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
 	switch key.Name {
 	case fyne.KeyReturn, fyne.KeyEnter:
+		if e.busy {
+			return
+		}
 		if e.isShiftHeld() {
 			e.Entry.KeyDown(key)
 			return
@@ -137,6 +141,7 @@ const placeholderIdle = "Message ggcode... (Enter to send, Shift+Enter for newli
 const placeholderBusy = "ggcode is working... (messages will be queued)"
 
 func (cv *ChatView) updateButtons(working bool) {
+	cv.entry.busy = working
 	if working {
 		cv.cancelBtn.Show()
 		cv.entry.PlaceHolder = placeholderBusy
@@ -154,6 +159,7 @@ func (cv *ChatView) onSend() {
 		return
 	}
 	cv.entry.SetText("")
+	cv.entry.Refresh()
 	cv.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
 	if cv.bridge.IsWorking() {
 		cv.bridge.QueueMessage(text)
@@ -381,8 +387,10 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 
 	var accItems []*widget.AccordionItem
 
-	if msg.ToolArgs != "" {
-		cmdBlock := widget.NewRichTextFromMarkdown("```bash\n" + msg.ToolArgs + "\n```")
+	// Extract command from raw JSON args.
+	cmd := extractJSONField(raw(msg), "command")
+	if cmd != "" {
+		cmdBlock := widget.NewRichTextFromMarkdown("```bash\n" + cmd + "\n```")
 		cmdBlock.Wrapping = fyne.TextWrapWord
 		accItems = append(accItems, widget.NewAccordionItem("Command", cmdBlock))
 	}
@@ -750,12 +758,17 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 }
 
 func (cv *ChatView) renderToolFromAgentEvent(toolEv *AgentEventEntry, result string) fyne.CanvasObject {
+	// Build ChatMessage exactly like the main panel does in agent_bridge.go.
+	// Main panel: toolDescription(name, rawArgs) + toolArgSummary(name, rawArgs) + rawArgs
+	rawArgs := toolEv.ToolArgs
+	name := toolEv.ToolName
 	msg := &ChatMessage{
-		ToolName: toolEv.ToolName,
-		ToolArgs: toolEv.ToolArgs,
-		ToolRaw:  toolEv.ToolArgs, // agent events have raw JSON in ToolArgs
+		Role:     "tool",
+		ToolName: name,
+		ToolDesc: toolDescription(name, rawArgs),
+		ToolArgs: toolArgSummary(name, rawArgs),
+		ToolRaw:  rawArgs,
 		Content:  result,
-		ToolDesc: toolEv.Content,
 	}
 	return cv.renderTool(msg)
 }
