@@ -1,0 +1,231 @@
+package markdownx
+
+import (
+	"fmt"
+	"image/color"
+	"net/url"
+	"strings"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
+)
+
+// renderBlock creates a Fyne CanvasObject for a parsed block.
+func renderBlock(b *mdBlock) fyne.CanvasObject {
+	switch b.kind {
+	case blockHeading:
+		return renderHeading(b)
+	case blockParagraph:
+		return renderParagraph(b)
+	case blockCode:
+		return renderCodeBlock(b)
+	case blockList:
+		return renderList(b)
+	case blockBlockquote:
+		return renderBlockquote(b)
+	case blockTable:
+		return renderTableBlock(b)
+	case blockHR:
+		return renderHR()
+	}
+	return widget.NewLabel("???")
+}
+
+// ── Heading ────────────────────────────────────────
+
+func renderHeading(b *mdBlock) fyne.CanvasObject {
+	rt := widget.NewRichText(headingSegments(b.content, b.level)...)
+	rt.Wrapping = fyne.TextWrapWord
+	return padded(6, 2, 0, 0, rt)
+}
+
+// ── Paragraph ──────────────────────────────────────
+
+func renderParagraph(b *mdBlock) fyne.CanvasObject {
+	if len(b.runs) > 0 {
+		return renderInlineRuns(b.runs)
+	}
+	// Fallback: plain text
+	rt := widget.NewRichText(&widget.ParagraphSegment{Texts: []widget.RichTextSegment{normalSeg(b.content)}})
+	rt.Wrapping = fyne.TextWrapWord
+	return padded(2, 2, 0, 0, rt)
+}
+
+func renderInlineRuns(runs []inlineRun) fyne.CanvasObject {
+	var segs []widget.RichTextSegment
+	for _, r := range runs {
+		switch {
+		case r.code:
+			segs = append(segs, codeSpanSeg(r.text))
+		case r.bold && r.italic:
+			segs = append(segs, &widget.TextSegment{Text: r.text, Style: widget.RichTextStyle{
+				Inline: true, TextStyle: fyne.TextStyle{Bold: true, Italic: true}}})
+		case r.bold:
+			segs = append(segs, boldSeg(r.text))
+		case r.italic:
+			segs = append(segs, italicSeg(r.text))
+		case r.link != "":
+			u, _ := url.Parse(r.link)
+			if u != nil {
+				segs = append(segs, &widget.HyperlinkSegment{Text: r.text, URL: u})
+			} else {
+				segs = append(segs, normalSeg(r.text))
+			}
+		default:
+			segs = append(segs, normalSeg(r.text))
+		}
+	}
+	rt := widget.NewRichText(&widget.ParagraphSegment{Texts: segs})
+	rt.Wrapping = fyne.TextWrapWord
+	return padded(2, 2, 0, 0, rt)
+}
+
+// ── Code Block ─────────────────────────────────────
+
+func renderCodeBlock(b *mdBlock) fyne.CanvasObject {
+	if len(b.lines) == 0 {
+		return nil
+	}
+
+	// Build code text with line numbers.
+	var sb strings.Builder
+	numWidth := len(fmt.Sprintf("%d", len(b.lines)))
+	for i, line := range b.lines {
+		sb.WriteString(fmt.Sprintf("%*d  %s\n", numWidth, i+1, line))
+	}
+	codeText := sb.String()
+
+	// Use a monospace RichText for the code content.
+	label := widget.NewLabelWithStyle(codeText, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+	label.Wrapping = fyne.TextWrapWord
+
+	// Dark background.
+	bg := canvas.NewRectangle(colCodeBg)
+	bg.SetMinSize(fyne.NewSize(0, 0))
+
+	// Language label.
+	var contentObjs []fyne.CanvasObject
+	if b.lang != "" {
+		langLabel := widget.NewLabelWithStyle(b.lang, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true})
+		contentObjs = append(contentObjs, langLabel)
+	}
+	contentObjs = append(contentObjs, label)
+
+	inner := container.NewStack(bg, container.NewVBox(contentObjs...))
+	return container.New(layout.NewCustomPaddedLayout(4, 4, 4, 4), inner)
+}
+
+// ── List ───────────────────────────────────────────
+
+func renderList(b *mdBlock) fyne.CanvasObject {
+	var items []fyne.CanvasObject
+	for i, text := range b.items {
+		prefix := "• "
+		if b.ordered {
+			prefix = fmt.Sprintf("%d. ", i+1)
+		}
+		bullet := widget.NewLabelWithStyle(prefix, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+		bullet.Resize(fyne.NewSize(30, bullet.MinSize().Height))
+
+		content := widget.NewLabel(text)
+		content.Wrapping = fyne.TextWrapWord
+
+		row := container.NewBorder(nil, nil, bullet, nil, content)
+		items = append(items, row)
+	}
+	return container.NewVBox(items...)
+}
+
+// ── Blockquote ─────────────────────────────────────
+
+func renderBlockquote(b *mdBlock) fyne.CanvasObject {
+	var children []fyne.CanvasObject
+	for _, child := range b.children {
+		children = append(children, renderBlock(child))
+	}
+
+	bar := canvas.NewRectangle(colQuoteBar)
+	bar.SetMinSize(fyne.NewSize(3, 0))
+
+	bg := canvas.NewRectangle(colQuoteBg)
+
+	content := container.NewVBox(children...)
+	inner := container.NewStack(bg, container.NewBorder(nil, nil, bar, nil, content))
+	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), inner)
+}
+
+// ── Table ──────────────────────────────────────────
+
+func renderTableBlock(b *mdBlock) fyne.CanvasObject {
+	numCols := len(b.headers)
+	for _, row := range b.rows {
+		if len(row) > numCols {
+			numCols = len(row)
+		}
+	}
+	if numCols == 0 {
+		return nil
+	}
+
+	var cells []fyne.CanvasObject
+
+	// Header row.
+	for i := 0; i < numCols; i++ {
+		text := cellText(i, b.headers)
+		label := widget.NewLabelWithStyle(text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true})
+		label.Wrapping = fyne.TextWrapWord
+		bg := canvas.NewRectangle(colTblHead)
+		cells = append(cells, container.NewStack(bg, container.NewPadded(label)))
+	}
+
+	// Data rows.
+	for ri, row := range b.rows {
+		for i := 0; i < numCols; i++ {
+			text := cellText(i, row)
+			label := widget.NewLabel(text)
+			label.TextStyle = fyne.TextStyle{Monospace: true}
+			label.Wrapping = fyne.TextWrapWord
+			if ri%2 == 1 {
+				bg := canvas.NewRectangle(colTblAlt)
+				cells = append(cells, container.NewStack(bg, container.NewPadded(label)))
+			} else {
+				cells = append(cells, container.NewPadded(label))
+			}
+		}
+	}
+
+	grid := container.NewGridWithColumns(numCols)
+	grid.Objects = cells
+	grid.Refresh()
+	return container.New(layout.NewCustomPaddedLayout(4, 4, 0, 0), grid)
+}
+
+func cellText(col int, row []string) string {
+	if col >= len(row) {
+		return ""
+	}
+	return row[col]
+}
+
+// ── HR ─────────────────────────────────────────────
+
+func renderHR() fyne.CanvasObject {
+	line := canvas.NewLine(theme.DisabledColor())
+	line.StrokeWidth = 1
+	return container.NewPadded(line)
+}
+
+// ── Helper ─────────────────────────────────────────
+
+func padded(top, bottom, left, right float32, obj fyne.CanvasObject) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(top, bottom, left, right), obj)
+}
+
+// Ensure imports.
+var _ = color.RGBA{}
+var _ = fyne.MeasureText
+var _ = theme.ColorNameForeground
