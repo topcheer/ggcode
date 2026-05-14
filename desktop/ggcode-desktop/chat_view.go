@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -14,8 +13,6 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
-
-const autoScrollPause = 30 * time.Second
 
 // ── sendEntry ────────────────────────────────────────
 
@@ -72,17 +69,12 @@ type ChatView struct {
 	tabs         *container.AppTabs
 	tabMap       map[string]*container.TabItem
 	agentScrolls map[string]*container.Scroll
-
-	scrollMu    sync.Mutex
-	autoScroll  bool
-	lastUserAct time.Time
 }
 
 func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 	cv := &ChatView{
 		bridge:       bridge,
 		ui:           ui,
-		autoScroll:   true,
 		tabMap:       make(map[string]*container.TabItem),
 		agentScrolls: make(map[string]*container.Scroll),
 	}
@@ -111,12 +103,6 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 
 	cv.vbox = container.NewVBox()
 	cv.scroll = container.NewVScroll(cv.vbox)
-	cv.scroll.OnScrolled = func(_ fyne.Position) {
-		cv.scrollMu.Lock()
-		cv.autoScroll = false
-		cv.lastUserAct = time.Now()
-		cv.scrollMu.Unlock()
-	}
 
 	mainTab := container.NewTabItem("Main", cv.scroll)
 	cv.tabs = container.NewAppTabs(mainTab)
@@ -139,7 +125,8 @@ func (cv *ChatView) pollRefresh() {
 			if dirty {
 				cv.rebuildMessages()
 			}
-			if cv.shouldAutoScroll() {
+			// Always scroll to bottom when agent is working.
+			if working {
 				cv.scroll.ScrollToBottom()
 			}
 			cv.updateButtons(working)
@@ -147,19 +134,6 @@ func (cv *ChatView) pollRefresh() {
 			cv.updateStatusBar(working)
 		})
 	}
-}
-
-func (cv *ChatView) shouldAutoScroll() bool {
-	cv.scrollMu.Lock()
-	defer cv.scrollMu.Unlock()
-	if cv.autoScroll {
-		return true
-	}
-	if time.Since(cv.lastUserAct) >= autoScrollPause {
-		cv.autoScroll = true
-		return true
-	}
-	return false
 }
 
 func (cv *ChatView) updateButtons(working bool) {
@@ -178,9 +152,6 @@ func (cv *ChatView) onSend() {
 		return
 	}
 	cv.entry.SetText("")
-	cv.scrollMu.Lock()
-	cv.autoScroll = true
-	cv.scrollMu.Unlock()
 	cv.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
 	if cv.bridge.IsWorking() {
 		cv.bridge.QueueMessage(text)
@@ -258,6 +229,9 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	if text == "" {
 		return nil
 	}
+	// Pre-process: Fyne RichText doesn't support GFM tables.
+	// Replace table blocks with formatted text representation.
+	text = renderMarkdownTables(text)
 	rt := widget.NewRichTextFromMarkdown(text)
 	rt.Wrapping = fyne.TextWrapWord
 	return cv.iconRow(theme.ComputerIcon(), rt)
@@ -532,14 +506,14 @@ func (cv *ChatView) renderTodoTool(msg *ChatMessage) fyne.CanvasObject {
 
 // renderAgentTool: agent name + task description.
 func (cv *ChatView) renderAgentTool(msg *ChatMessage) fyne.CanvasObject {
-	name := extractJSONField(msg.ToolArgs, "name")
+	name := extractJSONField(raw(msg), "name")
 	if name == "" {
-		name = extractJSONField(msg.ToolArgs, "subagent_type")
+		name = extractJSONField(raw(msg), "subagent_type")
 	}
 	if name == "" {
 		name = "agent"
 	}
-	task := truncateRunes(extractJSONField(msg.ToolArgs, "task"), 100, "...")
+	task := truncateRunes(extractJSONField(raw(msg), "task"), 100, "...")
 	desc := "Agent: " + name
 	if task != "" {
 		desc += " — " + task
@@ -549,8 +523,8 @@ func (cv *ChatView) renderAgentTool(msg *ChatMessage) fyne.CanvasObject {
 
 // renderSendMessageTool: to + summary + message preview.
 func (cv *ChatView) renderSendMessageTool(msg *ChatMessage) fyne.CanvasObject {
-	to := extractJSONField(msg.ToolArgs, "to")
-	summary := extractJSONField(msg.ToolArgs, "summary")
+	to := extractJSONField(raw(msg), "to")
+	summary := extractJSONField(raw(msg), "summary")
 	desc := "Send to: " + to
 	if summary != "" {
 		desc = summary
@@ -560,8 +534,8 @@ func (cv *ChatView) renderSendMessageTool(msg *ChatMessage) fyne.CanvasObject {
 
 // renderSwarmTaskTool: subject + assignee + description.
 func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
-	subject := extractJSONField(msg.ToolArgs, "subject")
-	assignee := extractJSONField(msg.ToolArgs, "assignee")
+	subject := extractJSONField(raw(msg), "subject")
+	assignee := extractJSONField(raw(msg), "assignee")
 	desc := "Task"
 	if subject != "" {
 		desc = subject
@@ -591,6 +565,13 @@ func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
 	rt := widget.NewRichTextFromMarkdown(md)
 	rt.Wrapping = fyne.TextWrapBreak
 	return rt
+}
+
+func raw(msg *ChatMessage) string {
+	if msg.ToolRaw != "" {
+		return msg.ToolRaw
+	}
+	return msg.ToolArgs
 }
 
 func toolIcon(msg *ChatMessage) fyne.Resource {
@@ -694,6 +675,11 @@ func (cv *ChatView) rebuildAgentTabs() {
 		}
 	}
 	cv.tabs.Refresh()
+
+	// Auto-scroll all agent panels to bottom.
+	for _, scr := range cv.agentScrolls {
+		scr.ScrollToBottom()
+	}
 }
 
 func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container) {
@@ -757,6 +743,7 @@ func (cv *ChatView) renderToolFromAgentEvent(toolEv *AgentEventEntry, result str
 	msg := &ChatMessage{
 		ToolName: toolEv.ToolName,
 		ToolArgs: toolEv.ToolArgs,
+		ToolRaw:  toolEv.ToolArgs, // agent events have raw JSON in ToolArgs
 		Content:  result,
 		ToolDesc: toolEv.Content,
 	}
@@ -782,4 +769,141 @@ func truncateTabName(name string, totalAgents int) string {
 		return name
 	}
 	return string(runes[:maxLen-1]) + "…"
+}
+
+// renderMarkdownTables converts GFM table blocks to formatted text
+// since Fyne's RichText doesn't support table rendering.
+func renderMarkdownTables(md string) string {
+	lines := strings.Split(md, "\n")
+	var result []string
+	var tableLines []string
+	inTable := false
+
+	for _, line := range lines {
+		if isTableLine(line) {
+			if !inTable {
+				inTable = true
+				tableLines = []string{line}
+			} else {
+				tableLines = append(tableLines, line)
+			}
+		} else {
+			if inTable {
+				result = append(result, formatTable(tableLines)...)
+				tableLines = nil
+				inTable = false
+			}
+			result = append(result, line)
+		}
+	}
+	if inTable {
+		result = append(result, formatTable(tableLines)...)
+	}
+	return strings.Join(result, "\n")
+}
+
+func isTableLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	// Table rows start and end with |
+	if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
+		return true
+	}
+	// Separator line like |---|---|
+	if strings.HasPrefix(trimmed, "|") && strings.Contains(trimmed, "---") {
+		return true
+	}
+	return false
+}
+
+func formatTable(lines []string) []string {
+	if len(lines) < 2 {
+		return lines
+	}
+
+	// Parse all rows (skip separator rows).
+	var rows [][]string
+	for _, line := range lines {
+		if isSeparatorRow(line) {
+			continue
+		}
+		cells := parseCells(line)
+		if len(cells) > 0 {
+			rows = append(rows, cells)
+		}
+	}
+	if len(rows) == 0 {
+		return lines
+	}
+
+	// Calculate column widths.
+	numCols := 0
+	for _, r := range rows {
+		if len(r) > numCols {
+			numCols = len(r)
+		}
+	}
+	widths := make([]int, numCols)
+	for _, r := range rows {
+		for i, c := range r {
+			w := len([]rune(c))
+			if w > widths[i] {
+				widths[i] = w
+			}
+		}
+	}
+
+	// Format rows.
+	var result []string
+	for ri, r := range rows {
+		var parts []string
+		for i := 0; i < numCols; i++ {
+			cell := ""
+			if i < len(r) {
+				cell = r[i]
+			}
+			pad := widths[i] - len([]rune(cell))
+			if pad < 0 {
+				pad = 0
+			}
+			parts = append(parts, cell+strings.Repeat(" ", pad))
+		}
+		result = append(result, "  "+strings.Join(parts, "  "))
+
+		// Add separator after header row.
+		if ri == 0 {
+			var seps []string
+			for i := 0; i < numCols; i++ {
+				seps = append(seps, strings.Repeat("-", widths[i]))
+			}
+			result = append(result, "  "+strings.Join(seps, "  "))
+		}
+	}
+	return result
+}
+
+func isSeparatorRow(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimPrefix(trimmed, "|")
+	trimmed = strings.TrimSuffix(trimmed, "|")
+	for _, ch := range trimmed {
+		if ch != '-' && ch != ' ' && ch != ':' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseCells(line string) []string {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.TrimPrefix(trimmed, "|")
+	trimmed = strings.TrimSuffix(trimmed, "|")
+	parts := strings.Split(trimmed, "|")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		result = append(result, strings.TrimSpace(p))
+	}
+	return result
 }

@@ -10,6 +10,7 @@ type ChatMessage struct {
 	ToolID    string // unique tool call ID for matching results
 	ToolDesc  string // human-readable description (from args.description or derived)
 	ToolArgs  string // short summary of key arguments
+	ToolRaw   string // raw JSON arguments for field extraction
 	Time      time.Time
 	Streaming bool
 	IsError   bool // tool result was an error

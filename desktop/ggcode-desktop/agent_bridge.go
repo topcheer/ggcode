@@ -200,6 +200,7 @@ func (b *AgentBridge) Send(userMsg string) error {
 					ToolID:   ev.Tool.ID,
 					ToolDesc: description,
 					ToolArgs: args,
+					ToolRaw:  string(ev.Tool.Arguments),
 					Content:  "",
 					Time:     time.Now(),
 				})
