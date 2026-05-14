@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/widget"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -19,14 +19,42 @@ import (
 
 var mdEngine = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
-// parseBlocks parses markdown source into a list of blocks.
-func parseBlocks(src string) []block {
+// ── Block data types ───────────────────────────────
+
+type mdBlock struct {
+	kind     blockKind
+	content  string        // raw text (heading, paragraph)
+	level    int           // heading level
+	lang     string        // code block language
+	lines    []string      // code block lines
+	colors   []color.Color // per-line chroma colors
+	ordered  bool          // list
+	items    []string      // list items
+	headers  []string      // table headers
+	rows     [][]string    // table rows
+	children []*mdBlock    // blockquote children
+	runs     []inlineRun   // inline runs (paragraph)
+}
+
+type blockKind int
+
+const (
+	blockHeading blockKind = iota
+	blockParagraph
+	blockCode
+	blockList
+	blockBlockquote
+	blockTable
+	blockHR
+)
+
+// parseBlocks converts markdown source into a list of block descriptors.
+func parseBlocks(src string) []*mdBlock {
 	reader := text.NewReader([]byte(src))
 	doc := mdEngine.Parser().Parse(reader)
-
-	var blocks []block
+	var blocks []*mdBlock
 	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
-		b := astToBlock(child, src)
+		b := nodeToBlock(child, src)
 		if b != nil {
 			blocks = append(blocks, b)
 		}
@@ -34,12 +62,14 @@ func parseBlocks(src string) []block {
 	return blocks
 }
 
-func astToBlock(node ast.Node, src string) block {
+func nodeToBlock(node ast.Node, src string) *mdBlock {
 	switch n := node.(type) {
 	case *ast.Heading:
-		return &headingBlock{level: n.Level, runs: collectInlineRuns(n, src)}
+		return &mdBlock{kind: blockHeading, level: n.Level, content: extractText(n, src)}
 	case *ast.Paragraph:
-		return &paragraphBlock{runs: collectInlineRuns(n, src)}
+		// Collect inline segments as text runs.
+		runs := collectInlineRuns(n, src)
+		return &mdBlock{kind: blockParagraph, content: runsToText(runs), runs: runs}
 	case *ast.FencedCodeBlock:
 		return parseCodeBlock(n, src)
 	case *ast.CodeBlock:
@@ -49,16 +79,99 @@ func astToBlock(node ast.Node, src string) block {
 	case *ast.Blockquote:
 		return parseBlockquote(n, src)
 	case *ast.ThematicBreak:
-		return &hrBlock{}
+		return &mdBlock{kind: blockHR}
 	case *east.Table:
 		return parseTable(n, src)
 	}
 	return nil
 }
 
+// ── Inline run ─────────────────────────────────────
+
+type inlineRun struct {
+	text  string
+	bold  bool
+	italic bool
+	code  bool
+	link  string
+}
+
+func collectInlineRuns(node ast.Node, src string) []inlineRun {
+	var runs []inlineRun
+	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+		collectInline(child, src, &runs, inlineRun{})
+	}
+	return runs
+}
+
+func collectInline(node ast.Node, src string, runs *[]inlineRun, style inlineRun) {
+	switch n := node.(type) {
+	case *ast.Text:
+		text := string(n.Segment.Value([]byte(src)))
+		if text != "" {
+			*runs = append(*runs, inlineRun{text: text, bold: style.bold, italic: style.italic, code: style.code, link: style.link})
+		}
+	case *ast.String:
+		*runs = append(*runs, inlineRun{text: string(n.Value), bold: style.bold, italic: style.italic, code: style.code})
+	case *ast.CodeSpan:
+		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+			collectInline(child, src, runs, inlineRun{code: true})
+		}
+	case *ast.Emphasis:
+		em := style
+		if n.Level == 2 {
+			em.bold = true
+		} else {
+			em.italic = true
+		}
+		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+			collectInline(child, src, runs, em)
+		}
+	case *ast.Link:
+		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+			collectInline(child, src, runs, inlineRun{link: string(n.Destination)})
+		}
+	default:
+		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+			collectInline(child, src, runs, style)
+		}
+	}
+}
+
+// runsToSegments converts inline runs to Fyne RichText segments.
+func runsToSegments(runs []inlineRun) []interface{} {
+	var segs []interface{}
+	for _, r := range runs {
+		switch {
+		case r.code:
+			segs = append(segs, codeSpanSeg(r.text))
+		case r.bold && r.italic:
+			segs = append(segs, &widget.TextSegment{Text: r.text, Style: widget.RichTextStyle{
+				Inline: true, TextStyle: fyne.TextStyle{Bold: true, Italic: true}}})
+		case r.bold:
+			segs = append(segs, boldSeg(r.text))
+		case r.italic:
+			segs = append(segs, italicSeg(r.text))
+		case r.link != "":
+			segs = append(segs, linkSeg(r.text, r.link))
+		default:
+			segs = append(segs, normalSeg(r.text))
+		}
+	}
+	return segs
+}
+
+func runsToText(runs []inlineRun) string {
+	var sb strings.Builder
+	for _, r := range runs {
+		sb.WriteString(r.text)
+	}
+	return sb.String()
+}
+
 // ── Code block parsing ─────────────────────────────
 
-func parseCodeBlock(n *ast.FencedCodeBlock, src string) *codeBlock {
+func parseCodeBlock(n *ast.FencedCodeBlock, src string) *mdBlock {
 	lang := ""
 	if n.Info != nil {
 		lang = string(n.Info.Text([]byte(src)))
@@ -66,107 +179,88 @@ func parseCodeBlock(n *ast.FencedCodeBlock, src string) *codeBlock {
 	var lines []string
 	for i := 0; i < n.Lines().Len(); i++ {
 		seg := n.Lines().At(i)
-		line := string(seg.Value([]byte(src)))
-		lines = append(lines, strings.TrimRight(line, "\n"))
+		lines = append(lines, strings.TrimRight(string(seg.Value([]byte(src))), "\n"))
 	}
-	colors := chromaLineColors(lang, lines)
-	return &codeBlock{lang: lang, lines: lines, color: colors}
+	colors := chromaColors(lang, lines)
+	return &mdBlock{kind: blockCode, lang: lang, lines: lines, colors: colors}
 }
 
-func parsePlainCodeBlock(n *ast.CodeBlock, src string) *codeBlock {
+func parsePlainCodeBlock(n *ast.CodeBlock, src string) *mdBlock {
 	var lines []string
 	for i := 0; i < n.Lines().Len(); i++ {
 		seg := n.Lines().At(i)
-		line := string(seg.Value([]byte(src)))
-		lines = append(lines, strings.TrimRight(line, "\n"))
+		lines = append(lines, strings.TrimRight(string(seg.Value([]byte(src))), "\n"))
 	}
-	return &codeBlock{lines: lines}
+	return &mdBlock{kind: blockCode, lines: lines}
 }
 
-// chromaLineColors returns per-line dominant syntax colors.
-func chromaLineColors(lang string, lines []string) []color.Color {
+func chromaColors(lang string, lines []string) []color.Color {
 	result := make([]color.Color, len(lines))
 	if lang == "" {
 		return result
 	}
-
 	lexer := lexers.Get(lang)
 	if lexer == nil {
 		return result
 	}
 	lexer = chroma.Coalesce(lexer)
-
-	code := strings.Join(lines, "\n")
-	iter, err := lexer.Tokenise(nil, code)
+	iter, err := lexer.Tokenise(nil, strings.Join(lines, "\n"))
 	if err != nil {
 		return result
 	}
-
 	style := styles.Get("monokai")
 	if style == nil {
 		style = styles.Fallback
 	}
-
-	currentLine := 0
+	line := 0
 	for tok := iter(); tok != chroma.EOF; tok = iter() {
 		entry := style.Get(tok.Type)
 		c := entry.Colour
 		if c.Red() > 0 || c.Green() > 0 || c.Blue() > 0 {
-			lastColor := color.RGBA{R: c.Red(), G: c.Green(), B: c.Blue(), A: 255}
-			newlines := strings.Count(tok.Value, "\n")
-			for i := currentLine; i <= currentLine+newlines && i < len(result); i++ {
+			rgb := color.RGBA{R: c.Red(), G: c.Green(), B: c.Blue(), A: 255}
+			for i := line; i < line+strings.Count(tok.Value, "\n")+1 && i < len(result); i++ {
 				if result[i] == nil {
-					result[i] = lastColor
+					result[i] = rgb
 				}
 			}
 		}
-		currentLine += strings.Count(tok.Value, "\n")
+		line += strings.Count(tok.Value, "\n")
 	}
 	return result
 }
 
 // ── List parsing ───────────────────────────────────
 
-func parseList(n *ast.List, src string) *listBlock {
-	lb := &listBlock{ordered: n.IsOrdered()}
+func parseList(n *ast.List, src string) *mdBlock {
+	lb := &mdBlock{kind: blockList, ordered: n.IsOrdered()}
 	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 		li, ok := child.(*ast.ListItem)
 		if !ok {
 			continue
 		}
-		item := listItem{}
-		for lc := li.FirstChild(); lc != nil; lc = lc.NextSibling() {
-			if para, ok := lc.(*ast.Paragraph); ok {
-				item.runs = collectInlineRuns(para, src)
-			} else {
-				b := astToBlock(lc, src)
-				if b != nil {
-					item.children = append(item.children, b)
-				}
-			}
-		}
-		lb.items = append(lb.items, item)
+		text := extractText(li, src)
+		lb.items = append(lb.items, strings.TrimSpace(text))
 	}
 	return lb
 }
 
 // ── Blockquote parsing ─────────────────────────────
 
-func parseBlockquote(n *ast.Blockquote, src string) *blockquoteBlock {
-	var children []block
+func parseBlockquote(n *ast.Blockquote, src string) *mdBlock {
+	bq := &mdBlock{kind: blockBlockquote}
 	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-		b := astToBlock(child, src)
+		b := nodeToBlock(child, src)
 		if b != nil {
-			children = append(children, b)
+			bq.children = append(bq.children, b)
 		}
 	}
-	return &blockquoteBlock{children: children}
+	return bq
 }
 
 // ── Table parsing ──────────────────────────────────
 
-func parseTable(n *east.Table, src string) *tableBlock {
-	tb := &tableBlock{}
+func parseTable(n *east.Table, src string) *mdBlock {
+	tb := &mdBlock{kind: blockTable}
 	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 		switch row := child.(type) {
 		case *east.TableHeader:
@@ -186,64 +280,6 @@ func extractCells(node ast.Node, src string) []string {
 		}
 	}
 	return cells
-}
-
-// ── Inline run collection ──────────────────────────
-
-// collectInlineRuns extracts styled text runs from an inline container.
-func collectInlineRuns(node ast.Node, src string) []textRun {
-	var runs []textRun
-	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-		collectInline(child, src, &runs, normalStyle())
-	}
-	return runs
-}
-
-func collectInline(node ast.Node, src string, runs *[]textRun, s textStyle) {
-	switch n := node.(type) {
-	case *ast.Text:
-		text := string(n.Segment.Value([]byte(src)))
-		if text != "" {
-			*runs = append(*runs, textRun{text: text, style: s})
-		}
-	case *ast.String:
-		*runs = append(*runs, textRun{text: string(n.Value), style: s})
-	case *ast.CodeSpan:
-		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-			collectInline(child, src, runs, codeSpanStyle())
-		}
-	case *ast.Emphasis:
-		em := s
-		if n.Level == 2 {
-			em = boldStyle()
-			if s.italic {
-				em = textStyle{bold: true, italic: true, size: textSize, color: colFgBold}
-			}
-		} else {
-			em = italicStyle()
-			if s.bold {
-				em = textStyle{bold: true, italic: true, size: textSize, color: colFgBold}
-			}
-		}
-		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
-			collectInline(child, src, runs, em)
-		}
-	case *ast.Link:
-		linkText := extractText(n, src)
-		if linkText != "" {
-			*runs = append(*runs, textRun{text: linkText, style: textStyle{size: textSize, color: color.RGBA{R: 100, G: 180, B: 255, A: 255}}})
-		}
-	case *ast.Image:
-		alt := extractText(n, src)
-		if alt == "" {
-			alt = string(n.Destination)
-		}
-		*runs = append(*runs, textRun{text: "[🖼 " + alt + "]", style: s})
-	default:
-		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
-			collectInline(child, src, runs, s)
-		}
-	}
 }
 
 // ── Text extraction ────────────────────────────────
@@ -269,13 +305,8 @@ func extractTextInto(node ast.Node, src string, sb *strings.Builder) {
 
 // closeOpenCodeBlocks ensures all ``` have matching closing ```.
 func closeOpenCodeBlocks(text string) string {
-	count := strings.Count(text, "```")
-	if count%2 == 0 {
-		return text
+	if strings.Count(text, "```")%2 != 0 {
+		return text + "\n```"
 	}
-	return text + "\n```"
+	return text
 }
-
-// Ensure imports used.
-var _ = canvas.NewLine
-var _ = fyne.MeasureText

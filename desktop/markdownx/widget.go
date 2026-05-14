@@ -6,169 +6,131 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 )
 
-// MarkdownWidget renders Markdown using raw canvas.Text and canvas.Rectangle.
+// MarkdownWidget renders markdown with proper Fyne widgets.
+// Uses VBox layout — no absolute positioning.
+//
+// Streaming: AppendChunk accumulates text and debounces re-render.
+// Only the last block is rebuilt during streaming.
 type MarkdownWidget struct {
 	widget.BaseWidget
 	mu sync.Mutex
 
-	buffer strings.Builder
-
-	objects []fyne.CanvasObject
-	minSize fyne.Size
-	builtW  float32 // width used for last rebuild
-	inBuild bool   // prevent re-entrant rebuild
+	buffer    strings.Builder
+	vbox      *fyne.Container
+	lastCount int // number of blocks last rendered
 
 	debounceMu    sync.Mutex
 	debounceTimer *time.Timer
 }
 
 func NewMarkdownWidget() *MarkdownWidget {
-	w := &MarkdownWidget{}
+	w := &MarkdownWidget{
+		vbox: container.NewVBox(),
+	}
 	w.ExtendBaseWidget(w)
 	return w
 }
 
+// SetMarkdown replaces content. Must be called on UI thread.
 func (w *MarkdownWidget) SetMarkdown(text string) {
 	w.mu.Lock()
 	w.buffer.Reset()
 	w.buffer.WriteString(text)
 	w.mu.Unlock()
-	w.doRebuild()
+	w.fullRebuild()
 }
 
-// Resize is called when the widget's parent changes its size.
-// We need to re-render because our layout depends on width.
-func (w *MarkdownWidget) Resize(size fyne.Size) {
-	w.BaseWidget.Resize(size)
-	if w.inBuild || size.Width <= 0 {
-		return
-	}
-	if w.builtW <= 0 || abs32(size.Width-w.builtW) > 5 {
-		w.doRebuild()
-	}
-}
-
-func abs32(x float32) float32 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
+// AppendChunk appends streaming text with debounced re-render.
 func (w *MarkdownWidget) AppendChunk(chunk string) {
 	w.mu.Lock()
 	w.buffer.WriteString(chunk)
 	w.mu.Unlock()
-	w.scheduleDebouncedRebuild()
+	w.scheduleRebuild()
 }
 
+// Content returns accumulated text.
 func (w *MarkdownWidget) Content() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.buffer.String()
 }
 
+// CreateRenderer returns the VBox directly.
 func (w *MarkdownWidget) CreateRenderer() fyne.WidgetRenderer {
-	r := &mdRenderer{widget: w}
-	return r
+	return widget.NewSimpleRenderer(w.vbox)
 }
 
-func (w *MarkdownWidget) doRebuild() {
-	if w.inBuild {
-		return
-	}
-	w.inBuild = true
-	defer func() { w.inBuild = false }()
-
+// fullRebuild re-parses and re-renders everything.
+func (w *MarkdownWidget) fullRebuild() {
+	w.mu.Lock()
 	text := w.buffer.String()
+	w.mu.Unlock()
 	text = closeOpenCodeBlocks(text)
 
-	newBlocks := parseBlocks(text)
-
-	width := float32(600)
-	if s := w.Size(); s.Width > 0 {
-		width = s.Width
-	}
-
-	var allObjects []fyne.CanvasObject
-	y := float32(0)
-
-	for _, b := range newBlocks {
-		objs, h := b.render(width)
-		for _, obj := range objs {
-			offsetY(obj, y)
-			allObjects = append(allObjects, obj)
+	blocks := parseBlocks(text)
+	objs := make([]fyne.CanvasObject, 0, len(blocks))
+	for _, b := range blocks {
+		obj := renderBlock(b)
+		if obj != nil {
+			objs = append(objs, obj)
 		}
-		y += h
 	}
 
-	w.objects = allObjects
-	w.minSize = fyne.NewSize(width, y)
-	w.builtW = width
-
-	// Important: Refresh triggers repaint. If renderer doesn't exist yet,
-	// CreateRenderer will be called later and will see the new objects.
-	w.BaseWidget.Refresh()
+	w.vbox.Objects = objs
+	w.lastCount = len(objs)
+	w.vbox.Refresh()
 }
 
-func (w *MarkdownWidget) scheduleDebouncedRebuild() {
+// streamingRebuild only re-renders the last block for streaming.
+func (w *MarkdownWidget) streamingRebuild() {
+	w.mu.Lock()
+	text := w.buffer.String()
+	w.mu.Unlock()
+	text = closeOpenCodeBlocks(text)
+
+	blocks := parseBlocks(text)
+	total := len(blocks)
+
+	// If block count changed, do full rebuild.
+	if total != w.lastCount {
+		w.fullRebuild()
+		return
+	}
+
+	// Only update last block.
+	if total == 0 {
+		return
+	}
+	lastBlock := blocks[total-1]
+	obj := renderBlock(lastBlock)
+	if obj == nil {
+		return
+	}
+
+	if len(w.vbox.Objects) > 0 {
+		w.vbox.Objects[len(w.vbox.Objects)-1] = obj
+	} else {
+		w.vbox.Objects = []fyne.CanvasObject{obj}
+	}
+	w.vbox.Refresh()
+}
+
+func (w *MarkdownWidget) scheduleRebuild() {
 	w.debounceMu.Lock()
 	defer w.debounceMu.Unlock()
 	if w.debounceTimer != nil {
 		w.debounceTimer.Stop()
 	}
-	w.debounceTimer = time.AfterFunc(100*time.Millisecond, func() {
-		fyne.Do(func() { w.doRebuild() })
+	// Fast streaming: 50ms debounce for responsiveness.
+	// Slow streaming: same — the debounce ensures we don't render
+	// more often than needed regardless of chunk frequency.
+	w.debounceTimer = time.AfterFunc(50*time.Millisecond, func() {
+		fyne.Do(func() {
+			w.streamingRebuild()
+		})
 	})
-}
-
-// ── Renderer ───────────────────────────────────────
-
-type mdRenderer struct {
-	widget *MarkdownWidget
-}
-
-func (r *mdRenderer) Destroy() {}
-
-func (r *mdRenderer) Layout(size fyne.Size) {
-	// Objects are absolutely positioned. Just ensure they're visible.
-	for _, obj := range r.Objects() {
-		obj.Show()
-	}
-}
-
-func (r *mdRenderer) MinSize() fyne.Size {
-	ms := r.widget.minSize
-	if ms.IsZero() {
-		return fyne.NewSize(100, 20)
-	}
-	return ms
-}
-
-func (r *mdRenderer) Objects() []fyne.CanvasObject {
-	return r.widget.objects
-}
-
-func (r *mdRenderer) Refresh() {
-	canvas.Refresh(r.widget)
-}
-
-// ── Position helpers ───────────────────────────────
-
-func offsetY(obj fyne.CanvasObject, dy float32) {
-	switch v := obj.(type) {
-	case *canvas.Text:
-		p := v.Position()
-		v.Move(fyne.NewPos(p.X, p.Y+dy))
-	case *canvas.Rectangle:
-		p := v.Position()
-		v.Move(fyne.NewPos(p.X, p.Y+dy))
-	case *canvas.Line:
-		v.Position1 = fyne.NewPos(v.Position1.X, v.Position1.Y+dy)
-		v.Position2 = fyne.NewPos(v.Position2.X, v.Position2.Y+dy)
-	}
 }
