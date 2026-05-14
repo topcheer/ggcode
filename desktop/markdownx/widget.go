@@ -42,14 +42,15 @@ func NewMarkdownWidget() *MarkdownWidget {
 }
 
 // SetMarkdown replaces the widget content with new markdown text.
-// Safe to call from any goroutine.
+// Must be called on the UI thread.
 func (w *MarkdownWidget) SetMarkdown(text string) {
 	w.mu.Lock()
 	w.buffer.Reset()
 	w.buffer.WriteString(text)
+	text = closeOpenCodeBlocks(text)
+	segments := parseMarkdown(text, w.renderers)
+	w.segments = segments
 	w.mu.Unlock()
-
-	w.reparse()
 }
 
 // AppendChunk appends a streaming text chunk and triggers debounced re-render.
@@ -89,14 +90,14 @@ func (w *MarkdownWidget) CreateRenderer() fyne.WidgetRenderer {
 func (w *MarkdownWidget) reparse() {
 	w.mu.Lock()
 	text := w.buffer.String()
-	// Fix unclosed code blocks for streaming.
 	text = closeOpenCodeBlocks(text)
 	segments := parseMarkdown(text, w.renderers)
 	w.segments = segments
 	w.mu.Unlock()
 
+	// Trigger refresh on UI thread.
 	fyne.Do(func() {
-		w.Refresh()
+		w.BaseWidget.Refresh()
 	})
 }
 
@@ -108,9 +109,7 @@ func (w *MarkdownWidget) scheduleDebouncedReparse() {
 		w.debounceTimer.Stop()
 	}
 	w.debounceTimer = time.AfterFunc(100*time.Millisecond, func() {
-		fyne.Do(func() {
-			w.reparse()
-		})
+		w.reparse()
 	})
 }
 
