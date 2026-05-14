@@ -29,11 +29,16 @@ type mdBlock struct {
 	lines    []string      // code block lines
 	colors   []color.Color // per-line chroma colors
 	ordered  bool          // list
-	items    []string      // list items
+	items    []listItem    // list items (with nesting support)
 	headers  []string      // table headers
 	rows     [][]string    // table rows
 	children []*mdBlock    // blockquote children
 	runs     []inlineRun   // inline runs (paragraph)
+}
+
+type listItem struct {
+	text     string     // item text content
+	children *mdBlock   // nested sub-list (nil if none)
 }
 
 type blockKind int
@@ -238,8 +243,27 @@ func parseList(n *ast.List, src string) *mdBlock {
 		if !ok {
 			continue
 		}
-		text := extractText(li, src)
-		lb.items = append(lb.items, strings.TrimSpace(text))
+		item := listItem{}
+		for lc := li.FirstChild(); lc != nil; lc = lc.NextSibling() {
+			switch v := lc.(type) {
+			case *ast.Paragraph:
+				// Direct text content of this list item.
+				item.text = extractText(v, src)
+			case *ast.List:
+				// Nested sub-list.
+				sub := parseList(v, src)
+				item.children = sub
+			case *ast.TextBlock:
+				// Some markdown parsers use TextBlock instead of Paragraph.
+				item.text = extractText(v, src)
+			default:
+				// Fallback: try to extract text.
+				if item.text == "" {
+					item.text = strings.TrimSpace(extractText(lc, src))
+				}
+			}
+		}
+		lb.items = append(lb.items, item)
 	}
 	return lb
 }

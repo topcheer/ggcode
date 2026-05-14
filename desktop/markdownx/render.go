@@ -122,22 +122,36 @@ func renderCodeBlock(b *mdBlock) fyne.CanvasObject {
 // ── List ───────────────────────────────────────────
 
 func renderList(b *mdBlock) fyne.CanvasObject {
+	return renderListWithIndent(b, 0)
+}
+
+func renderListWithIndent(b *mdBlock, indentLevel int) fyne.CanvasObject {
+	indent := float32(indentLevel) * 20
 	var items []fyne.CanvasObject
-	for i, text := range b.items {
+	for i, item := range b.items {
 		prefix := "• "
 		if b.ordered {
 			prefix = fmt.Sprintf("%d. ", i+1)
 		}
-		bullet := widget.NewLabelWithStyle(prefix, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-		bullet.Resize(fyne.NewSize(30, bullet.MinSize().Height))
 
-		content := widget.NewLabel(text)
+		bullet := widget.NewLabelWithStyle(prefix, fyne.TextAlignTrailing, fyne.TextStyle{Bold: true})
+		bulletRow := container.NewHBox(bullet)
+
+		content := widget.NewLabel(strings.TrimSpace(item.text))
 		content.Wrapping = fyne.TextWrapWord
 
-		row := container.NewBorder(nil, nil, bullet, nil, content)
-		items = append(items, row)
+		var rowChildren []fyne.CanvasObject
+		rowChildren = append(rowChildren, container.NewBorder(nil, nil, bulletRow, nil, content))
+
+		// Nested sub-list.
+		if item.children != nil {
+			rowChildren = append(rowChildren, renderListWithIndent(item.children, indentLevel+1))
+		}
+
+		items = append(items, container.NewVBox(rowChildren...))
 	}
-	return container.NewVBox(items...)
+	inner := container.NewVBox(items...)
+	return container.New(layout.NewCustomPaddedLayout(2, 2, indent+16, 0), inner)
 }
 
 // ── Blockquote ─────────────────────────────────────
