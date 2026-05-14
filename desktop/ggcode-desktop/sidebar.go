@@ -123,6 +123,14 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 		},
 	)
 
+	s.sessionList.OnSelected = func(id widget.ListItemID) {
+		if id >= len(s.sessions) {
+			return
+		}
+		sess := s.sessions[id]
+		s.app.resumeSession(sess.ID)
+	}
+
 	sessionHeader := widget.NewLabel("Sessions")
 	sessionHeader.TextStyle = fyne.TextStyle{Bold: true}
 	topSection := container.NewVBox(infoCard, statsCard, container.NewPadded(sessionHeader))
