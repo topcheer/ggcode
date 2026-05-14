@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -39,6 +40,8 @@ type AgentBridge struct {
 
 	registry   *tool.Registry
 	workingDir string
+	sessionStore session.Store
+	currentSes  *session.Session
 
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
@@ -46,13 +49,32 @@ type AgentBridge struct {
 }
 
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
-	return &AgentBridge{
+	b := &AgentBridge{
 		cfg:        cfg,
 		prov:       prov,
 		resolved:   resolved,
 		ui:         ui,
 		workingDir: workingDir,
 	}
+
+	// Initialize session store and create a new session.
+	if store, err := session.NewDefaultStore(); err == nil {
+		b.sessionStore = store
+		vendor := ""
+		endpoint := ""
+		model := ""
+		if cfg != nil {
+			vendor = cfg.Vendor
+			endpoint = cfg.Endpoint
+			model = cfg.Model
+		}
+		ses := session.NewSession(vendor, endpoint, model)
+		if err := store.Save(ses); err == nil {
+			b.currentSes = ses
+		}
+	}
+
+	return b
 }
 
 func (b *AgentBridge) setupAgent() error {
@@ -161,6 +183,7 @@ func (b *AgentBridge) Send(userMsg string) error {
 		defer func() {
 			cancel()
 			b.ui.FinalizeStreaming()
+			b.saveSession()
 			b.mu.Lock()
 			b.working = false
 			b.cancel = nil
@@ -559,4 +582,19 @@ func buildSystemPrompt(workingDir string) string {
 - Prefer small, reversible changes over broad rewrites.
 - Read before you edit, and inspect results before claiming success.
 `, hostname, cwd)
+}
+
+// saveSession persists the current conversation to the session store.
+func (b *AgentBridge) saveSession() {
+	if b.sessionStore == nil || b.currentSes == nil {
+		return
+	}
+	b.mu.Lock()
+	agent := b.agent
+	b.mu.Unlock()
+	if agent == nil {
+		return
+	}
+	b.currentSes.Messages = agent.Messages()
+	_ = b.sessionStore.Save(b.currentSes)
 }
