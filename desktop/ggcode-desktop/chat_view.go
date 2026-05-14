@@ -487,15 +487,13 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 	// Extract command from raw JSON args.
 	cmd := extractJSONField(raw(msg), "command")
 	if cmd != "" {
-		cmdBlock := widget.NewRichTextFromMarkdown("```bash\n" + cmd + "\n```")
-		cmdBlock.Wrapping = fyne.TextWrapWord
+		cmdBlock := newMD("```bash\n" + cmd + "\n```")
 		accItems = append(accItems, widget.NewAccordionItem("Command", cmdBlock))
 	}
 
 	if msg.Content != "" {
 		result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
-		resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
-		resultBlock.Wrapping = fyne.TextWrapWord
+		resultBlock := newMD("```\n" + result + "\n```")
 		accItems = append(accItems, widget.NewAccordionItem("Output", resultBlock))
 	}
 
@@ -520,8 +518,7 @@ func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 
 	// Show file result in accordion.
 	result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
-	resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
-	resultBlock.Wrapping = fyne.TextWrapWord
+	resultBlock := newMD("```\n" + result + "\n```")
 	acc := widget.NewAccordion(widget.NewAccordionItem("Content", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
@@ -545,8 +542,7 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 	}
 
 	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
-	resultBlock := widget.NewRichTextFromMarkdown("```\n" + result + "\n```")
-	resultBlock.Wrapping = fyne.TextWrapWord
+	resultBlock := newMD("```\n" + result + "\n```")
 	acc := widget.NewAccordion(widget.NewAccordionItem("Output", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
@@ -608,8 +604,7 @@ func (cv *ChatView) renderTodoTool(msg *ChatMessage) fyne.CanvasObject {
 		}
 		sb.WriteString("\n")
 	}
-	rt := widget.NewRichTextFromMarkdown(sb.String())
-	rt.Wrapping = fyne.TextWrapWord
+	rt := newMD(sb.String())
 	return cv.iconRow(theme.CheckButtonCheckedIcon(), rt)
 }
 
@@ -672,7 +667,6 @@ func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
 	}
 	md := "**" + desc + "** `" + badge + "`"
 	rt := widget.NewRichTextFromMarkdown(md)
-	rt.Wrapping = fyne.TextWrapBreak
 	return rt
 }
 
@@ -826,9 +820,7 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 		switch ev.Type {
 		case "text":
 			if ev.Content != "" {
-				rt := widget.NewRichTextFromMarkdown(ev.Content)
-				rt.Wrapping = fyne.TextWrapWord
-				objs = append(objs, cv.iconRow(theme.ComputerIcon(), rt))
+				objs = append(objs, cv.iconRow(theme.ComputerIcon(), newMD(ev.Content)))
 			}
 		case "tool_call":
 			pendingTool = ev
@@ -845,9 +837,7 @@ func (cv *ChatView) renderAgentPanel(panel AgentPanelData, vbox *fyne.Container)
 	}
 
 	if panel.Result != "" {
-		rt := widget.NewRichTextFromMarkdown("```\n" + panel.Result + "\n```")
-		rt.Wrapping = fyne.TextWrapWord
-		objs = append(objs, cv.iconRow(theme.ComputerIcon(), rt))
+		objs = append(objs, cv.iconRow(theme.ComputerIcon(), newMD("```\n" + panel.Result + "\n```")))
 	}
 
 	vbox.Objects = objs
