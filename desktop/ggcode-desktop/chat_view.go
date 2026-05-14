@@ -71,6 +71,11 @@ type ChatView struct {
 	tabs         *container.AppTabs
 	tabMap       map[string]*container.TabItem
 	agentScrolls map[string]*container.Scroll
+
+	// Cached rendering: avoid full rebuild when only streaming text changes.
+	lastRenderHash string           // hash of last fully rendered message list
+	streamWidget   *widget.RichText // persistent widget for streaming assistant
+	lastStreamText string           // last streaming text rendered
 }
 
 func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
@@ -194,6 +199,7 @@ func (cv *ChatView) updateStatusBar(working bool) {
 
 func (cv *ChatView) rebuildMessages() {
 	msgs := cv.ui.TakeMessages()
+
 	// Merge consecutive assistant messages into one.
 	merged := make([]ChatMessage, 0, len(msgs))
 	for i := range msgs {
@@ -203,6 +209,13 @@ func (cv *ChatView) rebuildMessages() {
 		}
 		merged = append(merged, msgs[i])
 	}
+
+	// Check if we can do a lightweight streaming update.
+	if cv.tryStreamingUpdate(merged) {
+		return
+	}
+
+	// Full rebuild.
 	objs := make([]fyne.CanvasObject, 0, len(merged))
 	for i := range merged {
 		w := cv.renderMessage(&merged[i])
@@ -212,6 +225,77 @@ func (cv *ChatView) rebuildMessages() {
 	}
 	cv.vbox.Objects = objs
 	cv.vbox.Refresh()
+
+	// Cache for next streaming update.
+	cv.cacheRenderState(merged)
+}
+
+// tryStreamingUpdate checks if only the last streaming assistant text changed.
+// If so, updates the streaming widget in place instead of full rebuild.
+func (cv *ChatView) tryStreamingUpdate(merged []ChatMessage) bool {
+	if len(merged) == 0 || cv.streamWidget == nil {
+		return false
+	}
+	last := &merged[len(merged)-1]
+	if !last.Streaming || last.Role != "assistant" {
+		return false
+	}
+	// Check that the message structure (count + non-streaming content) is the same.
+	hash := structHash(merged[:len(merged)-1])
+	if hash != cv.lastRenderHash {
+		return false
+	}
+	// Same structure, only streaming text changed — update in place.
+	if last.Content == cv.lastStreamText {
+		return true // nothing changed, skip
+	}
+	text := last.Content
+	text = renderMarkdownTables(text)
+	cv.streamWidget.ParseMarkdown(text)
+	cv.streamWidget.Refresh()
+	cv.lastStreamText = last.Content
+	return true
+}
+
+// cacheRenderState saves the current state for future streaming updates.
+func (cv *ChatView) cacheRenderState(merged []ChatMessage) {
+	if len(merged) == 0 {
+		return
+	}
+	last := merged[len(merged)-1]
+	if last.Streaming && last.Role == "assistant" {
+		cv.lastRenderHash = structHash(merged[:len(merged)-1])
+		cv.lastStreamText = last.Content
+		// Find the RichText widget from the last assistant message.
+		for i := len(cv.vbox.Objects) - 1; i >= 0; i-- {
+			if iconRow, ok := cv.vbox.Objects[i].(*fyne.Container); ok {
+				for _, child := range iconRow.Objects {
+					if rt, ok := child.(*widget.RichText); ok {
+						cv.streamWidget = rt
+						return
+					}
+				}
+			}
+		}
+	} else {
+		cv.streamWidget = nil
+		cv.lastStreamText = ""
+		cv.lastRenderHash = structHash(merged)
+	}
+}
+
+// structHash returns a quick hash of message structure (role + content of non-streaming msgs).
+func structHash(msgs []ChatMessage) string {
+	var sb strings.Builder
+	for _, m := range msgs {
+		sb.WriteString(m.Role)
+		sb.WriteString("|")
+		if !m.Streaming {
+			sb.WriteString(m.Content)
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // ── Message rendering ────────────────────────────────
