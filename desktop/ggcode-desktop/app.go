@@ -34,6 +34,7 @@ type App struct {
 	statusBar     *widget.Label
 	split         fyne.CanvasObject
 	chatViewObj   fyne.CanvasObject
+	chatViewRef   *ChatView
 	sidebarObj    fyne.CanvasObject
 	sidebarRef    *Sidebar
 	sidebarHidden bool
@@ -315,6 +316,34 @@ func (a *App) showOnboard() {
 
 // ── Chat ─────────────────────────────────────────────
 
+func (a *App) resumeSession(id string) {
+	defer safeRecover("resumeSession")
+
+	// Cancel current work if busy.
+	if a.agentBridge != nil {
+		a.agentBridge.Cancel()
+	}
+
+	// Load session and restore messages into agent.
+	if a.agentBridge != nil {
+		if err := a.agentBridge.ResumeSession(id); err != nil {
+			a.showError(fmt.Sprintf("Failed to resume session: %v", err))
+			return
+		}
+	}
+
+	// Rebuild chat view from session messages.
+	if a.chatViewRef != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
+		a.chatViewRef.rebuildFromMessages(a.agentBridge.CurrentSession().Messages)
+	}
+
+	// Refresh sidebar.
+	if a.sidebarRef != nil {
+		a.sidebarRef.loadSessions()
+		a.sidebarRef.sessionList.Refresh()
+	}
+}
+
 func (a *App) startChat() {
 	defer safeRecover("startChat")
 
@@ -334,6 +363,7 @@ func (a *App) startChat() {
 	a.agentBridge = bridge
 
 	chatView := NewChatView(bridge, a.ui)
+	a.chatViewRef = chatView
 	a.sidebarRef = NewSidebar(a, bridge, a.ui)
 	sidebarObj := a.sidebarRef.Render()
 	chatViewObj := chatView.Render()

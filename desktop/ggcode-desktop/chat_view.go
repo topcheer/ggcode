@@ -13,6 +13,8 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/topcheer/ggcode/internal/provider"
+
 	"github.com/topcheer/ggcode/desktop/markdownx"
 )
 
@@ -1227,4 +1229,97 @@ func parseCells(line string) []string {
 		result = append(result, strings.TrimSpace(p))
 	}
 	return result
+}
+
+// rebuildFromMessages clears the chat and rebuilds it from provider.Message history.
+// Used when resuming a session.
+func (cv *ChatView) rebuildFromMessages(messages []provider.Message) {
+	// Clear existing state.
+	cv.msgWidgets = nil
+	cv.toolWidgets = make(map[string]*toolWidgetRef)
+	cv.streamW = nil
+	cv.vbox.Objects = nil
+	cv.vbox.Refresh()
+
+	// Track tool_use blocks to match with tool_result.
+	type toolUseInfo struct {
+		toolName string
+		rawArgs  string
+		toolID   string
+	}
+	toolUses := make(map[string]toolUseInfo) // toolID → info
+
+	// First pass: collect all tool_use and tool_result pairs.
+	toolResults := make(map[string]string) // toolID → result
+	toolErrors := make(map[string]bool)    // toolID → isError
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.Type == "tool_use" && block.ToolID != "" {
+				toolUses[block.ToolID] = toolUseInfo{
+					toolName: block.ToolName,
+					rawArgs:  string(block.Input),
+					toolID:   block.ToolID,
+				}
+			}
+			if block.Type == "tool_result" && block.ToolID != "" {
+				toolResults[block.ToolID] = block.Output
+				toolErrors[block.ToolID] = block.IsError
+			}
+		}
+	}
+
+	// Second pass: render.
+	for _, msg := range messages {
+		switch msg.Role {
+		case "user":
+			var textParts []string
+			for _, block := range msg.Content {
+				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+					textParts = append(textParts, strings.TrimSpace(block.Text))
+				}
+			}
+			if len(textParts) > 0 {
+				w := cv.iconRow(theme.ComputerIcon(), newMD(strings.Join(textParts, "\n\n")))
+				cv.vbox.Add(w)
+				cv.msgWidgets = append(cv.msgWidgets, w)
+			}
+
+		case "assistant":
+			for _, block := range msg.Content {
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						w := newMD(strings.TrimSpace(block.Text))
+						cv.vbox.Add(w)
+						cv.msgWidgets = append(cv.msgWidgets, w)
+					}
+				case "tool_use":
+					result := toolResults[block.ToolID]
+					isErr := toolErrors[block.ToolID]
+					chatMsg := &ChatMessage{
+						Role:     "tool",
+						ToolName: block.ToolName,
+						ToolDesc: toolDescription(block.ToolName, string(block.Input)),
+						ToolArgs: toolArgSummary(block.ToolName, string(block.Input)),
+						ToolRaw:  string(block.Input),
+						ToolID:   block.ToolID,
+						Content:  result,
+						IsError:  isErr,
+					}
+					w := cv.renderTool(chatMsg)
+					if w != nil {
+						ref := cv.buildToolRef(chatMsg, w)
+						if ref != nil {
+							cv.toolWidgets[block.ToolID] = ref
+						}
+						cv.vbox.Add(w)
+						cv.msgWidgets = append(cv.msgWidgets, w)
+					}
+				}
+			}
+		}
+	}
+
+	cv.vbox.Refresh()
+	cv.scroll.ScrollToBottom()
 }
