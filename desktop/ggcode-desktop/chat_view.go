@@ -149,7 +149,7 @@ func (cv *ChatView) pollRefresh() {
 			}
 			cv.updateButtons(working)
 			cv.rebuildAgentTabs()
-
+			cv.updateStatusBar(working)
 		})
 	}
 }
@@ -191,18 +191,22 @@ func (cv *ChatView) onSend() {
 var lastStatusText string
 
 func (cv *ChatView) updateStatusBar(working bool) {
+	resolved := cv.bridge.Resolved()
 	tc := cv.bridge.TokenCount()
 	cw := cv.bridge.ContextWindow()
-	info := fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw))
 	var text string
 	if working {
-		text = fmt.Sprintf(">> Working (%s) | %s", cv.bridge.Elapsed().Round(time.Second), info)
+		text = fmt.Sprintf("%s/%s | %s/%s | working (%s)",
+			resolved.VendorID, resolved.Model,
+			humanizeTokens(tc), humanizeTokens(cw),
+			cv.bridge.Elapsed().Round(time.Second))
 	} else {
-		text = info
+		text = fmt.Sprintf("%s/%s | %s/%s",
+			resolved.VendorID, resolved.Model,
+			humanizeTokens(tc), humanizeTokens(cw))
 	}
 	if text != lastStatusText {
 		lastStatusText = text
-		// We're already on UI thread (inside fyne.Do from pollRefresh).
 		cv.ui.SetStatusDirect(text)
 	}
 }
