@@ -194,47 +194,39 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	cfg := s.app.cfg
 	resolved := s.bridge.Resolved()
 
-	// Vendor selection.
+	// Create ALL widgets first (before setting any values that trigger callbacks).
 	vendorNames := make([]string, 0, len(cfg.Vendors))
 	for name := range cfg.Vendors {
 		vendorNames = append(vendorNames, name)
 	}
+
 	s.vendorSelect = widget.NewSelect(vendorNames, func(vendor string) {
 		s.updateEndpoints(vendor)
 	})
-	s.vendorSelect.SetSelected(cfg.Vendor)
-
-	// Endpoint selection.
 	s.epSelect = widget.NewSelect([]string{}, func(ep string) {
 		s.onEndpointChange(s.vendorSelect.Selected, ep)
 	})
-	s.updateEndpoints(cfg.Vendor)
-	s.epSelect.SetSelected(cfg.Endpoint)
-
-	// API Key.
 	s.apiKeyEntry = widget.NewPasswordEntry()
 	s.apiKeyEntry.PlaceHolder = "API Key"
-	s.apiKeyEntry.SetText(resolved.APIKey)
-
-	// Base URL.
 	s.baseURLEntry = widget.NewEntry()
 	s.baseURLEntry.PlaceHolder = "https://api.example.com/v1"
-	s.baseURLEntry.SetText(resolved.BaseURL)
-
-	// Model selection (from discovery).
 	s.modelLoading = widget.NewLabel("")
 	s.modelSelect = widget.NewSelect([]string{}, nil)
 	s.modelSelect.PlaceHolder = "Select model..."
-	if resolved.Model != "" {
-		s.modelSelect.SetSelected(resolved.Model)
-	}
-
 	s.modelRefresh = widget.NewButtonWithIcon("Refresh Models", theme.ViewRefreshIcon(), func() {
 		s.fetchModels()
 	})
-
-	// Status label.
 	s.providerStatus = widget.NewLabel("")
+
+	// Now set values (callbacks safe - all widgets created above).
+	s.vendorSelect.SetSelected(cfg.Vendor)
+	s.updateEndpoints(cfg.Vendor)
+	s.epSelect.SetSelected(cfg.Endpoint)
+	s.apiKeyEntry.SetText(resolved.APIKey)
+	s.baseURLEntry.SetText(resolved.BaseURL)
+	if resolved.Model != "" {
+		s.modelSelect.SetSelected(resolved.Model)
+	}
 
 	// Apply button.
 	applyBtn := widget.NewButtonWithIcon("Apply & Restart", theme.ConfirmIcon(), func() {
