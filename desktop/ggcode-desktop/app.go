@@ -363,18 +363,8 @@ func (a *App) pollStats(bridge *AgentBridge) {
 		}
 		tc := bridge.TokenCount()
 		cw := bridge.ContextWindow()
-		resolved := bridge.Resolved()
-		working := ""
-		elapsed := ""
-		if bridge.IsWorking() {
-			working = " | working"
-			elapsed = fmt.Sprintf(" (%s)", bridge.Elapsed().Round(time.Second))
-		}
+
 		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)), float64(tc)/float64(max(cw, 1)))
-		a.ui.SetStatus(fmt.Sprintf("%s/%s | %s/%s%s%s",
-			resolved.VendorID, resolved.Model,
-			humanizeTokens(tc), humanizeTokens(cw),
-			working, elapsed))
 		// Refresh sidebar stats on UI thread.
 		fyne.Do(func() {
 			if a.sidebarRef != nil {
