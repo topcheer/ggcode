@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -385,6 +386,15 @@ func toolDescription(toolName, rawArgs string) string {
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return toolName
+	}
+	// For task tools, prefer subject (short title) over description (long detail).
+	if strings.HasPrefix(toolName, "task_") {
+		if subj, ok := args["subject"]; ok {
+			var s string
+			if json.Unmarshal(subj, &s) == nil && s != "" {
+				return s
+			}
+		}
 	}
 	if desc, ok := args["description"]; ok {
 		var s string
