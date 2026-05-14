@@ -228,14 +228,14 @@ func (u *UIState) ClearAgentDirty() {
 	u.agentDirty = false
 }
 
-// RemoveStalePanels removes completed/failed panels older than 30 seconds.
+// RemoveStalePanels removes completed/failed/idle panels older than 5 seconds.
 func (u *UIState) RemoveStalePanels() bool {
 	u.agentMu.Lock()
 	defer u.agentMu.Unlock()
 	changed := false
 	for id, p := range u.agentPanels {
-		if p.Status == "completed" || p.Status == "failed" {
-			if !p.CompletedAt.IsZero() && time.Since(p.CompletedAt) > 30*time.Second {
+		if p.Status == "completed" || p.Status == "failed" || p.Status == "idle" {
+			if !p.CompletedAt.IsZero() && time.Since(p.CompletedAt) > 5*time.Second {
 				delete(u.agentPanels, id)
 				changed = true
 			}
