@@ -81,6 +81,7 @@ type ChatView struct {
 	tabs         *container.AppTabs
 	tabMap       map[string]*container.TabItem
 	agentScrolls map[string]*container.Scroll
+	agentPanelHashes map[string]string // panel ID → content hash for skip-rebuild
 
 	// Cached rendering: avoid full rebuild when only streaming text changes.
 	lastRenderHash string           // hash of last fully rendered message list
@@ -94,6 +95,7 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 		ui:           ui,
 		tabMap:       make(map[string]*container.TabItem),
 		agentScrolls: make(map[string]*container.Scroll),
+		agentPanelHashes: make(map[string]string),
 	}
 
 	cv.entry = newSendEntry()
@@ -738,6 +740,15 @@ func (cv *ChatView) rebuildAgentTabs() {
 	for _, panel := range panels {
 		activeIDs[panel.ID] = true
 
+		// Only rebuild panel content if it actually changed.
+		panelHash := agentPanelHash(panel)
+		if lastHash, ok := cv.agentPanelHashes[panel.ID]; ok && lastHash == panelHash {
+			// Content unchanged, just update tab name.
+			cv.updateAgentTabName(panel)
+			continue
+		}
+		cv.agentPanelHashes[panel.ID] = panelHash
+
 		vbox := container.NewVBox()
 		cv.renderAgentPanel(panel, vbox)
 
@@ -775,6 +786,7 @@ func (cv *ChatView) rebuildAgentTabs() {
 			cv.tabs.Remove(item)
 			delete(cv.tabMap, id)
 			delete(cv.agentScrolls, id)
+			delete(cv.agentPanelHashes, id)
 		}
 	}
 	cv.tabs.Refresh()
@@ -1043,4 +1055,29 @@ func parseCells(line string) []string {
 		result = append(result, strings.TrimSpace(p))
 	}
 	return result
+}
+
+// agentPanelHash returns a quick content hash to detect changes.
+func agentPanelHash(p AgentPanelData) string {
+	h := p.Status + "|" + p.Name + "|" + p.Result + "|"
+	for _, ev := range p.Events {
+		h += ev.Type + ":" + ev.Content + "|"
+	}
+	return h
+}
+
+// updateAgentTabName updates only the tab label (no content rebuild).
+func (cv *ChatView) updateAgentTabName(panel AgentPanelData) {
+	item, exists := cv.tabMap[panel.ID]
+	if !exists {
+		return
+	}
+	tabName := truncateTabName(panel.Name, len(cv.ui.GetAgentPanels()))
+	if tabName == "" {
+		tabName = truncateTabName(panel.ID, len(cv.ui.GetAgentPanels()))
+	}
+	if panel.Status == "running" || panel.Status == "working" {
+		tabName += "*"
+	}
+	item.Text = tabName
 }
