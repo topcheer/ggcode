@@ -9,7 +9,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ToolInfo is the minimal interface needed from a tool for sub-agent registration.
@@ -158,7 +157,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				sa.appendEvent(AgentEvent{
 					Type:     AgentEventToolResult,
 					ToolName: lastToolName,
-					Result:   util.Truncate(event.Result, 2000),
+					Result:   event.Result,
 					IsError:  event.IsError,
 				})
 			}
