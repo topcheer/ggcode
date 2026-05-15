@@ -77,7 +77,6 @@ func (s *Sidebar) setProviderEnabled(enabled bool) {
 	}
 	s.providerEnabled = enabled
 	e := enabled
-	s.vendorSelect.Enable() // Select doesn't have Disable, use a different approach
 	if e {
 		s.vendorSelect.Enable()
 		s.epSelect.Enable()
