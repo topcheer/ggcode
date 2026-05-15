@@ -9,6 +9,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -133,8 +134,14 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 
 	sessionHeader := widget.NewLabel("Sessions")
 	sessionHeader.TextStyle = fyne.TextStyle{Bold: true}
+
+	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), func() {
+		s.showImpersonateDialog()
+	})
+	settingsBtn.Importance = widget.LowImportance
+
 	topSection := container.NewVBox(infoCard, statsCard, container.NewPadded(sessionHeader))
-	return container.NewBorder(topSection, nil, nil, nil, s.sessionList)
+	return container.NewBorder(topSection, container.NewPadded(settingsBtn), nil, nil, s.sessionList)
 }
 
 func (s *Sidebar) loadSessions() {
@@ -620,4 +627,72 @@ func sortedAdapterNames(cfg *config.Config) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// showImpersonateDialog shows a dialog to select impersonation preset.
+func (s *Sidebar) showImpersonateDialog() {
+	presets := provider.DefaultImpersonationPresets()
+	names := make([]string, len(presets))
+	for i, p := range presets {
+		names[i] = p.DisplayName
+	}
+
+	// Find current selection.
+	currentPreset := "none"
+	if s.app.cfg != nil && s.app.cfg.Impersonation.Preset != "" {
+		currentPreset = s.app.cfg.Impersonation.Preset
+	}
+
+	selectEntry := widget.NewSelect(names, nil)
+	for i, p := range presets {
+		if p.ID == currentPreset {
+			selectEntry.SetSelectedIndex(i)
+			break
+		}
+	}
+
+	versionEntry := widget.NewEntry()
+	versionEntry.SetPlaceHolder("Custom version (optional)")
+	if s.app.cfg != nil && s.app.cfg.Impersonation.CustomVersion != "" {
+		versionEntry.SetText(s.app.cfg.Impersonation.CustomVersion)
+	}
+
+	form := &widget.Form{
+		Items: []*widget.FormItem{
+			{Text: "Identity", Widget: selectEntry},
+			{Text: "Version", Widget: versionEntry},
+		},
+		OnSubmit: func() {
+			idx := selectEntry.SelectedIndex()
+			if idx < 0 || idx >= len(presets) {
+				return
+			}
+			selected := presets[idx]
+			version := strings.TrimSpace(versionEntry.Text)
+
+			// Apply globally.
+			var presetPtr *provider.ImpersonationPreset
+			if selected.ID != "none" {
+				presetPtr = &selected
+			}
+			provider.SetActiveImpersonation(presetPtr, version, nil)
+
+			// Persist to config.
+			if s.app.cfg != nil {
+				s.app.cfg.Impersonation = config.ImpersonationConfig{
+					Preset:        selected.ID,
+					CustomVersion: version,
+				}
+				_ = s.app.cfg.Save()
+			}
+		},
+	}
+
+	d := dialog.NewCustomConfirm("Impersonation", "Apply", "Cancel", form, func(ok bool) {
+		if ok {
+			form.OnSubmit()
+		}
+	}, s.app.window)
+	d.Resize(fyne.NewSize(400, 250))
+	d.Show()
 }
