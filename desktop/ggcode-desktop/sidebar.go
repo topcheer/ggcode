@@ -685,6 +685,9 @@ func (s *Sidebar) showImpersonateDialog() {
 				}
 				_ = s.app.cfg.Save()
 			}
+
+			// Reset agent so next request uses new headers.
+			s.app.agentBridge.ResetAgent()
 		},
 	}
 

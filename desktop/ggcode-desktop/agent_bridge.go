@@ -686,6 +686,14 @@ func (b *AgentBridge) CurrentSession() *session.Session {
 	return b.currentSes
 }
 
+// ResetAgent clears the cached agent so the next request recreates it
+// with fresh provider settings (e.g. new impersonation headers).
+func (b *AgentBridge) ResetAgent() {
+	b.mu.Lock()
+	b.agent = nil
+	b.mu.Unlock()
+}
+
 // ResumeSession loads a session by ID and restores its messages into the agent.
 func (b *AgentBridge) ResumeSession(id string) error {
 	if b.sessionStore == nil {
