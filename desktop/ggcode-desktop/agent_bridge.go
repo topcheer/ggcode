@@ -14,12 +14,16 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -45,6 +49,8 @@ type AgentBridge struct {
 	Emitter   *im.IMEmitter
 
 	imRound   imRoundState // per-round IM emission state
+	mainWindow  fyne.Window
+	permissionMode permission.PermissionMode
 
 	registry   *tool.Registry
 	workingDir string
@@ -163,6 +169,47 @@ func (b *AgentBridge) setupAgent() error {
 		maxIter = 200
 	}
 	b.agent = agent.NewAgent(b.prov, b.registry, systemPrompt, maxIter)
+
+	// Permission policy
+	mode := permission.ParsePermissionMode(b.cfg.DefaultMode)
+	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
+	b.agent.SetPermissionPolicy(policy)
+	b.permissionMode = mode
+
+	// Approval handler — popup dialog for tool approval
+	b.agent.SetApprovalHandler(func(ctx context.Context, toolName string, input string) permission.Decision {
+		if b.mainWindow == nil {
+			return permission.Deny
+		}
+		resp := make(chan permission.Decision, 1)
+		fyne.Do(func() {
+			dialog.ShowConfirm("Tool Approval",
+				fmt.Sprintf("Allow tool '%s' to run?\n\n%s", toolName, truncate(input, 500)),
+				func(ok bool) {
+					if ok {
+						resp <- permission.Allow
+					} else {
+						resp <- permission.Deny
+					}
+				}, b.mainWindow)
+		})
+		select {
+		case d := <-resp:
+			return d
+		case <-ctx.Done():
+			return permission.Deny
+		}
+	})
+
+	// Ask user handler — popup dialog for questions
+	if tl, ok := b.registry.Get("ask_user"); ok {
+		if askTool, ok := tl.(*tool.AskUserTool); ok {
+			askTool.SetHandler(func(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+				return b.handleAskUser(ctx, req)
+			})
+		}
+	}
+
 	if b.resolved.ContextWindow > 0 {
 		b.agent.ContextManager().SetContextWindow(b.resolved.ContextWindow)
 	}
@@ -826,4 +873,114 @@ type imRoundState struct {
 	ToolCalls     int
 	ToolSuccesses int
 	ToolFailures  int
+}
+
+// handleAskUser shows a dialog for ask_user tool questions.
+func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest) (tool.AskUserResponse, error) {
+	if b.mainWindow == nil || len(req.Questions) == 0 {
+		return tool.AskUserResponse{Status: "skipped"}, nil
+	}
+
+	resp := make(chan tool.AskUserResponse, 1)
+	fyne.Do(func() {
+		// Build form from questions
+		var answers []tool.AskUserAnswer
+		var items []*widget.FormItem
+
+		for _, q := range req.Questions {
+			ans := tool.AskUserAnswer{
+				ID:       q.ID,
+				Title:    q.Title,
+				Kind:     q.Kind,
+				Answered: true,
+			}
+
+			switch q.Kind {
+			case "text":
+				entry := widget.NewEntry()
+				entry.PlaceHolder = q.Placeholder
+				if q.Placeholder != "" {
+					entry.SetText(q.Placeholder)
+				}
+				items = append(items, &widget.FormItem{Text: q.Title, Widget: entry})
+				answers = append(answers, ans) // placeholder, will be filled below
+
+			case "single":
+				choices := make([]string, len(q.Choices))
+				for i, c := range q.Choices {
+					choices[i] = c.Label
+				}
+				sel := widget.NewSelect(choices, nil)
+				if len(choices) > 0 {
+					sel.SetSelectedIndex(0)
+				}
+				items = append(items, &widget.FormItem{Text: q.Title, Widget: sel})
+				answers = append(answers, ans)
+
+			default:
+				entry := widget.NewEntry()
+				entry.PlaceHolder = q.Placeholder
+				items = append(items, &widget.FormItem{Text: q.Title, Widget: entry})
+				answers = append(answers, ans)
+			}
+		}
+
+		d := dialog.NewForm(req.Title, "Submit", "Skip",
+			items,
+			func(ok bool) {
+				if !ok {
+					resp <- tool.AskUserResponse{Status: "skipped"}
+					return
+				}
+				// Collect answers from form items
+				for i, item := range items {
+					switch w := item.Widget.(type) {
+					case *widget.Entry:
+						answers[i].FreeformText = w.Text
+					case *widget.Select:
+						answers[i].SelectedChoiceIDs = []string{w.Selected}
+						answers[i].SelectedChoices = []string{w.Selected}
+					}
+				}
+				resp <- tool.AskUserResponse{
+					Status:        "answered",
+					Title:         req.Title,
+					QuestionCount: len(req.Questions),
+					AnsweredCount: len(answers),
+					Answers:       answers,
+				}
+			}, b.mainWindow)
+		d.Resize(fyne.NewSize(500, 400))
+		d.Show()
+	})
+
+	select {
+	case r := <-resp:
+		return r, nil
+	case <-ctx.Done():
+		return tool.AskUserResponse{Status: "cancelled"}, ctx.Err()
+	}
+}
+
+// truncate shortens a string for display.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// SetMainWindow sets the main window reference for dialogs.
+func (b *AgentBridge) SetMainWindow(w fyne.Window) {
+	b.mainWindow = w
+}
+
+// SetPermissionMode updates the agent permission mode at runtime.
+func (b *AgentBridge) SetPermissionMode(mode permission.PermissionMode) {
+	if b.agent == nil {
+		return
+	}
+	b.permissionMode = mode
+	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
+	b.agent.SetPermissionPolicy(policy)
 }
