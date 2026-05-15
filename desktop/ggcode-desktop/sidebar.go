@@ -26,9 +26,6 @@ type Sidebar struct {
 	tabs   *container.AppTabs
 
 	// Context tab widgets.
-	contextLabel *widget.Label
-	tokenLabel   *widget.Label
-	tokenBar     *widget.ProgressBar
 	modelLabel   *widget.Label
 	sessionList  *widget.List
 	sessions     []sessionMeta
@@ -70,18 +67,8 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 }
 
 func (s *Sidebar) RefreshStats() {
-	cw := s.bridge.ContextWindow()
-	tc := s.bridge.TokenCount()
 	resolved := s.bridge.Resolved()
-
 	s.modelLabel.SetText(resolved.Model)
-	s.contextLabel.SetText(humanizeTokens(cw))
-	s.tokenLabel.SetText(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)))
-	if cw > 0 {
-		s.tokenBar.SetValue(float64(tc) / float64(cw))
-	} else {
-		s.tokenBar.SetValue(0)
-	}
 }
 
 // ── Context tab ──────────────────────────────────────
@@ -90,20 +77,10 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	resolved := s.bridge.Resolved()
 
 	s.modelLabel = widget.NewLabel(resolved.Model)
-	s.contextLabel = widget.NewLabel(humanizeTokens(resolved.ContextWindow))
-	s.tokenLabel = widget.NewLabel("0 / " + humanizeTokens(resolved.ContextWindow))
-	s.tokenBar = widget.NewProgressBar()
-	s.tokenBar.Max = 1.0
 
 	infoCard := widget.NewCard("Model Info", "", widget.NewForm(
 		&widget.FormItem{Text: "Vendor", Widget: widget.NewLabel(resolved.VendorName)},
 		&widget.FormItem{Text: "Model", Widget: s.modelLabel},
-		&widget.FormItem{Text: "Context", Widget: s.contextLabel},
-	))
-
-	statsCard := widget.NewCard("Usage", "", container.NewVBox(
-		s.tokenLabel,
-		s.tokenBar,
 	))
 
 	// Session list.
@@ -150,7 +127,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	settingsBtn.Importance = widget.LowImportance
 
 	bottomBar := container.NewHBox(newChatBtn, settingsBtn)
-	topSection := container.NewVBox(infoCard, statsCard, container.NewPadded(sessionHeader))
+	topSection := container.NewVBox(infoCard, container.NewPadded(sessionHeader))
 	return container.NewBorder(topSection, bottomBar, nil, nil, s.sessionList)
 }
 
