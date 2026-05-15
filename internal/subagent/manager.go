@@ -431,6 +431,7 @@ func (m *Manager) Complete(id string, result string, err error) {
 	if onComplete != nil {
 		onComplete(sa)
 	}
+	m.notifyUpdate(sa)
 }
 
 func (m *Manager) UpdateProgress(id, summary string) {

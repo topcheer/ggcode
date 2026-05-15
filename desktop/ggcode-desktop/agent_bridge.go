@@ -284,6 +284,12 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			b.ui.FinalizeStreaming()
 			b.saveSession()
 
+			// Fallback: clear all sub-agent/teammate panels now that
+			// the agent loop is done. This ensures no stale tabs remain
+			// even if per-panel completion callbacks were missed.
+			b.ui.ClearAllAgentPanels()
+			b.ui.notify(UIEvent{Type: EventAgentUpdate})
+
 			b.mu.Lock()
 			wasCancelled := b.cancelled
 			b.working = false

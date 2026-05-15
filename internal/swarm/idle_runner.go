@@ -238,6 +238,9 @@ func tryClaimPendingTask(
 		}
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
+		tm.mu.Lock()
+		tm.EndedAt = time.Now()
+		tm.mu.Unlock()
 
 		if onEvent != nil {
 			onEvent(Event{

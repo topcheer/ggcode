@@ -289,17 +289,17 @@ jobs:
         run: |
           chmod +x ./scripts/release/build-desktop-darwin.sh
           ./scripts/release/build-desktop-darwin.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-darwin
+          path: dist/*.dmg
       - name: Upload desktop macOS DMG to release
         if: github.event_name != 'workflow_dispatch'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" dist/*.dmg --clobber
-      - name: Upload desktop macOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-darwin
-          path: dist/*.dmg
 
   build-desktop-windows:
     name: Build desktop Windows
@@ -332,6 +332,11 @@ jobs:
         shell: pwsh
         run: |
           .\scripts\release\build-desktop-windows.ps1 -Version $env:GGCODE_VERSION -OutputDir dist
+      - name: Upload desktop Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/
       - name: Upload desktop Windows exe to release
         if: github.event_name != 'workflow_dispatch'
         shell: pwsh
@@ -341,11 +346,6 @@ jobs:
           Get-ChildItem -Path dist -Filter *.exe | ForEach-Object {
             gh release upload $env:GITHUB_REF_NAME $_.FullName --clobber
           }
-      - name: Upload desktop Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-windows
-          path: dist\
 
   publish-site-release-branch:
     name: Publish site release branch
