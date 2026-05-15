@@ -509,33 +509,6 @@ func DefaultConfig() *Config {
 					"official", "gemini",
 				),
 			}),
-			"openrouter": defaultVendor("OpenRouter", "${OPENROUTER_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"OpenRouter API",
-					"openai",
-					"https://openrouter.ai/api/v1",
-					"openai/gpt-4o-mini",
-					"router", "openai-compatible",
-				),
-			}),
-			"aihubmix": defaultVendor("AIHubMix", "${AIHUBMIX_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"AIHubMix API",
-					"openai",
-					"https://aihubmix.com/v1",
-					"gpt-4o-mini",
-					"official", "openai-compatible", "router",
-				),
-			}),
-			"getgoapi": defaultVendor("GetGoAPI", "${GETGOAPI_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"GetGoAPI API",
-					"openai",
-					"https://api.getgoapi.com/v1",
-					"gpt-4o-mini",
-					"official", "openai-compatible", "router",
-				),
-			}),
 			"groq": defaultVendor("Groq", "${GROQ_API_KEY}", map[string]EndpointConfig{
 				"api": defaultEndpoint(
 					"Groq API",
@@ -572,15 +545,6 @@ func DefaultConfig() *Config {
 					"official", "openai-compatible", "cn",
 				),
 			}),
-			"novita": defaultVendor("Novita AI", "${NOVITA_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"Novita AI API",
-					"openai",
-					"https://api.novita.ai/openai/v1",
-					"gpt-4o-mini",
-					"official", "openai-compatible", "router",
-				),
-			}),
 			"aliyun": defaultVendor("Aliyun Bailian Coding Plan", "${DASHSCOPE_API_KEY}", map[string]EndpointConfig{
 				"coding-openai": defaultEndpoint(
 					"Aliyun Bailian Coding Plan",
@@ -595,33 +559,6 @@ func DefaultConfig() *Config {
 					"https://coding.dashscope.aliyuncs.com/apps/anthropic",
 					"qwen3-coder-plus",
 					"official", "coding", "cn", "anthropic",
-				),
-			}),
-			"poe": defaultVendor("Poe", "${POE_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"Poe API",
-					"openai",
-					"https://api.poe.com/v1",
-					"gpt-4o-mini",
-					"official", "openai-compatible", "router",
-				),
-			}),
-			"requesty": defaultVendor("Requesty", "${REQUESTY_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"Requesty API",
-					"openai",
-					"https://router.requesty.ai/v1",
-					"gpt-4o-mini",
-					"official", "openai-compatible", "router",
-				),
-			}),
-			"vercel": defaultVendor("Vercel AI Gateway", "${VERCEL_AI_GATEWAY_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"Vercel AI Gateway",
-					"openai",
-					"https://ai-gateway.vercel.sh/v1",
-					"gpt-4o-mini",
-					"official", "openai-compatible", "gateway",
 				),
 			}),
 			"kimi": defaultVendor("Kimi Coding Plan", "${KIMI_API_KEY}", map[string]EndpointConfig{
@@ -684,33 +621,6 @@ func DefaultConfig() *Config {
 					"https://ark.cn-beijing.volces.com/api/coding",
 					"ark-code-latest",
 					"official", "coding", "cn", "anthropic",
-				),
-			}),
-			"nvidia": defaultVendor("NVIDIA NIM", "${NVIDIA_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"NVIDIA NIM API",
-					"openai",
-					"https://integrate.api.nvidia.com/v1",
-					"moonshotai/kimi-k2.5",
-					"official", "openai-compatible", "open-models",
-				),
-			}),
-			"together": defaultVendor("Together AI", "${TOGETHER_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"Together API",
-					"openai",
-					"https://api.together.xyz/v1",
-					"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
-					"official", "openai-compatible", "open-models",
-				),
-			}),
-			"perplexity": defaultVendor("Perplexity", "${PERPLEXITY_API_KEY}", map[string]EndpointConfig{
-				"api": defaultEndpoint(
-					"Perplexity API",
-					"openai",
-					"https://api.perplexity.ai",
-					"llama-3.1-sonar-small-128k-online",
-					"official", "openai-compatible", "search",
 				),
 			}),
 			"github-copilot": defaultVendor("GitHub Copilot", "", map[string]EndpointConfig{
