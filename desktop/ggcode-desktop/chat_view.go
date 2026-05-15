@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	
+
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
-	"github.com/topcheer/ggcode/internal/permission"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
@@ -20,12 +19,12 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/permission"
 
 	"github.com/topcheer/ggcode/internal/provider"
 
 	"github.com/topcheer/ggcode/desktop/markdownx"
 )
-
 
 // newMD creates a MarkdownWidget with the given text.
 func newMD(text string) *markdownx.MarkdownWidget {
@@ -38,14 +37,14 @@ func newMD(text string) *markdownx.MarkdownWidget {
 
 type sendEntry struct {
 	widget.Entry
-	onSend      func()
-	busy        bool
-	pendingText    string
-	pendingImage   *provider.ContentBlock
+	onSend          func()
+	busy            bool
+	pendingText     string
+	pendingImage    *provider.ContentBlock
 	onImageAttached func()
-	history       []string
-	historyIdx    int
-	historyDraft  string // current unsent text saved when navigating history // called when image is attached (show preview bar)
+	history         []string
+	historyIdx      int
+	historyDraft    string // current unsent text saved when navigating history // called when image is attached (show preview bar)
 }
 
 func newSendEntry() *sendEntry {
@@ -83,6 +82,7 @@ func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
 		e.Entry.KeyDown(key)
 	}
 }
+
 // navigateHistory moves through message history.
 func (e *sendEntry) navigateHistory(dir int) {
 	if len(e.history) == 0 {
@@ -260,13 +260,13 @@ if ($img -ne $null) {
 // ── ChatView ─────────────────────────────────────────
 
 type ChatView struct {
-	bridge *AgentBridge
-	ui     *UIState
-	app    *App
+	bridge     *AgentBridge
+	ui         *UIState
+	app        *App
 	stopCh     chan struct{} // signals statusLoop to stop
-	lastStatus string       // dedup status bar updates
+	lastStatus string        // dedup status bar updates
 
-	entry     *sendEntry
+	entry        *sendEntry
 	sendBtn      *widget.Button
 	modeSelect   *widget.Select
 	cancelBtn    *widget.Button
@@ -277,18 +277,18 @@ type ChatView struct {
 	scroll *container.Scroll
 	vbox   *fyne.Container
 
-	tabs         *container.AppTabs
-	tabMap       map[string]*container.TabItem
-	agentScrolls map[string]*container.Scroll
+	tabs             *container.AppTabs
+	tabMap           map[string]*container.TabItem
+	agentScrolls     map[string]*container.Scroll
 	agentPanelHashes map[string]string
 
 	// Precise update tracking
-	msgWidgets  []fyne.CanvasObject
-	toolWidgets map[string]*toolWidgetRef
-	streamW     *markdownx.MarkdownWidget
-	thinkingW   fyne.CanvasObject  // pulsing "thinking..." indicator
-	reasoningBuf strings.Builder    // accumulated reasoning text
-	reasoningW   *widget.Accordion   // collapsible reasoning panel
+	msgWidgets   []fyne.CanvasObject
+	toolWidgets  map[string]*toolWidgetRef
+	streamW      *markdownx.MarkdownWidget
+	thinkingW    fyne.CanvasObject // pulsing "thinking..." indicator
+	reasoningBuf strings.Builder   // accumulated reasoning text
+	reasoningW   *widget.Accordion // collapsible reasoning panel
 
 	// Per-agent incremental state
 	agentStates map[string]*agentPanelState
@@ -306,21 +306,21 @@ type toolWidgetRef struct {
 
 // agentPanelState tracks incremental rendering per agent tab.
 type agentPanelState struct {
-	renderedEvents int                        // number of events already rendered
-	toolWidgets    map[int]*toolWidgetRef      // tool_call event index → ref
+	renderedEvents int                    // number of events already rendered
+	toolWidgets    map[int]*toolWidgetRef // tool_call event index → ref
 	vbox           *fyne.Container
 	scroll         *container.Scroll
 }
 
 func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 	cv := &ChatView{
-		bridge:       bridge,
-		ui:           ui,
-		tabMap:       make(map[string]*container.TabItem),
-		agentScrolls: make(map[string]*container.Scroll),
+		bridge:           bridge,
+		ui:               ui,
+		tabMap:           make(map[string]*container.TabItem),
+		agentScrolls:     make(map[string]*container.Scroll),
 		agentPanelHashes: make(map[string]string),
-		toolWidgets:  make(map[string]*toolWidgetRef),
-		agentStates:  make(map[string]*agentPanelState),
+		toolWidgets:      make(map[string]*toolWidgetRef),
+		agentStates:      make(map[string]*agentPanelState),
 	}
 
 	cv.entry = newSendEntry()
@@ -344,21 +344,21 @@ func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 
 	cv.imageBtn = widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
 		w := fyne.CurrentApp().Driver().AllWindows()[0]
-			d := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
-				if err != nil || rc == nil {
-					return
-				}
-				defer rc.Close()
-				if e := cv.entry.attachImage(rc.URI().Path()); e != nil {
-					return
-				}
-				cv.imageBtn.Importance = widget.HighImportance
-				cv.imageBtn.Refresh()
-				cv.imageBar.Show()
-			}, w)
-			d.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}))
-			d.Resize(fyne.NewSize(900, 600))
-			d.Show()
+		d := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
+			if err != nil || rc == nil {
+				return
+			}
+			defer rc.Close()
+			if e := cv.entry.attachImage(rc.URI().Path()); e != nil {
+				return
+			}
+			cv.imageBtn.Importance = widget.HighImportance
+			cv.imageBtn.Refresh()
+			cv.imageBar.Show()
+		}, w)
+		d.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}))
+		d.Resize(fyne.NewSize(900, 600))
+		d.Show()
 	})
 
 	return cv
@@ -845,7 +845,6 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	return cv.iconRow(theme.ComputerIcon(), newMD(text))
 }
 
-
 func (cv *ChatView) renderSystem(msg *ChatMessage) fyne.CanvasObject {
 	t := canvas.NewText(msg.Content, theme.DisabledColor())
 	t.TextStyle = fyne.TextStyle{Italic: true}
@@ -1243,7 +1242,6 @@ func prettifyToolName(name string) string {
 }
 
 // ── Agent tabs ───────────────────────────────────────
-
 
 // ── Agent panel (incremental, same rendering as main) ──
 
@@ -1684,9 +1682,9 @@ func (cv *ChatView) rebuildFromMessages(messages []provider.Message) {
 				}
 			}
 			if len(textParts) > 0 {
-					joined := strings.Join(textParts, "\n")
-					userMsgs = append(userMsgs, joined)
-					w := cv.iconRow(theme.ComputerIcon(), newMD(joined))
+				joined := strings.Join(textParts, "\n")
+				userMsgs = append(userMsgs, joined)
+				w := cv.iconRow(theme.ComputerIcon(), newMD(joined))
 				cv.vbox.Add(w)
 				cv.msgWidgets = append(cv.msgWidgets, w)
 			}

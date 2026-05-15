@@ -12,8 +12,8 @@ import (
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
-	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 )
 
@@ -37,8 +37,8 @@ type mdBlock struct {
 }
 
 type listItem struct {
-	text     string     // item text content
-	children *mdBlock   // nested sub-list (nil if none)
+	text     string   // item text content
+	children *mdBlock // nested sub-list (nil if none)
 }
 
 type blockKind int
@@ -94,11 +94,11 @@ func nodeToBlock(node ast.Node, src string) *mdBlock {
 // ── Inline run ─────────────────────────────────────
 
 type inlineRun struct {
-	text  string
-	bold  bool
+	text   string
+	bold   bool
 	italic bool
-	code  bool
-	link  string
+	code   bool
+	link   string
 }
 
 func collectInlineRuns(node ast.Node, src string) []inlineRun {

@@ -26,9 +26,9 @@ type Sidebar struct {
 	tabs   *container.AppTabs
 
 	// Context tab widgets.
-	modelLabel   *widget.Label
-	sessionList  *widget.List
-	sessions     []sessionMeta
+	modelLabel  *widget.Label
+	sessionList *widget.List
+	sessions    []sessionMeta
 
 	// Provider tab widgets.
 	vendorSelect   *widget.Select
@@ -204,12 +204,16 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	sort.Strings(vendorNames)
 
 	s.vendorSelect = widget.NewSelect(vendorNames, func(vendor string) {
-		if s.ui.AgentWorking.Load() { return }
+		if s.ui.AgentWorking.Load() {
+			return
+		}
 		s.updateEndpoints(vendor)
 		s.fetchModels()
 	})
 	s.epSelect = widget.NewSelect([]string{}, func(ep string) {
-		if s.ui.AgentWorking.Load() { return }
+		if s.ui.AgentWorking.Load() {
+			return
+		}
 		s.onEndpointChange(s.vendorSelect.Selected, ep)
 		s.fetchModels()
 	})
@@ -221,7 +225,9 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	s.modelSelect = widget.NewSelect([]string{}, nil)
 	s.modelSelect.PlaceHolder = "Select model..."
 	s.modelRefresh = widget.NewButtonWithIcon("Refresh Models", theme.ViewRefreshIcon(), func() {
-		if s.ui.AgentWorking.Load() { return }
+		if s.ui.AgentWorking.Load() {
+			return
+		}
 		s.fetchModels()
 	})
 	s.providerStatus = widget.NewLabel("")
@@ -238,7 +244,9 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 
 	// Apply button.
 	applyBtn := widget.NewButtonWithIcon("Apply & Restart", theme.ConfirmIcon(), func() {
-		if s.ui.AgentWorking.Load() { return }
+		if s.ui.AgentWorking.Load() {
+			return
+		}
 		s.applyProvider()
 	})
 	applyBtn.Importance = widget.HighImportance

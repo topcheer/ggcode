@@ -7,7 +7,6 @@ import (
 
 	"fyne.io/fyne/v2"
 
-	"github.com/topcheer/ggcode/internal/im"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
@@ -15,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/im"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -453,7 +453,7 @@ func (a *App) startChat() {
 	// Register global keyboard shortcuts.
 	a.registerShortcuts()
 
-	}
+}
 
 func (a *App) refreshSidebar() {
 	if a.agentBridge != nil {
@@ -522,7 +522,6 @@ func max(a, b int) int {
 	}
 	return b
 }
-
 
 // initIMRuntime initializes the IM manager once at app startup.
 func (a *App) initIMRuntime() {
