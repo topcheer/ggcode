@@ -254,7 +254,7 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 
 	// Toggle
 	if e.Enabled {
-		actions = append(actions, widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
+		actions = append(actions, widget.NewButtonWithIcon("Disable", theme.CancelIcon(), func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, false)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -263,7 +263,7 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 			a.refreshIMWindow()
 		}))
 	} else {
-		actions = append(actions, widget.NewButtonWithIcon("", theme.ConfirmIcon(), func() {
+		actions = append(actions, widget.NewButtonWithIcon("Enable", theme.ConfirmIcon(), func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, true)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -276,14 +276,14 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 	// Mute/Unmute
 	if e.Enabled && e.IsCurrent {
 		if e.Muted {
-			actions = append(actions, widget.NewButtonWithIcon("", theme.VolumeUpIcon(), func() {
+			actions = append(actions, widget.NewButtonWithIcon("Unmute", theme.VolumeUpIcon(), func() {
 				if a.imManager != nil {
 					_ = a.imManager.UnmuteBinding(e.Name)
 				}
 				a.refreshIMWindow()
 			}))
 		} else {
-			actions = append(actions, widget.NewButtonWithIcon("", theme.VolumeMuteIcon(), func() {
+			actions = append(actions, widget.NewButtonWithIcon("Mute", theme.VolumeMuteIcon(), func() {
 				if a.imManager != nil {
 					_ = a.imManager.MuteBinding(e.Name)
 				}
@@ -294,7 +294,7 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 
 	// Bind/Rebind
 	if !e.IsCurrent {
-		actions = append(actions, widget.NewButtonWithIcon("", theme.MailForwardIcon(), func() {
+		actions = append(actions, widget.NewButtonWithIcon("Bind", theme.MailForwardIcon(), func() {
 			if a.imManager == nil {
 				dialog.ShowInformation("Bind", "IM manager is not available yet.", w)
 				return
@@ -313,7 +313,7 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 	}
 
 	// Delete (last, smaller, less prominent)
-	delBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+	delBtn := widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
 		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete adapter '%s'?", e.Name), func(ok bool) {
 			if !ok {
 				return
@@ -438,6 +438,8 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 	bindingChannel := make(map[string]string)
 	bindingMuted := make(map[string]bool)
 	adapterHealthy := make(map[string]bool)
+
+	// Read bindings directly from store (works even without imManager).
 	if a.imManager != nil {
 		snap := a.imManager.Snapshot()
 		for _, b := range snap.CurrentBindings {
@@ -453,6 +455,22 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 		}
 		for _, s := range snap.Adapters {
 			adapterHealthy[s.Name] = s.Healthy
+		}
+	} else {
+		// Fallback: read directly from binding store file.
+		path, err := im.DefaultBindingsPath()
+		if err == nil {
+			store, err2 := im.NewJSONFileBindingStore(path)
+			if err2 == nil {
+				all, err3 := store.ListByWorkspace("")
+				if err3 == nil {
+					for _, b := range all {
+						bindingWorkspace[b.Adapter] = b.Workspace
+						bindingChannel[b.Adapter] = b.ChannelID
+						bindingMuted[b.Adapter] = b.Muted
+					}
+				}
+			}
 		}
 	}
 
