@@ -921,6 +921,8 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 		// Build form from questions
 		var answers []tool.AskUserAnswer
 		var items []*widget.FormItem
+			// labelToID maps choice label back to choice ID for each question index.
+			labelToID := make(map[int]map[string]string)
 
 		for _, q := range req.Questions {
 			switch q.Kind {
@@ -936,6 +938,10 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 					choices[i] = c.Label
 				}
 				sel := widget.NewSelect(choices, nil)
+				labelToID[len(items)] = make(map[string]string)
+				for _, c := range q.Choices {
+					labelToID[len(items)][c.Label] = c.ID
+				}
 				if len(choices) > 0 {
 					sel.SetSelectedIndex(0)
 				}
@@ -951,6 +957,10 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 					labels[i] = c.Label
 				}
 				checks := widget.NewCheckGroup(labels, nil)
+				labelToID[len(items)] = make(map[string]string)
+				for _, c := range q.Choices {
+					labelToID[len(items)][c.Label] = c.ID
+				}
 				notesEntry := widget.NewEntry()
 				notesEntry.PlaceHolder = "Additional notes (optional)"
 				box := container.NewVBox(checks, notesEntry)
@@ -986,12 +996,24 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 							switch obj.(type) {
 							case *widget.Select:
 								sel := obj.(*widget.Select)
-								answers[i].SelectedChoiceIDs = []string{sel.Selected}
+										if m := labelToID[i]; m != nil {
+											if id, ok := m[sel.Selected]; ok {
+												answers[i].SelectedChoiceIDs = []string{id}
+											}
+										}
 								answers[i].SelectedChoices = []string{sel.Selected}
 							case *widget.CheckGroup:
 								cg := obj.(*widget.CheckGroup)
 								answers[i].SelectedChoices = cg.Selected
-								answers[i].SelectedChoiceIDs = cg.Selected
+										var ids []string
+										if m := labelToID[i]; m != nil {
+											for _, lbl := range cg.Selected {
+												if id, ok := m[lbl]; ok {
+													ids = append(ids, id)
+												}
+											}
+										}
+										answers[i].SelectedChoiceIDs = ids
 							case *widget.Entry:
 								answers[i].FreeformText = obj.(*widget.Entry).Text
 							}
