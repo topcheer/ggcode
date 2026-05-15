@@ -54,6 +54,7 @@ func NewApp(fyneApp fyne.App) *App {
 // Run shows the window and starts the event loop.
 func (a *App) Run() {
 	a.window = a.fyneApp.NewWindow("ggcode")
+	setWindowIcon(a.window)
 	a.buildUI()
 	a.setupMenu()
 
