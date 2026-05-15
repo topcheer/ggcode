@@ -439,38 +439,15 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 	bindingMuted := make(map[string]bool)
 	adapterHealthy := make(map[string]bool)
 
-	// Read bindings directly from store (works even without imManager).
 	if a.imManager != nil {
-		snap := a.imManager.Snapshot()
-		for _, b := range snap.CurrentBindings {
+		// AllPersistedBindings returns ALL bindings from all workspaces.
+		for _, b := range a.imManager.AllPersistedBindings() {
 			bindingWorkspace[b.Adapter] = b.Workspace
 			bindingChannel[b.Adapter] = b.ChannelID
 			bindingMuted[b.Adapter] = b.Muted
 		}
-		for _, b := range snap.DisabledBindings {
-			if _, exists := bindingWorkspace[b.Adapter]; !exists {
-				bindingWorkspace[b.Adapter] = b.Workspace
-				bindingChannel[b.Adapter] = b.ChannelID
-			}
-		}
-		for _, s := range snap.Adapters {
+		for _, s := range a.imManager.Snapshot().Adapters {
 			adapterHealthy[s.Name] = s.Healthy
-		}
-	} else {
-		// Fallback: read directly from binding store file.
-		path, err := im.DefaultBindingsPath()
-		if err == nil {
-			store, err2 := im.NewJSONFileBindingStore(path)
-			if err2 == nil {
-				all, err3 := store.ListByWorkspace("")
-				if err3 == nil {
-					for _, b := range all {
-						bindingWorkspace[b.Adapter] = b.Workspace
-						bindingChannel[b.Adapter] = b.ChannelID
-						bindingMuted[b.Adapter] = b.Muted
-					}
-				}
-			}
 		}
 	}
 
