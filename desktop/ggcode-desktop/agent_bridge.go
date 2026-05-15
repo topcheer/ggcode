@@ -192,38 +192,12 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 	// Persist user message to disk immediately (incremental), same as TUI.
 	b.appendUserMessageContent(content)
 
-	// Render user message in chat UI.
-	userText := extractTextFromBlocks(content)
-	b.ui.AppendChat(ChatMessage{
-		Role:    "user",
-		Content: userText,
-		Time:    time.Now(),
-	})
-
 	go func() {
 		defer func() {
 			cancel()
 			b.ui.FinalizeStreaming()
 			b.saveSession()
 
-			// Push assistant reply to IM if emitter is set.
-			if b.emitter != nil {
-				if msgs := b.agent.Messages(); len(msgs) > 0 {
-					last := msgs[len(msgs)-1]
-					if last.Role == "assistant" {
-						var textParts []string
-					for _, b := range last.Content {
-						if b.Type == "text" {
-							textParts = append(textParts, b.Text)
-						}
-					}
-					text := strings.Join(textParts, "\n")
-						if strings.TrimSpace(text) != "" {
-							b.emitter.EmitText(text)
-						}
-					}
-				}
-			}
 
 			b.mu.Lock()
 			wasCancelled := b.cancelled
@@ -316,13 +290,13 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			}
 		}
 
+		err := b.agent.RunStreamWithContent(ctx, content, onEvent)
+
 		// Flush any remaining accumulated text after agent loop ends.
 		if b.emitter != nil && strings.TrimSpace(b.imAccumText) != "" {
 			b.emitter.EmitText(b.imAccumText)
 			b.imAccumText = ""
 		}
-
-		err := b.agent.RunStreamWithContent(ctx, content, onEvent)
 		if err != nil {
 			b.mu.Lock()
 			c := b.cancelled
