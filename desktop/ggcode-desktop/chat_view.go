@@ -211,6 +211,8 @@ type ChatView struct {
 	bridge *AgentBridge
 	ui     *UIState
 	app    *App
+	stopCh     chan struct{} // signals statusLoop to stop
+	lastStatus string       // dedup status bar updates
 
 	entry     *sendEntry
 	sendBtn      *widget.Button
@@ -348,8 +350,6 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 }
 
 // ── Event handler ─────────────────────────────────────
-
-var lastStatusText string
 
 func extractMarkdownWidget(obj fyne.CanvasObject) (*markdownx.MarkdownWidget, bool) {
 	switch v := obj.(type) {
@@ -609,20 +609,25 @@ func (cv *ChatView) onStreamDone() {
 func (cv *ChatView) statusLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	for range ticker.C {
-		working := cv.bridge.IsWorking()
-		fyne.Do(func() {
-			cv.updateStatusBar(working)
-			cv.updateButtons(working)
-			// Update sidebar stats and provider enabled state.
-			if cv.app != nil && cv.app.sidebarRef != nil {
-				cv.app.sidebarRef.RefreshStats()
-				cv.app.sidebarRef.setProviderEnabled(!working)
-			}
-			if working {
-				cv.scroll.ScrollToBottom()
-			}
-		})
+	for {
+		select {
+		case <-cv.stopCh:
+			return
+		case <-ticker.C:
+			working := cv.bridge.IsWorking()
+			fyne.Do(func() {
+				cv.updateStatusBar(working)
+				cv.updateButtons(working)
+				// Update sidebar stats and provider enabled state.
+				if cv.app != nil && cv.app.sidebarRef != nil {
+					cv.app.sidebarRef.RefreshStats()
+					cv.app.sidebarRef.setProviderEnabled(!working)
+				}
+				if working {
+					cv.scroll.ScrollToBottom()
+				}
+			})
+		}
 	}
 }
 
@@ -656,8 +661,8 @@ func (cv *ChatView) updateStatusBar(working bool) {
 			resolved.VendorID, resolved.Model,
 			humanizeTokens(tc), humanizeTokens(cw))
 	}
-	if text != lastStatusText {
-		lastStatusText = text
+	if text != cv.lastStatus {
+		cv.lastStatus = text
 		cv.ui.SetStatusDirect(text)
 	}
 }

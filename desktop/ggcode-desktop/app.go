@@ -346,6 +346,11 @@ func (a *App) resumeSession(id string) {
 func (a *App) startChat() {
 	defer safeRecover("startChat")
 
+	// Stop previous statusLoop if any.
+	if a.chatViewRef != nil {
+		close(a.chatViewRef.stopCh)
+	}
+
 	resolved, err := a.cfg.ResolveActiveEndpoint()
 	if err != nil {
 		a.showError(fmt.Sprintf("Failed to resolve endpoint: %v", err))
