@@ -79,15 +79,22 @@ func platformDisplayName(platform string) string {
 
 // ──────────────────────────── Show IM Settings ────────────────────────────
 
-// showIMWindow opens the IM Settings as a modal dialog on the main window.
+// showIMWindow opens the IM Settings window (singleton).
 func (a *App) showIMWindow() {
-	if a.window == nil {
+	if a.imWindow != nil {
+		a.imWindow.Show()
+		a.imWindow.RequestFocus()
 		return
 	}
-	content := a.buildIMDialogContent(a.window)
-	d := dialog.NewCustom("IM Settings", "Close", content, a.window)
-	d.Resize(fyne.NewSize(820, 620))
-	d.Show()
+	if a.fyneApp == nil {
+		return
+	}
+	w := a.fyneApp.NewWindow("IM Settings")
+	w.Resize(fyne.NewSize(850, 620))
+	w.SetOnClosed(func() { a.imWindow = nil })
+	a.imWindow = w
+	w.SetContent(a.buildIMDialogContent(w))
+	w.Show()
 }
 
 // buildIMDialogContent creates the full content for the IM Settings dialog.
