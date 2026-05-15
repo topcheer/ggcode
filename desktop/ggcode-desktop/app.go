@@ -64,6 +64,7 @@ func (a *App) Run() {
 	setWindowIcon(a.window)
 	a.buildUI()
 	a.setupMenu()
+	a.initIMRuntime()
 
 	// Apply dark titlebar matching the app theme.
 	setupNativeTitlebar(a.window)
@@ -204,6 +205,7 @@ func (a *App) initFromWorkDir(dir string) {
 	}
 	a.cfg = cfg
 	a.dc.WorkDir = dir
+	a.initIMRuntime()
 	_ = a.dc.Save()
 
 	if cfg.NeedsOnboard() {
@@ -513,40 +515,52 @@ func max(a, b int) int {
 }
 
 
-// initIMRuntime initializes the IM manager once.
+// initIMRuntime initializes the IM manager once at app startup.
 func (a *App) initIMRuntime() {
 	if a.imManager != nil {
 		return
 	}
 	defer safeRecover("initIMRuntime")
-		mgr := im.NewManager()
-		bindingsPath, err := im.DefaultBindingsPath()
-		if err != nil {
-			return
-		}
-		bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
-		if err != nil {
-			return
-		}
-		if err := mgr.SetBindingStore(bindingStore); err != nil {
-			return
-		}
-		pairingPath, err := im.DefaultPairingStatePath()
-		if err != nil {
-			return
-		}
-		pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
-		if err != nil {
-			return
-		}
-		if err := mgr.SetPairingStore(pairingStore); err != nil {
-			return
-		}
-		mgr.BindSession(im.SessionBinding{Workspace: a.dc.WorkDir})
+
+	mgr := im.NewManager()
+
+	bindingsPath, err := im.DefaultBindingsPath()
+	if err != nil {
+		return
+	}
+	bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
+	if err != nil {
+		return
+	}
+	if err := mgr.SetBindingStore(bindingStore); err != nil {
+		return
+	}
+
+	pairingPath, err := im.DefaultPairingStatePath()
+	if err != nil {
+		return
+	}
+	pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
+	if err != nil {
+		return
+	}
+	if err := mgr.SetPairingStore(pairingStore); err != nil {
+		return
+	}
+
+	workDir := ""
+	if a.dc != nil {
+		workDir = a.dc.WorkDir
+	}
+	mgr.BindSession(im.SessionBinding{Workspace: workDir})
+
+	if a.cfg != nil {
 		adapters := make(map[string]bool)
 		for name, acfg := range a.cfg.IM.Adapters {
 			adapters[name] = acfg.Enabled
 		}
 		mgr.ApplyAdapterConfig(adapters)
-		a.imManager = mgr
+	}
+
+	a.imManager = mgr
 }

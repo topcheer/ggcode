@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
@@ -17,7 +16,9 @@ import (
 	"github.com/topcheer/ggcode/internal/im"
 )
 
-// imAdapterEntry groups adapter info for display.
+// ──────────────────────────── Data types ────────────────────────────
+
+// imAdapterEntry holds adapter display info.
 type imAdapterEntry struct {
 	Name      string
 	Platform  string
@@ -29,232 +30,202 @@ type imAdapterEntry struct {
 	ChannelID string
 }
 
-// showIMWindow opens the IM Settings window (singleton).
-func (a *App) showIMWindow() {
-	if a.imWindow != nil {
-		a.imWindow.Show()
-		a.imWindow.RequestFocus()
-		return
-	}
-	w := a.fyneApp.NewWindow("IM Settings")
-	w.Resize(fyne.NewSize(850, 680))
-	w.SetOnClosed(func() { a.imWindow = nil })
-	a.imWindow = w
+// ──────────────────────────── Platform metadata ────────────────────────────
 
-	// Build content.
-	content := a.buildIMContent(w)
-	w.SetContent(content)
-	w.Show()
+type platformMeta struct {
+	DisplayName string
+	Fields      []platformField
 }
 
-func (a *App) buildIMContent(w fyne.Window) fyne.CanvasObject {
+type platformField struct {
+	Key         string
+	Label       string
+	Placeholder string
+}
+
+var platformRegistry = map[string]platformMeta{
+	"qq":        {DisplayName: "QQ", Fields: []platformField{{"appid", "App ID", "QQ app ID"}, {"appsecret", "App Secret", "QQ app secret"}}},
+	"telegram":  {DisplayName: "Telegram", Fields: []platformField{{"bot_token", "Bot Token", "123456:ABC-DEF..."}}},
+	"discord":   {DisplayName: "Discord", Fields: []platformField{{"token", "Bot Token", "Discord bot token"}}},
+	"feishu":    {DisplayName: "Feishu", Fields: []platformField{{"app_id", "App ID", "cli_xxx"}, {"app_secret", "App Secret", "Feishu app secret"}}},
+	"dingtalk":  {DisplayName: "DingTalk", Fields: []platformField{{"app_key", "App Key", "dingxxx"}, {"app_secret", "App Secret", "DingTalk app secret"}}},
+	"slack":     {DisplayName: "Slack", Fields: []platformField{{"bot_token", "Bot Token", "xoxb-xxx"}, {"app_token", "App Token", "xapp-xxx"}}},
+	"wechat":    {DisplayName: "WeChat", Fields: []platformField{{"bot_token", "Bot Token", "WeChat bot token"}}},
+	"wecom":     {DisplayName: "WeCom", Fields: []platformField{{"bot_id", "Bot ID", "WeCom bot ID"}, {"secret", "Secret", "WeCom secret"}}},
+	"whatsapp":  {DisplayName: "WhatsApp", Fields: []platformField{}},
+	"mattermost": {DisplayName: "Mattermost", Fields: []platformField{{"url", "Server URL", "https://mm.example.com"}, {"token", "Access Token", "mattermost token"}}},
+	"signal":    {DisplayName: "Signal", Fields: []platformField{{"account", "Phone Number", "+1234567890"}, {"base_url", "Signal CLI URL", "http://localhost:8080"}}},
+	"irc":       {DisplayName: "IRC", Fields: []platformField{{"host", "Server", "irc.libera.chat:6697"}, {"nick", "Nickname", "my-bot"}, {"channels", "Channels", "#channel1,#channel2"}}},
+	"matrix":    {DisplayName: "Matrix", Fields: []platformField{{"homeserver", "Homeserver", "https://matrix.org"}, {"access_token", "Access Token", "syt_xxx"}}},
+	"nostr":     {DisplayName: "Nostr", Fields: []platformField{{"private_key", "Private Key", "nsec1..."}, {"relays", "Relays", "wss://relay.damus.io"}}},
+	"twitch":    {DisplayName: "Twitch", Fields: []platformField{{"nick", "Nickname", "bot_name"}, {"token", "OAuth Token", "oauth:xxx"}, {"channels", "Channels", "#channel1,#channel2"}}},
+}
+
+func sortedPlatformKeys() []string {
+	keys := make([]string, 0, len(platformRegistry))
+	for k := range platformRegistry {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func platformDisplayName(platform string) string {
+	if meta, ok := platformRegistry[platform]; ok {
+		return meta.DisplayName
+	}
+	return strings.Title(platform)
+}
+
+// ──────────────────────────── Show IM Settings ────────────────────────────
+
+// showIMWindow opens the IM Settings as a modal dialog on the main window.
+func (a *App) showIMWindow() {
+	if a.window == nil {
+		return
+	}
+	content := a.buildIMDialogContent(a.window)
+	d := dialog.NewCustom("IM Settings", "Close", content, a.window)
+	d.Resize(fyne.NewSize(820, 620))
+	d.Show()
+}
+
+// buildIMDialogContent creates the full content for the IM Settings dialog.
+func (a *App) buildIMDialogContent(w fyne.Window) fyne.CanvasObject {
 	cfg := a.cfg
-	if cfg.IM.Adapters == nil {
-		cfg.IM.Adapters = make(map[string]config.IMAdapterConfig)
+	if cfg == nil || cfg.IM.Adapters == nil {
+		empty := widget.NewLabel("No configuration loaded yet.")
+		empty.Alignment = fyne.TextAlignCenter
+		return empty
 	}
 
-	// ── Header ──
-	headerTitle := widget.NewLabelWithStyle("IM Settings", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-
-	currentWS := a.dc.WorkDir
+	// ── Header row ──
+	currentWS := ""
+	if a.dc != nil {
+		currentWS = a.dc.WorkDir
+	}
 	wsLabel := widget.NewLabel("Workspace: " + currentWS)
 	wsLabel.Wrapping = fyne.TextWrapWord
-	wsLabel.TextStyle = fyne.TextStyle{Italic: true}
 
-	// ── Refresh function ──
-	var scroll *container.Scroll
-
-	refresh := func() {
-		body := a.buildIMBody(w, cfg)
-		if scroll != nil {
-			scroll.Content = body
-			scroll.Refresh()
-		}
-	}
-
-	// ── Action buttons ──
 	addBtn := widget.NewButtonWithIcon("Add Adapter", theme.ContentAddIcon(), func() {
-		a.showAddAdapterDialog(w, cfg, refresh)
+		a.showAddAdapterDialog(w)
 	})
-	refreshBtn := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
-		refresh()
-	})
-
-	toolbar := container.NewHBox(
-		layout.NewSpacer(),
-		refreshBtn,
-		addBtn,
-	)
-
-	// ── Body ──
-	body := a.buildIMBody(w, cfg)
-	scroll = container.NewVScroll(body)
 
 	header := container.NewVBox(
-		container.NewHBox(headerTitle, layout.NewSpacer()),
-		wsLabel,
-		toolbar,
+		container.NewBorder(nil, nil, wsLabel, addBtn),
 		widget.NewSeparator(),
 	)
+
+	// ── Adapter list (scrollable) ──
+	body := a.buildAdapterSections(w)
+	scroll := container.NewVScroll(body)
 
 	return container.NewBorder(header, nil, nil, nil, scroll)
 }
 
-// buildIMBody creates the scrollable adapter card list.
-func (a *App) buildIMBody(w fyne.Window, cfg *config.Config) *fyne.Container {
+// buildAdapterSections groups adapters and renders section cards.
+func (a *App) buildAdapterSections(w fyne.Window) *fyne.Container {
 	entries := a.imAdapterEntries()
-	currentWS := a.dc.WorkDir
+	currentWS := ""
+	if a.dc != nil {
+		currentWS = a.dc.WorkDir
+	}
 
-	// Group entries.
-	var currentGroup, otherGroup, unboundGroup, disabledGroup []imAdapterEntry
+	var current, other, unbound, disabled []imAdapterEntry
 	for _, e := range entries {
 		if !e.Enabled {
-			disabledGroup = append(disabledGroup, e)
+			disabled = append(disabled, e)
 		} else if e.IsCurrent {
-			currentGroup = append(currentGroup, e)
+			current = append(current, e)
 		} else if e.Workspace != "" {
-			otherGroup = append(otherGroup, e)
+			other = append(other, e)
 		} else {
-			unboundGroup = append(unboundGroup, e)
+			unbound = append(unbound, e)
 		}
 	}
 
-	var cards []fyne.CanvasObject
-
-	// ── Section: Bound to this workspace ──
-	if len(currentGroup) > 0 {
-		cards = append(cards, a.sectionHeader("Bound to this workspace", theme.ConfirmIcon()))
-		for _, e := range currentGroup {
-			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
+	var sections []fyne.CanvasObject
+	addSection := func(title string, list []imAdapterEntry) {
+		if len(list) == 0 {
+			return
+		}
+		sections = append(sections, widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+		for _, e := range list {
+			sections = append(sections, a.buildAdapterRow(w, e, currentWS))
 		}
 	}
 
-	// ── Section: Bound to other workspaces ──
-	if len(otherGroup) > 0 {
-		cards = append(cards, a.sectionHeader("Other workspaces", theme.MailForwardIcon()))
-		for _, e := range otherGroup {
-			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
-		}
+	addSection("This workspace", current)
+	addSection("Other workspaces", other)
+	addSection("Unbound", unbound)
+	addSection("Disabled", disabled)
+
+	if len(sections) == 0 {
+		empty := widget.NewLabel("No adapters configured. Click 'Add Adapter' to get started.")
+		empty.Alignment = fyne.TextAlignCenter
+		sections = append(sections, empty)
 	}
 
-	// ── Section: Unbound ──
-	if len(unboundGroup) > 0 {
-		cards = append(cards, a.sectionHeader("Unbound adapters", theme.ComputerIcon()))
-		for _, e := range unboundGroup {
-			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
-		}
-	}
-
-	// ── Section: Disabled ──
-	if len(disabledGroup) > 0 {
-		cards = append(cards, a.sectionHeader("Disabled", theme.CancelIcon()))
-		for _, e := range disabledGroup {
-			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
-		}
-	}
-
-	if len(cards) == 0 {
-		emptyLabel := widget.NewLabel("No adapters configured.\nClick 'Add Adapter' to get started.")
-		emptyLabel.Alignment = fyne.TextAlignCenter
-		cards = append(cards, emptyLabel)
-	}
-
-	return container.NewVBox(cards...)
+	return container.NewVBox(sections...)
 }
 
-// sectionHeader returns a section title row.
-func (a *App) sectionHeader(title string, icon fyne.Resource) fyne.CanvasObject {
-	lbl := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	ic := widget.NewIcon(icon)
-	return container.NewHBox(ic, lbl)
-}
-
-// adapterCard creates a card for a single adapter.
-func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onRefresh func()) fyne.CanvasObject {
-	// Left: name + platform
+// buildAdapterRow creates a single adapter row with info + actions.
+func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string) fyne.CanvasObject {
+	// ── Info column ──
 	nameLbl := widget.NewLabelWithStyle(e.Name, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	platLbl := widget.NewLabel(platformDisplayName(e.Platform))
 
-	// Status indicator
-	var statusText, statusColor string
-	switch {
-	case !e.Enabled:
+	// Status
+	statusText := "Active"
+	if !e.Enabled {
 		statusText = "Disabled"
-		statusColor = "danger"
-	case e.Muted:
+	} else if e.Muted {
 		statusText = "Muted"
-		statusColor = "warning"
-	case e.IsCurrent:
-		if e.Healthy {
-			statusText = "Connected"
-			statusColor = "success"
-		} else {
-			statusText = "Active"
-			statusColor = "success"
-		}
-	case e.Workspace != "":
-		statusText = "In use"
-		statusColor = "info"
-	default:
-		statusText = "Ready"
-		statusColor = "info"
+	} else if e.IsCurrent && e.Healthy {
+		statusText = "Connected"
 	}
-
 	statusLbl := widget.NewLabel(statusText)
-	statusLbl.TextStyle = fyne.TextStyle{Bold: true}
-	_ = statusColor // TODO: apply color
 
-	// Workspace binding info
-	var bindText string
+	// Binding
+	bindText := "Not bound"
 	if e.IsCurrent {
 		bindText = "This workspace"
 	} else if e.Workspace != "" {
-		// Show relative or shortened path
-		if strings.HasPrefix(e.Workspace, currentWS) {
-			bindText = "This workspace"
+		parts := strings.Split(e.Workspace, "/")
+		if len(parts) >= 2 {
+			bindText = ".../" + parts[len(parts)-2] + "/" + parts[len(parts)-1]
 		} else {
-			parts := strings.Split(e.Workspace, "/")
-			if len(parts) > 2 {
-				bindText = "Bound to: .../" + parts[len(parts)-2] + "/" + parts[len(parts)-1]
-			} else {
-				bindText = "Bound to: " + e.Workspace
-			}
+			bindText = e.Workspace
 		}
-	} else {
-		bindText = "Not bound"
 	}
 	bindLbl := widget.NewLabel(bindText)
 	bindLbl.TextStyle = fyne.TextStyle{Italic: true}
 
-	// Channel info
-	var chText string
-	if e.ChannelID != "" {
-		if len(e.ChannelID) > 20 {
-			chText = "Channel: " + e.ChannelID[:20] + "..."
-		} else {
-			chText = "Channel: " + e.ChannelID
-		}
-	}
+	// Channel
 	var chLbl *widget.Label
-	if chText != "" {
-		chLbl = widget.NewLabel(chText)
+	if e.ChannelID != "" {
+		ch := e.ChannelID
+		if len(ch) > 25 {
+			ch = ch[:25] + "..."
+		}
+		chLbl = widget.NewLabel(ch)
 		chLbl.TextStyle = fyne.TextStyle{Italic: true}
 	}
 
-	// Left info column
+	infoTop := container.NewHBox(nameLbl, platLbl, statusLbl)
 	var infoChildren []fyne.CanvasObject
-	infoChildren = append(infoChildren, nameLbl, container.NewHBox(platLbl, layout.NewSpacer(), statusLbl), bindLbl)
+	infoChildren = append(infoChildren, infoTop, bindLbl)
 	if chLbl != nil {
 		infoChildren = append(infoChildren, chLbl)
 	}
 	infoCol := container.NewVBox(infoChildren...)
 
-	// ── Action row (horizontal, compact icon buttons) ──
+	// ── Actions ──
 	var actions []fyne.CanvasObject
 
-	// Toggle
+	// Enable/Disable
 	if e.Enabled {
-		actions = append(actions, widget.NewButtonWithIcon("Disable", theme.CancelIcon(), func() {
+		actions = append(actions, widget.NewButton("Disable", func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, false)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -263,7 +234,7 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 			a.refreshIMWindow()
 		}))
 	} else {
-		actions = append(actions, widget.NewButtonWithIcon("Enable", theme.ConfirmIcon(), func() {
+		actions = append(actions, widget.NewButton("Enable", func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, true)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -273,17 +244,17 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 		}))
 	}
 
-	// Mute/Unmute
+	// Mute/Unmute (only for enabled adapters bound to this workspace)
 	if e.Enabled && e.IsCurrent {
 		if e.Muted {
-			actions = append(actions, widget.NewButtonWithIcon("Unmute", theme.VolumeUpIcon(), func() {
+			actions = append(actions, widget.NewButton("Unmute", func() {
 				if a.imManager != nil {
 					_ = a.imManager.UnmuteBinding(e.Name)
 				}
 				a.refreshIMWindow()
 			}))
 		} else {
-			actions = append(actions, widget.NewButtonWithIcon("Mute", theme.VolumeMuteIcon(), func() {
+			actions = append(actions, widget.NewButton("Mute", func() {
 				if a.imManager != nil {
 					_ = a.imManager.MuteBinding(e.Name)
 				}
@@ -292,11 +263,11 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 		}
 	}
 
-	// Bind/Rebind
+	// Bind to this workspace
 	if !e.IsCurrent {
-		actions = append(actions, widget.NewButtonWithIcon("Bind", theme.MailForwardIcon(), func() {
+		actions = append(actions, widget.NewButton("Bind here", func() {
 			if a.imManager == nil {
-				dialog.ShowInformation("Bind", "IM manager is not available yet.", w)
+				dialog.ShowInformation("Bind", "IM manager is not available.", w)
 				return
 			}
 			if e.Workspace != "" {
@@ -312,45 +283,54 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 		}))
 	}
 
-	// Delete (last, smaller, less prominent)
-	delBtn := widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
+	// Delete
+	delBtn := widget.NewButton("Delete", func() {
 		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete adapter '%s'?", e.Name), func(ok bool) {
 			if !ok {
 				return
 			}
 			_ = a.cfg.RemoveIMAdapter(e.Name)
 			_ = a.cfg.Save()
+			if a.imManager != nil {
+				_ = a.imManager.UnbindAdapter(e.Name)
+			}
 			a.refreshIMWindow()
 		}, w)
 	})
 	delBtn.Importance = widget.DangerImportance
 	actions = append(actions, delBtn)
 
-	actionRow := container.NewHBox(actions...)
-	btnCol := container.NewVBox(actionRow)
+	actionsRow := container.NewHBox(actions...)
 
-	// Card row: info | buttons
-	row := container.NewBorder(nil, nil, nil, btnCol, infoCol)
-
-	// Visual separation with background color hint via card
+	// ── Row: info (left) | actions (right) ──
+	row := container.NewBorder(nil, nil, nil, actionsRow, infoCol)
 	return widget.NewCard("", "", container.NewPadded(row))
 }
 
-// refreshIMWindow rebuilds the IM window content.
+// refreshIMWindow closes existing dialog and reopens.
 func (a *App) refreshIMWindow() {
-	if a.imWindow == nil {
+	if a.window == nil {
 		return
 	}
+	// Re-show by closing and re-opening. Fyne doesn't have a clean way to
+	// replace dialog content, so we just call showIMWindow which creates a new one.
 	fyne.Do(func() {
-		content := a.buildIMContent(a.imWindow)
-		a.imWindow.SetContent(content)
+		a.showIMWindow()
 	})
 }
 
-// showAddAdapterDialog opens a dialog to add a new adapter.
-func (a *App) showAddAdapterDialog(w fyne.Window, cfg *config.Config, onDone func()) {
-	platforms := []string{"qq", "telegram", "discord", "feishu", "dingtalk", "slack", "wechat", "wecom", "whatsapp", "mattermost", "signal", "irc", "matrix", "nostr", "twitch"}
-	platformSelect := widget.NewSelect(platforms, nil)
+// ──────────────────────────── Add Adapter Dialog ────────────────────────────
+
+// showAddAdapterDialog opens a modal dialog to add a new adapter.
+func (a *App) showAddAdapterDialog(w fyne.Window) {
+	platformKeys := sortedPlatformKeys()
+	platformLabels := make([]string, len(platformKeys))
+	for i, k := range platformKeys {
+		platformLabels[i] = platformRegistry[k].DisplayName
+	}
+
+	// Use a select with display names
+	platformSelect := widget.NewSelect(platformLabels, nil)
 	platformSelect.PlaceHolder = "Select platform..."
 
 	nameEntry := widget.NewEntry()
@@ -359,15 +339,33 @@ func (a *App) showAddAdapterDialog(w fyne.Window, cfg *config.Config, onDone fun
 	fieldsBox := container.NewVBox()
 	fieldEntries := make(map[string]*widget.Entry)
 
-	platformSelect.OnChanged = func(p string) {
+	platformSelect.OnChanged = func(selected string) {
 		fieldsBox.Objects = nil
 		fieldEntries = make(map[string]*widget.Entry)
-		for _, fieldName := range platformFields(p) {
+		// Find the platform key from display name
+		var platKey string
+		for k, meta := range platformRegistry {
+			if meta.DisplayName == selected {
+				platKey = k
+				break
+			}
+		}
+		if platKey == "" {
+			fieldsBox.Refresh()
+			return
+		}
+		meta := platformRegistry[platKey]
+		if len(meta.Fields) == 0 {
+			hint := widget.NewLabel("This platform requires scanning a QR code or link after adding.")
+			hint.TextStyle = fyne.TextStyle{Italic: true}
+			fieldsBox.Add(hint)
+		}
+		for _, f := range meta.Fields {
 			entry := widget.NewEntry()
-			entry.PlaceHolder = fieldName
+			entry.PlaceHolder = f.Placeholder
 			entry.Wrapping = fyne.TextWrapWord
-			fieldEntries[fieldName] = entry
-			fieldsBox.Add(widget.NewForm(&widget.FormItem{Text: fieldName, Widget: entry}))
+			fieldEntries[f.Key] = entry
+			fieldsBox.Add(widget.NewForm(&widget.FormItem{Text: f.Label, Widget: entry}))
 		}
 		fieldsBox.Refresh()
 	}
@@ -388,45 +386,57 @@ func (a *App) showAddAdapterDialog(w fyne.Window, cfg *config.Config, onDone fun
 			return
 		}
 		name := strings.TrimSpace(nameEntry.Text)
-		plat := platformSelect.Selected
-		if name == "" || plat == "" {
-			statusLabel.SetText("Name and platform required")
+		selectedLabel := platformSelect.Selected
+		if name == "" || selectedLabel == "" {
+			statusLabel.SetText("Name and platform are required.")
+			return
+		}
+		// Find platform key from display name
+		var platKey string
+		for k, meta := range platformRegistry {
+			if meta.DisplayName == selectedLabel {
+				platKey = k
+				break
+			}
+		}
+		if platKey == "" {
+			statusLabel.SetText("Unknown platform.")
 			return
 		}
 		extra := make(map[string]interface{})
 		for k, e := range fieldEntries {
-			if strings.TrimSpace(e.Text) != "" {
-				extra[k] = strings.TrimSpace(e.Text)
+			if v := strings.TrimSpace(e.Text); v != "" {
+				extra[k] = v
 			}
 		}
-		cfg.IM.Enabled = true
-		err := cfg.AddIMAdapter(name, config.IMAdapterConfig{
+		a.cfg.IM.Enabled = true
+		if err := a.cfg.AddIMAdapter(name, config.IMAdapterConfig{
 			Enabled:  true,
-			Platform: plat,
+			Platform: platKey,
 			Extra:    extra,
-		})
-		if err != nil {
+		}); err != nil {
 			statusLabel.SetText("Error: " + err.Error())
 			return
 		}
-		_ = cfg.Save()
+		_ = a.cfg.Save()
 		if a.imManager != nil {
 			adapters := make(map[string]bool)
-			for n, acfg := range cfg.IM.Adapters {
+			for n, acfg := range a.cfg.IM.Adapters {
 				adapters[n] = acfg.Enabled
 			}
 			a.imManager.ApplyAdapterConfig(adapters)
 		}
-		onDone()
+		a.refreshIMWindow()
 	}, w)
-	d.Resize(fyne.NewSize(500, 400))
+	d.Resize(fyne.NewSize(480, 400))
 	d.Show()
 }
 
-// imAdapterEntries returns sorted adapter entries from config + imManager state.
+// ──────────────────────────── Data layer ────────────────────────────
+
+// imAdapterEntries returns sorted adapter entries from config + imManager bindings.
 func (a *App) imAdapterEntries() []imAdapterEntry {
-	cfg := a.cfg
-	if cfg.IM.Adapters == nil {
+	if a.cfg == nil || a.cfg.IM.Adapters == nil {
 		return nil
 	}
 	currentWS := ""
@@ -434,13 +444,13 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 		currentWS = a.dc.WorkDir
 	}
 
+	// Read binding state from imManager
 	bindingWorkspace := make(map[string]string)
 	bindingChannel := make(map[string]string)
 	bindingMuted := make(map[string]bool)
 	adapterHealthy := make(map[string]bool)
 
 	if a.imManager != nil {
-		// AllPersistedBindings returns ALL bindings from all workspaces.
 		for _, b := range a.imManager.AllPersistedBindings() {
 			bindingWorkspace[b.Adapter] = b.Workspace
 			bindingChannel[b.Adapter] = b.ChannelID
@@ -452,7 +462,7 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 	}
 
 	var current, other, unbound, disabled []imAdapterEntry
-	for name, ac := range cfg.IM.Adapters {
+	for name, ac := range a.cfg.IM.Adapters {
 		ws := bindingWorkspace[name]
 		e := imAdapterEntry{
 			Name:      name,
@@ -464,7 +474,6 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 			Muted:     bindingMuted[name],
 			ChannelID: bindingChannel[name],
 		}
-
 		if !ac.Enabled {
 			disabled = append(disabled, e)
 		} else if e.IsCurrent {
@@ -489,96 +498,5 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 	return result
 }
 
-// platformDisplayName returns a user-friendly platform name.
-func platformDisplayName(platform string) string {
-	switch platform {
-	case "qq":
-		return "QQ"
-	case "telegram":
-		return "Telegram"
-	case "discord":
-		return "Discord"
-	case "feishu":
-		return "Feishu"
-	case "dingtalk":
-		return "DingTalk"
-	case "slack":
-		return "Slack"
-	case "wechat":
-		return "WeChat"
-	case "wecom":
-		return "WeCom"
-	case "whatsapp":
-		return "WhatsApp"
-	case "mattermost":
-		return "Mattermost"
-	case "signal":
-		return "Signal"
-	case "irc":
-		return "IRC"
-	case "matrix":
-		return "Matrix"
-	case "nostr":
-		return "Nostr"
-	case "twitch":
-		return "Twitch"
-	default:
-		return strings.Title(platform)
-	}
-}
-
-// platformFields returns the Extra field names required for each platform.
-func platformFields(platform string) []string {
-	switch platform {
-	case "qq":
-		return []string{"appid", "appsecret"}
-	case "telegram":
-		return []string{"bot_token"}
-	case "discord":
-		return []string{"token"}
-	case "feishu":
-		return []string{"app_id", "app_secret"}
-	case "dingtalk":
-		return []string{"app_key", "app_secret"}
-	case "slack":
-		return []string{"bot_token", "app_token"}
-	case "wechat":
-		return []string{"bot_token"}
-	case "wecom":
-		return []string{"bot_id", "secret"}
-	case "whatsapp":
-		return []string{}
-	case "mattermost":
-		return []string{"url", "token"}
-	case "signal":
-		return []string{"account", "base_url"}
-	case "irc":
-		return []string{"host", "nick", "channels"}
-	case "matrix":
-		return []string{"homeserver", "access_token"}
-	case "nostr":
-		return []string{"private_key", "relays"}
-	case "twitch":
-		return []string{"nick", "token", "channels"}
-	default:
-		return nil
-	}
-}
-
-// sortedAdapterNames returns adapter names in sorted order.
-func sortedAdapterNames(cfg *config.Config) []string {
-	if cfg.IM.Adapters == nil {
-		return nil
-	}
-	names := make([]string, 0, len(cfg.IM.Adapters))
-	for n := range cfg.IM.Adapters {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// blankLine returns a simple spacer.
-func blankLine() fyne.CanvasObject {
-	return canvas.NewRectangle(theme.BackgroundColor())
-}
+// ─── Keep layout import used ───
+var _ = layout.NewSpacer
