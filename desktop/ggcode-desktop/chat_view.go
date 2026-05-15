@@ -763,7 +763,7 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	if text == "" && msg.Streaming {
 		text = "..."
 	}
-	if text == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	return cv.iconRow(theme.ComputerIcon(), newMD(text))
