@@ -1243,6 +1243,33 @@ func mergeDefaultEndpoints(cfg, defaults *Config) {
 		}
 		cfg.Vendors[vendorName] = cfgVC
 	}
+
+	// Migrate standalone gateway vendors into ai-gateway endpoints.
+	gatewayVendors := map[string]string{
+		"openrouter": "openrouter",
+		"aihubmix":   "aihubmix",
+		"getgoapi":   "getgoapi",
+		"novita":     "novita",
+		"poe":        "poe",
+		"requesty":   "requesty",
+		"vercel":     "vercel",
+		"nvidia":     "nvidia",
+		"together":   "together",
+		"perplexity": "perplexity",
+	}
+	if agVC, ok := cfg.Vendors["ai-gateway"]; ok {
+		for oldVendor, epName := range gatewayVendors {
+			if oldVC, exists := cfg.Vendors[oldVendor]; exists {
+				if _, hasEP := agVC.Endpoints[epName]; !hasEP {
+					for _, ep := range oldVC.Endpoints {
+						agVC.Endpoints[epName] = ep
+					}
+				}
+				delete(cfg.Vendors, oldVendor)
+			}
+		}
+		cfg.Vendors["ai-gateway"] = agVC
+	}
 }
 
 // isPlaceholderBaseURL returns true if the URL looks like a template placeholder
