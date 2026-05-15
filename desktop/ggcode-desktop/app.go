@@ -352,6 +352,15 @@ func (a *App) startChat() {
 		a.chatViewRef.stopCh = nil
 	}
 
+	// Save current session before switching.
+	var prevSessionID string
+	if a.agentBridge != nil {
+		a.agentBridge.saveSession()
+		if a.agentBridge.CurrentSession() != nil {
+			prevSessionID = a.agentBridge.CurrentSession().ID
+		}
+	}
+
 	resolved, err := a.cfg.ResolveActiveEndpoint()
 	if err != nil {
 		a.showError(fmt.Sprintf("Failed to resolve endpoint: %v", err))
@@ -366,6 +375,11 @@ func (a *App) startChat() {
 
 	bridge := NewAgentBridge(a.cfg, prov, resolved, a.dc.WorkDir, a.ui)
 	a.agentBridge = bridge
+
+	// Resume previous session into new bridge to preserve history.
+	if prevSessionID != "" {
+		_ = bridge.ResumeSession(prevSessionID)
+	}
 
 	chatView := NewChatView(a, bridge, a.ui)
 	a.chatViewRef = chatView
@@ -382,6 +396,11 @@ func (a *App) startChat() {
 
 	a.content.Objects = []fyne.CanvasObject{split}
 	a.content.Refresh()
+
+	// Restore chat history from resumed session.
+	if a.chatViewRef != nil && bridge.CurrentSession() != nil && len(bridge.CurrentSession().Messages) > 0 {
+		a.chatViewRef.rebuildFromMessages(bridge.CurrentSession().Messages)
+	}
 
 	a.ui.SetModelInfo(resolved.Model, humanizeTokens(resolved.ContextWindow))
 	a.ui.SetStatus(fmt.Sprintf("%s/%s | context %s",
