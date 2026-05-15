@@ -262,6 +262,87 @@ jobs:
           name: windows-msi
           path: dist/*.msi
 
+  build-desktop-darwin:
+    name: Build desktop macOS
+    runs-on: macos-latest
+    needs: verify
+    permissions:
+      contents: write
+    env:
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Capture build date
+        shell: bash
+        run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
+      - name: Build desktop macOS DMG
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/build-desktop-darwin.sh
+          ./scripts/release/build-desktop-darwin.sh "${GGCODE_VERSION}" dist
+      - name: Upload desktop macOS DMG to release
+        if: github.event_name != 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.dmg --clobber
+      - name: Upload desktop macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-darwin
+          path: dist/*.dmg
+
+  build-desktop-windows:
+    name: Build desktop Windows
+    runs-on: windows-latest
+    needs: verify
+    permissions:
+      contents: write
+    env:
+      GGCODE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.package_version || github.ref_name }}
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install GCC (MinGW)
+        shell: pwsh
+        run: choco install mingw --yes
+      - name: Capture build date
+        shell: pwsh
+        run: |
+          $date = git show -s --format=%cI $env:GITHUB_SHA
+          Add-Content -Path $env:GITHUB_ENV -Value "GGCODE_DATE=$date"
+      - name: Build desktop Windows
+        shell: pwsh
+        run: |
+          .\scripts\release\build-desktop-windows.ps1 -Version $env:GGCODE_VERSION -OutputDir dist
+      - name: Upload desktop Windows exe to release
+        if: github.event_name != 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Get-ChildItem -Path dist -Filter *.exe | ForEach-Object {
+            gh release upload $env:GITHUB_REF_NAME $_.FullName --clobber
+          }
+      - name: Upload desktop Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/*.exe
+
   publish-site-release-branch:
     name: Publish site release branch
     if: github.event_name != 'workflow_dispatch'
@@ -273,6 +354,8 @@ jobs:
       - release-smoke-installer
       - release-macos-pkg
       - release-windows-msi
+      - build-desktop-darwin
+      - build-desktop-windows
     permissions:
       contents: write
     env:
@@ -293,6 +376,14 @@ jobs:
         with:
           name: windows-msi
           path: dist-site/windows-msi
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-darwin
+          path: dist-site/desktop-darwin
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist-site/desktop-windows
       - name: Publish release assets into deployment branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -304,4 +395,6 @@ jobs:
             --asset-dir dist \
             --asset-dir dist-site/macos-pkg \
             --asset-dir dist-site/windows-msi \
+            --asset-dir dist-site/desktop-darwin \
+            --asset-dir dist-site/desktop-windows \
             --source-label "${GITHUB_REF_NAME}"
