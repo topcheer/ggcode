@@ -262,18 +262,22 @@ func (cv *ChatView) onSend() {
 	cv.entry.Refresh()
 
 	var content []provider.ContentBlock
+	displayText := text
 	if img != nil {
-		content = append(content, *img)
+		pathHint := "\n\n[Attached image]\nAn image is attached directly to this message. Prefer native vision understanding first."
+		if text == "" {
+			text = pathHint
+			displayText = "[image]"
+		} else {
+			text = text + pathHint
+			displayText = "[image] " + displayText
+		}
 	}
 	if text != "" {
 		content = append(content, provider.TextBlock(text))
 	}
-
-	displayText := text
-	if img != nil && text == "" {
-		displayText = "[image]"
-	} else if img != nil {
-		displayText = "[image] " + text
+	if img != nil {
+		content = append(content, *img)
 	}
 	cv.ui.AppendChat(ChatMessage{Role: "user", Content: displayText, Time: time.Now()})
 
