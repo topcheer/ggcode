@@ -230,6 +230,7 @@ type ChatView struct {
 	msgWidgets  []fyne.CanvasObject
 	toolWidgets map[string]*toolWidgetRef
 	streamW     *markdownx.MarkdownWidget
+	thinkingW   fyne.CanvasObject // pulsing "thinking..." indicator
 
 	// Per-agent incremental state
 	agentStates map[string]*agentPanelState
@@ -403,6 +404,9 @@ func (cv *ChatView) onSend() {
 		cv.ui.AppendChat(ChatMessage{Role: "system", Content: "(queued)", Time: time.Now()})
 		return
 	}
+	// Show thinking indicator while waiting for agent response.
+	cv.showThinking()
+
 	if err := cv.bridge.SendContent(content); err != nil {
 		cv.ui.AppendChat(ChatMessage{Role: "error", Content: err.Error(), Time: time.Now()})
 	}
@@ -428,6 +432,7 @@ func (cv *ChatView) handleEvent(e UIEvent) {
 }
 
 func (cv *ChatView) onAppend(msg ChatMessage) {
+	cv.hideThinking()
 	w := cv.renderMessage(&msg)
 	if w == nil {
 		return
@@ -454,6 +459,7 @@ func (cv *ChatView) onAppend(msg ChatMessage) {
 }
 
 func (cv *ChatView) onAssistantChunk(text string) {
+	cv.hideThinking()
 	if cv.streamW != nil {
 		cv.streamW.SetMarkdown(text)
 		cv.scroll.ScrollToBottom()
@@ -467,6 +473,48 @@ func (cv *ChatView) onAssistantChunk(text string) {
 			cv.scroll.ScrollToBottom()
 		}
 	}
+}
+
+// showThinking displays a "Thinking..." indicator with animated dots.
+func (cv *ChatView) showThinking() {
+	cv.hideThinking()
+	icon := widget.NewIcon(theme.ComputerIcon())
+	label := widget.NewLabel("Thinking...")
+	label.TextStyle = fyne.TextStyle{Italic: true}
+	row := container.NewHBox(icon, label)
+	cv.thinkingW = row
+	cv.vbox.Add(row)
+	cv.vbox.Refresh()
+	cv.scroll.ScrollToBottom()
+
+	// Animate dots.
+	dots := []string{".", "..", "..."}
+	go func() {
+		i := 0
+		for cv.thinkingW != nil {
+			time.Sleep(500 * time.Millisecond)
+			if cv.thinkingW == nil {
+				return
+			}
+			i = (i + 1) % 3
+			text := "Thinking" + dots[i]
+			fyne.Do(func() {
+				if cv.thinkingW != nil {
+					row.Objects[1].(*widget.Label).SetText(text)
+				}
+			})
+		}
+	}()
+}
+
+// hideThinking removes the "Thinking..." indicator.
+func (cv *ChatView) hideThinking() {
+	if cv.thinkingW == nil {
+		return
+	}
+	cv.vbox.Remove(cv.thinkingW)
+	cv.thinkingW = nil
+	cv.vbox.Refresh()
 }
 
 func (cv *ChatView) onToolResult(toolID, result string, isError bool) {
