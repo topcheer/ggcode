@@ -68,12 +68,59 @@ func (e *sendEntry) KeyDown(key *fyne.KeyEvent) {
 		text := strings.TrimSpace(e.Text)
 		e.SetText("")
 		if text != "" && e.onSend != nil {
+			e.appendHistory(text)
 			e.pendingText = text
 			e.onSend()
 		}
 		return
+	case fyne.KeyUp:
+		e.navigateHistory(-1)
+		return
+	case fyne.KeyDown:
+		e.navigateHistory(1)
+		return
+	default:
+		e.Entry.KeyDown(key)
 	}
-	e.Entry.KeyDown(key)
+}
+// navigateHistory moves through message history.
+func (e *sendEntry) navigateHistory(dir int) {
+	if len(e.history) == 0 {
+		return
+	}
+	if e.historyIdx == len(e.history) {
+		e.historyDraft = e.Text
+	}
+	newIdx := e.historyIdx + dir
+	if newIdx < 0 || newIdx > len(e.history) {
+		return
+	}
+	e.historyIdx = newIdx
+	if newIdx == len(e.history) {
+		e.SetText(e.historyDraft)
+	} else {
+		e.SetText(e.history[newIdx])
+	}
+}
+
+// appendHistory adds a sent message to history.
+func (e *sendEntry) appendHistory(text string) {
+	if text == "" {
+		return
+	}
+	if len(e.history) > 0 && e.history[len(e.history)-1] == text {
+		e.historyIdx = len(e.history)
+		return
+	}
+	e.history = append(e.history, text)
+	e.historyIdx = len(e.history)
+}
+
+// loadHistory sets history from session user messages.
+func (e *sendEntry) loadHistory(msgs []string) {
+	e.history = msgs
+	e.historyIdx = len(e.history)
+	e.historyDraft = ""
 }
 
 // TypedKey intercepts the Return/Enter key to prevent the base Entry
@@ -1596,6 +1643,9 @@ func (cv *ChatView) rebuildFromMessages(messages []provider.Message) {
 	cv.vbox.Objects = nil
 	cv.vbox.Refresh()
 
+	// Collect user messages for input history.
+	var userMsgs []string
+
 	// Track tool_use blocks to match with tool_result.
 	type toolUseInfo struct {
 		toolName string
@@ -1685,4 +1735,5 @@ func (cv *ChatView) rebuildFromMessages(messages []provider.Message) {
 			cv.scroll.ScrollToBottom()
 		})
 	}()
+	cv.entry.loadHistory(userMsgs)
 }
