@@ -265,7 +265,9 @@ jobs:
   build-desktop-darwin:
     name: Build desktop macOS
     runs-on: macos-latest
-    needs: verify
+    needs:
+      - verify
+      - release
     permissions:
       contents: write
     env:
@@ -302,7 +304,9 @@ jobs:
   build-desktop-windows:
     name: Build desktop Windows
     runs-on: windows-latest
-    needs: verify
+    needs:
+      - verify
+      - release
     permissions:
       contents: write
     env:
