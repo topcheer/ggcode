@@ -24,7 +24,10 @@ type ReadFile struct {
 func (t ReadFile) Name() string { return "read_file" }
 
 func (t ReadFile) Description() string {
-	return "Read file contents. Supports text files, images (png/jpg/gif/webp), PDF, Office (docx/xlsx/pptx), OpenDocument (odt/ods/odp), EPUB, RTF, archives (zip/tar/tar.gz/tar.bz2), iWork (pages/numbers/key), and SVG. Archives are recursively extracted showing file listings and text content. Use offset and limit for range reading large files."
+	return "Read file contents into the agent's context. ALWAYS read a file with this tool before editing it — edit_file/multi_edit_file require exact byte-for-byte matches against the current content (including indentation and line endings). " +
+		"Output is line-numbered using `cat -n` format (\"   42\\t<line content>\"); when copying lines into edit_file's old_text you MUST drop the leading line-number prefix and tab. " +
+		"Use offset/limit for files larger than ~2000 lines. " +
+		"Supports text, images (png/jpg/gif/webp), PDF, Office (docx/xlsx/pptx), OpenDocument (odt/ods/odp), EPUB, RTF, archives (zip/tar/tar.gz/tar.bz2), iWork, and SVG."
 }
 
 func (t ReadFile) Parameters() json.RawMessage {
@@ -33,24 +36,23 @@ func (t ReadFile) Parameters() json.RawMessage {
 	"properties": {
 		"path": {
 			"type": "string",
-			"description": "Absolute path to the file to read"
+			"description": "Absolute path to the file to read."
 		},
 		"offset": {
 			"type": "integer",
-			"description": "Line number to start reading from (1-based). Only applies to text files and extracted documents."
+			"description": "1-based line number to start reading from. Only applies to text files and extracted documents."
 		},
 		"limit": {
 			"type": "integer",
-			"description": "Maximum number of lines to read."
+			"description": "Maximum number of lines to read. Output is capped at 2000 lines when no limit is supplied."
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "Optional. Brief activity label shown in the UI in the user's language."
 		}
 	},
 	"required": [
-		"path",
-		"description"
+		"path"
 	]
 }`)
 }

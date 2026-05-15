@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 // WriteFile implements the write_file tool.
@@ -14,7 +16,9 @@ type WriteFile struct {
 func (t WriteFile) Name() string { return "write_file" }
 
 func (t WriteFile) Description() string {
-	return "Write content to a file. Creates the file if it doesn't exist, overwrites if it does."
+	return "Write content to a file, creating it if missing or fully OVERWRITING any existing file at that path. " +
+		"Prefer edit_file or multi_edit_file when modifying an existing file — write_file destroys all current content. " +
+		"Parent directories are created automatically if they do not exist."
 }
 
 func (t WriteFile) Parameters() json.RawMessage {
@@ -23,21 +27,20 @@ func (t WriteFile) Parameters() json.RawMessage {
 	"properties": {
 		"path": {
 			"type": "string",
-			"description": "Path to the file to write"
+			"description": "Path to the file to write. Parent directories are created automatically."
 		},
 		"content": {
 			"type": "string",
-			"description": "Content to write to the file"
+			"description": "Content to write. Existing file contents at this path will be fully replaced."
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "Optional. Brief activity label shown in the UI in the user's language."
 		}
 	},
 	"required": [
 		"path",
-		"content",
-		"description"
+		"content"
 	]
 }`)
 }
@@ -53,6 +56,14 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	if t.SandboxCheck != nil && !t.SandboxCheck(args.Path) {
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
+	}
+
+	// Create parent directories so weak LLMs don't have to issue an extra
+	// run_command(mkdir) call for new files in fresh subdirectories.
+	if dir := filepath.Dir(args.Path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("error creating parent directory: %v", err)}, nil
+		}
 	}
 
 	if err := atomicWriteFile(args.Path, []byte(args.Content), 0644); err != nil {

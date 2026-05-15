@@ -16,7 +16,14 @@ type EditFile struct {
 func (t EditFile) Name() string { return "edit_file" }
 
 func (t EditFile) Description() string {
-	return "Edit a file by replacing an exact text match with new text. The old_text must uniquely match in the file."
+	return "Edit a file by replacing one occurrence of old_text with new_text. " +
+		"Rules for high success rate: " +
+		"(1) ALWAYS read_file first to get the exact current content. " +
+		"(2) old_text must match the file byte-for-byte INCLUDING indentation (tabs vs spaces) and line endings. " +
+		"(3) Do NOT include the line-number prefix (e.g. \"   42\\t\") from read_file output in old_text — only the raw line content. " +
+		"(4) old_text must be UNIQUE in the file; if not, include 1-3 lines of surrounding context to disambiguate, or set replace_all=true. " +
+		"(5) On failure, the error message lists hints (indent style, near-matches with whitespace visualised, matching line numbers) — read them and adjust before retrying. " +
+		"For multiple edits to the same file in one round-trip, prefer multi_edit_file."
 }
 
 func (t EditFile) Parameters() json.RawMessage {
@@ -25,30 +32,29 @@ func (t EditFile) Parameters() json.RawMessage {
 	"properties": {
 		"file_path": {
 			"type": "string",
-			"description": "Path to the file to edit"
+			"description": "Path to the file to edit."
 		},
 		"old_text": {
 			"type": "string",
-			"description": "Exact text to find and replace"
+			"description": "Exact text to find. Must match the file byte-for-byte (indentation, line endings). Do not include line-number prefixes from read_file output."
 		},
 		"new_text": {
 			"type": "string",
-			"description": "Replacement text"
+			"description": "Replacement text. Use the same indentation style as old_text."
 		},
 		"replace_all": {
 			"type": "boolean",
-			"description": "Replace all occurrences of old_text (default false)"
+			"description": "If true, replace every occurrence of old_text. Default false (the call fails if old_text is not unique)."
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "Optional. Brief activity label shown in the UI in the user's language (e.g. 'Updating retry policy', '更新缩进')."
 		}
 	},
 	"required": [
 		"file_path",
 		"old_text",
-		"new_text",
-		"description"
+		"new_text"
 	]
 }`)
 }
@@ -75,36 +81,38 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	content := string(data)
 
-	// Try exact match first.
-	oldText := args.OldText
-	if !strings.Contains(content, oldText) {
-		// Exact match failed — try whitespace normalization.
-		// This handles the common case where the LLM uses spaces for indentation
-		// but the file uses tabs (or vice versa), so it succeeds on the first
-		// attempt without wasting an LLM round-trip.
-		normalized := normalizeIndentation(content, oldText)
-		if normalized != oldText && strings.Contains(content, normalized) {
-			oldText = normalized
-		} else {
-			hint := diagnoseMatchFailure(content, args.OldText)
-			msg := "old_text not found in file"
-			if hint != "" {
-				msg += ". " + hint
-			}
-			return Result{IsError: true, Content: msg}, nil
+	oldText, transform := resolveOldText(content, args.OldText)
+	if oldText == "" {
+		hint := diagnoseMatchFailure(content, args.OldText)
+		msg := "old_text not found in file"
+		if hint != "" {
+			msg += ". " + hint
 		}
+		return Result{IsError: true, Content: msg}, nil
 	}
 
 	count := strings.Count(content, oldText)
 	if !args.ReplaceAll && count > 1 {
-		return Result{IsError: true, Content: fmt.Sprintf("old_text found %d times in file — must be unique (use replace_all to replace all occurrences)", count)}, nil
+		lines := findMatchLineNumbers(content, oldText)
+		msg := fmt.Sprintf(
+			"old_text found %d times in file — must be unique. Add 1-3 lines of surrounding context to disambiguate, or set replace_all=true to replace every occurrence.",
+			count,
+		)
+		if len(lines) > 0 {
+			more := ""
+			if count > len(lines) {
+				more = fmt.Sprintf(" (showing first %d)", len(lines))
+			}
+			msg += fmt.Sprintf(" Matches start at line(s): %s%s.", formatMatchLines(lines), more)
+		}
+		return Result{IsError: true, Content: msg}, nil
 	}
 
-	// When we used a normalized match, also normalize new_text indentation
-	// so the replacement preserves the file's indentation style.
+	// Apply the same transform to new_text so the replacement matches the
+	// file's conventions (indentation, line endings, line-number stripping).
 	newText := args.NewText
-	if oldText != args.OldText {
-		newText = normalizeIndentation(content, args.NewText)
+	if transform != "" {
+		newText = adjustNewText(content, args.NewText, transform)
 	}
 
 	var newContent string
