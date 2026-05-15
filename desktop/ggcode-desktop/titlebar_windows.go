@@ -39,3 +39,5 @@ func setupNativeTitlebar(w fyne.Window) {
 		C.setDarkTitlebar(C.ulonglong(win.HWND))
 	})
 }
+
+func setDockIconMac(path string) {}

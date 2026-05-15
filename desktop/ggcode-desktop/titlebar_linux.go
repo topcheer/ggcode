@@ -14,3 +14,5 @@ func setupNativeTitlebar(w fyne.Window) {
 	//   gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 	// No per-window API available on Linux.
 }
+
+func setDockIconMac(path string) {}
