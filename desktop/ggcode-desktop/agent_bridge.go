@@ -160,6 +160,10 @@ func (b *AgentBridge) setupAgent() error {
 }
 
 func (b *AgentBridge) Send(userMsg string) error {
+	return b.SendContent([]provider.ContentBlock{provider.TextBlock(userMsg)})
+}
+
+func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 	if err := b.setupAgent(); err != nil {
 		return err
 	}
@@ -172,7 +176,7 @@ func (b *AgentBridge) Send(userMsg string) error {
 	b.mu.Unlock()
 
 	// Persist user message to disk immediately (incremental), same as TUI.
-	b.appendUserMessage(userMsg)
+	b.appendUserMessageContent(content)
 
 	go func() {
 		defer func() {
@@ -263,7 +267,7 @@ func (b *AgentBridge) Send(userMsg string) error {
 			}
 		}
 
-		err := b.agent.RunStream(ctx, userMsg, onEvent)
+		err := b.agent.RunStreamWithContent(ctx, content, onEvent)
 		if err != nil {
 			b.mu.Lock()
 			c := b.cancelled
@@ -702,25 +706,30 @@ func (b *AgentBridge) SetRebuildCallback(cb func()) {
 	b.rebuildCB = cb
 }
 
-// appendUserMessage persists the user message to disk immediately (incremental),
-// matching TUI's appendUserMessage behavior.
-func (b *AgentBridge) appendUserMessage(text string) {
+// appendUserMessageContent persists the user message to disk immediately (incremental),
+// matching TUI's appendUserMessage behavior. Accepts full content blocks (text + image).
+func (b *AgentBridge) appendUserMessageContent(content []provider.ContentBlock) {
 	if b.sessionStore == nil || b.currentSes == nil {
 		return
 	}
 	msg := provider.Message{
 		Role:    "user",
-		Content: []provider.ContentBlock{{Type: "text", Text: text}},
+		Content: content,
 	}
 	b.currentSes.Messages = append(b.currentSes.Messages, msg)
 	b.currentSes.UpdatedAt = time.Now()
 
-	// Auto-generate title from first user message.
+	// Auto-generate title from first text block.
 	if b.currentSes.Title == "" || b.currentSes.Title == "New session" {
-		if len(text) > 60 {
-			b.currentSes.Title = text[:57] + "..."
-		} else {
-			b.currentSes.Title = text
+		for _, block := range content {
+			if block.Type == "text" && block.Text != "" {
+				text := block.Text
+				if len([]rune(text)) > 60 {
+					text = string([]rune(text)[:57]) + "..."
+				}
+				b.currentSes.Title = text
+				break
+			}
 		}
 	}
 
