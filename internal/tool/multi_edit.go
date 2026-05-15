@@ -18,7 +18,10 @@ func (t MultiEditFile) Name() string { return "multi_edit_file" }
 
 func (t MultiEditFile) Description() string {
 	return "Apply multiple find-and-replace edits to a single file in one call. " +
-		"Each old_text must uniquely match in the file. All edits are applied atomically."
+		"Each edit follows the same rules as edit_file: every old_text must match the file byte-for-byte (indentation, line endings) and must be UNIQUE in the file. " +
+		"Edits must not overlap. All edits are applied atomically — if any single edit fails, the file is left unchanged. " +
+		"Always read_file first; do not include line-number prefixes from read_file output in old_text. " +
+		"Use this instead of repeated edit_file calls when changing multiple sites in one file (e.g. renaming a symbol)."
 }
 
 func (t MultiEditFile) Parameters() json.RawMessage {
@@ -27,7 +30,7 @@ func (t MultiEditFile) Parameters() json.RawMessage {
 	"properties": {
 		"file_path": {
 			"type": "string",
-			"description": "Path to the file to edit"
+			"description": "Path to the file to edit."
 		},
 		"edits": {
 			"type": "array",
@@ -36,11 +39,11 @@ func (t MultiEditFile) Parameters() json.RawMessage {
 				"properties": {
 					"old_text": {
 						"type": "string",
-						"description": "Exact text to find"
+						"description": "Exact text to find. Must match byte-for-byte (indentation, line endings) and be unique in the file. Do not include line-number prefixes from read_file output."
 					},
 					"new_text": {
 						"type": "string",
-						"description": "Replacement text"
+						"description": "Replacement text. Use the same indentation style as old_text."
 					}
 				},
 				"required": [
@@ -48,17 +51,16 @@ func (t MultiEditFile) Parameters() json.RawMessage {
 					"new_text"
 				]
 			},
-			"description": "Array of edit operations to apply"
+			"description": "Edits to apply, in any order. Each old_text must be unique in the file and not overlap with other edits."
 		},
 		"description": {
 			"type": "string",
-			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+			"description": "Optional. Brief activity label shown in the UI in the user's language."
 		}
 	},
 	"required": [
 		"file_path",
-		"edits",
-		"description"
+		"edits"
 	]
 }`)
 }
@@ -104,20 +106,42 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if edit.OldText == "" {
 			return Result{IsError: true, Content: fmt.Sprintf("edits[%d]: old_text must not be empty", i)}, nil
 		}
-		count := strings.Count(content, edit.OldText)
-		if count == 0 {
-			return Result{IsError: true, Content: fmt.Sprintf("edits[%d]: old_text not found in file", i)}, nil
+		oldText, transform := resolveOldText(content, edit.OldText)
+		if oldText == "" {
+			hint := diagnoseMatchFailure(content, edit.OldText)
+			msg := fmt.Sprintf("edits[%d]: old_text not found in file", i)
+			if hint != "" {
+				msg += ". " + hint
+			}
+			return Result{IsError: true, Content: msg}, nil
 		}
+		count := strings.Count(content, oldText)
 		if count > 1 {
-			return Result{IsError: true, Content: fmt.Sprintf("edits[%d]: old_text found %d times — must be unique", i, count)}, nil
+			lines := findMatchLineNumbers(content, oldText)
+			msg := fmt.Sprintf(
+				"edits[%d]: old_text found %d times — must be unique. Add 1-3 lines of surrounding context to disambiguate.",
+				i, count,
+			)
+			if len(lines) > 0 {
+				more := ""
+				if count > len(lines) {
+					more = fmt.Sprintf(" (showing first %d)", len(lines))
+				}
+				msg += fmt.Sprintf(" Matches start at line(s): %s%s.", formatMatchLines(lines), more)
+			}
+			return Result{IsError: true, Content: msg}, nil
 		}
-		idx := strings.Index(content, edit.OldText)
+		idx := strings.Index(content, oldText)
+		newText := edit.NewText
+		if transform != "" {
+			newText = adjustNewText(content, edit.NewText, transform)
+		}
 		positions = append(positions, editPos{
 			start: idx,
-			end:   idx + len(edit.OldText),
+			end:   idx + len(oldText),
 			idx:   i,
-			old:   edit.OldText,
-			new_:  edit.NewText,
+			old:   oldText,
+			new_:  newText,
 		})
 	}
 
