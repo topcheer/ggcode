@@ -31,6 +31,7 @@ type App struct {
 	imManager    *im.Manager
 	imController *im.AdapterController
 	imWindow     fyne.Window
+	imPairingWin fyne.Window
 
 	// Shared UI state for cross-goroutine updates.
 	ui *UIState
@@ -565,15 +566,16 @@ func (a *App) initIMRuntime() {
 	}
 
 	mgr.SetOnUpdate(func(snap im.StatusSnapshot) {
-		if snap.PendingPairing != nil {
+		if snap.PendingPairing != nil && a.imPairingWin == nil {
 			ch := snap.PendingPairing
 			fyne.Do(func() {
-				if a.window != nil {
-					dialog.ShowInformation("IM Pairing Request",
-						fmt.Sprintf("Adapter '%s' (%s) is requesting to pair.\n\nEnter this code in your IM channel:\n\n    %s",
-							ch.Adapter, ch.Platform, ch.Code),
-						a.window)
-				}
+				a.showPairingCodeDialog(ch)
+			})
+		}
+		if snap.PendingPairing == nil && a.imPairingWin != nil {
+			fyne.Do(func() {
+				a.imPairingWin.Close()
+				a.imPairingWin = nil
 			})
 		}
 	})

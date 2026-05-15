@@ -5,7 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"fyne.io/fyne/v2/layout"
+
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 	"fyne.io/fyne/v2/dialog"
 	"github.com/topcheer/ggcode/internal/im"
 )
@@ -100,6 +106,37 @@ func (a *App) startIMAdapters() {
 		return
 	}
 	a.imController = controller
+}
+
+// showPairingCodeDialog opens a window with a large pairing code display.
+func (a *App) showPairingCodeDialog(ch *im.PairingChallenge) {
+	if a.fyneApp == nil {
+		return
+	}
+	w := a.fyneApp.NewWindow("IM Pairing Request")
+	w.Resize(fyne.NewSize(400, 300))
+	w.SetOnClosed(func() { a.imPairingWin = nil })
+	a.imPairingWin = w
+
+	adapterLbl := widget.NewLabel(fmt.Sprintf("%s (%s)", ch.Adapter, ch.Platform))
+	adapterLbl.Alignment = fyne.TextAlignCenter
+
+	hintLbl := widget.NewLabel("Enter this code in your IM channel:")
+	hintLbl.Alignment = fyne.TextAlignCenter
+
+	codeText := canvas.NewText(ch.Code, theme.ForegroundColor())
+	codeText.TextSize = 48
+	codeText.TextStyle = fyne.TextStyle{Bold: true}
+	codeText.Alignment = fyne.TextAlignCenter
+
+	w.SetContent(container.NewVBox(
+		layout.NewSpacer(),
+		adapterLbl,
+		hintLbl,
+		codeText,
+		layout.NewSpacer(),
+	))
+	w.Show()
 }
 
 // stopIMAdapters stops all running IM adapters.
