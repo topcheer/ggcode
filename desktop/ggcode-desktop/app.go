@@ -119,7 +119,10 @@ func (a *App) setupMenu() {
 		fyne.NewMenuItem("Toggle Sidebar", func() { a.toggleSidebar() }),
 		fyne.NewMenuItem("Refresh Stats", func() { a.refreshSidebar() }),
 	)
-	a.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu))
+	toolsMenu := fyne.NewMenu("Tools",
+		fyne.NewMenuItem("IM Settings...", func() { a.showIMWindow() }),
+	)
+	a.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, toolsMenu))
 }
 
 // ── Welcome screen ───────────────────────────────────
