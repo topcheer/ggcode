@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -184,17 +185,21 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 	cv.cancelBtn.Hide()
 
 	cv.imageBtn = widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
-		dialog.ShowFileOpen(func(rc fyne.URIReadCloser, err error) {
-			if err != nil || rc == nil {
-				return
-			}
-			defer rc.Close()
-			if e := cv.entry.attachImage(rc.URI().Path()); e != nil {
-				return
-			}
-			cv.imageBtn.Importance = widget.HighImportance
-			cv.imageBtn.Refresh()
-		}, fyne.CurrentApp().Driver().AllWindows()[0])
+		w := fyne.CurrentApp().Driver().AllWindows()[0]
+			d := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
+				if err != nil || rc == nil {
+					return
+				}
+				defer rc.Close()
+				if e := cv.entry.attachImage(rc.URI().Path()); e != nil {
+					return
+				}
+				cv.imageBtn.Importance = widget.HighImportance
+				cv.imageBtn.Refresh()
+			}, w)
+			d.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}))
+			d.Resize(fyne.NewSize(900, 600))
+			d.Show()
 	})
 
 	return cv
