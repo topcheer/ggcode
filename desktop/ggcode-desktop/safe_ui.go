@@ -21,6 +21,7 @@ const (
 	EventToolResultUpdate                  // tool result received (by ToolID)
 	EventStreamDone                        // streaming finalized
 	EventAgentUpdate                       // agent panel data changed
+	EventReasoning                         // reasoning chunk (accumulate, don't add as chat message)
 )
 
 type UIEvent struct {
@@ -134,6 +135,11 @@ func (u *UIState) AppendChat(msg ChatMessage) {
 	u.ChatMsgs = append(u.ChatMsgs, msg)
 	u.ChatMu.Unlock()
 	u.notify(UIEvent{Type: EventAppend, Msg: msg})
+}
+
+// AppendReasoning sends a reasoning chunk to the UI without adding it as a chat message.
+func (u *UIState) AppendReasoning(text string) {
+	u.notify(UIEvent{Type: EventReasoning, Text: text})
 }
 
 // AppendAssistantText appends a streaming text chunk to the assistant buffer
