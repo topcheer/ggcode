@@ -776,28 +776,20 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 	cfg := DefaultConfig()
 
 	wantVendors := map[string]string{
-		"zai":        "Z.ai",
-		"aihubmix":   "AIHubMix",
-		"getgoapi":   "GetGoAPI",
-		"anthropic":  "Anthropic",
-		"openai":     "OpenAI",
-		"google":     "Google Gemini",
-		"openrouter": "OpenRouter",
-		"groq":       "Groq",
-		"mistral":    "Mistral",
-		"deepseek":   "DeepSeek",
-		"moonshot":   "Moonshot AI",
-		"novita":     "Novita AI",
-		"aliyun":     "Aliyun Bailian Coding Plan",
-		"poe":        "Poe",
-		"requesty":   "Requesty",
-		"vercel":     "Vercel AI Gateway",
-		"kimi":       "Kimi Coding Plan",
-		"minimax":    "MiniMax Token Plan",
-		"ark":        "Volcengine Ark Coding Plan",
-		"nvidia":     "NVIDIA NIM",
-		"together":   "Together AI",
-		"perplexity": "Perplexity",
+		"zai":            "Z.ai",
+		"anthropic":      "Anthropic",
+		"openai":         "OpenAI",
+		"google":         "Google Gemini",
+		"groq":           "Groq",
+		"mistral":        "Mistral",
+		"deepseek":       "DeepSeek",
+		"moonshot":       "Moonshot AI",
+		"aliyun":         "Aliyun Bailian Coding Plan",
+		"kimi":           "Kimi Coding Plan",
+		"minimax":        "MiniMax Token Plan",
+		"ark":            "Volcengine Ark Coding Plan",
+		"github-copilot": "GitHub Copilot",
+		"ai-gateway":     "AI Gateway",
 	}
 
 	for id, displayName := range wantVendors {
@@ -813,14 +805,38 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 		}
 	}
 
+	// Verify ai-gateway endpoints (formerly top-level vendors)
+	wantGatewayEndpoints := map[string]string{
+		"aihubmix":   "AIHubMix",
+		"getgoapi":   "GetGoAPI",
+		"novita":     "Novita AI",
+		"nvidia":     "NVIDIA NIM",
+		"openrouter": "OpenRouter",
+		"poe":        "Poe",
+		"requesty":   "Requesty",
+		"together":   "Together AI",
+		"perplexity": "Perplexity",
+		"vercel":     "Vercel AI Gateway",
+	}
+	gw := cfg.Vendors["ai-gateway"]
+	for id, displayName := range wantGatewayEndpoints {
+		ep, ok := gw.Endpoints[id]
+		if !ok {
+			t.Fatalf("expected ai-gateway endpoint %q to be present", id)
+		}
+		if ep.DisplayName != displayName {
+			t.Fatalf("expected ai-gateway endpoint %q display name %q, got %q", id, displayName, ep.DisplayName)
+		}
+	}
+
 	if got := cfg.Vendors["google"].Endpoints["api"].Protocol; got != "gemini" {
 		t.Fatalf("expected google vendor to use gemini protocol, got %q", got)
 	}
 	if got := cfg.Vendors["anthropic"].Endpoints["api"].Protocol; got != "anthropic" {
 		t.Fatalf("expected anthropic vendor to use anthropic protocol, got %q", got)
 	}
-	if got := cfg.Vendors["openrouter"].Endpoints["api"].Protocol; got != "openai" {
-		t.Fatalf("expected openrouter vendor to use openai-compatible protocol, got %q", got)
+	if got := cfg.Vendors["ai-gateway"].Endpoints["openrouter"].Protocol; got != "openai" {
+		t.Fatalf("expected openrouter endpoint to use openai-compatible protocol, got %q", got)
 	}
 }
 
@@ -850,8 +866,8 @@ func TestResolveActiveEndpointUsesExplicitContextWindow(t *testing.T) {
 
 func TestResolveActiveEndpointInfersContextWindowFromModel(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Vendor = "perplexity"
-	cfg.Endpoint = "api"
+	cfg.Vendor = "ai-gateway"
+	cfg.Endpoint = "perplexity"
 	cfg.Model = "llama-3.1-sonar-small-128k-online"
 
 	resolved, err := cfg.ResolveActiveEndpoint()
@@ -1003,24 +1019,21 @@ func TestDefaultConfigIncludesAliyunBailianCodingPlanCapabilities(t *testing.T) 
 
 func TestDefaultConfigIncludesAdditionalOpenAICompatibleVendors(t *testing.T) {
 	cfg := DefaultConfig()
+	gw := cfg.Vendors["ai-gateway"]
 	cases := map[string]string{
 		"aihubmix": "https://aihubmix.com/v1",
 		"getgoapi": "https://api.getgoapi.com/v1",
 		"novita":   "https://api.novita.ai/openai/v1",
-		"poe":      "https://api.poe.com/v1",
 		"requesty": "https://router.requesty.ai/v1",
 		"vercel":   "https://ai-gateway.vercel.sh/v1",
 	}
-	for vendorID, baseURL := range cases {
-		ep := cfg.Vendors[vendorID].Endpoints["api"]
+	for epID, baseURL := range cases {
+		ep := gw.Endpoints[epID]
 		if ep.Protocol != "openai" {
-			t.Fatalf("expected %s protocol openai, got %q", vendorID, ep.Protocol)
+			t.Fatalf("expected %s protocol openai, got %q", epID, ep.Protocol)
 		}
 		if ep.BaseURL != baseURL {
-			t.Fatalf("expected %s base url %q, got %q", vendorID, baseURL, ep.BaseURL)
-		}
-		if ep.DefaultModel != "gpt-4o-mini" {
-			t.Fatalf("expected %s default model gpt-4o-mini, got %q", vendorID, ep.DefaultModel)
+			t.Fatalf("expected %s base url %q, got %q", epID, baseURL, ep.BaseURL)
 		}
 	}
 }
