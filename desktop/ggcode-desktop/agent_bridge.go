@@ -4,28 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"os"
-	
+	"strings"
+
 	"sync"
 	"time"
 
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/im"
-	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -37,10 +37,10 @@ type AgentBridge struct {
 	agent    *agent.Agent
 	ui       *UIState
 
-	mu      sync.Mutex
+	mu        sync.Mutex
 	cancel    context.CancelFunc
 	cancelled bool
-	working bool
+	working   bool
 
 	pendingMu  sync.Mutex
 	pendingMsg string
@@ -48,17 +48,17 @@ type AgentBridge struct {
 
 	startTime time.Time // when current agent loop started
 
-	Emitter   *im.IMEmitter
+	Emitter *im.IMEmitter
 
-	imRound   imRoundState // per-round IM emission state
-	mainWindow  fyne.Window
+	imRound        imRoundState // per-round IM emission state
+	mainWindow     fyne.Window
 	permissionMode permission.PermissionMode
 
-	registry   *tool.Registry
-	workingDir string
+	registry     *tool.Registry
+	workingDir   string
 	sessionStore session.Store
-	currentSes  *session.Session
-	rebuildCB   func()
+	currentSes   *session.Session
+	rebuildCB    func()
 
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
@@ -186,14 +186,14 @@ func (b *AgentBridge) setupAgent() error {
 		resp := make(chan permission.Decision, 1)
 		fyne.Do(func() {
 			var d dialog.Dialog
-				denyBtn := widget.NewButton("Deny", func() {
-					resp <- permission.Deny
-					d.Hide()
-				})
+			denyBtn := widget.NewButton("Deny", func() {
+				resp <- permission.Deny
+				d.Hide()
+			})
 			allowBtn := widget.NewButton("Allow", func() {
-					resp <- permission.Allow
-					d.Hide()
-				})
+				resp <- permission.Allow
+				d.Hide()
+			})
 			allowBtn.Importance = widget.HighImportance
 			alwaysBtn := widget.NewButton("Always Allow", func() {
 				if b.agent != nil {
@@ -202,7 +202,7 @@ func (b *AgentBridge) setupAgent() error {
 					}
 				}
 				resp <- permission.Allow
-					d.Hide()
+				d.Hide()
 			})
 			alwaysBtn.Importance = widget.SuccessImportance
 
@@ -251,7 +251,7 @@ func (b *AgentBridge) setupAgent() error {
 	if b.resolved.MaxTokens > 0 {
 		b.agent.ContextManager().SetOutputReserve(b.resolved.MaxTokens)
 	}
-		b.ensureSession()
+	b.ensureSession()
 	return nil
 }
 
@@ -279,7 +279,6 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			cancel()
 			b.ui.FinalizeStreaming()
 			b.saveSession()
-
 
 			b.mu.Lock()
 			wasCancelled := b.cancelled
@@ -367,8 +366,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 						Kind: im.OutboundEventToolResult,
 						ToolRes: &im.ToolResultInfo{
 							ToolName: ev.Tool.Name,
-							Result:  content,
-							IsError: ev.IsError,
+							Result:   content,
+							IsError:  ev.IsError,
 						},
 					})
 				}
@@ -385,7 +384,6 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: ev.Text,
 					Time:    time.Now(),
 				})
-
 
 			case provider.StreamEventReasoning:
 				if ev.Text != "" {
@@ -413,10 +411,10 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			c := b.cancelled
 			b.mu.Unlock()
 			if !c {
-			b.ui.AppendChat(ChatMessage{
-				Role:    "error",
-				Content: err.Error(),
-				Time:    time.Now(),
+				b.ui.AppendChat(ChatMessage{
+					Role:    "error",
+					Content: err.Error(),
+					Time:    time.Now(),
 				})
 			}
 		}
@@ -921,8 +919,8 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 		// Build form from questions
 		var answers []tool.AskUserAnswer
 		var items []*widget.FormItem
-			// labelToID maps choice label back to choice ID for each question index.
-			labelToID := make(map[int]map[string]string)
+		// labelToID maps choice label back to choice ID for each question index.
+		labelToID := make(map[int]map[string]string)
 
 		for _, q := range req.Questions {
 			switch q.Kind {
@@ -996,24 +994,24 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 							switch obj.(type) {
 							case *widget.Select:
 								sel := obj.(*widget.Select)
-										if m := labelToID[i]; m != nil {
-											if id, ok := m[sel.Selected]; ok {
-												answers[i].SelectedChoiceIDs = []string{id}
-											}
-										}
+								if m := labelToID[i]; m != nil {
+									if id, ok := m[sel.Selected]; ok {
+										answers[i].SelectedChoiceIDs = []string{id}
+									}
+								}
 								answers[i].SelectedChoices = []string{sel.Selected}
 							case *widget.CheckGroup:
 								cg := obj.(*widget.CheckGroup)
 								answers[i].SelectedChoices = cg.Selected
-										var ids []string
-										if m := labelToID[i]; m != nil {
-											for _, lbl := range cg.Selected {
-												if id, ok := m[lbl]; ok {
-													ids = append(ids, id)
-												}
-											}
+								var ids []string
+								if m := labelToID[i]; m != nil {
+									for _, lbl := range cg.Selected {
+										if id, ok := m[lbl]; ok {
+											ids = append(ids, id)
 										}
-										answers[i].SelectedChoiceIDs = ids
+									}
+								}
+								answers[i].SelectedChoiceIDs = ids
 							case *widget.Entry:
 								answers[i].FreeformText = obj.(*widget.Entry).Text
 							}

@@ -17,12 +17,12 @@ import (
 type UIEventType int
 
 const (
-	EventAppend          UIEventType = iota // new message appended to ChatMsgs
-	EventAssistantChunk                    // streaming assistant text updated
-	EventToolResultUpdate                  // tool result received (by ToolID)
-	EventStreamDone                        // streaming finalized
-	EventAgentUpdate                       // agent panel data changed
-	EventReasoning                         // reasoning chunk (accumulate, don't add as chat message)
+	EventAppend           UIEventType = iota // new message appended to ChatMsgs
+	EventAssistantChunk                      // streaming assistant text updated
+	EventToolResultUpdate                    // tool result received (by ToolID)
+	EventStreamDone                          // streaming finalized
+	EventAgentUpdate                         // agent panel data changed
+	EventReasoning                           // reasoning chunk (accumulate, don't add as chat message)
 )
 
 type UIEvent struct {

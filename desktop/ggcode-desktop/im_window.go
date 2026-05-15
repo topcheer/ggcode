@@ -44,21 +44,21 @@ type platformField struct {
 }
 
 var platformRegistry = map[string]platformMeta{
-	"qq":        {DisplayName: "QQ", Fields: []platformField{{"appid", "App ID", "QQ app ID"}, {"appsecret", "App Secret", "QQ app secret"}}},
-	"telegram":  {DisplayName: "Telegram", Fields: []platformField{{"bot_token", "Bot Token", "123456:ABC-DEF..."}}},
-	"discord":   {DisplayName: "Discord", Fields: []platformField{{"token", "Bot Token", "Discord bot token"}}},
-	"feishu":    {DisplayName: "Feishu", Fields: []platformField{{"app_id", "App ID", "cli_xxx"}, {"app_secret", "App Secret", "Feishu app secret"}}},
-	"dingtalk":  {DisplayName: "DingTalk", Fields: []platformField{{"app_key", "App Key", "dingxxx"}, {"app_secret", "App Secret", "DingTalk app secret"}}},
-	"slack":     {DisplayName: "Slack", Fields: []platformField{{"bot_token", "Bot Token", "xoxb-xxx"}, {"app_token", "App Token", "xapp-xxx"}}},
-	"wechat":    {DisplayName: "WeChat", Fields: []platformField{{"bot_token", "Bot Token", "WeChat bot token"}}},
-	"wecom":     {DisplayName: "WeCom", Fields: []platformField{{"bot_id", "Bot ID", "WeCom bot ID"}, {"secret", "Secret", "WeCom secret"}}},
-	"whatsapp":  {DisplayName: "WhatsApp", Fields: []platformField{}},
+	"qq":         {DisplayName: "QQ", Fields: []platformField{{"appid", "App ID", "QQ app ID"}, {"appsecret", "App Secret", "QQ app secret"}}},
+	"telegram":   {DisplayName: "Telegram", Fields: []platformField{{"bot_token", "Bot Token", "123456:ABC-DEF..."}}},
+	"discord":    {DisplayName: "Discord", Fields: []platformField{{"token", "Bot Token", "Discord bot token"}}},
+	"feishu":     {DisplayName: "Feishu", Fields: []platformField{{"app_id", "App ID", "cli_xxx"}, {"app_secret", "App Secret", "Feishu app secret"}}},
+	"dingtalk":   {DisplayName: "DingTalk", Fields: []platformField{{"app_key", "App Key", "dingxxx"}, {"app_secret", "App Secret", "DingTalk app secret"}}},
+	"slack":      {DisplayName: "Slack", Fields: []platformField{{"bot_token", "Bot Token", "xoxb-xxx"}, {"app_token", "App Token", "xapp-xxx"}}},
+	"wechat":     {DisplayName: "WeChat", Fields: []platformField{{"bot_token", "Bot Token", "WeChat bot token"}}},
+	"wecom":      {DisplayName: "WeCom", Fields: []platformField{{"bot_id", "Bot ID", "WeCom bot ID"}, {"secret", "Secret", "WeCom secret"}}},
+	"whatsapp":   {DisplayName: "WhatsApp", Fields: []platformField{}},
 	"mattermost": {DisplayName: "Mattermost", Fields: []platformField{{"url", "Server URL", "https://mm.example.com"}, {"token", "Access Token", "mattermost token"}}},
-	"signal":    {DisplayName: "Signal", Fields: []platformField{{"account", "Phone Number", "+1234567890"}, {"base_url", "Signal CLI URL", "http://localhost:8080"}}},
-	"irc":       {DisplayName: "IRC", Fields: []platformField{{"host", "Server", "irc.libera.chat:6697"}, {"nick", "Nickname", "my-bot"}, {"channels", "Channels", "#channel1,#channel2"}}},
-	"matrix":    {DisplayName: "Matrix", Fields: []platformField{{"homeserver", "Homeserver", "https://matrix.org"}, {"access_token", "Access Token", "syt_xxx"}}},
-	"nostr":     {DisplayName: "Nostr", Fields: []platformField{{"private_key", "Private Key", "nsec1..."}, {"relays", "Relays", "wss://relay.damus.io"}}},
-	"twitch":    {DisplayName: "Twitch", Fields: []platformField{{"nick", "Nickname", "bot_name"}, {"token", "OAuth Token", "oauth:xxx"}, {"channels", "Channels", "#channel1,#channel2"}}},
+	"signal":     {DisplayName: "Signal", Fields: []platformField{{"account", "Phone Number", "+1234567890"}, {"base_url", "Signal CLI URL", "http://localhost:8080"}}},
+	"irc":        {DisplayName: "IRC", Fields: []platformField{{"host", "Server", "irc.libera.chat:6697"}, {"nick", "Nickname", "my-bot"}, {"channels", "Channels", "#channel1,#channel2"}}},
+	"matrix":     {DisplayName: "Matrix", Fields: []platformField{{"homeserver", "Homeserver", "https://matrix.org"}, {"access_token", "Access Token", "syt_xxx"}}},
+	"nostr":      {DisplayName: "Nostr", Fields: []platformField{{"private_key", "Private Key", "nsec1..."}, {"relays", "Relays", "wss://relay.damus.io"}}},
+	"twitch":     {DisplayName: "Twitch", Fields: []platformField{{"nick", "Nickname", "bot_name"}, {"token", "OAuth Token", "oauth:xxx"}, {"channels", "Channels", "#channel1,#channel2"}}},
 }
 
 func sortedPlatformKeys() []string {
