@@ -10,24 +10,26 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
-
-	"github.com/topcheer/ggcode/internal/im"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/im"
 )
 
 // imAdapterEntry groups adapter info for display.
 type imAdapterEntry struct {
-	Name       string
-	Platform   string
-	Enabled    bool
-	Workspace  string // bound workspace path, empty if unbound
-	IsCurrent  bool   // bound to current workspace
+	Name      string
+	Platform  string
+	Enabled   bool
+	Workspace string
+	IsCurrent bool
+	Healthy   bool
+	Muted     bool
+	ChannelID string
 }
 
-// showIMWindow opens the IM Settings window.
+// showIMWindow opens the IM Settings window (singleton).
 func (a *App) showIMWindow() {
 	if a.imWindow != nil {
 		a.imWindow.Show()
@@ -35,189 +37,327 @@ func (a *App) showIMWindow() {
 		return
 	}
 	w := a.fyneApp.NewWindow("IM Settings")
-	w.Resize(fyne.NewSize(800, 600))
+	w.Resize(fyne.NewSize(850, 680))
 	w.SetOnClosed(func() { a.imWindow = nil })
 	a.imWindow = w
 
+	// Build content.
+	content := a.buildIMContent(w)
+	w.SetContent(content)
+	w.Show()
+}
+
+func (a *App) buildIMContent(w fyne.Window) fyne.CanvasObject {
 	cfg := a.cfg
 	if cfg.IM.Adapters == nil {
 		cfg.IM.Adapters = make(map[string]config.IMAdapterConfig)
 	}
 
-	// ── Left: adapter list ──
-	entries := a.imAdapterEntries()
-	adapterList := widget.NewList(
-		func() int { return len(entries) },
-		func() fyne.CanvasObject {
-			nameLbl := widget.NewLabel("adapter")
-			nameLbl.TextStyle = fyne.TextStyle{Bold: true}
-			platLbl := widget.NewLabel("platform")
-			platLbl.TextStyle = fyne.TextStyle{Italic: true}
-			wsLbl := widget.NewLabel("")
-			wsLbl.TextStyle = fyne.TextStyle{Italic: true}
-			statusIcon := widget.NewIcon(theme.ConfirmIcon())
-			return container.NewBorder(nil, nil, statusIcon,
-				container.NewVBox(platLbl, wsLbl),
-				nameLbl,
-			)
-		},
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			if id >= len(entries) {
-				return
-			}
-			e := entries[id]
-			box := obj.(*fyne.Container)
-			var nameLbl *widget.Label
-			var platLbl, wsLbl *widget.Label
-			var icon *widget.Icon
-			for _, o := range box.Objects {
-				switch v := o.(type) {
-				case *widget.Label:
-					if nameLbl == nil {
-						nameLbl = v
-					}
-				case *widget.Icon:
-					icon = v
-				case *fyne.Container:
-					for _, c := range v.Objects {
-						if lbl, ok := c.(*widget.Label); ok {
-							if platLbl == nil {
-								platLbl = lbl
-							} else {
-								wsLbl = lbl
-							}
-						}
-					}
-				}
-			}
-			if nameLbl != nil {
-				nameLbl.SetText(e.Name)
-			}
-			if platLbl != nil {
-				platLbl.SetText(platformDisplayName(e.Platform))
-			}
-			if wsLbl != nil {
-				if e.IsCurrent {
-					wsLbl.SetText("↳ this workspace")
-				} else if e.Workspace != "" {
-					wsLbl.SetText("↳ " + shortPath(e.Workspace))
-				} else {
-					wsLbl.SetText("↳ unbound")
-				}
-			}
-			if icon != nil {
-				if e.Enabled {
-					if e.IsCurrent {
-						icon.SetResource(theme.ConfirmIcon())
-					} else {
-						icon.SetResource(theme.MailForwardIcon())
-					}
-				} else {
-					icon.SetResource(theme.CancelIcon())
-				}
-			}
-		},
-	)
+	// ── Header ──
+	headerTitle := widget.NewLabelWithStyle("IM Settings", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	// ── Right: detail panel ──
-	detailCard := widget.NewCard("Details", "Select an adapter", container.NewVBox())
-	addCard := a.buildIMAddCard(w, cfg, func() {
-		entries = a.imAdapterEntries()
-		adapterList.Refresh()
-	})
+	currentWS := a.dc.WorkDir
+	wsLabel := widget.NewLabel("Workspace: " + currentWS)
+	wsLabel.Wrapping = fyne.TextWrapWord
+	wsLabel.TextStyle = fyne.TextStyle{Italic: true}
 
-	adapterList.OnSelected = func(id widget.ListItemID) {
-		if id >= len(entries) {
-			return
-		}
-		e := entries[id]
-		detailCard.SetTitle(e.Name)
-
-		statusText := "Enabled"
-		if !e.Enabled {
-			statusText = "Disabled"
-		}
-		bindText := "Unbound"
-		if e.IsCurrent {
-			bindText = "Bound to this workspace"
-		} else if e.Workspace != "" {
-			bindText = "Bound to: " + e.Workspace
-		}
-
-		statusLbl := widget.NewLabel(fmt.Sprintf("Status: %s", statusText))
-		platformLbl := widget.NewLabel(fmt.Sprintf("Platform: %s", platformDisplayName(e.Platform)))
-		bindLbl := widget.NewLabel(fmt.Sprintf("Binding: %s", bindText))
-		bindLbl.Wrapping = fyne.TextWrapWord
-
-		toggleBtn := widget.NewButton("Toggle On/Off", func() {
-			_ = cfg.SetIMAdapterEnabled(e.Name, !e.Enabled)
-			_ = cfg.Save()
-			entries = a.imAdapterEntries()
-			adapterList.Refresh()
-			adapterList.OnSelected(id)
-		})
-		deleteBtn := widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
-			dialog.ShowConfirm("Delete Adapter", fmt.Sprintf("Delete adapter '%s'?", e.Name), func(ok bool) {
-				if !ok {
-					return
-				}
-				_ = cfg.RemoveIMAdapter(e.Name)
-				_ = cfg.Save()
-				entries = a.imAdapterEntries()
-				adapterList.Refresh()
-				detailCard.SetTitle("Details")
-				detailCard.SetContent(container.NewVBox())
-			}, w)
-		})
-		deleteBtn.Importance = widget.DangerImportance
-
-		buttons := container.NewHBox(toggleBtn, deleteBtn)
-
-		// Rebind button — show if adapter is bound to a different workspace or unbound
-		var rebindBtn *widget.Button
-		if !e.IsCurrent {
-			rebindBtn = widget.NewButton("Bind to this workspace", func() {
-				if a.imManager == nil {
-					dialog.ShowInformation("Bind", "IM runtime is not available yet.", w)
-					return
-				}
-				// Unbind from old workspace first if needed.
-				if e.Workspace != "" {
-					_ = a.imManager.UnbindAdapter(e.Name)
-				}
-				a.imManager.BindSession(im.SessionBinding{Workspace: a.dc.WorkDir})
-				_, _ = a.imManager.BindChannel(im.ChannelBinding{
-					Workspace: a.dc.WorkDir,
-					Platform:  im.Platform(e.Platform),
-					Adapter:   e.Name,
-				})
-				entries = a.imAdapterEntries()
-				adapterList.Refresh()
-				adapterList.OnSelected(id)
-			})
-		}
-
-		var content fyne.CanvasObject
-		if rebindBtn != nil {
-			content = container.NewVBox(platformLbl, statusLbl, bindLbl, buttons, rebindBtn)
-		} else {
-			content = container.NewVBox(platformLbl, statusLbl, bindLbl, buttons)
-		}
-		detailCard.SetContent(content)
+	// Runtime status
+	runtimeStatus := widget.NewLabel("")
+	if a.imManager != nil {
+		runtimeStatus.SetText("Runtime: Active")
+	} else {
+		runtimeStatus.SetText("Runtime: Starting...")
 	}
 
-	// ── Layout ──
-	leftPanel := container.NewBorder(nil, nil, nil, nil, adapterList)
-	rightPanel := container.NewVBox(detailCard, addCard)
-	split := container.NewHSplit(leftPanel, container.NewVScroll(rightPanel))
-	split.SetOffset(0.35)
+	// ── Refresh function ──
+	var scroll *container.Scroll
 
-	w.SetContent(split)
-	w.Show()
+	refresh := func() {
+		body := a.buildIMBody(w, cfg)
+		if scroll != nil {
+			scroll.Content = body
+			scroll.Refresh()
+		}
+	}
+
+	// ── Action buttons ──
+	addBtn := widget.NewButtonWithIcon("Add Adapter", theme.ContentAddIcon(), func() {
+		a.showAddAdapterDialog(w, cfg, refresh)
+	})
+	refreshBtn := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
+		refresh()
+	})
+
+	toolbar := container.NewHBox(
+		layout.NewSpacer(),
+		runtimeStatus,
+		refreshBtn,
+		addBtn,
+	)
+
+	// ── Body ──
+	body := a.buildIMBody(w, cfg)
+	scroll = container.NewVScroll(body)
+
+	header := container.NewVBox(
+		container.NewHBox(headerTitle, layout.NewSpacer()),
+		wsLabel,
+		toolbar,
+		widget.NewSeparator(),
+	)
+
+	return container.NewBorder(header, nil, nil, nil, scroll)
 }
 
-// buildIMAddCard creates the "Add Adapter" card.
-func (a *App) buildIMAddCard(parent fyne.Window, cfg *config.Config, onAdded func()) *widget.Card {
+// buildIMBody creates the scrollable adapter card list.
+func (a *App) buildIMBody(w fyne.Window, cfg *config.Config) *fyne.Container {
+	entries := a.imAdapterEntries()
+	currentWS := a.dc.WorkDir
+
+	// Group entries.
+	var currentGroup, otherGroup, unboundGroup, disabledGroup []imAdapterEntry
+	for _, e := range entries {
+		if !e.Enabled {
+			disabledGroup = append(disabledGroup, e)
+		} else if e.IsCurrent {
+			currentGroup = append(currentGroup, e)
+		} else if e.Workspace != "" {
+			otherGroup = append(otherGroup, e)
+		} else {
+			unboundGroup = append(unboundGroup, e)
+		}
+	}
+
+	var cards []fyne.CanvasObject
+
+	// ── Section: Bound to this workspace ──
+	if len(currentGroup) > 0 {
+		cards = append(cards, a.sectionHeader("Bound to this workspace", theme.ConfirmIcon()))
+		for _, e := range currentGroup {
+			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
+		}
+	}
+
+	// ── Section: Bound to other workspaces ──
+	if len(otherGroup) > 0 {
+		cards = append(cards, a.sectionHeader("Other workspaces", theme.MailForwardIcon()))
+		for _, e := range otherGroup {
+			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
+		}
+	}
+
+	// ── Section: Unbound ──
+	if len(unboundGroup) > 0 {
+		cards = append(cards, a.sectionHeader("Unbound adapters", theme.ComputerIcon()))
+		for _, e := range unboundGroup {
+			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
+		}
+	}
+
+	// ── Section: Disabled ──
+	if len(disabledGroup) > 0 {
+		cards = append(cards, a.sectionHeader("Disabled", theme.CancelIcon()))
+		for _, e := range disabledGroup {
+			cards = append(cards, a.adapterCard(w, e, currentWS, func() {}))
+		}
+	}
+
+	if len(cards) == 0 {
+		emptyLabel := widget.NewLabel("No adapters configured.\nClick 'Add Adapter' to get started.")
+		emptyLabel.Alignment = fyne.TextAlignCenter
+		cards = append(cards, emptyLabel)
+	}
+
+	return container.NewVBox(cards...)
+}
+
+// sectionHeader returns a section title row.
+func (a *App) sectionHeader(title string, icon fyne.Resource) fyne.CanvasObject {
+	lbl := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	ic := widget.NewIcon(icon)
+	return container.NewHBox(ic, lbl)
+}
+
+// adapterCard creates a card for a single adapter.
+func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onRefresh func()) fyne.CanvasObject {
+	// Left: name + platform
+	nameLbl := widget.NewLabelWithStyle(e.Name, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	platLbl := widget.NewLabel(platformDisplayName(e.Platform))
+
+	// Status indicator
+	var statusText, statusColor string
+	switch {
+	case !e.Enabled:
+		statusText = "Disabled"
+		statusColor = "danger"
+	case e.Muted:
+		statusText = "Muted"
+		statusColor = "warning"
+	case e.IsCurrent:
+		if e.Healthy {
+			statusText = "Connected"
+			statusColor = "success"
+		} else {
+			statusText = "Active"
+			statusColor = "success"
+		}
+	case e.Workspace != "":
+		statusText = "In use"
+		statusColor = "info"
+	default:
+		statusText = "Ready"
+		statusColor = "info"
+	}
+
+	statusLbl := widget.NewLabel(statusText)
+	statusLbl.TextStyle = fyne.TextStyle{Bold: true}
+	_ = statusColor // TODO: apply color
+
+	// Workspace binding info
+	var bindText string
+	if e.IsCurrent {
+		bindText = "This workspace"
+	} else if e.Workspace != "" {
+		// Show relative or shortened path
+		if strings.HasPrefix(e.Workspace, currentWS) {
+			bindText = "This workspace"
+		} else {
+			parts := strings.Split(e.Workspace, "/")
+			if len(parts) > 2 {
+				bindText = "Bound to: .../" + parts[len(parts)-2] + "/" + parts[len(parts)-1]
+			} else {
+				bindText = "Bound to: " + e.Workspace
+			}
+		}
+	} else {
+		bindText = "Not bound"
+	}
+	bindLbl := widget.NewLabel(bindText)
+	bindLbl.TextStyle = fyne.TextStyle{Italic: true}
+
+	// Channel info
+	var chText string
+	if e.ChannelID != "" {
+		if len(e.ChannelID) > 20 {
+			chText = "Channel: " + e.ChannelID[:20] + "..."
+		} else {
+			chText = "Channel: " + e.ChannelID
+		}
+	}
+	var chLbl *widget.Label
+	if chText != "" {
+		chLbl = widget.NewLabel(chText)
+		chLbl.TextStyle = fyne.TextStyle{Italic: true}
+	}
+
+	// Left info column
+	var infoChildren []fyne.CanvasObject
+	infoChildren = append(infoChildren, nameLbl, container.NewHBox(platLbl, layout.NewSpacer(), statusLbl), bindLbl)
+	if chLbl != nil {
+		infoChildren = append(infoChildren, chLbl)
+	}
+	infoCol := container.NewVBox(infoChildren...)
+
+	// Right: action buttons
+	var buttons []fyne.CanvasObject
+
+	// Toggle button
+	if e.Enabled {
+		buttons = append(buttons, widget.NewButtonWithIcon("Disable", theme.CancelIcon(), func() {
+			_ = a.cfg.SetIMAdapterEnabled(e.Name, false)
+			_ = a.cfg.Save()
+			if a.imManager != nil {
+				_ = a.imManager.DisableBinding(e.Name)
+			}
+			a.refreshIMWindow()
+		}))
+	} else {
+		buttons = append(buttons, widget.NewButtonWithIcon("Enable", theme.ConfirmIcon(), func() {
+			_ = a.cfg.SetIMAdapterEnabled(e.Name, true)
+			_ = a.cfg.Save()
+			if a.imManager != nil {
+				_ = a.imManager.EnableBinding(e.Name)
+			}
+			a.refreshIMWindow()
+		}))
+	}
+
+	// Mute/Unmute (only for enabled adapters bound to this workspace)
+	if e.Enabled && e.IsCurrent {
+		if e.Muted {
+			buttons = append(buttons, widget.NewButton("Unmute", func() {
+				if a.imManager != nil {
+					_ = a.imManager.UnmuteBinding(e.Name)
+				}
+				a.refreshIMWindow()
+			}))
+		} else {
+			buttons = append(buttons, widget.NewButton("Mute", func() {
+				if a.imManager != nil {
+					_ = a.imManager.MuteBinding(e.Name)
+				}
+				a.refreshIMWindow()
+			}))
+		}
+	}
+
+	// Bind/Rebind (only for adapters NOT bound to current workspace)
+	if !e.IsCurrent {
+		bindBtn := widget.NewButtonWithIcon("Bind here", theme.MailForwardIcon(), func() {
+			if a.imManager == nil {
+				dialog.ShowInformation("Bind", "IM runtime is not available yet.", w)
+				return
+			}
+			if e.Workspace != "" {
+				_ = a.imManager.UnbindAdapter(e.Name)
+			}
+			a.imManager.BindSession(im.SessionBinding{Workspace: a.dc.WorkDir})
+			_, _ = a.imManager.BindChannel(im.ChannelBinding{
+				Workspace: a.dc.WorkDir,
+				Platform:  im.Platform(e.Platform),
+				Adapter:   e.Name,
+			})
+			a.refreshIMWindow()
+		})
+		buttons = append(buttons, bindBtn)
+	}
+
+	// Delete
+	delBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete adapter '%s'?", e.Name), func(ok bool) {
+			if !ok {
+				return
+			}
+			_ = a.cfg.RemoveIMAdapter(e.Name)
+			_ = a.cfg.Save()
+			a.refreshIMWindow()
+		}, w)
+	})
+	delBtn.Importance = widget.DangerImportance
+	buttons = append(buttons, delBtn)
+
+	btnCol := container.NewVBox(buttons...)
+
+	// Card row: info | buttons
+	row := container.NewBorder(nil, nil, nil, btnCol, infoCol)
+
+	// Visual separation with background color hint via card
+	return widget.NewCard("", "", container.NewPadded(row))
+}
+
+// refreshIMWindow rebuilds the IM window content.
+func (a *App) refreshIMWindow() {
+	if a.imWindow == nil {
+		return
+	}
+	fyne.Do(func() {
+		content := a.buildIMContent(a.imWindow)
+		a.imWindow.SetContent(content)
+	})
+}
+
+// showAddAdapterDialog opens a dialog to add a new adapter.
+func (a *App) showAddAdapterDialog(w fyne.Window, cfg *config.Config, onDone func()) {
 	platforms := []string{"qq", "telegram", "discord", "feishu", "dingtalk", "slack", "wechat", "wecom", "whatsapp", "mattermost", "signal", "irc", "matrix", "nostr", "twitch"}
 	platformSelect := widget.NewSelect(platforms, nil)
 	platformSelect.PlaceHolder = "Select platform..."
@@ -243,7 +383,19 @@ func (a *App) buildIMAddCard(parent fyne.Window, cfg *config.Config, onAdded fun
 
 	statusLabel := widget.NewLabel("")
 
-	addBtn := widget.NewButtonWithIcon("Add Adapter", theme.ContentAddIcon(), func() {
+	form := container.NewVBox(
+		widget.NewForm(
+			&widget.FormItem{Text: "Platform", Widget: platformSelect},
+			&widget.FormItem{Text: "Name", Widget: nameEntry},
+		),
+		fieldsBox,
+		statusLabel,
+	)
+
+	d := dialog.NewCustomConfirm("Add Adapter", "Add", "Cancel", form, func(ok bool) {
+		if !ok {
+			return
+		}
 		name := strings.TrimSpace(nameEntry.Text)
 		plat := platformSelect.Selected
 		if name == "" || plat == "" {
@@ -267,27 +419,20 @@ func (a *App) buildIMAddCard(parent fyne.Window, cfg *config.Config, onAdded fun
 			return
 		}
 		_ = cfg.Save()
-		nameEntry.SetText("")
-		platformSelect.SetSelected("")
-		for _, e := range fieldEntries {
-			e.SetText("")
+		if a.imManager != nil {
+			adapters := make(map[string]bool)
+			for n, acfg := range cfg.IM.Adapters {
+				adapters[n] = acfg.Enabled
+			}
+			a.imManager.ApplyAdapterConfig(adapters)
 		}
-		statusLabel.SetText("Added: " + name)
-		onAdded()
-	})
-
-	return widget.NewCard("Add Adapter", "", container.NewVBox(
-		widget.NewForm(
-			&widget.FormItem{Text: "Platform", Widget: platformSelect},
-			&widget.FormItem{Text: "Name", Widget: nameEntry},
-		),
-		fieldsBox,
-		container.NewHBox(addBtn, statusLabel),
-	))
+		onDone()
+	}, w)
+	d.Resize(fyne.NewSize(500, 400))
+	d.Show()
 }
 
-// imAdapterEntries returns sorted adapter entries grouped by binding status.
-// Reads real binding data from imManager when available, falls back to config-only.
+// imAdapterEntries returns sorted adapter entries from config + imManager state.
 func (a *App) imAdapterEntries() []imAdapterEntry {
 	cfg := a.cfg
 	if cfg.IM.Adapters == nil {
@@ -298,10 +443,10 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 		currentWS = a.dc.WorkDir
 	}
 
-	// Build workspace map from imManager bindings if available.
-	bindingWorkspace := make(map[string]string) // adapterName -> workspace
-	bindingChannel := make(map[string]string)   // adapterName -> channelID
-	bindingMuted := make(map[string]bool)       // adapterName -> muted
+	bindingWorkspace := make(map[string]string)
+	bindingChannel := make(map[string]string)
+	bindingMuted := make(map[string]bool)
+	adapterHealthy := make(map[string]bool)
 	if a.imManager != nil {
 		snap := a.imManager.Snapshot()
 		for _, b := range snap.CurrentBindings {
@@ -315,19 +460,23 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 				bindingChannel[b.Adapter] = b.ChannelID
 			}
 		}
+		for _, s := range snap.Adapters {
+			adapterHealthy[s.Name] = s.Healthy
+		}
 	}
 
 	var current, other, unbound, disabled []imAdapterEntry
 	for name, ac := range cfg.IM.Adapters {
 		ws := bindingWorkspace[name]
-		ch := bindingChannel[name]
-		_ = ch
 		e := imAdapterEntry{
-			Name:     name,
-			Platform: ac.Platform,
-			Enabled:  ac.Enabled,
+			Name:      name,
+			Platform:  ac.Platform,
+			Enabled:   ac.Enabled,
 			Workspace: ws,
 			IsCurrent: ws == currentWS && ws != "",
+			Healthy:   adapterHealthy[name],
+			Muted:     bindingMuted[name],
+			ChannelID: bindingChannel[name],
 		}
 
 		if !ac.Enabled {
@@ -354,22 +503,96 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 	return result
 }
 
-func shortPath(p string) string {
-	if len(p) > 30 {
-		return "..." + p[len(p)-27:]
+// platformDisplayName returns a user-friendly platform name.
+func platformDisplayName(platform string) string {
+	switch platform {
+	case "qq":
+		return "QQ"
+	case "telegram":
+		return "Telegram"
+	case "discord":
+		return "Discord"
+	case "feishu":
+		return "Feishu"
+	case "dingtalk":
+		return "DingTalk"
+	case "slack":
+		return "Slack"
+	case "wechat":
+		return "WeChat"
+	case "wecom":
+		return "WeCom"
+	case "whatsapp":
+		return "WhatsApp"
+	case "mattermost":
+		return "Mattermost"
+	case "signal":
+		return "Signal"
+	case "irc":
+		return "IRC"
+	case "matrix":
+		return "Matrix"
+	case "nostr":
+		return "Nostr"
+	case "twitch":
+		return "Twitch"
+	default:
+		return strings.Title(platform)
 	}
-	return p
 }
 
-// placeholder for image display (future QR code support)
-func newQRImage(data []byte) fyne.CanvasObject {
-	img := canvas.NewImageFromResource(nil)
-	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSize(200, 200))
-	return img
+// platformFields returns the Extra field names required for each platform.
+func platformFields(platform string) []string {
+	switch platform {
+	case "qq":
+		return []string{"appid", "appsecret"}
+	case "telegram":
+		return []string{"bot_token"}
+	case "discord":
+		return []string{"token"}
+	case "feishu":
+		return []string{"app_id", "app_secret"}
+	case "dingtalk":
+		return []string{"app_key", "app_secret"}
+	case "slack":
+		return []string{"bot_token", "app_token"}
+	case "wechat":
+		return []string{"bot_token"}
+	case "wecom":
+		return []string{"bot_id", "secret"}
+	case "whatsapp":
+		return []string{}
+	case "mattermost":
+		return []string{"url", "token"}
+	case "signal":
+		return []string{"account", "base_url"}
+	case "irc":
+		return []string{"host", "nick", "channels"}
+	case "matrix":
+		return []string{"homeserver", "access_token"}
+	case "nostr":
+		return []string{"private_key", "relays"}
+	case "twitch":
+		return []string{"nick", "token", "channels"}
+	default:
+		return nil
+	}
+}
+
+// sortedAdapterNames returns adapter names in sorted order.
+func sortedAdapterNames(cfg *config.Config) []string {
+	if cfg.IM.Adapters == nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.IM.Adapters))
+	for n := range cfg.IM.Adapters {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // blankLine returns a simple spacer.
 func blankLine() fyne.CanvasObject {
-	return layout.NewSpacer()
+	return canvas.NewRectangle(theme.BackgroundColor())
 }
