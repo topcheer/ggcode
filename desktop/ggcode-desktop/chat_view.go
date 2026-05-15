@@ -432,7 +432,10 @@ func (cv *ChatView) handleEvent(e UIEvent) {
 }
 
 func (cv *ChatView) onAppend(msg ChatMessage) {
-	cv.hideThinking()
+	// Hide thinking when agent starts responding (not on user/system messages).
+	if msg.Role == "assistant" || msg.Role == "tool" {
+		cv.hideThinking()
+	}
 	w := cv.renderMessage(&msg)
 	if w == nil {
 		return
