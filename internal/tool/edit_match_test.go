@@ -97,9 +97,9 @@ func TestWriteFile_CreatesParentDirs(t *testing.T) {
 }
 
 func TestResolveOldText_PreservesUnchangedOnExactMatch(t *testing.T) {
-	got, transform := resolveOldText("hello world", "hello")
-	if got != "hello" || transform != "" {
-		t.Errorf("exact match should return unchanged; got %q, transform=%q", got, transform)
+	mr := resolveOldText("hello world", "hello")
+	if mr.canonical != "hello" || mr.transform != "" {
+		t.Errorf("exact match should return unchanged; got %q, transform=%q", mr.canonical, mr.transform)
 	}
 }
 

@@ -81,8 +81,8 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	content := string(data)
 
-	oldText, transform := resolveOldText(content, args.OldText)
-	if oldText == "" {
+	mr := resolveOldText(content, args.OldText)
+	if mr.canonical == "" {
 		hint := diagnoseMatchFailure(content, args.OldText)
 		msg := "old_text not found in file"
 		if hint != "" {
@@ -90,6 +90,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		}
 		return Result{IsError: true, Content: msg}, nil
 	}
+	oldText := mr.canonical
 
 	count := strings.Count(content, oldText)
 	if !args.ReplaceAll && count > 1 {
@@ -111,8 +112,8 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// Apply the same transform to new_text so the replacement matches the
 	// file's conventions (indentation, line endings, line-number stripping).
 	newText := args.NewText
-	if transform != "" {
-		newText = adjustNewText(content, args.NewText, transform)
+	if mr.transform != "" {
+		newText = adjustNewText(content, args.NewText, mr)
 	}
 
 	var newContent string
