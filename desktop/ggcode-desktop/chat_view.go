@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	
 	"os/exec"
 	"runtime"
 	"strings"
@@ -621,7 +622,6 @@ func (cv *ChatView) statusLoop() {
 				// Update sidebar stats and provider enabled state.
 				if cv.app != nil && cv.app.sidebarRef != nil {
 					cv.app.sidebarRef.RefreshStats()
-					cv.app.sidebarRef.setProviderEnabled(!working)
 				}
 				if working {
 					cv.scroll.ScrollToBottom()
