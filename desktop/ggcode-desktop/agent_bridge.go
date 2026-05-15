@@ -76,6 +76,14 @@ func (b *AgentBridge) setupAgent() error {
 	}
 
 	b.registry = tool.NewRegistry()
+
+	// Apply impersonation from config (same as TUI startup).
+	if b.cfg != nil && b.cfg.Impersonation.Preset != "" && b.cfg.Impersonation.Preset != "none" {
+		if preset := provider.FindPresetByID(b.cfg.Impersonation.Preset); preset != nil {
+			provider.SetActiveImpersonation(preset, b.cfg.Impersonation.CustomVersion, b.cfg.Impersonation.CustomHeaders)
+		}
+	}
+
 	if err := tool.RegisterBuiltinTools(b.registry, nil, b.workingDir); err != nil {
 		return fmt.Errorf("register builtin tools: %w", err)
 	}
