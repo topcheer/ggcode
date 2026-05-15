@@ -42,6 +42,7 @@ type Sidebar struct {
 	modelLoading   *widget.Label
 	modelRefresh   *widget.Button
 	providerStatus *widget.Label
+	fetchingModels bool // prevent concurrent fetchModels calls
 }
 
 type sessionMeta struct {
@@ -319,6 +320,12 @@ func (s *Sidebar) onEndpointChange(vendor, endpoint string) {
 }
 
 func (s *Sidebar) fetchModels() {
+	if s.fetchingModels {
+		return
+	}
+	s.fetchingModels = true
+	defer func() { s.fetchingModels = false }()
+
 	s.modelLoading.SetText("Loading...")
 	s.modelLoading.Refresh()
 
@@ -343,6 +350,9 @@ func (s *Sidebar) fetchModels() {
 				return
 			}
 			s.modelSelect.Options = models
+			if s.modelSelect.Options == nil {
+				s.modelSelect.Options = []string{}
+			}
 			s.modelSelect.Refresh()
 			s.modelLoading.SetText(fmt.Sprintf("%d models found", len(models)))
 		})
