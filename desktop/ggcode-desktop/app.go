@@ -347,8 +347,9 @@ func (a *App) startChat() {
 	defer safeRecover("startChat")
 
 	// Stop previous statusLoop if any.
-	if a.chatViewRef != nil {
+	if a.chatViewRef != nil && a.chatViewRef.stopCh != nil {
 		close(a.chatViewRef.stopCh)
+		a.chatViewRef.stopCh = nil
 	}
 
 	resolved, err := a.cfg.ResolveActiveEndpoint()
