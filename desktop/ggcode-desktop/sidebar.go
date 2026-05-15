@@ -351,6 +351,8 @@ func (s *Sidebar) fetchModels() {
 		models, err := provider.DiscoverModels(ctx, tmpResolved)
 		fyne.Do(func() {
 			if err != nil {
+				s.modelSelect.Options = []string{}
+				s.modelSelect.Refresh()
 				s.modelLoading.SetText("Failed to refresh models")
 				return
 			}
