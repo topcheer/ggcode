@@ -1684,7 +1684,9 @@ func (cv *ChatView) rebuildFromMessages(messages []provider.Message) {
 				}
 			}
 			if len(textParts) > 0 {
-				w := cv.iconRow(theme.ComputerIcon(), newMD(strings.Join(textParts, "\n\n")))
+					joined := strings.Join(textParts, "\n")
+					userMsgs = append(userMsgs, joined)
+					w := cv.iconRow(theme.ComputerIcon(), newMD(joined))
 				cv.vbox.Add(w)
 				cv.msgWidgets = append(cv.msgWidgets, w)
 			}
