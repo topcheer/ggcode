@@ -169,7 +169,7 @@ func (a *App) showWelcome() {
 }
 
 func (a *App) showFolderPicker() {
-	dialog.ShowFolderOpen(func(u fyne.ListableURI, err error) {
+	d := dialog.NewFolderOpen(func(u fyne.ListableURI, err error) {
 		if err != nil || u == nil {
 			return
 		}
@@ -181,6 +181,8 @@ func (a *App) showFolderPicker() {
 			a.initFromWorkDir(path)
 		}
 	}, a.window)
+	d.Resize(fyne.NewSize(900, 600))
+	d.Show()
 }
 
 // ── Init from workDir ────────────────────────────────

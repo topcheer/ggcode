@@ -172,8 +172,12 @@ func (b *AgentBridge) setupAgent() error {
 	}
 	b.agent = agent.NewAgent(b.prov, b.registry, systemPrompt, maxIter)
 
-	// Permission policy
-	mode := permission.ParsePermissionMode(b.cfg.DefaultMode)
+	// Permission policy — default to "auto" for desktop.
+	modeStr := b.cfg.DefaultMode
+	if modeStr == "" {
+		modeStr = "auto"
+	}
+	mode := permission.ParsePermissionMode(modeStr)
 	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
 	b.agent.SetPermissionPolicy(policy)
 	b.permissionMode = mode
@@ -1059,4 +1063,50 @@ func (b *AgentBridge) SetPermissionMode(mode permission.PermissionMode) {
 	b.permissionMode = mode
 	policy := permission.NewConfigPolicyWithMode(nil, []string{b.workingDir}, mode)
 	b.agent.SetPermissionPolicy(policy)
+}
+
+// SwitchModel hot-swaps the model on the running agent without losing conversation
+// history. If the agent is currently running, the new provider takes effect on the
+// next LLM call in the agent loop.
+func (b *AgentBridge) SwitchModel(model string) error {
+	if model == "" || b.cfg == nil {
+		return fmt.Errorf("model is empty or config is nil")
+	}
+
+	// Update config with the new model selection.
+	if err := b.cfg.SetActiveSelection(b.cfg.Vendor, b.cfg.Endpoint, model); err != nil {
+		return fmt.Errorf("set active selection: %w", err)
+	}
+	_ = b.cfg.Save()
+
+	// Re-resolve endpoint (picks up new context window, etc.).
+	resolved, err := b.cfg.ResolveActiveEndpoint()
+	if err != nil {
+		return fmt.Errorf("resolve endpoint: %w", err)
+	}
+
+	// Create a new provider for the updated model.
+	prov, err := provider.NewProvider(resolved)
+	if err != nil {
+		return fmt.Errorf("create provider: %w", err)
+	}
+
+	// Swap provider on the live agent (thread-safe).
+	if b.agent != nil {
+		b.agent.SetProvider(prov)
+		if resolved.ContextWindow > 0 {
+			b.agent.ContextManager().SetContextWindow(resolved.ContextWindow)
+		}
+		if resolved.MaxTokens > 0 {
+			b.agent.ContextManager().SetOutputReserve(resolved.MaxTokens)
+		}
+	}
+
+	// Update bridge state so status bar reflects the new model.
+	b.mu.Lock()
+	b.prov = prov
+	b.resolved = resolved
+	b.mu.Unlock()
+
+	return nil
 }
