@@ -220,7 +220,7 @@ func (b *AgentBridge) setupAgent() error {
 			content := widget.NewLabel(fmt.Sprintf("Tool: %s\n\n%s", toolName, displayArgs))
 			content.Wrapping = fyne.TextWrapWord
 
-			d = dialog.NewCustom("Tool Approval", "",
+			d = dialog.NewCustomWithoutButtons("Tool Approval",
 				container.NewVBox(
 					content,
 					widget.NewSeparator(),
