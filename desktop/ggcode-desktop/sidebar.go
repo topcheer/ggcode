@@ -60,6 +60,11 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 		container.NewTabItemWithIcon("Provider", theme.ComputerIcon(), s.buildProviderTab()),
 		container.NewTabItemWithIcon("IM", theme.MailComposeIcon(), s.buildIMTab()),
 	)
+	s.tabs.OnSelected = func(tab *container.TabItem) {
+		if tab.Text == "Provider" {
+			s.fetchModels()
+		}
+	}
 	return s.tabs
 }
 
@@ -218,9 +223,11 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 
 	s.vendorSelect = widget.NewSelect(vendorNames, func(vendor string) {
 		s.updateEndpoints(vendor)
+		s.fetchModels()
 	})
 	s.epSelect = widget.NewSelect([]string{}, func(ep string) {
 		s.onEndpointChange(s.vendorSelect.Selected, ep)
+		s.fetchModels()
 	})
 	s.apiKeyEntry = widget.NewPasswordEntry()
 	s.apiKeyEntry.PlaceHolder = "API Key"
