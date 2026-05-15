@@ -518,8 +518,7 @@ func (a *App) initIMRuntime() {
 	if a.imManager != nil {
 		return
 	}
-	go func() {
-		defer safeRecover("initIMRuntime")
+	defer safeRecover("initIMRuntime")
 		mgr := im.NewManager()
 		bindingsPath, err := im.DefaultBindingsPath()
 		if err != nil {
@@ -550,5 +549,4 @@ func (a *App) initIMRuntime() {
 		}
 		mgr.ApplyAdapterConfig(adapters)
 		a.imManager = mgr
-	}()
 }
