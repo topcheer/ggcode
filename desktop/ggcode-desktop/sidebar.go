@@ -95,17 +95,6 @@ func (s *Sidebar) setProviderEnabled(enabled bool) {
 	}
 }
 
-func (s *Sidebar) providerStatusLoop() {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	for range ticker.C {
-		working := s.bridge.IsWorking()
-		fyne.Do(func() {
-			s.setProviderEnabled(!working)
-		})
-	}
-}
-
 func (s *Sidebar) RefreshStats() {
 	cw := s.bridge.ContextWindow()
 	tc := s.bridge.TokenCount()
