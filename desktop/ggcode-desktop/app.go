@@ -64,7 +64,6 @@ func (a *App) Run() {
 	setWindowIcon(a.window)
 	a.buildUI()
 	a.setupMenu()
-	a.initIMRuntime()
 
 	// Apply dark titlebar matching the app theme.
 	setupNativeTitlebar(a.window)
@@ -564,6 +563,20 @@ func (a *App) initIMRuntime() {
 		}
 		mgr.ApplyAdapterConfig(adapters)
 	}
+
+	mgr.SetOnUpdate(func(snap im.StatusSnapshot) {
+		if snap.PendingPairing != nil {
+			ch := snap.PendingPairing
+			fyne.Do(func() {
+				if a.window != nil {
+					dialog.ShowInformation("IM Pairing Request",
+						fmt.Sprintf("Adapter '%s' (%s) is requesting to pair.\n\nEnter this code in your IM channel:\n\n    %s",
+							ch.Adapter, ch.Platform, ch.Code),
+						a.window)
+				}
+			})
+		}
+	})
 
 	a.imManager = mgr
 
