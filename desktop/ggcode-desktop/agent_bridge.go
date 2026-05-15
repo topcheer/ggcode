@@ -185,14 +185,24 @@ func (b *AgentBridge) setupAgent() error {
 		}
 		resp := make(chan permission.Decision, 1)
 		fyne.Do(func() {
-			denyBtn := widget.NewButton("Deny", func() { resp <- permission.Deny })
-			allowBtn := widget.NewButton("Allow", func() { resp <- permission.Allow })
+			var d dialog.Dialog
+				denyBtn := widget.NewButton("Deny", func() {
+					resp <- permission.Deny
+					d.Hide()
+				})
+			allowBtn := widget.NewButton("Allow", func() {
+					resp <- permission.Allow
+					d.Hide()
+				})
 			allowBtn.Importance = widget.HighImportance
 			alwaysBtn := widget.NewButton("Always Allow", func() {
 				if b.agent != nil {
-					b.agent.PermissionPolicy().(*permission.ConfigPolicy).SetOverride(toolName, permission.Allow)
+					if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+						p.SetOverride(toolName, permission.Allow)
+					}
 				}
 				resp <- permission.Allow
+					d.Hide()
 			})
 			alwaysBtn.Importance = widget.SuccessImportance
 
@@ -210,18 +220,12 @@ func (b *AgentBridge) setupAgent() error {
 			content := widget.NewLabel(fmt.Sprintf("Tool: %s\n\n%s", toolName, displayArgs))
 			content.Wrapping = fyne.TextWrapWord
 
-			d := dialog.NewCustom("Tool Approval", "",
+			d = dialog.NewCustom("Tool Approval", "",
 				container.NewVBox(
 					content,
 					widget.NewSeparator(),
 					container.NewHBox(layout.NewSpacer(), denyBtn, allowBtn, alwaysBtn),
 				), b.mainWindow)
-			d.SetOnClosed(func() {
-				select {
-				case resp <- permission.Deny:
-				default:
-				}
-			})
 			d.Show()
 		})
 		select {
