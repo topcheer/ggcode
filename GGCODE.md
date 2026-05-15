@@ -11,7 +11,7 @@
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
 | License | MIT |
 | Build output | `bin/ggcode` |
-| Latest documented release | [`v1.2.10`](docs/releases/v1.2.10.md) |
+| Latest documented release | [`v1.3.0`](docs/releases/v1.3.0.md) |
 
 ## Build & Validation
 
@@ -39,6 +39,8 @@ Linter config (`.golangci.yml`): `gofmt`, `govet`, `errcheck`, `staticcheck`, `u
 ```
 cmd/ggcode/            CLI entrypoint, root command, pipe mode, resume, harness/mcp subcommands
 cmd/ggcode-installer/  Standalone Go installer that downloads release binaries
+desktop/               Desktop GUI application (Fyne-based, separate Go module)
+  ggcode-desktop/      Main desktop app — visual chat, IM integration, tool approval dialogs
 internal/              334 Go source files (~101k LOC non-test, ~69k LOC test)
   agent/               Core agent loop, tool execution, autopilot, compaction, memory (agent.go + split files)
   provider/            LLM provider adapters: OpenAI, Anthropic, Gemini, Copilot + retry logic
@@ -183,6 +185,7 @@ Available in any IM channel connected to a ggcode daemon:
 
 ## CLI Modes
 
+- **Desktop GUI**: `ggcode-desktop` — native desktop application with visual chat, IM settings panel, tool approval dialogs, session sidebar
 - **Interactive TUI**: `ggcode` — launches the full Bubble Tea TUI
 - **Daemon mode**: `ggcode daemon` — headless agent with IM gateway; `--follow` for terminal follow display
 - **Pipe mode**: `ggcode -p "prompt"` — non-interactive, sends prompt and outputs response

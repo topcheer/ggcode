@@ -81,6 +81,26 @@ Windows) if you prefer manual extraction over native installers.
 If you prefer not to install from a package manager, the existing release archives, Go installer,
 npm wrapper, and Python wrapper remain available.
 
+### Desktop Application (GUI)
+
+ggcode also ships as a native desktop application with a graphical interface, built with [Fyne](https://fyne.io/). It provides the same agent capabilities as the CLI with the addition of:
+
+- Visual chat interface with Markdown rendering
+- IM platform integration (WeChat, Feishu, DingTalk, etc.) via a settings panel
+- Tool approval dialogs with Allow / Deny / Always Allow options
+- Permission mode switching (Supervised / Auto / Bypass / Autopilot)
+- Session history sidebar with resume support
+- Image attachment support
+
+Download the latest desktop release from [GitHub Releases](https://github.com/topcheer/ggcode/releases):
+
+| Platform | Asset |
+| --- | --- |
+| macOS (Universal) | `ggcode-desktop_<version>_darwin_universal.dmg` |
+| Windows | `ggcode-desktop_<version>_windows_amd64.exe` |
+
+Open the DMG on macOS and drag **ggcode** to your Applications folder. On Windows, run the `.exe` directly.
+
 ### Build from source
 
 ```bash
