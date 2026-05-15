@@ -119,5 +119,6 @@ Supported architectures:
 ## Project links
 
 - GitHub Releases: https://github.com/topcheer/ggcode/releases
+- Desktop app downloads (macOS DMG, Windows EXE): available on the same releases page
 - Repository: https://github.com/topcheer/ggcode
 - Issues: https://github.com/topcheer/ggcode/issues

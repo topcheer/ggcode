@@ -221,7 +221,30 @@ If all smoke tests pass, the workflow additionally builds:
    - runs `scripts/release/build-windows-msi.ps1`
    - uploads `.msi` files to the GitHub Release
 
-### 5.5 Site deployment branch refresh
+### 5.5 Desktop application builds
+
+After `verify` succeeds, two additional jobs build the desktop application in parallel with the CLI release:
+
+1. `build-desktop-darwin` (macOS runner)
+   - Builds universal binary (amd64 + arm64 via `lipo`)
+   - Creates `.app` bundle with `Info.plist`
+   - Packages as `.dmg`
+   - Script: `scripts/release/build-desktop-darwin.sh`
+
+2. `build-desktop-windows` (Windows runner)
+   - Installs MinGW for CGO support
+   - Builds `ggcode-desktop.exe`
+   - Script: `scripts/release/build-desktop-windows.ps1`
+
+Both jobs upload artifacts to the GitHub Release (tag-driven) or as workflow artifacts (dispatch).
+
+The desktop application uses:
+- Separate Go module: `desktop/ggcode-desktop/go.mod`
+- `CGO_ENABLED=1` (required by Fyne GUI framework)
+- Build tag `goolm` (same as CLI)
+- `make build-desktop` for local builds
+
+### 5.6 Site deployment branch refresh
 
 Finally, `publish-site-release-branch` runs and pushes release assets into the deployment branch:
 
@@ -246,7 +269,9 @@ That script rebuilds `docs/site/downloads/latest/` and publishes:
 - archive files (`.tar.gz`, `.zip`)
 - Linux packages (`.deb`, `.rpm`, `.apk`, `.ipk`, `.pkg.tar.zst`)
 - macOS `.pkg`
+- macOS `.dmg` (desktop)
 - Windows `.msi`
+- Windows `.exe` (desktop)
 - generated `manifest.json`
 - generated `index.html`
 

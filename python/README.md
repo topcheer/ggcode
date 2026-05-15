@@ -93,8 +93,20 @@ Supported architectures:
 - x86_64 / amd64
 - arm64
 
+## Desktop Application
+
+ggcode also ships as a native desktop GUI application with visual chat, IM integration, and tool approval dialogs.
+
+Download from [GitHub Releases](https://github.com/topcheer/ggcode/releases/latest):
+
+| Platform | Asset |
+| --- | --- |
+| macOS (Universal) | `ggcode-desktop_*_darwin_universal.dmg` |
+| Windows | `ggcode-desktop_*_windows_amd64.exe` |
+
 ## Project links
 
 - GitHub Releases: https://github.com/topcheer/ggcode/releases
+- Desktop app downloads: available on the same releases page
 - Repository: https://github.com/topcheer/ggcode
 - Issues: https://github.com/topcheer/ggcode/issues
