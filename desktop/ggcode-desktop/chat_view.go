@@ -403,6 +403,11 @@ func (cv *ChatView) onSend() {
 	}
 	cv.ui.AppendChat(ChatMessage{Role: "user", Content: displayText, Time: time.Now()})
 
+	// Echo user message to IM channels.
+	if cv.bridge.Emitter != nil {
+		cv.bridge.Emitter.EmitUserText(displayText)
+	}
+
 	if cv.bridge.IsWorking() {
 		cv.bridge.QueueMessage(text)
 		cv.ui.AppendChat(ChatMessage{Role: "system", Content: "(queued)", Time: time.Now()})

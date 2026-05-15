@@ -415,7 +415,7 @@ func (a *App) startChat() {
 
 	// Set IM emitter for outbound message push.
 	if a.imManager != nil {
-		bridge.emitter = im.NewIMEmitter(a.imManager, a.cfg.Language, a.dc.WorkDir)
+		bridge.Emitter = im.NewIMEmitter(a.imManager, a.cfg.Language, a.dc.WorkDir)
 	}
 
 	// Resume previous session into new bridge to preserve history.
