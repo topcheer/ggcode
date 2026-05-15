@@ -289,3 +289,15 @@ func (u *UIState) RemoveStalePanels() bool {
 	}
 	return changed
 }
+
+// ClearAllAgentPanels removes every agent/teammate panel immediately.
+// Used as a fallback when the main agent loop finishes to ensure no stale
+// sub-agent or teammate tabs remain.
+func (u *UIState) ClearAllAgentPanels() {
+	u.agentMu.Lock()
+	defer u.agentMu.Unlock()
+	if len(u.agentPanels) > 0 {
+		u.agentPanels = make(map[string]AgentPanelData)
+		u.agentDirty = true
+	}
+}
