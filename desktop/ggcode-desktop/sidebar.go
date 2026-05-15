@@ -274,6 +274,9 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 		)),
 		s.providerStatus,
 		applyBtn,
+		widget.NewButtonWithIcon("Add Endpoint", theme.ContentAddIcon(), func() {
+			s.showAddEndpointDialog()
+		}),
 	))
 }
 
