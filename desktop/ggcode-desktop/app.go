@@ -412,6 +412,7 @@ func (a *App) startChat() {
 
 	bridge := NewAgentBridge(a.cfg, prov, resolved, a.dc.WorkDir, a.ui)
 	a.agentBridge = bridge
+	bridge.SetMainWindow(a.window)
 
 	// Set IM emitter for outbound message push.
 	if a.imManager != nil {

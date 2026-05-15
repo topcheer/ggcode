@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"github.com/topcheer/ggcode/internal/permission"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
@@ -217,6 +218,7 @@ type ChatView struct {
 
 	entry     *sendEntry
 	sendBtn      *widget.Button
+	modeSelect   *widget.Select
 	cancelBtn    *widget.Button
 	imageBtn     *widget.Button
 	imagePreview *canvas.Image
@@ -313,7 +315,26 @@ func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 }
 
 func (cv *ChatView) Render() fyne.CanvasObject {
-	btnRow := container.NewHBox(cv.cancelBtn, cv.imageBtn, cv.sendBtn)
+	// Permission mode selector
+	modeOptions := []string{"Supervised", "Auto", "Bypass", "Autopilot"}
+	cv.modeSelect = widget.NewSelect(modeOptions, func(sel string) {
+		if cv.bridge != nil {
+			var m permission.PermissionMode
+			switch sel {
+			case "Auto":
+				m = permission.AutoMode
+			case "Bypass":
+				m = permission.BypassMode
+			case "Autopilot":
+				m = permission.AutopilotMode
+			default:
+				m = permission.SupervisedMode
+			}
+			cv.bridge.SetPermissionMode(m)
+		}
+	})
+	cv.modeSelect.PlaceHolder = "Mode"
+	btnRow := container.NewHBox(cv.modeSelect, cv.cancelBtn, cv.imageBtn, cv.sendBtn)
 	inputBar := container.NewBorder(nil, nil, nil, btnRow, cv.entry)
 
 	// Image preview bar above input (hidden until image attached).
