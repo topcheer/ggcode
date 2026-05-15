@@ -118,9 +118,12 @@ func (e *sendEntry) clearImage() {
 // TypedShortcut handles Ctrl+V to detect image paste.
 func (e *sendEntry) TypedShortcut(s fyne.Shortcut) {
 	if _, ok := s.(*fyne.ShortcutPaste); ok {
-		if e.tryPasteImageFromClipboard() {
-			return
-		}
+		// Run clipboard check in goroutine to avoid blocking UI.
+		go func() {
+			if e.tryPasteImageFromClipboard() {
+				return
+			}
+		}()
 	}
 	e.Entry.TypedShortcut(s)
 }
@@ -150,7 +153,7 @@ end try`
 		return false
 	}
 	if e.onImageAttached != nil {
-		e.onImageAttached()
+		fyne.Do(e.onImageAttached)
 	}
 	return true
 }
@@ -245,6 +248,7 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 				}
 				cv.imageBtn.Importance = widget.HighImportance
 				cv.imageBtn.Refresh()
+				cv.imageBar.Show()
 			}, w)
 			d.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}))
 			d.Resize(fyne.NewSize(900, 600))
