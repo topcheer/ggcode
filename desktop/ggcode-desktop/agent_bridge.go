@@ -190,6 +190,14 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 	// Persist user message to disk immediately (incremental), same as TUI.
 	b.appendUserMessageContent(content)
 
+	// Render user message in chat UI.
+	userText := extractTextFromBlocks(content)
+	b.ui.AppendChat(ChatMessage{
+		Role:    "user",
+		Content: userText,
+		Time:    time.Now(),
+	})
+
 	go func() {
 		defer func() {
 			cancel()
@@ -777,4 +785,15 @@ func (b *AgentBridge) appendUserMessageContent(content []provider.ContentBlock) 
 	} else {
 		_ = b.sessionStore.Save(b.currentSes)
 	}
+}
+
+// extractTextFromBlocks extracts plain text from content blocks.
+func extractTextFromBlocks(blocks []provider.ContentBlock) string {
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
