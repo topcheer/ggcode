@@ -722,8 +722,8 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			textBuf.WriteString(event.Text)
 			assistantTextBuf.WriteString(event.Text)
 		case provider.StreamEventReasoning:
-			// Collect reasoning content but don't show in TUI.
-			// It will be stored in the assistant message for echo-back.
+			// Forward to UI for streaming display (GUI uses it for collapsible reasoning panel).
+			onEvent(event)
 			if event.Text != "" {
 				reasoningBuf.WriteString(event.Text)
 			}

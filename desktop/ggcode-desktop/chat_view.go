@@ -230,7 +230,9 @@ type ChatView struct {
 	msgWidgets  []fyne.CanvasObject
 	toolWidgets map[string]*toolWidgetRef
 	streamW     *markdownx.MarkdownWidget
-	thinkingW   fyne.CanvasObject // pulsing "thinking..." indicator
+	thinkingW   fyne.CanvasObject  // pulsing "thinking..." indicator
+	reasoningBuf strings.Builder    // accumulated reasoning text
+	reasoningW   *widget.Accordion   // collapsible reasoning panel
 
 	// Per-agent incremental state
 	agentStates map[string]*agentPanelState
@@ -424,6 +426,8 @@ func (cv *ChatView) handleEvent(e UIEvent) {
 		cv.onStreamDone()
 	case EventAgentUpdate:
 		cv.rebuildAgentTabs()
+	case EventReasoning:
+		cv.onReasoningChunk(e.Text)
 	}
 	cv.updateButtons(cv.bridge.IsWorking())
 	if cv.bridge.IsWorking() {
@@ -435,6 +439,7 @@ func (cv *ChatView) onAppend(msg ChatMessage) {
 	// Hide thinking when agent starts responding (not on user/system messages).
 	if msg.Role == "assistant" || msg.Role == "tool" {
 		cv.hideThinking()
+		cv.collapseReasoning()
 	}
 	w := cv.renderMessage(&msg)
 	if w == nil {
@@ -463,6 +468,7 @@ func (cv *ChatView) onAppend(msg ChatMessage) {
 
 func (cv *ChatView) onAssistantChunk(text string) {
 	cv.hideThinking()
+	cv.collapseReasoning()
 	if cv.streamW != nil {
 		cv.streamW.SetMarkdown(text)
 		cv.scroll.ScrollToBottom()
@@ -518,6 +524,49 @@ func (cv *ChatView) hideThinking() {
 	cv.vbox.Remove(cv.thinkingW)
 	cv.thinkingW = nil
 	cv.vbox.Refresh()
+}
+
+// onReasoningChunk accumulates reasoning text into a collapsible panel.
+func (cv *ChatView) onReasoningChunk(text string) {
+	cv.hideThinking()
+	cv.reasoningBuf.WriteString(text)
+
+	if cv.reasoningW == nil {
+		// First chunk: create accordion with streaming markdown.
+		md := newMD(cv.reasoningBuf.String())
+		accordion := widget.NewAccordion(widget.NewAccordionItem("Thinking...", md))
+		accordion.Open(0)
+		cv.reasoningW = accordion
+		cv.vbox.Add(accordion)
+		cv.vbox.Refresh()
+		cv.scroll.ScrollToBottom()
+	} else {
+		// Update existing markdown widget.
+		items := cv.reasoningW.Items
+		if len(items) > 0 {
+			if md, ok := items[0].Detail.(*markdownx.MarkdownWidget); ok {
+				md.SetMarkdown(cv.reasoningBuf.String())
+			}
+		}
+		cv.scroll.ScrollToBottom()
+	}
+}
+
+// collapseReasoning collapses the reasoning accordion and updates its title.
+func (cv *ChatView) collapseReasoning() {
+	if cv.reasoningW == nil {
+		return
+	}
+	n := cv.reasoningBuf.Len()
+	title := fmt.Sprintf("Thought (%d chars)", n)
+	items := cv.reasoningW.Items
+	if len(items) > 0 {
+		items[0].Title = title
+	}
+	cv.reasoningW.CloseAll()
+	cv.reasoningW.Refresh()
+	cv.reasoningBuf.Reset()
+	cv.reasoningW = nil
 }
 
 func (cv *ChatView) onToolResult(toolID, result string, isError bool) {

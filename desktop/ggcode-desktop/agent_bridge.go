@@ -266,11 +266,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 
 			case provider.StreamEventReasoning:
 				if ev.Text != "" {
-					b.ui.AppendChat(ChatMessage{
-						Role:    "reasoning",
-						Content: ev.Text,
-						Time:    time.Now(),
-					})
+					b.ui.AppendReasoning(ev.Text)
 				}
 			}
 		}
