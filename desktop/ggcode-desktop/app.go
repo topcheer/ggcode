@@ -344,6 +344,27 @@ func (a *App) resumeSession(id string) {
 	}
 }
 
+func (a *App) newSession() {
+	defer safeRecover("newSession")
+
+	// Cancel current work if busy.
+	if a.agentBridge != nil {
+		a.agentBridge.Cancel()
+	}
+
+	// Save current session.
+	if a.agentBridge != nil {
+		a.agentBridge.saveSession()
+	}
+
+	// Clear session ID so startChat creates a fresh one.
+	if a.agentBridge != nil {
+		a.agentBridge.currentSes = nil
+	}
+
+	a.startChat()
+}
+
 func (a *App) startChat() {
 	defer safeRecover("startChat")
 

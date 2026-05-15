@@ -141,13 +141,17 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	sessionHeader := widget.NewLabel("Sessions")
 	sessionHeader.TextStyle = fyne.TextStyle{Bold: true}
 
+	newChatBtn := widget.NewButtonWithIcon("New Chat", theme.ContentAddIcon(), func() {
+		s.app.newSession()
+	})
 	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), func() {
 		s.showImpersonateDialog()
 	})
 	settingsBtn.Importance = widget.LowImportance
 
+	bottomBar := container.NewBorder(nil, nil, newChatBtn, nil, container.NewPadded(settingsBtn))
 	topSection := container.NewVBox(infoCard, statsCard, container.NewPadded(sessionHeader))
-	return container.NewBorder(topSection, container.NewPadded(settingsBtn), nil, nil, s.sessionList)
+	return container.NewBorder(topSection, bottomBar, nil, nil, s.sessionList)
 }
 
 func (s *Sidebar) loadSessions() {
