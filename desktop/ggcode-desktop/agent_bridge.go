@@ -256,6 +256,17 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				// Track tool calls in round state.
 				b.imRound.ToolCalls++
 
+				// Emit tool call event to IM.
+				if b.Emitter != nil {
+					b.Emitter.EmitEvent(im.OutboundEvent{
+						Kind: im.OutboundEventToolCall,
+						ToolCall: &im.ToolCallInfo{
+							ToolName: name,
+							Args:     args,
+						},
+					})
+				}
+
 			case provider.StreamEventToolResult:
 				content := ev.Result
 				if len([]rune(content)) > 2000 {
@@ -266,6 +277,18 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					b.imRound.ToolFailures++
 				} else {
 					b.imRound.ToolSuccesses++
+				}
+
+				// Emit tool result event to IM.
+				if b.Emitter != nil {
+					b.Emitter.EmitEvent(im.OutboundEvent{
+						Kind: im.OutboundEventToolResult,
+						ToolRes: &im.ToolResultInfo{
+							ToolName: ev.Tool.Name,
+							Result:  content,
+							IsError: ev.IsError,
+						},
+					})
 				}
 
 				// After spawn_agent completes, sync agent panels.
@@ -288,10 +311,10 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				}
 
 			case provider.StreamEventDone:
-				// Each LLM turn ends with Done. Emit accumulated text to IM.
-				if b.Emitter != nil && b.imRound.Text.Len() > 0 {
-					text := b.imRound.Text.String()
-					if strings.TrimSpace(text) != "" {
+				// Each LLM turn ends with Done. Emit round summary to IM.
+				if b.Emitter != nil {
+					text := strings.TrimSpace(b.imRound.Text.String())
+					if text != "" || b.imRound.ToolCalls > 0 {
 						b.Emitter.EmitRoundSummary(text, b.imRound.ToolCalls, b.imRound.ToolSuccesses, b.imRound.ToolFailures)
 					}
 					b.imRound.Text.Reset()
