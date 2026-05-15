@@ -174,14 +174,17 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 			nameLabel.Wrapping = fyne.TextWrapWord
 			timeLabel := widget.NewLabel("time")
 			timeLabel.TextStyle = fyne.TextStyle{Monospace: true}
-			return container.NewBorder(nil, nil, nil, timeLabel, nameLabel)
+			return container.NewBorder(nil, nil, nil, timeLabel,
+				container.NewPadded(nameLabel),
+			)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id >= len(s.sessions) {
 				return
 			}
 			box := obj.(*fyne.Container)
-			nameLabel := box.Objects[0].(*widget.Label)
+			padded := box.Objects[0].(*fyne.Container)
+			nameLabel := padded.Objects[0].(*widget.Label)
 			timeLabel := box.Objects[1].(*widget.Label)
 			sess := s.sessions[id]
 			nameLabel.SetText(sess.Name)
