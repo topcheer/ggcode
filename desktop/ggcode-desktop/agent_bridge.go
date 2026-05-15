@@ -276,6 +276,11 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Time:     time.Now(),
 				})
 
+				// Emit tool status to IM.
+				if b.emitter != nil {
+					b.emitter.EmitToolStatus(name, args)
+				}
+
 			case provider.StreamEventToolResult:
 				content := ev.Result
 				if len([]rune(content)) > 2000 {
@@ -295,6 +300,11 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: ev.Text,
 					Time:    time.Now(),
 				})
+
+				// Emit assistant turn text to IM.
+				if b.emitter != nil {
+					b.emitter.EmitText(ev.Text)
+				}
 
 			case provider.StreamEventReasoning:
 				if ev.Text != "" {
