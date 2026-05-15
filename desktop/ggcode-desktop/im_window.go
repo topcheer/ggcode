@@ -27,8 +27,15 @@ type imAdapterEntry struct {
 
 // showIMWindow opens the IM Settings window.
 func (a *App) showIMWindow() {
+	if a.imWindow != nil {
+		a.imWindow.Show()
+		a.imWindow.RequestFocus()
+		return
+	}
 	w := a.fyneApp.NewWindow("IM Settings")
 	w.Resize(fyne.NewSize(800, 600))
+	w.SetOnClosed(func() { a.imWindow = nil })
+	a.imWindow = w
 
 	cfg := a.cfg
 	if cfg.IM.Adapters == nil {

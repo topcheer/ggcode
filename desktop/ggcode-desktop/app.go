@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"fyne.io/fyne/v2"
+
+	"github.com/topcheer/ggcode/internal/im"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
@@ -24,6 +26,11 @@ type App struct {
 	window  fyne.Window
 	dc      *DesktopConfig
 	cfg     *config.Config
+
+	// IM runtime.
+	imManager    *im.Manager
+	imController im.AdapterController
+	imWindow     fyne.Window
 
 	// Shared UI state for cross-goroutine updates.
 	ui *UIState
@@ -503,4 +510,45 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+
+// initIMRuntime initializes the IM manager once.
+func (a *App) initIMRuntime() {
+	if a.imManager != nil {
+		return
+	}
+	go func() {
+		defer safeRecover("initIMRuntime")
+		mgr := im.NewManager()
+		bindingsPath, err := im.DefaultBindingsPath()
+		if err != nil {
+			return
+		}
+		bindingStore, err := im.NewJSONFileBindingStore(bindingsPath)
+		if err != nil {
+			return
+		}
+		if err := mgr.SetBindingStore(bindingStore); err != nil {
+			return
+		}
+		pairingPath, err := im.DefaultPairingStatePath()
+		if err != nil {
+			return
+		}
+		pairingStore, err := im.NewJSONFilePairingStore(pairingPath)
+		if err != nil {
+			return
+		}
+		if err := mgr.SetPairingStore(pairingStore); err != nil {
+			return
+		}
+		mgr.BindSession(im.SessionBinding{Workspace: a.dc.WorkDir})
+		adapters := make(map[string]bool)
+		for name, acfg := range a.cfg.IM.Adapters {
+			adapters[name] = acfg.Enabled
+		}
+		mgr.ApplyAdapterConfig(adapters)
+		a.imManager = mgr
+	}()
 }
