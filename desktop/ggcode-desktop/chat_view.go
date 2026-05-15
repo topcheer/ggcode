@@ -42,7 +42,10 @@ type sendEntry struct {
 	busy        bool
 	pendingText    string
 	pendingImage   *provider.ContentBlock
-	onImageAttached func() // called when image is attached (show preview bar)
+	onImageAttached func()
+	history       []string
+	historyIdx    int
+	historyDraft  string // current unsent text saved when navigating history // called when image is attached (show preview bar)
 }
 
 func newSendEntry() *sendEntry {
