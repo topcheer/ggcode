@@ -726,3 +726,94 @@ func (s *Sidebar) showImpersonateDialog() {
 	d.Resize(fyne.NewSize(400, 250))
 	d.Show()
 }
+
+// showAddEndpointDialog shows a form to add a new endpoint to the current vendor.
+func (s *Sidebar) showAddEndpointDialog() {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("my-endpoint")
+
+	protocolSelect := widget.NewSelect([]string{"openai", "anthropic", "google"}, nil)
+	protocolSelect.SetSelected("openai")
+
+	apiKeyEntry := widget.NewPasswordEntry()
+	apiKeyEntry.SetPlaceHolder("sk-...")
+
+	baseURLEntry := widget.NewEntry()
+	baseURLEntry.SetPlaceHolder("https://api.example.com/v1")
+
+	statusLabel := widget.NewLabel("")
+
+	testBtn := widget.NewButton("Test Connection", func() {
+		baseURL := strings.TrimSpace(baseURLEntry.Text)
+		if baseURL == "" {
+			statusLabel.SetText("Base URL is required")
+			return
+		}
+		statusLabel.SetText("Testing...")
+		go func() {
+			tmpResolved := &config.ResolvedEndpoint{
+				Protocol: protocolSelect.Selected,
+				BaseURL:  baseURL,
+			}
+			if apiKey := strings.TrimSpace(apiKeyEntry.Text); apiKey != "" {
+				tmpResolved.APIKey = apiKey
+			}
+			models, err := provider.DiscoverModels(context.Background(), tmpResolved)
+			fyne.Do(func() {
+				if err != nil {
+					statusLabel.SetText("Failed")
+				} else {
+					statusLabel.SetText(fmt.Sprintf("OK — %d models found", len(models)))
+				}
+			})
+		}()
+	})
+
+	form := container.NewVBox(
+		widget.NewForm(
+			&widget.FormItem{Text: "Name", Widget: nameEntry},
+			&widget.FormItem{Text: "Protocol", Widget: protocolSelect},
+			&widget.FormItem{Text: "API Key", Widget: apiKeyEntry},
+			&widget.FormItem{Text: "Base URL", Widget: baseURLEntry},
+		),
+		container.NewHBox(testBtn, statusLabel),
+	)
+
+	d := dialog.NewCustomConfirm("Add Endpoint", "Add", "Cancel", form, func(ok bool) {
+		if !ok {
+			return
+		}
+		name := strings.TrimSpace(nameEntry.Text)
+		if name == "" {
+			return
+		}
+		vendor := s.vendorSelect.Selected
+		if vendor == "" {
+			return
+		}
+		// Add endpoint to config.
+		ep := config.EndpointConfig{
+			DisplayName: name,
+			Protocol:    protocolSelect.Selected,
+			BaseURL:     strings.TrimSpace(baseURLEntry.Text),
+		}
+		if apiKey := strings.TrimSpace(apiKeyEntry.Text); apiKey != "" {
+			ep.APIKey = apiKey
+		}
+		if s.app.cfg.Vendors[vendor].Endpoints == nil {
+			vc := s.app.cfg.Vendors[vendor]
+			vc.Endpoints = map[string]config.EndpointConfig{}
+			s.app.cfg.Vendors[vendor] = vc
+		}
+		vc := s.app.cfg.Vendors[vendor]
+		vc.Endpoints[name] = ep
+		s.app.cfg.Vendors[vendor] = vc
+		_ = s.app.cfg.Save()
+
+		// Refresh UI.
+		s.updateEndpoints(vendor)
+		s.epSelect.SetSelected(name)
+	}, s.app.window)
+	d.Resize(fyne.NewSize(500, 350))
+	d.Show()
+}
