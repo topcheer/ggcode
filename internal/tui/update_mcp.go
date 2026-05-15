@@ -44,8 +44,11 @@ func (m Model) handleMcpOAuthStartMsg(msg mcpOAuthStartMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.deviceUserCode != "" {
-		// Device flow: store code info for banner display, poll in background
+		// Device flow: copy code to clipboard, store code info for banner display, poll in background
 		m.addDeviceCode(msg.serverName, msg.deviceUserCode, msg.authorizeURL)
+		if m.clipboardWriter != nil {
+			_ = m.clipboardWriter(msg.deviceUserCode)
+		}
 		if m.mcpPanel != nil {
 			m.mcpPanel.message = fmt.Sprintf("Waiting for %s device authorization...", msg.serverName)
 		}
