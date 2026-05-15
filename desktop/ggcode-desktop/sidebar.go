@@ -221,6 +221,7 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	for name := range cfg.Vendors {
 		vendorNames = append(vendorNames, name)
 	}
+	sort.Strings(vendorNames)
 
 	s.vendorSelect = widget.NewSelect(vendorNames, func(vendor string) {
 		s.updateEndpoints(vendor)
@@ -283,6 +284,7 @@ func (s *Sidebar) updateEndpoints(vendor string) {
 		for name := range v.Endpoints {
 			eps = append(eps, name)
 		}
+		sort.Strings(eps)
 		s.epSelect.Options = eps
 		s.epSelect.Refresh()
 		if len(eps) > 0 {
@@ -357,6 +359,9 @@ func (s *Sidebar) fetchModels() {
 				s.modelSelect.Options = []string{}
 			}
 			s.modelSelect.Refresh()
+			if len(models) > 0 {
+				s.modelSelect.SetSelected(models[0])
+			}
 			s.modelLoading.SetText(fmt.Sprintf("%d models found", len(models)))
 		})
 	}()
