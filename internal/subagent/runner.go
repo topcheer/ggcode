@@ -175,6 +175,15 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 				})
 			}
 			cfg.Manager.Notify(cfg.SubAgentID)
+		case provider.StreamEventReasoning:
+			if event.Text != "" && event.Text != "__redacted_thinking__" {
+				if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
+					sa.appendEvent(AgentEvent{
+						Type: AgentEventReasoning,
+						Text: event.Text,
+					})
+				}
+			}
 		}
 	})
 	// Flush any remaining text at the end of the stream

@@ -588,6 +588,8 @@ func agentEventTypeStr(t subagent.AgentEventType) string {
 		return "tool_result"
 	case subagent.AgentEventError:
 		return "error"
+	case subagent.AgentEventReasoning:
+		return "reasoning"
 	}
 	return "unknown"
 }
