@@ -1,0 +1,41 @@
+name: Test Linux Desktop Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        required: false
+        default: main
+
+jobs:
+  build-linux-desktop:
+    runs-on: ubuntu-latest
+    env:
+      GGCODE_VERSION: v0.0.0-linux-test
+      GGCODE_COMMIT: ${{ github.sha }}
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Fyne dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxxf86vm-dev libglfw3-dev libpulse-dev
+      - name: Capture build date
+        run: echo "GGCODE_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
+      - name: Build desktop Linux
+        run: |
+          chmod +x ./scripts/release/build-desktop-linux.sh
+          ./scripts/release/build-desktop-linux.sh "${GGCODE_VERSION}" dist
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux
+          path: dist/ggcode-desktop_*
