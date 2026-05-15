@@ -23,6 +23,8 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -183,15 +185,44 @@ func (b *AgentBridge) setupAgent() error {
 		}
 		resp := make(chan permission.Decision, 1)
 		fyne.Do(func() {
-			dialog.ShowConfirm("Tool Approval",
-				fmt.Sprintf("Allow tool '%s' to run?\n\n%s", toolName, truncate(input, 500)),
-				func(ok bool) {
-					if ok {
-						resp <- permission.Allow
-					} else {
-						resp <- permission.Deny
-					}
-				}, b.mainWindow)
+			denyBtn := widget.NewButton("Deny", func() { resp <- permission.Deny })
+			allowBtn := widget.NewButton("Allow", func() { resp <- permission.Allow })
+			allowBtn.Importance = widget.HighImportance
+			alwaysBtn := widget.NewButton("Always Allow", func() {
+				if b.agent != nil {
+					b.agent.PermissionPolicy().(*permission.ConfigPolicy).SetOverride(toolName, permission.Allow)
+				}
+				resp <- permission.Allow
+			})
+			alwaysBtn.Importance = widget.SuccessImportance
+
+			// Format tool arguments as readable key-value pairs
+			var displayArgs string
+			var raw map[string]interface{}
+			if json.Unmarshal([]byte(input), &raw) == nil {
+				for k, v := range raw {
+					displayArgs += fmt.Sprintf("  %s: %v\n", k, v)
+				}
+				displayArgs = strings.TrimSpace(displayArgs)
+			} else {
+				displayArgs = truncate(input, 800)
+			}
+			content := widget.NewLabel(fmt.Sprintf("Tool: %s\n\n%s", toolName, displayArgs))
+			content.Wrapping = fyne.TextWrapWord
+
+			d := dialog.NewCustom("Tool Approval", "",
+				container.NewVBox(
+					content,
+					widget.NewSeparator(),
+					container.NewHBox(layout.NewSpacer(), denyBtn, allowBtn, alwaysBtn),
+				), b.mainWindow)
+			d.SetOnClosed(func() {
+				select {
+				case resp <- permission.Deny:
+				default:
+				}
+			})
+			d.Show()
 		})
 		select {
 		case d := <-resp:
@@ -888,22 +919,12 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 		var items []*widget.FormItem
 
 		for _, q := range req.Questions {
-			ans := tool.AskUserAnswer{
-				ID:       q.ID,
-				Title:    q.Title,
-				Kind:     q.Kind,
-				Answered: true,
-			}
-
 			switch q.Kind {
 			case "text":
-				entry := widget.NewEntry()
+				entry := widget.NewMultiLineEntry()
 				entry.PlaceHolder = q.Placeholder
-				if q.Placeholder != "" {
-					entry.SetText(q.Placeholder)
-				}
 				items = append(items, &widget.FormItem{Text: q.Title, Widget: entry})
-				answers = append(answers, ans) // placeholder, will be filled below
+				answers = append(answers, tool.AskUserAnswer{ID: q.ID, Title: q.Title, Kind: q.Kind, Answered: true})
 
 			case "single":
 				choices := make([]string, len(q.Choices))
@@ -914,14 +935,29 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 				if len(choices) > 0 {
 					sel.SetSelectedIndex(0)
 				}
-				items = append(items, &widget.FormItem{Text: q.Title, Widget: sel})
-				answers = append(answers, ans)
+				notesEntry := widget.NewEntry()
+				notesEntry.PlaceHolder = "Additional notes (optional)"
+				box := container.NewVBox(sel, notesEntry)
+				items = append(items, &widget.FormItem{Text: q.Title, Widget: box})
+				answers = append(answers, tool.AskUserAnswer{ID: q.ID, Title: q.Title, Kind: q.Kind, Answered: true})
+
+			case "multi":
+				labels := make([]string, len(q.Choices))
+				for i, c := range q.Choices {
+					labels[i] = c.Label
+				}
+				checks := widget.NewCheckGroup(labels, nil)
+				notesEntry := widget.NewEntry()
+				notesEntry.PlaceHolder = "Additional notes (optional)"
+				box := container.NewVBox(checks, notesEntry)
+				items = append(items, &widget.FormItem{Text: q.Title, Widget: box})
+				answers = append(answers, tool.AskUserAnswer{ID: q.ID, Title: q.Title, Kind: q.Kind, Answered: true})
 
 			default:
 				entry := widget.NewEntry()
 				entry.PlaceHolder = q.Placeholder
 				items = append(items, &widget.FormItem{Text: q.Title, Widget: entry})
-				answers = append(answers, ans)
+				answers = append(answers, tool.AskUserAnswer{ID: q.ID, Title: q.Title, Kind: q.Kind, Answered: true})
 			}
 		}
 
@@ -940,6 +976,22 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 					case *widget.Select:
 						answers[i].SelectedChoiceIDs = []string{w.Selected}
 						answers[i].SelectedChoices = []string{w.Selected}
+					case *fyne.Container:
+						// VBox with main widget + notes entry
+						for _, obj := range w.Objects {
+							switch obj.(type) {
+							case *widget.Select:
+								sel := obj.(*widget.Select)
+								answers[i].SelectedChoiceIDs = []string{sel.Selected}
+								answers[i].SelectedChoices = []string{sel.Selected}
+							case *widget.CheckGroup:
+								cg := obj.(*widget.CheckGroup)
+								answers[i].SelectedChoices = cg.Selected
+								answers[i].SelectedChoiceIDs = cg.Selected
+							case *widget.Entry:
+								answers[i].FreeformText = obj.(*widget.Entry).Text
+							}
+						}
 					}
 				}
 				resp <- tool.AskUserResponse{
