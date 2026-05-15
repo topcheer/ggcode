@@ -317,15 +317,13 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 	return widget.NewCard("", "", container.NewPadded(row))
 }
 
-// refreshIMWindow closes existing dialog and reopens.
+// refreshIMWindow rebuilds the content of the existing IM window.
 func (a *App) refreshIMWindow() {
-	if a.window == nil {
+	if a.imWindow == nil {
 		return
 	}
-	// Re-show by closing and re-opening. Fyne doesn't have a clean way to
-	// replace dialog content, so we just call showIMWindow which creates a new one.
 	fyne.Do(func() {
-		a.showIMWindow()
+		a.imWindow.SetContent(a.buildIMDialogContent(a.imWindow))
 	})
 }
 
