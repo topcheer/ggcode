@@ -528,6 +528,10 @@ func (cv *ChatView) hideThinking() {
 
 // onReasoningChunk accumulates reasoning text into a collapsible panel.
 func (cv *ChatView) onReasoningChunk(text string) {
+	// Filter out Anthropic redacted thinking blocks.
+	if text == "__redacted_thinking__" {
+		return
+	}
 	cv.hideThinking()
 	cv.reasoningBuf.WriteString(text)
 
@@ -1313,6 +1317,25 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 			t := canvas.NewText(ev.Content, theme.ErrorColor())
 			t.TextSize = theme.TextSize()
 			st.vbox.Add(cv.iconRow(theme.CancelIcon(), t))
+
+		case "reasoning":
+			// Collect consecutive reasoning events into a single collapsed accordion.
+			reasoningText := ev.Content
+			for j := i + 1; j < len(panel.Events); j++ {
+				if panel.Events[j].Type == "reasoning" {
+					reasoningText += panel.Events[j].Content
+					i = j
+				} else {
+					break
+				}
+			}
+			if reasoningText != "" {
+				md := newMD(reasoningText)
+				item := widget.NewAccordionItem(fmt.Sprintf("Thought (%d chars)", len(reasoningText)), md)
+				accordion := widget.NewAccordion(item)
+				accordion.CloseAll()
+				st.vbox.Add(accordion)
+			}
 		}
 	}
 }

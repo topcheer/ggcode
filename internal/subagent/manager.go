@@ -17,6 +17,7 @@ const (
 	AgentEventToolCall                         // tool invocation started
 	AgentEventToolResult                       // tool execution result
 	AgentEventError                            // error encountered
+	AgentEventReasoning                        // LLM thinking/reasoning content
 )
 
 // AgentEvent is a single recorded event from a sub-agent's execution.
