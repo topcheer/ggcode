@@ -5,6 +5,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2/data/binding"
@@ -44,6 +45,8 @@ type UIState struct {
 	TokenUsage binding.String
 	ContextWin binding.String
 	TokenPct   binding.Float
+
+	AgentWorking atomic.Bool // true while agent is busy
 
 	// Event callback: ChatView registers this to receive precise UI events.
 	OnEvent func(UIEvent)

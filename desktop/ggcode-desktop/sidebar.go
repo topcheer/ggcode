@@ -76,21 +76,20 @@ func (s *Sidebar) setProviderEnabled(enabled bool) {
 		return
 	}
 	s.providerEnabled = enabled
-	e := enabled
-	if e {
-		s.vendorSelect.Enable()
-		s.epSelect.Enable()
-		s.apiKeyEntry.Enable()
-		s.baseURLEntry.Enable()
-		s.modelSelect.Enable()
-		s.modelRefresh.Enable()
-	} else {
-		s.vendorSelect.Disable()
-		s.epSelect.Disable()
-		s.apiKeyEntry.Disable()
-		s.baseURLEntry.Disable()
-		s.modelSelect.Disable()
-		s.modelRefresh.Disable()
+	widgets := []fyne.Disableable{
+		s.vendorSelect,
+		s.epSelect,
+		s.apiKeyEntry,
+		s.baseURLEntry,
+		s.modelSelect,
+		s.modelRefresh,
+	}
+	for _, w := range widgets {
+		if enabled {
+			w.Enable()
+		} else {
+			w.Disable()
+		}
 	}
 }
 
