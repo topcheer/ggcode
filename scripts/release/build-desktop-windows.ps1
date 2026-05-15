@@ -14,7 +14,9 @@ $PackageVersion = $Version -replace '^v',''
 $Commit = if ($env:GGCODE_COMMIT) { $env:GGCODE_COMMIT } else { "" }
 $BuildDate = if ($env:GGCODE_DATE) { $env:GGCODE_DATE } else { "" }
 
-New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
+# Resolve OutputDir to absolute path
+$AbsOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $pwd $OutputDir }
+New-Item -ItemType Directory -Force -Path $AbsOutputDir | Out-Null
 
 $Ldflags = @(
   "-s", "-w",
@@ -24,12 +26,15 @@ $Ldflags = @(
 ) -join " "
 
 Write-Host "=== Building ggcode-desktop for Windows (amd64) ==="
+Write-Host "Output: $AbsOutputDir"
 
 Push-Location $DesktopDir
   $env:CGO_ENABLED = "1"
   $env:GOOS = "windows"
   $env:GOARCH = "amd64"
-  go build -tags goolm -ldflags $Ldflags -o (Join-Path $OutputDir "ggcode-desktop_${PackageVersion}_windows_amd64.exe") .
+  $outFile = Join-Path $AbsOutputDir "ggcode-desktop_${PackageVersion}_windows_amd64.exe"
+  go build -tags goolm -ldflags $Ldflags -o $outFile .
+  Write-Host "Built: $outFile"
 Pop-Location
 
 Write-Host "=== Done ==="
