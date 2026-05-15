@@ -10,6 +10,8 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+
+	"github.com/topcheer/ggcode/internal/im"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -175,8 +177,23 @@ func (a *App) showIMWindow() {
 		var rebindBtn *widget.Button
 		if !e.IsCurrent {
 			rebindBtn = widget.NewButton("Bind to this workspace", func() {
-				// TODO: actual bind logic when im runtime is available
-				dialog.ShowInformation("Bind", fmt.Sprintf("Adapter '%s' will be bound to the current workspace when IM runtime is active.", e.Name), w)
+				if a.imManager == nil {
+					dialog.ShowInformation("Bind", "IM runtime is not available yet.", w)
+					return
+				}
+				// Unbind from old workspace first if needed.
+				if e.Workspace != "" {
+					_ = a.imManager.UnbindAdapter(e.Name)
+				}
+				a.imManager.BindSession(im.SessionBinding{Workspace: a.dc.WorkDir})
+				_, _ = a.imManager.BindChannel(im.ChannelBinding{
+					Workspace: a.dc.WorkDir,
+					Platform:  im.Platform(e.Platform),
+					Adapter:   e.Name,
+				})
+				entries = a.imAdapterEntries()
+				adapterList.Refresh()
+				adapterList.OnSelected(id)
 			})
 		}
 
@@ -270,6 +287,7 @@ func (a *App) buildIMAddCard(parent fyne.Window, cfg *config.Config, onAdded fun
 }
 
 // imAdapterEntries returns sorted adapter entries grouped by binding status.
+// Reads real binding data from imManager when available, falls back to config-only.
 func (a *App) imAdapterEntries() []imAdapterEntry {
 	cfg := a.cfg
 	if cfg.IM.Adapters == nil {
@@ -280,20 +298,37 @@ func (a *App) imAdapterEntries() []imAdapterEntry {
 		currentWS = a.dc.WorkDir
 	}
 
+	// Build workspace map from imManager bindings if available.
+	bindingWorkspace := make(map[string]string) // adapterName -> workspace
+	bindingChannel := make(map[string]string)   // adapterName -> channelID
+	bindingMuted := make(map[string]bool)       // adapterName -> muted
+	if a.imManager != nil {
+		snap := a.imManager.Snapshot()
+		for _, b := range snap.CurrentBindings {
+			bindingWorkspace[b.Adapter] = b.Workspace
+			bindingChannel[b.Adapter] = b.ChannelID
+			bindingMuted[b.Adapter] = b.Muted
+		}
+		for _, b := range snap.DisabledBindings {
+			if _, exists := bindingWorkspace[b.Adapter]; !exists {
+				bindingWorkspace[b.Adapter] = b.Workspace
+				bindingChannel[b.Adapter] = b.ChannelID
+			}
+		}
+	}
+
 	var current, other, unbound, disabled []imAdapterEntry
 	for name, ac := range cfg.IM.Adapters {
+		ws := bindingWorkspace[name]
+		ch := bindingChannel[name]
+		_ = ch
 		e := imAdapterEntry{
 			Name:     name,
 			Platform: ac.Platform,
 			Enabled:  ac.Enabled,
+			Workspace: ws,
+			IsCurrent: ws == currentWS && ws != "",
 		}
-		// Check workspace binding from config targets or extra
-		if ws, ok := ac.Extra["workspace"]; ok {
-			if s, ok := ws.(string); ok {
-				e.Workspace = s
-			}
-		}
-		e.IsCurrent = e.Workspace == currentWS
 
 		if !ac.Enabled {
 			disabled = append(disabled, e)
