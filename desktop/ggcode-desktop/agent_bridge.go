@@ -42,7 +42,7 @@ type AgentBridge struct {
 
 	startTime time.Time // when current agent loop started
 
-	emitter   *im.IMEmitter
+	Emitter   *im.IMEmitter
 
 	imRound   imRoundState // per-round IM emission state
 
@@ -289,10 +289,10 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 
 			case provider.StreamEventDone:
 				// Each LLM turn ends with Done. Emit accumulated text to IM.
-				if b.emitter != nil && b.imRound.Text.Len() > 0 {
+				if b.Emitter != nil && b.imRound.Text.Len() > 0 {
 					text := b.imRound.Text.String()
 					if strings.TrimSpace(text) != "" {
-						b.emitter.EmitRoundSummary(text, b.imRound.ToolCalls, b.imRound.ToolSuccesses, b.imRound.ToolFailures)
+						b.Emitter.EmitRoundSummary(text, b.imRound.ToolCalls, b.imRound.ToolSuccesses, b.imRound.ToolFailures)
 					}
 					b.imRound.Text.Reset()
 					b.imRound.ToolCalls = 0
