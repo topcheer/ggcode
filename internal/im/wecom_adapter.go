@@ -641,10 +641,13 @@ func (a *wecomAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	if chatID == "" {
 		chatID = binding.TargetID
 	}
-	if event.Text == "" || chatID == "" {
+	if chatID == "" {
 		return nil
 	}
-	text := event.Text
+	text := a.outboundText(event)
+	if text == "" {
+		return nil
+	}
 	if len(text) > wecomMaxTextLen {
 		text = text[:wecomMaxTextLen]
 	}
@@ -836,4 +839,26 @@ func entryMatches(entries []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// outboundText converts an OutboundEvent to display text for WeCom.
+func (a *wecomAdapter) outboundText(event OutboundEvent) string {
+	switch event.Kind {
+	case OutboundEventText:
+		return event.Text
+	case OutboundEventStatus:
+		return event.Status
+	case OutboundEventToolCall:
+		if event.ToolCall == nil {
+			return ""
+		}
+		return formatToolCallText(event.ToolCall)
+	case OutboundEventToolResult:
+		if event.ToolRes == nil {
+			return ""
+		}
+		return formatToolResultText(event.ToolRes)
+	default:
+		return event.Text
+	}
 }
