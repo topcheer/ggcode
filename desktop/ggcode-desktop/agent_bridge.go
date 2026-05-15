@@ -44,7 +44,7 @@ type AgentBridge struct {
 
 	emitter   *im.IMEmitter
 
-	imAccumText string // accumulated assistant text for IM emission
+	imRound   imRoundState // per-round IM emission state
 
 	registry   *tool.Registry
 	workingDir string
@@ -230,7 +230,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			switch ev.Type {
 			case provider.StreamEventText:
 				b.ui.AppendAssistantText(ev.Text)
-				b.imAccumText += ev.Text
+				b.imRound.Text.WriteString(ev.Text)
 
 			case provider.StreamEventToolCallDone:
 				b.ui.FinalizeStreaming()
@@ -253,14 +253,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Time:     time.Now(),
 				})
 
-				// Flush accumulated assistant text to IM, then emit tool status.
-				if b.emitter != nil {
-					if strings.TrimSpace(b.imAccumText) != "" {
-						b.emitter.EmitText(b.imAccumText)
-						b.imAccumText = ""
-					}
-					b.emitter.EmitToolStatus(name, args)
-				}
+				// Track tool calls in round state.
+				b.imRound.ToolCalls++
 
 			case provider.StreamEventToolResult:
 				content := ev.Result
@@ -268,6 +262,11 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					content = truncateRunes(content, 2000, "\n...(truncated)")
 				}
 				b.ui.UpdateToolResult(ev.Tool.ID, content, ev.IsError)
+				if ev.IsError {
+					b.imRound.ToolFailures++
+				} else {
+					b.imRound.ToolSuccesses++
+				}
 
 				// After spawn_agent completes, sync agent panels.
 				if ev.Tool.Name == "spawn_agent" && b.subAgentMgr != nil {
@@ -287,16 +286,23 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if ev.Text != "" {
 					b.ui.AppendReasoning(ev.Text)
 				}
+
+			case provider.StreamEventDone:
+				// Each LLM turn ends with Done. Emit accumulated text to IM.
+				if b.emitter != nil && b.imRound.Text.Len() > 0 {
+					text := b.imRound.Text.String()
+					if strings.TrimSpace(text) != "" {
+						b.emitter.EmitRoundSummary(text, b.imRound.ToolCalls, b.imRound.ToolSuccesses, b.imRound.ToolFailures)
+					}
+					b.imRound.Text.Reset()
+					b.imRound.ToolCalls = 0
+					b.imRound.ToolSuccesses = 0
+					b.imRound.ToolFailures = 0
+				}
 			}
 		}
 
 		err := b.agent.RunStreamWithContent(ctx, content, onEvent)
-
-		// Flush any remaining accumulated text after agent loop ends.
-		if b.emitter != nil && strings.TrimSpace(b.imAccumText) != "" {
-			b.emitter.EmitText(b.imAccumText)
-			b.imAccumText = ""
-		}
 		if err != nil {
 			b.mu.Lock()
 			c := b.cancelled
@@ -789,4 +795,12 @@ func extractTextFromBlocks(blocks []provider.ContentBlock) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// imRoundState tracks per-LLM-turn state for IM emission.
+type imRoundState struct {
+	Text          strings.Builder
+	ToolCalls     int
+	ToolSuccesses int
+	ToolFailures  int
 }
