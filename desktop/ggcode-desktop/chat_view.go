@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -32,7 +34,8 @@ type sendEntry struct {
 	widget.Entry
 	onSend      func()
 	busy        bool
-	pendingText string
+	pendingText    string
+	pendingImage   *provider.ContentBlock
 }
 
 func newSendEntry() *sendEntry {
@@ -83,6 +86,29 @@ func (e *sendEntry) isShiftHeld() bool {
 		return m&fyne.KeyModifierShift != 0
 	}
 	return false
+}
+
+func (e *sendEntry) attachImage(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	mime := "image/png"
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") {
+		mime = "image/jpeg"
+	} else if strings.HasSuffix(lower, ".gif") {
+		mime = "image/gif"
+	} else if strings.HasSuffix(lower, ".webp") {
+		mime = "image/webp"
+	}
+	block := provider.ImageBlock(mime, base64.StdEncoding.EncodeToString(data))
+	e.pendingImage = &block
+	return nil
+}
+
+func (e *sendEntry) clearImage() {
+	e.pendingImage = nil
 }
 
 // ── ChatView ─────────────────────────────────────────
