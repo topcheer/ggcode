@@ -29,7 +29,7 @@ type App struct {
 
 	// IM runtime.
 	imManager    *im.Manager
-	imController im.AdapterController
+	imController *im.AdapterController
 	imWindow     fyne.Window
 
 	// Shared UI state for cross-goroutine updates.
@@ -384,6 +384,9 @@ func (a *App) startChat() {
 	if a.chatViewRef != nil && a.chatViewRef.stopCh != nil {
 		close(a.chatViewRef.stopCh)
 		a.chatViewRef.stopCh = nil
+
+		// Stop old IM adapters.
+		a.stopIMAdapters()
 	}
 
 	// Save current session before switching.
@@ -563,4 +566,7 @@ func (a *App) initIMRuntime() {
 	}
 
 	a.imManager = mgr
+
+	// Start adapters bound to current workspace.
+	a.startIMAdapters()
 }
