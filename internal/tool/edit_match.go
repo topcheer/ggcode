@@ -6,66 +6,83 @@ import (
 	"strings"
 )
 
+// matchResult describes a successful old_text resolution.
+type matchResult struct {
+	canonical string // the actual bytes in content that will be replaced
+	transform string // diagnostic tag for which fallback fired ("" = exact)
+	shift     string // for leading-indent-shift: prefix to prepend to new_text lines
+}
+
 // resolveOldText tries multiple strategies to locate oldText in content,
 // helping weaker LLMs whose `old_text` argument frequently differs from the
 // file in trivial ways (indentation style, line-number prefix copied from
-// read_file output, CRLF vs LF, trailing whitespace).
+// read_file output, CRLF vs LF, trailing whitespace, missing leading
+// indentation).
 //
-// On success, it returns the canonical text exactly as it appears in
-// content (so a strings.Replace will substitute the right bytes) and a
-// short transform tag describing what was applied. On failure both return
-// values are empty strings.
-func resolveOldText(content, oldText string) (canonical string, transform string) {
+// On success, canonical is the exact substring of content that will be
+// substituted (so a strings.Replace targets the right bytes). On failure
+// canonical is "".
+func resolveOldText(content, oldText string) matchResult {
 	if oldText == "" {
-		return "", ""
+		return matchResult{}
 	}
 	if strings.Contains(content, oldText) {
-		return oldText, ""
+		return matchResult{canonical: oldText}
 	}
 
 	// 1. Indentation normalization (tabs <-> spaces).
 	if normalized := normalizeIndentation(content, oldText); normalized != oldText && strings.Contains(content, normalized) {
-		return normalized, "indent-normalized"
+		return matchResult{canonical: normalized, transform: "indent-normalized"}
 	}
 
 	// 2. Line-number prefix from read_file output: "   42\t<line>".
 	if stripped := stripLineNumberPrefix(oldText); stripped != oldText {
 		if strings.Contains(content, stripped) {
-			return stripped, "line-numbers-stripped"
+			return matchResult{canonical: stripped, transform: "line-numbers-stripped"}
 		}
 		if normalized := normalizeIndentation(content, stripped); normalized != stripped && strings.Contains(content, normalized) {
-			return normalized, "line-numbers-stripped+indent-normalized"
+			return matchResult{canonical: normalized, transform: "line-numbers-stripped+indent-normalized"}
 		}
 	}
 
 	// 3. CRLF / LF mismatch.
 	if crlf := tryCRLFMatch(content, oldText); crlf != "" {
-		return crlf, "crlf-converted"
+		return matchResult{canonical: crlf, transform: "crlf-converted"}
 	}
 
-	// 4. Trailing-whitespace tolerance: match by per-line right-trimmed
-	// equality, then return the file's actual text at those lines so the
-	// substitution preserves the file's whitespace exactly.
+	// 4. Leading-indent shift: LLM provided the right text but with less
+	// (or no) leading indentation. Match by structural equality after
+	// stripping both leading and trailing whitespace, then return the
+	// file's actual block plus the shift to prepend to new_text lines.
+	if canonical, shift := tryLeadingIndentShift(content, oldText); canonical != "" {
+		return matchResult{canonical: canonical, transform: "leading-indent-shift", shift: shift}
+	}
+
+	// 5. Trailing-whitespace tolerance: leading whitespace already matches
+	// (otherwise step 4 would have caught the mismatch first); only the
+	// per-line trailing differs.
 	if trimmed := tryTrailingWhitespaceMatch(content, oldText); trimmed != "" {
-		return trimmed, "trailing-whitespace-tolerant"
+		return matchResult{canonical: trimmed, transform: "trailing-whitespace-tolerant"}
 	}
 
-	return "", ""
+	return matchResult{}
 }
 
 // adjustNewText applies the same transform that was used to find old_text
 // to new_text, so the replacement remains consistent with the file.
-func adjustNewText(content, newText, transform string) string {
+func adjustNewText(content, newText string, mr matchResult) string {
 	out := newText
-	switch {
-	case strings.Contains(transform, "line-numbers-stripped"):
+	if strings.Contains(mr.transform, "line-numbers-stripped") {
 		out = stripLineNumberPrefix(out)
 	}
-	if strings.Contains(transform, "indent-normalized") {
+	if strings.Contains(mr.transform, "indent-normalized") {
 		out = normalizeIndentation(content, out)
 	}
-	if transform == "crlf-converted" && !strings.Contains(out, "\r\n") {
+	if mr.transform == "crlf-converted" && !strings.Contains(out, "\r\n") {
 		out = strings.ReplaceAll(out, "\n", "\r\n")
+	}
+	if mr.transform == "leading-indent-shift" && mr.shift != "" {
+		out = applyLeadingIndentShift(out, mr.shift)
 	}
 	return out
 }
@@ -120,6 +137,119 @@ func tryCRLFMatch(content, oldText string) string {
 		return candidate
 	}
 	return ""
+}
+
+// leadingWhitespace returns the prefix of s that consists of spaces and tabs.
+func leadingWhitespace(s string) string {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	return s[:i]
+}
+
+// tryLeadingIndentShift handles the very common LLM failure where the
+// model provides the right text but with less (or no) leading indentation
+// than the file actually uses — e.g. file has "\t\t// foo" but the LLM
+// supplied just "// foo" as old_text.
+//
+// It looks for a contiguous block in content whose lines, after stripping
+// both leading and trailing whitespace, equal the lines of oldText. To
+// guard against unrelated false matches it requires:
+//   - The file's leading whitespace on each non-empty matched line must
+//     start with the LLM's leading whitespace on the corresponding old
+//     line (so the shift is well-defined).
+//   - The "shift" — the extra prefix the file has — must be IDENTICAL on
+//     every non-empty matched line, preserving the relative indent of the
+//     LLM's old_text.
+//
+// Returns the canonical block from the file plus the shift to prepend to
+// each line of new_text.
+func tryLeadingIndentShift(content, oldText string) (canonical, shift string) {
+	oldLines := strings.Split(oldText, "\n")
+	contentLines := strings.Split(content, "\n")
+	if len(oldLines) == 0 || len(oldLines) > len(contentLines) {
+		return "", ""
+	}
+
+	stripBoth := func(s string) string { return strings.TrimSpace(s) }
+
+	sOld := make([]string, len(oldLines))
+	firstNonEmpty := -1
+	for i, l := range oldLines {
+		s := stripBoth(l)
+		sOld[i] = s
+		if s != "" && firstNonEmpty < 0 {
+			firstNonEmpty = i
+		}
+	}
+	if firstNonEmpty < 0 {
+		return "", ""
+	}
+
+	for i := 0; i+len(sOld) <= len(contentLines); i++ {
+		match := true
+		for j := range sOld {
+			if stripBoth(contentLines[i+j]) != sOld[j] {
+				match = false
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+
+		baseFile := leadingWhitespace(contentLines[i+firstNonEmpty])
+		baseOld := leadingWhitespace(oldLines[firstNonEmpty])
+		if !strings.HasPrefix(baseFile, baseOld) {
+			continue
+		}
+		s := baseFile[len(baseOld):]
+		if s == "" {
+			// No actual shift — exact path or trailing-whitespace path
+			// would have already matched. Keep searching for a real
+			// shifted occurrence rather than returning a no-op.
+			continue
+		}
+
+		// Verify every non-empty line has the same shift on top of the
+		// LLM's per-line leading indent.
+		consistent := true
+		for j := range sOld {
+			if sOld[j] == "" {
+				continue
+			}
+			wantOldLead := leadingWhitespace(oldLines[j])
+			wantFileLead := s + wantOldLead
+			if leadingWhitespace(contentLines[i+j]) != wantFileLead {
+				consistent = false
+				break
+			}
+		}
+		if !consistent {
+			continue
+		}
+
+		return strings.Join(contentLines[i:i+len(sOld)], "\n"), s
+	}
+	return "", ""
+}
+
+// applyLeadingIndentShift prepends shift to every non-empty line of text.
+// Empty lines are left empty so trailing blank lines in new_text don't
+// gain spurious whitespace.
+func applyLeadingIndentShift(text, shift string) string {
+	if shift == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		lines[i] = shift + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // tryTrailingWhitespaceMatch finds oldText in content by ignoring

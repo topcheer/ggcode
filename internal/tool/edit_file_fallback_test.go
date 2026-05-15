@@ -135,3 +135,61 @@ func TestEditFile_DescriptionNotRequired(t *testing.T) {
 		t.Fatalf("description should be optional; got err=%v res=%v", err, res)
 	}
 }
+
+func TestEditFile_LeadingIndentShift(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	// File has the comment indented with two tabs.
+	content := "package main\n\nfunc x() {\n\tif true {\n\t\t// Device flow: foo\n\t\tdoThing()\n\t}\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// LLM provides old_text with NO leading whitespace.
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"old_text":  "// Device flow: foo",
+		"new_text":  "// Device flow: bar",
+	})
+	res, err := EditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected leading-indent-shift to succeed; got: %s", res.Content)
+	}
+	got, _ := os.ReadFile(fp)
+	want := "package main\n\nfunc x() {\n\tif true {\n\t\t// Device flow: bar\n\t\tdoThing()\n\t}\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestEditFile_LeadingIndentShift_MultiLine(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	// Block has consistent 2-tab base indent + relative indent within.
+	content := "func x() {\n\t\tif a {\n\t\t\treturn 1\n\t\t}\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// LLM strips the 2-tab base but keeps relative indent.
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"old_text":  "if a {\n\treturn 1\n}",
+		"new_text":  "if a {\n\treturn 2\n}",
+	})
+	res, err := EditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected leading-indent-shift to succeed; got: %s", res.Content)
+	}
+	got, _ := os.ReadFile(fp)
+	want := "func x() {\n\t\tif a {\n\t\t\treturn 2\n\t\t}\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}

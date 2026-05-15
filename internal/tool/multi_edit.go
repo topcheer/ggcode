@@ -106,8 +106,8 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if edit.OldText == "" {
 			return Result{IsError: true, Content: fmt.Sprintf("edits[%d]: old_text must not be empty", i)}, nil
 		}
-		oldText, transform := resolveOldText(content, edit.OldText)
-		if oldText == "" {
+		mr := resolveOldText(content, edit.OldText)
+		if mr.canonical == "" {
 			hint := diagnoseMatchFailure(content, edit.OldText)
 			msg := fmt.Sprintf("edits[%d]: old_text not found in file", i)
 			if hint != "" {
@@ -115,6 +115,7 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 			}
 			return Result{IsError: true, Content: msg}, nil
 		}
+		oldText := mr.canonical
 		count := strings.Count(content, oldText)
 		if count > 1 {
 			lines := findMatchLineNumbers(content, oldText)
@@ -133,8 +134,8 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		}
 		idx := strings.Index(content, oldText)
 		newText := edit.NewText
-		if transform != "" {
-			newText = adjustNewText(content, edit.NewText, transform)
+		if mr.transform != "" {
+			newText = adjustNewText(content, edit.NewText, mr)
 		}
 		positions = append(positions, editPos{
 			start: idx,
