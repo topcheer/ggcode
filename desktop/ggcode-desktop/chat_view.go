@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -120,6 +121,7 @@ type ChatView struct {
 	entry     *sendEntry
 	sendBtn   *widget.Button
 	cancelBtn *widget.Button
+	imageBtn  *widget.Button
 
 	scroll *container.Scroll
 	vbox   *fyne.Container
@@ -181,11 +183,25 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 	cv.cancelBtn.Importance = widget.DangerImportance
 	cv.cancelBtn.Hide()
 
+	cv.imageBtn = widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
+		dialog.ShowFileOpen(func(rc fyne.URIReadCloser, err error) {
+			if err != nil || rc == nil {
+				return
+			}
+			defer rc.Close()
+			if e := cv.entry.attachImage(rc.URI().Path()); e != nil {
+				return
+			}
+			cv.imageBtn.Importance = widget.HighImportance
+			cv.imageBtn.Refresh()
+		}, fyne.CurrentApp().Driver().AllWindows()[0])
+	})
+
 	return cv
 }
 
 func (cv *ChatView) Render() fyne.CanvasObject {
-	btnRow := container.NewHBox(cv.cancelBtn, cv.sendBtn)
+	btnRow := container.NewHBox(cv.cancelBtn, cv.imageBtn, cv.sendBtn)
 	inputBar := container.NewBorder(nil, nil, nil, btnRow, cv.entry)
 
 	cv.vbox = container.NewVBox()
@@ -230,18 +246,38 @@ func (cv *ChatView) onSend() {
 	if text == "" {
 		text = strings.TrimSpace(cv.entry.Text)
 	}
-	if text == "" {
+	if text == "" && cv.entry.pendingImage == nil {
 		return
 	}
 	cv.entry.SetText("")
+	img := cv.entry.pendingImage
+	cv.entry.clearImage()
+	cv.imageBtn.Importance = widget.MediumImportance
+	cv.imageBtn.Refresh()
 	cv.entry.Refresh()
-	cv.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
+
+	var content []provider.ContentBlock
+	if img != nil {
+		content = append(content, *img)
+	}
+	if text != "" {
+		content = append(content, provider.TextBlock(text))
+	}
+
+	displayText := text
+	if img != nil && text == "" {
+		displayText = "[image]"
+	} else if img != nil {
+		displayText = "[image] " + text
+	}
+	cv.ui.AppendChat(ChatMessage{Role: "user", Content: displayText, Time: time.Now()})
+
 	if cv.bridge.IsWorking() {
 		cv.bridge.QueueMessage(text)
 		cv.ui.AppendChat(ChatMessage{Role: "system", Content: "(queued)", Time: time.Now()})
 		return
 	}
-	if err := cv.bridge.Send(text); err != nil {
+	if err := cv.bridge.SendContent(content); err != nil {
 		cv.ui.AppendChat(ChatMessage{Role: "error", Content: err.Error(), Time: time.Now()})
 	}
 }
@@ -1351,5 +1387,13 @@ func (cv *ChatView) rebuildFromMessages(messages []provider.Message) {
 	}
 
 	cv.vbox.Refresh()
-	cv.scroll.ScrollToBottom()
+
+	// Defer scroll to bottom so layout is computed first.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		fyne.Do(func() {
+			cv.scroll.Refresh()
+			cv.scroll.ScrollToBottom()
+		})
+	}()
 }
