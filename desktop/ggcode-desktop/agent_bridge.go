@@ -44,6 +44,8 @@ type AgentBridge struct {
 
 	emitter   *im.IMEmitter
 
+	imAccumText string // accumulated assistant text for IM emission
+
 	registry   *tool.Registry
 	workingDir string
 	sessionStore session.Store
@@ -254,6 +256,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			switch ev.Type {
 			case provider.StreamEventText:
 				b.ui.AppendAssistantText(ev.Text)
+				b.imAccumText += ev.Text
 
 			case provider.StreamEventToolCallDone:
 				b.ui.FinalizeStreaming()
@@ -276,8 +279,12 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Time:     time.Now(),
 				})
 
-				// Emit tool status to IM.
+				// Flush accumulated assistant text to IM, then emit tool status.
 				if b.emitter != nil {
+					if strings.TrimSpace(b.imAccumText) != "" {
+						b.emitter.EmitText(b.imAccumText)
+						b.imAccumText = ""
+					}
 					b.emitter.EmitToolStatus(name, args)
 				}
 
@@ -301,16 +308,18 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Time:    time.Now(),
 				})
 
-				// Emit assistant turn text to IM.
-				if b.emitter != nil {
-					b.emitter.EmitText(ev.Text)
-				}
 
 			case provider.StreamEventReasoning:
 				if ev.Text != "" {
 					b.ui.AppendReasoning(ev.Text)
 				}
 			}
+		}
+
+		// Flush any remaining accumulated text after agent loop ends.
+		if b.emitter != nil && strings.TrimSpace(b.imAccumText) != "" {
+			b.emitter.EmitText(b.imAccumText)
+			b.imAccumText = ""
 		}
 
 		err := b.agent.RunStreamWithContent(ctx, content, onEvent)
