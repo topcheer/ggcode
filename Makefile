@@ -2,12 +2,15 @@ BINARY  := bin/ggcode
 PKG     := github.com/topcheer/ggcode/cmd/ggcode
 INSTALLER_PKG := github.com/topcheer/ggcode/cmd/ggcode-installer
 
-.PHONY: build test lint verify-ci knight-eval install install-installer install-git-hooks clean
+.PHONY: build build-desktop test lint verify-ci knight-eval install install-installer install-git-hooks clean
 
 TAGS := goolm
 
 build:
 	go build -tags "$(TAGS)" -o $(BINARY) ./cmd/ggcode
+
+build-desktop:
+	cd desktop/ggcode-desktop && CGO_ENABLED=1 go build -tags "$(TAGS)" -o ../../bin/ggcode-desktop .
 
 test:
 	go test -tags "$(TAGS)" ./...
