@@ -144,7 +144,12 @@ func (a *App) buildAdapterSections(w fyne.Window) *fyne.Container {
 	var current, other, unbound, disabled []imAdapterEntry
 	for _, e := range entries {
 		if !e.Enabled {
-			disabled = append(disabled, e)
+			if e.IsCurrent {
+				// Disabled but bound to this workspace — show in "This workspace".
+				current = append(current, e)
+			} else {
+				disabled = append(disabled, e)
+			}
 		} else if e.IsCurrent {
 			current = append(current, e)
 		} else if e.Workspace != "" {
