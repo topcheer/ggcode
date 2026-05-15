@@ -43,6 +43,7 @@ type Sidebar struct {
 	modelRefresh   *widget.Button
 	providerStatus *widget.Label
 	fetchingModels bool // prevent concurrent fetchModels calls
+	providerEnabled bool // tracks last known state to avoid redundant updates
 }
 
 type sessionMeta struct {
@@ -67,6 +68,42 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 		}
 	}
 	return s.tabs
+}
+
+// setProviderEnabled enables/disables all provider tab widgets.
+func (s *Sidebar) setProviderEnabled(enabled bool) {
+	if s.providerEnabled == enabled {
+		return
+	}
+	s.providerEnabled = enabled
+	e := enabled
+	s.vendorSelect.Enable() // Select doesn't have Disable, use a different approach
+	if e {
+		s.vendorSelect.Enable()
+		s.epSelect.Enable()
+		s.apiKeyEntry.Enable()
+		s.baseURLEntry.Enable()
+		s.modelSelect.Enable()
+		s.modelRefresh.Enable()
+	} else {
+		s.vendorSelect.Disable()
+		s.epSelect.Disable()
+		s.apiKeyEntry.Disable()
+		s.baseURLEntry.Disable()
+		s.modelSelect.Disable()
+		s.modelRefresh.Disable()
+	}
+}
+
+func (s *Sidebar) providerStatusLoop() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		working := s.bridge.IsWorking()
+		fyne.Do(func() {
+			s.setProviderEnabled(!working)
+		})
+	}
 }
 
 func (s *Sidebar) RefreshStats() {

@@ -365,6 +365,7 @@ func (a *App) startChat() {
 	chatView := NewChatView(bridge, a.ui)
 	a.chatViewRef = chatView
 	a.sidebarRef = NewSidebar(a, bridge, a.ui)
+	go a.sidebarRef.providerStatusLoop()
 	sidebarObj := a.sidebarRef.Render()
 	chatViewObj := chatView.Render()
 
