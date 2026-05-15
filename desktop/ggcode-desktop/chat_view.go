@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -128,21 +129,23 @@ func (e *sendEntry) TypedShortcut(s fyne.Shortcut) {
 	e.Entry.TypedShortcut(s)
 }
 
-// tryPasteImageFromClipboard reads image from macOS clipboard via osascript.
+// tryPasteImageFromClipboard reads image from system clipboard (cross-platform).
 func (e *sendEntry) tryPasteImageFromClipboard() bool {
-	tmpFile := "/tmp/ggcode-clipboard-paste.png"
+	tmpFile := os.TempDir() + string(os.PathSeparator) + "ggcode-clipboard-paste.png"
 	os.Remove(tmpFile)
-	script := `try
-	set pngData to the clipboard as «class PNGf»
-	set theFile to open for access POSIX file "` + tmpFile + `" with write permission
-	write pngData to theFile
-	close access theFile
-	return true
-on error
-	return false
-end try`
-	out, err := exec.Command("osascript", "-e", script).Output()
-	if err != nil || strings.TrimSpace(string(out)) != "true" {
+
+	var ok bool
+	switch runtime.GOOS {
+	case "darwin":
+		ok = pasteImageDarwin(tmpFile)
+	case "linux":
+		ok = pasteImageLinux(tmpFile)
+	case "windows":
+		ok = pasteImageWindows(tmpFile)
+	default:
+		return false
+	}
+	if !ok {
 		return false
 	}
 	info, err := os.Stat(tmpFile)
@@ -156,6 +159,50 @@ end try`
 		fyne.Do(e.onImageAttached)
 	}
 	return true
+}
+
+// pasteImageDarwin reads PNG from macOS clipboard via osascript.
+func pasteImageDarwin(tmpFile string) bool {
+	script := `try
+	set pngData to the clipboard as «class PNGf»
+	set theFile to open for access POSIX file "` + tmpFile + `" with write permission
+	write pngData to theFile
+	close access theFile
+	return true
+on error
+	return false
+end try`
+	out, err := exec.Command("osascript", "-e", script).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// pasteImageLinux reads PNG from Linux clipboard via xclip (X11) or wl-paste (Wayland).
+func pasteImageLinux(tmpFile string) bool {
+	out, err := exec.Command("xclip", "-selection", "clipboard", "-t", "image/png", "-o").Output()
+	if err == nil && len(out) > 0 {
+		return os.WriteFile(tmpFile, out, 0644) == nil
+	}
+	out, err = exec.Command("wl-paste", "--type", "image/png").Output()
+	if err == nil && len(out) > 0 {
+		return os.WriteFile(tmpFile, out, 0644) == nil
+	}
+	return false
+}
+
+// pasteImageWindows reads PNG from Windows clipboard via PowerShell.
+func pasteImageWindows(tmpFile string) bool {
+	psScript := `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$img = [System.Windows.Forms.Clipboard]::GetImage()
+if ($img -ne $null) {
+	$img.Save('` + tmpFile + `', [System.Drawing.Imaging.ImageFormat]::Png)
+	'true'
+} else {
+	'false'
+}`
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", psScript).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 // ── ChatView ─────────────────────────────────────────
