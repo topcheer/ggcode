@@ -1148,6 +1148,7 @@ func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.
 func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
 	md := "**" + desc + "**"
 	rt := widget.NewRichTextFromMarkdown(md)
+	rt.Wrapping = fyne.TextWrapWord
 	return rt
 }
 
@@ -1305,6 +1306,7 @@ func (cv *ChatView) renderAgentHeader(panel AgentPanelData, vbox *fyne.Container
 		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}, Text: panel.Task},
 		&widget.TextSegment{Style: widget.RichTextStyle{ColorName: statusColor}, Text: "  " + panel.Status},
 	)
+	header.Wrapping = fyne.TextWrapWord
 	vbox.Add(cv.iconRow(theme.ComputerIcon(), header))
 }
 
