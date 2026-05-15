@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -362,10 +361,9 @@ func (a *App) startChat() {
 	bridge := NewAgentBridge(a.cfg, prov, resolved, a.dc.WorkDir, a.ui)
 	a.agentBridge = bridge
 
-	chatView := NewChatView(bridge, a.ui)
+	chatView := NewChatView(a, bridge, a.ui)
 	a.chatViewRef = chatView
 	a.sidebarRef = NewSidebar(a, bridge, a.ui)
-	go a.sidebarRef.providerStatusLoop()
 	sidebarObj := a.sidebarRef.Render()
 	chatViewObj := chatView.Render()
 
@@ -387,29 +385,7 @@ func (a *App) startChat() {
 	// Register global keyboard shortcuts.
 	a.registerShortcuts()
 
-	// Background poll for stats (writes only to bindings — safe).
-	go a.pollStats(bridge)
-}
-
-func (a *App) pollStats(bridge *AgentBridge) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		if bridge == nil || a.sidebarRef == nil {
-			continue
-		}
-		tc := bridge.TokenCount()
-		cw := bridge.ContextWindow()
-
-		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)), float64(tc)/float64(max(cw, 1)))
-		// Refresh sidebar stats on UI thread.
-		fyne.Do(func() {
-			if a.sidebarRef != nil {
-				a.sidebarRef.RefreshStats()
-			}
-		})
 	}
-}
 
 func (a *App) refreshSidebar() {
 	if a.agentBridge != nil {

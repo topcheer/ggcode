@@ -210,6 +210,7 @@ if ($img -ne $null) {
 type ChatView struct {
 	bridge *AgentBridge
 	ui     *UIState
+	app    *App
 
 	entry     *sendEntry
 	sendBtn      *widget.Button
@@ -256,7 +257,7 @@ type agentPanelState struct {
 	scroll         *container.Scroll
 }
 
-func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
+func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 	cv := &ChatView{
 		bridge:       bridge,
 		ui:           ui,
@@ -613,6 +614,11 @@ func (cv *ChatView) statusLoop() {
 		fyne.Do(func() {
 			cv.updateStatusBar(working)
 			cv.updateButtons(working)
+			// Update sidebar stats and provider enabled state.
+			if cv.app != nil && cv.app.sidebarRef != nil {
+				cv.app.sidebarRef.RefreshStats()
+				cv.app.sidebarRef.setProviderEnabled(!working)
+			}
 			if working {
 				cv.scroll.ScrollToBottom()
 			}
