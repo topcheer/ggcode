@@ -56,7 +56,6 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 	s.tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Context", theme.InfoIcon(), s.buildContextTab()),
 		container.NewTabItemWithIcon("Provider", theme.ComputerIcon(), s.buildProviderTab()),
-		container.NewTabItemWithIcon("IM", theme.MailComposeIcon(), s.buildIMTab()),
 	)
 	s.tabs.OnSelected = func(tab *container.TabItem) {
 		if tab.Text == "Provider" {
