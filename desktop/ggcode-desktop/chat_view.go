@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -111,6 +112,43 @@ func (e *sendEntry) attachImage(path string) error {
 
 func (e *sendEntry) clearImage() {
 	e.pendingImage = nil
+}
+
+// TypedShortcut handles Ctrl+V to detect image paste.
+func (e *sendEntry) TypedShortcut(s fyne.Shortcut) {
+	if _, ok := s.(*fyne.ShortcutPaste); ok {
+		if e.tryPasteImageFromClipboard() {
+			return
+		}
+	}
+	e.Entry.TypedShortcut(s)
+}
+
+// tryPasteImageFromClipboard reads image from macOS clipboard via osascript.
+func (e *sendEntry) tryPasteImageFromClipboard() bool {
+	tmpFile := "/tmp/ggcode-clipboard-paste.png"
+	os.Remove(tmpFile)
+	script := `try
+	set pngData to the clipboard as «class PNGf»
+	set theFile to open for access POSIX file "` + tmpFile + `" with write permission
+	write pngData to theFile
+	close access theFile
+	return true
+on error
+	return false
+end try`
+	out, err := exec.Command("osascript", "-e", script).Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		return false
+	}
+	info, err := os.Stat(tmpFile)
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	if err := e.attachImage(tmpFile); err != nil {
+		return false
+	}
+	return true
 }
 
 // ── ChatView ─────────────────────────────────────────
