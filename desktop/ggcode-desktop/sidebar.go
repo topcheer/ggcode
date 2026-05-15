@@ -14,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 )
@@ -26,9 +27,12 @@ type Sidebar struct {
 	tabs   *container.AppTabs
 
 	// Context tab widgets.
-	modelLabel  *widget.Label
-	sessionList *widget.List
-	sessions    []sessionMeta
+	ctxModelSelect  *widget.Select
+	ctxModelLoading *widget.Label
+	modeSelect      *widget.Select
+	sessionList     *widget.List
+	sessions        []sessionMeta
+	ctxModelIniting bool // suppress OnChanged during initial SetSelected
 
 	// Provider tab widgets.
 	vendorSelect   *widget.Select
@@ -67,7 +71,9 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 
 func (s *Sidebar) RefreshStats() {
 	resolved := s.bridge.Resolved()
-	s.modelLabel.SetText(resolved.Model)
+	if s.ctxModelSelect != nil && resolved.Model != "" && s.ctxModelSelect.Selected != resolved.Model {
+		s.ctxModelSelect.SetSelected(resolved.Model)
+	}
 }
 
 // ── Context tab ──────────────────────────────────────
@@ -75,11 +81,88 @@ func (s *Sidebar) RefreshStats() {
 func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	resolved := s.bridge.Resolved()
 
-	s.modelLabel = widget.NewLabel(resolved.Model)
+	// Init loading label before the select callback can fire via SetSelected.
+	s.ctxModelLoading = widget.NewLabel("")
+
+	s.ctxModelIniting = true
+	s.ctxModelSelect = widget.NewSelect(nil, func(model string) {
+		if model == "" || s.bridge == nil || s.ctxModelIniting {
+			return
+		}
+		if err := s.bridge.SwitchModel(model); err != nil {
+			logf("sidebar", "switch model failed: %v", err)
+			return
+		}
+		s.ctxModelLoading.SetText("")
+		s.RefreshStats()
+	})
+	s.ctxModelSelect.PlaceHolder = "Select model..."
+
+	// Populate model list from resolved endpoint config.
+	if len(resolved.Models) > 0 {
+		s.ctxModelSelect.Options = resolved.Models
+	}
+	if resolved.Model != "" {
+		s.ctxModelSelect.SetSelected(resolved.Model)
+	}
+	s.ctxModelIniting = false
+
+	// Permission mode selector.
+	modeOptions := []string{"Supervised", "Plan", "Auto", "Bypass", "Autopilot"}
+	s.modeSelect = widget.NewSelect(modeOptions, func(sel string) {
+		if s.bridge == nil {
+			return
+		}
+		var m permission.PermissionMode
+		switch sel {
+		case "Supervised":
+			m = permission.SupervisedMode
+		case "Plan":
+			m = permission.PlanMode
+		case "Auto":
+			m = permission.AutoMode
+		case "Bypass":
+			m = permission.BypassMode
+		case "Autopilot":
+			m = permission.AutopilotMode
+		default:
+			m = permission.AutoMode
+		}
+		s.bridge.SetPermissionMode(m)
+
+		// Persist to workspace config.
+		if s.app.cfg != nil {
+			_ = s.app.cfg.SaveDefaultModePreference(m.String())
+		}
+	})
+
+	// Read initial mode from config, default to "auto".
+	initialMode := "auto"
+	if s.app.cfg != nil && s.app.cfg.DefaultMode != "" {
+		initialMode = s.app.cfg.DefaultMode
+	}
+	switch initialMode {
+	case "supervised":
+		s.modeSelect.SetSelected("Supervised")
+	case "plan":
+		s.modeSelect.SetSelected("Plan")
+	case "bypass":
+		s.modeSelect.SetSelected("Bypass")
+	case "autopilot":
+		s.modeSelect.SetSelected("Autopilot")
+	default:
+		s.modeSelect.SetSelected("Auto")
+	}
+
+	refreshModelsBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
+		s.fetchContextModels()
+	})
+	refreshModelsBtn.Importance = widget.LowImportance
 
 	infoCard := widget.NewCard("Model Info", "", widget.NewForm(
 		&widget.FormItem{Text: "Vendor", Widget: widget.NewLabel(resolved.VendorName)},
-		&widget.FormItem{Text: "Model", Widget: s.modelLabel},
+		&widget.FormItem{Text: "Model", Widget: container.NewBorder(nil, nil, nil, refreshModelsBtn, s.ctxModelSelect)},
+		&widget.FormItem{Text: "Mode", Widget: s.modeSelect},
 	))
 
 	// Session list.
@@ -188,6 +271,47 @@ func (s *Sidebar) loadSessions() {
 			Time: sess.UpdatedAt,
 		})
 	}
+}
+
+// fetchContextModels discovers models from the active provider and updates the
+// context tab model selector.
+func (s *Sidebar) fetchContextModels() {
+	s.ctxModelLoading.SetText("Loading...")
+	s.ctxModelLoading.Refresh()
+
+	resolved := s.bridge.Resolved()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		models, err := provider.DiscoverModels(ctx, resolved)
+		fyne.Do(func() {
+			if err != nil {
+				s.ctxModelLoading.SetText("Failed")
+				return
+			}
+			if len(models) > 0 {
+				// Preserve current selection.
+				current := s.ctxModelSelect.Selected
+				s.ctxModelSelect.Options = models
+				s.ctxModelSelect.Refresh()
+				if current != "" {
+					for _, m := range models {
+						if m == current {
+							s.ctxModelSelect.SetSelected(current)
+							break
+						}
+					}
+				}
+				// Update config model list for future use.
+				if s.app.cfg != nil {
+					_ = s.app.cfg.SetEndpointModels(resolved.VendorID, resolved.EndpointID, models)
+				}
+			}
+			s.ctxModelLoading.SetText(fmt.Sprintf("%d models", len(models)))
+		})
+	}()
 }
 
 // ── Provider tab ─────────────────────────────────────

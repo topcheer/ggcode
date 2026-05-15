@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
       - run: go mod download
       - run: go build -tags goolm -o /tmp/ggcode-release ./cmd/ggcode
       - run: go test -tags goolm -timeout 5m ./...
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0
       - name: Install GoReleaser
@@ -160,7 +160,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
       - uses: actions/download-artifact@v4
         with:
           name: goreleaser-dist
@@ -191,7 +191,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
@@ -232,7 +232,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
       - name: Install WiX Toolset
         shell: pwsh
         run: |
@@ -280,7 +280,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
       - name: Capture build date
         shell: bash
         run: echo "GGCODE_DATE=$(git show -s --format=%cI "${GITHUB_SHA}")" >> "${GITHUB_ENV}"
@@ -319,7 +319,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
+          cache: true
       - name: Install GCC (MinGW)
         shell: pwsh
         run: choco install mingw --yes
@@ -345,7 +345,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
-          path: dist/*.exe
+          path: dist\
 
   publish-site-release-branch:
     name: Publish site release branch
