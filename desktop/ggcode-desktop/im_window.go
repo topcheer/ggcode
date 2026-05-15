@@ -118,8 +118,11 @@ func (a *App) buildIMDialogContent(w fyne.Window) fyne.CanvasObject {
 		a.showAddAdapterDialog(w)
 	})
 
+	// Header: two rows. Top: title + add button. Bottom: workspace path.
+	titleLbl := widget.NewLabelWithStyle("IM Settings", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	header := container.NewVBox(
-		container.NewBorder(nil, nil, wsLabel, addBtn),
+		container.NewHBox(titleLbl, layout.NewSpacer(), addBtn),
+		wsLabel,
 		widget.NewSeparator(),
 	)
 
