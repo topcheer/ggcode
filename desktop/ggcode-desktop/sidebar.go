@@ -43,7 +43,6 @@ type Sidebar struct {
 	modelRefresh   *widget.Button
 	providerStatus *widget.Label
 	fetchingModels bool // prevent concurrent fetchModels calls
-	providerEnabled bool // tracks last known state to avoid redundant updates
 }
 
 type sessionMeta struct {
@@ -68,29 +67,6 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 		}
 	}
 	return s.tabs
-}
-
-// setProviderEnabled enables/disables all provider tab widgets.
-func (s *Sidebar) setProviderEnabled(enabled bool) {
-	if s.providerEnabled == enabled {
-		return
-	}
-	s.providerEnabled = enabled
-	widgets := []fyne.Disableable{
-		s.vendorSelect,
-		s.epSelect,
-		s.apiKeyEntry,
-		s.baseURLEntry,
-		s.modelSelect,
-		s.modelRefresh,
-	}
-	for _, w := range widgets {
-		if enabled {
-			w.Enable()
-		} else {
-			w.Disable()
-		}
-	}
 }
 
 func (s *Sidebar) RefreshStats() {
@@ -248,10 +224,12 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	sort.Strings(vendorNames)
 
 	s.vendorSelect = widget.NewSelect(vendorNames, func(vendor string) {
+		if s.ui.AgentWorking.Load() { return }
 		s.updateEndpoints(vendor)
 		s.fetchModels()
 	})
 	s.epSelect = widget.NewSelect([]string{}, func(ep string) {
+		if s.ui.AgentWorking.Load() { return }
 		s.onEndpointChange(s.vendorSelect.Selected, ep)
 		s.fetchModels()
 	})
@@ -263,6 +241,7 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	s.modelSelect = widget.NewSelect([]string{}, nil)
 	s.modelSelect.PlaceHolder = "Select model..."
 	s.modelRefresh = widget.NewButtonWithIcon("Refresh Models", theme.ViewRefreshIcon(), func() {
+		if s.ui.AgentWorking.Load() { return }
 		s.fetchModels()
 	})
 	s.providerStatus = widget.NewLabel("")
@@ -279,6 +258,7 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 
 	// Apply button.
 	applyBtn := widget.NewButtonWithIcon("Apply & Restart", theme.ConfirmIcon(), func() {
+		if s.ui.AgentWorking.Load() { return }
 		s.applyProvider()
 	})
 	applyBtn.Importance = widget.HighImportance
