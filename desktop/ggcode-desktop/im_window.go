@@ -249,12 +249,12 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 	}
 	infoCol := container.NewVBox(infoChildren...)
 
-	// Right: action buttons
-	var buttons []fyne.CanvasObject
+	// ── Action row (horizontal, compact icon buttons) ──
+	var actions []fyne.CanvasObject
 
-	// Toggle button
+	// Toggle
 	if e.Enabled {
-		buttons = append(buttons, widget.NewButtonWithIcon("Disable", theme.CancelIcon(), func() {
+		actions = append(actions, widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, false)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -263,7 +263,7 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 			a.refreshIMWindow()
 		}))
 	} else {
-		buttons = append(buttons, widget.NewButtonWithIcon("Enable", theme.ConfirmIcon(), func() {
+		actions = append(actions, widget.NewButtonWithIcon("", theme.ConfirmIcon(), func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, true)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -273,17 +273,17 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 		}))
 	}
 
-	// Mute/Unmute (only for enabled adapters bound to this workspace)
+	// Mute/Unmute
 	if e.Enabled && e.IsCurrent {
 		if e.Muted {
-			buttons = append(buttons, widget.NewButton("Unmute", func() {
+			actions = append(actions, widget.NewButtonWithIcon("", theme.VolumeUpIcon(), func() {
 				if a.imManager != nil {
 					_ = a.imManager.UnmuteBinding(e.Name)
 				}
 				a.refreshIMWindow()
 			}))
 		} else {
-			buttons = append(buttons, widget.NewButton("Mute", func() {
+			actions = append(actions, widget.NewButtonWithIcon("", theme.VolumeMuteIcon(), func() {
 				if a.imManager != nil {
 					_ = a.imManager.MuteBinding(e.Name)
 				}
@@ -292,11 +292,11 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 		}
 	}
 
-	// Bind/Rebind (only for adapters NOT bound to current workspace)
+	// Bind/Rebind
 	if !e.IsCurrent {
-		bindBtn := widget.NewButtonWithIcon("Bind here", theme.MailForwardIcon(), func() {
+		actions = append(actions, widget.NewButtonWithIcon("", theme.MailForwardIcon(), func() {
 			if a.imManager == nil {
-				dialog.ShowInformation("Bind", "IM runtime is not available yet.", w)
+				dialog.ShowInformation("Bind", "IM manager is not available yet.", w)
 				return
 			}
 			if e.Workspace != "" {
@@ -309,11 +309,10 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 				Adapter:   e.Name,
 			})
 			a.refreshIMWindow()
-		})
-		buttons = append(buttons, bindBtn)
+		}))
 	}
 
-	// Delete
+	// Delete (last, smaller, less prominent)
 	delBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
 		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete adapter '%s'?", e.Name), func(ok bool) {
 			if !ok {
@@ -325,9 +324,10 @@ func (a *App) adapterCard(w fyne.Window, e imAdapterEntry, currentWS string, onR
 		}, w)
 	})
 	delBtn.Importance = widget.DangerImportance
-	buttons = append(buttons, delBtn)
+	actions = append(actions, delBtn)
 
-	btnCol := container.NewVBox(buttons...)
+	actionRow := container.NewHBox(actions...)
+	btnCol := container.NewVBox(actionRow)
 
 	// Card row: info | buttons
 	row := container.NewBorder(nil, nil, nil, btnCol, infoCol)
