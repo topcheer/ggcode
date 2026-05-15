@@ -61,14 +61,6 @@ func (a *App) buildIMContent(w fyne.Window) fyne.CanvasObject {
 	wsLabel.Wrapping = fyne.TextWrapWord
 	wsLabel.TextStyle = fyne.TextStyle{Italic: true}
 
-	// Runtime status
-	runtimeStatus := widget.NewLabel("")
-	if a.imManager != nil {
-		runtimeStatus.SetText("Runtime: Active")
-	} else {
-		runtimeStatus.SetText("Runtime: Starting...")
-	}
-
 	// ── Refresh function ──
 	var scroll *container.Scroll
 
@@ -90,7 +82,6 @@ func (a *App) buildIMContent(w fyne.Window) fyne.CanvasObject {
 
 	toolbar := container.NewHBox(
 		layout.NewSpacer(),
-		runtimeStatus,
 		refreshBtn,
 		addBtn,
 	)
