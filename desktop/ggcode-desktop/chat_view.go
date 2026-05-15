@@ -39,6 +39,7 @@ type sendEntry struct {
 	busy        bool
 	pendingText    string
 	pendingImage   *provider.ContentBlock
+	onImageAttached func() // called when image is attached (show preview bar)
 }
 
 func newSendEntry() *sendEntry {
@@ -148,6 +149,9 @@ end try`
 	if err := e.attachImage(tmpFile); err != nil {
 		return false
 	}
+	if e.onImageAttached != nil {
+		e.onImageAttached()
+	}
 	return true
 }
 
@@ -158,9 +162,11 @@ type ChatView struct {
 	ui     *UIState
 
 	entry     *sendEntry
-	sendBtn   *widget.Button
-	cancelBtn *widget.Button
-	imageBtn  *widget.Button
+	sendBtn      *widget.Button
+	cancelBtn    *widget.Button
+	imageBtn     *widget.Button
+	imagePreview *canvas.Image
+	imageBar     *fyne.Container
 
 	scroll *container.Scroll
 	vbox   *fyne.Container
@@ -212,6 +218,11 @@ func NewChatView(bridge *AgentBridge, ui *UIState) *ChatView {
 	cv.entry.Wrapping = fyne.TextWrapWord
 	cv.entry.SetMinRowsVisible(2)
 	cv.entry.onSend = cv.onSend
+	cv.entry.onImageAttached = func() {
+		cv.imageBtn.Importance = widget.HighImportance
+		cv.imageBtn.Refresh()
+		cv.imageBar.Show()
+	}
 
 	cv.sendBtn = widget.NewButtonWithIcon("Send", theme.MailSendIcon(), cv.onSend)
 	cv.sendBtn.Importance = widget.HighImportance
@@ -247,6 +258,22 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	btnRow := container.NewHBox(cv.cancelBtn, cv.imageBtn, cv.sendBtn)
 	inputBar := container.NewBorder(nil, nil, nil, btnRow, cv.entry)
 
+	// Image preview bar above input (hidden until image attached).
+	removeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
+		cv.entry.clearImage()
+		cv.imageBar.Hide()
+		cv.imageBtn.Importance = widget.MediumImportance
+		cv.imageBtn.Refresh()
+	})
+	cv.imageBar = container.NewHBox(
+		widget.NewIcon(theme.ContentAddIcon()),
+		widget.NewLabel("Image attached"),
+		removeBtn,
+	)
+	cv.imageBar.Hide()
+
+	inputSection := container.NewVBox(cv.imageBar, inputBar)
+
 	cv.vbox = container.NewVBox()
 	cv.scroll = container.NewVScroll(cv.vbox)
 
@@ -262,7 +289,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	// Lightweight status bar updater.
 	go cv.statusLoop()
 
-	return container.NewBorder(nil, container.NewPadded(inputBar), nil, nil, cv.tabs)
+	return container.NewBorder(nil, container.NewPadded(inputSection), nil, nil, cv.tabs)
 }
 
 // ── Event handler ─────────────────────────────────────
@@ -297,6 +324,7 @@ func (cv *ChatView) onSend() {
 	cv.entry.clearImage()
 	cv.imageBtn.Importance = widget.MediumImportance
 	cv.imageBtn.Refresh()
+	cv.imageBar.Hide()
 	cv.entry.Refresh()
 
 	var content []provider.ContentBlock
