@@ -737,6 +737,78 @@ func DefaultConfig() *Config {
 					return ep
 				}(),
 			}),
+			"ai-gateway": defaultVendor("AI Gateway", "", map[string]EndpointConfig{
+				"aihubmix": defaultEndpoint(
+					"AIHubMix",
+					"openai",
+					"https://aihubmix.com/v1",
+					"",
+					"gateway",
+				),
+				"getgoapi": defaultEndpoint(
+					"GetGoAPI",
+					"openai",
+					"https://api.getgoapi.com/v1",
+					"",
+					"gateway",
+				),
+				"novita": defaultEndpoint(
+					"Novita AI",
+					"openai",
+					"https://api.novita.ai/openai/v1",
+					"",
+					"gateway",
+				),
+				"nvidia": defaultEndpoint(
+					"NVIDIA NIM",
+					"openai",
+					"https://integrate.api.nvidia.com/v1",
+					"",
+					"gateway",
+				),
+				"openrouter": defaultEndpoint(
+					"OpenRouter",
+					"openai",
+					"https://openrouter.ai/api/v1",
+					"",
+					"gateway",
+				),
+				"poe": defaultEndpoint(
+					"Poe",
+					"openai",
+					"https://api.poe.com/v1",
+					"",
+					"gateway",
+				),
+				"requesty": defaultEndpoint(
+					"Requesty",
+					"openai",
+					"https://router.requesty.ai/v1",
+					"",
+					"gateway",
+				),
+				"together": defaultEndpoint(
+					"Together AI",
+					"openai",
+					"https://api.together.xyz/v1",
+					"",
+					"gateway",
+				),
+				"perplexity": defaultEndpoint(
+					"Perplexity",
+					"openai",
+					"https://api.perplexity.ai",
+					"",
+					"gateway",
+				),
+				"vercel": defaultEndpoint(
+					"Vercel AI Gateway",
+					"openai",
+					"https://ai-gateway.vercel.sh/v1",
+					"",
+					"gateway",
+				),
+			}),
 		},
 	}
 	cfg.expandEnv()
