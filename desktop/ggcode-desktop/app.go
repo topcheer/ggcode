@@ -413,6 +413,11 @@ func (a *App) startChat() {
 	bridge := NewAgentBridge(a.cfg, prov, resolved, a.dc.WorkDir, a.ui)
 	a.agentBridge = bridge
 
+	// Set IM emitter for outbound message push.
+	if a.imManager != nil {
+		bridge.emitter = im.NewIMEmitter(a.imManager, a.cfg.Language, a.dc.WorkDir)
+	}
+
 	// Resume previous session into new bridge to preserve history.
 	if prevSessionID != "" {
 		_ = bridge.ResumeSession(prevSessionID)

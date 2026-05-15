@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
+	"os"
+	
 	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -39,6 +41,8 @@ type AgentBridge struct {
 	hasPending bool
 
 	startTime time.Time // when current agent loop started
+
+	emitter   *im.IMEmitter
 
 	registry   *tool.Registry
 	workingDir string
@@ -191,6 +195,26 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			cancel()
 			b.ui.FinalizeStreaming()
 			b.saveSession()
+
+			// Push assistant reply to IM if emitter is set.
+			if b.emitter != nil {
+				if msgs := b.agent.Messages(); len(msgs) > 0 {
+					last := msgs[len(msgs)-1]
+					if last.Role == "assistant" {
+						var textParts []string
+					for _, b := range last.Content {
+						if b.Type == "text" {
+							textParts = append(textParts, b.Text)
+						}
+					}
+					text := strings.Join(textParts, "\n")
+						if strings.TrimSpace(text) != "" {
+							b.emitter.EmitText(text)
+						}
+					}
+				}
+			}
+
 			b.mu.Lock()
 			wasCancelled := b.cancelled
 			b.working = false
