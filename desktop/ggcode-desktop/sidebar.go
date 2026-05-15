@@ -285,6 +285,9 @@ func (s *Sidebar) updateEndpoints(vendor string) {
 		}
 		s.epSelect.Options = eps
 		s.epSelect.Refresh()
+		if len(eps) > 0 {
+			s.epSelect.SetSelected(eps[0])
+		}
 
 		// Update API key from vendor.
 		if v.APIKey != "" {
