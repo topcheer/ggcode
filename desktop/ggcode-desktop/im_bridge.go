@@ -2,8 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
+
+	"github.com/skip2/go-qrcode"
+
+	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/util"
 
 	"fyne.io/fyne/v2/layout"
 
@@ -13,7 +22,6 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"github.com/topcheer/ggcode/internal/im"
 )
 
 // desktopIMBridge implements im.Bridge, routing inbound IM messages
@@ -145,4 +153,259 @@ func (a *App) stopIMAdapters() {
 		a.imController.Stop()
 		a.imController = nil
 	}
+}
+
+// ─── WeChat QR Code Authentication ───
+
+const wechatILinkBaseURL = "https://ilinkai.weixin.qq.com"
+
+// wechatILinkRequest makes an HTTP request to the WeChat iLink API.
+func wechatILinkRequest(ctx context.Context, method, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("AuthorizationType", "ilink_bot_token")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return util.ReadAll(resp.Body, util.ReadLimitGeneral)
+}
+
+// requestWechatQRCode fetches a QR code from iLink for WeChat onboard.
+func requestWechatQRCode(ctx context.Context) (qrcodeToken string, imgPNG []byte, err error) {
+	url := wechatILinkBaseURL + "/ilink/bot/get_bot_qrcode?bot_type=3"
+	data, err := wechatILinkRequest(ctx, http.MethodGet, url)
+	if err != nil {
+		return "", nil, fmt.Errorf("QR code request failed: %w", err)
+	}
+
+	var resp struct {
+		QRCode           string `json:"qrcode"`
+		QRCodeImgContent string `json:"qrcode_img_content"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", nil, fmt.Errorf("QR code decode failed: %w", err)
+	}
+	if resp.QRCode == "" {
+		return "", nil, fmt.Errorf("empty QR code token in response")
+	}
+
+	// qrcode_img_content is text content (URL) for generating QR image.
+	png, err := qrcode.Encode(resp.QRCodeImgContent, qrcode.Medium, 256)
+	if err != nil {
+		return "", nil, fmt.Errorf("QR image render failed: %w", err)
+	}
+	return resp.QRCode, png, nil
+}
+
+// pollWechatQRStatus polls the QR code scan status.
+func pollWechatQRStatus(ctx context.Context, qrcodeToken string) (status string, botToken string, err error) {
+	url := wechatILinkBaseURL + "/ilink/bot/get_qrcode_status?qrcode=" + qrcodeToken
+	data, err := wechatILinkRequest(ctx, http.MethodGet, url)
+	if err != nil {
+		return "", "", err
+	}
+
+	var resp struct {
+		Status   string `json:"status"`
+		BotToken string `json:"bot_token"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", "", fmt.Errorf("decode status: %w", err)
+	}
+	return resp.Status, resp.BotToken, nil
+}
+
+// showWechatQRAuthWindow opens a window displaying a QR code for WeChat scan-to-onboard.
+func (a *App) showWechatQRAuthWindow(adapterName string) {
+	if a.fyneApp == nil || a.window == nil {
+		return
+	}
+
+	w := a.fyneApp.NewWindow("WeChat — Scan QR Code")
+	w.Resize(fyne.NewSize(350, 420))
+
+	statusLabel := widget.NewLabel("Loading QR code...")
+	qrImg := &canvas.Image{}
+	qrImg.FillMode = canvas.ImageFillContain
+	qrImg.SetMinSize(fyne.NewSize(256, 256))
+
+	content := container.NewVBox(
+		widget.NewLabelWithStyle("Scan this QR code with WeChat", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		qrImg,
+		statusLabel,
+	)
+	w.SetContent(content)
+	w.Show()
+
+	// Fetch QR code in background
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		token, png, err := requestWechatQRCode(ctx)
+		if err != nil {
+			fyne.Do(func() { statusLabel.SetText("Error: " + err.Error()) })
+			return
+		}
+
+		// Display QR image
+		// Set QR image from PNG bytes
+		qrImg.Resource = fyne.NewStaticResource("qr.png", png)
+
+		fyne.Do(func() {
+			statusLabel.SetText("Waiting for scan...")
+			qrImg.Refresh()
+			content.Refresh()
+		})
+
+		// Poll for scan status
+		for i := 0; i < 60; i++ { // max 5 minutes
+			time.Sleep(5 * time.Second)
+			pollCtx, pollCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			status, botToken, err := pollWechatQRStatus(pollCtx, token)
+			pollCancel()
+
+			if err != nil {
+				fyne.Do(func() { statusLabel.SetText("Poll error: " + err.Error()) })
+				continue
+			}
+
+			switch status {
+			case "confirmed":
+				fyne.Do(func() {
+					statusLabel.SetText("Scan confirmed! Setting up adapter...")
+				})
+				// Save bot_token to adapter config
+				a.saveWechatBotToken(adapterName, botToken)
+				fyne.Do(func() {
+					w.Close()
+					a.refreshIMWindow()
+				})
+				return
+			case "scanned":
+				fyne.Do(func() { statusLabel.SetText("Scanned! Confirming on phone...") })
+			default:
+				// keep polling
+			}
+		}
+		fyne.Do(func() { statusLabel.SetText("QR code expired. Please try again.") })
+	}()
+}
+
+// saveWechatBotToken saves the bot token to the adapter config and starts it.
+// If adapterName already exists in config, it updates the bot_token in place.
+// If adapterName is empty, it auto-generates a new name (wechat, wechat-2, ...).
+func (a *App) saveWechatBotToken(adapterName, botToken string) {
+	if a.cfg == nil {
+		return
+	}
+
+	name := adapterName
+	if name == "" {
+		name = "wechat"
+		n := 2
+		for {
+			if _, exists := a.cfg.IM.Adapters[name]; !exists {
+				break
+			}
+			name = fmt.Sprintf("wechat-%d", n)
+			n++
+		}
+	}
+
+	// If adapter already exists, update bot_token in place
+	if acfg, exists := a.cfg.IM.Adapters[name]; exists {
+		if acfg.Extra == nil {
+			acfg.Extra = make(map[string]interface{})
+		}
+		acfg.Extra["bot_token"] = botToken
+		acfg.Enabled = true
+		a.cfg.IM.Adapters[name] = acfg
+		_ = a.cfg.Save()
+	} else {
+		// New adapter
+		if err := a.cfg.AddIMAdapter(name, config.IMAdapterConfig{
+			Enabled:  true,
+			Platform: "wechat",
+			Extra: map[string]interface{}{
+				"bot_token": botToken,
+			},
+		}); err != nil {
+			return
+		}
+		_ = a.cfg.Save()
+	}
+
+	// Start the adapter
+	if a.imManager != nil {
+		adapters := make(map[string]bool)
+		for n, acfg := range a.cfg.IM.Adapters {
+			adapters[n] = acfg.Enabled
+		}
+		a.imManager.ApplyAdapterConfig(adapters)
+	}
+}
+
+// startWechatQRAuth handles the QR auth flow for a new WeChat adapter.
+func (a *App) startWechatQRAuth(adapterName string) {
+	a.showWechatQRAuthWindow(adapterName)
+}
+
+// showContactQRWindow opens a window displaying a QR code from an adapter's ContactURI.
+// This is the generic QR display for platforms that expose a contact link after starting.
+func (a *App) showContactQRWindow(adapterName string) {
+	if a.fyneApp == nil || a.window == nil {
+		return
+	}
+
+	// Find the adapter state
+	var contactURI string
+	if a.imManager != nil {
+		for _, s := range a.imManager.Snapshot().Adapters {
+			if s.Name == adapterName && s.ContactURI != "" {
+				contactURI = s.ContactURI
+				break
+			}
+		}
+	}
+
+	if contactURI == "" {
+		dialog.ShowInformation("No QR Code", "Adapter has not generated a contact link yet. Make sure the adapter is enabled and running.", a.window)
+		return
+	}
+
+	w := a.fyneApp.NewWindow(adapterName + " — Scan to Add")
+	w.Resize(fyne.NewSize(350, 450))
+
+	// Render QR code from contact URI
+	png, err := qrcode.Encode(contactURI, qrcode.Medium, 256)
+	if err != nil {
+		dialog.ShowError(fmt.Errorf("failed to render QR code: %w", err), a.window)
+		return
+	}
+
+	qrImg := &canvas.Image{}
+	qrImg.Resource = fyne.NewStaticResource("qr.png", png)
+	qrImg.FillMode = canvas.ImageFillContain
+	qrImg.SetMinSize(fyne.NewSize(256, 256))
+
+	content := container.NewVBox(
+		widget.NewLabelWithStyle("Scan to add this bot", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		qrImg,
+		widget.NewLabel(contactURI),
+		layout.NewSpacer(),
+		widget.NewButton("Copy Link", func() {
+			if a.fyneApp.Driver() != nil {
+				a.window.Clipboard().SetContent(contactURI)
+			}
+		}),
+	)
+	w.SetContent(content)
+	w.Show()
 }

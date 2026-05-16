@@ -33,8 +33,10 @@ type imAdapterEntry struct {
 // ──────────────────────────── Platform metadata ────────────────────────────
 
 type platformMeta struct {
-	DisplayName string
-	Fields      []platformField
+	DisplayName   string
+	Fields        []platformField
+	QRAuth        bool // if true, onboard via QR code scan instead of form fields
+	ShowContactQR bool // if true, show QR button for ContactURI after adapter starts
 }
 
 type platformField struct {
@@ -44,17 +46,17 @@ type platformField struct {
 }
 
 var platformRegistry = map[string]platformMeta{
-	"qq":         {DisplayName: "QQ", Fields: []platformField{{"appid", "App ID", "QQ app ID"}, {"appsecret", "App Secret", "QQ app secret"}}},
-	"telegram":   {DisplayName: "Telegram", Fields: []platformField{{"bot_token", "Bot Token", "123456:ABC-DEF..."}}},
-	"discord":    {DisplayName: "Discord", Fields: []platformField{{"token", "Bot Token", "Discord bot token"}}},
+	"qq":         {DisplayName: "QQ", Fields: []platformField{{"appid", "App ID", "QQ app ID"}, {"appsecret", "App Secret", "QQ app secret"}}, ShowContactQR: true},
+	"telegram":   {DisplayName: "Telegram", Fields: []platformField{{"bot_token", "Bot Token", "123456:ABC-DEF..."}}, ShowContactQR: true},
+	"discord":    {DisplayName: "Discord", Fields: []platformField{{"token", "Bot Token", "Discord bot token"}}, ShowContactQR: true},
 	"feishu":     {DisplayName: "Feishu", Fields: []platformField{{"app_id", "App ID", "cli_xxx"}, {"app_secret", "App Secret", "Feishu app secret"}}},
 	"dingtalk":   {DisplayName: "DingTalk", Fields: []platformField{{"app_key", "App Key", "dingxxx"}, {"app_secret", "App Secret", "DingTalk app secret"}}},
-	"slack":      {DisplayName: "Slack", Fields: []platformField{{"bot_token", "Bot Token", "xoxb-xxx"}, {"app_token", "App Token", "xapp-xxx"}}},
-	"wechat":     {DisplayName: "WeChat", Fields: []platformField{{"bot_token", "Bot Token", "WeChat bot token"}}},
-	"wecom":      {DisplayName: "WeCom", Fields: []platformField{{"bot_id", "Bot ID", "WeCom bot ID"}, {"secret", "Secret", "WeCom secret"}}},
-	"whatsapp":   {DisplayName: "WhatsApp", Fields: []platformField{}},
+	"slack":      {DisplayName: "Slack", Fields: []platformField{{"bot_token", "Bot Token", "xoxb-xxx"}, {"app_token", "App Token", "xapp-xxx"}}, ShowContactQR: true},
+	"wechat":     {DisplayName: "WeChat", Fields: []platformField{}, QRAuth: true},
+	"wecom":      {DisplayName: "WeCom", Fields: []platformField{{"bot_id", "Bot ID", "WeCom bot ID"}, {"secret", "Secret", "WeCom secret"}}, ShowContactQR: true},
+	"whatsapp":   {DisplayName: "WhatsApp", Fields: []platformField{}, QRAuth: true},
 	"mattermost": {DisplayName: "Mattermost", Fields: []platformField{{"url", "Server URL", "https://mm.example.com"}, {"token", "Access Token", "mattermost token"}}},
-	"signal":     {DisplayName: "Signal", Fields: []platformField{{"account", "Phone Number", "+1234567890"}, {"base_url", "Signal CLI URL", "http://localhost:8080"}}},
+	"signal":     {DisplayName: "Signal", Fields: []platformField{{"account", "Phone Number", "+1234567890"}, {"base_url", "Signal CLI URL", "http://localhost:8080"}}, ShowContactQR: true},
 	"irc":        {DisplayName: "IRC", Fields: []platformField{{"host", "Server", "irc.libera.chat:6697"}, {"nick", "Nickname", "my-bot"}, {"channels", "Channels", "#channel1,#channel2"}}},
 	"matrix":     {DisplayName: "Matrix", Fields: []platformField{{"homeserver", "Homeserver", "https://matrix.org"}, {"access_token", "Access Token", "syt_xxx"}}},
 	"nostr":      {DisplayName: "Nostr", Fields: []platformField{{"private_key", "Private Key", "nsec1..."}, {"relays", "Relays", "wss://relay.damus.io"}}},
@@ -259,6 +261,20 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 		}))
 	}
 
+	// Scan QR Code button for QRAuth platforms (WeChat onboard)
+	if meta, ok := platformRegistry[e.Platform]; ok && meta.QRAuth {
+		actions = append(actions, widget.NewButton("Scan QR Code", func() {
+			a.showWechatQRAuthWindow(e.Name)
+		}))
+	}
+
+	// Show Contact QR button for platforms that expose a contact link
+	if meta, ok := platformRegistry[e.Platform]; ok && meta.ShowContactQR && e.Enabled {
+		actions = append(actions, widget.NewButton("Show QR Code", func() {
+			a.showContactQRWindow(e.Name)
+		}))
+	}
+
 	// Mute/Unmute (only for enabled adapters bound to this workspace)
 	if e.Enabled && e.IsCurrent {
 		if e.Muted {
@@ -414,6 +430,12 @@ func (a *App) showAddAdapterDialog(w fyne.Window) {
 		}
 		if platKey == "" {
 			statusLabel.SetText("Unknown platform.")
+			return
+		}
+		meta := platformRegistry[platKey]
+		if meta.QRAuth {
+			// QR auth platform - open scan window, do not save yet
+			a.showWechatQRAuthWindow(name)
 			return
 		}
 		extra := make(map[string]interface{})
