@@ -11,10 +11,11 @@ func TestCommandJobPollingNoDuplicateLines(t *testing.T) {
 	workDir := t.TempDir()
 	manager := NewCommandJobManager(workDir)
 
-	// Use a longer sleep so the output has time to be captured before the
-	// process exits. The original "echo hello && sleep 1" was flaky on CI
-	// because the process could exit before the first poll captured the output.
-	snapshot, err := manager.Start(context.Background(), "echo hello && sleep 2", 0)
+	// Use "sleep 1 && echo hello" so the process stays alive long enough for
+	// at least one poll cycle to observe it running and capture the output.
+	// "echo hello && sleep 2" was flaky on CI because the output could be
+	// consumed and the process exit before the first poll.
+	snapshot, err := manager.Start(context.Background(), "sleep 1 && echo hello", 0)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
