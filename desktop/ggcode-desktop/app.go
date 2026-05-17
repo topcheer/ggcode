@@ -504,6 +504,9 @@ func (a *App) showFilePreview(filePath string, targetLine int) {
 
 // closeFilePreview restores the chat view.
 func (a *App) closeFilePreview() {
+	if a.filePreview != nil {
+		a.filePreview.Close()
+	}
 	a.filePreview = nil
 	if a.sidebarHidden {
 		a.content.Objects = []fyne.CanvasObject{a.chatViewObj}

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -54,6 +57,7 @@ type FilePreview struct {
 	filePath string
 	scroll   *container.Scroll
 	onClose  func()
+	server   *http.Server // preview HTTP server for HTML files
 }
 
 // NewFilePreview creates a new file preview for the given path.
@@ -103,6 +107,11 @@ func (fp *FilePreview) build(targetLine int) fyne.CanvasObject {
 		return fp.buildImagePreview()
 	}
 
+	// HTML preview: serve locally and open in browser
+	if ext == ".html" || ext == ".htm" {
+		return fp.buildHTMLPreview()
+	}
+
 	// Read file content
 	info, err := os.Stat(fp.filePath)
 	if err != nil {
@@ -139,6 +148,80 @@ func (fp *FilePreview) build(targetLine int) fyne.CanvasObject {
 
 	// Code files: horizontal scroll, line numbers
 	return fp.buildCodePreview(fp.filePath, content, targetLine)
+}
+
+// buildHTMLPreview serves the HTML file via a local HTTP server and opens it in the browser.
+// The preview panel shows status info and a button to re-open the browser.
+func (fp *FilePreview) buildHTMLPreview() fyne.CanvasObject {
+	// Serve the directory containing the HTML file
+	dir := filepath.Dir(fp.filePath)
+	fileName := filepath.Base(fp.filePath)
+	port := findFreePort()
+
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir(dir)))
+	fp.server = &http.Server{
+		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
+		Handler: mux,
+	}
+
+	// Start server in background
+	go func() {
+		if err := fp.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logf("preview", "HTTP server error: %v", err)
+		}
+	}()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/%s", port, url.PathEscape(fileName))
+
+	// Open in default browser
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if u, err := urlParse(url); err == nil {
+			fyne.CurrentApp().OpenURL(u)
+		}
+	}()
+
+	infoLabel := widget.NewLabelWithStyle(
+		fmt.Sprintf("Previewing in browser\n\n%s\n\nhttp://127.0.0.1:%d", fileName, port),
+		fyne.TextAlignCenter,
+		fyne.TextStyle{Monospace: true},
+	)
+
+	reopenBtn := widget.NewButtonWithIcon("Open in Browser", theme.ComputerIcon(), func() {
+		if u, err := urlParse(url); err == nil {
+			fyne.CurrentApp().OpenURL(u)
+		}
+	})
+
+	viewSourceBtn := widget.NewButton("View Source", func() {
+		// Re-build as code preview — read file and show source
+		data, err := os.ReadFile(fp.filePath)
+		if err != nil {
+			return
+		}
+		content := strings.ReplaceAll(string(data), "\r\n", "\n")
+		sourceWidget := fp.buildCodePreview(fp.filePath, content, 0)
+		fp.scroll.Content = sourceWidget
+		fp.scroll.Refresh()
+	})
+
+	return container.NewVBox(
+		layout.NewSpacer(),
+		container.NewCenter(infoLabel),
+		container.NewHBox(layout.NewSpacer(), reopenBtn, viewSourceBtn, layout.NewSpacer()),
+		layout.NewSpacer(),
+	)
+}
+
+// Close shuts down the preview HTTP server (if running).
+func (fp *FilePreview) Close() {
+	if fp.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		fp.server.Shutdown(ctx)
+		fp.server = nil
+	}
 }
 
 // buildImagePreview shows an image file.
@@ -422,4 +505,19 @@ func formatSize(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
+}
+
+// findFreePort returns an available TCP port on localhost.
+func findFreePort() int {
+	addr, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 18080 // fallback
+	}
+	addr.Close()
+	return addr.Addr().(*net.TCPAddr).Port
+}
+
+// urlParse is a helper to parse a URL string.
+func urlParse(raw string) (*url.URL, error) {
+	return url.Parse(raw)
 }
