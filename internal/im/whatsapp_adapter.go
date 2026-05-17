@@ -385,7 +385,7 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 				// Fetch critical app state (encryption keys, contact list, group metadata).
 				// Without these, the client cannot decrypt incoming messages.
 				// Matches mautrix-whatsapp bridge's post-connect initialization.
-				go func() {
+				safego.Go("im.whatsapp.appstate", func() {
 					ctx := context.Background()
 					for _, name := range []appstate.WAPatchName{
 						appstate.WAPatchCriticalBlock,
@@ -397,7 +397,7 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 							debug.Log("whatsapp", "adapter %q: fetched app state %s", a.name, name)
 						}
 					}
-				}()
+				})
 			}
 
 		case *events.Disconnected:
