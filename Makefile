@@ -10,7 +10,7 @@ build:
 	go build -tags "$(TAGS)" -o $(BINARY) ./cmd/ggcode
 
 build-desktop:
-	cd desktop/ggcode-desktop && CGO_ENABLED=1 go build -tags "$(TAGS)" -o ../../bin/ggcode-desktop .
+	cd desktop/ggcode-desktop && CGO_ENABLED=1 go build -tags "$(TAGS)" -ldflags "-X main.Version=$$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o ../../bin/ggcode-desktop .
 
 test:
 	go test -tags "$(TAGS)" ./...
