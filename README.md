@@ -85,18 +85,26 @@ npm wrapper, and Python wrapper remain available.
 
 ggcode also ships as a native desktop application with a graphical interface, built with [Fyne](https://fyne.io/). It provides the same agent capabilities as the CLI with the addition of:
 
-- Visual chat interface with Markdown rendering
+- Visual chat interface with Markdown rendering (GFM tables, Mermaid diagrams)
+- Workspace file browser with search, filter, and file preview
+  - Code files with line numbers, text files with word wrap
+  - Markdown with rich rendering, images scaled to fit
+  - HTML files served locally and opened in your browser
+  - Binary file info display
 - IM platform integration (WeChat, Feishu, DingTalk, etc.) via a settings panel
 - Tool approval dialogs with Allow / Deny / Always Allow options
 - Permission mode switching (Supervised / Auto / Bypass / Autopilot)
 - Session history sidebar with resume support
 - Image attachment support
+- About dialog with version info and update checker
+- Keyboard shortcuts (Escape to close preview, Cmd+B to toggle sidebar)
 
 Download the latest desktop release from [GitHub Releases](https://github.com/topcheer/ggcode/releases):
 
 | Platform | Asset |
 | --- | --- |
 | macOS (Universal) | `ggcode-desktop_<version>_darwin_universal.dmg` |
+| Linux | `ggcode-desktop_<version>_linux_amd64` |
 | Windows | `ggcode-desktop_<version>_windows_amd64.exe` |
 
 Open the DMG on macOS and drag **ggcode** to your Applications folder. On Windows, run the `.exe` directly.
@@ -106,7 +114,8 @@ Open the DMG on macOS and drag **ggcode** to your Applications folder. On Window
 ```bash
 git clone https://github.com/topcheer/ggcode.git
 cd ggcode
-go build -o ggcode ./cmd/ggcode
+make build          # CLI
+make build-desktop  # Desktop GUI
 ./ggcode
 ```
 
