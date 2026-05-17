@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/flate"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -380,7 +382,9 @@ func splitMarkdownAndMermaid(content string) []mermaidPart {
 	return parts
 }
 
-// buildMermaidDiagram renders a mermaid diagram by fetching from mermaid.ink API.
+// buildMermaidDiagram renders a mermaid diagram by fetching from multiple backends.
+// It tries kroki.io first, then mermaid.ink as fallback. If all fail, shows
+// the raw code with a button to open in the online mermaid.live editor.
 func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject {
 	placeholder := widget.NewLabel("Loading diagram...")
 	placeholder.Alignment = fyne.TextAlignCenter
@@ -390,18 +394,47 @@ func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject
 	img.SetMinSize(fyne.NewSize(400, 300))
 	img.Hide()
 
+	fallbackBox := container.NewVBox() // hidden until needed
+	fallbackBox.Hide()
+
 	wrapper := container.NewStack(placeholder)
 
-	// Fetch diagram in background
+	// Fetch diagram in background with multi-backend fallback
 	go func() {
-		svgData, err := fetchMermaidSVG(mermaidCode)
+		svgData, err := fetchMermaidSVGMulti(mermaidCode)
 		if err != nil {
+			logf("mermaid", "all backends failed: %v", err)
 			fyne.Do(func() {
-				placeholder.SetText(fmt.Sprintf("Failed to render diagram: %v\n\n%s", err, mermaidCode))
+				placeholder.Hide()
+				// Show raw code + open-in-browser button
+				codeLabel := widget.NewLabel(mermaidCode)
+				codeLabel.TextStyle = fyne.TextStyle{Monospace: true}
+				codeLabel.Wrapping = fyne.TextWrapWord
+
+				errLabel := widget.NewLabel(fmt.Sprintf("⚠ Diagram rendering services unavailable: %v", err))
+				errLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+				openBtn := widget.NewButtonWithIcon("Open in Mermaid Live Editor", theme.ComputerIcon(), func() {
+					openMermaidLive(mermaidCode)
+				})
+
+				fallbackBox.Objects = []fyne.CanvasObject{errLabel, codeLabel, openBtn}
+				fallbackBox.Show()
+				fallbackBox.Refresh()
+				wrapper.Refresh()
 			})
 			return
 		}
-		img.Resource = fyne.NewStaticResource("mermaid.svg", svgData)
+		img.Resource = fyne.NewStaticResource("mermaid.png", svgData)
+		// Validate PNG header to prevent Fyne crash on invalid image data
+		if len(svgData) < 8 || !bytes.HasPrefix(svgData, []byte("\x89PNG")) {
+			logf("mermaid", "response is not a valid PNG (%d bytes)", len(svgData))
+			fyne.Do(func() {
+				placeholder.SetText("Diagram rendering returned invalid data")
+				placeholder.Refresh()
+			})
+			return
+		}
 		fyne.Do(func() {
 			placeholder.Hide()
 			img.Show()
@@ -410,27 +443,94 @@ func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject
 		})
 	}()
 
-	wrapper.Objects = append(wrapper.Objects, img)
+	wrapper.Objects = append(wrapper.Objects, img, fallbackBox)
 	return container.NewCenter(wrapper)
 }
 
-// fetchMermaidSVG fetches an SVG rendering of a mermaid diagram from the mermaid.ink API.
-func fetchMermaidSVG(code string) ([]byte, error) {
-	encoded := base64.StdEncoding.EncodeToString([]byte(code))
-	url := "https://mermaid.ink/img/" + encoded + "?type=svg"
+// fetchMermaidSVGMulti tries multiple backends to render a Mermaid diagram.
+// Order: kroki.io (primary) → mermaid.ink (fallback).
+func fetchMermaidSVGMulti(code string) ([]byte, error) {
+	var lastErr error
 
+	// Backend 1: kroki.io (POST with plain text body)
+	if data, err := fetchMermaidFromKroki(code); err == nil {
+		return data, nil
+	} else {
+		lastErr = fmt.Errorf("kroki: %w", err)
+		logf("mermaid", "kroki.io failed: %v, trying mermaid.ink", err)
+	}
+
+	// Backend 2: mermaid.ink (GET with base64 path)
+	if data, err := fetchMermaidFromInk(code); err == nil {
+		return data, nil
+	} else {
+		lastErr = fmt.Errorf("kroki: failed; ink: %w", err)
+		logf("mermaid", "mermaid.ink failed: %v", err)
+	}
+
+	return nil, fmt.Errorf("all rendering backends failed: %v", lastErr)
+}
+
+// fetchMermaidFromKroki fetches a PNG from kroki.io using POST.
+// Kroki accepts plain text diagram source and returns PNG directly.
+func fetchMermaidFromKroki(code string) ([]byte, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Post(
+		"https://kroki.io/mermaid/png",
+		"text/plain",
+		strings.NewReader(code),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("mermaid.ink returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return io.ReadAll(io.LimitReader(resp.Body, 5<<20)) // max 5MB SVG
+	return io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+}
+
+// fetchMermaidFromInk fetches a PNG from mermaid.ink using base64-encoded GET.
+func fetchMermaidFromInk(code string) ([]byte, error) {
+	// Use base64url encoding (no +/-/= issues in URL path)
+	encoded := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(code))
+	reqURL := "https://mermaid.ink/img/" + encoded
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+}
+
+// openMermaidLive opens the diagram in the online Mermaid Live Editor.
+func openMermaidLive(code string) {
+	// Encode the diagram using pako (deflate + base64) for mermaid.live URL
+	encoded := pakoEncode(code)
+	liveURL := "https://mermaid.live/edit#pako:" + encoded
+	if u, err := url.Parse(liveURL); err == nil {
+		fyne.CurrentApp().OpenURL(u)
+	}
+}
+
+// pakoEncode encodes a string using deflate + base64 (compatible with mermaid.live pako format).
+func pakoEncode(s string) string {
+	var buf strings.Builder
+	// NLevel=7 matches pako default compression level
+	w, _ := flate.NewWriter(&buf, 7)
+	w.Write([]byte(s))
+	w.Close()
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(buf.String()))
 }
 
 // buildError shows an error message.
