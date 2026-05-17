@@ -35,6 +35,19 @@ var markdownExts = map[string]bool{
 // maxPreviewSize is the maximum file size to read for preview (1 MB).
 const maxPreviewSize = 1 << 20
 
+// plainTextExts lists file extensions that should preview with word wrap.
+var plainTextExts = map[string]bool{
+	".txt": true, ".log": true, ".csv": true, ".tsv": true,
+	".ini": true, ".cfg": true, ".conf": true, ".properties": true,
+	".env": true, ".gitignore": true, ".dockerignore": true,
+	".editorconfig": true, ".mailmap": true, ".gitattributes": true,
+}
+
+// isPlainTextExt returns true if the extension should be rendered with word wrap.
+func isPlainTextExt(ext string) bool {
+	return plainTextExts[ext]
+}
+
 // FilePreview shows a read-only preview of a file in the main content area.
 type FilePreview struct {
 	app      *App
@@ -119,7 +132,12 @@ func (fp *FilePreview) build(targetLine int) fyne.CanvasObject {
 		return fp.buildMarkdownPreview(content)
 	}
 
-	// Syntax highlighted code
+	// Plain text files: word wrap
+	if isPlainTextExt(ext) {
+		return fp.buildTextPreview(content)
+	}
+
+	// Code files: horizontal scroll, line numbers
 	return fp.buildCodePreview(fp.filePath, content, targetLine)
 }
 
@@ -156,6 +174,17 @@ func (fp *FilePreview) buildImagePreview() fyne.CanvasObject {
 		container.NewCenter(infoLabel),
 		layout.NewSpacer(),
 	)
+}
+
+// buildTextPreview shows plain text with word wrap, no line numbers.
+func (fp *FilePreview) buildTextPreview(content string) fyne.CanvasObject {
+	entry := widget.NewEntry()
+	entry.MultiLine = true
+	entry.Wrapping = fyne.TextWrapWord
+	entry.TextStyle = fyne.TextStyle{Monospace: true}
+	entry.SetText(content)
+	entry.Disable()
+	return entry
 }
 
 // buildCodePreview shows source code in a read-only Entry with line numbers.
