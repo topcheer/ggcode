@@ -525,6 +525,15 @@ func (a *App) registerShortcuts() {
 	}, func(fyne.Shortcut) {
 		a.toggleSidebar()
 	})
+
+	// Escape: Close file preview (if open)
+	c.AddShortcut(&desktop.CustomShortcut{
+		KeyName: fyne.KeyEscape,
+	}, func(fyne.Shortcut) {
+		if a.filePreview != nil {
+			a.closeFilePreview()
+		}
+	})
 }
 
 func resolveConfigFilePath(workDir string) string {
