@@ -200,9 +200,8 @@ func (fp *FilePreview) buildMarkdownPreview(content string) fyne.CanvasObject {
 		if part.isMermaid {
 			objects = append(objects, fp.buildMermaidDiagram(part.content))
 		} else {
-			rt := widget.NewRichTextFromMarkdown(part.content)
-			rt.Wrapping = fyne.TextWrapWord
-			objects = append(objects, rt)
+			md := newMD(part.content)
+			objects = append(objects, md)
 		}
 	}
 
