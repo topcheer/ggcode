@@ -76,8 +76,14 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 	searchEntry.OnChanged = func(text string) {
 		s.fileTree.SetFilter(text)
 	}
+	refreshBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
+		searchEntry.SetText("")
+		s.fileTree.Refresh()
+	})
+	refreshBtn.Importance = widget.LowImportance
+	searchRow := container.NewBorder(nil, nil, nil, refreshBtn, searchEntry)
 	filesContent := container.NewBorder(
-		container.NewVBox(rootLabel, searchEntry),
+		container.NewVBox(rootLabel, searchRow),
 		nil, nil, nil,
 		s.fileTree.Widget(),
 	)
