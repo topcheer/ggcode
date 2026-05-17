@@ -45,6 +45,7 @@ type App struct {
 	sidebarObj    fyne.CanvasObject
 	sidebarRef    *Sidebar
 	sidebarHidden bool
+	filePreview   *FilePreview // currently shown file preview, or nil
 
 	// Agent state.
 	agentBridge *AgentBridge
@@ -473,6 +474,36 @@ func (a *App) setTitle(title string) {
 
 func (a *App) toggleSidebar() {
 	a.sidebarHidden = !a.sidebarHidden
+	if a.sidebarHidden {
+		a.content.Objects = []fyne.CanvasObject{a.chatViewObj}
+	} else {
+		a.content.Objects = []fyne.CanvasObject{a.split}
+	}
+	a.content.Refresh()
+}
+
+// showFilePreview opens a file preview in the main content area.
+func (a *App) showFilePreview(filePath string, targetLine int) {
+	if a.content == nil {
+		return
+	}
+	fp := NewFilePreview(a, filePath, targetLine, func() {
+		a.closeFilePreview()
+	})
+	a.filePreview = fp
+
+	// Show preview with sidebar (if not hidden)
+	if a.sidebarHidden {
+		a.content.Objects = []fyne.CanvasObject{fp.Widget()}
+	} else {
+		a.content.Objects = []fyne.CanvasObject{container.NewHSplit(fp.Widget(), a.sidebarObj)}
+	}
+	a.content.Refresh()
+}
+
+// closeFilePreview restores the chat view.
+func (a *App) closeFilePreview() {
+	a.filePreview = nil
 	if a.sidebarHidden {
 		a.content.Objects = []fyne.CanvasObject{a.chatViewObj}
 	} else {
