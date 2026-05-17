@@ -63,7 +63,7 @@ func TestPlatformRegistryCompleteness(t *testing.T) {
 		}
 		// WhatsApp, Signal etc may have empty fields (scan-based)
 		// but most should have at least one field
-		if p != "whatsapp" && len(meta.Fields) == 0 {
+		if p != "whatsapp" && p != "wechat" && len(meta.Fields) == 0 {
 			t.Errorf("platformRegistry[%s] has no fields defined", p)
 		}
 	}
