@@ -97,6 +97,7 @@ type dingtalkAdapter struct {
 	appSecret string
 
 	mu            sync.RWMutex
+	writeMu       sync.Mutex // protects websocket writes
 	accessToken   string
 	tokenExpire   time.Time
 	ws            *websocket.Conn
@@ -268,7 +269,10 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 			ws := a.ws
 			a.mu.RUnlock()
 			if ws != nil {
-				if err := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+				a.writeMu.Lock()
+				err := ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+				a.writeMu.Unlock()
+				if err != nil {
 					return fmt.Errorf("ping: %w", err)
 				}
 			}
@@ -433,7 +437,10 @@ func (a *dingtalkAdapter) sendFrameResponse(conn *websocket.Conn, reqFrame dingt
 	a.mu.RUnlock()
 
 	if ws != nil {
-		if err := ws.WriteMessage(websocket.TextMessage, respBytes); err != nil {
+		a.writeMu.Lock()
+		err := ws.WriteMessage(websocket.TextMessage, respBytes)
+		a.writeMu.Unlock()
+		if err != nil {
 			debug.Log("dingtalk", "adapter=%s write frame response: %v", a.name, err)
 		}
 	}
