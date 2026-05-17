@@ -6,6 +6,7 @@
 |------|-------|
 | Module | `github.com/topcheer/ggcode` |
 | Go version | 1.26.1 |
+| Build tags | **`goolm`** — required for all `go build`, `go vet`, `go test` commands |
 | CLI framework | Cobra (`spf13/cobra`) |
 | TUI framework | Bubble Tea / Lip Gloss (`charmbracelet/bubbletea`, `charmbracelet/lipgloss`) |
 | Storage | JSON files — harness uses JSON events/snapshots; sessions use JSONL files |
@@ -15,18 +16,30 @@
 
 ## Build & Validation
 
+**All Go commands require the `goolm` build tag** (set in Makefile via `TAGS := goolm`).
+Without it, builds fail due to missing libolm C headers (mautrix crypto dependency).
+
 ```bash
-make build          # go build -o bin/ggcode ./cmd/ggcode
-make test           # go test ./...
-make lint           # go vet ./...
-make install        # go install github.com/topcheer/ggcode/cmd/ggcode
+make build          # go build -tags goolm -o bin/ggcode ./cmd/ggcode
+make build-desktop  # go build -tags goolm -ldflags "-X main.Version=..." -o bin/ggcode-desktop .
+make test           # go test -tags goolm ./...
+make lint           # go vet -tags goolm ./...
+make install        # go install -tags goolm github.com/topcheer/ggcode/cmd/ggcode
 make clean          # rm -rf bin/
 ```
 
+If running `go` commands directly (not via `make`), always add `-tags goolm`:
+```bash
+go build -tags goolm ./...
+go vet -tags goolm ./...
+go test -tags goolm ./...
+go test -tags "goolm,integration" ./...   # integration tests
+```
+
 CI (`.github/workflows/ci.yml`):
-- `CGO_ENABLED=0 go build -o /tmp/ggcode ./cmd/ggcode`
-- `go vet ./...`
-- `go test -tags=!integration ./...`
+- `CGO_ENABLED=0 go build -tags goolm -o /tmp/ggcode ./cmd/ggcode`
+- `go vet -tags goolm ./...`
+- `go test -tags "goolm,!integration" ./...`
 - `gofmt -l .` must produce no output (separate `lint` job)
 
 Local CI-aligned verification lives in `scripts/dev/verify-ci.sh`; it mirrors the same build/vet/test
