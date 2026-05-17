@@ -543,6 +543,40 @@ func TestMarkdownExts(t *testing.T) {
 	}
 }
 
+func TestPlainTextExts(t *testing.T) {
+	for _, ext := range []string{".txt", ".log", ".csv", ".ini", ".cfg", ".env"} {
+		if !isPlainTextExt(ext) {
+			t.Errorf("isPlainTextExt(%q) should be true", ext)
+		}
+	}
+	if isPlainTextExt(".go") {
+		t.Error("isPlainTextExt(.go) should be false")
+	}
+	if isPlainTextExt(".py") {
+		t.Error("isPlainTextExt(.py) should be false")
+	}
+}
+
+func TestTextPreviewUsesWordWrap(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	os.WriteFile(filepath.Join(root, "readme.txt"), []byte(strings.Repeat("hello world ", 100)), 0644)
+
+	fp := NewFilePreview(app, filepath.Join(root, "readme.txt"), 0, nil)
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
+	w.Resize(fyne.NewSize(600, 400))
+
+	entry := findEntry(obj)
+	if entry == nil {
+		t.Fatal("text preview should contain an Entry")
+	}
+	if entry.Wrapping != fyne.TextWrapWord {
+		t.Error("plain text preview should use TextWrapWord")
+	}
+}
+
 // ── FilePreview tests ──────────────────────────────────────────
 
 func TestFilePreviewCodeFile(t *testing.T) {
@@ -750,8 +784,17 @@ func TestFilePreviewTextFile(t *testing.T) {
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
 	fp := NewFilePreview(app, filepath.Join(root, "notes.txt"), 0, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
+
+	entry := findEntry(obj)
+	if entry == nil {
+		t.Fatal("text file preview should contain an Entry")
+	}
+	if entry.Wrapping != fyne.TextWrapWord {
+		t.Errorf("plain text file should use TextWrapWord, got %v", entry.Wrapping)
+	}
 }
 
 func TestFilePreviewYAMLFile(t *testing.T) {
