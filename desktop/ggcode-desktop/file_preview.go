@@ -158,36 +158,58 @@ func (fp *FilePreview) buildImagePreview() fyne.CanvasObject {
 	)
 }
 
-// buildCodePreview shows syntax-highlighted source code with line numbers.
+// buildCodePreview shows source code in a read-only Entry with line numbers.
 func (fp *FilePreview) buildCodePreview(path, content string, targetLine int) fyne.CanvasObject {
-	// Use Chroma for syntax highlighting
-	highlighted := highlightCode(path, content)
+	// Build line-numbered content
+	lines := strings.Split(content, "\n")
+	// Remove trailing empty line from final newline
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	maxLine := len(lines)
+	lineNumWidth := len(fmt.Sprintf("%d", maxLine))
+	fmtStr := fmt.Sprintf("%%%dd  %%s", lineNumWidth)
 
-	// Build numbered lines
-	var lineWidgets []fyne.CanvasObject
-	for i, line := range highlighted {
-		lineNum := fmt.Sprintf("%4d", i+1)
-		numLabel := widget.NewLabel(lineNum)
-		numLabel.TextStyle = fyne.TextStyle{Monospace: true}
-		numLabel.Importance = widget.LowImportance
-
-		lineLabel := widget.NewLabel(line)
-		lineLabel.TextStyle = fyne.TextStyle{Monospace: true}
-		lineLabel.Wrapping = fyne.TextWrapBreak
-
-		row := container.NewHBox(numLabel, lineLabel)
-		if targetLine > 0 && i+1 == targetLine {
-			// Highlight the target line with a subtle background
-			bg := canvas.NewRectangle(theme.PrimaryColor())
-			bg.SetMinSize(fyne.NewSize(0, 0))
-			bg.FillColor = theme.HoverColor()
-			row = container.NewStack(bg, row)
+	var numbered strings.Builder
+	for i, line := range lines {
+		numbered.WriteString(fmt.Sprintf(fmtStr, i+1, line))
+		if i < len(lines)-1 {
+			numbered.WriteByte('\n')
 		}
-		lineWidgets = append(lineWidgets, row)
 	}
 
-	codeBox := container.NewVBox(lineWidgets...)
-	return codeBox
+	entry := widget.NewEntry()
+	entry.MultiLine = true
+	entry.Wrapping = fyne.TextWrapOff
+	entry.TextStyle = fyne.TextStyle{Monospace: true}
+	entry.SetText(numbered.String())
+	entry.Disable() // read-only
+
+	// If target line specified, scroll to it after layout
+	if targetLine > 0 && targetLine <= len(lines) {
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			fyne.Do(func() {
+				// Calculate scroll position based on line height
+				lineHeight := theme.TextSize()
+				offset := float32(targetLine-1) * lineHeight * 1.5
+				if scroll := fp.findScroll(); scroll != nil {
+					scroll.Offset.Y = offset
+					scroll.Refresh()
+				}
+			})
+		}()
+	}
+
+	return entry
+}
+
+// findScroll walks up to find the parent Scroll container.
+func (fp *FilePreview) findScroll() *container.Scroll {
+	if fp.scroll != nil {
+		return fp.scroll
+	}
+	return nil
 }
 
 // buildMarkdownPreview renders Markdown as rich text, with Mermaid diagram support.
