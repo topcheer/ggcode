@@ -39,7 +39,7 @@ type App struct {
 	// UI components.
 	content       *fyne.Container
 	statusBar     *widget.Label
-	split         fyne.CanvasObject
+	split         *container.Split
 	chatViewObj   fyne.CanvasObject
 	chatViewRef   *ChatView
 	sidebarObj    fyne.CanvasObject
@@ -492,11 +492,12 @@ func (a *App) showFilePreview(filePath string, targetLine int) {
 	})
 	a.filePreview = fp
 
-	// Show preview with sidebar (if not hidden)
+	// Show preview: replace left side of the existing split, keep sidebar ratio
 	if a.sidebarHidden {
 		a.content.Objects = []fyne.CanvasObject{fp.Widget()}
 	} else {
-		a.content.Objects = []fyne.CanvasObject{container.NewHSplit(fp.Widget(), a.sidebarObj)}
+		a.content.Objects = []fyne.CanvasObject{a.split}
+		a.split.Leading = fp.Widget()
 	}
 	a.content.Refresh()
 }
@@ -507,6 +508,7 @@ func (a *App) closeFilePreview() {
 	if a.sidebarHidden {
 		a.content.Objects = []fyne.CanvasObject{a.chatViewObj}
 	} else {
+		a.split.Leading = a.chatViewObj
 		a.content.Objects = []fyne.CanvasObject{a.split}
 	}
 	a.content.Refresh()
