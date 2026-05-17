@@ -921,8 +921,8 @@ func TestAppCloseFilePreviewRestoresSplit(t *testing.T) {
 func TestAppShowFilePreviewWithSidebarHidden(t *testing.T) {
 	root := createTestWorkspace(t)
 	app := &App{
-		fyneApp:      test.NewApp(),
-		dc:           &DesktopConfig{WorkDir: root},
+		fyneApp:       test.NewApp(),
+		dc:            &DesktopConfig{WorkDir: root},
 		sidebarHidden: true,
 	}
 	w := app.fyneApp.NewWindow("test")
