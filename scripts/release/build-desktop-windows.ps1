@@ -22,7 +22,8 @@ $Ldflags = @(
   "-s", "-w",
   "-X", "github.com/topcheer/ggcode/internal/version.Version=$Version",
   "-X", "github.com/topcheer/ggcode/internal/version.Commit=$Commit",
-  "-X", "github.com/topcheer/ggcode/internal/version.Date=$BuildDate"
+  "-X", "github.com/topcheer/ggcode/internal/version.Date=$BuildDate",
+  "-X", "main.Version=$Version"
 ) -join " "
 
 Write-Host "=== Building ggcode-desktop for Windows (amd64) ==="

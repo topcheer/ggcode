@@ -23,6 +23,7 @@ LDFLAGS=(
   "-X" "github.com/topcheer/ggcode/internal/version.Version=${VERSION}"
   "-X" "github.com/topcheer/ggcode/internal/version.Commit=${COMMIT}"
   "-X" "github.com/topcheer/ggcode/internal/version.Date=${BUILD_DATE}"
+  "-X" "main.Version=${VERSION}"
 )
 
 echo "=== Building ggcode-desktop for macOS (universal) ==="
