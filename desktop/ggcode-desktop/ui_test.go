@@ -1044,7 +1044,7 @@ func TestInterceptFileLinks(t *testing.T) {
 	root := t.TempDir()
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
-	link := widget.NewHyperlink("test.go", mustParseURL(t, "file://"+filepath.Join(root, "test.go")))
+	link := widget.NewHyperlink("test.go", mustParseURLTest(t, "file://"+filepath.Join(root, "test.go")))
 	box := container.NewVBox(link)
 
 	interceptFileLinks(box, app)
@@ -1058,7 +1058,7 @@ func TestInterceptFileLinksHTTPS(t *testing.T) {
 	root := t.TempDir()
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
-	link := widget.NewHyperlink("docs", mustParseURL(t, "https://example.com"))
+	link := widget.NewHyperlink("docs", mustParseURLTest(t, "https://example.com"))
 	box := container.NewVBox(link)
 
 	interceptFileLinks(box, app)
@@ -1228,7 +1228,7 @@ func min(a, b int) int {
 	return b
 }
 
-func mustParseURL(t *testing.T, raw string) *url.URL {
+func mustParseURLTest(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)
 	if err != nil {

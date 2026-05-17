@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"fyne.io/fyne/v2"
-
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
@@ -131,7 +134,101 @@ func (a *App) setupMenu() {
 	toolsMenu := fyne.NewMenu("Tools",
 		fyne.NewMenuItem("IM Settings...", func() { a.showIMWindow() }),
 	)
-	a.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, toolsMenu))
+	helpMenu := fyne.NewMenu("Help",
+		fyne.NewMenuItem("About", func() { a.showAbout() }),
+		fyne.NewMenuItem("Check for Updates", func() { a.openUpdates() }),
+	)
+	a.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, toolsMenu, helpMenu))
+}
+
+// showAbout displays the About dialog with app icon, version, and links.
+func (a *App) showAbout() {
+	icon := canvas.NewImageFromResource(fyne.NewStaticResource("icon.png", iconBytes))
+	icon.FillMode = canvas.ImageFillContain
+	icon.SetMinSize(fyne.NewSize(96, 96))
+
+	title := widget.NewLabelWithStyle("ggcode", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	versionLabel := widget.NewLabelWithStyle("Version "+Version, fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
+	desc := widget.NewLabel("AI-powered coding assistant\nwith IM integration")
+	desc.Alignment = fyne.TextAlignCenter
+
+	releaseLink := widget.NewHyperlink("GitHub Releases", mustParseURL("https://github.com/topcheer/ggcode/releases"))
+	releaseLink.Alignment = fyne.TextAlignCenter
+	issuesLink := widget.NewHyperlink("Report an Issue", mustParseURL("https://github.com/topcheer/ggcode/issues"))
+	issuesLink.Alignment = fyne.TextAlignCenter
+
+	content := container.NewVBox(
+		container.NewCenter(icon),
+		container.NewCenter(title),
+		container.NewCenter(versionLabel),
+		widget.NewSeparator(),
+		container.NewCenter(desc),
+		widget.NewSeparator(),
+		container.NewCenter(releaseLink),
+		container.NewCenter(issuesLink),
+	)
+
+	dialog.ShowCustom("About ggcode", "Close", content, a.window)
+}
+
+// openUpdates checks for the latest release on GitHub.
+func (a *App) openUpdates() {
+	go func() {
+		latest, err := fetchLatestReleaseTag()
+		if err != nil {
+			fyne.Do(func() {
+				dialog.ShowInformation("Update Check", "Could not check for updates:\n"+err.Error(), a.window)
+			})
+			return
+		}
+		msg := fmt.Sprintf("Current: %s\nLatest: %s", Version, latest)
+		if latest == Version || latest == "v"+Version {
+			msg += "\n\nYou are up to date!"
+		} else {
+			msg += "\n\nA newer version is available."
+		}
+		fyne.Do(func() {
+			if latest == Version || latest == "v"+Version {
+				dialog.ShowInformation("Update Check", msg, a.window)
+			} else {
+				dialog.ShowConfirm("Update Available", msg+"\n\nDownload now?", func(ok bool) {
+					if ok {
+						a.fyneApp.OpenURL(mustParseURL("https://github.com/topcheer/ggcode/releases/latest"))
+					}
+				}, a.window)
+			}
+		})
+	}()
+	dialog.ShowInformation("Update Check", "Checking for updates...", a.window)
+}
+
+// fetchLatestReleaseTag queries GitHub API for the latest release tag.
+func fetchLatestReleaseTag() (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/topcheer/ggcode/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", err
+	}
+	return release.TagName, nil
+}
+
+// mustParseURL parses a URL string, panicking on failure.
+func mustParseURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	return u
 }
 
 // ── Welcome screen ───────────────────────────────────
