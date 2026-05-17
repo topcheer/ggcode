@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -553,20 +554,86 @@ func TestFilePreviewCodeFile(t *testing.T) {
 	if fp == nil {
 		t.Fatal("preview is nil")
 	}
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
+
+	// Verify code preview uses a single Entry widget, not many Labels
+	entry := findEntry(obj)
+	if entry == nil {
+		t.Fatal("code preview should contain a widget.Entry for code content")
+	}
+	if !entry.Disabled() {
+		t.Error("code preview Entry should be disabled (read-only)")
+	}
+	if !entry.MultiLine {
+		t.Error("code preview Entry should be MultiLine")
+	}
+	if entry.Text == "" {
+		t.Error("code preview Entry should have content")
+	}
+	// Verify line numbers are present
+	if !strings.Contains(entry.Text, "1 ") {
+		t.Errorf("code preview should have line numbers, got: %q", entry.Text[:min(100, len(entry.Text))])
+	}
+	// Verify code content is on the same line as line number (not vertical)
+	lines := strings.Split(entry.Text, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("code preview should have multiple lines, got %d", len(lines))
+	}
+	// Verify each line has a line number prefix
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Line should start with a number followed by spaces and content
+		if !strings.HasPrefix(trimmed, fmt.Sprintf("%d", i+1)) {
+			t.Errorf("line %d should start with line number %d: %q", i+1, i+1, trimmed)
+		}
+		// Vertical rendering bug: if line number and code are on separate lines
+		// each line would be just 1-2 chars. Verify at least one line has real content.
+	}
+	// Verify at least one line has actual code content (not just line numbers)
+	hasCodeContent := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) > 5 { // "1  package" is > 5 chars
+			hasCodeContent = true
+			break
+		}
+	}
+	if !hasCodeContent {
+		t.Error("no line has real code content - possible vertical rendering bug")
+	}
 }
 
 func TestFilePreviewCodeWithTargetLine(t *testing.T) {
 	root := createTestWorkspace(t)
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
-	// Create a file with 10 lines
 	os.WriteFile(filepath.Join(root, "ten.go"), []byte("line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"), 0644)
 
 	fp := NewFilePreview(app, filepath.Join(root, "ten.go"), 5, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
+
+	entry := findEntry(obj)
+	if entry == nil {
+		t.Fatal("code preview should contain a widget.Entry")
+	}
+	// Verify 10 lines of content
+	lines := strings.Split(entry.Text, "\n")
+	if len(lines) != 10 {
+		t.Errorf("expected 10 lines, got %d", len(lines))
+	}
+	// Verify each line has both line number and content
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), fmt.Sprintf("%d", i+1)) {
+			t.Errorf("line %d should start with line number: %q", i+1, line)
+		}
+	}
 }
 
 func TestFilePreviewMarkdownFile(t *testing.T) {
@@ -574,9 +641,17 @@ func TestFilePreviewMarkdownFile(t *testing.T) {
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
 	fp := NewFilePreview(app, filepath.Join(root, "README.md"), 0, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
-	_ = w
+
+	// Markdown preview should NOT use a plain Entry
+	// It should use markdownx.MarkdownWidget for rich rendering
+	if findEntry(obj) != nil {
+		// Markdown file should not be rendered as plain text Entry
+		// (unless it's wrapped in a larger container)
+		_ = w // just verify no panic
+	}
 }
 
 func TestFilePreviewBinaryFile(t *testing.T) {
@@ -584,9 +659,21 @@ func TestFilePreviewBinaryFile(t *testing.T) {
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
 	fp := NewFilePreview(app, filepath.Join(root, "binary.dat"), 0, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
-	_ = w
+
+	// Binary preview should show file info text, not a code Entry
+	lbl := findLabelDeep(obj)
+	if lbl == nil {
+		t.Fatal("binary preview should show a label with file info")
+	}
+	if !strings.Contains(lbl.Text, "Binary") {
+		t.Errorf("binary info should mention 'Binary', got: %q", lbl.Text)
+	}
+	if !strings.Contains(lbl.Text, "binary.dat") {
+		t.Errorf("binary info should show filename, got: %q", lbl.Text)
+	}
 }
 
 func TestFilePreviewDirectoryError(t *testing.T) {
@@ -594,31 +681,57 @@ func TestFilePreviewDirectoryError(t *testing.T) {
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
 	fp := NewFilePreview(app, root, 0, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
+
+	lbl := findLabelDeep(obj)
+	if lbl == nil {
+		t.Fatal("directory error should show a label")
+	}
+	if !strings.Contains(lbl.Text, "directory") {
+		t.Errorf("should mention directory error, got: %q", lbl.Text)
+	}
 }
 
 func TestFilePreviewNonexistentFile(t *testing.T) {
 	app := &App{dc: &DesktopConfig{WorkDir: "/tmp"}}
 
 	fp := NewFilePreview(app, "/nonexistent/file.go", 0, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
+
+	lbl := findLabelDeep(obj)
+	if lbl == nil {
+		t.Fatal("nonexistent file should show an error label")
+	}
+	if !strings.Contains(lbl.Text, "Cannot") {
+		t.Errorf("should show access error, got: %q", lbl.Text)
+	}
 }
 
 func TestFilePreviewLargeFile(t *testing.T) {
 	root := t.TempDir()
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
-	// Create a file larger than maxPreviewSize
 	largeFile := filepath.Join(root, "large.log")
 	f, _ := os.Create(largeFile)
 	f.WriteString(strings.Repeat("x\n", maxPreviewSize/2+1))
 	f.Close()
 
 	fp := NewFilePreview(app, largeFile, 0, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
+
+	lbl := findLabelDeep(obj)
+	if lbl == nil {
+		t.Fatal("large file should show an error label")
+	}
+	if !strings.Contains(lbl.Text, "large") && !strings.Contains(lbl.Text, "Large") {
+		t.Errorf("should mention file too large, got: %q", lbl.Text)
+	}
 }
 
 func TestFilePreviewEmptyFile(t *testing.T) {
@@ -972,6 +1085,45 @@ func findLabel(obj fyne.CanvasObject) *widget.Label {
 		}
 	}
 	return nil
+}
+
+func findEntry(obj fyne.CanvasObject) *widget.Entry {
+	// Use Fyne's test helper to walk all objects
+	all := test.LaidOutObjects(obj)
+	for _, o := range all {
+		if e, ok := o.(*widget.Entry); ok {
+			return e
+		}
+	}
+	// Also try direct container walking
+	switch w := obj.(type) {
+	case *widget.Entry:
+		return w
+	case *fyne.Container:
+		for _, child := range w.Objects {
+			if e := findEntry(child); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
+func findLabelDeep(obj fyne.CanvasObject) *widget.Label {
+	all := test.LaidOutObjects(obj)
+	for _, o := range all {
+		if l, ok := o.(*widget.Label); ok {
+			return l
+		}
+	}
+	return findLabel(obj)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {
