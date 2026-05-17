@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -245,8 +246,8 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 
 	readErr := make(chan error, 1)
 
-	// Read goroutine
-	go func() {
+	// Read goroutine (safego protects against panic)
+	safego.Go("im.dingtalk.read", func() {
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
@@ -255,7 +256,7 @@ func (a *dingtalkAdapter) connectAndServe(ctx context.Context) error {
 			}
 			a.handleDataFrame(ctx, conn, message)
 		}
-	}()
+	})
 
 	// Main loop: read errors, ping, context cancellation
 	for {
