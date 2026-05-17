@@ -40,7 +40,7 @@ type FilePreview struct {
 	app      *App
 	filePath string
 	scroll   *container.Scroll
- onClose  func()
+	onClose  func()
 }
 
 // NewFilePreview creates a new file preview for the given path.
