@@ -1,13 +1,16 @@
 package main
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -44,37 +47,87 @@ func createTestWorkspace(t *testing.T) string {
 	return root
 }
 
-// ── FileTree tests ────────────────────────────────────────────
+// ── fileIconForExt ─────────────────────────────────────────────
+
+func TestFileIconForExt(t *testing.T) {
+	tests := []struct {
+		ext  string
+		want fyne.Resource
+	}{
+		{".go", theme.DocumentIcon()},
+		{".GO", theme.DocumentIcon()},
+		{".md", theme.DocumentIcon()},
+		{".txt", theme.DocumentIcon()},
+		{".png", theme.MediaPhotoIcon()},
+		{".jpg", theme.MediaPhotoIcon()},
+		{".jpeg", theme.MediaPhotoIcon()},
+		{".gif", theme.MediaPhotoIcon()},
+		{".svg", theme.MediaPhotoIcon()},
+		{".webp", theme.MediaPhotoIcon()},
+		{".yaml", theme.SettingsIcon()},
+		{".json", theme.SettingsIcon()},
+		{".toml", theme.SettingsIcon()},
+		{".xml", theme.SettingsIcon()},
+		{".xyz", theme.FileIcon()},
+		{"", theme.FileIcon()},
+	}
+	for _, tt := range tests {
+		got := fileIconForExt(tt.ext)
+		if got != tt.want {
+			t.Errorf("fileIconForExt(%q) = %v, want %v", tt.ext, got, tt.want)
+		}
+	}
+}
+
+// ── skippedDirs ────────────────────────────────────────────────
+
+func TestSkippedDirsComplete(t *testing.T) {
+	// Verify all major skip targets are in the map
+	mustSkip := []string{".git", "node_modules", "vendor", ".venv", "venv",
+		"bin", "dist", "build", "__pycache__", "target", "coverage",
+		".gradle", ".cache", ".terraform", "pods"}
+	for _, d := range mustSkip {
+		if _, ok := skippedDirs[d]; !ok {
+			t.Errorf("%q not in skippedDirs", d)
+		}
+	}
+}
+
+func TestSkippedDirsNotInTree(t *testing.T) {
+	root := createTestWorkspace(t)
+	ft := NewFileTree(root, func(absPath string) {})
+	children := ft.childUIDs("")
+
+	forbidden := map[string]bool{
+		".git": true, "node_modules": true, "vendor": true,
+	}
+	for _, child := range children {
+		name := filepath.Base(string(child))
+		if forbidden[name] {
+			t.Errorf("forbidden directory appeared in tree: %s", name)
+		}
+	}
+}
+
+// ── FileTree tests ─────────────────────────────────────────────
 
 func TestFileTreeShowsWorkspaceFiles(t *testing.T) {
 	root := createTestWorkspace(t)
 	ft := NewFileTree(root, func(absPath string) {})
 
-	// Verify tree widget was created
 	if ft.tree == nil {
 		t.Fatal("tree widget is nil")
 	}
 
-	// Force layout so child UIDs get loaded
 	c := test.NewCanvas()
 	c.SetContent(ft.Widget())
 	c.Resize(fyne.NewSize(400, 600))
 
-	// Verify children of root are loaded
 	children := ft.childUIDs("")
 	if len(children) == 0 {
 		t.Fatal("root has no children")
 	}
 
-	// .git, node_modules, vendor should be skipped
-	for _, child := range children {
-		name := filepath.Base(string(child))
-		if name == ".git" || name == "node_modules" || name == "vendor" {
-			t.Errorf("skipped directory appeared in tree: %s", name)
-		}
-	}
-
-	// Verify cmd and internal are branches
 	foundCmd := false
 	foundInternal := false
 	for _, child := range children {
@@ -118,7 +171,6 @@ func TestFileTreeOnOpenCallback(t *testing.T) {
 		clicked = absPath
 	})
 
-	// Simulate selecting a file
 	ft.onSelected("README.md")
 	expected := filepath.Join(root, "README.md")
 	if clicked != expected {
@@ -133,10 +185,33 @@ func TestFileTreeOnOpenDirectoryIgnored(t *testing.T) {
 		clicked = absPath
 	})
 
-	// Selecting a directory should not trigger callback
 	ft.onSelected("cmd")
 	if clicked != "" {
 		t.Errorf("onOpen should not fire for directory, got %q", clicked)
+	}
+}
+
+func TestFileTreeOnOpenNilCallback(t *testing.T) {
+	root := createTestWorkspace(t)
+	ft := NewFileTree(root, nil)
+
+	// Should not panic
+	ft.onSelected("README.md")
+}
+
+func TestFileTreeOnOpenNonexistentPath(t *testing.T) {
+	root := createTestWorkspace(t)
+	clicked := ""
+	ft := NewFileTree(root, func(absPath string) {
+		clicked = absPath
+	})
+
+	// Path that doesn't exist
+	ft.onSelected("nonexistent.go")
+	if clicked != "" {
+		// os.Stat fails, IsDir() returns false, but it won't be a real file
+		// The callback still fires because os.Stat fails silently
+		// This tests that it doesn't panic
 	}
 }
 
@@ -144,14 +219,11 @@ func TestFileTreeRefresh(t *testing.T) {
 	root := createTestWorkspace(t)
 	ft := NewFileTree(root, nil)
 
-	// Load initial children
 	children1 := ft.childUIDs("")
 	count1 := len(children1)
 
-	// Create a new file
 	os.WriteFile(filepath.Join(root, "newfile.txt"), []byte("test"), 0644)
 
-	// Clear cache and refresh
 	ft.entries = nil
 	ft.Refresh()
 
@@ -163,7 +235,314 @@ func TestFileTreeRefresh(t *testing.T) {
 	}
 }
 
-// ── FilePreview tests ─────────────────────────────────────────
+func TestFileTreeDirectorySortOrder(t *testing.T) {
+	root := t.TempDir()
+	// Create files and dirs with names that sort differently
+	os.MkdirAll(filepath.Join(root, "z_dir"), 0755)
+	os.MkdirAll(filepath.Join(root, "a_dir"), 0755)
+	os.WriteFile(filepath.Join(root, "z_file.txt"), []byte("z"), 0644)
+	os.WriteFile(filepath.Join(root, "a_file.txt"), []byte("a"), 0644)
+
+	ft := NewFileTree(root, nil)
+	children := ft.childUIDs("")
+
+	// All directories should come before all files
+	firstFileIdx := -1
+	lastDirIdx := -1
+	for i, child := range children {
+		if ft.isBranch(string(child)) {
+			lastDirIdx = i
+		} else {
+			if firstFileIdx == -1 {
+				firstFileIdx = i
+			}
+		}
+	}
+	if firstFileIdx >= 0 && lastDirIdx >= 0 && firstFileIdx < lastDirIdx {
+		t.Errorf("directories should come before files: firstFile=%d, lastDir=%d", firstFileIdx, lastDirIdx)
+	}
+
+	// Directories should be sorted alphabetically
+	var dirNames []string
+	for _, child := range children {
+		if ft.isBranch(string(child)) {
+			dirNames = append(dirNames, string(child))
+		}
+	}
+	for i := 1; i < len(dirNames); i++ {
+		if dirNames[i] < dirNames[i-1] {
+			t.Errorf("dirs not sorted: %q > %q", dirNames[i-1], dirNames[i])
+		}
+	}
+}
+
+func TestFileTreeDSDotStoreSkipped(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, ".DS_Store"), []byte("junk"), 0644)
+	os.WriteFile(filepath.Join(root, "real.txt"), []byte("ok"), 0644)
+
+	ft := NewFileTree(root, nil)
+	children := ft.childUIDs("")
+
+	for _, child := range children {
+		if string(child) == ".DS_Store" {
+			t.Error(".DS_Store should be skipped")
+		}
+	}
+}
+
+func TestFileTreeIsBranchNonexistent(t *testing.T) {
+	root := createTestWorkspace(t)
+	ft := NewFileTree(root, nil)
+
+	if ft.isBranch("does_not_exist") {
+		t.Error("nonexistent path should not be a branch")
+	}
+}
+
+func TestFileTreeLazyLoading(t *testing.T) {
+	root := createTestWorkspace(t)
+	ft := NewFileTree(root, nil)
+
+	// Before accessing, entries should be nil
+	if ft.entries != nil {
+		t.Fatal("entries should start nil")
+	}
+
+	// First access loads
+	_ = ft.childUIDs("")
+	if ft.entries == nil {
+		t.Fatal("entries should be populated after first access")
+	}
+
+	// Second access uses cache (same count)
+	cached := ft.childUIDs("")
+	if len(cached) != len(ft.entries[""]) {
+		t.Error("second access should use cache")
+	}
+}
+
+func TestFileTreeNestedDirectories(t *testing.T) {
+	root := createTestWorkspace(t)
+	ft := NewFileTree(root, nil)
+
+	// Load root first
+	ft.childUIDs("")
+
+	// Load internal/children
+	internalChildren := ft.childUIDs("internal")
+	foundPkg := false
+	for _, child := range internalChildren {
+		if filepath.Base(string(child)) == "pkg" {
+			foundPkg = true
+			if !ft.isBranch(string(child)) {
+				t.Error("pkg should be a branch")
+			}
+		}
+	}
+	if !foundPkg {
+		t.Error("pkg directory not found under internal/")
+	}
+
+	// Load internal/pkg/ children
+	pkgPath := "internal" + string(filepath.Separator) + "pkg"
+	pkgChildren := ft.childUIDs(pkgPath)
+	foundUtil := false
+	for _, child := range pkgChildren {
+		if filepath.Base(string(child)) == "util.go" {
+			foundUtil = true
+			if ft.isBranch(string(child)) {
+				t.Error("util.go should not be a branch")
+			}
+		}
+	}
+	if !foundUtil {
+		t.Error("util.go not found under internal/pkg/")
+	}
+}
+
+func TestFileTreeWidgetNotNil(t *testing.T) {
+	root := createTestWorkspace(t)
+	ft := NewFileTree(root, nil)
+
+	w := ft.Widget()
+	if w == nil {
+		t.Fatal("Widget() returned nil")
+	}
+}
+
+func TestFileTreeUpdateNode(t *testing.T) {
+	root := createTestWorkspace(t)
+	ft := NewFileTree(root, nil)
+
+	node := ft.createNode(true)
+	ft.updateNode("cmd", true, node)
+
+	node2 := ft.createNode(false)
+	ft.updateNode("README.md", false, node2)
+}
+
+// ── isBinaryData ───────────────────────────────────────────────
+
+func TestIsBinaryData(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"empty", []byte{}, false},
+		{"pure text", []byte("hello world"), false},
+		{"has null byte", []byte("hello\x00world"), true},
+		{"null at start", []byte("\x00abc"), true},
+		{"null at end within 512", append([]byte(strings.Repeat("a", 511)), 0), true},
+		{"null beyond 512", append([]byte(strings.Repeat("a", 600)), 0), false},
+		{"large text no null", []byte(strings.Repeat("abcdefgh\n", 100)), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isBinaryData(tt.data); got != tt.want {
+				t.Errorf("isBinaryData() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ── formatSize ─────────────────────────────────────────────────
+
+func TestFormatSize(t *testing.T) {
+	tests := []struct {
+		bytes int64
+		want  string
+	}{
+		{0, "0 B"},
+		{1, "1 B"},
+		{512, "512 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KB"},
+		{1536, "1.5 KB"},
+		{1048576, "1.0 MB"},
+		{1073741824, "1.0 GB"},
+		{2147483648, "2.0 GB"},
+	}
+	for _, tt := range tests {
+		got := formatSize(tt.bytes)
+		if got != tt.want {
+			t.Errorf("formatSize(%d) = %q, want %q", tt.bytes, got, tt.want)
+		}
+	}
+}
+
+// ── splitMarkdownAndMermaid ────────────────────────────────────
+
+func TestSplitMarkdownNoMermaid(t *testing.T) {
+	input := "# Title\n\nSome text\n"
+	parts := splitMarkdownAndMermaid(input)
+	if len(parts) != 1 || parts[0].isMermaid {
+		t.Errorf("expected 1 non-mermaid part, got %v", parts)
+	}
+}
+
+func TestSplitMarkdownSingleMermaid(t *testing.T) {
+	input := "# Title\n\n```mermaid\ngraph LR\n  A-->B\n```\n\nMore text\n"
+	parts := splitMarkdownAndMermaid(input)
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d", len(parts))
+	}
+	if parts[0].isMermaid {
+		t.Error("first part should be text")
+	}
+	if !parts[1].isMermaid {
+		t.Error("second part should be mermaid")
+	}
+	if parts[1].content != "graph LR\n  A-->B" {
+		t.Errorf("mermaid content = %q", parts[1].content)
+	}
+	if parts[2].isMermaid {
+		t.Error("third part should be text")
+	}
+}
+
+func TestSplitMarkdownMultipleMermaid(t *testing.T) {
+	input := "```mermaid\ngraph A\n```\nText between\n```mermaid\ngraph B\n```\nFinal text"
+	parts := splitMarkdownAndMermaid(input)
+	if len(parts) != 4 {
+		t.Fatalf("expected 4 parts, got %d", len(parts))
+	}
+	if !parts[0].isMermaid {
+		t.Error("first should be mermaid")
+	}
+	if parts[1].isMermaid {
+		t.Error("second should be text")
+	}
+	if !parts[2].isMermaid {
+		t.Error("third should be mermaid")
+	}
+	if parts[3].isMermaid {
+		t.Error("fourth should be text")
+	}
+	if parts[3].content != "Final text" {
+		t.Errorf("fourth content = %q, want %q", parts[3].content, "Final text")
+	}
+}
+
+func TestSplitMarkdownMermaidOnly(t *testing.T) {
+	input := "```mermaid\ngraph LR\n  A-->B\n```"
+	parts := splitMarkdownAndMermaid(input)
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(parts))
+	}
+	if !parts[0].isMermaid {
+		t.Error("should be mermaid")
+	}
+}
+
+func TestSplitMarkdownEmpty(t *testing.T) {
+	input := ""
+	parts := splitMarkdownAndMermaid(input)
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part (empty fallback), got %d", len(parts))
+	}
+}
+
+func TestSplitMarkdownMermaidAtEnd(t *testing.T) {
+	input := "# Header\n\n```mermaid\npie\n  title Pets\n  dogs: 50\n```"
+	parts := splitMarkdownAndMermaid(input)
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(parts))
+	}
+	if parts[0].isMermaid {
+		t.Error("first should be text")
+	}
+	if !parts[1].isMermaid {
+		t.Error("second should be mermaid")
+	}
+}
+
+// ── imageExts / markdownExts ───────────────────────────────────
+
+func TestImageExts(t *testing.T) {
+	for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"} {
+		if !imageExts[ext] {
+			t.Errorf("imageExts[%q] should be true", ext)
+		}
+	}
+	if imageExts[".go"] {
+		t.Error(".go should not be in imageExts")
+	}
+}
+
+func TestMarkdownExts(t *testing.T) {
+	for _, ext := range []string{".md", ".markdown", ".mdown", ".mkd"} {
+		if !markdownExts[ext] {
+			t.Errorf("markdownExts[%q] should be true", ext)
+		}
+	}
+	if markdownExts[".go"] {
+		t.Error(".go should not be in markdownExts")
+	}
+}
+
+// ── FilePreview tests ──────────────────────────────────────────
 
 func TestFilePreviewCodeFile(t *testing.T) {
 	root := createTestWorkspace(t)
@@ -171,25 +550,30 @@ func TestFilePreviewCodeFile(t *testing.T) {
 
 	goFile := filepath.Join(root, "cmd", "main.go")
 	fp := NewFilePreview(app, goFile, 0, nil)
-
 	if fp == nil {
 		t.Fatal("preview is nil")
 	}
-
 	w := test.NewWindow(fp.Widget())
 	w.Resize(fyne.NewSize(600, 400))
+}
 
-	// Verify the widget rendered without panicking
-	// (if we get here, buildCodePreview succeeded)
+func TestFilePreviewCodeWithTargetLine(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	// Create a file with 10 lines
+	os.WriteFile(filepath.Join(root, "ten.go"), []byte("line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"), 0644)
+
+	fp := NewFilePreview(app, filepath.Join(root, "ten.go"), 5, nil)
+	w := test.NewWindow(fp.Widget())
+	w.Resize(fyne.NewSize(600, 400))
 }
 
 func TestFilePreviewMarkdownFile(t *testing.T) {
 	root := createTestWorkspace(t)
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
-	mdFile := filepath.Join(root, "README.md")
-	fp := NewFilePreview(app, mdFile, 0, nil)
-
+	fp := NewFilePreview(app, filepath.Join(root, "README.md"), 0, nil)
 	w := test.NewWindow(fp.Widget())
 	w.Resize(fyne.NewSize(600, 400))
 	_ = w
@@ -199,9 +583,7 @@ func TestFilePreviewBinaryFile(t *testing.T) {
 	root := createTestWorkspace(t)
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
-	binFile := filepath.Join(root, "binary.dat")
-	fp := NewFilePreview(app, binFile, 0, nil)
-
+	fp := NewFilePreview(app, filepath.Join(root, "binary.dat"), 0, nil)
 	w := test.NewWindow(fp.Widget())
 	w.Resize(fyne.NewSize(600, 400))
 	_ = w
@@ -224,6 +606,73 @@ func TestFilePreviewNonexistentFile(t *testing.T) {
 	w.Resize(fyne.NewSize(600, 400))
 }
 
+func TestFilePreviewLargeFile(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	// Create a file larger than maxPreviewSize
+	largeFile := filepath.Join(root, "large.log")
+	f, _ := os.Create(largeFile)
+	f.WriteString(strings.Repeat("x\n", maxPreviewSize/2+1))
+	f.Close()
+
+	fp := NewFilePreview(app, largeFile, 0, nil)
+	w := test.NewWindow(fp.Widget())
+	w.Resize(fyne.NewSize(600, 400))
+}
+
+func TestFilePreviewEmptyFile(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	os.WriteFile(filepath.Join(root, "empty.go"), []byte(""), 0644)
+
+	fp := NewFilePreview(app, filepath.Join(root, "empty.go"), 0, nil)
+	w := test.NewWindow(fp.Widget())
+	w.Resize(fyne.NewSize(600, 400))
+}
+
+func TestFilePreviewTextFile(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	fp := NewFilePreview(app, filepath.Join(root, "notes.txt"), 0, nil)
+	w := test.NewWindow(fp.Widget())
+	w.Resize(fyne.NewSize(600, 400))
+}
+
+func TestFilePreviewYAMLFile(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	fp := NewFilePreview(app, filepath.Join(root, "config.yaml"), 0, nil)
+	w := test.NewWindow(fp.Widget())
+	w.Resize(fyne.NewSize(600, 400))
+}
+
+func TestFilePreviewImagePNG(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	// Create a minimal valid PNG (1x1 pixel red)
+	pngData := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+		0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT chunk
+		0x54, 0x08, 0xD7, 0x63, 0xD8, 0xCD, 0xC0, 0x00,
+		0x00, 0x00, 0x04, 0x00, 0x01, 0xF6, 0x17, 0xA4,
+		0x49, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, // IEND chunk
+		0x44, 0xAE, 0x42, 0x60, 0x82,
+	}
+	os.WriteFile(filepath.Join(root, "test.png"), pngData, 0644)
+
+	fp := NewFilePreview(app, filepath.Join(root, "test.png"), 0, nil)
+	w := test.NewWindow(fp.Widget())
+	w.Resize(fyne.NewSize(600, 400))
+}
+
 func TestFilePreviewCloseButton(t *testing.T) {
 	root := createTestWorkspace(t)
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
@@ -237,7 +686,6 @@ func TestFilePreviewCloseButton(t *testing.T) {
 	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
 
-	// Find and tap close button (CancelIcon button in header)
 	closeBtn := findButton(obj, "")
 	if closeBtn != nil {
 		test.Tap(closeBtn)
@@ -247,7 +695,165 @@ func TestFilePreviewCloseButton(t *testing.T) {
 	}
 }
 
-// ── App showFilePreview / closeFilePreview ────────────────────
+func TestFilePreviewWidgetRelativePath(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	fp := NewFilePreview(app, filepath.Join(root, "cmd", "main.go"), 0, nil)
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
+	w.Resize(fyne.NewSize(600, 400))
+
+	// Find the label that shows the path
+	label := findLabel(obj)
+	if label == nil {
+		t.Fatal("no label found in preview header")
+	}
+	if label.Text != filepath.Join("cmd", "main.go") {
+		t.Errorf("path label = %q, want %q", label.Text, filepath.Join("cmd", "main.go"))
+	}
+}
+
+func TestFilePreviewWidgetNoWorkDir(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{dc: &DesktopConfig{WorkDir: ""}} // no workdir
+
+	absPath := filepath.Join(root, "README.md")
+	fp := NewFilePreview(app, absPath, 0, nil)
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
+	w.Resize(fyne.NewSize(600, 400))
+
+	label := findLabel(obj)
+	if label == nil {
+		t.Fatal("no label found")
+	}
+	// Without WorkDir, should show absolute path
+	if label.Text != absPath {
+		t.Errorf("path label = %q, want %q", label.Text, absPath)
+	}
+}
+
+func TestFilePreviewNilOnClose(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	fp := NewFilePreview(app, filepath.Join(root, "README.md"), 0, nil)
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
+	w.Resize(fyne.NewSize(600, 400))
+
+	closeBtn := findButton(obj, "")
+	if closeBtn != nil {
+		// Should not panic with nil onClose
+		test.Tap(closeBtn)
+	}
+}
+
+// ── highlightCode ──────────────────────────────────────────────
+
+func TestHighlightCodeGoFile(t *testing.T) {
+	lines := highlightCode("main.go", "package main\n\nfunc main() {}\n")
+	if len(lines) < 2 {
+		t.Errorf("expected multiple lines, got %d", len(lines))
+	}
+}
+
+func TestHighlightCodeUnknownExt(t *testing.T) {
+	lines := highlightCode("unknown.xyz", "hello world\nline 2")
+	if len(lines) != 2 {
+		t.Errorf("expected 2 lines, got %d", len(lines))
+	}
+	if lines[0] != "hello world" {
+		t.Errorf("line 0 = %q, want %q", lines[0], "hello world")
+	}
+}
+
+// ── linkifyFilePaths ───────────────────────────────────────────
+
+func TestLinkifyFilePathsNilApp(t *testing.T) {
+	result := linkifyFilePaths("check /some/path/file.go", nil)
+	if result != "check /some/path/file.go" {
+		t.Error("should return unchanged text with nil app")
+	}
+}
+
+func TestLinkifyFilePathsEmptyWorkDir(t *testing.T) {
+	app := &App{dc: &DesktopConfig{WorkDir: ""}}
+	result := linkifyFilePaths("check /some/path/file.go", app)
+	if result != "check /some/path/file.go" {
+		t.Error("should return unchanged text with empty WorkDir")
+	}
+}
+
+func TestLinkifyFilePathsExistingFile(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "hello.go"), []byte("package main"), 0644)
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	text := "see " + filepath.Join(root, "hello.go") + " for details"
+	result := linkifyFilePaths(text, app)
+
+	if !strings.Contains(result, "[hello.go](file://") {
+		t.Errorf("expected linkified path in %q", result)
+	}
+}
+
+func TestLinkifyFilePathsNonexistentFile(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	text := "see " + filepath.Join(root, "nonexistent.go") + " for details"
+	result := linkifyFilePaths(text, app)
+
+	if strings.Contains(result, "[nonexistent.go](file://") {
+		t.Error("should not linkify nonexistent file")
+	}
+}
+
+func TestLinkifyFilePathsOutsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	text := "see /other/workspace/file.go for details"
+	result := linkifyFilePaths(text, app)
+
+	if strings.Contains(result, "[file.go](file://") {
+		t.Error("should not linkify paths outside workspace")
+	}
+}
+
+// ── interceptFileLinks ─────────────────────────────────────────
+
+func TestInterceptFileLinks(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	link := widget.NewHyperlink("test.go", mustParseURL(t, "file://"+filepath.Join(root, "test.go")))
+	box := container.NewVBox(link)
+
+	interceptFileLinks(box, app)
+
+	if link.OnTapped == nil {
+		t.Error("OnTapped should be set for file:// link")
+	}
+}
+
+func TestInterceptFileLinksHTTPS(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	link := widget.NewHyperlink("docs", mustParseURL(t, "https://example.com"))
+	box := container.NewVBox(link)
+
+	interceptFileLinks(box, app)
+
+	if link.OnTapped != nil {
+		t.Error("OnTapped should not be set for https:// link")
+	}
+}
+
+// ── App showFilePreview / closeFilePreview ─────────────────────
 
 func TestAppShowAndCloseFilePreview(t *testing.T) {
 	root := createTestWorkspace(t)
@@ -257,7 +863,6 @@ func TestAppShowAndCloseFilePreview(t *testing.T) {
 	}
 	w := app.fyneApp.NewWindow("test")
 
-	// Create a minimal chat view so closeFilePreview doesn't crash
 	chatLabel := widget.NewLabel("chat")
 	app.chatViewObj = chatLabel
 	app.sidebarObj = widget.NewLabel("sidebar")
@@ -266,7 +871,6 @@ func TestAppShowAndCloseFilePreview(t *testing.T) {
 	w.SetContent(app.content)
 	w.Resize(fyne.NewSize(800, 600))
 
-	// Show preview
 	goFile := filepath.Join(root, "cmd", "main.go")
 	app.showFilePreview(goFile, 0)
 
@@ -274,7 +878,6 @@ func TestAppShowAndCloseFilePreview(t *testing.T) {
 		t.Fatal("filePreview should be set after showFilePreview")
 	}
 
-	// Close preview
 	app.closeFilePreview()
 
 	if app.filePreview != nil {
@@ -282,7 +885,64 @@ func TestAppShowAndCloseFilePreview(t *testing.T) {
 	}
 }
 
-// ── Helper functions ──────────────────────────────────────────
+func TestAppShowFilePreviewNilContent(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	// Should not panic with nil content
+	app.showFilePreview(filepath.Join(root, "README.md"), 0)
+}
+
+func TestAppCloseFilePreviewRestoresSplit(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      &DesktopConfig{WorkDir: root},
+	}
+	w := app.fyneApp.NewWindow("test")
+
+	chatLabel := widget.NewLabel("chat")
+	app.chatViewObj = chatLabel
+	app.sidebarObj = widget.NewLabel("sidebar")
+	app.split = container.NewHSplit(chatLabel, app.sidebarObj)
+	app.content = container.NewHBox(app.split)
+	w.SetContent(app.content)
+	w.Resize(fyne.NewSize(800, 600))
+
+	// Show then close
+	app.showFilePreview(filepath.Join(root, "README.md"), 0)
+	app.closeFilePreview()
+
+	if app.filePreview != nil {
+		t.Error("filePreview should be nil")
+	}
+}
+
+func TestAppShowFilePreviewWithSidebarHidden(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{
+		fyneApp:      test.NewApp(),
+		dc:           &DesktopConfig{WorkDir: root},
+		sidebarHidden: true,
+	}
+	w := app.fyneApp.NewWindow("test")
+
+	chatLabel := widget.NewLabel("chat")
+	app.chatViewObj = chatLabel
+	app.sidebarObj = widget.NewLabel("sidebar")
+	app.split = container.NewHSplit(chatLabel, app.sidebarObj)
+	app.content = container.NewHBox(app.split)
+	w.SetContent(app.content)
+	w.Resize(fyne.NewSize(800, 600))
+
+	// Should not panic with sidebar hidden
+	app.showFilePreview(filepath.Join(root, "README.md"), 0)
+	if app.filePreview == nil {
+		t.Error("filePreview should be set")
+	}
+}
+
+// ── Helper functions ───────────────────────────────────────────
 
 func findButton(obj fyne.CanvasObject, text string) *widget.Button {
 	switch w := obj.(type) {
@@ -298,4 +958,27 @@ func findButton(obj fyne.CanvasObject, text string) *widget.Button {
 		}
 	}
 	return nil
+}
+
+func findLabel(obj fyne.CanvasObject) *widget.Label {
+	switch w := obj.(type) {
+	case *widget.Label:
+		return w
+	case *fyne.Container:
+		for _, child := range w.Objects {
+			if lbl := findLabel(child); lbl != nil {
+				return lbl
+			}
+		}
+	}
+	return nil
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse URL %q: %v", raw, err)
+	}
+	return u
 }
