@@ -63,6 +63,7 @@ type FileTree struct {
 	onOpen  func(absPath string)
 	tree    *widget.Tree
 	entries map[string][]string // uid -> sorted child names
+	filter  string              // current search filter
 }
 
 // NewFileTree creates a new file tree rooted at the given workspace directory.
@@ -90,6 +91,42 @@ func (ft *FileTree) Widget() fyne.CanvasObject {
 func (ft *FileTree) Refresh() {
 	ft.entries = nil
 	ft.tree.Refresh()
+}
+
+// SetFilter sets a search filter and refreshes the tree.
+// Only files matching the filter (case-insensitive substring) are shown.
+// Directories are always shown to preserve tree structure.
+func (ft *FileTree) SetFilter(text string) {
+	ft.filter = strings.ToLower(text)
+	ft.entries = nil
+	ft.tree.Refresh()
+}
+
+// dirContainsMatch checks if a directory (up to 2 levels deep) contains a file matching the filter.
+func (ft *FileTree) dirContainsMatch(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.Contains(strings.ToLower(name), ft.filter) {
+			return true
+		}
+		if e.IsDir() && !isSkipped(name) {
+			sub := filepath.Join(dir, name)
+			if ft.dirContainsMatch(sub) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSkipped checks if a directory name should be skipped.
+func isSkipped(name string) bool {
+	_, skip := skippedDirs[name]
+	return skip
 }
 
 // onSelected handles a node being selected in the tree.
@@ -148,6 +185,29 @@ func (ft *FileTree) childUIDs(uid widget.TreeNodeID) (children []widget.TreeNode
 	}
 	sort.Strings(dirs)
 	sort.Strings(files)
+	// Apply filter: when filter is set, only show matching files and dirs that contain matches
+	if ft.filter != "" {
+		var filteredDirs []string
+		for _, d := range dirs {
+			if strings.Contains(strings.ToLower(d), ft.filter) {
+				filteredDirs = append(filteredDirs, d)
+				continue
+			}
+			// Check if any file inside this dir matches
+			childPath := filepath.Join(dir, d)
+			if ft.dirContainsMatch(childPath) {
+				filteredDirs = append(filteredDirs, d)
+			}
+		}
+		var filteredFiles []string
+		for _, f := range files {
+			if strings.Contains(strings.ToLower(f), ft.filter) {
+				filteredFiles = append(filteredFiles, f)
+			}
+		}
+		dirs = filteredDirs
+		files = filteredFiles
+	}
 	names := append(dirs, files...)
 	ft.entries[uid] = names
 	for _, name := range names {
@@ -173,7 +233,8 @@ func (ft *FileTree) isBranch(uid widget.TreeNodeID) bool {
 // createNode creates a new tree node widget.
 func (ft *FileTree) createNode(isBranch bool) fyne.CanvasObject {
 	icon := widget.NewIcon(theme.FileIcon())
-	label := widget.NewLabel("")
+	label := widget.NewLabel("            ")
+	label.TextStyle = fyne.TextStyle{Monospace: true}
 	return container.NewHBox(icon, label)
 }
 
@@ -186,10 +247,11 @@ func (ft *FileTree) updateNode(uid widget.TreeNodeID, isBranch bool, node fyne.C
 	if uid == "" {
 		name = filepath.Base(ft.root)
 	}
-	label.SetText(name)
 	if isBranch {
+		label.SetText(name + string(filepath.Separator))
 		icon.SetResource(theme.FolderIcon())
 	} else {
+		label.SetText(name)
 		ext := strings.ToLower(filepath.Ext(name))
 		icon.SetResource(fileIconForExt(ext))
 	}

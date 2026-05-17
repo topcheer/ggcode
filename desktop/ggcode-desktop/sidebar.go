@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -64,10 +65,27 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 		s.app.showFilePreview(absPath, 0)
 	})
 
+	// Build file browser tab content: root label + search + tree
+	rootName := filepath.Base(s.app.dc.WorkDir)
+	if rootName == "" || rootName == "." {
+		rootName = "Files"
+	}
+	rootLabel := widget.NewLabelWithStyle(rootName, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	searchEntry := widget.NewEntry()
+	searchEntry.SetPlaceHolder("Search files...")
+	searchEntry.OnChanged = func(text string) {
+		s.fileTree.SetFilter(text)
+	}
+	filesContent := container.NewBorder(
+		container.NewVBox(rootLabel, searchEntry),
+		nil, nil, nil,
+		s.fileTree.Widget(),
+	)
+
 	s.tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Context", theme.InfoIcon(), s.buildContextTab()),
 		container.NewTabItemWithIcon("Provider", theme.ComputerIcon(), s.buildProviderTab()),
-		container.NewTabItemWithIcon("Files", theme.FolderIcon(), s.fileTree.Widget()),
+		container.NewTabItemWithIcon("Files", theme.FolderIcon(), filesContent),
 	)
 	s.tabs.OnSelected = func(tab *container.TabItem) {
 		if tab.Text == "Provider" {
