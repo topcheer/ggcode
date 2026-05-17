@@ -34,6 +34,8 @@ type Sidebar struct {
 	sessions        []sessionMeta
 	ctxModelIniting bool // suppress OnChanged during initial SetSelected
 
+	fileTree *FileTree
+
 	// Provider tab widgets.
 	vendorSelect   *widget.Select
 	epSelect       *widget.Select
@@ -57,9 +59,15 @@ func NewSidebar(app *App, bridge *AgentBridge, ui *UIState) *Sidebar {
 }
 
 func (s *Sidebar) Render() fyne.CanvasObject {
+	// Build file tree
+	s.fileTree = NewFileTree(s.app.dc.WorkDir, func(absPath string) {
+		s.app.showFilePreview(absPath, 0)
+	})
+
 	s.tabs = container.NewAppTabs(
 		container.NewTabItemWithIcon("Context", theme.InfoIcon(), s.buildContextTab()),
 		container.NewTabItemWithIcon("Provider", theme.ComputerIcon(), s.buildProviderTab()),
+		container.NewTabItemWithIcon("Files", theme.FolderIcon(), s.fileTree.Widget()),
 	)
 	s.tabs.OnSelected = func(tab *container.TabItem) {
 		if tab.Text == "Provider" {

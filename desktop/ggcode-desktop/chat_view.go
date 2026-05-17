@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -821,7 +822,14 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return cv.iconRow(theme.ComputerIcon(), newMD(text))
+	// Linkify bare file paths in the message text
+	text = linkifyFilePaths(text, cv.app)
+	md := newMD(text)
+	// Intercept file:// hyperlink clicks
+	if cv.app != nil {
+		interceptFileLinks(md, cv.app)
+	}
+	return cv.iconRow(theme.ComputerIcon(), md)
 }
 
 func (cv *ChatView) renderSystem(msg *ChatMessage) fyne.CanvasObject {
@@ -1717,4 +1725,50 @@ func (cv *ChatView) rebuildFromMessages(messages []provider.Message) {
 		})
 	}()
 	cv.entry.loadHistory(userMsgs)
+}
+
+// linkifyFilePaths converts bare file paths in agent messages to clickable markdown links.
+// Paths under the workspace root are converted to relative paths for display.
+func linkifyFilePaths(text string, app *App) string {
+	if app == nil || app.dc == nil || app.dc.WorkDir == "" {
+		return text
+	}
+	ws := app.dc.WorkDir
+	// Match absolute paths under workspace: /workspace/path/to/file.go
+	wsPattern := regexp.QuoteMeta(ws)
+	pat := regexp.MustCompile(`(?m)(?:^|[\s(\[` + "`" + `'"` + `])(` + wsPattern + `/[^\s)\]` + "`" + `'"` + `]+)`)
+	return pat.ReplaceAllStringFunc(text, func(match string) string {
+		sub := pat.FindStringSubmatch(match)
+		if len(sub) < 2 || sub[1] == "" {
+			return match
+		}
+		absPath := sub[1]
+		if _, err := os.Stat(absPath); err != nil {
+			return match
+		}
+		rel, err := filepath.Rel(ws, absPath)
+		if err != nil {
+			rel = absPath
+		}
+		// Replace just the path portion with a markdown link
+		link := "[" + rel + "](file://" + absPath + ")"
+		return strings.Replace(match, absPath, link, 1)
+	})
+}
+
+// interceptFileLinks walks the widget tree and replaces file:// hyperlink OnTapped handlers.
+func interceptFileLinks(obj fyne.CanvasObject, app *App) {
+	switch w := obj.(type) {
+	case *widget.Hyperlink:
+		if w.URL != nil && w.URL.Scheme == "file" {
+			path := w.URL.Path
+			w.OnTapped = func() {
+				app.showFilePreview(path, 0)
+			}
+		}
+	case *fyne.Container:
+		for _, child := range w.Objects {
+			interceptFileLinks(child, app)
+		}
+	}
 }
