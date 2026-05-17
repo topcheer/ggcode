@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/flate"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -242,7 +244,7 @@ func (fp *FilePreview) buildImagePreview() fyne.CanvasObject {
 	img := &canvas.Image{}
 	img.Resource = fyne.NewStaticResource(filepath.Base(fp.filePath), data)
 	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSize(400, 300))
+	img.SetMinSize(fyne.NewSize(800, 600))
 
 	// Image info
 	info, _ := os.Stat(fp.filePath)
@@ -391,7 +393,7 @@ func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject
 
 	img := &canvas.Image{}
 	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSize(400, 300))
+	img.SetMinSize(fyne.NewSize(800, 600))
 	img.Hide()
 
 	fallbackBox := container.NewVBox() // hidden until needed
@@ -401,7 +403,7 @@ func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject
 
 	// Fetch diagram in background with multi-backend fallback
 	go func() {
-		svgData, err := fetchMermaidSVGMulti(mermaidCode)
+		pngData, err := fetchMermaidPNG(mermaidCode)
 		if err != nil {
 			logf("mermaid", "all backends failed: %v", err)
 			fyne.Do(func() {
@@ -425,10 +427,10 @@ func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject
 			})
 			return
 		}
-		img.Resource = fyne.NewStaticResource("mermaid.png", svgData)
+		img.Resource = fyne.NewStaticResource("mermaid.png", pngData)
 		// Validate PNG header to prevent Fyne crash on invalid image data
-		if len(svgData) < 8 || !bytes.HasPrefix(svgData, []byte("\x89PNG")) {
-			logf("mermaid", "response is not a valid PNG (%d bytes)", len(svgData))
+		if len(pngData) < 8 || !bytes.HasPrefix(pngData, []byte("\x89PNG")) {
+			logf("mermaid", "response is not a valid PNG (%d bytes)", len(pngData))
 			fyne.Do(func() {
 				placeholder.SetText("Diagram rendering returned invalid data")
 				placeholder.Refresh()
@@ -447,13 +449,27 @@ func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject
 	return container.NewCenter(wrapper)
 }
 
-// fetchMermaidSVGMulti tries multiple backends to render a Mermaid diagram.
-// Order: kroki.io (primary) → mermaid.ink (fallback).
-func fetchMermaidSVGMulti(code string) ([]byte, error) {
+// fetchMermaidPNG tries multiple backends to render a Mermaid diagram.
+// Uses a local file cache keyed by content hash to avoid redundant API calls.
+// Order: cache → kroki.io (primary) → mermaid.ink (fallback).
+func fetchMermaidPNG(code string) ([]byte, error) {
+	// Check cache first
+	cacheDir := mermaidCacheDir()
+	cacheKey := mermaidCacheKey(code)
+	cacheFile := filepath.Join(cacheDir, cacheKey+".png")
+
+	if data, err := os.ReadFile(cacheFile); err == nil && len(data) > 8 && bytes.HasPrefix(data, []byte("\x89PNG")) {
+		logf("mermaid", "cache hit: %s", cacheKey[:12])
+		return data, nil
+	}
+
+	// Cache miss — fetch from backends
 	var lastErr error
 
 	// Backend 1: kroki.io (POST with plain text body)
 	if data, err := fetchMermaidFromKroki(code); err == nil {
+		_ = os.MkdirAll(cacheDir, 0755)
+		_ = os.WriteFile(cacheFile, data, 0644)
 		return data, nil
 	} else {
 		lastErr = fmt.Errorf("kroki: %w", err)
@@ -462,6 +478,8 @@ func fetchMermaidSVGMulti(code string) ([]byte, error) {
 
 	// Backend 2: mermaid.ink (GET with base64 path)
 	if data, err := fetchMermaidFromInk(code); err == nil {
+		_ = os.MkdirAll(cacheDir, 0755)
+		_ = os.WriteFile(cacheFile, data, 0644)
 		return data, nil
 	} else {
 		lastErr = fmt.Errorf("kroki: failed; ink: %w", err)
@@ -469,6 +487,18 @@ func fetchMermaidSVGMulti(code string) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("all rendering backends failed: %v", lastErr)
+}
+
+// mermaidCacheDir returns the cache directory under .ggcode/ in the workspace.
+func mermaidCacheDir() string {
+	wd, _ := os.Getwd()
+	return filepath.Join(wd, ".ggcode", "mermaid-cache")
+}
+
+// mermaidCacheKey returns a SHA-256 hash of the diagram code for filename.
+func mermaidCacheKey(code string) string {
+	h := sha256.Sum256([]byte(code))
+	return hex.EncodeToString(h[:])
 }
 
 // fetchMermaidFromKroki fetches a PNG from kroki.io using POST.
