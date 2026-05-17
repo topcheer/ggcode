@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -810,23 +814,78 @@ func TestFilePreviewImagePNG(t *testing.T) {
 	root := t.TempDir()
 	app := &App{dc: &DesktopConfig{WorkDir: root}}
 
-	// Create a minimal valid PNG (1x1 pixel red)
 	pngData := []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
 		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-		0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT chunk
+		0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
 		0x54, 0x08, 0xD7, 0x63, 0xD8, 0xCD, 0xC0, 0x00,
 		0x00, 0x00, 0x04, 0x00, 0x01, 0xF6, 0x17, 0xA4,
-		0x49, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, // IEND chunk
+		0x49, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
 		0x44, 0xAE, 0x42, 0x60, 0x82,
 	}
 	os.WriteFile(filepath.Join(root, "test.png"), pngData, 0644)
 
 	fp := NewFilePreview(app, filepath.Join(root, "test.png"), 0, nil)
-	w := test.NewWindow(fp.Widget())
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
 	w.Resize(fyne.NewSize(600, 400))
+
+	// Should not crash, image should render
+	fp.Close() // no-op for non-HTML
+}
+
+func TestFilePreviewHTMLFile(t *testing.T) {
+	root := t.TempDir()
+	app := &App{dc: &DesktopConfig{WorkDir: root}}
+
+	htmlContent := `<!DOCTYPE html><html><head><title>Test</title></head><body><h1>Hello</h1></body></html>`
+	os.WriteFile(filepath.Join(root, "index.html"), []byte(htmlContent), 0644)
+
+	fp := NewFilePreview(app, filepath.Join(root, "index.html"), 0, nil)
+	obj := fp.Widget()
+	w := test.NewWindow(obj)
+	w.Resize(fyne.NewSize(600, 400))
+
+	// Verify server was started
+	if fp.server == nil {
+		t.Fatal("HTML preview should start an HTTP server")
+	}
+
+	// Verify the server is serving content
+	addr := fp.server.Addr
+	resp, err := http.Get("http://" + addr + "/index.html")
+	if err != nil {
+		t.Fatalf("failed to get HTML from preview server: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("<h1>Hello</h1>")) {
+		t.Errorf("response should contain HTML content, got: %s", string(body[:min(200, len(body))]))
+	}
+
+	// Close should shut down the server
+	fp.Close()
+	if fp.server != nil {
+		t.Error("server should be nil after Close()")
+	}
+}
+
+func TestFindFreePort(t *testing.T) {
+	port := findFreePort()
+	if port < 1 || port > 65535 {
+		t.Errorf("invalid port: %d", port)
+	}
+	// Verify port is actually available
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Errorf("port %d not available: %v", port, err)
+	}
+	ln.Close()
 }
 
 func TestFilePreviewCloseButton(t *testing.T) {
