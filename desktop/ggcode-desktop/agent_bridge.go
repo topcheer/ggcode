@@ -347,15 +347,11 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				// Track tool calls in round state.
 				b.imRound.ToolCalls++
 
-				// Emit tool call event to IM.
+				// Do NOT emit intermediate tool_call event to IM — only
+				// final results via OutboundEventToolResult. This mirrors
+				// the daemon bridge behavior (two events merged into one).
 				if b.Emitter != nil {
-					b.Emitter.EmitEvent(im.OutboundEvent{
-						Kind: im.OutboundEventToolCall,
-						ToolCall: &im.ToolCallInfo{
-							ToolName: name,
-							Args:     args,
-						},
-					})
+					b.Emitter.TriggerTyping()
 				}
 
 			case provider.StreamEventToolResult:
@@ -370,16 +366,19 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					b.imRound.ToolSuccesses++
 				}
 
-				// Emit tool result event to IM.
+				// Emit tool result event to IM (includes tool call info
+				// so the start+result is delivered as a single message).
 				if b.Emitter != nil {
 					b.Emitter.EmitEvent(im.OutboundEvent{
 						Kind: im.OutboundEventToolResult,
 						ToolRes: &im.ToolResultInfo{
 							ToolName: ev.Tool.Name,
+							Args:     string(ev.Tool.Arguments),
 							Result:   content,
 							IsError:  ev.IsError,
 						},
 					})
+					b.Emitter.TriggerTyping()
 				}
 
 				// After spawn_agent completes, sync agent panels.
