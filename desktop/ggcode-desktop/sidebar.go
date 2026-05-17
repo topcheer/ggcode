@@ -235,7 +235,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	sessionHeader := widget.NewLabel("Sessions")
 	sessionHeader.TextStyle = fyne.TextStyle{Bold: true}
 
-	newChatBtn := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
+	newChatBtn := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() {
 		s.app.newSession()
 	})
 	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), func() {

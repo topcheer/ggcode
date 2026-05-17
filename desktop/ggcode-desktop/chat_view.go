@@ -341,7 +341,7 @@ func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 	cv.cancelBtn.Importance = widget.DangerImportance
 	cv.cancelBtn.Hide()
 
-	cv.imageBtn = widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
+	cv.imageBtn = widget.NewButtonWithIcon("", theme.FileImageIcon(), func() {
 		w := fyne.CurrentApp().Driver().AllWindows()[0]
 		d := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
 			if err != nil || rc == nil {
