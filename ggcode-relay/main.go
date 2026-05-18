@@ -122,9 +122,9 @@ func (p *peer) readPump(h *hub) {
 	}()
 
 	p.conn.SetReadLimit(1 << 20)
-	p.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	p.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 	p.conn.SetPongHandler(func(string) error {
-		p.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		p.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 		return nil
 	})
 

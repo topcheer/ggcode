@@ -107,6 +107,15 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
         _ref.read(currentModeProvider.notifier).state = data.mode;
         break;
 
+      case 'user_message':
+        if (msg.data != null) {
+          final text = msg.data!['text'] as String? ?? '';
+          if (text.isNotEmpty) {
+            chatNotifier.addRemoteUserMessage(text);
+          }
+        }
+        break;
+
       case 'chat_history':
         if (msg.data != null) {
           final messages = msg.data!['messages'] as List<dynamic>? ?? [];
@@ -339,6 +348,18 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         id: 'hist-${_msgCounter++}',
         isUser: role == 'user',
         text: content,
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  void addRemoteUserMessage(String text) {
+    state = [
+      ...state,
+      ChatMessage(
+        id: 'remote-user-${_msgCounter++}',
+        isUser: true,
+        text: text,
         time: DateTime.now(),
       ),
     ];
