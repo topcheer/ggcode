@@ -244,7 +244,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	})
 	settingsBtn.Importance = widget.LowImportance
 
-	shareBtn := widget.NewButtonWithIcon("", theme.MailSendIcon(), func() {
+	shareBtn := widget.NewButtonWithIcon("", theme.ViewFullScreenIcon(), func() {
 		s.app.showShareDialog()
 	})
 	shareBtn.Importance = widget.LowImportance
