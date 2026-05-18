@@ -139,6 +139,44 @@ func (b *AgentBridge) setupAgent() error {
 	// Forward sub-agent events to UI.
 	b.subAgentMgr.SetOnUpdate(func(sa *subagent.SubAgent) {
 		b.ui.UpdateAgentPanel(sa.ID, agentPanelFromSubAgent(sa))
+
+		// Push to mobile client
+		if b.tunnelBroker != nil {
+			switch sa.Status {
+			case subagent.StatusRunning:
+				// Check if this is the first running update (spawn)
+				if sa.ToolCallCount <= 1 && sa.ProgressSummary == "" {
+					b.tunnelBroker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
+				}
+				b.tunnelBroker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
+				// Push latest text event
+				evs := sa.Events()
+				if len(evs) > 0 {
+					last := evs[len(evs)-1]
+					if last.Type == subagent.AgentEventText && last.Text != "" {
+						msgID := fmt.Sprintf("sa-%s", sa.ID)
+						b.tunnelBroker.PushSubagentText(sa.ID, msgID, last.Text, false)
+					}
+				}
+
+			case subagent.StatusCompleted:
+				if sa.Result != "" {
+					msgID := fmt.Sprintf("sa-%s", sa.ID)
+					b.tunnelBroker.PushSubagentText(sa.ID, msgID, sa.Result, true)
+				}
+				b.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, sa.Result, true)
+
+			case subagent.StatusFailed:
+				errMsg := ""
+				if sa.Error != nil {
+					errMsg = sa.Error.Error()
+				}
+				b.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, errMsg, false)
+
+			case subagent.StatusCancelled:
+				b.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
+			}
+		}
 	})
 
 	// Swarm manager.
