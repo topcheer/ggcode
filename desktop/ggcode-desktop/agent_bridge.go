@@ -27,6 +27,7 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 // AgentBridge wraps the agent loop with sub-agent and swarm support.
@@ -63,6 +64,10 @@ type AgentBridge struct {
 	// Sub-agent and swarm managers.
 	subAgentMgr *subagent.Manager
 	swarmMgr    *swarm.Manager
+
+	// Mobile tunnel broker (nil if not sharing).
+	tunnelBroker *tunnel.Broker
+	tunnelMsgID  string
 }
 
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
@@ -279,6 +284,18 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 	b.appendUserMessageContent(content)
 
 	go func() {
+		if b.tunnelBroker != nil {
+			b.tunnelMsgID = b.tunnelBroker.NextMessageID()
+			b.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+				Workspace: b.workingDir,
+				Model:     b.resolved.Model,
+				Provider:  b.resolved.VendorName,
+				Mode:      string(b.permissionMode),
+				Version:   Version,
+			})
+			b.tunnelBroker.PushStatus(tunnel.StatusThinking, "processing")
+		}
+
 		defer func() {
 			cancel()
 			b.ui.FinalizeStreaming()
@@ -322,6 +339,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			case provider.StreamEventText:
 				b.ui.AppendAssistantText(ev.Text)
 				b.imRound.Text.WriteString(ev.Text)
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushText(b.tunnelMsgID, ev.Text)
+				}
 
 			case provider.StreamEventToolCallDone:
 				b.ui.FinalizeStreaming()
@@ -353,6 +373,11 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if b.Emitter != nil {
 					b.Emitter.TriggerTyping()
 				}
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
+					b.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
+					b.tunnelBroker.PushToolCall(name, string(ev.Tool.Arguments), description)
+				}
 
 			case provider.StreamEventToolResult:
 				content := ev.Result
@@ -380,6 +405,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					})
 					b.Emitter.TriggerTyping()
 				}
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushToolResult(ev.Tool.Name, content, ev.IsError)
+				}
 
 				// After spawn_agent completes, sync agent panels.
 				if ev.Tool.Name == "spawn_agent" && b.subAgentMgr != nil {
@@ -393,6 +421,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: ev.Text,
 					Time:    time.Now(),
 				})
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
+				}
 
 			case provider.StreamEventReasoning:
 				if ev.Text != "" {
@@ -410,6 +441,11 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					b.imRound.ToolCalls = 0
 					b.imRound.ToolSuccesses = 0
 					b.imRound.ToolFailures = 0
+				}
+				if b.tunnelBroker != nil {
+					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
+					b.tunnelBroker.PushStatus(tunnel.StatusIdle, "")
+					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
 				}
 			}
 		}
