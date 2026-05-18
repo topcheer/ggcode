@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -249,21 +251,37 @@ func (a *App) showShareDialog() {
 			})
 			broker.PushStatus(tunnel.StatusIdle, "Ready")
 
-			// Push chat history
-			if a.ui != nil {
-				msgs := a.ui.TakeMessages()
-				history := make([]tunnel.HistoryEntry, 0, len(msgs))
-				for _, m := range msgs {
-					if m.Role == "user" || m.Role == "assistant" {
-						history = append(history, tunnel.HistoryEntry{
-							Role:    m.Role,
-							Content: m.Content,
-						})
+			// Push chat history from agent session
+			if a.agentBridge != nil {
+				session := a.agentBridge.CurrentSession()
+				if session != nil && len(session.Messages) > 0 {
+					history := make([]tunnel.HistoryEntry, 0, len(session.Messages))
+					for _, msg := range session.Messages {
+						if msg.Role != "user" && msg.Role != "assistant" {
+							continue
+						}
+						var textParts []string
+						for _, block := range msg.Content {
+							if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+								textParts = append(textParts, strings.TrimSpace(block.Text))
+							}
+						}
+						if len(textParts) > 0 {
+							history = append(history, tunnel.HistoryEntry{
+								Role:    msg.Role,
+								Content: strings.Join(textParts, "\n"),
+							})
+						}
 					}
+					log.Printf("[desktop] sending %d history entries to mobile", len(history))
+					if len(history) > 0 {
+						broker.PushChatHistory(history)
+					}
+				} else {
+					log.Printf("[desktop] no session messages to push")
 				}
-				if len(history) > 0 {
-					broker.PushChatHistory(history)
-				}
+			} else {
+				log.Printf("[desktop] agentBridge is nil, cannot push history")
 			}
 
 			// Show system message in desktop chat
