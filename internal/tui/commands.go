@@ -379,6 +379,8 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			resp, _ := m.handleStreamSlash(args)
 			m.chatWriteSystem(nextSystemID(), resp)
 			return nil
+		case "/tunnel":
+			return m.handleTunnelCommand(text)
 		default:
 			// Check custom commands
 			if cmdName := strings.TrimPrefix(cmd, "/"); cmdName != "" {

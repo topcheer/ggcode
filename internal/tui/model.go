@@ -32,6 +32,7 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
 )
 
@@ -242,6 +243,10 @@ type Model struct {
 	updateInfo            update.CheckResult
 	updateError           string
 	systemPromptRebuilder func() string // rebuilds and returns the full system prompt
+
+	// Mobile tunnel
+	tunnelSession *tunnel.Session
+	tunnelBroker  *tunnel.Broker
 }
 
 // pendingQueue holds the queue of user messages submitted while the agent
