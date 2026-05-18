@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../connection_service.dart';
+export '../connection_service.dart' show ConnectionStatus;
 import '../models/protocol.dart' as proto;
 
 // ---- Connection Service Provider ----
@@ -9,8 +10,6 @@ import '../models/protocol.dart' as proto;
 final connectionProvider = StateNotifierProvider<ConnectionNotifier, TunnelConnectionState>(
   (ref) => ConnectionNotifier(ref),
 );
-
-enum ConnectionStatus { disconnected, connecting, connected }
 
 class TunnelConnectionState {
   final ConnectionStatus status;

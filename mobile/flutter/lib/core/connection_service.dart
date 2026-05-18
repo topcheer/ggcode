@@ -13,6 +13,7 @@ enum ConnectionStatus {
 class ConnectionService {
   final String url;
   WebSocketChannel? _channel;
+  bool _disposed = false;
 
   final _statusController = StreamController<ConnectionStatus>.broadcast();
   final _messageController =
@@ -21,9 +22,8 @@ class ConnectionService {
   Stream<ConnectionStatus> get statusStream => _statusController.stream;
   Stream<proto.WsMessage> get messageStream => _messageController.stream;
 
-  Timer? _reconnectTimer;
-  Timer? _pongTimeout;
-  bool _disposed = false;
+  Timer? _watchdog;
+  int _missedPings = 0;
 
   ConnectionService(this.url);
 
@@ -31,72 +31,53 @@ class ConnectionService {
     _statusController.add(ConnectionStatus.connecting);
     try {
       _channel = WebSocketChannel.connect(Uri.parse(url));
-
-      // Wait for connection ready
-      await _channel!.ready;
-
       _statusController.add(ConnectionStatus.connected);
-      _startPongWatchdog();
+      _startWatchdog();
 
       _channel!.stream.listen(
         (data) {
-          _resetPongWatchdog();
+          _missedPings = 0;
           final msg = proto.WsMessage.fromJson(data as String);
           _messageController.add(msg);
         },
         onDone: () {
-          _cancelPongWatchdog();
-          _statusController.add(ConnectionStatus.disconnected);
+          _stopWatchdog();
           if (!_disposed) {
-            _scheduleReconnect();
+            _statusController.add(ConnectionStatus.disconnected);
           }
         },
         onError: (e) {
-          _cancelPongWatchdog();
-          _statusController.add(ConnectionStatus.disconnected);
+          _stopWatchdog();
           if (!_disposed) {
-            _scheduleReconnect();
+            _statusController.add(ConnectionStatus.disconnected);
           }
         },
       );
     } catch (e) {
       _statusController.add(ConnectionStatus.disconnected);
-      if (!_disposed) {
-        _scheduleReconnect();
-      }
-      rethrow;
     }
   }
 
-  /// Server sends WebSocket pings every 15s.
-  /// The web_socket_channel library auto-replies with pong.
-  /// We just need to detect if no message arrives within 30s (2x ping interval)
-  /// to consider the connection dead.
-  void _startPongWatchdog() {
-    _pongTimeout?.cancel();
-    _pongTimeout = Timer(const Duration(seconds: 30), () {
-      // No data received in 30s — connection is dead
-      disconnect();
-      _scheduleReconnect();
-    });
-  }
-
-  void _resetPongWatchdog() {
-    _startPongWatchdog();
-  }
-
-  void _cancelPongWatchdog() {
-    _pongTimeout?.cancel();
-    _pongTimeout = null;
-  }
-
-  void _scheduleReconnect() {
-    _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 3), () {
-      if (!_disposed) {
-        connect();
+  /// Watchdog: if no data received for 30s, connection is dead.
+  /// Server pings every 15s, so 30s = 2 missed pings.
+  void _startWatchdog() {
+    _stopWatchdog();
+    _missedPings = 0;
+    _watchdog = Timer.periodic(const Duration(seconds: 15), (_) {
+      _missedPings++;
+      if (_missedPings >= 2) {
+        _stopWatchdog();
+        if (!_disposed) {
+          _statusController.add(ConnectionStatus.disconnected);
+        }
+        disconnect();
       }
     });
+  }
+
+  void _stopWatchdog() {
+    _watchdog?.cancel();
+    _watchdog = null;
   }
 
   void send(Map<String, dynamic> data) {
@@ -104,11 +85,9 @@ class ConnectionService {
   }
 
   void disconnect() {
-    _reconnectTimer?.cancel();
-    _cancelPongWatchdog();
+    _stopWatchdog();
     _channel?.sink.close();
     _channel = null;
-    _statusController.add(ConnectionStatus.disconnected);
   }
 
   void dispose() {
