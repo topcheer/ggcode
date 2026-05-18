@@ -91,6 +91,19 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
         _ref.read(currentModeProvider.notifier).state = data.mode;
         break;
 
+      case 'chat_history':
+        if (msg.data != null) {
+          final messages = msg.data!['messages'] as List<dynamic>? ?? [];
+          for (final m in messages) {
+            final role = m['role'] as String? ?? '';
+            final content = m['content'] as String? ?? '';
+            if (content.isNotEmpty) {
+              chatNotifier.addHistoryMessage(role, content);
+            }
+          }
+        }
+        break;
+
       case 'text':
       case 'stream_text':
         if (msg.data != null) {
@@ -300,6 +313,18 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
       'type': 'message',
       'data': {'text': text},
     });
+  }
+
+  void addHistoryMessage(String role, String content) {
+    state = [
+      ...state,
+      ChatMessage(
+        id: 'hist-${_msgCounter++}',
+        isUser: role == 'user',
+        text: content,
+        time: DateTime.now(),
+      ),
+    ];
   }
 
   void handleTextChunk(proto.TextData data) {
