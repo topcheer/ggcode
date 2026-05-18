@@ -696,6 +696,16 @@ func (a *App) newSession() {
 		a.agentBridge.currentSes = nil
 	}
 
+	// Notify mobile client: new session
+	if a.tunnelBroker != nil {
+		a.tunnelBroker.PushChatClear()
+		a.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: a.dc.WorkDir,
+			Version:   Version,
+		})
+		a.tunnelBroker.PushStatus(tunnel.StatusIdle, "Ready")
+	}
+
 	a.startChat()
 }
 
