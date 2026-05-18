@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -108,7 +109,7 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[gateway] client connected from %s", conn.RemoteAddr())
+	_ = os.WriteFile("/tmp/ggcode-gateway.log", []byte(fmt.Sprintf("connected: %s\n", conn.RemoteAddr())), 0644)
 
 	g.mu.Lock()
 	g.conn = conn
@@ -171,7 +172,7 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			log.Printf("[gateway] received from client: type=%s", msg.Type)
+			_ = os.WriteFile("/tmp/ggcode-gateway.log", []byte(fmt.Sprintf("recv: type=%s\n", msg.Type)), 0644)
 			if g.onMessage != nil {
 				g.onMessage(msg)
 			}

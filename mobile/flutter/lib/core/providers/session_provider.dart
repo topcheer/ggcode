@@ -36,6 +36,14 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
     state = state.copyWith(status: ConnectionStatus.connecting, url: url);
     service = ConnectionService(url);
 
+    // Listen to connection status changes (disconnect detection)
+    service!.statusStream.listen(
+      (status) {
+        state = state.copyWith(status: status);
+      },
+    );
+
+    // Listen to messages from server
     service!.messageStream.listen(
       (msg) => _dispatchMessage(msg),
       onError: (e) {
