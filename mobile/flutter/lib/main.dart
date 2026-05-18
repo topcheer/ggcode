@@ -1,9 +1,7 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/providers/session_provider.dart';
-import 'core/models/protocol.dart' as proto;
 import 'features/connect/connect_screen.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/chat/ask_user_screen.dart';
@@ -40,47 +38,14 @@ class GGCodeApp extends StatelessWidget {
   }
 }
 
-class AppShell extends ConsumerStatefulWidget {
+class AppShell extends ConsumerWidget {
   const AppShell({super.key});
 
   @override
-  ConsumerState<AppShell> createState() => _AppShellState();
-}
-
-class _AppShellState extends ConsumerState<AppShell> {
-  StreamSubscription? _sub;
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    super.dispose();
-  }
-
-  void _listenToMessages(TunnelConnectionState connState) {
-    _sub?.cancel();
-
-    if (connState.status != ConnectionStatus.connected) return;
-
-    final notifier = ref.read(connectionProvider.notifier);
-    final svc = notifier.service;
-    if (svc == null) return;
-
-    _sub = svc.messageStream.listen((msg) {
-      final dispatcher = ref.read(messageDispatcherProvider);
-      dispatcher(msg);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final connState = ref.watch(connectionProvider);
     final askUser = ref.watch(askUserProvider);
     final isConnected = connState.status == ConnectionStatus.connected;
-
-    // Listen to connection changes
-    ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
-      _listenToMessages(next);
-    });
 
     // Show ask_user questionnaire as modal bottom sheet
     ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
@@ -97,9 +62,6 @@ class _AppShellState extends ConsumerState<AppShell> {
     if (!isConnected) {
       return const ConnectScreen();
     }
-
-    // Start listening if not already
-    if (_sub == null) _listenToMessages(connState);
 
     return const ChatScreen();
   }

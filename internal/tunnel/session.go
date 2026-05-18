@@ -22,6 +22,7 @@ type Session struct {
 	gateway *Gateway
 	tunnel  *Tunnel
 	onMsg   func(msg GatewayMessage)
+	onConn  func() // called when a client connects
 
 	mu   sync.RWMutex
 	info *SessionInfo
@@ -92,12 +93,23 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		}
 	})
 
+	// Wire up connect handler
+	s.gateway.OnConnect(func() {
+		if s.onConn != nil {
+			s.onConn()
+		}
+	})
+
 	return info, nil
 }
 
 // OnMessage sets the handler for incoming messages from connected clients.
 func (s *Session) OnMessage(fn func(msg GatewayMessage)) {
 	s.onMsg = fn
+}
+
+func (s *Session) OnConnect(fn func()) {
+	s.onConn = fn
 }
 
 // Send pushes a message to the connected client.

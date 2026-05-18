@@ -24,10 +24,11 @@ import (
 //	b.PushToolResult("read_file", "package main...", false)
 //	b.PushApprovalRequest("123", "run_command", "rm -rf /")
 type Broker struct {
-	session   *Session
-	onCommand func(cmd GatewayMessage)
-	textMu    sync.Mutex
-	msgCount  atomic.Int64
+	session         *Session
+	onCommand       func(cmd GatewayMessage)
+	onClientConnect func()
+	textMu          sync.Mutex
+	msgCount        atomic.Int64
 }
 
 // NewBroker creates a broker bound to a tunnel session.
@@ -45,12 +46,23 @@ func NewBroker(sess *Session) *Broker {
 			log.Printf("[broker] OnMessage: onCommand is nil, dropping")
 		}
 	})
+	sess.OnConnect(func() {
+		log.Printf("[broker] client connected")
+		if b.onClientConnect != nil {
+			b.onClientConnect()
+		}
+	})
 	return b
 }
 
 // OnCommand sets the handler for commands from the mobile client.
 func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
 	b.onCommand = fn
+}
+
+// OnClientConnect sets the handler called when a mobile client connects.
+func (b *Broker) OnClientConnect(fn func()) {
+	b.onClientConnect = fn
 }
 
 // SendSessionInfo sends session metadata to the client.
