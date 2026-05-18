@@ -216,6 +216,9 @@ func (a *App) showShareDialog() {
 		broker := tunnel.NewBroker(sess)
 		a.tunnelSession = sess
 		a.tunnelBroker = broker
+		if a.agentBridge != nil {
+			a.agentBridge.tunnelBroker = broker
+		}
 
 		fyne.Do(func() {
 			connectWin.Hide()
