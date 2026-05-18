@@ -205,7 +205,7 @@ func (a *App) showShareDialog() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		sess := tunnel.NewSession()
+		sess := tunnel.NewSession(tunnel.DefaultRelayURL)
 		info, err := sess.Start(ctx)
 		if err != nil {
 			fyne.Do(func() {
