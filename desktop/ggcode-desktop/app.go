@@ -633,6 +633,38 @@ func (a *App) resumeSession(id string) {
 		a.chatViewRef.rebuildFromMessages(a.agentBridge.CurrentSession().Messages)
 	}
 
+	// Push updated session info + history to mobile client
+	if a.tunnelBroker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
+		a.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: a.dc.WorkDir,
+			Version:   Version,
+		})
+		a.tunnelBroker.PushChatClear()
+		session := a.agentBridge.CurrentSession()
+		history := make([]tunnel.HistoryEntry, 0, len(session.Messages))
+		for _, msg := range session.Messages {
+			if msg.Role != "user" && msg.Role != "assistant" {
+				continue
+			}
+			var textParts []string
+			for _, block := range msg.Content {
+				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+					textParts = append(textParts, strings.TrimSpace(block.Text))
+				}
+			}
+			if len(textParts) > 0 {
+				history = append(history, tunnel.HistoryEntry{
+					Role:    msg.Role,
+					Content: strings.Join(textParts, "\n"),
+				})
+			}
+		}
+		if len(history) > 0 {
+			a.tunnelBroker.PushChatHistory(history)
+		}
+		a.tunnelBroker.PushStatus(tunnel.StatusIdle, "Ready")
+	}
+
 	// Refresh sidebar.
 	if a.sidebarRef != nil {
 		a.sidebarRef.loadSessions()
