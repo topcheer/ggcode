@@ -27,7 +27,7 @@ type Broker struct {
 	session         *Session
 	onCommand       func(cmd GatewayMessage)
 	onClientConnect func()
-	textMu          sync.Mutex
+	sendMu          sync.Mutex // serializes all sends to guarantee ordering
 	msgCount        atomic.Int64
 }
 
@@ -184,6 +184,9 @@ func (b *Broker) PushChatHistory(messages []HistoryEntry) {
 
 // send marshals and sends a typed message over the WebSocket.
 func (b *Broker) send(eventType string, data interface{}) {
+	b.sendMu.Lock()
+	defer b.sendMu.Unlock()
+
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		log.Printf("broker: marshal error for %s: %v", eventType, err)
