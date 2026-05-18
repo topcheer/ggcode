@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 // App is the top-level desktop application state.
@@ -52,6 +54,10 @@ type App struct {
 
 	// Agent state.
 	agentBridge *AgentBridge
+
+	// Mobile tunnel.
+	tunnelSession *tunnel.Session
+	tunnelBroker  *tunnel.Broker
 }
 
 // NewApp creates the desktop app.
@@ -96,6 +102,9 @@ func (a *App) Run() {
 		_ = a.dc.Save()
 		if a.agentBridge != nil {
 			a.agentBridge.Close()
+		}
+		if a.tunnelSession != nil {
+			a.tunnelSession.Stop()
 		}
 	})
 
@@ -169,6 +178,82 @@ func (a *App) showAbout() {
 	)
 
 	dialog.ShowCustom("About ggcode", "Close", content, a.window)
+}
+
+// showShareDialog starts a tunnel and shows the connection QR code + URL.
+func (a *App) showShareDialog() {
+	if a.tunnelSession != nil {
+		// Already running — show current info
+		info := a.tunnelSession.Info()
+		if info != nil {
+			a.showTunnelInfo(info)
+		}
+		return
+	}
+
+	// Show "connecting..." dialog
+	statusLabel := widget.NewLabel("Establishing tunnel...")
+	statusLabel.Alignment = fyne.TextAlignCenter
+	progress := widget.NewProgressBarInfinite()
+	connectContent := container.NewVBox(statusLabel, progress)
+	connectWin := dialog.NewCustom("Share Session", "Cancel", connectContent, a.window)
+	connectWin.Show()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		sess := tunnel.NewSession()
+		info, err := sess.Start(ctx)
+		if err != nil {
+			fyne.Do(func() {
+				connectWin.Hide()
+				dialog.ShowError(fmt.Errorf("tunnel failed: %v", err), a.window)
+			})
+			return
+		}
+
+		broker := tunnel.NewBroker(sess)
+		a.tunnelSession = sess
+		a.tunnelBroker = broker
+
+		fyne.Do(func() {
+			connectWin.Hide()
+			a.showTunnelInfo(info)
+		})
+	}()
+}
+
+func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
+	urlLabel := widget.NewEntry()
+	urlLabel.SetText(info.ConnectURL)
+	urlLabel.Wrapping = fyne.TextWrapOff
+	urlLabel.SetPlaceHolder("Tunnel URL")
+
+	copyBtn := widget.NewButton("Copy URL", func() {
+		a.window.Clipboard().SetContent(info.ConnectURL)
+	})
+
+	stopBtn := widget.NewButton("Stop Sharing", func() {
+		if a.tunnelSession != nil {
+			a.tunnelSession.Stop()
+			a.tunnelSession = nil
+			a.tunnelBroker = nil
+		}
+	})
+
+	content := container.NewVBox(
+		widget.NewLabelWithStyle("Mobile Connection", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewSeparator(),
+		widget.NewLabel("Scan QR code in GGCode Mobile app, or copy URL:"),
+		urlLabel,
+		container.NewHBox(copyBtn, stopBtn),
+		widget.NewSeparator(),
+		widget.NewLabel("QR Code:"),
+		container.NewCenter(widget.NewLabel(info.QRCode)),
+	)
+
+	dialog.ShowCustom("Share Session", "Close", content, a.window)
 }
 
 // openUpdates checks for the latest release on GitHub.

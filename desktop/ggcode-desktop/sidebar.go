@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -243,7 +244,12 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	})
 	settingsBtn.Importance = widget.LowImportance
 
-	bottomBar := container.NewHBox(newChatBtn, settingsBtn)
+	shareBtn := widget.NewButtonWithIcon("", theme.MailSendIcon(), func() {
+		s.app.showShareDialog()
+	})
+	shareBtn.Importance = widget.LowImportance
+
+	bottomBar := container.NewHBox(newChatBtn, layout.NewSpacer(), shareBtn, settingsBtn)
 	topSection := container.NewVBox(infoCard, container.NewPadded(sessionHeader))
 	return container.NewBorder(topSection, bottomBar, nil, nil, s.sessionList)
 }
