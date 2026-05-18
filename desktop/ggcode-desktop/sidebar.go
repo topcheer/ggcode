@@ -82,7 +82,7 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 		s.fileTree.Refresh()
 	})
 	refreshBtn.Importance = widget.LowImportance
-	searchRow := container.NewBorder(nil, nil, nil, newHintWrap(refreshBtn, "Refresh Files"), searchEntry)
+	searchRow := container.NewBorder(nil, nil, nil, refreshBtn, searchEntry)
 	filesContent := container.NewBorder(
 		container.NewVBox(rootLabel, searchRow),
 		nil, nil, nil,
@@ -194,7 +194,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 
 	infoCard := widget.NewCard("Model Info", "", widget.NewForm(
 		&widget.FormItem{Text: "Vendor", Widget: widget.NewLabel(resolved.VendorName)},
-		&widget.FormItem{Text: "Model", Widget: container.NewBorder(nil, nil, nil, newHintWrap(refreshModelsBtn, "Refresh Models"), s.ctxModelSelect)},
+		&widget.FormItem{Text: "Model", Widget: container.NewBorder(nil, nil, nil, refreshModelsBtn, s.ctxModelSelect)},
 		&widget.FormItem{Text: "Mode", Widget: s.modeSelect},
 	))
 
@@ -249,7 +249,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	})
 	shareBtn.Importance = widget.LowImportance
 
-	bottomBar := container.NewHBox(newHintWrap(newChatBtn, "New Session"), layout.NewSpacer(), newHintWrap(shareBtn, "Share to Mobile"), newHintWrap(settingsBtn, "Settings"))
+	bottomBar := container.NewHBox(newChatBtn, layout.NewSpacer(), shareBtn, settingsBtn)
 	topSection := container.NewVBox(infoCard, container.NewPadded(sessionHeader))
 	return container.NewBorder(topSection, bottomBar, nil, nil, s.sessionList)
 }
