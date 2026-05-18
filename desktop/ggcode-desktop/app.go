@@ -239,6 +239,13 @@ func (a *App) showShareDialog() {
 			}
 		})
 
+		// Send session_info immediately so client confirms connection
+		broker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: a.dc.WorkDir,
+			Version:   Version,
+		})
+		broker.PushStatus(tunnel.StatusIdle, "Ready")
+
 		a.tunnelSession = sess
 		a.tunnelBroker = broker
 		if a.agentBridge != nil {
