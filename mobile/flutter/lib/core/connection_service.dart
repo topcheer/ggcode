@@ -22,8 +22,7 @@ class ConnectionService {
   Stream<ConnectionStatus> get statusStream => _statusController.stream;
   Stream<proto.WsMessage> get messageStream => _messageController.stream;
 
-  Timer? _watchdog;
-  int _missedPings = 0;
+  Timer? _heartbeatTimer;
 
   ConnectionService(this.url);
 
@@ -32,22 +31,21 @@ class ConnectionService {
     try {
       _channel = WebSocketChannel.connect(Uri.parse(url));
       _statusController.add(ConnectionStatus.connected);
-      _startWatchdog();
+      _startHeartbeat();
 
       _channel!.stream.listen(
         (data) {
-          _missedPings = 0;
           final msg = proto.WsMessage.fromJson(data as String);
           _messageController.add(msg);
         },
         onDone: () {
-          _stopWatchdog();
+          _stopHeartbeat();
           if (!_disposed) {
             _statusController.add(ConnectionStatus.disconnected);
           }
         },
         onError: (e) {
-          _stopWatchdog();
+          _stopHeartbeat();
           if (!_disposed) {
             _statusController.add(ConnectionStatus.disconnected);
           }
@@ -58,26 +56,26 @@ class ConnectionService {
     }
   }
 
-  /// Watchdog: if no data received for 30s, connection is dead.
-  /// Server pings every 15s, so 30s = 2 missed pings.
-  void _startWatchdog() {
-    _stopWatchdog();
-    _missedPings = 0;
-    _watchdog = Timer.periodic(const Duration(seconds: 15), (_) {
-      _missedPings++;
-      if (_missedPings >= 2) {
-        _stopWatchdog();
+  /// Client sends {"type":"ping"} every 15 seconds.
+  /// If the write fails, the connection is dead.
+  void _startHeartbeat() {
+    _stopHeartbeat();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      try {
+        send({'type': 'ping'});
+      } catch (e) {
+        // Write failed — connection is dead
+        _stopHeartbeat();
         if (!_disposed) {
           _statusController.add(ConnectionStatus.disconnected);
         }
-        disconnect();
       }
     });
   }
 
-  void _stopWatchdog() {
-    _watchdog?.cancel();
-    _watchdog = null;
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
   }
 
   void send(Map<String, dynamic> data) {
@@ -85,7 +83,7 @@ class ConnectionService {
   }
 
   void disconnect() {
-    _stopWatchdog();
+    _stopHeartbeat();
     _channel?.sink.close();
     _channel = null;
   }
