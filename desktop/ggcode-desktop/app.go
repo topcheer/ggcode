@@ -319,9 +319,15 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	})
 
 	stopBtn := widget.NewButton("Stop Sharing", func() {
+		// Notify mobile clients to disconnect
+		if a.tunnelBroker != nil {
+			a.tunnelBroker.PushSharingStopped()
+		}
+		// Disconnect agent bridge from broker
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = nil
 		}
+		// Stop relay session
 		if a.tunnelSession != nil {
 			a.tunnelSession.Stop()
 			a.tunnelSession = nil

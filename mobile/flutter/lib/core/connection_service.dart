@@ -121,10 +121,11 @@ class ConnectionService {
         break;
 
       case 'server_offline':
+      case 'sharing_stopped':
         _cleanup();
         if (!_disposed) {
+          _disposed = true; // Don't reconnect on server-initiated stop
           _statusController.add(ConnectionStatus.disconnected);
-          _scheduleReconnect();
         }
         break;
 
