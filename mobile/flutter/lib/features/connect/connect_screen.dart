@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/providers/session_provider.dart';
+
+final _historyProvider = StateProvider<List<String>>((ref) => []);
+final _urlProvider = StateProvider<String>((ref) => '');
 
 class ConnectScreen extends ConsumerStatefulWidget {
   const ConnectScreen({super.key});
@@ -13,8 +16,36 @@ class ConnectScreen extends ConsumerStatefulWidget {
 
 class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _urlController = TextEditingController();
-  bool _isScanning = false;
-  bool _isConnecting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  Future<void> _loadHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final history = prefs.getStringList('tunnel_history') ?? [];
+    ref.read(_historyProvider.notifier).state = history;
+  }
+
+  Future<void> _saveToHistory(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    final history = prefs.getStringList('tunnel_history') ?? [];
+    if (!history.contains(url)) {
+      history.insert(0, url);
+      if (history.length > 10) history.removeLast();
+      await prefs.setStringList('tunnel_history', history);
+      ref.read(_historyProvider.notifier).state = history;
+    }
+  }
+
+  void _connect() {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) return;
+    _saveToHistory(url);
+    ref.read(connectionProvider.notifier).connect(url);
+  }
 
   @override
   void dispose() {
@@ -22,205 +53,137 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     super.dispose();
   }
 
-  Future<void> _connect(String url) async {
-    if (url.trim().isEmpty) return;
-
-    setState(() => _isConnecting = true);
-    final service = ref.read(connectionProvider);
-    await service.connect(url.trim());
-
-    // Save to history
-    ref.read(connectionHistoryProvider.notifier).add(url.trim());
-
-    if (mounted) {
-      setState(() => _isConnecting = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final history = ref.watch(connectionHistoryProvider);
-    final theme = Theme.of(context);
+    final connState = ref.watch(connectionProvider);
+    final history = ref.watch(_historyProvider);
+    final isConnecting = connState.status == ConnectionStatus.connecting;
 
     return Scaffold(
       body: SafeArea(
-        child: SingleChildScrollView(
+        child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const SizedBox(height: 40),
-
-              // App logo
-              Center(
-                child: Image.asset(
-                  'assets/icon.png',
-                  width: 120,
-                  height: 120,
-                  errorBuilder: (_, __, ___) => Container(
-                    width: 120,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Icon(
-                      Icons.code,
-                      size: 60,
-                      color: theme.colorScheme.onPrimaryContainer,
+              // Logo area
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A1A2E),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Center(
+                  child: Text(
+                    'GG',
+                    style: TextStyle(
+                      color: Colors.blueAccent,
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
+              const Text(
                 'GGCode Mobile',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.headlineMedium?.copyWith(
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               Text(
-                'Connect to your AI coding agent',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+                'Connect to your GGCode agent',
+                style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 14),
               ),
-              const SizedBox(height: 40),
-
-              // QR Scanner toggle
-              if (_isScanning) ...[
-                Container(
-                  height: 280,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: theme.colorScheme.outlineVariant,
-                    ),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: MobileScanner(
-                    onDetect: (capture) {
-                      final barcode = capture.barcodes.firstOrNull;
-                      if (barcode != null && barcode.rawValue != null) {
-                        _urlController.text = barcode.rawValue!;
-                        setState(() => _isScanning = false);
-                        _connect(barcode.rawValue!);
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () => setState(() => _isScanning = false),
-                  icon: const Icon(Icons.close),
-                  label: const Text('Close Scanner'),
-                ),
-              ] else ...[
-                OutlinedButton.icon(
-                  onPressed: () => setState(() => _isScanning = true),
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('Scan QR Code'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 24),
-
-              // Divider with text
-              Row(children: [
-                const Expanded(child: Divider()),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Text(
-                    'OR ENTER URL',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                const Expanded(child: Divider()),
-              ]),
-
-              const SizedBox(height: 16),
+              const SizedBox(height: 32),
 
               // URL input
               TextField(
                 controller: _urlController,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
                 decoration: InputDecoration(
-                  hintText: 'wss://abc123.lhr.life/ws?token=...',
-                  prefixIcon: const Icon(Icons.link),
+                  hintText: 'ws://host:port/ws?token=xxx',
+                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                  filled: true,
+                  fillColor: const Color(0xFF1A1A2E),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
                   ),
-                  filled: true,
+                  prefixIcon: const Icon(Icons.link, color: Colors.white54),
+                  suffixIcon: _urlController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, color: Colors.white54),
+                          onPressed: () {
+                            _urlController.clear();
+                            setState(() {});
+                          },
+                        )
+                      : null,
                 ),
-                keyboardType: TextInputType.url,
-                onSubmitted: (v) => _connect(v),
+                onChanged: (v) => setState(() {}),
+                onSubmitted: (_) => _connect(),
               ),
               const SizedBox(height: 16),
 
               // Connect button
-              FilledButton(
-                onPressed: _isConnecting
-                    ? null
-                    : () => _connect(_urlController.text),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: FilledButton(
+                  onPressed: isConnecting ? null : _connect,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.blueAccent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
+                  child: isConnecting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Connect'),
                 ),
-                child: _isConnecting
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Connect'),
               ),
 
-              // Connection history
+              // History
               if (history.isNotEmpty) ...[
-                const SizedBox(height: 32),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Recent Connections',
-                      style: theme.textTheme.titleSmall,
+                const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Recent Connections',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.5),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
                     ),
-                  ],
+                  ),
                 ),
                 const SizedBox(height: 8),
-                ...history.map((url) => Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.history, size: 20),
-                        title: Text(
-                          url,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: () {
-                            ref
-                                .read(connectionHistoryProvider.notifier)
-                                .remove(url);
-                          },
-                        ),
-                        onTap: () {
-                          _urlController.text = url;
-                          _connect(url);
-                        },
+                ...history.map((url) => ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      dense: true,
+                      leading: const Icon(Icons.history, color: Colors.white38, size: 18),
+                      title: Text(
+                        url,
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
+                      onTap: () {
+                        _urlController.text = url;
+                        setState(() {});
+                      },
                     )),
               ],
             ],

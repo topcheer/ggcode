@@ -1,81 +1,115 @@
 import 'package:flutter/material.dart';
 
 import '../../core/providers/session_provider.dart';
-import 'markdown_view.dart';
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
-  final String? streamingText;
 
-  const MessageBubble({
-    super.key,
-    required this.message,
-    this.streamingText,
-  });
+  const MessageBubble({super.key, required this.message});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final screenWidth = MediaQuery.of(context).size.width;
-
-    switch (message.type) {
-      case MessageType.user:
-        return _buildUserBubble(theme, screenWidth);
-      case MessageType.agent:
-        return _buildAgentBubble(theme, screenWidth);
-      default:
-        return const SizedBox.shrink();
+    if (message.isUser) {
+      return _buildUserBubble();
     }
+    return _buildAgentBubble();
   }
 
-  Widget _buildUserBubble(ThemeData theme, double screenWidth) {
+  Widget _buildUserBubble() {
     return Align(
       alignment: Alignment.centerRight,
       child: Container(
-        constraints: BoxConstraints(maxWidth: screenWidth * 0.75),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.primary,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(16),
-            topRight: Radius.circular(16),
-            bottomLeft: Radius.circular(16),
-            bottomRight: Radius.circular(4),
-          ),
+        margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(navigatorKey.currentContext!).size.width * 0.75,
         ),
-        child: Text(
-          message.text ?? '',
-          style: TextStyle(
-            color: theme.colorScheme.onPrimary,
-            fontSize: 15,
-          ),
+        decoration: BoxDecoration(
+          color: Colors.blueAccent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: SelectableText(
+          message.text,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
         ),
       ),
     );
   }
 
-  Widget _buildAgentBubble(ThemeData theme, double screenWidth) {
-    final text = message.text ?? streamingText ?? '';
-    if (text.isEmpty) return const SizedBox.shrink();
-
+  Widget _buildAgentBubble() {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        constraints: BoxConstraints(maxWidth: screenWidth * 0.85),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHigh,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(4),
-            topRight: Radius.circular(16),
-            bottomLeft: Radius.circular(16),
-            bottomRight: Radius.circular(16),
-          ),
+        margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(navigatorKey.currentContext!).size.width * 0.8,
         ),
-        child: MarkdownView(data: text),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E2E),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (message.sourceName != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: _parseColor(message.sourceColor ?? '#4CAF50'),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      message.sourceName!,
+                      style: TextStyle(
+                        color: _parseColor(message.sourceColor ?? '#4CAF50'),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            SelectableText(
+              message.text,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.9),
+                fontSize: 14,
+                fontFamily: message.text.contains('\n') ? 'monospace' : null,
+              ),
+            ),
+            if (message.streaming)
+              Container(
+                margin: const EdgeInsets.only(top: 2),
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(
+                  color: Colors.blueAccent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
+
+  Color _parseColor(String hex) {
+    try {
+      return Color(int.parse(hex.replaceFirst('#', '0xFF')));
+    } catch (_) {
+      return Colors.green;
+    }
+  }
 }
+
+// Global navigator key for MediaQuery access
+final navigatorKey = GlobalKey<NavigatorState>();

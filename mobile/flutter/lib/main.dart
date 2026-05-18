@@ -6,6 +6,7 @@ import 'core/providers/session_provider.dart';
 import 'core/models/protocol.dart' as proto;
 import 'features/connect/connect_screen.dart';
 import 'features/chat/chat_screen.dart';
+import 'features/chat/ask_user_screen.dart';
 
 void main() {
   runApp(const ProviderScope(child: GGCodeApp()));
@@ -55,18 +56,16 @@ class _AppShellState extends ConsumerState<AppShell> {
     super.dispose();
   }
 
-  void _listenToMessages(ConnectionState connState) {
+  void _listenToMessages(TunnelConnectionState connState) {
     _sub?.cancel();
 
-    final status = connState.status;
-    if (status != ConnectionStatus.connected) return;
+    if (connState.status != ConnectionStatus.connected) return;
 
-    // Re-acquire the service stream
     final notifier = ref.read(connectionProvider.notifier);
-    final svc = notifier._service;
+    final svc = notifier.service;
     if (svc == null) return;
 
-    _sub = svc.messages.listen((msg) {
+    _sub = svc.messageStream.listen((msg) {
       final dispatcher = ref.read(messageDispatcherProvider);
       dispatcher(msg);
     });
@@ -79,11 +78,11 @@ class _AppShellState extends ConsumerState<AppShell> {
     final isConnected = connState.status == ConnectionStatus.connected;
 
     // Listen to connection changes
-    ref.listen<ConnectionState>(connectionProvider, (prev, next) {
+    ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
       _listenToMessages(next);
     });
 
-    // Show ask_user questionnaire as a modal bottom sheet
+    // Show ask_user questionnaire as modal bottom sheet
     ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
       if (next != null && prev == null) {
         showModalBottomSheet(

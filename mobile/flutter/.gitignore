@@ -9,3 +9,9 @@ build
 .pub-cache
 .pub
 local.properties
+ios/Pods/
+ios/.symlinks/
+android/.gradle/
+build/
+ios/Flutter/ephemeral/
+Podfile.lock

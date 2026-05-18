@@ -6,35 +6,37 @@ import '../models/protocol.dart' as proto;
 
 // ---- Connection Service Provider ----
 
-final connectionProvider = StateNotifierProvider<ConnectionNotifier, ConnectionState>(
+final connectionProvider = StateNotifierProvider<ConnectionNotifier, TunnelConnectionState>(
   (ref) => ConnectionNotifier(),
 );
 
-class ConnectionState {
+enum ConnectionStatus { disconnected, connecting, connected }
+
+class TunnelConnectionState {
   final ConnectionStatus status;
   final String? url;
   final String? error;
 
-  ConnectionState({required this.status, this.url, this.error});
+  TunnelConnectionState({required this.status, this.url, this.error});
 
-  ConnectionState copyWith({ConnectionStatus? status, String? url, String? error}) =>
-      ConnectionState(
+  TunnelConnectionState copyWith({ConnectionStatus? status, String? url, String? error}) =>
+      TunnelConnectionState(
         status: status ?? this.status,
         url: url ?? this.url,
         error: error ?? this.error,
       );
 }
 
-class ConnectionNotifier extends StateNotifier<ConnectionState> {
-  ConnectionService? _service;
+class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
+  ConnectionService? service;
 
-  ConnectionNotifier() : super(ConnectionState(status: ConnectionStatus.disconnected));
+  ConnectionNotifier() : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
 
   Future<void> connect(String url) async {
     state = state.copyWith(status: ConnectionStatus.connecting, url: url);
-    _service = ConnectionService(url);
+    service = ConnectionService(url);
 
-    _service!.messages.listen(
+    service!.messageStream.listen(
       (msg) => _handleMessage(msg),
       onError: (e) {
         state = state.copyWith(status: ConnectionStatus.disconnected, error: e.toString());
@@ -45,7 +47,7 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
     );
 
     try {
-      await _service!.connect();
+      await service!.connect();
       state = state.copyWith(status: ConnectionStatus.connected);
       _saveUrl(url);
     } catch (e) {
@@ -54,12 +56,12 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
   }
 
   void disconnect() {
-    _service?.disconnect();
+    service?.disconnect();
     state = state.copyWith(status: ConnectionStatus.disconnected);
   }
 
   void send(Map<String, dynamic> data) {
-    _service?.send(data);
+    service?.send(data);
   }
 
   void _handleMessage(proto.WsMessage msg) {

@@ -4,110 +4,78 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/session_provider.dart';
 
 class InputBar extends ConsumerStatefulWidget {
-  const InputBar({super.key});
+  final TextEditingController controller;
+  const InputBar({super.key, required this.controller});
 
   @override
   ConsumerState<InputBar> createState() => _InputBarState();
 }
 
 class _InputBarState extends ConsumerState<InputBar> {
-  final _controller = TextEditingController();
-  final _focusNode = FocusNode();
-
   @override
   void dispose() {
-    _controller.dispose();
-    _focusNode.dispose();
     super.dispose();
-  }
-
-  void _send() {
-    final text = _controller.text.trim();
-    if (text.isEmpty) return;
-
-    ref.read(chatProvider.notifier).addUserMessage(text);
-    ref.read(connectionProvider).sendMessage(text);
-    _controller.clear();
-    _focusNode.requestFocus();
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final status = ref.watch(agentStatusProvider);
-    final isActive = status.status != 'idle';
+    final isRunning = status == 'thinking' || status == 'running';
 
     return Container(
-      padding: EdgeInsets.only(
-        left: 12,
-        right: 12,
-        top: 8,
-        bottom: MediaQuery.of(context).padding.bottom + 8,
-      ),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLow,
-        border: Border(
-          top: BorderSide(color: theme.colorScheme.outlineVariant),
-        ),
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      decoration: const BoxDecoration(
+        color: Color(0xFF0D0D14),
+        border: Border(top: BorderSide(color: Colors.white12)),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Interrupt button
-          if (isActive)
-            Padding(
-              padding: const EdgeInsets.only(right: 8, bottom: 4),
-              child: IconButton.filledTonal(
-                onPressed: () {
-                  ref.read(connectionProvider).sendInterrupt();
-                },
-                icon: const Icon(Icons.stop_circle_outlined),
-                color: theme.colorScheme.error,
-                tooltip: 'Interrupt',
-                constraints:
-                    const BoxConstraints(minWidth: 44, minHeight: 44),
-              ),
-            ),
-
-          // Text input
           Expanded(
             child: TextField(
-              controller: _controller,
-              focusNode: _focusNode,
-              maxLines: 5,
-              minLines: 1,
-              textInputAction: TextInputAction.newline,
-              onSubmitted: (_) => _send(),
+              controller: widget.controller,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
-                hintText: isActive ? 'Agent is busy...' : 'Type a message...',
+                hintText: isRunning ? 'Agent is working...' : 'Type a message...',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                filled: true,
+                fillColor: const Color(0xFF1A1A2E),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide.none,
                 ),
-                filled: true,
-                fillColor: theme.colorScheme.surfaceContainerHighest,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               ),
+              enabled: !isRunning,
+              onSubmitted: (_) => _send(),
             ),
           ),
           const SizedBox(width: 8),
-
-          // Send button
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: IconButton.filled(
+          if (isRunning)
+            IconButton(
+              icon: const Icon(Icons.stop_circle, color: Colors.redAccent),
+              onPressed: () {
+                ref.read(connectionProvider.notifier).send({
+                  'type': 'interrupt',
+                  'data': {},
+                });
+              },
+              tooltip: 'Interrupt',
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.send, color: Colors.blueAccent),
               onPressed: _send,
-              icon: const Icon(Icons.send),
               tooltip: 'Send',
-              constraints:
-                  const BoxConstraints(minWidth: 44, minHeight: 44),
             ),
-          ),
         ],
       ),
     );
+  }
+
+  void _send() {
+    final text = widget.controller.text.trim();
+    if (text.isEmpty) return;
+    widget.controller.clear();
+    ref.read(chatProvider.notifier).addUserMessage(text);
   }
 }

@@ -2,15 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
-import '../../core/models/protocol.dart';
 import 'message_bubble.dart';
-import 'tool_card.dart';
 import 'approval_sheet.dart';
-import 'ask_user_screen.dart';
 import 'input_bar.dart';
-import 'status_bar.dart';
-import 'subagent_panel.dart';
 import '../status/status_bar.dart';
+import 'subagent_panel.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -21,27 +17,12 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scrollController = ScrollController();
-
-  @override
-  void initState() {
-    super.initState();
-    // Listen for approval requests to show bottom sheet
-    ref.listenManual(pendingApprovalProvider, (prev, next) {
-      if (next != null && prev == null) {
-        showModalBottomSheet(
-          context: context,
-          isDismissible: false,
-          enableDrag: false,
-          isScrollControlled: true,
-          builder: (_) => const ApprovalSheet(),
-        );
-      }
-    });
-  }
+  final _inputController = TextEditingController();
 
   @override
   void dispose() {
     _scrollController.dispose();
+    _inputController.dispose();
     super.dispose();
   }
 
@@ -59,190 +40,137 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final chatState = ref.watch(chatProvider);
-    final session = ref.watch(sessionInfoProvider);
-    final theme = Theme.of(context);
+    final messages = ref.watch(chatProvider);
+    final approval = ref.watch(approvalProvider);
+    final info = ref.watch(sessionInfoProvider);
 
     // Auto-scroll on new messages
-    _scrollToBottom();
+    ref.listen<List<ChatMessage>>(chatProvider, (prev, next) {
+      if (prev?.length != next.length) _scrollToBottom();
+    });
 
     return Scaffold(
       appBar: AppBar(
         title: Row(
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    session?.workspace ?? 'GGCode',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    session?.model ?? 'Connecting...',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+              child: Text(
+                info?.workspace?.split('/').last ?? 'GGCode',
+                style: const TextStyle(fontSize: 16),
               ),
             ),
-            _StatusDot(),
+            Text(
+              info?.model ?? '',
+              style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5)),
+            ),
           ],
         ),
         actions: [
-          // Mode selector
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.tune),
-            tooltip: 'Change mode',
-            onSelected: (mode) {
-              ref.read(currentModeProvider.notifier).state = mode;
-              ref.read(connectionProvider).sendModeChange(mode);
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'supervised', child: Text('Supervised')),
-              const PopupMenuItem(value: 'auto', child: Text('Auto')),
-              const PopupMenuItem(value: 'bypass', child: Text('Bypass')),
-              const PopupMenuItem(value: 'autopilot', child: Text('Autopilot')),
-            ],
-          ),
-          // Disconnect
           IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Disconnect',
+            icon: const Icon(Icons.link_off, size: 20),
             onPressed: () {
-              ref.read(connectionProvider).disconnect();
+              ref.read(connectionProvider.notifier).disconnect();
             },
+            tooltip: 'Disconnect',
           ),
         ],
       ),
       body: Stack(
         children: [
           Column(
-        children: [
-          // Messages
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: chatState.messages.length +
-                  chatState.streamingBuffers.length,
-              itemBuilder: (context, index) {
-                // Check if this is a streaming message
-                final bufferKeys = chatState.streamingBuffers.keys.toList();
-                if (index >= chatState.messages.length) {
-                  final bufferIndex = index - chatState.messages.length;
-                  if (bufferIndex < bufferKeys.length) {
-                    final bufferId = bufferKeys[bufferIndex];
-                    final streamingText =
-                        chatState.streamingBuffers[bufferId] ?? '';
-                    return _buildStreamingBubble(streamingText, theme);
-                  }
-                }
-
-                final msg = chatState.messages[index];
-                return _buildMessage(msg, chatState, theme);
-              },
-            ),
+            children: [
+              const StatusBar(),
+              // Messages
+              Expanded(
+                child: ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  itemCount: messages.length,
+                  itemBuilder: (context, index) {
+                    final msg = messages[index];
+                    if (msg.toolName != null) {
+                      return _buildToolMessage(msg);
+                    }
+                    return MessageBubble(message: msg);
+                  },
+                ),
+              ),
+              // Approval sheet
+              if (approval != null)
+                ApprovalSheet(approval: approval),
+              // Input
+              InputBar(controller: _inputController),
+            ],
           ),
-
-          // Status bar
-          const StatusBar(),
-
-          // Input bar
-          const InputBar(),
+          // Floating sub-agent panel
+          const SubagentPanel(),
         ],
       ),
-      // Floating sub-agent panel
-      const SubagentPanel(),
-      ],
-      ),
     );
   }
 
-  Widget _buildMessage(ChatMessage msg, ChatState chatState, ThemeData theme) {
-    switch (msg.type) {
-      case MessageType.user:
-      case MessageType.agent:
-        return MessageBubble(message: msg);
-      case MessageType.toolCall:
-        return ToolCard(toolData: msg.toolCall!);
-      case MessageType.toolResult:
-        return ToolCard(toolData: msg.toolResult!);
-    }
-  }
-
-  Widget _buildStreamingBubble(String text, ThemeData theme) {
-    if (text.isEmpty) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(16),
+  Widget _buildToolMessage(ChatMessage msg) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.build, size: 14, color: Colors.blueAccent.withOpacity(0.7)),
+              const SizedBox(width: 4),
+              Text(
+                msg.toolName ?? 'tool',
+                style: TextStyle(
+                  color: Colors.blueAccent.withOpacity(0.9),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (msg.toolDetail != null) ...[
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    msg.toolDetail!,
+                    style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ],
           ),
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: theme.colorScheme.primary,
+          if (msg.toolResult != null) ...[
+            const SizedBox(height: 4),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: msg.isToolError
+                    ? Colors.red.withOpacity(0.1)
+                    : Colors.green.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                msg.toolResult!.length > 200
+                    ? '${msg.toolResult!.substring(0, 200)}...'
+                    : msg.toolResult!,
+                style: TextStyle(
+                  color: msg.isToolError ? Colors.redAccent : Colors.white70,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                ),
+              ),
             ),
-          ),
-        ),
-      );
-    }
-
-    return MessageBubble(
-      message: ChatMessage(
-        id: '__streaming__',
-        type: MessageType.agent,
-        text: text,
-      ),
-    );
-  }
-}
-
-class _StatusDot extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final status = ref.watch(agentStatusProvider);
-    final color = _colorForStatus(status.status);
-    return Tooltip(
-      message: status.status,
-      child: Container(
-        width: 10,
-        height: 10,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(color: color.withOpacity(0.4), blurRadius: 4),
           ],
-        ),
+        ],
       ),
     );
-  }
-
-  Color _colorForStatus(String status) {
-    switch (status) {
-      case 'thinking':
-        return Colors.blue;
-      case 'running':
-        return Colors.orange;
-      case 'waiting':
-        return Colors.amber;
-      case 'idle':
-      default:
-        return Colors.green;
-    }
   }
 }
