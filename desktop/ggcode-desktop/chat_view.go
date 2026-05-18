@@ -467,6 +467,9 @@ func (cv *ChatView) onSend() {
 	// Show thinking indicator while waiting for agent response.
 	cv.showThinking()
 
+	// Push user message to mobile (only from desktop, not echo)
+	cv.bridge.PushUserMessageToMobile(text)
+
 	if err := cv.bridge.SendContent(content); err != nil {
 		cv.ui.AppendChat(ChatMessage{Role: "error", Content: err.Error(), Time: time.Now()})
 	}
