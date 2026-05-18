@@ -16,10 +16,10 @@ type hintWrap struct {
 	child fyne.Widget
 	hint  string
 
-	popover *fyne.Container
-	tipBg   *canvas.Rectangle
-	tipText *canvas.Text
-	inited  bool
+	popover  *fyne.Container
+	tipBg    *canvas.Rectangle
+	tipText  *canvas.Text
+	inited   bool
 }
 
 func newHintWrap(child fyne.Widget, hint string) *hintWrap {
