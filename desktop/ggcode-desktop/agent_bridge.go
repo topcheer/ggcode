@@ -166,9 +166,48 @@ func (b *AgentBridge) setupAgent() error {
 	// Re-register send_message with both managers.
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
 
-	// Forward swarm events to UI.
+	// Forward swarm events to UI and mobile tunnel.
 	b.swarmMgr.SetOnUpdate(func(ev swarm.Event) {
 		b.ui.UpdateAgentPanel(ev.TeammateID, agentPanelFromSwarmEvent(b.swarmMgr, ev))
+
+		// Push to mobile client
+		if b.tunnelBroker != nil {
+			switch ev.Type {
+			case "teammate_spawned":
+				snap, ok := b.swarmMgr.TeammateSnapshot(ev.TeammateID)
+				color := ""
+				if ok {
+					color = snap.Color
+				}
+				b.tunnelBroker.PushSubagentSpawn(ev.TeammateID, ev.TeammateName, "teammate", color, ev.TeamID)
+
+			case "teammate_working":
+				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.TeammateName)
+				snap, ok := b.swarmMgr.TeammateSnapshot(ev.TeammateID)
+				if ok && len(snap.Events) > 0 {
+					last := snap.Events[len(snap.Events)-1]
+					if last.Type == swarm.TeammateEventText && last.Text != "" {
+						msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
+						b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, last.Text, false)
+					}
+				}
+
+			case "teammate_idle":
+				if ev.Result != "" {
+					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
+					b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
+				}
+				success := ev.Error == nil
+				summary := ev.Result
+				if ev.Error != nil {
+					summary = ev.Error.Error()
+				}
+				b.tunnelBroker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, summary, success)
+
+			case "teammate_shutdown":
+				b.tunnelBroker.PushSubagentComplete(ev.TeammateID, ev.TeammateName, "shutdown", true)
+			}
+		}
 	})
 
 	systemPrompt := buildSystemPrompt(b.workingDir)
