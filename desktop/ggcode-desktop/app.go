@@ -225,8 +225,12 @@ func (a *App) showShareDialog() {
 			case "user_text", "message":
 				text, _ := payload["text"].(string)
 				if text != "" {
-					if a.agentBridge == nil {
-					} else {
+					fyne.Do(func() {
+						if a.ui != nil {
+							a.ui.AppendChat(ChatMessage{Role: "user", Content: text, Time: time.Now()})
+						}
+					})
+					if a.agentBridge != nil {
 						a.agentBridge.Send(text)
 					}
 				}
