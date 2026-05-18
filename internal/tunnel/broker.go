@@ -10,25 +10,17 @@ import (
 
 // Broker bridges agent events and the WebSocket tunnel protocol.
 //
-// Usage:
-//
-//	b := NewBroker(sess)
-//	b.OnCommand(func(cmd GatewayMessage) { ... handle client commands ... })
-//
-//	// Push agent events:
-//	b.PushText(id, "Hello, ")
-//	b.PushText(id, "world!")
-//	b.PushTextDone(id)
-//	b.PushStatus(StatusRunning, "executing tool")
-//	b.PushToolCall("read_file", `{path:"main.go"}`, "read_file(main.go)")
-//	b.PushToolResult("read_file", "package main...", false)
-//	b.PushApprovalRequest("123", "run_command", "rm -rf /")
+// It maintains a sentLog of all messages pushed to the mobile client.
+// On reconnection, ReplayToClient() replays this log so the mobile
+// always shows exactly what the desktop shows — regardless of
+// session persistence timing.
 type Broker struct {
 	session         *Session
 	onCommand       func(cmd GatewayMessage)
 	onClientConnect func()
-	sendMu          sync.Mutex // serializes all sends to guarantee ordering
+	sendMu          sync.Mutex // serializes all sends + sentLog access
 	msgCount        atomic.Int64
+	sentLog         []GatewayMessage // replay log: everything sent since last chat_clear
 }
 
 // NewBroker creates a broker bound to a tunnel session.
@@ -47,7 +39,7 @@ func NewBroker(sess *Session) *Broker {
 		}
 	})
 	sess.OnConnect(func() {
-		log.Printf("[broker] client connected")
+		log.Printf("[broker] client connected, replaying %d messages", len(b.sentLog))
 		if b.onClientConnect != nil {
 			b.onClientConnect()
 		}
@@ -65,108 +57,127 @@ func (b *Broker) OnClientConnect(fn func()) {
 	b.onClientConnect = fn
 }
 
-// SendSessionInfo sends session metadata to the client.
+// ReplayToClient resends all logged messages to the mobile client.
+// Called on reconnect to ensure mobile shows the current desktop state.
+func (b *Broker) ReplayToClient() {
+	b.sendMu.Lock()
+	msgs := make([]GatewayMessage, len(b.sentLog))
+	copy(msgs, b.sentLog)
+	b.sendMu.Unlock()
+
+	log.Printf("[broker] ReplayToClient: %d messages", len(msgs))
+	for _, msg := range msgs {
+		if err := b.session.Send(msg); err != nil {
+			log.Printf("[broker] replay send %s failed: %v", msg.Type, err)
+			return
+		}
+	}
+}
+
+// ─── Session lifecycle ───
+
 func (b *Broker) SendSessionInfo(data SessionInfoData) {
 	b.send(EventSessionInfo, data)
 }
 
-// PushUserMessage sends a user message from desktop to mobile client.
-func (b *Broker) PushUserMessage(text string) {
-	b.send(EventUserMessage, map[string]string{"text": text})
-}
-
-// PushText sends a streaming text chunk.
-func (b *Broker) PushText(id, chunk string) {
-	log.Printf("[broker] PushText: id=%s len=%d", id, len(chunk))
-	b.send(EventText, TextData{ID: id, Chunk: chunk})
-}
-
-// PushTextDone signals the end of a text stream.
-func (b *Broker) PushTextDone(id string) {
-	b.send(EventTextDone, TextData{ID: id, Done: true})
-}
-
-// PushStatus sends an agent status change.
-func (b *Broker) PushStatus(status, message string) {
-	b.send(EventStatus, StatusData{Status: status, Message: message})
-}
-
-// PushToolCall sends a tool call notification.
-func (b *Broker) PushToolCall(toolName, args, detail string) {
-	b.send(EventToolCall, ToolCallData{ToolName: toolName, Args: args, Detail: detail})
-}
-
-// PushToolResult sends a tool result.
-func (b *Broker) PushToolResult(toolName, result string, isError bool) {
-	b.send(EventToolResult, ToolResultData{ToolName: toolName, Result: result, IsError: isError})
-}
-
-// PushApprovalRequest sends an approval request to the mobile client.
-func (b *Broker) PushApprovalRequest(id, toolName, input string) {
-	b.send(EventApprovalRequest, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
-}
-
-// PushApprovalResult sends an approval result back.
-func (b *Broker) PushApprovalResult(id, decision string) {
-	b.send(EventApprovalResult, map[string]string{"id": id, "decision": decision})
-}
-
-// PushError sends an error to the client.
-func (b *Broker) PushError(message string) {
-	b.send(EventError, ErrorData{Message: message})
-}
-
-// ─── Ask User (structured questionnaire) ───
-
-// PushAskUserRequest sends a structured questionnaire to the mobile client.
-func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
-	b.send(EventAskUserRequest, AskUserRequestData{ID: id, Title: title, Questions: questions})
-}
-
-// PushAskUserResponse sends the user's answers back (confirmation echo).
-func (b *Broker) PushAskUserResponse(id, status string, answers []AskUserAnswer) {
-	b.send(EventAskUserResponse, AskUserResponseData{ID: id, Status: status, Answers: answers})
-}
-
-// ─── Sub-agent / Teammate ───
-
-// PushSubagentSpawn notifies mobile that a sub-agent has been created.
-func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) {
-	b.send(EventSubagentSpawn, SubagentSpawnData{
-		AgentID: agentID, Name: name, Task: task, Color: color, ParentID: parentID,
-	})
-}
-
-// PushSubagentText sends streaming text from a sub-agent.
-func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
-	b.send(EventSubagentText, SubagentTextData{AgentID: agentID, ID: msgID, Chunk: chunk, Done: done})
-}
-
-// PushSubagentStatus sends a status update for a sub-agent.
-func (b *Broker) PushSubagentStatus(agentID, status, message string) {
-	b.send(EventSubagentStatus, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
-}
-
-// PushSubagentComplete notifies that a sub-agent has finished.
-func (b *Broker) PushSubagentComplete(agentID, name, summary string, success bool) {
-	b.send(EventSubagentComplete, SubagentCompleteData{
-		AgentID: agentID, Name: name, Summary: summary, Success: success,
-	})
-}
-
-// NextMessageID generates a unique message ID for grouping text chunks.
-func (b *Broker) NextMessageID() string {
-	return fmt.Sprintf("msg-%d", b.msgCount.Add(1))
-}
-
 // PushChatClear tells the mobile client to clear its message list.
+// Also clears the broker's replay log.
 func (b *Broker) PushChatClear() {
+	b.sendMu.Lock()
+	b.sentLog = nil
+	b.sendMu.Unlock()
 	b.send("chat_clear", nil)
 }
 
 // PushSharingStopped tells mobile clients the server is stopping.
 func (b *Broker) PushSharingStopped() {
 	b.send("sharing_stopped", nil)
+}
+
+// ─── User message ───
+
+func (b *Broker) PushUserMessage(text string) {
+	b.send(EventUserMessage, map[string]string{"text": text})
+}
+
+// ─── Streaming text ───
+
+func (b *Broker) PushText(id, chunk string) {
+	b.send(EventText, TextData{ID: id, Chunk: chunk})
+}
+
+func (b *Broker) PushTextDone(id string) {
+	b.send(EventTextDone, TextData{ID: id, Done: true})
+}
+
+// ─── Status ───
+
+func (b *Broker) PushStatus(status, message string) {
+	b.send(EventStatus, StatusData{Status: status, Message: message})
+}
+
+// ─── Tool calls ───
+
+func (b *Broker) PushToolCall(toolName, args, detail string) {
+	b.send(EventToolCall, ToolCallData{ToolName: toolName, Args: args, Detail: detail})
+}
+
+func (b *Broker) PushToolResult(toolName, result string, isError bool) {
+	b.send(EventToolResult, ToolResultData{ToolName: toolName, Result: result, IsError: isError})
+}
+
+// ─── Approval ───
+
+func (b *Broker) PushApprovalRequest(id, toolName, input string) {
+	b.send(EventApprovalRequest, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
+}
+
+func (b *Broker) PushApprovalResult(id, decision string) {
+	b.send(EventApprovalResult, map[string]string{"id": id, "decision": decision})
+}
+
+// ─── Error ───
+
+func (b *Broker) PushError(message string) {
+	b.send(EventError, ErrorData{Message: message})
+}
+
+// ─── Ask User ───
+
+func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
+	b.send(EventAskUserRequest, AskUserRequestData{ID: id, Title: title, Questions: questions})
+}
+
+func (b *Broker) PushAskUserResponse(id, status string, answers []AskUserAnswer) {
+	b.send(EventAskUserResponse, AskUserResponseData{ID: id, Status: status, Answers: answers})
+}
+
+// ─── Sub-agent / Teammate ───
+
+func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) {
+	b.send(EventSubagentSpawn, SubagentSpawnData{
+		AgentID: agentID, Name: name, Task: task, Color: color, ParentID: parentID,
+	})
+}
+
+func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
+	b.send(EventSubagentText, SubagentTextData{AgentID: agentID, ID: msgID, Chunk: chunk, Done: done})
+}
+
+func (b *Broker) PushSubagentStatus(agentID, status, message string) {
+	b.send(EventSubagentStatus, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
+}
+
+func (b *Broker) PushSubagentComplete(agentID, name, summary string, success bool) {
+	b.send(EventSubagentComplete, SubagentCompleteData{
+		AgentID: agentID, Name: name, Summary: summary, Success: success,
+	})
+}
+
+// ─── Utility ───
+
+func (b *Broker) NextMessageID() string {
+	return fmt.Sprintf("msg-%d", b.msgCount.Add(1))
 }
 
 // HistoryEntry represents a single chat message for history replay.
@@ -182,7 +193,10 @@ func (b *Broker) PushChatHistory(messages []HistoryEntry) {
 	})
 }
 
+// ─── Internal ───
+
 // send marshals and sends a typed message over the WebSocket.
+// Also appends to sentLog for replay on client reconnect.
 func (b *Broker) send(eventType string, data interface{}) {
 	b.sendMu.Lock()
 	defer b.sendMu.Unlock()
@@ -197,9 +211,16 @@ func (b *Broker) send(eventType string, data interface{}) {
 		Data: dataBytes,
 	}
 	if err := b.session.Send(msg); err != nil {
-		// Client not connected — this is normal if mobile disconnected
 		log.Printf("broker: send %s failed: %v", eventType, err)
 	} else {
 		log.Printf("[broker] send %s OK (%d bytes)", eventType, len(dataBytes))
+	}
+
+	// Record for replay (skip control messages that don't affect display)
+	switch eventType {
+	case "sharing_stopped":
+		// don't log
+	default:
+		b.sentLog = append(b.sentLog, msg)
 	}
 }
