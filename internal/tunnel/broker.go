@@ -154,6 +154,19 @@ func (b *Broker) NextMessageID() string {
 	return fmt.Sprintf("msg-%d", b.msgCount.Add(1))
 }
 
+// HistoryEntry represents a single chat message for history replay.
+type HistoryEntry struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// PushChatHistory sends the full chat history to the mobile client.
+func (b *Broker) PushChatHistory(messages []HistoryEntry) {
+	b.send("chat_history", map[string]interface{}{
+		"messages": messages,
+	})
+}
+
 // send marshals and sends a typed message over the WebSocket.
 func (b *Broker) send(eventType string, data interface{}) {
 	dataBytes, err := json.Marshal(data)

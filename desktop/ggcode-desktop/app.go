@@ -248,6 +248,24 @@ func (a *App) showShareDialog() {
 				Version:   Version,
 			})
 			broker.PushStatus(tunnel.StatusIdle, "Ready")
+
+			// Push chat history
+			if a.ui != nil {
+				msgs := a.ui.TakeMessages()
+				history := make([]tunnel.HistoryEntry, 0, len(msgs))
+				for _, m := range msgs {
+					if m.Role == "user" || m.Role == "assistant" {
+						history = append(history, tunnel.HistoryEntry{
+							Role:    m.Role,
+							Content: m.Content,
+						})
+					}
+				}
+				if len(history) > 0 {
+					broker.PushChatHistory(history)
+				}
+			}
+
 			// Show system message in desktop chat
 			fyne.Do(func() {
 				if a.ui != nil {
