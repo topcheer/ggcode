@@ -18,16 +18,17 @@ import (
 
 // Gateway is a WebSocket server with token-based authentication.
 type Gateway struct {
-	port      int
-	token     string
-	server    *http.Server
-	upgrader  websocket.Upgrader
-	onMessage func(msg GatewayMessage)
+	port     int
+	token    string
+	server   *http.Server
+	upgrader websocket.Upgrader
 
-	mu     sync.RWMutex
-	conn   *websocket.Conn
-	connMu sync.Mutex
-	done   chan struct{}
+	mu        sync.RWMutex
+	conn      *websocket.Conn
+	connMu    sync.Mutex
+	done      chan struct{}
+	onMessage func(msg GatewayMessage)
+	onConnect func() // called when a client connects
 
 	// Client keepalive: track last message received from client.
 	lastRecv   time.Time
@@ -84,6 +85,10 @@ func (g *Gateway) OnMessage(fn func(msg GatewayMessage)) {
 	g.onMessage = fn
 }
 
+func (g *Gateway) OnConnect(fn func()) {
+	g.onConnect = fn
+}
+
 func (g *Gateway) Send(msg GatewayMessage) error {
 	g.connMu.Lock()
 	defer g.connMu.Unlock()
@@ -121,7 +126,6 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[gateway] client connected from %s", conn.RemoteAddr())
-	_ = os.WriteFile("/tmp/ggcode-gateway.log", []byte(fmt.Sprintf("connected: %s\n", conn.RemoteAddr())), 0644)
 
 	g.mu.Lock()
 	g.conn = conn
@@ -130,6 +134,11 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	g.lastRecvMu.Lock()
 	g.lastRecv = time.Now()
 	g.lastRecvMu.Unlock()
+
+	// Notify that a client has connected
+	if g.onConnect != nil {
+		g.onConnect()
+	}
 
 	// Read loop
 	go func() {
@@ -141,7 +150,6 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 			g.connMu.Unlock()
 			conn.Close()
 			log.Printf("[gateway] client disconnected")
-			_ = os.WriteFile("/tmp/ggcode-gateway.log", []byte("disconnected\n"), 0644)
 		}()
 
 		for {

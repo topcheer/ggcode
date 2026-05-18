@@ -40,6 +40,9 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
     service!.statusStream.listen(
       (status) {
         state = state.copyWith(status: status);
+        if (status == ConnectionStatus.connected) {
+          _saveUrl(url);
+        }
       },
     );
 
@@ -56,8 +59,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
 
     try {
       await service!.connect();
-      state = state.copyWith(status: ConnectionStatus.connected);
-      _saveUrl(url);
+      // Don't set connected here — wait for first server message via statusStream
     } catch (e) {
       state = state.copyWith(status: ConnectionStatus.disconnected, error: e.toString());
     }

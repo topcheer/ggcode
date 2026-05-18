@@ -217,7 +217,6 @@ func (a *App) showShareDialog() {
 
 		// Handle commands from mobile client
 		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-			_ = os.WriteFile("/tmp/ggcode-tunnel.log", []byte(fmt.Sprintf("command: type=%s\n", cmd.Type)), 0644)
 			var payload map[string]interface{}
 			if len(cmd.Data) > 0 {
 				json.Unmarshal(cmd.Data, &payload)
@@ -227,7 +226,6 @@ func (a *App) showShareDialog() {
 				text, _ := payload["text"].(string)
 				if text != "" {
 					if a.agentBridge == nil {
-						_ = os.WriteFile("/tmp/ggcode-tunnel.log", []byte("agentBridge is nil!\n"), 0644)
 					} else {
 						a.agentBridge.Send(text)
 					}
@@ -239,12 +237,14 @@ func (a *App) showShareDialog() {
 			}
 		})
 
-		// Send session_info immediately so client confirms connection
-		broker.SendSessionInfo(tunnel.SessionInfoData{
-			Workspace: a.dc.WorkDir,
-			Version:   Version,
+		// When mobile client connects, send session_info to confirm connection
+		broker.OnClientConnect(func() {
+			broker.SendSessionInfo(tunnel.SessionInfoData{
+				Workspace: a.dc.WorkDir,
+				Version:   Version,
+			})
+			broker.PushStatus(tunnel.StatusIdle, "Ready")
 		})
-		broker.PushStatus(tunnel.StatusIdle, "Ready")
 
 		a.tunnelSession = sess
 		a.tunnelBroker = broker
