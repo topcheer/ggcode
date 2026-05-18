@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -218,7 +217,7 @@ func (a *App) showShareDialog() {
 
 		// Handle commands from mobile client
 		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-			log.Printf("[tunnel] command received: type=%s", cmd.Type)
+			_ = os.WriteFile("/tmp/ggcode-tunnel.log", []byte(fmt.Sprintf("command: type=%s\n", cmd.Type)), 0644)
 			var payload map[string]interface{}
 			if len(cmd.Data) > 0 {
 				json.Unmarshal(cmd.Data, &payload)
@@ -228,14 +227,9 @@ func (a *App) showShareDialog() {
 				text, _ := payload["text"].(string)
 				if text != "" {
 					if a.agentBridge == nil {
-						// Auto-create session on first mobile message
-						log.Printf("[tunnel] no agentBridge, auto-creating session")
-						a.newSession()
-					}
-					if a.agentBridge != nil {
-						a.agentBridge.Send(text)
+						_ = os.WriteFile("/tmp/ggcode-tunnel.log", []byte("agentBridge is nil!\n"), 0644)
 					} else {
-						log.Printf("[tunnel] failed to create agentBridge, dropping message")
+						a.agentBridge.Send(text)
 					}
 				}
 			case "approval_result":
