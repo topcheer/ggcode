@@ -493,7 +493,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				Workspace: workingDir,
 				Model:     resolved.Model,
 				Provider:  resolved.VendorName,
-				Mode:      string(mode),
+				Mode:      mode.String(),
 				Version:   version.Version,
 			})
 			defer tunnelSession.Stop()
