@@ -259,6 +259,38 @@ func (a *App) showShareDialog() {
 		a.tunnelBroker = broker
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = broker
+
+			// Seed sentLog with current session history so mobile
+			// gets the full conversation on first connect.
+			broker.SendSessionInfo(tunnel.SessionInfoData{
+				Workspace: a.dc.WorkDir,
+				Version:   Version,
+			})
+			session := a.agentBridge.CurrentSession()
+			if session != nil && len(session.Messages) > 0 {
+				history := make([]tunnel.HistoryEntry, 0, len(session.Messages))
+				for _, msg := range session.Messages {
+					if msg.Role != "user" && msg.Role != "assistant" {
+						continue
+					}
+					var textParts []string
+					for _, block := range msg.Content {
+						if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+							textParts = append(textParts, strings.TrimSpace(block.Text))
+						}
+					}
+					if len(textParts) > 0 {
+						history = append(history, tunnel.HistoryEntry{
+							Role:    msg.Role,
+							Content: strings.Join(textParts, "\n"),
+						})
+					}
+				}
+				if len(history) > 0 {
+					broker.PushChatHistory(history)
+				}
+			}
+			broker.PushStatus(tunnel.StatusIdle, "Ready")
 		}
 
 		fyne.Do(func() {
