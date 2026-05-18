@@ -463,7 +463,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var tunnelSession *tunnel.Session
 	var tunnelBroker *tunnel.Broker
 	if startTunnel {
-		tunnelSession = tunnel.NewSession()
+		tunnelSession = tunnel.NewSession(tunnel.DefaultRelayURL)
 		info, err := tunnelSession.Start(context.Background())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "tunnel failed: %v\n", err)

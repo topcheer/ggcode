@@ -21,6 +21,7 @@ dependencies:
   google_fonts: ^6.1.0
   animations: ^2.0.8
   flutter_mermaid: ^0.1.0
+  cryptography: ^2.9.0
 
 dev_dependencies:
   flutter_test:

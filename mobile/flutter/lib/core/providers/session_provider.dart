@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../connection_service.dart';
 export '../connection_service.dart' show ConnectionStatus;
+import '../crypto.dart';
 import '../models/protocol.dart' as proto;
 
 // ---- Connection Service Provider ----
@@ -40,7 +41,16 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
     }
 
     state = state.copyWith(status: ConnectionStatus.connecting, url: url, error: null);
-    service = ConnectionService(url);
+
+    // Extract token from URL for encryption
+    final token = _extractToken(url) ?? '';
+    if (token.isEmpty) {
+      state = state.copyWith(status: ConnectionStatus.disconnected, error: 'Invalid URL: no token');
+      return;
+    }
+
+    final crypto = TunnelCrypto(token);
+    service = ConnectionService(url: url, crypto: crypto);
 
     // Listen to connection status changes
     service!.statusStream.listen(
@@ -78,7 +88,13 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
   }
 
   void send(Map<String, dynamic> data) {
-    service?.send(data);
+    final msg = proto.WsMessage(type: data['type'] as String? ?? 'message', data: data['data'] as Map<String, dynamic>?);
+    service?.sendEncrypted(msg);
+  }
+
+  String? _extractToken(String url) {
+    final uri = Uri.tryParse(url);
+    return uri?.queryParameters['token'];
   }
 
   void _dispatchMessage(proto.WsMessage msg) {

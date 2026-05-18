@@ -1,5 +1,13 @@
 package tunnel
 
+import "encoding/json"
+
+// GatewayMessage is a JSON message exchanged over the encrypted channel.
+type GatewayMessage struct {
+	Type string          `json:"type"`
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
 // Protocol defines the message types exchanged between the ggcode backend
 // and mobile clients over the WebSocket tunnel.
 //

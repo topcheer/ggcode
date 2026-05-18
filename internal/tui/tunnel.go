@@ -43,7 +43,7 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 			m.chatWriteSystem(nextSystemID(), "No active tunnel. Use /tunnel to start one.")
 		} else {
 			info := m.tunnelSession.Info()
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel active:\n  URL: %s\n  Connect: %s", info.PublicURL, info.ConnectURL))
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Relay active:\n  Connect: %s", info.ConnectURL))
 		}
 		return nil
 
@@ -67,7 +67,7 @@ func (m *Model) startTunnel() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		sess := tunnel.NewSession()
+		sess := tunnel.NewSession(tunnel.DefaultRelayURL)
 		info, err := sess.Start(ctx)
 		if err != nil {
 			return tunnelStartMsg{err: err}
