@@ -267,10 +267,6 @@ func (b *AgentBridge) setupAgent() error {
 
 func (b *AgentBridge) Send(userMsg string) error {
 	log.Printf("[agent-bridge] Send called: %q", userMsg)
-	// Push user message to mobile client
-	if b.tunnelBroker != nil {
-		b.tunnelBroker.PushUserMessage(userMsg)
-	}
 	return b.SendContent([]provider.ContentBlock{provider.TextBlock(userMsg)})
 }
 
@@ -288,19 +284,6 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 
 	// Persist user message to disk immediately (incremental), same as TUI.
 	b.appendUserMessageContent(content)
-
-	// Push user message to mobile client
-	if b.tunnelBroker != nil {
-		var textParts []string
-		for _, block := range content {
-			if block.Type == "text" {
-				textParts = append(textParts, block.Text)
-			}
-		}
-		if len(textParts) > 0 {
-			b.tunnelBroker.PushUserMessage(strings.Join(textParts, "\n"))
-		}
-	}
 
 	go func() {
 		if b.tunnelBroker != nil {
@@ -513,6 +496,15 @@ func (b *AgentBridge) Cancel() {
 
 func (b *AgentBridge) Close() {
 	b.Cancel()
+}
+
+// PushUserMessageToMobile pushes a user message to the mobile client.
+// Called from ChatView when the desktop user types — NOT from onCommand
+// (mobile-initiated messages) to avoid echo.
+func (b *AgentBridge) PushUserMessageToMobile(text string) {
+	if b.tunnelBroker != nil {
+		b.tunnelBroker.PushUserMessage(text)
+	}
 }
 
 // QueueMessage stores a user message to be sent after the current agent turn.
