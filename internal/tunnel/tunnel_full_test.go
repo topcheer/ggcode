@@ -644,6 +644,28 @@ func TestProtocolJSONRoundtrip(t *testing.T) {
 		{"MessageData", MessageData{Text: "hello"}},
 		{"ModeChangeData", ModeChangeData{Mode: ModeAuto}},
 		{"ErrorData", ErrorData{Message: "oops", Code: "E001"}},
+
+		// Ask User types
+		{"AskUserRequestData", AskUserRequestData{
+			ID: "ask-1", Title: "Choose deployment",
+			Questions: []AskUserQuestion{
+				{ID: "q1", Prompt: "Scale?", Kind: "single",
+					Choices:       []AskUserChoice{{ID: "c1", Label: "Small"}, {ID: "c2", Label: "Full"}},
+					AllowFreeform: true, Placeholder: "Or type..."},
+			},
+		}},
+		{"AskUserResponseData", AskUserResponseData{
+			ID: "ask-1", Status: "submitted",
+			Answers: []AskUserAnswer{
+				{QuestionID: "q1", ChoiceIDs: []string{"c1"}, FreeformText: ""},
+			},
+		}},
+
+		// Sub-agent types
+		{"SubagentSpawnData", SubagentSpawnData{AgentID: "sa-1", Name: "Researcher", Task: "Search codebase", Color: "#4CAF50"}},
+		{"SubagentTextData", SubagentTextData{AgentID: "sa-1", ID: "msg-1", Chunk: "Found 3 files", Done: false}},
+		{"SubagentStatusData", SubagentStatusData{AgentID: "sa-1", Status: "running", Message: "Searching..."}},
+		{"SubagentCompleteData", SubagentCompleteData{AgentID: "sa-1", Name: "Researcher", Summary: "Found 3 files", Success: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -704,4 +726,139 @@ func TestGatewayUpgraderCheckOrigin(t *testing.T) {
 	if !g.upgrader.CheckOrigin(httptest.NewRequest("GET", "/ws", nil)) {
 		t.Error("CheckOrigin should return true for any request")
 	}
+}
+
+// ─── Broker: Ask User Tests ───
+
+func TestBrokerAskUserRequest(t *testing.T) {
+	g, conn := startGatewayWithClient(t)
+	defer g.Close()
+	defer conn.Close()
+
+	sess := &Session{gateway: g}
+	sess.gateway.OnMessage(func(msg GatewayMessage) {})
+	broker := NewBroker(sess)
+
+	broker.PushAskUserRequest("ask-1", "Choose deployment scale", []AskUserQuestion{
+		{ID: "q1", Prompt: "Scale?", Kind: "single",
+			Choices:       []AskUserChoice{{ID: "c1", Label: "Small"}, {ID: "c2", Label: "Full"}},
+			AllowFreeform: true, Placeholder: "Or type custom..."},
+		{ID: "q2", Prompt: "Region?", Kind: "text", Placeholder: "e.g. us-east-1"},
+	})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, msgBytes, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var msg GatewayMessage
+	json.Unmarshal(msgBytes, &msg)
+	if msg.Type != "ask_user_request" {
+		t.Fatalf("type = %q, want 'ask_user_request'", msg.Type)
+	}
+
+	var data AskUserRequestData
+	json.Unmarshal(msg.Data, &data)
+	if data.ID != "ask-1" {
+		t.Errorf("id = %q, want 'ask-1'", data.ID)
+	}
+	if data.Title != "Choose deployment scale" {
+		t.Errorf("title = %q", data.Title)
+	}
+	if len(data.Questions) != 2 {
+		t.Fatalf("questions count = %d, want 2", len(data.Questions))
+	}
+	if data.Questions[0].Kind != "single" {
+		t.Errorf("q1 kind = %q, want 'single'", data.Questions[0].Kind)
+	}
+	if len(data.Questions[0].Choices) != 2 {
+		t.Errorf("q1 choices = %d, want 2", len(data.Questions[0].Choices))
+	}
+	if data.Questions[1].Kind != "text" {
+		t.Errorf("q2 kind = %q, want 'text'", data.Questions[1].Kind)
+	}
+}
+
+// ─── Broker: Sub-agent Tests ───
+
+func TestBrokerSubagentLifecycle(t *testing.T) {
+	g, conn := startGatewayWithClient(t)
+	defer g.Close()
+	defer conn.Close()
+
+	sess := &Session{gateway: g}
+	sess.gateway.OnMessage(func(msg GatewayMessage) {})
+	broker := NewBroker(sess)
+
+	// 1. Spawn
+	broker.PushSubagentSpawn("sa-1", "Researcher", "Search codebase for TODO patterns", "#4CAF50", "")
+
+	// 2. Status
+	broker.PushSubagentStatus("sa-1", "running", "Searching files...")
+
+	// 3. Streaming text
+	msgID := broker.NextMessageID()
+	broker.PushSubagentText("sa-1", msgID, "Found 3 TODO items in main.go", true) // done in one shot
+
+	// 4. Complete
+	broker.PushSubagentComplete("sa-1", "Researcher", "Found 3 TODO items in main.go", true)
+
+	// Read and verify all 4 messages
+	expectedTypes := []string{"subagent_spawn", "subagent_status", "subagent_text", "subagent_complete"}
+	for i, want := range expectedTypes {
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, msgBytes, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		var msg GatewayMessage
+		json.Unmarshal(msgBytes, &msg)
+		if msg.Type != want {
+			t.Errorf("msg[%d] type = %q, want %q", i, msg.Type, want)
+		}
+	}
+
+	// Verify spawn data
+	// (re-read first message)
+	conn2, _, _ := websocket.DefaultDialer.Dial(
+		fmt.Sprintf("ws://127.0.0.1:%d/ws?token=%s", g.Port(), g.Token()), nil)
+	defer conn2.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	broker.PushSubagentSpawn("sa-2", "Coder", "Implement fix", "#2196F3", "sa-1")
+	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, msgBytes, _ := conn2.ReadMessage()
+	var spawnMsg GatewayMessage
+	json.Unmarshal(msgBytes, &spawnMsg)
+	var spawnData SubagentSpawnData
+	json.Unmarshal(spawnMsg.Data, &spawnData)
+	if spawnData.AgentID != "sa-2" {
+		t.Errorf("agent_id = %q, want 'sa-2'", spawnData.AgentID)
+	}
+	if spawnData.ParentID != "sa-1" {
+		t.Errorf("parent_id = %q, want 'sa-1'", spawnData.ParentID)
+	}
+	if spawnData.Color != "#2196F3" {
+		t.Errorf("color = %q, want '#2196F3'", spawnData.Color)
+	}
+}
+
+// ─── Helper ───
+
+func startGatewayWithClient(t *testing.T) (*Gateway, *websocket.Conn) {
+	t.Helper()
+	g := NewGateway()
+	_, _, err := g.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws?token=%s", g.Port(), g.Token())
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		g.Close()
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	return g, conn
 }
