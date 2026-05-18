@@ -148,13 +148,13 @@ func (rc *RelayClient) readPump(done func()) {
 	defer done()
 
 	rc.conn.SetReadLimit(1 << 20)
-	rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 	rc.conn.SetPongHandler(func(string) error {
 		rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 		return nil
 	})
 
 	for {
+		rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 		_, raw, err := rc.conn.ReadMessage()
 		if err != nil {
 			if err != io.EOF {
