@@ -267,6 +267,10 @@ func (b *AgentBridge) setupAgent() error {
 
 func (b *AgentBridge) Send(userMsg string) error {
 	log.Printf("[agent-bridge] Send called: %q", userMsg)
+	// Push user message to mobile client
+	if b.tunnelBroker != nil {
+		b.tunnelBroker.PushUserMessage(userMsg)
+	}
 	return b.SendContent([]provider.ContentBlock{provider.TextBlock(userMsg)})
 }
 

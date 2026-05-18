@@ -70,6 +70,11 @@ func (b *Broker) SendSessionInfo(data SessionInfoData) {
 	b.send(EventSessionInfo, data)
 }
 
+// PushUserMessage sends a user message from desktop to mobile client.
+func (b *Broker) PushUserMessage(text string) {
+	b.send(EventUserMessage, map[string]string{"text": text})
+}
+
 // PushText sends a streaming text chunk.
 func (b *Broker) PushText(id, chunk string) {
 	log.Printf("[broker] PushText: id=%s len=%d", id, len(chunk))

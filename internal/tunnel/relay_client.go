@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,31 +14,31 @@ import (
 )
 
 // RelayClient connects to the ggcode-relay server as the "server" role.
-// It replaces the old Gateway + Tunnel combination.
+// It auto-reconnects on disconnect with exponential backoff.
 type RelayClient struct {
-	relayURL string // e.g. "wss://relay.ggcode.app"
+	relayURL string
 	token    string
 	crypto   *Crypto
 
-	conn   *websocket.Conn
-	connMu sync.Mutex
-	sendCh chan []byte
-	done   chan struct{}
+	conn    *websocket.Conn
+	connMu  sync.Mutex
+	sendCh  chan []byte
+	done    chan struct{}
+	closed  bool
+	closeMu sync.Mutex
 
 	onMessage func(msg GatewayMessage)
-	onConnect func() // called when a client joins
-
-	mu sync.RWMutex
+	onConnect func()
+	mu        sync.RWMutex
 }
 
-// NewRelayClient creates a client that will connect to the relay server.
 func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 	crypto, err := NewCrypto(token)
 	if err != nil {
 		return nil, err
 	}
 	return &RelayClient{
-		relayURL: relayURL,
+		relayURL: strings.TrimSuffix(relayURL, "/"),
 		token:    token,
 		crypto:   crypto,
 		sendCh:   make(chan []byte, 256),
@@ -45,43 +46,106 @@ func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 	}, nil
 }
 
-// Connect establishes the WebSocket connection to the relay server.
+// Connect starts the connection loop. It connects, runs pumps, and auto-reconnects.
 func (rc *RelayClient) Connect() error {
+	if err := rc.dial(); err != nil {
+		return err
+	}
+	go rc.run()
+	return nil
+}
+
+func (rc *RelayClient) dial() error {
 	url := fmt.Sprintf("%s/ws?role=server&token=%s", rc.relayURL, rc.token)
-	header := http.Header{}
-	conn, _, err := websocket.DefaultDialer.Dial(url, header)
+	conn, _, err := websocket.DefaultDialer.Dial(url, http.Header{})
 	if err != nil {
 		return fmt.Errorf("relay dial: %w", err)
 	}
 	rc.conn = conn
-
-	go rc.writePump()
-	go rc.readPump()
-	go rc.heartbeatLoop()
-
-	log.Printf("[relay-client] connected to %s", rc.relayURL)
 	return nil
 }
 
-func (rc *RelayClient) writePump() {
-	defer rc.conn.Close()
-	for msg := range rc.sendCh {
-		rc.connMu.Lock()
-		err := rc.conn.WriteMessage(websocket.TextMessage, msg)
-		rc.connMu.Unlock()
-		if err != nil {
+// run starts pumps and handles reconnection.
+func (rc *RelayClient) run() {
+	for {
+		// Start pumps for this connection
+		done := make(chan struct{})
+		go rc.writePump(done)
+		go rc.readPump(done)
+
+		<-done // Wait for either pump to exit
+		rc.conn.Close()
+
+		rc.closeMu.Lock()
+		if rc.closed {
+			rc.closeMu.Unlock()
 			return
+		}
+		rc.closeMu.Unlock()
+
+		// Reconnect with backoff
+		log.Printf("[relay-client] disconnected, reconnecting in 3s...")
+		time.Sleep(3 * time.Second)
+
+		for attempt := 0; ; attempt++ {
+			rc.closeMu.Lock()
+			if rc.closed {
+				rc.closeMu.Unlock()
+				return
+			}
+			rc.closeMu.Unlock()
+
+			if err := rc.dial(); err != nil {
+				backoff := time.Duration(attempt+1) * 5 * time.Second
+				if backoff > 30*time.Second {
+					backoff = 30 * time.Second
+				}
+				log.Printf("[relay-client] reconnect failed (attempt %d): %v, retry in %v", attempt+1, err, backoff)
+				time.Sleep(backoff)
+				continue
+			}
+			log.Printf("[relay-client] reconnected")
+			break
 		}
 	}
 }
 
-func (rc *RelayClient) readPump() {
-	defer close(rc.done)
+func (rc *RelayClient) writePump(done chan struct{}) {
+	defer func() { close(done) }()
+	pingMsg, _ := json.Marshal(map[string]string{"type": "ping"})
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case msg, ok := <-rc.sendCh:
+			if !ok {
+				return
+			}
+			rc.connMu.Lock()
+			err := rc.conn.WriteMessage(websocket.TextMessage, msg)
+			rc.connMu.Unlock()
+			if err != nil {
+				return
+			}
+		case <-ticker.C:
+			rc.connMu.Lock()
+			err := rc.conn.WriteMessage(websocket.TextMessage, pingMsg)
+			rc.connMu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (rc *RelayClient) readPump(done chan struct{}) {
+	defer func() { close(done) }() // Signal connection lost
 
 	rc.conn.SetReadLimit(1 << 20)
-	rc.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 	rc.conn.SetPongHandler(func(string) error {
-		rc.conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
 		return nil
 	})
 
@@ -99,7 +163,6 @@ func (rc *RelayClient) readPump() {
 			Nonce      string `json:"nonce,omitempty"`
 			Ciphertext string `json:"ciphertext,omitempty"`
 			Role       string `json:"role,omitempty"`
-			Count      int    `json:"count,omitempty"`
 		}
 		if json.Unmarshal(raw, &relayMsg) != nil {
 			continue
@@ -119,10 +182,9 @@ func (rc *RelayClient) readPump() {
 			}
 
 		case "pong":
-			// keepalive response
+			// keepalive
 
 		case "encrypted":
-			// Decrypt and dispatch
 			plaintext, err := rc.crypto.Decrypt(relayMsg.Nonce, relayMsg.Ciphertext)
 			if err != nil {
 				log.Printf("[relay-client] decrypt error: %v", err)
@@ -171,49 +233,29 @@ func (rc *RelayClient) Send(msg GatewayMessage) error {
 	}
 }
 
-// OnMessage sets the handler for decrypted messages from mobile clients.
 func (rc *RelayClient) OnMessage(fn func(msg GatewayMessage)) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.onMessage = fn
 }
 
-// OnConnect sets the handler called when a mobile client joins.
 func (rc *RelayClient) OnConnect(fn func()) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.onConnect = fn
 }
 
-// Close shuts down the client.
-// heartbeatLoop sends ping every 30 seconds to keep the connection alive.
-func (rc *RelayClient) heartbeatLoop() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	pingMsg, _ := json.Marshal(map[string]string{"type": "ping"})
-	for {
-		select {
-		case <-ticker.C:
-			select {
-			case rc.sendCh <- pingMsg:
-			default:
-			}
-		case <-rc.done:
-			return
-		}
-	}
-}
-
 func (rc *RelayClient) Close() {
+	rc.closeMu.Lock()
+	rc.closed = true
+	rc.closeMu.Unlock()
 	close(rc.sendCh)
 }
 
-// ConnectURL returns the URL that mobile clients should use to connect.
 func (rc *RelayClient) ConnectURL() string {
 	return fmt.Sprintf("%s/ws?role=client&token=%s", rc.relayURL, rc.token)
 }
 
-// Token returns the session token.
 func (rc *RelayClient) Token() string {
 	return rc.token
 }

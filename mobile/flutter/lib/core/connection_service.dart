@@ -12,10 +12,13 @@ enum ConnectionStatus {
 }
 
 class ConnectionService {
-  final String url; // wss://gateway.ggcode.dev/ws?role=client&token=xxx
+  final String url;
   final TunnelCrypto crypto;
   WebSocket? _socket;
   bool _disposed = false;
+  int _reconnectAttempts = 0;
+  static const _maxReconnectAttempts = 10;
+  Timer? _reconnectTimer;
 
   final _statusController = StreamController<ConnectionStatus>.broadcast();
   final _errorController = StreamController<String>.broadcast();
@@ -31,6 +34,7 @@ class ConnectionService {
   ConnectionService({required this.url, required this.crypto});
 
   Future<void> connect() async {
+    _cancelReconnect();
     _statusController.add(ConnectionStatus.connecting);
 
     try {
@@ -39,6 +43,7 @@ class ConnectionService {
       if (!_disposed) {
         _errorController.add('Connection failed: $e');
         _statusController.add(ConnectionStatus.disconnected);
+        _scheduleReconnect();
       }
       return;
     }
@@ -47,6 +52,8 @@ class ConnectionService {
       _socket!.close();
       return;
     }
+
+    _reconnectAttempts = 0; // Reset on successful connect
 
     _socketSub = _socket!.listen(
       (data) async {
@@ -57,6 +64,7 @@ class ConnectionService {
         _cleanup();
         if (!_disposed) {
           _statusController.add(ConnectionStatus.disconnected);
+          _scheduleReconnect();
         }
       },
       onError: (e) {
@@ -64,9 +72,33 @@ class ConnectionService {
         if (!_disposed) {
           _errorController.add('Connection error: $e');
           _statusController.add(ConnectionStatus.disconnected);
+          _scheduleReconnect();
         }
       },
     );
+  }
+
+  void _scheduleReconnect() {
+    if (_disposed) return;
+    if (_reconnectAttempts >= _maxReconnectAttempts) {
+      _errorController.add('Max reconnection attempts reached');
+      return;
+    }
+
+    _reconnectAttempts++;
+    // Exponential backoff: 2s, 4s, 8s, 16s, 32s, max 30s
+    final delay = Duration(seconds: (_reconnectAttempts * 2).clamp(2, 30));
+    print('[connection] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+    _reconnectTimer = Timer(delay, () {
+      if (!_disposed) {
+        connect();
+      }
+    });
+  }
+
+  void _cancelReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
   }
 
   Future<void> _handleRelayMessage(String raw) async {
@@ -75,33 +107,28 @@ class ConnectionService {
 
     switch (type) {
       case 'connected':
-        // Relay confirmed our connection
         _statusController.add(ConnectionStatus.connected);
         _startHeartbeat();
         break;
 
       case 'pong':
-        // Keepalive response
         break;
 
       case 'replay_start':
-        // About to receive cached messages
         break;
 
       case 'replay_end':
-        // Cache replay finished
         break;
 
       case 'server_offline':
-        // Server disconnected
         _cleanup();
         if (!_disposed) {
           _statusController.add(ConnectionStatus.disconnected);
+          _scheduleReconnect();
         }
         break;
 
       case 'encrypted':
-        // Decrypt and dispatch
         final nonce = map['nonce'] as String? ?? '';
         final ciphertext = map['ciphertext'] as String? ?? '';
         if (nonce.isEmpty || ciphertext.isEmpty) return;
@@ -112,7 +139,7 @@ class ConnectionService {
           final msg = proto.WsMessage.fromJson(plaintext);
           _messageController.add(msg);
         } catch (e) {
-          // Decrypt error — might be wrong token
+          // Decrypt error
         }
         break;
     }
@@ -126,7 +153,7 @@ class ConnectionService {
 
   void _startHeartbeat() {
     _stopHeartbeat();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       send({'type': 'ping'});
     });
   }
@@ -154,6 +181,7 @@ class ConnectionService {
   }
 
   void disconnect() {
+    _cancelReconnect();
     _cleanup();
     _socket?.close();
     _socket = null;

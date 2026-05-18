@@ -18,9 +18,10 @@ type GatewayMessage struct {
 const (
 	EventConnected        = "connected"
 	EventSessionInfo      = "session_info"
-	EventText             = "text"      // streaming text chunk
-	EventTextDone         = "text_done" // text stream complete
-	EventStatus           = "status"    // agent status change
+	EventUserMessage      = "user_message" // user text from desktop
+	EventText             = "text"         // streaming text chunk
+	EventTextDone         = "text_done"    // text stream complete
+	EventStatus           = "status"       // agent status change
 	EventToolCall         = "tool_call"
 	EventToolResult       = "tool_result"
 	EventApprovalRequest  = "approval_request"
