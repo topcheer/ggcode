@@ -289,6 +289,19 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 	// Persist user message to disk immediately (incremental), same as TUI.
 	b.appendUserMessageContent(content)
 
+	// Push user message to mobile client
+	if b.tunnelBroker != nil {
+		var textParts []string
+		for _, block := range content {
+			if block.Type == "text" {
+				textParts = append(textParts, block.Text)
+			}
+		}
+		if len(textParts) > 0 {
+			b.tunnelBroker.PushUserMessage(strings.Join(textParts, "\n"))
+		}
+	}
+
 	go func() {
 		if b.tunnelBroker != nil {
 			b.tunnelMsgID = b.tunnelBroker.NextMessageID()
