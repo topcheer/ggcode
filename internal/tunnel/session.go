@@ -9,7 +9,7 @@ import (
 )
 
 // DefaultRelayURL is the default ggcode-relay server URL.
-const DefaultRelayURL = "wss://gateway.ggcode.dev"
+const DefaultRelayURL = "wss://ggcode-production-a244.up.railway.app"
 
 // Session manages a relay session: connects to ggcode-relay, generates QR code.
 //
