@@ -11,157 +11,97 @@ void main() {
   runApp(const ProviderScope(child: GGCodeApp()));
 }
 
-class GGCodeApp extends ConsumerWidget {
+class GGCodeApp extends StatelessWidget {
   const GGCodeApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return MaterialApp(
       title: 'GGCode Mobile',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF6750A4),
-        brightness: Brightness.dark,
-        useMaterial3: true,
-        textTheme: const TextTheme(
-          bodyMedium: TextStyle(fontSize: 15),
-          bodySmall: TextStyle(fontSize: 13),
+        colorScheme: const ColorScheme.dark(
+          primary: Colors.blueAccent,
+          surface: Color(0xFF0D0D14),
+          onSurface: Colors.white,
         ),
+        scaffoldBackgroundColor: const Color(0xFF0D0D14),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0D0D14),
+          elevation: 0,
+          iconTheme: IconThemeData(color: Colors.white),
+          titleTextStyle: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+        useMaterial3: true,
       ),
-      home: const _AppRoot(),
+      home: const AppShell(),
     );
   }
 }
 
-class _AppRoot extends ConsumerStatefulWidget {
-  const _AppRoot();
+class AppShell extends ConsumerStatefulWidget {
+  const AppShell({super.key});
 
   @override
-  ConsumerState<_AppRoot> createState() => _AppRootState();
+  ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppRootState extends ConsumerState<_AppRoot> {
-  StreamSubscription<ConnectionStatus>? _statusSub;
-  StreamSubscription<proto.WsMessage>? _msgSub;
-  bool _isConnected = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _setupListeners();
-  }
-
-  void _setupListeners() {
-    final service = ref.read(connectionProvider);
-
-    // Listen to connection status changes
-    _statusSub = service.statusStream.listen((status) {
-      final wasConnected = _isConnected;
-      _isConnected = status == ConnectionStatus.connected;
-
-      if (wasConnected && !_isConnected) {
-        if (mounted) {
-          ref.read(chatProvider.notifier).clear();
-          ref.read(sessionInfoProvider.notifier).state = null;
-          ref.read(pendingApprovalProvider.notifier).state = null;
-          ref.read(agentStatusProvider.notifier).state =
-              proto.AgentStatus(status: 'idle', message: '');
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const ConnectScreen()),
-            (route) => false,
-          );
-        }
-      }
-    });
-
-    // Subscribe to messages
-    _msgSub = service.messageStream.listen((msg) {
-      _handleMessage(msg);
-    });
-  }
-
-  void _handleMessage(proto.WsMessage msg) {
-    final data = msg.data ?? {};
-
-    switch (msg.type) {
-      case 'connected':
-        // Connection confirmed
-        break;
-
-      case 'session_info':
-        final info = proto.SessionInfo.fromData(data);
-        ref.read(sessionInfoProvider.notifier).state = info;
-        ref.read(currentModeProvider.notifier).state = info.mode;
-        break;
-
-      case 'text':
-        final chunk = proto.TextChunk.fromData(data);
-        final chatNotifier = ref.read(chatProvider.notifier);
-        final buffers = ref.read(chatProvider).streamingBuffers;
-        if (!buffers.containsKey(chunk.id)) {
-          chatNotifier.startAgentMessage(chunk.id);
-        }
-        chatNotifier.appendTextChunk(chunk.id, chunk.chunk);
-        if (chunk.done) {
-          chatNotifier.finishAgentMessage(chunk.id);
-        }
-        break;
-
-      case 'text_done':
-        final id = data['id'] as String? ?? '';
-        ref.read(chatProvider.notifier).finishAgentMessage(id);
-        break;
-
-      case 'status':
-        final status = proto.AgentStatus.fromData(data);
-        ref.read(agentStatusProvider.notifier).state = status;
-        break;
-
-      case 'tool_call':
-        final tc = proto.ToolCall.fromData(data);
-        ref.read(chatProvider.notifier).addToolCall(tc);
-        break;
-
-      case 'tool_result':
-        final tr = proto.ToolResult.fromData(data);
-        ref.read(chatProvider.notifier).addToolResult(tr);
-        break;
-
-      case 'approval_request':
-        final ar = proto.ApprovalRequest.fromData(data);
-        ref.read(pendingApprovalProvider.notifier).state = ar;
-        break;
-
-      case 'error':
-        final err = proto.ErrorEvent.fromData(data);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error: ${err.message}'),
-              backgroundColor: Colors.red.shade800,
-            ),
-          );
-        }
-        break;
-    }
-  }
+class _AppShellState extends ConsumerState<AppShell> {
+  StreamSubscription? _sub;
 
   @override
   void dispose() {
-    _statusSub?.cancel();
-    _msgSub?.cancel();
+    _sub?.cancel();
     super.dispose();
+  }
+
+  void _listenToMessages(ConnectionState connState) {
+    _sub?.cancel();
+
+    final status = connState.status;
+    if (status != ConnectionStatus.connected) return;
+
+    // Re-acquire the service stream
+    final notifier = ref.read(connectionProvider.notifier);
+    final svc = notifier._service;
+    if (svc == null) return;
+
+    _sub = svc.messages.listen((msg) {
+      final dispatcher = ref.read(messageDispatcherProvider);
+      dispatcher(msg);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final service = ref.watch(connectionProvider);
-    // Rebuild when status changes by watching the stream
-    ref.watch(connectionStatusProvider);
+    final connState = ref.watch(connectionProvider);
+    final askUser = ref.watch(askUserProvider);
+    final isConnected = connState.status == ConnectionStatus.connected;
 
-    if (service.status == ConnectionStatus.connected) {
-      return const ChatScreen();
+    // Listen to connection changes
+    ref.listen<ConnectionState>(connectionProvider, (prev, next) {
+      _listenToMessages(next);
+    });
+
+    // Show ask_user questionnaire as a modal bottom sheet
+    ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
+      if (next != null && prev == null) {
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => const AskUserScreen(),
+        );
+      }
+    });
+
+    if (!isConnected) {
+      return const ConnectScreen();
     }
-    return const ConnectScreen();
+
+    // Start listening if not already
+    if (_sub == null) _listenToMessages(connState);
+
+    return const ChatScreen();
   }
 }
