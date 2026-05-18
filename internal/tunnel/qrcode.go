@@ -27,3 +27,13 @@ func QRCodeLines(url string) ([]string, error) {
 	}
 	return strings.Split(s, "\n"), nil
 }
+
+// QRCodePNG generates a PNG image of the QR code for the given URL.
+// Returns raw PNG bytes suitable for displaying in an image widget.
+func QRCodePNG(url string) ([]byte, error) {
+	png, err := qrcode.Encode(url, qrcode.Medium, 256)
+	if err != nil {
+		return nil, fmt.Errorf("qr png: %w", err)
+	}
+	return png, nil
+}

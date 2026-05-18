@@ -242,6 +242,17 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		}
 	})
 
+	// Build QR code image
+	var qrImage fyne.CanvasObject
+	if len(info.QRCodePNG) > 0 {
+		img := canvas.NewImageFromResource(fyne.NewStaticResource("qr.png", info.QRCodePNG))
+		img.FillMode = canvas.ImageFillContain
+		img.SetMinSize(fyne.NewSize(256, 256))
+		qrImage = container.NewCenter(img)
+	} else {
+		qrImage = widget.NewLabel("QR code unavailable")
+	}
+
 	content := container.NewVBox(
 		widget.NewLabelWithStyle("Mobile Connection", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
@@ -249,8 +260,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		urlLabel,
 		container.NewHBox(copyBtn, stopBtn),
 		widget.NewSeparator(),
-		widget.NewLabel("QR Code:"),
-		container.NewCenter(widget.NewLabel(info.QRCode)),
+		qrImage,
 	)
 
 	dialog.ShowCustom("Share Session", "Close", content, a.window)
