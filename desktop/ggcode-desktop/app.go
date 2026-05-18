@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -245,44 +244,8 @@ func (a *App) showShareDialog() {
 
 		// When mobile client connects, send session_info to confirm connection
 		broker.OnClientConnect(func() {
-			broker.SendSessionInfo(tunnel.SessionInfoData{
-				Workspace: a.dc.WorkDir,
-				Version:   Version,
-			})
-			broker.PushStatus(tunnel.StatusIdle, "Ready")
-
-			// Push chat history from agent session
-			if a.agentBridge != nil {
-				session := a.agentBridge.CurrentSession()
-				if session != nil && len(session.Messages) > 0 {
-					history := make([]tunnel.HistoryEntry, 0, len(session.Messages))
-					for _, msg := range session.Messages {
-						if msg.Role != "user" && msg.Role != "assistant" {
-							continue
-						}
-						var textParts []string
-						for _, block := range msg.Content {
-							if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-								textParts = append(textParts, strings.TrimSpace(block.Text))
-							}
-						}
-						if len(textParts) > 0 {
-							history = append(history, tunnel.HistoryEntry{
-								Role:    msg.Role,
-								Content: strings.Join(textParts, "\n"),
-							})
-						}
-					}
-					log.Printf("[desktop] sending %d history entries to mobile", len(history))
-					if len(history) > 0 {
-						broker.PushChatHistory(history)
-					}
-				} else {
-					log.Printf("[desktop] no session messages to push")
-				}
-			} else {
-				log.Printf("[desktop] agentBridge is nil, cannot push history")
-			}
+			// Replay everything the broker has sent.
+			broker.ReplayToClient()
 
 			// Show system message in desktop chat
 			fyne.Do(func() {
