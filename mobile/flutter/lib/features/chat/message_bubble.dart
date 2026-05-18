@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_mermaid/flutter_mermaid.dart';
 
 import '../../core/providers/session_provider.dart';
 
@@ -38,6 +39,9 @@ class MessageBubble extends StatelessWidget {
   }
 
   Widget _buildAgentBubble(BuildContext context) {
+    // Split text into segments: markdown text and mermaid diagrams
+    final segments = _parseSegments(message.text);
+
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -79,58 +83,18 @@ class MessageBubble extends StatelessWidget {
                   ],
                 ),
               ),
-            // Render markdown for agent messages
-            MarkdownBody(
-              data: message.text,
+            // Render segments
+            ...segments.map((seg) {
+              if (seg.isMermaid) {
+                return _buildMermaidDiagram(seg.content);
+              }
+              if (seg.content.trim().isEmpty) return const SizedBox.shrink();
+              return MarkdownBody(
+                data: seg.content,
                 selectable: true,
-                styleSheet: MarkdownStyleSheet(
-                  p: TextStyle(
-                    color: Colors.white.withOpacity(0.9),
-                    fontSize: 14,
-                  ),
-                  code: TextStyle(
-                    color: Colors.blueAccent[100],
-                    fontSize: 13,
-                    backgroundColor: const Color(0xFF2A2A3E),
-                  ),
-                  codeblockDecoration: BoxDecoration(
-                    color: const Color(0xFF1A1A2E),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  codeblockPadding: const EdgeInsets.all(8),
-                  listBullet: TextStyle(
-                    color: Colors.white.withOpacity(0.9),
-                    fontSize: 14,
-                  ),
-                  h2: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  h3: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  strong: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  em: const TextStyle(
-                    color: Colors.white70,
-                    fontStyle: FontStyle.italic,
-                  ),
-                  blockquote: TextStyle(
-                    color: Colors.white.withOpacity(0.7),
-                    fontSize: 14,
-                  ),
-                  blockquoteDecoration: BoxDecoration(
-                    color: const Color(0xFF2A2A3E),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                ),
-              ),
+                styleSheet: _markdownStyleSheet(),
+              );
+            }),
             if (message.streaming)
               Container(
                 margin: const EdgeInsets.only(top: 2),
@@ -147,6 +111,107 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+  Widget _buildMermaidDiagram(String code) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2A3E),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.account_tree, size: 14, color: Colors.blueAccent),
+              SizedBox(width: 4),
+              Text(
+                'Diagram',
+                style: TextStyle(
+                  color: Colors.blueAccent,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: MermaidDiagram(code: code),
+          ),
+        ],
+      ),
+    );
+  }
+
+  MarkdownStyleSheet _markdownStyleSheet() {
+    return MarkdownStyleSheet(
+      p: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 14),
+      code: TextStyle(
+        color: Colors.blueAccent[100],
+        fontSize: 13,
+        backgroundColor: const Color(0xFF2A2A3E),
+      ),
+      codeblockDecoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      codeblockPadding: const EdgeInsets.all(8),
+      listBullet: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 14),
+      h2: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+      h3: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+      strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+      em: const TextStyle(color: Colors.white70, fontStyle: FontStyle.italic),
+      blockquote: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14),
+      blockquoteDecoration: BoxDecoration(
+        color: const Color(0xFF2A2A3E),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.white12),
+      ),
+    );
+  }
+
+  /// Parse text into segments, extracting ```mermaid blocks.
+  List<_TextSegment> _parseSegments(String text) {
+    final segments = <_TextSegment>[];
+    final regex = RegExp(r'```mermaid\s*\n([\s\S]*?)```', multiLine: true);
+
+    int lastEnd = 0;
+    for (final match in regex.allMatches(text)) {
+      // Add text before this mermaid block
+      if (match.start > lastEnd) {
+        final before = text.substring(lastEnd, match.start);
+        if (before.trim().isNotEmpty) {
+          segments.add(_TextSegment(content: before));
+        }
+      }
+      // Add mermaid block
+      segments.add(_TextSegment(
+        content: match.group(1)?.trim() ?? '',
+        isMermaid: true,
+      ));
+      lastEnd = match.end;
+    }
+
+    // Add remaining text after last mermaid block
+    if (lastEnd < text.length) {
+      final remaining = text.substring(lastEnd);
+      if (remaining.trim().isNotEmpty) {
+        segments.add(_TextSegment(content: remaining));
+      }
+    }
+
+    // If no segments, return the whole text
+    if (segments.isEmpty) {
+      segments.add(_TextSegment(content: text));
+    }
+
+    return segments;
+  }
+
   Color _parseColor(String hex) {
     try {
       return Color(int.parse(hex.replaceFirst('#', '0xFF')));
@@ -154,4 +219,11 @@ class MessageBubble extends StatelessWidget {
       return Colors.green;
     }
   }
+}
+
+class _TextSegment {
+  final String content;
+  final bool isMermaid;
+
+  _TextSegment({required this.content, this.isMermaid = false});
 }
