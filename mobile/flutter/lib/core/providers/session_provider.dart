@@ -33,10 +33,16 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
   ConnectionNotifier(this._ref) : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
 
   Future<void> connect(String url) async {
-    state = state.copyWith(status: ConnectionStatus.connecting, url: url);
+    // Disconnect previous if any
+    if (service != null) {
+      service!.dispose();
+      service = null;
+    }
+
+    state = state.copyWith(status: ConnectionStatus.connecting, url: url, error: null);
     service = ConnectionService(url);
 
-    // Listen to connection status changes (disconnect detection)
+    // Listen to connection status changes
     service!.statusStream.listen(
       (status) {
         state = state.copyWith(status: status);
@@ -46,20 +52,21 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       },
     );
 
-    // Listen to messages from server
-    service!.messageStream.listen(
-      (msg) => _dispatchMessage(msg),
-      onError: (e) {
-        state = state.copyWith(status: ConnectionStatus.disconnected, error: e.toString());
-      },
-      onDone: () {
-        state = state.copyWith(status: ConnectionStatus.disconnected);
+    // Listen to error messages
+    service!.errorStream.listen(
+      (error) {
+        state = state.copyWith(error: error);
       },
     );
 
+    // Listen to messages from server
+    service!.messageStream.listen(
+      (msg) => _dispatchMessage(msg),
+    );
+
     try {
+      // dart:io WebSocket.connect properly awaits handshake
       await service!.connect();
-      // Don't set connected here — wait for first server message via statusStream
     } catch (e) {
       state = state.copyWith(status: ConnectionStatus.disconnected, error: e.toString());
     }
