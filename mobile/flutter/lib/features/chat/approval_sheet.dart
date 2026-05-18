@@ -2,161 +2,90 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
-import '../../core/models/protocol.dart';
 
 class ApprovalSheet extends ConsumerWidget {
-  const ApprovalSheet({super.key});
+  final ApprovalInfo approval;
+  const ApprovalSheet({super.key, required this.approval});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final approval = ref.watch(pendingApprovalProvider);
-    if (approval == null) return const SizedBox.shrink();
-
-    final theme = Theme.of(context);
-
     return Container(
-      padding: const EdgeInsets.all(20),
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHigh,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        color: const Color(0xFF1E1E2E),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.withOpacity(0.3)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.outlineVariant,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
           Row(
             children: [
-              Icon(
-                Icons.shield_outlined,
-                color: theme.colorScheme.error,
-                size: 28,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Approval Required',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+              const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Approval Required',
+                style: TextStyle(
+                  color: Colors.orange.withOpacity(0.9),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          _buildInfoRow(context, 'Tool', approval.toolName),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           Text(
-            'Input:',
-            style: theme.textTheme.labelMedium,
+            approval.toolName,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 4),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            constraints: const BoxConstraints(maxHeight: 200),
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
+              color: Colors.black.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(6),
             ),
-            child: SingleChildScrollView(
-              child: SelectableText(
-                approval.input,
-                style: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  color: theme.colorScheme.onSurface,
-                ),
-              ),
+            child: Text(
+              approval.input.length > 300
+                  ? '${approval.input.substring(0, 300)}...'
+                  : approval.input,
+              style: const TextStyle(color: Colors.white70, fontSize: 12, fontFamily: 'monospace'),
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           Row(
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () {
-                    ref.read(connectionProvider).sendApprovalResponse(
-                        approval.id, 'deny');
-                    ref.read(pendingApprovalProvider.notifier).state = null;
-                    Navigator.pop(context);
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.colorScheme.error,
-                    side: BorderSide(color: theme.colorScheme.error),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  child: const Text('Deny'),
-                ),
+              TextButton(
+                onPressed: () => _respond(ref, 'deny'),
+                child: const Text('Deny', style: TextStyle(color: Colors.redAccent)),
               ),
               const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () {
-                    ref.read(connectionProvider).sendApprovalResponse(
-                        approval.id, 'allow');
-                    ref.read(pendingApprovalProvider.notifier).state = null;
-                    Navigator.pop(context);
-                  },
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  child: const Text('Allow'),
-                ),
+              TextButton(
+                onPressed: () => _respond(ref, 'allow'),
+                child: const Text('Allow', style: TextStyle(color: Colors.green)),
               ),
               const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton.tonal(
-                  onPressed: () {
-                    ref.read(connectionProvider).sendApprovalResponse(
-                        approval.id, 'always_allow');
-                    ref.read(pendingApprovalProvider.notifier).state = null;
-                    Navigator.pop(context);
-                  },
-                  style: FilledButton.tonalStyleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  child: const Text(
-                    'Always',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                ),
+              FilledButton(
+                onPressed: () => _respond(ref, 'always_allow'),
+                style: FilledButton.styleFrom(backgroundColor: Colors.blueAccent),
+                child: const Text('Always Allow'),
               ),
             ],
           ),
-          SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
         ],
       ),
     );
   }
 
-  Widget _buildInfoRow(BuildContext context, String label, String value) {
-    return Row(
-      children: [
-        Text(
-          '$label: ',
-          style: Theme.of(context).textTheme.labelMedium,
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-          ),
-        ),
-      ],
-    );
+  void _respond(WidgetRef ref, String decision) {
+    ref.read(connectionProvider.notifier).send({
+      'type': 'approval_response',
+      'data': {'id': approval.id, 'decision': decision},
+    });
+    ref.read(approvalProvider.notifier).state = null;
   }
 }

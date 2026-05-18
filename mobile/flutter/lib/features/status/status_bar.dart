@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
-import '../../core/models/protocol.dart';
 
 class StatusBar extends ConsumerWidget {
   const StatusBar({super.key});
@@ -10,18 +9,11 @@ class StatusBar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(agentStatusProvider);
-    final theme = Theme.of(context);
-
-    final (color, icon, text) = _statusInfo(status);
+    final message = ref.watch(agentStatusMessageProvider);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
-        border: Border(
-          top: BorderSide(color: color.withOpacity(0.3)),
-        ),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      color: const Color(0xFF1A1A2E),
       child: Row(
         children: [
           SizedBox(
@@ -29,21 +21,17 @@ class StatusBar extends ConsumerWidget {
             height: 8,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: color,
+                color: _statusColor(status),
                 shape: BoxShape.circle,
               ),
             ),
           ),
           const SizedBox(width: 8),
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              text,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: color,
-                fontWeight: FontWeight.w500,
-              ),
+          Text(
+            message.isNotEmpty ? message : _statusLabel(status),
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.7),
+              fontSize: 12,
             ),
           ),
         ],
@@ -51,20 +39,37 @@ class StatusBar extends ConsumerWidget {
     );
   }
 
-  (Color, IconData, String) _statusInfo(AgentStatus status) {
-    switch (status.status) {
-      case 'thinking':
-        return (Colors.blue.shade300, Icons.psychology, 'Thinking...');
-      case 'running':
-        final msg = status.message.isNotEmpty
-            ? 'Running ${status.message}...'
-            : 'Running...';
-        return (Colors.orange.shade300, Icons.play_arrow, msg);
-      case 'waiting':
-        return (Colors.amber.shade300, Icons.hourglass_top, 'Waiting for approval...');
+  Color _statusColor(String status) {
+    switch (status) {
       case 'idle':
+        return Colors.grey;
+      case 'thinking':
+        return Colors.amber;
+      case 'running':
+        return Colors.blue;
+      case 'waiting':
+        return Colors.orange;
+      case 'error':
+        return Colors.red;
       default:
-        return (Colors.green.shade300, Icons.check_circle_outline, 'Ready');
+        return Colors.grey;
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'idle':
+        return 'Ready';
+      case 'thinking':
+        return 'Thinking...';
+      case 'running':
+        return 'Working...';
+      case 'waiting':
+        return 'Waiting for approval';
+      case 'error':
+        return 'Error';
+      default:
+        return status;
     }
   }
 }

@@ -297,3 +297,16 @@ class SubagentCompleteData {
         success: d['success'] as bool? ?? false,
       );
 }
+
+class ErrorData {
+  final String message;
+  final String code;
+
+  ErrorData({required this.message, required this.code});
+
+  factory ErrorData.fromJson(Map<String, dynamic> d) => ErrorData(
+        message: d["message"] as String? ?? "",
+        code: d["code"] as String? ?? "",
+      );
+}
+
