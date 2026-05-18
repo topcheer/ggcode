@@ -23,9 +23,9 @@ type RelayClient struct {
 	conn    *websocket.Conn
 	connMu  sync.Mutex
 	sendCh  chan []byte
-	done    chan struct{}
 	closed  bool
 	closeMu sync.Mutex
+	stopCh  chan struct{}
 
 	onMessage func(msg GatewayMessage)
 	onConnect func()
@@ -42,7 +42,7 @@ func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 		token:    token,
 		crypto:   crypto,
 		sendCh:   make(chan []byte, 256),
-		done:     make(chan struct{}),
+		stopCh:   make(chan struct{}),
 	}, nil
 }
 
@@ -65,13 +65,14 @@ func (rc *RelayClient) dial() error {
 	return nil
 }
 
-// run starts pumps and handles reconnection.
 func (rc *RelayClient) run() {
 	for {
-		// Start pumps for this connection
 		done := make(chan struct{})
-		go rc.writePump(done)
-		go rc.readPump(done)
+		var once sync.Once
+		closeDone := func() { once.Do(func() { close(done) }) }
+
+		go rc.writePump(closeDone)
+		go rc.readPump(closeDone)
 
 		<-done // Wait for either pump to exit
 		rc.conn.Close()
@@ -84,9 +85,7 @@ func (rc *RelayClient) run() {
 		rc.closeMu.Unlock()
 
 		// Reconnect with backoff
-		log.Printf("[relay-client] disconnected, reconnecting in 3s...")
-		time.Sleep(3 * time.Second)
-
+		log.Printf("[relay-client] disconnected, reconnecting...")
 		for attempt := 0; ; attempt++ {
 			rc.closeMu.Lock()
 			if rc.closed {
@@ -101,8 +100,12 @@ func (rc *RelayClient) run() {
 					backoff = 30 * time.Second
 				}
 				log.Printf("[relay-client] reconnect failed (attempt %d): %v, retry in %v", attempt+1, err, backoff)
-				time.Sleep(backoff)
-				continue
+				select {
+				case <-time.After(backoff):
+					continue
+				case <-rc.stopCh:
+					return
+				}
 			}
 			log.Printf("[relay-client] reconnected")
 			break
@@ -110,8 +113,8 @@ func (rc *RelayClient) run() {
 	}
 }
 
-func (rc *RelayClient) writePump(done chan struct{}) {
-	defer func() { close(done) }()
+func (rc *RelayClient) writePump(done func()) {
+	defer done()
 	pingMsg, _ := json.Marshal(map[string]string{"type": "ping"})
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -135,12 +138,14 @@ func (rc *RelayClient) writePump(done chan struct{}) {
 			if err != nil {
 				return
 			}
+		case <-rc.stopCh:
+			return
 		}
 	}
 }
 
-func (rc *RelayClient) readPump(done chan struct{}) {
-	defer func() { close(done) }() // Signal connection lost
+func (rc *RelayClient) readPump(done func()) {
+	defer done()
 
 	rc.conn.SetReadLimit(1 << 20)
 	rc.conn.SetReadDeadline(time.Now().Add(300 * time.Second))
@@ -205,7 +210,15 @@ func (rc *RelayClient) readPump(done chan struct{}) {
 }
 
 // Send encrypts and sends a GatewayMessage to the relay.
+// Safe to call after Close — returns error instead of panicking.
 func (rc *RelayClient) Send(msg GatewayMessage) error {
+	rc.closeMu.Lock()
+	if rc.closed {
+		rc.closeMu.Unlock()
+		return fmt.Errorf("relay client closed")
+	}
+	rc.closeMu.Unlock()
+
 	plaintext, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -249,7 +262,7 @@ func (rc *RelayClient) Close() {
 	rc.closeMu.Lock()
 	rc.closed = true
 	rc.closeMu.Unlock()
-	close(rc.sendCh)
+	close(rc.stopCh)
 }
 
 func (rc *RelayClient) ConnectURL() string {

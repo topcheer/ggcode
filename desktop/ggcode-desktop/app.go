@@ -311,16 +311,23 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	urlLabel.Wrapping = fyne.TextWrapOff
 	urlLabel.SetPlaceHolder("Tunnel URL")
 
+	var shareDialog dialog.Dialog // captured below
+
 	copyBtn := widget.NewButton("Copy URL", func() {
 		a.window.Clipboard().SetContent(info.ConnectURL)
+		shareDialog.Hide()
 	})
 
 	stopBtn := widget.NewButton("Stop Sharing", func() {
+		if a.agentBridge != nil {
+			a.agentBridge.tunnelBroker = nil
+		}
 		if a.tunnelSession != nil {
 			a.tunnelSession.Stop()
 			a.tunnelSession = nil
 			a.tunnelBroker = nil
 		}
+		shareDialog.Hide()
 	})
 
 	// Build QR code image
@@ -344,7 +351,8 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		qrImage,
 	)
 
-	dialog.ShowCustom("Share Session", "Close", content, a.window)
+	shareDialog = dialog.NewCustom("Share Session", "Close", content, a.window)
+	shareDialog.Show()
 }
 
 // openUpdates checks for the latest release on GitHub.
