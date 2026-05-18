@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -217,6 +218,7 @@ func (a *App) showShareDialog() {
 
 		// Handle commands from mobile client
 		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+			log.Printf("[tunnel] command received: type=%s", cmd.Type)
 			var payload map[string]interface{}
 			if len(cmd.Data) > 0 {
 				json.Unmarshal(cmd.Data, &payload)

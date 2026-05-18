@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -265,6 +266,7 @@ func (b *AgentBridge) setupAgent() error {
 }
 
 func (b *AgentBridge) Send(userMsg string) error {
+	log.Printf("[agent-bridge] Send called: %q", userMsg)
 	return b.SendContent([]provider.ContentBlock{provider.TextBlock(userMsg)})
 }
 
