@@ -7,7 +7,7 @@ import '../models/protocol.dart' as proto;
 // ---- Connection Service Provider ----
 
 final connectionProvider = StateNotifierProvider<ConnectionNotifier, TunnelConnectionState>(
-  (ref) => ConnectionNotifier(),
+  (ref) => ConnectionNotifier(ref),
 );
 
 enum ConnectionStatus { disconnected, connecting, connected }
@@ -28,16 +28,17 @@ class TunnelConnectionState {
 }
 
 class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
+  final Ref _ref;
   ConnectionService? service;
 
-  ConnectionNotifier() : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
+  ConnectionNotifier(this._ref) : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
 
   Future<void> connect(String url) async {
     state = state.copyWith(status: ConnectionStatus.connecting, url: url);
     service = ConnectionService(url);
 
     service!.messageStream.listen(
-      (msg) => _handleMessage(msg),
+      (msg) => _dispatchMessage(msg),
       onError: (e) {
         state = state.copyWith(status: ConnectionStatus.disconnected, error: e.toString());
       },
@@ -64,8 +65,130 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
     service?.send(data);
   }
 
-  void _handleMessage(proto.WsMessage msg) {
-    // Handled by individual providers via ref.read
+  void _dispatchMessage(proto.WsMessage msg) {
+    final chatNotifier = _ref.read(chatProvider.notifier);
+
+    switch (msg.type) {
+      case 'session_info':
+        final data = proto.SessionInfoData.fromJson(msg.data!);
+        _ref.read(sessionInfoProvider.notifier).state = data;
+        _ref.read(currentModeProvider.notifier).state = data.mode;
+        break;
+
+      case 'text':
+      case 'stream_text':
+        if (msg.data != null) {
+          final text = msg.data!['text'] as String? ?? msg.data!['chunk'] as String? ?? '';
+          final msgId = msg.data!['id'] as String? ?? 'msg-${DateTime.now().millisecondsSinceEpoch}';
+          final done = msg.data!['done'] as bool? ?? false;
+          chatNotifier.handleTextChunk(proto.TextData(id: msgId, chunk: text, done: done));
+        }
+        break;
+
+      case 'stream_start':
+        break;
+
+      case 'stream_end':
+        chatNotifier.finalizeStreaming();
+        break;
+
+      case 'status':
+        if (msg.data != null) {
+          final status = msg.data!['status'] as String? ?? 'idle';
+          final message = msg.data!['message'] as String? ?? '';
+          _ref.read(agentStatusProvider.notifier).state = status;
+          _ref.read(agentStatusMessageProvider.notifier).state = message;
+        }
+        break;
+
+      case 'tool_call':
+        if (msg.data != null) {
+          chatNotifier.handleToolCall(proto.ToolCallData.fromJson(msg.data!));
+        }
+        break;
+
+      case 'tool_result':
+        if (msg.data != null) {
+          chatNotifier.handleToolResult(proto.ToolResultData.fromJson(msg.data!));
+        }
+        break;
+
+      case 'approval_request':
+        if (msg.data != null) {
+          final data = proto.ApprovalRequestData.fromJson(msg.data!);
+          _ref.read(approvalProvider.notifier).state =
+              ApprovalInfo(id: data.id, toolName: data.toolName, input: data.input);
+        }
+        break;
+
+      case 'ask_user_request':
+        if (msg.data != null) {
+          final data = proto.AskUserRequestData.fromJson(msg.data!);
+          _ref.read(askUserProvider.notifier).state =
+              AskUserInfo(id: data.id, title: data.title, questions: data.questions);
+        }
+        break;
+
+      case 'subagent_spawn':
+        if (msg.data != null) {
+          final data = proto.SubagentSpawnData.fromJson(msg.data!);
+          final agents = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          agents[data.agentId] = SubagentInfo(
+            agentId: data.agentId,
+            name: data.name,
+            task: data.task,
+            color: data.color,
+            parentId: data.parentId,
+          );
+          _ref.read(subagentProvider.notifier).state = agents;
+        }
+        break;
+
+      case 'subagent_text':
+        if (msg.data != null) {
+          chatNotifier.handleSubagentText(proto.SubagentTextData.fromJson(msg.data!));
+        }
+        break;
+
+      case 'subagent_status':
+        if (msg.data != null) {
+          final data = proto.SubagentStatusData.fromJson(msg.data!);
+          final agents = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          if (agents.containsKey(data.agentId)) {
+            agents[data.agentId] = agents[data.agentId]!.copyWith(status: data.status);
+            _ref.read(subagentProvider.notifier).state = agents;
+          }
+        }
+        break;
+
+      case 'subagent_complete':
+        if (msg.data != null) {
+          final data = proto.SubagentCompleteData.fromJson(msg.data!);
+          final agents = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          if (agents.containsKey(data.agentId)) {
+            agents[data.agentId] = agents[data.agentId]!.copyWith(
+              status: 'completed',
+              completed: true,
+              success: data.success,
+              summary: data.summary,
+            );
+            _ref.read(subagentProvider.notifier).state = agents;
+          }
+          Future.delayed(const Duration(seconds: 3), () {
+            final current = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+            current.remove(data.agentId);
+            _ref.read(subagentProvider.notifier).state = current;
+          });
+        }
+        break;
+
+      case 'error':
+        if (msg.data != null) {
+          final errMsg = msg.data!['message'] as String? ?? 'Unknown error';
+          chatNotifier.addErrorMessage(errMsg);
+        }
+        break;
+    }
   }
 
   Future<void> _saveUrl(String url) async {
@@ -244,6 +367,23 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
 
   SubagentInfo? _findSubagent(String id) {
     return _ref.read(subagentProvider)[id];
+  }
+
+  void finalizeStreaming() {
+    state = [
+      for (final m in state) m.copyWith(streaming: false),
+    ];
+  }
+
+  void addErrorMessage(String message) {
+    state = [
+      ...state,
+      ChatMessage(
+        id: 'error-${_msgCounter++}',
+        text: message,
+        time: DateTime.now(),
+      ),
+    ];
   }
 }
 

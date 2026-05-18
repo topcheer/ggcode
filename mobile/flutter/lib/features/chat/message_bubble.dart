@@ -10,19 +10,19 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (message.isUser) {
-      return _buildUserBubble();
+      return _buildUserBubble(context);
     }
-    return _buildAgentBubble();
+    return _buildAgentBubble(context);
   }
 
-  Widget _buildUserBubble() {
+  Widget _buildUserBubble(BuildContext context) {
     return Align(
       alignment: Alignment.centerRight,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(navigatorKey.currentContext!).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
         ),
         decoration: BoxDecoration(
           color: Colors.blueAccent,
@@ -36,14 +36,14 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _buildAgentBubble() {
+  Widget _buildAgentBubble(BuildContext context) {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(navigatorKey.currentContext!).size.width * 0.8,
+          maxWidth: MediaQuery.of(context).size.width * 0.8,
         ),
         decoration: BoxDecoration(
           color: const Color(0xFF1E1E2E),
@@ -83,7 +83,6 @@ class MessageBubble extends StatelessWidget {
               style: TextStyle(
                 color: Colors.white.withOpacity(0.9),
                 fontSize: 14,
-                fontFamily: message.text.contains('\n') ? 'monospace' : null,
               ),
             ),
             if (message.streaming)
@@ -110,6 +109,3 @@ class MessageBubble extends StatelessWidget {
     }
   }
 }
-
-// Global navigator key for MediaQuery access
-final navigatorKey = GlobalKey<NavigatorState>();
