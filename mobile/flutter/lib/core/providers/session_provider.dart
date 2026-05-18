@@ -129,6 +129,10 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
         }
         break;
 
+      case 'chat_clear':
+        chatNotifier.clearMessages();
+        break;
+
       case 'text':
       case 'stream_text':
         if (msg.data != null) {
@@ -363,6 +367,10 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         time: DateTime.now(),
       ),
     ];
+  }
+
+  void clearMessages() {
+    state = [];
   }
 
   void handleTextChunk(proto.TextData data) {

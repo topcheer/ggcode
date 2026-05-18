@@ -159,6 +159,11 @@ func (b *Broker) NextMessageID() string {
 	return fmt.Sprintf("msg-%d", b.msgCount.Add(1))
 }
 
+// PushChatClear tells the mobile client to clear its message list.
+func (b *Broker) PushChatClear() {
+	b.send("chat_clear", nil)
+}
+
 // HistoryEntry represents a single chat message for history replay.
 type HistoryEntry struct {
 	Role    string `json:"role"`
