@@ -33,7 +33,8 @@ type SessionInfo struct {
 	PublicURL  string // https://xxx.lhr.life
 	Token      string // auth token
 	Port       int    // local gateway port
-	QRCode     string // terminal-friendly QR code
+	QRCode     string // terminal-friendly QR code (text)
+	QRCodePNG  []byte // PNG image bytes for GUI display
 	QRLines    []string
 }
 
@@ -68,6 +69,7 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 	// 4. Generate QR code
 	qrStr, _ := QRCodeForURL(connectURL)
 	qrLines, _ := QRCodeLines(connectURL)
+	qrPNG, _ := QRCodePNG(connectURL)
 
 	info := &SessionInfo{
 		ConnectURL: connectURL,
@@ -75,6 +77,7 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 		Token:      token,
 		Port:       port,
 		QRCode:     qrStr,
+		QRCodePNG:  qrPNG,
 		QRLines:    qrLines,
 	}
 
