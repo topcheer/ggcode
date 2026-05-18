@@ -57,6 +57,7 @@ func (rc *RelayClient) Connect() error {
 
 	go rc.writePump()
 	go rc.readPump()
+	go rc.heartbeatLoop()
 
 	log.Printf("[relay-client] connected to %s", rc.relayURL)
 	return nil
@@ -185,6 +186,24 @@ func (rc *RelayClient) OnConnect(fn func()) {
 }
 
 // Close shuts down the client.
+// heartbeatLoop sends ping every 30 seconds to keep the connection alive.
+func (rc *RelayClient) heartbeatLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	pingMsg, _ := json.Marshal(map[string]string{"type": "ping"})
+	for {
+		select {
+		case <-ticker.C:
+			select {
+			case rc.sendCh <- pingMsg:
+			default:
+			}
+		case <-rc.done:
+			return
+		}
+	}
+}
+
 func (rc *RelayClient) Close() {
 	close(rc.sendCh)
 }

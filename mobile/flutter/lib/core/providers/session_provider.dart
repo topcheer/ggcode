@@ -134,6 +134,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
         break;
 
       case 'stream_end':
+      case 'text_done':
         chatNotifier.finalizeStreaming();
         break;
 
