@@ -491,6 +491,11 @@ func (b *AgentBridge) Cancel() {
 		b.cancel()
 	}
 	b.mu.Unlock()
+	// Notify mobile client
+	if b.tunnelBroker != nil {
+		b.tunnelBroker.PushTextDone(b.tunnelMsgID)
+		b.tunnelBroker.PushStatus(tunnel.StatusIdle, "cancelled")
+	}
 }
 
 func (b *AgentBridge) Close() {
