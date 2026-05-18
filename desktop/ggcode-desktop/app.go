@@ -226,8 +226,17 @@ func (a *App) showShareDialog() {
 			switch cmd.Type {
 			case "user_text", "message":
 				text, _ := payload["text"].(string)
-				if text != "" && a.agentBridge != nil {
-					a.agentBridge.Send(text)
+				if text != "" {
+					if a.agentBridge == nil {
+						// Auto-create session on first mobile message
+						log.Printf("[tunnel] no agentBridge, auto-creating session")
+						a.newSession()
+					}
+					if a.agentBridge != nil {
+						a.agentBridge.Send(text)
+					} else {
+						log.Printf("[tunnel] failed to create agentBridge, dropping message")
+					}
 				}
 			case "approval_result":
 				// TODO: wire to permission handler
