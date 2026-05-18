@@ -6,7 +6,6 @@ import 'message_bubble.dart';
 import 'approval_sheet.dart';
 import 'input_bar.dart';
 import '../status/status_bar.dart';
-import 'subagent_panel.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -15,14 +14,19 @@ class ChatScreen extends ConsumerStatefulWidget {
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends ConsumerState<ChatScreen> {
+class _ChatScreenState extends ConsumerState<ChatScreen>
+    with SingleTickerProviderStateMixin {
   final _scrollController = ScrollController();
   final _inputController = TextEditingController();
+  TabController? _tabController;
+  List<String> _tabIds = ['main']; // 'main' + agent IDs
+  int _currentTab = 0;
 
   @override
   void dispose() {
     _scrollController.dispose();
     _inputController.dispose();
+    _tabController?.dispose();
     super.dispose();
   }
 
@@ -34,13 +38,62 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  void _rebuildTabs(List<String> newIds) {
+    if (_tabIds.length == newIds.length &&
+        _tabIds.asMap().entries.every((e) => e.value == newIds[e.key])) {
+      return; // No change
+    }
+    _tabController?.dispose();
+    _tabIds = newIds;
+    _tabController = TabController(length: _tabIds.length, vsync: this);
+    // Keep current tab if possible
+    if (_currentTab >= _tabIds.length) {
+      _currentTab = _tabIds.length - 1;
+    }
+    _tabController!.animateTo(_currentTab);
+    _tabController!.addListener(() {
+      if (!_tabController!.indexIsChanging) {
+        setState(() {
+          _currentTab = _tabController!.index;
+        });
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final messages = ref.watch(chatProvider);
+    final allMessages = ref.watch(chatProvider);
     final approval = ref.watch(approvalProvider);
     final info = ref.watch(sessionInfoProvider);
+    final agents = ref.watch(subagentProvider);
 
-    // Auto-scroll on new messages or content changes
+    // Build tab list: main + active agents
+    final tabIds = ['main'];
+    final tabNames = ['Chat'];
+    for (final agent in agents.values) {
+      if (!agent.completed) {
+        tabIds.add(agent.agentId);
+        tabNames.add(agent.name);
+      }
+    }
+    // Add completed agents (still accessible)
+    for (final agent in agents.values) {
+      if (agent.completed && !tabIds.contains(agent.agentId)) {
+        tabIds.add(agent.agentId);
+        tabNames.add(agent.name);
+      }
+    }
+
+    _rebuildTabs(tabIds);
+
+    // Filter messages for current tab
+    final currentSourceId =
+        _currentTab < _tabIds.length ? _tabIds[_currentTab] : 'main';
+    final messages = currentSourceId == 'main'
+        ? allMessages.where((m) => m.sourceId == null).toList()
+        : allMessages.where((m) => m.sourceId == currentSourceId).toList();
+
+    // Auto-scroll on message changes
     ref.listen<List<ChatMessage>>(chatProvider, (prev, next) {
       _scrollToBottom();
     });
@@ -70,39 +123,108 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             tooltip: 'Disconnect',
           ),
         ],
+        bottom: _tabIds.length > 1
+            ? TabBar(
+                controller: _tabController,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                labelColor: Colors.white,
+                unselectedLabelColor: Colors.white54,
+                indicatorColor: Colors.blueAccent,
+                labelStyle: const TextStyle(fontSize: 13),
+                tabs: List.generate(_tabIds.length, (i) {
+                  final id = _tabIds[i];
+                  final name = tabNames[i];
+                  final agent = agents[id];
+                  final isCompleted = agent?.completed ?? false;
+                  final isRunning =
+                      agent?.status == 'running' || agent?.status == 'thinking';
+
+                  return Tab(
+                    height: 36,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isRunning)
+                          SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: _parseColor(agent?.color ?? '#4CAF50'),
+                            ),
+                          )
+                        else if (isCompleted)
+                          Icon(
+                            agent?.success ?? false
+                                ? Icons.check_circle
+                                : Icons.error,
+                            size: 12,
+                            color: agent?.success ?? false
+                                ? Colors.green
+                                : Colors.red,
+                          ),
+                        if (isRunning || isCompleted) const SizedBox(width: 4),
+                        Text(
+                          name,
+                          style: TextStyle(
+                            color: isCompleted ? Colors.white38 : Colors.white,
+                          ),
+                        ),
+                        // Close button for completed agents
+                        if (isCompleted && id != 'main')
+                          GestureDetector(
+                            onTap: () {
+                              _closeTab(id);
+                            },
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(Icons.close, size: 14, color: Colors.white38),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }),
+              )
+            : null,
       ),
-      body: Stack(
+      body: Column(
         children: [
-          Column(
-            children: [
-              const StatusBar(),
-              // Messages
-              Expanded(
-                child: ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  itemCount: messages.length,
-                  itemBuilder: (context, index) {
-                    final msg = messages[index];
-                    if (msg.toolName != null) {
-                      return _buildToolMessage(msg);
-                    }
-                    return MessageBubble(message: msg);
-                  },
-                ),
-              ),
-              // Approval sheet
-              if (approval != null)
-                ApprovalSheet(approval: approval),
-              // Input
-              InputBar(controller: _inputController),
-            ],
+          const StatusBar(),
+          // Messages
+          Expanded(
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              itemCount: messages.length,
+              itemBuilder: (context, index) {
+                final msg = messages[index];
+                if (msg.toolName != null) {
+                  return _buildToolMessage(msg);
+                }
+                return MessageBubble(message: msg);
+              },
+            ),
           ),
-          // Floating sub-agent panel
-          const SubagentPanel(),
+          // Approval sheet
+          if (approval != null) ApprovalSheet(approval: approval),
+          // Input
+          InputBar(controller: _inputController),
         ],
       ),
     );
+  }
+
+  void _closeTab(String agentId) {
+    final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
+    agents.remove(agentId);
+    ref.read(subagentProvider.notifier).state = agents;
+
+    // Also remove messages for this agent
+    final msgs = ref.read(chatProvider);
+    ref.read(chatProvider.notifier).state =
+        msgs.where((m) => m.sourceId != agentId).toList();
   }
 
   Widget _buildToolMessage(ChatMessage msg) {
@@ -168,5 +290,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ],
       ),
     );
+  }
+
+  Color _parseColor(String hex) {
+    try {
+      return Color(int.parse(hex.replaceFirst('#', '0xFF')));
+    } catch (_) {
+      return Colors.green;
+    }
   }
 }
