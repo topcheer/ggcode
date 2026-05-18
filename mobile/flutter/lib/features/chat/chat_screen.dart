@@ -6,7 +6,10 @@ import '../../core/models/protocol.dart';
 import 'message_bubble.dart';
 import 'tool_card.dart';
 import 'approval_sheet.dart';
+import 'ask_user_screen.dart';
 import 'input_bar.dart';
+import 'status_bar.dart';
+import 'subagent_panel.dart';
 import '../status/status_bar.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -119,7 +122,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
+        children: [
+          Column(
         children: [
           // Messages
           Expanded(
@@ -153,6 +158,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           // Input bar
           const InputBar(),
         ],
+      ),
+      // Floating sub-agent panel
+      const SubagentPanel(),
+      ],
       ),
     );
   }
