@@ -244,6 +244,12 @@ func (a *App) showShareDialog() {
 				Version:   Version,
 			})
 			broker.PushStatus(tunnel.StatusIdle, "Ready")
+			// Show system message in desktop chat
+			fyne.Do(func() {
+				if a.ui != nil {
+					a.ui.AppendChat(ChatMessage{Role: "system", Content: "Mobile client connected", Time: time.Now()})
+				}
+			})
 		})
 
 		a.tunnelSession = sess
