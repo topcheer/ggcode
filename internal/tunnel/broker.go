@@ -66,6 +66,12 @@ func (b *Broker) ReplayToClient() {
 	b.sendMu.Unlock()
 
 	log.Printf("[broker] ReplayToClient: %d messages", len(msgs))
+	// Always start with chat_clear to reset mobile state
+	clearMsg := GatewayMessage{Type: "chat_clear"}
+	if err := b.session.Send(clearMsg); err != nil {
+		log.Printf("[broker] replay chat_clear failed: %v", err)
+		return
+	}
 	for _, msg := range msgs {
 		if err := b.session.Send(msg); err != nil {
 			log.Printf("[broker] replay send %s failed: %v", msg.Type, err)
