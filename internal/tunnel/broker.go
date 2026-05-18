@@ -91,6 +91,44 @@ func (b *Broker) PushError(message string) {
 	b.send(EventError, ErrorData{Message: message})
 }
 
+// ─── Ask User (structured questionnaire) ───
+
+// PushAskUserRequest sends a structured questionnaire to the mobile client.
+func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
+	b.send(EventAskUserRequest, AskUserRequestData{ID: id, Title: title, Questions: questions})
+}
+
+// PushAskUserResponse sends the user's answers back (confirmation echo).
+func (b *Broker) PushAskUserResponse(id, status string, answers []AskUserAnswer) {
+	b.send(EventAskUserResponse, AskUserResponseData{ID: id, Status: status, Answers: answers})
+}
+
+// ─── Sub-agent / Teammate ───
+
+// PushSubagentSpawn notifies mobile that a sub-agent has been created.
+func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) {
+	b.send(EventSubagentSpawn, SubagentSpawnData{
+		AgentID: agentID, Name: name, Task: task, Color: color, ParentID: parentID,
+	})
+}
+
+// PushSubagentText sends streaming text from a sub-agent.
+func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
+	b.send(EventSubagentText, SubagentTextData{AgentID: agentID, ID: msgID, Chunk: chunk, Done: done})
+}
+
+// PushSubagentStatus sends a status update for a sub-agent.
+func (b *Broker) PushSubagentStatus(agentID, status, message string) {
+	b.send(EventSubagentStatus, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
+}
+
+// PushSubagentComplete notifies that a sub-agent has finished.
+func (b *Broker) PushSubagentComplete(agentID, name, summary string, success bool) {
+	b.send(EventSubagentComplete, SubagentCompleteData{
+		AgentID: agentID, Name: name, Summary: summary, Success: success,
+	})
+}
+
 // NextMessageID generates a unique message ID for grouping text chunks.
 func (b *Broker) NextMessageID() string {
 	return fmt.Sprintf("msg-%d", b.msgCount.Add(1))

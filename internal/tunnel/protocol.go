@@ -8,18 +8,24 @@ package tunnel
 
 // Server → Client event types.
 const (
-	EventConnected       = "connected"
-	EventSessionInfo     = "session_info"
-	EventText            = "text"      // streaming text chunk
-	EventTextDone        = "text_done" // text stream complete
-	EventStatus          = "status"    // agent status change
-	EventToolCall        = "tool_call"
-	EventToolResult      = "tool_result"
-	EventApprovalRequest = "approval_request"
-	EventApprovalResult  = "approval_result"
-	EventError           = "error"
-	EventPing            = "ping"
-	EventDisconnected    = "disconnected"
+	EventConnected        = "connected"
+	EventSessionInfo      = "session_info"
+	EventText             = "text"      // streaming text chunk
+	EventTextDone         = "text_done" // text stream complete
+	EventStatus           = "status"    // agent status change
+	EventToolCall         = "tool_call"
+	EventToolResult       = "tool_result"
+	EventApprovalRequest  = "approval_request"
+	EventApprovalResult   = "approval_result"
+	EventAskUserRequest   = "ask_user_request"
+	EventAskUserResponse  = "ask_user_response"
+	EventSubagentSpawn    = "subagent_spawn"
+	EventSubagentText     = "subagent_text"
+	EventSubagentStatus   = "subagent_status"
+	EventSubagentComplete = "subagent_complete"
+	EventError            = "error"
+	EventPing             = "ping"
+	EventDisconnected     = "disconnected"
 )
 
 // Client → Server command types.
@@ -28,6 +34,7 @@ const (
 	CmdApprovalResponse = "approval_response"
 	CmdInterrupt        = "interrupt"
 	CmdModeChange       = "mode_change"
+	CmdAskUserResponse  = "ask_user_response"
 	CmdPong             = "pong"
 )
 
@@ -118,4 +125,80 @@ type ModeChangeData struct {
 type ErrorData struct {
 	Message string `json:"message"`
 	Code    string `json:"code,omitempty"`
+}
+
+// ─── Ask User (structured questionnaire) ───
+
+// AskUserRequestData carries a structured questionnaire from the agent.
+// This is NOT the same as approval_request — it's a multi-question form
+// with single/multi/text question types.
+type AskUserRequestData struct {
+	ID        string            `json:"id"`
+	Title     string            `json:"title,omitempty"`
+	Questions []AskUserQuestion `json:"questions"`
+}
+
+// AskUserQuestion represents a single question in the questionnaire.
+type AskUserQuestion struct {
+	ID            string          `json:"id"`
+	Prompt        string          `json:"prompt"`
+	Kind          string          `json:"kind"` // single/multi/text
+	Choices       []AskUserChoice `json:"choices,omitempty"`
+	AllowFreeform bool            `json:"allow_freeform,omitempty"`
+	Placeholder   string          `json:"placeholder,omitempty"`
+}
+
+// AskUserChoice represents a selectable choice.
+type AskUserChoice struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+// AskUserResponseData carries the user's answers back.
+type AskUserResponseData struct {
+	ID      string          `json:"id"`
+	Status  string          `json:"status"` // submitted/cancelled
+	Answers []AskUserAnswer `json:"answers,omitempty"`
+}
+
+// AskUserAnswer carries a single question answer.
+type AskUserAnswer struct {
+	QuestionID   string   `json:"question_id"`
+	ChoiceIDs    []string `json:"choice_ids,omitempty"`
+	FreeformText string   `json:"freeform_text,omitempty"`
+}
+
+// ─── Sub-agent / Teammate ───
+
+// SubagentSpawnData notifies mobile that a sub-agent has been spawned.
+// Mobile should show a live activity card for this agent.
+type SubagentSpawnData struct {
+	AgentID  string `json:"agent_id"`
+	Name     string `json:"name"`                // e.g. "Researcher", "Coder"
+	Task     string `json:"task"`                // brief task description
+	Color    string `json:"color,omitempty"`     // e.g. "#4CAF50"
+	ParentID string `json:"parent_id,omitempty"` // empty for top-level
+}
+
+// SubagentTextData carries streaming text from a sub-agent.
+type SubagentTextData struct {
+	AgentID string `json:"agent_id"`
+	ID      string `json:"id"` // message ID for grouping chunks
+	Chunk   string `json:"chunk"`
+	Done    bool   `json:"done"`
+}
+
+// SubagentStatusData carries status updates for a sub-agent.
+type SubagentStatusData struct {
+	AgentID string `json:"agent_id"`
+	Status  string `json:"status"` // running/waiting_approval/completed/failed
+	Message string `json:"message,omitempty"`
+}
+
+// SubagentCompleteData notifies that a sub-agent has finished.
+type SubagentCompleteData struct {
+	AgentID string `json:"agent_id"`
+	Name    string `json:"name"`
+	Summary string `json:"summary"` // one-line summary of what was done
+	Success bool   `json:"success"`
 }
