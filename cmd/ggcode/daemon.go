@@ -37,11 +37,13 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
+	"github.com/topcheer/ggcode/internal/version"
 	"github.com/topcheer/ggcode/internal/webui"
 )
 
 func newDaemonCmd(cfgFile *string) *cobra.Command {
-	var bypassFlag, followFlag, backgroundFlag bool
+	var bypassFlag, followFlag, backgroundFlag, tunnelFlag bool
 	var resumeID string
 
 	cmd := &cobra.Command{
@@ -76,7 +78,7 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			// If --__daemonized, skip fork logic — we ARE the daemonized child
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
 				noIM, _ := cmd.Flags().GetBool("__no-im")
-				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM)
+				return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, true, noIM, tunnelFlag)
 			}
 
 			// If --background, fork and exit parent
@@ -86,13 +88,14 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 
 			// Normal foreground start
 			noIM, _ := cmd.Flags().GetBool("__no-im")
-			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM)
+			return runDaemon(cfg, resolvedCfg, bypassFlag, followFlag, resumeID, false, noIM, tunnelFlag)
 		},
 	}
 
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops)")
 	cmd.Flags().BoolVar(&followFlag, "follow", false, "auto-enable follow mode")
 	cmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "start in background")
+	cmd.Flags().BoolVar(&tunnelFlag, "tunnel", false, "start with mobile tunnel (QR code for GGCode Mobile)")
 	cmd.Flags().StringVar(&resumeID, "resume", "", "resume a previous session by ID; use --resume-picker for interactive selection")
 	cmd.Flags().Bool("resume-picker", false, "interactively select a session to resume")
 	cmd.Flags().Bool("__daemonized", false, "internal: already daemonized")
@@ -122,7 +125,7 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	return nil
 }
 
-func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool) error {
+func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
 	prov, resolved, err := ResolveProvider(cfg)
@@ -455,6 +458,47 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 
 	// Set bridge on manager
 	imMgr.SetBridge(bridge)
+
+	// Start mobile tunnel if requested
+	var tunnelSession *tunnel.Session
+	var tunnelBroker *tunnel.Broker
+	if startTunnel {
+		tunnelSession = tunnel.NewSession()
+		info, err := tunnelSession.Start(context.Background())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "tunnel failed: %v\n", err)
+		} else {
+			tunnelBroker = tunnel.NewBroker(tunnelSession)
+			fmt.Fprintf(os.Stderr, "\n  Mobile Tunnel Active\n")
+			fmt.Fprintf(os.Stderr, "  URL: %s\n\n", info.ConnectURL)
+			fmt.Fprintf(os.Stderr, "%s\n", info.QRCode)
+			// Subscribe daemon bridge events to tunnel broker
+			bridge.Subscribe(func(ev provider.StreamEvent) {
+				switch ev.Type {
+				case provider.StreamEventText:
+					tunnelBroker.PushText(tunnelBroker.NextMessageID(), ev.Text)
+				case provider.StreamEventToolCallDone:
+					name := ev.Tool.Name
+					if name == "" {
+						name = "tool"
+					}
+					tunnelBroker.PushToolCall(name, string(ev.Tool.Arguments), name)
+				case provider.StreamEventToolResult:
+					tunnelBroker.PushToolResult(ev.Tool.Name, ev.Result, ev.IsError)
+				case provider.StreamEventDone:
+					tunnelBroker.PushStatus(tunnel.StatusIdle, "")
+				}
+			})
+			tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+				Workspace: workingDir,
+				Model:     resolved.Model,
+				Provider:  resolved.VendorName,
+				Mode:      string(mode),
+				Version:   version.Version,
+			})
+			defer tunnelSession.Stop()
+		}
+	}
 
 	// Track previous pairing state so we can notify follow display.
 	// When follow mode is off, pairing code is printed to stderr directly
