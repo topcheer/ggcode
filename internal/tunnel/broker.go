@@ -34,8 +34,15 @@ type Broker struct {
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{session: sess}
 	sess.OnMessage(func(msg GatewayMessage) {
+		dataPreview := string(msg.Data)
+		if len(dataPreview) > 200 {
+			dataPreview = dataPreview[:200]
+		}
+		log.Printf("[broker] OnMessage: type=%s data=%s", msg.Type, dataPreview)
 		if b.onCommand != nil {
 			b.onCommand(msg)
+		} else {
+			log.Printf("[broker] OnMessage: onCommand is nil, dropping")
 		}
 	})
 	return b
@@ -53,6 +60,7 @@ func (b *Broker) SendSessionInfo(data SessionInfoData) {
 
 // PushText sends a streaming text chunk.
 func (b *Broker) PushText(id, chunk string) {
+	log.Printf("[broker] PushText: id=%s len=%d", id, len(chunk))
 	b.send(EventText, TextData{ID: id, Chunk: chunk})
 }
 
@@ -148,5 +156,7 @@ func (b *Broker) send(eventType string, data interface{}) {
 	if err := b.session.Send(msg); err != nil {
 		// Client not connected — this is normal if mobile disconnected
 		log.Printf("broker: send %s failed: %v", eventType, err)
+	} else {
+		log.Printf("[broker] send %s OK (%d bytes)", eventType, len(dataBytes))
 	}
 }

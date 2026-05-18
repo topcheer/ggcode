@@ -10,24 +10,18 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 // Gateway is a WebSocket server with token-based authentication.
-// It provides a simple bidirectional JSON message pipe.
-//
-// Mobile client connects via:
-//
-//	wss://<tunnel-url>/ws?token=<token>
-//
-// Messages are JSON: {"type":"...","data":{...}}
 type Gateway struct {
 	port      int
 	token     string
 	server    *http.Server
 	upgrader  websocket.Upgrader
-	onMessage func(msg GatewayMessage) // called when client sends a message
+	onMessage func(msg GatewayMessage)
 
 	mu     sync.RWMutex
 	conn   *websocket.Conn
@@ -63,7 +57,6 @@ func (g *Gateway) Start() (int, string, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", g.handleWS)
-	// Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		w.Write([]byte("ok"))
@@ -79,18 +72,13 @@ func (g *Gateway) Start() (int, string, error) {
 	return g.port, g.token, nil
 }
 
-// Port returns the local port the gateway is listening on.
-func (g *Gateway) Port() int { return g.port }
-
-// Token returns the authentication token.
+func (g *Gateway) Port() int     { return g.port }
 func (g *Gateway) Token() string { return g.token }
 
-// OnMessage sets the handler for incoming messages from the client.
 func (g *Gateway) OnMessage(fn func(msg GatewayMessage)) {
 	g.onMessage = fn
 }
 
-// Send sends a message to the connected client.
 func (g *Gateway) Send(msg GatewayMessage) error {
 	g.connMu.Lock()
 	defer g.connMu.Unlock()
@@ -100,7 +88,6 @@ func (g *Gateway) Send(msg GatewayMessage) error {
 	return g.conn.WriteJSON(msg)
 }
 
-// Close shuts down the gateway.
 func (g *Gateway) Close() error {
 	if g.server != nil {
 		g.server.Close()
@@ -109,7 +96,6 @@ func (g *Gateway) Close() error {
 }
 
 func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
-	// Token validation
 	token := r.URL.Query().Get("token")
 	if token != g.token {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -122,36 +108,70 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[gateway] client connected from %s", conn.RemoteAddr())
+
 	g.mu.Lock()
 	g.conn = conn
 	g.mu.Unlock()
 
+	// Ping-pong keepalive: server pings every 15s.
+	// Client must respond with pong. If ping fails, connection is dead.
+	conn.SetPongHandler(func(appData string) error {
+		return nil
+	})
+
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				g.connMu.Lock()
+				if g.conn != nil {
+					if err := g.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+						g.connMu.Unlock()
+						log.Printf("[gateway] ping failed, client dead: %v", err)
+						conn.Close()
+						return
+					}
+				}
+				g.connMu.Unlock()
+			case <-pingDone:
+				return
+			}
+		}
+	}()
+
 	// Read loop
 	go func() {
 		defer func() {
+			close(pingDone)
 			g.connMu.Lock()
 			if g.conn == conn {
 				g.conn = nil
 			}
 			g.connMu.Unlock()
 			conn.Close()
+			log.Printf("[gateway] client disconnected")
 		}()
 
 		for {
 			_, msgBytes, err := conn.ReadMessage()
 			if err != nil {
-				if err != io.EOF && websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
-					log.Printf("gateway ws read error: %v", err)
+				if err != io.EOF && !websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
+					log.Printf("[gateway] ws read error: %v", err)
 				}
 				return
 			}
 
 			var msg GatewayMessage
 			if err := json.Unmarshal(msgBytes, &msg); err != nil {
-				log.Printf("gateway ws invalid message: %v", err)
+				log.Printf("[gateway] invalid message: %v", err)
 				continue
 			}
 
+			log.Printf("[gateway] received from client: type=%s", msg.Type)
 			if g.onMessage != nil {
 				g.onMessage(msg)
 			}
@@ -159,7 +179,6 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// ConnectURL returns the full WebSocket URL for a given tunnel host.
 func (g *Gateway) ConnectURL(tunnelHost string) string {
 	return fmt.Sprintf("wss://%s/ws?token=%s", tunnelHost, g.token)
 }
