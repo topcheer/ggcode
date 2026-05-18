@@ -28,6 +28,10 @@ type Gateway struct {
 	conn   *websocket.Conn
 	connMu sync.Mutex
 	done   chan struct{}
+
+	// Client keepalive: track last message received from client.
+	lastRecv   time.Time
+	lastRecvMu sync.Mutex
 }
 
 // GatewayMessage is a JSON message exchanged over the WebSocket.
@@ -96,6 +100,13 @@ func (g *Gateway) Close() error {
 	return nil
 }
 
+// LastRecv returns the time of the last message received from the client.
+func (g *Gateway) LastRecv() time.Time {
+	g.lastRecvMu.Lock()
+	defer g.lastRecvMu.Unlock()
+	return g.lastRecv
+}
+
 func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token != g.token {
@@ -109,45 +120,20 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[gateway] client connected from %s", conn.RemoteAddr())
 	_ = os.WriteFile("/tmp/ggcode-gateway.log", []byte(fmt.Sprintf("connected: %s\n", conn.RemoteAddr())), 0644)
 
 	g.mu.Lock()
 	g.conn = conn
 	g.mu.Unlock()
 
-	// Ping-pong keepalive: server pings every 15s.
-	// Client must respond with pong. If ping fails, connection is dead.
-	conn.SetPongHandler(func(appData string) error {
-		return nil
-	})
-
-	pingDone := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				g.connMu.Lock()
-				if g.conn != nil {
-					if err := g.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-						g.connMu.Unlock()
-						log.Printf("[gateway] ping failed, client dead: %v", err)
-						conn.Close()
-						return
-					}
-				}
-				g.connMu.Unlock()
-			case <-pingDone:
-				return
-			}
-		}
-	}()
+	g.lastRecvMu.Lock()
+	g.lastRecv = time.Now()
+	g.lastRecvMu.Unlock()
 
 	// Read loop
 	go func() {
 		defer func() {
-			close(pingDone)
 			g.connMu.Lock()
 			if g.conn == conn {
 				g.conn = nil
@@ -155,6 +141,7 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 			g.connMu.Unlock()
 			conn.Close()
 			log.Printf("[gateway] client disconnected")
+			_ = os.WriteFile("/tmp/ggcode-gateway.log", []byte("disconnected\n"), 0644)
 		}()
 
 		for {
@@ -172,7 +159,19 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			// Update last received time (any message counts as alive)
+			g.lastRecvMu.Lock()
+			g.lastRecv = time.Now()
+			g.lastRecvMu.Unlock()
+
+			// Ping is just keepalive, no need to dispatch
+			if msg.Type == "ping" {
+				continue
+			}
+
+			log.Printf("[gateway] received from client: type=%s", msg.Type)
 			_ = os.WriteFile("/tmp/ggcode-gateway.log", []byte(fmt.Sprintf("recv: type=%s\n", msg.Type)), 0644)
+
 			if g.onMessage != nil {
 				g.onMessage(msg)
 			}
