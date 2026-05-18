@@ -58,6 +58,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     final connState = ref.watch(connectionProvider);
     final history = ref.watch(_historyProvider);
     final isConnecting = connState.status == ConnectionStatus.connecting;
+    final errorMsg = connState.error ?? (connState.status == ConnectionStatus.disconnected ? null : null);
 
     return Scaffold(
       body: SafeArea(
@@ -154,6 +155,24 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                       : const Text('Connect'),
                 ),
               ),
+
+              // Error message
+              if (errorMsg != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                  ),
+                  child: Text(
+                    errorMsg,
+                    style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                  ),
+                ),
+              ],
 
               // History
               if (history.isNotEmpty) ...[

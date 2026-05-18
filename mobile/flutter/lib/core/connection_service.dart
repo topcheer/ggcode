@@ -24,20 +24,31 @@ class ConnectionService {
   Stream<proto.WsMessage> get messageStream => _messageController.stream;
 
   Timer? _heartbeatTimer;
+  Timer? _connectTimeout;
 
   ConnectionService(this.url);
 
   Future<void> connect() async {
     _statusController.add(ConnectionStatus.connecting);
+
+    // Timeout: if no server message within 10s, consider connection failed
+    _connectTimeout = Timer(const Duration(seconds: 10), () {
+      if (!_connected && !_disposed) {
+        disconnect();
+        _statusController.add(ConnectionStatus.disconnected);
+      }
+    });
+
     try {
       _channel = WebSocketChannel.connect(Uri.parse(url));
-      // Don't emit connected yet — wait for first message from server
 
       _channel!.stream.listen(
         (data) {
           // First message confirms connection is truly alive
           if (!_connected) {
             _connected = true;
+            _connectTimeout?.cancel();
+            _connectTimeout = null;
             _statusController.add(ConnectionStatus.connected);
             _startHeartbeat();
           }
@@ -45,38 +56,42 @@ class ConnectionService {
           _messageController.add(msg);
         },
         onDone: () {
-          _stopHeartbeat();
+          _cleanup();
           if (!_disposed) {
-            _connected = false;
             _statusController.add(ConnectionStatus.disconnected);
           }
         },
         onError: (e) {
-          _stopHeartbeat();
+          _cleanup();
           if (!_disposed) {
-            _connected = false;
             _statusController.add(ConnectionStatus.disconnected);
           }
         },
       );
     } catch (e) {
+      _cleanup();
       if (!_disposed) {
         _statusController.add(ConnectionStatus.disconnected);
       }
     }
   }
 
+  void _cleanup() {
+    _connectTimeout?.cancel();
+    _connectTimeout = null;
+    _stopHeartbeat();
+    _connected = false;
+  }
+
   /// Client sends {"type":"ping"} every 15 seconds.
-  /// If the send fails, connection is dead.
   void _startHeartbeat() {
     _stopHeartbeat();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       try {
         send({'type': 'ping'});
       } catch (e) {
-        _stopHeartbeat();
+        _cleanup();
         if (!_disposed) {
-          _connected = false;
           _statusController.add(ConnectionStatus.disconnected);
         }
       }
@@ -93,10 +108,9 @@ class ConnectionService {
   }
 
   void disconnect() {
-    _stopHeartbeat();
+    _cleanup();
     _channel?.sink.close();
     _channel = null;
-    _connected = false;
   }
 
   void dispose() {
