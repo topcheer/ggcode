@@ -31,6 +31,9 @@ class ConnectionService {
   Timer? _heartbeatTimer;
   StreamSubscription? _socketSub;
 
+  // Sequential message processing queue
+  Future<void> _queue = Future.value();
+
   ConnectionService({required this.url, required this.crypto});
 
   Future<void> connect() async {
@@ -53,12 +56,14 @@ class ConnectionService {
       return;
     }
 
-    _reconnectAttempts = 0; // Reset on successful connect
+    _reconnectAttempts = 0;
+    _queue = Future.value();
 
     _socketSub = _socket!.listen(
-      (data) async {
+      (data) {
         if (data is! String) return;
-        await _handleRelayMessage(data);
+        // Enqueue for sequential processing
+        _queue = _queue.then((_) => _handleRelayMessage(data));
       },
       onDone: () {
         _cleanup();
@@ -86,7 +91,6 @@ class ConnectionService {
     }
 
     _reconnectAttempts++;
-    // Exponential backoff: 2s, 4s, 8s, 16s, 32s, max 30s
     final delay = Duration(seconds: (_reconnectAttempts * 2).clamp(2, 30));
     print('[connection] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
     _reconnectTimer = Timer(delay, () {
@@ -124,7 +128,7 @@ class ConnectionService {
       case 'sharing_stopped':
         _cleanup();
         if (!_disposed) {
-          _disposed = true; // Don't reconnect on server-initiated stop
+          _disposed = true;
           _statusController.add(ConnectionStatus.disconnected);
         }
         break;
@@ -164,12 +168,10 @@ class ConnectionService {
     _heartbeatTimer = null;
   }
 
-  /// Send an unencrypted control message (ping/pong).
   void send(Map<String, dynamic> data) {
     _socket?.add(jsonEncode(data));
   }
 
-  /// Send an encrypted message to the relay.
   Future<void> sendEncrypted(proto.WsMessage msg) async {
     final plaintext = utf8.encode(msg.toJson());
     final encrypted = await crypto.encryptData(plaintext);
