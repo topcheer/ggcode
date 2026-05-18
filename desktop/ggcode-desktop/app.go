@@ -214,6 +214,26 @@ func (a *App) showShareDialog() {
 		}
 
 		broker := tunnel.NewBroker(sess)
+
+		// Handle commands from mobile client
+		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
+			var payload map[string]interface{}
+			if len(cmd.Data) > 0 {
+				json.Unmarshal(cmd.Data, &payload)
+			}
+			switch cmd.Type {
+			case "user_text", "message":
+				text, _ := payload["text"].(string)
+				if text != "" && a.agentBridge != nil {
+					a.agentBridge.Send(text)
+				}
+			case "approval_result":
+				// TODO: wire to permission handler
+			case "ask_user_response":
+				// TODO: wire to ask_user handler
+			}
+		})
+
 		a.tunnelSession = sess
 		a.tunnelBroker = broker
 		if a.agentBridge != nil {
