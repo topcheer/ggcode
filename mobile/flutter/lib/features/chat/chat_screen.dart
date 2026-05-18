@@ -29,11 +29,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       }
     });
   }
@@ -44,9 +40,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final approval = ref.watch(approvalProvider);
     final info = ref.watch(sessionInfoProvider);
 
-    // Auto-scroll on new messages
+    // Auto-scroll on new messages or content changes
     ref.listen<List<ChatMessage>>(chatProvider, (prev, next) {
-      if (prev?.length != next.length) _scrollToBottom();
+      _scrollToBottom();
     });
 
     return Scaffold(

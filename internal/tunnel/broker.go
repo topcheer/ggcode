@@ -164,6 +164,11 @@ func (b *Broker) PushChatClear() {
 	b.send("chat_clear", nil)
 }
 
+// PushSharingStopped tells mobile clients the server is stopping.
+func (b *Broker) PushSharingStopped() {
+	b.send("sharing_stopped", nil)
+}
+
 // HistoryEntry represents a single chat message for history replay.
 type HistoryEntry struct {
 	Role    string `json:"role"`
