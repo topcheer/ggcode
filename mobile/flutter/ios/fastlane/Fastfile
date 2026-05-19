@@ -2,6 +2,20 @@
 default_platform(:ios)
 
 platform :ios do
+  desc "Generate provisioning profiles via sigh"
+  lane :provision do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+    sigh(
+      api_key: api_key,
+      app_identifier: "gg.ai.ggcode.mobile"
+    )
+  end
+
   desc "Build iOS Release Archive"
   lane :build do
     gym(
@@ -15,19 +29,30 @@ platform :ios do
 
   desc "Upload to TestFlight"
   lane :upload_testflight do
+    setup_ci
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+
+    sigh(
+      api_key: api_key,
+      app_identifier: "gg.ai.ggcode.mobile"
+    )
+
     gym(
       scheme: "Runner",
       configuration: "Release",
       export_method: "app-store",
       output_directory: "../../builds/ios",
-      output_name: "GGCode.ipa"
-    )
-
-    api_key = app_store_connect_api_key(
-      key_id: ENV["APP_STORE_KEY_ID"],
-      issuer_id: ENV["APP_STORE_ISSUER_ID"],
-      key_filepath: ENV["APP_STORE_KEY_PATH"] || "../../secrets/AuthKey.p8",
-      in_house: false
+      output_name: "GGCode.ipa",
+      export_options: {
+        signingStyle: "automatic",
+        manageAppVersionAndBuildNumber: true
+      }
     )
 
     upload_to_testflight(
@@ -51,7 +76,7 @@ platform :ios do
     api_key = app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
       issuer_id: ENV["APP_STORE_ISSUER_ID"],
-      key_filepath: ENV["APP_STORE_KEY_PATH"] || "../../secrets/AuthKey.p8",
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
       in_house: false
     )
 
