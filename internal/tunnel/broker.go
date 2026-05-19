@@ -37,7 +37,7 @@ type Broker struct {
 
 	// Text batching
 	textMu   sync.Mutex
-	textBuf  map[string]string // msgID → accumulated text chunks
+	textBuf  map[string]*textEntry // msgID → accumulated text entry
 	textTick *time.Ticker
 	textDone chan struct{} // stop text flusher
 
@@ -52,7 +52,7 @@ func NewBroker(sess *Session) *Broker {
 		pendingAck: make(chan int64, 1),
 		ackTimeout: 5 * time.Second,
 		sendQueue:  make(chan GatewayMessage, 1000),
-		textBuf:    make(map[string]string),
+		textBuf:    make(map[string]*textEntry),
 		textTick:   time.NewTicker(300 * time.Millisecond),
 		textDone:   make(chan struct{}),
 	}
@@ -96,6 +96,13 @@ func NewBroker(sess *Session) *Broker {
 
 // ─── Goroutines ───
 
+// textEntry tracks accumulated text for a message stream.
+// agentID == "" means main agent text; otherwise it's a subagent/teammate.
+type textEntry struct {
+	agentID string
+	text    string
+}
+
 // senderLoop drains sendQueue one message at a time, waiting for ACK after each.
 func (b *Broker) senderLoop() {
 	for msg := range b.sendQueue {
@@ -133,32 +140,38 @@ func (b *Broker) flushAllText() {
 		b.textMu.Unlock()
 		return
 	}
-	bufs := make(map[string]string)
+	bufs := make(map[string]*textEntry)
 	for k, v := range b.textBuf {
-		if v != "" {
+		if v.text != "" {
 			bufs[k] = v
 		}
 	}
-	// Clear the buffer
 	for k := range b.textBuf {
 		delete(b.textBuf, k)
 	}
 	b.textMu.Unlock()
 
-	for msgID, text := range bufs {
+	for msgID, entry := range bufs {
 		seq := b.nextSeq.Add(1)
-		data, _ := json.Marshal(TextData{ID: msgID, Chunk: text})
-		msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
-		b.recordLog(msg)
-		b.sendQueue <- msg
+		if entry.agentID != "" {
+			data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
+			msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
+			b.recordLog(msg)
+			b.sendQueue <- msg
+		} else {
+			data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
+			msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
+			b.recordLog(msg)
+			b.sendQueue <- msg
+		}
 	}
 }
 
 // flushText flushes the buffer for a specific msgID immediately.
 func (b *Broker) flushText(msgID string) {
 	b.textMu.Lock()
-	text := b.textBuf[msgID]
-	if text == "" {
+	entry := b.textBuf[msgID]
+	if entry == nil || entry.text == "" {
 		b.textMu.Unlock()
 		return
 	}
@@ -166,10 +179,17 @@ func (b *Broker) flushText(msgID string) {
 	b.textMu.Unlock()
 
 	seq := b.nextSeq.Add(1)
-	data, _ := json.Marshal(TextData{ID: msgID, Chunk: text})
-	msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
-	b.recordLog(msg)
-	b.sendQueue <- msg
+	if entry.agentID != "" {
+		data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
+		msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
+		b.recordLog(msg)
+		b.sendQueue <- msg
+	} else {
+		data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
+		msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
+		b.recordLog(msg)
+		b.sendQueue <- msg
+	}
 }
 
 // ─── Lifecycle ───
@@ -222,7 +242,7 @@ func (b *Broker) PushChatClear() {
 	b.logMu.Unlock()
 	// Clear text buffers too
 	b.textMu.Lock()
-	b.textBuf = make(map[string]string)
+	b.textBuf = make(map[string]*textEntry)
 	b.textMu.Unlock()
 	b.enqueue("chat_clear", nil)
 }
@@ -241,7 +261,10 @@ func (b *Broker) PushUserMessage(text string) {
 
 func (b *Broker) PushText(id, chunk string) {
 	b.textMu.Lock()
-	b.textBuf[id] += chunk
+	if b.textBuf[id] == nil {
+		b.textBuf[id] = &textEntry{agentID: ""}
+	}
+	b.textBuf[id].text += chunk
 	b.textMu.Unlock()
 }
 
@@ -302,10 +325,12 @@ func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) 
 }
 
 func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
-	// Subagent text also gets batched like main text
 	if !done {
 		b.textMu.Lock()
-		b.textBuf[msgID] += chunk
+		if b.textBuf[msgID] == nil {
+			b.textBuf[msgID] = &textEntry{agentID: agentID}
+		}
+		b.textBuf[msgID].text += chunk
 		b.textMu.Unlock()
 	} else {
 		b.flushText(msgID)
