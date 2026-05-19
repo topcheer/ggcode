@@ -417,16 +417,17 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
   }
 
   void addHistoryToolResult(String toolName, String result, bool isError) {
-    state = [
-      ...state,
-      ChatMessage(
-        id: 'hist-${_msgCounter++}',
-        toolName: toolName,
-        toolResult: result,
-        isToolError: isError,
-        time: DateTime.now(),
-      ),
-    ];
+    // Find the last tool_call with this name and fill in the result
+    final idx = state.lastIndexWhere(
+      (m) => m.toolName == toolName && m.toolResult == null && m.sourceId == null,
+    );
+    if (idx >= 0) {
+      final msg = state[idx];
+      state = [
+        for (int i = 0; i < state.length; i++)
+          if (i == idx) msg.copyWith(toolResult: result, isToolError: isError) else state[i],
+      ];
+    }
   }
 
   void addRemoteUserMessage(String text) {
