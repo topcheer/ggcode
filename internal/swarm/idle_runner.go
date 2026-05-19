@@ -317,6 +317,16 @@ func executeTask(
 		case provider.StreamEventText:
 			output.WriteString(event.Text)
 			textBuf.WriteString(event.Text)
+			if onEvent != nil {
+				onEvent(Event{
+					Type:         "teammate_text",
+					TeamID:       team.ID,
+					TeammateID:   tm.ID,
+					TeammateName: tm.Name,
+					Result:       event.Text,
+					Timestamp:    time.Now(),
+				})
+			}
 		case provider.StreamEventToolCallDone:
 			flushText()
 			debug.Log("swarm", "teammate %s tool call done", tm.ID)
