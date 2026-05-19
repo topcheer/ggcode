@@ -30,7 +30,10 @@ type Broker struct {
 	// Send queue: all outbound messages go here.
 	// The sender goroutine drains it continuously (no ACK blocking).
 	// TCP/WebSocket guarantees ordered delivery.
-	sendQueue chan GatewayMessage
+	outMu    sync.Mutex
+	outCond  *sync.Cond
+	outbound []GatewayMessage // unbounded queue: enqueue never blocks
+	outDone  chan struct{}
 
 	// Text batching
 	textMu   sync.Mutex
@@ -45,12 +48,13 @@ type Broker struct {
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
-		session:   sess,
-		sendQueue: make(chan GatewayMessage, 1000),
-		textBuf:   make(map[string]*textEntry),
-		textTick:  time.NewTicker(300 * time.Millisecond),
-		textDone:  make(chan struct{}),
+		session:  sess,
+		outDone:  make(chan struct{}),
+		textBuf:  make(map[string]*textEntry),
+		textTick: time.NewTicker(300 * time.Millisecond),
+		textDone: make(chan struct{}),
 	}
+	b.outCond = sync.NewCond(&b.outMu)
 
 	// Start sender goroutine (ACK flow control)
 	go b.senderLoop()
@@ -87,12 +91,27 @@ type textEntry struct {
 	text    string
 }
 
-// senderLoop drains sendQueue continuously.
-// TCP/WebSocket guarantees ordered delivery per connection.
+// senderLoop drains the outbound queue. Never blocks the producer.
 func (b *Broker) senderLoop() {
-	for msg := range b.sendQueue {
-		if err := b.session.Send(msg); err != nil {
-			log.Printf("[broker] send %s seq=%d failed: %v", msg.Type, msg.Seq, err)
+	for {
+		b.outMu.Lock()
+		for len(b.outbound) == 0 {
+			select {
+			case <-b.outDone:
+				b.outMu.Unlock()
+				return
+			default:
+			}
+			b.outCond.Wait()
+		}
+		batch := b.outbound
+		b.outbound = nil
+		b.outMu.Unlock()
+
+		for _, msg := range batch {
+			if err := b.session.Send(msg); err != nil {
+				log.Printf("[broker] send %s seq=%d failed: %v", msg.Type, msg.Seq, err)
+			}
 		}
 	}
 }
@@ -133,20 +152,12 @@ func (b *Broker) flushAllText() {
 			data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 			msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
 			b.recordLog(msg)
-			select {
-			case b.sendQueue <- msg:
-			default:
-				log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
-			}
+			b.enqueueOut(msg)
 		} else {
 			data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
 			msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
 			b.recordLog(msg)
-			select {
-			case b.sendQueue <- msg:
-			default:
-				log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
-			}
+			b.enqueueOut(msg)
 		}
 	}
 }
@@ -167,20 +178,12 @@ func (b *Broker) flushText(msgID string) {
 		data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 		msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
 		b.recordLog(msg)
-		select {
-		case b.sendQueue <- msg:
-		default:
-			log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
-		}
+		b.enqueueOut(msg)
 	} else {
 		data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
 		msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
 		b.recordLog(msg)
-		select {
-		case b.sendQueue <- msg:
-		default:
-			log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
-		}
+		b.enqueueOut(msg)
 	}
 }
 
@@ -197,7 +200,8 @@ func (b *Broker) OnClientConnect(fn func()) {
 func (b *Broker) Stop() {
 	b.textTick.Stop()
 	close(b.textDone)
-	close(b.sendQueue)
+	close(b.outDone)
+	b.outCond.Broadcast()
 }
 
 // ReplayToClient resends all logged messages, bypassing ACK flow control.
@@ -372,7 +376,16 @@ func (b *Broker) PushChatHistory(messages []HistoryEntry) {
 
 // ─── Internal ───
 
-// enqueue assigns a seq, marshals, records to sentLog, and puts on sendQueue.
+// enqueueOut appends a message to the unbounded outbound queue and wakes the sender.
+// This NEVER blocks, so OnUpdate callbacks can call tunnel methods safely.
+func (b *Broker) enqueueOut(msg GatewayMessage) {
+	b.outMu.Lock()
+	b.outbound = append(b.outbound, msg)
+	b.outMu.Unlock()
+	b.outCond.Signal()
+}
+
+// enqueue assigns a seq, marshals, records to sentLog, and puts on outbound.
 func (b *Broker) enqueue(eventType string, data interface{}) {
 	seq := b.nextSeq.Add(1)
 
@@ -387,11 +400,7 @@ func (b *Broker) enqueue(eventType string, data interface{}) {
 		Data: dataBytes,
 	}
 	b.recordLog(msg)
-	select {
-	case b.sendQueue <- msg:
-	default:
-		log.Printf("[broker] sendQueue full, dropping %s seq=%d", eventType, seq)
-	}
+	b.enqueueOut(msg)
 }
 
 // recordLog appends to sentLog for replay.
