@@ -333,21 +333,6 @@ func (a *App) showShareDialog() {
 								})
 							}
 						}
-						for _, block := range msg.Content {
-							if block.Type == "tool_result" {
-								result := block.Output
-								if len(result) > 500 {
-									result = result[:500] + "..."
-								}
-								history = append(history, tunnel.HistoryEntry{
-									Role:     "tool_result",
-									ToolID:   block.ToolID,
-									ToolName: block.ToolName,
-									Result:   result,
-									IsError:  block.IsError,
-								})
-							}
-						}
 					}
 				}
 				if len(history) > 0 {
@@ -768,21 +753,6 @@ func (a *App) resumeSession(id string) {
 							ToolID:   block.ToolID,
 							ToolName: block.ToolName,
 							ToolArgs: detail,
-						})
-					}
-				}
-				for _, block := range msg.Content {
-					if block.Type == "tool_result" {
-						result := block.Output
-						if len(result) > 500 {
-							result = result[:500] + "..."
-						}
-						history = append(history, tunnel.HistoryEntry{
-							Role:     "tool_result",
-							ToolID:   block.ToolID,
-							ToolName: block.ToolName,
-							Result:   result,
-							IsError:  block.IsError,
 						})
 					}
 				}
