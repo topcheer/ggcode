@@ -196,15 +196,16 @@ func (s *SubAgent) snapshot() Snapshot {
 
 // Manager manages spawning, tracking, and collecting results from sub-agents.
 type Manager struct {
-	agents     map[string]*SubAgent
-	mu         sync.Mutex
-	sem        chan struct{}
-	timeout    time.Duration
-	showOutput bool
-	onUpdate   func(*SubAgent)
-	onComplete func(*SubAgent)
-	lastNotify time.Time // throttle: last time onUpdate was called
-	nextID     int
+	agents       map[string]*SubAgent
+	mu           sync.Mutex
+	sem          chan struct{}
+	timeout      time.Duration
+	showOutput   bool
+	onUpdate     func(*SubAgent)
+	onComplete   func(*SubAgent)
+	onStreamText func(agentID, text string) // called on each text chunk (no throttle)
+	lastNotify   time.Time                  // throttle: last time onUpdate was called
+	nextID       int
 	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
 	// per-call/per-submit ctx so that sub-agents survive the parent agent
 	// turn that spawned them. It is cancelled by Shutdown(). See locks.md S6.
@@ -462,6 +463,24 @@ func (m *Manager) Notify(id string) {
 	m.mu.Unlock()
 	if ok {
 		m.notifyUpdate(sa)
+	}
+}
+
+// SetOnStreamText sets a callback invoked on each text chunk from any sub-agent.
+// Unlike OnUpdate, this is NOT throttled.
+func (m *Manager) SetOnStreamText(fn func(agentID, text string)) {
+	m.mu.Lock()
+	m.onStreamText = fn
+	m.mu.Unlock()
+}
+
+// NotifyStreamText forwards a text chunk to the onStreamText callback.
+func (m *Manager) NotifyStreamText(agentID, text string) {
+	m.mu.Lock()
+	fn := m.onStreamText
+	m.mu.Unlock()
+	if fn != nil {
+		fn(agentID, text)
 	}
 }
 
