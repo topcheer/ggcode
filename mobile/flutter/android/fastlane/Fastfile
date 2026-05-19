@@ -1,7 +1,19 @@
 # Android Fastfile for GGCode Mobile
 default_platform(:android)
 
+def current_version_code
+  pubspec = File.expand_path("../../../pubspec.yaml", __FILE__)
+  content = File.read(pubspec)
+  if content =~ /version:\s*(\d+\.\d+\.\d+)\+(\d+)/
+    $2.to_i
+  else
+    UI.user_error!("Cannot parse version from pubspec.yaml")
+  end
+end
+
 platform :android do
+  # ── Build ──────────────────────────────────────────────
+
   desc "Build release AAB"
   lane :build_aab do
     sh("cd ../.. && flutter build appbundle --release")
@@ -12,7 +24,9 @@ platform :android do
     sh("cd ../.. && flutter build apk --release")
   end
 
-  desc "Upload metadata only (no AAB)"
+  # ── Upload ─────────────────────────────────────────────
+
+  desc "Upload metadata + images only (no AAB)"
   lane :upload_metadata do
     upload_to_play_store(
       package_name: "gg.ai.ggcode.mobile",
@@ -26,19 +40,17 @@ platform :android do
     )
   end
 
-  desc "Upload AAB to Google Play Internal Testing"
+  desc "Upload AAB to Internal Testing"
   lane :upload_internal do
-    # Resolve AAB path relative to project root (not fastlane dir)
     project_root = File.expand_path("../../..", __FILE__)
     aab_path = File.join(project_root, "build/app/outputs/bundle/release/app-release.aab")
-
     UI.user_error!("AAB not found at #{aab_path}") unless File.exist?(aab_path)
 
     upload_to_play_store(
       package_name: "gg.ai.ggcode.mobile",
       aab: aab_path,
       track: "internal",
-      skip_upload_metadata: false,
+      skip_upload_metadata: true,
       skip_upload_changelogs: true,
       skip_upload_images: true,
       skip_upload_screenshots: true,
@@ -46,57 +58,54 @@ platform :android do
     )
   end
 
-  desc "Build and upload to Internal Testing"
-  lane :deploy_internal do
-    build_aab
-    upload_internal
-  end
+  # ── Promote ─────────────────────────────────────────────
 
-  desc "Promote from internal to alpha (Closed Testing)"
+  desc "Promote latest from internal to alpha (Closed Testing)"
   lane :promote_alpha do
-    version_json_path = File.expand_path("../../pubspec.yaml", __FILE__)
-    version_content = File.read(version_json_path)
-    if version_content =~ /version:\s*(\d+\.\d+\.\d+)\+(\d+)/
-      version_code = $2.to_i
-    else
-      UI.user_error!("Cannot parse version from pubspec.yaml")
-    end
-
     upload_to_play_store(
       package_name: "gg.ai.ggcode.mobile",
       track: "internal",
       track_promote_to: "alpha",
-      version_code: version_code,
-      skip_upload_metadata: false,
+      version_code: current_version_code,
+      skip_upload_metadata: true,
       skip_upload_changelogs: false,
-      skip_upload_images: false,
+      skip_upload_images: true,
       skip_upload_screenshots: true,
       skip_upload_apk: true,
       skip_upload_aab: true
     )
   end
 
-  desc "Promote from alpha to production"
+  desc "Promote latest from alpha to production"
   lane :promote_production do
-    version_json_path = File.expand_path("../../pubspec.yaml", __FILE__)
-    version_content = File.read(version_json_path)
-    if version_content =~ /version:\s*(\d+\.\d+\.\d+)\+(\d+)/
-      version_code = $2.to_i
-    else
-      UI.user_error!("Cannot parse version from pubspec.yaml")
-    end
-
     upload_to_play_store(
       package_name: "gg.ai.ggcode.mobile",
       track: "alpha",
       track_promote_to: "production",
-      version_code: version_code,
-      skip_upload_metadata: false,
+      version_code: current_version_code,
+      skip_upload_metadata: true,
       skip_upload_changelogs: false,
-      skip_upload_images: false,
+      skip_upload_images: true,
       skip_upload_screenshots: true,
       skip_upload_apk: true,
       skip_upload_aab: true
     )
+  end
+
+  # ── Full deploy pipelines ──────────────────────────────
+
+  desc "Build → Upload to Internal Testing → Promote to Closed Testing"
+  lane :deploy do
+    build_aab
+    upload_internal
+    UI.success("AAB uploaded to Internal Testing")
+    promote_alpha
+    UI.success("Promoted to Closed Testing (alpha)")
+  end
+
+  desc "Build → Upload to Internal Testing only (no promote)"
+  lane :deploy_internal do
+    build_aab
+    upload_internal
   end
 end
