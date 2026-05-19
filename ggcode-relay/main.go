@@ -23,11 +23,12 @@ type relayMessage struct {
 // ─── Room ───
 
 type room struct {
-	token   string
-	server  *peer
-	clients map[*peer]struct{}
-	cache   [][]byte
-	mu      sync.RWMutex
+	token        string
+	server       *peer
+	clients      map[*peer]struct{}
+	cache        [][]byte
+	mu           sync.RWMutex
+	offlineTimer *time.Timer // grace period before notifying clients
 }
 
 func newRoom(token string) *room {
@@ -105,11 +106,30 @@ func (p *peer) readPump(h *hub) {
 		p.room.mu.Lock()
 		if p.role == "server" {
 			p.room.server = nil
-			for c := range p.room.clients {
-				c.sendJSON(relayMessage{Type: "server_offline"})
-			}
 			token := p.room.token
+			clients := make([]*peer, 0, len(p.room.clients))
+			for c := range p.room.clients {
+				clients = append(clients, c)
+			}
+			// Cancel any pending offline timer
+			if p.room.offlineTimer != nil {
+				p.room.offlineTimer.Stop()
+				p.room.offlineTimer = nil
+			}
+			p.room.offlineTimer = time.AfterFunc(30*time.Second, func() {
+				p.room.mu.Lock()
+				defer p.room.mu.Unlock()
+				if p.room.server != nil {
+					return // reconnected during grace period
+				}
+				log.Printf("[relay] server grace period expired: room=%s", token[:8])
+				for _, c := range clients {
+					c.sendJSON(relayMessage{Type: "server_offline"})
+				}
+				p.room.offlineTimer = nil
+			})
 			p.room.mu.Unlock()
+			// Keep room alive for reconnection
 			go func() {
 				time.Sleep(5 * time.Minute)
 				h.removeRoomIfEmpty(h.getOrCreateRoom(token))

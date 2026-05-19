@@ -95,9 +95,9 @@ func (rc *RelayClient) run() {
 			rc.closeMu.Unlock()
 
 			if err := rc.dial(); err != nil {
-				backoff := time.Duration(attempt+1) * 5 * time.Second
-				if backoff > 30*time.Second {
-					backoff = 30 * time.Second
+				backoff := time.Duration(attempt+1) * time.Second
+				if backoff > 10*time.Second {
+					backoff = 10 * time.Second
 				}
 				log.Printf("[relay-client] reconnect failed (attempt %d): %v, retry in %v", attempt+1, err, backoff)
 				select {
