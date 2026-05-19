@@ -178,7 +178,7 @@ func (u *UIState) AppendAssistantText(chunk string) {
 	u.streamLastNotify.Store(time.Now().UnixMilli())
 }
 
-const streamThrottleMs = 80
+const streamThrottleMs = 300 // match mobile broker batch interval
 
 func (u *UIState) maybeNotifyChunk(full string) {
 	now := time.Now().UnixMilli()
