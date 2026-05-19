@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -218,23 +217,13 @@ func (a *AssistantItem) Render(width int) string {
 }
 
 func (a *AssistantItem) renderReasoning(width, prefixWidth, contentWidth int) string {
-	if a.reasoningOk {
-		// Collapsed: one-line summary with reasoning prefix.
-		charCount := utf8.RuneCountInString(a.reasoning)
-		summary := a.styles.ReasoningStyle.Render(
-			fmt.Sprintf("%sThought (%d chars)", a.styles.ReasoningPrefix, charCount),
-		)
-		indented := a.styles.AssistantStyle.Render(a.prefix) + summary
-		return indented
-	}
-
-	// Streaming: show full reasoning in italic with reasoning prefix.
+	// Always render full reasoning text — no collapsing (TUI can't expand).
 	reasoningRendered := markdown.Render(a.reasoning, contentWidth)
 	lines := strings.Split(reasoningRendered, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
 		if i == 0 {
-			sb.WriteString(a.styles.AssistantStyle.Render(a.styles.ReasoningPrefix))
+			sb.WriteString(a.styles.ReasoningPrefix)
 		} else {
 			sb.WriteString(strings.Repeat(" ", prefixWidth))
 		}
