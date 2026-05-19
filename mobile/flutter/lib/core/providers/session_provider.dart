@@ -40,6 +40,10 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       service = null;
     }
 
+    // Clear previous session state
+    _ref.read(chatProvider.notifier).clearMessages();
+    _ref.read(subagentProvider.notifier).state = {};
+
     state = state.copyWith(status: ConnectionStatus.connecting, url: url, error: null);
 
     // Extract token from URL for encryption
