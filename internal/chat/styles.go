@@ -61,6 +61,10 @@ type Styles struct {
 	SystemPrefix string
 	SystemStyle  lipgloss.Style
 
+	// Reasoning / thinking
+	ReasoningPrefix string
+	ReasoningStyle  lipgloss.Style
+
 	// Error
 	ErrorStyle lipgloss.Style
 
@@ -85,6 +89,8 @@ func DefaultStyles() Styles {
 		BashBody:        lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("235")),
 		SystemPrefix:    "○ ",
 		SystemStyle:     lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		ReasoningPrefix: "✦ ",
+		ReasoningStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("99")).Italic(true),
 		ErrorStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("9")),
 		MutedStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		ItemGap:         1,

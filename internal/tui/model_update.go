@@ -119,6 +119,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentStreamMsg:
 		return m.handleAgentStreamMsg(msg, spinnerCmd)
 
+	case agentReasoningMsg:
+		return m.handleAgentReasoningMsg(msg, spinnerCmd)
+
+	case agentReasoningDoneMsg:
+		m.chatFinishReasoning()
+		return m, spinnerCmd
+
 	case agentInterruptMsg:
 		if msg.RunID != m.activeAgentRunID {
 			return m, nil

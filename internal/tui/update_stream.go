@@ -21,5 +21,13 @@ func (m Model) handleAgentStreamMsg(msg agentStreamMsg, spinnerCmd tea.Cmd) (Mod
 	}
 	m.appendStreamChunk(msg.Text)
 	return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
+}
 
+// handleAgentReasoningMsg handles accumulated reasoning/thinking chunks.
+func (m Model) handleAgentReasoningMsg(msg agentReasoningMsg, spinnerCmd tea.Cmd) (Model, tea.Cmd) {
+	if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
+		return m, nil
+	}
+	m.appendReasoningChunk(msg.Text)
+	return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 }
