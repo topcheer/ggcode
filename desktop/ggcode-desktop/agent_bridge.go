@@ -211,6 +211,10 @@ func (b *AgentBridge) setupAgent() error {
 		// Push to mobile client
 		if b.tunnelBroker != nil {
 			switch ev.Type {
+			case "teammate_text":
+				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
+				b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
+
 			case "teammate_spawned":
 				snap, ok := b.swarmMgr.TeammateSnapshot(ev.TeammateID)
 				color := ""
