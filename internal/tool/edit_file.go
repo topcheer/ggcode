@@ -19,9 +19,9 @@ func (t EditFile) Description() string {
 	return "Edit a file by replacing one occurrence of old_text with new_text. " +
 		"Rules for high success rate: " +
 		"(1) ALWAYS read_file first to get the exact current content. " +
-		"(2) old_text must match the file byte-for-byte INCLUDING indentation (tabs vs spaces) and line endings. " +
-		"(3) Do NOT include the line-number prefix (e.g. \"   42\\t\") from read_file output in old_text — only the raw line content. " +
-		"(4) old_text must be UNIQUE in the file; if not, include 1-3 lines of surrounding context to disambiguate, or set replace_all=true. " +
+		"(2) Best practice: copy the relevant numbered lines directly from read_file into old_text. The tool understands read_file prefixes like \"   42\\t\" and uses them as anchors, which is especially helpful for single-line edits and duplicate text. " +
+		"(3) If you do not use line-number anchors, old_text must still match the file byte-for-byte INCLUDING indentation (tabs vs spaces) and line endings. " +
+		"(4) Without line-number anchors, old_text must be UNIQUE in the file; otherwise include 1-3 lines of surrounding context or set replace_all=true. " +
 		"(5) On failure, the error message lists hints (indent style, near-matches with whitespace visualised, matching line numbers) — read them and adjust before retrying. " +
 		"For multiple edits to the same file in one round-trip, prefer multi_edit_file."
 }
@@ -36,11 +36,11 @@ func (t EditFile) Parameters() json.RawMessage {
 		},
 		"old_text": {
 			"type": "string",
-			"description": "Exact text to find. Must match the file byte-for-byte (indentation, line endings). Do not include line-number prefixes from read_file output."
+			"description": "Text to find. Recommended: paste the numbered lines directly from read_file; the tool understands line-number prefixes and uses them as anchors. Without line numbers, old_text must match the file byte-for-byte (indentation, line endings)."
 		},
 		"new_text": {
 			"type": "string",
-			"description": "Replacement text. Use the same indentation style as old_text."
+			"description": "Replacement text. If you copied numbered lines from read_file, you may keep or remove those prefixes here; they are stripped automatically."
 		},
 		"replace_all": {
 			"type": "boolean",
@@ -93,10 +93,10 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	oldText := mr.canonical
 
 	count := strings.Count(content, oldText)
-	if !args.ReplaceAll && count > 1 {
+	if !args.ReplaceAll && count > 1 && !mr.anchored {
 		lines := findMatchLineNumbers(content, oldText)
 		msg := fmt.Sprintf(
-			"old_text found %d times in file — must be unique. Add 1-3 lines of surrounding context to disambiguate, or set replace_all=true to replace every occurrence.",
+			"old_text found %d times in file — must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence.",
 			count,
 		)
 		if len(lines) > 0 {
@@ -119,6 +119,8 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	var newContent string
 	if args.ReplaceAll {
 		newContent = strings.ReplaceAll(content, oldText, newText)
+	} else if mr.anchored {
+		newContent = content[:mr.start] + newText + content[mr.start+len(oldText):]
 	} else {
 		newContent = strings.Replace(content, oldText, newText, 1)
 	}

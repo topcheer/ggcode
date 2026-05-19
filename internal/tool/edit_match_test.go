@@ -75,6 +75,78 @@ func TestMultiEdit_NotFoundIncludesHint(t *testing.T) {
 	}
 }
 
+func TestMultiEdit_ReadFileAnchorsDuplicateText(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	content := "package main\n\nfunc a() {\n\tprintln(\"same\")\n}\n\nfunc b() {\n\tprintln(\"same\")\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"edits": []map[string]string{
+			{
+				"old_text": "     4\t\tprintln(\"same\")",
+				"new_text": "     4\t\tprintln(\"FIRST\")",
+			},
+			{
+				"old_text": "     8\t\tprintln(\"same\")",
+				"new_text": "     8\t\tprintln(\"SECOND\")",
+			},
+		},
+	})
+	res, err := MultiEditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected numbered anchors to disambiguate duplicates; got: %s", res.Content)
+	}
+
+	got, _ := os.ReadFile(fp)
+	want := "package main\n\nfunc a() {\n\tprintln(\"FIRST\")\n}\n\nfunc b() {\n\tprintln(\"SECOND\")\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestMultiEdit_ReadFileWrapperLinesAreIgnored(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	content := "package main\n\nfunc main() {\n\tfmt.Println(\"hello\")\n\tfmt.Println(\"again\")\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"edits": []map[string]string{
+			{
+				"old_text": "[indent: tab]\n     4\t\tfmt.Println(\"hello\")",
+				"new_text": "[indent: tab]\n     4\t\tfmt.Println(\"world\")",
+			},
+			{
+				"old_text": "     5\t\tfmt.Println(\"again\")\n[File truncated: showing lines 1-5 of 6. Use read_file with offset/limit for more.]",
+				"new_text": "     5\t\tfmt.Println(\"done\")",
+			},
+		},
+	})
+	res, err := MultiEditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected wrapper lines to be ignored; got: %s", res.Content)
+	}
+
+	got, _ := os.ReadFile(fp)
+	want := "package main\n\nfunc main() {\n\tfmt.Println(\"world\")\n\tfmt.Println(\"done\")\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}
+
 func TestWriteFile_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "a", "b", "c", "out.txt")

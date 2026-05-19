@@ -11,6 +11,8 @@ type matchResult struct {
 	canonical string // the actual bytes in content that will be replaced
 	transform string // diagnostic tag for which fallback fired ("" = exact)
 	shift     string // for leading-indent-shift: prefix to prepend to new_text lines
+	start     int    // byte offset of canonical in content when the match is anchored
+	anchored  bool
 }
 
 // resolveOldText tries multiple strategies to locate oldText in content,
@@ -28,6 +30,20 @@ func resolveOldText(content, oldText string) matchResult {
 	}
 	if strings.Contains(content, oldText) {
 		return matchResult{canonical: oldText}
+	}
+	if trimmed, changed := trimReadFileWrapperLines(oldText); changed {
+		if mr := resolveOldText(content, trimmed); mr.canonical != "" {
+			mr.transform = prependTransform("read-file-wrapper-stripped", mr.transform)
+			return mr
+		}
+	}
+
+	// 0. read_file line-number anchors. This is the most reliable path for weak
+	// models because it lets them paste numbered lines directly from read_file,
+	// including single-line edits and duplicate text that would otherwise be
+	// ambiguous.
+	if anchored := tryReadFileLineAnchor(content, oldText); anchored.canonical != "" {
+		return anchored
 	}
 
 	// 1. Indentation normalization (tabs <-> spaces).
@@ -68,12 +84,146 @@ func resolveOldText(content, oldText string) matchResult {
 	return matchResult{}
 }
 
+var readFileLineRE = regexp.MustCompile(`^\s{0,12}(\d+)\t(.*)$`)
+
+type numberedBlock struct {
+	startLine int
+	lines     []string
+}
+
+type fileLine struct {
+	text  string
+	start int
+	end   int
+}
+
+func splitFileLines(content string) []fileLine {
+	if content == "" {
+		return nil
+	}
+	lines := make([]fileLine, 0, strings.Count(content, "\n")+1)
+	start := 0
+	for start < len(content) {
+		rel := strings.IndexByte(content[start:], '\n')
+		if rel < 0 {
+			lines = append(lines, fileLine{
+				text:  content[start:],
+				start: start,
+				end:   len(content),
+			})
+			break
+		}
+		end := start + rel
+		lines = append(lines, fileLine{
+			text:  content[start:end],
+			start: start,
+			end:   end,
+		})
+		start = end + 1
+	}
+	return lines
+}
+
+func parseReadFileNumberedBlock(text string) (numberedBlock, bool) {
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 {
+		return numberedBlock{}, false
+	}
+
+	body := make([]string, len(lines))
+	startLine := 0
+	for i, line := range lines {
+		m := readFileLineRE.FindStringSubmatch(line)
+		if m == nil {
+			return numberedBlock{}, false
+		}
+		n := 0
+		fmt.Sscanf(m[1], "%d", &n)
+		if n <= 0 {
+			return numberedBlock{}, false
+		}
+		if i == 0 {
+			startLine = n
+		} else if n != startLine+i {
+			return numberedBlock{}, false
+		}
+		body[i] = m[2]
+	}
+
+	return numberedBlock{
+		startLine: startLine,
+		lines:     body,
+	}, true
+}
+
+func resolveAnchoredCandidate(candidate, oldText string) matchResult {
+	if candidate == oldText {
+		return matchResult{canonical: candidate}
+	}
+	if normalized := normalizeIndentation(candidate, oldText); normalized == candidate {
+		return matchResult{canonical: candidate, transform: "indent-normalized"}
+	}
+	if strings.Contains(candidate, "\r\n") && !strings.Contains(oldText, "\r\n") {
+		if strings.ReplaceAll(oldText, "\n", "\r\n") == candidate {
+			return matchResult{canonical: candidate, transform: "crlf-converted"}
+		}
+	}
+	if canonical, shift := tryLeadingIndentShift(candidate, oldText); canonical == candidate {
+		return matchResult{canonical: candidate, transform: "leading-indent-shift", shift: shift}
+	}
+	if trimmed := tryTrailingWhitespaceMatch(candidate, oldText); trimmed == candidate {
+		return matchResult{canonical: candidate, transform: "trailing-whitespace-tolerant"}
+	}
+	return matchResult{}
+}
+
+func prependTransform(prefix, suffix string) string {
+	switch {
+	case prefix == "":
+		return suffix
+	case suffix == "":
+		return prefix
+	default:
+		return prefix + "+" + suffix
+	}
+}
+
+func tryReadFileLineAnchor(content, oldText string) matchResult {
+	block, ok := parseReadFileNumberedBlock(oldText)
+	if !ok {
+		return matchResult{}
+	}
+
+	lines := splitFileLines(content)
+	if block.startLine <= 0 || block.startLine+len(block.lines)-1 > len(lines) {
+		return matchResult{}
+	}
+
+	startIdx := block.startLine - 1
+	endIdx := startIdx + len(block.lines) - 1
+	candidate := content[lines[startIdx].start:lines[endIdx].end]
+	mr := resolveAnchoredCandidate(candidate, strings.Join(block.lines, "\n"))
+	if mr.canonical == "" {
+		return matchResult{}
+	}
+	mr.canonical = candidate
+	mr.transform = prependTransform("line-numbers-stripped", mr.transform)
+	mr.start = lines[startIdx].start
+	mr.anchored = true
+	return mr
+}
+
 // adjustNewText applies the same transform that was used to find old_text
 // to new_text, so the replacement remains consistent with the file.
 func adjustNewText(content, newText string, mr matchResult) string {
 	out := newText
+	if strings.Contains(mr.transform, "read-file-wrapper-stripped") {
+		if trimmed, changed := trimReadFileWrapperLines(out); changed {
+			out = trimmed
+		}
+	}
 	if strings.Contains(mr.transform, "line-numbers-stripped") {
-		out = stripLineNumberPrefix(out)
+		out = stripAllLineNumberPrefixes(out)
 	}
 	if strings.Contains(mr.transform, "indent-normalized") {
 		out = normalizeIndentation(content, out)
@@ -91,6 +241,7 @@ func adjustNewText(content, newText string, mr matchResult) string {
 // up to 6 leading spaces, then 1+ digits, then a tab.
 // We allow more leading spaces in case the LLM reformatted slightly.
 var lineNumberPrefixRE = regexp.MustCompile(`^\s{0,12}\d+\t`)
+var readFileWrapperLineRE = regexp.MustCompile(`^\[(indent:|encoding:|Extracted from |File truncated:|File has )`)
 
 // stripLineNumberPrefix removes "  42\t" style prefixes if a clear majority
 // of non-empty lines have them. This catches the common failure where an
@@ -118,6 +269,33 @@ func stripLineNumberPrefix(text string) string {
 		out[i] = lineNumberPrefixRE.ReplaceAllString(l, "")
 	}
 	return strings.Join(out, "\n")
+}
+
+func stripAllLineNumberPrefixes(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = lineNumberPrefixRE.ReplaceAllString(l, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func trimReadFileWrapperLines(text string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	start, end := 0, len(lines)
+	for start < end && readFileWrapperLineRE.MatchString(lines[start]) {
+		start++
+	}
+	for end > start && readFileWrapperLineRE.MatchString(lines[end-1]) {
+		end--
+	}
+	if start == 0 && end == len(lines) {
+		return text, false
+	}
+	trimmed := strings.Join(lines[start:end], "\n")
+	if trimmed == "" {
+		return text, false
+	}
+	return trimmed, true
 }
 
 // tryCRLFMatch handles the case where the file uses CRLF line endings but
