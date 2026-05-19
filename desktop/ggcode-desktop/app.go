@@ -367,16 +367,13 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	})
 
 	stopBtn := widget.NewButton("Stop Sharing", func() {
-		// Notify mobile clients to disconnect
-		if a.tunnelBroker != nil {
-			a.tunnelBroker.PushSharingStopped()
-		}
-		// Disconnect agent bridge from broker
+		// Disconnect agent bridge from broker FIRST
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = nil
 		}
-		// Stop relay session
+		// Send sharing_stopped synchronously, THEN close the connection.
 		if a.tunnelSession != nil {
+			_ = a.tunnelSession.Send(tunnel.GatewayMessage{Type: "sharing_stopped"})
 			a.tunnelSession.Stop()
 			a.tunnelSession = nil
 			a.tunnelBroker = nil
@@ -778,24 +775,24 @@ func (a *App) resumeSession(id string) {
 func (a *App) newSession() {
 	defer safeRecover("newSession")
 
-	// Cancel current work if busy.
+	// 1. Detach broker from bridge FIRST so Cancel() won't enqueue messages.
+	if a.agentBridge != nil {
+		a.agentBridge.tunnelBroker = nil
+	}
+
+	// 2. Cancel current work (won't push to broker now).
 	if a.agentBridge != nil {
 		a.agentBridge.Cancel()
 	}
 
-	// Save current session.
+	// 3. Save current session.
 	if a.agentBridge != nil {
 		a.agentBridge.saveSession()
 	}
 
-	// Stop sharing — mobile client should reconnect after new session is ready.
-	if a.tunnelBroker != nil {
-		a.tunnelBroker.PushSharingStopped()
-	}
-	if a.agentBridge != nil {
-		a.agentBridge.tunnelBroker = nil
-	}
+	// 4. Send sharing_stopped synchronously, THEN close the connection.
 	if a.tunnelSession != nil {
+		_ = a.tunnelSession.Send(tunnel.GatewayMessage{Type: "sharing_stopped"})
 		a.tunnelSession.Stop()
 		a.tunnelSession = nil
 		a.tunnelBroker = nil
