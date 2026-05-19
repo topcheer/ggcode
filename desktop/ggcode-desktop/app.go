@@ -788,19 +788,31 @@ func (a *App) newSession() {
 		a.agentBridge.saveSession()
 	}
 
+	// Stop sharing — mobile client should reconnect after new session is ready.
+	if a.tunnelBroker != nil {
+		a.tunnelBroker.PushSharingStopped()
+	}
+	if a.agentBridge != nil {
+		a.agentBridge.tunnelBroker = nil
+	}
+	if a.tunnelSession != nil {
+		a.tunnelSession.Stop()
+		a.tunnelSession = nil
+		a.tunnelBroker = nil
+	}
+
 	// Clear session ID so startChat creates a fresh one.
 	if a.agentBridge != nil {
 		a.agentBridge.currentSes = nil
 	}
 
-	// Notify mobile client: new session
-	if a.tunnelBroker != nil {
-		a.tunnelBroker.PushChatClear()
-		a.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
-			Workspace: a.dc.WorkDir,
-			Version:   Version,
-		})
-		a.tunnelBroker.PushStatus(tunnel.StatusIdle, "Ready")
+	// Clear chat view immediately (lightweight — just clear widgets).
+	if a.chatViewRef != nil {
+		a.chatViewRef.vbox.Objects = nil
+		a.chatViewRef.vbox.Refresh()
+		a.chatViewRef.msgWidgets = nil
+		a.chatViewRef.toolWidgets = make(map[string]*toolWidgetRef)
+		a.chatViewRef.streamW = nil
 	}
 
 	a.startChat()
@@ -853,21 +865,35 @@ func (a *App) startChat() {
 		_ = bridge.ResumeSession(prevSessionID)
 	}
 
-	chatView := NewChatView(a, bridge, a.ui)
-	a.chatViewRef = chatView
-	a.sidebarRef = NewSidebar(a, bridge, a.ui)
-	sidebarObj := a.sidebarRef.Render()
-	chatViewObj := chatView.Render()
+	// Create or reuse chat view and sidebar.
+	// Reuse existing widgets to avoid expensive UI rebuild on new-session.
+	if a.chatViewRef == nil {
+		cv := NewChatView(a, bridge, a.ui)
+		a.chatViewRef = cv
+		sb := NewSidebar(a, bridge, a.ui)
+		a.sidebarRef = sb
+		sidebarObj := sb.Render()
+		chatViewObj := cv.Render()
 
-	split := container.NewHSplit(chatViewObj, sidebarObj)
-	split.SetOffset(0.75)
-	a.split = split
-	a.chatViewObj = chatViewObj
-	a.sidebarObj = sidebarObj
-	a.sidebarHidden = false
-
-	a.content.Objects = []fyne.CanvasObject{split}
-	a.content.Refresh()
+		split := container.NewHSplit(chatViewObj, sidebarObj)
+		split.SetOffset(0.75)
+		a.split = split
+		a.chatViewObj = chatViewObj
+		a.sidebarObj = sidebarObj
+		a.sidebarHidden = false
+		a.content.Objects = []fyne.CanvasObject{split}
+		a.content.Refresh()
+	} else {
+		// Reuse existing widgets — just update the bridge reference.
+		a.chatViewRef.bridge = bridge
+		a.chatViewRef.ui = a.ui
+		if a.sidebarRef != nil {
+			a.sidebarRef.bridge = bridge
+			a.sidebarRef.ui = a.ui
+			a.sidebarRef.loadSessions()
+			a.sidebarRef.sessionList.Refresh()
+		}
+	}
 
 	// Restore chat history from resumed session.
 	if a.chatViewRef != nil && bridge.CurrentSession() != nil && len(bridge.CurrentSession().Messages) > 0 {
