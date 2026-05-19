@@ -79,14 +79,16 @@ class StatusData {
 /// ─── Tool Call / Result ───
 
 class ToolCallData {
+  final String toolId;
   final String toolName;
   final String args;
   final String detail;
 
   ToolCallData(
-      {required this.toolName, required this.args, required this.detail});
+      {required this.toolId, required this.toolName, required this.args, required this.detail});
 
   factory ToolCallData.fromJson(Map<String, dynamic> d) => ToolCallData(
+        toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
         args: d['args'] as String? ?? '',
         detail: d['detail'] as String? ?? '',
@@ -94,14 +96,16 @@ class ToolCallData {
 }
 
 class ToolResultData {
+  final String toolId;
   final String toolName;
   final String result;
   final bool isError;
 
   ToolResultData(
-      {required this.toolName, required this.result, required this.isError});
+      {required this.toolId, required this.toolName, required this.result, required this.isError});
 
   factory ToolResultData.fromJson(Map<String, dynamic> d) => ToolResultData(
+        toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
         result: d['result'] as String? ?? '',
         isError: d['is_error'] as bool? ?? false,
@@ -302,12 +306,14 @@ class SubagentCompleteData {
 
 class SubagentToolCallData {
   final String agentId;
+  final String toolId;
   final String toolName;
   final String args;
   final String detail;
 
   SubagentToolCallData({
     required this.agentId,
+    required this.toolId,
     required this.toolName,
     this.args = '',
     this.detail = '',
@@ -316,6 +322,7 @@ class SubagentToolCallData {
   factory SubagentToolCallData.fromJson(Map<String, dynamic> d) =>
       SubagentToolCallData(
         agentId: d['agent_id'] as String? ?? '',
+        toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
         args: d['args'] as String? ?? '',
         detail: d['detail'] as String? ?? '',
@@ -324,12 +331,14 @@ class SubagentToolCallData {
 
 class SubagentToolResultData {
   final String agentId;
+  final String toolId;
   final String toolName;
   final String result;
   final bool isError;
 
   SubagentToolResultData({
     required this.agentId,
+    required this.toolId,
     required this.toolName,
     required this.result,
     this.isError = false,
@@ -338,6 +347,7 @@ class SubagentToolResultData {
   factory SubagentToolResultData.fromJson(Map<String, dynamic> d) =>
       SubagentToolResultData(
         agentId: d['agent_id'] as String? ?? '',
+        toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
         result: d['result'] as String? ?? '',
         isError: d['is_error'] as bool? ?? false,

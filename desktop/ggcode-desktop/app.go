@@ -269,7 +269,6 @@ func (a *App) showShareDialog() {
 			session := a.agentBridge.CurrentSession()
 			if session != nil && len(session.Messages) > 0 {
 				history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
-				toolIDMap := map[string]string{} // toolID → toolName
 				for _, msg := range session.Messages {
 					if msg.Role == "user" {
 						var textParts []string
@@ -313,11 +312,11 @@ func (a *App) showShareDialog() {
 								}
 								history = append(history, tunnel.HistoryEntry{
 									Role:     "tool_call",
+									ToolID:   block.ToolID,
 									ToolName: block.ToolName,
 									ToolArgs: detail,
 								})
 								if block.ToolID != "" {
-									toolIDMap[block.ToolID] = block.ToolName
 								}
 							}
 						}
@@ -328,13 +327,10 @@ func (a *App) showShareDialog() {
 								if len(result) > 500 {
 									result = result[:500] + "..."
 								}
-								tName := block.ToolName
-								if tName == "" {
-									tName = toolIDMap[block.ToolID]
-								}
 								history = append(history, tunnel.HistoryEntry{
 									Role:     "tool_result",
-									ToolName: tName,
+									ToolID:   block.ToolID,
+									ToolName: block.ToolName,
 									Result:   result,
 									IsError:  block.IsError,
 								})
@@ -699,7 +695,6 @@ func (a *App) resumeSession(id string) {
 		a.tunnelBroker.PushChatClear()
 		session := a.agentBridge.CurrentSession()
 		history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
-		toolIDMap := map[string]string{} // toolID → toolName
 		for _, msg := range session.Messages {
 			if msg.Role == "user" {
 				var textParts []string
@@ -743,12 +738,10 @@ func (a *App) resumeSession(id string) {
 						}
 						history = append(history, tunnel.HistoryEntry{
 							Role:     "tool_call",
+							ToolID:   block.ToolID,
 							ToolName: block.ToolName,
 							ToolArgs: detail,
 						})
-						if block.ToolID != "" {
-							toolIDMap[block.ToolID] = block.ToolName
-						}
 					}
 				}
 			} else if msg.Role == "tool" {
@@ -758,13 +751,10 @@ func (a *App) resumeSession(id string) {
 						if len(result) > 500 {
 							result = result[:500] + "..."
 						}
-						tName := block.ToolName
-						if tName == "" {
-							tName = toolIDMap[block.ToolID]
-						}
 						history = append(history, tunnel.HistoryEntry{
 							Role:     "tool_result",
-							ToolName: tName,
+							ToolID:   block.ToolID,
+							ToolName: block.ToolName,
 							Result:   result,
 							IsError:  block.IsError,
 						})

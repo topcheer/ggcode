@@ -229,6 +229,7 @@ type Event struct {
 	Result       string
 	Error        error
 	CurrentTool  string // tool name (for teammate_tool_call)
+	ToolID       string // tool call ID (for teammate_tool_call/result)
 	ToolArgs     string // tool args (for teammate_tool_call)
 	IsError      bool   // tool result error (for teammate_tool_result)
 	Timestamp    time.Time

@@ -278,12 +278,12 @@ func (b *Broker) PushStatus(status, message string) {
 
 // ─── Tool calls ───
 
-func (b *Broker) PushToolCall(toolName, args, detail string) {
-	b.enqueue(EventToolCall, ToolCallData{ToolName: toolName, Args: args, Detail: detail})
+func (b *Broker) PushToolCall(toolID, toolName, args, detail string) {
+	b.enqueue(EventToolCall, ToolCallData{ToolID: toolID, ToolName: toolName, Args: args, Detail: detail})
 }
 
-func (b *Broker) PushToolResult(toolName, result string, isError bool) {
-	b.enqueue(EventToolResult, ToolResultData{ToolName: toolName, Result: result, IsError: isError})
+func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
+	b.enqueue(EventToolResult, ToolResultData{ToolID: toolID, ToolName: toolName, Result: result, IsError: isError})
 }
 
 // ─── Approval ───
@@ -343,15 +343,15 @@ func (b *Broker) PushSubagentComplete(agentID, name, summary string, success boo
 	})
 }
 
-func (b *Broker) PushSubagentToolCall(agentID, toolName, args, detail string) {
+func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, args, detail string) {
 	b.enqueue(EventSubagentToolCall, SubagentToolCallData{
-		AgentID: agentID, ToolName: toolName, Args: args, Detail: detail,
+		AgentID: agentID, ToolID: toolID, ToolName: toolName, Args: args, Detail: detail,
 	})
 }
 
-func (b *Broker) PushSubagentToolResult(agentID, toolName, result string, isError bool) {
+func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, result string, isError bool) {
 	b.enqueue(EventSubagentToolResult, SubagentToolResultData{
-		AgentID: agentID, ToolName: toolName, Result: result, IsError: isError,
+		AgentID: agentID, ToolID: toolID, ToolName: toolName, Result: result, IsError: isError,
 	})
 }
 
@@ -367,6 +367,7 @@ type HistoryEntry struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	// Tool fields (role == "tool_call" or "tool_result")
+	ToolID   string `json:"tool_id,omitempty"`
 	ToolName string `json:"tool_name,omitempty"`
 	ToolArgs string `json:"tool_args,omitempty"`
 	Result   string `json:"result,omitempty"`

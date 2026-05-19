@@ -179,14 +179,14 @@ func (b *AgentBridge) setupAgent() error {
 	})
 
 	// Forward sub-agent tool calls/results to mobile.
-	b.subAgentMgr.SetOnToolCall(func(agentID, toolName, args, detail string) {
+	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
 		if b.tunnelBroker != nil {
-			b.tunnelBroker.PushSubagentToolCall(agentID, toolName, args, detail)
+			b.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, args, detail)
 		}
 	})
-	b.subAgentMgr.SetOnToolResult(func(agentID, toolName, result string, isError bool) {
+	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
 		if b.tunnelBroker != nil {
-			b.tunnelBroker.PushSubagentToolResult(agentID, toolName, result, isError)
+			b.tunnelBroker.PushSubagentToolResult(agentID, toolID, toolName, result, isError)
 		}
 	})
 
@@ -223,11 +223,11 @@ func (b *AgentBridge) setupAgent() error {
 		if b.tunnelBroker != nil {
 			switch ev.Type {
 			case "teammate_tool_call":
-				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.CurrentTool, ev.ToolArgs, "")
+				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, "")
 				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 			case "teammate_tool_result":
-				b.tunnelBroker.PushSubagentToolResult(ev.TeammateID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
+				b.tunnelBroker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
 
 			case "teammate_text":
 				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
@@ -477,7 +477,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if b.tunnelBroker != nil {
 					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
 					b.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
-					b.tunnelBroker.PushToolCall(name, string(ev.Tool.Arguments), description)
+					b.tunnelBroker.PushToolCall(ev.Tool.ID, name, string(ev.Tool.Arguments), description)
 				}
 
 			case provider.StreamEventToolResult:
@@ -507,7 +507,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					b.Emitter.TriggerTyping()
 				}
 				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushToolResult(ev.Tool.Name, content, ev.IsError)
+					b.tunnelBroker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 				}
 
 				// After spawn_agent completes, sync agent panels.

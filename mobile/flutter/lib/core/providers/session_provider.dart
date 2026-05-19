@@ -122,14 +122,16 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
           for (final m in messages) {
             final role = m['role'] as String? ?? '';
             if (role == 'tool_call') {
+              final toolId = m['tool_id'] as String? ?? '';
               final toolName = m['tool_name'] as String? ?? '';
               final toolArgs = m['tool_args'] as String? ?? '';
-              chatNotifier.addHistoryToolCall(toolName, toolArgs);
+              chatNotifier.addHistoryToolCall(toolId, toolName, toolArgs);
             } else if (role == 'tool_result') {
+              final toolId = m['tool_id'] as String? ?? '';
               final toolName = m['tool_name'] as String? ?? '';
               final result = m['result'] as String? ?? '';
               final isError = m['is_error'] as bool? ?? false;
-              chatNotifier.addHistoryToolResult(toolName, result, isError);
+              chatNotifier.addHistoryToolResult(toolId, toolName, result, isError);
             } else {
               final content = m['content'] as String? ?? '';
               if (content.isNotEmpty) {
@@ -266,6 +268,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
           final chatNotifier = _ref.read(chatProvider.notifier);
           chatNotifier.addSubagentToolCall(
             agentId: data.agentId,
+            toolId: data.toolId,
             toolName: data.toolName,
             args: data.args,
             detail: data.detail,
@@ -281,6 +284,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
           final chatNotifier = _ref.read(chatProvider.notifier);
           chatNotifier.updateSubagentToolResult(
             agentId: data.agentId,
+            toolId: data.toolId,
             toolName: data.toolName,
             result: data.result,
             isError: data.isError,
@@ -323,6 +327,7 @@ class ChatMessage {
   final bool isUser;
   final String text;
   final bool streaming;
+  final String? toolId;
   final String? toolName;
   final String? toolDetail;
   final String? toolResult;
@@ -337,6 +342,7 @@ class ChatMessage {
     this.isUser = false,
     this.text = '',
     this.streaming = false,
+    this.toolId,
     this.toolName,
     this.toolDetail,
     this.toolResult,
@@ -358,6 +364,7 @@ class ChatMessage {
         isUser: isUser,
         text: text ?? this.text,
         streaming: streaming ?? this.streaming,
+        toolId: toolId,
         toolName: toolName,
         toolDetail: toolDetail,
         toolResult: toolResult ?? this.toolResult,
@@ -404,11 +411,12 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
     ];
   }
 
-  void addHistoryToolCall(String toolName, String args) {
+  void addHistoryToolCall(String toolId, String toolName, String args) {
     state = [
       ...state,
       ChatMessage(
         id: 'hist-${_msgCounter++}',
+        toolId: toolId,
         toolName: toolName,
         toolDetail: args.isNotEmpty ? (args.length > 100 ? '${args.substring(0, 100)}...' : args) : '',
         time: DateTime.now(),
@@ -416,11 +424,15 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
     ];
   }
 
-  void addHistoryToolResult(String toolName, String result, bool isError) {
-    // Find the last tool_call with this name and fill in the result
-    final idx = state.lastIndexWhere(
-      (m) => m.toolName == toolName && m.toolResult == null && m.sourceId == null,
-    );
+  void addHistoryToolResult(String toolId, String toolName, String result, bool isError) {
+    // Match by toolId (exact), fallback to toolName
+    int idx = -1;
+    if (toolId.isNotEmpty) {
+      idx = state.lastIndexWhere((m) => m.toolId == toolId && m.toolResult == null);
+    }
+    if (idx < 0) {
+      idx = state.lastIndexWhere((m) => m.toolName == toolName && m.toolResult == null && m.sourceId == null);
+    }
     if (idx >= 0) {
       final msg = state[idx];
       state = [
@@ -502,6 +514,7 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
 
   void addSubagentToolCall({
     required String agentId,
+    required String toolId,
     required String toolName,
     required String args,
     required String detail,
@@ -516,6 +529,7 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         sourceId: agentId,
         sourceName: sourceName,
         sourceColor: sourceColor,
+        toolId: toolId,
         toolName: toolName,
         toolDetail: detail.isNotEmpty ? detail : (args.length > 100 ? '${args.substring(0, 100)}...' : args),
         time: DateTime.now(),
@@ -525,14 +539,23 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
 
   void updateSubagentToolResult({
     required String agentId,
+    required String toolId,
     required String toolName,
     required String result,
     required bool isError,
   }) {
-    // Find last tool call message from this agent with this tool
-    final idx = state.lastIndexWhere(
-      (m) => m.sourceId == agentId && m.toolName == toolName && m.toolResult == null,
-    );
+    // Match by toolId (exact), fallback to agentId+toolName
+    int idx = -1;
+    if (toolId.isNotEmpty) {
+      idx = state.lastIndexWhere(
+        (m) => m.toolId == toolId && m.toolResult == null,
+      );
+    }
+    if (idx < 0) {
+      idx = state.lastIndexWhere(
+        (m) => m.sourceId == agentId && m.toolName == toolName && m.toolResult == null,
+      );
+    }
     if (idx >= 0) {
       final msg = state[idx];
       state = [
@@ -550,6 +573,7 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
       ...state,
       ChatMessage(
         id: 'tool-${_msgCounter++}',
+        toolId: data.toolId,
         toolName: data.toolName,
         toolDetail: data.detail,
         text: '${data.toolName}(${data.detail})',
@@ -559,8 +583,14 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
   }
 
   void handleToolResult(proto.ToolResultData data) {
-    // Find the last tool_call with this name and append result
-    final idx = state.lastIndexWhere((m) => m.toolName == data.toolName && m.toolResult == null);
+    // Match by toolId (exact), fallback to toolName
+    int idx = -1;
+    if (data.toolId.isNotEmpty) {
+      idx = state.lastIndexWhere((m) => m.toolId == data.toolId && m.toolResult == null);
+    }
+    if (idx < 0) {
+      idx = state.lastIndexWhere((m) => m.toolName == data.toolName && m.toolResult == null && m.sourceId == null);
+    }
     if (idx >= 0) {
       final msg = state[idx];
       state = [
@@ -699,14 +729,16 @@ final messageDispatcherProvider = Provider<Function>((ref) {
           for (final m in messages) {
             final role = m['role'] as String? ?? '';
             if (role == 'tool_call') {
+              final toolId = m['tool_id'] as String? ?? '';
               final toolName = m['tool_name'] as String? ?? '';
               final toolArgs = m['tool_args'] as String? ?? '';
-              chatNotifier.addHistoryToolCall(toolName, toolArgs);
+              chatNotifier.addHistoryToolCall(toolId, toolName, toolArgs);
             } else if (role == 'tool_result') {
+              final toolId = m['tool_id'] as String? ?? '';
               final toolName = m['tool_name'] as String? ?? '';
               final result = m['result'] as String? ?? '';
               final isError = m['is_error'] as bool? ?? false;
-              chatNotifier.addHistoryToolResult(toolName, result, isError);
+              chatNotifier.addHistoryToolResult(toolId, toolName, result, isError);
             } else {
               final content = m['content'] as String? ?? '';
               if (content.isNotEmpty) {

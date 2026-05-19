@@ -149,6 +149,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			}
 			lastToolName = event.Tool.Name
 			cfg.Manager.Notify(cfg.SubAgentID)
+			cfg.Manager.NotifyToolCall(cfg.SubAgentID, event.Tool.ID, event.Tool.Name, string(event.Tool.Arguments), "")
 		case provider.StreamEventToolResult:
 			flushText()
 			if summary := subagentToolProgressSummary(lastToolName, event.Result); summary != "" {
@@ -165,7 +166,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 					IsError:  event.IsError,
 				})
 			}
-			cfg.Manager.NotifyToolResult(cfg.SubAgentID, lastToolName, event.Result, event.IsError)
+			cfg.Manager.NotifyToolResult(cfg.SubAgentID, event.Tool.ID, lastToolName, event.Result, event.IsError)
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))
