@@ -766,10 +766,8 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 		return
 	}
 	tc := classifyToolGUI(ref.toolName)
-	// Header-only tools: no result display.
-	if tc == tcSearch || tc == tcList || tc == tcWeb || tc == tcCmd ||
-		tc == tcLSP || tc == tcWait || tc == tcTeammate || tc == tcSwarm ||
-		tc == tcSuppress || tc == tcAgent || tc == tcMessage {
+	// Truly header-only tools: no result display needed.
+	if tc == tcSuppress || tc == tcTodo {
 		return
 	}
 
@@ -995,6 +993,29 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 }
 
+// newCodeBlock wraps text in a markdown code block.
+func newCodeBlock(result string) fyne.CanvasObject {
+	return newMD("```\n" + result + "\n```")
+}
+
+// renderHeaderOnlyTool: header + optional result accordion.
+func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
+	desc := msg.ToolDesc
+	if desc == "" {
+		desc = prettifyToolName(msg.ToolName)
+	}
+	header := cv.toolHeader(desc, msg)
+
+	if msg.Content == "" {
+		return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
+	}
+
+	result := truncateRunes(msg.Content, 2000, "...")
+	resultBlock := newCodeBlock(result)
+	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+}
+
 // renderFileTool: header + line count / edit summary + result in accordion.
 func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 	desc := msg.ToolDesc
@@ -1022,33 +1043,17 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 	}
 	header := cv.toolHeader(desc, msg)
 
-	// git_add, git_commit, git_stash — header only
-	switch msg.ToolName {
-	case "git_add", "git_commit", "git_stash":
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
-	}
-
 	if msg.Content == "" {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
-	resultBlock := newMD("```\n" + result + "\n```")
+		result := truncateRunes(msg.Content, 2000, "...")
+		resultBlock := newCodeBlock(result)
 	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
-// renderHeaderOnlyTool: just the header line, no body.
-// For: suppress tools, teammate ops, task ops, search, list, web, cmd, LSP.
-func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
-	desc := msg.ToolDesc
-	if desc == "" {
-		desc = prettifyToolName(msg.ToolName)
-	}
-	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
-}
-
-// renderGenericTool: header + result in accordion.
+// renderGenericTool: header + result in accordion (no raw JSON).
 func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	desc := msg.ToolDesc
 	if desc == "" {
@@ -1060,10 +1065,16 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := truncateRunes(msg.Content, 1000, "\n...(truncated)")
-	resultBlock := widget.NewLabel(result)
-	resultBlock.Wrapping = fyne.TextWrapWord
-	resultBlock.TextStyle = fyne.TextStyle{Monospace: true}
+	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
+	// Wrap raw JSON in code block for readability
+	trimmed := strings.TrimSpace(result)
+	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
+		(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+		resultBlock := newMD("```json\n" + result + "\n```")
+		acc := widget.NewAccordion(wrapAccordionItem("Result", resultBlock))
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	}
+	resultBlock := newMD("```\n" + result + "\n```")
 	acc := widget.NewAccordion(wrapAccordionItem("Result", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
@@ -1127,22 +1138,22 @@ func (cv *ChatView) renderSendMessageTool(msg *ChatMessage) fyne.CanvasObject {
 	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
 }
 
-// renderSwarmTaskTool: subject > description > pretty name + assignee.
+// renderSwarmTaskTool: subject + assignee header, result in accordion.
 func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
-	r := raw(msg)
-	subject := extractJSONField(r, "subject")
-	assignee := extractJSONField(r, "assignee")
-	desc := subject
-	if desc == "" {
-		desc = extractJSONField(r, "description")
-	}
+	desc := msg.ToolDesc
 	if desc == "" {
 		desc = prettifyToolName(msg.ToolName)
 	}
-	if assignee != "" {
-		desc += " -> " + assignee
+	header := cv.toolHeader(desc, msg)
+
+	if msg.Content == "" {
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
-	return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
+
+		result := truncateRunes(msg.Content, 2000, "...")
+		resultBlock := newCodeBlock(result)
+	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
 // ── Shared helpers ───────────────────────────────────
@@ -1224,7 +1235,14 @@ func prettifyToolName(name string) string {
 		return strings.Title(name[4:])
 	}
 	if len(name) > 0 {
-		return strings.ToUpper(name[:1]) + name[1:]
+		// Title case: replace _ with space, capitalize each word
+		words := strings.Split(strings.ReplaceAll(name, "_", " "), " ")
+		for i, w := range words {
+			if len(w) > 0 {
+				words[i] = strings.ToUpper(w[:1]) + w[1:]
+			}
+		}
+		return strings.Join(words, " ")
 	}
 	return name
 }

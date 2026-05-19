@@ -700,24 +700,316 @@ func (b *AgentBridge) SwarmPanels() []AgentPanelData {
 func toolDescription(toolName, rawArgs string) string {
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return toolName
+		return prettifyToolName(toolName)
 	}
-	// For task tools, prefer subject (short title) over description (long detail).
-	if strings.HasPrefix(toolName, "task_") {
-		if subj, ok := args["subject"]; ok {
+
+	// Helper to extract a string field.
+	str := func(field string) string {
+		if v, ok := args[field]; ok {
 			var s string
-			if json.Unmarshal(subj, &s) == nil && s != "" {
+			if json.Unmarshal(v, &s) == nil {
 				return s
 			}
 		}
+		return ""
 	}
-	if desc, ok := args["description"]; ok {
-		var s string
-		if json.Unmarshal(desc, &s) == nil && s != "" {
+
+	// First check for explicit description field from LLM.
+	if desc := str("description"); desc != "" {
+		return desc
+	}
+
+	switch toolName {
+	// File operations
+	case "read_file":
+		if p := str("path"); p != "" {
+			return "Read: " + shortPath(p)
+		}
+	case "write_file":
+		if p := str("path"); p != "" {
+			return "Write: " + shortPath(p)
+		}
+	case "edit_file", "multi_edit_file":
+		if p := str("file_path"); p != "" {
+			return "Edit: " + shortPath(p)
+		}
+	case "notebook_edit":
+		if p := str("notebook_path"); p != "" {
+			return "Notebook: " + shortPath(p)
+		}
+
+	// Search / listing
+	case "search_files", "grep":
+		pat := str("pattern")
+		dir := str("directory")
+		if pat != "" {
+			d := "Grep: " + truncateRunes(pat, 60, "...")
+			if dir != "" {
+				d += " in " + shortPath(dir)
+			}
+			return d
+		}
+	case "glob":
+		pat := str("pattern")
+		dir := str("directory")
+		if pat != "" {
+			d := "Glob: " + truncateRunes(pat, 60, "...")
+			if dir != "" {
+				d += " in " + shortPath(dir)
+			}
+			return d
+		}
+	case "list_directory":
+		if p := str("path"); p != "" {
+			return "List: " + shortPath(p)
+		}
+
+	// Web
+	case "web_search":
+		if q := str("query"); q != "" {
+			return "Search: " + truncateRunes(q, 80, "...")
+		}
+	case "web_fetch":
+		if u := str("url"); u != "" {
+			return "Fetch: " + truncateRunes(u, 80, "...")
+		}
+
+	// Commands
+	case "run_command", "start_command":
+		if c := str("command"); c != "" {
+			if comment := firstCommentLine(c); comment != "" {
+				return comment
+			}
+			return "Bash: " + truncateRunes(strings.SplitN(c, "\n", 2)[0], 60, "...")
+		}
+	case "stop_command":
+		if id := str("job_id"); id != "" {
+			return "Stop Job: " + id
+		}
+	case "read_command_output":
+		if id := str("job_id"); id != "" {
+			return "Read Output: " + id
+		}
+	case "wait_command":
+		if id := str("job_id"); id != "" {
+			return "Wait: " + id
+		}
+	case "write_command_input":
+		if id := str("job_id"); id != "" {
+			return "Write Input: " + id
+		}
+	case "list_commands":
+		return "Background Jobs"
+
+	// Git
+	case "git_status":
+		return "Git Status"
+	case "git_diff":
+		if f := str("file"); f != "" {
+			return "Git Diff: " + shortPath(f)
+		}
+		return "Git Diff"
+	case "git_log":
+		return "Git Log"
+	case "git_show":
+		if r := str("revision"); r != "" {
+			return "Git Show: " + truncateRunes(r, 40, "...")
+		}
+		return "Git Show"
+	case "git_blame":
+		if f := str("file"); f != "" {
+			return "Git Blame: " + shortPath(f)
+		}
+		return "Git Blame"
+	case "git_add":
+		return "Git Add"
+	case "git_commit":
+		return "Git Commit"
+	case "git_branch_list":
+		return "Git Branches"
+	case "git_remote":
+		return "Git Remote"
+	case "git_stash":
+		return "Git Stash"
+	case "git_stash_list":
+		return "Git Stash List"
+
+	// Agent tools
+	case "spawn_agent":
+		name := str("name")
+		if name == "" {
+			name = str("subagent_type")
+		}
+		task := truncateRunes(str("task"), 80, "...")
+		d := "(Spawn Sub-Agent) " + name
+		if task != "" {
+			d += " — " + task
+		}
+		return d
+	case "wait_agent":
+		if id := str("agent_id"); id != "" {
+			return "(Wait Agent) " + id
+		}
+		return "(Wait Agent)"
+	case "list_agents":
+		return "(List Agents)"
+
+	// Messaging
+	case "send_message":
+		to := str("to")
+		summary := str("summary")
+		if summary != "" {
+			return summary
+		}
+		if to != "" {
+			return "Send to: " + to
+		}
+		return "Send Message"
+
+	// Swarm / Team
+	case "swarm_task_create":
+		subj := str("subject")
+		assignee := str("assignee")
+		d := "Create Task"
+		if subj != "" {
+			d = truncateRunes(subj, 80, "...")
+		}
+		if assignee != "" {
+			d += " → " + assignee
+		}
+		return d
+	case "swarm_task_claim":
+		tid := str("task_id")
+		if tid != "" {
+			return "Claim Task: " + tid
+		}
+		return "Claim Task"
+	case "swarm_task_complete":
+		tid := str("task_id")
+		if tid != "" {
+			return "Complete Task: " + tid
+		}
+		return "Complete Task"
+	case "swarm_task_list":
+		tid := str("team_id")
+		if tid != "" {
+			return "List Tasks: " + tid
+		}
+		return "List Tasks"
+	case "team_create":
+		if n := str("name"); n != "" {
+			return "Create Team: " + n
+		}
+		return "Create Team"
+	case "team_delete":
+		if tid := str("team_id"); tid != "" {
+			return "Delete Team: " + tid
+		}
+		return "Delete Team"
+
+	// Teammate
+	case "teammate_spawn":
+		if n := str("name"); n != "" {
+			return "(Spawn Teammate) " + n
+		}
+		return "(Spawn Teammate)"
+	case "teammate_shutdown":
+		if tid := str("teammate_id"); tid != "" {
+			return "(Shutdown Teammate) " + tid
+		}
+		return "(Shutdown Teammate)"
+	case "teammate_list":
+		return "(List Teammates)"
+	case "teammate_results":
+		if tid := str("teammate_id"); tid != "" {
+			return "(Get Results) " + tid
+		}
+		return "(Get Results)"
+
+	// Other tools
+	case "save_memory":
+		if k := str("key"); k != "" {
+			return "Save Memory: " + k
+		}
+		return "Save Memory"
+	case "config":
+		if s := str("setting"); s != "" {
+			return "Config: " + s
+		}
+		return "Config"
+	case "skill":
+		if s := str("skill"); s != "" {
+			return "Skill: " + s
+		}
+		return "Skill"
+	case "ask_user":
+		return "Ask User"
+	case "todo_write":
+		return "Update Todos"
+	case "enter_plan_mode":
+		return "Enter Plan Mode"
+	case "exit_plan_mode":
+		return "Exit Plan Mode"
+	case "enter_worktree":
+		return "Enter Worktree"
+	case "exit_worktree":
+		return "Exit Worktree"
+	case "task_create":
+		if s := str("subject"); s != "" {
 			return s
 		}
+		return "Create Task"
+	case "task_get", "task_update", "task_stop", "task_list":
+		if s := str("subject"); s != "" {
+			return s
+		}
+		return prettifyToolName(toolName)
+	case "cron_create":
+		return "Schedule Job"
+	case "cron_delete":
+		return "Delete Job"
+	case "cron_list":
+		return "Scheduled Jobs"
+	case "list_mcp_capabilities":
+		return "MCP Capabilities"
+	case "get_mcp_prompt":
+		if n := str("name"); n != "" {
+			return "MCP Prompt: " + n
+		}
+		return "MCP Prompt"
+	case "read_mcp_resource":
+		if u := str("uri"); u != "" {
+			return "MCP Resource: " + truncateRunes(u, 60, "...")
+		}
+		return "MCP Resource"
 	}
-	return toolName
+
+	// LSP tools
+	if strings.HasPrefix(toolName, "lsp_") {
+		op := strings.ReplaceAll(toolName[4:], "_", " ")
+		return "LSP: " + strings.Title(op)
+	}
+
+	// MCP tools (mcp__server__tool)
+	if strings.HasPrefix(toolName, "mcp__") {
+		parts := strings.Split(toolName, "__")
+		if len(parts) >= 3 {
+			return "MCP: " + strings.ReplaceAll(parts[len(parts)-1], "_", " ")
+		}
+	}
+
+	return prettifyToolName(toolName)
+}
+
+func shortPath(p string) string {
+	if len(p) > 60 {
+		// Try to shorten from the left: keep last 57 chars with "…"
+		runes := []rune(p)
+		if len(runes) > 57 {
+			return "…" + string(runes[len(runes)-57:])
+		}
+	}
+	return p
 }
 
 func toolArgSummary(toolName, rawArgs string) string {
