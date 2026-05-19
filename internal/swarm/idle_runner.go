@@ -357,6 +357,17 @@ func executeTask(
 				Result:   event.Result,
 				IsError:  event.IsError,
 			})
+			if onEvent != nil {
+				onEvent(Event{
+					Type:         "teammate_tool_result",
+					TeamID:       team.ID,
+					TeammateID:   tm.ID,
+					TeammateName: tm.Name,
+					CurrentTool:  lastToolName,
+					ToolArgs:     event.Result,
+					Timestamp:    time.Now(),
+				})
+			}
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))

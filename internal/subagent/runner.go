@@ -165,6 +165,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 					IsError:  event.IsError,
 				})
 			}
+			cfg.Manager.NotifyToolResult(cfg.SubAgentID, lastToolName, event.Result, event.IsError)
 		case provider.StreamEventError:
 			flushText()
 			output.WriteString(fmt.Sprintf("[error: %v]\n", event.Error))

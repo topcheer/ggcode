@@ -298,6 +298,50 @@ class SubagentCompleteData {
       );
 }
 
+class SubagentToolCallData {
+  final String agentId;
+  final String toolName;
+  final String args;
+  final String detail;
+
+  SubagentToolCallData({
+    required this.agentId,
+    required this.toolName,
+    this.args = '',
+    this.detail = '',
+  });
+
+  factory SubagentToolCallData.fromJson(Map<String, dynamic> d) =>
+      SubagentToolCallData(
+        agentId: d['agent_id'] as String? ?? '',
+        toolName: d['tool_name'] as String? ?? '',
+        args: d['args'] as String? ?? '',
+        detail: d['detail'] as String? ?? '',
+      );
+}
+
+class SubagentToolResultData {
+  final String agentId;
+  final String toolName;
+  final String result;
+  final bool isError;
+
+  SubagentToolResultData({
+    required this.agentId,
+    required this.toolName,
+    required this.result,
+    this.isError = false,
+  });
+
+  factory SubagentToolResultData.fromJson(Map<String, dynamic> d) =>
+      SubagentToolResultData(
+        agentId: d['agent_id'] as String? ?? '',
+        toolName: d['tool_name'] as String? ?? '',
+        result: d['result'] as String? ?? '',
+        isError: d['is_error'] as bool? ?? false,
+      );
+}
+
 class ErrorData {
   final String message;
   final String code;
