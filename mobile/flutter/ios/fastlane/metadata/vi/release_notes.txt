@@ -1,0 +1,1 @@
+Initial release — connect to your GGCode desktop agent via QR code and chat with your AI coding assistant on the go.

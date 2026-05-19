@@ -1,0 +1,86 @@
+# iOS Fastfile for GGCode Mobile
+default_platform(:ios)
+
+platform :ios do
+  desc "Build iOS Release Archive"
+  lane :build do
+    gym(
+      scheme: "Runner",
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "../../builds/ios",
+      output_name: "GGCode.ipa"
+    )
+  end
+
+  desc "Upload to TestFlight"
+  lane :upload_testflight do
+    gym(
+      scheme: "Runner",
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "../../builds/ios",
+      output_name: "GGCode.ipa"
+    )
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || "../../secrets/AuthKey.p8",
+      in_house: false
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true,
+      skip_submission: true,
+      distribute_only: false
+    )
+  end
+
+  desc "Build and submit for App Store Review"
+  lane :release do
+    gym(
+      scheme: "Runner",
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "../../builds/ios",
+      output_name: "GGCode.ipa"
+    )
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || "../../secrets/AuthKey.p8",
+      in_house: false
+    )
+
+    retry_count = 0
+    max_retries = 3
+
+    begin
+      upload_to_app_store(
+        api_key: api_key,
+        skip_metadata: false,
+        skip_screenshots: true,
+        submit_for_review: true,
+        automatic_release: false,
+        force: true,
+        precheck_include_in_app_purchases: false,
+        submission_information: {
+          add_id_info_uses_idfa: false
+        }
+      )
+    rescue => exception
+      retry_count += 1
+      if retry_count < max_retries
+        UI.important("Upload failed (attempt #{retry_count}/#{max_retries}): #{exception.message}")
+        sleep(10)
+        retry
+      else
+        UI.error("Upload failed after #{max_retries} retries")
+        UI.user_error!("Cannot complete upload")
+      end
+    end
+  end
+end

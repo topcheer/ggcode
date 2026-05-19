@@ -1,0 +1,82 @@
+# Android Fastfile for GGCode Mobile
+default_platform(:android)
+
+platform :android do
+  desc "Build release AAB"
+  lane :build_aab do
+    sh("cd ../.. && flutter build appbundle --release")
+  end
+
+  desc "Build release APK"
+  lane :build_apk do
+    sh("cd ../.. && flutter build apk --release")
+  end
+
+  desc "Upload AAB to Google Play Internal Testing"
+  lane :upload_internal do
+    upload_to_play_store(
+      package_name: "gg.ai.ggcode.mobile",
+      aab: "../../build/app/outputs/bundle/release/app-release.aab",
+      track: "internal",
+      skip_upload_metadata: false,
+      skip_upload_changelogs: true,
+      skip_upload_images: false,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true
+    )
+  end
+
+  desc "Build and upload to Internal Testing"
+  lane :deploy_internal do
+    build_aab
+    upload_internal
+  end
+
+  desc "Promote from internal to alpha (Closed Testing)"
+  lane :promote_alpha do
+    version_json_path = File.expand_path("../../pubspec.yaml", __FILE__)
+    version_content = File.read(version_json_path)
+    if version_content =~ /version:\s*(\d+\.\d+\.\d+)\+(\d+)/
+      version_code = $2.to_i
+    else
+      UI.user_error!("Cannot parse version from pubspec.yaml")
+    end
+
+    upload_to_play_store(
+      package_name: "gg.ai.ggcode.mobile",
+      track: "internal",
+      track_promote_to: "alpha",
+      version_code: version_code,
+      skip_upload_metadata: false,
+      skip_upload_changelogs: false,
+      skip_upload_images: false,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true,
+      skip_upload_aab: true
+    )
+  end
+
+  desc "Promote from alpha to production"
+  lane :promote_production do
+    version_json_path = File.expand_path("../../pubspec.yaml", __FILE__)
+    version_content = File.read(version_json_path)
+    if version_content =~ /version:\s*(\d+\.\d+\.\d+)\+(\d+)/
+      version_code = $2.to_i
+    else
+      UI.user_error!("Cannot parse version from pubspec.yaml")
+    end
+
+    upload_to_play_store(
+      package_name: "gg.ai.ggcode.mobile",
+      track: "alpha",
+      track_promote_to: "production",
+      version_code: version_code,
+      skip_upload_metadata: false,
+      skip_upload_changelogs: false,
+      skip_upload_images: false,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true,
+      skip_upload_aab: true
+    )
+  end
+end
