@@ -24,9 +24,9 @@ platform :android do
       package_name: "gg.ai.ggcode.mobile",
       aab: aab_path,
       track: "internal",
-      skip_upload_metadata: false,
+      skip_upload_metadata: true,
       skip_upload_changelogs: true,
-      skip_upload_images: false,
+      skip_upload_images: true,
       skip_upload_screenshots: true,
       skip_upload_apk: true
     )
