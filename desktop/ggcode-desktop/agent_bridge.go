@@ -178,6 +178,18 @@ func (b *AgentBridge) setupAgent() error {
 		}
 	})
 
+	// Forward sub-agent tool calls/results to mobile.
+	b.subAgentMgr.SetOnToolCall(func(agentID, toolName, args, detail string) {
+		if b.tunnelBroker != nil {
+			b.tunnelBroker.PushSubagentToolCall(agentID, toolName, args, detail)
+		}
+	})
+	b.subAgentMgr.SetOnToolResult(func(agentID, toolName, result string, isError bool) {
+		if b.tunnelBroker != nil {
+			b.tunnelBroker.PushSubagentToolResult(agentID, toolName, result, isError)
+		}
+	})
+
 	// Swarm manager.
 	swarmFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) swarm.AgentRunner {
 		return agent.NewAgent(prov, tools.(*tool.Registry), systemPrompt, maxTurns)
@@ -211,7 +223,11 @@ func (b *AgentBridge) setupAgent() error {
 		if b.tunnelBroker != nil {
 			switch ev.Type {
 			case "teammate_tool_call":
+				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.CurrentTool, ev.ToolArgs, "")
 				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
+
+			case "teammate_tool_result":
+				b.tunnelBroker.PushSubagentToolResult(ev.TeammateID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
 
 			case "teammate_text":
 				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)

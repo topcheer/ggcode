@@ -180,6 +180,18 @@ func (b *Broker) PushSubagentComplete(agentID, name, summary string, success boo
 	})
 }
 
+func (b *Broker) PushSubagentToolCall(agentID, toolName, args, detail string) {
+	b.send(EventSubagentToolCall, SubagentToolCallData{
+		AgentID: agentID, ToolName: toolName, Args: args, Detail: detail,
+	})
+}
+
+func (b *Broker) PushSubagentToolResult(agentID, toolName, result string, isError bool) {
+	b.send(EventSubagentToolResult, SubagentToolResultData{
+		AgentID: agentID, ToolName: toolName, Result: result, IsError: isError,
+	})
+}
+
 // ─── Utility ───
 
 func (b *Broker) NextMessageID() string {

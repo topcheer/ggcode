@@ -131,6 +131,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
 
       case 'chat_clear':
         chatNotifier.clearMessages();
+        _ref.read(subagentProvider.notifier).state = {};
         break;
 
       case 'text':
@@ -233,11 +234,36 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
             );
             _ref.read(subagentProvider.notifier).state = agents;
           }
-          Future.delayed(const Duration(seconds: 3), () {
-            final current = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
-            current.remove(data.agentId);
-            _ref.read(subagentProvider.notifier).state = current;
-          });
+        }
+        break;
+
+      case 'subagent_tool_call':
+        if (msg.data != null) {
+          final data = proto.SubagentToolCallData.fromJson(msg.data!);
+          final agents = _ref.read(subagentProvider);
+          final agent = agents[data.agentId];
+          final chatNotifier = _ref.read(chatProvider.notifier);
+          chatNotifier.addSubagentToolCall(
+            agentId: data.agentId,
+            toolName: data.toolName,
+            args: data.args,
+            detail: data.detail,
+            sourceName: agent?.name ?? data.agentId,
+            sourceColor: agent?.color ?? '#4CAF50',
+          );
+        }
+        break;
+
+      case 'subagent_tool_result':
+        if (msg.data != null) {
+          final data = proto.SubagentToolResultData.fromJson(msg.data!);
+          final chatNotifier = _ref.read(chatProvider.notifier);
+          chatNotifier.updateSubagentToolResult(
+            agentId: data.agentId,
+            toolName: data.toolName,
+            result: data.result,
+            isError: data.isError,
+          );
         }
         break;
 
@@ -423,6 +449,51 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
           streaming: !data.done,
           time: DateTime.now(),
         ),
+      ];
+    }
+  }
+
+  void addSubagentToolCall({
+    required String agentId,
+    required String toolName,
+    required String args,
+    required String detail,
+    required String sourceName,
+    required String sourceColor,
+  }) {
+    final msgId = '$agentId-tool-${_msgCounter++}';
+    state = [
+      ...state,
+      ChatMessage(
+        id: msgId,
+        sourceId: agentId,
+        sourceName: sourceName,
+        sourceColor: sourceColor,
+        toolName: toolName,
+        toolDetail: detail.isNotEmpty ? detail : (args.length > 100 ? '${args.substring(0, 100)}...' : args),
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  void updateSubagentToolResult({
+    required String agentId,
+    required String toolName,
+    required String result,
+    required bool isError,
+  }) {
+    // Find last tool call message from this agent with this tool
+    final idx = state.lastIndexWhere(
+      (m) => m.sourceId == agentId && m.toolName == toolName && m.toolResult == null,
+    );
+    if (idx >= 0) {
+      final msg = state[idx];
+      state = [
+        for (int i = 0; i < state.length; i++)
+          if (i == idx)
+            msg.copyWith(toolResult: result, isToolError: isError)
+          else
+            state[i],
       ];
     }
   }

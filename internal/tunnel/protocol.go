@@ -16,25 +16,27 @@ type GatewayMessage struct {
 
 // Server → Client event types.
 const (
-	EventConnected        = "connected"
-	EventSessionInfo      = "session_info"
-	EventUserMessage      = "user_message" // user text from desktop
-	EventText             = "text"         // streaming text chunk
-	EventTextDone         = "text_done"    // text stream complete
-	EventStatus           = "status"       // agent status change
-	EventToolCall         = "tool_call"
-	EventToolResult       = "tool_result"
-	EventApprovalRequest  = "approval_request"
-	EventApprovalResult   = "approval_result"
-	EventAskUserRequest   = "ask_user_request"
-	EventAskUserResponse  = "ask_user_response"
-	EventSubagentSpawn    = "subagent_spawn"
-	EventSubagentText     = "subagent_text"
-	EventSubagentStatus   = "subagent_status"
-	EventSubagentComplete = "subagent_complete"
-	EventError            = "error"
-	EventPing             = "ping"
-	EventDisconnected     = "disconnected"
+	EventConnected          = "connected"
+	EventSessionInfo        = "session_info"
+	EventUserMessage        = "user_message" // user text from desktop
+	EventText               = "text"         // streaming text chunk
+	EventTextDone           = "text_done"    // text stream complete
+	EventStatus             = "status"       // agent status change
+	EventToolCall           = "tool_call"
+	EventToolResult         = "tool_result"
+	EventApprovalRequest    = "approval_request"
+	EventApprovalResult     = "approval_result"
+	EventAskUserRequest     = "ask_user_request"
+	EventAskUserResponse    = "ask_user_response"
+	EventSubagentSpawn      = "subagent_spawn"
+	EventSubagentText       = "subagent_text"
+	EventSubagentStatus     = "subagent_status"
+	EventSubagentToolCall   = "subagent_tool_call"
+	EventSubagentToolResult = "subagent_tool_result"
+	EventSubagentComplete   = "subagent_complete"
+	EventError              = "error"
+	EventPing               = "ping"
+	EventDisconnected       = "disconnected"
 )
 
 // Client → Server command types.
@@ -202,6 +204,22 @@ type SubagentStatusData struct {
 	AgentID string `json:"agent_id"`
 	Status  string `json:"status"` // running/waiting_approval/completed/failed
 	Message string `json:"message,omitempty"`
+}
+
+// SubagentToolCallData carries tool call info from a sub-agent.
+type SubagentToolCallData struct {
+	AgentID  string `json:"agent_id"`
+	ToolName string `json:"tool_name"`
+	Args     string `json:"args,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+// SubagentToolResultData carries tool result from a sub-agent.
+type SubagentToolResultData struct {
+	AgentID  string `json:"agent_id"`
+	ToolName string `json:"tool_name"`
+	Result   string `json:"result"`
+	IsError  bool   `json:"is_error"`
 }
 
 // SubagentCompleteData notifies that a sub-agent has finished.
