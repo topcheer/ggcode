@@ -210,6 +210,9 @@ func (b *AgentBridge) setupAgent() error {
 		// Push to mobile client
 		if b.tunnelBroker != nil {
 			switch ev.Type {
+			case "teammate_tool_call":
+				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
+
 			case "teammate_text":
 				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
 				b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)

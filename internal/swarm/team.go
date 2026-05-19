@@ -222,11 +222,13 @@ func (t *Team) listTeammates() []*Teammate {
 
 // Event represents a state change in the swarm system, sent to TUI via callback.
 type Event struct {
-	Type         string // "teammate_spawned", "teammate_working", "teammate_idle", "teammate_shutdown", "team_created", "team_deleted"
+	Type         string // "teammate_spawned", "teammate_working", "teammate_text", "teammate_tool_call", "teammate_idle", "teammate_shutdown", "team_created", "team_deleted"
 	TeamID       string
 	TeammateID   string
 	TeammateName string
 	Result       string
 	Error        error
+	CurrentTool  string // tool name (for teammate_tool_call)
+	ToolArgs     string // tool args (for teammate_tool_call)
 	Timestamp    time.Time
 }
