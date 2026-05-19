@@ -339,10 +339,12 @@ func executeTask(
 			})
 			if onEvent != nil {
 				onEvent(Event{
-					Type:         "teammate_working",
+					Type:         "teammate_tool_call",
 					TeamID:       team.ID,
 					TeammateID:   tm.ID,
 					TeammateName: tm.Name,
+					CurrentTool:  event.Tool.Name,
+					ToolArgs:     string(event.Tool.Arguments),
 					Timestamp:    time.Now(),
 				})
 			}
