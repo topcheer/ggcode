@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera access is needed to scan QR codes for connecting to GGCode instances.</string>
+		<key>ITSAppUsesNonExemptEncryption</key>
+		<false/>
 </dict>
 </plist>

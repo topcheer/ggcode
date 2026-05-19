@@ -2,6 +2,26 @@
 default_platform(:ios)
 
 platform :ios do
+  desc "Upload metadata to App Store Connect (no build)"
+  lane :upload_metadata do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+
+    deliver(
+      api_key: api_key,
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      submit_for_review: false,
+      force: true,
+      precheck_include_in_app_purchases: false,
+      overwrite_screenshots: false
+    )
+  end
+
   desc "Generate provisioning profiles via sigh"
   lane :provision do
     api_key = app_store_connect_api_key(
