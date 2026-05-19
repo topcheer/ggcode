@@ -225,7 +225,14 @@ func (b *AgentBridge) setupAgent() error {
 		if b.tunnelBroker != nil {
 			switch ev.Type {
 			case "teammate_tool_call":
-				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, "")
+				detail := ""
+				var input map[string]interface{}
+				if json.Unmarshal([]byte(ev.ToolArgs), &input) == nil {
+					if desc, ok := input["description"].(string); ok && desc != "" {
+						detail = desc
+					}
+				}
+				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, detail)
 				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 			case "teammate_tool_result":
