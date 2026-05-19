@@ -1,0 +1,18 @@
+GGCode is a mobile companion app for the GGCode AI coding agent. Connect to your desktop terminal agent via QR code and interact with your AI coding assistant from anywhere.
+
+KEY FEATURES
+- Scan QR code to connect to your desktop GGCode agent
+- Real-time streaming chat with the AI assistant
+- View tool execution results (file edits, terminal commands, git operations)
+- Monitor sub-agent and teammate activity
+- Background connection resilience with auto-reconnect
+- Ask User questionnaire support for interactive workflows
+- Dark theme optimized for extended use
+
+HOW IT WORKS
+1. Run GGCode desktop with relay enabled
+2. Scan the QR code shown on desktop
+3. Chat with your AI agent from your phone
+4. Approve tool executions and review results on the go
+
+GGCode turns your phone into a remote control for AI-powered software development. Monitor builds, review code changes, and guide your AI agent — all from your pocket.

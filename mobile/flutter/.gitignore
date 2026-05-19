@@ -15,3 +15,20 @@ android/.gradle/
 build/
 ios/Flutter/ephemeral/
 Podfile.lock
+
+# Secrets — NEVER commit credentials
+secrets/
+*.jks
+*.keystore
+*.p8
+*.p12
+*.pem
+key.properties
+.env
+.env.*
+!*.env.example
+*.json_key
+google-services.json
+GoogleService-Info.plist
+fastlane/README.md
+fastlane/report.xml
