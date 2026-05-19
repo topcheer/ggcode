@@ -242,68 +242,69 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 
   Widget _buildToolMessage(ChatMessage msg) {
+    final prettyName = _prettyToolName(msg.toolName ?? 'tool');
+    final hasResult = msg.toolResult != null && msg.toolResult!.isNotEmpty;
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 2),
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A2E),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header line: icon + tool name + detail
           Row(
             children: [
-              Icon(Icons.build, size: 14, color: Colors.blueAccent.withOpacity(0.7)),
+              Icon(Icons.build, size: 13, color: Colors.blueAccent.withOpacity(0.7)),
               const SizedBox(width: 4),
               Text(
-                msg.toolName ?? 'tool',
+                '($prettyName)',
                 style: TextStyle(
                   color: Colors.blueAccent.withOpacity(0.9),
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              if (msg.toolDetail != null) ...[
-                const SizedBox(width: 4),
+              if (msg.toolDetail != null && msg.toolDetail!.isNotEmpty) ...[
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     msg.toolDetail!,
-                    style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+                    style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
+              if (hasResult)
+                Icon(
+                  msg.isToolError ? Icons.error_outline : Icons.check_circle_outline,
+                  size: 13,
+                  color: msg.isToolError ? Colors.redAccent.withOpacity(0.7) : Colors.green.withOpacity(0.6),
+                ),
             ],
           ),
-          if (msg.toolResult != null) ...[
-            const SizedBox(height: 4),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: msg.isToolError
-                    ? Colors.red.withOpacity(0.1)
-                    : Colors.green.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                msg.toolResult!.length > 200
-                    ? '${msg.toolResult!.substring(0, 200)}...'
-                    : msg.toolResult!,
-                style: TextStyle(
-                  color: msg.isToolError ? Colors.redAccent : Colors.white70,
-                  fontSize: 11,
-                  fontFamily: 'monospace',
-                ),
-              ),
+          // Result: collapsed by default, tap to expand
+          if (hasResult)
+            _ToolResultCard(
+              result: msg.toolResult!,
+              isError: msg.isToolError,
             ),
-          ],
         ],
       ),
     );
+  }
+
+  /// read_file → Read File, search_files → Search Files
+  static String _prettyToolName(String name) {
+    return name
+        .split('_')
+        .map((w) => w.isEmpty ? '' : '${w[0].toUpperCase()}${w.substring(1)}')
+        .join(' ');
   }
 
   Color _parseColor(String hex) {
@@ -312,5 +313,75 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } catch (_) {
       return Colors.green;
     }
+  }
+}
+
+/// Collapsible tool result card. Default collapsed, tap to expand.
+class _ToolResultCard extends StatefulWidget {
+  final String result;
+  final bool isError;
+  const _ToolResultCard({required this.result, this.isError = false});
+
+  @override
+  State<_ToolResultCard> createState() => _ToolResultCardState();
+}
+
+class _ToolResultCardState extends State<_ToolResultCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = widget.result.length > 120
+        ? '${widget.result.substring(0, 120)}...'
+        : widget.result;
+
+    return GestureDetector(
+      onTap: () => setState(() => _expanded = !_expanded),
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(top: 4),
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: widget.isError
+              ? Colors.red.withOpacity(0.08)
+              : Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 14,
+                  color: Colors.white38,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  widget.isError ? 'Error' : 'Result',
+                  style: TextStyle(
+                    color: widget.isError ? Colors.redAccent.withOpacity(0.8) : Colors.white38,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              _expanded ? widget.result : preview,
+              style: TextStyle(
+                color: widget.isError ? Colors.redAccent : Colors.white60,
+                fontSize: 11,
+                fontFamily: 'monospace',
+              ),
+              maxLines: _expanded ? null : 2,
+              overflow: _expanded ? null : TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
