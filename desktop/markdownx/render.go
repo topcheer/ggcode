@@ -1,8 +1,12 @@
 package markdownx
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"image/color"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -22,6 +26,9 @@ func renderBlock(b *mdBlock) fyne.CanvasObject {
 	case blockParagraph:
 		return renderParagraph(b)
 	case blockCode:
+		if b.lang == "mermaid" {
+			return renderMermaidBlock(b)
+		}
 		return renderCodeBlock(b)
 	case blockList:
 		return renderList(b)
@@ -230,6 +237,88 @@ func renderHR() fyne.CanvasObject {
 
 func padded(top, bottom, left, right float32, obj fyne.CanvasObject) fyne.CanvasObject {
 	return container.New(layout.NewCustomPaddedLayout(top, bottom, left, right), obj)
+}
+
+// ── Mermaid Diagram ────────────────────────────────────
+
+func renderMermaidBlock(b *mdBlock) fyne.CanvasObject {
+	mermaidCode := strings.Join(b.lines, "\n")
+
+	placeholder := widget.NewLabel("Loading diagram...")
+	placeholder.Alignment = fyne.TextAlignCenter
+
+	img := &canvas.Image{}
+	img.FillMode = canvas.ImageFillContain
+	img.SetMinSize(fyne.NewSize(600, 400))
+	img.Hide()
+
+	wrapper := container.NewStack(placeholder)
+
+	go func() {
+		pngData, err := fetchMermaidPNG(mermaidCode)
+		if err != nil {
+			fyne.Do(func() {
+				placeholder.SetText(fmt.Sprintf("Diagram unavailable: %v", err))
+				placeholder.Refresh()
+			})
+			return
+		}
+		if len(pngData) < 8 || !bytes.HasPrefix(pngData, []byte("\x89PNG")) {
+			fyne.Do(func() {
+				placeholder.SetText("Diagram rendering returned invalid data")
+				placeholder.Refresh()
+			})
+			return
+		}
+		img.Resource = fyne.NewStaticResource("mermaid.png", pngData)
+		fyne.Do(func() {
+			placeholder.Hide()
+			img.Show()
+			img.Refresh()
+			wrapper.Refresh()
+		})
+	}()
+
+	return padded(6, 6, 0, 0, wrapper)
+}
+
+// fetchMermaidPNG tries kroki.io first, then mermaid.ink as fallback.
+func fetchMermaidPNG(mermaidCode string) ([]byte, error) {
+	// Backend 1: kroki.io
+	if data, err := fetchKroki(mermaidCode); err == nil {
+		return data, nil
+	}
+	// Backend 2: mermaid.ink
+	if data, err := fetchMermaidInk(mermaidCode); err == nil {
+		return data, nil
+	}
+	return nil, fmt.Errorf("all mermaid backends failed")
+}
+
+func fetchKroki(mermaidCode string) ([]byte, error) {
+	payload := strings.NewReader(url.QueryEscape(mermaidCode))
+	resp, err := http.Post("https://kroki.io/mermaid/png", "application/x-www-form-urlencoded", payload)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("kroki returned %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func fetchMermaidInk(mermaidCode string) ([]byte, error) {
+	encoded := base64.URLEncoding.EncodeToString([]byte(mermaidCode))
+	resp, err := http.Get("https://mermaid.ink/img/" + encoded)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("mermaid.ink returned %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 // Ensure imports.
