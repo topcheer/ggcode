@@ -119,7 +119,9 @@ if [[ "${DO_SIGN}" == "true" ]]; then
   security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
   security import "${P12_PATH}" -P "${P12_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN}"
   echo "  Import exit code: $?"
-  ls -la "${P12_FILE:-$P12_PATH}" 2>/dev/null || true
+  file "${P12_PATH}"
+  # Verify identity is available after import
+  security find-identity -v -p codesigning "${KEYCHAIN}" || echo "  WARNING: No signing identities found after import"
   # set-key-partition-list may fail on some runners; allow codesign access via -T.
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" 2>/dev/null || true
   # Add custom keychain to the search list so codesign can find the identity.
