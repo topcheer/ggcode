@@ -269,6 +269,7 @@ func (a *App) showShareDialog() {
 			session := a.agentBridge.CurrentSession()
 			if session != nil && len(session.Messages) > 0 {
 				history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
+				toolIDMap := map[string]string{} // toolID → toolName
 				for _, msg := range session.Messages {
 					if msg.Role == "user" {
 						var textParts []string
@@ -296,12 +297,18 @@ func (a *App) showShareDialog() {
 							case "tool_use":
 								detail := ""
 								if block.Input != nil {
-									if raw, err := json.Marshal(block.Input); err == nil {
-										s := string(raw)
-										if len(s) > 200 {
-											s = s[:200] + "..."
+									var input map[string]interface{}
+									if json.Unmarshal(block.Input, &input) == nil {
+										if desc, ok := input["description"].(string); ok && desc != "" {
+											detail = desc
+										} else {
+											for _, v := range input {
+												if s, ok := v.(string); ok && s != "" {
+													detail = s
+													break
+												}
+											}
 										}
-										detail = s
 									}
 								}
 								history = append(history, tunnel.HistoryEntry{
@@ -309,6 +316,9 @@ func (a *App) showShareDialog() {
 									ToolName: block.ToolName,
 									ToolArgs: detail,
 								})
+								if block.ToolID != "" {
+									toolIDMap[block.ToolID] = block.ToolName
+								}
 							}
 						}
 					} else if msg.Role == "tool" {
@@ -318,9 +328,13 @@ func (a *App) showShareDialog() {
 								if len(result) > 500 {
 									result = result[:500] + "..."
 								}
+								tName := block.ToolName
+								if tName == "" {
+									tName = toolIDMap[block.ToolID]
+								}
 								history = append(history, tunnel.HistoryEntry{
 									Role:     "tool_result",
-									ToolName: block.ToolName,
+									ToolName: tName,
 									Result:   result,
 									IsError:  block.IsError,
 								})
@@ -685,6 +699,7 @@ func (a *App) resumeSession(id string) {
 		a.tunnelBroker.PushChatClear()
 		session := a.agentBridge.CurrentSession()
 		history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
+		toolIDMap := map[string]string{} // toolID → toolName
 		for _, msg := range session.Messages {
 			if msg.Role == "user" {
 				var textParts []string
@@ -712,12 +727,18 @@ func (a *App) resumeSession(id string) {
 					case "tool_use":
 						detail := ""
 						if block.Input != nil {
-							if raw, err := json.Marshal(block.Input); err == nil {
-								s := string(raw)
-								if len(s) > 200 {
-									s = s[:200] + "..."
+							var input map[string]interface{}
+							if json.Unmarshal(block.Input, &input) == nil {
+								if desc, ok := input["description"].(string); ok && desc != "" {
+									detail = desc
+								} else {
+									for _, v := range input {
+										if s, ok := v.(string); ok && s != "" {
+											detail = s
+											break
+										}
+									}
 								}
-								detail = s
 							}
 						}
 						history = append(history, tunnel.HistoryEntry{
@@ -725,6 +746,9 @@ func (a *App) resumeSession(id string) {
 							ToolName: block.ToolName,
 							ToolArgs: detail,
 						})
+						if block.ToolID != "" {
+							toolIDMap[block.ToolID] = block.ToolName
+						}
 					}
 				}
 			} else if msg.Role == "tool" {
@@ -734,9 +758,13 @@ func (a *App) resumeSession(id string) {
 						if len(result) > 500 {
 							result = result[:500] + "..."
 						}
+						tName := block.ToolName
+						if tName == "" {
+							tName = toolIDMap[block.ToolID]
+						}
 						history = append(history, tunnel.HistoryEntry{
 							Role:     "tool_result",
-							ToolName: block.ToolName,
+							ToolName: tName,
 							Result:   result,
 							IsError:  block.IsError,
 						})
