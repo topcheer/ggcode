@@ -299,7 +299,6 @@ func (a *App) showShareDialog() {
 							})
 						}
 					} else if msg.Role == "assistant" {
-					} else if msg.Role == "assistant" {
 						for _, block := range msg.Content {
 							switch block.Type {
 							case "text":
@@ -737,7 +736,6 @@ func (a *App) resumeSession(id string) {
 						Content: strings.Join(textParts, "\n"),
 					})
 				}
-			} else if msg.Role == "assistant" {
 			} else if msg.Role == "assistant" {
 				for _, block := range msg.Content {
 					switch block.Type {
