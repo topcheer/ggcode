@@ -32,3 +32,6 @@ google-services.json
 GoogleService-Info.plist
 fastlane/README.md
 fastlane/report.xml
+vendor/bundle/
+Gemfile.lock
+vendor/

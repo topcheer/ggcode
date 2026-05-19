@@ -1,2 +1,2 @@
-json_key_file("../../secrets/playstore-service-account.json")
+json_key_file("../secrets/playstore-service-account.json")
 package_name("gg.ai.ggcode.mobile")
