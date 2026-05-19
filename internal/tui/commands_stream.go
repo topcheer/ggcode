@@ -77,8 +77,8 @@ func (m *Model) appendReasoningChunk(chunk string) {
 	if m.chatList != nil {
 		if item := m.chatList.FindByID(aid); item != nil {
 			if a, ok := item.(*chat.AssistantItem); ok {
-				// Accumulate: get current reasoning and append
-				a.SetReasoning(a.Reasoning() + chunk)
+				// msg.Text is already the accumulated full text from batchReasoningBuf
+				a.SetReasoning(chunk)
 			}
 		}
 	}
