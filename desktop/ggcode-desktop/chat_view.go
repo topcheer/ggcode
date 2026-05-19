@@ -674,6 +674,7 @@ func (cv *ChatView) statusLoop() {
 		case <-cv.stopCh:
 			return
 		case <-ticker.C:
+			cv.ui.FlushStream()
 			working := cv.bridge.IsWorking()
 			fyne.Do(func() {
 				cv.updateStatusBar(working)
