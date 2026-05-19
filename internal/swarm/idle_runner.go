@@ -344,6 +344,7 @@ func executeTask(
 					TeammateID:   tm.ID,
 					TeammateName: tm.Name,
 					CurrentTool:  event.Tool.Name,
+					ToolID:       event.Tool.ID,
 					ToolArgs:     string(event.Tool.Arguments),
 					Timestamp:    time.Now(),
 				})
@@ -364,7 +365,9 @@ func executeTask(
 					TeammateID:   tm.ID,
 					TeammateName: tm.Name,
 					CurrentTool:  lastToolName,
+					ToolID:       event.Tool.ID,
 					ToolArgs:     event.Result,
+					IsError:      event.IsError,
 					Timestamp:    time.Now(),
 				})
 			}

@@ -482,9 +482,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					if name == "" {
 						name = "tool"
 					}
-					tunnelBroker.PushToolCall(name, string(ev.Tool.Arguments), name)
+					tunnelBroker.PushToolCall(ev.Tool.ID, name, string(ev.Tool.Arguments), name)
 				case provider.StreamEventToolResult:
-					tunnelBroker.PushToolResult(ev.Tool.Name, ev.Result, ev.IsError)
+					tunnelBroker.PushToolResult(ev.Tool.ID, ev.Tool.Name, ev.Result, ev.IsError)
 				case provider.StreamEventDone:
 					tunnelBroker.PushStatus(tunnel.StatusIdle, "")
 				}

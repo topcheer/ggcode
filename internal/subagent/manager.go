@@ -203,10 +203,10 @@ type Manager struct {
 	showOutput   bool
 	onUpdate     func(*SubAgent)
 	onComplete   func(*SubAgent)
-	onStreamText func(agentID, text string)                           // called on each text chunk (no throttle)
-	onToolCall   func(agentID, toolName, args, detail string)         // called on tool call
-	onToolResult func(agentID, toolName, result string, isError bool) // called on tool result
-	lastNotify   time.Time                                            // throttle: last time onUpdate was called
+	onStreamText func(agentID, text string)                                   // called on each text chunk (no throttle)
+	onToolCall   func(agentID, toolID, toolName, args, detail string)         // called on tool call
+	onToolResult func(agentID, toolID, toolName, result string, isError bool) // called on tool result
+	lastNotify   time.Time                                                    // throttle: last time onUpdate was called
 	nextID       int
 	// rootCtx is the lifecycle ctx for sub-agents. It is independent of any
 	// per-call/per-submit ctx so that sub-agents survive the parent agent
@@ -476,33 +476,33 @@ func (m *Manager) SetOnStreamText(fn func(agentID, text string)) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) SetOnToolCall(fn func(agentID, toolName, args, detail string)) {
+func (m *Manager) SetOnToolCall(fn func(agentID, toolID, toolName, args, detail string)) {
 	m.mu.Lock()
 	m.onToolCall = fn
 	m.mu.Unlock()
 }
 
-func (m *Manager) SetOnToolResult(fn func(agentID, toolName, result string, isError bool)) {
+func (m *Manager) SetOnToolResult(fn func(agentID, toolID, toolName, result string, isError bool)) {
 	m.mu.Lock()
 	m.onToolResult = fn
 	m.mu.Unlock()
 }
 
-func (m *Manager) NotifyToolCall(agentID, toolName, args, detail string) {
+func (m *Manager) NotifyToolCall(agentID, toolID, toolName, args, detail string) {
 	m.mu.Lock()
 	fn := m.onToolCall
 	m.mu.Unlock()
 	if fn != nil {
-		fn(agentID, toolName, args, detail)
+		fn(agentID, toolID, toolName, args, detail)
 	}
 }
 
-func (m *Manager) NotifyToolResult(agentID, toolName, result string, isError bool) {
+func (m *Manager) NotifyToolResult(agentID, toolID, toolName, result string, isError bool) {
 	m.mu.Lock()
 	fn := m.onToolResult
 	m.mu.Unlock()
 	if fn != nil {
-		fn(agentID, toolName, result, isError)
+		fn(agentID, toolID, toolName, result, isError)
 	}
 }
 
