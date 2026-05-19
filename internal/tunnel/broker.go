@@ -133,12 +133,20 @@ func (b *Broker) flushAllText() {
 			data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 			msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
 			b.recordLog(msg)
-			b.sendQueue <- msg
+			select {
+			case b.sendQueue <- msg:
+			default:
+				log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
+			}
 		} else {
 			data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
 			msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
 			b.recordLog(msg)
-			b.sendQueue <- msg
+			select {
+			case b.sendQueue <- msg:
+			default:
+				log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
+			}
 		}
 	}
 }
@@ -159,12 +167,20 @@ func (b *Broker) flushText(msgID string) {
 		data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 		msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
 		b.recordLog(msg)
-		b.sendQueue <- msg
+		select {
+		case b.sendQueue <- msg:
+		default:
+			log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
+		}
 	} else {
 		data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
 		msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
 		b.recordLog(msg)
-		b.sendQueue <- msg
+		select {
+		case b.sendQueue <- msg:
+		default:
+			log.Printf("[broker] sendQueue full, dropping seq=%d", seq)
+		}
 	}
 }
 
@@ -371,7 +387,11 @@ func (b *Broker) enqueue(eventType string, data interface{}) {
 		Data: dataBytes,
 	}
 	b.recordLog(msg)
-	b.sendQueue <- msg
+	select {
+	case b.sendQueue <- msg:
+	default:
+		log.Printf("[broker] sendQueue full, dropping %s seq=%d", eventType, seq)
+	}
 }
 
 // recordLog appends to sentLog for replay.
