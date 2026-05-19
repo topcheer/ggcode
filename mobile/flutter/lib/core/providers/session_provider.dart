@@ -692,6 +692,30 @@ final messageDispatcherProvider = Provider<Function>((ref) {
         chatNotifier.handleTextChunk(data);
         break;
 
+      case 'chat_history':
+        if (msg.data != null) {
+          final messages = msg.data!['messages'] as List<dynamic>? ?? [];
+          for (final m in messages) {
+            final role = m['role'] as String? ?? '';
+            if (role == 'tool_call') {
+              final toolName = m['tool_name'] as String? ?? '';
+              final toolArgs = m['tool_args'] as String? ?? '';
+              chatNotifier.addHistoryToolCall(toolName, toolArgs);
+            } else if (role == 'tool_result') {
+              final toolName = m['tool_name'] as String? ?? '';
+              final result = m['result'] as String? ?? '';
+              final isError = m['is_error'] as bool? ?? false;
+              chatNotifier.addHistoryToolResult(toolName, result, isError);
+            } else {
+              final content = m['content'] as String? ?? '';
+              if (content.isNotEmpty) {
+                chatNotifier.addHistoryMessage(role, content);
+              }
+            }
+          }
+        }
+        break;
+
       case 'status':
         final data = proto.StatusData.fromJson(msg.data!);
         ref.read(agentStatusProvider.notifier).state = data.status;
