@@ -27,12 +27,9 @@ type Broker struct {
 	// Sequencing
 	nextSeq atomic.Int64
 
-	// ACK flow control
-	pendingAck chan int64 // sender goroutine waits here for ack seq
-	ackTimeout time.Duration
-
 	// Send queue: all outbound messages go here.
-	// The sender goroutine drains it one-at-a-time, waiting for ACK.
+	// The sender goroutine drains it continuously (no ACK blocking).
+	// TCP/WebSocket guarantees ordered delivery.
 	sendQueue chan GatewayMessage
 
 	// Text batching
@@ -48,13 +45,11 @@ type Broker struct {
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
-		session:    sess,
-		pendingAck: make(chan int64, 1),
-		ackTimeout: 5 * time.Second,
-		sendQueue:  make(chan GatewayMessage, 1000),
-		textBuf:    make(map[string]*textEntry),
-		textTick:   time.NewTicker(300 * time.Millisecond),
-		textDone:   make(chan struct{}),
+		session:   sess,
+		sendQueue: make(chan GatewayMessage, 1000),
+		textBuf:   make(map[string]*textEntry),
+		textTick:  time.NewTicker(300 * time.Millisecond),
+		textDone:  make(chan struct{}),
 	}
 
 	// Start sender goroutine (ACK flow control)
@@ -66,18 +61,7 @@ func NewBroker(sess *Session) *Broker {
 	// Handle incoming messages from mobile
 	sess.OnMessage(func(msg GatewayMessage) {
 		if msg.Type == EventAck {
-			// Extract seq from data
-			var ackData struct {
-				Seq int64 `json:"seq"`
-			}
-			if msg.Data != nil {
-				json.Unmarshal(msg.Data, &ackData)
-			}
-			select {
-			case b.pendingAck <- ackData.Seq:
-			default:
-			}
-			return
+			return // ACK received, no action needed
 		}
 		if b.onCommand != nil {
 			b.onCommand(msg)
@@ -103,20 +87,12 @@ type textEntry struct {
 	text    string
 }
 
-// senderLoop drains sendQueue one message at a time, waiting for ACK after each.
+// senderLoop drains sendQueue continuously.
+// TCP/WebSocket guarantees ordered delivery per connection.
 func (b *Broker) senderLoop() {
 	for msg := range b.sendQueue {
 		if err := b.session.Send(msg); err != nil {
 			log.Printf("[broker] send %s seq=%d failed: %v", msg.Type, msg.Seq, err)
-			continue
-		}
-		// Wait for ACK (with timeout)
-		if msg.Seq > 0 {
-			select {
-			case <-b.pendingAck:
-			case <-time.After(b.ackTimeout):
-				log.Printf("[broker] ACK timeout for seq=%d, proceeding", msg.Seq)
-			}
 		}
 	}
 }
