@@ -298,7 +298,7 @@ jobs:
             P12_FILE="${RUNNER_TEMP}/cert.p12"
             echo "${APPLE_DEVELOPER_ID_P12}" | base64 -d > "${P12_FILE}"
             echo "APPLE_DEVELOPER_ID_P12_PATH=${P12_FILE}" >> "${GITHUB_ENV}"
-            echo "APPLE_DEVELOPER_ID_P12_PASSWORD=${APPLE_DEVELOPER_ID_P12_PASSWORD}" >> "${GITHUB_ENV}"
+            printf '%s\n' "APPLE_DEVELOPER_ID_P12_PASSWORD=${APPLE_DEVELOPER_ID_P12_PASSWORD}" >> "${GITHUB_ENV}"
 
             KEY_FILE="${RUNNER_TEMP}/AuthKey.p8"
             echo "${APPLE_API_KEY_P8}" | base64 -d > "${KEY_FILE}"
