@@ -14,9 +14,15 @@ platform :android do
 
   desc "Upload AAB to Google Play Internal Testing"
   lane :upload_internal do
+    # Resolve AAB path relative to project root (not fastlane dir)
+    project_root = File.expand_path("../../..", __FILE__)
+    aab_path = File.join(project_root, "build/app/outputs/bundle/release/app-release.aab")
+
+    UI.user_error!("AAB not found at #{aab_path}") unless File.exist?(aab_path)
+
     upload_to_play_store(
       package_name: "gg.ai.ggcode.mobile",
-      aab: "../../build/app/outputs/bundle/release/app-release.aab",
+      aab: aab_path,
       track: "internal",
       skip_upload_metadata: false,
       skip_upload_changelogs: true,
