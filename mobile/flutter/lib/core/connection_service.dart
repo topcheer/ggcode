@@ -41,7 +41,7 @@ class ConnectionService {
     _statusController.add(ConnectionStatus.connecting);
 
     try {
-      _socket = await WebSocket.connect(url).timeout(const Duration(seconds: 10));
+      _socket = await WebSocket.connect(url).timeout(const Duration(seconds: 30));
     } catch (e) {
       if (!_disposed) {
         _errorController.add('Connection failed: $e');
