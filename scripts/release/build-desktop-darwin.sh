@@ -116,7 +116,7 @@ if [[ "${DO_SIGN}" == "true" ]]; then
   security set-keychain-settings -lut 21600 "${KEYCHAIN}"
   security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
   security import "${P12_PATH}" -P "${P12_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN}"
-  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" 2>/dev/null || true
   security list-keychains -d user -s "${KEYCHAIN}" "$(security list-keychains -d user | tr -d '\"')"
 
   echo "  Codesigning..."
