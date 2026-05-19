@@ -38,6 +38,7 @@ type RunnerConfig struct {
 	Model        string                                                       // optional model override (e.g., "sonnet", "opus", "haiku")
 	AgentType    string                                                       // optional agent type hint (e.g., "Explore", "Plan")
 	WorkingDir   string                                                       // working directory for the sub-agent
+	OnStreamText func(agentID, text string)                                   // called on each text chunk for tunnel relay
 }
 
 // Run starts the sub-agent in a goroutine, running a complete agentic loop.
@@ -125,6 +126,7 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			if sa, ok := cfg.Manager.Get(cfg.SubAgentID); ok {
 				sa.setActivity("writing", "", "")
 			}
+			cfg.Manager.NotifyStreamText(cfg.SubAgentID, event.Text)
 			// Flush and notify every ~200 tokens to keep follow panel responsive
 			// during long pure-text output (e.g. summary rounds).
 			if textBuf.Len() >= 800 {

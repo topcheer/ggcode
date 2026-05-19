@@ -145,19 +145,10 @@ func (b *AgentBridge) setupAgent() error {
 			switch sa.Status {
 			case subagent.StatusRunning:
 				// Check if this is the first running update (spawn)
-				if sa.ToolCallCount <= 1 && sa.ProgressSummary == "" {
+				if sa.ToolCallCount <= 1 {
 					b.tunnelBroker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
 				}
 				b.tunnelBroker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
-				// Push latest text event
-				evs := sa.Events()
-				if len(evs) > 0 {
-					last := evs[len(evs)-1]
-					if last.Type == subagent.AgentEventText && last.Text != "" {
-						msgID := fmt.Sprintf("sa-%s", sa.ID)
-						b.tunnelBroker.PushSubagentText(sa.ID, msgID, last.Text, false)
-					}
-				}
 
 			case subagent.StatusCompleted:
 				if sa.Result != "" {
@@ -176,6 +167,14 @@ func (b *AgentBridge) setupAgent() error {
 			case subagent.StatusCancelled:
 				b.tunnelBroker.PushSubagentComplete(sa.ID, sa.Name, "cancelled", false)
 			}
+		}
+	})
+
+	// Forward sub-agent text chunks to mobile (unthrottled).
+	b.subAgentMgr.SetOnStreamText(func(agentID, text string) {
+		if b.tunnelBroker != nil {
+			msgID := fmt.Sprintf("sa-%s", agentID)
+			b.tunnelBroker.PushSubagentText(agentID, msgID, text, false)
 		}
 	})
 
