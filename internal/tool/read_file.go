@@ -24,8 +24,8 @@ type ReadFile struct {
 func (t ReadFile) Name() string { return "read_file" }
 
 func (t ReadFile) Description() string {
-	return "Read file contents into the agent's context. ALWAYS read a file with this tool before editing it — edit_file/multi_edit_file require exact byte-for-byte matches against the current content (including indentation and line endings). " +
-		"Output is line-numbered using `cat -n` format (\"   42\\t<line content>\"); when copying lines into edit_file's old_text you MUST drop the leading line-number prefix and tab. " +
+	return "Read file contents into the agent's context. ALWAYS read a file with this tool before editing it. " +
+		"Output is line-numbered using `cat -n` format (\"   42\\t<line content>\"). Recommended workflow: copy those numbered lines directly into edit_file/multi_edit_file old_text, because the edit tools understand the prefixes and use them as anchors for single-line edits and duplicate text. " +
 		"Use offset/limit for files larger than ~2000 lines. " +
 		"Supports text, images (png/jpg/gif/webp), PDF, Office (docx/xlsx/pptx), OpenDocument (odt/ods/odp), EPUB, RTF, archives (zip/tar/tar.gz/tar.bz2), iWork, and SVG."
 }

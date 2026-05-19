@@ -18,9 +18,9 @@ func (t MultiEditFile) Name() string { return "multi_edit_file" }
 
 func (t MultiEditFile) Description() string {
 	return "Apply multiple find-and-replace edits to a single file in one call. " +
-		"Each edit follows the same rules as edit_file: every old_text must match the file byte-for-byte (indentation, line endings) and must be UNIQUE in the file. " +
+		"Each edit follows the same rules as edit_file: the best practice is to paste the numbered lines directly from read_file into each old_text, because the tool uses those line numbers as anchors. Without line-number anchors, every old_text must match the file byte-for-byte (indentation, line endings) and must be UNIQUE in the file. " +
 		"Edits must not overlap. All edits are applied atomically — if any single edit fails, the file is left unchanged. " +
-		"Always read_file first; do not include line-number prefixes from read_file output in old_text. " +
+		"All old_text matches are resolved against the ORIGINAL file, not after earlier edits in the same call. Always read_file first. " +
 		"Use this instead of repeated edit_file calls when changing multiple sites in one file (e.g. renaming a symbol)."
 }
 
@@ -39,11 +39,11 @@ func (t MultiEditFile) Parameters() json.RawMessage {
 				"properties": {
 					"old_text": {
 						"type": "string",
-						"description": "Exact text to find. Must match byte-for-byte (indentation, line endings) and be unique in the file. Do not include line-number prefixes from read_file output."
+						"description": "Text to find. Recommended: paste the numbered lines directly from read_file; the tool uses those prefixes as anchors. Without line numbers, old_text must match byte-for-byte (indentation, line endings) and be unique in the file."
 					},
 					"new_text": {
 						"type": "string",
-						"description": "Replacement text. Use the same indentation style as old_text."
+						"description": "Replacement text. If you copied numbered lines from read_file, you may keep or remove those prefixes here; they are stripped automatically."
 					}
 				},
 				"required": [
@@ -117,10 +117,10 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		}
 		oldText := mr.canonical
 		count := strings.Count(content, oldText)
-		if count > 1 {
+		if count > 1 && !mr.anchored {
 			lines := findMatchLineNumbers(content, oldText)
 			msg := fmt.Sprintf(
-				"edits[%d]: old_text found %d times — must be unique. Add 1-3 lines of surrounding context to disambiguate.",
+				"edits[%d]: old_text found %d times — must be unique. Add 1-3 lines of surrounding context to disambiguate, or copy the exact numbered lines from read_file so this edit is line-number anchored.",
 				i, count,
 			)
 			if len(lines) > 0 {
@@ -132,7 +132,10 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 			}
 			return Result{IsError: true, Content: msg}, nil
 		}
-		idx := strings.Index(content, oldText)
+		idx := mr.start
+		if !mr.anchored {
+			idx = strings.Index(content, oldText)
+		}
 		newText := edit.NewText
 		if mr.transform != "" {
 			newText = adjustNewText(content, edit.NewText, mr)

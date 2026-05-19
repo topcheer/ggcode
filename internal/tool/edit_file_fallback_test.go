@@ -193,3 +193,82 @@ func TestEditFile_LeadingIndentShift_MultiLine(t *testing.T) {
 		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
 	}
 }
+
+func TestEditFile_SingleLineReadFileAnchor(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(fp, []byte("alpha\nbeta\ngamma\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"old_text":  "     2\tbeta",
+		"new_text":  "     2\tBETA",
+	})
+	res, err := EditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected single-line numbered anchor to succeed; got: %s", res.Content)
+	}
+	got, _ := os.ReadFile(fp)
+	if string(got) != "alpha\nBETA\ngamma\n" {
+		t.Errorf("unexpected content: %q", got)
+	}
+}
+
+func TestEditFile_ReadFileAnchorDisambiguatesDuplicateText(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	content := "package main\n\nfunc a() {\n\tprintln(\"same\")\n}\n\nfunc b() {\n\tprintln(\"same\")\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"old_text":  "     8\t\tprintln(\"same\")",
+		"new_text":  "     8\t\tprintln(\"SECOND\")",
+	})
+	res, err := EditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected numbered anchor to disambiguate duplicate text; got: %s", res.Content)
+	}
+	got, _ := os.ReadFile(fp)
+	want := "package main\n\nfunc a() {\n\tprintln(\"same\")\n}\n\nfunc b() {\n\tprintln(\"SECOND\")\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestEditFile_ReadFileWrapperLinesAreIgnored(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	content := "package main\n\nfunc main() {\n\tfmt.Println(\"hello\")\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"old_text":  "[indent: tab]\n     4\t\tfmt.Println(\"hello\")\n[File truncated: showing lines 1-4 of 5. Use read_file with offset/limit for more.]",
+		"new_text":  "[indent: tab]\n     4\t\tfmt.Println(\"world\")",
+	})
+	res, err := EditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected wrapper lines to be ignored; got: %s", res.Content)
+	}
+	got, _ := os.ReadFile(fp)
+	want := "package main\n\nfunc main() {\n\tfmt.Println(\"world\")\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}
