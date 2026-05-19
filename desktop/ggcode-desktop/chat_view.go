@@ -1047,8 +1047,8 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-		result := truncateRunes(msg.Content, 2000, "...")
-		resultBlock := newCodeBlock(result)
+	result := truncateRunes(msg.Content, 2000, "...")
+	resultBlock := newCodeBlock(result)
 	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
@@ -1150,8 +1150,8 @@ func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-		result := truncateRunes(msg.Content, 2000, "...")
-		resultBlock := newCodeBlock(result)
+	result := truncateRunes(msg.Content, 2000, "...")
+	resultBlock := newCodeBlock(result)
 	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
