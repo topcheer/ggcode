@@ -836,12 +836,12 @@ func toolDescription(toolName, rawArgs string) string {
 
 	// Agent tools
 	case "spawn_agent":
-		name := str("name")
-		if name == "" {
-			name = str("subagent_type")
-		}
 		task := truncateRunes(str("task"), 80, "...")
-		d := "(Spawn Sub-Agent) " + name
+		stype := str("subagent_type")
+		d := "(Spawn Sub-Agent)"
+		if stype != "" {
+			d += " " + stype
+		}
 		if task != "" {
 			d += " — " + task
 		}
