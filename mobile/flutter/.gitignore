@@ -35,3 +35,4 @@ fastlane/report.xml
 vendor/bundle/
 Gemfile.lock
 vendor/
+builds/

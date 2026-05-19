@@ -110,9 +110,8 @@
     },
     {
       "size" : "1024x1024",
-      "idiom" : "universal-platform",
+      "idiom" : "ios-marketing",
       "filename" : "Icon-App-1024x1024.png",
-      "platform" : "ios",
       "scale" : "1x"
     }
   ],

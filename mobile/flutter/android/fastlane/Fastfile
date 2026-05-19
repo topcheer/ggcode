@@ -12,6 +12,20 @@ platform :android do
     sh("cd ../.. && flutter build apk --release")
   end
 
+  desc "Upload metadata only (no AAB)"
+  lane :upload_metadata do
+    upload_to_play_store(
+      package_name: "gg.ai.ggcode.mobile",
+      track: "internal",
+      skip_upload_metadata: false,
+      skip_upload_changelogs: true,
+      skip_upload_images: false,
+      skip_upload_screenshots: false,
+      skip_upload_apk: true,
+      skip_upload_aab: true
+    )
+  end
+
   desc "Upload AAB to Google Play Internal Testing"
   lane :upload_internal do
     # Resolve AAB path relative to project root (not fastlane dir)
@@ -24,7 +38,7 @@ platform :android do
       package_name: "gg.ai.ggcode.mobile",
       aab: aab_path,
       track: "internal",
-      skip_upload_metadata: true,
+      skip_upload_metadata: false,
       skip_upload_changelogs: true,
       skip_upload_images: true,
       skip_upload_screenshots: true,
