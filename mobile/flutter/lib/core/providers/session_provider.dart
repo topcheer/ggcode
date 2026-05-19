@@ -33,16 +33,18 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
 
   ConnectionNotifier(this._ref) : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
 
-  Future<void> connect(String url) async {
+  Future<void> connect(String url, {bool clearState = true}) async {
     // Disconnect previous if any
     if (service != null) {
       service!.dispose();
       service = null;
     }
 
-    // Clear previous session state
-    _ref.read(chatProvider.notifier).clearMessages();
-    _ref.read(subagentProvider.notifier).state = {};
+    // Clear previous session state (skip on reconnect from background)
+    if (clearState) {
+      _ref.read(chatProvider.notifier).clearMessages();
+      _ref.read(subagentProvider.notifier).state = {};
+    }
 
     state = state.copyWith(status: ConnectionStatus.connecting, url: url, error: null);
 
@@ -84,6 +86,14 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
     } catch (e) {
       state = state.copyWith(status: ConnectionStatus.disconnected, error: e.toString());
     }
+  }
+
+  /// Reconnect using the last known URL (e.g. after app resumes from background).
+  /// Preserves existing chat state — server will replay recent messages.
+  Future<void> reconnect() async {
+    final url = state.url;
+    if (url == null || url.isEmpty) return;
+    await connect(url, clearState: false);
   }
 
   void disconnect() {
