@@ -282,12 +282,11 @@ type ChatView struct {
 	agentPanelHashes map[string]string
 
 	// Precise update tracking
-	msgWidgets   []fyne.CanvasObject
-	toolWidgets  map[string]*toolWidgetRef
-	streamW      *markdownx.MarkdownWidget
-	thinkingW    fyne.CanvasObject // pulsing "thinking..." indicator
-	reasoningBuf strings.Builder   // accumulated reasoning text
-	reasoningW   *widget.Accordion // collapsible reasoning panel
+	msgWidgets  []fyne.CanvasObject
+	toolWidgets map[string]*toolWidgetRef
+	streamW     *markdownx.MarkdownWidget
+	thinkingW   fyne.CanvasObject // pulsing "thinking..." indicator
+	reasoningW  *widget.Accordion // collapsible reasoning panel
 
 	// Per-agent incremental state
 	agentStates map[string]*agentPanelState
@@ -594,11 +593,10 @@ func (cv *ChatView) onReasoningChunk(text string) {
 		return
 	}
 	cv.hideThinking()
-	cv.reasoningBuf.WriteString(text)
 
 	if cv.reasoningW == nil {
 		// First chunk: create accordion with streaming markdown.
-		md := newMD(cv.reasoningBuf.String())
+		md := newMD(text)
 		accordion := widget.NewAccordion(widget.NewAccordionItem("Thinking...", md))
 		accordion.Open(0)
 		cv.reasoningW = accordion
@@ -610,7 +608,7 @@ func (cv *ChatView) onReasoningChunk(text string) {
 		items := cv.reasoningW.Items
 		if len(items) > 0 {
 			if md, ok := items[0].Detail.(*markdownx.MarkdownWidget); ok {
-				md.SetMarkdown(cv.reasoningBuf.String())
+				md.SetMarkdown(text)
 			}
 		}
 		cv.scroll.ScrollToBottom()
@@ -622,15 +620,12 @@ func (cv *ChatView) collapseReasoning() {
 	if cv.reasoningW == nil {
 		return
 	}
-	n := cv.reasoningBuf.Len()
-	title := fmt.Sprintf("Thought (%d chars)", n)
 	items := cv.reasoningW.Items
 	if len(items) > 0 {
-		items[0].Title = title
+		items[0].Title = "Thought"
 	}
 	cv.reasoningW.CloseAll()
 	cv.reasoningW.Refresh()
-	cv.reasoningBuf.Reset()
 	cv.reasoningW = nil
 }
 
@@ -675,6 +670,7 @@ func (cv *ChatView) statusLoop() {
 			return
 		case <-ticker.C:
 			cv.ui.FlushStream()
+			cv.ui.FlushReasoning()
 			working := cv.bridge.IsWorking()
 			fyne.Do(func() {
 				cv.updateStatusBar(working)
