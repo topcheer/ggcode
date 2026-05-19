@@ -65,6 +65,10 @@ type UIState struct {
 
 	// Status bar label reference (set once during buildUI).
 	statusLabel *widget.Label
+
+	// Streaming throttle: avoid per-token GUI redraws.
+	streamLastNotify atomic.Int64 // unix millis of last EventAssistantChunk
+	streamDirty      atomic.Bool  // true if buffered text not yet pushed to GUI
 }
 
 func (u *UIState) notify(e UIEvent) {
@@ -147,6 +151,7 @@ func (u *UIState) AppendReasoning(text string) {
 
 // AppendAssistantText appends a streaming text chunk to the assistant buffer
 // and updates (or creates) the last assistant message with the full accumulated text.
+// Throttled: GUI updates at most every 80ms to avoid overwhelming Fyne's renderer.
 func (u *UIState) AppendAssistantText(chunk string) {
 	u.ChatMu.Lock()
 	u.assistantBuf.WriteString(chunk)
@@ -155,7 +160,7 @@ func (u *UIState) AppendAssistantText(chunk string) {
 		if u.ChatMsgs[i].Role == "assistant" && u.ChatMsgs[i].Streaming {
 			u.ChatMsgs[i].Content = full
 			u.ChatMu.Unlock()
-			u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
+			u.maybeNotifyChunk(full)
 			return
 		}
 	}
@@ -167,9 +172,35 @@ func (u *UIState) AppendAssistantText(chunk string) {
 	}
 	u.ChatMsgs = append(u.ChatMsgs, msg)
 	u.ChatMu.Unlock()
-	// Notify UI to create a new widget for this message, then update it.
+	// First chunk: always notify immediately to create the widget.
 	u.notify(UIEvent{Type: EventAppend, Msg: msg})
 	u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
+	u.streamLastNotify.Store(time.Now().UnixMilli())
+}
+
+const streamThrottleMs = 80
+
+func (u *UIState) maybeNotifyChunk(full string) {
+	now := time.Now().UnixMilli()
+	last := u.streamLastNotify.Load()
+	if now-last >= streamThrottleMs {
+		u.streamLastNotify.Store(now)
+		u.streamDirty.Store(false)
+		u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
+	} else {
+		u.streamDirty.Store(true)
+	}
+}
+
+// FlushStream forces an immediate EventAssistantChunk if dirty.
+func (u *UIState) FlushStream() {
+	if u.streamDirty.CompareAndSwap(true, false) {
+		u.ChatMu.Lock()
+		full := u.assistantBuf.String()
+		u.ChatMu.Unlock()
+		u.streamLastNotify.Store(time.Now().UnixMilli())
+		u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
+	}
 }
 
 // UpdateToolResult updates the tool message with matching tool call ID.
@@ -190,6 +221,7 @@ func (u *UIState) UpdateToolResult(toolID, result string, isError bool) {
 // FinalizeStreaming marks the last streaming assistant message as done,
 // resets the streaming buffer, and marks any still-running tool calls as cancelled.
 func (u *UIState) FinalizeStreaming() {
+	u.FlushStream() // ensure last chunk is rendered before finalize
 	u.ChatMu.Lock()
 	u.assistantBuf.Reset()
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
