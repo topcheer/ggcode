@@ -69,6 +69,7 @@ type AgentBridge struct {
 	// Mobile tunnel broker (nil if not sharing).
 	tunnelBroker *tunnel.Broker
 	tunnelMsgID  string
+	spawnedSet   map[string]bool // tracks which subagents have been announced to mobile
 }
 
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
@@ -78,6 +79,7 @@ func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config
 		resolved:   resolved,
 		ui:         ui,
 		workingDir: workingDir,
+		spawnedSet: make(map[string]bool),
 	}
 
 	// Initialize session store (session created lazily in ensureSession).
@@ -144,8 +146,8 @@ func (b *AgentBridge) setupAgent() error {
 		if b.tunnelBroker != nil {
 			switch sa.Status {
 			case subagent.StatusRunning:
-				// Check if this is the first running update (spawn)
-				if sa.ToolCallCount <= 1 {
+				if !b.spawnedSet[sa.ID] {
+					b.spawnedSet[sa.ID] = true
 					b.tunnelBroker.PushSubagentSpawn(sa.ID, sa.Name, sa.Task, "", "")
 				}
 				b.tunnelBroker.PushSubagentStatus(sa.ID, tunnel.StatusRunning, sa.CurrentTool)
