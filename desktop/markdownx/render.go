@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -252,7 +253,7 @@ func renderMermaidBlock(b *mdBlock) fyne.CanvasObject {
 	img.SetMinSize(fyne.NewSize(600, 400))
 	img.Hide()
 
-	wrapper := container.NewStack(placeholder)
+	wrapper := container.NewStack(placeholder, img)
 
 	go func() {
 		pngData, err := fetchMermaidPNG(mermaidCode)
@@ -296,8 +297,8 @@ func fetchMermaidPNG(mermaidCode string) ([]byte, error) {
 }
 
 func fetchKroki(mermaidCode string) ([]byte, error) {
-	payload := strings.NewReader(url.QueryEscape(mermaidCode))
-	resp, err := http.Post("https://kroki.io/mermaid/png", "application/x-www-form-urlencoded", payload)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post("https://kroki.io/mermaid/png", "text/plain", strings.NewReader(mermaidCode))
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +311,8 @@ func fetchKroki(mermaidCode string) ([]byte, error) {
 
 func fetchMermaidInk(mermaidCode string) ([]byte, error) {
 	encoded := base64.URLEncoding.EncodeToString([]byte(mermaidCode))
-	resp, err := http.Get("https://mermaid.ink/img/" + encoded)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get("https://mermaid.ink/img/" + encoded)
 	if err != nil {
 		return nil, err
 	}
