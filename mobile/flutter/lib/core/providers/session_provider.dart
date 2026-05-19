@@ -121,9 +121,20 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
           final messages = msg.data!['messages'] as List<dynamic>? ?? [];
           for (final m in messages) {
             final role = m['role'] as String? ?? '';
-            final content = m['content'] as String? ?? '';
-            if (content.isNotEmpty) {
-              chatNotifier.addHistoryMessage(role, content);
+            if (role == 'tool_call') {
+              final toolName = m['tool_name'] as String? ?? '';
+              final toolArgs = m['tool_args'] as String? ?? '';
+              chatNotifier.addHistoryToolCall(toolName, toolArgs);
+            } else if (role == 'tool_result') {
+              final toolName = m['tool_name'] as String? ?? '';
+              final result = m['result'] as String? ?? '';
+              final isError = m['is_error'] as bool? ?? false;
+              chatNotifier.addHistoryToolResult(toolName, result, isError);
+            } else {
+              final content = m['content'] as String? ?? '';
+              if (content.isNotEmpty) {
+                chatNotifier.addHistoryMessage(role, content);
+              }
             }
           }
         }
@@ -388,6 +399,31 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         id: 'hist-${_msgCounter++}',
         isUser: role == 'user',
         text: content,
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  void addHistoryToolCall(String toolName, String args) {
+    state = [
+      ...state,
+      ChatMessage(
+        id: 'hist-${_msgCounter++}',
+        toolName: toolName,
+        toolDetail: args.isNotEmpty ? (args.length > 100 ? '${args.substring(0, 100)}...' : args) : '',
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  void addHistoryToolResult(String toolName, String result, bool isError) {
+    state = [
+      ...state,
+      ChatMessage(
+        id: 'hist-${_msgCounter++}',
+        toolName: toolName,
+        toolResult: result,
+        isToolError: isError,
         time: DateTime.now(),
       ),
     ];

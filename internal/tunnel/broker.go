@@ -366,6 +366,11 @@ var msgCount atomic.Int64
 type HistoryEntry struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Tool fields (role == "tool_call" or "tool_result")
+	ToolName string `json:"tool_name,omitempty"`
+	ToolArgs string `json:"tool_args,omitempty"`
+	Result   string `json:"result,omitempty"`
+	IsError  bool   `json:"is_error,omitempty"`
 }
 
 func (b *Broker) PushChatHistory(messages []HistoryEntry) {

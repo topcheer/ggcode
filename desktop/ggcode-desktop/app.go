@@ -268,22 +268,64 @@ func (a *App) showShareDialog() {
 			})
 			session := a.agentBridge.CurrentSession()
 			if session != nil && len(session.Messages) > 0 {
-				history := make([]tunnel.HistoryEntry, 0, len(session.Messages))
+				history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
 				for _, msg := range session.Messages {
-					if msg.Role != "user" && msg.Role != "assistant" {
-						continue
-					}
-					var textParts []string
-					for _, block := range msg.Content {
-						if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-							textParts = append(textParts, strings.TrimSpace(block.Text))
+					if msg.Role == "user" {
+						var textParts []string
+						for _, block := range msg.Content {
+							if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+								textParts = append(textParts, strings.TrimSpace(block.Text))
+							}
 						}
-					}
-					if len(textParts) > 0 {
-						history = append(history, tunnel.HistoryEntry{
-							Role:    msg.Role,
-							Content: strings.Join(textParts, "\n"),
-						})
+						if len(textParts) > 0 {
+							history = append(history, tunnel.HistoryEntry{
+								Role:    "user",
+								Content: strings.Join(textParts, "\n"),
+							})
+						}
+					} else if msg.Role == "assistant" {
+						for _, block := range msg.Content {
+							switch block.Type {
+							case "text":
+								if strings.TrimSpace(block.Text) != "" {
+									history = append(history, tunnel.HistoryEntry{
+										Role:    "assistant",
+										Content: strings.TrimSpace(block.Text),
+									})
+								}
+							case "tool_use":
+								detail := ""
+								if block.Input != nil {
+									if raw, err := json.Marshal(block.Input); err == nil {
+										s := string(raw)
+										if len(s) > 200 {
+											s = s[:200] + "..."
+										}
+										detail = s
+									}
+								}
+								history = append(history, tunnel.HistoryEntry{
+									Role:     "tool_call",
+									ToolName: block.ToolName,
+									ToolArgs: detail,
+								})
+							}
+						}
+					} else if msg.Role == "tool" {
+						for _, block := range msg.Content {
+							if block.Type == "tool_result" {
+								result := block.Output
+								if len(result) > 500 {
+									result = result[:500] + "..."
+								}
+								history = append(history, tunnel.HistoryEntry{
+									Role:     "tool_result",
+									ToolName: block.ToolName,
+									Result:   result,
+									IsError:  block.IsError,
+								})
+							}
+						}
 					}
 				}
 				if len(history) > 0 {
@@ -642,22 +684,64 @@ func (a *App) resumeSession(id string) {
 		})
 		a.tunnelBroker.PushChatClear()
 		session := a.agentBridge.CurrentSession()
-		history := make([]tunnel.HistoryEntry, 0, len(session.Messages))
+		history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
 		for _, msg := range session.Messages {
-			if msg.Role != "user" && msg.Role != "assistant" {
-				continue
-			}
-			var textParts []string
-			for _, block := range msg.Content {
-				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-					textParts = append(textParts, strings.TrimSpace(block.Text))
+			if msg.Role == "user" {
+				var textParts []string
+				for _, block := range msg.Content {
+					if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+						textParts = append(textParts, strings.TrimSpace(block.Text))
+					}
 				}
-			}
-			if len(textParts) > 0 {
-				history = append(history, tunnel.HistoryEntry{
-					Role:    msg.Role,
-					Content: strings.Join(textParts, "\n"),
-				})
+				if len(textParts) > 0 {
+					history = append(history, tunnel.HistoryEntry{
+						Role:    "user",
+						Content: strings.Join(textParts, "\n"),
+					})
+				}
+			} else if msg.Role == "assistant" {
+				for _, block := range msg.Content {
+					switch block.Type {
+					case "text":
+						if strings.TrimSpace(block.Text) != "" {
+							history = append(history, tunnel.HistoryEntry{
+								Role:    "assistant",
+								Content: strings.TrimSpace(block.Text),
+							})
+						}
+					case "tool_use":
+						detail := ""
+						if block.Input != nil {
+							if raw, err := json.Marshal(block.Input); err == nil {
+								s := string(raw)
+								if len(s) > 200 {
+									s = s[:200] + "..."
+								}
+								detail = s
+							}
+						}
+						history = append(history, tunnel.HistoryEntry{
+							Role:     "tool_call",
+							ToolName: block.ToolName,
+							ToolArgs: detail,
+						})
+					}
+				}
+			} else if msg.Role == "tool" {
+				for _, block := range msg.Content {
+					if block.Type == "tool_result" {
+						result := block.Output
+						if len(result) > 500 {
+							result = result[:500] + "..."
+						}
+						history = append(history, tunnel.HistoryEntry{
+							Role:     "tool_result",
+							ToolName: block.ToolName,
+							Result:   result,
+							IsError:  block.IsError,
+						})
+					}
+				}
 			}
 		}
 		if len(history) > 0 {
