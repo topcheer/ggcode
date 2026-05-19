@@ -69,6 +69,11 @@ type UIState struct {
 	// Streaming throttle: avoid per-token GUI redraws.
 	streamLastNotify atomic.Int64 // unix millis of last EventAssistantChunk
 	streamDirty      atomic.Bool  // true if buffered text not yet pushed to GUI
+
+	// Reasoning throttle: same pattern as streaming text.
+	reasoningBuf   strings.Builder
+	reasoningLastN atomic.Int64 // unix millis of last EventReasoning
+	reasoningDirty atomic.Bool
 }
 
 func (u *UIState) notify(e UIEvent) {
@@ -144,9 +149,34 @@ func (u *UIState) AppendChat(msg ChatMessage) {
 	u.notify(UIEvent{Type: EventAppend, Msg: msg})
 }
 
-// AppendReasoning sends a reasoning chunk to the UI without adding it as a chat message.
-func (u *UIState) AppendReasoning(text string) {
-	u.notify(UIEvent{Type: EventReasoning, Text: text})
+// AppendReasoning buffers a reasoning chunk and throttles GUI updates
+// to match the 300ms streaming cadence.
+func (u *UIState) AppendReasoning(chunk string) {
+	u.ChatMu.Lock()
+	u.reasoningBuf.WriteString(chunk)
+	full := u.reasoningBuf.String()
+	u.ChatMu.Unlock()
+
+	now := time.Now().UnixMilli()
+	last := u.reasoningLastN.Load()
+	if now-last >= streamThrottleMs {
+		u.reasoningLastN.Store(now)
+		u.reasoningDirty.Store(false)
+		u.notify(UIEvent{Type: EventReasoning, Text: full})
+	} else {
+		u.reasoningDirty.Store(true)
+	}
+}
+
+// FlushReasoning forces an immediate EventReasoning if dirty.
+func (u *UIState) FlushReasoning() {
+	if u.reasoningDirty.CompareAndSwap(true, false) {
+		u.ChatMu.Lock()
+		full := u.reasoningBuf.String()
+		u.ChatMu.Unlock()
+		u.reasoningLastN.Store(time.Now().UnixMilli())
+		u.notify(UIEvent{Type: EventReasoning, Text: full})
+	}
 }
 
 // AppendAssistantText appends a streaming text chunk to the assistant buffer
