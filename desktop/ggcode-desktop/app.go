@@ -59,6 +59,7 @@ type App struct {
 	// Mobile tunnel.
 	tunnelSession *tunnel.Session
 	tunnelBroker  *tunnel.Broker
+	shareDialog   dialog.Dialog
 }
 
 // NewApp creates the desktop app.
@@ -252,6 +253,11 @@ func (a *App) showShareDialog() {
 				if a.ui != nil {
 					a.ui.AppendChat(ChatMessage{Role: "system", Content: "Mobile client connected", Time: time.Now()})
 				}
+				// Hide share dialog
+				if a.shareDialog != nil {
+					a.shareDialog.Hide()
+					a.shareDialog = nil
+				}
 			})
 		})
 
@@ -355,11 +361,9 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	urlLabel.Wrapping = fyne.TextWrapOff
 	urlLabel.SetPlaceHolder("Tunnel URL")
 
-	var shareDialog dialog.Dialog // captured below
-
 	copyBtn := widget.NewButton("Copy URL", func() {
 		a.window.Clipboard().SetContent(info.ConnectURL)
-		shareDialog.Hide()
+		a.shareDialog.Hide()
 	})
 
 	stopBtn := widget.NewButton("Stop Sharing", func() {
@@ -377,7 +381,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 			a.tunnelSession = nil
 			a.tunnelBroker = nil
 		}
-		shareDialog.Hide()
+		a.shareDialog.Hide()
 	})
 
 	// Build QR code image
@@ -401,8 +405,8 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		qrImage,
 	)
 
-	shareDialog = dialog.NewCustom("Share Session", "Close", content, a.window)
-	shareDialog.Show()
+	a.shareDialog = dialog.NewCustom("Share Session", "Close", content, a.window)
+	a.shareDialog.Show()
 }
 
 // openUpdates checks for the latest release on GitHub.
