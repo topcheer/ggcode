@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/providers/session_provider.dart';
@@ -16,6 +17,7 @@ class ConnectScreen extends ConsumerStatefulWidget {
 
 class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _urlController = TextEditingController();
+  bool _showScanner = false;
 
   @override
   void initState() {
@@ -47,6 +49,26 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     ref.read(connectionProvider.notifier).connect(url);
   }
 
+  void _handleQrCode(String code) {
+    // Extract URL from QR code — might be raw URL or a ggcode:// scheme
+    String url = code.trim();
+    if (url.startsWith('ggcode://')) {
+      url = url.replaceFirst('ggcode://', 'wss://');
+    }
+    if (url.startsWith('http://')) {
+      url = url.replaceFirst('http://', 'ws://');
+    } else if (url.startsWith('https://')) {
+      url = url.replaceFirst('https://', 'wss://');
+    }
+
+    setState(() {
+      _showScanner = false;
+      _urlController.text = url;
+    });
+    _saveToHistory(url);
+    ref.read(connectionProvider.notifier).connect(url);
+  }
+
   @override
   void dispose() {
     _urlController.dispose();
@@ -58,7 +80,53 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     final connState = ref.watch(connectionProvider);
     final history = ref.watch(_historyProvider);
     final isConnecting = connState.status == ConnectionStatus.connecting;
-    final errorMsg = connState.error ?? (connState.status == ConnectionStatus.disconnected ? null : null);
+    final errorMsg = connState.error;
+
+    if (_showScanner) {
+      return Scaffold(
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Top bar
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => setState(() => _showScanner = false),
+                    ),
+                    const Text(
+                      'Scan QR Code',
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+              // Scanner
+              Expanded(
+                child: MobileScanner(
+                  onDetect: (capture) {
+                    final barcode = capture.barcodes.firstOrNull;
+                    if (barcode != null && barcode.rawValue != null) {
+                      _handleQrCode(barcode.rawValue!);
+                    }
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Point the camera at the QR code shown in GGCode Desktop',
+                  style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       body: SafeArea(
@@ -97,10 +165,42 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Connect to your GGCode agent',
+                'Scan QR code or enter URL to connect',
                 style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 14),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
+
+              // Scan QR button (prominent)
+              SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(() => _showScanner = true),
+                  icon: const Icon(Icons.qr_code_scanner, size: 28),
+                  label: const Text('Scan QR Code', style: TextStyle(fontSize: 16)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.blueAccent,
+                    side: const BorderSide(color: Colors.blueAccent, width: 1.5),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Divider with "or"
+              Row(
+                children: [
+                  Expanded(child: Divider(color: Colors.white.withOpacity(0.15))),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text('or', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12)),
+                  ),
+                  Expanded(child: Divider(color: Colors.white.withOpacity(0.15))),
+                ],
+              ),
+              const SizedBox(height: 20),
 
               // URL input
               TextField(
@@ -129,7 +229,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 onChanged: (v) => setState(() {}),
                 onSubmitted: (_) => _connect(),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
 
               // Connect button
               SizedBox(
