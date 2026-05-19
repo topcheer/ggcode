@@ -59,6 +59,33 @@ class AppShell extends ConsumerWidget {
       }
     });
 
+    // Show dialog when server disconnects
+    ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
+      if (prev?.status == ConnectionStatus.connected &&
+          next.status == ConnectionStatus.disconnected) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1A1A2E),
+            title: const Text('连接已断开', style: TextStyle(color: Colors.white)),
+            content: const Text(
+              '服务端已离线，请返回扫码页面重新连接。',
+              style: TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('确定', style: TextStyle(color: Colors.blueAccent)),
+              ),
+            ],
+          ),
+        );
+      }
+    });
+
     if (!isConnected) {
       return const ConnectScreen();
     }
