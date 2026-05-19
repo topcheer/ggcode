@@ -109,20 +109,26 @@ PLIST
 
 # ── Codesign ──────────────────────────────────────────────
 if [[ "${DO_SIGN}" == "true" ]]; then
-  echo "  Importing signing certificate..."
+  # Import certificate and configure keychain for codesigning.
   KEYCHAIN="${WORK_DIR}/signing.keychain-db"
-  KEYCHAIN_PASSWORD="ci-signing-$(date +%s)"
+  KEYCHAIN_PASSWORD="ci-$(date +%s)"
   security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
   security set-keychain-settings -lut 21600 "${KEYCHAIN}"
   security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
   security import "${P12_PATH}" -P "${P12_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN}"
+  # set-key-partition-list may fail on some runners; allow codesign access via -T.
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" 2>/dev/null || true
-  security list-keychains -d user -s "${KEYCHAIN}" "$(security list-keychains -d user | tr -d '\"')"
+  # Add custom keychain to the search list so codesign can find the identity.
+  security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db 2>/dev/null || true
+
+  echo "  Available signing identities:"
+  security find-identity -v -p codesigning "${KEYCHAIN}" 2>/dev/null || true
 
   echo "  Codesigning..."
   codesign --force --deep --options runtime \
     --entitlements "${DESKTOP_DIR}/entitlements.plist" \
     --sign "${SIGN_IDENTITY}" \
+    --keychain "${KEYCHAIN}" \
     "${APP_BUNDLE}"
   codesign -vvv --deep --strict "${APP_BUNDLE}"
   echo "  Codesign OK"
