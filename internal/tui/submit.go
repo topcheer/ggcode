@@ -195,6 +195,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 	// and makes the TUI appear frozen — especially during burst tool calls.
 	var batchMu sync.Mutex
 	var batchBuf strings.Builder
+	var batchReasoningBuf strings.Builder
 	var toolBatchStatus []agentStatusMsg
 	var toolBatchTools []agentToolStatusMsg
 	batchDone := make(chan struct{})
@@ -216,6 +217,8 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		batchMu.Lock()
 		text := batchBuf.String()
 		batchBuf.Reset()
+		reasoning := batchReasoningBuf.String()
+		batchReasoningBuf.Reset()
 		status := toolBatchStatus
 		tools := toolBatchTools
 		toolBatchStatus = nil
@@ -228,6 +231,10 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		// Send text first (if any)
 		if text != "" {
 			m.program.Send(agentStreamMsg{RunID: runID, Text: text})
+			// Send reasoning (if any)
+			if reasoning != "" {
+				m.program.Send(agentReasoningMsg{RunID: runID, Text: reasoning})
+			}
 		}
 		// Send all batched tool events in a single message
 		if len(status) > 0 || len(tools) > 0 {
@@ -284,6 +291,13 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 					Activity: m.t("status.writing"),
 				}})
 			}
+		case provider.StreamEventReasoning:
+			if event.Text != "" && event.Text != "__redacted_thinking__" {
+				batchMu.Lock()
+				batchReasoningBuf.WriteString(event.Text)
+				batchMu.Unlock()
+			}
+
 		case provider.StreamEventSystem:
 			// System notification (retry status, etc.) — render as system message.
 			flushBatch()
@@ -412,6 +426,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			// flush, the text would remain stuck in batchBuf because the
 			// ticker goroutine exits after the first closeBatchDone().
 			flushBatch()
+			m.program.Send(agentReasoningDoneMsg{})
 			writingStatusSent = false
 			switch {
 			case round.AskUserText != "":

@@ -131,6 +131,13 @@ type agentStreamMsg struct {
 	Text  string
 }
 
+type agentReasoningMsg struct {
+	RunID int
+	Text  string
+}
+
+type agentReasoningDoneMsg struct{}
+
 type agentDoneMsg struct {
 	RunID int
 }

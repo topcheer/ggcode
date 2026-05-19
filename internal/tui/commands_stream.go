@@ -3,6 +3,8 @@ package tui
 import (
 	"bytes"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/chat"
 )
 
 func (m *Model) appendStreamChunk(chunk string) {
@@ -58,6 +60,41 @@ func (m *Model) appendStreamStatusLine(text string) {
 	m.chatFinishAssistant(m.currentAssistantID())
 	m.chatWriteSystem(nextChatID(), strings.TrimSuffix(text, "\n"))
 	m.chatListScrollToBottom()
+}
+
+func (m *Model) appendReasoningChunk(chunk string) {
+	if chunk == "" {
+		return
+	}
+	m.chatFinishAllRunningTools()
+	if !m.streamPrefixWritten {
+		m.streamPrefixWritten = true
+		m.nextAssistantID()
+		m.chatEnsureAssistant()
+	}
+	// Append reasoning to the current assistant item
+	aid := m.currentAssistantID()
+	if m.chatList != nil {
+		if item := m.chatList.FindByID(aid); item != nil {
+			if a, ok := item.(*chat.AssistantItem); ok {
+				// Accumulate: get current reasoning and append
+				a.SetReasoning(a.Reasoning() + chunk)
+			}
+		}
+	}
+	m.chatListScrollToBottom()
+}
+
+// chatFinishReasoning collapses the reasoning block in the current assistant item.
+func (m *Model) chatFinishReasoning() {
+	aid := m.currentAssistantID()
+	if m.chatList != nil {
+		if item := m.chatList.FindByID(aid); item != nil {
+			if a, ok := item.(*chat.AssistantItem); ok {
+				a.SetReasoningFinished()
+			}
+		}
+	}
 }
 
 func (m *Model) renderStreamBuffer(renderMarkdown bool) {

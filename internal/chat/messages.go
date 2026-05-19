@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -120,11 +121,13 @@ func wrapLines(text string, width int) []string {
 // AssistantItem renders an assistant message (supports streaming).
 type AssistantItem struct {
 	CachedItem
-	id        string
-	text      string
-	prefix    string
-	styles    Styles
-	streaming bool
+	id          string
+	text        string
+	reasoning   string // accumulated thinking/reasoning content
+	reasoningOk bool   // true once reasoning is complete (collapsed)
+	prefix      string
+	styles      Styles
+	streaming   bool
 }
 
 // NewAssistantItem creates a new assistant message item.
@@ -152,6 +155,25 @@ func (a *AssistantItem) SetFinished() {
 	a.streaming = false
 }
 
+// Reasoning returns the current reasoning content.
+func (a *AssistantItem) Reasoning() string {
+	return a.reasoning
+}
+
+// SetReasoning updates the reasoning/thinking content.
+func (a *AssistantItem) SetReasoning(text string) {
+	if a.reasoning != text {
+		a.reasoning = text
+		a.Invalidate()
+	}
+}
+
+// SetReasoningFinished collapses reasoning into a one-line summary.
+func (a *AssistantItem) SetReasoningFinished() {
+	a.reasoningOk = true
+	a.Invalidate()
+}
+
 func (a *AssistantItem) Render(width int) string {
 	if cached, _, ok := a.GetCached(width); ok {
 		return cached
@@ -163,14 +185,19 @@ func (a *AssistantItem) Render(width int) string {
 		contentWidth = 10
 	}
 
-	// Render markdown to ANSI
-	rendered := markdown.Render(a.text, contentWidth)
+	var result string
 
-	// Indent all lines after the first with the prefix width
+	// Render reasoning block if present.
+	if a.reasoning != "" {
+		result = a.renderReasoning(width, prefixWidth, contentWidth)
+	}
+
+	// Render main assistant content.
+	rendered := markdown.Render(a.text, contentWidth)
 	lines := strings.Split(rendered, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
-		if i == 0 {
+		if i == 0 && result == "" {
 			sb.WriteString(a.styles.AssistantStyle.Render(a.prefix))
 		} else {
 			sb.WriteString(strings.Repeat(" ", prefixWidth))
@@ -180,11 +207,43 @@ func (a *AssistantItem) Render(width int) string {
 			sb.WriteString("\n")
 		}
 	}
+	if result != "" {
+		result += "\n" + sb.String()
+	} else {
+		result = sb.String()
+	}
 
-	result := sb.String()
-	// Always cache — Invalidate() is called by SetText() when content changes.
 	a.SetCached(result, width, measureHeight(result))
 	return result
+}
+
+func (a *AssistantItem) renderReasoning(width, prefixWidth, contentWidth int) string {
+	if a.reasoningOk {
+		// Collapsed: one-line summary with reasoning prefix.
+		charCount := utf8.RuneCountInString(a.reasoning)
+		summary := a.styles.ReasoningStyle.Render(
+			fmt.Sprintf("%sThought (%d chars)", a.styles.ReasoningPrefix, charCount),
+		)
+		indented := a.styles.AssistantStyle.Render(a.prefix) + summary
+		return indented
+	}
+
+	// Streaming: show full reasoning in italic with reasoning prefix.
+	reasoningRendered := markdown.Render(a.reasoning, contentWidth)
+	lines := strings.Split(reasoningRendered, "\n")
+	var sb strings.Builder
+	for i, line := range lines {
+		if i == 0 {
+			sb.WriteString(a.styles.AssistantStyle.Render(a.styles.ReasoningPrefix))
+		} else {
+			sb.WriteString(strings.Repeat(" ", prefixWidth))
+		}
+		sb.WriteString(a.styles.ReasoningStyle.Render(line))
+		if i < len(lines)-1 {
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
 }
 
 func (a *AssistantItem) Height(width int) int {
