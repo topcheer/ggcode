@@ -234,6 +234,16 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
             );
             _ref.read(subagentProvider.notifier).state = agents;
           }
+          // Auto-remove completed agent tab after 5 seconds
+          Future.delayed(const Duration(seconds: 5), () {
+            final current = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+            current.remove(data.agentId);
+            _ref.read(subagentProvider.notifier).state = current;
+            // Also remove messages for this agent
+            final msgs = _ref.read(chatProvider);
+            _ref.read(chatProvider.notifier).state =
+                msgs.where((m) => m.sourceId != data.agentId).toList();
+          });
         }
         break;
 
