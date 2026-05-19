@@ -15,49 +15,69 @@ class ChatScreen extends ConsumerStatefulWidget {
 }
 
 class _ChatScreenState extends ConsumerState<ChatScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _scrollController = ScrollController();
   final _inputController = TextEditingController();
   TabController? _tabController;
-  List<String> _tabIds = ['main']; // 'main' + agent IDs
+  List<String> _tabIds = [];
+  List<String> _tabNames = [];
   int _currentTab = 0;
+  bool _disposed = false;
 
   @override
   void dispose() {
+    _disposed = true;
     _scrollController.dispose();
     _inputController.dispose();
+    _tabController?.removeListener(_onTabChange);
     _tabController?.dispose();
     super.dispose();
   }
 
+  void _onTabChange() {
+    if (_disposed) return;
+    final controller = _tabController;
+    if (controller == null) return;
+    if (!controller.indexIsChanging) {
+      setState(() {
+        _currentTab = controller.index;
+      });
+    }
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+      if (_scrollController.hasClients && !_disposed) {
         _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
       }
     });
   }
 
-  void _rebuildTabs(List<String> newIds) {
-    if (_tabIds.length == newIds.length &&
-        _tabIds.asMap().entries.every((e) => e.value == newIds[e.key])) {
-      return; // No change
+  void _updateTabs(List<String> newIds, List<String> newNames) {
+    // Only rebuild if tab list actually changed
+    if (_tabIds.length == newIds.length) {
+      bool changed = false;
+      for (int i = 0; i < _tabIds.length; i++) {
+        if (_tabIds[i] != newIds[i]) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) return;
     }
+
+    _tabController?.removeListener(_onTabChange);
     _tabController?.dispose();
+
     _tabIds = newIds;
+    _tabNames = newNames;
     _tabController = TabController(length: _tabIds.length, vsync: this);
-    // Keep current tab if possible
+    _tabController!.addListener(_onTabChange);
+
     if (_currentTab >= _tabIds.length) {
       _currentTab = _tabIds.length - 1;
     }
-    _tabController!.animateTo(_currentTab);
-    _tabController!.addListener(() {
-      if (!_tabController!.indexIsChanging) {
-        setState(() {
-          _currentTab = _tabController!.index;
-        });
-      }
-    });
+    if (_currentTab < 0) _currentTab = 0;
   }
 
   @override
@@ -67,16 +87,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final info = ref.watch(sessionInfoProvider);
     final agents = ref.watch(subagentProvider);
 
-    // Build tab list: main + active agents
-    final tabIds = ['main'];
-    final tabNames = ['Chat'];
+    // Build tab list: main + all agents (active first, then completed)
+    final tabIds = <String>['main'];
+    final tabNames = <String>['Chat'];
     for (final agent in agents.values) {
       if (!agent.completed) {
         tabIds.add(agent.agentId);
         tabNames.add(agent.name);
       }
     }
-    // Add completed agents (still accessible)
     for (final agent in agents.values) {
       if (agent.completed && !tabIds.contains(agent.agentId)) {
         tabIds.add(agent.agentId);
@@ -84,7 +103,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       }
     }
 
-    _rebuildTabs(tabIds);
+    _updateTabs(tabIds, tabNames);
 
     // Filter messages for current tab
     final currentSourceId =
@@ -97,6 +116,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     ref.listen<List<ChatMessage>>(chatProvider, (prev, next) {
       _scrollToBottom();
     });
+
+    final showTabs = _tabIds.length > 1 && _tabController != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -123,7 +144,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             tooltip: 'Disconnect',
           ),
         ],
-        bottom: _tabIds.length > 1
+        bottom: showTabs
             ? TabBar(
                 controller: _tabController,
                 isScrollable: true,
@@ -134,7 +155,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 labelStyle: const TextStyle(fontSize: 13),
                 tabs: List.generate(_tabIds.length, (i) {
                   final id = _tabIds[i];
-                  final name = tabNames[i];
+                  final name = _tabNames[i];
                   final agent = agents[id];
                   final isCompleted = agent?.completed ?? false;
                   final isRunning =
@@ -171,12 +192,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             color: isCompleted ? Colors.white38 : Colors.white,
                           ),
                         ),
-                        // Close button for completed agents
                         if (isCompleted && id != 'main')
                           GestureDetector(
-                            onTap: () {
-                              _closeTab(id);
-                            },
+                            onTap: () => _closeTab(id),
                             child: const Padding(
                               padding: EdgeInsets.only(left: 4),
                               child: Icon(Icons.close, size: 14, color: Colors.white38),
@@ -192,7 +210,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       body: Column(
         children: [
           const StatusBar(),
-          // Messages
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
@@ -207,9 +224,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               },
             ),
           ),
-          // Approval sheet
           if (approval != null) ApprovalSheet(approval: approval),
-          // Input
           InputBar(controller: _inputController),
         ],
       ),
@@ -221,7 +236,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     agents.remove(agentId);
     ref.read(subagentProvider.notifier).state = agents;
 
-    // Also remove messages for this agent
     final msgs = ref.read(chatProvider);
     ref.read(chatProvider.notifier).state =
         msgs.where((m) => m.sourceId != agentId).toList();
