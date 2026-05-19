@@ -6,67 +6,197 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Broker bridges agent events and the WebSocket tunnel protocol.
 //
-// It maintains a sentLog of all messages pushed to the mobile client.
-// On reconnection, ReplayToClient() replays this log so the mobile
-// always shows exactly what the desktop shows — regardless of
-// session persistence timing.
+// Delivery guarantees:
+//   - Text chunks are batched: PushText appends to a per-msgID buffer;
+//     a 300ms ticker flushes all accumulated text as a single message.
+//   - Every outbound message carries a monotonically-increasing Seq.
+//   - A sender goroutine sends one message at a time and waits for the
+//     mobile client to ACK (by seq) before sending the next.
+//   - If ACK times out (5s), the next message is sent anyway.
+//   - ReplayToClient bypasses ACK flow control for fast reconnect.
 type Broker struct {
 	session         *Session
 	onCommand       func(cmd GatewayMessage)
 	onClientConnect func()
-	sendMu          sync.Mutex // serializes all sends + sentLog access
-	msgCount        atomic.Int64
-	sentLog         []GatewayMessage // replay log: everything sent since last chat_clear
+
+	// Sequencing
+	nextSeq atomic.Int64
+
+	// ACK flow control
+	pendingAck chan int64 // sender goroutine waits here for ack seq
+	ackTimeout time.Duration
+
+	// Send queue: all outbound messages go here.
+	// The sender goroutine drains it one-at-a-time, waiting for ACK.
+	sendQueue chan GatewayMessage
+
+	// Text batching
+	textMu   sync.Mutex
+	textBuf  map[string]string // msgID → accumulated text chunks
+	textTick *time.Ticker
+	textDone chan struct{} // stop text flusher
+
+	// Replay log
+	logMu   sync.Mutex
+	sentLog []GatewayMessage
 }
 
-// NewBroker creates a broker bound to a tunnel session.
 func NewBroker(sess *Session) *Broker {
-	b := &Broker{session: sess}
+	b := &Broker{
+		session:    sess,
+		pendingAck: make(chan int64, 1),
+		ackTimeout: 5 * time.Second,
+		sendQueue:  make(chan GatewayMessage, 1000),
+		textBuf:    make(map[string]string),
+		textTick:   time.NewTicker(300 * time.Millisecond),
+		textDone:   make(chan struct{}),
+	}
+
+	// Start sender goroutine (ACK flow control)
+	go b.senderLoop()
+
+	// Start text flush ticker
+	go b.textFlushLoop()
+
+	// Handle incoming messages from mobile
 	sess.OnMessage(func(msg GatewayMessage) {
-		dataPreview := string(msg.Data)
-		if len(dataPreview) > 200 {
-			dataPreview = dataPreview[:200]
+		if msg.Type == EventAck {
+			// Extract seq from data
+			var ackData struct {
+				Seq int64 `json:"seq"`
+			}
+			if msg.Data != nil {
+				json.Unmarshal(msg.Data, &ackData)
+			}
+			select {
+			case b.pendingAck <- ackData.Seq:
+			default:
+			}
+			return
 		}
-		log.Printf("[broker] OnMessage: type=%s data=%s", msg.Type, dataPreview)
 		if b.onCommand != nil {
 			b.onCommand(msg)
-		} else {
-			log.Printf("[broker] OnMessage: onCommand is nil, dropping")
 		}
 	})
+
 	sess.OnConnect(func() {
 		log.Printf("[broker] client connected, replaying %d messages", len(b.sentLog))
 		if b.onClientConnect != nil {
 			b.onClientConnect()
 		}
 	})
+
 	return b
 }
 
-// OnCommand sets the handler for commands from the mobile client.
+// ─── Goroutines ───
+
+// senderLoop drains sendQueue one message at a time, waiting for ACK after each.
+func (b *Broker) senderLoop() {
+	for msg := range b.sendQueue {
+		if err := b.session.Send(msg); err != nil {
+			log.Printf("[broker] send %s seq=%d failed: %v", msg.Type, msg.Seq, err)
+			continue
+		}
+		// Wait for ACK (with timeout)
+		if msg.Seq > 0 {
+			select {
+			case <-b.pendingAck:
+			case <-time.After(b.ackTimeout):
+				log.Printf("[broker] ACK timeout for seq=%d, proceeding", msg.Seq)
+			}
+		}
+	}
+}
+
+// textFlushLoop periodically flushes accumulated text buffers to the sendQueue.
+func (b *Broker) textFlushLoop() {
+	for {
+		select {
+		case <-b.textTick.C:
+			b.flushAllText()
+		case <-b.textDone:
+			return
+		}
+	}
+}
+
+// flushAllText sends all accumulated text chunks as a single message per msgID.
+func (b *Broker) flushAllText() {
+	b.textMu.Lock()
+	if len(b.textBuf) == 0 {
+		b.textMu.Unlock()
+		return
+	}
+	bufs := make(map[string]string)
+	for k, v := range b.textBuf {
+		if v != "" {
+			bufs[k] = v
+		}
+	}
+	// Clear the buffer
+	for k := range b.textBuf {
+		delete(b.textBuf, k)
+	}
+	b.textMu.Unlock()
+
+	for msgID, text := range bufs {
+		seq := b.nextSeq.Add(1)
+		data, _ := json.Marshal(TextData{ID: msgID, Chunk: text})
+		msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
+		b.recordLog(msg)
+		b.sendQueue <- msg
+	}
+}
+
+// flushText flushes the buffer for a specific msgID immediately.
+func (b *Broker) flushText(msgID string) {
+	b.textMu.Lock()
+	text := b.textBuf[msgID]
+	if text == "" {
+		b.textMu.Unlock()
+		return
+	}
+	delete(b.textBuf, msgID)
+	b.textMu.Unlock()
+
+	seq := b.nextSeq.Add(1)
+	data, _ := json.Marshal(TextData{ID: msgID, Chunk: text})
+	msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
+	b.recordLog(msg)
+	b.sendQueue <- msg
+}
+
+// ─── Lifecycle ───
+
 func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
 	b.onCommand = fn
 }
 
-// OnClientConnect sets the handler called when a mobile client connects.
 func (b *Broker) OnClientConnect(fn func()) {
 	b.onClientConnect = fn
 }
 
-// ReplayToClient resends all logged messages to the mobile client.
-// Called on reconnect to ensure mobile shows the current desktop state.
+func (b *Broker) Stop() {
+	b.textTick.Stop()
+	close(b.textDone)
+	close(b.sendQueue)
+}
+
+// ReplayToClient resends all logged messages, bypassing ACK flow control.
 func (b *Broker) ReplayToClient() {
-	b.sendMu.Lock()
+	b.logMu.Lock()
 	msgs := make([]GatewayMessage, len(b.sentLog))
 	copy(msgs, b.sentLog)
-	b.sendMu.Unlock()
+	b.logMu.Unlock()
 
 	log.Printf("[broker] ReplayToClient: %d messages", len(msgs))
-	// Always start with chat_clear to reset mobile state
+	// Always start with chat_clear
 	clearMsg := GatewayMessage{Type: "chat_clear"}
 	if err := b.session.Send(clearMsg); err != nil {
 		log.Printf("[broker] replay chat_clear failed: %v", err)
@@ -83,111 +213,123 @@ func (b *Broker) ReplayToClient() {
 // ─── Session lifecycle ───
 
 func (b *Broker) SendSessionInfo(data SessionInfoData) {
-	b.send(EventSessionInfo, data)
+	b.enqueue(EventSessionInfo, data)
 }
 
-// PushChatClear tells the mobile client to clear its message list.
-// Also clears the broker's replay log.
 func (b *Broker) PushChatClear() {
-	b.sendMu.Lock()
+	b.logMu.Lock()
 	b.sentLog = nil
-	b.sendMu.Unlock()
-	b.send("chat_clear", nil)
+	b.logMu.Unlock()
+	// Clear text buffers too
+	b.textMu.Lock()
+	b.textBuf = make(map[string]string)
+	b.textMu.Unlock()
+	b.enqueue("chat_clear", nil)
 }
 
-// PushSharingStopped tells mobile clients the server is stopping.
 func (b *Broker) PushSharingStopped() {
-	b.send("sharing_stopped", nil)
+	b.enqueue("sharing_stopped", nil)
 }
 
 // ─── User message ───
 
 func (b *Broker) PushUserMessage(text string) {
-	b.send(EventUserMessage, map[string]string{"text": text})
+	b.enqueue(EventUserMessage, map[string]string{"text": text})
 }
 
-// ─── Streaming text ───
+// ─── Streaming text (batched) ───
 
 func (b *Broker) PushText(id, chunk string) {
-	b.send(EventText, TextData{ID: id, Chunk: chunk})
+	b.textMu.Lock()
+	b.textBuf[id] += chunk
+	b.textMu.Unlock()
 }
 
 func (b *Broker) PushTextDone(id string) {
-	b.send(EventTextDone, TextData{ID: id, Done: true})
+	// Flush remaining text immediately, then send text_done
+	b.flushText(id)
+	b.enqueue(EventTextDone, TextData{ID: id, Done: true})
 }
 
 // ─── Status ───
 
 func (b *Broker) PushStatus(status, message string) {
-	b.send(EventStatus, StatusData{Status: status, Message: message})
+	b.enqueue(EventStatus, StatusData{Status: status, Message: message})
 }
 
 // ─── Tool calls ───
 
 func (b *Broker) PushToolCall(toolName, args, detail string) {
-	b.send(EventToolCall, ToolCallData{ToolName: toolName, Args: args, Detail: detail})
+	b.enqueue(EventToolCall, ToolCallData{ToolName: toolName, Args: args, Detail: detail})
 }
 
 func (b *Broker) PushToolResult(toolName, result string, isError bool) {
-	b.send(EventToolResult, ToolResultData{ToolName: toolName, Result: result, IsError: isError})
+	b.enqueue(EventToolResult, ToolResultData{ToolName: toolName, Result: result, IsError: isError})
 }
 
 // ─── Approval ───
 
 func (b *Broker) PushApprovalRequest(id, toolName, input string) {
-	b.send(EventApprovalRequest, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
+	b.enqueue(EventApprovalRequest, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
 }
 
 func (b *Broker) PushApprovalResult(id, decision string) {
-	b.send(EventApprovalResult, map[string]string{"id": id, "decision": decision})
+	b.enqueue(EventApprovalResult, map[string]string{"id": id, "decision": decision})
 }
 
 // ─── Error ───
 
 func (b *Broker) PushError(message string) {
-	b.send(EventError, ErrorData{Message: message})
+	b.enqueue(EventError, ErrorData{Message: message})
 }
 
 // ─── Ask User ───
 
 func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
-	b.send(EventAskUserRequest, AskUserRequestData{ID: id, Title: title, Questions: questions})
+	b.enqueue(EventAskUserRequest, AskUserRequestData{ID: id, Title: title, Questions: questions})
 }
 
 func (b *Broker) PushAskUserResponse(id, status string, answers []AskUserAnswer) {
-	b.send(EventAskUserResponse, AskUserResponseData{ID: id, Status: status, Answers: answers})
+	b.enqueue(EventAskUserResponse, AskUserResponseData{ID: id, Status: status, Answers: answers})
 }
 
 // ─── Sub-agent / Teammate ───
 
 func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) {
-	b.send(EventSubagentSpawn, SubagentSpawnData{
+	b.enqueue(EventSubagentSpawn, SubagentSpawnData{
 		AgentID: agentID, Name: name, Task: task, Color: color, ParentID: parentID,
 	})
 }
 
 func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
-	b.send(EventSubagentText, SubagentTextData{AgentID: agentID, ID: msgID, Chunk: chunk, Done: done})
+	// Subagent text also gets batched like main text
+	if !done {
+		b.textMu.Lock()
+		b.textBuf[msgID] += chunk
+		b.textMu.Unlock()
+	} else {
+		b.flushText(msgID)
+	}
 }
 
 func (b *Broker) PushSubagentStatus(agentID, status, message string) {
-	b.send(EventSubagentStatus, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
+	b.enqueue(EventSubagentStatus, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
 }
 
 func (b *Broker) PushSubagentComplete(agentID, name, summary string, success bool) {
-	b.send(EventSubagentComplete, SubagentCompleteData{
+	b.enqueue(EventSubagentComplete, SubagentCompleteData{
 		AgentID: agentID, Name: name, Summary: summary, Success: success,
 	})
 }
 
 func (b *Broker) PushSubagentToolCall(agentID, toolName, args, detail string) {
-	b.send(EventSubagentToolCall, SubagentToolCallData{
+	b.enqueue(EventSubagentToolCall, SubagentToolCallData{
 		AgentID: agentID, ToolName: toolName, Args: args, Detail: detail,
 	})
 }
 
 func (b *Broker) PushSubagentToolResult(agentID, toolName, result string, isError bool) {
-	b.send(EventSubagentToolResult, SubagentToolResultData{
+	b.enqueue(EventSubagentToolResult, SubagentToolResultData{
 		AgentID: agentID, ToolName: toolName, Result: result, IsError: isError,
 	})
 }
@@ -195,29 +337,27 @@ func (b *Broker) PushSubagentToolResult(agentID, toolName, result string, isErro
 // ─── Utility ───
 
 func (b *Broker) NextMessageID() string {
-	return fmt.Sprintf("msg-%d", b.msgCount.Add(1))
+	return fmt.Sprintf("msg-%d", msgCount.Add(1))
 }
 
-// HistoryEntry represents a single chat message for history replay.
+var msgCount atomic.Int64
+
 type HistoryEntry struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-// PushChatHistory sends the full chat history to the mobile client.
 func (b *Broker) PushChatHistory(messages []HistoryEntry) {
-	b.send("chat_history", map[string]interface{}{
+	b.enqueue("chat_history", map[string]interface{}{
 		"messages": messages,
 	})
 }
 
 // ─── Internal ───
 
-// send marshals and sends a typed message over the WebSocket.
-// Also appends to sentLog for replay on client reconnect.
-func (b *Broker) send(eventType string, data interface{}) {
-	b.sendMu.Lock()
-	defer b.sendMu.Unlock()
+// enqueue assigns a seq, marshals, records to sentLog, and puts on sendQueue.
+func (b *Broker) enqueue(eventType string, data interface{}) {
+	seq := b.nextSeq.Add(1)
 
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -225,20 +365,22 @@ func (b *Broker) send(eventType string, data interface{}) {
 		return
 	}
 	msg := GatewayMessage{
+		Seq:  seq,
 		Type: eventType,
 		Data: dataBytes,
 	}
-	if err := b.session.Send(msg); err != nil {
-		log.Printf("broker: send %s failed: %v", eventType, err)
-	} else {
-		log.Printf("[broker] send %s OK (%d bytes)", eventType, len(dataBytes))
-	}
+	b.recordLog(msg)
+	b.sendQueue <- msg
+}
 
-	// Record for replay (skip control messages that don't affect display)
-	switch eventType {
+// recordLog appends to sentLog for replay.
+func (b *Broker) recordLog(msg GatewayMessage) {
+	switch msg.Type {
 	case "sharing_stopped":
 		// don't log
 	default:
+		b.logMu.Lock()
 		b.sentLog = append(b.sentLog, msg)
+		b.logMu.Unlock()
 	}
 }

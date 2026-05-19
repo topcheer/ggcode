@@ -143,6 +143,13 @@ class ConnectionService {
           final plaintext = utf8.decode(plaintextBytes);
           final msg = proto.WsMessage.fromJson(plaintext);
           _messageController.add(msg);
+          // Send ACK for sequenced delivery
+          if (msg.seq != null && msg.seq! > 0) {
+            sendEncrypted(proto.WsMessage(
+              type: 'ack',
+              data: {'seq': msg.seq},
+            ));
+          }
         } catch (e) {
           // Decrypt error
         }
