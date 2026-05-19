@@ -1007,7 +1007,7 @@ func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
 	header := cv.toolHeader(desc, msg)
 
 	if msg.Content == "" {
-		return cv.iconRow(toolIcon(msg), cv.toolHeader(desc, msg))
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
 	result := truncateRunes(msg.Content, 2000, "...")
@@ -1065,7 +1065,7 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := truncateRunes(msg.Content, 2000, "\n...(truncated)")
+	result := truncateRunes(msg.Content, 2000, "...")
 	// Wrap raw JSON in code block for readability
 	trimmed := strings.TrimSpace(result)
 	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
