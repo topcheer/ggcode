@@ -63,6 +63,14 @@ Promote latest from internal to alpha (Closed Testing)
 
 Promote latest from alpha to production
 
+### android promote_beta
+
+```sh
+[bundle exec] fastlane android promote_beta
+```
+
+Promote latest from alpha to beta (Open Testing)
+
 ### android deploy
 
 ```sh

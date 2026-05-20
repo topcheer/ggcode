@@ -66,7 +66,7 @@ platform :ios do
     )
 
     # Use flutter-built IPA if available (has correct version from pubspec.yaml)
-    flutter_ipa = File.expand_path("../../build/ios/ipa/ggcode_mobile.ipa", __FILE__)
+    flutter_ipa = File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __FILE__)
     if File.exist?(flutter_ipa)
       UI.message("Using flutter-built IPA: #{flutter_ipa}")
       upload_to_testflight(
@@ -106,7 +106,7 @@ platform :ios do
       in_house: false
     )
 
-    ipa_path = options[:ipa] || File.expand_path("../../build/ios/ipa/ggcode_mobile.ipa", __FILE__)
+    ipa_path = options[:ipa] || File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __FILE__)
     UI.user_error!("IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
 
     upload_to_testflight(
@@ -116,6 +116,63 @@ platform :ios do
       skip_submission: true,
       distribute_only: false
     )
+  end
+
+  desc "Wait for TestFlight build processing, then promote to External Testing"
+  lane :promote_external do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+
+    # Wait for the latest build to finish processing
+    UI.message("Waiting for TestFlight build to finish processing...")
+    build = wait_for_build_processing(
+      api_key: api_key,
+      build_version: ENV["BUILD_NUMBER"],
+      timeout_sec: 600,
+      sleep_sec: 30
+    )
+
+    if build.nil?
+      UI.error("No processed build found after waiting. Skipping External Testing promotion.")
+      UI.error("You can manually promote later from App Store Connect → TestFlight.")
+      return
+    end
+
+    UI.success("Build #{build.build_version} (#{build.train_version}) is ready!")
+
+    # Add to external testing group
+    UI.message("Adding build to External Testing group...")
+    begin
+      add_to_external_group = Spaceship::ConnectAPI::BetaGroup.all.find { |g| g.is_external_group }
+      if add_to_external_group
+        build.add_beta_groups(beta_groups: [add_to_external_group])
+        UI.success("Added to External Testing group '#{add_to_external_group.name}'")
+      else
+        # Create external group if none exists
+        UI.message("No external testing group found. Creating one...")
+        app = Spaceship::ConnectAPI::App.find("gg.ai.ggcode.mobile")
+        group = Spaceship::ConnectAPI::BetaGroup.create(
+          app_id: app.id,
+          group_name: "External Testers",
+          is_external_group: true
+        )
+        build.add_beta_groups(beta_groups: [group])
+        UI.success("Created and added to External Testing group")
+      end
+    rescue => e
+      UI.error("Could not add to external group: #{e.message}")
+      UI.message("Build is available in TestFlight. You can manually add it to external testers.")
+    end
+  end
+
+  desc "Full deploy: upload TestFlight + promote to External Testing"
+  lane :deploy_external do
+    upload_testflight
+    promote_external
   end
 
   desc "Build and submit for App Store Review"
@@ -128,7 +185,7 @@ platform :ios do
     )
 
     # Use flutter-built IPA if available
-    flutter_ipa = File.expand_path("../../build/ios/ipa/ggcode_mobile.ipa", __FILE__)
+    flutter_ipa = File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __FILE__)
     ipa_to_upload = nil
     if File.exist?(flutter_ipa)
       UI.message("Using flutter-built IPA: #{flutter_ipa}")
