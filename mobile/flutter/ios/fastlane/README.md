@@ -21,23 +21,15 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 [bundle exec] fastlane ios upload_metadata
 ```
 
-Upload metadata to App Store Connect (no build)
+Upload metadata and screenshots (run once)
 
-### ios provision
-
-```sh
-[bundle exec] fastlane ios provision
-```
-
-Generate provisioning profiles via sigh
-
-### ios build
+### ios upload_ipa
 
 ```sh
-[bundle exec] fastlane ios build
+[bundle exec] fastlane ios upload_ipa
 ```
 
-Build iOS Release Archive
+Upload pre-built IPA to TestFlight
 
 ### ios upload_testflight
 
@@ -47,21 +39,13 @@ Build iOS Release Archive
 
 Upload to TestFlight (uses flutter-built IPA if available)
 
-### ios upload_ipa
-
-```sh
-[bundle exec] fastlane ios upload_ipa
-```
-
-Upload pre-built IPA to TestFlight (no build step)
-
 ### ios promote_external
 
 ```sh
 [bundle exec] fastlane ios promote_external
 ```
 
-Wait for TestFlight build processing, then distribute to External Testing
+Wait for TestFlight processing, distribute to External Testing
 
 ### ios deploy_external
 
@@ -69,31 +53,15 @@ Wait for TestFlight build processing, then distribute to External Testing
 [bundle exec] fastlane ios deploy_external
 ```
 
-Full deploy: upload TestFlight + promote to External Testing
+Full deploy: upload TestFlight + promote to External
 
-### ios release_latest
-
-```sh
-[bundle exec] fastlane ios release_latest
-```
-
-Submit latest TestFlight build for App Store Review (no rebuild)
-
-### ios test_build_association
+### ios submit
 
 ```sh
-[bundle exec] fastlane ios test_build_association
+[bundle exec] fastlane ios submit
 ```
 
-Test: update version string and associate build
-
-### ios cleanup_submissions
-
-```sh
-[bundle exec] fastlane ios cleanup_submissions
-```
-
-List and cancel all pending review submissions
+Submit latest build for App Store Review
 
 ### ios inspect
 
@@ -101,31 +69,7 @@ List and cancel all pending review submissions
 [bundle exec] fastlane ios inspect
 ```
 
-Show all versions and builds on App Store Connect
-
-### ios cleanup_live
-
-```sh
-[bundle exec] fastlane ios cleanup_live
-```
-
-Remove invalid 'live' version from App Store Connect
-
-### ios full_release
-
-```sh
-[bundle exec] fastlane ios full_release
-```
-
-Full setup: ensure version, associate build, set review notes, upload metadata+screenshots, submit
-
-### ios release
-
-```sh
-[bundle exec] fastlane ios release
-```
-
-Build and submit for App Store Review
+Show App Store Connect state
 
 ----
 
