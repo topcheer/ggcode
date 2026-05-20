@@ -213,7 +213,7 @@ Available in any IM channel connected to a ggcode daemon:
 | Mode | Behavior |
 |------|----------|
 | `supervised` | Default. Respects per-tool rules, asks for unspecified tools |
-| `plan` | Read-only: allows `read_file`, `list_directory`, `search_files`; denies writes/commands |
+| `plan` | Read-only: allows `read_file`, `multi_file_read`, `list_directory`, `search_files`, `glob`; denies writes/commands |
 | `auto` | Allows safe operations, denies dangerous ones automatically |
 | `bypass` | Allows almost everything, warns on critical operations |
 | `autopilot` | Bypass permissions + automatically continues when model asks for input; escalates external blockers to `ask_user` |
@@ -222,7 +222,7 @@ Available in any IM channel connected to a ggcode daemon:
 
 Registered in `internal/tool/builtin.go` (core tools) + `cmd/ggcode/root.go` and `internal/tui/repl.go` (additional tools):
 
-**File operations** (6): `read_file`, `write_file`, `edit_file`, `list_directory`, `search_files`, `glob`
+**File operations**: `read_file`, `multi_file_read`, `write_file`, `edit_file`, `multi_edit_file`, `multi_file_edit`, `list_directory`, `search_files`, `glob`
 **Execution** (7): `run_command`, `start_command`, `read_command_output`, `wait_command`, `stop_command`, `write_command_input`, `list_commands`
 **Git** (3): `git_status`, `git_diff`, `git_log`
 **Web** (2): `web_fetch`, `web_search`

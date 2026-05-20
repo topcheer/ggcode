@@ -218,6 +218,109 @@ func TestAgent_SetDiffConfirm(t *testing.T) {
 	}
 }
 
+func TestAgent_ExecuteTool_MultiFileEditDiffAndCheckpoints(t *testing.T) {
+	tmpDir := t.TempDir()
+	aPath := filepath.Join(tmpDir, "a.txt")
+	bPath := filepath.Join(tmpDir, "b.txt")
+	if err := os.WriteFile(aPath, []byte("hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte("world\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.MultiFileEdit{}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	a := NewAgent(&mockProvider{}, registry, "", 1)
+	cp := checkpoint.NewManager(10)
+	a.SetCheckpointManager(cp)
+
+	var capturedPath, capturedDiff string
+	a.SetDiffConfirm(func(_ context.Context, filePath, diffText string) bool {
+		capturedPath = filePath
+		capturedDiff = diffText
+		return true
+	})
+
+	args, _ := json.Marshal(map[string]any{
+		"files": []map[string]any{
+			{"path": aPath, "edits": []map[string]string{{"old_text": "hello", "new_text": "HELLO"}}},
+			{"path": bPath, "edits": []map[string]string{{"old_text": "world", "new_text": "WORLD"}}},
+		},
+	})
+	result := a.executeTool(context.Background(), provider.ToolCallDelta{
+		ID:        "mf1",
+		Name:      "multi_file_edit",
+		Arguments: args,
+	})
+	if result.IsError {
+		t.Fatalf("expected success, got: %s", result.Content)
+	}
+	if capturedPath != "2 files" {
+		t.Fatalf("expected multi-file diff label, got %q", capturedPath)
+	}
+	if !strings.Contains(capturedDiff, "=== "+aPath+" ===") || !strings.Contains(capturedDiff, "=== "+bPath+" ===") {
+		t.Fatalf("expected combined diff for both files, got: %s", capturedDiff)
+	}
+	if len(cp.List()) != 2 {
+		t.Fatalf("expected 2 checkpoints, got %d", len(cp.List()))
+	}
+	gotA, _ := os.ReadFile(aPath)
+	gotB, _ := os.ReadFile(bPath)
+	if string(gotA) != "HELLO\n" || string(gotB) != "WORLD\n" {
+		t.Fatalf("unexpected contents: a=%q b=%q", gotA, gotB)
+	}
+}
+
+func TestAgent_ExecuteTool_MultiFileEditPartialSuccessSavesSuccessfulCheckpoints(t *testing.T) {
+	tmpDir := t.TempDir()
+	aPath := filepath.Join(tmpDir, "a.txt")
+	bPath := filepath.Join(tmpDir, "b.txt")
+	if err := os.WriteFile(aPath, []byte("hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte("world\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.MultiFileEdit{}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	a := NewAgent(&mockProvider{}, registry, "", 1)
+	cp := checkpoint.NewManager(10)
+	a.SetCheckpointManager(cp)
+
+	args, _ := json.Marshal(map[string]any{
+		"mode": "partial_success",
+		"files": []map[string]any{
+			{"path": aPath, "edits": []map[string]string{{"old_text": "hello", "new_text": "HELLO"}}},
+			{"path": bPath, "edits": []map[string]string{{"old_text": "missing", "new_text": "WORLD"}}},
+		},
+	})
+	result := a.executeTool(context.Background(), provider.ToolCallDelta{
+		ID:        "mf2",
+		Name:      "multi_file_edit",
+		Arguments: args,
+	})
+	if !result.IsError {
+		t.Fatalf("expected partial success to still surface an error result, got: %s", result.Content)
+	}
+	if len(cp.List()) != 1 {
+		t.Fatalf("expected 1 checkpoint for the written file, got %d", len(cp.List()))
+	}
+	if cp.Last().FilePath != aPath {
+		t.Fatalf("expected checkpoint for %s, got %+v", aPath, cp.Last())
+	}
+	gotA, _ := os.ReadFile(aPath)
+	gotB, _ := os.ReadFile(bPath)
+	if string(gotA) != "HELLO\n" || string(gotB) != "world\n" {
+		t.Fatalf("unexpected contents after partial success: a=%q b=%q", gotA, gotB)
+	}
+}
+
 func TestAgent_SetHookConfig(t *testing.T) {
 	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
 	// Verify hook config is wired through by setting a pre-tool-use hook

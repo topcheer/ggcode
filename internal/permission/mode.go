@@ -90,7 +90,7 @@ func (m PermissionMode) Next() PermissionMode {
 // IsReadOnlyTool returns true if the tool is safe for Plan mode (read-only).
 func IsReadOnlyTool(name string) bool {
 	switch name {
-	case "read_file", "list_directory", "search_files", "glob", "grep":
+	case "read_file", "multi_file_read", "list_directory", "search_files", "glob", "grep":
 		return true
 	case "lsp_hover", "lsp_definition", "lsp_references", "lsp_symbols",
 		"lsp_diagnostics", "lsp_workspace_symbols", "lsp_code_actions",

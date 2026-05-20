@@ -64,8 +64,8 @@ func TestPermissionModeNext(t *testing.T) {
 }
 
 func TestIsReadOnlyTool(t *testing.T) {
-	readOnly := []string{"read_file", "list_directory", "search_files", "grep"}
-	write := []string{"write_file", "edit_file", "run_command", "start_command", "write_command_input", "bash"}
+	readOnly := []string{"read_file", "multi_file_read", "list_directory", "search_files", "grep"}
+	write := []string{"write_file", "edit_file", "multi_edit_file", "multi_file_edit", "run_command", "start_command", "write_command_input", "bash"}
 	for _, name := range readOnly {
 		if !IsReadOnlyTool(name) {
 			t.Errorf("IsReadOnlyTool(%q) should be true", name)

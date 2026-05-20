@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/topcheer/ggcode/internal/extract"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -106,46 +105,13 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		}, nil
 	}
 
-	// Document file handling: extract text, then apply range reading.
-	if extract.IsDocumentFile(args.Path) {
-		result, err := extract.Extract(args.Path, data)
-		if err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("error extracting document text: %v", err)}, nil
-		}
-
-		var header string
-		if result.Pages > 0 {
-			header = fmt.Sprintf("[Extracted from %s, %d pages]\n", result.Format, result.Pages)
-		} else {
-			header = fmt.Sprintf("[Extracted from %s]\n", result.Format)
-		}
-
-		text := readFileRange(result.Text, args.Offset, args.Limit, 0)
-		return Result{Content: header + text}, nil
+	text, err := readTextContentFromBytes(args.Path, data, args.Offset, args.Limit, readFileRangeOptions{
+		defaultLimit: maxOutputLines,
+		moreHint:     "Use read_file with offset/limit for more.",
+	})
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
 	}
-
-	// Plain text file: apply range reading.
-	content := string(data)
-	text := readFileRange(content, args.Offset, args.Limit, 0)
-
-	// Detect indentation style and encoding, prepend as metadata hint.
-	// This helps the LLM produce correct old_text matches for edit_file.
-	var meta string
-	indentHint := detectIndentStyle(content)
-	if indentHint != "" {
-		meta = indentHint
-	}
-	encHint := detectEncoding(data)
-	if encHint != "" {
-		if meta != "" {
-			meta += ", "
-		}
-		meta += encHint
-	}
-	if meta != "" {
-		text = "[" + meta + "]\n" + text
-	}
-
 	return Result{Content: text}, nil
 }
 
