@@ -379,7 +379,7 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			resp, _ := m.handleStreamSlash(args)
 			m.chatWriteSystem(nextSystemID(), resp)
 			return nil
-		case "/tunnel":
+		case "/tunnel", "/share":
 			return m.handleTunnelCommand(text)
 		default:
 			// Check custom commands

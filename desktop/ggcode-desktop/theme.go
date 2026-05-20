@@ -110,7 +110,6 @@ func (m *modernTheme) Size(name fyne.ThemeSizeName) float32 {
 		return 8
 	case theme.SizeNameSelectionRadius:
 		return 6
-		return 2 // not used much in cards
 	}
 	return m.Theme.Size(name)
 }

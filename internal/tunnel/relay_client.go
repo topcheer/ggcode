@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // RelayClient connects to the ggcode-relay server as the "server" role.
@@ -85,7 +86,7 @@ func (rc *RelayClient) run() {
 		rc.closeMu.Unlock()
 
 		// Reconnect with backoff
-		log.Printf("[relay-client] disconnected, reconnecting...")
+		debug.Log("tunnel", "relay-client: disconnected, reconnecting...")
 		for attempt := 0; ; attempt++ {
 			rc.closeMu.Lock()
 			if rc.closed {
@@ -99,7 +100,7 @@ func (rc *RelayClient) run() {
 				if backoff > 10*time.Second {
 					backoff = 10 * time.Second
 				}
-				log.Printf("[relay-client] reconnect failed (attempt %d): %v, retry in %v", attempt+1, err, backoff)
+				debug.Log("tunnel", "relay-client: reconnect failed (attempt %d): %v, retry in %v", attempt+1, err, backoff)
 				select {
 				case <-time.After(backoff):
 					continue
@@ -107,7 +108,7 @@ func (rc *RelayClient) run() {
 					return
 				}
 			}
-			log.Printf("[relay-client] reconnected")
+			debug.Log("tunnel", "relay-client: reconnected")
 			break
 		}
 	}
@@ -158,7 +159,7 @@ func (rc *RelayClient) readPump(done func()) {
 		_, raw, err := rc.conn.ReadMessage()
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("[relay-client] read error: %v", err)
+				debug.Log("tunnel", "relay-client: read error: %v", err)
 			}
 			return
 		}
@@ -175,10 +176,10 @@ func (rc *RelayClient) readPump(done func()) {
 
 		switch relayMsg.Type {
 		case "connected":
-			log.Printf("[relay-client] confirmed as %s", relayMsg.Role)
+			debug.Log("tunnel", "relay-client: confirmed as %s", relayMsg.Role)
 
 		case "client_joined":
-			log.Printf("[relay-client] mobile client joined")
+			debug.Log("tunnel", "relay-client: mobile client joined")
 			rc.mu.RLock()
 			fn := rc.onConnect
 			rc.mu.RUnlock()
@@ -192,7 +193,7 @@ func (rc *RelayClient) readPump(done func()) {
 		case "encrypted":
 			plaintext, err := rc.crypto.Decrypt(relayMsg.Nonce, relayMsg.Ciphertext)
 			if err != nil {
-				log.Printf("[relay-client] decrypt error: %v", err)
+				debug.Log("tunnel", "relay-client: decrypt error: %v", err)
 				continue
 			}
 			var msg GatewayMessage

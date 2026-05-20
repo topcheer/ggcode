@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 func (m *Model) resetConversationView() {
@@ -35,10 +36,13 @@ func (m *Model) resetConversationView() {
 
 func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 	pa := m.pendingApproval
+	requestID := m.tunnelPendingApprovalID
 	m.pendingApproval = nil
+	m.tunnelPendingApprovalID = ""
 	if pa == nil || pa.Response == nil {
 		return nil
 	}
+	m.pushTunnelApprovalResult(requestID, tunnelDecisionString(d))
 	safego.Go("tui.commands.approvalRespond", func() {
 		select {
 		case pa.Response <- d:
@@ -51,7 +55,9 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 
 func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 	pa := m.pendingApproval
+	requestID := m.tunnelPendingApprovalID
 	m.pendingApproval = nil
+	m.tunnelPendingApprovalID = ""
 	if pa != nil && m.policy != nil {
 		m.policy.SetOverride(pa.ToolName, permission.Allow)
 		present := describeTool(m.currentLanguage(), pa.ToolName, pa.Input)
@@ -70,6 +76,7 @@ func (m *Model) handleApprovalAllowAlways() tea.Cmd {
 			}
 		})
 	}
+	m.pushTunnelApprovalResult(requestID, tunnel.DecisionAlwaysAllow)
 	return nil
 }
 

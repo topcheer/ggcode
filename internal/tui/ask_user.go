@@ -130,6 +130,8 @@ func (m *Model) handleQuestionnaireResult(status string) tea.Cmd {
 		return nil
 	}
 	response := qs.buildResponse(status)
+	m.pushTunnelAskUserResponse(m.tunnelPendingAskUserID, response)
+	m.tunnelPendingAskUserID = ""
 
 	// Emit IM summary: show all questions with their answers.
 	// This gives IM users visibility into what was answered via TUI.

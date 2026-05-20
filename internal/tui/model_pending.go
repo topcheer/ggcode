@@ -55,6 +55,7 @@ func (m *Model) cancelActiveRun() {
 		return
 	}
 	m.runCanceled = true
+	m.pushTunnelCancel()
 	if m.cancelFunc != nil {
 		m.cancelFunc()
 	}

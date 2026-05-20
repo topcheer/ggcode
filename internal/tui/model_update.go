@@ -358,6 +358,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatListScrollToBottom()
 		return m, nil
 
+	case tunnelInboundMsg:
+		return m.handleTunnelInboundMsg(msg)
+
+	case tunnelModeChangeMsg:
+		return m.handleTunnelModeChangeMsg(msg)
+
+	case tunnelApprovalResponseMsg:
+		return m.handleTunnelApprovalResponse(msg)
+
+	case tunnelAskUserResponseMsg:
+		return m.handleTunnelAskUserResponse(msg)
+
 	case wechatQRCodeMsg:
 		return m.handleWechatQRCodeMsg(msg)
 	case wechatQRPollMsg:

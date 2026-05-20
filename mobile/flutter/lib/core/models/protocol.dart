@@ -85,7 +85,10 @@ class ToolCallData {
   final String detail;
 
   ToolCallData(
-      {required this.toolId, required this.toolName, required this.args, required this.detail});
+      {required this.toolId,
+      required this.toolName,
+      required this.args,
+      required this.detail});
 
   factory ToolCallData.fromJson(Map<String, dynamic> d) => ToolCallData(
         toolId: d['tool_id'] as String? ?? '',
@@ -102,7 +105,10 @@ class ToolResultData {
   final bool isError;
 
   ToolResultData(
-      {required this.toolId, required this.toolName, required this.result, required this.isError});
+      {required this.toolId,
+      required this.toolName,
+      required this.result,
+      required this.isError});
 
   factory ToolResultData.fromJson(Map<String, dynamic> d) => ToolResultData(
         toolId: d['tool_id'] as String? ?? '',
@@ -127,6 +133,19 @@ class ApprovalRequestData {
         id: d['id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
         input: d['input'] as String? ?? '',
+      );
+}
+
+class ApprovalResultData {
+  final String id;
+  final String decision;
+
+  ApprovalResultData({required this.id, required this.decision});
+
+  factory ApprovalResultData.fromJson(Map<String, dynamic> d) =>
+      ApprovalResultData(
+        id: d['id'] as String? ?? '',
+        decision: d['decision'] as String? ?? '',
       );
 }
 
@@ -190,8 +209,8 @@ class AskUserRequestData {
         id: d['id'] as String? ?? '',
         title: d['title'] as String? ?? '',
         questions: (d['questions'] as List<dynamic>?)
-                ?.map((q) =>
-                    AskUserQuestion.fromJson(q as Map<String, dynamic>))
+                ?.map(
+                    (q) => AskUserQuestion.fromJson(q as Map<String, dynamic>))
                 .toList() ??
             [],
       );
@@ -213,6 +232,37 @@ class AskUserAnswer {
         'choice_ids': choiceIds,
         'freeform_text': freeformText,
       };
+
+  factory AskUserAnswer.fromJson(Map<String, dynamic> d) => AskUserAnswer(
+        questionId: d['question_id'] as String? ?? '',
+        choiceIds: (d['choice_ids'] as List<dynamic>?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            const [],
+        freeformText: d['freeform_text'] as String? ?? '',
+      );
+}
+
+class AskUserResponseData {
+  final String id;
+  final String status;
+  final List<AskUserAnswer> answers;
+
+  AskUserResponseData({
+    required this.id,
+    required this.status,
+    required this.answers,
+  });
+
+  factory AskUserResponseData.fromJson(Map<String, dynamic> d) =>
+      AskUserResponseData(
+        id: d['id'] as String? ?? '',
+        status: d['status'] as String? ?? '',
+        answers: (d['answers'] as List<dynamic>?)
+                ?.map((a) => AskUserAnswer.fromJson(a as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
 }
 
 /// ─── Sub-agent / Teammate ───
@@ -365,4 +415,3 @@ class ErrorData {
         code: d["code"] as String? ?? "",
       );
 }
-

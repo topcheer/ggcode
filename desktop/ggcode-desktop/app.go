@@ -219,13 +219,13 @@ func (a *App) showShareDialog() {
 
 		// Handle commands from mobile client
 		broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-			var payload map[string]interface{}
-			if len(cmd.Data) > 0 {
-				json.Unmarshal(cmd.Data, &payload)
-			}
 			switch cmd.Type {
 			case "user_text", "message":
-				text, _ := payload["text"].(string)
+				var data tunnel.MessageData
+				if err := json.Unmarshal(cmd.Data, &data); err != nil {
+					return
+				}
+				text := data.Text
 				if text != "" {
 					fyne.Do(func() {
 						if a.ui != nil {
@@ -236,10 +236,24 @@ func (a *App) showShareDialog() {
 						a.agentBridge.Send(text)
 					}
 				}
-			case "approval_result":
-				// TODO: wire to permission handler
-			case "ask_user_response":
-				// TODO: wire to ask_user handler
+			case tunnel.CmdApprovalResponse:
+				if a.agentBridge == nil {
+					return
+				}
+				var data tunnel.ApprovalResponseData
+				if err := json.Unmarshal(cmd.Data, &data); err != nil {
+					return
+				}
+				a.agentBridge.handleMobileApprovalResponse(data)
+			case tunnel.CmdAskUserResponse:
+				if a.agentBridge == nil {
+					return
+				}
+				var data tunnel.AskUserResponseData
+				if err := json.Unmarshal(cmd.Data, &data); err != nil {
+					return
+				}
+				a.agentBridge.handleMobileAskUserResponse(data)
 			}
 		})
 
