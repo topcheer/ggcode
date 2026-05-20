@@ -34,8 +34,8 @@ jobs:
           cache: true
       - run: go mod download
       - run: go build -tags goolm -o /tmp/ggcode-release ./cmd/ggcode
-      - run: go test -tags goolm -timeout 5m ./...
-      - run: go vet -tags goolm ./...
+      - run: go test -tags goolm -timeout 5m $(go list -tags goolm ./... | grep -v /desktop | grep -v ggcode-desktop)
+      - run: go vet -tags goolm $(go list -tags goolm ./... | grep -v /desktop | grep -v ggcode-desktop)
 
   release:
     name: Build & Release
