@@ -28,7 +28,7 @@ const (
 type UIEvent struct {
 	Type    UIEventType
 	Msg     ChatMessage // for EventAppend
-	Text    string      // full accumulated streaming text for EventAssistantChunk
+	Text    string      // incremental chunk text for streaming / reasoning updates
 	ToolID  string      // for EventToolResultUpdate
 	Result  string      // for EventToolResultUpdate
 	IsError bool        // for EventToolResultUpdate
@@ -53,6 +53,7 @@ type UIState struct {
 
 	// Assistant streaming buffer.
 	assistantBuf strings.Builder
+	assistantInc strings.Builder
 
 	// Non-bound state: chat messages.
 	ChatMsgs []ChatMessage
@@ -72,6 +73,7 @@ type UIState struct {
 
 	// Reasoning throttle: same pattern as streaming text.
 	reasoningBuf   strings.Builder
+	reasoningInc   strings.Builder
 	reasoningLastN atomic.Int64 // unix millis of last EventReasoning
 	reasoningDirty atomic.Bool
 }
@@ -149,20 +151,24 @@ func (u *UIState) AppendChat(msg ChatMessage) {
 	u.notify(UIEvent{Type: EventAppend, Msg: msg})
 }
 
-// AppendReasoning buffers a reasoning chunk and throttles GUI updates
-// to match the 300ms streaming cadence.
+// AppendReasoning buffers a reasoning chunk and throttles GUI updates.
 func (u *UIState) AppendReasoning(chunk string) {
 	u.ChatMu.Lock()
 	u.reasoningBuf.WriteString(chunk)
-	full := u.reasoningBuf.String()
+	u.reasoningInc.WriteString(chunk)
 	u.ChatMu.Unlock()
 
 	now := time.Now().UnixMilli()
 	last := u.reasoningLastN.Load()
 	if now-last >= streamThrottleMs {
+		if inc := u.takeReasoningIncrement(); inc != "" {
+			u.reasoningLastN.Store(now)
+			u.reasoningDirty.Store(false)
+			u.notify(UIEvent{Type: EventReasoning, Text: inc})
+			return
+		}
 		u.reasoningLastN.Store(now)
 		u.reasoningDirty.Store(false)
-		u.notify(UIEvent{Type: EventReasoning, Text: full})
 	} else {
 		u.reasoningDirty.Store(true)
 	}
@@ -171,17 +177,16 @@ func (u *UIState) AppendReasoning(chunk string) {
 // FlushReasoning forces an immediate EventReasoning if dirty.
 func (u *UIState) FlushReasoning() {
 	if u.reasoningDirty.CompareAndSwap(true, false) {
-		u.ChatMu.Lock()
-		full := u.reasoningBuf.String()
-		u.ChatMu.Unlock()
-		u.reasoningLastN.Store(time.Now().UnixMilli())
-		u.notify(UIEvent{Type: EventReasoning, Text: full})
+		if inc := u.takeReasoningIncrement(); inc != "" {
+			u.reasoningLastN.Store(time.Now().UnixMilli())
+			u.notify(UIEvent{Type: EventReasoning, Text: inc})
+		}
 	}
 }
 
 // AppendAssistantText appends a streaming text chunk to the assistant buffer
 // and updates (or creates) the last assistant message with the full accumulated text.
-// Throttled: GUI updates at most every 80ms to avoid overwhelming Fyne's renderer.
+// Throttled: GUI updates are chunked so markdown widgets can append incrementally.
 func (u *UIState) AppendAssistantText(chunk string) {
 	u.ChatMu.Lock()
 	u.assistantBuf.WriteString(chunk)
@@ -189,8 +194,9 @@ func (u *UIState) AppendAssistantText(chunk string) {
 	for i := len(u.ChatMsgs) - 1; i >= 0; i-- {
 		if u.ChatMsgs[i].Role == "assistant" && u.ChatMsgs[i].Streaming {
 			u.ChatMsgs[i].Content = full
+			u.assistantInc.WriteString(chunk)
 			u.ChatMu.Unlock()
-			u.maybeNotifyChunk(full)
+			u.maybeNotifyChunk()
 			return
 		}
 	}
@@ -201,22 +207,28 @@ func (u *UIState) AppendAssistantText(chunk string) {
 		Streaming: true,
 	}
 	u.ChatMsgs = append(u.ChatMsgs, msg)
+	u.assistantInc.Reset()
 	u.ChatMu.Unlock()
 	// First chunk: always notify immediately to create the widget.
 	u.notify(UIEvent{Type: EventAppend, Msg: msg})
-	u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
 	u.streamLastNotify.Store(time.Now().UnixMilli())
+	u.streamDirty.Store(false)
 }
 
-const streamThrottleMs = 300 // match mobile broker batch interval
+const streamThrottleMs = 80
 
-func (u *UIState) maybeNotifyChunk(full string) {
+func (u *UIState) maybeNotifyChunk() {
 	now := time.Now().UnixMilli()
 	last := u.streamLastNotify.Load()
 	if now-last >= streamThrottleMs {
+		if inc := u.takeAssistantIncrement(); inc != "" {
+			u.streamLastNotify.Store(now)
+			u.streamDirty.Store(false)
+			u.notify(UIEvent{Type: EventAssistantChunk, Text: inc})
+			return
+		}
 		u.streamLastNotify.Store(now)
 		u.streamDirty.Store(false)
-		u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
 	} else {
 		u.streamDirty.Store(true)
 	}
@@ -225,12 +237,33 @@ func (u *UIState) maybeNotifyChunk(full string) {
 // FlushStream forces an immediate EventAssistantChunk if dirty.
 func (u *UIState) FlushStream() {
 	if u.streamDirty.CompareAndSwap(true, false) {
-		u.ChatMu.Lock()
-		full := u.assistantBuf.String()
-		u.ChatMu.Unlock()
-		u.streamLastNotify.Store(time.Now().UnixMilli())
-		u.notify(UIEvent{Type: EventAssistantChunk, Text: full})
+		if inc := u.takeAssistantIncrement(); inc != "" {
+			u.streamLastNotify.Store(time.Now().UnixMilli())
+			u.notify(UIEvent{Type: EventAssistantChunk, Text: inc})
+		}
 	}
+}
+
+func (u *UIState) takeAssistantIncrement() string {
+	u.ChatMu.Lock()
+	defer u.ChatMu.Unlock()
+	if u.assistantInc.Len() == 0 {
+		return ""
+	}
+	inc := u.assistantInc.String()
+	u.assistantInc.Reset()
+	return inc
+}
+
+func (u *UIState) takeReasoningIncrement() string {
+	u.ChatMu.Lock()
+	defer u.ChatMu.Unlock()
+	if u.reasoningInc.Len() == 0 {
+		return ""
+	}
+	inc := u.reasoningInc.String()
+	u.reasoningInc.Reset()
+	return inc
 }
 
 // UpdateToolResult updates the tool message with matching tool call ID.
