@@ -120,13 +120,15 @@ func wrapLines(text string, width int) []string {
 // AssistantItem renders an assistant message (supports streaming).
 type AssistantItem struct {
 	CachedItem
-	id          string
-	text        string
-	reasoning   string // accumulated thinking/reasoning content
-	reasoningOk bool   // true once reasoning is complete (collapsed)
-	prefix      string
-	styles      Styles
-	streaming   bool
+	id             string
+	text           string
+	reasoning      string // accumulated thinking/reasoning content
+	reasoningOk    bool   // true once reasoning is complete (collapsed)
+	prefix         string
+	styles         Styles
+	streaming      bool
+	textCache      streamRenderCache
+	reasoningCache streamRenderCache
 }
 
 // NewAssistantItem creates a new assistant message item.
@@ -152,6 +154,9 @@ func (a *AssistantItem) SetText(text string) {
 // SetFinished marks the assistant as done streaming.
 func (a *AssistantItem) SetFinished() {
 	a.streaming = false
+	a.textCache = streamRenderCache{}
+	a.reasoningCache = streamRenderCache{}
+	a.Invalidate()
 }
 
 // Reasoning returns the current reasoning content.
@@ -163,6 +168,7 @@ func (a *AssistantItem) Reasoning() string {
 func (a *AssistantItem) SetReasoning(text string) {
 	if a.reasoning != text {
 		a.reasoning = text
+		a.reasoningOk = false
 		a.Invalidate()
 	}
 }
@@ -170,6 +176,7 @@ func (a *AssistantItem) SetReasoning(text string) {
 // SetReasoningFinished collapses reasoning into a one-line summary.
 func (a *AssistantItem) SetReasoningFinished() {
 	a.reasoningOk = true
+	a.reasoningCache = streamRenderCache{}
 	a.Invalidate()
 }
 
@@ -192,7 +199,7 @@ func (a *AssistantItem) Render(width int) string {
 	}
 
 	// Render main assistant content.
-	rendered := markdown.Render(a.text, contentWidth)
+	rendered := a.renderMainContent(contentWidth)
 	lines := strings.Split(rendered, "\n")
 	var sb strings.Builder
 	for i, line := range lines {
@@ -216,9 +223,27 @@ func (a *AssistantItem) Render(width int) string {
 	return result
 }
 
+func (a *AssistantItem) renderMainContent(contentWidth int) string {
+	if a.streaming {
+		rendered, cache := renderStreamingMarkdown(a.text, contentWidth, &a.textCache)
+		a.textCache = cache
+		return rendered
+	}
+	a.textCache = streamRenderCache{}
+	return markdown.Render(a.text, contentWidth)
+}
+
 func (a *AssistantItem) renderReasoning(width, prefixWidth, contentWidth int) string {
 	// Always render full reasoning text — no collapsing (TUI can't expand).
-	reasoningRendered := markdown.Render(a.reasoning, contentWidth)
+	reasoningRendered := a.reasoning
+	if !a.reasoningOk {
+		rendered, cache := renderStreamingMarkdown(a.reasoning, contentWidth, &a.reasoningCache)
+		a.reasoningCache = cache
+		reasoningRendered = rendered
+	} else {
+		a.reasoningCache = streamRenderCache{}
+		reasoningRendered = markdown.Render(a.reasoning, contentWidth)
+	}
 	lines := strings.Split(reasoningRendered, "\n")
 	var sb strings.Builder
 	for i, line := range lines {

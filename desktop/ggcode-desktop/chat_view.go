@@ -287,6 +287,7 @@ type ChatView struct {
 	streamW     *markdownx.MarkdownWidget
 	thinkingW   fyne.CanvasObject // pulsing "thinking..." indicator
 	reasoningW  *widget.Accordion // collapsible reasoning panel
+	reasoningMD *markdownx.MarkdownWidget
 
 	// Per-agent incremental state
 	agentStates map[string]*agentPanelState
@@ -308,6 +309,8 @@ type agentPanelState struct {
 	toolWidgets    map[int]*toolWidgetRef // tool_call event index → ref
 	vbox           *fyne.Container
 	scroll         *container.Scroll
+	textMD         *markdownx.MarkdownWidget
+	reasoningMD    *markdownx.MarkdownWidget
 }
 
 func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
@@ -530,7 +533,7 @@ func (cv *ChatView) onAssistantChunk(text string) {
 	cv.hideThinking()
 	cv.collapseReasoning()
 	if cv.streamW != nil {
-		cv.streamW.SetMarkdown(text)
+		cv.streamW.AppendChunk(text)
 		cv.scroll.ScrollToBottom()
 		return
 	}
@@ -538,7 +541,7 @@ func (cv *ChatView) onAssistantChunk(text string) {
 	if len(cv.msgWidgets) > 0 {
 		if md, ok := extractMarkdownWidget(cv.msgWidgets[len(cv.msgWidgets)-1]); ok {
 			cv.streamW = md
-			md.SetMarkdown(text)
+			md.AppendChunk(text)
 			cv.scroll.ScrollToBottom()
 		}
 	}
@@ -600,16 +603,13 @@ func (cv *ChatView) onReasoningChunk(text string) {
 		accordion := widget.NewAccordion(widget.NewAccordionItem("Thinking...", md))
 		accordion.Open(0)
 		cv.reasoningW = accordion
+		cv.reasoningMD = md
 		cv.vbox.Add(accordion)
 		cv.vbox.Refresh()
 		cv.scroll.ScrollToBottom()
 	} else {
-		// Update existing markdown widget.
-		items := cv.reasoningW.Items
-		if len(items) > 0 {
-			if md, ok := items[0].Detail.(*markdownx.MarkdownWidget); ok {
-				md.SetMarkdown(text)
-			}
+		if cv.reasoningMD != nil {
+			cv.reasoningMD.AppendChunk(text)
 		}
 		cv.scroll.ScrollToBottom()
 	}
@@ -627,6 +627,7 @@ func (cv *ChatView) collapseReasoning() {
 	cv.reasoningW.CloseAll()
 	cv.reasoningW.Refresh()
 	cv.reasoningW = nil
+	cv.reasoningMD = nil
 }
 
 func (cv *ChatView) onToolResult(toolID, result string, isError bool) {
@@ -662,7 +663,7 @@ func (cv *ChatView) onStreamDone() {
 
 // statusLoop updates status bar periodically (lightweight).
 func (cv *ChatView) statusLoop() {
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(120 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1355,11 +1356,19 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 
 		switch ev.Type {
 		case "text":
+			st.reasoningMD = nil
 			if ev.Content != "" {
-				st.vbox.Add(cv.iconRow(theme.ComputerIcon(), newMD(ev.Content)))
+				if st.textMD == nil {
+					st.textMD = newMD(ev.Content)
+					st.vbox.Add(cv.iconRow(theme.ComputerIcon(), st.textMD))
+				} else {
+					st.textMD.AppendChunk(ev.Content)
+				}
 			}
 
 		case "tool_call":
+			st.textMD = nil
+			st.reasoningMD = nil
 			result := toolResults[ev.ToolID]
 			isErr := toolErrors[ev.ToolID]
 
@@ -1384,6 +1393,8 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 			}
 
 		case "tool_result":
+			st.textMD = nil
+			st.reasoningMD = nil
 			// Find the tool_call ref by matching ToolID via the event at the stored index.
 			for idx, ref := range st.toolWidgets {
 				if ref.hasResult {
@@ -1406,27 +1417,25 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 			}
 
 		case "error":
+			st.textMD = nil
+			st.reasoningMD = nil
 			t := canvas.NewText(ev.Content, theme.ErrorColor())
 			t.TextSize = theme.TextSize()
 			st.vbox.Add(cv.iconRow(theme.CancelIcon(), t))
 
 		case "reasoning":
-			// Collect consecutive reasoning events into a single collapsed accordion.
-			reasoningText := ev.Content
-			for j := i + 1; j < len(panel.Events); j++ {
-				if panel.Events[j].Type == "reasoning" {
-					reasoningText += panel.Events[j].Content
-					i = j
+			st.textMD = nil
+			if ev.Content != "" {
+				if st.reasoningMD == nil {
+					md := newMD(ev.Content)
+					item := widget.NewAccordionItem("Thought", md)
+					accordion := widget.NewAccordion(item)
+					accordion.CloseAll()
+					st.reasoningMD = md
+					st.vbox.Add(accordion)
 				} else {
-					break
+					st.reasoningMD.AppendChunk(ev.Content)
 				}
-			}
-			if reasoningText != "" {
-				md := newMD(reasoningText)
-				item := widget.NewAccordionItem(fmt.Sprintf("Thought (%d chars)", len(reasoningText)), md)
-				accordion := widget.NewAccordion(item)
-				accordion.CloseAll()
-				st.vbox.Add(accordion)
 			}
 		}
 	}
