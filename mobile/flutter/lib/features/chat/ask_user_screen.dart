@@ -26,6 +26,14 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
+      if (prev != null &&
+          next == null &&
+          mounted &&
+          Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+    });
     final askUser = ref.watch(askUserProvider);
     if (askUser == null) {
       return const SizedBox.shrink();
@@ -55,7 +63,8 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: Row(
                 children: [
-                  const Icon(Icons.help_outline, color: Colors.blueAccent, size: 20),
+                  const Icon(Icons.help_outline,
+                      color: Colors.blueAccent, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -103,7 +112,10 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                   onPressed: () => _submit(askUser),
                   child: const Text(
                     'Submit',
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
@@ -126,7 +138,8 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
             children: [
               Text(
                 '${index + 1}. ',
-                style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                    color: Colors.blueAccent, fontWeight: FontWeight.w600),
               ),
               Expanded(
                 child: Text(
@@ -143,8 +156,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
             ...question.choices.map((choice) => _buildChoiceTile(
                   question.id,
                   choice,
-                                  isSelected: (_selectedChoices[question.id]?.length ?? 0) == 1 &&
-                      _selectedChoices[question.id]!.first == choice.id,
+                  isSelected:
+                      (_selectedChoices[question.id]?.length ?? 0) == 1 &&
+                          _selectedChoices[question.id]!.first == choice.id,
                   multi: false,
                 )),
 
@@ -153,7 +167,9 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
             ...question.choices.map((choice) => _buildChoiceTile(
                   question.id,
                   choice,
-                  isSelected: _selectedChoices[question.id]?.contains(choice.id) ?? false,
+                  isSelected:
+                      _selectedChoices[question.id]?.contains(choice.id) ??
+                          false,
                   multi: true,
                 )),
 
@@ -161,10 +177,13 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
           if (question.kind == 'text' || question.allowFreeform) ...[
             const SizedBox(height: 4),
             TextField(
-              controller: _freeformControllers.putIfAbsent(question.id, () => TextEditingController()),
+              controller: _freeformControllers.putIfAbsent(
+                  question.id, () => TextEditingController()),
               style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
-                hintText: question.placeholder.isNotEmpty ? question.placeholder : 'Type your answer...',
+                hintText: question.placeholder.isNotEmpty
+                    ? question.placeholder
+                    : 'Type your answer...',
                 hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
                 filled: true,
                 fillColor: const Color(0xFF1A1A2E),
@@ -172,7 +191,8 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                   borderRadius: BorderRadius.circular(8),
                   borderSide: BorderSide.none,
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               ),
               maxLines: question.kind == 'text' ? 3 : 1,
             ),
@@ -205,8 +225,12 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
           children: [
             Icon(
               multi
-                  ? (isSelected ? Icons.check_box : Icons.check_box_outline_blank)
-                  : (isSelected ? Icons.radio_button_checked : Icons.radio_button_unchecked),
+                  ? (isSelected
+                      ? Icons.check_box
+                      : Icons.check_box_outline_blank)
+                  : (isSelected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked),
               color: isSelected ? Colors.blueAccent : Colors.white38,
               size: 20,
             ),
@@ -235,6 +259,24 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
       );
     }).toList();
 
+    // Build human-readable answer summary for chat
+    final parts = <String>[];
+    for (int i = 0; i < askUser.questions.length; i++) {
+      final q = askUser.questions[i];
+      final a = answers[i];
+      String answer;
+      if (a.choiceIds.isNotEmpty) {
+        final labels = q.choices
+            .where((c) => a.choiceIds.contains(c.id))
+            .map((c) => c.label)
+            .toList();
+        answer = labels.join(', ');
+      } else {
+        answer = a.freeformText;
+      }
+      if (answer.isNotEmpty) parts.add(answer);
+    }
+
     ref.read(connectionProvider.notifier).send({
       'type': 'ask_user_response',
       'data': {
@@ -244,8 +286,15 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
       },
     });
 
+    // Update the ask_user chat message with the answer
+    if (askUser.msgId.isNotEmpty) {
+      ref.read(chatProvider.notifier).updateAskUserAnswer(
+            askUser.msgId,
+            parts.join(' / '),
+          );
+    }
+
     ref.read(askUserProvider.notifier).state = null;
-    Navigator.of(context).pop();
   }
 
   void _cancel(String id) {
@@ -253,7 +302,16 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
       'type': 'ask_user_response',
       'data': {'id': id, 'status': 'cancelled', 'answers': []},
     });
+
+    // Update the ask_user chat message with cancelled status
+    final askUser = ref.read(askUserProvider);
+    if (askUser != null && askUser.msgId.isNotEmpty) {
+      ref.read(chatProvider.notifier).updateAskUserAnswer(
+            askUser.msgId,
+            'Cancelled',
+          );
+    }
+
     ref.read(askUserProvider.notifier).state = null;
-    Navigator.of(context).pop();
   }
 }

@@ -48,6 +48,9 @@ func (m *Model) appendUserMessage(text string) {
 	store := m.sessionStore
 	m.sessionMutex().Unlock()
 
+	// Echo to mobile tunnel client.
+	m.pushTunnelUserMessage(text)
+
 	// Persist to disk outside the lock.
 	// JSONLStore.AppendMessageToDisk only writes the JSONL file + updates
 	// the index (both protected by the store's own mu). It does NOT modify
@@ -96,6 +99,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 				cancel()
 			}()
 
+			m.pushTunnelStatusThinking()
 			if err := m.runAgentSubmission(ctx, runID, text, img); err != nil && !errors.Is(err, context.Canceled) && m.program != nil {
 				m.program.Send(agentErrMsg{RunID: runID, Err: err})
 			}
@@ -196,6 +200,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 	var batchMu sync.Mutex
 	var batchBuf strings.Builder
 	var batchReasoningBuf strings.Builder
+	var fullReasoningBuf strings.Builder
 	var toolBatchStatus []agentStatusMsg
 	var toolBatchTools []agentToolStatusMsg
 	batchDone := make(chan struct{})
@@ -217,8 +222,12 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		batchMu.Lock()
 		text := batchBuf.String()
 		batchBuf.Reset()
-		reasoning := batchReasoningBuf.String()
+		reasoningPending := batchReasoningBuf.Len() > 0
 		batchReasoningBuf.Reset()
+		reasoning := ""
+		if reasoningPending {
+			reasoning = fullReasoningBuf.String()
+		}
 		status := toolBatchStatus
 		tools := toolBatchTools
 		toolBatchStatus = nil
@@ -228,21 +237,8 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		if m.program == nil {
 			return
 		}
-		// Send text first (if any)
-		if text != "" {
-			m.program.Send(agentStreamMsg{RunID: runID, Text: text})
-			// Send reasoning (if any)
-			if reasoning != "" {
-				m.program.Send(agentReasoningMsg{RunID: runID, Text: reasoning})
-			}
-		}
-		// Send all batched tool events in a single message
-		if len(status) > 0 || len(tools) > 0 {
-			m.program.Send(agentToolBatchMsg{
-				RunID:      runID,
-				StatusMsgs: status,
-				ToolMsgs:   tools,
-			})
+		for _, msg := range buildBatchedStreamMessages(runID, text, reasoning, status, tools) {
+			m.program.Send(msg)
 		}
 	}
 
@@ -274,6 +270,8 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		if m.webuiBridge != nil {
 			m.webuiBridge.BroadcastEvent(event)
 		}
+		// Push to mobile tunnel client
+		m.pushTunnelEvent(event)
 		if m.program == nil {
 			return
 		}
@@ -295,6 +293,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			if event.Text != "" && event.Text != "__redacted_thinking__" {
 				batchMu.Lock()
 				batchReasoningBuf.WriteString(event.Text)
+				fullReasoningBuf.WriteString(event.Text)
 				batchMu.Unlock()
 			}
 
@@ -453,6 +452,24 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 		return false, err
 	}
 	return streamErrSent, err
+}
+
+func buildBatchedStreamMessages(runID int, text, reasoning string, status []agentStatusMsg, tools []agentToolStatusMsg) []tea.Msg {
+	msgs := make([]tea.Msg, 0, 3)
+	if text != "" {
+		msgs = append(msgs, agentStreamMsg{RunID: runID, Text: text})
+	}
+	if reasoning != "" {
+		msgs = append(msgs, agentReasoningMsg{RunID: runID, Text: reasoning})
+	}
+	if len(status) > 0 || len(tools) > 0 {
+		msgs = append(msgs, agentToolBatchMsg{
+			RunID:      runID,
+			StatusMsgs: status,
+			ToolMsgs:   tools,
+		})
+	}
+	return msgs
 }
 
 type agentIMRoundState struct {

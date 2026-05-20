@@ -3,10 +3,11 @@ package tunnel
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Broker bridges agent events and the WebSocket tunnel protocol.
@@ -73,7 +74,7 @@ func NewBroker(sess *Session) *Broker {
 	})
 
 	sess.OnConnect(func() {
-		log.Printf("[broker] client connected, replaying %d messages", len(b.sentLog))
+		debug.Log("tunnel", "broker: client connected, replaying %d messages", len(b.sentLog))
 		if b.onClientConnect != nil {
 			b.onClientConnect()
 		}
@@ -110,7 +111,7 @@ func (b *Broker) senderLoop() {
 
 		for _, msg := range batch {
 			if err := b.session.Send(msg); err != nil {
-				log.Printf("[broker] send %s seq=%d failed: %v", msg.Type, msg.Seq, err)
+				debug.Log("tunnel", "broker: send %s seq=%d failed: %v", msg.Type, msg.Seq, err)
 			}
 		}
 	}
@@ -211,16 +212,16 @@ func (b *Broker) ReplayToClient() {
 	copy(msgs, b.sentLog)
 	b.logMu.Unlock()
 
-	log.Printf("[broker] ReplayToClient: %d messages", len(msgs))
+	debug.Log("tunnel", "broker: ReplayToClient: %d messages", len(msgs))
 	// Always start with chat_clear
 	clearMsg := GatewayMessage{Type: "chat_clear"}
 	if err := b.session.Send(clearMsg); err != nil {
-		log.Printf("[broker] replay chat_clear failed: %v", err)
+		debug.Log("tunnel", "broker: replay chat_clear failed: %v", err)
 		return
 	}
 	for _, msg := range msgs {
 		if err := b.session.Send(msg); err != nil {
-			log.Printf("[broker] replay send %s failed: %v", msg.Type, err)
+			debug.Log("tunnel", "broker: replay send %s failed: %v", msg.Type, err)
 			return
 		}
 	}
@@ -397,7 +398,7 @@ func (b *Broker) enqueue(eventType string, data interface{}) {
 
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("broker: marshal error for %s: %v", eventType, err)
+		debug.Log("tunnel", "broker: marshal error for %s: %v", eventType, err)
 		return
 	}
 	msg := GatewayMessage{

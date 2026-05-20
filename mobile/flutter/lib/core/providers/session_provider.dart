@@ -8,7 +8,8 @@ import '../models/protocol.dart' as proto;
 
 // ---- Connection Service Provider ----
 
-final connectionProvider = StateNotifierProvider<ConnectionNotifier, TunnelConnectionState>(
+final connectionProvider =
+    StateNotifierProvider<ConnectionNotifier, TunnelConnectionState>(
   (ref) => ConnectionNotifier(ref),
 );
 
@@ -19,7 +20,8 @@ class TunnelConnectionState {
 
   TunnelConnectionState({required this.status, this.url, this.error});
 
-  TunnelConnectionState copyWith({ConnectionStatus? status, String? url, String? error}) =>
+  TunnelConnectionState copyWith(
+          {ConnectionStatus? status, String? url, String? error}) =>
       TunnelConnectionState(
         status: status ?? this.status,
         url: url ?? this.url,
@@ -31,7 +33,8 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
   final Ref _ref;
   ConnectionService? service;
 
-  ConnectionNotifier(this._ref) : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
+  ConnectionNotifier(this._ref)
+      : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
 
   Future<void> connect(String url, {bool clearState = true}) async {
     // Disconnect previous if any
@@ -46,12 +49,15 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       _ref.read(subagentProvider.notifier).state = {};
     }
 
-    state = state.copyWith(status: ConnectionStatus.connecting, url: url, error: null);
+    state = state.copyWith(
+        status: ConnectionStatus.connecting, url: url, error: null);
 
     // Extract token from URL for encryption
     final token = _extractToken(url) ?? '';
     if (token.isEmpty) {
-      state = state.copyWith(status: ConnectionStatus.disconnected, error: 'Invalid URL: no token');
+      state = state.copyWith(
+          status: ConnectionStatus.disconnected,
+          error: 'Invalid URL: no token');
       return;
     }
 
@@ -84,7 +90,8 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       // dart:io WebSocket.connect properly awaits handshake
       await service!.connect();
     } catch (e) {
-      state = state.copyWith(status: ConnectionStatus.disconnected, error: e.toString());
+      state = state.copyWith(
+          status: ConnectionStatus.disconnected, error: e.toString());
     }
   }
 
@@ -102,7 +109,9 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
   }
 
   void send(Map<String, dynamic> data) {
-    final msg = proto.WsMessage(type: data['type'] as String? ?? 'message', data: data['data'] as Map<String, dynamic>?);
+    final msg = proto.WsMessage(
+        type: data['type'] as String? ?? 'message',
+        data: data['data'] as Map<String, dynamic>?);
     service?.sendEncrypted(msg);
   }
 
@@ -145,7 +154,8 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
               final toolName = m['tool_name'] as String? ?? '';
               final result = m['result'] as String? ?? '';
               final isError = m['is_error'] as bool? ?? false;
-              chatNotifier.addHistoryToolResult(toolId, toolName, result, isError);
+              chatNotifier.addHistoryToolResult(
+                  toolId, toolName, result, isError);
             } else {
               final content = m['content'] as String? ?? '';
               if (content.isNotEmpty) {
@@ -164,10 +174,14 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'text':
       case 'stream_text':
         if (msg.data != null) {
-          final text = msg.data!['text'] as String? ?? msg.data!['chunk'] as String? ?? '';
-          final msgId = msg.data!['id'] as String? ?? 'msg-${DateTime.now().millisecondsSinceEpoch}';
+          final text = msg.data!['text'] as String? ??
+              msg.data!['chunk'] as String? ??
+              '';
+          final msgId = msg.data!['id'] as String? ??
+              'msg-${DateTime.now().millisecondsSinceEpoch}';
           final done = msg.data!['done'] as bool? ?? false;
-          chatNotifier.handleTextChunk(proto.TextData(id: msgId, chunk: text, done: done));
+          chatNotifier.handleTextChunk(
+              proto.TextData(id: msgId, chunk: text, done: done));
         }
         break;
 
@@ -196,30 +210,67 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
 
       case 'tool_result':
         if (msg.data != null) {
-          chatNotifier.handleToolResult(proto.ToolResultData.fromJson(msg.data!));
+          chatNotifier
+              .handleToolResult(proto.ToolResultData.fromJson(msg.data!));
         }
         break;
 
       case 'approval_request':
         if (msg.data != null) {
           final data = proto.ApprovalRequestData.fromJson(msg.data!);
-          _ref.read(approvalProvider.notifier).state =
-              ApprovalInfo(id: data.id, toolName: data.toolName, input: data.input);
+          _ref.read(approvalProvider.notifier).state = ApprovalInfo(
+              id: data.id, toolName: data.toolName, input: data.input);
+        }
+        break;
+
+      case 'approval_result':
+        if (msg.data != null) {
+          final data = proto.ApprovalResultData.fromJson(msg.data!);
+          final approval = _ref.read(approvalProvider);
+          if (approval != null && approval.id == data.id) {
+            _ref.read(approvalProvider.notifier).state = null;
+          }
         }
         break;
 
       case 'ask_user_request':
         if (msg.data != null) {
           final data = proto.AskUserRequestData.fromJson(msg.data!);
-          _ref.read(askUserProvider.notifier).state =
-              AskUserInfo(id: data.id, title: data.title, questions: data.questions);
+          // Build a human-readable summary of the questions
+          final detail =
+              data.questions.map(_describeAskUserQuestion).join('\n');
+          final amsgId = _newAskUserMessageId();
+          chatNotifier.addAskUserRequest(amsgId, data.title, detail);
+          _ref.read(askUserProvider.notifier).state = AskUserInfo(
+              id: data.id,
+              title: data.title,
+              questions: data.questions,
+              msgId: amsgId);
+        }
+        break;
+
+      case 'ask_user_response':
+        if (msg.data != null) {
+          final data = proto.AskUserResponseData.fromJson(msg.data!);
+          final askUser = _ref.read(askUserProvider);
+          if (askUser != null && askUser.id == data.id) {
+            if (askUser.msgId.isNotEmpty) {
+              chatNotifier.updateAskUserAnswer(
+                askUser.msgId,
+                _summarizeAskUserResponse(
+                    askUser.questions, data.answers, data.status),
+              );
+            }
+            _ref.read(askUserProvider.notifier).state = null;
+          }
         }
         break;
 
       case 'subagent_spawn':
         if (msg.data != null) {
           final data = proto.SubagentSpawnData.fromJson(msg.data!);
-          final agents = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          final agents =
+              Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
           agents[data.agentId] = SubagentInfo(
             agentId: data.agentId,
             name: data.name,
@@ -233,16 +284,19 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
 
       case 'subagent_text':
         if (msg.data != null) {
-          chatNotifier.handleSubagentText(proto.SubagentTextData.fromJson(msg.data!));
+          chatNotifier
+              .handleSubagentText(proto.SubagentTextData.fromJson(msg.data!));
         }
         break;
 
       case 'subagent_status':
         if (msg.data != null) {
           final data = proto.SubagentStatusData.fromJson(msg.data!);
-          final agents = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          final agents =
+              Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
           if (agents.containsKey(data.agentId)) {
-            agents[data.agentId] = agents[data.agentId]!.copyWith(status: data.status);
+            agents[data.agentId] =
+                agents[data.agentId]!.copyWith(status: data.status);
             _ref.read(subagentProvider.notifier).state = agents;
           }
         }
@@ -251,7 +305,8 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'subagent_complete':
         if (msg.data != null) {
           final data = proto.SubagentCompleteData.fromJson(msg.data!);
-          final agents = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          final agents =
+              Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
           if (agents.containsKey(data.agentId)) {
             agents[data.agentId] = agents[data.agentId]!.copyWith(
               status: 'completed',
@@ -263,7 +318,8 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
           }
           // Auto-remove completed agent tab after 5 seconds
           Future.delayed(const Duration(seconds: 5), () {
-            final current = Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+            final current =
+                Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
             current.remove(data.agentId);
             _ref.read(subagentProvider.notifier).state = current;
             // Also remove messages for this agent
@@ -432,26 +488,34 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         id: 'hist-${_msgCounter++}',
         toolId: toolId,
         toolName: toolName,
-        toolDetail: args.isNotEmpty ? (args.length > 100 ? '${args.substring(0, 100)}...' : args) : '',
+        toolDetail: args.isNotEmpty
+            ? (args.length > 100 ? '${args.substring(0, 100)}...' : args)
+            : '',
         time: DateTime.now(),
       ),
     ];
   }
 
-  void addHistoryToolResult(String toolId, String toolName, String result, bool isError) {
+  void addHistoryToolResult(
+      String toolId, String toolName, String result, bool isError) {
     // Match by toolId (exact), fallback to toolName
     int idx = -1;
     if (toolId.isNotEmpty) {
-      idx = state.lastIndexWhere((m) => m.toolId == toolId && m.toolResult == null);
+      idx = state
+          .lastIndexWhere((m) => m.toolId == toolId && m.toolResult == null);
     }
     if (idx < 0) {
-      idx = state.lastIndexWhere((m) => m.toolName == toolName && m.toolResult == null && m.sourceId == null);
+      idx = state.lastIndexWhere((m) =>
+          m.toolName == toolName && m.toolResult == null && m.sourceId == null);
     }
     if (idx >= 0) {
       final msg = state[idx];
       state = [
         for (int i = 0; i < state.length; i++)
-          if (i == idx) msg.copyWith(toolResult: result, isToolError: isError) else state[i],
+          if (i == idx)
+            msg.copyWith(toolResult: result, isToolError: isError)
+          else
+            state[i],
       ];
     }
   }
@@ -545,7 +609,9 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         sourceColor: sourceColor,
         toolId: toolId,
         toolName: toolName,
-        toolDetail: detail.isNotEmpty ? detail : (args.length > 100 ? '${args.substring(0, 100)}...' : args),
+        toolDetail: detail.isNotEmpty
+            ? detail
+            : (args.length > 100 ? '${args.substring(0, 100)}...' : args),
         time: DateTime.now(),
       ),
     ];
@@ -567,7 +633,10 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
     }
     if (idx < 0) {
       idx = state.lastIndexWhere(
-        (m) => m.sourceId == agentId && m.toolName == toolName && m.toolResult == null,
+        (m) =>
+            m.sourceId == agentId &&
+            m.toolName == toolName &&
+            m.toolResult == null,
       );
     }
     if (idx >= 0) {
@@ -600,16 +669,23 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
     // Match by toolId (exact), fallback to toolName
     int idx = -1;
     if (data.toolId.isNotEmpty) {
-      idx = state.lastIndexWhere((m) => m.toolId == data.toolId && m.toolResult == null);
+      idx = state.lastIndexWhere(
+          (m) => m.toolId == data.toolId && m.toolResult == null);
     }
     if (idx < 0) {
-      idx = state.lastIndexWhere((m) => m.toolName == data.toolName && m.toolResult == null && m.sourceId == null);
+      idx = state.lastIndexWhere((m) =>
+          m.toolName == data.toolName &&
+          m.toolResult == null &&
+          m.sourceId == null);
     }
     if (idx >= 0) {
       final msg = state[idx];
       state = [
         for (int i = 0; i < state.length; i++)
-          if (i == idx) msg.copyWith(toolResult: data.result, isToolError: data.isError) else state[i],
+          if (i == idx)
+            msg.copyWith(toolResult: data.result, isToolError: data.isError)
+          else
+            state[i],
       ];
     }
   }
@@ -633,6 +709,33 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         time: DateTime.now(),
       ),
     ];
+  }
+
+  void addAskUserRequest(String msgId, String title, String detail) {
+    state = [
+      ...state,
+      ChatMessage(
+        id: msgId,
+        toolId: msgId,
+        toolName: 'ask_user',
+        toolDetail: title.isNotEmpty ? title : detail,
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  void updateAskUserAnswer(String msgId, String answer) {
+    final idx = state.indexWhere((m) => m.id == msgId);
+    if (idx >= 0) {
+      final msg = state[idx];
+      state = [
+        for (int i = 0; i < state.length; i++)
+          if (i == idx)
+            msg.copyWith(toolResult: answer, isToolError: false)
+          else
+            state[i],
+      ];
+    }
   }
 }
 
@@ -705,15 +808,73 @@ class AskUserInfo {
   final String id;
   final String title;
   final List<proto.AskUserQuestion> questions;
+  final String msgId; // chat message ID for updating the answer
 
-  AskUserInfo({required this.id, required this.title, required this.questions});
+  AskUserInfo(
+      {required this.id,
+      required this.title,
+      required this.questions,
+      required this.msgId});
 }
 
 final askUserProvider = StateProvider<AskUserInfo?>((ref) => null);
 
+String _newAskUserMessageId() =>
+    'askuser-${DateTime.now().millisecondsSinceEpoch}';
+
+String _describeAskUserQuestion(proto.AskUserQuestion q) {
+  final prefix = q.kind == 'single'
+      ? '[Single]'
+      : q.kind == 'multi'
+          ? '[Multi]'
+          : '[Text]';
+  final choices = q.choices.isNotEmpty
+      ? ' (${q.choices.map((c) => c.label).join(', ')})'
+      : '';
+  return '$prefix ${q.prompt}$choices';
+}
+
+String _summarizeAskUserResponse(
+  List<proto.AskUserQuestion> questions,
+  List<proto.AskUserAnswer> answers,
+  String status,
+) {
+  if (status == 'cancelled') {
+    return 'Cancelled';
+  }
+  final answerByQuestion = <String, proto.AskUserAnswer>{
+    for (final answer in answers) answer.questionId: answer,
+  };
+  final parts = <String>[];
+  for (final question in questions) {
+    final answer = answerByQuestion[question.id];
+    if (answer == null) continue;
+    String text = '';
+    if (answer.choiceIds.isNotEmpty) {
+      final labels = question.choices
+          .where((choice) => answer.choiceIds.contains(choice.id))
+          .map((choice) => choice.label)
+          .toList();
+      text = labels.join(', ');
+      if (answer.freeformText.trim().isNotEmpty) {
+        text = text.isEmpty
+            ? answer.freeformText.trim()
+            : '$text — ${answer.freeformText.trim()}';
+      }
+    } else {
+      text = answer.freeformText.trim();
+    }
+    if (text.isNotEmpty) {
+      parts.add(text);
+    }
+  }
+  return parts.isEmpty ? 'Answered' : parts.join(' / ');
+}
+
 // ---- Session Info Provider ----
 
-final sessionInfoProvider = StateProvider<proto.SessionInfoData?>((ref) => null);
+final sessionInfoProvider =
+    StateProvider<proto.SessionInfoData?>((ref) => null);
 
 // ---- Current mode provider ----
 
@@ -752,7 +913,8 @@ final messageDispatcherProvider = Provider<Function>((ref) {
               final toolName = m['tool_name'] as String? ?? '';
               final result = m['result'] as String? ?? '';
               final isError = m['is_error'] as bool? ?? false;
-              chatNotifier.addHistoryToolResult(toolId, toolName, result, isError);
+              chatNotifier.addHistoryToolResult(
+                  toolId, toolName, result, isError);
             } else {
               final content = m['content'] as String? ?? '';
               if (content.isNotEmpty) {
@@ -781,19 +943,49 @@ final messageDispatcherProvider = Provider<Function>((ref) {
 
       case 'approval_request':
         final data = proto.ApprovalRequestData.fromJson(msg.data!);
-        ref.read(approvalProvider.notifier).state =
-            ApprovalInfo(id: data.id, toolName: data.toolName, input: data.input);
+        ref.read(approvalProvider.notifier).state = ApprovalInfo(
+            id: data.id, toolName: data.toolName, input: data.input);
+        break;
+
+      case 'approval_result':
+        final data = proto.ApprovalResultData.fromJson(msg.data!);
+        final approval = ref.read(approvalProvider);
+        if (approval != null && approval.id == data.id) {
+          ref.read(approvalProvider.notifier).state = null;
+        }
         break;
 
       case 'ask_user_request':
         final data = proto.AskUserRequestData.fromJson(msg.data!);
-        ref.read(askUserProvider.notifier).state =
-            AskUserInfo(id: data.id, title: data.title, questions: data.questions);
+        final detail = data.questions.map(_describeAskUserQuestion).join('\n');
+        final amsgId = _newAskUserMessageId();
+        chatNotifier.addAskUserRequest(amsgId, data.title, detail);
+        ref.read(askUserProvider.notifier).state = AskUserInfo(
+            id: data.id,
+            title: data.title,
+            questions: data.questions,
+            msgId: amsgId);
+        break;
+
+      case 'ask_user_response':
+        final data = proto.AskUserResponseData.fromJson(msg.data!);
+        final askUser = ref.read(askUserProvider);
+        if (askUser != null && askUser.id == data.id) {
+          if (askUser.msgId.isNotEmpty) {
+            chatNotifier.updateAskUserAnswer(
+              askUser.msgId,
+              _summarizeAskUserResponse(
+                  askUser.questions, data.answers, data.status),
+            );
+          }
+          ref.read(askUserProvider.notifier).state = null;
+        }
         break;
 
       case 'subagent_spawn':
         final data = proto.SubagentSpawnData.fromJson(msg.data!);
-        final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
+        final agents =
+            Map<String, SubagentInfo>.from(ref.read(subagentProvider));
         agents[data.agentId] = SubagentInfo(
           agentId: data.agentId,
           name: data.name,
@@ -811,16 +1003,19 @@ final messageDispatcherProvider = Provider<Function>((ref) {
 
       case 'subagent_status':
         final data = proto.SubagentStatusData.fromJson(msg.data!);
-        final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
+        final agents =
+            Map<String, SubagentInfo>.from(ref.read(subagentProvider));
         if (agents.containsKey(data.agentId)) {
-          agents[data.agentId] = agents[data.agentId]!.copyWith(status: data.status);
+          agents[data.agentId] =
+              agents[data.agentId]!.copyWith(status: data.status);
           ref.read(subagentProvider.notifier).state = agents;
         }
         break;
 
       case 'subagent_complete':
         final data = proto.SubagentCompleteData.fromJson(msg.data!);
-        final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
+        final agents =
+            Map<String, SubagentInfo>.from(ref.read(subagentProvider));
         if (agents.containsKey(data.agentId)) {
           agents[data.agentId] = agents[data.agentId]!.copyWith(
             status: 'completed',
@@ -832,7 +1027,8 @@ final messageDispatcherProvider = Provider<Function>((ref) {
         }
         // Auto-dismiss after 3 seconds
         Future.delayed(const Duration(seconds: 3), () {
-          final current = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
+          final current =
+              Map<String, SubagentInfo>.from(ref.read(subagentProvider));
           current.remove(data.agentId);
           ref.read(subagentProvider.notifier).state = current;
         });

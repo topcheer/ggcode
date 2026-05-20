@@ -5,6 +5,7 @@ import (
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 // handleApprovalMsg handles the corresponding message case.
@@ -22,6 +23,12 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	if m.imEmitter != nil {
 		m.emitIMApproval(msg.ToolName, msg.Input)
 		m.approvalNotifiedIM = true
+	}
+	// Push to mobile tunnel client
+	if m.tunnelBroker != nil {
+		m.tunnelPendingApprovalID = m.nextTunnelRequestID()
+		m.tunnelBroker.PushApprovalRequest(m.tunnelPendingApprovalID, msg.ToolName, msg.Input)
+		m.tunnelBroker.PushStatus(tunnel.StatusWaiting, "approval")
 	}
 	return m, nil
 
@@ -65,6 +72,27 @@ func (m Model) handleAskUserMsg(msg AskUserMsg) (Model, tea.Cmd) {
 		} else {
 			m.emitIMAskUser(fallback)
 		}
+	}
+	// Push to mobile tunnel client
+	if m.tunnelBroker != nil {
+		m.tunnelPendingAskUserID = m.nextTunnelRequestID()
+		questions := make([]tunnel.AskUserQuestion, len(msg.Request.Questions))
+		for i, q := range msg.Request.Questions {
+			choices := make([]tunnel.AskUserChoice, len(q.Choices))
+			for j, c := range q.Choices {
+				choices[j] = tunnel.AskUserChoice{ID: c.ID, Label: c.Label}
+			}
+			questions[i] = tunnel.AskUserQuestion{
+				ID:            q.ID,
+				Prompt:        q.Prompt,
+				Kind:          string(q.Kind),
+				Choices:       choices,
+				AllowFreeform: q.AllowFreeform,
+				Placeholder:   q.Placeholder,
+			}
+		}
+		m.tunnelBroker.PushAskUserRequest(m.tunnelPendingAskUserID, msg.Request.Title, questions)
+		m.tunnelBroker.PushStatus(tunnel.StatusWaiting, "ask_user")
 	}
 	return m, nil
 

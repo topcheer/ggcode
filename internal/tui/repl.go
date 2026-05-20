@@ -211,8 +211,10 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		if r.program != nil {
 			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
 		}
+		r.model.pushSubAgentTunnelEvent(sa)
 	})
 	mgr.SetOnComplete(func(sa *subagent.SubAgent) {
+		r.model.pushSubAgentTunnelEvent(sa)
 		if r.program != nil {
 			r.program.Send(subAgentUpdateMsg{AgentID: sa.ID})
 			r.program.Send(subAgentDoneMsg{
@@ -293,6 +295,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 
 	// Notify TUI on swarm state changes.
 	mgr.SetOnUpdate(func(ev swarm.Event) {
+		r.model.pushSwarmTunnelEvent(ev)
 		if r.program != nil {
 			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
 			// When a teammate finishes a task, notify the main agent.

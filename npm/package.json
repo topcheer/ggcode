@@ -1,6 +1,6 @@
 {
   "name": "@ggcode-cli/ggcode",
-  "version": "1.3.4",
+  "version": "1.3.7",
   "description": "Thin npm wrapper that installs the ggcode GitHub Release binary",
   "license": "MIT",
   "repository": {

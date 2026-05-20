@@ -67,9 +67,17 @@ type AgentBridge struct {
 	swarmMgr    *swarm.Manager
 
 	// Mobile tunnel broker (nil if not sharing).
-	tunnelBroker *tunnel.Broker
-	tunnelMsgID  string
-	spawnedSet   map[string]bool // tracks which subagents have been announced to mobile
+	tunnelBroker      *tunnel.Broker
+	tunnelMsgID       string
+	spawnedSet        map[string]bool // tracks which subagents have been announced to mobile
+	approvalRespCh    chan permission.Decision
+	approvalRequestID string
+	approvalToolName  string
+	approvalDialog    dialog.Dialog
+	askUserRespCh     chan tool.AskUserResponse
+	askUserRequestID  string
+	askUserRequest    tool.AskUserRequest
+	askUserDialog     dialog.Dialog
 }
 
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
@@ -302,13 +310,26 @@ func (b *AgentBridge) setupAgent() error {
 			return permission.Deny
 		}
 		resp := make(chan permission.Decision, 1)
+		requestID := ""
+		b.setPendingApproval(requestID, toolName, resp)
+		// Push to mobile tunnel client
+		if b.tunnelBroker != nil {
+			requestID = b.nextTunnelRequestID()
+			b.setPendingApproval(requestID, toolName, resp)
+			b.tunnelBroker.PushApprovalRequest(requestID, toolName, input)
+			b.tunnelBroker.PushStatus("waiting", "approval")
+		}
 		fyne.Do(func() {
 			var d dialog.Dialog
 			denyBtn := widget.NewButton("Deny", func() {
+				b.clearPendingApproval(requestID)
+				b.pushTunnelApprovalResult(requestID, tunnel.DecisionDeny)
 				resp <- permission.Deny
 				d.Hide()
 			})
 			allowBtn := widget.NewButton("Allow", func() {
+				b.clearPendingApproval(requestID)
+				b.pushTunnelApprovalResult(requestID, tunnel.DecisionAllow)
 				resp <- permission.Allow
 				d.Hide()
 			})
@@ -319,6 +340,8 @@ func (b *AgentBridge) setupAgent() error {
 						p.SetOverride(toolName, permission.Allow)
 					}
 				}
+				b.clearPendingApproval(requestID)
+				b.pushTunnelApprovalResult(requestID, tunnel.DecisionAlwaysAllow)
 				resp <- permission.Allow
 				d.Hide()
 			})
@@ -344,12 +367,16 @@ func (b *AgentBridge) setupAgent() error {
 					widget.NewSeparator(),
 					container.NewHBox(layout.NewSpacer(), denyBtn, allowBtn, alwaysBtn),
 				), b.mainWindow)
-			d.Show()
+			if b.attachApprovalDialog(requestID, d) {
+				d.Show()
+			}
 		})
 		select {
 		case d := <-resp:
+			b.clearPendingApproval(requestID)
 			return d
 		case <-ctx.Done():
+			b.hideDialog(b.clearPendingApproval(requestID))
 			return permission.Deny
 		}
 	})
@@ -400,7 +427,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				Workspace: b.workingDir,
 				Model:     b.resolved.Model,
 				Provider:  b.resolved.VendorName,
-				Mode:      string(b.permissionMode),
+				Mode:      b.permissionMode.String(),
 				Version:   Version,
 			})
 			b.tunnelBroker.PushStatus(tunnel.StatusThinking, "processing")
@@ -1376,6 +1403,15 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 	}
 
 	resp := make(chan tool.AskUserResponse, 1)
+	requestID := ""
+	b.setPendingAskUser(requestID, req, resp)
+	// Push to mobile tunnel client
+	if b.tunnelBroker != nil {
+		requestID = b.nextTunnelRequestID()
+		b.setPendingAskUser(requestID, req, resp)
+		b.tunnelBroker.PushAskUserRequest(requestID, req.Title, buildTunnelAskUserQuestions(req))
+		b.tunnelBroker.PushStatus("waiting", "ask_user")
+	}
 	fyne.Do(func() {
 		// Build form from questions
 		var answers []tool.AskUserAnswer
@@ -1438,7 +1474,14 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 			items,
 			func(ok bool) {
 				if !ok {
-					resp <- tool.AskUserResponse{Status: "skipped"}
+					response := tool.AskUserResponse{
+						Status:        tool.AskUserStatusCancelled,
+						Title:         req.Title,
+						QuestionCount: len(req.Questions),
+					}
+					b.clearPendingAskUser(requestID)
+					b.pushTunnelAskUserResponse(requestID, response)
+					resp <- response
 					return
 				}
 				// Collect answers from form items
@@ -1447,7 +1490,11 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 					case *widget.Entry:
 						answers[i].FreeformText = w.Text
 					case *widget.Select:
-						answers[i].SelectedChoiceIDs = []string{w.Selected}
+						if m := labelToID[i]; m != nil {
+							if id, ok := m[w.Selected]; ok {
+								answers[i].SelectedChoiceIDs = []string{id}
+							}
+						}
 						answers[i].SelectedChoices = []string{w.Selected}
 					case *fyne.Container:
 						// VBox with main widget + notes entry
@@ -1479,22 +1526,37 @@ func (b *AgentBridge) handleAskUser(ctx context.Context, req tool.AskUserRequest
 						}
 					}
 				}
-				resp <- tool.AskUserResponse{
-					Status:        "answered",
+				finalAnswers := make([]tool.AskUserAnswer, len(req.Questions))
+				answeredCount := 0
+				for i, question := range req.Questions {
+					finalAnswers[i] = buildAskUserAnswer(question, answers[i].SelectedChoiceIDs, answers[i].FreeformText)
+					if finalAnswers[i].Answered {
+						answeredCount++
+					}
+				}
+				response := tool.AskUserResponse{
+					Status:        tool.AskUserStatusSubmitted,
 					Title:         req.Title,
 					QuestionCount: len(req.Questions),
-					AnsweredCount: len(answers),
-					Answers:       answers,
+					AnsweredCount: answeredCount,
+					Answers:       finalAnswers,
 				}
+				b.clearPendingAskUser(requestID)
+				b.pushTunnelAskUserResponse(requestID, response)
+				resp <- response
 			}, b.mainWindow)
 		d.Resize(fyne.NewSize(500, 400))
-		d.Show()
+		if b.attachAskUserDialog(requestID, d) {
+			d.Show()
+		}
 	})
 
 	select {
 	case r := <-resp:
+		b.clearPendingAskUser(requestID)
 		return r, nil
 	case <-ctx.Done():
+		b.hideDialog(b.clearPendingAskUser(requestID))
 		return tool.AskUserResponse{Status: "cancelled"}, ctx.Err()
 	}
 }
@@ -1566,4 +1628,291 @@ func (b *AgentBridge) SwitchModel(model string) error {
 	b.mu.Unlock()
 
 	return nil
+}
+
+func (b *AgentBridge) nextTunnelRequestID() string {
+	if b.tunnelBroker == nil {
+		return ""
+	}
+	return b.tunnelBroker.NextMessageID()
+}
+
+func (b *AgentBridge) setPendingApproval(id, toolName string, ch chan permission.Decision) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.approvalRequestID = id
+	b.approvalToolName = toolName
+	b.approvalRespCh = ch
+	b.approvalDialog = nil
+}
+
+func (b *AgentBridge) attachApprovalDialog(id string, dlg dialog.Dialog) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.approvalRespCh == nil {
+		return false
+	}
+	if strings.TrimSpace(id) != "" && b.approvalRequestID != id {
+		return false
+	}
+	b.approvalDialog = dlg
+	return true
+}
+
+func (b *AgentBridge) consumePendingApproval(id string) (string, chan permission.Decision, dialog.Dialog, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.approvalRespCh == nil {
+		return "", nil, nil, false
+	}
+	if strings.TrimSpace(id) != "" && b.approvalRequestID != "" && b.approvalRequestID != id {
+		return "", nil, nil, false
+	}
+	toolName := b.approvalToolName
+	ch := b.approvalRespCh
+	dlg := b.approvalDialog
+	b.approvalRespCh = nil
+	b.approvalRequestID = ""
+	b.approvalToolName = ""
+	b.approvalDialog = nil
+	return toolName, ch, dlg, true
+}
+
+func (b *AgentBridge) clearPendingApproval(id string) dialog.Dialog {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if strings.TrimSpace(id) != "" && b.approvalRequestID != "" && b.approvalRequestID != id {
+		return nil
+	}
+	dlg := b.approvalDialog
+	b.approvalRespCh = nil
+	b.approvalRequestID = ""
+	b.approvalToolName = ""
+	b.approvalDialog = nil
+	return dlg
+}
+
+func (b *AgentBridge) setPendingAskUser(id string, req tool.AskUserRequest, ch chan tool.AskUserResponse) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.askUserRequestID = id
+	b.askUserRequest = req
+	b.askUserRespCh = ch
+	b.askUserDialog = nil
+}
+
+func (b *AgentBridge) attachAskUserDialog(id string, dlg dialog.Dialog) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.askUserRespCh == nil {
+		return false
+	}
+	if strings.TrimSpace(id) != "" && b.askUserRequestID != id {
+		return false
+	}
+	b.askUserDialog = dlg
+	return true
+}
+
+func (b *AgentBridge) consumePendingAskUser(id string) (tool.AskUserRequest, chan tool.AskUserResponse, dialog.Dialog, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.askUserRespCh == nil {
+		return tool.AskUserRequest{}, nil, nil, false
+	}
+	if strings.TrimSpace(id) != "" && b.askUserRequestID != "" && b.askUserRequestID != id {
+		return tool.AskUserRequest{}, nil, nil, false
+	}
+	req := b.askUserRequest
+	ch := b.askUserRespCh
+	dlg := b.askUserDialog
+	b.askUserRequestID = ""
+	b.askUserRequest = tool.AskUserRequest{}
+	b.askUserRespCh = nil
+	b.askUserDialog = nil
+	return req, ch, dlg, true
+}
+
+func (b *AgentBridge) clearPendingAskUser(id string) dialog.Dialog {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if strings.TrimSpace(id) != "" && b.askUserRequestID != "" && b.askUserRequestID != id {
+		return nil
+	}
+	dlg := b.askUserDialog
+	b.askUserRequestID = ""
+	b.askUserRequest = tool.AskUserRequest{}
+	b.askUserRespCh = nil
+	b.askUserDialog = nil
+	return dlg
+}
+
+func (b *AgentBridge) hideDialog(dlg dialog.Dialog) {
+	if dlg == nil {
+		return
+	}
+	fyne.Do(func() {
+		dlg.Hide()
+	})
+}
+
+func (b *AgentBridge) pushTunnelApprovalResult(id, decision string) {
+	if b.tunnelBroker == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	b.tunnelBroker.PushApprovalResult(id, decision)
+	b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+}
+
+func (b *AgentBridge) pushTunnelAskUserResponse(id string, response tool.AskUserResponse) {
+	if b.tunnelBroker == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	answers := make([]tunnel.AskUserAnswer, len(response.Answers))
+	for i, answer := range response.Answers {
+		answers[i] = tunnel.AskUserAnswer{
+			QuestionID:   answer.ID,
+			ChoiceIDs:    append([]string(nil), answer.SelectedChoiceIDs...),
+			FreeformText: answer.FreeformText,
+		}
+	}
+	b.tunnelBroker.PushAskUserResponse(id, response.Status, answers)
+	b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+}
+
+func (b *AgentBridge) handleMobileApprovalResponse(data tunnel.ApprovalResponseData) {
+	toolName, ch, dlg, ok := b.consumePendingApproval(data.ID)
+	if !ok {
+		return
+	}
+	b.hideDialog(dlg)
+	if data.Decision == tunnel.DecisionAlwaysAllow && b.agent != nil {
+		if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
+			p.SetOverride(toolName, permission.Allow)
+		}
+	}
+	decision := permission.Deny
+	switch data.Decision {
+	case tunnel.DecisionAllow:
+		decision = permission.Allow
+	case tunnel.DecisionAlwaysAllow, "always":
+		decision = permission.Allow
+	default:
+		decision = permission.Deny
+	}
+	select {
+	case ch <- decision:
+	default:
+	}
+	if b.tunnelBroker != nil {
+		b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	}
+}
+
+func (b *AgentBridge) handleMobileAskUserResponse(data tunnel.AskUserResponseData) {
+	req, ch, dlg, ok := b.consumePendingAskUser(data.ID)
+	if !ok {
+		return
+	}
+	b.hideDialog(dlg)
+	response := buildAskUserResponseFromTunnel(req, data.Status, data.Answers)
+	select {
+	case ch <- response:
+	default:
+	}
+	if b.tunnelBroker != nil {
+		b.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	}
+}
+
+func buildTunnelAskUserQuestions(req tool.AskUserRequest) []tunnel.AskUserQuestion {
+	questions := make([]tunnel.AskUserQuestion, len(req.Questions))
+	for i, q := range req.Questions {
+		choices := make([]tunnel.AskUserChoice, len(q.Choices))
+		for j, c := range q.Choices {
+			choices[j] = tunnel.AskUserChoice{ID: c.ID, Label: c.Label}
+		}
+		questions[i] = tunnel.AskUserQuestion{
+			ID:            q.ID,
+			Prompt:        q.Prompt,
+			Kind:          q.Kind,
+			Choices:       choices,
+			AllowFreeform: q.AllowFreeform,
+			Placeholder:   q.Placeholder,
+		}
+	}
+	return questions
+}
+
+func buildAskUserResponseFromTunnel(req tool.AskUserRequest, status string, answers []tunnel.AskUserAnswer) tool.AskUserResponse {
+	normalizedStatus := strings.TrimSpace(status)
+	if normalizedStatus == "" {
+		normalizedStatus = tool.AskUserStatusSubmitted
+	}
+	answerByQuestion := make(map[string]tunnel.AskUserAnswer, len(answers))
+	for _, answer := range answers {
+		answerByQuestion[answer.QuestionID] = answer
+	}
+	out := tool.AskUserResponse{
+		Status:        normalizedStatus,
+		Title:         req.Title,
+		QuestionCount: len(req.Questions),
+		Answers:       make([]tool.AskUserAnswer, 0, len(req.Questions)),
+	}
+	for _, question := range req.Questions {
+		raw := answerByQuestion[question.ID]
+		answer := buildAskUserAnswer(question, raw.ChoiceIDs, raw.FreeformText)
+		if answer.Answered {
+			out.AnsweredCount++
+		}
+		out.Answers = append(out.Answers, answer)
+	}
+	return out
+}
+
+func buildAskUserAnswer(question tool.AskUserQuestion, selectedIDs []string, freeform string) tool.AskUserAnswer {
+	selectedSet := make(map[string]struct{}, len(selectedIDs))
+	for _, id := range selectedIDs {
+		selectedSet[id] = struct{}{}
+	}
+	orderedIDs := make([]string, 0, len(selectedSet))
+	orderedLabels := make([]string, 0, len(selectedSet))
+	for _, choice := range question.Choices {
+		if _, ok := selectedSet[choice.ID]; ok {
+			orderedIDs = append(orderedIDs, choice.ID)
+			orderedLabels = append(orderedLabels, choice.Label)
+		}
+	}
+	freeform = strings.TrimSpace(freeform)
+	answerMode := tool.AskUserAnswerModeNone
+	completionStatus := tool.AskUserCompletionUnanswered
+	switch {
+	case len(orderedIDs) == 0 && freeform == "":
+		answerMode = tool.AskUserAnswerModeNone
+		completionStatus = tool.AskUserCompletionUnanswered
+	case len(orderedIDs) == 0 && freeform != "":
+		answerMode = tool.AskUserAnswerModeFreeformOnly
+		if question.Kind == tool.AskUserKindText {
+			completionStatus = tool.AskUserCompletionAnswered
+		} else {
+			completionStatus = tool.AskUserCompletionPartial
+		}
+	case len(orderedIDs) > 0 && freeform == "":
+		answerMode = tool.AskUserAnswerModeSelectionOnly
+		completionStatus = tool.AskUserCompletionAnswered
+	default:
+		answerMode = tool.AskUserAnswerModeSelectionAndFreeform
+		completionStatus = tool.AskUserCompletionAnswered
+	}
+	return tool.AskUserAnswer{
+		ID:                question.ID,
+		Title:             question.Title,
+		Kind:              question.Kind,
+		CompletionStatus:  completionStatus,
+		AnswerMode:        answerMode,
+		Answered:          completionStatus == tool.AskUserCompletionAnswered,
+		SelectedChoiceIDs: orderedIDs,
+		SelectedChoices:   orderedLabels,
+		FreeformText:      freeform,
+	}
 }
