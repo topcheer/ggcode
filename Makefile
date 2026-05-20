@@ -39,25 +39,27 @@ clean:
 
 # ── Mobile App Store Deployment ──────────────────────
 # Usage:
-#   make store-deploy VERSION=1.3.9              # Both platforms
-#   make store-deploy-ios VERSION=1.3.9          # iOS only
-#   make store-deploy-android VERSION=1.3.9      # Android only
-#   make store-version                           # Show current version
-#   make store-screenshots                       # Upload metadata + screenshots
-
-VERSION ?= $(shell cd mobile/flutter && grep '^version:' pubspec.yaml | sed 's/version: \([0-9.]*\)+.*/\1/')
+#   make store-deploy                     # Both platforms, auto version from git tag
+#   make store-deploy-ios                 # iOS only
+#   make store-deploy-android             # Android only
+#   make store-deploy VERSION=1.4.0       # Bump version, deploy both
+#   make store-version                    # Show current version
+#   make store-tag                        # Create git tag for current version
 
 store-deploy:
 	cd mobile/flutter && bash scripts/store_deploy.sh $(VERSION)
 
 store-deploy-ios:
-	cd mobile/flutter && bash scripts/store_deploy.sh $(VERSION) ios
+	cd mobile/flutter && bash scripts/store_deploy.sh ios
 
 store-deploy-android:
-	cd mobile/flutter && bash scripts/store_deploy.sh $(VERSION) android
+	cd mobile/flutter && bash scripts/store_deploy.sh android
 
 store-version:
 	cd mobile/flutter && bash scripts/store_deploy.sh --current
 
-store-screenshots:
-	cd mobile/flutter && bash scripts/store_deploy.sh --screenshots
+store-tag:
+	cd mobile/flutter && bash scripts/store_deploy.sh --tag
+
+store-release:
+	cd mobile/flutter && bash scripts/store_deploy.sh --release

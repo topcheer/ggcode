@@ -55,6 +55,22 @@ Upload to TestFlight (uses flutter-built IPA if available)
 
 Upload pre-built IPA to TestFlight (no build step)
 
+### ios promote_external
+
+```sh
+[bundle exec] fastlane ios promote_external
+```
+
+Wait for TestFlight build processing, then distribute to External Testing
+
+### ios deploy_external
+
+```sh
+[bundle exec] fastlane ios deploy_external
+```
+
+Full deploy: upload TestFlight + promote to External Testing
+
 ### ios release
 
 ```sh
