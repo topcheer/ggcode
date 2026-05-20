@@ -158,26 +158,62 @@ platform :ios do
       in_house: false
     )
 
-    deliver(
-      api_key: api_key,
-      skip_binary_upload: true,
-      skip_screenshots: true,
-      submit_for_review: true,
-      automatic_release: false,
-      force: true,
-      precheck_include_in_app_purchases: false,
-      submission_information: {
-        add_id_info_uses_idfa: false
-      },
-      app_review_information: {
-        first_name: "GGCode",
-        last_name: "Team",
-        email: "support@ggcode.dev",
-        phone: "+86",
-        notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via WebSocket.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop and run 'ggcode serve --remote' to generate a connection QR code\n3. Open this mobile app and scan the QR code (or paste the connection URL)\n4. Once connected, you can send messages to the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
-      },
-      app_version: "live"
-    )
+    # Read version from Info.plist
+    plist_path = File.expand_path("../../Runner/Info.plist", __FILE__)
+    version_str = `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '#{plist_path}' 2>/dev/null`.strip
+    UI.user_error!("Could not read version from Info.plist") if version_str.empty?
+    UI.message("Submitting version #{version_str} for App Store Review...")
+
+    # Ensure version exists on App Store Connect and select latest build
+    begin
+      app = Spaceship::ConnectAPI::App.find("gg.ai.ggcode.mobile")
+      UI.user_error!("App not found on App Store Connect") if app.nil?
+
+      # Get or create the app version
+      version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+      if version.nil?
+        UI.message("Creating new app store version #{version_str}...")
+        version = app.create_app_store_version(
+          version_string: version_str,
+          platform: Spaceship::ConnectAPI::Platform::IOS
+        )
+      end
+      UI.message("App Store version: #{version.version_string}")
+
+      # Select the latest processed build
+      builds = version.get_builds.sort_by { |b| b.build_version.to_i }.reverse
+      if builds.empty?
+        UI.user_error!("No builds found for version #{version_str}. Upload a build first.")
+      end
+      latest_build = builds.first
+      UI.message("Selecting build #{latest_build.version} (#{latest_build.build_version})")
+      version.select_build(build: latest_build)
+
+      # Update review information
+      app_info = app.fetch_edit_app_info
+      if app_info
+        app_info.update(
+          app_review_information: {
+            first_name: "GGCode",
+            last_name: "Team",
+            email: "support@ggcode.dev",
+            phone: "+86",
+            notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via WebSocket.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop and run 'ggcode serve --remote' to generate a connection QR code\n3. Open this mobile app and scan the QR code (or paste the connection URL)\n4. Once connected, you can send messages to the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
+          }
+        )
+      end
+
+      # Submit for review
+      version.submit_for_review(
+        submission_information: {
+          add_id_info_uses_idfa: false
+        }
+      )
+      UI.success("Version #{version_str} submitted for App Store Review!")
+    rescue => e
+      UI.error("Submit failed: #{e.message}")
+      UI.message("You can manually submit from App Store Connect.")
+    end
   end
 
   desc "Build and submit for App Store Review"
