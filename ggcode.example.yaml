@@ -497,8 +497,11 @@ max_iterations: 0
 # Per-tool permission rules: ask (prompt user), allow (auto-approve), deny (block)
 tool_permissions:
   read_file: allow
+  multi_file_read: allow
   write_file: ask
   edit_file: ask
+  multi_edit_file: ask
+  multi_file_edit: ask
   list_directory: allow
   search_files: allow
   glob: allow

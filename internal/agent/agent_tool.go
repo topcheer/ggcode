@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	runtimedebug "runtime/debug"
+	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -93,6 +94,13 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 
 	// For file-editing tools: read old content, compute new, show diff, save checkpoint
+	if tc.Name == "multi_file_edit" {
+		if previewer, ok := t.(interface {
+			PreviewChanges(input json.RawMessage) ([]tool.PlannedFileEdit, error)
+		}); ok {
+			return a.executeMultiFileTool(ctx, t, previewer, tc, env)
+		}
+	}
 	if tc.Name == "edit_file" || tc.Name == "write_file" {
 		return a.executeFileTool(ctx, t, tc, env)
 	}
@@ -115,6 +123,62 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		result.Content += "\n" + postResult.Output
 	}
 
+	return result
+}
+
+func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer interface {
+	PreviewChanges(input json.RawMessage) ([]tool.PlannedFileEdit, error)
+}, tc provider.ToolCallDelta, env hooks.HookEnv) tool.Result {
+	a.mu.Lock()
+	cpMgr := a.checkpoints
+	diffFn := a.diffConfirm
+	a.mu.Unlock()
+
+	plans, err := previewer.PreviewChanges(tc.Arguments)
+	if err == nil && diffFn != nil {
+		if diffText, hasChanges := buildMultiFileDiffText(plans); hasChanges {
+			label := fmt.Sprintf("%d files", len(plans))
+			if len(plans) == 1 {
+				label = plans[0].Path
+			}
+			if !diffFn(ctx, label, diffText) {
+				return tool.Result{Content: "Multi-file write cancelled by user.", IsError: true}
+			}
+		}
+	}
+
+	a.mu.RLock()
+	hookCfg := a.hookConfig
+	a.mu.RUnlock()
+	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, env)
+	if !preResult.Allowed {
+		return tool.Result{Content: preResult.Output, IsError: true}
+	}
+
+	result, err := a.safeExecute(t, ctx, tc.Arguments)
+	if err != nil {
+		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
+	}
+
+	if cpMgr != nil && len(plans) > 0 {
+		var outcome tool.MultiFileEditContent
+		if err := json.Unmarshal([]byte(result.Content), &outcome); err == nil {
+			planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
+			for _, plan := range plans {
+				planByPath[plan.Path] = plan
+			}
+			for _, path := range outcome.WrittenPaths {
+				if plan, ok := planByPath[path]; ok {
+					cpMgr.Save(path, plan.OldContent, plan.NewContent, tc.Name)
+				}
+			}
+		}
+	}
+
+	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, env)
+	if postResult.Output != "" {
+		result.Content += "\n" + postResult.Output
+	}
 	return result
 }
 
@@ -237,6 +301,25 @@ func replaceFirst(s, old, new string) string {
 		return s
 	}
 	return s[:idx] + new + s[idx+len(old):]
+}
+
+func buildMultiFileDiffText(plans []tool.PlannedFileEdit) (string, bool) {
+	var out strings.Builder
+	hasChanges := false
+	for _, plan := range plans {
+		if !diff.HasChanges(plan.OldContent, plan.NewContent) {
+			continue
+		}
+		if hasChanges {
+			out.WriteString("\n")
+		}
+		out.WriteString("=== ")
+		out.WriteString(plan.Path)
+		out.WriteString(" ===\n")
+		out.WriteString(diff.UnifiedDiff(plan.OldContent, plan.NewContent, 3))
+		hasChanges = true
+	}
+	return out.String(), hasChanges
 }
 
 // indexOf returns the index of the first occurrence of substr in s, or -1.

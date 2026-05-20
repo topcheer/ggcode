@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 )
 
 // MultiEditFile applies multiple find-and-replace edits to a single file in one call.
@@ -91,78 +89,13 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	content := string(data)
-
-	// Find all match positions first, validate uniqueness.
-	type editPos struct {
-		start int
-		end   int
-		idx   int
-		old   string
-		new_  string
-	}
-	var positions []editPos
-
+	edits := make([]textEdit, len(args.Edits))
 	for i, edit := range args.Edits {
-		if edit.OldText == "" {
-			return Result{IsError: true, Content: fmt.Sprintf("edits[%d]: old_text must not be empty", i)}, nil
-		}
-		mr := resolveOldText(content, edit.OldText)
-		if mr.canonical == "" {
-			hint := diagnoseMatchFailure(content, edit.OldText)
-			msg := fmt.Sprintf("edits[%d]: old_text not found in file", i)
-			if hint != "" {
-				msg += ". " + hint
-			}
-			return Result{IsError: true, Content: msg}, nil
-		}
-		oldText := mr.canonical
-		count := strings.Count(content, oldText)
-		if count > 1 && !mr.anchored {
-			lines := findMatchLineNumbers(content, oldText)
-			msg := fmt.Sprintf(
-				"edits[%d]: old_text found %d times — must be unique. Add 1-3 lines of surrounding context to disambiguate, or copy the exact numbered lines from read_file so this edit is line-number anchored.",
-				i, count,
-			)
-			if len(lines) > 0 {
-				more := ""
-				if count > len(lines) {
-					more = fmt.Sprintf(" (showing first %d)", len(lines))
-				}
-				msg += fmt.Sprintf(" Matches start at line(s): %s%s.", formatMatchLines(lines), more)
-			}
-			return Result{IsError: true, Content: msg}, nil
-		}
-		idx := mr.start
-		if !mr.anchored {
-			idx = strings.Index(content, oldText)
-		}
-		newText := edit.NewText
-		if mr.transform != "" {
-			newText = adjustNewText(content, edit.NewText, mr)
-		}
-		positions = append(positions, editPos{
-			start: idx,
-			end:   idx + len(oldText),
-			idx:   i,
-			old:   oldText,
-			new_:  newText,
-		})
+		edits[i] = textEdit{OldText: edit.OldText, NewText: edit.NewText}
 	}
-
-	// Check for overlapping edits.
-	sort.Slice(positions, func(i, j int) bool { return positions[i].start < positions[j].start })
-	for i := 1; i < len(positions); i++ {
-		if positions[i].start < positions[i-1].end {
-			return Result{IsError: true, Content: fmt.Sprintf(
-				"edits[%d] and edits[%d]: overlapping matches — each old_text must not overlap",
-				positions[i-1].idx, positions[i].idx)}, nil
-		}
-	}
-
-	// Apply edits from back to front to preserve earlier positions.
-	for i := len(positions) - 1; i >= 0; i-- {
-		p := positions[i]
-		content = content[:p.start] + p.new_ + content[p.end:]
+	content, _, msg := planTextEdits(content, edits)
+	if msg != "" {
+		return Result{IsError: true, Content: msg}, nil
 	}
 
 	if err := atomicWriteFile(args.FilePath, []byte(content), 0644); err != nil {

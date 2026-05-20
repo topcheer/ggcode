@@ -241,7 +241,7 @@ func adjustNewText(content, newText string, mr matchResult) string {
 // up to 6 leading spaces, then 1+ digits, then a tab.
 // We allow more leading spaces in case the LLM reformatted slightly.
 var lineNumberPrefixRE = regexp.MustCompile(`^\s{0,12}\d+\t`)
-var readFileWrapperLineRE = regexp.MustCompile(`^\[(indent:|encoding:|Extracted from |File truncated:|File has )`)
+var readFileWrapperLineRE = regexp.MustCompile(`^(?:\[(?:indent:|encoding:|Extracted from |File truncated:|File has |multi_file_read summary)|=== (?:FILE|ERROR): |\[end (?:file|error)\]$|\[skipped:)`)
 
 // stripLineNumberPrefix removes "  42\t" style prefixes if a clear majority
 // of non-empty lines have them. This catches the common failure where an
@@ -282,11 +282,25 @@ func stripAllLineNumberPrefixes(text string) string {
 func trimReadFileWrapperLines(text string) (string, bool) {
 	lines := strings.Split(text, "\n")
 	start, end := 0, len(lines)
-	for start < end && readFileWrapperLineRE.MatchString(lines[start]) {
-		start++
+	firstContent := start
+	for firstContent < end && strings.TrimSpace(lines[firstContent]) == "" {
+		firstContent++
 	}
-	for end > start && readFileWrapperLineRE.MatchString(lines[end-1]) {
-		end--
+	if firstContent < end && readFileWrapperLineRE.MatchString(lines[firstContent]) {
+		start = firstContent + 1
+		for start < end && (strings.TrimSpace(lines[start]) == "" || readFileWrapperLineRE.MatchString(lines[start])) {
+			start++
+		}
+	}
+	lastContent := end - 1
+	for lastContent >= start && strings.TrimSpace(lines[lastContent]) == "" {
+		lastContent--
+	}
+	if lastContent >= start && readFileWrapperLineRE.MatchString(lines[lastContent]) {
+		end = lastContent
+		for end > start && (strings.TrimSpace(lines[end-1]) == "" || readFileWrapperLineRE.MatchString(lines[end-1])) {
+			end--
+		}
 	}
 	if start == 0 && end == len(lines) {
 		return text, false

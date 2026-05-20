@@ -7,18 +7,36 @@ import (
 
 const maxOutputLines = 2000
 
+type readFileRangeOptions struct {
+	defaultLimit int
+	moreHint     string
+}
+
 // readFileRange formats content with cat -n style line numbers, returning
 // lines [offset, offset+limit) from the full content.
 // offset is 1-based; 0 or 1 means start from the beginning.
 // limit <= 0 means read to end (capped at maxOutputLines).
 func readFileRange(content string, offset, limit int, totalLines int) string {
+	return readFileRangeWithOptions(content, offset, limit, readFileRangeOptions{
+		defaultLimit: maxOutputLines,
+		moreHint:     "Use read_file with offset/limit for more.",
+	})
+}
+
+func readFileRangeWithOptions(content string, offset, limit int, opts readFileRangeOptions) string {
 	lines := strings.Split(content, "\n")
 
 	// Handle trailing newline: strings.Split on "abc\n" gives ["abc", ""]
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	totalLines = len(lines)
+	totalLines := len(lines)
+	if opts.defaultLimit <= 0 {
+		opts.defaultLimit = maxOutputLines
+	}
+	if opts.moreHint == "" {
+		opts.moreHint = "Use read_file with offset/limit for more."
+	}
 
 	// Convert 1-based offset to 0-based index
 	startIdx := offset - 1
@@ -37,9 +55,9 @@ func readFileRange(content string, offset, limit int, totalLines int) string {
 			endIdx = totalLines
 		}
 	} else if startIdx == 0 {
-		// No limit specified and starting from beginning: cap at maxOutputLines
-		if endIdx > maxOutputLines {
-			endIdx = maxOutputLines
+		// No limit specified and starting from beginning: cap at defaultLimit.
+		if endIdx > opts.defaultLimit {
+			endIdx = opts.defaultLimit
 		}
 	}
 
@@ -50,8 +68,8 @@ func readFileRange(content string, offset, limit int, totalLines int) string {
 
 	// Truncation notice
 	if endIdx < totalLines {
-		fmt.Fprintf(&buf, "[File truncated: showing lines %d-%d of %d. Use read_file with offset/limit for more.]\n",
-			startIdx+1, endIdx, totalLines)
+		fmt.Fprintf(&buf, "[File truncated: showing lines %d-%d of %d. %s]\n",
+			startIdx+1, endIdx, totalLines, opts.moreHint)
 	}
 
 	return buf.String()

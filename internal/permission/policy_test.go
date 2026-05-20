@@ -225,3 +225,38 @@ func TestConfigPolicy_ReadOnlySandboxAppliesOnlyToReadTools(t *testing.T) {
 		t.Fatal("expected edit_file to deny read-only sandbox path in PlanMode")
 	}
 }
+
+func TestConfigPolicy_MultiFileToolPaths(t *testing.T) {
+	rules := map[string]Decision{
+		"multi_file_read": Allow,
+		"multi_file_edit": Allow,
+	}
+	p := NewConfigPolicy(rules, []string{"/tmp/work"})
+
+	readInput := json.RawMessage(`{"files":[{"path":"/tmp/work/a.txt"},{"path":"/tmp/work/b.txt"}]}`)
+	d, err := p.Check("multi_file_read", readInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Allow {
+		t.Fatalf("expected multi_file_read allow, got %s", d)
+	}
+
+	outsideRead := json.RawMessage(`{"files":[{"path":"/tmp/work/a.txt"},{"path":"/etc/passwd"}]}`)
+	d, err = p.Check("multi_file_read", outsideRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Deny {
+		t.Fatalf("expected multi_file_read deny for outside path, got %s", d)
+	}
+
+	outsideWrite := json.RawMessage(`{"files":[{"path":"/tmp/work/a.txt","edits":[{"old_text":"x","new_text":"y"}]},{"path":"/etc/passwd","edits":[{"old_text":"x","new_text":"y"}]}]}`)
+	d, err = p.Check("multi_file_edit", outsideWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != Deny {
+		t.Fatalf("expected multi_file_edit deny for outside path, got %s", d)
+	}
+}

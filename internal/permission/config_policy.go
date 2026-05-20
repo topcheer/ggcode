@@ -78,14 +78,16 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// the workspace get silently overwritten on a prompt-injected tool
 		// call. See locks.md S5.
 		if isWriteFileTool(toolName) {
-			path, _ := extractFilePath(input)
-			if path != "" && !p.sandbox.Allowed(path) {
-				return Ask, nil
+			for _, path := range extractFilePaths(input) {
+				if path != "" && !p.sandbox.Allowed(path) {
+					return Ask, nil
+				}
 			}
 		} else if isFileTool(toolName) {
-			path, _ := extractFilePath(input)
-			if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
-				return Ask, nil
+			for _, path := range extractFilePaths(input) {
+				if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
+					return Ask, nil
+				}
 			}
 		}
 		return Allow, nil
@@ -116,9 +118,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		}
 		// Check sandbox for file tools
 		if isFileTool(toolName) {
-			path, _ := extractFilePath(input)
-			if path != "" && !p.sandbox.Allowed(path) {
-				return Deny, nil
+			for _, path := range extractFilePaths(input) {
+				if path != "" && !p.sandbox.Allowed(path) {
+					return Deny, nil
+				}
 			}
 		}
 		return Allow, nil
@@ -127,9 +130,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// Supervised mode (default): check overrides, then ask
 	if d, ok := p.rules[toolName]; ok {
 		if isFileTool(toolName) {
-			path, _ := extractFilePath(input)
-			if path != "" && !p.sandbox.Allowed(path) {
-				return Deny, nil
+			for _, path := range extractFilePaths(input) {
+				if path != "" && !p.sandbox.Allowed(path) {
+					return Deny, nil
+				}
 			}
 		}
 		if isCommandTool(toolName) {
@@ -253,7 +257,7 @@ func isSensitivePath(path string) bool {
 
 func isFileTool(name string) bool {
 	switch name {
-	case "read_file", "write_file", "edit_file", "list_directory", "search_files", "glob":
+	case "read_file", "multi_file_read", "write_file", "edit_file", "multi_edit_file", "multi_file_edit", "list_directory", "search_files", "glob":
 		return true
 	}
 	return false
@@ -267,7 +271,7 @@ func isReadOnlyFileTool(name string) bool {
 // extra sandbox enforcement in bypass/autopilot modes).
 func isWriteFileTool(name string) bool {
 	switch name {
-	case "write_file", "edit_file":
+	case "write_file", "edit_file", "multi_edit_file", "multi_file_edit":
 		return true
 	}
 	return false
@@ -286,19 +290,42 @@ func isCommandTool(name string) bool {
 }
 
 func extractFilePath(input json.RawMessage) (string, bool) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(input, &m); err != nil {
+	paths := extractFilePaths(input)
+	if len(paths) == 0 {
 		return "", false
 	}
+	return paths[0], true
+}
+
+func extractFilePaths(input json.RawMessage) []string {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(input, &m); err != nil {
+		return nil
+	}
+	var paths []string
 	for _, key := range []string{"file_path", "path", "directory"} {
 		if v, ok := m[key]; ok {
 			var s string
 			if err := json.Unmarshal(v, &s); err == nil {
-				return s, true
+				paths = append(paths, s)
+				break
 			}
 		}
 	}
-	return "", false
+	if v, ok := m["files"]; ok {
+		var files []map[string]json.RawMessage
+		if err := json.Unmarshal(v, &files); err == nil {
+			for _, file := range files {
+				if rawPath, ok := file["path"]; ok {
+					var s string
+					if err := json.Unmarshal(rawPath, &s); err == nil && s != "" {
+						paths = append(paths, s)
+					}
+				}
+			}
+		}
+	}
+	return paths
 }
 
 func extractCommand(input json.RawMessage) (string, bool) {
