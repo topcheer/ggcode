@@ -350,6 +350,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case mcpInstallResultMsg:
 		return m.handleMcpInstallResultMsg(msg)
 
+	case tunnelStartMsg:
+		return m.handleTunnelStartMsg(msg)
+
+	case tunnelStopMsg:
+		m.chatWriteSystem(nextSystemID(), "Tunnel stopped.")
+		m.chatListScrollToBottom()
+		return m, nil
+
 	case wechatQRCodeMsg:
 		return m.handleWechatQRCodeMsg(msg)
 	case wechatQRPollMsg:

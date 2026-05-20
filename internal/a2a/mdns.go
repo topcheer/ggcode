@@ -3,6 +3,7 @@ package a2a
 import (
 	"context"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"io"
 	"log"
 	"net"
@@ -12,7 +13,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/hashicorp/mdns"
@@ -113,8 +113,8 @@ func (m *mdnsService) startAvahi(name string, port int, txt []string) error {
 	time.Sleep(500 * time.Millisecond)
 
 	// Check if the process is still alive.
-	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-		return fmt.Errorf("avahi-publish died immediately: %w", err)
+	if !util.IsProcessAliveProc(cmd.Process) {
+		return fmt.Errorf("avahi-publish died immediately")
 	}
 
 	debug.Log("a2a.mdns", "registered via avahi-publish as %s port=%d", name, port)

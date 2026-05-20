@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type Workspace struct {
@@ -248,7 +250,7 @@ func linkWorkspaceRuntimeDir(rootDir, workspacePath, rel string) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 		return fmt.Errorf("create runtime dir parent %s: %w", target, err)
 	}
-	if err := os.Symlink(source, target); err != nil {
+	if err := util.SafeSymlink(source, target); err != nil {
 		return fmt.Errorf("link runtime dir %s -> %s: %w", target, source, err)
 	}
 	return nil
