@@ -34,10 +34,20 @@ if ! command -v bundle &>/dev/null; then
   gem install bundler
 fi
 
+echo "=== iOS Deploy: lane=$LANE ==="
+
+# For build-related lanes, first run flutter build to update Generated.xcconfig
+# (FLUTTER_BUILD_NAME and FLUTTER_BUILD_NUMBER) from pubspec.yaml
+if [ "$LANE" != "metadata" ]; then
+  echo "--- flutter build ipa (updating version info) ---"
+  flutter build ipa --release 2>&1 || {
+    echo "WARNING: flutter build ipa failed (may be expected if archive-only mode)"
+    echo "Will proceed with fastlane gym for archive + upload"
+  }
+fi
+
 cd ios
 bundle install --quiet 2>/dev/null || true
-
-echo "=== iOS Deploy: lane=$LANE ==="
 
 case "$LANE" in
   metadata)
@@ -47,7 +57,15 @@ case "$LANE" in
     bundle exec fastlane build
     ;;
   testflight)
-    bundle exec fastlane upload_testflight
+    # Use the ipa built by flutter if available, otherwise fall back to gym
+    IPA_PATH="../build/ios/ipa/ggcode_mobile.ipa"
+    if [ -f "$IPA_PATH" ]; then
+      echo "--- Uploading flutter-built IPA to TestFlight ---"
+      bundle exec fastlane upload_to_testflight_only ipa:"../../build/ios/ipa/ggcode_mobile.ipa"
+    else
+      echo "--- No flutter IPA found, using gym ---"
+      bundle exec fastlane upload_testflight
+    fi
     ;;
   release)
     bundle exec fastlane release

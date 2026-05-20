@@ -47,6 +47,14 @@ Build iOS Release Archive
 
 Upload to TestFlight
 
+### ios upload_to_testflight_only
+
+```sh
+[bundle exec] fastlane ios upload_to_testflight_only
+```
+
+Upload pre-built IPA to TestFlight (no build step)
+
 ### ios release
 
 ```sh

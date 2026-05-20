@@ -14,11 +14,13 @@ platform :ios do
     deliver(
       api_key: api_key,
       skip_binary_upload: true,
-      skip_screenshots: true,
+      skip_screenshots: false,
+      screenshots_path: "./metadata/en-US/screenshots",
       submit_for_review: false,
       force: true,
       precheck_include_in_app_purchases: false,
-      overwrite_screenshots: false
+      overwrite_screenshots: true,
+      app_review_attachment_file: ""
     )
   end
 
@@ -83,6 +85,23 @@ platform :ios do
     )
   end
 
+  desc "Upload pre-built IPA to TestFlight (no build step)"
+  lane :upload_to_testflight_only do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true,
+      skip_submission: true,
+      distribute_only: false
+    )
+  end
+
   desc "Build and submit for App Store Review"
   lane :release do
     gym(
@@ -107,7 +126,7 @@ platform :ios do
       upload_to_app_store(
         api_key: api_key,
         skip_metadata: false,
-        skip_screenshots: true,
+        skip_screenshots: false,
         submit_for_review: true,
         automatic_release: false,
         force: true,
