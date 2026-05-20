@@ -19,8 +19,7 @@ platform :ios do
       submit_for_review: false,
       force: true,
       precheck_include_in_app_purchases: false,
-      overwrite_screenshots: true,
-      app_review_attachment_file: ""
+      overwrite_screenshots: true
     )
   end
 
@@ -170,6 +169,13 @@ platform :ios do
       submission_information: {
         add_id_info_uses_idfa: false
       },
+      app_review_information: {
+        first_name: "GGCode",
+        last_name: "Team",
+        email: "support@ggcode.dev",
+        phone: "+86",
+        notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via WebSocket.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop and run 'ggcode serve --remote' to generate a connection QR code\n3. Open this mobile app and scan the QR code (or paste the connection URL)\n4. Once connected, you can send messages to the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
+      },
       app_version: "live"
     )
   end
@@ -214,6 +220,13 @@ platform :ios do
         precheck_include_in_app_purchases: false,
         submission_information: {
           add_id_info_uses_idfa: false
+        },
+        app_review_information: {
+          first_name: "GGCode",
+          last_name: "Team",
+          email: "support@ggcode.dev",
+          phone: "+86",
+          notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via WebSocket.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop and run 'ggcode serve --remote' to generate a connection QR code\n3. Open this mobile app and scan the QR code (or paste the connection URL)\n4. Once connected, you can send messages to the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
         }
       }
       upload_options[:ipa] = ipa_to_upload if ipa_to_upload

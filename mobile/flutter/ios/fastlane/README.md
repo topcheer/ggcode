@@ -71,6 +71,14 @@ Wait for TestFlight build processing, then distribute to External Testing
 
 Full deploy: upload TestFlight + promote to External Testing
 
+### ios release_latest
+
+```sh
+[bundle exec] fastlane ios release_latest
+```
+
+Submit latest TestFlight build for App Store Review (no rebuild)
+
 ### ios release
 
 ```sh
