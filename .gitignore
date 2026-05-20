@@ -45,3 +45,5 @@ desktop/ggcode-desktop/frontend/bindings/
 desktop/ggcode-desktop/build/
 desktop/ggcode-desktop/ggcode.app/
 desktop/ggcode-desktop/desktop
+mobile/builds/
+mobile/flutter/build/
