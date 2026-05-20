@@ -77,7 +77,7 @@ Promote latest from alpha to beta (Open Testing)
 [bundle exec] fastlane android deploy
 ```
 
-Build → Upload to Internal Testing → Promote to Closed Testing
+Build → Upload to Internal Testing → Wait → Promote to Closed Testing
 
 ### android deploy_internal
 

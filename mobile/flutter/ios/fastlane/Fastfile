@@ -118,7 +118,7 @@ platform :ios do
     )
   end
 
-  desc "Wait for TestFlight build processing, then promote to External Testing"
+  desc "Wait for TestFlight build processing, then distribute to External Testing"
   lane :promote_external do
     api_key = app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
@@ -127,45 +127,20 @@ platform :ios do
       in_house: false
     )
 
-    # Wait for the latest build to finish processing
-    UI.message("Waiting for TestFlight build to finish processing...")
-    build = wait_for_build_processing(
-      api_key: api_key,
-      build_version: ENV["BUILD_NUMBER"],
-      timeout_sec: 600,
-      sleep_sec: 30
-    )
-
-    if build.nil?
-      UI.error("No processed build found after waiting. Skipping External Testing promotion.")
-      UI.error("You can manually promote later from App Store Connect → TestFlight.")
-      return
-    end
-
-    UI.success("Build #{build.build_version} (#{build.train_version}) is ready!")
-
-    # Add to external testing group
-    UI.message("Adding build to External Testing group...")
+    # pilot with skip_submission=false will wait for processing and distribute
+    UI.message("Waiting for TestFlight build processing and distributing to External Testing...")
     begin
-      add_to_external_group = Spaceship::ConnectAPI::BetaGroup.all.find { |g| g.is_external_group }
-      if add_to_external_group
-        build.add_beta_groups(beta_groups: [add_to_external_group])
-        UI.success("Added to External Testing group '#{add_to_external_group.name}'")
-      else
-        # Create external group if none exists
-        UI.message("No external testing group found. Creating one...")
-        app = Spaceship::ConnectAPI::App.find("gg.ai.ggcode.mobile")
-        group = Spaceship::ConnectAPI::BetaGroup.create(
-          app_id: app.id,
-          group_name: "External Testers",
-          is_external_group: true
-        )
-        build.add_beta_groups(beta_groups: [group])
-        UI.success("Created and added to External Testing group")
-      end
+      pilot(
+        api_key: api_key,
+        skip_waiting_for_build_processing: false,
+        skip_submission: false,
+        distribute_only: true,
+        changelog: "Bug fixes and dependency updates"
+      )
+      UI.success("Build distributed to External Testing!")
     rescue => e
-      UI.error("Could not add to external group: #{e.message}")
-      UI.message("Build is available in TestFlight. You can manually add it to external testers.")
+      UI.error("Could not auto-distribute: #{e.message}")
+      UI.message("Build is available in TestFlight. Promote manually from App Store Connect.")
     end
   end
 
@@ -173,6 +148,30 @@ platform :ios do
   lane :deploy_external do
     upload_testflight
     promote_external
+  end
+
+  desc "Submit latest TestFlight build for App Store Review (no rebuild)"
+  lane :release_latest do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+
+    deliver(
+      api_key: api_key,
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      submit_for_review: true,
+      automatic_release: false,
+      force: true,
+      precheck_include_in_app_purchases: false,
+      submission_information: {
+        add_id_info_uses_idfa: false
+      },
+      app_version: "live"
+    )
   end
 
   desc "Build and submit for App Store Review"
