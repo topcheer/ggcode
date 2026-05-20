@@ -169,15 +169,12 @@ platform :ios do
       app = Spaceship::ConnectAPI::App.find("gg.ai.ggcode.mobile")
       UI.user_error!("App not found on App Store Connect") if app.nil?
 
-      # Get or create the app version
+      # Ensure version exists (creates if needed)
+      UI.message("Ensuring version #{version_str} exists on App Store Connect...")
+      app.ensure_version!(version_str, platform: Spaceship::ConnectAPI::Platform::IOS)
+
       version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
-      if version.nil?
-        UI.message("Creating new app store version #{version_str}...")
-        version = app.create_app_store_version(
-          version_string: version_str,
-          platform: Spaceship::ConnectAPI::Platform::IOS
-        )
-      end
+      UI.user_error!("Could not get edit version for #{version_str}") if version.nil?
       UI.message("App Store version: #{version.version_string}")
 
       # Select the latest processed build
@@ -187,7 +184,7 @@ platform :ios do
       end
       latest_build = builds.first
       UI.message("Selecting build #{latest_build.version} (#{latest_build.build_version})")
-      version.select_build(build: latest_build)
+      version.select_build(build_id: latest_build.id)
 
       # Update review information
       app_info = app.fetch_edit_app_info
@@ -204,11 +201,7 @@ platform :ios do
       end
 
       # Submit for review
-      version.submit_for_review(
-        submission_information: {
-          add_id_info_uses_idfa: false
-        }
-      )
+      submission = app.create_review_submission(platform: Spaceship::ConnectAPI::Platform::IOS)
       UI.success("Version #{version_str} submitted for App Store Review!")
     rescue => e
       UI.error("Submit failed: #{e.message}")
