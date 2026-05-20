@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func init() {
@@ -549,7 +549,7 @@ func cleanupStaleLogs() {
 		}
 		// On Unix, FindProcess always succeeds. Use signal 0 to check liveness.
 		proc, _ := os.FindProcess(pid)
-		if proc.Signal(syscall.Signal(0)) != nil {
+		if !util.IsProcessAliveProc(proc) {
 			// Process doesn't exist — remove its log files
 			_ = os.Remove(filepath.Join(defaultLogDir, name))
 		}
@@ -798,7 +798,7 @@ func (s *asyncFileSink) refreshCompatPath() {
 		return
 	}
 	_ = os.Remove(s.compatPath)
-	_ = os.Symlink(s.basePath, s.compatPath)
+	_ = util.SafeSymlink(s.basePath, s.compatPath)
 }
 
 func (s *asyncFileSink) cleanupCompatPath() {

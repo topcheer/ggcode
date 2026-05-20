@@ -3,6 +3,8 @@ package auth
 import (
 	"testing"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func TestDefaultTokenCacheDir(t *testing.T) {
@@ -65,7 +67,7 @@ func TestStoreHasUsableToken_NoToken(t *testing.T) {
 }
 
 func TestHomeDir(t *testing.T) {
-	dir := homeDir()
+	dir := util.HomeDir()
 	if dir == "" {
 		t.Error("expected non-empty home dir")
 	}

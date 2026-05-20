@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/topcheer/ggcode/internal/util"
 	"image/png"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,7 +93,10 @@ func (m *Model) installSignalDaemon() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "sh", "-c", im.SignalDaemonInstallCommand())
+		cmd, _, shellErr := util.NewShellCommandContext(ctx, im.SignalDaemonInstallCommand())
+		if shellErr != nil {
+			return signalBindResultMsg{err: fmt.Errorf("install: shell not found: %w", shellErr)}
+		}
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return signalBindResultMsg{err: fmt.Errorf("install failed: %s: %s", err, strings.TrimSpace(string(output)))}

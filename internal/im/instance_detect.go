@@ -9,10 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -252,15 +253,9 @@ func (d *InstanceDetect) readInstanceFile(path string) (InstanceInfo, error) {
 }
 
 // isProcessAlive checks if a process with the given PID is alive.
-// Uses signal 0 (no-op signal) to check without affecting the process.
+// isProcessAlive checks if the process with the given PID is still running.
 func isProcessAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// signal 0 doesn't kill the process — just checks existence + permission
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return util.IsProcessAlive(pid)
 }
 
 // parsePIDFromFilename extracts the PID from a filename like "12345-abc12345.json".

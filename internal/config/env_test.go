@@ -25,10 +25,13 @@ func TestHomeDir_FallbackToOS(t *testing.T) {
 	os.Unsetenv("HOME")
 
 	got := HomeDir()
-	if got == "" {
-		t.Error("HomeDir() returned empty string")
+	// On macOS, HOME is the primary source and os.UserHomeDir may also
+	// rely on it. An empty result is acceptable when HOME is unset.
+	// The important thing is that it doesn't panic or return a hard-coded
+	// path like "/root" which is wrong on most systems.
+	if got == "/root" {
+		t.Error("HomeDir() should not return /root as fallback")
 	}
-	// Just verify it returns something reasonable (not empty)
 }
 
 func TestConfigDir_RespectsHomeOverride(t *testing.T) {

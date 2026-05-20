@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -29,7 +31,7 @@ type Store struct {
 }
 
 func DefaultPath() string {
-	return filepath.Join(homeDir(), ".ggcode", "provider_auth.json")
+	return filepath.Join(util.HomeDir(), ".ggcode", "provider_auth.json")
 }
 
 func NewStore(path string) *Store {

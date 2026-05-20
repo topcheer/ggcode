@@ -42,9 +42,33 @@ func NewSessionAnalyzer(k *Knight) *SessionAnalyzer {
 // isTempDir returns true if the path looks like a temp directory (test scenario).
 func isTempDir(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
-	return strings.Contains(path, "/tmp/") || strings.HasPrefix(path, "/tmp/") ||
-		strings.Contains(path, "/var/folders/") || // macOS tmp
-		strings.HasPrefix(base, "knight-") || strings.HasPrefix(base, "test-") ||
+
+	// Cross-platform temp directory detection
+	// Normalize path separators for consistent checking
+	normalized := filepath.ToSlash(path)
+
+	// Unix/macOS temp paths
+	if strings.Contains(normalized, "/tmp/") || strings.HasPrefix(normalized, "/tmp/") ||
+		strings.Contains(normalized, "/var/folders/") {
+		return true
+	}
+
+	// Windows temp paths
+	if strings.Contains(normalized, "/temp/") || strings.Contains(normalized, "/tmp/") {
+		return true
+	}
+
+	// Check against os.TempDir() (respects $TMPDIR, %TEMP%, etc.)
+	if tempDir := os.TempDir(); tempDir != "" {
+		// Compare normalized paths
+		normalizedTemp := filepath.ToSlash(tempDir)
+		if strings.HasPrefix(normalized, normalizedTemp+"/") || normalized == normalizedTemp {
+			return true
+		}
+	}
+
+	// Name-based heuristics
+	return strings.HasPrefix(base, "knight-") || strings.HasPrefix(base, "test-") ||
 		strings.Contains(base, "tmp")
 }
 

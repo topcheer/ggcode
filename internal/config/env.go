@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -62,19 +64,9 @@ func expandValueWithLookup(v interface{}, lookup envLookupFunc) interface{} {
 }
 
 // HomeDir returns the user's home directory.
-// It respects the $HOME environment variable first (critical for test isolation),
-// then falls back to os.UserHomeDir() (which reads the OS-level home on all platforms).
+// Delegates to util.HomeDir which handles $HOME, os.UserHomeDir, and $USERPROFILE.
 func HomeDir() string {
-	if h := os.Getenv("HOME"); h != "" {
-		return h
-	}
-	if h, err := os.UserHomeDir(); err == nil {
-		return h
-	}
-	if h := os.Getenv("USERPROFILE"); h != "" { // Windows fallback
-		return h
-	}
-	return "/root"
+	return util.HomeDir()
 }
 
 // ConfigDir returns ~/.ggcode

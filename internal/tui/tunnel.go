@@ -82,6 +82,27 @@ func (m *Model) startTunnel() tea.Cmd {
 	}
 }
 
+func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel failed: %v", msg.err))
+		m.chatListScrollToBottom()
+		return m, nil
+	}
+
+	m.tunnelSession = msg.session
+	m.tunnelBroker = msg.broker
+
+	// Open QR overlay with connect URL and QR code.
+	m.openQROverlayDirect(
+		"Mobile Tunnel",
+		"Scan with GGCode Mobile to connect",
+		msg.info.QRCode,
+		msg.info.ConnectURL,
+	)
+
+	return m, nil
+}
+
 func (m *Model) handleTunnelClientMessage(msg tunnel.GatewayMessage) {
 	switch msg.Type {
 	case tunnel.CmdMessage:

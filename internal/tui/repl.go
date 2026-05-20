@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
-	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -777,7 +775,7 @@ func messageCount(ses *session.Session) int {
 
 // execRestart replaces the current process with a fresh ggcode binary.
 // Called after program.Run() returns and the terminal has been restored.
-// Uses syscall.Exec to keep the same PID and terminal control.
+// Uses restart.ExecSelf which does syscall.Exec on Unix or exec+exit on Windows.
 func (r *REPL) execRestart() error {
 	binary, err := restart.ResolveBinary()
 	if err != nil {
@@ -785,20 +783,17 @@ func (r *REPL) execRestart() error {
 	}
 
 	args := r.model.buildRestartArgs()
-	execArgs := append([]string{binary}, args...)
 
 	sessionID := ""
 	if r.model.session != nil {
 		sessionID = r.model.session.ID
 	}
 	debug.Log("restart", "exec binary=%s session=%s args=%v", binary, sessionID, args)
-	debug.Log("restart", "sessionID=%q args=%v", sessionID, args)
-	debug.Log("restart", "exec %s", strings.Join(execArgs, " "))
 
 	env := os.Environ()
 	if r.model.restartDebug {
 		env = append(env, "GGCODE_DEBUG=1")
 	}
 
-	return syscall.Exec(binary, execArgs, env)
+	return restart.ExecSelf(binary, args, env)
 }
