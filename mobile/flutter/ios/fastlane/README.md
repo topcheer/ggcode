@@ -79,6 +79,22 @@ Full deploy: upload TestFlight + promote to External Testing
 
 Submit latest TestFlight build for App Store Review (no rebuild)
 
+### ios test_build_association
+
+```sh
+[bundle exec] fastlane ios test_build_association
+```
+
+Test: update version string and associate build
+
+### ios cleanup_submissions
+
+```sh
+[bundle exec] fastlane ios cleanup_submissions
+```
+
+List and cancel all pending review submissions
+
 ### ios inspect
 
 ```sh
@@ -101,7 +117,7 @@ Remove invalid 'live' version from App Store Connect
 [bundle exec] fastlane ios full_release
 ```
 
-Full setup: upload metadata+screenshots, set review notes, select build, submit
+Full setup: ensure version, associate build, set review notes, upload metadata+screenshots, submit
 
 ### ios release
 

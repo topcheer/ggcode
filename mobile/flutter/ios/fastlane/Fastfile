@@ -195,7 +195,7 @@ platform :ios do
             last_name: "Team",
             email: "support@ggcode.dev",
             phone: "+86",
-            notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via WebSocket.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop and run 'ggcode serve --remote' to generate a connection QR code\n3. Open this mobile app and scan the QR code (or paste the connection URL)\n4. Once connected, you can send messages to the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
+            notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop\n   - GUI: click the Share button in the sidebar to generate a QR code\n   - Terminal (TUI): type /share or /tunnel in the chat to generate a QR code\n3. Open this mobile app and scan the QR code\n4. Once connected, you can chat with the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
           }
         )
       end
@@ -210,6 +210,104 @@ platform :ios do
   end
 
   # ── Debug: inspect App Store Connect state ────────────
+
+  desc "Test: update version string and associate build"
+  lane :test_build_association do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+
+    # Read version from Info.plist
+    plist_path = File.expand_path("../../Runner/Info.plist", __FILE__)
+    version_str = `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '#{plist_path}' 2>/dev/null`.strip
+    UI.message("Local version: #{version_str}")
+
+    app = Spaceship::ConnectAPI::App.find("gg.ai.ggcode.mobile")
+    client = Spaceship::ConnectAPI.client
+
+    # 1. Get the version on ASC
+    versions = app.get_app_store_versions
+    version = versions.find { |v| v.app_store_state == "PREPARE_FOR_SUBMISSION" }
+    
+    # Check platform — must be IOS
+    mac_version = versions.find { |v| v.platform == "MAC_OS" }
+    ios_version = versions.find { |v| v.platform == "IOS" }
+
+    if ios_version.nil?
+      # Create iOS version first (can't delete MAC_OS until another platform exists)
+      UI.message("No iOS version found. Creating iOS version #{version_str}...")
+      client.post_app_store_version(
+        app_id: app.id,
+        attributes: {
+          platform: Spaceship::ConnectAPI::Platform::IOS,
+          versionString: version_str
+        }
+      )
+      ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+      UI.user_error!("Failed to create iOS version") if ios_version.nil?
+      UI.success("Created iOS version: #{ios_version.version_string}")
+
+      # Now delete the MAC_OS version
+      if mac_version
+        UI.message("Deleting MAC_OS version #{mac_version.version_string}...")
+        begin
+          client.tunes_request_client.delete("v1/appStoreVersions/#{mac_version.id}")
+          UI.success("Deleted MAC_OS version")
+        rescue => e
+          UI.message("Could not delete MAC_OS version: #{e.message}")
+        end
+      end
+    end
+
+    version = ios_version
+    UI.user_error!("No editable iOS version") if version.nil?
+    UI.message("ASC version: #{version.version_string} id=#{version.id} platform=#{version.platform}")
+
+    # 3. Find latest valid build
+    builds = client.get_builds(filter: { app: app.id }, sort: "-uploadedDate", limit: 10, includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES).to_models
+    valid = builds.select { |b| b.processing_state == "VALID" }
+    UI.user_error!("No VALID builds") if valid.empty?
+    build = valid.first
+    UI.message("Build: #{build.version} (#{build.id}) state=#{build.processing_state} platform=#{begin; build.platform; rescue; 'unknown'; end}")
+
+    # 4. Associate build to version
+    UI.message("Associating build #{build.version} to version #{version_str}...")
+    version.select_build(build_id: build.id)
+    UI.success("Build associated!")
+  end
+
+  desc "List and cancel all pending review submissions"
+  lane :cleanup_submissions do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
+    )
+
+    app = Spaceship::ConnectAPI::App.find("gg.ai.ggcode.mobile")
+    UI.user_error!("App not found") if app.nil?
+
+    client = Spaceship::ConnectAPI.client
+    resp = client.get_review_submissions(app_id: app.id)
+    submissions = resp.to_models
+    UI.message("Found #{submissions.size} review submissions")
+
+    submissions.each do |s|
+      UI.message("  Submission #{s.id}: state=#{s.state}")
+      begin
+        client.tunes_request_client.delete("v1/reviewSubmissions/#{s.id}")
+        UI.success("  Deleted #{s.id}")
+      rescue => e
+        UI.error("  Failed to delete #{s.id}: #{e.message}")
+      end
+    end
+
+    UI.success("Cleanup done")
+  end
 
   desc "Show all versions and builds on App Store Connect"
   lane :inspect do
@@ -255,7 +353,7 @@ platform :ios do
     end
   end
 
-  desc "Full setup: upload metadata+screenshots, set review notes, select build, submit"
+  desc "Full setup: ensure version, associate build, set review notes, upload metadata+screenshots, submit"
   lane :full_release do
     api_key = app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
@@ -264,99 +362,137 @@ platform :ios do
       in_house: false
     )
 
+    # Read version from Info.plist
+    plist_path = File.expand_path("../../Runner/Info.plist", __FILE__)
+    version_str = `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '#{plist_path}' 2>/dev/null`.strip
+    UI.user_error!("Could not read version from Info.plist") if version_str.empty?
+    UI.message("Local version: #{version_str}")
+
     app = Spaceship::ConnectAPI::App.find("gg.ai.ggcode.mobile")
     UI.user_error!("App not found") if app.nil?
+    client = Spaceship::ConnectAPI.client
 
-    # 1. Get existing editable version
-    UI.message("Step 1: Finding editable version...")
-    version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
-    if version.nil?
-      versions = app.get_app_store_versions
-      version = versions.find { |v| v.app_store_state == "PREPARE_FOR_SUBMISSION" }
-    end
-    UI.user_error!("No editable version. Create one in App Store Connect first.") if version.nil?
-    UI.success("Version: #{version.version_string} (#{version.app_store_state})")
+    # ── Step 1: Find or create IOS version ───────────────
+    UI.message("Step 1: Ensuring iOS version #{version_str}...")
+    versions = app.get_app_store_versions
+    ios_version = versions.find { |v| v.platform == "IOS" && v.app_store_state == "PREPARE_FOR_SUBMISSION" }
 
-    # 2. Select latest build
-    UI.message("Step 2: Selecting latest processed build...")
-    begin
-      client = Spaceship::ConnectAPI.client
-      resp = client.get_builds(filter: { app: app.id }, sort: "-uploadedDate", limit: 5, includes: nil)
-      builds = resp.to_models.select { |b| b.processing_state == "VALID" || b.processing_state == "PROCESSING" }
-      if builds.empty?
-        UI.error("No processed builds found.")
-      else
-        b = builds.first
-        UI.message("Build: #{b.version} (state=#{b.processing_state})")
-        version.select_build(build_id: b.id)
-        UI.success("Build selected")
+    if ios_version.nil?
+      # No iOS version — create one
+      UI.message("Creating iOS version #{version_str}...")
+      client.post_app_store_version(
+        app_id: app.id,
+        attributes: { platform: Spaceship::ConnectAPI::Platform::IOS, versionString: version_str }
+      )
+      ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+
+      # Delete stale MAC_OS version if it blocks us
+      mac_version = versions.find { |v| v.platform == "MAC_OS" }
+      if mac_version
+        UI.message("Cleaning up MAC_OS version...")
+        begin
+          client.tunes_request_client.delete("v1/appStoreVersions/#{mac_version.id}")
+          UI.success("Deleted MAC_OS version")
+        rescue => e
+          UI.message("MAC_OS cleanup skipped: #{e.message}")
+        end
       end
-    rescue => e
-      UI.error("Build selection failed: #{e.message}")
     end
 
-    # 3. Set review notes (on version, not app_info)
-    UI.message("Step 3: Setting review notes...")
+    UI.user_error!("No editable iOS version") if ios_version.nil?
+
+    # Update version string if needed
+    if ios_version.version_string != version_str
+      UI.message("Updating version string from #{ios_version.version_string} to #{version_str}...")
+      client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { versionString: version_str })
+    end
+    UI.success("Version: #{version_str} platform=#{ios_version.platform}")
+
+    # ── Step 2: Clean up stale review submissions ────────
+    UI.message("Step 2: Cleaning up stale review submissions...")
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    submissions.each do |s|
+      begin
+        client.tunes_request_client.delete("v1/reviewSubmissions/#{s.id}")
+        UI.message("  Deleted submission #{s.id}")
+      rescue => e
+        UI.message("  Skip #{s.id}: #{e.message}")
+      end
+    end
+    UI.success("Submissions cleaned (#{submissions.size} removed)")
+
+    # ── Step 3: Associate latest valid build ─────────────
+    UI.message("Step 3: Associating latest build...")
+    builds = client.get_builds(
+      filter: { app: app.id },
+      sort: "-uploadedDate",
+      limit: 10,
+      includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+    ).to_models
+    valid_builds = builds.select { |b| b.processing_state == "VALID" }
+    UI.user_error!("No VALID builds found. Upload one first.") if valid_builds.empty?
+    build = valid_builds.first
+    UI.message("  Build: #{build.version} (#{build.id}) platform=#{begin; build.platform; rescue; '?'; end})")
+    ios_version.select_build(build_id: build.id)
+    UI.success("Build associated!")
+
+    # ── Step 4: Set review notes ─────────────────────────
+    UI.message("Step 4: Setting review notes...")
     begin
       review_detail = nil
       begin
-        review_detail = version.fetch_app_store_review_detail
+        review_detail = ios_version.fetch_app_store_review_detail
       rescue
         nil
       end
-      attributes = {
+      review_attrs = {
         contactEmail: "support@ggcode.dev",
         contactFirstName: "GGCode",
         contactLastName: "Team",
         contactPhone: "+86 13800000000",
-        notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via WebSocket.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop and run 'ggcode serve --remote' to generate a connection QR code\n3. Open this mobile app and scan the QR code (or paste the connection URL)\n4. Once connected, you can send messages to the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
+        notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop\n   - GUI: click the Share button in the sidebar to generate a QR code\n   - Terminal (TUI): type /share or /tunnel in the chat to generate a QR code\n3. Open this mobile app and scan the QR code\n4. Once connected, you can chat with the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
       }
       if review_detail
-        review_detail.update(attributes: attributes)
-        UI.success("Review notes updated")
+        review_detail.update(attributes: review_attrs)
       else
-        version.create_app_store_review_detail(attributes: attributes)
-        UI.success("Review notes created")
+        ios_version.create_app_store_review_detail(attributes: review_attrs)
       end
+      UI.success("Review notes set")
     rescue => e
-      UI.error("Review notes failed: #{e.message}")
+      UI.error("Review notes: #{e.message}")
     end
 
-    # 4. Submit for review
-    UI.message("Step 4: Submitting for review...")
+    # ── Step 5: Upload metadata + screenshots via deliver ─
+    UI.message("Step 5: Uploading metadata + screenshots...")
+    begin
+      deliver(
+        api_key: api_key,
+        app_version: version_str,
+        edit_live: false,
+        skip_binary_upload: true,
+        skip_screenshots: false,
+        skip_metadata: false,
+        submit_for_review: false,
+        force: true,
+        precheck_include_in_app_purchases: false,
+        overwrite_screenshots: true,
+        run_precheck_before_submit: false,
+        skip_app_version_update: true
+      )
+      UI.success("Metadata + screenshots uploaded")
+    rescue => e
+      UI.error("Metadata upload: #{e.message}")
+      UI.message("Retry 'fastlane full_release' or upload manually.")
+    end
+
+    # ── Step 6: Submit for review ────────────────────────
+    UI.message("Step 6: Submitting for review...")
     begin
       app.create_review_submission(platform: Spaceship::ConnectAPI::Platform::IOS)
       UI.success("Submitted for App Store Review!")
     rescue => e
-      UI.error("Submit failed: #{e.message}")
+      UI.error("Submit: #{e.message}")
       UI.message("Submit manually from App Store Connect.")
-    end
-
-    # 5. Upload metadata + screenshots via deliver (slow, runs last)
-    UI.message("Step 5: Uploading metadata + screenshots (timeout 5min)...")
-    begin
-      Timeout.timeout(300) do
-        deliver(
-          api_key: api_key,
-          app_version: version.version_string,
-          edit_live: false,
-          skip_binary_upload: true,
-          skip_screenshots: false,
-          skip_metadata: false,
-          submit_for_review: false,
-          force: true,
-          precheck_include_in_app_purchases: false,
-          overwrite_screenshots: true,
-          run_precheck_before_submit: false,
-          skip_app_version_update: true
-        )
-        UI.success("Metadata + screenshots uploaded")
-      end
-    rescue Timeout::Error
-      UI.error("Upload timed out. Retry with 'fastlane upload_metadata'.")
-    rescue => e
-      UI.error("Upload failed: #{e.message}")
-      UI.message("Upload manually from App Store Connect.")
     end
   rescue => e
     UI.error("Release failed: #{e.message}")
@@ -410,7 +546,7 @@ platform :ios do
           last_name: "Team",
           email: "support@ggcode.dev",
           phone: "+86",
-          notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via WebSocket.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop and run 'ggcode serve --remote' to generate a connection QR code\n3. Open this mobile app and scan the QR code (or paste the connection URL)\n4. Once connected, you can send messages to the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
+          notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop\n   - GUI: click the Share button in the sidebar to generate a QR code\n   - Terminal (TUI): type /share or /tunnel in the chat to generate a QR code\n3. Open this mobile app and scan the QR code\n4. Once connected, you can chat with the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
         }
       }
       upload_options[:ipa] = ipa_to_upload if ipa_to_upload
