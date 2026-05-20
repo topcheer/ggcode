@@ -408,18 +408,26 @@ platform :ios do
     end
     UI.success("Version: #{version_str} platform=#{ios_version.platform}")
 
-    # ── Step 2: Clean up stale review submissions ────────
-    UI.message("Step 2: Cleaning up stale review submissions...")
+    # ── Step 2: Find or create a single review submission ──
+    UI.message("Step 2: Finding review submission...")
     submissions = client.get_review_submissions(app_id: app.id).to_models
-    submissions.each do |s|
-      begin
-        client.tunes_request_client.delete("v1/reviewSubmissions/#{s.id}")
-        UI.message("  Deleted submission #{s.id}")
-      rescue => e
-        UI.message("  Skip #{s.id}: #{e.message}")
-      end
+    existing = submissions.find { |s| s.state.nil? || s.state.empty? }
+
+    if existing
+      UI.success("Using existing submission #{existing.id}")
+    elsif !submissions.empty?
+      # There are submissions but none are draft — can't create another
+      # (Apple limits to 5 concurrent submissions)
+      UI.error("Found #{submissions.size} existing submissions (states: #{submissions.map(&:state).join(', ')}). Cannot create a new one.")
+      UI.message("Cancel existing submissions in App Store Connect first, or wait for them to complete.")
+      submission = submissions.first
+      UI.message("Will try to continue with submission #{submission.id}")
+    else
+      UI.message("Creating new review submission...")
+      resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
+      submission = resp.to_models.first
+      UI.success("Created submission #{submission.id}")
     end
-    UI.success("Submissions cleaned (#{submissions.size} removed)")
 
     # ── Step 3: Associate latest valid build ─────────────
     UI.message("Step 3: Associating latest build...")
@@ -447,9 +455,9 @@ platform :ios do
       end
       review_attrs = {
         contactEmail: "support@ggcode.dev",
-        contactFirstName: "GGCode",
-        contactLastName: "Team",
-        contactPhone: "+86 13800000000",
+        contactFirstName: "Guang",
+        contactLastName: "Guang",
+        contactPhone: "+8613858128966",
         notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop\n   - GUI: click the Share button in the sidebar to generate a QR code\n   - Terminal (TUI): type /share or /tunnel in the chat to generate a QR code\n3. Open this mobile app and scan the QR code\n4. Once connected, you can chat with the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
       }
       if review_detail
@@ -485,11 +493,24 @@ platform :ios do
       UI.message("Retry 'fastlane full_release' or upload manually.")
     end
 
-    # ── Step 6: Submit for review ────────────────────────
-    UI.message("Step 6: Submitting for review...")
+    # ── Step 6: Confirm submission for review ────────────
+    UI.message("Step 6: Confirming submission for review...")
     begin
-      app.create_review_submission(platform: Spaceship::ConnectAPI::Platform::IOS)
-      UI.success("Submitted for App Store Review!")
+      # Re-fetch submissions to get latest state
+      submissions = client.get_review_submissions(app_id: app.id).to_models
+      draft = submissions.find { |s| s.state.nil? || s.state.empty? }
+
+      if draft
+        # Add this version as a submission item
+        client.post_review_submission_item(review_submission_id: draft.id, app_store_version_id: ios_version.id)
+        UI.success("Submission #{draft.id} confirmed with version #{version_str}!")
+      else
+        # No draft — create one
+        resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
+        new_sub = resp.to_models.first
+        client.post_review_submission_item(review_submission_id: new_sub.id, app_store_version_id: ios_version.id)
+        UI.success("Created and confirmed submission #{new_sub.id} with version #{version_str}!")
+      end
     rescue => e
       UI.error("Submit: #{e.message}")
       UI.message("Submit manually from App Store Connect.")
