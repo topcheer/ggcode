@@ -34,12 +34,11 @@ generate_build_number() {
 
 	if [[ "$current_build" =~ ^${today}([0-9]+)$ ]]; then
 		# Same day — increment sequence
-		local seq=${BASH_REMATCH[1]}
-		seq=$((seq + 1))
-		echo "${today}${seq}"
+		local seq=$((10#${BASH_REMATCH[1]} + 1))
+		printf "%s%02d" "$today" "$seq"
 	else
-		# New day — start at 1
-		echo "${today}1"
+		# New day — start at 01
+		echo "${today}01"
 	fi
 }
 
