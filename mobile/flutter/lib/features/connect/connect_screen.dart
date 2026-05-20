@@ -5,8 +5,34 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/providers/session_provider.dart';
 
-final _historyProvider = StateProvider<List<String>>((ref) => []);
-final _urlProvider = StateProvider<String>((ref) => '');
+class _SimpleNotifier<T> extends Notifier<T> {
+  late T _value;
+  late T Function() _init;
+
+  @override
+  T build() {
+    _value = _init();
+    return _value;
+  }
+
+  void set(T v) {
+    _value = v;
+    state = v;
+  }
+}
+
+NotifierProvider<_SimpleNotifier<T>, T> _simpleProvider<T>(T Function() init) {
+  return NotifierProvider<_SimpleNotifier<T>, T>(
+    () {
+      final n = _SimpleNotifier<T>();
+      n._init = init;
+      return n;
+    },
+  );
+}
+
+final _historyProvider = _simpleProvider<List<String>>(() => []);
+final _urlProvider = _simpleProvider<String>(() => '');
 
 class ConnectScreen extends ConsumerStatefulWidget {
   const ConnectScreen({super.key});
@@ -28,7 +54,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   Future<void> _loadHistory() async {
     final prefs = await SharedPreferences.getInstance();
     final history = prefs.getStringList('tunnel_history') ?? [];
-    ref.read(_historyProvider.notifier).state = history;
+    ref.read(_historyProvider.notifier).set(history);
   }
 
   Future<void> _saveToHistory(String url) async {
@@ -38,7 +64,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
       history.insert(0, url);
       if (history.length > 10) history.removeLast();
       await prefs.setStringList('tunnel_history', history);
-      ref.read(_historyProvider.notifier).state = history;
+      ref.read(_historyProvider.notifier).set(history);
     }
   }
 

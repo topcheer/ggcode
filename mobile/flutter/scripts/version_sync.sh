@@ -16,6 +16,7 @@ cd "$(dirname "$0")/.."
 
 PUBSPEC="pubspec.yaml"
 GRADLE="android/app/build.gradle.kts"
+INFO_PLIST="ios/Runner/Info.plist"
 DRY_RUN=false
 
 # ── Helpers ──────────────────────────────────────────────
@@ -59,11 +60,23 @@ show_current() {
 	echo "pubspec.yaml:     version ${ver}"
 	echo "build.gradle.kts: versionCode=${gradle_vc} versionName=${gradle_vn}"
 
+	local plist_ver
+	plist_ver=$(grep -A1 "CFBundleShortVersionString" "$INFO_PLIST" | grep string | sed 's/.*<string>//; s/<.*//')
+	local plist_build
+	plist_build=$(grep -A1 "CFBundleVersion" "$INFO_PLIST" | grep string | sed 's/.*<string>//; s/<.*//')
+	echo "Info.plist:       CFBundleShortVersionString=${plist_ver} CFBundleVersion=${plist_build}"
+
 	if [[ "$name" != "$gradle_vn" ]]; then
 		echo "⚠  Version name mismatch: pubspec=${name} gradle=${gradle_vn}"
 	fi
 	if [[ "$build" != "$gradle_vc" ]]; then
 		echo "⚠  Version code mismatch: pubspec=+${build} gradle=${gradle_vc}"
+	fi
+	if [[ "$name" != "$plist_ver" ]]; then
+		echo "⚠  Version name mismatch: pubspec=${name} plist=${plist_ver}"
+	fi
+	if [[ "$build" != "$plist_build" ]]; then
+		echo "⚠  Version code mismatch: pubspec=+${build} plist=${plist_build}"
 	fi
 }
 
@@ -80,6 +93,7 @@ sync_version() {
 	echo "→ Setting version: ${new_spec}"
 	echo "  pubspec.yaml:     version: ${new_spec}"
 	echo "  build.gradle.kts: versionCode = ${build_number}, versionName = \"${version_name}\""
+	echo "  Info.plist:       CFBundleShortVersionString = ${version_name}, CFBundleVersion = ${build_number}"
 
 	if [[ "$DRY_RUN" == true ]]; then
 		echo "(dry run — no files changed)"
@@ -100,6 +114,15 @@ sync_version() {
 	else
 		sed -i "s/versionCode = [0-9]*/versionCode = ${build_number}/" "$GRADLE"
 		sed -i "s/versionName = \"[^\"]*\"/versionName = \"${version_name}\"/" "$GRADLE"
+	fi
+
+	# Update iOS Info.plist (CFBundleShortVersionString + CFBundleVersion)
+	if [[ "$(uname)" == "Darwin" ]]; then
+		sed -i '' "/CFBundleShortVersionString/{n;s/<string>[^<]*<\/string>/<string>${version_name}<\/string>/;}" "$INFO_PLIST"
+		sed -i '' "/CFBundleVersion/{n;s/<string>[^<]*<\/string>/<string>${build_number}<\/string>/;}" "$INFO_PLIST"
+	else
+		sed -i "/CFBundleShortVersionString/{n;s/<string>[^<]*<\/string>/<string>${version_name}<\/string>/;}" "$INFO_PLIST"
+		sed -i "/CFBundleVersion/{n;s/<string>[^<]*<\/string>/<string>${build_number}<\/string>/;}" "$INFO_PLIST"
 	fi
 
 	echo "✓ Version synced."

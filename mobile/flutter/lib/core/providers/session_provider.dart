@@ -9,8 +9,8 @@ import '../models/protocol.dart' as proto;
 // ---- Connection Service Provider ----
 
 final connectionProvider =
-    StateNotifierProvider<ConnectionNotifier, TunnelConnectionState>(
-  (ref) => ConnectionNotifier(ref),
+    NotifierProvider<ConnectionNotifier, TunnelConnectionState>(
+  ConnectionNotifier.new,
 );
 
 class TunnelConnectionState {
@@ -29,12 +29,12 @@ class TunnelConnectionState {
       );
 }
 
-class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
-  final Ref _ref;
+class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   ConnectionService? service;
 
-  ConnectionNotifier(this._ref)
-      : super(TunnelConnectionState(status: ConnectionStatus.disconnected));
+  @override
+  TunnelConnectionState build() =>
+      TunnelConnectionState(status: ConnectionStatus.disconnected);
 
   Future<void> connect(String url, {bool clearState = true}) async {
     // Disconnect previous if any
@@ -45,8 +45,8 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
 
     // Clear previous session state (skip on reconnect from background)
     if (clearState) {
-      _ref.read(chatProvider.notifier).clearMessages();
-      _ref.read(subagentProvider.notifier).state = {};
+      ref.read(chatProvider.notifier).clearMessages();
+      ref.read(subagentProvider.notifier).clear();
     }
 
     state = state.copyWith(
@@ -121,13 +121,13 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
   }
 
   void _dispatchMessage(proto.WsMessage msg) {
-    final chatNotifier = _ref.read(chatProvider.notifier);
+    final chatNotifier = ref.read(chatProvider.notifier);
 
     switch (msg.type) {
       case 'session_info':
         final data = proto.SessionInfoData.fromJson(msg.data!);
-        _ref.read(sessionInfoProvider.notifier).state = data;
-        _ref.read(currentModeProvider.notifier).state = data.mode;
+        ref.read(sessionInfoProvider.notifier).set(data);
+        ref.read(currentModeProvider.notifier).set(data.mode);
         break;
 
       case 'user_message':
@@ -168,7 +168,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
 
       case 'chat_clear':
         chatNotifier.clearMessages();
-        _ref.read(subagentProvider.notifier).state = {};
+        ref.read(subagentProvider.notifier).clear();
         break;
 
       case 'text':
@@ -197,8 +197,8 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
         if (msg.data != null) {
           final status = msg.data!['status'] as String? ?? 'idle';
           final message = msg.data!['message'] as String? ?? '';
-          _ref.read(agentStatusProvider.notifier).state = status;
-          _ref.read(agentStatusMessageProvider.notifier).state = message;
+          ref.read(agentStatusProvider.notifier).set(status);
+          ref.read(agentStatusMessageProvider.notifier).set(message);
         }
         break;
 
@@ -218,17 +218,17 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'approval_request':
         if (msg.data != null) {
           final data = proto.ApprovalRequestData.fromJson(msg.data!);
-          _ref.read(approvalProvider.notifier).state = ApprovalInfo(
-              id: data.id, toolName: data.toolName, input: data.input);
+          ref.read(approvalProvider.notifier).set(ApprovalInfo(
+              id: data.id, toolName: data.toolName, input: data.input));
         }
         break;
 
       case 'approval_result':
         if (msg.data != null) {
           final data = proto.ApprovalResultData.fromJson(msg.data!);
-          final approval = _ref.read(approvalProvider);
+          final approval = ref.read(approvalProvider);
           if (approval != null && approval.id == data.id) {
-            _ref.read(approvalProvider.notifier).state = null;
+            ref.read(approvalProvider.notifier).set(null);
           }
         }
         break;
@@ -241,18 +241,18 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
               data.questions.map(_describeAskUserQuestion).join('\n');
           final amsgId = _newAskUserMessageId();
           chatNotifier.addAskUserRequest(amsgId, data.title, detail);
-          _ref.read(askUserProvider.notifier).state = AskUserInfo(
+          ref.read(askUserProvider.notifier).set(AskUserInfo(
               id: data.id,
               title: data.title,
               questions: data.questions,
-              msgId: amsgId);
+              msgId: amsgId));
         }
         break;
 
       case 'ask_user_response':
         if (msg.data != null) {
           final data = proto.AskUserResponseData.fromJson(msg.data!);
-          final askUser = _ref.read(askUserProvider);
+          final askUser = ref.read(askUserProvider);
           if (askUser != null && askUser.id == data.id) {
             if (askUser.msgId.isNotEmpty) {
               chatNotifier.updateAskUserAnswer(
@@ -261,7 +261,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
                     askUser.questions, data.answers, data.status),
               );
             }
-            _ref.read(askUserProvider.notifier).state = null;
+            ref.read(askUserProvider.notifier).set(null);
           }
         }
         break;
@@ -269,8 +269,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'subagent_spawn':
         if (msg.data != null) {
           final data = proto.SubagentSpawnData.fromJson(msg.data!);
-          final agents =
-              Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
           agents[data.agentId] = SubagentInfo(
             agentId: data.agentId,
             name: data.name,
@@ -278,7 +277,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
             color: data.color,
             parentId: data.parentId,
           );
-          _ref.read(subagentProvider.notifier).state = agents;
+          ref.read(subagentProvider.notifier).set(agents);
         }
         break;
 
@@ -292,12 +291,11 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'subagent_status':
         if (msg.data != null) {
           final data = proto.SubagentStatusData.fromJson(msg.data!);
-          final agents =
-              Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
           if (agents.containsKey(data.agentId)) {
             agents[data.agentId] =
                 agents[data.agentId]!.copyWith(status: data.status);
-            _ref.read(subagentProvider.notifier).state = agents;
+            ref.read(subagentProvider.notifier).set(agents);
           }
         }
         break;
@@ -305,8 +303,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'subagent_complete':
         if (msg.data != null) {
           final data = proto.SubagentCompleteData.fromJson(msg.data!);
-          final agents =
-              Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+          final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
           if (agents.containsKey(data.agentId)) {
             agents[data.agentId] = agents[data.agentId]!.copyWith(
               status: 'completed',
@@ -314,18 +311,18 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
               success: data.success,
               summary: data.summary,
             );
-            _ref.read(subagentProvider.notifier).state = agents;
+            ref.read(subagentProvider.notifier).set(agents);
           }
           // Auto-remove completed agent tab after 5 seconds
           Future.delayed(const Duration(seconds: 5), () {
             final current =
-                Map<String, SubagentInfo>.from(_ref.read(subagentProvider));
+                Map<String, SubagentInfo>.from(ref.read(subagentProvider));
             current.remove(data.agentId);
-            _ref.read(subagentProvider.notifier).state = current;
+            ref.read(subagentProvider.notifier).set(current);
             // Also remove messages for this agent
-            final msgs = _ref.read(chatProvider);
-            _ref.read(chatProvider.notifier).state =
-                msgs.where((m) => m.sourceId != data.agentId).toList();
+            final msgs = ref.read(chatProvider);
+            ref.read(chatProvider.notifier).set(
+                msgs.where((m) => m.sourceId != data.agentId).toList());
           });
         }
         break;
@@ -333,9 +330,9 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'subagent_tool_call':
         if (msg.data != null) {
           final data = proto.SubagentToolCallData.fromJson(msg.data!);
-          final agents = _ref.read(subagentProvider);
+          final agents = ref.read(subagentProvider);
           final agent = agents[data.agentId];
-          final chatNotifier = _ref.read(chatProvider.notifier);
+          final chatNotifier = ref.read(chatProvider.notifier);
           chatNotifier.addSubagentToolCall(
             agentId: data.agentId,
             toolId: data.toolId,
@@ -351,7 +348,7 @@ class ConnectionNotifier extends StateNotifier<TunnelConnectionState> {
       case 'subagent_tool_result':
         if (msg.data != null) {
           final data = proto.SubagentToolResultData.fromJson(msg.data!);
-          final chatNotifier = _ref.read(chatProvider.notifier);
+          final chatNotifier = ref.read(chatProvider.notifier);
           chatNotifier.updateSubagentToolResult(
             agentId: data.agentId,
             toolId: data.toolId,
@@ -443,15 +440,15 @@ class ChatMessage {
       );
 }
 
-final chatProvider = StateNotifierProvider<ChatNotifier, List<ChatMessage>>(
-  (ref) => ChatNotifier(ref),
+final chatProvider = NotifierProvider<ChatNotifier, List<ChatMessage>>(
+  ChatNotifier.new,
 );
 
-class ChatNotifier extends StateNotifier<List<ChatMessage>> {
-  final Ref _ref;
+class ChatNotifier extends Notifier<List<ChatMessage>> {
   int _msgCounter = 0;
 
-  ChatNotifier(this._ref) : super([]);
+  @override
+  List<ChatMessage> build() => [];
 
   void addUserMessage(String text) {
     state = [
@@ -463,7 +460,7 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
         time: DateTime.now(),
       ),
     ];
-    _ref.read(connectionProvider.notifier).send({
+    ref.read(connectionProvider.notifier).send({
       'type': 'message',
       'data': {'text': text},
     });
@@ -691,7 +688,7 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
   }
 
   SubagentInfo? _findSubagent(String id) {
-    return _ref.read(subagentProvider)[id];
+    return ref.read(subagentProvider)[id];
   }
 
   void finalizeStreaming() {
@@ -737,12 +734,42 @@ class ChatNotifier extends StateNotifier<List<ChatMessage>> {
       ];
     }
   }
+
+  // Expose setter for direct state updates (used by subagent_complete)
+  void set(List<ChatMessage> messages) {
+    state = messages;
+  }
 }
 
 // ---- Agent Status Provider ----
 
-final agentStatusProvider = StateProvider<String>((ref) => 'idle');
-final agentStatusMessageProvider = StateProvider<String>((ref) => '');
+// Simple value notifier wrapper for Riverpod 3
+class _ValueNotifier<T> extends Notifier<T> {
+  final T Function() _initialValue;
+  late T _value;
+
+  _ValueNotifier(this._initialValue);
+
+  @override
+  T build() {
+    _value = _initialValue();
+    return _value;
+  }
+
+  void set(T value) {
+    _value = value;
+    state = value;
+  }
+}
+
+final agentStatusProvider =
+    NotifierProvider<_ValueNotifier<String>, String>(
+  () => _ValueNotifier(() => 'idle'),
+);
+final agentStatusMessageProvider =
+    NotifierProvider<_ValueNotifier<String>, String>(
+  () => _ValueNotifier(() => ''),
+);
 
 // ---- Sub-agent Provider ----
 
@@ -788,7 +815,23 @@ class SubagentInfo {
       );
 }
 
-final subagentProvider = StateProvider<Map<String, SubagentInfo>>((ref) => {});
+class _SubagentNotifier extends Notifier<Map<String, SubagentInfo>> {
+  @override
+  Map<String, SubagentInfo> build() => {};
+
+  void set(Map<String, SubagentInfo> agents) {
+    state = agents;
+  }
+
+  void clear() {
+    state = {};
+  }
+}
+
+final subagentProvider =
+    NotifierProvider<_SubagentNotifier, Map<String, SubagentInfo>>(
+  _SubagentNotifier.new,
+);
 
 // ---- Approval Provider ----
 
@@ -800,7 +843,28 @@ class ApprovalInfo {
   ApprovalInfo({required this.id, required this.toolName, required this.input});
 }
 
-final approvalProvider = StateProvider<ApprovalInfo?>((ref) => null);
+class _NullableValueNotifier<T> extends Notifier<T> {
+  final T Function() _initialValue;
+  late T _value;
+
+  _NullableValueNotifier(this._initialValue);
+
+  @override
+  T build() {
+    _value = _initialValue();
+    return _value;
+  }
+
+  void set(T value) {
+    _value = value;
+    state = value;
+  }
+}
+
+final approvalProvider =
+    NotifierProvider<_NullableValueNotifier<ApprovalInfo?>, ApprovalInfo?>(
+  () => _NullableValueNotifier(() => null),
+);
 
 // ---- Ask User Provider ----
 
@@ -817,7 +881,10 @@ class AskUserInfo {
       required this.msgId});
 }
 
-final askUserProvider = StateProvider<AskUserInfo?>((ref) => null);
+final askUserProvider =
+    NotifierProvider<_NullableValueNotifier<AskUserInfo?>, AskUserInfo?>(
+  () => _NullableValueNotifier(() => null),
+);
 
 String _newAskUserMessageId() =>
     'askuser-${DateTime.now().millisecondsSinceEpoch}';
@@ -874,11 +941,16 @@ String _summarizeAskUserResponse(
 // ---- Session Info Provider ----
 
 final sessionInfoProvider =
-    StateProvider<proto.SessionInfoData?>((ref) => null);
+    NotifierProvider<_NullableValueNotifier<proto.SessionInfoData?>, proto.SessionInfoData?>(
+  () => _NullableValueNotifier(() => null),
+);
 
 // ---- Current mode provider ----
 
-final currentModeProvider = StateProvider<String>((ref) => 'supervised');
+final currentModeProvider =
+    NotifierProvider<_ValueNotifier<String>, String>(
+  () => _ValueNotifier(() => 'supervised'),
+);
 
 // ---- Message Dispatcher ----
 
@@ -889,8 +961,8 @@ final messageDispatcherProvider = Provider<Function>((ref) {
     switch (msg.type) {
       case 'session_info':
         final data = proto.SessionInfoData.fromJson(msg.data!);
-        ref.read(sessionInfoProvider.notifier).state = data;
-        ref.read(currentModeProvider.notifier).state = data.mode;
+        ref.read(sessionInfoProvider.notifier).set(data);
+        ref.read(currentModeProvider.notifier).set(data.mode);
         break;
 
       case 'text':
@@ -927,8 +999,8 @@ final messageDispatcherProvider = Provider<Function>((ref) {
 
       case 'status':
         final data = proto.StatusData.fromJson(msg.data!);
-        ref.read(agentStatusProvider.notifier).state = data.status;
-        ref.read(agentStatusMessageProvider.notifier).state = data.message;
+        ref.read(agentStatusProvider.notifier).set(data.status);
+        ref.read(agentStatusMessageProvider.notifier).set(data.message);
         break;
 
       case 'tool_call':
@@ -943,15 +1015,15 @@ final messageDispatcherProvider = Provider<Function>((ref) {
 
       case 'approval_request':
         final data = proto.ApprovalRequestData.fromJson(msg.data!);
-        ref.read(approvalProvider.notifier).state = ApprovalInfo(
-            id: data.id, toolName: data.toolName, input: data.input);
+        ref.read(approvalProvider.notifier).set(ApprovalInfo(
+            id: data.id, toolName: data.toolName, input: data.input));
         break;
 
       case 'approval_result':
         final data = proto.ApprovalResultData.fromJson(msg.data!);
         final approval = ref.read(approvalProvider);
         if (approval != null && approval.id == data.id) {
-          ref.read(approvalProvider.notifier).state = null;
+          ref.read(approvalProvider.notifier).set(null);
         }
         break;
 
@@ -960,11 +1032,11 @@ final messageDispatcherProvider = Provider<Function>((ref) {
         final detail = data.questions.map(_describeAskUserQuestion).join('\n');
         final amsgId = _newAskUserMessageId();
         chatNotifier.addAskUserRequest(amsgId, data.title, detail);
-        ref.read(askUserProvider.notifier).state = AskUserInfo(
+        ref.read(askUserProvider.notifier).set(AskUserInfo(
             id: data.id,
             title: data.title,
             questions: data.questions,
-            msgId: amsgId);
+            msgId: amsgId));
         break;
 
       case 'ask_user_response':
@@ -978,7 +1050,7 @@ final messageDispatcherProvider = Provider<Function>((ref) {
                   askUser.questions, data.answers, data.status),
             );
           }
-          ref.read(askUserProvider.notifier).state = null;
+          ref.read(askUserProvider.notifier).set(null);
         }
         break;
 
@@ -993,7 +1065,7 @@ final messageDispatcherProvider = Provider<Function>((ref) {
           color: data.color,
           parentId: data.parentId,
         );
-        ref.read(subagentProvider.notifier).state = agents;
+        ref.read(subagentProvider.notifier).set(agents);
         break;
 
       case 'subagent_text':
@@ -1008,7 +1080,7 @@ final messageDispatcherProvider = Provider<Function>((ref) {
         if (agents.containsKey(data.agentId)) {
           agents[data.agentId] =
               agents[data.agentId]!.copyWith(status: data.status);
-          ref.read(subagentProvider.notifier).state = agents;
+          ref.read(subagentProvider.notifier).set(agents);
         }
         break;
 
@@ -1023,14 +1095,14 @@ final messageDispatcherProvider = Provider<Function>((ref) {
             success: data.success,
             summary: data.summary,
           );
-          ref.read(subagentProvider.notifier).state = agents;
+          ref.read(subagentProvider.notifier).set(agents);
         }
         // Auto-dismiss after 3 seconds
         Future.delayed(const Duration(seconds: 3), () {
           final current =
               Map<String, SubagentInfo>.from(ref.read(subagentProvider));
           current.remove(data.agentId);
-          ref.read(subagentProvider.notifier).state = current;
+          ref.read(subagentProvider.notifier).set(current);
         });
         break;
 
