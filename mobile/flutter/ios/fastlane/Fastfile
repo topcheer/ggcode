@@ -49,7 +49,7 @@ platform :ios do
     )
   end
 
-  desc "Upload to TestFlight"
+  desc "Upload to TestFlight (uses flutter-built IPA if available)"
   lane :upload_testflight do
     setup_ci
 
@@ -65,28 +65,40 @@ platform :ios do
       app_identifier: "gg.ai.ggcode.mobile"
     )
 
-    gym(
-      scheme: "Runner",
-      configuration: "Release",
-      export_method: "app-store",
-      output_directory: "../../builds/ios",
-      output_name: "GGCode.ipa",
-      export_options: {
-        signingStyle: "automatic",
-        manageAppVersionAndBuildNumber: true
-      }
-    )
-
-    upload_to_testflight(
-      api_key: api_key,
-      skip_waiting_for_build_processing: true,
-      skip_submission: true,
-      distribute_only: false
-    )
+    # Use flutter-built IPA if available (has correct version from pubspec.yaml)
+    flutter_ipa = File.expand_path("../../build/ios/ipa/ggcode_mobile.ipa", __FILE__)
+    if File.exist?(flutter_ipa)
+      UI.message("Using flutter-built IPA: #{flutter_ipa}")
+      upload_to_testflight(
+        api_key: api_key,
+        ipa: flutter_ipa,
+        skip_waiting_for_build_processing: true,
+        skip_submission: true,
+        distribute_only: false
+      )
+    else
+      UI.message("No flutter IPA found, building with gym...")
+      gym(
+        scheme: "Runner",
+        configuration: "Release",
+        export_method: "app-store",
+        output_directory: "../../builds/ios",
+        output_name: "GGCode.ipa",
+        export_options: {
+          signingStyle: "automatic"
+        }
+      )
+      upload_to_testflight(
+        api_key: api_key,
+        skip_waiting_for_build_processing: true,
+        skip_submission: true,
+        distribute_only: false
+      )
+    end
   end
 
   desc "Upload pre-built IPA to TestFlight (no build step)"
-  lane :upload_to_testflight_only do
+  lane :upload_ipa do |options|
     api_key = app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
       issuer_id: ENV["APP_STORE_ISSUER_ID"],
@@ -94,8 +106,12 @@ platform :ios do
       in_house: false
     )
 
+    ipa_path = options[:ipa] || File.expand_path("../../build/ios/ipa/ggcode_mobile.ipa", __FILE__)
+    UI.user_error!("IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
+
     upload_to_testflight(
       api_key: api_key,
+      ipa: ipa_path,
       skip_waiting_for_build_processing: true,
       skip_submission: true,
       distribute_only: false
@@ -104,14 +120,6 @@ platform :ios do
 
   desc "Build and submit for App Store Review"
   lane :release do
-    gym(
-      scheme: "Runner",
-      configuration: "Release",
-      export_method: "app-store",
-      output_directory: "../../builds/ios",
-      output_name: "GGCode.ipa"
-    )
-
     api_key = app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
       issuer_id: ENV["APP_STORE_ISSUER_ID"],
@@ -119,11 +127,28 @@ platform :ios do
       in_house: false
     )
 
+    # Use flutter-built IPA if available
+    flutter_ipa = File.expand_path("../../build/ios/ipa/ggcode_mobile.ipa", __FILE__)
+    ipa_to_upload = nil
+    if File.exist?(flutter_ipa)
+      UI.message("Using flutter-built IPA: #{flutter_ipa}")
+      ipa_to_upload = flutter_ipa
+    else
+      UI.message("No flutter IPA found, building with gym...")
+      gym(
+        scheme: "Runner",
+        configuration: "Release",
+        export_method: "app-store",
+        output_directory: "../../builds/ios",
+        output_name: "GGCode.ipa"
+      )
+    end
+
     retry_count = 0
     max_retries = 3
 
     begin
-      upload_to_app_store(
+      upload_options = {
         api_key: api_key,
         skip_metadata: false,
         skip_screenshots: false,
@@ -134,7 +159,9 @@ platform :ios do
         submission_information: {
           add_id_info_uses_idfa: false
         }
-      )
+      }
+      upload_options[:ipa] = ipa_to_upload if ipa_to_upload
+      upload_to_app_store(upload_options)
     rescue => exception
       retry_count += 1
       if retry_count < max_retries

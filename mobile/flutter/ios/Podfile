@@ -37,52 +37,5 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
-
-    # Ensure minimum deployment target
-    target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-    end
-
-    # Inject missing PrivacyInfo.xcprivacy into pods flagged by Apple
-    needs_manifest = ['GTMSessionFetcher', 'GoogleToolboxForMac']
-    needs_manifest.each do |pod_name|
-      next unless target.name.start_with?(pod_name)
-
-      phase = target.shell_script_build_phases.find { |p| p.name == 'Inject Privacy Manifest' }
-      unless phase
-        phase = target.new_shell_script_build_phase('Inject Privacy Manifest')
-      end
-      phase.shell_script = <<~SCRIPT
-        MANIFEST_PATH="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/#{target.name}.framework/PrivacyInfo.xcprivacy"
-        if [ ! -f "${MANIFEST_PATH}" ]; then
-          cat > "${MANIFEST_PATH}" << 'EOF'
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-          <key>NSPrivacyTracking</key>
-          <false/>
-          <key>NSPrivacyTrackingDomains</key>
-          <array/>
-          <key>NSPrivacyCollectedDataTypes</key>
-          <array/>
-          <key>NSPrivacyAccessedAPITypes</key>
-          <array>
-            <dict>
-              <key>NSPrivacyAccessedAPIType</key>
-              <string>NSPrivacyAccessedAPITypeUserDefaults</string>
-              <key>NSPrivacyAccessedAPITypeReasons</key>
-              <array>
-                <string>CA92.1</string>
-              </array>
-            </dict>
-          </array>
-        </dict>
-        </plist>
-        EOF
-          echo "Injected PrivacyInfo.xcprivacy into #{target.name}.framework"
-        fi
-      SCRIPT
-    end
   end
 end

@@ -45,12 +45,12 @@ Build iOS Release Archive
 [bundle exec] fastlane ios upload_testflight
 ```
 
-Upload to TestFlight
+Upload to TestFlight (uses flutter-built IPA if available)
 
-### ios upload_to_testflight_only
+### ios upload_ipa
 
 ```sh
-[bundle exec] fastlane ios upload_to_testflight_only
+[bundle exec] fastlane ios upload_ipa
 ```
 
 Upload pre-built IPA to TestFlight (no build step)
