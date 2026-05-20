@@ -324,9 +324,14 @@ platform :ios do
 
     versions = app.get_app_store_versions
     versions.each do |v|
-      UI.message("  Version: \"#{v.version_string}\" State: #{v.app_store_state} ID: #{v.id}")
-      builds = v.get_builds
-      builds.each { |b| UI.message("    Build: #{b.version} (#{b.build_version}) processing=#{b.processing}") }
+      UI.message("  Version: \"#{v.version_string}\" State: #{v.app_store_state} ID: #{v.id} Platform: #{v.platform}")
+    end
+
+    client = Spaceship::ConnectAPI.client
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    UI.message("Submissions (#{submissions.size}):")
+    submissions.each do |s|
+      UI.message("  #{s.id}: state=#{s.state}")
     end
   end
 
@@ -378,7 +383,6 @@ platform :ios do
     ios_version = versions.find { |v| v.platform == "IOS" && v.app_store_state == "PREPARE_FOR_SUBMISSION" }
 
     if ios_version.nil?
-      # No iOS version — create one
       UI.message("Creating iOS version #{version_str}...")
       client.post_app_store_version(
         app_id: app.id,
@@ -406,31 +410,10 @@ platform :ios do
       UI.message("Updating version string from #{ios_version.version_string} to #{version_str}...")
       client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { versionString: version_str })
     end
-    UI.success("Version: #{version_str} platform=#{ios_version.platform}")
+    UI.success("Version: #{version_str} platform=#{ios_version.platform} id=#{ios_version.id}")
 
-    # ── Step 2: Find or create a single review submission ──
-    UI.message("Step 2: Finding review submission...")
-    submissions = client.get_review_submissions(app_id: app.id).to_models
-    existing = submissions.find { |s| s.state.nil? || s.state.empty? }
-
-    if existing
-      UI.success("Using existing submission #{existing.id}")
-    elsif !submissions.empty?
-      # There are submissions but none are draft — can't create another
-      # (Apple limits to 5 concurrent submissions)
-      UI.error("Found #{submissions.size} existing submissions (states: #{submissions.map(&:state).join(', ')}). Cannot create a new one.")
-      UI.message("Cancel existing submissions in App Store Connect first, or wait for them to complete.")
-      submission = submissions.first
-      UI.message("Will try to continue with submission #{submission.id}")
-    else
-      UI.message("Creating new review submission...")
-      resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
-      submission = resp.to_models.first
-      UI.success("Created submission #{submission.id}")
-    end
-
-    # ── Step 3: Associate latest valid build ─────────────
-    UI.message("Step 3: Associating latest build...")
+    # ── Step 2: Associate latest valid build ─────────────
+    UI.message("Step 2: Associating latest build...")
     builds = client.get_builds(
       filter: { app: app.id },
       sort: "-uploadedDate",
@@ -440,12 +423,12 @@ platform :ios do
     valid_builds = builds.select { |b| b.processing_state == "VALID" }
     UI.user_error!("No VALID builds found. Upload one first.") if valid_builds.empty?
     build = valid_builds.first
-    UI.message("  Build: #{build.version} (#{build.id}) platform=#{begin; build.platform; rescue; '?'; end})")
+    UI.message("  Build: #{build.version} platform=#{begin; build.platform; rescue; '?'; end}")
     ios_version.select_build(build_id: build.id)
     UI.success("Build associated!")
 
-    # ── Step 4: Set review notes ─────────────────────────
-    UI.message("Step 4: Setting review notes...")
+    # ── Step 3: Set review notes ─────────────────────────
+    UI.message("Step 3: Setting review notes...")
     begin
       review_detail = nil
       begin
@@ -470,8 +453,8 @@ platform :ios do
       UI.error("Review notes: #{e.message}")
     end
 
-    # ── Step 5: Upload metadata + screenshots via deliver ─
-    UI.message("Step 5: Uploading metadata + screenshots...")
+    # ── Step 4: Upload metadata + screenshots via deliver ─
+    UI.message("Step 4: Uploading metadata + screenshots...")
     begin
       deliver(
         api_key: api_key,
@@ -493,23 +476,32 @@ platform :ios do
       UI.message("Retry 'fastlane full_release' or upload manually.")
     end
 
-    # ── Step 6: Confirm submission for review ────────────
-    UI.message("Step 6: Confirming submission for review...")
+    # ── Step 5: Submit for review (one submission, never duplicate) ──
+    UI.message("Step 5: Submitting for review...")
     begin
-      # Re-fetch submissions to get latest state
       submissions = client.get_review_submissions(app_id: app.id).to_models
-      draft = submissions.find { |s| s.state.nil? || s.state.empty? }
 
-      if draft
-        # Add this version as a submission item
-        client.post_review_submission_item(review_submission_id: draft.id, app_store_version_id: ios_version.id)
-        UI.success("Submission #{draft.id} confirmed with version #{version_str}!")
+      # Look for an existing submission that we can add items to
+      existing = submissions.first
+
+      if existing && existing.state == "READY_FOR_REVIEW"
+        UI.message("Submission #{existing.id} already in READY_FOR_REVIEW — nothing to do.")
+      elsif existing && (existing.state.nil? || existing.state.empty? || existing.state == "UNSURE")
+        # Existing draft — add version to it
+        UI.message("Adding version to existing submission #{existing.id}...")
+        client.post_review_submission_item(review_submission_id: existing.id, app_store_version_id: ios_version.id)
+        UI.success("Version added to submission #{existing.id}!")
+      elsif existing
+        UI.message("Existing submission #{existing.id} state=#{existing.state} — skipping submit.")
+        UI.message("Manage submissions manually in App Store Connect.")
       else
-        # No draft — create one
+        # No submissions at all — create one and add version
+        UI.message("Creating review submission...")
         resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
         new_sub = resp.to_models.first
+        UI.message("Created submission #{new_sub.id}, adding version...")
         client.post_review_submission_item(review_submission_id: new_sub.id, app_store_version_id: ios_version.id)
-        UI.success("Created and confirmed submission #{new_sub.id} with version #{version_str}!")
+        UI.success("Created and submitted #{new_sub.id} with version #{version_str}!")
       end
     rescue => e
       UI.error("Submit: #{e.message}")
