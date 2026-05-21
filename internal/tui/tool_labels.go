@@ -49,7 +49,9 @@ func describeTool(lang Language, toolName, rawArgs string) toolPresentation {
 			detail = argString(args, "pattern")
 		}
 		detail = displayToolTarget(detail)
-		return toolPresentation{DisplayName: desc, Detail: detail, Activity: desc}
+		pretty := prettifyToolName(toolName)
+		displayName := desc + " (" + pretty + ")"
+		return toolPresentation{DisplayName: displayName, Detail: detail, Activity: desc}
 	}
 
 	switch toolName {
