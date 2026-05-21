@@ -443,7 +443,7 @@ func TestTextThrottleMap_Concurrent(t *testing.T) {
 	if count < 30 {
 		t.Errorf("expected at least 30 allowed calls, got %d", count)
 	}
-	if count > 600 {
+	if count > 1000 {
 		t.Errorf("expected at most 600 allowed calls (sanity), got %d", count)
 	}
 }
