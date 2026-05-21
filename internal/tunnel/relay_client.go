@@ -212,7 +212,9 @@ func (rc *RelayClient) readPump(done func()) {
 	}
 }
 
-// Send encrypts and sends a GatewayMessage to the relay.
+// Send encrypts and enqueues a GatewayMessage for delivery to the relay.
+// It applies backpressure instead of dropping when the relay is reconnecting
+// or the write pump is briefly saturated.
 // Safe to call after Close — returns error instead of panicking.
 func (rc *RelayClient) Send(msg GatewayMessage) error {
 	rc.closeMu.Lock()
@@ -259,8 +261,8 @@ func (rc *RelayClient) Send(msg GatewayMessage) error {
 	select {
 	case rc.sendCh <- data:
 		return nil
-	default:
-		return fmt.Errorf("send channel full")
+	case <-rc.stopCh:
+		return fmt.Errorf("relay client closed")
 	}
 }
 

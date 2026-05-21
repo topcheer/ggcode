@@ -40,6 +40,39 @@ func TestRenderStreamingMarkdownClosesOpenFences(t *testing.T) {
 	}
 }
 
+func TestSplitMarkdownBlocksPreservesListMarkers(t *testing.T) {
+	text := "Intro paragraph.\n\n- first item\n- second item\n"
+	blocks := splitMarkdownBlocks(text)
+	if len(blocks) != 2 {
+		t.Fatalf("block count = %d, want 2", len(blocks))
+	}
+	if !strings.Contains(blocks[1], "- first item") || !strings.Contains(blocks[1], "- second item") {
+		t.Fatalf("list block lost markdown markers: %q", blocks[1])
+	}
+}
+
+func TestRenderStreamingMarkdownPreservesRenderedLists(t *testing.T) {
+	text := "Intro paragraph.\n\n- first item\n- second item\n"
+	rendered, _ := renderStreamingMarkdown(text, 80, nil)
+	if !strings.Contains(rendered, "first item") || !strings.Contains(rendered, "second item") {
+		t.Fatalf("expected rendered list items, got %q", rendered)
+	}
+}
+
+func TestRenderStreamingMarkdownPreservesGrowingList(t *testing.T) {
+	initial := "Intro paragraph.\n\n- first"
+	rendered1, cache := renderStreamingMarkdown(initial, 80, nil)
+	if !strings.Contains(rendered1, "first") {
+		t.Fatalf("expected initial partial list content, got %q", rendered1)
+	}
+
+	updated := "Intro paragraph.\n\n- first item\n- second item\n"
+	rendered2, _ := renderStreamingMarkdown(updated, 80, &cache)
+	if !strings.Contains(rendered2, "first item") || !strings.Contains(rendered2, "second item") {
+		t.Fatalf("expected grown list items, got %q", rendered2)
+	}
+}
+
 func TestAssistantItemFinalRenderClearsStreamingCaches(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewAssistantItem("a1", styles)
@@ -65,5 +98,17 @@ func TestAssistantItemFinalRenderClearsStreamingCaches(t *testing.T) {
 	}
 	if len(item.reasoningCache.blocks) != 0 {
 		t.Fatal("expected reasoning cache to be cleared after final render")
+	}
+}
+
+func TestAssistantItemFinishedRenderPreservesLists(t *testing.T) {
+	styles := DefaultStyles()
+	item := NewAssistantItem("a2", styles)
+	item.SetText("Intro paragraph.\n\n- first item\n- second item\n")
+	item.SetFinished()
+
+	rendered := item.Render(80)
+	if !strings.Contains(rendered, "first item") || !strings.Contains(rendered, "second item") {
+		t.Fatalf("finished render missing list items: %q", rendered)
 	}
 }

@@ -131,6 +131,21 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     state = state.copyWith(status: ConnectionStatus.disconnected);
   }
 
+  Future<void> leaveSession() async {
+    service?.dispose();
+    service = null;
+    _clearUiProjection();
+    _sessionId = '';
+    _lastAppliedEventId = '';
+    _awaitingReplay = false;
+    _recentEventIds.clear();
+    _recentEventSet.clear();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_resumeSessionIdKey);
+    await prefs.remove(_resumeEventIdKey);
+    state = TunnelConnectionState(status: ConnectionStatus.disconnected);
+  }
+
   void send(Map<String, dynamic> data) {
     final msg = proto.WsMessage(
         type: data['type'] as String? ?? 'message',
@@ -447,12 +462,22 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'sharing_stopped':
-        chatNotifier.clearMessages();
-        ref.read(subagentProvider.notifier).clear();
+        _clearUiProjection();
         service?.disconnect();
         state = state.copyWith(status: ConnectionStatus.disconnected);
         break;
     }
+  }
+
+  void _clearUiProjection() {
+    ref.read(chatProvider.notifier).clearMessages();
+    ref.read(subagentProvider.notifier).clear();
+    ref.read(approvalProvider.notifier).set(null);
+    ref.read(askUserProvider.notifier).set(null);
+    ref.read(sessionInfoProvider.notifier).set(null);
+    ref.read(currentModeProvider.notifier).set('supervised');
+    ref.read(agentStatusProvider.notifier).set('idle');
+    ref.read(agentStatusMessageProvider.notifier).set('');
   }
 
   Future<void> _saveUrl(String url) async {

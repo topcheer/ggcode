@@ -74,17 +74,19 @@ func splitMarkdownBlocks(src string) []string {
 	return blocks
 }
 
-type lineNode interface {
-	Lines() *text.Segments
-}
-
 func extractBlockMarkdown(node ast.Node, source []byte) string {
-	if block, ok := node.(lineNode); ok {
-		lines := block.Lines()
+	switch node.(type) {
+	case *ast.List, *ast.Blockquote:
+		if start, end, ok := rawBlockSpan(node, source); ok {
+			return string(source[start:end])
+		}
+	}
+	lines := node.Lines()
+	if lines != nil && lines.Len() > 0 {
 		var sb strings.Builder
 		for i := 0; i < lines.Len(); i++ {
 			seg := lines.At(i)
-			sb.Write((&seg).Value(source))
+			sb.Write(seg.Value(source))
 		}
 		return sb.String()
 	}
@@ -102,6 +104,43 @@ func extractBlockMarkdown(node ast.Node, source []byte) string {
 		return ast.WalkContinue, nil
 	})
 	return sb.String()
+}
+
+func rawBlockSpan(node ast.Node, source []byte) (int, int, bool) {
+	start := node.Pos()
+	if start < 0 || start >= len(source) {
+		return 0, 0, false
+	}
+	end := start
+	_ = ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if n.Type() == ast.TypeBlock {
+			lines := n.Lines()
+			for i := 0; i < lines.Len(); i++ {
+				seg := lines.At(i)
+				if seg.Stop > end {
+					end = seg.Stop
+				}
+			}
+		}
+		switch v := n.(type) {
+		case *ast.Text:
+			if v.Segment.Stop > end {
+				end = v.Segment.Stop
+			}
+		case *ast.String:
+			if stop := v.Pos() + len(v.Value); stop > end {
+				end = stop
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	if end <= start {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 func closeOpenFences(text string) string {
