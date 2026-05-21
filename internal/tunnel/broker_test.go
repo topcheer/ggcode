@@ -636,6 +636,46 @@ func TestBrokerSeedHistory(t *testing.T) {
 	}
 }
 
+func TestBrokerSeedHistoryLargeBurstDoesNotDrop(t *testing.T) {
+	sess := NewSession("wss://test.local")
+	rc, err := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	sess.client = rc
+
+	b := NewBroker(sess)
+	defer b.Stop()
+
+	const historyCount = 400
+	history := make([]HistoryEntry, 0, historyCount)
+	for i := 0; i < historyCount; i++ {
+		history = append(history, HistoryEntry{Role: "user", Content: "hello"})
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		count := 0
+		for count < historyCount {
+			<-rc.sendCh
+			count++
+		}
+		done <- count
+	}()
+
+	b.SeedHistory(history)
+
+	select {
+	case count := <-done:
+		if count != historyCount {
+			t.Fatalf("expected %d relayed history events, got %d", historyCount, count)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for %d relayed history events", historyCount)
+	}
+}
+
 func TestBrokerEventIDsIncrease(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

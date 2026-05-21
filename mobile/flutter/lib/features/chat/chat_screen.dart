@@ -132,7 +132,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             ),
             Text(
               info?.model ?? '',
-              style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5)),
+              style:
+                  TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5)),
             ),
           ],
         ),
@@ -140,26 +141,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           _ConnectionStatusIcon(
             status: connState.status,
             onDisconnectTap: () {
+              final isDisconnected =
+                  connState.status == ConnectionStatus.disconnected;
               showDialog(
                 context: context,
                 builder: (ctx) => AlertDialog(
                   backgroundColor: const Color(0xFF1A1A2E),
-                  title: const Text('断开连接', style: TextStyle(color: Colors.white)),
-                  content: const Text(
-                    '确定要断开与服务端的连接吗？',
+                  title: Text(
+                    isDisconnected ? '返回连接页' : '断开连接',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  content: Text(
+                    isDisconnected
+                        ? '当前连接已经断开。返回后会回到扫码 / 连接界面。'
+                        : '确定要断开与服务端的连接吗？',
                     style: TextStyle(color: Colors.white70),
                   ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(ctx).pop(),
-                      child: const Text('取消', style: TextStyle(color: Colors.white54)),
+                      child: const Text('取消',
+                          style: TextStyle(color: Colors.white54)),
                     ),
                     TextButton(
-                      onPressed: () {
+                      onPressed: () async {
                         Navigator.of(ctx).pop();
-                        ref.read(connectionProvider.notifier).disconnect();
+                        await ref
+                            .read(connectionProvider.notifier)
+                            .leaveSession();
                       },
-                      child: const Text('断开', style: TextStyle(color: Colors.redAccent)),
+                      child: Text(
+                        isDisconnected ? '返回' : '断开',
+                        style: const TextStyle(color: Colors.redAccent),
+                      ),
                     ),
                   ],
                 ),
@@ -220,7 +234,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             onTap: () => _closeTab(id),
                             child: const Padding(
                               padding: EdgeInsets.only(left: 4),
-                              child: Icon(Icons.close, size: 14, color: Colors.white38),
+                              child: Icon(Icons.close,
+                                  size: 14, color: Colors.white38),
                             ),
                           ),
                       ],
@@ -282,7 +297,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           // Header line: icon + tool name + detail
           Row(
             children: [
-              Icon(Icons.build, size: 13, color: Colors.blueAccent.withOpacity(0.7)),
+              Icon(Icons.build,
+                  size: 13, color: Colors.blueAccent.withOpacity(0.7)),
               const SizedBox(width: 4),
               Text(
                 '($prettyName)',
@@ -297,7 +313,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 Expanded(
                   child: Text(
                     msg.toolDetail!,
-                    style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11),
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.4), fontSize: 11),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -305,9 +322,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               ],
               if (hasResult)
                 Icon(
-                  msg.isToolError ? Icons.error_outline : Icons.check_circle_outline,
+                  msg.isToolError
+                      ? Icons.error_outline
+                      : Icons.check_circle_outline,
                   size: 13,
-                  color: msg.isToolError ? Colors.redAccent.withOpacity(0.7) : Colors.green.withOpacity(0.6),
+                  color: msg.isToolError
+                      ? Colors.redAccent.withOpacity(0.7)
+                      : Colors.green.withOpacity(0.6),
                 ),
             ],
           ),
@@ -384,7 +405,9 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                 Text(
                   widget.isError ? 'Error' : 'Result',
                   style: TextStyle(
-                    color: widget.isError ? Colors.redAccent.withOpacity(0.8) : Colors.white38,
+                    color: widget.isError
+                        ? Colors.redAccent.withOpacity(0.8)
+                        : Colors.white38,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
                   ),
@@ -446,7 +469,7 @@ class _ConnectionStatusIcon extends StatelessWidget {
         return IconButton(
           icon: const Icon(Icons.cloud_off, size: 20, color: Colors.redAccent),
           onPressed: onDisconnectTap,
-          tooltip: 'Disconnected — tap to leave',
+          tooltip: 'Disconnected — tap to return to connect',
         );
     }
   }

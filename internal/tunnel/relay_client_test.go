@@ -183,24 +183,40 @@ func TestRelayClientSendEncryptsPayload(t *testing.T) {
 	}
 }
 
-func TestRelayClientSendChannelFull(t *testing.T) {
+func TestRelayClientSendWaitsForBufferSpace(t *testing.T) {
 	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rc.Close()
 
-	// Fill the send channel (capacity 256)
-	for i := 0; i < 256; i++ {
+	for i := 0; i < cap(rc.sendCh); i++ {
 		rc.sendCh <- []byte("filler")
 	}
 
-	// Next send should get "send channel full" error
-	err = rc.Send(GatewayMessage{Type: "test"})
-	if err == nil {
-		t.Error("expected error when channel is full")
+	done := make(chan error, 1)
+	go func() {
+		done <- rc.Send(GatewayMessage{Type: "test"})
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Send should wait for space instead of failing immediately: %v", err)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if !strings.Contains(err.Error(), "full") {
-		t.Errorf("error should mention full: %v", err)
+
+	select {
+	case <-rc.sendCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out freeing buffer space")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Send should succeed after space is available: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Send did not resume after buffer space was freed")
 	}
 }
