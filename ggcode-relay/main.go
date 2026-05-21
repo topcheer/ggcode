@@ -63,6 +63,7 @@ func newRoom(token string) *room {
 // This guarantees strict FIFO ordering — replay and live broadcasts never interleave.
 
 type peer struct {
+	hub      *hub
 	room     *room
 	role     string // "server" or "client"
 	conn     *websocket.Conn
@@ -92,7 +93,15 @@ func (p *peer) writePump() {
 	defer p.conn.Close()
 
 	// 1. Send connected confirmation directly.
-	connMsg, _ := json.Marshal(relayMessage{Type: "connected", Role: p.role})
+	p.room.mu.RLock()
+	connState := relayMessage{
+		Type:      "connected",
+		Role:      p.role,
+		SessionID: p.room.sessionID,
+		Count:     len(p.room.history),
+	}
+	p.room.mu.RUnlock()
+	connMsg, _ := json.Marshal(connState)
 	if err := p.conn.WriteMessage(websocket.TextMessage, connMsg); err != nil {
 		return
 	}
@@ -190,6 +199,8 @@ func (p *peer) readPump(h *hub) {
 		}
 
 		p.room.mu.Lock()
+		var persistMsg relayMessage
+		var persistRaw []byte
 		if p.role == "server" {
 			if msg.SessionID != "" && msg.SessionID != p.room.sessionID {
 				p.room.sessionID = msg.SessionID
@@ -203,6 +214,8 @@ func (p *peer) readPump(h *hub) {
 					typ:       msg.Type,
 					raw:       append([]byte(nil), raw...),
 				})
+				persistMsg = msg
+				persistRaw = append([]byte(nil), raw...)
 			}
 			for c := range p.room.clients {
 				if c.ready {
@@ -215,6 +228,11 @@ func (p *peer) readPump(h *hub) {
 			}
 		}
 		p.room.mu.Unlock()
+		if p.role == "server" && p.hub != nil && p.hub.store != nil && persistMsg.SessionID != "" {
+			if err := p.hub.store.persistEvent(p.room.token, persistMsg, persistRaw); err != nil {
+				log.Printf("[relay] persist event failed: room=%s err=%v", p.room.token[:8], err)
+			}
+		}
 	}
 }
 
@@ -279,11 +297,12 @@ func (r *room) resumePlan(clientSessionID, lastEventID string) (string, []roomEv
 
 type hub struct {
 	rooms map[string]*room
+	store *relayStore
 	mu    sync.RWMutex
 }
 
-func newHub() *hub {
-	return &hub{rooms: make(map[string]*room)}
+func newHub(store *relayStore) *hub {
+	return &hub{rooms: make(map[string]*room), store: store}
 }
 
 func (h *hub) getOrCreateRoom(token string) *room {
@@ -293,6 +312,15 @@ func (h *hub) getOrCreateRoom(token string) *room {
 		return r
 	}
 	r := newRoom(token)
+	if h.store != nil {
+		state, err := h.store.loadRoom(token)
+		if err != nil {
+			log.Printf("[relay] load room failed: room=%s err=%v", token[:8], err)
+		} else {
+			r.sessionID = state.sessionID
+			r.history = state.history
+		}
+	}
 	h.rooms[token] = r
 	return r
 }
@@ -340,6 +368,7 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := &peer{
+		hub:    h,
 		room:   rm,
 		role:   role,
 		conn:   conn,
@@ -366,7 +395,25 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	h := newHub()
+	store, err := openRelayStore(relayDBPath(), defaultCleanupAge)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.cleanupExpired(time.Now()); err != nil {
+		log.Printf("[relay] initial cleanup failed: %v", err)
+	}
+	go func() {
+		ticker := time.NewTicker(defaultCleanupInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := store.cleanupExpired(time.Now()); err != nil {
+				log.Printf("[relay] periodic cleanup failed: %v", err)
+			}
+		}
+	}()
+
+	h := newHub(store)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.handleWS)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

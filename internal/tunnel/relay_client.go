@@ -32,8 +32,15 @@ type RelayClient struct {
 	stopOnce       sync.Once
 	gracefulOnce   sync.Once
 
-	onMessage func(msg GatewayMessage)
-	mu        sync.RWMutex
+	onMessage   func(msg GatewayMessage)
+	onConnected func(info RelayConnectedState)
+	mu          sync.RWMutex
+}
+
+type RelayConnectedState struct {
+	Role         string
+	SessionID    string
+	HistoryCount int
 }
 
 func NewRelayClient(relayURL, token string) (*RelayClient, error) {
@@ -196,6 +203,7 @@ func (rc *RelayClient) readPump(done func()) {
 			SessionID  string `json:"session_id,omitempty"`
 			EventID    string `json:"event_id,omitempty"`
 			StreamID   string `json:"stream_id,omitempty"`
+			Count      int    `json:"count,omitempty"`
 			Nonce      string `json:"nonce,omitempty"`
 			Ciphertext string `json:"ciphertext,omitempty"`
 			Role       string `json:"role,omitempty"`
@@ -207,6 +215,16 @@ func (rc *RelayClient) readPump(done func()) {
 		switch relayMsg.Type {
 		case "connected":
 			debug.Log("tunnel", "relay-client: confirmed as %s", relayMsg.Role)
+			rc.mu.RLock()
+			fn := rc.onConnected
+			rc.mu.RUnlock()
+			if fn != nil {
+				fn(RelayConnectedState{
+					Role:         relayMsg.Role,
+					SessionID:    relayMsg.SessionID,
+					HistoryCount: relayMsg.Count,
+				})
+			}
 
 		case "pong":
 			// keepalive
@@ -298,6 +316,12 @@ func (rc *RelayClient) OnMessage(fn func(msg GatewayMessage)) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.onMessage = fn
+}
+
+func (rc *RelayClient) OnConnected(fn func(info RelayConnectedState)) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.onConnected = fn
 }
 
 func (rc *RelayClient) Close() {

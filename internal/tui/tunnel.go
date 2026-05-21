@@ -156,22 +156,14 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		m.handleTunnelClientCommand(cmd)
 	})
 
-	// Send initial session info.
-	msg.broker.SendSessionInfo(tunnel.SessionInfoData{
-		Workspace: m.sidebarWorkingDirectory(),
-		Model:     m.activeModel,
-		Provider:  m.activeVendor,
-		Mode:      m.mode.String(),
-		Version:   version.Version,
-	})
-
-	// Seed history from current session messages.
-	if msgs := m.currentSessionMessages(); len(msgs) > 0 {
-		history := tunnelMessagesToHistory(msgs)
-		if len(history) > 0 {
-			msg.broker.SeedHistory(history)
-		}
+	snapshot := m.tunnelSnapshot()
+	msg.broker.SendSessionInfo(snapshot.SessionInfo)
+	if len(snapshot.History) > 0 {
+		msg.broker.SeedHistory(snapshot.History)
 	}
+	msg.broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+		return m.tunnelSnapshot()
+	})
 
 	// Open QR overlay with connect URL and QR code.
 	m.openQROverlayDirect(
@@ -566,6 +558,22 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 		}
 	}
 	return history
+}
+
+func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
+	snapshot := tunnel.BrokerSnapshot{
+		SessionInfo: tunnel.SessionInfoData{
+			Workspace: m.sidebarWorkingDirectory(),
+			Model:     m.activeModel,
+			Provider:  m.activeVendor,
+			Mode:      m.mode.String(),
+			Version:   version.Version,
+		},
+	}
+	if msgs := m.currentSessionMessages(); len(msgs) > 0 {
+		snapshot.History = tunnelMessagesToHistory(msgs)
+	}
+	return snapshot
 }
 
 // truncateRunes truncates a string to maxRunes runes, appending suffix if truncated.

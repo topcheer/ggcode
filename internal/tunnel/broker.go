@@ -43,11 +43,19 @@ type Broker struct {
 	waitMu      sync.Mutex
 	sendWaiters map[string]chan struct{}
 
+	snapshotMu       sync.RWMutex
+	snapshotProvider func() BrokerSnapshot
+
 	// Text batching
 	textMu   sync.Mutex
 	textBuf  map[string]*textEntry // msgID → accumulated text entry
 	textTick *time.Ticker
 	textDone chan struct{} // stop text flusher
+}
+
+type BrokerSnapshot struct {
+	SessionInfo SessionInfoData
+	History     []HistoryEntry
 }
 
 func NewBroker(sess *Session) *Broker {
@@ -73,6 +81,9 @@ func NewBroker(sess *Session) *Broker {
 		if b.onCommand != nil {
 			b.onCommand(msg)
 		}
+	})
+	sess.OnConnected(func(info RelayConnectedState) {
+		b.handleRelayConnected(info)
 	})
 
 	return b
@@ -184,6 +195,12 @@ func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
 	b.onCommand = fn
 }
 
+func (b *Broker) SetSnapshotProvider(fn func() BrokerSnapshot) {
+	b.snapshotMu.Lock()
+	defer b.snapshotMu.Unlock()
+	b.snapshotProvider = fn
+}
+
 func (b *Broker) Stop() {
 	b.stopOnce.Do(func() {
 		b.textTick.Stop()
@@ -252,6 +269,35 @@ func (b *Broker) StopSharingGracefully(timeout time.Duration) {
 	if b.session != nil {
 		b.session.StopGracefully(timeout)
 	}
+}
+
+func (b *Broker) handleRelayConnected(info RelayConnectedState) {
+	if info.Role != "server" {
+		return
+	}
+	currentSessionID := b.SessionID()
+	if info.SessionID == currentSessionID && info.HistoryCount > 0 {
+		return
+	}
+	b.snapshotMu.RLock()
+	provider := b.snapshotProvider
+	b.snapshotMu.RUnlock()
+	if provider == nil {
+		return
+	}
+	snapshot := provider()
+	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 {
+		return
+	}
+	go func() {
+		debug.Log("tunnel", "broker: relay state lost (relay session=%q count=%d local session=%q), reseeding snapshot", info.SessionID, info.HistoryCount, currentSessionID)
+		if snapshot.SessionInfo != (SessionInfoData{}) {
+			b.SendSessionInfo(snapshot.SessionInfo)
+		}
+		if len(snapshot.History) > 0 {
+			b.SeedHistory(snapshot.History)
+		}
+	}()
 }
 
 // ─── User message ───
