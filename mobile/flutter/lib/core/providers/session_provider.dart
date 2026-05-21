@@ -71,6 +71,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await cache.initialize();
     final workspaceKey = ref.read(workspaceCacheProvider).selectedWorkspaceKey;
     if (workspaceKey == null || workspaceKey.isEmpty) return;
+    _restoreCachedAgentStatus(workspaceKey: workspaceKey);
     await connectWorkspace(workspaceKey, clearState: false);
   }
 
@@ -80,6 +81,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await cache.initialize();
     final url = cache.urlForWorkspace(workspaceKey);
     if (url == null || url.isEmpty) return;
+    _restoreCachedAgentStatus(workspaceKey: workspaceKey);
     await connect(url, clearState: clearState);
   }
 
@@ -227,10 +229,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _recentEventIds.clear();
           _recentEventSet.clear();
         }
-        unawaited(ref
-            .read(workspaceCacheProvider.notifier)
-            .registerLiveSession(sessionId, ref.read(sessionInfoProvider),
-                lastEventId: _lastAppliedEventId));
+        unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
+            sessionId, ref.read(sessionInfoProvider),
+            lastEventId: _lastAppliedEventId));
+        _restoreCachedAgentStatus(sessionId: sessionId);
         _persistResumeState();
         break;
 
@@ -247,10 +249,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
         }
-        unawaited(ref
-            .read(workspaceCacheProvider.notifier)
-            .registerLiveSession(_sessionId, ref.read(sessionInfoProvider),
-                lastEventId: _lastAppliedEventId));
+        unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
+            _sessionId, ref.read(sessionInfoProvider),
+            lastEventId: _lastAppliedEventId));
+        _restoreCachedAgentStatus(sessionId: _sessionId);
         _persistResumeState();
         break;
 
@@ -260,9 +262,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         ref.read(sessionInfoProvider.notifier).set(data);
         ref.read(currentModeProvider.notifier).set(data.mode);
         _markEventApplied(msg);
-        unawaited(ref
-            .read(workspaceCacheProvider.notifier)
-            .registerLiveSession(
+        unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
               data,
               lastEventId: _lastAppliedEventId,
@@ -272,13 +272,27 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'user_message':
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
-          final text = msg.data!['text'] as String? ?? '';
-          if (text.isNotEmpty) {
-            chatNotifier.addRemoteUserMessage(
-              text,
-              messageId: msg.eventId ??
-                  'remote-user-${DateTime.now().millisecondsSinceEpoch}',
+          final data = proto.MessageData.fromJson(msg.data!);
+          final displayText =
+              data.displayText.isNotEmpty ? data.displayText : data.text;
+          final remoteMessageId = msg.eventId ??
+              'remote-user-${DateTime.now().millisecondsSinceEpoch}';
+          if (data.kind == 'cron') {
+            chatNotifier.addRemoteSystemMessage(
+              displayText.isNotEmpty ? displayText : '⏰ Cron job triggered',
+              messageId: remoteMessageId,
             );
+          } else if (displayText.isNotEmpty) {
+            final absorbed = chatNotifier.bindRemoteUserMessage(
+              data.text,
+              remoteMessageId: remoteMessageId,
+            );
+            if (!absorbed) {
+              chatNotifier.addRemoteUserMessage(
+                displayText,
+                messageId: remoteMessageId,
+              );
+            }
           }
         }
         _markEventApplied(msg);
@@ -318,8 +332,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (msg.data != null) {
           final status = msg.data!['status'] as String? ?? 'idle';
           final message = msg.data!['message'] as String? ?? '';
-          ref.read(agentStatusProvider.notifier).set(status);
-          ref.read(agentStatusMessageProvider.notifier).set(message);
+          _setAgentStatus(status, message);
         }
         _markEventApplied(msg);
         break;
@@ -545,8 +558,32 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     ref.read(askUserProvider.notifier).set(null);
     ref.read(sessionInfoProvider.notifier).set(null);
     ref.read(currentModeProvider.notifier).set('supervised');
-    ref.read(agentStatusProvider.notifier).set('idle');
-    ref.read(agentStatusMessageProvider.notifier).set('');
+    _setAgentStatus('idle', '');
+  }
+
+  void _setAgentStatus(String status, String message) {
+    ref.read(agentStatusProvider.notifier).set(status);
+    ref.read(agentStatusMessageProvider.notifier).set(message);
+  }
+
+  void _restoreCachedAgentStatus({String? workspaceKey, String? sessionId}) {
+    final cacheState = ref.read(workspaceCacheProvider);
+    final resolvedWorkspaceKey = workspaceKey ??
+        cacheState.selectedWorkspaceKey ??
+        cacheState.liveWorkspaceKey;
+    final resolvedSessionId =
+        sessionId ?? cacheState.selectedSessionId ?? cacheState.liveSessionId;
+    if (resolvedWorkspaceKey == null ||
+        resolvedWorkspaceKey.isEmpty ||
+        resolvedSessionId == null ||
+        resolvedSessionId.isEmpty) {
+      return;
+    }
+    final snapshot = ref
+        .read(workspaceCacheProvider.notifier)
+        .snapshotFor(resolvedWorkspaceKey, resolvedSessionId);
+    if (snapshot == null) return;
+    _setAgentStatus(snapshot.agentStatus, snapshot.agentStatusMessage);
   }
 
   Future<void> _saveUrl(String url) async {
@@ -589,11 +626,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _recentEventSet.clear();
       _lastAppliedEventId = '';
       _sessionId = sessionId;
-      unawaited(ref
-          .read(workspaceCacheProvider.notifier)
-          .observeLiveSession(sessionId,
-              previousSessionId: previousSessionId,
-              sessionInfo: ref.read(sessionInfoProvider)));
+      unawaited(ref.read(workspaceCacheProvider.notifier).observeLiveSession(
+          sessionId,
+          previousSessionId: previousSessionId,
+          sessionInfo: ref.read(sessionInfoProvider)));
     } else if (sessionId.isNotEmpty) {
       _sessionId = sessionId;
     }
@@ -700,13 +736,14 @@ class ChatMessage {
   });
 
   ChatMessage copyWith({
+    String? id,
     String? text,
     bool? streaming,
     String? toolResult,
     bool? isToolError,
   }) =>
       ChatMessage(
-        id: id,
+        id: id ?? this.id,
         sourceId: sourceId,
         sourceName: sourceName,
         sourceColor: sourceColor,
@@ -753,7 +790,8 @@ class ChatMessage {
         toolDetail: json['tool_detail'] as String?,
         toolResult: json['tool_result'] as String?,
         isToolError: json['is_tool_error'] as bool? ?? false,
-        time: DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
+        time:
+            DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
       );
 }
 
@@ -793,6 +831,37 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         time: DateTime.now(),
       ),
     ];
+  }
+
+  void addRemoteSystemMessage(String text, {String? messageId}) {
+    state = [
+      ...state,
+      ChatMessage(
+        id: messageId ?? 'remote-system-${_msgCounter++}',
+        text: text,
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  bool bindRemoteUserMessage(String text, {required String remoteMessageId}) {
+    final idx = state.lastIndexWhere(
+      (m) =>
+          m.isUser &&
+          m.sourceId == null &&
+          m.toolName == null &&
+          m.text == text &&
+          m.id.startsWith('user-'),
+    );
+    if (idx < 0) {
+      return false;
+    }
+    final msg = state[idx];
+    state = [
+      for (int i = 0; i < state.length; i++)
+        if (i == idx) msg.copyWith(id: remoteMessageId) else state[i],
+    ];
+    return true;
   }
 
   void clearMessages() {
@@ -1249,3 +1318,802 @@ final sessionInfoProvider = NotifierProvider<
 final currentModeProvider = NotifierProvider<_ValueNotifier<String>, String>(
   () => _ValueNotifier(() => 'supervised'),
 );
+
+class WorkspaceRecord {
+  final String key;
+  final String url;
+  final String displayName;
+  final String lastSessionId;
+  final DateTime lastOpenedAt;
+
+  const WorkspaceRecord({
+    required this.key,
+    required this.url,
+    required this.displayName,
+    required this.lastSessionId,
+    required this.lastOpenedAt,
+  });
+
+  WorkspaceRecord copyWith({
+    String? url,
+    String? displayName,
+    String? lastSessionId,
+    DateTime? lastOpenedAt,
+  }) =>
+      WorkspaceRecord(
+        key: key,
+        url: url ?? this.url,
+        displayName: displayName ?? this.displayName,
+        lastSessionId: lastSessionId ?? this.lastSessionId,
+        lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'key': key,
+        'url': url,
+        'display_name': displayName,
+        'last_session_id': lastSessionId,
+        'last_opened_at': lastOpenedAt.toIso8601String(),
+      };
+
+  factory WorkspaceRecord.fromJson(Map<String, dynamic> json) =>
+      WorkspaceRecord(
+        key: json['key'] as String? ?? '',
+        url: json['url'] as String? ?? '',
+        displayName: json['display_name'] as String? ?? '',
+        lastSessionId: json['last_session_id'] as String? ?? '',
+        lastOpenedAt:
+            DateTime.tryParse(json['last_opened_at'] as String? ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0),
+      );
+}
+
+class CachedSessionRecord {
+  final String workspaceKey;
+  final String sessionId;
+  final String title;
+  final String model;
+  final String provider;
+  final String mode;
+  final String version;
+  final String lastEventId;
+  final DateTime lastUpdatedAt;
+
+  const CachedSessionRecord({
+    required this.workspaceKey,
+    required this.sessionId,
+    required this.title,
+    required this.model,
+    required this.provider,
+    required this.mode,
+    required this.version,
+    required this.lastEventId,
+    required this.lastUpdatedAt,
+  });
+
+  CachedSessionRecord copyWith({
+    String? title,
+    String? model,
+    String? provider,
+    String? mode,
+    String? version,
+    String? lastEventId,
+    DateTime? lastUpdatedAt,
+  }) =>
+      CachedSessionRecord(
+        workspaceKey: workspaceKey,
+        sessionId: sessionId,
+        title: title ?? this.title,
+        model: model ?? this.model,
+        provider: provider ?? this.provider,
+        mode: mode ?? this.mode,
+        version: version ?? this.version,
+        lastEventId: lastEventId ?? this.lastEventId,
+        lastUpdatedAt: lastUpdatedAt ?? this.lastUpdatedAt,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'workspace_key': workspaceKey,
+        'session_id': sessionId,
+        'title': title,
+        'model': model,
+        'provider': provider,
+        'mode': mode,
+        'version': version,
+        'last_event_id': lastEventId,
+        'last_updated_at': lastUpdatedAt.toIso8601String(),
+      };
+
+  factory CachedSessionRecord.fromJson(Map<String, dynamic> json) =>
+      CachedSessionRecord(
+        workspaceKey: json['workspace_key'] as String? ?? '',
+        sessionId: json['session_id'] as String? ?? '',
+        title: json['title'] as String? ?? '',
+        model: json['model'] as String? ?? '',
+        provider: json['provider'] as String? ?? '',
+        mode: json['mode'] as String? ?? '',
+        version: json['version'] as String? ?? '',
+        lastEventId: json['last_event_id'] as String? ?? '',
+        lastUpdatedAt:
+            DateTime.tryParse(json['last_updated_at'] as String? ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0),
+      );
+}
+
+class CachedSessionSnapshot {
+  final List<ChatMessage> messages;
+  final Map<String, SubagentInfo> subagents;
+  final proto.SessionInfoData? sessionInfo;
+  final String agentStatus;
+  final String agentStatusMessage;
+
+  const CachedSessionSnapshot({
+    required this.messages,
+    required this.subagents,
+    required this.sessionInfo,
+    this.agentStatus = 'idle',
+    this.agentStatusMessage = '',
+  });
+
+  Map<String, dynamic> toJson() => {
+        'messages': messages.map((m) => m.toJson()).toList(),
+        'subagents': subagents.map((k, v) => MapEntry(k, v.toJson())),
+        'session_info': _sessionInfoToJson(sessionInfo),
+        'agent_status': agentStatus,
+        'agent_status_message': agentStatusMessage,
+      };
+
+  factory CachedSessionSnapshot.fromJson(Map<String, dynamic> json) {
+    final rawSubagents = json['subagents'] as Map<String, dynamic>? ?? {};
+    return CachedSessionSnapshot(
+      messages: (json['messages'] as List<dynamic>? ?? const [])
+          .map((m) => ChatMessage.fromJson(Map<String, dynamic>.from(m)))
+          .toList(),
+      subagents: rawSubagents.map((key, value) => MapEntry(
+            key,
+            SubagentInfo.fromJson(Map<String, dynamic>.from(value)),
+          )),
+      sessionInfo: _sessionInfoFromJson(
+        json['session_info'] is Map<String, dynamic>
+            ? Map<String, dynamic>.from(json['session_info'])
+            : null,
+      ),
+      agentStatus: json['agent_status'] as String? ?? 'idle',
+      agentStatusMessage: json['agent_status_message'] as String? ?? '',
+    );
+  }
+}
+
+class WorkspaceCacheState {
+  final bool initialized;
+  final Map<String, WorkspaceRecord> workspaces;
+  final Map<String, CachedSessionRecord> sessions;
+  final Map<String, CachedSessionSnapshot> snapshots;
+  final String? selectedWorkspaceKey;
+  final String? selectedSessionId;
+  final String? liveWorkspaceKey;
+  final String? liveSessionId;
+
+  const WorkspaceCacheState({
+    required this.initialized,
+    required this.workspaces,
+    required this.sessions,
+    required this.snapshots,
+    this.selectedWorkspaceKey,
+    this.selectedSessionId,
+    this.liveWorkspaceKey,
+    this.liveSessionId,
+  });
+
+  WorkspaceCacheState copyWith({
+    bool? initialized,
+    Map<String, WorkspaceRecord>? workspaces,
+    Map<String, CachedSessionRecord>? sessions,
+    Map<String, CachedSessionSnapshot>? snapshots,
+    Object? selectedWorkspaceKey = _workspaceCacheSentinel,
+    Object? selectedSessionId = _workspaceCacheSentinel,
+    Object? liveWorkspaceKey = _workspaceCacheSentinel,
+    Object? liveSessionId = _workspaceCacheSentinel,
+  }) =>
+      WorkspaceCacheState(
+        initialized: initialized ?? this.initialized,
+        workspaces: workspaces ?? this.workspaces,
+        sessions: sessions ?? this.sessions,
+        snapshots: snapshots ?? this.snapshots,
+        selectedWorkspaceKey:
+            identical(selectedWorkspaceKey, _workspaceCacheSentinel)
+                ? this.selectedWorkspaceKey
+                : selectedWorkspaceKey as String?,
+        selectedSessionId: identical(selectedSessionId, _workspaceCacheSentinel)
+            ? this.selectedSessionId
+            : selectedSessionId as String?,
+        liveWorkspaceKey: identical(liveWorkspaceKey, _workspaceCacheSentinel)
+            ? this.liveWorkspaceKey
+            : liveWorkspaceKey as String?,
+        liveSessionId: identical(liveSessionId, _workspaceCacheSentinel)
+            ? this.liveSessionId
+            : liveSessionId as String?,
+      );
+}
+
+const _workspaceCacheSentinel = Object();
+const _workspaceSnapshotPrefix = 'ggcode_workspace_snapshot_v1_';
+
+final workspaceCacheProvider =
+    NotifierProvider<WorkspaceCacheNotifier, WorkspaceCacheState>(
+  WorkspaceCacheNotifier.new,
+);
+
+class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
+  static const _indexKey = 'ggcode_workspace_cache_v1';
+  static const _maxWorkspaces = 10;
+  static const _maxSessionsPerWorkspace = 20;
+  static const _maxMessagesPerSession = 300;
+
+  SharedPreferences? _prefs;
+  bool _initializing = false;
+  Timer? _flushTimer;
+  final Set<String> _dirtySnapshots = <String>{};
+
+  @override
+  WorkspaceCacheState build() => const WorkspaceCacheState(
+        initialized: false,
+        workspaces: {},
+        sessions: {},
+        snapshots: {},
+      );
+
+  Future<void> initialize() async {
+    if (state.initialized || _initializing) return;
+    _initializing = true;
+    try {
+      _prefs ??= await SharedPreferences.getInstance();
+      final raw = _prefs!.getString(_indexKey);
+      if (raw == null || raw.isEmpty) {
+        state = state.copyWith(initialized: true);
+        return;
+      }
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      final workspaces = <String, WorkspaceRecord>{};
+      for (final item in json['workspaces'] as List<dynamic>? ?? const []) {
+        final record =
+            WorkspaceRecord.fromJson(Map<String, dynamic>.from(item));
+        if (record.key.isNotEmpty) {
+          workspaces[record.key] = record;
+        }
+      }
+      final sessions = <String, CachedSessionRecord>{};
+      for (final item in json['sessions'] as List<dynamic>? ?? const []) {
+        final record =
+            CachedSessionRecord.fromJson(Map<String, dynamic>.from(item));
+        if (record.workspaceKey.isNotEmpty && record.sessionId.isNotEmpty) {
+          sessions[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
+              record;
+        }
+      }
+      state = WorkspaceCacheState(
+        initialized: true,
+        workspaces: workspaces,
+        sessions: sessions,
+        snapshots: {},
+        selectedWorkspaceKey: json['selected_workspace_key'] as String?,
+        selectedSessionId: json['selected_session_id'] as String?,
+      );
+      final workspaceKey = state.selectedWorkspaceKey;
+      final sessionId = state.selectedSessionId;
+      if (workspaceKey != null &&
+          workspaceKey.isNotEmpty &&
+          sessionId != null &&
+          sessionId.isNotEmpty) {
+        await _ensureSnapshotLoaded(workspaceKey, sessionId);
+      }
+    } finally {
+      _initializing = false;
+    }
+  }
+
+  String? urlForWorkspace(String workspaceKey) =>
+      state.workspaces[workspaceKey]?.url;
+
+  Future<void> activateWorkspaceUrl(String url) async {
+    await initialize();
+    final normalized = normalizeTunnelUrl(url);
+    final key = _workspaceKeyForUrl(normalized);
+    final now = DateTime.now();
+    final current = state.workspaces[key];
+    final sessions = sessionsForWorkspace(key);
+    final selectedSessionId = current?.lastSessionId.isNotEmpty == true
+        ? current!.lastSessionId
+        : (sessions.isNotEmpty ? sessions.first.sessionId : null);
+    final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces)
+      ..[key] = (current ??
+              WorkspaceRecord(
+                key: key,
+                url: normalized,
+                displayName: _workspaceDisplayName(normalized, null),
+                lastSessionId: selectedSessionId ?? '',
+                lastOpenedAt: now,
+              ))
+          .copyWith(url: normalized, lastOpenedAt: now);
+    state = state.copyWith(
+      workspaces: _prunedWorkspaces(workspaces),
+      selectedWorkspaceKey: key,
+      selectedSessionId: selectedSessionId,
+      liveWorkspaceKey: key,
+      liveSessionId: state.liveWorkspaceKey == key ? state.liveSessionId : null,
+    );
+    await _persistIndex();
+    if (selectedSessionId != null && selectedSessionId.isNotEmpty) {
+      await _ensureSnapshotLoaded(key, selectedSessionId);
+    }
+  }
+
+  Future<void> clearSelection() async {
+    await initialize();
+    state = state.copyWith(
+      selectedWorkspaceKey: null,
+      selectedSessionId: null,
+      liveWorkspaceKey: null,
+      liveSessionId: null,
+    );
+    await _persistIndex();
+  }
+
+  void markDisconnected() {
+    state = state.copyWith(liveWorkspaceKey: null, liveSessionId: null);
+  }
+
+  Future<void> selectSession(String workspaceKey, String sessionId) async {
+    await initialize();
+    state = state.copyWith(
+      selectedWorkspaceKey: workspaceKey,
+      selectedSessionId: sessionId,
+    );
+    await _ensureSnapshotLoaded(workspaceKey, sessionId);
+    await _persistIndex();
+  }
+
+  Future<void> registerLiveSession(
+    String sessionId,
+    proto.SessionInfoData? sessionInfo, {
+    String? lastEventId,
+  }) async {
+    if (sessionId.isEmpty) return;
+    await initialize();
+    final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    if (workspaceKey == null || workspaceKey.isEmpty) return;
+    final now = DateTime.now();
+    final previousLiveSessionId = state.liveSessionId;
+    final lastKnownLiveSessionId =
+        state.workspaces[workspaceKey]?.lastSessionId;
+    final selectionFollowedLive = state.selectedWorkspaceKey == workspaceKey &&
+        (state.selectedSessionId == null ||
+            state.selectedSessionId!.isEmpty ||
+            state.selectedSessionId == previousLiveSessionId ||
+            (previousLiveSessionId == null &&
+                state.selectedSessionId == lastKnownLiveSessionId));
+    final sessionKey = _sessionCacheKey(workspaceKey, sessionId);
+    final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
+      ..[sessionKey] = (state.sessions[sessionKey] ??
+              CachedSessionRecord(
+                workspaceKey: workspaceKey,
+                sessionId: sessionId,
+                title: _sessionTitle(sessionInfo, sessionId),
+                model: sessionInfo?.model ?? '',
+                provider: sessionInfo?.provider ?? '',
+                mode: sessionInfo?.mode ?? '',
+                version: sessionInfo?.version ?? '',
+                lastEventId: lastEventId ?? '',
+                lastUpdatedAt: now,
+              ))
+          .copyWith(
+        title: _sessionTitle(sessionInfo, sessionId),
+        model: sessionInfo?.model ?? state.sessions[sessionKey]?.model,
+        provider: sessionInfo?.provider ?? state.sessions[sessionKey]?.provider,
+        mode: sessionInfo?.mode ?? state.sessions[sessionKey]?.mode,
+        version: sessionInfo?.version ?? state.sessions[sessionKey]?.version,
+        lastEventId: lastEventId ?? state.sessions[sessionKey]?.lastEventId,
+        lastUpdatedAt: now,
+      );
+    final workspace = state.workspaces[workspaceKey];
+    final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
+    if (workspace != null) {
+      workspaces[workspaceKey] = workspace.copyWith(
+        displayName: _workspaceDisplayName(workspace.url, sessionInfo),
+        lastSessionId: sessionId,
+        lastOpenedAt: now,
+      );
+    }
+    state = state.copyWith(
+      workspaces: _prunedWorkspaces(workspaces),
+      sessions: _prunedSessions(sessions),
+      liveWorkspaceKey: workspaceKey,
+      liveSessionId: sessionId,
+      selectedWorkspaceKey:
+          selectionFollowedLive ? workspaceKey : state.selectedWorkspaceKey,
+      selectedSessionId:
+          selectionFollowedLive ? sessionId : state.selectedSessionId,
+    );
+    await _persistIndex();
+    if (selectionFollowedLive) {
+      await _ensureSnapshotLoaded(workspaceKey, sessionId);
+    }
+  }
+
+  Future<void> observeLiveSession(
+    String sessionId, {
+    required String previousSessionId,
+    proto.SessionInfoData? sessionInfo,
+  }) async {
+    await registerLiveSession(
+      sessionId,
+      sessionInfo,
+      lastEventId: state
+          .sessions[_sessionCacheKey(
+              state.liveWorkspaceKey ?? state.selectedWorkspaceKey ?? '',
+              sessionId)]
+          ?.lastEventId,
+    );
+    if (previousSessionId.isEmpty || previousSessionId == sessionId) return;
+  }
+
+  Future<void> updateLiveCursor(String sessionId, String lastEventId) async {
+    if (sessionId.isEmpty) return;
+    await initialize();
+    final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    if (workspaceKey == null || workspaceKey.isEmpty) return;
+    final key = _sessionCacheKey(workspaceKey, sessionId);
+    final record = state.sessions[key];
+    if (record == null) return;
+    final updated = Map<String, CachedSessionRecord>.from(state.sessions)
+      ..[key] = record.copyWith(
+        lastEventId: lastEventId,
+        lastUpdatedAt: DateTime.now(),
+      );
+    state = state.copyWith(sessions: updated);
+    _scheduleFlush();
+  }
+
+  Future<void> captureLiveProjection({
+    required List<ChatMessage> messages,
+    required Map<String, SubagentInfo> subagents,
+    required proto.SessionInfoData? sessionInfo,
+    required String agentStatus,
+    required String agentStatusMessage,
+    required String lastEventId,
+  }) async {
+    await initialize();
+    final workspaceKey = state.liveWorkspaceKey;
+    final sessionId = state.liveSessionId;
+    if (workspaceKey == null ||
+        workspaceKey.isEmpty ||
+        sessionId == null ||
+        sessionId.isEmpty) {
+      return;
+    }
+    final trimmedMessages = messages.length <= _maxMessagesPerSession
+        ? messages
+        : messages.sublist(messages.length - _maxMessagesPerSession);
+    final snapshot = CachedSessionSnapshot(
+      messages: List<ChatMessage>.from(trimmedMessages),
+      subagents: Map<String, SubagentInfo>.from(subagents),
+      sessionInfo: sessionInfo,
+      agentStatus: agentStatus,
+      agentStatusMessage: agentStatusMessage,
+    );
+    final snapshotKey = _sessionCacheKey(workspaceKey, sessionId);
+    final snapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots)
+      ..[snapshotKey] = snapshot;
+    final now = DateTime.now();
+    final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
+      ..[snapshotKey] = (state.sessions[snapshotKey] ??
+              CachedSessionRecord(
+                workspaceKey: workspaceKey,
+                sessionId: sessionId,
+                title: _sessionTitle(sessionInfo, sessionId),
+                model: sessionInfo?.model ?? '',
+                provider: sessionInfo?.provider ?? '',
+                mode: sessionInfo?.mode ?? '',
+                version: sessionInfo?.version ?? '',
+                lastEventId: lastEventId,
+                lastUpdatedAt: now,
+              ))
+          .copyWith(
+        title: _sessionTitle(sessionInfo, sessionId),
+        model: sessionInfo?.model ?? state.sessions[snapshotKey]?.model,
+        provider:
+            sessionInfo?.provider ?? state.sessions[snapshotKey]?.provider,
+        mode: sessionInfo?.mode ?? state.sessions[snapshotKey]?.mode,
+        version: sessionInfo?.version ?? state.sessions[snapshotKey]?.version,
+        lastEventId: lastEventId,
+        lastUpdatedAt: now,
+      );
+    final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
+    final workspace = workspaces[workspaceKey];
+    if (workspace != null) {
+      workspaces[workspaceKey] = workspace.copyWith(
+        displayName: _workspaceDisplayName(workspace.url, sessionInfo),
+        lastSessionId: sessionId,
+        lastOpenedAt: now,
+      );
+    }
+    state = state.copyWith(
+      workspaces: _prunedWorkspaces(workspaces),
+      sessions: _prunedSessions(sessions),
+      snapshots: snapshots,
+    );
+    _dirtySnapshots.add(snapshotKey);
+    _scheduleFlush();
+  }
+
+  List<WorkspaceRecord> sortedWorkspaces() {
+    final items = state.workspaces.values.toList()
+      ..sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
+    return items;
+  }
+
+  List<CachedSessionRecord> sessionsForWorkspace(String workspaceKey) {
+    final items = state.sessions.values
+        .where((record) => record.workspaceKey == workspaceKey)
+        .toList()
+      ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+    return items;
+  }
+
+  CachedSessionSnapshot? snapshotFor(String workspaceKey, String sessionId) =>
+      state.snapshots[_sessionCacheKey(workspaceKey, sessionId)];
+
+  Future<void> _ensureSnapshotLoaded(
+      String workspaceKey, String sessionId) async {
+    final key = _sessionCacheKey(workspaceKey, sessionId);
+    if (state.snapshots.containsKey(key)) return;
+    _prefs ??= await SharedPreferences.getInstance();
+    final raw = _prefs!.getString(_snapshotStorageKey(key));
+    if (raw == null || raw.isEmpty) return;
+    final snapshot =
+        CachedSessionSnapshot.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    state = state.copyWith(
+      snapshots: Map<String, CachedSessionSnapshot>.from(state.snapshots)
+        ..[key] = snapshot,
+    );
+  }
+
+  void _scheduleFlush() {
+    _flushTimer?.cancel();
+    _flushTimer = Timer(const Duration(milliseconds: 350), () async {
+      await _flushDirtySnapshots();
+      await _persistIndex();
+    });
+  }
+
+  Future<void> _flushDirtySnapshots() async {
+    if (_dirtySnapshots.isEmpty) return;
+    _prefs ??= await SharedPreferences.getInstance();
+    final pending = List<String>.from(_dirtySnapshots);
+    _dirtySnapshots.clear();
+    for (final key in pending) {
+      final snapshot = state.snapshots[key];
+      if (snapshot == null) continue;
+      await _prefs!.setString(
+        _snapshotStorageKey(key),
+        jsonEncode(snapshot.toJson()),
+      );
+    }
+  }
+
+  Future<void> _persistIndex() async {
+    _prefs ??= await SharedPreferences.getInstance();
+    final orderedSessions = state.sessions.values.toList()
+      ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+    final payload = {
+      'workspaces':
+          sortedWorkspaces().map((workspace) => workspace.toJson()).toList(),
+      'sessions': orderedSessions.map((session) => session.toJson()).toList(),
+      'selected_workspace_key': state.selectedWorkspaceKey,
+      'selected_session_id': state.selectedSessionId,
+    };
+    await _prefs!.setString(_indexKey, jsonEncode(payload));
+  }
+
+  Map<String, WorkspaceRecord> _prunedWorkspaces(
+      Map<String, WorkspaceRecord> workspaces) {
+    final ordered = workspaces.values.toList()
+      ..sort((a, b) => b.lastOpenedAt.compareTo(a.lastOpenedAt));
+    final keep = ordered.take(_maxWorkspaces).toList();
+    return <String, WorkspaceRecord>{
+      for (final workspace in keep) workspace.key: workspace,
+    };
+  }
+
+  Map<String, CachedSessionRecord> _prunedSessions(
+      Map<String, CachedSessionRecord> sessions) {
+    final result = <String, CachedSessionRecord>{};
+    final grouped = <String, List<CachedSessionRecord>>{};
+    for (final record in sessions.values) {
+      grouped
+          .putIfAbsent(record.workspaceKey, () => <CachedSessionRecord>[])
+          .add(record);
+    }
+    for (final entry in grouped.entries) {
+      entry.value.sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
+      for (final record in entry.value.take(_maxSessionsPerWorkspace)) {
+        result[_sessionCacheKey(record.workspaceKey, record.sessionId)] =
+            record;
+      }
+    }
+    return result;
+  }
+}
+
+final displayedMessagesProvider = Provider<List<ChatMessage>>((ref) {
+  final cache = ref.watch(workspaceCacheProvider);
+  if (_isViewingLive(cache)) {
+    return ref.watch(chatProvider);
+  }
+  final workspaceKey = cache.selectedWorkspaceKey;
+  final sessionId = cache.selectedSessionId;
+  if (workspaceKey == null ||
+      workspaceKey.isEmpty ||
+      sessionId == null ||
+      sessionId.isEmpty) {
+    return const [];
+  }
+  return ref
+          .watch(workspaceCacheProvider.notifier)
+          .snapshotFor(workspaceKey, sessionId)
+          ?.messages ??
+      const [];
+});
+
+final displayedSubagentProvider = Provider<Map<String, SubagentInfo>>((ref) {
+  final cache = ref.watch(workspaceCacheProvider);
+  if (_isViewingLive(cache)) {
+    return ref.watch(subagentProvider);
+  }
+  final workspaceKey = cache.selectedWorkspaceKey;
+  final sessionId = cache.selectedSessionId;
+  if (workspaceKey == null ||
+      workspaceKey.isEmpty ||
+      sessionId == null ||
+      sessionId.isEmpty) {
+    return const {};
+  }
+  return ref
+          .watch(workspaceCacheProvider.notifier)
+          .snapshotFor(workspaceKey, sessionId)
+          ?.subagents ??
+      const {};
+});
+
+final displayedSessionInfoProvider = Provider<proto.SessionInfoData?>((ref) {
+  final cache = ref.watch(workspaceCacheProvider);
+  if (_isViewingLive(cache)) {
+    return ref.watch(sessionInfoProvider);
+  }
+  final workspaceKey = cache.selectedWorkspaceKey;
+  final sessionId = cache.selectedSessionId;
+  if (workspaceKey == null ||
+      workspaceKey.isEmpty ||
+      sessionId == null ||
+      sessionId.isEmpty) {
+    return null;
+  }
+  return ref
+      .watch(workspaceCacheProvider.notifier)
+      .snapshotFor(workspaceKey, sessionId)
+      ?.sessionInfo;
+});
+
+final displayedAgentStatusProvider = Provider<String>((ref) {
+  final cache = ref.watch(workspaceCacheProvider);
+  if (_isViewingLive(cache)) {
+    return ref.watch(agentStatusProvider);
+  }
+  final workspaceKey = cache.selectedWorkspaceKey;
+  final sessionId = cache.selectedSessionId;
+  if (workspaceKey == null ||
+      workspaceKey.isEmpty ||
+      sessionId == null ||
+      sessionId.isEmpty) {
+    return 'idle';
+  }
+  return ref
+          .watch(workspaceCacheProvider.notifier)
+          .snapshotFor(workspaceKey, sessionId)
+          ?.agentStatus ??
+      'idle';
+});
+
+final displayedAgentStatusMessageProvider = Provider<String>((ref) {
+  final cache = ref.watch(workspaceCacheProvider);
+  if (_isViewingLive(cache)) {
+    return ref.watch(agentStatusMessageProvider);
+  }
+  final workspaceKey = cache.selectedWorkspaceKey;
+  final sessionId = cache.selectedSessionId;
+  if (workspaceKey == null ||
+      workspaceKey.isEmpty ||
+      sessionId == null ||
+      sessionId.isEmpty) {
+    return '';
+  }
+  return ref
+          .watch(workspaceCacheProvider.notifier)
+          .snapshotFor(workspaceKey, sessionId)
+          ?.agentStatusMessage ??
+      '';
+});
+
+final isHistoricalViewProvider = Provider<bool>((ref) {
+  final cache = ref.watch(workspaceCacheProvider);
+  final selectedWorkspaceKey = cache.selectedWorkspaceKey;
+  final selectedSessionId = cache.selectedSessionId;
+  if (selectedWorkspaceKey == null ||
+      selectedWorkspaceKey.isEmpty ||
+      selectedSessionId == null ||
+      selectedSessionId.isEmpty) {
+    return false;
+  }
+  return !_isViewingLive(cache);
+});
+
+final canSendMessagesProvider = Provider<bool>((ref) {
+  final conn = ref.watch(connectionProvider);
+  return conn.status == ConnectionStatus.connected &&
+      !ref.watch(isHistoricalViewProvider);
+});
+
+bool _isViewingLive(WorkspaceCacheState state) {
+  final workspaceKey = state.selectedWorkspaceKey;
+  final sessionId = state.selectedSessionId;
+  if (workspaceKey == null ||
+      workspaceKey.isEmpty ||
+      sessionId == null ||
+      sessionId.isEmpty) {
+    return true;
+  }
+  return workspaceKey == state.liveWorkspaceKey &&
+      sessionId == state.liveSessionId;
+}
+
+String _workspaceKeyForUrl(String url) =>
+    base64UrlEncode(utf8.encode(url)).replaceAll('=', '');
+
+String _sessionCacheKey(String workspaceKey, String sessionId) =>
+    '$workspaceKey::$sessionId';
+
+String _snapshotStorageKey(String sessionKey) =>
+    '$_workspaceSnapshotPrefix${base64UrlEncode(utf8.encode(sessionKey)).replaceAll('=', '')}';
+
+Map<String, dynamic>? _sessionInfoToJson(proto.SessionInfoData? info) {
+  if (info == null) return null;
+  return {
+    'workspace': info.workspace,
+    'model': info.model,
+    'provider': info.provider,
+    'mode': info.mode,
+    'version': info.version,
+  };
+}
+
+proto.SessionInfoData? _sessionInfoFromJson(Map<String, dynamic>? json) {
+  if (json == null) return null;
+  return proto.SessionInfoData.fromJson(json);
+}
+
+String _workspaceDisplayName(String url, proto.SessionInfoData? sessionInfo) {
+  final workspace = sessionInfo?.workspace ?? '';
+  if (workspace.isNotEmpty) {
+    final parts = workspace.split('/');
+    return parts.isNotEmpty ? parts.last : workspace;
+  }
+  final uri = Uri.tryParse(url);
+  return uri?.host.isNotEmpty == true ? uri!.host : 'Workspace';
+}
+
+String _sessionTitle(proto.SessionInfoData? sessionInfo, String sessionId) {
+  final workspace = sessionInfo?.workspace ?? '';
+  final label = workspace.isNotEmpty ? workspace.split('/').last : 'Session';
+  final shortId = sessionId.length > 8 ? sessionId.substring(0, 8) : sessionId;
+  return '$label · $shortId';
+}

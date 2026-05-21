@@ -20,7 +20,9 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
   @override
   Widget build(BuildContext context) {
     final agents = ref.watch(subagentProvider);
-    final active = agents.values.where((a) => !a.completed || _expanded.contains(a.agentId)).toList();
+    final active = agents.values
+        .where((a) => !a.completed || _expanded.contains(a.agentId))
+        .toList();
 
     if (active.isEmpty) return const SizedBox.shrink();
 
@@ -38,7 +40,8 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
   Widget _buildCard(SubagentInfo agent) {
     final isExpanded = _expanded.contains(agent.agentId);
     final color = _parseColor(agent.color);
-    final isRunning = agent.status == 'running' || agent.status == 'waiting_approval';
+    final isRunning =
+        agent.status == 'running' || agent.status == 'waiting_approval';
 
     return GestureDetector(
       onTap: () {
@@ -55,10 +58,10 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
         decoration: BoxDecoration(
           color: const Color(0xFF1E1E2E),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withOpacity(0.3)),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.3),
+              color: Colors.black.withValues(alpha: 0.3),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
@@ -71,7 +74,8 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
             children: [
               // Header
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Row(
                   children: [
                     // Animated dot
@@ -106,7 +110,7 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                       child: Text(
                         agent.task,
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.6),
+                          color: Colors.white.withValues(alpha: 0.6),
                           fontSize: 12,
                         ),
                         maxLines: 1,
@@ -142,7 +146,8 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                         if (agentMessages.isEmpty && agent.summary != null) {
                           return Text(
                             agent.summary!,
-                            style: const TextStyle(color: Colors.white70, fontSize: 13),
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 13),
                           );
                         }
 
@@ -156,7 +161,8 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                                 children: [
                                   if (msg.streaming)
                                     Container(
-                                      margin: const EdgeInsets.only(top: 4, right: 6),
+                                      margin: const EdgeInsets.only(
+                                          top: 4, right: 6),
                                       width: 6,
                                       height: 6,
                                       decoration: BoxDecoration(
@@ -168,7 +174,8 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
                                     child: Text(
                                       msg.text,
                                       style: TextStyle(
-                                        color: Colors.white.withOpacity(0.85),
+                                        color: Colors.white
+                                            .withValues(alpha: 0.85),
                                         fontSize: 13,
                                         fontFamily: 'monospace',
                                       ),

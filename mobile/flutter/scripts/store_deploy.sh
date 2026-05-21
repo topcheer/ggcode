@@ -101,7 +101,7 @@ fi
 if [[ "$ACTION" == "release" ]]; then
   step "Submitting latest TestFlight build for App Store Review"
   cd ios && bundle install --quiet 2>/dev/null || true
-  bundle exec fastlane release_latest 2>&1 | tail -10
+  bundle exec fastlane release_latest 2>&1 | tail -30
   cd ..
   info "Submitted for App Store Review ✓"
   exit 0
@@ -128,9 +128,9 @@ if [[ "$PLATFORM" == "both" || "$PLATFORM" == "ios" ]]; then
   flutter build ipa --release 2>&1 | tail -3
   [[ -f "build/ios/ipa/GGCode Mobile.ipa" ]] || fail "IPA build failed"
 
-  step "2b/4 [iOS]: Upload → TestFlight → External Testing"
+  step "2b/4 [iOS]: Upload → TestFlight → External Testing → Submit for Review (if needed)"
   cd ios && bundle install --quiet 2>/dev/null || true
-  bundle exec fastlane deploy_external 2>&1 | tail -10
+  bundle exec fastlane deploy_external 2>&1 | tail -30
   cd ..
   info "iOS: TestFlight → External Testing ✓"
 fi
@@ -139,7 +139,7 @@ fi
 if [[ "$PLATFORM" == "both" || "$PLATFORM" == "android" ]]; then
   step "3/4 [Android]: Build AAB → Internal → Closed Testing"
   cd android && bundle install --quiet 2>/dev/null || true
-  bundle exec fastlane deploy 2>&1 | tail -10
+  bundle exec fastlane deploy 2>&1 | tail -30
   cd ..
   info "Android: Internal → Closed Testing ✓"
 fi

@@ -245,12 +245,13 @@ type Model struct {
 	systemPromptRebuilder func() string // rebuilds and returns the full system prompt
 
 	// Mobile tunnel
-	tunnelSession           *tunnel.Session
-	tunnelBroker            *tunnel.Broker
-	tunnelMsgID             string
-	tunnelPendingApprovalID string
-	tunnelPendingAskUserID  string
-	tunnelSpawned           map[string]bool // tracks which subagents have been announced to mobile
+	tunnelSession             *tunnel.Session
+	tunnelBroker              *tunnel.Broker
+	tunnelMsgID               string
+	tunnelPendingApprovalID   string
+	tunnelPendingAskUserID    string
+	tunnelUserMessageOverride *tunnel.MessageData
+	tunnelSpawned             map[string]bool // tracks which subagents have been announced to mobile
 }
 
 // pendingQueue holds the queue of user messages submitted while the agent

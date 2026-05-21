@@ -683,6 +683,22 @@ func (b *AgentBridge) Close() {
 	b.Cancel()
 }
 
+func (b *AgentBridge) CurrentTunnelStatus() tunnel.StatusData {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch {
+	case b.approvalRequestID != "":
+		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "approval"}
+	case b.askUserRequestID != "":
+		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "ask_user"}
+	case b.working:
+		return tunnel.StatusData{Status: tunnel.StatusThinking, Message: "processing"}
+	default:
+		return tunnel.StatusData{Status: tunnel.StatusIdle, Message: "Ready"}
+	}
+}
+
 // PushUserMessageToMobile pushes a user message to the mobile client.
 // Called from ChatView when the desktop user types — NOT from onCommand
 // (mobile-initiated messages) to avoid echo.

@@ -184,7 +184,8 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
                 hintText: question.placeholder.isNotEmpty
                     ? question.placeholder
                     : 'Type your answer...',
-                hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                hintStyle:
+                    TextStyle(color: Colors.white.withValues(alpha: 0.3)),
                 filled: true,
                 fillColor: const Color(0xFF1A1A2E),
                 border: OutlineInputBorder(
@@ -294,7 +295,7 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
           );
     }
 
-    ref.read(askUserProvider.notifier).state = null;
+    ref.read(askUserProvider.notifier).set(null);
   }
 
   void _cancel(String id) {
@@ -312,6 +313,6 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
           );
     }
 
-    ref.read(askUserProvider.notifier).state = null;
+    ref.read(askUserProvider.notifier).set(null);
   }
 }

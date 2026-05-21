@@ -8,10 +8,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
 import 'package:ggcode_mobile/features/chat/chat_screen.dart';
+import 'package:ggcode_mobile/features/chat/input_bar.dart';
 import 'package:ggcode_mobile/features/connect/connect_screen.dart';
 import 'package:ggcode_mobile/main.dart';
 
@@ -26,6 +28,10 @@ class _FakeConnectionNotifier extends ConnectionNotifier {
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('App shell renders', (WidgetTester tester) async {
     await tester.pumpWidget(const ProviderScope(child: GGCodeApp()));
 
@@ -43,6 +49,7 @@ void main() {
         child: const GGCodeApp(),
       ),
     );
+    await tester.pumpAndSettle();
 
     expect(find.byType(ConnectScreen), findsOneWidget);
 
@@ -93,5 +100,39 @@ void main() {
     expect(find.text('Build Android APK'), findsOneWidget);
     expect(find.text('flutter build apk'), findsOneWidget);
     expect(find.text('(Run Command)'), findsNothing);
+  });
+
+  testWidgets('InputBar stays enabled while agent is busy',
+      (WidgetTester tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          connectionProvider.overrideWith(_FakeConnectionNotifier.new),
+        ],
+        child: MaterialApp(
+          home: Scaffold(body: InputBar(controller: controller)),
+        ),
+      ),
+    );
+
+    final context = tester.element(find.byType(InputBar));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier =
+        container.read(connectionProvider.notifier) as _FakeConnectionNotifier;
+    notifier.emit(TunnelConnectionState(
+      status: ConnectionStatus.connected,
+      url: 'wss://example.test/ws?token=abc',
+    ));
+    container.read(agentStatusProvider.notifier).set('running');
+    container.read(agentStatusMessageProvider.notifier).set('read_file');
+    await tester.pump();
+
+    final textField = tester.widget<TextField>(find.byType(TextField));
+    expect(textField.enabled, isTrue);
+    expect(find.byIcon(Icons.stop_circle), findsOneWidget);
+    expect(find.byIcon(Icons.send), findsOneWidget);
   });
 }

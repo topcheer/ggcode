@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 import 'crypto.dart';
 import 'models/protocol.dart' as proto;
 
@@ -93,7 +95,7 @@ class ConnectionService {
 
     _reconnectAttempts++;
     final delay = Duration(seconds: (_reconnectAttempts * 2).clamp(2, 30));
-    print(
+    debugPrint(
         '[connection] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
     _reconnectTimer = Timer(delay, () {
       if (!_disposed) {

@@ -157,10 +157,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	})
 
 	snapshot := m.tunnelSnapshot()
-	msg.broker.SendSessionInfo(snapshot.SessionInfo)
-	if len(snapshot.History) > 0 {
-		msg.broker.SeedHistory(snapshot.History)
-	}
+	msg.broker.SendSnapshot(snapshot)
 	msg.broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 		return m.tunnelSnapshot()
 	})
@@ -224,8 +221,21 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 // pushTunnelUserMessage echoes a locally-typed user message to the mobile client.
 func (m *Model) pushTunnelUserMessage(text string) {
 	if m.tunnelBroker != nil {
+		if m.tunnelUserMessageOverride != nil {
+			override := *m.tunnelUserMessageOverride
+			if override.Text == "" {
+				override.Text = text
+			}
+			m.tunnelUserMessageOverride = nil
+			m.tunnelBroker.PushUserMessageData(override)
+			return
+		}
 		m.tunnelBroker.PushUserMessage(text)
 	}
+}
+
+func (m *Model) setNextTunnelUserMessageOverride(data tunnel.MessageData) {
+	m.tunnelUserMessageOverride = &data
 }
 
 // pushTunnelStatusThinking sends a thinking status to the mobile client.
@@ -569,11 +579,29 @@ func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
 			Mode:      m.mode.String(),
 			Version:   version.Version,
 		},
+		Status: m.currentTunnelStatus(),
 	}
 	if msgs := m.currentSessionMessages(); len(msgs) > 0 {
 		snapshot.History = tunnelMessagesToHistory(msgs)
 	}
 	return snapshot
+}
+
+func (m *Model) currentTunnelStatus() tunnel.StatusData {
+	switch {
+	case m.pendingApproval != nil:
+		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "approval"}
+	case m.pendingQuestionnaire != nil:
+		return tunnel.StatusData{Status: tunnel.StatusWaiting, Message: "ask_user"}
+	case strings.TrimSpace(m.statusToolName) != "":
+		return tunnel.StatusData{Status: tunnel.StatusRunning, Message: strings.TrimSpace(m.statusToolName)}
+	case m.loading && strings.TrimSpace(m.statusActivity) != "":
+		return tunnel.StatusData{Status: tunnel.StatusThinking, Message: strings.TrimSpace(m.statusActivity)}
+	case m.loading:
+		return tunnel.StatusData{Status: tunnel.StatusThinking, Message: "processing"}
+	default:
+		return tunnel.StatusData{Status: tunnel.StatusIdle, Message: "Ready"}
+	}
 }
 
 // truncateRunes truncates a string to maxRunes runes, appending suffix if truncated.

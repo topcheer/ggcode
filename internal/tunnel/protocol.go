@@ -162,7 +162,9 @@ type ApprovalResponseData struct {
 
 // MessageData carries a user message.
 type MessageData struct {
-	Text string `json:"text"`
+	Text        string `json:"text"`
+	DisplayText string `json:"display_text,omitempty"`
+	Kind        string `json:"kind,omitempty"`
 }
 
 // ModeChangeData carries a mode change request.

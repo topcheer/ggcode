@@ -156,6 +156,10 @@ func TestBuildSystemPrompt(t *testing.T) {
 func TestDefaultSystemPromptEncouragesBatchingAndSparseTodoWrites(t *testing.T) {
 	for _, substr := range []string{
 		"Batch related inspections or validations into a single assistant turn",
+		"Reuse existing helpers, patterns, and abstractions before adding new ones",
+		"Fix the root cause when you can identify it",
+		"Preserve existing behavior, APIs, and UX unless the user asks for a change",
+		"run the narrowest existing validation that proves the change works",
 		"Do not emit progress-only assistant messages while meaningful work remains",
 		"Do not update it after every micro-step",
 	} {

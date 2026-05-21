@@ -46,6 +46,10 @@ type Broker struct {
 	snapshotMu       sync.RWMutex
 	snapshotProvider func() BrokerSnapshot
 
+	statusMu         sync.RWMutex
+	currentStatus    StatusData
+	hasCurrentStatus bool
+
 	// Text batching
 	textMu   sync.Mutex
 	textBuf  map[string]*textEntry // msgID → accumulated text entry
@@ -56,6 +60,7 @@ type Broker struct {
 type BrokerSnapshot struct {
 	SessionInfo SessionInfoData
 	History     []HistoryEntry
+	Status      StatusData
 }
 
 func NewBroker(sess *Session) *Broker {
@@ -230,6 +235,18 @@ func (b *Broker) SendSessionInfo(data SessionInfoData) {
 	b.enqueue(EventSessionInfo, data)
 }
 
+func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
+	if snapshot.SessionInfo != (SessionInfoData{}) {
+		b.SendSessionInfo(snapshot.SessionInfo)
+	}
+	if len(snapshot.History) > 0 {
+		b.SeedHistory(snapshot.History)
+	}
+	if snapshot.Status.Status != "" {
+		b.PushStatus(snapshot.Status.Status, snapshot.Status.Message)
+	}
+}
+
 func (b *Broker) ResetSession() {
 	// Clear text buffers too
 	b.textMu.Lock()
@@ -286,24 +303,28 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 		return
 	}
 	snapshot := provider()
-	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 {
+	if snapshot.Status.Status == "" {
+		if status, ok := b.CurrentStatus(); ok {
+			snapshot.Status = status
+		}
+	}
+	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && snapshot.Status.Status == "" {
 		return
 	}
 	go func() {
 		debug.Log("tunnel", "broker: relay state lost (relay session=%q count=%d local session=%q), reseeding snapshot", info.SessionID, info.HistoryCount, currentSessionID)
-		if snapshot.SessionInfo != (SessionInfoData{}) {
-			b.SendSessionInfo(snapshot.SessionInfo)
-		}
-		if len(snapshot.History) > 0 {
-			b.SeedHistory(snapshot.History)
-		}
+		b.SendSnapshot(snapshot)
 	}()
 }
 
 // ─── User message ───
 
 func (b *Broker) PushUserMessage(text string) {
-	b.enqueue(EventUserMessage, map[string]string{"text": text})
+	b.PushUserMessageData(MessageData{Text: text})
+}
+
+func (b *Broker) PushUserMessageData(data MessageData) {
+	b.enqueue(EventUserMessage, data)
 }
 
 // ─── Streaming text (batched) ───
@@ -326,7 +347,17 @@ func (b *Broker) PushTextDone(id string) {
 // ─── Status ───
 
 func (b *Broker) PushStatus(status, message string) {
+	b.statusMu.Lock()
+	b.currentStatus = StatusData{Status: status, Message: message}
+	b.hasCurrentStatus = status != ""
+	b.statusMu.Unlock()
 	b.enqueue(EventStatus, StatusData{Status: status, Message: message})
+}
+
+func (b *Broker) CurrentStatus() (StatusData, bool) {
+	b.statusMu.RLock()
+	defer b.statusMu.RUnlock()
+	return b.currentStatus, b.hasCurrentStatus
 }
 
 // ─── Tool calls ───

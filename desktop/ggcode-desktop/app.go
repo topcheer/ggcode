@@ -261,14 +261,10 @@ func (a *App) showShareDialog() {
 			a.agentBridge.tunnelBroker = broker
 
 			snapshot := a.tunnelSnapshot()
-			broker.SendSessionInfo(snapshot.SessionInfo)
-			if len(snapshot.History) > 0 {
-				broker.SeedHistory(snapshot.History)
-			}
+			broker.SendSnapshot(snapshot)
 			broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 				return a.tunnelSnapshot()
 			})
-			broker.PushStatus(tunnel.StatusIdle, "Ready")
 		}
 
 		fyne.Do(func() {
@@ -286,8 +282,10 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		},
 	}
 	if a.agentBridge == nil {
+		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle, Message: "Ready"}
 		return snapshot
 	}
+	snapshot.Status = a.agentBridge.CurrentTunnelStatus()
 	session := a.agentBridge.CurrentSession()
 	if session == nil || len(session.Messages) == 0 {
 		return snapshot

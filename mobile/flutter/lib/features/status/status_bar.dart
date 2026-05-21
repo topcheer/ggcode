@@ -8,8 +8,10 @@ class StatusBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final status = ref.watch(agentStatusProvider);
-    final message = ref.watch(agentStatusMessageProvider);
+    final status = ref.watch(displayedAgentStatusProvider);
+    final message = ref.watch(displayedAgentStatusMessageProvider);
+    final label = _statusLabel(status);
+    final detail = _statusDetail(status, message);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -28,9 +30,9 @@ class StatusBar extends ConsumerWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            message.isNotEmpty ? message : _statusLabel(status),
+            detail.isNotEmpty ? '$label · $detail' : label,
             style: TextStyle(
-              color: Colors.white.withOpacity(0.7),
+              color: Colors.white.withValues(alpha: 0.7),
               fontSize: 12,
             ),
           ),
@@ -71,5 +73,16 @@ class StatusBar extends ConsumerWidget {
       default:
         return status;
     }
+  }
+
+  String _statusDetail(String status, String message) {
+    final trimmed = message.trim();
+    if (trimmed.isEmpty) return '';
+    final normalized = trimmed.toLowerCase();
+    if ((status == 'idle' && normalized == 'ready') ||
+        (status == 'thinking' && normalized == 'processing')) {
+      return '';
+    }
+    return trimmed;
   }
 }

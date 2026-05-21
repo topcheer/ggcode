@@ -248,6 +248,34 @@ func TestBrokerPushUserMessage(t *testing.T) {
 	}
 }
 
+func TestBrokerPushUserMessageData(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushUserMessageData(MessageData{
+		Text:        "run scheduled check",
+		DisplayText: "⏰ Cron job triggered",
+		Kind:        "cron",
+	})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	for _, m := range msgs {
+		if m.Type != EventUserMessage {
+			continue
+		}
+		var data MessageData
+		if err := json.Unmarshal(m.Data, &data); err != nil {
+			t.Fatalf("unmarshal user_message data: %v", err)
+		}
+		if data.Text != "run scheduled check" || data.DisplayText != "⏰ Cron job triggered" || data.Kind != "cron" {
+			t.Fatalf("unexpected user_message data: %+v", data)
+		}
+		return
+	}
+	t.Fatal("expected user_message event")
+}
+
 func TestBrokerPushToolCall(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
@@ -730,6 +758,42 @@ func TestBrokerHandleRelayConnectedReseedsSnapshotWhenRelayStateLost(t *testing.
 	}
 	if msgs[0].Type != EventSessionInfo {
 		t.Fatalf("expected first event session_info, got %q", msgs[0].Type)
+	}
+}
+
+func TestBrokerHandleRelayConnectedReseedsCurrentStatusAfterHistory(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.PushStatus("running", "read_file")
+	time.Sleep(50 * time.Millisecond)
+	d.drain()
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History: []HistoryEntry{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: "world"},
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{Role: "server"})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) < 4 {
+		t.Fatalf("expected reseeded snapshot plus status, got %d", len(msgs))
+	}
+	if msgs[len(msgs)-1].Type != EventStatus {
+		t.Fatalf("expected final event status, got %q", msgs[len(msgs)-1].Type)
+	}
+	var status StatusData
+	if err := json.Unmarshal(msgs[len(msgs)-1].Data, &status); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	if status.Status != "running" || status.Message != "read_file" {
+		t.Fatalf("unexpected reseeded status: %+v", status)
 	}
 }
 

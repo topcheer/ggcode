@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../core/providers/session_provider.dart';
 import 'message_bubble.dart';
@@ -82,11 +83,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   @override
   Widget build(BuildContext context) {
-    final allMessages = ref.watch(chatProvider);
+    final allMessages = ref.watch(displayedMessagesProvider);
     final approval = ref.watch(approvalProvider);
-    final info = ref.watch(sessionInfoProvider);
-    final agents = ref.watch(subagentProvider);
+    final info = ref.watch(displayedSessionInfoProvider);
+    final agents = ref.watch(displayedSubagentProvider);
     final connState = ref.watch(connectionProvider);
+    final cache = ref.watch(workspaceCacheProvider);
+    final cacheNotifier = ref.read(workspaceCacheProvider.notifier);
+    final isHistorical = ref.watch(isHistoricalViewProvider);
+    final currentWorkspace = cache.selectedWorkspaceKey != null &&
+            cache.selectedWorkspaceKey!.isNotEmpty
+        ? cache.workspaces[cache.selectedWorkspaceKey!]
+        : null;
+    final currentSessions = currentWorkspace == null
+        ? const <CachedSessionRecord>[]
+        : cacheNotifier.sessionsForWorkspace(currentWorkspace.key);
+    CachedSessionRecord? currentSession;
+    if (cache.selectedSessionId != null &&
+        cache.selectedSessionId!.isNotEmpty) {
+      for (final session in currentSessions) {
+        if (session.sessionId == cache.selectedSessionId) {
+          currentSession = session;
+          break;
+        }
+      }
+    }
 
     // Build tab list: main + all agents (active first, then completed)
     final tabIds = <String>['main'];
@@ -114,7 +135,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         : allMessages.where((m) => m.sourceId == currentSourceId).toList();
 
     // Auto-scroll on message changes
-    ref.listen<List<ChatMessage>>(chatProvider, (prev, next) {
+    ref.listen<List<ChatMessage>>(displayedMessagesProvider, (prev, next) {
       _scrollToBottom();
     });
 
@@ -122,18 +143,58 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.qr_code_scanner),
+          tooltip: 'Scan workspace',
+          onPressed: _openWorkspaceScanner,
+        ),
         title: Row(
           children: [
             Expanded(
-              child: Text(
-                info?.workspace?.split('/').last ?? 'GGCode',
-                style: const TextStyle(fontSize: 16),
+              child: InkWell(
+                onTap: _openWorkspaceSwitcher,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              currentWorkspace?.displayName ??
+                                  info?.workspace.split('/').last ??
+                                  'GGCode',
+                              style: const TextStyle(fontSize: 16),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(Icons.expand_more,
+                              size: 16,
+                              color: Colors.white.withValues(alpha: 0.7)),
+                        ],
+                      ),
+                      if (currentSession != null)
+                        Text(
+                          currentSession.title,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.45),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
             Text(
               info?.model ?? '',
-              style:
-                  TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5)),
+              style: TextStyle(
+                  fontSize: 12, color: Colors.white.withValues(alpha: 0.5)),
             ),
           ],
         ),
@@ -248,6 +309,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       body: Column(
         children: [
           const StatusBar(),
+          if (isHistorical)
+            _HistoricalSessionBanner(
+              onReturnToLive: () async {
+                final liveWorkspaceKey = cache.liveWorkspaceKey;
+                final liveSessionId = cache.liveSessionId;
+                if (liveWorkspaceKey == null ||
+                    liveWorkspaceKey.isEmpty ||
+                    liveSessionId == null ||
+                    liveSessionId.isEmpty) {
+                  return;
+                }
+                await ref
+                    .read(workspaceCacheProvider.notifier)
+                    .selectSession(liveWorkspaceKey, liveSessionId);
+              },
+            ),
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
@@ -272,11 +349,134 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   void _closeTab(String agentId) {
     final agents = Map<String, SubagentInfo>.from(ref.read(subagentProvider));
     agents.remove(agentId);
-    ref.read(subagentProvider.notifier).state = agents;
+    ref.read(subagentProvider.notifier).set(agents);
 
     final msgs = ref.read(chatProvider);
-    ref.read(chatProvider.notifier).state =
-        msgs.where((m) => m.sourceId != agentId).toList();
+    ref
+        .read(chatProvider.notifier)
+        .set(msgs.where((m) => m.sourceId != agentId).toList());
+  }
+
+  Future<void> _openWorkspaceScanner() async {
+    final scanned = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const _WorkspaceScannerScreen()),
+    );
+    if (scanned == null || scanned.isEmpty) return;
+    await ref.read(connectionProvider.notifier).connectScannedCode(scanned);
+  }
+
+  Future<void> _openWorkspaceSwitcher() async {
+    final cache = ref.read(workspaceCacheProvider);
+    final notifier = ref.read(workspaceCacheProvider.notifier);
+    final workspaces = notifier.sortedWorkspaces();
+    final selectedWorkspaceKey = cache.selectedWorkspaceKey;
+    final sessionList =
+        selectedWorkspaceKey == null || selectedWorkspaceKey.isEmpty
+            ? const <CachedSessionRecord>[]
+            : notifier.sessionsForWorkspace(selectedWorkspaceKey);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF141421),
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            children: [
+              Text(
+                'Workspaces',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final workspace in workspaces)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    workspace.key == cache.liveWorkspaceKey
+                        ? Icons.radio_button_checked
+                        : Icons.folder_open,
+                    color: workspace.key == cache.selectedWorkspaceKey
+                        ? Colors.blueAccent
+                        : Colors.white54,
+                  ),
+                  title: Text(
+                    workspace.displayName,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  subtitle: workspace.lastSessionId.isNotEmpty
+                      ? Text(
+                          'Session ${workspace.lastSessionId.substring(0, workspace.lastSessionId.length > 8 ? 8 : workspace.lastSessionId.length)}',
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.45)),
+                        )
+                      : null,
+                  trailing: workspace.key == cache.selectedWorkspaceKey
+                      ? const Icon(Icons.check, color: Colors.blueAccent)
+                      : null,
+                  onTap: () async {
+                    Navigator.of(ctx).pop();
+                    await ref
+                        .read(connectionProvider.notifier)
+                        .connectWorkspace(workspace.key);
+                  },
+                ),
+              if (selectedWorkspaceKey != null &&
+                  selectedWorkspaceKey.isNotEmpty &&
+                  sessionList.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'Sessions',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final session in sessionList)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      session.sessionId == cache.liveSessionId
+                          ? Icons.bolt
+                          : Icons.history,
+                      color: session.sessionId == cache.selectedSessionId
+                          ? Colors.blueAccent
+                          : Colors.white54,
+                    ),
+                    title: Text(
+                      session.title,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    subtitle: Text(
+                      session.model.isNotEmpty
+                          ? session.model
+                          : session.provider,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.45)),
+                    ),
+                    trailing: session.sessionId == cache.selectedSessionId
+                        ? const Icon(Icons.check, color: Colors.blueAccent)
+                        : null,
+                    onTap: () async {
+                      Navigator.of(ctx).pop();
+                      await ref
+                          .read(workspaceCacheProvider.notifier)
+                          .selectSession(
+                              selectedWorkspaceKey, session.sessionId);
+                    },
+                  ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildToolMessage(ChatMessage msg) {
@@ -293,7 +493,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A2E),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -302,12 +502,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           Row(
             children: [
               Icon(Icons.build,
-                  size: 13, color: Colors.blueAccent.withOpacity(0.7)),
+                  size: 13, color: Colors.blueAccent.withValues(alpha: 0.7)),
               const SizedBox(width: 4),
               Text(
                 title,
                 style: TextStyle(
-                  color: Colors.blueAccent.withOpacity(0.9),
+                  color: Colors.blueAccent.withValues(alpha: 0.9),
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
@@ -318,7 +518,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   child: Text(
                     msg.toolDetail!,
                     style: TextStyle(
-                        color: Colors.white.withOpacity(0.4), fontSize: 11),
+                        color: Colors.white.withValues(alpha: 0.4),
+                        fontSize: 11),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -331,8 +532,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       : Icons.check_circle_outline,
                   size: 13,
                   color: msg.isToolError
-                      ? Colors.redAccent.withOpacity(0.7)
-                      : Colors.green.withOpacity(0.6),
+                      ? Colors.redAccent.withValues(alpha: 0.7)
+                      : Colors.green.withValues(alpha: 0.6),
                 ),
             ],
           ),
@@ -364,6 +565,110 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 }
 
+class _HistoricalSessionBanner extends StatelessWidget {
+  final Future<void> Function() onReturnToLive;
+
+  const _HistoricalSessionBanner({required this.onReturnToLive});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.amber.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.history_toggle_off, color: Colors.amber, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '当前查看的是缓存的历史 session，输入已禁用。',
+              style: TextStyle(
+                color: Colors.amber.shade100,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onReturnToLive,
+            child: const Text('回到当前会话'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkspaceScannerScreen extends StatefulWidget {
+  const _WorkspaceScannerScreen();
+
+  @override
+  State<_WorkspaceScannerScreen> createState() =>
+      _WorkspaceScannerScreenState();
+}
+
+class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
+  bool _handled = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0D14),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                  const Text(
+                    'Scan Workspace QR',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: MobileScanner(
+                onDetect: (capture) {
+                  if (_handled) return;
+                  if (capture.barcodes.isEmpty) return;
+                  final barcode = capture.barcodes.first;
+                  final raw = barcode.rawValue?.trim() ?? '';
+                  if (raw.isEmpty) return;
+                  _handled = true;
+                  Navigator.of(context).pop(raw);
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                '扫描 GGCode 桌面端展示的二维码，立即切换到对应 workspace。',
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Collapsible tool result card. Default collapsed, tap to expand.
 class _ToolResultCard extends StatefulWidget {
   final String result;
@@ -391,8 +696,8 @@ class _ToolResultCardState extends State<_ToolResultCard> {
         padding: const EdgeInsets.all(6),
         decoration: BoxDecoration(
           color: widget.isError
-              ? Colors.red.withOpacity(0.08)
-              : Colors.white.withOpacity(0.03),
+              ? Colors.red.withValues(alpha: 0.08)
+              : Colors.white.withValues(alpha: 0.03),
           borderRadius: BorderRadius.circular(4),
         ),
         child: Column(
@@ -410,7 +715,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                   widget.isError ? 'Error' : 'Result',
                   style: TextStyle(
                     color: widget.isError
-                        ? Colors.redAccent.withOpacity(0.8)
+                        ? Colors.redAccent.withValues(alpha: 0.8)
                         : Colors.white38,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,

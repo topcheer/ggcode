@@ -15,7 +15,7 @@ class ApprovalSheet extends ConsumerWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E2E),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withOpacity(0.3)),
+        border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -28,7 +28,7 @@ class ApprovalSheet extends ConsumerWidget {
               Text(
                 'Approval Required',
                 style: TextStyle(
-                  color: Colors.orange.withOpacity(0.9),
+                  color: Colors.orange.withValues(alpha: 0.9),
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
                 ),
@@ -38,21 +38,23 @@ class ApprovalSheet extends ConsumerWidget {
           const SizedBox(height: 8),
           Text(
             approval.toolName,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 4),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3),
+              color: Colors.black.withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
               approval.input.length > 300
                   ? '${approval.input.substring(0, 300)}...'
                   : approval.input,
-              style: const TextStyle(color: Colors.white70, fontSize: 12, fontFamily: 'monospace'),
+              style: const TextStyle(
+                  color: Colors.white70, fontSize: 12, fontFamily: 'monospace'),
             ),
           ),
           const SizedBox(height: 12),
@@ -61,17 +63,20 @@ class ApprovalSheet extends ConsumerWidget {
             children: [
               TextButton(
                 onPressed: () => _respond(ref, 'deny'),
-                child: const Text('Deny', style: TextStyle(color: Colors.redAccent)),
+                child: const Text('Deny',
+                    style: TextStyle(color: Colors.redAccent)),
               ),
               const SizedBox(width: 8),
               TextButton(
                 onPressed: () => _respond(ref, 'allow'),
-                child: const Text('Allow', style: TextStyle(color: Colors.green)),
+                child:
+                    const Text('Allow', style: TextStyle(color: Colors.green)),
               ),
               const SizedBox(width: 8),
               FilledButton(
                 onPressed: () => _respond(ref, 'always_allow'),
-                style: FilledButton.styleFrom(backgroundColor: Colors.blueAccent),
+                style:
+                    FilledButton.styleFrom(backgroundColor: Colors.blueAccent),
                 child: const Text('Always Allow'),
               ),
             ],
@@ -86,6 +91,6 @@ class ApprovalSheet extends ConsumerWidget {
       'type': 'approval_response',
       'data': {'id': approval.id, 'decision': decision},
     });
-    ref.read(approvalProvider.notifier).state = null;
+    ref.read(approvalProvider.notifier).set(null);
   }
 }
