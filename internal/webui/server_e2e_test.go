@@ -913,6 +913,12 @@ func TestE2EChatWSMixedAttachments(t *testing.T) {
 		t.Errorf("expected file_names [data.txt], got %v", ack["file_names"])
 	}
 	// 1 text + 1 image + 1 file = 3
+	// Retry briefly: ack is sent via buffered channel so may arrive before
+	// SendUserMessage completes on the handler goroutine.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(bridge.lastContent) != 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(bridge.lastContent) != 3 {
 		t.Errorf("expected 3 content blocks, got %d: %+v", len(bridge.lastContent), bridge.lastContent)
 	}
