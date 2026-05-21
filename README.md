@@ -109,6 +109,15 @@ Download the latest desktop release from [GitHub Releases](https://github.com/to
 
 Open the DMG on macOS and drag **ggcode** to your Applications folder. On Windows, run the `.exe` directly.
 
+### Mobile App (Beta)
+
+GGCode Mobile is a companion app that lets you interact with your desktop agent from your phone — connect via QR code, chat, approve tool calls, and monitor tasks on the go.
+
+| Platform | Link | Notes |
+| --- | --- | --- |
+| iOS (TestFlight) | [Join Beta](https://testflight.apple.com/join/J34wVD6p) | Open in Safari on iPhone |
+| Android (Closed Testing) | [Join Google Group first](https://groups.google.com/g/gg-studio-ai-products) | **You must join the group to get access**, then opt in at [Play Store testing page](https://play.google.com/apps/testing/gg.ai.ggcode.mobile) |
+
 ### Build from source
 
 ```bash

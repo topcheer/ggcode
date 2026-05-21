@@ -126,34 +126,7 @@ platform :ios do
     UI.user_error!("Could not read version") if v.empty?
     UI.message("Version: #{v}")
 
-    # 1. Find or create IOS version
-    ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
-    if ios_version.nil?
-      versions = app.get_app_store_versions
-      ios_version = versions.find { |ver| ver.platform == "IOS" && ver.app_store_state == "PREPARE_FOR_SUBMISSION" }
-    end
-    if ios_version.nil?
-      UI.message("Creating iOS version #{v}...")
-      client.post_app_store_version(app_id: app.id, attributes: { platform: Spaceship::ConnectAPI::Platform::IOS, versionString: v })
-      ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
-      # Cleanup stale MAC_OS version if it blocks us
-      mac = versions&.find { |ver| ver.platform == "MAC_OS" }
-      if mac
-        begin
-          client.tunes_request_client.delete("v1/appStoreVersions/#{mac.id}")
-        rescue
-          nil
-        end
-      end
-    end
-    UI.user_error!("No editable iOS version") if ios_version.nil?
-    # Update version string if needed
-    if ios_version.version_string != v
-      client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { versionString: v })
-    end
-    UI.success("Version: #{v} (#{ios_version.id})")
-
-    # 2. Associate latest valid build
+    # Find latest valid build
     builds = client.get_builds(
       filter: { app: app.id },
       sort: "-uploadedDate", limit: 10,
@@ -162,65 +135,114 @@ platform :ios do
     UI.user_error!("No VALID builds. Upload one first.") if builds.empty?
     build = builds.first
     UI.message("Build: #{build.version} (#{build.platform rescue '?'})")
-    ios_version.select_build(build_id: build.id)
-    UI.success("Build associated")
 
-    # 3. Set review notes
-    begin
-      review_detail = ios_version.fetch_app_store_review_detail
-      review_attrs = {
-        contactEmail: "support@ggcode.dev",
-        contactFirstName: "Guang",
-        contactLastName: "Guang",
-        contactPhone: "+8613858128966",
-        notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop\n   - GUI: click the Share button in the sidebar to generate a QR code\n   - Terminal (TUI): type /share or /tunnel in the chat to generate a QR code\n3. Open this mobile app and scan the QR code\n4. Once connected, you can chat with the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
-      }
-      if review_detail
-        review_detail.update(attributes: review_attrs)
-      else
-        ios_version.create_app_store_review_detail(attributes: review_attrs)
-      end
-      UI.success("Review notes set")
-    rescue => e
-      UI.error("Review notes: #{e.message}")
-    end
-
-    # 4. Submit — find or create exactly one submission
+    # Check for blocking submission
     submissions = client.get_review_submissions(app_id: app.id).to_models
-    existing = submissions.first
+    ready_for_review = submissions.find { |s| s.state == "READY_FOR_REVIEW" }
 
-    if existing && existing.state == "READY_FOR_REVIEW"
-      # Stale empty submission — try to cancel
-      UI.message("Cancelling stale submission #{existing.id}...")
+    if ready_for_review
+      UI.message("Submission #{ready_for_review.id} is READY_FOR_REVIEW — skipping App Store submission.")
+      UI.message("Only promoting build to External Testing...")
+
+      # Promote to External Testing
       begin
-        client.patch_review_submission(review_submission_id: existing.id, attributes: { cancelled: true })
-        sleep(3)
-        submissions = client.get_review_submissions(app_id: app.id).to_models
-        existing = submissions.first
+        ext
+        UI.success("Build #{build.version} distributed to External Testing!")
       rescue => e
-        UI.message("Cancel failed: #{e.message}")
+        UI.message("External Testing: #{e.message}")
       end
-    end
-
-    if existing && (existing.state.nil? || existing.state.empty?)
-      UI.message("Adding version to existing submission #{existing.id}...")
-      client.post_review_submission_item(review_submission_id: existing.id, app_store_version_id: ios_version.id)
-      UI.success("Submitted #{existing.id}!")
-    elsif existing && existing.state == "COMPLETE"
-      # Old completed submission — safe to create a new one
-      UI.message("Previous submission #{existing.id} is COMPLETE, creating new one...")
-      resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
-      sub = resp.to_models.first
-      client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
-      UI.success("Submitted #{sub.id} with version #{v}!")
-    elsif existing
-      UI.error("Submission #{existing.id} state=#{existing.state} — manage in App Store Connect")
     else
-      UI.message("Creating submission...")
-      resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
-      sub = resp.to_models.first
-      client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
-      UI.success("Submitted #{sub.id} with version #{v}!")
+      UI.message("No blocking submission — proceeding with full App Store submission.")
+
+      # 1. Find or create IOS version
+      ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+      if ios_version.nil?
+        versions = app.get_app_store_versions
+        ios_version = versions.find { |ver| ver.platform == "IOS" && ver.app_store_state == "PREPARE_FOR_SUBMISSION" }
+      end
+      if ios_version.nil?
+        UI.message("Creating iOS version #{v}...")
+        client.post_app_store_version(app_id: app.id, attributes: { platform: Spaceship::ConnectAPI::Platform::IOS, versionString: v })
+        ios_version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+        # Cleanup stale MAC_OS version if it blocks us
+        versions = app.get_app_store_versions
+        mac = versions&.find { |ver| ver.platform == "MAC_OS" }
+        if mac
+          begin
+            client.tunes_request_client.delete("v1/appStoreVersions/#{mac.id}")
+          rescue
+            nil
+          end
+        end
+      end
+      UI.user_error!("No editable iOS version") if ios_version.nil?
+      if ios_version.version_string != v
+        client.patch_app_store_version(app_store_version_id: ios_version.id, attributes: { versionString: v })
+      end
+      UI.success("Version: #{v} (#{ios_version.id})")
+
+      # 2. Associate build
+      ios_version.select_build(build_id: build.id)
+      UI.success("Build associated")
+
+      # 3. Set review notes
+      begin
+        review_detail = ios_version.fetch_app_store_review_detail
+        review_attrs = {
+          contactEmail: "support@ggcode.dev",
+          contactFirstName: "Guang",
+          contactLastName: "Guang",
+          contactPhone: "+8613858128966",
+          notes: "This app is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code.\n\nHow to test:\n1. Install GGCode desktop app on a Mac/PC from https://ggcode.dev\n2. Start GGCode desktop\n   - GUI: click the Share button in the sidebar to generate a QR code\n   - Terminal (TUI): type /share or /tunnel in the chat to generate a QR code\n3. Open this mobile app and scan the QR code\n4. Once connected, you can chat with the AI agent, review and approve tool calls, and monitor sub-agent tasks in real-time\n\nThe app requires an active GGCode desktop session to function. No separate account or login is needed."
+        }
+        if review_detail
+          review_detail.update(attributes: review_attrs)
+        else
+          ios_version.create_app_store_review_detail(attributes: review_attrs)
+        end
+        UI.success("Review notes set")
+      rescue => e
+        UI.error("Review notes: #{e.message}")
+      end
+
+      # 4. Submit — find or create submission
+      submissions = client.get_review_submissions(app_id: app.id).to_models
+      existing = submissions.first
+
+      if existing && (existing.state.nil? || existing.state.empty?)
+        UI.message("Adding version to existing submission #{existing.id}...")
+        client.post_review_submission_item(review_submission_id: existing.id, app_store_version_id: ios_version.id)
+        UI.success("Submitted #{existing.id}!")
+      elsif existing && existing.state == "COMPLETE"
+        UI.message("Previous submission #{existing.id} is COMPLETE, creating new one...")
+        resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
+        sub = resp.to_models.first
+        client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
+        UI.success("Submitted #{sub.id} with version #{v}!")
+      elsif existing
+        UI.error("Submission #{existing.id} state=#{existing.state} — manage in App Store Connect")
+      else
+        UI.message("Creating submission...")
+        resp = client.post_review_submission(app_id: app.id, platform: Spaceship::ConnectAPI::Platform::IOS)
+        sub = resp.to_models.first
+        client.post_review_submission_item(review_submission_id: sub.id, app_store_version_id: ios_version.id)
+        UI.success("Submitted #{sub.id} with version #{v}!")
+      end
+
+      # 5. Also promote to External Testing
+      begin
+        pilot(
+          api_key: api_key,
+          skip_waiting_for_build_processing: false,
+          skip_submission: false,
+          distribute_only: true,
+          build_number: build.version,
+          changelog: "Version #{v}"
+        )
+        UI.success("Distributed to External Testing!")
+      rescue => e
+        UI.message("External Testing: #{e.message}")
+      end
     end
   rescue => e
     UI.error("#{e.message}")
