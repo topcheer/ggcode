@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:ggcode_mobile/core/models/protocol.dart' as proto;
 import 'package:ggcode_mobile/core/providers/session_provider.dart';
 import 'package:ggcode_mobile/features/chat/chat_screen.dart';
 import 'package:ggcode_mobile/features/connect/connect_screen.dart';
@@ -62,5 +63,35 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.byType(ConnectScreen), findsOneWidget);
+  });
+
+  testWidgets('ChatScreen uses tool display name as card title',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier = container.read(chatProvider.notifier);
+
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-1',
+        toolName: 'run_command',
+        displayName: 'Build Android APK',
+        args: '{"command":"flutter build apk"}',
+        detail: 'flutter build apk',
+      ),
+      messageId: 'ev-0001',
+    );
+
+    await tester.pump();
+
+    expect(find.text('Build Android APK'), findsOneWidget);
+    expect(find.text('flutter build apk'), findsOneWidget);
+    expect(find.text('(Run Command)'), findsNothing);
   });
 }

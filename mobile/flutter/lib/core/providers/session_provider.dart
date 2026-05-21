@@ -423,6 +423,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             agentId: data.agentId,
             toolId: data.toolId,
             toolName: data.toolName,
+            displayName: data.displayName,
             args: data.args,
             detail: data.detail,
             sourceName: agent?.name ?? data.agentId,
@@ -595,6 +596,7 @@ class ChatMessage {
   final bool streaming;
   final String? toolId;
   final String? toolName;
+  final String? toolDisplayName;
   final String? toolDetail;
   final String? toolResult;
   final bool isToolError;
@@ -610,6 +612,7 @@ class ChatMessage {
     this.streaming = false,
     this.toolId,
     this.toolName,
+    this.toolDisplayName,
     this.toolDetail,
     this.toolResult,
     this.isToolError = false,
@@ -632,6 +635,7 @@ class ChatMessage {
         streaming: streaming ?? this.streaming,
         toolId: toolId,
         toolName: toolName,
+        toolDisplayName: toolDisplayName,
         toolDetail: toolDetail,
         toolResult: toolResult ?? this.toolResult,
         isToolError: isToolError ?? this.isToolError,
@@ -740,6 +744,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     required String agentId,
     required String toolId,
     required String toolName,
+    required String displayName,
     required String args,
     required String detail,
     required String sourceName,
@@ -756,6 +761,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         sourceColor: sourceColor,
         toolId: toolId,
         toolName: toolName,
+        toolDisplayName: displayName,
         toolDetail: detail.isNotEmpty
             ? detail
             : (args.length > 100 ? '${args.substring(0, 100)}...' : args),
@@ -806,8 +812,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             'tool-${data.toolId.isNotEmpty ? data.toolId : _msgCounter++}',
         toolId: data.toolId,
         toolName: data.toolName,
+        toolDisplayName: data.displayName,
         toolDetail: data.detail,
-        text: '${data.toolName}(${data.detail})',
+        text: data.displayName.isNotEmpty ? data.displayName : data.toolName,
         time: DateTime.now(),
       ),
     ];

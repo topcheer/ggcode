@@ -281,6 +281,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   Widget _buildToolMessage(ChatMessage msg) {
     final prettyName = _prettyToolName(msg.toolName ?? 'tool');
+    final title =
+        (msg.toolDisplayName != null && msg.toolDisplayName!.isNotEmpty)
+            ? msg.toolDisplayName!
+            : prettyName;
     final hasResult = msg.toolResult != null && msg.toolResult!.isNotEmpty;
 
     return Container(
@@ -301,7 +305,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   size: 13, color: Colors.blueAccent.withOpacity(0.7)),
               const SizedBox(width: 4),
               Text(
-                '($prettyName)',
+                title,
                 style: TextStyle(
                   color: Colors.blueAccent.withOpacity(0.9),
                   fontSize: 12,

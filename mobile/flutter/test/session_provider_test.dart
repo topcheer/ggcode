@@ -36,6 +36,7 @@ void main() {
       proto.ToolCallData(
         toolId: 'tool-1',
         toolName: 'read_file',
+        displayName: 'Inspect file',
         args: '{"path":"a"}',
         detail: 'read file',
       ),
@@ -53,6 +54,7 @@ void main() {
     final message = container.read(chatProvider).single;
     expect(message.id, 'ev-0001');
     expect(message.toolId, 'tool-1');
+    expect(message.toolDisplayName, 'Inspect file');
     expect(message.toolResult, 'done');
   });
 }

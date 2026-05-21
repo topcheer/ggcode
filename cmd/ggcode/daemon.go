@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -482,7 +483,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 					if name == "" {
 						name = "tool"
 					}
-					tunnelBroker.PushToolCall(ev.Tool.ID, name, string(ev.Tool.Arguments), name)
+					present := tool.DescribeTool(name, string(ev.Tool.Arguments))
+					tunnelBroker.PushToolCall(ev.Tool.ID, name, daemonToolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), present.Detail)
 				case provider.StreamEventToolResult:
 					tunnelBroker.PushToolResult(ev.Tool.ID, ev.Tool.Name, ev.Result, ev.IsError)
 				case provider.StreamEventDone:
@@ -1200,6 +1202,28 @@ loop:
 
 	fmt.Fprintln(os.Stderr, daemon.Tr(lang, "daemon.stopped"))
 	return nil
+}
+
+func daemonToolDisplayName(toolName, rawArgs string) string {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rawArgs), &args); err == nil {
+		if v, ok := args["description"]; ok {
+			var desc string
+			if json.Unmarshal(v, &desc) == nil && strings.TrimSpace(desc) != "" {
+				return strings.TrimSpace(desc)
+			}
+		}
+	}
+	toolName = strings.ReplaceAll(toolName, "-", " ")
+	toolName = strings.ReplaceAll(toolName, "_", " ")
+	parts := strings.Fields(toolName)
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 // readKeyboard reads raw keystrokes from stdin and sends them to the channel.

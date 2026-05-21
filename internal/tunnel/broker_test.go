@@ -252,7 +252,7 @@ func TestBrokerPushToolCall(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	b.PushToolCall("t1", "read_file", `{"path":"/tmp"}`, "reading file")
+	b.PushToolCall("t1", "read_file", "Inspect config", `{"path":"/tmp"}`, "reading file")
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
@@ -262,7 +262,7 @@ func TestBrokerPushToolCall(t *testing.T) {
 			found = true
 			var td ToolCallData
 			json.Unmarshal(m.Data, &td)
-			if td.ToolID != "t1" || td.ToolName != "read_file" {
+			if td.ToolID != "t1" || td.ToolName != "read_file" || td.DisplayName != "Inspect config" {
 				t.Errorf("tool call mismatch: %+v", td)
 			}
 		}
@@ -526,7 +526,7 @@ func TestBrokerPushSubagentToolCall(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	b.PushSubagentToolCall("agent-1", "t1", "search", `{"pattern":"TODO"}`, "searching")
+	b.PushSubagentToolCall("agent-1", "t1", "search", "Find TODOs", `{"pattern":"TODO"}`, "searching")
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
@@ -534,6 +534,11 @@ func TestBrokerPushSubagentToolCall(t *testing.T) {
 	for _, m := range msgs {
 		if m.Type == EventSubagentToolCall {
 			found = true
+			var td SubagentToolCallData
+			json.Unmarshal(m.Data, &td)
+			if td.DisplayName != "Find TODOs" {
+				t.Errorf("subagent tool call mismatch: %+v", td)
+			}
 		}
 	}
 	if !found {

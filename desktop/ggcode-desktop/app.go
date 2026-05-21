@@ -313,13 +313,18 @@ func (a *App) showShareDialog() {
 								if len(argsStr) > 200 {
 									argsStr = argsStr[:200] + "..."
 								}
-								detail := toolDescription(block.ToolName, string(block.Input))
+								title := toolDisplayName(block.ToolName, string(block.Input))
+								detail := toolArgSummary(block.ToolName, string(block.Input))
+								if detail == title {
+									detail = ""
+								}
 								history = append(history, tunnel.HistoryEntry{
-									Role:       "tool_call",
-									ToolID:     block.ToolID,
-									ToolName:   block.ToolName,
-									ToolArgs:   argsStr,
-									ToolDetail: detail,
+									Role:            "tool_call",
+									ToolID:          block.ToolID,
+									ToolName:        block.ToolName,
+									ToolDisplayName: title,
+									ToolArgs:        argsStr,
+									ToolDetail:      detail,
 								})
 							}
 						}
@@ -736,13 +741,18 @@ func (a *App) resumeSession(id string) {
 						if len(argsStr) > 200 {
 							argsStr = argsStr[:200] + "..."
 						}
-						detail := toolDescription(block.ToolName, string(block.Input))
+						title := toolDisplayName(block.ToolName, string(block.Input))
+						detail := toolArgSummary(block.ToolName, string(block.Input))
+						if detail == title {
+							detail = ""
+						}
 						history = append(history, tunnel.HistoryEntry{
-							Role:       "tool_call",
-							ToolID:     block.ToolID,
-							ToolName:   block.ToolName,
-							ToolArgs:   argsStr,
-							ToolDetail: detail,
+							Role:            "tool_call",
+							ToolID:          block.ToolID,
+							ToolName:        block.ToolName,
+							ToolDisplayName: title,
+							ToolArgs:        argsStr,
+							ToolDetail:      detail,
 						})
 					}
 				}
