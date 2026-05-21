@@ -794,8 +794,9 @@ func toolDescription(toolName, rawArgs string) string {
 	}
 
 	// First check for explicit description field from LLM.
+	// If present, use it as displayName with PrettyName in parentheses.
 	if desc := str("description"); desc != "" {
-		return desc
+		return desc + " (" + prettifyToolName(toolName) + ")"
 	}
 
 	switch toolName {
