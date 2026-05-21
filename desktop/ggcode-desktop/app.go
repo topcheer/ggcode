@@ -260,80 +260,14 @@ func (a *App) showShareDialog() {
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = broker
 
-			// Seed the broker event stream with current session history so mobile
-			// gets the full conversation on first connect.
-			broker.SendSessionInfo(tunnel.SessionInfoData{
-				Workspace: a.dc.WorkDir,
-				Version:   Version,
-			})
-			session := a.agentBridge.CurrentSession()
-			if session != nil && len(session.Messages) > 0 {
-				history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
-				for _, msg := range session.Messages {
-					if msg.Role == "user" || msg.Role == "tool" {
-						var textParts []string
-						for _, block := range msg.Content {
-							switch block.Type {
-							case "text":
-								if strings.TrimSpace(block.Text) != "" {
-									textParts = append(textParts, strings.TrimSpace(block.Text))
-								}
-							case "tool_result":
-								result := block.Output
-								if len(result) > 500 {
-									result = result[:500] + "..."
-								}
-								history = append(history, tunnel.HistoryEntry{
-									Role:     "tool_result",
-									ToolID:   block.ToolID,
-									ToolName: block.ToolName,
-									Result:   result,
-									IsError:  block.IsError,
-								})
-							}
-						}
-						if len(textParts) > 0 {
-							history = append(history, tunnel.HistoryEntry{
-								Role:    "user",
-								Content: strings.Join(textParts, "\n"),
-							})
-						}
-					} else if msg.Role == "assistant" {
-						for _, block := range msg.Content {
-							switch block.Type {
-							case "text":
-								if strings.TrimSpace(block.Text) != "" {
-									history = append(history, tunnel.HistoryEntry{
-										Role:    "assistant",
-										Content: strings.TrimSpace(block.Text),
-									})
-								}
-							case "tool_use":
-								argsStr := string(block.Input)
-								if len(argsStr) > 200 {
-									argsStr = argsStr[:200] + "..."
-								}
-								title := toolDisplayName(block.ToolName, string(block.Input))
-								detail := toolArgSummary(block.ToolName, string(block.Input))
-								if detail == title {
-									detail = ""
-								}
-								history = append(history, tunnel.HistoryEntry{
-									Role:            "tool_call",
-									ToolID:          block.ToolID,
-									ToolName:        block.ToolName,
-									ToolDisplayName: title,
-									ToolArgs:        argsStr,
-									ToolDetail:      detail,
-								})
-							}
-						}
-					}
-				}
-				if len(history) > 0 {
-					broker.SeedHistory(history)
-				}
+			snapshot := a.tunnelSnapshot()
+			broker.SendSessionInfo(snapshot.SessionInfo)
+			if len(snapshot.History) > 0 {
+				broker.SeedHistory(snapshot.History)
 			}
+			broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
+				return a.tunnelSnapshot()
+			})
 			broker.PushStatus(tunnel.StatusIdle, "Ready")
 		}
 
@@ -342,6 +276,87 @@ func (a *App) showShareDialog() {
 			a.showTunnelInfo(info)
 		})
 	}()
+}
+
+func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
+	snapshot := tunnel.BrokerSnapshot{
+		SessionInfo: tunnel.SessionInfoData{
+			Workspace: a.dc.WorkDir,
+			Version:   Version,
+		},
+	}
+	if a.agentBridge == nil {
+		return snapshot
+	}
+	session := a.agentBridge.CurrentSession()
+	if session == nil || len(session.Messages) == 0 {
+		return snapshot
+	}
+
+	history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
+	for _, msg := range session.Messages {
+		if msg.Role == "user" || msg.Role == "tool" {
+			var textParts []string
+			for _, block := range msg.Content {
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						textParts = append(textParts, strings.TrimSpace(block.Text))
+					}
+				case "tool_result":
+					result := block.Output
+					if len(result) > 500 {
+						result = result[:500] + "..."
+					}
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_result",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						Result:   result,
+						IsError:  block.IsError,
+					})
+				}
+			}
+			if len(textParts) > 0 {
+				history = append(history, tunnel.HistoryEntry{
+					Role:    "user",
+					Content: strings.Join(textParts, "\n"),
+				})
+			}
+		} else if msg.Role == "assistant" {
+			for _, block := range msg.Content {
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						history = append(history, tunnel.HistoryEntry{
+							Role:    "assistant",
+							Content: strings.TrimSpace(block.Text),
+						})
+					}
+				case "tool_use":
+					argsStr := string(block.Input)
+					if len(argsStr) > 200 {
+						argsStr = argsStr[:200] + "..."
+					}
+					title := toolDisplayName(block.ToolName, string(block.Input))
+					detail := toolArgSummary(block.ToolName, string(block.Input))
+					if detail == title {
+						detail = ""
+					}
+					history = append(history, tunnel.HistoryEntry{
+						Role:            "tool_call",
+						ToolID:          block.ToolID,
+						ToolName:        block.ToolName,
+						ToolDisplayName: title,
+						ToolArgs:        argsStr,
+						ToolDetail:      detail,
+					})
+				}
+			}
+		}
+	}
+	snapshot.History = history
+	return snapshot
 }
 
 func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {

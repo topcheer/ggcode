@@ -707,6 +707,55 @@ func TestBrokerSeedHistoryLargeBurstDoesNotDrop(t *testing.T) {
 	}
 }
 
+func TestBrokerHandleRelayConnectedReseedsSnapshotWhenRelayStateLost(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History: []HistoryEntry{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: "world"},
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{Role: "server"})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) < 3 {
+		t.Fatalf("expected reseeded snapshot messages, got %d", len(msgs))
+	}
+	if msgs[0].Type != EventSessionInfo {
+		t.Fatalf("expected first event session_info, got %q", msgs[0].Type)
+	}
+}
+
+func TestBrokerHandleRelayConnectedSkipsReseedWhenRelayStateRetained(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			History:     []HistoryEntry{{Role: "user", Content: "hello"}},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "server",
+		SessionID:    "sess-local",
+		HistoryCount: 2,
+	})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) != 0 {
+		t.Fatalf("expected no reseed when relay state retained, got %d messages", len(msgs))
+	}
+}
+
 func TestBrokerEventIDsIncrease(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
