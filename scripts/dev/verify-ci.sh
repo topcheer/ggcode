@@ -21,10 +21,11 @@ unset ZAI_API_KEY
 unset GGCODE_ZAI_API_KEY
 unset ZAI_MODEL
 
-echo "[verify-ci] checking gofmt cleanliness"
-if ! test -z "$(gofmt -l .)"; then
+# ── Main module ──────────────────────────────────────────────────────────
+echo "[verify-ci] checking gofmt cleanliness (main module)"
+if ! test -z "$(gofmt -l ./cmd ./internal)"; then
   echo "[verify-ci] gofmt found unformatted files:"
-  gofmt -l .
+  gofmt -l ./cmd ./internal
   exit 1
 fi
 
@@ -34,8 +35,29 @@ go mod download
 echo "[verify-ci] building ggcode"
 go build -tags goolm -o /tmp/ggcode ./cmd/ggcode
 
-echo "[verify-ci] running go vet"
-go vet -tags goolm ./...
+echo "[verify-ci] running go vet (main module)"
+go vet -tags goolm ./cmd/... ./internal/...
 
-echo "[verify-ci] running tests (unit + Tier 1 integration)"
-go test -tags "goolm,integration" ./...
+echo "[verify-ci] running tests (main module, unit + Tier 1 integration)"
+go test -tags "goolm,integration" ./cmd/... ./internal/...
+
+# ── Desktop module (CGO required, macOS only) ────────────────────────────
+desktop_dir="${repo_root}/desktop/ggcode-desktop"
+if [ -d "${desktop_dir}" ] && [ -f "${desktop_dir}/go.mod" ]; then
+  echo ""
+  echo "[verify-ci:desktop] checking gofmt cleanliness"
+  if ! test -z "$(gofmt -l "${desktop_dir}")"; then
+    echo "[verify-ci:desktop] gofmt found unformatted files:"
+    gofmt -l "${desktop_dir}"
+    exit 1
+  fi
+
+  echo "[verify-ci:desktop] downloading modules"
+  (cd "${desktop_dir}" && go mod download)
+
+  echo "[verify-ci:desktop] running go vet"
+  (cd "${desktop_dir}" && CGO_ENABLED=1 go vet -tags goolm ./...)
+
+  echo "[verify-ci:desktop] running tests"
+  (cd "${desktop_dir}" && CGO_ENABLED=1 go test -tags goolm -count=1 ./...)
+fi
