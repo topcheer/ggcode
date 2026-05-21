@@ -32,7 +32,6 @@ NotifierProvider<_SimpleNotifier<T>, T> _simpleProvider<T>(T Function() init) {
 }
 
 final _historyProvider = _simpleProvider<List<String>>(() => []);
-final _urlProvider = _simpleProvider<String>(() => '');
 
 class ConnectScreen extends ConsumerStatefulWidget {
   const ConnectScreen({super.key});
@@ -52,18 +51,17 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   }
 
   Future<void> _loadHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    final history = prefs.getStringList('tunnel_history') ?? [];
+    final history = await ConnectionNotifier.loadHistory();
     ref.read(_historyProvider.notifier).set(history);
   }
 
   Future<void> _saveToHistory(String url) async {
     final prefs = await SharedPreferences.getInstance();
-    final history = prefs.getStringList('tunnel_history') ?? [];
+    final history = prefs.getStringList('ggcode_history') ?? [];
     if (!history.contains(url)) {
       history.insert(0, url);
       if (history.length > 10) history.removeLast();
-      await prefs.setStringList('tunnel_history', history);
+      await prefs.setStringList('ggcode_history', history);
       ref.read(_historyProvider.notifier).set(history);
     }
   }
@@ -76,16 +74,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   }
 
   void _handleQrCode(String code) {
-    // Extract URL from QR code — might be raw URL or a ggcode:// scheme
-    String url = code.trim();
-    if (url.startsWith('ggcode://')) {
-      url = url.replaceFirst('ggcode://', 'wss://');
-    }
-    if (url.startsWith('http://')) {
-      url = url.replaceFirst('http://', 'ws://');
-    } else if (url.startsWith('https://')) {
-      url = url.replaceFirst('https://', 'wss://');
-    }
+    final url = normalizeTunnelUrl(code);
 
     setState(() {
       _showScanner = false;
@@ -124,7 +113,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                     ),
                     const Text(
                       'Scan QR Code',
-                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
@@ -133,9 +125,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
               Expanded(
                 child: MobileScanner(
                   onDetect: (capture) {
-                    final barcode = capture.barcodes.firstOrNull;
-                    if (barcode != null && barcode.rawValue != null) {
-                      _handleQrCode(barcode.rawValue!);
+                    if (capture.barcodes.isEmpty) return;
+                    final rawValue = capture.barcodes.first.rawValue;
+                    if (rawValue != null && rawValue.isNotEmpty) {
+                      _handleQrCode(rawValue);
                     }
                   },
                 ),
@@ -144,7 +137,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Text(
                   'Point the camera at the QR code shown in GGCode Desktop',
-                  style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 13),
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -192,7 +186,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
               const SizedBox(height: 8),
               Text(
                 'Scan QR code or enter URL to connect',
-                style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 14),
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5), fontSize: 14),
               ),
               const SizedBox(height: 24),
 
@@ -203,10 +198,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 child: OutlinedButton.icon(
                   onPressed: () => setState(() => _showScanner = true),
                   icon: const Icon(Icons.qr_code_scanner, size: 28),
-                  label: const Text('Scan QR Code', style: TextStyle(fontSize: 16)),
+                  label: const Text('Scan QR Code',
+                      style: TextStyle(fontSize: 16)),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.blueAccent,
-                    side: const BorderSide(color: Colors.blueAccent, width: 1.5),
+                    side:
+                        const BorderSide(color: Colors.blueAccent, width: 1.5),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -218,12 +215,19 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
               // Divider with "or"
               Row(
                 children: [
-                  Expanded(child: Divider(color: Colors.white.withOpacity(0.15))),
+                  Expanded(
+                      child:
+                          Divider(color: Colors.white.withValues(alpha: 0.15))),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text('or', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12)),
+                    child: Text('or',
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.3),
+                            fontSize: 12)),
                   ),
-                  Expanded(child: Divider(color: Colors.white.withOpacity(0.15))),
+                  Expanded(
+                      child:
+                          Divider(color: Colors.white.withValues(alpha: 0.15))),
                 ],
               ),
               const SizedBox(height: 20),
@@ -234,7 +238,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 style: const TextStyle(color: Colors.white, fontSize: 14),
                 decoration: InputDecoration(
                   hintText: 'ws://host:port/ws?token=xxx',
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                  hintStyle:
+                      TextStyle(color: Colors.white.withValues(alpha: 0.3)),
                   filled: true,
                   fillColor: const Color(0xFF1A1A2E),
                   border: OutlineInputBorder(
@@ -289,13 +294,15 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
+                    color: Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                    border:
+                        Border.all(color: Colors.red.withValues(alpha: 0.3)),
                   ),
                   child: Text(
                     errorMsg,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                    style:
+                        const TextStyle(color: Colors.redAccent, fontSize: 12),
                   ),
                 ),
               ],
@@ -308,7 +315,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   child: Text(
                     'Recent Connections',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.5),
+                      color: Colors.white.withValues(alpha: 0.5),
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
@@ -318,10 +325,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 ...history.map((url) => ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                       dense: true,
-                      leading: const Icon(Icons.history, color: Colors.white38, size: 18),
+                      leading: const Icon(Icons.history,
+                          color: Colors.white38, size: 18),
                       title: Text(
                         url,
-                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),

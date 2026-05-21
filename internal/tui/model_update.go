@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 // Update handles all Bubble Tea messages and is defined in model_update.go for file-size
@@ -306,6 +307,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sysMsg := m.t("cron.firing")
 		m.chatWriteSystem(nextSystemID(), sysMsg)
 		m.emitIMText(sysMsg)
+		m.setNextTunnelUserMessageOverride(tunnel.MessageData{
+			Text:        msg.Prompt,
+			DisplayText: sysMsg,
+			Kind:        "cron",
+		})
 		// If agent is idle, submit the cron prompt immediately.
 		// Otherwise queue it for processing after the current run finishes.
 		if !m.loading {

@@ -92,6 +92,24 @@ class StatusData {
       );
 }
 
+class MessageData {
+  final String text;
+  final String displayText;
+  final String kind;
+
+  MessageData({
+    required this.text,
+    this.displayText = '',
+    this.kind = '',
+  });
+
+  factory MessageData.fromJson(Map<String, dynamic> d) => MessageData(
+        text: d['text'] as String? ?? '',
+        displayText: d['display_text'] as String? ?? '',
+        kind: d['kind'] as String? ?? '',
+      );
+}
+
 /// ─── Tool Call / Result ───
 
 class ToolCallData {

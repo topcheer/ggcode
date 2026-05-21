@@ -149,7 +149,7 @@ class MessageBubble extends StatelessWidget {
 
   MarkdownStyleSheet _markdownStyleSheet() {
     return MarkdownStyleSheet(
-      p: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 14),
+      p: TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 14),
       code: TextStyle(
         color: Colors.blueAccent[100],
         fontSize: 13,
@@ -160,12 +160,16 @@ class MessageBubble extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       codeblockPadding: const EdgeInsets.all(8),
-      listBullet: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 14),
-      h2: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
-      h3: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+      listBullet:
+          TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 14),
+      h2: const TextStyle(
+          color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+      h3: const TextStyle(
+          color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
       strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
       em: const TextStyle(color: Colors.white70, fontStyle: FontStyle.italic),
-      blockquote: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14),
+      blockquote:
+          TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
       blockquoteDecoration: BoxDecoration(
         color: const Color(0xFF2A2A3E),
         borderRadius: BorderRadius.circular(4),
