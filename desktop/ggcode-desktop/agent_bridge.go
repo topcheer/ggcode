@@ -66,6 +66,11 @@ type AgentBridge struct {
 	subAgentMgr *subagent.Manager
 	swarmMgr    *swarm.Manager
 
+	// Throttle state for high-frequency swarm teammate_text events.
+	swarmTextMu      sync.Mutex
+	swarmTextLast    map[string]time.Time // per-teammate last notify time
+	swarmEventCounts map[string]int       // per-teammate cached event count for incremental updates
+
 	// Mobile tunnel broker (nil if not sharing).
 	tunnelBroker      *tunnel.Broker
 	tunnelMsgID       string
@@ -226,8 +231,54 @@ func (b *AgentBridge) setupAgent() error {
 	b.registry.Register(tool.SendMessageTool{Manager: b.subAgentMgr, SwarmMgr: b.swarmMgr})
 
 	// Forward swarm events to UI and mobile tunnel.
+	// teammate_text events are throttled to 500ms per teammate to avoid
+	// flooding the UI with full-snapshot updates on every streaming token.
+	// Status-change events (tool_call, idle, etc.) are sent immediately.
+	b.swarmTextLast = make(map[string]time.Time)
+	b.swarmEventCounts = make(map[string]int)
+
 	b.swarmMgr.SetOnUpdate(func(ev swarm.Event) {
-		b.ui.UpdateAgentPanel(ev.TeammateID, agentPanelFromSwarmEvent(b.swarmMgr, ev))
+		switch ev.Type {
+		case "teammate_text":
+			// Throttle: at most one UpdateAgentPanel per teammate per 500ms.
+			b.swarmTextMu.Lock()
+			last := b.swarmTextLast[ev.TeammateID]
+			now := time.Now()
+			if !last.IsZero() && now.Sub(last) < 500*time.Millisecond {
+				b.swarmTextMu.Unlock()
+				// Still push to mobile tunnel (lightweight)
+				if b.tunnelBroker != nil {
+					msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
+					b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
+				}
+				return
+			}
+			b.swarmTextLast[ev.TeammateID] = now
+			cachedCount := b.swarmEventCounts[ev.TeammateID]
+			b.swarmTextMu.Unlock()
+
+			panel, newTotal := agentPanelFromSwarmEventIncremental(b.swarmMgr, ev, cachedCount)
+			b.ui.UpdateAgentPanel(ev.TeammateID, panel)
+
+			// Update the cached event count for next incremental update
+			b.swarmTextMu.Lock()
+			b.swarmEventCounts[ev.TeammateID] = newTotal
+			b.swarmTextMu.Unlock()
+
+		case "teammate_idle":
+			if ev.Result != "" {
+				// Clear cached event count on completion
+				b.swarmTextMu.Lock()
+				delete(b.swarmEventCounts, ev.TeammateID)
+				b.swarmTextMu.Unlock()
+				b.ui.UpdateAgentPanel(ev.TeammateID, agentPanelFromSwarmEvent(b.swarmMgr, ev))
+			}
+
+		case "teammate_spawned", "teammate_working", "teammate_shutdown",
+			"teammate_tool_call", "teammate_tool_result", "teammate_error":
+			// Status-change events: send immediately with full snapshot
+			b.ui.UpdateAgentPanel(ev.TeammateID, agentPanelFromSwarmEvent(b.swarmMgr, ev))
+		}
 
 		// Push to mobile client
 		if b.tunnelBroker != nil {
@@ -247,6 +298,7 @@ func (b *AgentBridge) setupAgent() error {
 				b.tunnelBroker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, ev.IsError)
 
 			case "teammate_text":
+				// Already handled above in throttle block if skipped
 				msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
 				b.tunnelBroker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
 
@@ -1097,6 +1149,8 @@ func agentPanelFromSubAgent(sa *subagent.SubAgent) AgentPanelData {
 	if sa.DisplayTask != "" {
 		task = sa.DisplayTask
 	}
+	// Use Events() for full panel construction (first call or after completion).
+	// This is called at ~10Hz (subagent notifyUpdate throttle), not per-token.
 	events := make([]AgentEventEntry, 0)
 	for _, ev := range sa.Events() {
 		entry := AgentEventEntry{
@@ -1184,6 +1238,49 @@ func agentPanelFromSwarmEvent(mgr *swarm.Manager, ev swarm.Event) AgentPanelData
 		p.CompletedAt = snap.EndedAt
 	}
 	return p
+}
+
+// agentPanelFromSwarmEventIncremental builds panel data using incremental events
+// instead of a full TeammateSnapshot. fromIdx is the cached event count from the
+// last update — only new events (index >= fromIdx) are fetched. Returns the panel
+// data and the new total event count to cache for the next call.
+func agentPanelFromSwarmEventIncremental(mgr *swarm.Manager, ev swarm.Event, fromIdx int) (AgentPanelData, int) {
+	// Fetch only incremental events
+	newEvents, totalCount, ok := mgr.TeammateEventsSince(ev.TeammateID, fromIdx)
+	if !ok {
+		return AgentPanelData{ID: ev.TeammateID, Name: ev.TeammateName, Kind: "teammate", Status: "working", TeamID: ev.TeamID}, 0
+	}
+
+	entries := make([]AgentEventEntry, 0, len(newEvents))
+	for _, e := range newEvents {
+		entry := AgentEventEntry{
+			Type:     teammateEventTypeStr(e.Type),
+			ToolName: e.ToolName,
+			ToolID:   e.ToolID,
+			ToolArgs: e.ToolArgs,
+		}
+		switch e.Type {
+		case swarm.TeammateEventToolResult:
+			entry.Content = e.Result
+			entry.IsError = e.IsError
+		case swarm.TeammateEventToolCall:
+			entry.Content = toolArgSummary(e.ToolName, e.ToolArgs)
+		default:
+			entry.Content = e.Text
+		}
+		entries = append(entries, entry)
+	}
+
+	p := AgentPanelData{
+		ID:     ev.TeammateID,
+		Name:   ev.TeammateName,
+		Kind:   "teammate",
+		Status: "working",
+		TeamID: ev.TeamID,
+		Events: entries,
+	}
+
+	return p, totalCount
 }
 
 func teammateEventTypeStr(t swarm.TeammateEventType) string {

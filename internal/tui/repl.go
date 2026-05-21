@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -294,12 +295,34 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	tools.Register(tool.SendMessageTool{Manager: r.model.subAgentMgr, SwarmMgr: mgr})
 
 	// Notify TUI on swarm state changes.
+	// teammate_text events are high-frequency (one per streaming token).
+	// We throttle them to ~2 Hz per teammate to avoid flooding Bubble Tea's
+	// event loop with messages that trigger expensive snapshot operations.
+	// Status-change events (tool_call, idle, etc.) are sent immediately.
+	var swarmTextNotifyMu sync.Mutex
+	swarmTextLastNotify := make(map[string]time.Time)
+
 	mgr.SetOnUpdate(func(ev swarm.Event) {
 		r.model.pushSwarmTunnelEvent(ev)
-		if r.program != nil {
+		if r.program == nil {
+			return
+		}
+		switch ev.Type {
+		case "teammate_text":
+			// Throttle: at most one subAgentUpdateMsg per teammate per 500ms.
+			swarmTextNotifyMu.Lock()
+			last := swarmTextLastNotify[ev.TeammateID]
+			now := time.Now()
+			if !last.IsZero() && now.Sub(last) < 500*time.Millisecond {
+				swarmTextNotifyMu.Unlock()
+				return
+			}
+			swarmTextLastNotify[ev.TeammateID] = now
+			swarmTextNotifyMu.Unlock()
 			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
-			// When a teammate finishes a task, notify the main agent.
-			if ev.Type == "teammate_idle" && ev.Result != "" {
+		case "teammate_idle":
+			if ev.Result != "" {
+				r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
 				r.program.Send(subAgentDoneMsg{
 					AgentID:   ev.TeammateID,
 					AgentName: ev.TeammateName,
@@ -307,6 +330,10 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 					Kind:      "teammate",
 				})
 			}
+		case "teammate_spawned", "teammate_working", "teammate_shutdown",
+			"teammate_tool_call", "teammate_tool_result", "teammate_error":
+			// Status-change events: send immediately so strip updates promptly.
+			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
 		}
 	})
 }

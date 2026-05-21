@@ -115,10 +115,49 @@ func (t *Teammate) appendEvent(ev TeammateEvent) {
 	t.events = append(t.events, ev)
 }
 
+// EventsSince returns only events with index >= fromIdx, along with the total
+// event count. This avoids copying the full event history when only incremental
+// events are needed (e.g. GUI agent panel updates).
+func (t *Teammate) EventsSince(fromIdx int) ([]TeammateEvent, int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	total := len(t.events)
+	if fromIdx >= total {
+		return nil, total
+	}
+	out := make([]TeammateEvent, total-fromIdx)
+	copy(out, t.events[fromIdx:])
+	return out, total
+}
+
 func (t *Teammate) getResults() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.LastResult
+}
+
+// TeammateStatusInfo is a lightweight read-only copy of a Teammate's identity
+// and status. Unlike TeammateSnapshot, it does NOT copy events, making it
+// safe to call at high frequency (e.g. every streaming token) without
+// incurring O(maxTeammateEvents) copy overhead or contending the Teammate.mu
+// lock that the runner uses for appendEvent.
+type TeammateStatusInfo struct {
+	ID     string
+	Name   string
+	Status TeammateStatus
+}
+
+// statusInfo returns a lightweight copy with only identity + status.
+// It acquires Teammate.mu briefly to read the Status field.
+func (t *Teammate) statusInfo() TeammateStatusInfo {
+	t.mu.Lock()
+	s := t.Status
+	t.mu.Unlock()
+	return TeammateStatusInfo{
+		ID:     t.ID,
+		Name:   t.Name,
+		Status: s,
+	}
 }
 
 // TeammateSnapshot is a read-only copy of a Teammate for external consumption.
@@ -176,6 +215,21 @@ type TeamSnapshot struct {
 	Teammates []TeammateSnapshot
 	TaskCount int
 	CreatedAt time.Time
+}
+
+// teammateStatuses returns lightweight status info for all teammates.
+// Unlike snapshot(), this does NOT copy events and is safe to call at high
+// frequency. It only acquires Team.mu.RLock briefly to iterate teammates,
+// and each Teammate.mu briefly to read Status.
+func (t *Team) teammateStatuses() []TeammateStatusInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]TeammateStatusInfo, 0, len(t.Teammates))
+	for _, m := range t.Teammates {
+		out = append(out, m.statusInfo())
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 func (t *Team) snapshot() TeamSnapshot {

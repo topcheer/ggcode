@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -613,5 +614,178 @@ func TestManager_SetWorkingDir(t *testing.T) {
 	m.SetWorkingDir("/test/dir")
 	if m.workingDir != "/test/dir" {
 		t.Errorf("expected /test/dir, got %s", m.workingDir)
+	}
+}
+
+func TestManager_ListTeamStatuses_Empty(t *testing.T) {
+	m, _ := testManager(t)
+	statuses := m.ListTeamStatuses()
+	if len(statuses) != 0 {
+		t.Fatalf("expected 0 teams, got %d", len(statuses))
+	}
+}
+
+func TestManager_ListTeamStatuses_WithTeammates(t *testing.T) {
+	m, tools := testManager(t)
+	team := m.CreateTeam("status-team", "leader-id")
+
+	// Spawn teammates
+	_, err := m.SpawnTeammate(team.ID, "coder", "32", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = m.SpawnTeammate(team.ID, "reviewer", "31", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ListTeamStatuses should return lightweight info without copying events
+	statuses := m.ListTeamStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 team, got %d", len(statuses))
+	}
+
+	ts := statuses[0]
+	if ts.ID != team.ID {
+		t.Errorf("expected team ID %s, got %s", team.ID, ts.ID)
+	}
+	if ts.Name != "status-team" {
+		t.Errorf("expected team name status-team, got %s", ts.Name)
+	}
+	if ts.LeaderID != "leader-id" {
+		t.Errorf("expected leader-id, got %s", ts.LeaderID)
+	}
+	if len(ts.Teammates) != 2 {
+		t.Fatalf("expected 2 teammates, got %d", len(ts.Teammates))
+	}
+
+	// Teammates should be sorted by ID
+	if ts.Teammates[0].ID == "" || ts.Teammates[1].ID == "" {
+		t.Fatal("teammate IDs should not be empty")
+	}
+
+	// Verify the lightweight info has no events field (compile-time check via type)
+	// The TeammateStatusInfo type has only ID, Name, Status — no Events.
+	// This test ensures the API returns correct values.
+	for _, tm := range ts.Teammates {
+		if tm.Status != TeammateIdle {
+			t.Errorf("expected teammate %s to be idle, got %s", tm.ID, tm.Status)
+		}
+	}
+
+	// Suppress unused tools warning
+	_ = tools
+}
+
+func TestManager_ListTeamStatuses_DoesNotCopyEvents(t *testing.T) {
+	// Verify that ListTeamStatuses returns data even after appending many events.
+	// The key guarantee: it does NOT copy events, so it's safe to call at high frequency.
+	m, _ := testManager(t)
+	team := m.CreateTeam("events-team", "leader")
+
+	tm, err := m.SpawnTeammate(team.ID, "coder", "32", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Append events directly to the teammate (bypass the runner)
+	// Access the teammate via the manager's internal team
+	tmID := tm.ID
+	m.mu.Lock()
+	for _, t := range m.teams {
+		if raw, ok := t.Teammates[tmID]; ok {
+			for i := 0; i < 100; i++ {
+				raw.appendEvent(TeammateEvent{Type: TeammateEventText, Text: "text chunk"})
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	// ListTeamStatuses should still work and be lightweight
+	statuses := m.ListTeamStatuses()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 team, got %d", len(statuses))
+	}
+	if len(statuses[0].Teammates) != 1 {
+		t.Fatalf("expected 1 teammate, got %d", len(statuses[0].Teammates))
+	}
+
+	// The status info should not expose events (type has no Events field)
+	if statuses[0].Teammates[0].Status != TeammateIdle {
+		t.Errorf("expected idle, got %s", statuses[0].Teammates[0].Status)
+	}
+}
+
+func TestManager_TeammateEventsSince(t *testing.T) {
+	m, _ := testManager(t)
+	team := m.CreateTeam("events-team", "leader")
+
+	tm, err := m.SpawnTeammate(team.ID, "coder", "32", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add events
+	tmID := tm.ID
+	m.mu.Lock()
+	for _, t := range m.teams {
+		if raw, ok := t.Teammates[tmID]; ok {
+			for i := 0; i < 10; i++ {
+				raw.appendEvent(TeammateEvent{Type: TeammateEventText, Text: fmt.Sprintf("text-%d", i)})
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	// Get all events
+	events, total, ok := m.TeammateEventsSince(tmID, 0)
+	if !ok {
+		t.Fatal("expected teammate to be found")
+	}
+	if total != 10 {
+		t.Fatalf("expected 10 total, got %d", total)
+	}
+	if len(events) != 10 {
+		t.Fatalf("expected 10 events, got %d", len(events))
+	}
+
+	// Get incremental events from index 7
+	events, total, ok = m.TeammateEventsSince(tmID, 7)
+	if !ok {
+		t.Fatal("expected teammate to be found")
+	}
+	if total != 10 {
+		t.Fatalf("expected 10 total, got %d", total)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 incremental events, got %d", len(events))
+	}
+
+	// Non-existent teammate
+	_, _, ok = m.TeammateEventsSince("nonexistent", 0)
+	if ok {
+		t.Error("expected false for nonexistent teammate")
+	}
+}
+
+func TestManager_TeammateEventsSince_NoEvents(t *testing.T) {
+	m, _ := testManager(t)
+	team := m.CreateTeam("empty-team", "leader")
+
+	tm, err := m.SpawnTeammate(team.ID, "coder", "32", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, total, ok := m.TeammateEventsSince(tm.ID, 0)
+	if !ok {
+		t.Fatal("expected teammate to be found")
+	}
+	if total != 0 {
+		t.Fatalf("expected 0 total, got %d", total)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events, got %d", len(events))
 	}
 }

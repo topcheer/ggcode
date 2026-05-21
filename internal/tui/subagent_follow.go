@@ -40,14 +40,21 @@ type followViewEntry struct {
 	dropped int
 }
 
+// stripRefreshInterval is the minimum time between follow-strip refreshes.
+// This prevents high-frequency teammate_text events from triggering expensive
+// refreshSlots/refreshSwarmSlots calls on every streaming token.
+const stripRefreshInterval = 500 * time.Millisecond
+
 // subAgentFollowState tracks the TUI follow-mode for sub-agents AND swarm teammates.
 // Ctrl+N cycles through all slots regardless of kind.
 type subAgentFollowState struct {
-	activeID    string                      // agent/teammate ID being followed ("" = main view)
-	slots       []followSlot                // ordered list of all followable agents
-	views       map[string]*followViewEntry // cached chat lists per agent
-	dirty       map[string]bool             // which views need rebuild
-	lastRebuild map[string]time.Time        // throttle: last rebuild time per view
+	activeID         string                      // agent/teammate ID being followed ("" = main view)
+	slots            []followSlot                // ordered list of all followable agents
+	views            map[string]*followViewEntry // cached chat lists per agent
+	dirty            map[string]bool             // which views need rebuild
+	lastRebuild      map[string]time.Time        // throttle: last rebuild time per view
+	lastStripRefresh time.Time                   // throttle: last time strip slots were refreshed
+	stripDirty       bool                        // true when strip needs refresh on next tick
 }
 
 // ---------------------------------------------------------------------------
@@ -67,21 +74,21 @@ func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 	var newSlots []followSlot
 
 	// Sub-agent slots: keep running agents and recently-completed ones (grace period)
+	// Uses the lightweight Statuses() API to avoid copying events.
 	if saMgr != nil {
-		agents := saMgr.List()
-		slices.SortFunc(agents, func(a, b *subagent.SubAgent) int {
+		statuses := saMgr.Statuses()
+		slices.SortFunc(statuses, func(a, b subagent.StatusInfo) int {
 			return cmp.Compare(a.ID, b.ID)
 		})
 		now := time.Now()
-		for _, sa := range agents {
-			snap, _ := saMgr.Snapshot(sa.ID)
-			isTerminal := snap.Status == subagent.StatusCompleted || snap.Status == subagent.StatusFailed || snap.Status == subagent.StatusCancelled
+		for _, s := range statuses {
+			isTerminal := s.Status == subagent.StatusCompleted || s.Status == subagent.StatusFailed || s.Status == subagent.StatusCancelled
 			if isTerminal {
 				// Keep in strip during grace period so user can see the result
-				if !snap.EndedAt.IsZero() && now.Sub(snap.EndedAt) < subAgentGracePeriod {
+				if !s.EndedAt.IsZero() && now.Sub(s.EndedAt) < subAgentGracePeriod {
 					newSlots = append(newSlots, followSlot{
-						ID:       snap.ID,
-						Name:     snap.Name,
+						ID:       s.ID,
+						Name:     s.Name,
 						Kind:     followSlotSubAgent,
 						Phase:    "done",
 						Terminal: true,
@@ -90,10 +97,10 @@ func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 				continue
 			}
 			newSlots = append(newSlots, followSlot{
-				ID:       snap.ID,
-				Name:     snap.Name,
+				ID:       s.ID,
+				Name:     s.Name,
 				Kind:     followSlotSubAgent,
-				Phase:    snap.CurrentPhase,
+				Phase:    s.CurrentPhase,
 				Terminal: false,
 			})
 		}
@@ -103,6 +110,7 @@ func (f *subAgentFollowState) refreshSlots(saMgr *subagent.Manager) {
 }
 
 // refreshSwarmSlots appends swarm teammate slots.
+// Uses the lightweight ListTeamStatuses() API to avoid copying teammate events.
 func (f *subAgentFollowState) refreshSwarmSlots(swMgr *swarm.Manager) {
 	if swMgr == nil {
 		return
@@ -116,7 +124,7 @@ func (f *subAgentFollowState) refreshSwarmSlots(swMgr *swarm.Manager) {
 	}
 	f.slots = subOnly
 
-	for _, ts := range swMgr.ListTeams() {
+	for _, ts := range swMgr.ListTeamStatuses() {
 		for _, tm := range ts.Teammates {
 			f.slots = append(f.slots, followSlot{
 				ID:       tm.ID,
@@ -139,6 +147,32 @@ func (f *subAgentFollowState) markDirty(agentID string) {
 		f.dirty = make(map[string]bool)
 	}
 	f.dirty[agentID] = true
+}
+
+// markStripDirty marks the follow strip as needing a slot refresh.
+// The actual refresh is deferred to the next periodic tick (stripRefreshInterval)
+// to avoid calling refreshSlots/refreshSwarmSlots on every streaming token.
+func (f *subAgentFollowState) markStripDirty() {
+	f.stripDirty = true
+}
+
+// refreshStripIfNeeded performs the strip refresh only if enough time has
+// elapsed since the last refresh (stripRefreshInterval). This is called
+// from handleSubAgentUpdateMsg and handleSubAgentFollowRefreshMsg.
+// Returns true if a refresh happened.
+func (f *subAgentFollowState) refreshStripIfNeeded(saMgr *subagent.Manager, swMgr *swarm.Manager) bool {
+	if !f.stripDirty {
+		return false
+	}
+	now := time.Now()
+	if !f.lastStripRefresh.IsZero() && now.Sub(f.lastStripRefresh) < stripRefreshInterval {
+		return false // still throttled
+	}
+	f.refreshSlots(saMgr)
+	f.refreshSwarmSlots(swMgr)
+	f.lastStripRefresh = now
+	f.stripDirty = false
+	return true
 }
 
 // isActive returns true if we're following a specific agent.
