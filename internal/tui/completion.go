@@ -196,7 +196,7 @@ var SlashCommands = []string{
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/checkpoints", "/plugins",
 	"/image", "/init", "/harness", "/exit", "/quit",
-	"/compact", "/todo", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel",
+	"/compact", "/todo", "/status", "/knight", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -251,6 +251,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/skills":      "Browse available skills",
 	"/stream":      "Live stream TUI to platforms (YouTube, Bilibili, etc.)",
 	"/share":       "Share session to mobile (QR code tunnel)",
+	"/unshare":     "Stop sharing (disconnect mobile)",
 	"/tunnel":      "Share session to mobile (QR code tunnel)",
 }
 
@@ -274,6 +275,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/wechat":      "<subcommand>",
 	"/stream":      "<start|stop|status|config>",
 	"/share":       "<start|stop|status>",
+	"/unshare":     "(no args)",
 	"/tunnel":      "<start|stop|status>",
 	"/wecom":       "<subcommand>",
 	"/mattermost":  "<subcommand>",

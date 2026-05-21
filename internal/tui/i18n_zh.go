@@ -534,6 +534,8 @@ func zhCatalog(key string) string {
 		return "Ctrl+N 跟随"
 	case "hint.unfollow_panel":
 		return "Ctrl+N 取消跟随"
+	case "tunnel.not_active":
+		return "当前没有活跃的共享会话。"
 	case "tunnel.stopped":
 		return "隧道已停止。"
 	case "pairing.rejected":

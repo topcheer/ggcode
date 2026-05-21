@@ -205,7 +205,10 @@ func (m *Model) handleCommand(text string) tea.Cmd {
 			m.quitting = true
 			return tea.Quit
 		case "/clear":
-			m.resetConversationView()
+			m.handleClearChat()
+			return nil
+		case "/unshare":
+			m.handleUnshare()
 			return nil
 		case "/help", "/?":
 			m.chatWriteSystem(nextSystemID(), m.helpText())

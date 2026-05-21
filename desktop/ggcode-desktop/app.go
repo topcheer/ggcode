@@ -711,11 +711,11 @@ func (a *App) resumeSession(id string) {
 
 	// Push updated session info + history to mobile client
 	if a.tunnelBroker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
+		a.tunnelBroker.PushChatClear()
 		a.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
 			Workspace: a.dc.WorkDir,
 			Version:   Version,
 		})
-		a.tunnelBroker.PushChatClear()
 		session := a.agentBridge.CurrentSession()
 		history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
 		for _, msg := range session.Messages {
@@ -815,12 +815,13 @@ func (a *App) newSession() {
 		a.agentBridge.saveSession()
 	}
 
-	// 4. Send sharing_stopped synchronously, THEN close the connection.
-	if a.tunnelSession != nil {
-		_ = a.tunnelSession.Send(tunnel.GatewayMessage{Type: "sharing_stopped"})
-		a.tunnelSession.Stop()
-		a.tunnelSession = nil
-		a.tunnelBroker = nil
+	// 4. Notify mobile client about new session (don't close tunnel).
+	if a.tunnelBroker != nil {
+		a.tunnelBroker.PushChatClear()
+	}
+	// Re-attach broker so startChat can send SessionInfo.
+	if a.agentBridge != nil && a.tunnelBroker != nil {
+		a.agentBridge.tunnelBroker = a.tunnelBroker
 	}
 
 	// Clear session ID so startChat creates a fresh one.
