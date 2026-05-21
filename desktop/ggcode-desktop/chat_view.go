@@ -1026,8 +1026,11 @@ func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := truncateRunes(msg.Content, 2000, "...")
-	resultBlock := newCodeBlock(result)
+	formatted := cv.formatToolResult(msg.ToolName, msg.Content)
+	if formatted == "" {
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+	}
+	resultBlock := newCodeBlock(truncateRunes(formatted, 2000, "..."))
 	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
@@ -1081,7 +1084,10 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 
-	result := truncateRunes(msg.Content, 2000, "...")
+	result := cv.formatToolResult(msg.ToolName, truncateRunes(msg.Content, 2000, "..."))
+	if result == "" {
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
+	}
 	// Wrap raw JSON in code block for readability
 	trimmed := strings.TrimSpace(result)
 	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
