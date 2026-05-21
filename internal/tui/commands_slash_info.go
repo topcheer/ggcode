@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/version"
 )
 
@@ -52,6 +53,25 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 			m.agent.AddMessage(msg)
 		}
 		m.SetSession(ses, m.sessionStore)
+
+		// Notify mobile client about session switch
+		if m.tunnelBroker != nil {
+			m.tunnelBroker.PushChatClear()
+			m.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+				Workspace: m.sidebarWorkingDirectory(),
+				Model:     m.activeModel,
+				Provider:  m.activeVendor,
+				Mode:      m.mode.String(),
+				Version:   version.Version,
+			})
+			if msgs := m.currentSessionMessages(); len(msgs) > 0 {
+				history := tunnelMessagesToHistory(msgs)
+				if len(history) > 0 {
+					m.tunnelBroker.PushChatHistory(history)
+				}
+			}
+		}
+
 		m.rebuildConversationFromMessages(ses.Messages)
 		m.restoreHistoryFromMessages(ses.Messages)
 		title := ses.Title

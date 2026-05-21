@@ -11,8 +11,73 @@ import (
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tunnel"
+	"github.com/topcheer/ggcode/internal/version"
 )
+
+// handleClearChat creates a new session, clears the conversation view,
+// and notifies any connected mobile client.
+func (m *Model) handleClearChat() {
+	// Save current session first.
+	if m.session != nil && m.sessionStore != nil {
+		m.sessionStore.Save(m.session)
+	}
+
+	// Create new session.
+	vendor, endpoint, model := "", "", ""
+	if m.config != nil {
+		vendor = m.config.Vendor
+		endpoint = m.config.Endpoint
+		model = m.config.Model
+	}
+	ses := session.NewSession(vendor, endpoint, model)
+	if m.sessionStore != nil {
+		m.sessionStore.Save(ses)
+	}
+	m.SetSession(ses, m.sessionStore)
+
+	// Clear agent conversation state.
+	if m.agent != nil {
+		m.agent.Clear()
+	}
+
+	// Clear local view.
+	m.resetConversationView()
+
+	// Notify mobile client.
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.PushChatClear()
+		m.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: m.sidebarWorkingDirectory(),
+			Model:     m.activeModel,
+			Provider:  m.activeVendor,
+			Mode:      m.mode.String(),
+			Version:   version.Version,
+		})
+	}
+
+	m.chatWriteSystem(nextSystemID(), m.t("session.new", ses.ID))
+}
+
+// handleUnshare stops the active tunnel/sharing session.
+func (m *Model) handleUnshare() {
+	if m.tunnelSession == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("tunnel.not_active"))
+		return
+	}
+	m.tunnelSession.Stop()
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.PushSharingStopped()
+	}
+	m.tunnelSession = nil
+	m.tunnelBroker = nil
+	m.tunnelMsgID = ""
+	m.tunnelPendingApprovalID = ""
+	m.tunnelPendingAskUserID = ""
+	m.tunnelSpawned = nil
+	m.chatWriteSystem(nextSystemID(), m.t("tunnel.stopped"))
+}
 
 func (m *Model) resetConversationView() {
 	m.chatReset()

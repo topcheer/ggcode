@@ -903,11 +903,13 @@ func TestScenario_UserRunsClearCommand(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd after /clear")
 	}
-	if m.chatList != nil && m.chatList.Len() != 0 {
-		t.Error("expected output buffer cleared")
-	}
 	if m.loading {
 		t.Error("expected loading=false after /clear")
+	}
+	// /clear now creates a new session and writes a system message.
+	// Verify chatList was cleared and then received the new-session message.
+	if m.chatList == nil || m.chatList.Len() == 0 {
+		t.Error("expected session.new system message after /clear")
 	}
 }
 

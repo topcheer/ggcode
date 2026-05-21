@@ -147,6 +147,197 @@ func TestMultiEdit_ReadFileWrapperLinesAreIgnored(t *testing.T) {
 	}
 }
 
+func TestMultiEdit_LeadingIndentShift_OverIndentedOldText(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	content := "func catalog(key string) string {\n\tswitch key {\n\tcase \"hint.follow_panel\":\n\t\treturn \"Ctrl+N follow\"\n\tcase \"hint.unfollow_panel\":\n\t\treturn \"Ctrl+N unfollow\"\n\t}\n\treturn \"\"\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"edits": []map[string]string{
+			{
+				"old_text": "\t\tcase \"hint.follow_panel\":\n\t\t\treturn \"Ctrl+N follow\"",
+				"new_text": "\t\tcase \"hint.follow_panel\":\n\t\t\treturn \"Ctrl+F follow\"",
+			},
+			{
+				"old_text": "\t\tcase \"hint.unfollow_panel\":\n\t\t\treturn \"Ctrl+N unfollow\"",
+				"new_text": "\t\tcase \"hint.unfollow_panel\":\n\t\t\treturn \"Ctrl+F unfollow\"",
+			},
+		},
+	})
+	res, err := MultiEditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected over-indented old_text edits to succeed; got: %s", res.Content)
+	}
+
+	got, _ := os.ReadFile(fp)
+	want := "func catalog(key string) string {\n\tswitch key {\n\tcase \"hint.follow_panel\":\n\t\treturn \"Ctrl+F follow\"\n\tcase \"hint.unfollow_panel\":\n\t\treturn \"Ctrl+F unfollow\"\n\t}\n\treturn \"\"\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestMultiEdit_ReadFileAnchorIgnoresDanglingLineNumber(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "test.go")
+	content := "func describe(result string) string {\n\tcaseOne()\n\treturn result\n}\n"
+	if err := os.WriteFile(fp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	input, _ := json.Marshal(map[string]any{
+		"file_path": fp,
+		"edits": []map[string]string{
+			{
+				"old_text": "     2\t\tcaseOne()\n     3\t\treturn result\n     4",
+				"new_text": "     2\t\tcaseTwo()\n     3\t\treturn result\n     4",
+			},
+		},
+	})
+	res, err := MultiEditFile{}.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("expected dangling line-number fragment to be ignored; got: %s", res.Content)
+	}
+
+	got, _ := os.ReadFile(fp)
+	want := "func describe(result string) string {\n\tcaseTwo()\n\treturn result\n}\n"
+	if string(got) != want {
+		t.Errorf("unexpected content:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestMultiEdit_CorpusReplay_ValidCompatibilityCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		edits   []map[string]string
+		want    string
+	}{
+		{
+			name:    "top-level and nested blocks over-indented like corpus failures",
+			content: "package tool\n\nfunc localizedGenericActivity(lang string, label string) string {\n\treturn label\n}\n\nfunc params() string {\n\treturn `{\n\t\t\"properties\": {\n\t\t\t\"command\": {\n\t\t\t\t\"type\": \"string\",\n\t\t\t\t\"description\": \"Shell command to execute\"\n\t\t\t}\n\t\t}\n\t}`\n}\n",
+			edits: []map[string]string{
+				{
+					"old_text": "\tfunc localizedGenericActivity(lang string, label string) string {\n\t\treturn label\n\t}",
+					"new_text": "\tfunc localizedGenericActivity(lang string, label string) string {\n\t\treturn strings.TrimSpace(label)\n\t}",
+				},
+				{
+					"old_text": "\t\t\t\t\"command\": {\n\t\t\t\t\t\"type\": \"string\",\n\t\t\t\t\t\"description\": \"Shell command to execute\"\n\t\t\t\t}",
+					"new_text": "\t\t\t\t\"command\": {\n\t\t\t\t\t\"type\": \"string\",\n\t\t\t\t\t\"description\": \"Shell command to execute in the background\"\n\t\t\t\t}",
+				},
+			},
+			want: "package tool\n\nfunc localizedGenericActivity(lang string, label string) string {\n\treturn strings.TrimSpace(label)\n}\n\nfunc params() string {\n\treturn `{\n\t\t\"properties\": {\n\t\t\t\"command\": {\n\t\t\t\t\"type\": \"string\",\n\t\t\t\t\"description\": \"Shell command to execute in the background\"\n\t\t\t}\n\t\t}\n\t}`\n}\n",
+		},
+		{
+			name:    "numbered import block ignores dangling final line number like corpus failures",
+			content: "package main\n\nimport (\n\t\"strings\"\n\t\"syscall\"\n\t\"time\"\n\n\t\"github.com/hashicorp/mdns\"\n\t\"github.com/topcheer/ggcode/internal/debug\"\n)\n",
+			edits: []map[string]string{
+				{
+					"old_text": "   4\t\t\"strings\"\n   5\t\t\"syscall\"\n   6\t\t\"time\"\n   7\n   8\t\t\"github.com/hashicorp/mdns\"\n   9\t\t\"github.com/topcheer/ggcode/internal/debug\"\n   10",
+					"new_text": "   4\t\t\"strings\"\n   5\t\t\"syscall\"\n   6\t\t\"time\"\n   7\n   8\t\t\"github.com/hashicorp/mdns\"\n   9\t\t\"github.com/topcheer/ggcode/internal/debug\"\n   10\t\t\"github.com/topcheer/ggcode/internal/safego\"",
+				},
+			},
+			want: "package main\n\nimport (\n\t\"strings\"\n\t\"syscall\"\n\t\"time\"\n\n\t\"github.com/hashicorp/mdns\"\n\t\"github.com/topcheer/ggcode/internal/debug\"\n\t\"github.com/topcheer/ggcode/internal/safego\"\n)\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fp := filepath.Join(dir, "test.go")
+			if err := os.WriteFile(fp, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			input, _ := json.Marshal(map[string]any{
+				"file_path": fp,
+				"edits":     tt.edits,
+			})
+			res, err := MultiEditFile{}.Execute(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.IsError {
+				t.Fatalf("expected corpus replay case to succeed; got: %s", res.Content)
+			}
+
+			got, _ := os.ReadFile(fp)
+			if string(got) != tt.want {
+				t.Errorf("unexpected content:\n got: %q\nwant: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMultiEdit_CorpusReplay_InvalidCases(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		edits      []map[string]string
+		wantSubstr string
+	}{
+		{
+			name:    "empty old_text remains invalid",
+			content: "alpha\nbeta\n",
+			edits: []map[string]string{
+				{"old_text": "", "new_text": "x"},
+			},
+			wantSubstr: "old_text must not be empty",
+		},
+		{
+			name:    "non-unique old_text remains invalid without anchor",
+			content: "release-smoke-linux:\n  needs:\nrelease-smoke-linux:\n  needs:\nrelease-smoke-linux:\n  needs:\n",
+			edits: []map[string]string{
+				{"old_text": "release-smoke-linux:\n  needs:", "new_text": "release-smoke-linux:\n  needs: [verify]"},
+			},
+			wantSubstr: "must be unique",
+		},
+		{
+			name:    "multi_edit still matches against original file only",
+			content: "alpha\nbeta\ngamma\n",
+			edits: []map[string]string{
+				{"old_text": "beta", "new_text": "BETA"},
+				{"old_text": "BETA", "new_text": "BETA2"},
+			},
+			wantSubstr: "old_text not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fp := filepath.Join(dir, "test.txt")
+			if err := os.WriteFile(fp, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			input, _ := json.Marshal(map[string]any{
+				"file_path": fp,
+				"edits":     tt.edits,
+			})
+			res, err := MultiEditFile{}.Execute(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.IsError {
+				t.Fatal("expected invalid corpus replay case to fail")
+			}
+			if !strings.Contains(res.Content, tt.wantSubstr) {
+				t.Fatalf("expected error containing %q, got: %s", tt.wantSubstr, res.Content)
+			}
+		})
+	}
+}
+
 func TestWriteFile_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "a", "b", "c", "out.txt")

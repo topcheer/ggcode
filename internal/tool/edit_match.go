@@ -11,6 +11,7 @@ type matchResult struct {
 	canonical string // the actual bytes in content that will be replaced
 	transform string // diagnostic tag for which fallback fired ("" = exact)
 	shift     string // for leading-indent-shift: prefix to prepend to new_text lines
+	trim      string // for leading-indent-shift: prefix to trim from new_text lines
 	start     int    // byte offset of canonical in content when the match is anchored
 	anchored  bool
 }
@@ -66,12 +67,12 @@ func resolveOldText(content, oldText string) matchResult {
 		return matchResult{canonical: crlf, transform: "crlf-converted"}
 	}
 
-	// 4. Leading-indent shift: LLM provided the right text but with less
-	// (or no) leading indentation. Match by structural equality after
-	// stripping both leading and trailing whitespace, then return the
-	// file's actual block plus the shift to prepend to new_text lines.
-	if canonical, shift := tryLeadingIndentShift(content, oldText); canonical != "" {
-		return matchResult{canonical: canonical, transform: "leading-indent-shift", shift: shift}
+	// 4. Leading-indent shift: LLM provided the right text but with a
+	// consistent extra/missing base indentation. Match by structural equality
+	// after stripping both leading and trailing whitespace, then return the
+	// file's actual block plus the indent delta to apply to new_text.
+	if canonical, shift, trim := tryLeadingIndentShift(content, oldText); canonical != "" {
+		return matchResult{canonical: canonical, transform: "leading-indent-shift", shift: shift, trim: trim}
 	}
 
 	// 5. Trailing-whitespace tolerance: leading whitespace already matches
@@ -85,6 +86,7 @@ func resolveOldText(content, oldText string) matchResult {
 }
 
 var readFileLineRE = regexp.MustCompile(`^\s{0,12}(\d+)\t(.*)$`)
+var readFileLineNumberOnlyRE = regexp.MustCompile(`^\s{0,12}\d+\s*$`)
 
 type numberedBlock struct {
 	startLine int
@@ -125,7 +127,7 @@ func splitFileLines(content string) []fileLine {
 }
 
 func parseReadFileNumberedBlock(text string) (numberedBlock, bool) {
-	lines := strings.Split(text, "\n")
+	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	if len(lines) == 0 {
 		return numberedBlock{}, false
 	}
@@ -133,13 +135,8 @@ func parseReadFileNumberedBlock(text string) (numberedBlock, bool) {
 	body := make([]string, len(lines))
 	startLine := 0
 	for i, line := range lines {
-		m := readFileLineRE.FindStringSubmatch(line)
-		if m == nil {
-			return numberedBlock{}, false
-		}
-		n := 0
-		fmt.Sscanf(m[1], "%d", &n)
-		if n <= 0 {
+		n, lineText, ok := parseReadFileLine(line)
+		if !ok {
 			return numberedBlock{}, false
 		}
 		if i == 0 {
@@ -147,13 +144,31 @@ func parseReadFileNumberedBlock(text string) (numberedBlock, bool) {
 		} else if n != startLine+i {
 			return numberedBlock{}, false
 		}
-		body[i] = m[2]
+		body[i] = lineText
 	}
 
 	return numberedBlock{
 		startLine: startLine,
 		lines:     body,
 	}, true
+}
+
+func parseReadFileLine(line string) (lineNumber int, text string, ok bool) {
+	if m := readFileLineRE.FindStringSubmatch(line); m != nil {
+		fmt.Sscanf(m[1], "%d", &lineNumber)
+		if lineNumber <= 0 {
+			return 0, "", false
+		}
+		return lineNumber, m[2], true
+	}
+	if readFileLineNumberOnlyRE.MatchString(line) {
+		fmt.Sscanf(strings.TrimSpace(line), "%d", &lineNumber)
+		if lineNumber <= 0 {
+			return 0, "", false
+		}
+		return lineNumber, "", true
+	}
+	return 0, "", false
 }
 
 func resolveAnchoredCandidate(candidate, oldText string) matchResult {
@@ -168,8 +183,8 @@ func resolveAnchoredCandidate(candidate, oldText string) matchResult {
 			return matchResult{canonical: candidate, transform: "crlf-converted"}
 		}
 	}
-	if canonical, shift := tryLeadingIndentShift(candidate, oldText); canonical == candidate {
-		return matchResult{canonical: candidate, transform: "leading-indent-shift", shift: shift}
+	if canonical, shift, trim := tryLeadingIndentShift(candidate, oldText); canonical == candidate {
+		return matchResult{canonical: candidate, transform: "leading-indent-shift", shift: shift, trim: trim}
 	}
 	if trimmed := tryTrailingWhitespaceMatch(candidate, oldText); trimmed == candidate {
 		return matchResult{canonical: candidate, transform: "trailing-whitespace-tolerant"}
@@ -228,11 +243,16 @@ func adjustNewText(content, newText string, mr matchResult) string {
 	if strings.Contains(mr.transform, "indent-normalized") {
 		out = normalizeIndentation(content, out)
 	}
-	if mr.transform == "crlf-converted" && !strings.Contains(out, "\r\n") {
+	if strings.Contains(mr.transform, "crlf-converted") && !strings.Contains(out, "\r\n") {
 		out = strings.ReplaceAll(out, "\n", "\r\n")
 	}
-	if mr.transform == "leading-indent-shift" && mr.shift != "" {
-		out = applyLeadingIndentShift(out, mr.shift)
+	if strings.Contains(mr.transform, "leading-indent-shift") {
+		if mr.shift != "" {
+			out = applyLeadingIndentShift(out, mr.shift)
+		}
+		if mr.trim != "" {
+			out = trimLeadingIndentShift(out, mr.trim)
+		}
 	}
 	return out
 }
@@ -248,14 +268,14 @@ var readFileWrapperLineRE = regexp.MustCompile(`^(?:\[(?:indent:|encoding:|Extra
 // LLM pastes back read_file output (which is line-numbered) verbatim as
 // old_text.
 func stripLineNumberPrefix(text string) string {
-	lines := strings.Split(text, "\n")
+	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	matched, nonEmpty := 0, 0
 	for _, l := range lines {
 		if strings.TrimSpace(l) == "" {
 			continue
 		}
 		nonEmpty++
-		if lineNumberPrefixRE.MatchString(l) {
+		if lineNumberPrefixRE.MatchString(l) || readFileLineNumberOnlyRE.MatchString(l) {
 			matched++
 		}
 	}
@@ -266,17 +286,49 @@ func stripLineNumberPrefix(text string) string {
 	}
 	out := make([]string, len(lines))
 	for i, l := range lines {
+		if readFileLineNumberOnlyRE.MatchString(l) {
+			out[i] = ""
+			continue
+		}
 		out[i] = lineNumberPrefixRE.ReplaceAllString(l, "")
 	}
 	return strings.Join(out, "\n")
 }
 
 func stripAllLineNumberPrefixes(text string) string {
-	lines := strings.Split(text, "\n")
+	lines := trimDanglingReadFileLineNumberOnlyLines(strings.Split(text, "\n"))
 	for i, l := range lines {
+		if readFileLineNumberOnlyRE.MatchString(l) {
+			lines[i] = ""
+			continue
+		}
 		lines[i] = lineNumberPrefixRE.ReplaceAllString(l, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func trimDanglingReadFileLineNumberOnlyLines(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	hasAnchoredLine := false
+	for _, line := range lines {
+		if readFileLineRE.MatchString(line) || readFileLineNumberOnlyRE.MatchString(line) {
+			hasAnchoredLine = true
+			break
+		}
+	}
+	if !hasAnchoredLine {
+		return lines
+	}
+	start, end := 0, len(lines)
+	for start < end && readFileLineNumberOnlyRE.MatchString(lines[start]) {
+		start++
+	}
+	for end > start && readFileLineNumberOnlyRE.MatchString(lines[end-1]) {
+		end--
+	}
+	return lines[start:end]
 }
 
 func trimReadFileWrapperLines(text string) (string, bool) {
@@ -341,27 +393,23 @@ func leadingWhitespace(s string) string {
 }
 
 // tryLeadingIndentShift handles the very common LLM failure where the
-// model provides the right text but with less (or no) leading indentation
-// than the file actually uses — e.g. file has "\t\t// foo" but the LLM
-// supplied just "// foo" as old_text.
+// model provides the right text but with a consistently different base
+// indentation than the file — e.g. file has "\t\t// foo" but the LLM
+// supplied either "// foo" or "\t\t\t// foo" as old_text.
 //
 // It looks for a contiguous block in content whose lines, after stripping
 // both leading and trailing whitespace, equal the lines of oldText. To
 // guard against unrelated false matches it requires:
-//   - The file's leading whitespace on each non-empty matched line must
-//     start with the LLM's leading whitespace on the corresponding old
-//     line (so the shift is well-defined).
-//   - The "shift" — the extra prefix the file has — must be IDENTICAL on
-//     every non-empty matched line, preserving the relative indent of the
-//     LLM's old_text.
+//   - The file and old_text leading whitespace must differ by the same
+//     prefix on every non-empty matched line, in either direction.
 //
 // Returns the canonical block from the file plus the shift to prepend to
-// each line of new_text.
-func tryLeadingIndentShift(content, oldText string) (canonical, shift string) {
+// or trim from each line of new_text.
+func tryLeadingIndentShift(content, oldText string) (canonical, shift, trim string) {
 	oldLines := strings.Split(oldText, "\n")
 	contentLines := strings.Split(content, "\n")
 	if len(oldLines) == 0 || len(oldLines) > len(contentLines) {
-		return "", ""
+		return "", "", ""
 	}
 
 	stripBoth := func(s string) string { return strings.TrimSpace(s) }
@@ -376,7 +424,7 @@ func tryLeadingIndentShift(content, oldText string) (canonical, shift string) {
 		}
 	}
 	if firstNonEmpty < 0 {
-		return "", ""
+		return "", "", ""
 	}
 
 	for i := 0; i+len(sOld) <= len(contentLines); i++ {
@@ -393,28 +441,39 @@ func tryLeadingIndentShift(content, oldText string) (canonical, shift string) {
 
 		baseFile := leadingWhitespace(contentLines[i+firstNonEmpty])
 		baseOld := leadingWhitespace(oldLines[firstNonEmpty])
-		if !strings.HasPrefix(baseFile, baseOld) {
+		extraFile, extraOld := "", ""
+		switch {
+		case strings.HasPrefix(baseFile, baseOld):
+			extraFile = baseFile[len(baseOld):]
+		case strings.HasPrefix(baseOld, baseFile):
+			extraOld = baseOld[len(baseFile):]
+		default:
 			continue
 		}
-		s := baseFile[len(baseOld):]
-		if s == "" {
-			// No actual shift — exact path or trailing-whitespace path
-			// would have already matched. Keep searching for a real
-			// shifted occurrence rather than returning a no-op.
+		if extraFile == "" && extraOld == "" {
 			continue
 		}
 
-		// Verify every non-empty line has the same shift on top of the
-		// LLM's per-line leading indent.
+		// Verify every non-empty line has the same indent delta while
+		// preserving the old_text's relative indentation.
 		consistent := true
 		for j := range sOld {
 			if sOld[j] == "" {
 				continue
 			}
-			wantOldLead := leadingWhitespace(oldLines[j])
-			wantFileLead := s + wantOldLead
-			if leadingWhitespace(contentLines[i+j]) != wantFileLead {
-				consistent = false
+			fileLead := leadingWhitespace(contentLines[i+j])
+			oldLead := leadingWhitespace(oldLines[j])
+			switch {
+			case extraFile != "":
+				if fileLead != extraFile+oldLead {
+					consistent = false
+				}
+			case extraOld != "":
+				if oldLead != extraOld+fileLead {
+					consistent = false
+				}
+			}
+			if !consistent {
 				break
 			}
 		}
@@ -422,9 +481,9 @@ func tryLeadingIndentShift(content, oldText string) (canonical, shift string) {
 			continue
 		}
 
-		return strings.Join(contentLines[i:i+len(sOld)], "\n"), s
+		return strings.Join(contentLines[i:i+len(sOld)], "\n"), extraFile, extraOld
 	}
-	return "", ""
+	return "", "", ""
 }
 
 // applyLeadingIndentShift prepends shift to every non-empty line of text.
@@ -440,6 +499,22 @@ func applyLeadingIndentShift(text, shift string) string {
 			continue
 		}
 		lines[i] = shift + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+func trimLeadingIndentShift(text, trim string) string {
+	if trim == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		if strings.HasPrefix(l, trim) {
+			lines[i] = l[len(trim):]
+		}
 	}
 	return strings.Join(lines, "\n")
 }
