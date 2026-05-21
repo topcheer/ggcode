@@ -11,9 +11,11 @@ import (
 
 func TestGatewayMessageJSON(t *testing.T) {
 	msg := GatewayMessage{
-		Seq:  42,
-		Type: "text",
-		Data: json.RawMessage(`{"id":"msg-1","chunk":"hello"}`),
+		SessionID: "sess-1",
+		EventID:   "ev-000000001",
+		StreamID:  "msg-1",
+		Type:      "text",
+		Data:      json.RawMessage(`{"id":"msg-1","chunk":"hello"}`),
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
@@ -23,8 +25,8 @@ func TestGatewayMessageJSON(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Seq != 42 {
-		t.Errorf("Seq = %d, want 42", got.Seq)
+	if got.SessionID != "sess-1" || got.EventID != "ev-000000001" || got.StreamID != "msg-1" {
+		t.Errorf("metadata mismatch: %+v", got)
 	}
 	if got.Type != "text" {
 		t.Errorf("Type = %q, want %q", got.Type, "text")
@@ -42,8 +44,8 @@ func TestGatewayMessageOmitEmpty(t *testing.T) {
 	}
 	var m map[string]interface{}
 	json.Unmarshal(b, &m)
-	if _, ok := m["seq"]; ok {
-		t.Error("seq should be omitted when zero")
+	if _, ok := m["session_id"]; ok {
+		t.Error("session_id should be omitted when empty")
 	}
 	if _, ok := m["data"]; ok {
 		t.Error("data should be omitted when nil")
@@ -392,7 +394,7 @@ func TestEventConstants(t *testing.T) {
 
 func TestCommandConstants(t *testing.T) {
 	cmds := []string{
-		EventAck, CmdMessage, CmdApprovalResponse, CmdInterrupt,
+		CmdResumeHello, CmdResumeFrom, CmdMessage, CmdApprovalResponse, CmdInterrupt,
 		CmdModeChange, CmdAskUserResponse, CmdPong,
 	}
 	for _, c := range cmds {

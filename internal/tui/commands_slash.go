@@ -47,7 +47,7 @@ func (m *Model) handleClearChat() {
 
 	// Notify mobile client.
 	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushChatClear()
+		m.tunnelBroker.ResetSession()
 		m.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
 			Workspace: m.sidebarWorkingDirectory(),
 			Model:     m.activeModel,

@@ -19,7 +19,7 @@ The `Broker` (`internal/tunnel/broker.go`) already has Push methods:
 - `PushSubagentStatus(agentID, status, message)`
 - `PushSubagentComplete(agentID, name, summary, success)`
 
-All are logged in `sentLog` for replay on reconnect.
+All are emitted onto the broker's session-scoped event stream; reconnect replay is owned by the relay's per-client cursor resume logic.
 
 ### 1.2 Desktop Agent Bridge (`desktop/ggcode-desktop/agent_bridge.go`)
 
@@ -292,7 +292,7 @@ The only limitation is the 10Hz throttle on the Go side. For most LLM output, th
 | 3.1 | `mobile/flutter/lib/features/chat/chat_screen.dart` | Add elapsed time display for running agents. Auto-scroll per-tab. |
 | 3.2 | `mobile/flutter/lib/features/chat/chat_screen.dart` | Tab reorder: newly spawned agents jump to front. |
 | 3.3 | `mobile/flutter/lib/features/chat/subagent_panel.dart` | Either remove this file or integrate it as a notification overlay when user is on a different tab. |
-| 3.4 | `internal/tunnel/broker.go` | Ensure team/agent state is replayed correctly on reconnect (verify sentLog handles new events). |
+| 3.4 | `internal/tunnel/broker.go` + `ggcode-relay/main.go` | Ensure team/agent state reconnects correctly through session-scoped event IDs and relay incremental resume. |
 
 ---
 
@@ -518,7 +518,7 @@ swarmMgr.SetOnUpdate()───────┤         │
 
 4. **Tab lifecycle tied to SubagentInfo** - Tabs appear on `subagent_spawn`, update on `subagent_text`/`subagent_status`, mark completed on `subagent_complete`, and close on manual dismiss or `team_deleted`.
 
-5. **Replay on reconnect works automatically** - All events are logged in `broker.sentLog` and replayed. Mobile reconstructs tab state from replayed events.
+5. **Replay on reconnect works automatically** - Broker emits the canonical session event stream, and relay replays the needed incremental history per client. Mobile reconstructs tab state from ordered replayed events.
 
 ---
 

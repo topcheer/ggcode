@@ -4,9 +4,11 @@ import "encoding/json"
 
 // GatewayMessage is a JSON message exchanged over the encrypted channel.
 type GatewayMessage struct {
-	Seq  int64           `json:"seq,omitempty"`
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+	EventID   string          `json:"event_id,omitempty"`
+	StreamID  string          `json:"stream_id,omitempty"`
+	Type      string          `json:"type"`
+	Data      json.RawMessage `json:"data,omitempty"`
 }
 
 // Protocol defines the message types exchanged between the ggcode backend
@@ -35,6 +37,8 @@ const (
 	EventSubagentToolCall   = "subagent_tool_call"
 	EventSubagentToolResult = "subagent_tool_result"
 	EventSubagentComplete   = "subagent_complete"
+	EventResumeMiss         = "resume_miss"
+	EventSnapshotReset      = "snapshot_reset"
 	EventError              = "error"
 	EventPing               = "ping"
 	EventDisconnected       = "disconnected"
@@ -42,7 +46,8 @@ const (
 
 // Client → Server command types.
 const (
-	EventAck            = "ack" // client ACK for sequenced delivery
+	CmdResumeHello      = "resume_hello"
+	CmdResumeFrom       = "resume_from"
 	CmdMessage          = "message"
 	CmdApprovalResponse = "approval_response"
 	CmdInterrupt        = "interrupt"
@@ -75,6 +80,13 @@ const (
 	DecisionAlwaysAllow = "always_allow"
 )
 
+// Resume mode values used by resume_ack.
+const (
+	ResumeModeIncremental      = "incremental"
+	ResumeModeFullHistory      = "full_history"
+	ResumeModeSnapshotRequired = "snapshot_required"
+)
+
 // SessionInfoData carries session metadata sent after connection.
 type SessionInfoData struct {
 	Workspace string `json:"workspace"`
@@ -82,6 +94,27 @@ type SessionInfoData struct {
 	Provider  string `json:"provider"`
 	Mode      string `json:"mode"`
 	Version   string `json:"version"`
+}
+
+// ResumeHelloData requests either incremental replay or full session replay.
+type ResumeHelloData struct {
+	ClientID    string `json:"client_id"`
+	SessionID   string `json:"session_id,omitempty"`
+	LastEventID string `json:"last_event_id,omitempty"`
+}
+
+// ResumeFromData requests replay starting after the caller's last good cursor.
+type ResumeFromData struct {
+	ClientID    string `json:"client_id"`
+	SessionID   string `json:"session_id,omitempty"`
+	LastEventID string `json:"last_event_id,omitempty"`
+}
+
+// ResumeAckData tells the client how the gateway will recover state.
+type ResumeAckData struct {
+	ClientID   string `json:"client_id"`
+	SessionID  string `json:"session_id,omitempty"`
+	ResumeMode string `json:"resume_mode"`
 }
 
 // TextData carries a streaming text chunk.

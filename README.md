@@ -128,9 +128,11 @@ make build-desktop  # Desktop GUI
 ./ggcode
 ```
 
+If you run `go` commands directly instead of `make`, include `-tags goolm`.
+
 ### Optional: install the local CI pre-commit hook
 
-If you want local commits to catch the same Go issues that CI checks, install the bundled git hook:
+If you want local commits to catch common Go issues before they leave your machine, install the bundled git hook:
 
 ```bash
 make install-git-hooks
@@ -139,14 +141,12 @@ make install-git-hooks
 The hook will:
 
 - auto-format staged Go files with `gofmt`
-- run `go mod download`
-- run `go build -o /tmp/ggcode ./cmd/ggcode`
-- run `go vet ./...`
-- run `go test -tags=!integration ./...`
+- run `go vet -tags goolm ./...`
+- run `CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode`
 
-The shared `make verify-ci` script also clears provider integration-test env vars, inherited
-`GIT_*` hook context, and global git-hook config first, so local verification matches CI more
-closely even when your machine has extra Git tooling installed.
+For the fuller CI-aligned chain, use `make verify-ci`. It clears provider integration-test env vars,
+inherited `GIT_*` hook context, and global git-hook config first, then runs the repository validation
+script.
 
 You can also run the same check chain manually with:
 

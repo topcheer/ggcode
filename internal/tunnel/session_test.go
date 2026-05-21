@@ -43,14 +43,6 @@ func TestSessionOnMessage(t *testing.T) {
 	_ = called
 }
 
-func TestSessionOnConnect(t *testing.T) {
-	sess := NewSession("wss://relay.example.com")
-	sess.OnConnect(func() {})
-	if sess.onConn == nil {
-		t.Error("onConn should be set")
-	}
-}
-
 func TestSessionStopNilClient(t *testing.T) {
 	sess := NewSession("wss://relay.example.com")
 	// Should not panic when client is nil

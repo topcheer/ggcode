@@ -2,18 +2,34 @@ import 'dart:convert';
 
 /// Base class for all WebSocket messages
 class WsMessage {
-  final int? seq;
+  final String? sessionId;
+  final String? eventId;
+  final String? streamId;
   final String type;
   final Map<String, dynamic>? data;
 
-  WsMessage({this.seq, required this.type, this.data});
+  WsMessage({
+    this.sessionId,
+    this.eventId,
+    this.streamId,
+    required this.type,
+    this.data,
+  });
 
-  String toJson() => jsonEncode({'seq': seq, 'type': type, 'data': data});
+  String toJson() => jsonEncode({
+        'session_id': sessionId,
+        'event_id': eventId,
+        'stream_id': streamId,
+        'type': type,
+        'data': data,
+      });
 
   static WsMessage fromJson(String jsonStr) {
     final map = jsonDecode(jsonStr) as Map<String, dynamic>;
     return WsMessage(
-      seq: map['seq'] as int?,
+      sessionId: map['session_id'] as String?,
+      eventId: map['event_id'] as String?,
+      streamId: map['stream_id'] as String?,
       type: map['type'] as String,
       data: map['data'] as Map<String, dynamic>?,
     );

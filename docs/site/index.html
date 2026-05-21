@@ -41,7 +41,7 @@
             <div class="eyebrow" data-i18n="hero.eyebrow">terminal-native · self-update-ready · mcp-ready</div>
             <h1 data-i18n="hero.title">Bring the AI coding workflow back into your terminal.</h1>
             <p class="hero-text" data-i18n="hero.text">
-              ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, running harnessed task queues, connecting to IM platforms for remote coding, and keeping long tasks moving inside one fresh, modern, geek-forward interface.
+              ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, running harnessed task queues, syncing with the mobile companion app or IM bridges, and keeping long tasks moving inside one fresh, modern, geek-forward interface.
             </p>
 
             <div class="hero-actions">
@@ -86,7 +86,7 @@
 
           <div class="hero-visual">
             <div class="hero-frame">
-              <div class="frame-badge" data-i18n="hero.badge">v1.1.41 · self-update ready</div>
+              <div class="frame-badge" data-i18n="hero.badge">release-ready · self-update ready</div>
               <img
                 src="./assets/ggcode-banner.png?v=__SITE_ASSET_VERSION__"
                 alt="ggcode CLI banner"
@@ -127,8 +127,8 @@
             </article>
 
             <article class="feature-card">
-              <h3 data-i18n="features.im.title">IM-native remote coding</h3>
-              <p data-i18n="features.im.text">Bind your workspace to QQ, Telegram, Discord, Slack, Feishu, or DingTalk. Send prompts, receive streamed agent output, answer ask_user questions, and run remote commands — all from your phone or a shared team channel.</p>
+              <h3 data-i18n="features.remote.title">Remote coding across mobile and IM</h3>
+              <p data-i18n="features.remote.text">Use the mobile companion app or bind your workspace to QQ, Telegram, Discord, Slack, Feishu, or DingTalk. Ordered reconnect resume keeps prompts, streamed output, approvals, and ask_user flows consistent on your phone or in a shared team channel.</p>
             </article>
 
             <article class="feature-card">
@@ -160,11 +160,11 @@
               <div class="terminal-body">
                 <div class="terminal-line"><span class="prompt">&gt;</span> <span data-i18n="workflow.demo.ask1">Explain the auth flow and why startup feels slow</span></div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply1">● reads config, traces provider setup, inspects startup banner logic</div>
-                <div class="terminal-line"><span class="prompt">$</span> <span data-i18n="workflow.demo.ask2">go test ./internal/tui</span></div>
+                <div class="terminal-line"><span class="prompt">$</span> <span data-i18n="workflow.demo.ask2">go test -tags goolm ./internal/tui</span></div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply2">● local shell mode runs in the main session view</div>
                 <div class="terminal-line"><span class="prompt">&gt;</span> /undo</div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply3">● rolls back the last file edit from checkpoint</div>
-                <div class="terminal-line"><span class="prompt">&gt;</span> start_command "go test ./..."</div>
+                <div class="terminal-line"><span class="prompt">&gt;</span> start_command "go test -tags goolm ./..."</div>
                 <div class="terminal-line muted" data-i18n="workflow.demo.reply4">● background job started · progress visible in-session</div>
               </div>
             </div>

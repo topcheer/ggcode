@@ -41,7 +41,8 @@ class ConnectionService {
     _statusController.add(ConnectionStatus.connecting);
 
     try {
-      _socket = await WebSocket.connect(url).timeout(const Duration(seconds: 30));
+      _socket =
+          await WebSocket.connect(url).timeout(const Duration(seconds: 30));
     } catch (e) {
       if (!_disposed) {
         _errorController.add('Connection failed: $e');
@@ -92,7 +93,8 @@ class ConnectionService {
 
     _reconnectAttempts++;
     final delay = Duration(seconds: (_reconnectAttempts * 2).clamp(2, 30));
-    print('[connection] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
+    print(
+        '[connection] reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempts)');
     _reconnectTimer = Timer(delay, () {
       if (!_disposed) {
         connect();
@@ -118,12 +120,6 @@ class ConnectionService {
       case 'pong':
         break;
 
-      case 'replay_start':
-        break;
-
-      case 'replay_end':
-        break;
-
       case 'server_offline':
       case 'sharing_stopped':
         _cleanup();
@@ -131,6 +127,18 @@ class ConnectionService {
           _disposed = true;
           _statusController.add(ConnectionStatus.disconnected);
         }
+        break;
+
+      case 'resume_ack':
+      case 'resume_miss':
+      case 'snapshot_reset':
+        _messageController.add(proto.WsMessage(
+          sessionId: map['session_id'] as String?,
+          type: type,
+          data: Map<String, dynamic>.from(map)
+            ..remove('type')
+            ..remove('session_id'),
+        ));
         break;
 
       case 'encrypted':
@@ -141,15 +149,22 @@ class ConnectionService {
         try {
           final plaintextBytes = await crypto.decryptData(nonce, ciphertext);
           final plaintext = utf8.decode(plaintextBytes);
-          final msg = proto.WsMessage.fromJson(plaintext);
-          _messageController.add(msg);
-          // Send ACK for sequenced delivery
-          if (msg.seq != null && msg.seq! > 0) {
-            sendEncrypted(proto.WsMessage(
-              type: 'ack',
-              data: {'seq': msg.seq},
-            ));
+          var msg = proto.WsMessage.fromJson(plaintext);
+          if ((msg.sessionId == null || msg.sessionId!.isEmpty) &&
+              map['session_id'] is String) {
+            msg = proto.WsMessage(
+              sessionId: map['session_id'] as String?,
+              eventId: (msg.eventId?.isNotEmpty ?? false)
+                  ? msg.eventId
+                  : map['event_id'] as String?,
+              streamId: (msg.streamId?.isNotEmpty ?? false)
+                  ? msg.streamId
+                  : map['stream_id'] as String?,
+              type: msg.type,
+              data: msg.data,
+            );
           }
+          _messageController.add(msg);
         } catch (e) {
           // Decrypt error
         }
@@ -177,6 +192,34 @@ class ConnectionService {
 
   void send(Map<String, dynamic> data) {
     _socket?.add(jsonEncode(data));
+  }
+
+  void sendResumeHello({
+    required String clientId,
+    String? sessionId,
+    String? lastEventId,
+  }) {
+    send({
+      'type': 'resume_hello',
+      'client_id': clientId,
+      if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
+      if (lastEventId != null && lastEventId.isNotEmpty)
+        'last_event_id': lastEventId,
+    });
+  }
+
+  void requestReplayFrom({
+    required String clientId,
+    String? sessionId,
+    String? lastEventId,
+  }) {
+    send({
+      'type': 'resume_from',
+      'client_id': clientId,
+      if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
+      if (lastEventId != null && lastEventId.isNotEmpty)
+        'last_event_id': lastEventId,
+    });
   }
 
   Future<void> sendEncrypted(proto.WsMessage msg) async {

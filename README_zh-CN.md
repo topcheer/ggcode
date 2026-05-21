@@ -88,13 +88,16 @@ GGCode Mobile 是一个移动端伴侣应用，可以通过 QR 码连接桌面 a
 ```bash
 git clone https://github.com/topcheer/ggcode.git
 cd ggcode
-go build -o ggcode ./cmd/ggcode
+make build          # CLI
+make build-desktop  # Desktop GUI
 ./ggcode
 ```
 
+如果你不通过 `make`，而是直接运行 `go build` / `go test` / `go vet`，请始终加上 `-tags goolm`。
+
 ### 可选：安装本地 CI pre-commit hook
 
-如果你希望本地提交时也执行 CI 级别的 Go 检查：
+如果你希望本地提交前先拦住常见 Go 问题：
 
 ```bash
 make install-git-hooks
@@ -103,10 +106,10 @@ make install-git-hooks
 hook 会执行以下操作：
 
 - 用 `gofmt` 自动格式化已暂存的 Go 文件
-- 运行 `go mod download`
-- 运行 `go build -o /tmp/ggcode ./cmd/ggcode`
-- 运行 `go vet ./...`
-- 运行 `go test -tags=!integration ./...`
+- 运行 `go vet -tags goolm ./...`
+- 运行 `CGO_ENABLED=0 go build -tags goolm -o /dev/null ./cmd/ggcode`
+
+如果需要完整的 CI 对齐校验，请使用 `make verify-ci`。它会先清理 provider 集成测试环境变量、继承的 `GIT_*` hook 上下文和全局 git-hook 配置，然后运行仓库验证脚本。
 
 也可以手动运行相同的检查链：
 

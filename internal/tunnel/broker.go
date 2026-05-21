@@ -1,6 +1,8 @@
 package tunnel
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -15,18 +17,17 @@ import (
 // Delivery guarantees:
 //   - Text chunks are batched: PushText appends to a per-msgID buffer;
 //     a 300ms ticker flushes all accumulated text as a single message.
-//   - Every outbound message carries a monotonically-increasing Seq.
-//   - A sender goroutine sends one message at a time and waits for the
-//     mobile client to ACK (by seq) before sending the next.
-//   - If ACK times out (5s), the next message is sent anyway.
-//   - ReplayToClient bypasses ACK flow control for fast reconnect.
+//   - Every outbound message carries a stable session_id + event_id.
+//   - The broker only produces ordered events for the current active session.
+//   - Relay owns per-client replay; broker only emits the canonical event stream.
 type Broker struct {
-	session         *Session
-	onCommand       func(cmd GatewayMessage)
-	onClientConnect func()
+	session   *Session
+	onCommand func(cmd GatewayMessage)
 
-	// Sequencing
-	nextSeq atomic.Int64
+	// Session-scoped event identity.
+	sessionMu sync.RWMutex
+	sessionID string
+	nextEvent atomic.Int64
 
 	// Send queue: all outbound messages go here.
 	// The sender goroutine drains it continuously (no ACK blocking).
@@ -41,23 +42,20 @@ type Broker struct {
 	textBuf  map[string]*textEntry // msgID → accumulated text entry
 	textTick *time.Ticker
 	textDone chan struct{} // stop text flusher
-
-	// Replay log
-	logMu   sync.Mutex
-	sentLog []GatewayMessage
 }
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
-		session:  sess,
-		outDone:  make(chan struct{}),
-		textBuf:  make(map[string]*textEntry),
-		textTick: time.NewTicker(300 * time.Millisecond),
-		textDone: make(chan struct{}),
+		session:   sess,
+		sessionID: newTunnelSessionID(),
+		outDone:   make(chan struct{}),
+		textBuf:   make(map[string]*textEntry),
+		textTick:  time.NewTicker(300 * time.Millisecond),
+		textDone:  make(chan struct{}),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 
-	// Start sender goroutine (ACK flow control)
+	// Start sender goroutine.
 	go b.senderLoop()
 
 	// Start text flush ticker
@@ -65,22 +63,20 @@ func NewBroker(sess *Session) *Broker {
 
 	// Handle incoming messages from mobile
 	sess.OnMessage(func(msg GatewayMessage) {
-		if msg.Type == EventAck {
-			return // ACK received, no action needed
-		}
 		if b.onCommand != nil {
 			b.onCommand(msg)
 		}
 	})
 
-	sess.OnConnect(func() {
-		debug.Log("tunnel", "broker: client connected, replaying %d messages", len(b.sentLog))
-		if b.onClientConnect != nil {
-			b.onClientConnect()
-		}
-	})
-
 	return b
+}
+
+func newTunnelSessionID() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err == nil {
+		return "sess-" + hex.EncodeToString(buf)
+	}
+	return fmt.Sprintf("sess-%d", time.Now().UnixNano())
 }
 
 // ─── Goroutines ───
@@ -111,7 +107,7 @@ func (b *Broker) senderLoop() {
 
 		for _, msg := range batch {
 			if err := b.session.Send(msg); err != nil {
-				debug.Log("tunnel", "broker: send %s seq=%d failed: %v", msg.Type, msg.Seq, err)
+				debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
 			}
 		}
 	}
@@ -148,17 +144,10 @@ func (b *Broker) flushAllText() {
 	b.textMu.Unlock()
 
 	for msgID, entry := range bufs {
-		seq := b.nextSeq.Add(1)
 		if entry.agentID != "" {
-			data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
-			msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
-			b.recordLog(msg)
-			b.enqueueOut(msg)
+			b.enqueueWithStream(EventSubagentText, msgID, SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 		} else {
-			data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
-			msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
-			b.recordLog(msg)
-			b.enqueueOut(msg)
+			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.text})
 		}
 	}
 }
@@ -174,17 +163,10 @@ func (b *Broker) flushText(msgID string) {
 	delete(b.textBuf, msgID)
 	b.textMu.Unlock()
 
-	seq := b.nextSeq.Add(1)
 	if entry.agentID != "" {
-		data, _ := json.Marshal(SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
-		msg := GatewayMessage{Seq: seq, Type: EventSubagentText, Data: data}
-		b.recordLog(msg)
-		b.enqueueOut(msg)
+		b.enqueueWithStream(EventSubagentText, msgID, SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 	} else {
-		data, _ := json.Marshal(TextData{ID: msgID, Chunk: entry.text})
-		msg := GatewayMessage{Seq: seq, Type: EventText, Data: data}
-		b.recordLog(msg)
-		b.enqueueOut(msg)
+		b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.text})
 	}
 }
 
@@ -194,10 +176,6 @@ func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
 	b.onCommand = fn
 }
 
-func (b *Broker) OnClientConnect(fn func()) {
-	b.onClientConnect = fn
-}
-
 func (b *Broker) Stop() {
 	b.textTick.Stop()
 	close(b.textDone)
@@ -205,26 +183,18 @@ func (b *Broker) Stop() {
 	b.outCond.Broadcast()
 }
 
-// ReplayToClient resends all logged messages, bypassing ACK flow control.
-func (b *Broker) ReplayToClient() {
-	b.logMu.Lock()
-	msgs := make([]GatewayMessage, len(b.sentLog))
-	copy(msgs, b.sentLog)
-	b.logMu.Unlock()
+func (b *Broker) SessionID() string {
+	b.sessionMu.RLock()
+	defer b.sessionMu.RUnlock()
+	return b.sessionID
+}
 
-	debug.Log("tunnel", "broker: ReplayToClient: %d messages", len(msgs))
-	// Always start with chat_clear
-	clearMsg := GatewayMessage{Type: "chat_clear"}
-	if err := b.session.Send(clearMsg); err != nil {
-		debug.Log("tunnel", "broker: replay chat_clear failed: %v", err)
-		return
-	}
-	for _, msg := range msgs {
-		if err := b.session.Send(msg); err != nil {
-			debug.Log("tunnel", "broker: replay send %s failed: %v", msg.Type, err)
-			return
-		}
-	}
+func (b *Broker) resetSession() string {
+	b.sessionMu.Lock()
+	defer b.sessionMu.Unlock()
+	b.sessionID = newTunnelSessionID()
+	b.nextEvent.Store(0)
+	return b.sessionID
 }
 
 // ─── Session lifecycle ───
@@ -233,15 +203,13 @@ func (b *Broker) SendSessionInfo(data SessionInfoData) {
 	b.enqueue(EventSessionInfo, data)
 }
 
-func (b *Broker) PushChatClear() {
-	b.logMu.Lock()
-	b.sentLog = nil
-	b.logMu.Unlock()
+func (b *Broker) ResetSession() {
 	// Clear text buffers too
 	b.textMu.Lock()
 	b.textBuf = make(map[string]*textEntry)
 	b.textMu.Unlock()
-	b.enqueue("chat_clear", nil)
+	b.resetSession()
+	b.enqueue(EventSnapshotReset, nil)
 }
 
 func (b *Broker) PushSharingStopped() {
@@ -268,7 +236,7 @@ func (b *Broker) PushText(id, chunk string) {
 func (b *Broker) PushTextDone(id string) {
 	// Flush remaining text immediately, then send text_done
 	b.flushText(id)
-	b.enqueue(EventTextDone, TextData{ID: id, Done: true})
+	b.enqueueWithStream(EventTextDone, id, TextData{ID: id, Done: true})
 }
 
 // ─── Status ───
@@ -280,21 +248,21 @@ func (b *Broker) PushStatus(status, message string) {
 // ─── Tool calls ───
 
 func (b *Broker) PushToolCall(toolID, toolName, args, detail string) {
-	b.enqueue(EventToolCall, ToolCallData{ToolID: toolID, ToolName: toolName, Args: args, Detail: detail})
+	b.enqueueWithStream(EventToolCall, toolID, ToolCallData{ToolID: toolID, ToolName: toolName, Args: args, Detail: detail})
 }
 
 func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
-	b.enqueue(EventToolResult, ToolResultData{ToolID: toolID, ToolName: toolName, Result: result, IsError: isError})
+	b.enqueueWithStream(EventToolResult, toolID, ToolResultData{ToolID: toolID, ToolName: toolName, Result: result, IsError: isError})
 }
 
 // ─── Approval ───
 
 func (b *Broker) PushApprovalRequest(id, toolName, input string) {
-	b.enqueue(EventApprovalRequest, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
+	b.enqueueWithStream(EventApprovalRequest, id, ApprovalRequestData{ID: id, ToolName: toolName, Input: input})
 }
 
 func (b *Broker) PushApprovalResult(id, decision string) {
-	b.enqueue(EventApprovalResult, map[string]string{"id": id, "decision": decision})
+	b.enqueueWithStream(EventApprovalResult, id, map[string]string{"id": id, "decision": decision})
 }
 
 // ─── Error ───
@@ -306,17 +274,17 @@ func (b *Broker) PushError(message string) {
 // ─── Ask User ───
 
 func (b *Broker) PushAskUserRequest(id, title string, questions []AskUserQuestion) {
-	b.enqueue(EventAskUserRequest, AskUserRequestData{ID: id, Title: title, Questions: questions})
+	b.enqueueWithStream(EventAskUserRequest, id, AskUserRequestData{ID: id, Title: title, Questions: questions})
 }
 
 func (b *Broker) PushAskUserResponse(id, status string, answers []AskUserAnswer) {
-	b.enqueue(EventAskUserResponse, AskUserResponseData{ID: id, Status: status, Answers: answers})
+	b.enqueueWithStream(EventAskUserResponse, id, AskUserResponseData{ID: id, Status: status, Answers: answers})
 }
 
 // ─── Sub-agent / Teammate ───
 
 func (b *Broker) PushSubagentSpawn(agentID, name, task, color, parentID string) {
-	b.enqueue(EventSubagentSpawn, SubagentSpawnData{
+	b.enqueueWithStream(EventSubagentSpawn, agentID, SubagentSpawnData{
 		AgentID: agentID, Name: name, Task: task, Color: color, ParentID: parentID,
 	})
 }
@@ -335,23 +303,31 @@ func (b *Broker) PushSubagentText(agentID, msgID, chunk string, done bool) {
 }
 
 func (b *Broker) PushSubagentStatus(agentID, status, message string) {
-	b.enqueue(EventSubagentStatus, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
+	b.enqueueWithStream(EventSubagentStatus, agentID, SubagentStatusData{AgentID: agentID, Status: status, Message: message})
 }
 
 func (b *Broker) PushSubagentComplete(agentID, name, summary string, success bool) {
-	b.enqueue(EventSubagentComplete, SubagentCompleteData{
+	b.enqueueWithStream(EventSubagentComplete, agentID, SubagentCompleteData{
 		AgentID: agentID, Name: name, Summary: summary, Success: success,
 	})
 }
 
 func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, args, detail string) {
-	b.enqueue(EventSubagentToolCall, SubagentToolCallData{
+	streamID := toolID
+	if streamID == "" {
+		streamID = fmt.Sprintf("%s-tool", agentID)
+	}
+	b.enqueueWithStream(EventSubagentToolCall, streamID, SubagentToolCallData{
 		AgentID: agentID, ToolID: toolID, ToolName: toolName, Args: args, Detail: detail,
 	})
 }
 
 func (b *Broker) PushSubagentToolResult(agentID, toolID, toolName, result string, isError bool) {
-	b.enqueue(EventSubagentToolResult, SubagentToolResultData{
+	streamID := toolID
+	if streamID == "" {
+		streamID = fmt.Sprintf("%s-tool", agentID)
+	}
+	b.enqueueWithStream(EventSubagentToolResult, streamID, SubagentToolResultData{
 		AgentID: agentID, ToolID: toolID, ToolName: toolName, Result: result, IsError: isError,
 	})
 }
@@ -375,10 +351,26 @@ type HistoryEntry struct {
 	IsError  bool   `json:"is_error,omitempty"`
 }
 
-func (b *Broker) PushChatHistory(messages []HistoryEntry) {
-	b.enqueue("chat_history", map[string]interface{}{
-		"messages": messages,
-	})
+func (b *Broker) SeedHistory(messages []HistoryEntry) {
+	for _, entry := range messages {
+		switch entry.Role {
+		case "user":
+			if entry.Content != "" {
+				b.PushUserMessage(entry.Content)
+			}
+		case "assistant":
+			if entry.Content == "" {
+				continue
+			}
+			msgID := b.NextMessageID()
+			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.Content})
+			b.enqueueWithStream(EventTextDone, msgID, TextData{ID: msgID, Done: true})
+		case "tool_call":
+			b.PushToolCall(entry.ToolID, entry.ToolName, entry.ToolArgs, entry.ToolArgs)
+		case "tool_result":
+			b.PushToolResult(entry.ToolID, entry.ToolName, entry.Result, entry.IsError)
+		}
+	}
 }
 
 // ─── Internal ───
@@ -392,32 +384,37 @@ func (b *Broker) enqueueOut(msg GatewayMessage) {
 	b.outCond.Signal()
 }
 
-// enqueue assigns a seq, marshals, records to sentLog, and puts on outbound.
+// enqueue assigns stable session/event metadata and puts on outbound.
 func (b *Broker) enqueue(eventType string, data interface{}) {
-	seq := b.nextSeq.Add(1)
+	msg := b.newMessage(eventType, "", data)
+	if msg.Type == "" {
+		return
+	}
+	b.enqueueOut(msg)
+}
+
+func (b *Broker) enqueueWithStream(eventType, streamID string, data interface{}) {
+	msg := b.newMessage(eventType, streamID, data)
+	if msg.Type == "" {
+		return
+	}
+	b.enqueueOut(msg)
+}
+
+func (b *Broker) newMessage(eventType, streamID string, data interface{}) GatewayMessage {
+	eventNum := b.nextEvent.Add(1)
 
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
 		debug.Log("tunnel", "broker: marshal error for %s: %v", eventType, err)
-		return
+		return GatewayMessage{}
 	}
-	msg := GatewayMessage{
-		Seq:  seq,
-		Type: eventType,
-		Data: dataBytes,
-	}
-	b.recordLog(msg)
-	b.enqueueOut(msg)
-}
 
-// recordLog appends to sentLog for replay.
-func (b *Broker) recordLog(msg GatewayMessage) {
-	switch msg.Type {
-	case "sharing_stopped":
-		// don't log
-	default:
-		b.logMu.Lock()
-		b.sentLog = append(b.sentLog, msg)
-		b.logMu.Unlock()
+	return GatewayMessage{
+		SessionID: b.SessionID(),
+		EventID:   fmt.Sprintf("ev-%09d", eventNum),
+		StreamID:  streamID,
+		Type:      eventType,
+		Data:      dataBytes,
 	}
 }

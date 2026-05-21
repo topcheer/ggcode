@@ -56,7 +56,7 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 
 		// Notify mobile client about session switch
 		if m.tunnelBroker != nil {
-			m.tunnelBroker.PushChatClear()
+			m.tunnelBroker.ResetSession()
 			m.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
 				Workspace: m.sidebarWorkingDirectory(),
 				Model:     m.activeModel,
@@ -67,7 +67,7 @@ func (m *Model) resumeSession(id string) tea.Cmd {
 			if msgs := m.currentSessionMessages(); len(msgs) > 0 {
 				history := tunnelMessagesToHistory(msgs)
 				if len(history) > 0 {
-					m.tunnelBroker.PushChatHistory(history)
+					m.tunnelBroker.SeedHistory(history)
 				}
 			}
 		}

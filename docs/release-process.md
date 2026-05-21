@@ -77,11 +77,12 @@ make verify-ci
 
 That runs `scripts/dev/verify-ci.sh`, which does:
 
-1. `gofmt -l .` cleanliness check
+1. `gofmt -l ./cmd ./internal` cleanliness check
 2. `go mod download`
-3. `go build -o /tmp/ggcode ./cmd/ggcode`
-4. `go vet ./...`
-5. `go test -tags=integration ./...`
+3. `go build -tags goolm -o /tmp/ggcode ./cmd/ggcode`
+4. `go vet -tags goolm ./cmd/... ./internal/...`
+5. `go test -tags "goolm,integration" ./cmd/... ./internal/...`
+6. Desktop-module `gofmt` / `go vet` / `go test` when `desktop/ggcode-desktop` is present
 
 ### Integration test tiers
 
@@ -94,14 +95,14 @@ Integration tests use Go build tags to separate three tiers:
 | **Tier 3** | `integration_service` | Tests requiring external services (IM/QQ/TG adapters) | Local dev only (needs service config) |
 
 ```bash
-# CI-safe (Tier 1 only) — what CI runs
-go test -tags=integration ./...
+# CI-safe (unit + Tier 1 integration) — what CI runs for the main module
+go test -tags "goolm,integration" ./cmd/... ./internal/...
 
 # Local dev with LLM (Tier 1 + 2)
-go test -tags='integration,integration_local' ./...
+go test -tags 'goolm,integration,integration_local' ./cmd/... ./internal/...
 
 # Full suite (Tier 1 + 2 + 3)
-go test -tags='integration,integration_local,integration_service' ./...
+go test -tags 'goolm,integration,integration_local,integration_service' ./cmd/... ./internal/...
 ```
 
 Tier assignment by file:
@@ -178,11 +179,11 @@ The main workflow is `.github/workflows/release.yml`.
 Runs on Ubuntu before anything else:
 
 1. `go mod download`
-2. `go build -o /tmp/ggcode-release ./cmd/ggcode`
-3. `go test ./...`
-4. `go vet ./...`
+2. `go build -tags goolm -o /tmp/ggcode-release ./cmd/ggcode`
+3. `go test -tags goolm -timeout 5m $(go list -tags goolm ./... | grep -v /desktop | grep -v ggcode-desktop)`
+4. `go vet -tags goolm $(go list -tags goolm ./... | grep -v /desktop | grep -v ggcode-desktop)`
 
-This is stricter than `make verify-ci` because it runs `go test ./...` without the `!integration` tag filter.
+This differs from `make verify-ci`: release verification runs the non-desktop Go package set with `-tags goolm`, while `make verify-ci` runs the CI-aligned main-module checks plus desktop-module validation when present.
 
 ### 5.2 `release`
 
@@ -516,12 +517,12 @@ Fix:
 
 Symptom:
 
-- `go vet ./...` fails on `sync.Mutex` copy-by-value or similar pre-existing warnings
+- `go vet -tags goolm ./...` fails on `sync.Mutex` copy-by-value or similar pre-existing warnings
 - Release workflow's "Verify release inputs" step fails even though your code is clean
 
 Cause:
 
-- pre-existing issues in the codebase that CI's `go vet ./...` catches
+- pre-existing issues in the codebase that CI's `go vet -tags goolm ./...` catches
 
 Fix:
 
