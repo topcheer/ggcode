@@ -534,6 +534,8 @@ func enCatalog(key string) string {
 		return "image attached"
 	case "hint.follow_panel":
 		return "Ctrl+N follow"
+	case "hint.unfollow_panel":
+		return "Ctrl+N unfollow"
 	case "queued.count":
 		return "%d queued"
 	case "queued.output":

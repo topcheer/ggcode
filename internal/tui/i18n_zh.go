@@ -532,6 +532,8 @@ func zhCatalog(key string) string {
 		return "已附加图片"
 	case "hint.follow_panel":
 		return "Ctrl+N 跟随"
+	case "hint.unfollow_panel":
+		return "Ctrl+N 取消跟随"
 	case "queued.count":
 		return "%d 条排队中"
 	case "queued.output":
