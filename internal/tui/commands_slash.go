@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/image"
@@ -66,16 +67,7 @@ func (m *Model) handleUnshare() {
 		m.chatWriteSystem(nextSystemID(), m.t("tunnel.not_active"))
 		return
 	}
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushSharingStopped()
-	}
-	m.tunnelSession.Stop()
-	m.tunnelSession = nil
-	m.tunnelBroker = nil
-	m.tunnelMsgID = ""
-	m.tunnelPendingApprovalID = ""
-	m.tunnelPendingAskUserID = ""
-	m.tunnelSpawned = nil
+	m.closeTunnelGracefully(2 * time.Second)
 	m.chatWriteSystem(nextSystemID(), m.t("tunnel.stopped"))
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"sync"
+	"time"
 )
 
 // DefaultRelayURL is the default ggcode-relay server URL.
@@ -113,5 +114,11 @@ func (s *Session) Info() *SessionInfo {
 func (s *Session) Stop() {
 	if s.client != nil {
 		s.client.Close()
+	}
+}
+
+func (s *Session) StopGracefully(timeout time.Duration) {
+	if s.client != nil {
+		s.client.CloseGracefully(timeout)
 	}
 }

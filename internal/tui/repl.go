@@ -714,6 +714,11 @@ func (r *REPL) Run() error {
 		_ = r.store.Save(r.model.session)
 	}
 
+	if m, ok := finalModel.(Model); ok {
+		m.closeTunnelGracefully(2 * time.Second)
+		finalModel = m
+	}
+
 	// Check if the final model requested a self-restart.
 	// program.Run() returns the final model state, but r.model is a
 	// snapshot from before Run() — we must read from finalModel.

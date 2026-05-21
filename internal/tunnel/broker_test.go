@@ -21,11 +21,12 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 	d := &drainHelper{}
 
 	b := &Broker{
-		session:  sess,
-		outDone:  make(chan struct{}),
-		textBuf:  make(map[string]*textEntry),
-		textTick: time.NewTicker(300 * time.Millisecond),
-		textDone: make(chan struct{}),
+		session:     sess,
+		outDone:     make(chan struct{}),
+		textBuf:     make(map[string]*textEntry),
+		textTick:    time.NewTicker(300 * time.Millisecond),
+		textDone:    make(chan struct{}),
+		sendWaiters: make(map[string]chan struct{}),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 
@@ -636,6 +637,31 @@ func TestBrokerSeedHistory(t *testing.T) {
 	}
 }
 
+func TestBrokerSeedHistoryPreservesToolDetail(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.SeedHistory([]HistoryEntry{{
+		Role:       "tool_call",
+		ToolID:     "t1",
+		ToolName:   "run_command",
+		ToolArgs:   `{"command":"cd /tmp && go test ./..."}`,
+		ToolDetail: "cd /tmp && go test ./...",
+	}})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) != 1 || msgs[0].Type != EventToolCall {
+		t.Fatalf("expected one tool_call event, got %+v", msgs)
+	}
+	var data ToolCallData
+	if err := json.Unmarshal(msgs[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Detail != "cd /tmp && go test ./..." {
+		t.Fatalf("tool detail = %q, want reconstructed detail", data.Detail)
+	}
+}
+
 func TestBrokerSeedHistoryLargeBurstDoesNotDrop(t *testing.T) {
 	sess := NewSession("wss://test.local")
 	rc, err := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
@@ -741,6 +767,53 @@ func TestBrokerMultipleMessageIDs(t *testing.T) {
 func TestBrokerStop(t *testing.T) {
 	b, _ := newBrokerForTest()
 	b.Stop()
+	b.Stop()
+}
+
+func TestBrokerStopSharingGracefullySendsStopEventBeforeClosing(t *testing.T) {
+	sess := NewSession("wss://test.local")
+	rc, err := NewRelayClient("wss://test.local", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.client = rc
+
+	b := NewBroker(sess)
+	b.PushStatus("running", "go")
+	b.StopSharingGracefully(200 * time.Millisecond)
+
+	if !rc.closed {
+		t.Fatal("relay client should be closed after graceful broker stop")
+	}
+
+	var types []string
+	for i := 0; i < 2; i++ {
+		select {
+		case raw := <-rc.sendCh:
+			var envelope struct {
+				Nonce      string `json:"nonce"`
+				Ciphertext string `json:"ciphertext"`
+			}
+			if err := json.Unmarshal(raw, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			plain, err := rc.crypto.Decrypt(envelope.Nonce, envelope.Ciphertext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var msg GatewayMessage
+			if err := json.Unmarshal(plain, &msg); err != nil {
+				t.Fatal(err)
+			}
+			types = append(types, msg.Type)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for relayed message %d", i)
+		}
+	}
+
+	if len(types) != 2 || types[0] != EventStatus || types[1] != "sharing_stopped" {
+		t.Fatalf("unexpected graceful shutdown ordering: %v", types)
+	}
 }
 
 func TestBrokerChatClearFlushesTextBuffers(t *testing.T) {

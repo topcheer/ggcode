@@ -450,13 +450,14 @@ func TestDecisionConstants(t *testing.T) {
 
 func TestHistoryEntryJSON(t *testing.T) {
 	h := HistoryEntry{
-		Role:     "tool_call",
-		Content:  "calling tool",
-		ToolID:   "t1",
-		ToolName: "read_file",
-		ToolArgs: `{"path":"/tmp"}`,
-		Result:   "",
-		IsError:  false,
+		Role:       "tool_call",
+		Content:    "calling tool",
+		ToolID:     "t1",
+		ToolName:   "read_file",
+		ToolArgs:   `{"path":"/tmp"}`,
+		ToolDetail: "/tmp",
+		Result:     "",
+		IsError:    false,
 	}
 	b, _ := json.Marshal(h)
 	var got HistoryEntry
@@ -471,7 +472,7 @@ func TestHistoryEntryOmitEmpty(t *testing.T) {
 	b, _ := json.Marshal(h)
 	var m map[string]interface{}
 	json.Unmarshal(b, &m)
-	for _, key := range []string{"tool_id", "tool_name", "tool_args", "result", "is_error"} {
+	for _, key := range []string{"tool_id", "tool_name", "tool_args", "tool_detail", "result", "is_error"} {
 		if _, ok := m[key]; ok {
 			t.Errorf("%q should be omitted when zero/empty", key)
 		}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 // Broker bridges agent events and the WebSocket tunnel protocol.
@@ -36,6 +37,10 @@ type Broker struct {
 	outCond  *sync.Cond
 	outbound []GatewayMessage // unbounded queue: enqueue never blocks
 	outDone  chan struct{}
+	stopOnce sync.Once
+
+	waitMu      sync.Mutex
+	sendWaiters map[string]chan struct{}
 
 	// Text batching
 	textMu   sync.Mutex
@@ -46,12 +51,13 @@ type Broker struct {
 
 func NewBroker(sess *Session) *Broker {
 	b := &Broker{
-		session:   sess,
-		sessionID: newTunnelSessionID(),
-		outDone:   make(chan struct{}),
-		textBuf:   make(map[string]*textEntry),
-		textTick:  time.NewTicker(300 * time.Millisecond),
-		textDone:  make(chan struct{}),
+		session:     sess,
+		sessionID:   newTunnelSessionID(),
+		outDone:     make(chan struct{}),
+		textBuf:     make(map[string]*textEntry),
+		textTick:    time.NewTicker(300 * time.Millisecond),
+		textDone:    make(chan struct{}),
+		sendWaiters: make(map[string]chan struct{}),
 	}
 	b.outCond = sync.NewCond(&b.outMu)
 
@@ -109,6 +115,7 @@ func (b *Broker) senderLoop() {
 			if err := b.session.Send(msg); err != nil {
 				debug.Log("tunnel", "broker: send %s event=%s failed: %v", msg.Type, msg.EventID, err)
 			}
+			b.signalSent(msg.EventID)
 		}
 	}
 }
@@ -177,10 +184,12 @@ func (b *Broker) OnCommand(fn func(cmd GatewayMessage)) {
 }
 
 func (b *Broker) Stop() {
-	b.textTick.Stop()
-	close(b.textDone)
-	close(b.outDone)
-	b.outCond.Broadcast()
+	b.stopOnce.Do(func() {
+		b.textTick.Stop()
+		close(b.textDone)
+		close(b.outDone)
+		b.outCond.Broadcast()
+	})
 }
 
 func (b *Broker) SessionID() string {
@@ -214,6 +223,34 @@ func (b *Broker) ResetSession() {
 
 func (b *Broker) PushSharingStopped() {
 	b.enqueue("sharing_stopped", nil)
+}
+
+func (b *Broker) StopSharingGracefully(timeout time.Duration) {
+	if b == nil {
+		return
+	}
+	b.flushAllText()
+	msg := b.newMessage("sharing_stopped", "", nil)
+	if msg.Type != "" {
+		wait := b.trackSend(msg.EventID)
+		b.enqueueOut(msg)
+		timer := time.NewTimer(timeout)
+		select {
+		case <-wait:
+		case <-timer.C:
+			debug.Log("tunnel", "broker: timed out waiting to enqueue sharing_stopped event=%s", msg.EventID)
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+	b.Stop()
+	if b.session != nil {
+		b.session.StopGracefully(timeout)
+	}
 }
 
 // ─── User message ───
@@ -344,11 +381,12 @@ type HistoryEntry struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	// Tool fields (role == "tool_call" or "tool_result")
-	ToolID   string `json:"tool_id,omitempty"`
-	ToolName string `json:"tool_name,omitempty"`
-	ToolArgs string `json:"tool_args,omitempty"`
-	Result   string `json:"result,omitempty"`
-	IsError  bool   `json:"is_error,omitempty"`
+	ToolID     string `json:"tool_id,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	ToolArgs   string `json:"tool_args,omitempty"`
+	ToolDetail string `json:"tool_detail,omitempty"`
+	Result     string `json:"result,omitempty"`
+	IsError    bool   `json:"is_error,omitempty"`
 }
 
 func (b *Broker) SeedHistory(messages []HistoryEntry) {
@@ -366,7 +404,15 @@ func (b *Broker) SeedHistory(messages []HistoryEntry) {
 			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.Content})
 			b.enqueueWithStream(EventTextDone, msgID, TextData{ID: msgID, Done: true})
 		case "tool_call":
-			b.PushToolCall(entry.ToolID, entry.ToolName, entry.ToolArgs, entry.ToolArgs)
+			detail := entry.ToolDetail
+			if detail == "" && entry.ToolArgs != "" {
+				present := toolpkg.DescribeTool(entry.ToolName, entry.ToolArgs)
+				detail = present.Detail
+				if detail == "" && present.DisplayName != "" && present.DisplayName != entry.ToolName {
+					detail = present.DisplayName
+				}
+			}
+			b.PushToolCall(entry.ToolID, entry.ToolName, entry.ToolArgs, detail)
 		case "tool_result":
 			b.PushToolResult(entry.ToolID, entry.ToolName, entry.Result, entry.IsError)
 		}
@@ -382,6 +428,27 @@ func (b *Broker) enqueueOut(msg GatewayMessage) {
 	b.outbound = append(b.outbound, msg)
 	b.outMu.Unlock()
 	b.outCond.Signal()
+}
+
+func (b *Broker) trackSend(eventID string) <-chan struct{} {
+	ch := make(chan struct{})
+	b.waitMu.Lock()
+	if b.sendWaiters == nil {
+		b.sendWaiters = make(map[string]chan struct{})
+	}
+	b.sendWaiters[eventID] = ch
+	b.waitMu.Unlock()
+	return ch
+}
+
+func (b *Broker) signalSent(eventID string) {
+	b.waitMu.Lock()
+	ch := b.sendWaiters[eventID]
+	delete(b.sendWaiters, eventID)
+	b.waitMu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
 }
 
 // enqueue assigns stable session/event metadata and puts on outbound.

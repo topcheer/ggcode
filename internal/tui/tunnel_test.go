@@ -107,7 +107,7 @@ func TestTunnelMessagesToHistory_AssistantWithTool(t *testing.T) {
 
 func TestTunnelMessagesToHistory_ToolResult(t *testing.T) {
 	msgs := []provider.Message{
-		{Role: "tool", Content: []provider.ContentBlock{
+		{Role: "user", Content: []provider.ContentBlock{
 			{Type: "tool_result", ToolID: "t1", ToolName: "read_file", Output: "file content", IsError: false},
 		}},
 	}
@@ -139,10 +139,25 @@ func TestTunnelMessagesToHistory_TruncatesToolArgs(t *testing.T) {
 	}
 }
 
+func TestTunnelMessagesToHistoryStoresToolDetail(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{
+			{Type: "tool_use", ToolID: "t1", ToolName: "run_command", Input: json.RawMessage(`{"command":"cd /tmp && go test ./..."}`)},
+		}},
+	}
+	history := tunnelMessagesToHistory(msgs)
+	if len(history) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(history))
+	}
+	if history[0].ToolDetail == "" {
+		t.Fatal("expected tool_detail to be populated for tool history")
+	}
+}
+
 func TestTunnelMessagesToHistory_TruncatesResult(t *testing.T) {
 	longResult := strings.Repeat("y", 600)
 	msgs := []provider.Message{
-		{Role: "tool", Content: []provider.ContentBlock{
+		{Role: "user", Content: []provider.ContentBlock{
 			{Type: "tool_result", ToolID: "t1", ToolName: "tool", Output: longResult},
 		}},
 	}
@@ -185,7 +200,7 @@ func TestTunnelMessagesToHistory_FullConversation(t *testing.T) {
 			{Type: "text", Text: "I'll fix it."},
 			{Type: "tool_use", ToolID: "t1", ToolName: "edit_file", Input: json.RawMessage(`{"path":"/tmp/x"}`)},
 		}},
-		{Role: "tool", Content: []provider.ContentBlock{
+		{Role: "user", Content: []provider.ContentBlock{
 			{Type: "tool_result", ToolID: "t1", ToolName: "edit_file", Output: "OK"},
 		}},
 		{Role: "assistant", Content: []provider.ContentBlock{

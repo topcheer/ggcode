@@ -4,6 +4,7 @@ package tunnel
 
 import (
 	"testing"
+	"time"
 )
 
 func TestNewSession(t *testing.T) {
@@ -59,6 +60,19 @@ func TestSessionStopWithClient(t *testing.T) {
 	sess.Stop()
 	if !rc.closed {
 		t.Error("client should be closed after session Stop")
+	}
+}
+
+func TestSessionStopGracefullyWithClient(t *testing.T) {
+	sess := NewSession("wss://relay.example.com")
+	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.client = rc
+	sess.StopGracefully(50 * time.Millisecond)
+	if !rc.closed {
+		t.Error("client should be closed after session StopGracefully")
 	}
 }
 
