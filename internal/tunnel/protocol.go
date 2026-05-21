@@ -132,10 +132,11 @@ type StatusData struct {
 
 // ToolCallData carries a tool call notification.
 type ToolCallData struct {
-	ToolID   string `json:"tool_id"`
-	ToolName string `json:"tool_name"`
-	Args     string `json:"args,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	ToolID      string `json:"tool_id"`
+	ToolName    string `json:"tool_name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Args        string `json:"args,omitempty"`
+	Detail      string `json:"detail,omitempty"`
 }
 
 // ToolResultData carries a tool result.
@@ -245,11 +246,12 @@ type SubagentStatusData struct {
 
 // SubagentToolCallData carries tool call info from a sub-agent.
 type SubagentToolCallData struct {
-	AgentID  string `json:"agent_id"`
-	ToolID   string `json:"tool_id"`
-	ToolName string `json:"tool_name"`
-	Args     string `json:"args,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	AgentID     string `json:"agent_id"`
+	ToolID      string `json:"tool_id"`
+	ToolName    string `json:"tool_name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Args        string `json:"args,omitempty"`
+	Detail      string `json:"detail,omitempty"`
 }
 
 // SubagentToolResultData carries tool result from a sub-agent.

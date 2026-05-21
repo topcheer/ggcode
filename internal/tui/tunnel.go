@@ -204,8 +204,9 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 			name = "tool"
 		}
 		present := describeTool(m.currentLanguage(), name, string(ev.Tool.Arguments))
+		title := toolCallDisplayName(name, string(ev.Tool.Arguments))
 		m.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
-		m.tunnelBroker.PushToolCall(ev.Tool.ID, name, string(ev.Tool.Arguments), present.Detail)
+		m.tunnelBroker.PushToolCall(ev.Tool.ID, name, title, string(ev.Tool.Arguments), present.Detail)
 
 	case provider.StreamEventToolResult:
 		content := ev.Result
@@ -294,9 +295,9 @@ func (m *Model) pushSubAgentTunnelStreamText(agentID, text string) {
 }
 
 // pushSubAgentTunnelToolCall pushes a tool call from a sub-agent.
-func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, args, detail string) {
+func (m *Model) pushSubAgentTunnelToolCall(agentID, toolID, toolName, displayName, args, detail string) {
 	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, args, detail)
+		m.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail)
 	}
 }
 
@@ -317,14 +318,9 @@ func (m *Model) pushSwarmTunnelEvent(ev swarm.Event) {
 
 	switch ev.Type {
 	case "teammate_tool_call":
-		detail := ""
-		var input map[string]interface{}
-		if json.Unmarshal([]byte(ev.ToolArgs), &input) == nil {
-			if desc, ok := input["description"].(string); ok && desc != "" {
-				detail = desc
-			}
-		}
-		m.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, detail)
+		detail := describeTool(LangEnglish, ev.CurrentTool, ev.ToolArgs).Detail
+		title := toolCallDisplayName(ev.CurrentTool, ev.ToolArgs)
+		m.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, title, ev.ToolArgs, detail)
 		m.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 	case "teammate_tool_result":
@@ -542,11 +538,12 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 					}
 					present := describeTool(LangEnglish, block.ToolName, string(block.Input))
 					history = append(history, tunnel.HistoryEntry{
-						Role:       "tool_call",
-						ToolID:     block.ToolID,
-						ToolName:   block.ToolName,
-						ToolArgs:   argsStr,
-						ToolDetail: present.Detail,
+						Role:            "tool_call",
+						ToolID:          block.ToolID,
+						ToolName:        block.ToolName,
+						ToolDisplayName: toolCallDisplayName(block.ToolName, string(block.Input)),
+						ToolArgs:        argsStr,
+						ToolDetail:      present.Detail,
 					})
 				}
 			}
@@ -578,6 +575,14 @@ func truncateRunes(s string, maxRunes int, suffix string) string {
 		return s
 	}
 	return string(runes[:maxRunes]) + suffix
+}
+
+func toolCallDisplayName(toolName, rawArgs string) string {
+	args := parseToolArgs(rawArgs)
+	if desc := argString(args, "description"); desc != "" {
+		return desc
+	}
+	return prettifyToolName(toolName)
 }
 
 // parseModeFromString parses a permission mode string, returning (mode, true) if valid.

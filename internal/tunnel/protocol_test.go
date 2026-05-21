@@ -121,10 +121,11 @@ func TestStatusDataOmitEmptyMessage(t *testing.T) {
 
 func TestToolCallDataJSON(t *testing.T) {
 	d := ToolCallData{
-		ToolID:   "t1",
-		ToolName: "read_file",
-		Args:     `{"path":"/tmp/f"}`,
-		Detail:   "reading file",
+		ToolID:      "t1",
+		ToolName:    "read_file",
+		DisplayName: "Inspect config",
+		Args:        `{"path":"/tmp/f"}`,
+		Detail:      "reading file",
 	}
 	b, _ := json.Marshal(d)
 	var got ToolCallData
@@ -344,11 +345,12 @@ func TestSubagentCompleteDataJSON(t *testing.T) {
 
 func TestSubagentToolCallDataJSON(t *testing.T) {
 	d := SubagentToolCallData{
-		AgentID:  "agent-1",
-		ToolID:   "t1",
-		ToolName: "search",
-		Args:     `{"pattern":"TODO"}`,
-		Detail:   "searching",
+		AgentID:     "agent-1",
+		ToolID:      "t1",
+		ToolName:    "search",
+		DisplayName: "Find TODOs",
+		Args:        `{"pattern":"TODO"}`,
+		Detail:      "searching",
 	}
 	b, _ := json.Marshal(d)
 	var got SubagentToolCallData
@@ -450,14 +452,15 @@ func TestDecisionConstants(t *testing.T) {
 
 func TestHistoryEntryJSON(t *testing.T) {
 	h := HistoryEntry{
-		Role:       "tool_call",
-		Content:    "calling tool",
-		ToolID:     "t1",
-		ToolName:   "read_file",
-		ToolArgs:   `{"path":"/tmp"}`,
-		ToolDetail: "/tmp",
-		Result:     "",
-		IsError:    false,
+		Role:            "tool_call",
+		Content:         "calling tool",
+		ToolID:          "t1",
+		ToolName:        "read_file",
+		ToolDisplayName: "Read Config",
+		ToolArgs:        `{"path":"/tmp"}`,
+		ToolDetail:      "/tmp",
+		Result:          "",
+		IsError:         false,
 	}
 	b, _ := json.Marshal(h)
 	var got HistoryEntry

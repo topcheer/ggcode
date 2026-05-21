@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -284,8 +285,14 @@ func (b *Broker) PushStatus(status, message string) {
 
 // ─── Tool calls ───
 
-func (b *Broker) PushToolCall(toolID, toolName, args, detail string) {
-	b.enqueueWithStream(EventToolCall, toolID, ToolCallData{ToolID: toolID, ToolName: toolName, Args: args, Detail: detail})
+func (b *Broker) PushToolCall(toolID, toolName, displayName, args, detail string) {
+	b.enqueueWithStream(EventToolCall, toolID, ToolCallData{
+		ToolID:      toolID,
+		ToolName:    toolName,
+		DisplayName: displayName,
+		Args:        args,
+		Detail:      detail,
+	})
 }
 
 func (b *Broker) PushToolResult(toolID, toolName, result string, isError bool) {
@@ -349,13 +356,18 @@ func (b *Broker) PushSubagentComplete(agentID, name, summary string, success boo
 	})
 }
 
-func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, args, detail string) {
+func (b *Broker) PushSubagentToolCall(agentID, toolID, toolName, displayName, args, detail string) {
 	streamID := toolID
 	if streamID == "" {
 		streamID = fmt.Sprintf("%s-tool", agentID)
 	}
 	b.enqueueWithStream(EventSubagentToolCall, streamID, SubagentToolCallData{
-		AgentID: agentID, ToolID: toolID, ToolName: toolName, Args: args, Detail: detail,
+		AgentID:     agentID,
+		ToolID:      toolID,
+		ToolName:    toolName,
+		DisplayName: displayName,
+		Args:        args,
+		Detail:      detail,
 	})
 }
 
@@ -381,12 +393,13 @@ type HistoryEntry struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	// Tool fields (role == "tool_call" or "tool_result")
-	ToolID     string `json:"tool_id,omitempty"`
-	ToolName   string `json:"tool_name,omitempty"`
-	ToolArgs   string `json:"tool_args,omitempty"`
-	ToolDetail string `json:"tool_detail,omitempty"`
-	Result     string `json:"result,omitempty"`
-	IsError    bool   `json:"is_error,omitempty"`
+	ToolID          string `json:"tool_id,omitempty"`
+	ToolName        string `json:"tool_name,omitempty"`
+	ToolDisplayName string `json:"tool_display_name,omitempty"`
+	ToolArgs        string `json:"tool_args,omitempty"`
+	ToolDetail      string `json:"tool_detail,omitempty"`
+	Result          string `json:"result,omitempty"`
+	IsError         bool   `json:"is_error,omitempty"`
 }
 
 func (b *Broker) SeedHistory(messages []HistoryEntry) {
@@ -404,19 +417,33 @@ func (b *Broker) SeedHistory(messages []HistoryEntry) {
 			b.enqueueWithStream(EventText, msgID, TextData{ID: msgID, Chunk: entry.Content})
 			b.enqueueWithStream(EventTextDone, msgID, TextData{ID: msgID, Done: true})
 		case "tool_call":
+			displayName := strings.TrimSpace(entry.ToolDisplayName)
+			if displayName == "" {
+				displayName = fallbackToolDisplayName(entry.ToolName)
+			}
 			detail := entry.ToolDetail
 			if detail == "" && entry.ToolArgs != "" {
 				present := toolpkg.DescribeTool(entry.ToolName, entry.ToolArgs)
 				detail = present.Detail
-				if detail == "" && present.DisplayName != "" && present.DisplayName != entry.ToolName {
-					detail = present.DisplayName
-				}
 			}
-			b.PushToolCall(entry.ToolID, entry.ToolName, entry.ToolArgs, detail)
+			b.PushToolCall(entry.ToolID, entry.ToolName, displayName, entry.ToolArgs, detail)
 		case "tool_result":
 			b.PushToolResult(entry.ToolID, entry.ToolName, entry.Result, entry.IsError)
 		}
 	}
+}
+
+func fallbackToolDisplayName(toolName string) string {
+	toolName = strings.ReplaceAll(toolName, "-", " ")
+	toolName = strings.ReplaceAll(toolName, "_", " ")
+	parts := strings.Fields(toolName)
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 // ─── Internal ───

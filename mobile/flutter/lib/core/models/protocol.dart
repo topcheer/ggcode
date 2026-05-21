@@ -97,18 +97,21 @@ class StatusData {
 class ToolCallData {
   final String toolId;
   final String toolName;
+  final String displayName;
   final String args;
   final String detail;
 
   ToolCallData(
       {required this.toolId,
       required this.toolName,
+      this.displayName = '',
       required this.args,
       required this.detail});
 
   factory ToolCallData.fromJson(Map<String, dynamic> d) => ToolCallData(
         toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
+        displayName: d['display_name'] as String? ?? '',
         args: d['args'] as String? ?? '',
         detail: d['detail'] as String? ?? '',
       );
@@ -374,6 +377,7 @@ class SubagentToolCallData {
   final String agentId;
   final String toolId;
   final String toolName;
+  final String displayName;
   final String args;
   final String detail;
 
@@ -381,6 +385,7 @@ class SubagentToolCallData {
     required this.agentId,
     required this.toolId,
     required this.toolName,
+    this.displayName = '',
     this.args = '',
     this.detail = '',
   });
@@ -390,6 +395,7 @@ class SubagentToolCallData {
         agentId: d['agent_id'] as String? ?? '',
         toolId: d['tool_id'] as String? ?? '',
         toolName: d['tool_name'] as String? ?? '',
+        displayName: d['display_name'] as String? ?? '',
         args: d['args'] as String? ?? '',
         detail: d['detail'] as String? ?? '',
       );

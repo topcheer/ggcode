@@ -196,7 +196,11 @@ func (b *AgentBridge) setupAgent() error {
 	// Forward sub-agent tool calls/results to mobile.
 	b.subAgentMgr.SetOnToolCall(func(agentID, toolID, toolName, args, detail string) {
 		if b.tunnelBroker != nil {
-			b.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, args, detail)
+			summary := detail
+			if summary == "" {
+				summary = toolArgSummary(toolName, args)
+			}
+			b.tunnelBroker.PushSubagentToolCall(agentID, toolID, toolName, toolDisplayName(toolName, args), args, summary)
 		}
 	})
 	b.subAgentMgr.SetOnToolResult(func(agentID, toolID, toolName, result string, isError bool) {
@@ -284,14 +288,8 @@ func (b *AgentBridge) setupAgent() error {
 		if b.tunnelBroker != nil {
 			switch ev.Type {
 			case "teammate_tool_call":
-				detail := ""
-				var input map[string]interface{}
-				if json.Unmarshal([]byte(ev.ToolArgs), &input) == nil {
-					if desc, ok := input["description"].(string); ok && desc != "" {
-						detail = desc
-					}
-				}
-				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, ev.ToolArgs, detail)
+				detail := toolArgSummary(ev.CurrentTool, ev.ToolArgs)
+				b.tunnelBroker.PushSubagentToolCall(ev.TeammateID, ev.ToolID, ev.CurrentTool, toolDisplayName(ev.CurrentTool, ev.ToolArgs), ev.ToolArgs, detail)
 				b.tunnelBroker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 			case "teammate_tool_result":
@@ -565,7 +563,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if b.tunnelBroker != nil {
 					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
 					b.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
-					b.tunnelBroker.PushToolCall(ev.Tool.ID, name, string(ev.Tool.Arguments), description)
+					b.tunnelBroker.PushToolCall(ev.Tool.ID, name, toolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), args)
 				}
 
 			case provider.StreamEventToolResult:
@@ -775,6 +773,19 @@ func (b *AgentBridge) SwarmPanels() []AgentPanelData {
 }
 
 // ── Helpers ──────────────────────────────────────────
+
+func toolDisplayName(toolName, rawArgs string) string {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rawArgs), &args); err == nil {
+		if v, ok := args["description"]; ok {
+			var desc string
+			if json.Unmarshal(v, &desc) == nil && desc != "" {
+				return desc
+			}
+		}
+	}
+	return prettifyToolName(toolName)
+}
 
 func toolDescription(toolName, rawArgs string) string {
 	var args map[string]json.RawMessage

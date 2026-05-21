@@ -103,6 +103,9 @@ func TestTunnelMessagesToHistory_AssistantWithTool(t *testing.T) {
 	if history[1].Role != "tool_call" || history[1].ToolName != "read_file" {
 		t.Errorf("entry 1: %+v", history[1])
 	}
+	if history[1].ToolDisplayName != "Read File" {
+		t.Errorf("entry 1 display name: %q", history[1].ToolDisplayName)
+	}
 }
 
 func TestTunnelMessagesToHistory_ToolResult(t *testing.T) {
@@ -151,6 +154,24 @@ func TestTunnelMessagesToHistoryStoresToolDetail(t *testing.T) {
 	}
 	if history[0].ToolDetail == "" {
 		t.Fatal("expected tool_detail to be populated for tool history")
+	}
+	if history[0].ToolDisplayName != "Run Command" {
+		t.Fatalf("expected fallback tool display name, got %q", history[0].ToolDisplayName)
+	}
+}
+
+func TestTunnelMessagesToHistoryStoresToolDisplayNameFromDescription(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "assistant", Content: []provider.ContentBlock{
+			{Type: "tool_use", ToolID: "t1", ToolName: "run_command", Input: json.RawMessage(`{"description":"run tests","command":"cd /tmp && go test ./..."}`)},
+		}},
+	}
+	history := tunnelMessagesToHistory(msgs)
+	if len(history) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(history))
+	}
+	if history[0].ToolDisplayName != "run tests" {
+		t.Fatalf("expected tool display name from description, got %q", history[0].ToolDisplayName)
 	}
 }
 
@@ -259,7 +280,7 @@ func TestAllPushMethods_NilBroker(t *testing.T) {
 	m.pushTunnelStatusThinking()
 	m.pushTunnelCancel()
 	m.pushSubAgentTunnelStreamText("sa-1", "text")
-	m.pushSubAgentTunnelToolCall("sa-1", "t1", "tool", "{}", "")
+	m.pushSubAgentTunnelToolCall("sa-1", "t1", "tool", "Tool", "{}", "")
 	m.pushSubAgentTunnelToolResult("sa-1", "t1", "tool", "result", false)
 	m.pushSubAgentTunnelEvent(&subagent.SubAgent{ID: "x", Status: subagent.StatusRunning})
 	m.pushSubAgentTunnelEvent(&subagent.SubAgent{ID: "x", Status: subagent.StatusCompleted, Result: "done"})
