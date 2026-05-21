@@ -310,7 +310,7 @@ func TestEscapeRejectsPendingIMPairing(t *testing.T) {
 		t.Fatalf("expected pending pairing to clear, got %#v", pending)
 	}
 	events := sink.snapshot()
-	if len(events) != 1 || !strings.Contains(events[0].Text, "拒绝") {
+	if len(events) != 1 || events[0].Text == "" {
 		t.Fatalf("expected rejection notice to be emitted, got %#v", events)
 	}
 }

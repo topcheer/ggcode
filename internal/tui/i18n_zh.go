@@ -534,6 +534,12 @@ func zhCatalog(key string) string {
 		return "Ctrl+N 跟随"
 	case "hint.unfollow_panel":
 		return "Ctrl+N 取消跟随"
+	case "tunnel.stopped":
+		return "隧道已停止。"
+	case "pairing.rejected":
+		return "当前配对请求已被拒绝，如需继续请重新发起。"
+	case "pairing.blacklisted":
+		return "该渠道因多次被拒绝，已被加入黑名单。"
 	case "queued.count":
 		return "%d 条排队中"
 	case "queued.output":
