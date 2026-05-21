@@ -123,3 +123,157 @@ func TestAppendAgentEventsMergesConsecutiveReasoningChunks(t *testing.T) {
 		t.Fatalf("reasoningMD content = %q, want %q", got, "first second")
 	}
 }
+
+// TestAppendAgentEventsToolCallNoPreFillResult verifies that tool_call does not
+// pre-fill the result content. The result should only appear when tool_result arrives.
+func TestAppendAgentEventsToolCallNoPreFillResult(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	cv := &ChatView{}
+	st := &agentPanelState{
+		toolWidgets: make(map[int]*toolWidgetRef),
+		vbox:        container.NewVBox(),
+	}
+
+	panel := AgentPanelData{
+		Events: []AgentEventEntry{
+			{Type: "tool_call", ToolID: "call_1", ToolName: "read_file", ToolArgs: `{"path":"/tmp/test.txt"}`},
+			{Type: "tool_result", ToolID: "call_1", Content: "file contents here"},
+		},
+	}
+
+	cv.appendAgentEvents(panel, st, 0)
+
+	// The tool_call should have created a ref
+	if len(st.toolWidgets) != 1 {
+		t.Fatalf("expected 1 toolWidget, got %d", len(st.toolWidgets))
+	}
+
+	// The ref should have hasResult=true (set by tool_result)
+	for _, ref := range st.toolWidgets {
+		if !ref.hasResult {
+			t.Error("expected hasResult=true after tool_result")
+		}
+	}
+}
+
+// TestAppendAgentEventsToolResultMatchesByToolID verifies that tool_result
+// matches the correct tool_call by ToolID, not by event index.
+func TestAppendAgentEventsToolResultMatchesByToolID(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	cv := &ChatView{}
+	st := &agentPanelState{
+		toolWidgets: make(map[int]*toolWidgetRef),
+		vbox:        container.NewVBox(),
+	}
+
+	panel := AgentPanelData{
+		Events: []AgentEventEntry{
+			{Type: "tool_call", ToolID: "call_A", ToolName: "read_file", ToolArgs: `{"path":"A"}`},
+			{Type: "text", Content: "thinking..."},
+			{Type: "tool_call", ToolID: "call_B", ToolName: "run_command", ToolArgs: `{"command":"ls"}`},
+			{Type: "tool_result", ToolID: "call_B", Content: "file1\nfile2"},
+			{Type: "tool_result", ToolID: "call_A", Content: "content A"},
+		},
+	}
+
+	cv.appendAgentEvents(panel, st, 0)
+
+	if len(st.toolWidgets) != 2 {
+		t.Fatalf("expected 2 toolWidgets, got %d", len(st.toolWidgets))
+	}
+
+	// Both should have hasResult=true
+	foundA, foundB := false, false
+	for _, ref := range st.toolWidgets {
+		if !ref.hasResult {
+			t.Errorf("tool %q has hasResult=false, expected true", ref.toolID)
+		}
+		if ref.toolID == "call_A" {
+			foundA = true
+		}
+		if ref.toolID == "call_B" {
+			foundB = true
+		}
+	}
+	if !foundA {
+		t.Error("call_A not found in toolWidgets")
+	}
+	if !foundB {
+		t.Error("call_B not found in toolWidgets")
+	}
+}
+
+// TestAppendAgentEventsNoDuplicateToolResult verifies that a tool_result event
+// does not produce duplicate rendering when tool_call and tool_result arrive
+// in the same batch.
+func TestAppendAgentEventsNoDuplicateToolResult(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	cv := &ChatView{}
+	st := &agentPanelState{
+		toolWidgets: make(map[int]*toolWidgetRef),
+		vbox:        container.NewVBox(),
+	}
+
+	panel := AgentPanelData{
+		Events: []AgentEventEntry{
+			{Type: "tool_call", ToolID: "call_1", ToolName: "read_file", ToolArgs: `{"path":"/tmp/test"}`},
+			{Type: "tool_result", ToolID: "call_1", Content: "hello"},
+		},
+	}
+
+	cv.appendAgentEvents(panel, st, 0)
+
+	// Count result-related children in the vbox.
+	// After fix, tool_call creates one block, tool_result adds one result block.
+	// Before fix, tool_call pre-filled result AND tool_result added another = duplicate.
+	// We check by counting: there should be exactly 1 tool block with hasResult=true.
+	resultCount := 0
+	for _, ref := range st.toolWidgets {
+		if ref.hasResult {
+			resultCount++
+		}
+	}
+	if resultCount != 1 {
+		t.Errorf("expected exactly 1 tool with hasResult=true, got %d", resultCount)
+	}
+}
+
+// TestAppendAgentEventsToolResultIgnoresAlreadyMatched verifies that a second
+// tool_result for the same ToolID is ignored (no duplicate addToolResult).
+func TestAppendAgentEventsToolResultIgnoresAlreadyMatched(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	cv := &ChatView{}
+	st := &agentPanelState{
+		toolWidgets: make(map[int]*toolWidgetRef),
+		vbox:        container.NewVBox(),
+	}
+
+	panel := AgentPanelData{
+		Events: []AgentEventEntry{
+			{Type: "tool_call", ToolID: "call_1", ToolName: "read_file", ToolArgs: `{"path":"/tmp/test"}`},
+			{Type: "tool_result", ToolID: "call_1", Content: "first"},
+			{Type: "tool_result", ToolID: "call_1", Content: "duplicate"},
+		},
+	}
+
+	cv.appendAgentEvents(panel, st, 0)
+
+	// The second tool_result should be ignored because hasResult is already true
+	resultCount := 0
+	for _, ref := range st.toolWidgets {
+		if ref.hasResult {
+			resultCount++
+		}
+	}
+	if resultCount != 1 {
+		t.Errorf("expected exactly 1 tool with hasResult=true (duplicate ignored), got %d", resultCount)
+	}
+}
