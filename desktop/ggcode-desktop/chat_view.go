@@ -773,8 +773,18 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 	if tc == tcSuppress || tc == tcTodo {
 		return
 	}
+	// Web, start/stop command, list_agents: suppress output entirely.
+	if tc == tcWeb || ref.toolName == "start_command" || ref.toolName == "stop_command" || ref.toolName == "list_commands" || ref.toolName == "list_agents" {
+		return
+	}
 
-	resultBlock := newMD("```\n" + truncateRunes(result, 3000, "\n...(truncated)") + "\n```")
+	// Format result based on tool type.
+	formatted := cv.formatToolResult(ref.toolName, result)
+	if formatted == "" {
+		return
+	}
+
+	resultBlock := newMD("```\n" + truncateRunes(formatted, 3000, "\n...(truncated)") + "\n```")
 	label := "Output"
 	if tc == tcFile {
 		label = "Content"
@@ -1780,4 +1790,69 @@ func interceptFileLinks(obj fyne.CanvasObject, app *App) {
 			interceptFileLinks(child, app)
 		}
 	}
+}
+
+// formatToolResult transforms raw tool result into a human-readable summary.
+func (cv *ChatView) formatToolResult(toolName, result string) string {
+	switch toolName {
+	case "multi_file_edit", "multi_edit_file":
+		return formatMultiEditResult(result)
+	case "read_command_output":
+		return extractRecentOutput(result)
+	default:
+		return result
+	}
+}
+
+// formatMultiEditResult formats multi_file_edit JSON into a human-readable summary.
+func formatMultiEditResult(result string) string {
+	var raw struct {
+		Summary string `json:"summary"`
+		Results []struct {
+			Path             string `json:"path"`
+			Status           string `json:"status"`
+			AppliedEditCount int    `json:"applied_edit_count"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(result), &raw); err != nil {
+		return result
+	}
+
+	var lines []string
+	lines = append(lines, raw.Summary)
+	for _, r := range raw.Results {
+		path := r.Path
+		if idx := strings.LastIndex(path, "/"); idx >= 0 {
+			path = path[idx+1:]
+		}
+		if r.Status == "success" {
+			if r.AppliedEditCount > 0 {
+				lines = append(lines, fmt.Sprintf("  - %s (%d edit%s)", path, r.AppliedEditCount, pluralS(r.AppliedEditCount)))
+			} else {
+				lines = append(lines, fmt.Sprintf("  - %s", path))
+			}
+		} else {
+			lines = append(lines, fmt.Sprintf("  - %s [%s]", path, r.Status))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// extractRecentOutput parses the structured read_command_output result
+// and returns only the "Recent output" content.
+func extractRecentOutput(result string) string {
+	marker := "Recent output:\n"
+	idx := strings.Index(result, marker)
+	if idx < 0 {
+		return ""
+	}
+	output := result[idx+len(marker):]
+	return strings.TrimSpace(output)
 }
