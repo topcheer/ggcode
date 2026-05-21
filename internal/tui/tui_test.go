@@ -397,8 +397,8 @@ func TestDescribeToolReadFile(t *testing.T) {
 
 func TestDescribeToolReadFileWithDescription(t *testing.T) {
 	present := describeTool(LangEnglish, "read_file", `{"path":"docs/guide.md","description":"Checking build config"}`)
-	if present.DisplayName != "Checking build config" {
-		t.Fatalf("expected description as display name, got %q", present.DisplayName)
+	if present.DisplayName != "Checking build config (Read File)" {
+		t.Fatalf("expected description with prettified name, got %q", present.DisplayName)
 	}
 	if present.Detail != "docs/guide.md" {
 		t.Fatalf("expected file detail, got %q", present.Detail)
@@ -410,15 +410,15 @@ func TestDescribeToolReadFileWithDescription(t *testing.T) {
 
 func TestDescribeToolEditFileWithDescription(t *testing.T) {
 	present := describeTool(LangEnglish, "edit_file", `{"file_path":"main.go","old_text":"x","new_text":"y","description":"Fixing typo in main"}`)
-	if present.DisplayName != "Fixing typo in main" {
-		t.Fatalf("expected description as display name, got %q", present.DisplayName)
+	if present.DisplayName != "Fixing typo in main (Edit File)" {
+		t.Fatalf("expected description with prettified name, got %q", present.DisplayName)
 	}
 }
 
 func TestDescribeToolWriteFileWithDescription(t *testing.T) {
 	present := describeTool(LangEnglish, "write_file", `{"path":"output.txt","content":"hello","description":"Creating output"}`)
-	if present.DisplayName != "Creating output" {
-		t.Fatalf("expected description as display name, got %q", present.DisplayName)
+	if present.DisplayName != "Creating output (Write File)" {
+		t.Fatalf("expected description with prettified name, got %q", present.DisplayName)
 	}
 }
 
