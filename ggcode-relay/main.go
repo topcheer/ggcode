@@ -11,13 +11,28 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// relayMessage is the wire format — gateway only sees type + opaque blobs.
+// relayMessage is the wire format. Metadata fields remain plaintext so relay
+// can manage replay and ordering without decrypting business payloads.
 type relayMessage struct {
-	Type       string `json:"type"`
-	Nonce      string `json:"nonce,omitempty"`
-	Ciphertext string `json:"ciphertext,omitempty"`
-	Role       string `json:"role,omitempty"`
-	Count      int    `json:"count,omitempty"`
+	Type        string `json:"type"`
+	SessionID   string `json:"session_id,omitempty"`
+	EventID     string `json:"event_id,omitempty"`
+	StreamID    string `json:"stream_id,omitempty"`
+	ClientID    string `json:"client_id,omitempty"`
+	LastEventID string `json:"last_event_id,omitempty"`
+	ResumeMode  string `json:"resume_mode,omitempty"`
+	Nonce       string `json:"nonce,omitempty"`
+	Ciphertext  string `json:"ciphertext,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Count       int    `json:"count,omitempty"`
+}
+
+type roomEvent struct {
+	sessionID string
+	eventID   string
+	streamID  string
+	typ       string
+	raw       []byte
 }
 
 // ─── Room ───
@@ -26,13 +41,19 @@ type room struct {
 	token        string
 	server       *peer
 	clients      map[*peer]struct{}
-	cache        [][]byte
+	clientsByID  map[string]*peer
+	sessionID    string
+	history      []roomEvent
 	mu           sync.RWMutex
 	offlineTimer *time.Timer // grace period before notifying clients
 }
 
 func newRoom(token string) *room {
-	return &room{token: token, clients: make(map[*peer]struct{})}
+	return &room{
+		token:       token,
+		clients:     make(map[*peer]struct{}),
+		clientsByID: make(map[string]*peer),
+	}
 }
 
 // ─── Peer ───
@@ -42,12 +63,13 @@ func newRoom(token string) *room {
 // This guarantees strict FIFO ordering — replay and live broadcasts never interleave.
 
 type peer struct {
-	room       *room
-	role       string // "server" or "client"
-	conn       *websocket.Conn
-	sendCh     chan []byte // never closed; done channel signals stop
-	done       chan struct{}
-	replayData [][]byte // set once before writePump starts
+	room     *room
+	role     string // "server" or "client"
+	conn     *websocket.Conn
+	sendCh   chan []byte // never closed; done channel signals stop
+	done     chan struct{}
+	clientID string
+	ready    bool
 }
 
 // sendJSON enqueues a message for sending. Never panics — sendCh is never closed.
@@ -59,34 +81,23 @@ func (p *peer) sendJSON(msg relayMessage) {
 	}
 }
 
+func (p *peer) sendRaw(raw []byte) {
+	select {
+	case p.sendCh <- raw:
+	default:
+	}
+}
+
 func (p *peer) writePump() {
 	defer p.conn.Close()
 
-	// 1. Send connected confirmation directly
+	// 1. Send connected confirmation directly.
 	connMsg, _ := json.Marshal(relayMessage{Type: "connected", Role: p.role})
 	if err := p.conn.WriteMessage(websocket.TextMessage, connMsg); err != nil {
 		return
 	}
 
-	// 2. Replay cached messages to clients (serialized before live messages)
-	if p.role == "client" && len(p.replayData) > 0 {
-		startMsg, _ := json.Marshal(relayMessage{Type: "replay_start", Count: len(p.replayData)})
-		if err := p.conn.WriteMessage(websocket.TextMessage, startMsg); err != nil {
-			return
-		}
-		for _, m := range p.replayData {
-			if err := p.conn.WriteMessage(websocket.TextMessage, m); err != nil {
-				return
-			}
-		}
-		endMsg, _ := json.Marshal(relayMessage{Type: "replay_end"})
-		if err := p.conn.WriteMessage(websocket.TextMessage, endMsg); err != nil {
-			return
-		}
-		log.Printf("[relay] replayed %d messages to client", len(p.replayData))
-	}
-
-	// 3. Normal pump — live messages from sendCh
+	// 2. Normal pump — resume ack/replay/live messages all flow through sendCh.
 	for {
 		select {
 		case msg := <-p.sendCh:
@@ -136,6 +147,11 @@ func (p *peer) readPump(h *hub) {
 			}()
 		} else {
 			delete(p.room.clients, p)
+			if p.clientID != "" {
+				if current := p.room.clientsByID[p.clientID]; current == p {
+					delete(p.room.clientsByID, p.clientID)
+				}
+			}
 			p.room.mu.Unlock()
 		}
 		log.Printf("[relay] %s disconnected: room=%s", p.role, p.room.token[:8])
@@ -162,6 +178,11 @@ func (p *peer) readPump(h *hub) {
 		case "ping":
 			p.sendJSON(relayMessage{Type: "pong"})
 			continue
+		case "resume_hello", "resume_from":
+			if p.role == "client" {
+				p.handleResume(msg)
+			}
+			continue
 		case "encrypted":
 			// proceed
 		default:
@@ -170,34 +191,88 @@ func (p *peer) readPump(h *hub) {
 
 		p.room.mu.Lock()
 		if p.role == "server" {
-			p.room.cache = append(p.room.cache, raw)
-			if len(p.room.cache) > 10000 {
-				p.room.cache = p.room.cache[len(p.room.cache)-10000:]
+			if msg.SessionID != "" && msg.SessionID != p.room.sessionID {
+				p.room.sessionID = msg.SessionID
+				p.room.history = nil
+			}
+			if msg.SessionID != "" {
+				p.room.history = append(p.room.history, roomEvent{
+					sessionID: msg.SessionID,
+					eventID:   msg.EventID,
+					streamID:  msg.StreamID,
+					typ:       msg.Type,
+					raw:       append([]byte(nil), raw...),
+				})
 			}
 			for c := range p.room.clients {
-				select {
-				case c.sendCh <- raw:
-				default:
+				if c.ready {
+					c.sendRaw(raw)
 				}
 			}
 		} else {
 			if p.room.server != nil {
-				select {
-				case p.room.server.sendCh <- raw:
-				default:
-				}
-			}
-			for c := range p.room.clients {
-				if c != p {
-					select {
-					case c.sendCh <- raw:
-					default:
-					}
-				}
+				p.room.server.sendRaw(raw)
 			}
 		}
 		p.room.mu.Unlock()
 	}
+}
+
+func (p *peer) handleResume(msg relayMessage) {
+	p.room.mu.Lock()
+	defer p.room.mu.Unlock()
+
+	if msg.ClientID == "" {
+		p.sendJSON(relayMessage{Type: "error", Ciphertext: "missing client_id"})
+		return
+	}
+
+	p.clientID = msg.ClientID
+	p.room.clientsByID[msg.ClientID] = p
+
+	mode, replay := p.room.resumePlan(msg.SessionID, msg.LastEventID)
+	p.ready = true
+
+	p.sendJSON(relayMessage{
+		Type:       "resume_ack",
+		SessionID:  p.room.sessionID,
+		ClientID:   msg.ClientID,
+		ResumeMode: mode,
+	})
+
+	switch mode {
+	case "snapshot_required":
+		p.sendJSON(relayMessage{Type: "resume_miss", SessionID: p.room.sessionID, ClientID: msg.ClientID})
+		p.sendJSON(relayMessage{Type: "snapshot_reset", SessionID: p.room.sessionID, ClientID: msg.ClientID})
+		for _, ev := range replay {
+			p.sendRaw(ev.raw)
+		}
+	default:
+		for _, ev := range replay {
+			p.sendRaw(ev.raw)
+		}
+	}
+}
+
+func (r *room) resumePlan(clientSessionID, lastEventID string) (string, []roomEvent) {
+	if len(r.history) == 0 {
+		return "full_history", nil
+	}
+	if clientSessionID == "" || clientSessionID != r.sessionID || lastEventID == "" {
+		replay := make([]roomEvent, len(r.history))
+		copy(replay, r.history)
+		return "full_history", replay
+	}
+	for i, ev := range r.history {
+		if ev.eventID == lastEventID {
+			replay := make([]roomEvent, len(r.history[i+1:]))
+			copy(replay, r.history[i+1:])
+			return "incremental", replay
+		}
+	}
+	replay := make([]roomEvent, len(r.history))
+	copy(replay, r.history)
+	return "snapshot_required", replay
 }
 
 // ─── Hub ───
@@ -276,18 +351,12 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 		rm.server = p
 	} else {
 		rm.clients[p] = struct{}{}
-		if rm.server != nil {
-			rm.server.sendJSON(relayMessage{Type: "client_joined"})
-		}
-		// Copy cache atomically (inside room lock)
-		p.replayData = make([][]byte, len(rm.cache))
-		copy(p.replayData, rm.cache)
 	}
 	rm.mu.Unlock()
 
 	log.Printf("[relay] %s connected: room=%s clients=%d", role, token[:8], len(rm.clients))
-	go p.writePump() // writePump sends connected + replay + live messages
-	p.readPump(h)    // blocks
+	go p.writePump()
+	p.readPump(h) // blocks
 }
 
 // ─── Main ───

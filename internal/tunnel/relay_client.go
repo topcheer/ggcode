@@ -29,7 +29,6 @@ type RelayClient struct {
 	stopCh  chan struct{}
 
 	onMessage func(msg GatewayMessage)
-	onConnect func()
 	mu        sync.RWMutex
 }
 
@@ -166,6 +165,9 @@ func (rc *RelayClient) readPump(done func()) {
 
 		var relayMsg struct {
 			Type       string `json:"type"`
+			SessionID  string `json:"session_id,omitempty"`
+			EventID    string `json:"event_id,omitempty"`
+			StreamID   string `json:"stream_id,omitempty"`
 			Nonce      string `json:"nonce,omitempty"`
 			Ciphertext string `json:"ciphertext,omitempty"`
 			Role       string `json:"role,omitempty"`
@@ -177,15 +179,6 @@ func (rc *RelayClient) readPump(done func()) {
 		switch relayMsg.Type {
 		case "connected":
 			debug.Log("tunnel", "relay-client: confirmed as %s", relayMsg.Role)
-
-		case "client_joined":
-			debug.Log("tunnel", "relay-client: mobile client joined")
-			rc.mu.RLock()
-			fn := rc.onConnect
-			rc.mu.RUnlock()
-			if fn != nil {
-				fn()
-			}
 
 		case "pong":
 			// keepalive
@@ -199,6 +192,15 @@ func (rc *RelayClient) readPump(done func()) {
 			var msg GatewayMessage
 			if json.Unmarshal(plaintext, &msg) != nil {
 				continue
+			}
+			if msg.SessionID == "" {
+				msg.SessionID = relayMsg.SessionID
+			}
+			if msg.EventID == "" {
+				msg.EventID = relayMsg.EventID
+			}
+			if msg.StreamID == "" {
+				msg.StreamID = relayMsg.StreamID
 			}
 			rc.mu.RLock()
 			fn := rc.onMessage
@@ -234,7 +236,22 @@ func (rc *RelayClient) Send(msg GatewayMessage) error {
 		"nonce":      nonce,
 		"ciphertext": ciphertext,
 	}
-	data, err := json.Marshal(relayMsg)
+	envelope := struct {
+		Type       string `json:"type"`
+		SessionID  string `json:"session_id,omitempty"`
+		EventID    string `json:"event_id,omitempty"`
+		StreamID   string `json:"stream_id,omitempty"`
+		Nonce      string `json:"nonce"`
+		Ciphertext string `json:"ciphertext"`
+	}{
+		Type:       relayMsg["type"],
+		SessionID:  msg.SessionID,
+		EventID:    msg.EventID,
+		StreamID:   msg.StreamID,
+		Nonce:      relayMsg["nonce"],
+		Ciphertext: relayMsg["ciphertext"],
+	}
+	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err
 	}
@@ -251,12 +268,6 @@ func (rc *RelayClient) OnMessage(fn func(msg GatewayMessage)) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.onMessage = fn
-}
-
-func (rc *RelayClient) OnConnect(fn func()) {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	rc.onConnect = fn
 }
 
 func (rc *RelayClient) Close() {

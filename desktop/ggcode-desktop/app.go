@@ -257,30 +257,12 @@ func (a *App) showShareDialog() {
 			}
 		})
 
-		// When mobile client connects, send session_info to confirm connection
-		broker.OnClientConnect(func() {
-			// Replay everything the broker has sent.
-			broker.ReplayToClient()
-
-			// Show system message in desktop chat
-			fyne.Do(func() {
-				if a.ui != nil {
-					a.ui.AppendChat(ChatMessage{Role: "system", Content: "Mobile client connected", Time: time.Now()})
-				}
-				// Hide share dialog
-				if a.shareDialog != nil {
-					a.shareDialog.Hide()
-					a.shareDialog = nil
-				}
-			})
-		})
-
 		a.tunnelSession = sess
 		a.tunnelBroker = broker
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = broker
 
-			// Seed sentLog with current session history so mobile
+			// Seed the broker event stream with current session history so mobile
 			// gets the full conversation on first connect.
 			broker.SendSessionInfo(tunnel.SessionInfoData{
 				Workspace: a.dc.WorkDir,
@@ -356,7 +338,7 @@ func (a *App) showShareDialog() {
 					}
 				}
 				if len(history) > 0 {
-					broker.PushChatHistory(history)
+					broker.SeedHistory(history)
 				}
 			}
 			broker.PushStatus(tunnel.StatusIdle, "Ready")
@@ -387,7 +369,9 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		}
 		// Send sharing_stopped synchronously, THEN close the connection.
 		if a.tunnelSession != nil {
-			_ = a.tunnelSession.Send(tunnel.GatewayMessage{Type: "sharing_stopped"})
+			if a.tunnelBroker != nil {
+				a.tunnelBroker.PushSharingStopped()
+			}
 			a.tunnelSession.Stop()
 			a.tunnelSession = nil
 			a.tunnelBroker = nil
@@ -711,7 +695,7 @@ func (a *App) resumeSession(id string) {
 
 	// Push updated session info + history to mobile client
 	if a.tunnelBroker != nil && a.agentBridge != nil && a.agentBridge.CurrentSession() != nil {
-		a.tunnelBroker.PushChatClear()
+		a.tunnelBroker.ResetSession()
 		a.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
 			Workspace: a.dc.WorkDir,
 			Version:   Version,
@@ -785,7 +769,7 @@ func (a *App) resumeSession(id string) {
 			}
 		}
 		if len(history) > 0 {
-			a.tunnelBroker.PushChatHistory(history)
+			a.tunnelBroker.SeedHistory(history)
 		}
 		a.tunnelBroker.PushStatus(tunnel.StatusIdle, "Ready")
 	}
@@ -817,7 +801,7 @@ func (a *App) newSession() {
 
 	// 4. Notify mobile client about new session (don't close tunnel).
 	if a.tunnelBroker != nil {
-		a.tunnelBroker.PushChatClear()
+		a.tunnelBroker.ResetSession()
 	}
 	// Re-attach broker so startChat can send SessionInfo.
 	if a.agentBridge != nil && a.tunnelBroker != nil {

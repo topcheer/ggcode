@@ -35,14 +35,6 @@ func newBrokerForTest() (*Broker, *drainHelper) {
 	// Start only the text flush loop (so batched text tests work)
 	go b.textFlushLoop()
 
-	// Wire handlers like NewBroker does
-	sess.OnMessage(func(msg GatewayMessage) {
-		if msg.Type == EventAck {
-			return
-		}
-	})
-	sess.OnConnect(func() {})
-
 	d.b = b
 	return b, d
 }
@@ -93,12 +85,6 @@ func TestBrokerOnCommand(t *testing.T) {
 	b, _ := newBrokerForTest()
 	defer b.Stop()
 	b.OnCommand(func(cmd GatewayMessage) {})
-}
-
-func TestBrokerOnClientConnect(t *testing.T) {
-	b, _ := newBrokerForTest()
-	defer b.Stop()
-	b.OnClientConnect(func() {})
 }
 
 func TestBrokerPushTextAndFlush(t *testing.T) {
@@ -592,72 +578,65 @@ func TestBrokerPushSharingStopped(t *testing.T) {
 	}
 }
 
-func TestBrokerPushChatClear(t *testing.T) {
+func TestBrokerResetSession(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
 	// First push something to the log
 	b.PushStatus("running", "go")
 	time.Sleep(50 * time.Millisecond)
-	d.drain()
-
-	// Verify we have a log entry
-	b.logMu.Lock()
-	logLen := len(b.sentLog)
-	b.logMu.Unlock()
-	if logLen == 0 {
-		t.Fatal("should have log entries before clear")
+	if len(d.drain()) == 0 {
+		t.Fatal("expected outbound event before reset")
 	}
 
-	// Clear should reset the log and enqueue chat_clear
-	b.PushChatClear()
+	// Clear should reset the log and enqueue snapshot_reset with a new session id.
+	oldSessionID := b.SessionID()
+	b.ResetSession()
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
 	found := false
 	for _, m := range msgs {
-		if m.Type == "chat_clear" {
+		if m.Type == EventSnapshotReset {
 			found = true
+			if m.SessionID == "" || m.SessionID == oldSessionID {
+				t.Fatalf("expected rotated session id after reset, got old=%q new=%q", oldSessionID, m.SessionID)
+			}
 		}
 	}
 	if !found {
-		t.Error("expected chat_clear event")
+		t.Error("expected snapshot_reset event")
 	}
 
-	// Verify sentLog was cleared (chat_clear itself is not logged)
-	b.logMu.Lock()
-	logLen = len(b.sentLog)
-	b.logMu.Unlock()
-	// chat_clear is logged by recordLog (only sharing_stopped is skipped)
-	// so after clearing, the log will contain the chat_clear entry itself
-	if logLen > 1 {
-		t.Errorf("sentLog should have at most 1 entry (chat_clear), got %d", logLen)
-	}
 }
 
-func TestBrokerPushChatHistory(t *testing.T) {
+func TestBrokerSeedHistory(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	b.PushChatHistory([]HistoryEntry{
+	b.SeedHistory([]HistoryEntry{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi there"},
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
 
-	found := false
+	foundUser := false
+	foundAssistant := false
 	for _, m := range msgs {
-		if m.Type == "chat_history" {
-			found = true
+		if m.Type == EventUserMessage {
+			foundUser = true
+		}
+		if m.Type == EventText {
+			foundAssistant = true
 		}
 	}
-	if !found {
-		t.Error("expected chat_history event")
+	if !foundUser || !foundAssistant {
+		t.Errorf("expected synthesized history events, got user=%t assistant=%t", foundUser, foundAssistant)
 	}
 }
 
-func TestBrokerSeqIncrement(t *testing.T) {
+func TestBrokerEventIDsIncrease(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
@@ -672,30 +651,27 @@ func TestBrokerSeqIncrement(t *testing.T) {
 	}
 
 	for i := 1; i < len(msgs); i++ {
-		if msgs[i].Seq <= msgs[i-1].Seq {
-			t.Errorf("seq not increasing: msgs[%d].Seq=%d <= msgs[%d].Seq=%d",
-				i, msgs[i].Seq, i-1, msgs[i-1].Seq)
+		if msgs[i].EventID <= msgs[i-1].EventID {
+			t.Errorf("event ids not increasing: msgs[%d].EventID=%s <= msgs[%d].EventID=%s",
+				i, msgs[i].EventID, i-1, msgs[i-1].EventID)
 		}
 	}
 }
 
-func TestBrokerRecordLogSkipsSharingStopped(t *testing.T) {
+func TestBrokerPushSharingStoppedKeepsOutboundOrder(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
 	b.PushSharingStopped()
 	b.PushStatus("running", "go")
 	time.Sleep(100 * time.Millisecond)
-	d.drain()
+	msgs := d.drain()
 
-	b.logMu.Lock()
-	log := b.sentLog
-	b.logMu.Unlock()
-
-	for _, m := range log {
-		if m.Type == "sharing_stopped" {
-			t.Error("sharing_stopped should not be recorded in sentLog")
-		}
+	if len(msgs) != 2 {
+		t.Fatalf("expected two outbound messages, got %d", len(msgs))
+	}
+	if msgs[0].Type != "sharing_stopped" || msgs[1].Type != EventStatus {
+		t.Fatalf("unexpected outbound ordering: %+v", msgs)
 	}
 }
 
@@ -727,62 +703,12 @@ func TestBrokerStop(t *testing.T) {
 	b.Stop()
 }
 
-func TestBrokerReplayToClient(t *testing.T) {
-	b, d := newBrokerForTest()
-	defer b.Stop()
-
-	// Push a few messages to populate the log
-	b.PushStatus("running", "go")
-	b.PushError("test error")
-	time.Sleep(100 * time.Millisecond)
-	d.drain()
-
-	// Verify sentLog has entries
-	b.logMu.Lock()
-	logLen := len(b.sentLog)
-	b.logMu.Unlock()
-	if logLen == 0 {
-		t.Error("sentLog should have entries before replay")
-	}
-}
-
-func TestBrokerReplayToClientDirect(t *testing.T) {
-	// Test ReplayToClient by calling it directly with a session that has a client
-	sess := NewSession("wss://test.local")
-	rc, _ := NewRelayClient("wss://test.local", "0123456789abcdef0123456789abcdef")
-	rc.Close()
-	sess.client = rc
-
-	// Build broker manually with senderLoop NOT running
-	b := &Broker{
-		session:  sess,
-		outDone:  make(chan struct{}),
-		textBuf:  make(map[string]*textEntry),
-		textTick: time.NewTicker(300 * time.Millisecond),
-		textDone: make(chan struct{}),
-	}
-	b.outCond = sync.NewCond(&b.outMu)
-
-	// Add entries to the sent log
-	b.logMu.Lock()
-	b.sentLog = []GatewayMessage{
-		{Seq: 1, Type: "text", Data: json.RawMessage(`{"chunk":"hello"}`)},
-		{Seq: 2, Type: "status", Data: json.RawMessage(`{"status":"running"}`)},
-	}
-	b.logMu.Unlock()
-
-	// ReplayToClient calls session.Send which calls rc.Send (closed, so errors)
-	// It should not panic, just log errors via debug.Log
-	b.ReplayToClient()
-	// If we get here without panic, the test passes
-}
-
 func TestBrokerChatClearFlushesTextBuffers(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
 	b.PushText("msg-x", "pending text")
-	b.PushChatClear()
+	b.ResetSession()
 	time.Sleep(100 * time.Millisecond)
 	d.drain()
 
@@ -790,7 +716,7 @@ func TestBrokerChatClearFlushesTextBuffers(t *testing.T) {
 	bufLen := len(b.textBuf)
 	b.textMu.Unlock()
 	if bufLen != 0 {
-		t.Errorf("textBuf should be empty after chat_clear, got %d entries", bufLen)
+		t.Errorf("textBuf should be empty after snapshot_reset, got %d entries", bufLen)
 	}
 }
 
@@ -840,7 +766,7 @@ func TestBrokerEnqueueOutDirect(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()
 
-	msg := GatewayMessage{Seq: 99, Type: "test_type", Data: json.RawMessage(`"hello"`)}
+	msg := GatewayMessage{EventID: "ev-manual", Type: "test_type", Data: json.RawMessage(`"hello"`)}
 	b.enqueueOut(msg)
 
 	time.Sleep(50 * time.Millisecond)
@@ -848,7 +774,7 @@ func TestBrokerEnqueueOutDirect(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
-	if msgs[0].Seq != 99 || msgs[0].Type != "test_type" {
+	if msgs[0].EventID != "ev-manual" || msgs[0].Type != "test_type" {
 		t.Errorf("message mismatch: %+v", msgs[0])
 	}
 }
@@ -866,7 +792,60 @@ func TestBrokerEnqueueDirect(t *testing.T) {
 	if msgs[0].Type != "custom_event" {
 		t.Errorf("type = %q, want %q", msgs[0].Type, "custom_event")
 	}
-	if msgs[0].Seq == 0 {
-		t.Error("seq should be non-zero")
+	if msgs[0].EventID == "" {
+		t.Error("event_id should be non-empty")
+	}
+}
+
+func TestBrokerEventsCarryStableSessionMetadata(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushText("msg-1", "hello")
+	b.PushTextDone("msg-1")
+	time.Sleep(200 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) == 0 {
+		t.Fatal("expected broker messages")
+	}
+
+	sessionID := b.SessionID()
+	for _, msg := range msgs {
+		if msg.SessionID != sessionID {
+			t.Fatalf("session_id = %q, want %q", msg.SessionID, sessionID)
+		}
+		if msg.EventID == "" {
+			t.Fatalf("expected event_id on %+v", msg)
+		}
+		if msg.Type == EventText || msg.Type == EventTextDone {
+			if msg.StreamID != "msg-1" {
+				t.Fatalf("stream_id = %q, want msg-1", msg.StreamID)
+			}
+		}
+	}
+}
+
+func TestBrokerPushChatClearRotatesSession(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	oldSessionID := b.SessionID()
+	b.PushStatus("running", "before")
+	time.Sleep(50 * time.Millisecond)
+	d.drain()
+
+	b.ResetSession()
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+	if len(msgs) == 0 {
+		t.Fatal("expected snapshot_reset after chat clear")
+	}
+
+	reset := msgs[len(msgs)-1]
+	if reset.Type != EventSnapshotReset {
+		t.Fatalf("expected snapshot_reset, got %q", reset.Type)
+	}
+	if reset.SessionID == "" || reset.SessionID == oldSessionID {
+		t.Fatalf("expected rotated session_id, got old=%q new=%q", oldSessionID, reset.SessionID)
 	}
 }

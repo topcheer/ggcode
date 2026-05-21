@@ -258,7 +258,7 @@ func TestCryptoDifferentNonceEachEncrypt(t *testing.T) {
 
 func TestCryptoRoundTripViaJSON(t *testing.T) {
 	c, _ := NewCrypto("test-token-that-is-32-bytes-long!")
-	msg := GatewayMessage{Seq: 1, Type: "message", Data: json.RawMessage(`{"text":"hi"}`)}
+	msg := GatewayMessage{Type: "message", EventID: "ev-1", Data: json.RawMessage(`{"text":"hi"}`)}
 
 	plaintext, _ := json.Marshal(msg)
 	nonce, ct, err := c.Encrypt(plaintext)
@@ -288,7 +288,7 @@ func TestCryptoRoundTripViaJSON(t *testing.T) {
 	}
 	var gotMsg GatewayMessage
 	json.Unmarshal(dec, &gotMsg)
-	if gotMsg.Type != "message" || gotMsg.Seq != 1 {
+	if gotMsg.Type != "message" || gotMsg.EventID != "ev-1" {
 		t.Errorf("mismatch: %+v", gotMsg)
 	}
 }

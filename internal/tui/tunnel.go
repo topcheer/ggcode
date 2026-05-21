@@ -151,11 +151,6 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		m.handleTunnelClientCommand(cmd)
 	})
 
-	// Register client connect handler — replay history on reconnect.
-	msg.broker.OnClientConnect(func() {
-		m.handleTunnelClientConnect()
-	})
-
 	// Send initial session info.
 	msg.broker.SendSessionInfo(tunnel.SessionInfoData{
 		Workspace: m.sidebarWorkingDirectory(),
@@ -169,7 +164,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	if msgs := m.currentSessionMessages(); len(msgs) > 0 {
 		history := tunnelMessagesToHistory(msgs)
 		if len(history) > 0 {
-			msg.broker.PushChatHistory(history)
+			msg.broker.SeedHistory(history)
 		}
 	}
 
@@ -483,35 +478,6 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Mode changed to %s (from mobile)", newMode))
 	m.chatListScrollToBottom()
 	return m, nil
-}
-
-// ─── Client connect ───
-
-// handleTunnelClientConnect is called when the mobile client (re)connects.
-func (m *Model) handleTunnelClientConnect() {
-	if m.tunnelBroker == nil {
-		return
-	}
-
-	// Replay all broker-sent messages.
-	m.tunnelBroker.ReplayToClient()
-
-	// Send fresh session info.
-	m.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
-		Workspace: m.sidebarWorkingDirectory(),
-		Model:     m.activeModel,
-		Provider:  m.activeVendor,
-		Mode:      m.mode.String(),
-		Version:   version.Version,
-	})
-
-	// Push chat history from current session.
-	if msgs := m.currentSessionMessages(); len(msgs) > 0 {
-		history := tunnelMessagesToHistory(msgs)
-		if len(history) > 0 {
-			m.tunnelBroker.PushChatHistory(history)
-		}
-	}
 }
 
 // ─── Helpers ───

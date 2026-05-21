@@ -78,31 +78,8 @@ func TestRelayClientOnMessage(t *testing.T) {
 	if fn == nil {
 		t.Fatal("onMessage should be set")
 	}
-	fn(GatewayMessage{Type: "test", Seq: 1})
+	fn(GatewayMessage{Type: "test", EventID: "ev-1"})
 	if received.Type != "test" {
-		t.Error("callback should have been called")
-	}
-}
-
-func TestRelayClientOnConnect(t *testing.T) {
-	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rc.Close()
-
-	var called bool
-	rc.OnConnect(func() {
-		called = true
-	})
-	rc.mu.RLock()
-	fn := rc.onConnect
-	rc.mu.RUnlock()
-	if fn == nil {
-		t.Fatal("onConnect should be set")
-	}
-	fn()
-	if !called {
 		t.Error("callback should have been called")
 	}
 }
@@ -140,7 +117,13 @@ func TestRelayClientSendSuccess(t *testing.T) {
 	}
 	defer rc.Close()
 
-	msg := GatewayMessage{Type: "message", Seq: 1, Data: json.RawMessage(`{"text":"hi"}`)}
+	msg := GatewayMessage{
+		Type:      "message",
+		SessionID: "sess-1",
+		EventID:   "ev-1",
+		StreamID:  "msg-1",
+		Data:      json.RawMessage(`{"text":"hi"}`),
+	}
 	err = rc.Send(msg)
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +136,9 @@ func TestRelayClientSendSuccess(t *testing.T) {
 		}
 		if parsed["type"] != "encrypted" {
 			t.Errorf("relay message type = %q, want %q", parsed["type"], "encrypted")
+		}
+		if parsed["session_id"] != "sess-1" || parsed["event_id"] != "ev-1" || parsed["stream_id"] != "msg-1" {
+			t.Fatalf("expected envelope metadata, got %+v", parsed)
 		}
 		if parsed["nonce"] == "" {
 			t.Error("nonce should not be empty")
@@ -172,7 +158,7 @@ func TestRelayClientSendEncryptsPayload(t *testing.T) {
 	}
 	defer rc.Close()
 
-	msg := GatewayMessage{Type: "test", Seq: 42}
+	msg := GatewayMessage{Type: "test", SessionID: "sess-1", EventID: "ev-42"}
 	err = rc.Send(msg)
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +178,7 @@ func TestRelayClientSendEncryptsPayload(t *testing.T) {
 	}
 	var got GatewayMessage
 	json.Unmarshal(plain, &got)
-	if got.Type != "test" || got.Seq != 42 {
+	if got.Type != "test" || got.SessionID != "sess-1" || got.EventID != "ev-42" {
 		t.Errorf("decrypted message mismatch: %+v", got)
 	}
 }

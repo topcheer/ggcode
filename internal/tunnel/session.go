@@ -27,7 +27,6 @@ type Session struct {
 	client   *RelayClient
 	token    string
 	onMsg    func(msg GatewayMessage)
-	onConn   func()
 	mu       sync.RWMutex
 	info     *SessionInfo
 }
@@ -73,11 +72,6 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 			s.onMsg(msg)
 		}
 	})
-	client.OnConnect(func() {
-		if s.onConn != nil {
-			s.onConn()
-		}
-	})
 
 	// Build connect URL
 	connectURL := client.ConnectURL()
@@ -104,10 +98,6 @@ func (s *Session) Start(ctx context.Context) (*SessionInfo, error) {
 
 func (s *Session) OnMessage(fn func(msg GatewayMessage)) {
 	s.onMsg = fn
-}
-
-func (s *Session) OnConnect(fn func()) {
-	s.onConn = fn
 }
 
 func (s *Session) Send(msg GatewayMessage) error {

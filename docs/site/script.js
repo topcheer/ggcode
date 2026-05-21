@@ -9,13 +9,13 @@ const translations = {
     "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
     "hero.title": "Bring the AI coding workflow back into your terminal.",
     "hero.text":
-      "ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, running harnessed task queues, and keeping long tasks moving inside one fresh, modern, geek-forward interface.",
+      "ggcode is not a chat toy wrapped in a shell. It is a durable AI coding CLI for reading code, editing files, running commands, wiring in MCP, switching modes, tracking checkpoints, running harnessed task queues, syncing with the mobile companion app or IM bridges, and keeping long tasks moving inside one fresh, modern, geek-forward interface.",
     "hero.ctaPrimary": "Get started",
     "hero.ctaSecondary": "View repository",
     "hero.stats.update": "Upgrade in-app or install native packages from releases",
     "hero.stats.background": "Run long jobs, harness queues, and release flows with live visibility",
     "hero.stats.extensible": "Extend the CLI natively with more capabilities",
-    "hero.badge": "v1.1.20 · self-update ready",
+    "hero.badge": "release-ready · self-update ready",
     "hero.bannerAlt": "ggcode CLI banner",
     "features.eyebrow": "what makes it memorable",
     "features.title":
@@ -33,6 +33,9 @@ const translations = {
     "features.extend.title": "More extensible",
     "features.extend.text":
       "MCP, skills, plugins, and project memory can all plug into the same agent loop.",
+    "features.remote.title": "Remote coding across mobile and IM",
+    "features.remote.text":
+      "Use the mobile companion app or bind your workspace to QQ, Telegram, Discord, Slack, Feishu, or DingTalk. Ordered reconnect resume keeps prompts, streamed output, approvals, and ask_user flows consistent on your phone or in a shared team channel.",
     "features.longTasks.title": "Better for long-running work",
     "features.longTasks.text":
       "Background commands, worker-backed harness runs, activity panels, and status signals keep builds, tests, and release batches from blocking the whole session.",
@@ -45,7 +48,7 @@ const translations = {
     "workflow.demo.ask1": "Explain the auth flow and why startup feels slow",
     "workflow.demo.reply1":
       "● reads config, traces provider setup, inspects startup banner logic",
-    "workflow.demo.ask2": "go test ./internal/tui",
+    "workflow.demo.ask2": "go test -tags goolm ./internal/tui",
     "workflow.demo.reply2":
       "● local shell mode runs in the main session view",
     "workflow.demo.reply3": "● rolls back the last file edit from checkpoint",
@@ -110,13 +113,13 @@ const translations = {
     "hero.eyebrow": "terminal-native · self-update-ready · mcp-ready",
     "hero.title": "把 AI 编码工作流，真正放回你的终端。",
     "hero.text":
-      "ggcode 不是一个会聊天的命令行玩具，而是一套可持续使用的 AI Coding CLI：读代码、改文件、跑命令、接 MCP、看 checkpoint、切模式、跑 harness 队列、排长任务，都在一个清新、现代、极客感十足的界面里完成。",
+      "ggcode 不是一个会聊天的命令行玩具，而是一套可持续使用的 AI Coding CLI：读代码、改文件、跑命令、接 MCP、看 checkpoint、切模式、跑 harness 队列，并通过移动端伴侣应用或 IM 桥接保持远程协作与长任务连续性，都在一个清新、现代、极客感十足的界面里完成。",
     "hero.ctaPrimary": "马上开始",
     "hero.ctaSecondary": "查看仓库",
     "hero.stats.update": "可在应用内升级，也能直接安装原生发布包",
     "hero.stats.background": "长任务、harness 队列和发布流都能持续看进度",
     "hero.stats.extensible": "从 CLI 原生长出扩展能力",
-    "hero.badge": "v1.1.20 · 可直接升级",
+    "hero.badge": "release-ready · 可直接升级",
     "hero.bannerAlt": "ggcode CLI 横幅",
     "features.eyebrow": "what makes it memorable",
     "features.title": "不是“AI 接个壳”，而是一套终端里的完整产品体验。",
@@ -132,6 +135,9 @@ const translations = {
     "features.extend.title": "更能扩",
     "features.extend.text":
       "MCP、skills、plugins、project memory 同时存在，能把你自己的工具链接进 agent loop。",
+    "features.remote.title": "移动端与 IM 一体化远程协作",
+    "features.remote.text":
+      "既可以使用移动端伴侣应用，也可以把工作区绑定到 QQ、Telegram、Discord、Slack、飞书或钉钉。断线重连后的有序增量恢复，能让手机端或群聊里的提示词、流式输出、审批和 ask_user 流程保持一致。",
     "features.longTasks.title": "更适合长任务",
     "features.longTasks.text":
       "后台命令、worker-backed harness run、活动面板、状态提示，让编译、测试、release batch 不再卡住整次交互。",
@@ -142,7 +148,7 @@ const translations = {
     "workflow.title": "像一个真正的工程搭档，而不是一次性回答器。",
     "workflow.demo.ask1": "解释一下认证流程，以及为什么启动会变慢",
     "workflow.demo.reply1": "● 读取配置，追踪 provider 初始化，检查启动 banner 逻辑",
-    "workflow.demo.ask2": "go test ./internal/tui",
+    "workflow.demo.ask2": "go test -tags goolm ./internal/tui",
     "workflow.demo.reply2": "● 本地 shell 模式会直接在主会话区展示输出",
     "workflow.demo.reply3": "● 从 checkpoint 回滚上一次文件修改",
     "workflow.demo.reply4": "● 后台任务已启动 · 进度可在会话中持续查看",
