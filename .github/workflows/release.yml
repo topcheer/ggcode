@@ -85,6 +85,8 @@ jobs:
           name: goreleaser-dist
           path: dist/
 
+
+
   release-macos-pkg:
     name: Build macOS pkg
     runs-on: macos-latest
@@ -320,7 +322,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" dist/ggcode-desktop_* --clobber
-
 
   publish-site-release-branch:
     name: Publish site release branch
