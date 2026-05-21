@@ -97,8 +97,14 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 
 	case "", "start", "on":
 		if m.tunnelSession != nil {
+			// Already active — re-show QR overlay
 			info := m.tunnelSession.Info()
-			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel already active:\n  URL: %s", info.ConnectURL))
+			m.openQROverlayDirect(
+				"Mobile Tunnel",
+				"Scan with GGCode Mobile to connect",
+				info.QRCode,
+				info.ConnectURL,
+			)
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), "Starting tunnel...")
