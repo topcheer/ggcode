@@ -1187,7 +1187,14 @@ func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.
 }
 
 func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
-	md := "**" + desc + "**"
+	// Match TUI format: "**ToolName** detail"
+	// Use ToolArgs (bare parameter) for detail, fall back to desc if empty.
+	name := prettifyToolName(msg.ToolName)
+	detail := msg.ToolArgs
+	if detail == "" {
+		detail = desc
+	}
+	md := "**" + name + "** " + detail
 	rt := widget.NewRichTextFromMarkdown(md)
 	rt.Wrapping = fyne.TextWrapWord
 	return rt
