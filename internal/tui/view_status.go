@@ -192,14 +192,18 @@ func (m Model) renderComposerPanel() string {
 		hints = append(hints, lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(timerLabel))
 	}
 
-	// Ctrl+N follow hint when subagent/teammate slots exist — highlighted to stand out
-	if len(m.subAgentFollow.slots) > 0 && !m.subAgentFollow.isActive() {
+	// Ctrl+N follow/unfollow hint when subagent/teammate slots exist
+	if len(m.subAgentFollow.slots) > 0 {
+		key := "hint.follow_panel"
+		if m.subAgentFollow.isActive() {
+			key = "hint.unfollow_panel"
+		}
 		followHint := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#00FFFF")).
 			Background(lipgloss.Color("#333333")).
 			Bold(true).
 			Padding(0, 1).
-			Render(m.t("hint.follow_panel"))
+			Render(m.t(key))
 		hints = append(hints, followHint)
 	}
 

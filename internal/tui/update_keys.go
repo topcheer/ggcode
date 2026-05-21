@@ -318,11 +318,14 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 	switch msg.String() {
 	case "ctrl+n":
-		// Follow mode: open panel (navigate with arrow keys)
-		if len(m.subAgentFollow.slots) > 0 && !m.subAgentFollow.isActive() {
-			m.subAgentFollow.activate(0)
-			// Immediately rebuild the follow view so View() has content
-			m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
+		// Follow mode: toggle panel on/off
+		if len(m.subAgentFollow.slots) > 0 {
+			if m.subAgentFollow.isActive() {
+				m.subAgentFollow.deactivate()
+			} else {
+				m.subAgentFollow.activate(0)
+				m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
+			}
 			return m, nil
 		}
 	case "ctrl+p":
