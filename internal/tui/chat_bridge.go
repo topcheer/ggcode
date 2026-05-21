@@ -326,8 +326,51 @@ func suppressToolResult(toolName, result string) string {
 		return extractRecentOutput(result)
 	case "ask_user":
 		return formatAskUserResult(result)
+	case "multi_file_edit":
+		return formatMultiEditResult(result)
 	}
 	return result
+}
+
+// formatMultiEditResult formats multi_file_edit JSON into a human-readable summary.
+func formatMultiEditResult(result string) string {
+	var raw struct {
+		Summary string `json:"summary"`
+		Results []struct {
+			Path             string `json:"path"`
+			Status           string `json:"status"`
+			AppliedEditCount int    `json:"applied_edit_count"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(result), &raw); err != nil {
+		return result
+	}
+
+	var lines []string
+	lines = append(lines, raw.Summary)
+	for _, r := range raw.Results {
+		path := r.Path
+		if idx := strings.LastIndex(path, "/"); idx >= 0 {
+			path = path[idx+1:]
+		}
+		if r.Status == "success" {
+			if r.AppliedEditCount > 0 {
+				lines = append(lines, fmt.Sprintf("  - %s (%d edit%s)", path, r.AppliedEditCount, pluralS(r.AppliedEditCount)))
+			} else {
+				lines = append(lines, fmt.Sprintf("  - %s", path))
+			}
+		} else {
+			lines = append(lines, fmt.Sprintf("  - %s [%s]", path, r.Status))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // extractRecentOutput parses the structured read_command_output result
