@@ -74,6 +74,15 @@ Python 包装器同样默认下载最新的 ggcode GitHub Release，也支持 `G
 
 如果你不想使用包管理器安装，也可以使用 release 压缩包、Go 安装器、npm 包装器或 Python 包装器。
 
+### 移动端 App（Beta）
+
+GGCode Mobile 是一个移动端伴侣应用，可以通过 QR 码连接桌面 agent，在手机上聊天、审批工具调用、监控任务进度。
+
+| 平台 | 链接 | 说明 |
+| --- | --- | --- |
+| iOS (TestFlight) | [加入 Beta](https://testflight.apple.com/join/J34wVD6p) | 在 iPhone 的 Safari 中打开 |
+| Android (Closed Testing) | [先加入 Google Group](https://groups.google.com/g/gg-studio-ai-products) | **必须先加入群组才能获得权限**，然后在 [Play Store 测试页](https://play.google.com/apps/testing/gg.ai.ggcode.mobile) 加入测试 |
+
 ### 从源码构建
 
 ```bash
