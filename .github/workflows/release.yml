@@ -321,3 +321,62 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" dist/ggcode-desktop_* --clobber
 
+
+  publish-site-release-branch:
+    name: Publish site release branch
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs:
+      - release
+      - release-macos-pkg
+      - release-windows-msi
+      - build-desktop-darwin
+      - build-desktop-windows
+      - build-desktop-linux
+    permissions:
+      contents: write
+    env:
+      TARGET_BRANCH: copilot/site-release-update
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: goreleaser-dist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-pkg
+          path: dist-site/macos-pkg
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi
+          path: dist-site/windows-msi
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-darwin
+          path: dist-site/desktop-darwin
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist-site/desktop-windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux
+          path: dist-site/desktop-linux
+      - name: Publish release assets into deployment branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          chmod +x ./scripts/release/publish-site-branch.sh
+          ./scripts/release/publish-site-branch.sh \
+            --target-branch "${TARGET_BRANCH}" \
+            --asset-dir dist \
+            --asset-dir dist-site/macos-pkg \
+            --asset-dir dist-site/windows-msi \
+            --asset-dir dist-site/desktop-darwin \
+            --asset-dir dist-site/desktop-windows \
+            --asset-dir dist-site/desktop-linux \
+            --source-label "${GITHUB_REF_NAME}"
