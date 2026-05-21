@@ -66,10 +66,10 @@ func (m *Model) handleUnshare() {
 		m.chatWriteSystem(nextSystemID(), m.t("tunnel.not_active"))
 		return
 	}
-	m.tunnelSession.Stop()
 	if m.tunnelBroker != nil {
 		m.tunnelBroker.PushSharingStopped()
 	}
+	m.tunnelSession.Stop()
 	m.tunnelSession = nil
 	m.tunnelBroker = nil
 	m.tunnelMsgID = ""
