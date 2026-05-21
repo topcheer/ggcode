@@ -774,7 +774,7 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 		return
 	}
 	// Web, start/stop command, list_agents: suppress output entirely.
-	if tc == tcWeb || ref.toolName == "start_command" || ref.toolName == "stop_command" || ref.toolName == "list_commands" || ref.toolName == "list_agents" {
+	if tc == tcWeb || ref.toolName == "start_command" || ref.toolName == "stop_command" || ref.toolName == "list_agents" {
 		return
 	}
 
@@ -886,6 +886,7 @@ const (
 	tcTeammate                  // teammate_spawn/shutdown/list/results
 	tcSwarm                     // swarm_task_create/claim/complete/list
 	tcSuppress                  // header-only tools (save_memory, config, skill, etc.)
+	tcAskUser                   // ask_user (format Q&A)
 	tcGeneric                   // fallback
 )
 
@@ -925,9 +926,10 @@ func classifyToolGUI(name string) toolClass {
 		"enter_plan_mode", "enter_worktree", "exit_worktree",
 		"task_create", "task_get", "task_update", "task_list", "task_stop",
 		"cron_create", "cron_delete", "cron_list",
-		"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource",
-		"ask_user":
+		"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource":
 		return tcSuppress
+	case "ask_user":
+		return tcAskUser
 	default:
 		if strings.HasPrefix(name, "lsp_") {
 			return tcLSP
@@ -1800,6 +1802,8 @@ func (cv *ChatView) formatToolResult(toolName, result string) string {
 		return formatMultiEditResult(result)
 	case "read_command_output":
 		return extractRecentOutput(result)
+	case "ask_user":
+		return formatAskUserResult(result)
 	default:
 		return result
 	}
@@ -1856,4 +1860,45 @@ func extractRecentOutput(result string) string {
 	}
 	output := result[idx+len(marker):]
 	return strings.TrimSpace(output)
+}
+
+// formatAskUserResult converts the JSON ask_user response into a human-readable
+// format showing each question title and the user's answer.
+func formatAskUserResult(result string) string {
+	var resp struct {
+		Title   string `json:"title"`
+		Answers []struct {
+			Title           string   `json:"title"`
+			SelectedChoices []string `json:"selected_choices"`
+			FreeformText    string   `json:"freeform_text"`
+			Answered        bool     `json:"answered"`
+		} `json:"answers"`
+	}
+	if err := json.Unmarshal([]byte(result), &resp); err != nil {
+		return result
+	}
+
+	var b strings.Builder
+	for i, ans := range resp.Answers {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		q := ans.Title
+		if q == "" {
+			q = fmt.Sprintf("Question %d", i+1)
+		}
+		b.WriteString("Q: ")
+		b.WriteString(q)
+		b.WriteString("\n")
+		var parts []string
+		for _, c := range ans.SelectedChoices {
+			parts = append(parts, c)
+		}
+		if ans.FreeformText != "" {
+			parts = append(parts, ans.FreeformText)
+		}
+		b.WriteString("A: ")
+		b.WriteString(strings.Join(parts, ", "))
+	}
+	return strings.TrimSpace(b.String())
 }
