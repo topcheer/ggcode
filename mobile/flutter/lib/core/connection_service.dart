@@ -17,7 +17,7 @@ class ConnectionService {
   WebSocket? _socket;
   bool _disposed = false;
   int _reconnectAttempts = 0;
-  static const _maxReconnectAttempts = 10;
+  static const _maxReconnectAttempts = 30;
   Timer? _reconnectTimer;
 
   final _statusController = StreamController<ConnectionStatus>.broadcast();

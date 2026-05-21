@@ -54,6 +54,7 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver {
   StreamSubscription<TunnelConnectionState>? _connSub;
   bool _wasConnectedBeforeBackground = false;
+  bool _hasConnected = false;
 
   @override
   void initState() {
@@ -124,9 +125,7 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
 
   @override
   Widget build(BuildContext context) {
-    final connState = ref.watch(connectionProvider);
     final askUser = ref.watch(askUserProvider);
-    final isConnected = connState.status == ConnectionStatus.connected;
 
     // Manage wakelock based on connection state
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
@@ -149,40 +148,16 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
       }
     });
 
-    // Show dialog when server disconnects (only if NOT caused by app backgrounding)
+    // Track first successful connection
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
-      if (prev?.status == ConnectionStatus.connected &&
-          next.status == ConnectionStatus.disconnected) {
-        // Small delay to skip disconnects caused by app backgrounding
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (!mounted) return;
-          // If already reconnected, don't show dialog
-          if (ref.read(connectionProvider).status != ConnectionStatus.disconnected) return;
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF1A1A2E),
-              title: const Text('连接已断开', style: TextStyle(color: Colors.white)),
-              content: const Text(
-                '服务端已离线，请返回扫码页面重新连接。',
-                style: TextStyle(color: Colors.white70),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(ctx).pop();
-                  },
-                  child: const Text('确定', style: TextStyle(color: Colors.blueAccent)),
-                ),
-              ],
-            ),
-          );
-        });
+      if (next.status == ConnectionStatus.connected && !_hasConnected) {
+        setState(() { _hasConnected = true; });
       }
     });
 
-    if (!isConnected && !_demoMode) {
+    // Show ConnectScreen only before first successful connection.
+    // Once connected, always show ChatScreen (connection status shown in AppBar).
+    if (!_hasConnected && !_demoMode) {
       return const ConnectScreen();
     }
 

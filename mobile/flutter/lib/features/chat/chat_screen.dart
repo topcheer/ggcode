@@ -86,6 +86,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final approval = ref.watch(approvalProvider);
     final info = ref.watch(sessionInfoProvider);
     final agents = ref.watch(subagentProvider);
+    final connState = ref.watch(connectionProvider);
 
     // Build tab list: main + all agents (active first, then completed)
     final tabIds = <String>['main'];
@@ -136,12 +137,34 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.link_off, size: 20),
-            onPressed: () {
-              ref.read(connectionProvider.notifier).disconnect();
+          _ConnectionStatusIcon(
+            status: connState.status,
+            onDisconnectTap: () {
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  backgroundColor: const Color(0xFF1A1A2E),
+                  title: const Text('断开连接', style: TextStyle(color: Colors.white)),
+                  content: const Text(
+                    '确定要断开与服务端的连接吗？',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('取消', style: TextStyle(color: Colors.white54)),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        ref.read(connectionProvider.notifier).disconnect();
+                      },
+                      child: const Text('断开', style: TextStyle(color: Colors.redAccent)),
+                    ),
+                  ],
+                ),
+              );
             },
-            tooltip: 'Disconnect',
           ),
         ],
         bottom: showTabs
@@ -383,5 +406,48 @@ class _ToolResultCardState extends State<_ToolResultCard> {
         ),
       ),
     );
+  }
+}
+
+/// Connection status indicator shown in the AppBar.
+/// - connected: green dot
+/// - connecting: yellow spinner
+/// - disconnected: red broken link icon (tappable to disconnect)
+class _ConnectionStatusIcon extends StatelessWidget {
+  final ConnectionStatus status;
+  final VoidCallback onDisconnectTap;
+
+  const _ConnectionStatusIcon({
+    required this.status,
+    required this.onDisconnectTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    switch (status) {
+      case ConnectionStatus.connected:
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Icon(Icons.cloud_done, size: 18, color: Colors.greenAccent),
+        );
+      case ConnectionStatus.connecting:
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.orangeAccent,
+            ),
+          ),
+        );
+      case ConnectionStatus.disconnected:
+        return IconButton(
+          icon: const Icon(Icons.cloud_off, size: 20, color: Colors.redAccent),
+          onPressed: onDisconnectTap,
+          tooltip: 'Disconnected — tap to leave',
+        );
+    }
   }
 }
