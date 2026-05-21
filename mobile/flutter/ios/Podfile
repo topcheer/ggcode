@@ -37,5 +37,12 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    # Exclude simulator architectures from release builds
+    target.build_configurations.each do |config|
+      if config.build_settings['ONLY_ACTIVE_ARCH'] == 'NO' || config.name == 'Release'
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphoneos*]'] = 'x86_64 i386'
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+      end
+    end
   end
 end

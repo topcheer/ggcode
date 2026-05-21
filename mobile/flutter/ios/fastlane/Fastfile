@@ -8,7 +8,7 @@ platform :ios do
     app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
       issuer_id: ENV["APP_STORE_ISSUER_ID"],
-      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../secrets/AuthKey_8KNYUZ47F2.p8", __dir__),
       in_house: false
     )
   end
@@ -18,7 +18,7 @@ platform :ios do
   end
 
   def version_str
-    plist_path = File.expand_path("../../Runner/Info.plist", __FILE__)
+    plist_path = File.expand_path("../Runner/Info.plist", __dir__)
     `/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '#{plist_path}' 2>/dev/null`.strip
   end
 
@@ -38,12 +38,74 @@ platform :ios do
     )
   end
 
+  # ── Helpers ────────────────────────────────────────────
+
+  def remove_simulator_frameworks(ipa_path)
+    require 'tmpdir'
+    Dir.mktmpdir do |tmp|
+      work = File.join(tmp, 'strip')
+      Dir.mkdir(work)
+      `unzip -q #{Shellwords.shellescape(ipa_path)} -d #{work} 2>/dev/null`
+      frameworks_dir = File.join(work, 'Payload', 'Runner.app', 'Frameworks')
+      unless Dir.exist?(frameworks_dir)
+        UI.message("No Frameworks/ found in IPA, skipping")
+        return ipa_path
+      end
+      removed = false
+      Dir.glob(File.join(frameworks_dir, '*.framework')).each do |fw|
+        exe = File.join(fw, File.basename(fw, '.framework'))
+        next unless File.exist?(exe)
+        vtool_out = `vtool -show #{Shellwords.shellescape(exe)} 2>/dev/null`
+        # Check all load commands for IOSSIMULATOR without any IOS
+        # Count how many platform lines exist
+        platforms = vtool_out.scan(/platform (\S+)/).flatten
+        has_sim = platforms.include?('IOSSIMULATOR')
+        has_device_ios = platforms.include?('IOS')
+        if has_sim && !has_device_ios
+          UI.message("Removing simulator-only framework: #{File.basename(fw)}")
+          FileUtils.rm_rf(fw)
+          removed = true
+        end
+      end
+      unless removed
+        UI.message("No simulator-only frameworks found, IPA is clean")
+        return ipa_path
+      end
+      # Re-sign the app after removing frameworks
+      app_path = File.join(work, 'Payload', 'Runner.app')
+      UI.message("Re-signing Runner.app after framework removal")
+      # Extract entitlements from embedded provisioning profile
+      embedded_profile = File.join(app_path, 'embedded.mobileprovision')
+      entitlements_plist = File.join(tmp, 'entitlements.plist')
+      if File.exist?(embedded_profile)
+        `security cms -D -i #{Shellwords.shellescape(embedded_profile)} 2>/dev/null > #{Shellwords.shellescape(entitlements_plist + '.full')}`
+        `/usr/libexec/PlistBuddy -x -c 'Print :Entitlements' #{Shellwords.shellescape(entitlements_plist + '.full')} 2>/dev/null > #{Shellwords.shellescape(entitlements_plist)}`
+      end
+      sign_cmd = "codesign --force --sign \"Apple Distribution: Junjun Zhang (EGZFS7M525)\" --timestamp --generate-entitlement-der"
+      sign_cmd += " --entitlements #{Shellwords.shellescape(entitlements_plist)}" if File.exist?(entitlements_plist) && File.size(entitlements_plist) > 0
+      sign_cmd += " #{Shellwords.shellescape(app_path)}"
+      sign_output = `#{sign_cmd} 2>&1`
+      unless $?.success?
+        UI.error("Codesign failed: #{sign_output}")
+      end
+      cleaned_ipa = ipa_path.sub(/\.ipa$/, '.cleaned.ipa')
+      `cd #{work} && zip -q -r #{Shellwords.shellescape(cleaned_ipa)} Payload/ 2>/dev/null`
+      if File.exist?(cleaned_ipa) && File.size(cleaned_ipa) > 0
+        FileUtils.mv(cleaned_ipa, ipa_path, force: true)
+        UI.success("Removed simulator-only frameworks and re-packaged IPA")
+      end
+    end
+    ipa_path
+  end
+
   # ── Build & Upload ────────────────────────────────────
 
   desc "Upload pre-built IPA to TestFlight"
   lane :upload_ipa do |options|
-    ipa_path = options[:ipa] || File.expand_path("../../../build/ios/ipa/GGCode Mobile.ipa", __FILE__)
+    ipa_path = options[:ipa] || File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __dir__)
     UI.user_error!("IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
+
+    remove_simulator_frameworks(ipa_path)
 
     upload_to_testflight(
       api_key: api_key,
@@ -60,9 +122,10 @@ platform :ios do
 
     sigh(api_key: api_key, app_identifier: app_id)
 
-    flutter_ipa = File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __FILE__)
+    flutter_ipa = File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __dir__)
     if File.exist?(flutter_ipa)
       UI.message("Using flutter-built IPA: #{flutter_ipa}")
+      remove_simulator_frameworks(flutter_ipa)
       upload_to_testflight(
         api_key: api_key,
         ipa: flutter_ipa,
@@ -94,7 +157,7 @@ platform :ios do
     app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
       issuer_id: ENV["APP_STORE_ISSUER_ID"],
-      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../secrets/AuthKey_8KNYUZ47F2.p8", __dir__),
       in_house: false
     )
     client = Spaceship::ConnectAPI.client
@@ -135,7 +198,7 @@ platform :ios do
     app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
       issuer_id: ENV["APP_STORE_ISSUER_ID"],
-      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../secrets/AuthKey_8KNYUZ47F2.p8", __dir__),
       in_house: false
     )
 
