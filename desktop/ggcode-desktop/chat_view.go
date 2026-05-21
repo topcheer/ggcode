@@ -796,6 +796,7 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 		// No accordion yet — create one with the result.
 		ref.acc = widget.NewAccordion(wrapAccordionItem(label, resultBlock))
 		ref.body.Add(ref.acc)
+		ref.body.Refresh()
 	}
 }
 
