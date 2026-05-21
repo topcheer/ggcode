@@ -444,13 +444,11 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		m.knight.NotifyActivity()
 	}
 
-	// Render user bubble and persist.
-	m.chatWriteUser(nextChatID(), text)
-	m.chatListScrollToBottom()
-	m.appendUserMessage(text)
-
-	// Same routing as webchatUserMsg.
 	if m.cancelFunc == nil {
+		// Agent idle — render user bubble and persist, then start agent.
+		m.chatWriteUser(nextChatID(), text)
+		m.chatListScrollToBottom()
+		m.appendUserMessage(text)
 		m.streamBuffer = nil
 		m.shellBuffer = nil
 		m.streamPrefixWritten = false
@@ -463,6 +461,9 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		cmd := m.startAgent(text)
 		return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 	}
+	// Agent busy — persist to session, queue for submission.
+	// queuePendingSubmission will render the user bubble.
+	m.appendUserMessage(text)
 	m.queuePendingSubmission(text)
 	return m, nil
 }

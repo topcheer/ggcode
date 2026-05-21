@@ -145,12 +145,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.knight != nil {
 			m.knight.NotifyActivity()
 		}
-		// Render the user bubble and persist to session -- same as keyboard input.
-		m.chatWriteUser(nextChatID(), text)
-		m.chatListScrollToBottom()
-		m.appendUserMessage(text)
 		// If agent is idle, start a new run with the webchat message
 		if m.cancelFunc == nil {
+			// Render the user bubble and persist to session.
+			m.chatWriteUser(nextChatID(), text)
+			m.chatListScrollToBottom()
+			m.appendUserMessage(text)
 			m.streamBuffer = &bytes.Buffer{}
 			m.shellBuffer = nil
 			m.streamPrefixWritten = false
@@ -163,7 +163,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.startAgent(text)
 			return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 		}
-		// Agent is busy — queue as interruption
+		// Agent is busy — persist to session, queue for submission.
+		// queuePendingSubmission will render the user bubble.
+		m.appendUserMessage(text)
 		m.queuePendingSubmission(text)
 		return m, nil
 
