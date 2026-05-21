@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -353,5 +355,124 @@ func TestRefreshSlots_MultipleAgents(t *testing.T) {
 	}
 	if terminal != 1 {
 		t.Errorf("expected 1 terminal (completed in grace), got %d", terminal)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// textThrottleMap tests — verifies the per-ID throttle used by repl.go
+// ---------------------------------------------------------------------------
+
+func TestTextThrottleMap_FirstAllow(t *testing.T) {
+	tm := newTextThrottleMap(500 * time.Millisecond)
+	if !tm.Allow("tm-1") {
+		t.Error("first Allow should return true")
+	}
+}
+
+func TestTextThrottleMap_Throttled(t *testing.T) {
+	tm := newTextThrottleMap(500 * time.Millisecond)
+	tm.Allow("tm-1")
+	if tm.Allow("tm-1") {
+		t.Error("second Allow within delay should return false")
+	}
+}
+
+func TestTextThrottleMap_AfterDelay(t *testing.T) {
+	tm := newTextThrottleMap(1 * time.Millisecond)
+	tm.Allow("tm-1")
+	time.Sleep(2 * time.Millisecond)
+	if !tm.Allow("tm-1") {
+		t.Error("Allow after delay elapsed should return true")
+	}
+}
+
+func TestTextThrottleMap_PerID(t *testing.T) {
+	tm := newTextThrottleMap(500 * time.Millisecond)
+	tm.Allow("tm-1")
+	// Different ID should not be throttled
+	if !tm.Allow("tm-2") {
+		t.Error("different ID should not be throttled by tm-1's rate")
+	}
+	// Original ID is still throttled
+	if tm.Allow("tm-1") {
+		t.Error("tm-1 should still be throttled")
+	}
+}
+
+func TestTextThrottleMap_Clear(t *testing.T) {
+	tm := newTextThrottleMap(500 * time.Millisecond)
+	tm.Allow("tm-1")
+	tm.Clear("tm-1")
+	// After clear, should be allowed again
+	if !tm.Allow("tm-1") {
+		t.Error("Allow after Clear should return true")
+	}
+}
+
+func TestTextThrottleMap_Concurrent(t *testing.T) {
+	tm := newTextThrottleMap(1 * time.Millisecond)
+	var wg sync.WaitGroup
+	allowed := make(chan string, 2000)
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				if tm.Allow(id) {
+					allowed <- id
+				}
+				time.Sleep(100 * time.Microsecond)
+			}
+		}(fmt.Sprintf("tm-%d", i))
+	}
+
+	go func() {
+		wg.Wait()
+		close(allowed)
+	}()
+
+	count := 0
+	for range allowed {
+		count++
+	}
+
+	// With 5 IDs × 200 attempts each at 100µs apart = ~20ms total per ID.
+	// With 1ms throttle, each ID should be allowed ~20 times.
+	// Total should be roughly 100 (5 × 20). Be lenient with timing.
+	if count < 30 {
+		t.Errorf("expected at least 30 allowed calls, got %d", count)
+	}
+	if count > 600 {
+		t.Errorf("expected at most 600 allowed calls (sanity), got %d", count)
+	}
+}
+
+func TestTextThrottleMap_HighFrequencySimulation(t *testing.T) {
+	// Simulates the actual use case: 5 teammates streaming text at ~50 tokens/s
+	tm := newTextThrottleMap(500 * time.Millisecond)
+	ids := []string{"tm-1", "tm-2", "tm-3", "tm-4", "tm-5"}
+
+	allowed := 0
+	blocked := 0
+
+	// Simulate 100ms of tokens at ~50 tokens/s per teammate = 5 tokens each
+	for _, id := range ids {
+		for i := 0; i < 5; i++ {
+			if tm.Allow(id) {
+				allowed++
+			} else {
+				blocked++
+			}
+		}
+	}
+
+	// 5 IDs × 1st call allowed = 5 allowed
+	// 5 IDs × 4 subsequent calls blocked = 20 blocked
+	if allowed != 5 {
+		t.Errorf("expected 5 allowed (one per ID), got %d", allowed)
+	}
+	if blocked != 20 {
+		t.Errorf("expected 20 blocked (4 per ID), got %d", blocked)
 	}
 }

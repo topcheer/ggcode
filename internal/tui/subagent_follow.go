@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -614,4 +615,43 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// ---------------------------------------------------------------------------
+// Per-ID text throttle map (used by repl.go for swarm teammate_text events)
+// ---------------------------------------------------------------------------
+
+// textThrottleMap provides per-ID time-based throttling. It is used to
+// prevent high-frequency streaming text events (one per LLM token) from
+// flooding Bubble Tea's event loop.
+type textThrottleMap struct {
+	mu    sync.Mutex
+	last  map[string]time.Time
+	delay time.Duration
+}
+
+// newTextThrottleMap creates a throttle map with the given minimum interval.
+func newTextThrottleMap(delay time.Duration) *textThrottleMap {
+	return &textThrottleMap{last: make(map[string]time.Time), delay: delay}
+}
+
+// Allow returns true if enough time has elapsed since the last Allow for this
+// id. It updates the timestamp atomically.
+func (t *textThrottleMap) Allow(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := time.Now()
+	last := t.last[id]
+	if !last.IsZero() && now.Sub(last) < t.delay {
+		return false
+	}
+	t.last[id] = now
+	return true
+}
+
+// Clear removes the throttle state for a given id (e.g., on completion).
+func (t *textThrottleMap) Clear(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.last, id)
 }

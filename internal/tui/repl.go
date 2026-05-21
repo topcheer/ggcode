@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -299,8 +298,7 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 	// We throttle them to ~2 Hz per teammate to avoid flooding Bubble Tea's
 	// event loop with messages that trigger expensive snapshot operations.
 	// Status-change events (tool_call, idle, etc.) are sent immediately.
-	var swarmTextNotifyMu sync.Mutex
-	swarmTextLastNotify := make(map[string]time.Time)
+	swarmTextThrottle := newTextThrottleMap(500 * time.Millisecond)
 
 	mgr.SetOnUpdate(func(ev swarm.Event) {
 		r.model.pushSwarmTunnelEvent(ev)
@@ -310,15 +308,9 @@ func (r *REPL) SetSwarmManager(mgr *swarm.Manager, tools *tool.Registry) {
 		switch ev.Type {
 		case "teammate_text":
 			// Throttle: at most one subAgentUpdateMsg per teammate per 500ms.
-			swarmTextNotifyMu.Lock()
-			last := swarmTextLastNotify[ev.TeammateID]
-			now := time.Now()
-			if !last.IsZero() && now.Sub(last) < 500*time.Millisecond {
-				swarmTextNotifyMu.Unlock()
+			if !swarmTextThrottle.Allow(ev.TeammateID) {
 				return
 			}
-			swarmTextLastNotify[ev.TeammateID] = now
-			swarmTextNotifyMu.Unlock()
 			r.program.Send(subAgentUpdateMsg{AgentID: ev.TeammateID})
 		case "teammate_idle":
 			if ev.Result != "" {

@@ -623,9 +623,9 @@ func (m *Model) rejectPendingPairing() tea.Cmd {
 		return nil
 	}
 	mgr := m.imManager
-	reply := "当前配对请求已被拒绝，如需继续请重新发起。"
+	reply := m.t("pairing.rejected")
 	if blacklisted {
-		reply = "该 QQ 渠道因多次被拒绝，已被加入黑名单。"
+		reply = m.t("pairing.blacklisted")
 	}
 	binding := challenge.ReplyBinding()
 	return func() tea.Msg {
