@@ -326,7 +326,7 @@ func suppressToolResult(toolName, result string) string {
 		return extractRecentOutput(result)
 	case "ask_user":
 		return formatAskUserResult(result)
-	case "multi_file_edit":
+	case "multi_file_edit", "multi_edit_file":
 		return formatMultiEditResult(result)
 	}
 	return result
