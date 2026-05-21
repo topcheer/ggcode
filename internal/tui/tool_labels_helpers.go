@@ -897,6 +897,19 @@ func firstLine(s string) string {
 	return s
 }
 
+// friendlyToolName returns a short, user-friendly name for a tool,
+// with special mappings for common tools and prettifyToolName as fallback.
+func friendlyToolName(name string) string {
+	switch name {
+	case "run_command":
+		return "Bash"
+	case "start_command":
+		return "Background Bash"
+	default:
+		return prettifyToolName(name)
+	}
+}
+
 func prettifyToolName(name string) string {
 	name = strings.ReplaceAll(name, "-", " ")
 	name = strings.ReplaceAll(name, "_", " ")
