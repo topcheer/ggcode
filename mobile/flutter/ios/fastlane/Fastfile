@@ -91,14 +91,34 @@ platform :ios do
 
   desc "Wait for TestFlight processing, distribute to External Testing"
   lane :promote_external do
-    pilot(
-      api_key: api_key,
-      skip_waiting_for_build_processing: false,
-      skip_submission: false,
-      distribute_only: true,
-      changelog: "Bug fixes and dependency updates"
+    app_store_connect_api_key(
+      key_id: ENV["APP_STORE_KEY_ID"],
+      issuer_id: ENV["APP_STORE_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../../secrets/AuthKey_8KNYUZ47F2.p8", __FILE__),
+      in_house: false
     )
-    UI.success("Distributed to External Testing!")
+    client = Spaceship::ConnectAPI.client
+    app = Spaceship::ConnectAPI::App.find(app_id)
+    UI.user_error!("App not found") if app.nil?
+
+    # Find latest valid build
+    builds = client.get_builds(
+      filter: { app: app.id },
+      sort: "-uploadedDate", limit: 10,
+      includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+    ).to_models.select { |b| b.processing_state == "VALID" }
+    UI.user_error!("No VALID builds") if builds.empty?
+    build = builds.first
+    UI.message("Build: #{build.version}")
+
+    # Find the "ext" beta group
+    groups = client.get_beta_groups(filter: { app: app.id }).to_models
+    ext_group = groups.find { |g| g.name == "ext" }
+    UI.user_error!("No 'ext' beta group found in App Store Connect") if ext_group.nil?
+
+    # Add build to ext group
+    client.add_beta_groups_to_build(build_id: build.id, beta_group_ids: [ext_group.id])
+    UI.success("Build #{build.version} added to 'ext' External Testing group!")
   end
 
   desc "Full deploy: upload TestFlight + promote to External"
@@ -146,7 +166,7 @@ platform :ios do
 
       # Promote to External Testing
       begin
-        ext
+        promote_external
         UI.success("Build #{build.version} distributed to External Testing!")
       rescue => e
         UI.message("External Testing: #{e.message}")
