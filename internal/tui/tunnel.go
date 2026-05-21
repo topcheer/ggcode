@@ -70,10 +70,10 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 	switch args {
 	case "stop", "close", "off":
 		if m.tunnelSession != nil {
-			m.tunnelSession.Stop()
 			if m.tunnelBroker != nil {
 				m.tunnelBroker.PushSharingStopped()
 			}
+			m.tunnelSession.Stop()
 			m.tunnelSession = nil
 			m.tunnelBroker = nil
 			m.tunnelMsgID = ""

@@ -1276,6 +1276,10 @@ Mouse:
 		return "Running harness"
 	case "command.harness_cancelled":
 		return "Harness run cancelled."
+	case "tunnel.stopped":
+		return "Tunnel stopped."
+	case "tunnel.not_active":
+		return "No active sharing session."
 	default:
 		if v, ok := lookupModuleCatalog(LangEnglish, key); ok {
 			return v
