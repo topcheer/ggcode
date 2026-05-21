@@ -299,6 +299,7 @@ type toolWidgetRef struct {
 	body      *fyne.Container
 	acc       *widget.Accordion
 	toolName  string
+	toolID    string
 	rawArgs   string
 	hasResult bool
 }
@@ -729,6 +730,7 @@ func (cv *ChatView) updateStatusBar(working bool) {
 func (cv *ChatView) buildToolRef(msg *ChatMessage, w fyne.CanvasObject) *toolWidgetRef {
 	ref := &toolWidgetRef{
 		toolName: msg.ToolName,
+		toolID:   msg.ToolID,
 		rawArgs:  raw(msg),
 	}
 	// Walk widget tree to find icon and the content VBox inside iconRow's Border.
@@ -1340,17 +1342,6 @@ func (cv *ChatView) renderAgentHeader(panel AgentPanelData, vbox *fyne.Container
 // appendAgentEvents renders only new events incrementally.
 // Uses the same renderTool as main panel for consistent look.
 func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState, fromIdx int) {
-	// Build tool_result lookup: ToolID → (result, isError)
-	toolResults := map[string]string{}
-	toolErrors := map[string]bool{}
-	for i := range panel.Events {
-		ev := &panel.Events[i]
-		if ev.Type == "tool_result" && ev.ToolID != "" {
-			toolResults[ev.ToolID] = ev.Content
-			toolErrors[ev.ToolID] = ev.IsError
-		}
-	}
-
 	for i := fromIdx; i < len(panel.Events); i++ {
 		ev := &panel.Events[i]
 
@@ -1369,8 +1360,6 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 		case "tool_call":
 			st.textMD = nil
 			st.reasoningMD = nil
-			result := toolResults[ev.ToolID]
-			isErr := toolErrors[ev.ToolID]
 
 			msg := &ChatMessage{
 				Role:     "tool",
@@ -1379,8 +1368,6 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 				ToolArgs: toolArgSummary(ev.ToolName, ev.ToolArgs),
 				ToolRaw:  ev.ToolArgs,
 				ToolID:   ev.ToolID,
-				Content:  result,
-				IsError:  isErr,
 			}
 			w := cv.renderTool(msg)
 
@@ -1395,25 +1382,20 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 		case "tool_result":
 			st.textMD = nil
 			st.reasoningMD = nil
-			// Find the tool_call ref by matching ToolID via the event at the stored index.
-			for idx, ref := range st.toolWidgets {
-				if ref.hasResult {
+			// Find the tool_call ref by matching ToolID directly on the ref.
+			for _, ref := range st.toolWidgets {
+				if ref.hasResult || ref.toolID != ev.ToolID {
 					continue
 				}
-				if idx < len(panel.Events) {
-					tcEv := panel.Events[idx]
-					if tcEv.Type == "tool_call" && tcEv.ToolID == ev.ToolID && ev.ToolID != "" {
-						ref.hasResult = true
-						if ev.IsError {
-							ref.icon.SetResource(theme.CancelIcon())
-						} else {
-							ref.icon.SetResource(theme.ConfirmIcon())
-						}
-						ref.icon.Refresh()
-						cv.addToolResult(ref, ev.Content)
-						break
-					}
+				ref.hasResult = true
+				if ev.IsError {
+					ref.icon.SetResource(theme.CancelIcon())
+				} else {
+					ref.icon.SetResource(theme.ConfirmIcon())
 				}
+				ref.icon.Refresh()
+				cv.addToolResult(ref, ev.Content)
+				break
 			}
 
 		case "error":
