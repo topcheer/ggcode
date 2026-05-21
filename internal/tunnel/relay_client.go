@@ -21,12 +21,16 @@ type RelayClient struct {
 	token    string
 	crypto   *Crypto
 
-	conn    *websocket.Conn
-	connMu  sync.Mutex
-	sendCh  chan []byte
-	closed  bool
-	closeMu sync.Mutex
-	stopCh  chan struct{}
+	conn           *websocket.Conn
+	connMu         sync.Mutex
+	sendCh         chan []byte
+	closed         bool
+	closeMu        sync.Mutex
+	stopCh         chan struct{}
+	gracefulStopCh chan struct{}
+	runDone        chan struct{}
+	stopOnce       sync.Once
+	gracefulOnce   sync.Once
 
 	onMessage func(msg GatewayMessage)
 	mu        sync.RWMutex
@@ -38,11 +42,13 @@ func NewRelayClient(relayURL, token string) (*RelayClient, error) {
 		return nil, err
 	}
 	return &RelayClient{
-		relayURL: strings.TrimSuffix(relayURL, "/"),
-		token:    token,
-		crypto:   crypto,
-		sendCh:   make(chan []byte, 256),
-		stopCh:   make(chan struct{}),
+		relayURL:       strings.TrimSuffix(relayURL, "/"),
+		token:          token,
+		crypto:         crypto,
+		sendCh:         make(chan []byte, 256),
+		stopCh:         make(chan struct{}),
+		gracefulStopCh: make(chan struct{}),
+		runDone:        make(chan struct{}),
 	}, nil
 }
 
@@ -66,6 +72,7 @@ func (rc *RelayClient) dial() error {
 }
 
 func (rc *RelayClient) run() {
+	defer close(rc.runDone)
 	for {
 		done := make(chan struct{})
 		var once sync.Once
@@ -137,6 +144,27 @@ func (rc *RelayClient) writePump(done func()) {
 			rc.connMu.Unlock()
 			if err != nil {
 				return
+			}
+		case <-rc.gracefulStopCh:
+			for {
+				select {
+				case msg := <-rc.sendCh:
+					rc.connMu.Lock()
+					err := rc.conn.WriteMessage(websocket.TextMessage, msg)
+					rc.connMu.Unlock()
+					if err != nil {
+						return
+					}
+				default:
+					rc.connMu.Lock()
+					_ = rc.conn.WriteControl(
+						websocket.CloseMessage,
+						websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+						time.Now().Add(time.Second),
+					)
+					rc.connMu.Unlock()
+					return
+				}
 			}
 		case <-rc.stopCh:
 			return
@@ -276,7 +304,39 @@ func (rc *RelayClient) Close() {
 	rc.closeMu.Lock()
 	rc.closed = true
 	rc.closeMu.Unlock()
-	close(rc.stopCh)
+	rc.stopOnce.Do(func() {
+		close(rc.stopCh)
+		rc.connMu.Lock()
+		if rc.conn != nil {
+			_ = rc.conn.Close()
+		}
+		rc.connMu.Unlock()
+	})
+}
+
+func (rc *RelayClient) CloseGracefully(timeout time.Duration) {
+	rc.closeMu.Lock()
+	rc.closed = true
+	hasConn := rc.conn != nil
+	rc.closeMu.Unlock()
+
+	if !hasConn {
+		rc.Close()
+		return
+	}
+
+	rc.gracefulOnce.Do(func() {
+		close(rc.gracefulStopCh)
+	})
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-rc.runDone:
+	case <-timer.C:
+		rc.Close()
+	}
 }
 
 func (rc *RelayClient) ConnectURL() string {

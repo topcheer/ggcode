@@ -90,8 +90,20 @@ func TestRelayClientClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc.Close()
+	rc.Close()
 	if !rc.closed {
 		t.Error("closed should be true after Close()")
+	}
+}
+
+func TestRelayClientCloseGracefullyWithoutConnectionFallsBackToClose(t *testing.T) {
+	rc, err := NewRelayClient("wss://relay.example.com", "0123456789abcdef01234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.CloseGracefully(50 * time.Millisecond)
+	if !rc.closed {
+		t.Fatal("CloseGracefully should mark client closed even without an active connection")
 	}
 }
 

@@ -70,16 +70,7 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 	switch args {
 	case "stop", "close", "off":
 		if m.tunnelSession != nil {
-			if m.tunnelBroker != nil {
-				m.tunnelBroker.PushSharingStopped()
-			}
-			m.tunnelSession.Stop()
-			m.tunnelSession = nil
-			m.tunnelBroker = nil
-			m.tunnelMsgID = ""
-			m.tunnelPendingApprovalID = ""
-			m.tunnelPendingAskUserID = ""
-			m.tunnelSpawned = nil
+			m.closeTunnelGracefully(2 * time.Second)
 			m.chatWriteSystem(nextSystemID(), "Tunnel closed.")
 		} else {
 			m.chatWriteSystem(nextSystemID(), "No active tunnel.")
@@ -114,6 +105,20 @@ func (m *Model) handleTunnelCommand(text string) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), "Usage: /tunnel [start|stop|status]")
 		return nil
 	}
+}
+
+func (m *Model) closeTunnelGracefully(timeout time.Duration) {
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.StopSharingGracefully(timeout)
+	} else if m.tunnelSession != nil {
+		m.tunnelSession.StopGracefully(timeout)
+	}
+	m.tunnelSession = nil
+	m.tunnelBroker = nil
+	m.tunnelMsgID = ""
+	m.tunnelPendingApprovalID = ""
+	m.tunnelPendingAskUserID = ""
+	m.tunnelSpawned = nil
 }
 
 // ─── Tunnel lifecycle ───
@@ -498,8 +503,23 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 		case "user":
 			var textParts []string
 			for _, block := range msg.Content {
-				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-					textParts = append(textParts, strings.TrimSpace(block.Text))
+				switch block.Type {
+				case "text":
+					if strings.TrimSpace(block.Text) != "" {
+						textParts = append(textParts, strings.TrimSpace(block.Text))
+					}
+				case "tool_result":
+					result := block.Output
+					if len(result) > 500 {
+						result = result[:500] + "..."
+					}
+					history = append(history, tunnel.HistoryEntry{
+						Role:     "tool_result",
+						ToolID:   block.ToolID,
+						ToolName: block.ToolName,
+						Result:   result,
+						IsError:  block.IsError,
+					})
 				}
 			}
 			if len(textParts) > 0 {
@@ -520,11 +540,13 @@ func tunnelMessagesToHistory(msgs []provider.Message) []tunnel.HistoryEntry {
 					if len(argsStr) > 200 {
 						argsStr = argsStr[:200] + "..."
 					}
+					present := describeTool(LangEnglish, block.ToolName, string(block.Input))
 					history = append(history, tunnel.HistoryEntry{
-						Role:     "tool_call",
-						ToolID:   block.ToolID,
-						ToolName: block.ToolName,
-						ToolArgs: argsStr,
+						Role:       "tool_call",
+						ToolID:     block.ToolID,
+						ToolName:   block.ToolName,
+						ToolArgs:   argsStr,
+						ToolDetail: present.Detail,
 					})
 				}
 			}

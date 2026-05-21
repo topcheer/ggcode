@@ -105,9 +105,7 @@ func (a *App) Run() {
 		if a.agentBridge != nil {
 			a.agentBridge.Close()
 		}
-		if a.tunnelSession != nil {
-			a.tunnelSession.Stop()
-		}
+		a.closeTunnelGracefully(2 * time.Second)
 	})
 
 	a.window.ShowAndRun()
@@ -311,27 +309,17 @@ func (a *App) showShareDialog() {
 									})
 								}
 							case "tool_use":
-								detail := ""
-								if block.Input != nil {
-									var input map[string]interface{}
-									if json.Unmarshal(block.Input, &input) == nil {
-										if desc, ok := input["description"].(string); ok && desc != "" {
-											detail = desc
-										} else {
-											for _, v := range input {
-												if s, ok := v.(string); ok && s != "" {
-													detail = s
-													break
-												}
-											}
-										}
-									}
+								argsStr := string(block.Input)
+								if len(argsStr) > 200 {
+									argsStr = argsStr[:200] + "..."
 								}
+								detail := toolDescription(block.ToolName, string(block.Input))
 								history = append(history, tunnel.HistoryEntry{
-									Role:     "tool_call",
-									ToolID:   block.ToolID,
-									ToolName: block.ToolName,
-									ToolArgs: detail,
+									Role:       "tool_call",
+									ToolID:     block.ToolID,
+									ToolName:   block.ToolName,
+									ToolArgs:   argsStr,
+									ToolDetail: detail,
 								})
 							}
 						}
@@ -367,15 +355,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = nil
 		}
-		// Send sharing_stopped synchronously, THEN close the connection.
-		if a.tunnelSession != nil {
-			if a.tunnelBroker != nil {
-				a.tunnelBroker.PushSharingStopped()
-			}
-			a.tunnelSession.Stop()
-			a.tunnelSession = nil
-			a.tunnelBroker = nil
-		}
+		a.closeTunnelGracefully(2 * time.Second)
 		a.shareDialog.Hide()
 	})
 
@@ -413,6 +393,16 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 
 	a.shareDialog = dialog.NewCustom("Share Session", "Close", content, a.window)
 	a.shareDialog.Show()
+}
+
+func (a *App) closeTunnelGracefully(timeout time.Duration) {
+	if a.tunnelBroker != nil {
+		a.tunnelBroker.StopSharingGracefully(timeout)
+	} else if a.tunnelSession != nil {
+		a.tunnelSession.StopGracefully(timeout)
+	}
+	a.tunnelSession = nil
+	a.tunnelBroker = nil
 }
 
 // openUpdates checks for the latest release on GitHub.
@@ -742,29 +732,47 @@ func (a *App) resumeSession(id string) {
 							})
 						}
 					case "tool_use":
-						detail := ""
-						if block.Input != nil {
-							var input map[string]interface{}
-							if json.Unmarshal(block.Input, &input) == nil {
-								if desc, ok := input["description"].(string); ok && desc != "" {
-									detail = desc
-								} else {
-									for _, v := range input {
-										if s, ok := v.(string); ok && s != "" {
-											detail = s
-											break
-										}
-									}
-								}
-							}
+						argsStr := string(block.Input)
+						if len(argsStr) > 200 {
+							argsStr = argsStr[:200] + "..."
 						}
+						detail := toolDescription(block.ToolName, string(block.Input))
 						history = append(history, tunnel.HistoryEntry{
-							Role:     "tool_call",
-							ToolID:   block.ToolID,
-							ToolName: block.ToolName,
-							ToolArgs: detail,
+							Role:       "tool_call",
+							ToolID:     block.ToolID,
+							ToolName:   block.ToolName,
+							ToolArgs:   argsStr,
+							ToolDetail: detail,
 						})
 					}
+				}
+			} else if msg.Role == "user" || msg.Role == "tool" {
+				var textParts []string
+				for _, block := range msg.Content {
+					switch block.Type {
+					case "text":
+						if strings.TrimSpace(block.Text) != "" {
+							textParts = append(textParts, strings.TrimSpace(block.Text))
+						}
+					case "tool_result":
+						result := block.Output
+						if len(result) > 500 {
+							result = result[:500] + "..."
+						}
+						history = append(history, tunnel.HistoryEntry{
+							Role:     "tool_result",
+							ToolID:   block.ToolID,
+							ToolName: block.ToolName,
+							Result:   result,
+							IsError:  block.IsError,
+						})
+					}
+				}
+				if len(textParts) > 0 {
+					history = append(history, tunnel.HistoryEntry{
+						Role:    "user",
+						Content: strings.Join(textParts, "\n"),
+					})
 				}
 			}
 		}
