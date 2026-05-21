@@ -42,7 +42,7 @@ platform :ios do
 
   desc "Upload pre-built IPA to TestFlight"
   lane :upload_ipa do |options|
-    ipa_path = options[:ipa] || File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __FILE__)
+    ipa_path = options[:ipa] || File.expand_path("../../../build/ios/ipa/GGCode Mobile.ipa", __FILE__)
     UI.user_error!("IPA not found at #{ipa_path}") unless File.exist?(ipa_path)
 
     upload_to_testflight(
