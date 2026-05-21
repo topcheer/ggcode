@@ -91,6 +91,15 @@ func (m Model) renderQROverlay() string {
 		body = append(body, footerStyle.Render(fmt.Sprintf(" %s", o.footer)), "")
 	}
 
+	// Mobile app download links
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	body = append(body,
+		dimStyle.Render(" Get GGCode Mobile:"),
+		dimStyle.Render("   iOS:     https://testflight.apple.com/join/J34wVD6p"),
+		dimStyle.Render("   Android: https://play.google.com/apps/testing/gg.ai.ggcode.mobile"),
+		"",
+	)
+
 	// Esc hint
 	escHint := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
 		" " + m.t("panel.qr.esc_hint"),

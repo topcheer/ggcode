@@ -406,6 +406,11 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		qrImage = widget.NewLabel("QR code unavailable")
 	}
 
+	// Mobile app download links
+	getAppLabel := widget.NewLabelWithStyle("Get GGCode Mobile:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	iosLink := widget.NewHyperlink("iOS (TestFlight)", mustParseURL("https://testflight.apple.com/join/J34wVD6p"))
+	androidLink := widget.NewHyperlink("Android (Closed Testing)", mustParseURL("https://play.google.com/apps/testing/gg.ai.ggcode.mobile"))
+
 	content := container.NewVBox(
 		widget.NewLabelWithStyle("Mobile Connection", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
@@ -414,6 +419,12 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		container.NewHBox(copyBtn, stopBtn),
 		widget.NewSeparator(),
 		qrImage,
+		widget.NewSeparator(),
+		getAppLabel,
+		container.NewHBox(
+			widget.NewLabel("  "),
+			container.NewVBox(iosLink, androidLink),
+		),
 	)
 
 	a.shareDialog = dialog.NewCustom("Share Session", "Close", content, a.window)
