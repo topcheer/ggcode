@@ -779,7 +779,7 @@ func (b *AgentBridge) SwarmPanels() []AgentPanelData {
 func toolDescription(toolName, rawArgs string) string {
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return prettifyToolName(toolName)
+		return ""
 	}
 
 	// Helper to extract a string field.
@@ -802,15 +802,15 @@ func toolDescription(toolName, rawArgs string) string {
 	// File operations
 	case "read_file":
 		if p := str("path"); p != "" {
-			return "Read: " + shortPath(p)
+			return shortPath(p)
 		}
 	case "write_file":
 		if p := str("path"); p != "" {
-			return "Write: " + shortPath(p)
+			return shortPath(p)
 		}
 	case "edit_file", "multi_edit_file":
 		if p := str("file_path"); p != "" {
-			return "Edit: " + shortPath(p)
+			return shortPath(p)
 		}
 	case "notebook_edit":
 		if p := str("notebook_path"); p != "" {
@@ -840,17 +840,17 @@ func toolDescription(toolName, rawArgs string) string {
 		}
 	case "list_directory":
 		if p := str("path"); p != "" {
-			return "List: " + shortPath(p)
+			return shortPath(p)
 		}
 
 	// Web
 	case "web_search":
 		if q := str("query"); q != "" {
-			return "Search: " + truncateRunes(q, 80, "...")
+			return truncateRunes(q, 80, "...")
 		}
 	case "web_fetch":
 		if u := str("url"); u != "" {
-			return "Fetch: " + truncateRunes(u, 80, "...")
+			return truncateRunes(u, 80, "...")
 		}
 
 	// Commands
@@ -859,7 +859,7 @@ func toolDescription(toolName, rawArgs string) string {
 			if comment := firstCommentLine(c); comment != "" {
 				return comment
 			}
-			return "Bash: " + truncateRunes(strings.SplitN(c, "\n", 2)[0], 60, "...")
+			return truncateRunes(strings.SplitN(c, "\n", 2)[0], 60, "...")
 		}
 	case "stop_command":
 		if id := str("job_id"); id != "" {
@@ -882,34 +882,34 @@ func toolDescription(toolName, rawArgs string) string {
 
 	// Git
 	case "git_status":
-		return "Git Status"
+		return ""
 	case "git_diff":
 		if f := str("file"); f != "" {
-			return "Git Diff: " + shortPath(f)
+			return shortPath(f)
 		}
-		return "Git Diff"
+		return ""
 	case "git_log":
-		return "Git Log"
+		return ""
 	case "git_show":
 		if r := str("revision"); r != "" {
-			return "Git Show: " + truncateRunes(r, 40, "...")
+			return truncateRunes(r, 40, "...")
 		}
-		return "Git Show"
+		return ""
 	case "git_blame":
 		if f := str("file"); f != "" {
-			return "Git Blame: " + shortPath(f)
+			return shortPath(f)
 		}
-		return "Git Blame"
+		return ""
 	case "git_add":
-		return "Git Add"
+		return ""
 	case "git_commit":
-		return "Git Commit"
+		return ""
 	case "git_branch_list":
-		return "Git Branches"
+		return ""
 	case "git_remote":
-		return "Git Remote"
+		return ""
 	case "git_stash":
-		return "Git Stash"
+		return ""
 	case "git_stash_list":
 		return "Git Stash List"
 
