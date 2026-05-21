@@ -97,6 +97,17 @@ type Snapshot struct {
 	Events          []AgentEvent
 }
 
+// StatusInfo is a lightweight copy of a sub-agent's identity and status.
+// Unlike Snapshot, it does NOT copy events, making it safe for high-frequency
+// calls (e.g. strip display refresh) without O(maxAgentEvents) copy overhead.
+type StatusInfo struct {
+	ID           string
+	Name         string
+	Status       Status
+	CurrentPhase string
+	EndedAt      time.Time
+}
+
 // RecordEvent appends an event to the sub-agent's event log.
 // This is the exported version for external callers (e.g., tests).
 func (s *SubAgent) RecordEvent(ev AgentEvent) {
@@ -126,6 +137,22 @@ func (s *SubAgent) Events() []AgentEvent {
 	out := make([]AgentEvent, len(s.events))
 	copy(out, s.events)
 	return out
+}
+
+// EventsSince returns only events with index >= fromIdx.
+// This avoids copying the full event history when only incremental events
+// are needed (e.g. GUI agent panel updates). Returns the total event count
+// so callers can track the next fromIdx.
+func (s *SubAgent) EventsSince(fromIdx int) ([]AgentEvent, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	total := len(s.events)
+	if fromIdx >= total {
+		return nil, total
+	}
+	out := make([]AgentEvent, total-fromIdx)
+	copy(out, s.events[fromIdx:])
+	return out, total
 }
 
 func (s *SubAgent) IncrementToolCalls() {
@@ -192,6 +219,20 @@ func (s *SubAgent) snapshot() Snapshot {
 		snap.Error = s.Error.Error()
 	}
 	return snap
+}
+
+// statusInfo returns a lightweight copy with only identity + status.
+// Unlike snapshot(), it does NOT copy events.
+func (s *SubAgent) statusInfo() StatusInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return StatusInfo{
+		ID:           s.ID,
+		Name:         s.Name,
+		Status:       s.Status,
+		CurrentPhase: s.CurrentPhase,
+		EndedAt:      s.EndedAt,
+	}
 }
 
 // Manager manages spawning, tracking, and collecting results from sub-agents.
@@ -326,6 +367,19 @@ func (m *Manager) Snapshot(id string) (Snapshot, bool) {
 		return Snapshot{}, false
 	}
 	return sa.snapshot(), true
+}
+
+// Statuses returns lightweight status info for all sub-agents.
+// Unlike List() + Snapshot(), this does NOT copy events and is safe to call
+// at high frequency (e.g. strip display refresh).
+func (m *Manager) Statuses() []StatusInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]StatusInfo, 0, len(m.agents))
+	for _, sa := range m.agents {
+		out = append(out, sa.statusInfo())
+	}
+	return out
 }
 
 // RunningCount returns the number of currently running agents.

@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -246,4 +247,185 @@ func TestManager_CancelAll_Empty(t *testing.T) {
 	if cancelled != 0 {
 		t.Errorf("expected 0 cancelled for empty manager, got %d", cancelled)
 	}
+}
+
+func TestSubAgent_statusInfo(t *testing.T) {
+	sa := &SubAgent{
+		ID:           "agent-1",
+		Name:         "researcher",
+		Status:       StatusRunning,
+		CurrentPhase: "reading files",
+		EndedAt:      time.Time{}, // zero
+		Mailbox:      make(chan AgentMessage, 16),
+	}
+
+	info := sa.statusInfo()
+	if info.ID != "agent-1" {
+		t.Errorf("expected ID agent-1, got %s", info.ID)
+	}
+	if info.Name != "researcher" {
+		t.Errorf("expected Name researcher, got %s", info.Name)
+	}
+	if info.Status != StatusRunning {
+		t.Errorf("expected Status running, got %s", info.Status)
+	}
+	if info.CurrentPhase != "reading files" {
+		t.Errorf("expected CurrentPhase 'reading files', got %s", info.CurrentPhase)
+	}
+	if !info.EndedAt.IsZero() {
+		t.Errorf("expected zero EndedAt, got %v", info.EndedAt)
+	}
+}
+
+func TestManager_Statuses(t *testing.T) {
+	m := newTestManager()
+
+	// Empty manager
+	statuses := m.Statuses()
+	if len(statuses) != 0 {
+		t.Fatalf("expected 0 statuses, got %d", len(statuses))
+	}
+
+	// Spawn agents
+	ctx1 := context.Background()
+	ctx2 := context.Background()
+	m.Spawn("alpha", "alpha", "task-a", nil, ctx1)
+	m.Spawn("beta", "beta", "task-b", nil, ctx2)
+
+	statuses = m.Statuses()
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 statuses, got %d", len(statuses))
+	}
+
+	// Verify names are present (order not guaranteed)
+	names := map[string]bool{}
+	for _, s := range statuses {
+		names[s.Name] = true
+		if s.Status == "" {
+			t.Error("status should not be empty")
+		}
+	}
+	if !names["alpha"] {
+		t.Error("expected alpha agent in statuses")
+	}
+	if !names["beta"] {
+		t.Error("expected beta agent in statuses")
+	}
+
+	// Cleanup
+	m.CancelAll()
+}
+
+func TestManager_Statuses_DoesNotCopyEvents(t *testing.T) {
+	// Verify Statuses() is lightweight — it should not reflect event counts.
+	// We add events to an agent, call Statuses(), and verify it returns without
+	// copying or exposing the events array.
+	m := newTestManager()
+	ctx := context.Background()
+	id := m.Spawn("event-agent", "event-agent", "eventful task", nil, ctx)
+
+	// Add events to the agent
+	agents := m.List()
+	for _, sa := range agents {
+		if sa.ID == id {
+			for i := 0; i < 50; i++ {
+				sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "chunk"})
+			}
+		}
+	}
+
+	// Statuses should still work and be lightweight
+	statuses := m.Statuses()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+
+	// StatusInfo has no Events field — just ID, Name, Status, CurrentPhase, EndedAt
+	if statuses[0].Name != "event-agent" {
+		t.Errorf("expected event-agent, got %s", statuses[0].Name)
+	}
+
+	m.CancelAll()
+}
+
+func TestSubAgent_EventsSince(t *testing.T) {
+	sa := &SubAgent{
+		ID:      "agent-1",
+		Name:    "coder",
+		Status:  StatusRunning,
+		Mailbox: make(chan AgentMessage, 16),
+	}
+
+	// No events yet
+	events, total := sa.EventsSince(0)
+	if total != 0 {
+		t.Fatalf("expected 0 total, got %d", total)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events, got %d", len(events))
+	}
+
+	// Add events
+	for i := 0; i < 5; i++ {
+		sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "chunk"})
+	}
+
+	// Get all
+	events, total = sa.EventsSince(0)
+	if total != 5 {
+		t.Fatalf("expected 5 total, got %d", total)
+	}
+	if len(events) != 5 {
+		t.Fatalf("expected 5 events, got %d", len(events))
+	}
+
+	// Get incremental
+	events, total = sa.EventsSince(3)
+	if total != 5 {
+		t.Fatalf("expected 5 total, got %d", total)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 incremental events, got %d", len(events))
+	}
+
+	// fromIdx >= total returns empty
+	events, total = sa.EventsSince(10)
+	if total != 5 {
+		t.Fatalf("expected 5 total, got %d", total)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events, got %d", len(events))
+	}
+}
+
+func TestManager_EventsSince_Integration(t *testing.T) {
+	m := newTestManager()
+	ctx := context.Background()
+	id := m.Spawn("worker", "worker", "task", nil, ctx)
+
+	// Add events via the agent
+	agents := m.List()
+	for _, sa := range agents {
+		if sa.ID == id {
+			for i := 0; i < 20; i++ {
+				sa.appendEvent(AgentEvent{Type: AgentEventText, Text: "data"})
+			}
+		}
+	}
+
+	// Get incremental from 15
+	agents = m.List()
+	for _, sa := range agents {
+		if sa.ID == id {
+			events, total := sa.EventsSince(15)
+			if total != 20 {
+				t.Fatalf("expected 20 total, got %d", total)
+			}
+			if len(events) != 5 {
+				t.Fatalf("expected 5 incremental events, got %d", len(events))
+			}
+		}
+	}
+
+	m.CancelAll()
 }

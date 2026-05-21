@@ -162,7 +162,43 @@ func (m *Manager) GetTeam(id string) (TeamSnapshot, bool) {
 	return team.snapshot(), true
 }
 
-// ListTeams returns snapshots of all teams.
+// TeamStatusInfo is a lightweight snapshot of a team with only teammate status
+// info (no events). Use this instead of ListTeams() when only the strip display
+// needs updating.
+type TeamStatusInfo struct {
+	ID        string
+	Name      string
+	LeaderID  string
+	Teammates []TeammateStatusInfo
+	TaskCount int
+}
+
+// ListTeamStatuses returns lightweight status info for all teams.
+// Unlike ListTeams(), this does NOT copy teammate events and is safe to call
+// at high frequency (e.g. on every streaming token event) without contending
+// the Teammate.mu lock that the runner uses for appendEvent.
+func (m *Manager) ListTeamStatuses() []TeamStatusInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]TeamStatusInfo, 0, len(m.teams))
+	for _, t := range m.teams {
+		taskCount := 0
+		if t.Tasks != nil {
+			taskCount = len(t.Tasks.List())
+		}
+		out = append(out, TeamStatusInfo{
+			ID:        t.ID,
+			Name:      t.Name,
+			LeaderID:  t.LeaderID,
+			Teammates: t.teammateStatuses(),
+			TaskCount: taskCount,
+		})
+	}
+	return out
+}
+
+// ListTeams returns full snapshots of all teams (including events).
+// Prefer ListTeamStatuses() for strip/status display to avoid copying events.
 func (m *Manager) ListTeams() []TeamSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -515,4 +551,23 @@ func (m *Manager) TeammateSnapshot(tmID string) (TeammateSnapshot, bool) {
 		}
 	}
 	return TeammateSnapshot{}, false
+}
+
+// TeammateEventsSince returns incremental events for a teammate starting from
+// fromIdx, along with the total event count. Unlike TeammateSnapshot, this
+// avoids copying the full event history and is safe to call at high frequency.
+func (m *Manager) TeammateEventsSince(tmID string, fromIdx int) ([]TeammateEvent, int, bool) {
+	m.mu.Lock()
+	for _, team := range m.teams {
+		team.mu.RLock()
+		tm, ok := team.Teammates[tmID]
+		team.mu.RUnlock()
+		if ok {
+			events, total := tm.EventsSince(fromIdx)
+			m.mu.Unlock()
+			return events, total, true
+		}
+	}
+	m.mu.Unlock()
+	return nil, 0, false
 }

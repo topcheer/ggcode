@@ -1,9 +1,10 @@
 package tui
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // handleSubAgentUpdateMsg handles the corresponding message case.
@@ -22,10 +23,18 @@ func (m Model) handleSubAgentUpdateMsg(msg subAgentUpdateMsg) (Model, tea.Cmd) {
 				return subAgentFollowRefreshMsg{}
 			})
 		}
+		// Also mark strip dirty for non-active slots (status changes).
+		m.subAgentFollow.markStripDirty()
 	} else {
-		// No follow panel — refresh strip slot list.
-		m.subAgentFollow.refreshSlots(m.subAgentMgr)
-		m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
+		// No follow panel — defer strip refresh to the throttled path.
+		// This avoids calling refreshSlots/refreshSwarmSlots on every streaming token.
+		m.subAgentFollow.markStripDirty()
+		if !m.subAgentFollow.refreshStripIfNeeded(m.subAgentMgr, m.swarmMgr) {
+			// Still throttled — schedule a delayed tick to pick it up.
+			return m, tea.Tick(stripRefreshInterval, func(t time.Time) tea.Msg {
+				return subAgentFollowRefreshMsg{}
+			})
+		}
 	}
 
 	if m.subAgentFollow.isActive() && m.subAgentFollow.currentSlotIndex() == -1 {
@@ -47,6 +56,10 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 	m.chatWriteSystem(nextSystemID(), m.formatSubAgentDoneNotice(msg))
 	m.chatListScrollToBottom()
 
+	// Force immediate strip refresh on completion (status changed).
+	m.subAgentFollow.refreshSlots(m.subAgentMgr)
+	m.subAgentFollow.refreshSwarmSlots(m.swarmMgr)
+
 	// Build prompt for the main agent.
 	var agentHint string
 	if msg.IsError {
@@ -67,7 +80,7 @@ func (m Model) handleSubAgentDoneMsg(msg subAgentDoneMsg) (Model, tea.Cmd) {
 
 // handleSubAgentFollowRefreshMsg handles the corresponding message case.
 func (m Model) handleSubAgentFollowRefreshMsg(msg subAgentFollowRefreshMsg) (Model, tea.Cmd) {
-	// Delayed rebuild after throttle window
+	// Delayed rebuild after throttle window (for follow panel)
 	if m.subAgentFollow.isActive() && m.subAgentFollow.shouldRebuild(m.subAgentFollow.activeID) {
 		m.subAgentFollow.rebuildActiveView(m.subAgentMgr, m.swarmMgr, m.chatStyles)
 	} else if m.subAgentFollow.isActive() && m.subAgentFollow.dirty[m.subAgentFollow.activeID] {
@@ -76,6 +89,24 @@ func (m Model) handleSubAgentFollowRefreshMsg(msg subAgentFollowRefreshMsg) (Mod
 			return subAgentFollowRefreshMsg{}
 		})
 	}
+
+	// Also handle deferred strip refresh
+	if m.subAgentFollow.stripDirty {
+		if m.subAgentFollow.refreshStripIfNeeded(m.subAgentMgr, m.swarmMgr) {
+			// Refreshed now, but if still dirty, schedule next check
+			if m.subAgentFollow.stripDirty {
+				return m, tea.Tick(stripRefreshInterval, func(t time.Time) tea.Msg {
+					return subAgentFollowRefreshMsg{}
+				})
+			}
+		} else {
+			// Still throttled — reschedule
+			return m, tea.Tick(stripRefreshInterval, func(t time.Time) tea.Msg {
+				return subAgentFollowRefreshMsg{}
+			})
+		}
+	}
+
 	return m, nil
 
 }

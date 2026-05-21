@@ -2,6 +2,8 @@ package swarm
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,5 +220,198 @@ func TestTeammate_Cancel(t *testing.T) {
 		// expected
 	default:
 		t.Error("context should be done after cancel")
+	}
+}
+
+func TestTeammate_statusInfo(t *testing.T) {
+	tm := &Teammate{
+		ID:     "tm-42",
+		Name:   "coder",
+		Status: TeammateWorking,
+		Inbox:  make(chan MailMessage, 16),
+	}
+
+	info := tm.statusInfo()
+	if info.ID != "tm-42" {
+		t.Errorf("expected ID tm-42, got %s", info.ID)
+	}
+	if info.Name != "coder" {
+		t.Errorf("expected Name coder, got %s", info.Name)
+	}
+	if info.Status != TeammateWorking {
+		t.Errorf("expected Status working, got %s", info.Status)
+	}
+}
+
+func TestTeammate_statusInfo_ReflectsStatusChange(t *testing.T) {
+	tm := &Teammate{
+		ID:     "tm-1",
+		Name:   "researcher",
+		Status: TeammateIdle,
+		Inbox:  make(chan MailMessage, 16),
+	}
+
+	info := tm.statusInfo()
+	if info.Status != TeammateIdle {
+		t.Fatalf("expected idle, got %s", info.Status)
+	}
+
+	tm.setStatus(TeammateWorking)
+	info = tm.statusInfo()
+	if info.Status != TeammateWorking {
+		t.Errorf("expected working after setStatus, got %s", info.Status)
+	}
+}
+
+func TestTeam_teammateStatuses(t *testing.T) {
+	team := &Team{
+		ID:        "team-1",
+		Name:      "test",
+		LeaderID:  "leader",
+		Teammates: make(map[string]*Teammate),
+		CreatedAt: time.Now(),
+	}
+
+	// Empty team
+	statuses := team.teammateStatuses()
+	if len(statuses) != 0 {
+		t.Fatalf("expected 0 statuses, got %d", len(statuses))
+	}
+
+	// Add teammates out of order
+	team.Teammates["tm-3"] = &Teammate{ID: "tm-3", Name: "c", Status: TeammateIdle, Inbox: make(chan MailMessage, 16)}
+	team.Teammates["tm-1"] = &Teammate{ID: "tm-1", Name: "a", Status: TeammateWorking, Inbox: make(chan MailMessage, 16)}
+	team.Teammates["tm-2"] = &Teammate{ID: "tm-2", Name: "b", Status: TeammateShuttingDown, Inbox: make(chan MailMessage, 16)}
+
+	statuses = team.teammateStatuses()
+	if len(statuses) != 3 {
+		t.Fatalf("expected 3 statuses, got %d", len(statuses))
+	}
+
+	// Verify sorted by ID
+	if statuses[0].ID != "tm-1" {
+		t.Errorf("expected first tm-1, got %s", statuses[0].ID)
+	}
+	if statuses[1].ID != "tm-2" {
+		t.Errorf("expected second tm-2, got %s", statuses[1].ID)
+	}
+	if statuses[2].ID != "tm-3" {
+		t.Errorf("expected third tm-3, got %s", statuses[2].ID)
+	}
+
+	// Verify statuses
+	if statuses[0].Status != TeammateWorking {
+		t.Errorf("tm-1: expected working, got %s", statuses[0].Status)
+	}
+	if statuses[1].Status != TeammateShuttingDown {
+		t.Errorf("tm-2: expected shutting_down, got %s", statuses[1].Status)
+	}
+	if statuses[2].Status != TeammateIdle {
+		t.Errorf("tm-3: expected idle, got %s", statuses[2].Status)
+	}
+}
+
+func TestTeammateStatusInfo_ConcurrentWithAppendEvent(t *testing.T) {
+	// This test verifies that statusInfo() does not deadlock when called
+	// concurrently with appendEvent(). Both acquire Teammate.mu — if statusInfo()
+	// held the lock too long (like snapshot() does while copying 200 events),
+	// the appendEvent goroutine would be blocked, causing this test to timeout.
+	tm := &Teammate{
+		ID:     "tm-1",
+		Name:   "coder",
+		Status: TeammateWorking,
+		Inbox:  make(chan MailMessage, 16),
+	}
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	// Writer: append events rapidly (simulates streaming tokens)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: "chunk"})
+		}
+	}()
+
+	// Reader: call statusInfo rapidly (simulates TUI strip refresh)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			info := tm.statusInfo()
+			if info.ID != "tm-1" {
+				t.Errorf("unexpected ID: %s", info.ID)
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success — no deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected: statusInfo and appendEvent did not complete within 10s")
+	}
+}
+
+func TestTeammate_EventsSince(t *testing.T) {
+	tm := &Teammate{
+		ID:     "tm-1",
+		Name:   "coder",
+		Status: TeammateWorking,
+		Inbox:  make(chan MailMessage, 16),
+	}
+
+	// No events yet
+	events, total := tm.EventsSince(0)
+	if total != 0 {
+		t.Fatalf("expected 0 total, got %d", total)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events, got %d", len(events))
+	}
+
+	// Add some events
+	for i := 0; i < 5; i++ {
+		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: fmt.Sprintf("chunk-%d", i)})
+	}
+
+	// Get all events
+	events, total = tm.EventsSince(0)
+	if total != 5 {
+		t.Fatalf("expected 5 total, got %d", total)
+	}
+	if len(events) != 5 {
+		t.Fatalf("expected 5 events, got %d", len(events))
+	}
+
+	// Get incremental events (from index 3)
+	events, total = tm.EventsSince(3)
+	if total != 5 {
+		t.Fatalf("expected 5 total, got %d", total)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 incremental events, got %d", len(events))
+	}
+	if events[0].Text != "chunk-3" {
+		t.Errorf("expected chunk-3, got %s", events[0].Text)
+	}
+	if events[1].Text != "chunk-4" {
+		t.Errorf("expected chunk-4, got %s", events[1].Text)
+	}
+
+	// fromIdx >= total returns empty
+	events, total = tm.EventsSince(10)
+	if total != 5 {
+		t.Fatalf("expected 5 total, got %d", total)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected 0 events for fromIdx >= total, got %d", len(events))
 	}
 }
