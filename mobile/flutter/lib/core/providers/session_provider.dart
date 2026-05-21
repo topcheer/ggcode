@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -13,6 +16,19 @@ final connectionProvider =
     NotifierProvider<ConnectionNotifier, TunnelConnectionState>(
   ConnectionNotifier.new,
 );
+
+String normalizeTunnelUrl(String raw) {
+  String url = raw.trim();
+  if (url.startsWith('ggcode://')) {
+    url = url.replaceFirst('ggcode://', 'wss://');
+  }
+  if (url.startsWith('http://')) {
+    url = url.replaceFirst('http://', 'ws://');
+  } else if (url.startsWith('https://')) {
+    url = url.replaceFirst('https://', 'wss://');
+  }
+  return url;
+}
 
 class TunnelConnectionState {
   final ConnectionStatus status;
@@ -47,7 +63,39 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   TunnelConnectionState build() =>
       TunnelConnectionState(status: ConnectionStatus.disconnected);
 
+  String get currentSessionId => _sessionId;
+  String get lastAppliedEventId => _lastAppliedEventId;
+
+  Future<void> restoreSelectedWorkspace() async {
+    final cache = ref.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    final workspaceKey = ref.read(workspaceCacheProvider).selectedWorkspaceKey;
+    if (workspaceKey == null || workspaceKey.isEmpty) return;
+    await connectWorkspace(workspaceKey, clearState: false);
+  }
+
+  Future<void> connectWorkspace(String workspaceKey,
+      {bool clearState = true}) async {
+    final cache = ref.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    final url = cache.urlForWorkspace(workspaceKey);
+    if (url == null || url.isEmpty) return;
+    await connect(url, clearState: clearState);
+  }
+
+  Future<void> connectScannedCode(String rawCode,
+      {bool clearState = true}) async {
+    final url = normalizeTunnelUrl(rawCode);
+    if (url.isEmpty) return;
+    await connect(url, clearState: clearState);
+  }
+
   Future<void> connect(String url, {bool clearState = true}) async {
+    url = normalizeTunnelUrl(url);
+    final cache = ref.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl(url);
+
     // Disconnect previous if any
     if (service != null) {
       service!.dispose();
@@ -56,8 +104,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
 
     // Clear previous session state (skip on reconnect from background)
     if (clearState) {
-      ref.read(chatProvider.notifier).clearMessages();
-      ref.read(subagentProvider.notifier).clear();
+      _clearUiProjection();
       _lastAppliedEventId = '';
       _awaitingReplay = false;
       _recentEventIds.clear();
@@ -122,12 +169,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   /// Preserves existing chat state — server will replay recent messages.
   Future<void> reconnect() async {
     final url = state.url;
-    if (url == null || url.isEmpty) return;
+    if (url == null || url.isEmpty) {
+      await restoreSelectedWorkspace();
+      return;
+    }
     await connect(url, clearState: false);
   }
 
   void disconnect() {
     service?.disconnect();
+    ref.read(workspaceCacheProvider.notifier).markDisconnected();
     state = state.copyWith(status: ConnectionStatus.disconnected);
   }
 
@@ -143,6 +194,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_resumeSessionIdKey);
     await prefs.remove(_resumeEventIdKey);
+    await ref.read(workspaceCacheProvider.notifier).clearSelection();
     state = TunnelConnectionState(status: ConnectionStatus.disconnected);
   }
 
@@ -175,6 +227,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           _recentEventIds.clear();
           _recentEventSet.clear();
         }
+        unawaited(ref
+            .read(workspaceCacheProvider.notifier)
+            .registerLiveSession(sessionId, ref.read(sessionInfoProvider),
+                lastEventId: _lastAppliedEventId));
         _persistResumeState();
         break;
 
@@ -191,6 +247,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         if (msg.sessionId != null && msg.sessionId!.isNotEmpty) {
           _sessionId = msg.sessionId!;
         }
+        unawaited(ref
+            .read(workspaceCacheProvider.notifier)
+            .registerLiveSession(_sessionId, ref.read(sessionInfoProvider),
+                lastEventId: _lastAppliedEventId));
         _persistResumeState();
         break;
 
@@ -200,6 +260,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         ref.read(sessionInfoProvider.notifier).set(data);
         ref.read(currentModeProvider.notifier).set(data.mode);
         _markEventApplied(msg);
+        unawaited(ref
+            .read(workspaceCacheProvider.notifier)
+            .registerLiveSession(
+              _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
+              data,
+              lastEventId: _lastAppliedEventId,
+            ));
         break;
 
       case 'user_message':
@@ -465,6 +532,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'sharing_stopped':
         _clearUiProjection();
         service?.disconnect();
+        ref.read(workspaceCacheProvider.notifier).markDisconnected();
         state = state.copyWith(status: ConnectionStatus.disconnected);
         break;
     }
@@ -514,12 +582,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     if (sessionId.isNotEmpty &&
         _sessionId.isNotEmpty &&
         sessionId != _sessionId) {
+      final previousSessionId = _sessionId;
       ref.read(chatProvider.notifier).clearMessages();
       ref.read(subagentProvider.notifier).clear();
       _recentEventIds.clear();
       _recentEventSet.clear();
       _lastAppliedEventId = '';
       _sessionId = sessionId;
+      unawaited(ref
+          .read(workspaceCacheProvider.notifier)
+          .observeLiveSession(sessionId,
+              previousSessionId: previousSessionId,
+              sessionInfo: ref.read(sessionInfoProvider)));
     } else if (sessionId.isNotEmpty) {
       _sessionId = sessionId;
     }
@@ -555,6 +629,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     }
     if (eventId == null || eventId.isEmpty) {
       _persistResumeState();
+      unawaited(ref
+          .read(workspaceCacheProvider.notifier)
+          .updateLiveCursor(_sessionId, _lastAppliedEventId));
       return;
     }
     _awaitingReplay = false;
@@ -566,6 +643,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _recentEventSet.remove(evicted);
     }
     _persistResumeState();
+    unawaited(ref
+        .read(workspaceCacheProvider.notifier)
+        .updateLiveCursor(_sessionId, _lastAppliedEventId));
   }
 
   int? _parseEventOrdinal(String? eventId) {
@@ -640,6 +720,40 @@ class ChatMessage {
         toolResult: toolResult ?? this.toolResult,
         isToolError: isToolError ?? this.isToolError,
         time: time,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'source_id': sourceId,
+        'source_name': sourceName,
+        'source_color': sourceColor,
+        'is_user': isUser,
+        'text': text,
+        'streaming': streaming,
+        'tool_id': toolId,
+        'tool_name': toolName,
+        'tool_display_name': toolDisplayName,
+        'tool_detail': toolDetail,
+        'tool_result': toolResult,
+        'is_tool_error': isToolError,
+        'time': time.toIso8601String(),
+      };
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: json['id'] as String? ?? '',
+        sourceId: json['source_id'] as String?,
+        sourceName: json['source_name'] as String?,
+        sourceColor: json['source_color'] as String?,
+        isUser: json['is_user'] as bool? ?? false,
+        text: json['text'] as String? ?? '',
+        streaming: json['streaming'] as bool? ?? false,
+        toolId: json['tool_id'] as String?,
+        toolName: json['tool_name'] as String?,
+        toolDisplayName: json['tool_display_name'] as String?,
+        toolDetail: json['tool_detail'] as String?,
+        toolResult: json['tool_result'] as String?,
+        isToolError: json['is_tool_error'] as bool? ?? false,
+        time: DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
       );
 }
 
@@ -973,6 +1087,30 @@ class SubagentInfo {
         summary: summary ?? this.summary,
         completed: completed ?? this.completed,
         success: success ?? this.success,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'agent_id': agentId,
+        'name': name,
+        'task': task,
+        'color': color,
+        'parent_id': parentId,
+        'status': status,
+        'summary': summary,
+        'completed': completed,
+        'success': success,
+      };
+
+  factory SubagentInfo.fromJson(Map<String, dynamic> json) => SubagentInfo(
+        agentId: json['agent_id'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        task: json['task'] as String? ?? '',
+        color: json['color'] as String? ?? '#4CAF50',
+        parentId: json['parent_id'] as String? ?? '',
+        status: json['status'] as String? ?? 'running',
+        summary: json['summary'] as String?,
+        completed: json['completed'] as bool? ?? false,
+        success: json['success'] as bool? ?? false,
       );
 }
 
