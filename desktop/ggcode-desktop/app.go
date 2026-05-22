@@ -123,14 +123,17 @@ func (a *App) buildUI() {
 	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
 	a.ui.SetStatusLabel(a.statusBar)
 
-	statusBox := widget.NewCard("", "", container.NewHBox(
+	statusChrome := surfaceRect(theme.ColorNameOverlayBackground)
+	statusChrome.StrokeColor = blendThemeColors(theme.ColorNameSeparator, theme.ColorNamePrimary, 0.12)
+	statusChrome.CornerRadius = 10
+	statusBox := container.NewStack(statusChrome, compactPad(4, 4, 10, 10, container.NewHBox(
 		a.statusBar,
 		layout.NewSpacer(),
-	))
+	)))
 
 	a.content = container.NewStack(widget.NewLabel(""))
 
-	root := container.NewBorder(nil, container.NewPadded(statusBox), nil, nil, a.content)
+	root := container.NewBorder(nil, compactPad(4, 6, 8, 8, statusBox), nil, nil, a.content)
 	a.window.SetContent(root)
 }
 

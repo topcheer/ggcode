@@ -60,7 +60,7 @@ var themePalettes = map[string]*palette{
 		Focus:             c(110, 168, 255, 110),
 		Hover:             c(34, 46, 74, 255),
 		Separator:         c(42, 54, 85, 255),
-		Shadow:            c(0, 0, 0, 55),
+		Shadow:            c(0, 0, 0, 28),
 		Selection:         c(110, 168, 255, 70),
 	},
 	"oled": {
@@ -83,7 +83,7 @@ var themePalettes = map[string]*palette{
 		Focus:             c(100, 180, 255, 100),
 		Hover:             c(28, 28, 28, 255),
 		Separator:         c(35, 35, 35, 255),
-		Shadow:            c(0, 0, 0, 80),
+		Shadow:            c(0, 0, 0, 42),
 		Selection:         c(100, 180, 255, 60),
 	},
 	"nord": {
@@ -106,7 +106,7 @@ var themePalettes = map[string]*palette{
 		Focus:             c(136, 192, 208, 100),
 		Hover:             c(67, 76, 94, 255),
 		Separator:         c(67, 76, 94, 255),
-		Shadow:            c(0, 0, 0, 55),
+		Shadow:            c(0, 0, 0, 28),
 		Selection:         c(136, 192, 208, 60),
 	},
 	"rose": {
@@ -129,7 +129,7 @@ var themePalettes = map[string]*palette{
 		Focus:             c(244, 143, 177, 100),
 		Hover:             c(55, 35, 48, 255),
 		Separator:         c(65, 40, 52, 255),
-		Shadow:            c(0, 0, 0, 55),
+		Shadow:            c(0, 0, 0, 28),
 		Selection:         c(244, 143, 177, 60),
 	},
 	"forest": {
@@ -152,7 +152,7 @@ var themePalettes = map[string]*palette{
 		Focus:             c(102, 210, 150, 100),
 		Hover:             c(30, 50, 36, 255),
 		Separator:         c(35, 60, 42, 255),
-		Shadow:            c(0, 0, 0, 55),
+		Shadow:            c(0, 0, 0, 28),
 		Selection:         c(102, 210, 150, 60),
 	},
 	"light": {
@@ -175,7 +175,7 @@ var themePalettes = map[string]*palette{
 		Focus:             c(50, 100, 200, 100),
 		Hover:             c(225, 228, 235, 255),
 		Separator:         c(210, 215, 225, 255),
-		Shadow:            c(0, 0, 0, 20),
+		Shadow:            c(0, 0, 0, 10),
 		Selection:         c(50, 100, 200, 40),
 	},
 }
@@ -263,13 +263,13 @@ func (m *modernTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant)
 func (m *modernTheme) Size(name fyne.ThemeSizeName) float32 {
 	switch name {
 	case theme.SizeNamePadding:
-		return 10
+		return 8
 	case theme.SizeNameInlineIcon:
 		return 20
 	case theme.SizeNameScrollBar:
-		return 8
+		return 12
 	case theme.SizeNameScrollBarSmall:
-		return 6
+		return 12
 	case theme.SizeNameText:
 		return 14
 	case theme.SizeNameHeadingText:
