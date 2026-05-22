@@ -179,11 +179,48 @@ jobs:
       - name: Build IPA
         shell: bash
         run: |
-          # Override Xcode project to Manual signing for CI
-          PBX=ios/Runner.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PBX"
+          # Get provisioning profile UUID and name installed by sigh
+          PP_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          PP_FILE=$(ls "$PP_DIR"/*.mobileprovision 2>/dev/null | head -1)
+          if [ -z "$PP_FILE" ]; then
+            echo "ERROR: No provisioning profile found"
+            exit 1
+          fi
+          PP_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$PP_FILE")")
+          PP_NAME=$(/usr/libexec/PlistBuddy -c "Print Name" /dev/stdin <<< "$(security cms -D -i "$PP_FILE")")
+          echo "Provisioning profile: $PP_NAME ($PP_UUID)"
 
-          flutter build ipa --release --export-method app-store
+          # Create ExportOptions.plist for manual signing
+          cat > ios/ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>EGZFS7M525</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>gg.ai.ggcode.mobile</key>
+              <string>PP_PLACEHOLDER</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+          sed -i '' "s/PP_PLACEHOLDER/$PP_NAME/" ios/ExportOptions.plist
+
+          # Build with manual signing: archive args via --, export via ExportOptions.plist
+          flutter build ipa \
+            --release \
+            --export-options-plist=ios/ExportOptions.plist \
+            -- \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
+            DEVELOPMENT_TEAM=EGZFS7M525
 
       - name: Upload to TestFlight & promote
         run: |
