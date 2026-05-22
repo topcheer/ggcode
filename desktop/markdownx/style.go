@@ -57,16 +57,102 @@ func linkSeg(text, url string) *widget.HyperlinkSegment {
 	return &widget.HyperlinkSegment{Text: text} // URL set by caller
 }
 
-// ── Colors for code block ──────────────────────────
+// ── Theme-aware block colors ───────────────────────
 
-var (
-	colCodeBg   = color.RGBA{R: 40, G: 40, B: 40, A: 255}
-	colLineNum  = color.RGBA{R: 100, G: 100, B: 100, A: 255}
-	colQuoteBar = color.RGBA{R: 60, G: 120, B: 216, A: 255}
-	colQuoteBg  = color.RGBA{R: 40, G: 40, B: 40, A: 40}
-	colTblHead  = color.RGBA{R: 55, G: 85, B: 135, A: 100}
-	colTblAlt   = color.RGBA{R: 50, G: 50, B: 50, A: 50}
-)
+func currentThemeColor(name fyne.ThemeColorName) color.Color {
+	app := fyne.CurrentApp()
+	if app == nil {
+		return themeColor(theme.DefaultTheme(), theme.VariantDark, name)
+	}
+	return themeColor(app.Settings().Theme(), app.Settings().ThemeVariant(), name)
+}
+
+func themeColor(th fyne.Theme, variant fyne.ThemeVariant, name fyne.ThemeColorName) color.Color {
+	if th == nil {
+		th = theme.DefaultTheme()
+	}
+	return th.Color(name, variant)
+}
+
+func toNRGBA(c color.Color) color.NRGBA {
+	r, g, b, a := c.RGBA()
+	return color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
+}
+
+func blendColor(base, overlay color.Color, alpha float64) color.Color {
+	if alpha < 0 {
+		alpha = 0
+	}
+	if alpha > 1 {
+		alpha = 1
+	}
+	b := toNRGBA(base)
+	o := toNRGBA(overlay)
+	mix := func(x, y uint8) uint8 {
+		return uint8(float64(x)*(1-alpha) + float64(y)*alpha + 0.5)
+	}
+	return color.NRGBA{
+		R: mix(b.R, o.R),
+		G: mix(b.G, o.G),
+		B: mix(b.B, o.B),
+		A: 255,
+	}
+}
+
+func codeBlockBackgroundColor() color.Color {
+	return codeBlockBackgroundColorForTheme(nil, theme.VariantDark)
+}
+
+func codeBlockBackgroundColorForTheme(th fyne.Theme, variant fyne.ThemeVariant) color.Color {
+	if th == nil {
+		return blendColor(currentThemeColor(theme.ColorNameInputBackground), currentThemeColor(theme.ColorNameForeground), 0.08)
+	}
+	return blendColor(themeColor(th, variant, theme.ColorNameInputBackground), themeColor(th, variant, theme.ColorNameForeground), 0.08)
+}
+
+func quoteBarColor() color.Color {
+	return quoteBarColorForTheme(nil, theme.VariantDark)
+}
+
+func quoteBarColorForTheme(th fyne.Theme, variant fyne.ThemeVariant) color.Color {
+	if th == nil {
+		return currentThemeColor(theme.ColorNamePrimary)
+	}
+	return themeColor(th, variant, theme.ColorNamePrimary)
+}
+
+func quoteBackgroundColor() color.Color {
+	return quoteBackgroundColorForTheme(nil, theme.VariantDark)
+}
+
+func quoteBackgroundColorForTheme(th fyne.Theme, variant fyne.ThemeVariant) color.Color {
+	if th == nil {
+		return blendColor(currentThemeColor(theme.ColorNameBackground), currentThemeColor(theme.ColorNamePrimary), 0.08)
+	}
+	return blendColor(themeColor(th, variant, theme.ColorNameBackground), themeColor(th, variant, theme.ColorNamePrimary), 0.08)
+}
+
+func tableHeaderBackgroundColor() color.Color {
+	return tableHeaderBackgroundColorForTheme(nil, theme.VariantDark)
+}
+
+func tableHeaderBackgroundColorForTheme(th fyne.Theme, variant fyne.ThemeVariant) color.Color {
+	if th == nil {
+		return blendColor(currentThemeColor(theme.ColorNameInputBackground), currentThemeColor(theme.ColorNamePrimary), 0.22)
+	}
+	return blendColor(themeColor(th, variant, theme.ColorNameInputBackground), themeColor(th, variant, theme.ColorNamePrimary), 0.22)
+}
+
+func tableAlternateBackgroundColor() color.Color {
+	return tableAlternateBackgroundColorForTheme(nil, theme.VariantDark)
+}
+
+func tableAlternateBackgroundColorForTheme(th fyne.Theme, variant fyne.ThemeVariant) color.Color {
+	if th == nil {
+		return blendColor(currentThemeColor(theme.ColorNameBackground), currentThemeColor(theme.ColorNameForeground), 0.04)
+	}
+	return blendColor(themeColor(th, variant, theme.ColorNameBackground), themeColor(th, variant, theme.ColorNameForeground), 0.04)
+}
 
 // ── Helpers ────────────────────────────────────────
 

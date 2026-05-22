@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"image/color"
 	"io"
 	"net/http"
 	"net/url"
@@ -112,8 +111,7 @@ func renderCodeBlock(b *mdBlock) fyne.CanvasObject {
 	rt := widget.NewRichText(codeSeg)
 	rt.Wrapping = fyne.TextWrapBreak
 
-	// Dark background.
-	bg := canvas.NewRectangle(colCodeBg)
+	bg := canvas.NewRectangle(codeBlockBackgroundColor())
 	bg.SetMinSize(fyne.NewSize(0, 0))
 
 	inner := container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(4, 4, 8, 8), rt))
@@ -163,10 +161,10 @@ func renderBlockquote(b *mdBlock) fyne.CanvasObject {
 		children = append(children, renderBlock(child))
 	}
 
-	bar := canvas.NewRectangle(colQuoteBar)
+	bar := canvas.NewRectangle(quoteBarColor())
 	bar.SetMinSize(fyne.NewSize(3, 0))
 
-	bg := canvas.NewRectangle(colQuoteBg)
+	bg := canvas.NewRectangle(quoteBackgroundColor())
 
 	content := container.NewVBox(children...)
 	inner := container.NewStack(bg, container.NewBorder(nil, nil, bar, nil, content))
@@ -193,7 +191,7 @@ func renderTableBlock(b *mdBlock) fyne.CanvasObject {
 		text := cellText(i, b.headers)
 		label := widget.NewLabelWithStyle(text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true})
 		label.Wrapping = fyne.TextWrapWord
-		bg := canvas.NewRectangle(colTblHead)
+		bg := canvas.NewRectangle(tableHeaderBackgroundColor())
 		cells = append(cells, container.NewStack(bg, container.NewPadded(label)))
 	}
 
@@ -205,7 +203,7 @@ func renderTableBlock(b *mdBlock) fyne.CanvasObject {
 			label.TextStyle = fyne.TextStyle{Monospace: true}
 			label.Wrapping = fyne.TextWrapWord
 			if ri%2 == 1 {
-				bg := canvas.NewRectangle(colTblAlt)
+				bg := canvas.NewRectangle(tableAlternateBackgroundColor())
 				cells = append(cells, container.NewStack(bg, container.NewPadded(label)))
 			} else {
 				cells = append(cells, container.NewPadded(label))
@@ -324,6 +322,5 @@ func fetchMermaidInk(mermaidCode string) ([]byte, error) {
 }
 
 // Ensure imports.
-var _ = color.RGBA{}
 var _ = fyne.MeasureText
 var _ = theme.ColorNameForeground

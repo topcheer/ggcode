@@ -1,8 +1,12 @@
 package markdownx
 
 import (
+	"image/color"
 	"strings"
 	"testing"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/theme"
 )
 
 // ── Parser tests ───────────────────────────────────
@@ -223,5 +227,66 @@ func TestAppendChunk(t *testing.T) {
 	w.AppendChunk("World")
 	if w.Content() != "Hello World" {
 		t.Errorf("got %q", w.Content())
+	}
+}
+
+type staticTheme struct {
+	fyne.Theme
+	colors map[fyne.ThemeColorName]color.Color
+}
+
+func (t staticTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if c, ok := t.colors[name]; ok {
+		return c
+	}
+	return t.Theme.Color(name, variant)
+}
+
+func TestThemeAwareBlockColorsStayLightInLightTheme(t *testing.T) {
+	th := staticTheme{
+		Theme: theme.DefaultTheme(),
+		colors: map[fyne.ThemeColorName]color.Color{
+			theme.ColorNameBackground:      color.NRGBA{R: 250, G: 250, B: 252, A: 255},
+			theme.ColorNameInputBackground: color.NRGBA{R: 242, G: 244, B: 248, A: 255},
+			theme.ColorNameForeground:      color.NRGBA{R: 30, G: 35, B: 45, A: 255},
+			theme.ColorNamePrimary:         color.NRGBA{R: 50, G: 100, B: 200, A: 255},
+		},
+	}
+
+	assertLightColor(t, "code background", codeBlockBackgroundColorForTheme(th, theme.VariantLight), 180)
+	assertLightColor(t, "quote background", quoteBackgroundColorForTheme(th, theme.VariantLight), 180)
+	assertLightColor(t, "table alt background", tableAlternateBackgroundColorForTheme(th, theme.VariantLight), 180)
+	assertLightColor(t, "table header background", tableHeaderBackgroundColorForTheme(th, theme.VariantLight), 150)
+}
+
+func TestThemeAwareBlockColorsStayDarkInDarkTheme(t *testing.T) {
+	th := staticTheme{
+		Theme: theme.DefaultTheme(),
+		colors: map[fyne.ThemeColorName]color.Color{
+			theme.ColorNameBackground:      color.NRGBA{R: 11, G: 16, B: 31, A: 255},
+			theme.ColorNameInputBackground: color.NRGBA{R: 19, G: 28, B: 48, A: 255},
+			theme.ColorNameForeground:      color.NRGBA{R: 245, G: 247, B: 251, A: 255},
+			theme.ColorNamePrimary:         color.NRGBA{R: 110, G: 168, B: 255, A: 255},
+		},
+	}
+
+	assertDarkColor(t, "code background", codeBlockBackgroundColorForTheme(th, theme.VariantDark), 90)
+	assertDarkColor(t, "quote background", quoteBackgroundColorForTheme(th, theme.VariantDark), 90)
+	assertDarkColor(t, "table alt background", tableAlternateBackgroundColorForTheme(th, theme.VariantDark), 90)
+}
+
+func assertLightColor(t *testing.T, name string, c color.Color, min uint8) {
+	t.Helper()
+	got := toNRGBA(c)
+	if got.R < min || got.G < min || got.B < min {
+		t.Fatalf("%s = %#v, want RGB channels >= %d", name, got, min)
+	}
+}
+
+func assertDarkColor(t *testing.T, name string, c color.Color, max uint8) {
+	t.Helper()
+	got := toNRGBA(c)
+	if got.R > max || got.G > max || got.B > max {
+		t.Fatalf("%s = %#v, want RGB channels <= %d", name, got, max)
 	}
 }
