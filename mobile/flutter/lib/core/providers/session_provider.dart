@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../connection_service.dart';
 export '../connection_service.dart' show ConnectionStatus;
 import '../crypto.dart';
+import '../l10n/app_localizations.dart';
 import '../models/protocol.dart' as proto;
 
 // ---- Connection Service Provider ----
@@ -240,6 +241,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         _awaitingReplay = false;
         break;
 
+      case 'language_change':
+        if (msg.data != null) {
+          final lang = msg.data!['language'] as String? ?? '';
+          if (lang.isNotEmpty) {
+            ref.read(languageProvider.notifier).setLanguage(lang);
+            unawaited(loadTranslations(lang));
+          }
+        }
+        break;
+
       case 'snapshot_reset':
         chatNotifier.clearMessages();
         ref.read(subagentProvider.notifier).clear();
@@ -261,6 +272,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         final data = proto.SessionInfoData.fromJson(msg.data!);
         ref.read(sessionInfoProvider.notifier).set(data);
         ref.read(currentModeProvider.notifier).set(data.mode);
+        // Sync language from desktop
+        if (data.language.isNotEmpty) {
+          ref.read(languageProvider.notifier).setLanguage(data.language);
+          unawaited(loadTranslations(data.language));
+        }
         _markEventApplied(msg);
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),

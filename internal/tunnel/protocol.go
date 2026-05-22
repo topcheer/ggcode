@@ -39,6 +39,7 @@ const (
 	EventSubagentComplete   = "subagent_complete"
 	EventResumeMiss         = "resume_miss"
 	EventSnapshotReset      = "snapshot_reset"
+	EventLanguageChange     = "language_change" // bidirectional language sync
 	EventError              = "error"
 	EventPing               = "ping"
 	EventDisconnected       = "disconnected"
@@ -54,6 +55,7 @@ const (
 	CmdModeChange       = "mode_change"
 	CmdAskUserResponse  = "ask_user_response"
 	CmdPong             = "pong"
+	CmdLanguageChange   = "language_change"
 )
 
 // Agent status values.
@@ -94,6 +96,12 @@ type SessionInfoData struct {
 	Provider  string `json:"provider"`
 	Mode      string `json:"mode"`
 	Version   string `json:"version"`
+	Language  string `json:"language,omitempty"`
+}
+
+// LanguageChangeData carries a language preference change (bidirectional sync).
+type LanguageChangeData struct {
+	Language string `json:"language"` // "en" or "zh-CN"
 }
 
 // ResumeHelloData requests either incremental replay or full session replay.

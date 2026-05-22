@@ -235,6 +235,10 @@ func (b *Broker) SendSessionInfo(data SessionInfoData) {
 	b.enqueue(EventSessionInfo, data)
 }
 
+func (b *Broker) SendLanguageChange(lang string) {
+	b.enqueue(EventLanguageChange, LanguageChangeData{Language: lang})
+}
+
 func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 	if snapshot.SessionInfo != (SessionInfoData{}) {
 		b.SendSessionInfo(snapshot.SessionInfo)

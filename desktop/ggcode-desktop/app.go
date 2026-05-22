@@ -73,6 +73,12 @@ func NewApp(fyneApp fyne.App) *App {
 
 // Run shows the window and starts the event loop.
 func (a *App) Run() {
+	// Initialize i18n
+	loadTranslations()
+	if a.cfg != nil && a.cfg.Language != "" {
+		setLanguage(a.cfg.Language)
+	}
+
 	a.window = a.fyneApp.NewWindow("ggcode")
 	setWindowIcon(a.window)
 	a.buildUI()
@@ -115,7 +121,7 @@ func (a *App) Run() {
 
 func (a *App) buildUI() {
 	// Status bar — updated directly by pollRefresh.
-	a.statusBar = widget.NewLabel("Ready")
+	a.statusBar = widget.NewLabel(t("status.ready"))
 	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
 	a.ui.SetStatusLabel(a.statusBar)
 
@@ -158,7 +164,7 @@ func (a *App) showAbout() {
 
 	title := widget.NewLabelWithStyle("ggcode", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	versionLabel := widget.NewLabelWithStyle("Version "+Version, fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	desc := widget.NewLabel("AI-powered coding assistant\nwith IM integration")
+	desc := widget.NewLabel(t("app.description"))
 	desc.Alignment = fyne.TextAlignCenter
 
 	releaseLink := widget.NewHyperlink("GitHub Releases", mustParseURL("https://github.com/topcheer/ggcode/releases"))
@@ -192,7 +198,7 @@ func (a *App) showShareDialog() {
 	}
 
 	// Show "connecting..." dialog
-	statusLabel := widget.NewLabel("Establishing tunnel...")
+	statusLabel := widget.NewLabel(t("status.establishing_tunnel"))
 	statusLabel.Alignment = fyne.TextAlignCenter
 	progress := widget.NewProgressBarInfinite()
 	connectContent := container.NewVBox(statusLabel, progress)
@@ -279,6 +285,7 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		SessionInfo: tunnel.SessionInfoData{
 			Workspace: a.dc.WorkDir,
 			Version:   Version,
+			Language:  a.cfg.Language,
 		},
 	}
 	if a.agentBridge == nil {
@@ -363,12 +370,12 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	urlLabel.Wrapping = fyne.TextWrapOff
 	urlLabel.SetPlaceHolder("Tunnel URL")
 
-	copyBtn := widget.NewButton("Copy URL", func() {
+	copyBtn := widget.NewButton(t("share.copy_url"), func() {
 		a.window.Clipboard().SetContent(info.ConnectURL)
 		a.shareDialog.Hide()
 	})
 
-	stopBtn := widget.NewButton("Stop Sharing", func() {
+	stopBtn := widget.NewButton(t("share.stop"), func() {
 		// Disconnect agent bridge from broker FIRST
 		if a.agentBridge != nil {
 			a.agentBridge.tunnelBroker = nil
@@ -385,7 +392,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		img.SetMinSize(fyne.NewSize(256, 256))
 		qrImage = container.NewCenter(img)
 	} else {
-		qrImage = widget.NewLabel("QR code unavailable")
+		qrImage = widget.NewLabel(t("share.qr_unavailable"))
 	}
 
 	// Mobile app download links
@@ -396,7 +403,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	content := container.NewVBox(
 		widget.NewLabelWithStyle("Mobile Connection", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
-		widget.NewLabel("Scan QR code in GGCode Mobile app, or copy URL:"),
+		widget.NewLabel(t("share.scan_hint")),
 		urlLabel,
 		container.NewHBox(copyBtn, stopBtn),
 		widget.NewSeparator(),
@@ -490,7 +497,7 @@ func (a *App) showWelcome() {
 	title.TextSize = 24
 	title.TextStyle = fyne.TextStyle{Bold: true}
 
-	subtitle := widget.NewLabel("Select your project directory to get started.")
+	subtitle := widget.NewLabel(t("folder.select_title"))
 	subtitle.Alignment = fyne.TextAlignCenter
 
 	btn := widget.NewButtonWithIcon("Choose Directory", theme.FolderOpenIcon(), func() {
@@ -572,7 +579,7 @@ func (a *App) initFromWorkDir(dir string) {
 func (a *App) showError(msg string) {
 	errLabel := widget.NewLabel(msg)
 	errLabel.Wrapping = fyne.TextWrapWord
-	retryBtn := widget.NewButton("Choose Another Directory", func() { a.showFolderPicker() })
+	retryBtn := widget.NewButton(t("folder.retry"), func() { a.showFolderPicker() })
 
 	card := widget.NewCard("Error", "", container.NewVBox(
 		container.NewHBox(widget.NewIcon(theme.ErrorIcon()), errLabel),
@@ -707,6 +714,7 @@ func (a *App) resumeSession(id string) {
 		a.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
 			Workspace: a.dc.WorkDir,
 			Version:   Version,
+			Language:  a.cfg.Language,
 		})
 		session := a.agentBridge.CurrentSession()
 		history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)

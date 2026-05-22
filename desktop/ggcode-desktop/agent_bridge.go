@@ -371,20 +371,20 @@ func (b *AgentBridge) setupAgent() error {
 		}
 		fyne.Do(func() {
 			var d dialog.Dialog
-			denyBtn := widget.NewButton("Deny", func() {
+			denyBtn := widget.NewButton(t("approval.deny"), func() {
 				b.clearPendingApproval(requestID)
 				b.pushTunnelApprovalResult(requestID, tunnel.DecisionDeny)
 				resp <- permission.Deny
 				d.Hide()
 			})
-			allowBtn := widget.NewButton("Allow", func() {
+			allowBtn := widget.NewButton(t("approval.allow"), func() {
 				b.clearPendingApproval(requestID)
 				b.pushTunnelApprovalResult(requestID, tunnel.DecisionAllow)
 				resp <- permission.Allow
 				d.Hide()
 			})
 			allowBtn.Importance = widget.HighImportance
-			alwaysBtn := widget.NewButton("Always Allow", func() {
+			alwaysBtn := widget.NewButton(t("approval.always_allow"), func() {
 				if b.agent != nil {
 					if p, ok := b.agent.PermissionPolicy().(*permission.ConfigPolicy); ok {
 						p.SetOverride(toolName, permission.Allow)
@@ -479,6 +479,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				Provider:  b.resolved.VendorName,
 				Mode:      b.permissionMode.String(),
 				Version:   Version,
+				Language:  b.cfg.Language,
 			})
 			b.tunnelBroker.PushStatus(tunnel.StatusThinking, "processing")
 		}

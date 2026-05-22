@@ -55,6 +55,11 @@ type tunnelAskUserResponseMsg struct {
 	answers []tunnel.AskUserAnswer
 }
 
+// tunnelLanguageChangeMsg carries a language change from mobile.
+type tunnelLanguageChangeMsg struct {
+	language string
+}
+
 // ─── Slash command handler ───
 
 func (m *Model) handleTunnelCommand(text string) tea.Cmd {
@@ -419,6 +424,15 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 		if m.program != nil {
 			m.program.Send(tunnelAskUserResponseMsg{id: data.ID, status: data.Status, answers: data.Answers})
 		}
+
+	case tunnel.CmdLanguageChange:
+		var data tunnel.LanguageChangeData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			return
+		}
+		if data.Language != "" && m.program != nil {
+			m.program.Send(tunnelLanguageChangeMsg{language: data.Language})
+		}
 	}
 }
 
@@ -479,6 +493,22 @@ func (m *Model) handleTunnelModeChangeMsg(msg tunnelModeChangeMsg) (tea.Model, t
 	}
 	m.persistModePreference()
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Mode changed to %s (from mobile)", newMode))
+	m.chatListScrollToBottom()
+	return m, nil
+}
+
+// handleTunnelLanguageChangeMsg switches the UI language from a mobile request.
+func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.Model, tea.Cmd) {
+	lang := normalizeLanguage(msg.language)
+	if lang == m.currentLanguage() {
+		return m, nil
+	}
+	m.setLanguage(msg.language)
+	// Notify mobile that language changed (echo back)
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.SendLanguageChange(msg.language)
+	}
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Language changed to %s (from mobile)", lang))
 	m.chatListScrollToBottom()
 	return m, nil
 }

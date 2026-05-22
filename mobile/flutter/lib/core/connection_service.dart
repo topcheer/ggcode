@@ -224,6 +224,13 @@ class ConnectionService {
     });
   }
 
+  void sendLanguageChange(String language) {
+    send({
+      'type': 'language_change',
+      'language': language,
+    });
+  }
+
   Future<void> sendEncrypted(proto.WsMessage msg) async {
     final plaintext = utf8.encode(msg.toJson());
     final encrypted = await crypto.encryptData(plaintext);

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
+import '../../core/l10n/app_localizations.dart';
 
 class InputBar extends ConsumerStatefulWidget {
   final TextEditingController controller;
@@ -48,13 +49,13 @@ class _InputBarState extends ConsumerState<InputBar>
     }
     String hintText;
     if (isHistorical) {
-      hintText = 'Viewing cached session...';
+      hintText = t('chat.placeholder.cached');
     } else if (connState.status != ConnectionStatus.connected) {
-      hintText = 'Disconnected';
+      hintText = t('chat.placeholder.disconnected');
     } else if (isRunning) {
-      hintText = 'Agent is working... you can still send a message';
+      hintText = t('chat.placeholder.working');
     } else {
-      hintText = 'Type a message...';
+      hintText = t('chat.placeholder.idle');
     }
 
     return Container(

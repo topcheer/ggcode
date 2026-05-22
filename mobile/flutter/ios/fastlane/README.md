@@ -53,7 +53,7 @@ Wait for TestFlight processing, distribute to External Testing
 [bundle exec] fastlane ios deploy_external
 ```
 
-Full deploy: upload TestFlight + promote to External
+Full deploy: upload → wait for processing → External Testing → submit for review if needed
 
 ### ios submit
 

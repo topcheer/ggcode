@@ -379,7 +379,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	})
 	cv.imageBar = container.NewHBox(
 		widget.NewIcon(theme.ContentAddIcon()),
-		widget.NewLabel("Image attached"),
+		widget.NewLabel(t("chat.image_attached")),
 		removeBtn,
 	)
 	cv.imageBar.Hide()
@@ -552,7 +552,7 @@ func (cv *ChatView) onAssistantChunk(text string) {
 func (cv *ChatView) showThinking() {
 	cv.hideThinking()
 	icon := widget.NewIcon(theme.ComputerIcon())
-	label := widget.NewLabel("Thinking...")
+	label := widget.NewLabel(t("status.thinking"))
 	label.TextStyle = fyne.TextStyle{Italic: true}
 	row := container.NewHBox(icon, label)
 	cv.thinkingW = row

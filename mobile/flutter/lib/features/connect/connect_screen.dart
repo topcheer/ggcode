@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/l10n/app_localizations.dart';
+
 import '../../core/providers/session_provider.dart';
 
 class _SimpleNotifier<T> extends Notifier<T> {
@@ -111,9 +113,9 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                       icon: const Icon(Icons.close, color: Colors.white),
                       onPressed: () => setState(() => _showScanner = false),
                     ),
-                    const Text(
-                      'Scan QR Code',
-                      style: TextStyle(
+                    Text(
+                      t('connect.scan_qr'),
+                      style: const TextStyle(
                           color: Colors.white,
                           fontSize: 18,
                           fontWeight: FontWeight.w600),
@@ -185,7 +187,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Scan QR code or enter URL to connect',
+                t('connect.scan_hint'),
                 style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.5), fontSize: 14),
               ),
@@ -198,8 +200,8 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 child: OutlinedButton.icon(
                   onPressed: () => setState(() => _showScanner = true),
                   icon: const Icon(Icons.qr_code_scanner, size: 28),
-                  label: const Text('Scan QR Code',
-                      style: TextStyle(fontSize: 16)),
+                  label: Text(t('connect.scan_qr'),
+                      style: const TextStyle(fontSize: 16)),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.blueAccent,
                     side:
@@ -313,7 +315,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    'Recent Connections',
+                    t('connect.recent_connections'),
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.5),
                       fontSize: 12,

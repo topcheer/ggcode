@@ -233,7 +233,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 		s.app.resumeSession(sess.ID)
 	}
 
-	sessionHeader := widget.NewLabel("Sessions")
+	sessionHeader := widget.NewLabel(t("sidebar.sessions"))
 	sessionHeader.TextStyle = fyne.TextStyle{Bold: true}
 
 	newChatBtn := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() {
@@ -317,7 +317,7 @@ func (s *Sidebar) loadSessions() {
 // fetchContextModels discovers models from the active provider and updates the
 // context tab model selector.
 func (s *Sidebar) fetchContextModels() {
-	s.ctxModelLoading.SetText("Loading...")
+	s.ctxModelLoading.SetText(t("status.loading"))
 	s.ctxModelLoading.Refresh()
 
 	resolved := s.bridge.Resolved()
@@ -329,7 +329,7 @@ func (s *Sidebar) fetchContextModels() {
 		models, err := provider.DiscoverModels(ctx, resolved)
 		fyne.Do(func() {
 			if err != nil {
-				s.ctxModelLoading.SetText("Failed")
+				s.ctxModelLoading.SetText(t("status.failed"))
 				return
 			}
 			if len(models) > 0 {
