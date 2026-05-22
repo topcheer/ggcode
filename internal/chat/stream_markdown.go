@@ -6,6 +6,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 
 	mdpkg "github.com/topcheer/ggcode/internal/markdown"
@@ -76,7 +77,7 @@ func splitMarkdownBlocks(src string) []string {
 
 func extractBlockMarkdown(node ast.Node, source []byte) string {
 	switch node.(type) {
-	case *ast.List, *ast.Blockquote:
+	case *ast.List, *ast.Blockquote, *extast.Table:
 		if start, end, ok := rawBlockSpan(node, source); ok {
 			return string(source[start:end])
 		}
