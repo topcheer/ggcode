@@ -34,7 +34,7 @@ platform :ios do
     # cert will create/manage the distribution certificate via API key
     cert(
       api_key: api_key,
-      production: true
+      type: "appstore"
     )
     sigh(
       api_key: api_key,
