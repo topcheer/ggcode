@@ -1,7 +1,1 @@
-# CI: use service account JSON from env var; local: use file
-if ENV["PLAY_STORE_SERVICE_ACCOUNT_JSON"]
-  json_key_data(ENV["PLAY_STORE_SERVICE_ACCOUNT_JSON"])
-else
-  json_key_file("../secrets/playstore-service-account.json")
-end
 package_name("gg.ai.ggcode.mobile")
