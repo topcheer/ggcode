@@ -14,17 +14,18 @@ import (
 // relayMessage is the wire format. Metadata fields remain plaintext so relay
 // can manage replay and ordering without decrypting business payloads.
 type relayMessage struct {
-	Type        string `json:"type"`
-	SessionID   string `json:"session_id,omitempty"`
-	EventID     string `json:"event_id,omitempty"`
-	StreamID    string `json:"stream_id,omitempty"`
-	ClientID    string `json:"client_id,omitempty"`
-	LastEventID string `json:"last_event_id,omitempty"`
-	ResumeMode  string `json:"resume_mode,omitempty"`
-	Nonce       string `json:"nonce,omitempty"`
-	Ciphertext  string `json:"ciphertext,omitempty"`
-	Role        string `json:"role,omitempty"`
-	Count       int    `json:"count,omitempty"`
+	Type        string          `json:"type"`
+	SessionID   string          `json:"session_id,omitempty"`
+	EventID     string          `json:"event_id,omitempty"`
+	StreamID    string          `json:"stream_id,omitempty"`
+	ClientID    string          `json:"client_id,omitempty"`
+	LastEventID string          `json:"last_event_id,omitempty"`
+	ResumeMode  string          `json:"resume_mode,omitempty"`
+	Nonce       string          `json:"nonce,omitempty"`
+	Ciphertext  string          `json:"ciphertext,omitempty"`
+	Role        string          `json:"role,omitempty"`
+	Count       int             `json:"count,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
 }
 
 type roomEvent struct {
@@ -195,14 +196,17 @@ func (p *peer) readPump(h *hub) {
 		case "language_change":
 			// forward to all other peers in room
 			p.room.mu.Lock()
-			for _, peer := range p.room.peers {
-				if peer.id != p.id {
-					peer.sendJSON(relayMessage{
-						Type:      "language_change",
-						Data:      msg.Data,
-						SessionID: p.room.sessionID,
-						EventID:   p.room.nextEventID(),
-					})
+			fwdMsg := relayMessage{
+				Type:      "language_change",
+				Data:      msg.Data,
+				SessionID: p.room.sessionID,
+			}
+			if p.room.server != nil && p.room.server != p {
+				p.room.server.sendJSON(fwdMsg)
+			}
+			for c := range p.room.clients {
+				if c != p {
+					c.sendJSON(fwdMsg)
 				}
 			}
 			p.room.mu.Unlock()
