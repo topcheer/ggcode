@@ -290,36 +290,22 @@ platform :ios do
     groups = client.get_beta_groups(filter: { app: app.id }).to_models
     ext_group = groups.find { |g| g.name == "ext" }
 
-    # Set beta app review information on the build
-    begin
-      beta_build_detail = client.get_build_beta_details(filter: { build: build.id }).to_models.first
-      review_notes = "This is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code scanning.\n\nTest workflow: Install GGCode desktop → Start desktop → Generate QR code → Scan with this app → Chat with AI, approve tool calls, monitor tasks."
-      if beta_build_detail
-        client.patch_build_beta_details(build_beta_details_id: beta_build_detail.id, attributes: {
-          auto_notify_enabled: true
-        })
-      end
-      # Set what_to_test via build localization
-      localizations = client.get_build_beta_detail_localizations(filter: { build: build.id }).to_models rescue []
-      if localizations.any?
-        client.patch_beta_build_localization(
-          beta_build_localization_id: localizations.first.id,
-          attributes: { whats_new: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync" }
-        )
-      else
-        client.post_beta_build_localizations(build_id: build.id, attributes: {
-          locale: "en-US",
-          whats_new: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync"
-        })
-      end
-      UI.success("Beta review info set")
-    rescue => e
-      UI.message("Beta review info: #{e.message}")
-    end
-
     if ext_group
       client.add_beta_groups_to_build(build_id: build.id, beta_group_ids: [ext_group.id])
       UI.success("Build #{build.version} added to 'ext' External Testing group!")
+
+      # Submit for Beta App Review (required for External Testing)
+      begin
+        existing_beta_subs = client.get_beta_app_review_submissions(filter: { build: build.id }).to_models
+        if existing_beta_subs.empty?
+          client.post_beta_app_review_submissions(build_id: build.id)
+          UI.success("Beta App Review submitted for build #{build.version}!")
+        else
+          UI.message("Beta App Review already exists: #{existing_beta_subs.first.beta_review_state}")
+        end
+      rescue => e
+        UI.error("Beta App Review submission failed: #{e.message}")
+      end
     else
       UI.message("'ext' beta group not found, distributing via pilot...")
       pilot(
@@ -421,14 +407,49 @@ platform :ios do
   desc "Show App Store Connect state"
   lane :inspect do
     api_key
+    client = Spaceship::ConnectAPI.client
     app = Spaceship::ConnectAPI::App.find(app_id)
     UI.message("App: #{app.name}")
 
     versions = app.get_app_store_versions
+    UI.message("App Store Versions:")
     versions.each { |v| UI.message("  #{v.version_string} | #{v.app_store_state} | #{v.platform} | #{v.id}") }
 
-    submissions = Spaceship::ConnectAPI.client.get_review_submissions(app_id: app.id).to_models
-    UI.message("Submissions (#{submissions.size}):")
+    submissions = client.get_review_submissions(app_id: app.id).to_models
+    UI.message("Review Submissions (#{submissions.size}):")
     submissions.each { |s| UI.message("  #{s.id} | #{s.state}") }
+
+    # Beta groups & builds
+    groups = client.get_beta_groups(filter: { app: app.id }).to_models
+    UI.message("Beta Groups (#{groups.size}):")
+    groups.each do |g|
+      UI.message("  #{g.name} | #{g.is_internal_group ? 'Internal' : 'External'} | #{g.id}")
+    end
+
+    builds = client.get_builds(
+      filter: { app: app.id },
+      sort: "-uploadedDate", limit: 3,
+      includes: Spaceship::ConnectAPI::Build::ESSENTIAL_INCLUDES
+    ).to_models
+    UI.message("Recent Builds (#{builds.size}):")
+    builds.each do |b|
+      UI.message("  #{b.version} | #{b.processing_state} | #{b.id}")
+    end
+
+    # Check beta app review submissions for latest build
+    begin
+      latest = builds.first
+      if latest
+        beta_subs = client.get_beta_app_review_submissions(filter: { build: latest.id }).to_models
+        UI.message("Beta App Review (build #{latest.version}):")
+        if beta_subs.empty?
+          UI.message("  NO beta review submission found!")
+        else
+          beta_subs.each { |s| UI.message("  #{s.id} | #{s.beta_review_state}") }
+        end
+      end
+    rescue => e
+      UI.message("Beta submissions: #{e.message}")
+    end
   end
 end
