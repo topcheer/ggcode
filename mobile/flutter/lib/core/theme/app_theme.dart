@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // ─── Color Palette ───────────────────────────────────
 
@@ -147,6 +150,21 @@ const _palettes = <String, _Palette>{
 };
 
 final availableThemes = _palettes.keys.toList();
+const _themePreferenceKey = 'theme_scheme';
+const themeDisplayNames = <String, String>{
+  'midnight': 'Midnight',
+  'oled': 'OLED Black',
+  'nord': 'Nord',
+  'rose': 'Rose',
+  'forest': 'Forest',
+  'light': 'Light',
+};
+
+String normalizeThemeName(String name) =>
+    _palettes.containsKey(name) ? name : 'midnight';
+
+String displayThemeName(String name) =>
+    themeDisplayNames[normalizeThemeName(name)] ?? 'Midnight';
 
 // ─── Static Access (backward compatible) ─────────────
 
@@ -183,9 +201,26 @@ class _ThemeNotifier extends Notifier<String> {
   String build() => 'midnight';
 
   void setTheme(String name) {
-    if (!_palettes.containsKey(name)) return;
-    state = name;
-    _current = _palettes[name]!;
+    final normalized = normalizeThemeName(name);
+    if (state == normalized && identical(_current, _palettes[normalized]!)) {
+      return;
+    }
+    state = normalized;
+    _current = _palettes[normalized]!;
+    unawaited(_persistTheme(normalized));
+  }
+
+  Future<void> loadThemePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_themePreferenceKey);
+    if (stored != null && stored.isNotEmpty) {
+      setTheme(stored);
+    }
+  }
+
+  Future<void> _persistTheme(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_themePreferenceKey, name);
   }
 }
 

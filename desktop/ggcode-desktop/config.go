@@ -26,7 +26,7 @@ func defaultDesktopConfig() *DesktopConfig {
 		WindowW:  1200,
 		WindowH:  800,
 		SidebarW: 300,
-		Theme:    "dark",
+		Theme:    "midnight",
 		Language: "en",
 	}
 }
@@ -43,6 +43,8 @@ func LoadDesktopConfig() *DesktopConfig {
 		return dc
 	}
 	_ = json.Unmarshal(data, dc)
+	dc.Theme = normalizeThemeName(dc.Theme)
+	dc.Language = normalizeLanguage(dc.Language)
 	return dc
 }
 

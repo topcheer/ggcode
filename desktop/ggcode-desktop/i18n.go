@@ -17,6 +17,18 @@ var (
 	currentLang      = "en"
 )
 
+func normalizeLanguage(lang string) string {
+	switch lang {
+	case "", "en", "zh-CN":
+		if lang == "" {
+			return "en"
+		}
+		return lang
+	default:
+		return "en"
+	}
+}
+
 func loadTranslations() {
 	translationsOnce.Do(func() {
 		for _, lang := range []string{"en", "zh-CN"} {
@@ -38,10 +50,7 @@ func loadTranslations() {
 func setLanguage(lang string) {
 	loadTranslations()
 	translationsMu.Lock()
-	if lang == "" {
-		lang = "en"
-	}
-	currentLang = lang
+	currentLang = normalizeLanguage(lang)
 	translationsMu.Unlock()
 }
 

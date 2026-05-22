@@ -287,6 +287,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           ref.read(languageProvider.notifier).setLanguage(data.language);
           unawaited(loadTranslations(data.language));
         }
+        if (data.theme.isNotEmpty) {
+          ref.read(themeProvider.notifier).setTheme(data.theme);
+        }
         _markEventApplied(msg);
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''),
@@ -2119,6 +2122,8 @@ Map<String, dynamic>? _sessionInfoToJson(proto.SessionInfoData? info) {
     'provider': info.provider,
     'mode': info.mode,
     'version': info.version,
+    'language': info.language,
+    'theme': info.theme,
   };
 }
 
