@@ -15,6 +15,14 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 
 ## iOS
 
+### ios fetch_profiles
+
+```sh
+[bundle exec] fastlane ios fetch_profiles
+```
+
+Fetch provisioning profiles for CI (sigh)
+
 ### ios upload_metadata
 
 ```sh

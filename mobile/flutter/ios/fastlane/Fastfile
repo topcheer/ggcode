@@ -152,7 +152,17 @@ platform :ios do
         ipa: flutter_ipa,
         skip_waiting_for_build_processing: true,
         skip_submission: true,
-        distribute_only: false
+        distribute_only: false,
+        changelog: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync",
+        beta_app_review_info: {
+          contact_email: "support@ggcode.dev",
+          contact_first_name: "GGCode",
+          contact_last_name: "Team",
+          contact_phone: "+8613858128966",
+          demo_account_name: "",
+          demo_account_password: "",
+          notes: "Remote control client for GGCode AI coding agent. Test: Install desktop from ggcode.dev → Generate QR → Scan with this app → Chat with AI."
+        }
       )
     else
       UI.message("No flutter IPA found, building with gym...")
@@ -168,7 +178,17 @@ platform :ios do
         api_key: api_key,
         skip_waiting_for_build_processing: true,
         skip_submission: true,
-        distribute_only: false
+        distribute_only: false,
+        changelog: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync",
+        beta_app_review_info: {
+          contact_email: "support@ggcode.dev",
+          contact_first_name: "GGCode",
+          contact_last_name: "Team",
+          contact_phone: "+8613858128966",
+          demo_account_name: "",
+          demo_account_password: "",
+          notes: "Remote control client for GGCode AI coding agent. Test: Install desktop from ggcode.dev → Generate QR → Scan with this app → Chat with AI."
+        }
       )
     end
   end
@@ -215,6 +235,7 @@ platform :ios do
 
   desc "Submit latest build for App Store Review"
   lane :submit do
+    api_key
     client = Spaceship::ConnectAPI.client
     app = Spaceship::ConnectAPI::App.find(app_id)
     UI.user_error!("App not found") if app.nil?
@@ -268,6 +289,34 @@ platform :ios do
   def _promote_to_external(client, app, build)
     groups = client.get_beta_groups(filter: { app: app.id }).to_models
     ext_group = groups.find { |g| g.name == "ext" }
+
+    # Set beta app review information on the build
+    begin
+      beta_build_detail = client.get_build_beta_details(filter: { build: build.id }).to_models.first
+      review_notes = "This is a remote control client for GGCode, an AI coding agent that runs on macOS/Linux/Windows desktop. The mobile app connects to the desktop agent via QR code scanning.\n\nTest workflow: Install GGCode desktop → Start desktop → Generate QR code → Scan with this app → Chat with AI, approve tool calls, monitor tasks."
+      if beta_build_detail
+        client.patch_build_beta_details(build_beta_details_id: beta_build_detail.id, attributes: {
+          auto_notify_enabled: true
+        })
+      end
+      # Set what_to_test via build localization
+      localizations = client.get_build_beta_detail_localizations(filter: { build: build.id }).to_models rescue []
+      if localizations.any?
+        client.patch_beta_build_localization(
+          beta_build_localization_id: localizations.first.id,
+          attributes: { whats_new: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync" }
+        )
+      else
+        client.post_beta_build_localizations(build_id: build.id, attributes: {
+          locale: "en-US",
+          whats_new: "v#{version_str} — Theme system with 6 palettes, i18n support (EN/zh-CN), bidirectional sync"
+        })
+      end
+      UI.success("Beta review info set")
+    rescue => e
+      UI.message("Beta review info: #{e.message}")
+    end
+
     if ext_group
       client.add_beta_groups_to_build(build_id: build.id, beta_group_ids: [ext_group.id])
       UI.success("Build #{build.version} added to 'ext' External Testing group!")
