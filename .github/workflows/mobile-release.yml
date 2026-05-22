@@ -10,11 +10,11 @@ on:
         description: 'Version (e.g. 1.3.16)'
         required: false
         type: string
-      promote_only:
-        description: 'Only promote (skip build+upload)'
+      platform:
+        description: 'Platform (both, ios, android)'
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: 'both'
 
 concurrency:
   group: mobile-release-${{ github.ref }}
@@ -55,7 +55,7 @@ jobs:
     name: Build & deploy Android
     needs: verify
     runs-on: ubuntu-latest
-    if: ${{ !inputs.promote_only }}
+    if: ${{ inputs.platform == 'both' || inputs.platform == 'android' || inputs.platform == '' || inputs.platform == null }}
     defaults:
       run:
         working-directory: mobile/flutter
@@ -79,6 +79,7 @@ jobs:
           working-directory: mobile/flutter/android
 
       - name: Setup Android signing
+        shell: bash
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/upload.jks
           cat > android/key.properties <<EOF
@@ -87,7 +88,6 @@ jobs:
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
           storeFile=upload.jks
           EOF
-        shell: bash
 
       - name: Sync version
         run: |
@@ -117,7 +117,7 @@ jobs:
     name: Build & deploy iOS
     needs: verify
     runs-on: macos-15
-    if: ${{ !inputs.promote_only }}
+    if: ${{ inputs.platform == 'both' || inputs.platform == 'ios' || inputs.platform == '' || inputs.platform == null }}
     defaults:
       run:
         working-directory: mobile/flutter
@@ -182,7 +182,6 @@ jobs:
       - name: Upload to TestFlight & promote
         run: |
           cd ios
-          bundle install --jobs 4 --retry 3
           bundle exec fastlane deploy_external
 
       - name: Commit build number
