@@ -4,6 +4,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../core/providers/session_provider.dart';
 import '../../core/l10n/app_localizations.dart';
+import '../../core/theme/app_theme.dart';
 import 'message_bubble.dart';
 import 'approval_sheet.dart';
 import 'input_bar.dart';
@@ -154,48 +155,54 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             Expanded(
               child: InkWell(
                 onTap: _openWorkspaceSwitcher,
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              currentWorkspace?.displayName ??
-                                  info?.workspace.split('/').last ??
-                                  'GGCode',
-                              style: const TextStyle(fontSize: 16),
-                              overflow: TextOverflow.ellipsis,
+                borderRadius: BorderRadius.circular(16),
+                child: Ink(
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                currentWorkspace?.displayName ??
+                                    info?.workspace.split('/').last ??
+                                    'GGCode',
+                                style: const TextStyle(fontSize: 16),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 4),
-                          Icon(Icons.expand_more,
-                              size: 16,
-                              color: Colors.white.withValues(alpha: 0.7)),
-                        ],
-                      ),
-                      if (currentSession != null)
-                        Text(
-                          currentSession.title,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.white.withValues(alpha: 0.45),
-                          ),
-                          overflow: TextOverflow.ellipsis,
+                            const SizedBox(width: 4),
+                            Icon(Icons.expand_more,
+                                size: 16, color: AppColors.textSecondary),
+                          ],
                         ),
-                    ],
+                        if (currentSession != null)
+                          Text(
+                            currentSession.title,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textMuted,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
+            const SizedBox(width: 8),
             Text(
               info?.model ?? '',
-              style: TextStyle(
-                  fontSize: 12, color: Colors.white.withValues(alpha: 0.5)),
+              style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
             ),
           ],
         ),
@@ -206,7 +213,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             return IconButton(
               icon: Text(
                 lang == 'zh-CN' ? 'EN' : '中',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                style:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
               ),
               tooltip: t('settings.language'),
               onPressed: () {
@@ -214,7 +222,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 ref.read(languageProvider.notifier).setLanguage(newLang);
                 loadTranslations(newLang);
                 // Notify desktop
-                ref.read(connectionProvider.notifier).service?.sendLanguageChange(newLang);
+                ref
+                    .read(connectionProvider.notifier)
+                    .service
+                    ?.sendLanguageChange(newLang);
                 setState(() {});
               },
             );
@@ -227,20 +238,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               showDialog(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  backgroundColor: const Color(0xFF1A1A2E),
+                  backgroundColor: AppColors.surface,
                   title: Text(
-                    isDisconnected ? t('chat.back_to_connect') : t('chat.disconnect_confirm'),
-                    style: const TextStyle(color: Colors.white),
+                    isDisconnected
+                        ? t('chat.back_to_connect')
+                        : t('chat.disconnect_confirm'),
+                    style: const TextStyle(color: AppColors.textPrimary),
                   ),
                   content: Text(
-                    isDisconnected ? t('chat.disconnected_message') : t('chat.disconnect_message'),
-                    style: TextStyle(color: Colors.white70),
+                    isDisconnected
+                        ? t('chat.disconnected_message')
+                        : t('chat.disconnect_message'),
+                    style: const TextStyle(color: AppColors.textSecondary),
                   ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(ctx).pop(),
                       child: Text(t('chat.cancel'),
-                          style: const TextStyle(color: Colors.white54)),
+                          style:
+                              const TextStyle(color: AppColors.textSecondary)),
                     ),
                     TextButton(
                       onPressed: () async {
@@ -250,8 +266,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             .leaveSession();
                       },
                       child: Text(
-                        isDisconnected ? t('chat.back_button') : t('chat.disconnect_button'),
-                        style: const TextStyle(color: Colors.redAccent),
+                        isDisconnected
+                            ? t('chat.back_button')
+                            : t('chat.disconnect_button'),
+                        style: const TextStyle(color: AppColors.danger),
                       ),
                     ),
                   ],
@@ -346,7 +364,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
               itemCount: messages.length,
               itemBuilder: (context, index) {
                 final msg = messages[index];
@@ -405,7 +423,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               Text(
                 t('workspace.switcher_title'),
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.9),
+                  color: AppColors.textPrimary.withValues(alpha: 0.95),
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                 ),
@@ -413,6 +431,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               const SizedBox(height: 8),
               for (final workspace in workspaces)
                 ListTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  tileColor:
+                      AppColors.backgroundElevated.withValues(alpha: 0.5),
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
                     workspace.key == cache.liveWorkspaceKey
@@ -420,17 +443,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         : Icons.folder_open,
                     color: workspace.key == cache.selectedWorkspaceKey
                         ? Colors.blueAccent
-                        : Colors.white54,
+                        : AppColors.textSecondary,
                   ),
                   title: Text(
                     workspace.displayName,
-                    style: const TextStyle(color: Colors.white),
+                    style: const TextStyle(color: AppColors.textPrimary),
                   ),
                   subtitle: workspace.lastSessionId.isNotEmpty
                       ? Text(
                           'Session ${workspace.lastSessionId.substring(0, workspace.lastSessionId.length > 8 ? 8 : workspace.lastSessionId.length)}',
-                          style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.45)),
+                          style: TextStyle(color: AppColors.textMuted),
                         )
                       : null,
                   trailing: workspace.key == cache.selectedWorkspaceKey
@@ -450,7 +472,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 Text(
                   'Sessions',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.9),
+                    color: AppColors.textPrimary.withValues(alpha: 0.95),
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                   ),
@@ -458,6 +480,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 const SizedBox(height: 8),
                 for (final session in sessionList)
                   ListTile(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    tileColor:
+                        AppColors.backgroundElevated.withValues(alpha: 0.5),
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
                       session.sessionId == cache.liveSessionId
@@ -465,18 +492,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                           : Icons.history,
                       color: session.sessionId == cache.selectedSessionId
                           ? Colors.blueAccent
-                          : Colors.white54,
+                          : AppColors.textSecondary,
                     ),
                     title: Text(
                       session.title,
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(color: AppColors.textPrimary),
                     ),
                     subtitle: Text(
                       session.model.isNotEmpty
                           ? session.model
                           : session.provider,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.45)),
+                      style: TextStyle(color: AppColors.textMuted),
                     ),
                     trailing: session.sessionId == cache.selectedSessionId
                         ? const Icon(Icons.check, color: Colors.blueAccent)
@@ -506,12 +532,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final hasResult = msg.toolResult != null && msg.toolResult!.isNotEmpty;
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 2),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.md),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.panel,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -520,12 +547,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           Row(
             children: [
               Icon(Icons.build,
-                  size: 13, color: Colors.blueAccent.withValues(alpha: 0.7)),
+                  size: 13, color: AppColors.accent.withValues(alpha: 0.85)),
               const SizedBox(width: 4),
               Text(
                 title,
                 style: TextStyle(
-                  color: Colors.blueAccent.withValues(alpha: 0.9),
+                  color: AppColors.accent.withValues(alpha: 0.95),
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
@@ -535,9 +562,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 Expanded(
                   child: Text(
                     msg.toolDetail!,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.4),
-                        fontSize: 11),
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -551,7 +576,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   size: 13,
                   color: msg.isToolError
                       ? Colors.redAccent.withValues(alpha: 0.7)
-                      : Colors.green.withValues(alpha: 0.6),
+                      : AppColors.success.withValues(alpha: 0.75),
                 ),
             ],
           ),
@@ -596,18 +621,19 @@ class _HistoricalSessionBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.amber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.amber.withValues(alpha: 0.2)),
+        borderRadius: BorderRadius.circular(AppRadii.sm),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.28)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.history_toggle_off, color: Colors.amber, size: 18),
+          const Icon(Icons.history_toggle_off,
+              color: AppColors.warning, size: 18),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               t('session.cached_input_disabled'),
               style: TextStyle(
-                color: Colors.amber.shade100,
+                color: AppColors.warning.withValues(alpha: 0.95),
                 fontSize: 12,
               ),
             ),
@@ -636,22 +662,22 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D14),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white),
+                    icon: const Icon(Icons.close, color: AppColors.textPrimary),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   Text(
                     t('workspace.scan_new'),
                     style: const TextStyle(
-                        color: Colors.white,
+                        color: AppColors.textPrimary,
                         fontSize: 18,
                         fontWeight: FontWeight.w600),
                   ),
@@ -675,8 +701,8 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
               padding: const EdgeInsets.all(16),
               child: Text(
                 t('workspace.scan_hint'),
-                style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -711,12 +737,17 @@ class _ToolResultCardState extends State<_ToolResultCard> {
       child: Container(
         width: double.infinity,
         margin: const EdgeInsets.only(top: 4),
-        padding: const EdgeInsets.all(6),
+        padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
           color: widget.isError
-              ? Colors.red.withValues(alpha: 0.08)
-              : Colors.white.withValues(alpha: 0.03),
-          borderRadius: BorderRadius.circular(4),
+              ? AppColors.danger.withValues(alpha: 0.10)
+              : AppColors.backgroundElevated,
+          borderRadius: BorderRadius.circular(AppRadii.sm),
+          border: Border.all(
+            color: widget.isError
+                ? AppColors.danger.withValues(alpha: 0.20)
+                : AppColors.border,
+          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -726,15 +757,15 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                 Icon(
                   _expanded ? Icons.expand_less : Icons.expand_more,
                   size: 14,
-                  color: Colors.white38,
+                  color: AppColors.textMuted,
                 ),
                 const SizedBox(width: 2),
                 Text(
                   widget.isError ? t('tool.error') : t('tool.result'),
                   style: TextStyle(
                     color: widget.isError
-                        ? Colors.redAccent.withValues(alpha: 0.8)
-                        : Colors.white38,
+                        ? AppColors.danger.withValues(alpha: 0.9)
+                        : AppColors.textMuted,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
                   ),
@@ -745,7 +776,8 @@ class _ToolResultCardState extends State<_ToolResultCard> {
             Text(
               _expanded ? widget.result : preview,
               style: TextStyle(
-                color: widget.isError ? Colors.redAccent : Colors.white60,
+                color:
+                    widget.isError ? AppColors.danger : AppColors.textSecondary,
                 fontSize: 11,
                 fontFamily: 'monospace',
               ),
@@ -778,7 +810,7 @@ class _ConnectionStatusIcon extends StatelessWidget {
       case ConnectionStatus.connected:
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Icon(Icons.cloud_done, size: 18, color: Colors.greenAccent),
+          child: Icon(Icons.cloud_done, size: 18, color: AppColors.success),
         );
       case ConnectionStatus.connecting:
         return Padding(
@@ -788,13 +820,13 @@ class _ConnectionStatusIcon extends StatelessWidget {
             height: 18,
             child: CircularProgressIndicator(
               strokeWidth: 2,
-              color: Colors.orangeAccent,
+              color: AppColors.warning,
             ),
           ),
         );
       case ConnectionStatus.disconnected:
         return IconButton(
-          icon: const Icon(Icons.cloud_off, size: 20, color: Colors.redAccent),
+          icon: const Icon(Icons.cloud_off, size: 20, color: AppColors.danger),
           onPressed: onDisconnectTap,
           tooltip: t('connect.status_disconnected'),
         );

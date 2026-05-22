@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
 import '../../core/l10n/app_localizations.dart';
+import '../../core/theme/app_theme.dart';
 
 class InputBar extends ConsumerStatefulWidget {
   final TextEditingController controller;
@@ -59,12 +60,12 @@ class _InputBarState extends ConsumerState<InputBar>
     }
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 14),
       decoration: const BoxDecoration(
-        color: Color(0xFF0D0D14),
-        border: Border(top: BorderSide(color: Colors.white12)),
+        color: AppColors.background,
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Expanded(
             child: AnimatedBuilder(
@@ -72,15 +73,17 @@ class _InputBarState extends ConsumerState<InputBar>
               builder: (context, child) {
                 final pulse = _busyPulseController.value;
                 final borderColor = isRunning
-                    ? Colors.blueAccent.withValues(alpha: 0.55 + pulse * 0.35)
-                    : Colors.white12;
-                final shadowColor = Colors.blueAccent
+                    ? AppColors.accent.withValues(alpha: 0.60 + pulse * 0.20)
+                    : AppColors.border;
+                final shadowColor = AppColors.accent
                     .withValues(alpha: isRunning ? 0.10 + pulse * 0.18 : 0);
                 return DecoratedBox(
                   decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppRadii.lg),
                     border: Border.all(color: borderColor),
                     boxShadow: [
+                      ...AppShadows.panel,
                       if (isRunning)
                         BoxShadow(
                           color: shadowColor,
@@ -94,37 +97,37 @@ class _InputBarState extends ConsumerState<InputBar>
               },
               child: TextField(
                 controller: widget.controller,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
+                style:
+                    const TextStyle(color: AppColors.textPrimary, fontSize: 14),
                 decoration: InputDecoration(
                   hintText: hintText,
-                  hintStyle:
-                      TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                  hintStyle: const TextStyle(color: AppColors.textMuted),
                   filled: true,
-                  fillColor: const Color(0xFF1A1A2E),
+                  fillColor: AppColors.surface,
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadii.lg),
                     borderSide: BorderSide.none,
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadii.lg),
                     borderSide: BorderSide.none,
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadii.lg),
                     borderSide: BorderSide.none,
                   ),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  contentPadding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
                 ),
                 enabled: inputEnabled,
                 onSubmitted: (_) => _send(),
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           if (isRunning && canSend)
-            IconButton(
-              icon: const Icon(Icons.stop_circle, color: Colors.redAccent),
+            _ActionButton(
+              icon: Icons.stop_circle,
+              color: AppColors.danger,
               onPressed: () {
                 ref.read(connectionProvider.notifier).send({
                   'type': 'interrupt',
@@ -133,9 +136,10 @@ class _InputBarState extends ConsumerState<InputBar>
               },
               tooltip: 'Interrupt',
             ),
-          IconButton(
-            icon: Icon(Icons.send,
-                color: inputEnabled ? Colors.blueAccent : Colors.white24),
+          const SizedBox(width: 10),
+          _ActionButton(
+            icon: Icons.send,
+            color: inputEnabled ? AppColors.accent : AppColors.textMuted,
             onPressed: inputEnabled ? _send : null,
             tooltip: 'Send',
           ),
@@ -150,5 +154,38 @@ class _InputBarState extends ConsumerState<InputBar>
     if (text.isEmpty) return;
     widget.controller.clear();
     ref.read(chatProvider.notifier).addUserMessage(text);
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onPressed;
+  final String tooltip;
+
+  const _ActionButton({
+    required this.icon,
+    required this.color,
+    required this.onPressed,
+    required this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.panel,
+      ),
+      child: IconButton(
+        icon: Icon(icon, color: color, size: 20),
+        onPressed: onPressed,
+        tooltip: tooltip,
+      ),
+    );
   }
 }
