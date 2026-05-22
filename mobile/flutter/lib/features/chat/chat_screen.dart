@@ -179,7 +179,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            const SizedBox(width: 4),
+                             SizedBox(width: 4),
                             Icon(Icons.expand_more,
                                 size: 16, color: AppColors.textSecondary),
                           ],
@@ -187,7 +187,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         if (currentSession != null)
                           Text(
                             currentSession.title,
-                            style: const TextStyle(
+                            style:  TextStyle(
                               fontSize: 11,
                               color: AppColors.textMuted,
                             ),
@@ -199,10 +199,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 ),
               ),
             ),
-            const SizedBox(width: 8),
+             SizedBox(width: 8),
             Text(
               info?.model ?? '',
-              style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+              style: 	TextStyle(fontSize: 12, color: AppColors.textMuted),
             ),
           ],
         ),
@@ -230,6 +230,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               },
             );
           }),
+          // Theme toggle
+          Consumer(builder: (context, ref, _) {
+            final current = ref.watch(themeProvider);
+            return IconButton(
+              icon: Icon(Icons.palette_outlined, size: 20),
+              tooltip: 'Theme: $current',
+              onPressed: () {
+                final idx = availableThemes.indexOf(current);
+                final next = availableThemes[(idx + 1) % availableThemes.length];
+                ref.read(themeProvider.notifier).setTheme(next);
+                setState(() {});
+              },
+            );
+          }),
           _ConnectionStatusIcon(
             status: connState.status,
             onDisconnectTap: () {
@@ -243,20 +257,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     isDisconnected
                         ? t('chat.back_to_connect')
                         : t('chat.disconnect_confirm'),
-                    style: const TextStyle(color: AppColors.textPrimary),
+                    style: 	TextStyle(color: AppColors.textPrimary),
                   ),
                   content: Text(
                     isDisconnected
                         ? t('chat.disconnected_message')
                         : t('chat.disconnect_message'),
-                    style: const TextStyle(color: AppColors.textSecondary),
+                    style: 	TextStyle(color: AppColors.textSecondary),
                   ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(ctx).pop(),
                       child: Text(t('chat.cancel'),
                           style:
-                              const TextStyle(color: AppColors.textSecondary)),
+                              	TextStyle(color: AppColors.textSecondary)),
                     ),
                     TextButton(
                       onPressed: () async {
@@ -269,7 +283,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                         isDisconnected
                             ? t('chat.back_button')
                             : t('chat.disconnect_button'),
-                        style: const TextStyle(color: AppColors.danger),
+                        style: 	TextStyle(color: AppColors.danger),
                       ),
                     ),
                   ],
@@ -418,7 +432,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         return SafeArea(
           child: ListView(
             shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            padding:  EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
               Text(
                 t('workspace.switcher_title'),
@@ -428,7 +442,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 8),
+               SizedBox(height: 8),
               for (final workspace in workspaces)
                 ListTile(
                   shape: RoundedRectangleBorder(
@@ -447,7 +461,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   ),
                   title: Text(
                     workspace.displayName,
-                    style: const TextStyle(color: AppColors.textPrimary),
+                    style: 	TextStyle(color: AppColors.textPrimary),
                   ),
                   subtitle: workspace.lastSessionId.isNotEmpty
                       ? Text(
@@ -468,7 +482,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               if (selectedWorkspaceKey != null &&
                   selectedWorkspaceKey.isNotEmpty &&
                   sessionList.isNotEmpty) ...[
-                const SizedBox(height: 16),
+                 SizedBox(height: 16),
                 Text(
                   'Sessions',
                   style: TextStyle(
@@ -477,7 +491,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 8),
+                 SizedBox(height: 8),
                 for (final session in sessionList)
                   ListTile(
                     shape: RoundedRectangleBorder(
@@ -496,7 +510,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     ),
                     title: Text(
                       session.title,
-                      style: const TextStyle(color: AppColors.textPrimary),
+                      style: 	TextStyle(color: AppColors.textPrimary),
                     ),
                     subtitle: Text(
                       session.model.isNotEmpty
@@ -532,8 +546,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final hasResult = msg.toolResult != null && msg.toolResult!.isNotEmpty;
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 5),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      margin:  EdgeInsets.symmetric(vertical: 5),
+      padding:  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppRadii.md),
@@ -548,7 +562,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             children: [
               Icon(Icons.build,
                   size: 13, color: AppColors.accent.withValues(alpha: 0.85)),
-              const SizedBox(width: 4),
+               SizedBox(width: 4),
               Text(
                 title,
                 style: TextStyle(
@@ -558,7 +572,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 ),
               ),
               if (msg.toolDetail != null && msg.toolDetail!.isNotEmpty) ...[
-                const SizedBox(width: 6),
+                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     msg.toolDetail!,
@@ -617,8 +631,8 @@ class _HistoricalSessionBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      margin:  EdgeInsets.fromLTRB(8, 6, 8, 0),
+      padding:  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.amber.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(AppRadii.sm),
@@ -626,9 +640,9 @@ class _HistoricalSessionBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.history_toggle_off,
+           Icon(Icons.history_toggle_off,
               color: AppColors.warning, size: 18),
-          const SizedBox(width: 8),
+           SizedBox(width: 8),
           Expanded(
             child: Text(
               t('session.cached_input_disabled'),
@@ -667,16 +681,16 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+              padding:  EdgeInsets.fromLTRB(8, 8, 8, 4),
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.close, color: AppColors.textPrimary),
+                    icon: 	Icon(Icons.close, color: AppColors.textPrimary),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   Text(
                     t('workspace.scan_new'),
-                    style: const TextStyle(
+                    style:  TextStyle(
                         color: AppColors.textPrimary,
                         fontSize: 18,
                         fontWeight: FontWeight.w600),
@@ -698,10 +712,10 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding:  EdgeInsets.all(16),
               child: Text(
                 t('workspace.scan_hint'),
-                style: const TextStyle(
+                style:  TextStyle(
                     color: AppColors.textSecondary, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
@@ -736,8 +750,8 @@ class _ToolResultCardState extends State<_ToolResultCard> {
       onTap: () => setState(() => _expanded = !_expanded),
       child: Container(
         width: double.infinity,
-        margin: const EdgeInsets.only(top: 4),
-        padding: const EdgeInsets.all(8),
+        margin:  EdgeInsets.only(top: 4),
+        padding:  EdgeInsets.all(8),
         decoration: BoxDecoration(
           color: widget.isError
               ? AppColors.danger.withValues(alpha: 0.10)
@@ -759,7 +773,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                   size: 14,
                   color: AppColors.textMuted,
                 ),
-                const SizedBox(width: 2),
+                 SizedBox(width: 2),
                 Text(
                   widget.isError ? t('tool.error') : t('tool.result'),
                   style: TextStyle(
@@ -772,7 +786,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                 ),
               ],
             ),
-            const SizedBox(height: 2),
+             SizedBox(height: 2),
             Text(
               _expanded ? widget.result : preview,
               style: TextStyle(
@@ -809,12 +823,12 @@ class _ConnectionStatusIcon extends StatelessWidget {
     switch (status) {
       case ConnectionStatus.connected:
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding:  EdgeInsets.symmetric(horizontal: 12),
           child: Icon(Icons.cloud_done, size: 18, color: AppColors.success),
         );
       case ConnectionStatus.connecting:
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding:  EdgeInsets.symmetric(horizontal: 12),
           child: SizedBox(
             width: 18,
             height: 18,
@@ -826,7 +840,7 @@ class _ConnectionStatusIcon extends StatelessWidget {
         );
       case ConnectionStatus.disconnected:
         return IconButton(
-          icon: const Icon(Icons.cloud_off, size: 20, color: AppColors.danger),
+          icon: 	Icon(Icons.cloud_off, size: 20, color: AppColors.danger),
           onPressed: onDisconnectTap,
           tooltip: t('connect.status_disconnected'),
         );

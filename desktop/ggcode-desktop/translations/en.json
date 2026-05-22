@@ -115,7 +115,7 @@
   "menu.file": "File",
   "menu.open_project": "Open Project...",
   "menu.quit": "Quit",
-  "menu.view": "View",
+  "menu.theme": "Theme", "View",
   "menu.toggle_sidebar": "Toggle Sidebar",
   "menu.refresh_stats": "Refresh Stats",
   "menu.tools": "Tools",

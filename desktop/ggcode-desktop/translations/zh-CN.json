@@ -115,7 +115,7 @@
   "menu.file": "文件",
   "menu.open_project": "打开项目...",
   "menu.quit": "退出",
-  "menu.view": "视图",
+  "menu.theme": "主题", "视图",
   "menu.toggle_sidebar": "切换侧边栏",
   "menu.refresh_stats": "刷新统计",
   "menu.tools": "工具",

@@ -145,6 +145,8 @@ func (a *App) setupMenu() {
 	viewMenu := fyne.NewMenu(t("menu.view"),
 		fyne.NewMenuItem(t("menu.toggle_sidebar"), func() { a.toggleSidebar() }),
 		fyne.NewMenuItem(t("menu.refresh_stats"), func() { a.refreshSidebar() }),
+		fyne.NewMenuItemSeparator(),
+		a.buildThemeMenu(),
 	)
 	toolsMenu := fyne.NewMenu(t("menu.tools"),
 		fyne.NewMenuItem(t("menu.im_settings"), func() { a.showIMWindow() }),
@@ -1020,6 +1022,44 @@ func (a *App) refreshLanguageUI() {
 		}
 		a.content.Refresh()
 	}
+}
+
+// applyThemeChange switches the desktop theme at runtime.
+func (a *App) applyThemeChange(themeName string) {
+	if themeName == "" {
+		themeName = "midnight"
+	}
+	a.dc.Theme = themeName
+	a.dc.Save()
+	fyne.Do(func() {
+		a.fyneApp.Settings().SetTheme(newThemeForScheme(themeName))
+	})
+}
+
+// buildThemeMenu creates the Theme submenu with check marks.
+func (a *App) buildThemeMenu() *fyne.MenuItem {
+	themeLabels := map[string]string{
+		"midnight": "Midnight",
+		"oled":     "OLED Black",
+		"nord":     "Nord",
+		"rose":     "Rose",
+		"forest":   "Forest",
+		"light":    "Light",
+	}
+	items := make([]*fyne.MenuItem, 0, len(availableThemes))
+	for _, name := range availableThemes {
+		label := themeLabels[name]
+		item := fyne.NewMenuItem(label, func() {
+			a.applyThemeChange(name)
+		})
+		if name == a.dc.Theme {
+			item.Checked = true
+		}
+		items = append(items, item)
+	}
+	themeMenu := fyne.NewMenuItem(t("menu.theme"), nil)
+	themeMenu.ChildMenu = fyne.NewMenu("", items...)
+	return themeMenu
 }
 
 // ── Helpers ──────────────────────────────────────────

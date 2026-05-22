@@ -108,17 +108,17 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
             children: [
               // Top bar
               Padding(
-                padding: const EdgeInsets.all(8),
+                padding:  EdgeInsets.all(8),
                 child: Row(
                   children: [
                     IconButton(
                       icon:
-                          const Icon(Icons.close, color: AppColors.textPrimary),
+                          	Icon(Icons.close, color: AppColors.textPrimary),
                       onPressed: () => setState(() => _showScanner = false),
                     ),
                     Text(
                       t('connect.scan_qr'),
-                      style: const TextStyle(
+                      style:  TextStyle(
                           color: AppColors.textPrimary,
                           fontSize: 18,
                           fontWeight: FontWeight.w600),
@@ -139,10 +139,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.all(16),
+                padding:  EdgeInsets.all(16),
                 child: Text(
                   'Point the camera at the QR code shown in GGCode Desktop',
-                  style: const TextStyle(
+                  style:  TextStyle(
                       color: AppColors.textSecondary, fontSize: 13),
                   textAlign: TextAlign.center,
                 ),
@@ -166,7 +166,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 width: 88,
                 height: 88,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
+                  gradient:  LinearGradient(
                     colors: [AppColors.surfaceElevated, AppColors.surface],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
@@ -175,7 +175,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   border: Border.all(color: AppColors.borderStrong),
                   boxShadow: AppShadows.panel,
                 ),
-                child: const Center(
+                child:  Center(
                   child: Text(
                     'GG',
                     style: TextStyle(
@@ -186,19 +186,19 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
+               SizedBox(height: 16),
               Text(
                 t('app.title'),
-                style: const TextStyle(
+                style:  TextStyle(
                   color: AppColors.textPrimary,
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              const SizedBox(height: 8),
+               SizedBox(height: 8),
               Text(
                 t('connect.scan_hint'),
-                style: const TextStyle(
+                style:  TextStyle(
                     color: AppColors.textSecondary, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
@@ -210,44 +210,44 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                 height: 56,
                 child: OutlinedButton.icon(
                   onPressed: () => setState(() => _showScanner = true),
-                  icon: const Icon(Icons.qr_code_scanner, size: 28),
+                  icon:  Icon(Icons.qr_code_scanner, size: 28),
                   label: Text(t('connect.scan_qr'),
-                      style: const TextStyle(fontSize: 16)),
+                      style:  TextStyle(fontSize: 16)),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.accent,
                     backgroundColor: AppColors.surface,
-                    side: const BorderSide(color: AppColors.accent, width: 1.5),
+                    side: 	BorderSide(color: AppColors.accent, width: 1.5),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppRadii.md),
                     ),
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
+               SizedBox(height: 20),
 
               // Divider with "or"
               Row(
                 children: [
-                  const Expanded(child: Divider(color: AppColors.border)),
+                  	Expanded(child: Divider(color: AppColors.border)),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    padding:  EdgeInsets.symmetric(horizontal: 12),
                     child: Text('or',
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.textMuted, fontSize: 12)),
                   ),
-                  const Expanded(child: Divider(color: AppColors.border)),
+                  	Expanded(child: Divider(color: AppColors.border)),
                 ],
               ),
-              const SizedBox(height: 20),
+               SizedBox(height: 20),
 
               // URL input
               TextField(
                 controller: _urlController,
                 style:
-                    const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                    	TextStyle(color: AppColors.textPrimary, fontSize: 14),
                 decoration: InputDecoration(
                   hintText: 'ws://host:port/ws?token=xxx',
-                  hintStyle: const TextStyle(color: AppColors.textMuted),
+                  hintStyle: 	TextStyle(color: AppColors.textMuted),
                   filled: true,
                   fillColor: AppColors.surface,
                   border: OutlineInputBorder(
@@ -255,10 +255,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                     borderSide: BorderSide.none,
                   ),
                   prefixIcon:
-                      const Icon(Icons.link, color: AppColors.textSecondary),
+                      	Icon(Icons.link, color: AppColors.textSecondary),
                   suffixIcon: _urlController.text.isNotEmpty
                       ? IconButton(
-                          icon: const Icon(Icons.clear,
+                          icon:  Icon(Icons.clear,
                               color: AppColors.textSecondary),
                           onPressed: () {
                             _urlController.clear();
@@ -299,10 +299,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
 
               // Error message
               if (errorMsg != null) ...[
-                const SizedBox(height: 12),
+                 SizedBox(height: 12),
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(12),
+                  padding:  EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: AppColors.danger.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(AppRadii.sm),
@@ -312,39 +312,39 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   child: Text(
                     errorMsg,
                     style:
-                        const TextStyle(color: AppColors.danger, fontSize: 12),
+                        	TextStyle(color: AppColors.danger, fontSize: 12),
                   ),
                 ),
               ],
 
               // History
               if (history.isNotEmpty) ...[
-                const SizedBox(height: 24),
+                 SizedBox(height: 24),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     t('connect.recent_connections'),
-                    style: const TextStyle(
+                    style:  TextStyle(
                       color: AppColors.textSecondary,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
+                 SizedBox(height: 8),
                 ...history.map((url) => ListTile(
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.sm),
                       ),
                       tileColor: AppColors.surface.withValues(alpha: 0.7),
                       contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 12),
+                           EdgeInsets.symmetric(horizontal: 12),
                       dense: true,
-                      leading: const Icon(Icons.history,
+                      leading:  Icon(Icons.history,
                           color: AppColors.textMuted, size: 18),
                       title: Text(
                         url,
-                        style: const TextStyle(
+                        style:  TextStyle(
                             color: AppColors.textSecondary, fontSize: 12),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,

@@ -23,12 +23,12 @@ class MessageBubble extends StatelessWidget {
       alignment: Alignment.centerRight,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding:  EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         constraints: BoxConstraints(
           maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
+          gradient:  LinearGradient(
             colors: [AppColors.accentSoft, AppColors.accent],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -52,8 +52,8 @@ class MessageBubble extends StatelessWidget {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        margin:  EdgeInsets.symmetric(vertical: 4),
+        padding:  EdgeInsets.fromLTRB(16, 14, 16, 14),
         constraints: BoxConstraints(
           maxWidth: MediaQuery.of(context).size.width * 0.85,
         ),
@@ -106,14 +106,14 @@ class MessageBubble extends StatelessWidget {
             }),
             if (message.streaming)
               Container(
-                margin: const EdgeInsets.only(top: 6),
+                margin:  EdgeInsets.only(top: 6),
                 width: 18,
                 height: 18,
                 decoration: BoxDecoration(
                   color: AppColors.accent.withValues(alpha: 0.14),
                   shape: BoxShape.circle,
                 ),
-                child: const Center(
+                child:  Center(
                   child: SizedBox(
                     width: 6,
                     height: 6,
@@ -134,8 +134,8 @@ class MessageBubble extends StatelessWidget {
 
   Widget _buildMermaidDiagram(String code) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      padding: const EdgeInsets.all(8),
+      margin:  EdgeInsets.symmetric(vertical: 6),
+      padding:  EdgeInsets.all(8),
       decoration: BoxDecoration(
         color: AppColors.backgroundElevated,
         borderRadius: BorderRadius.circular(AppRadii.sm),
@@ -144,7 +144,7 @@ class MessageBubble extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+           Row(
             children: [
               Icon(Icons.account_tree, size: 14, color: AppColors.accent),
               SizedBox(width: 4),
@@ -170,7 +170,7 @@ class MessageBubble extends StatelessWidget {
 
   MarkdownStyleSheet _markdownStyleSheet() {
     return MarkdownStyleSheet(
-      p: const TextStyle(
+      p:  TextStyle(
           color: AppColors.textPrimary, fontSize: 14, height: 1.5),
       code: TextStyle(
         color: AppColors.accent.withValues(alpha: 0.95),
@@ -182,21 +182,21 @@ class MessageBubble extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadii.sm),
         border: Border.all(color: AppColors.border),
       ),
-      codeblockPadding: const EdgeInsets.all(8),
-      listBullet: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
-      h2: const TextStyle(
+      codeblockPadding:  EdgeInsets.all(8),
+      listBullet: 	TextStyle(color: AppColors.textPrimary, fontSize: 14),
+      h2:  TextStyle(
           color: AppColors.textPrimary,
           fontSize: 16,
           fontWeight: FontWeight.w600),
-      h3: const TextStyle(
+      h3:  TextStyle(
           color: AppColors.textPrimary,
           fontSize: 15,
           fontWeight: FontWeight.w600),
-      strong: const TextStyle(
+      strong:  TextStyle(
           color: AppColors.textPrimary, fontWeight: FontWeight.w700),
-      em: const TextStyle(
+      em:  TextStyle(
           color: AppColors.textSecondary, fontStyle: FontStyle.italic),
-      blockquote: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+      blockquote: 	TextStyle(color: AppColors.textSecondary, fontSize: 14),
       blockquoteDecoration: BoxDecoration(
         color: AppColors.backgroundElevated,
         borderRadius: BorderRadius.circular(AppRadii.xs),

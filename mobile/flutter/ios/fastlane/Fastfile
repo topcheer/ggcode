@@ -76,17 +76,17 @@ platform :ios do
       entitlements_plist = File.join(tmp, 'entitlements.plist')
       if File.exist?(embedded_profile)
         `security cms -D -i #{Shellwords.shellescape(embedded_profile)} 2>/dev/null > #{Shellwords.shellescape(entitlements_plist + '.full')}`
-        `/usr/libexec/PlistBuddy -x -c 'Print :Entitlements' #{Shellwords.shelvescape(entitlements_plist + '.full')} 2>/dev/null > #{Shellwords.shelvescape(entitlements_plist)}`
+        `/usr/libexec/PlistBuddy -x -c 'Print :Entitlements' #{Shellwords.shellescape(entitlements_plist + '.full')} 2>/dev/null > #{Shellwords.shellescape(entitlements_plist)}`
       end
       sign_cmd = "codesign --force --sign \"Apple Distribution: Junjun Zhang (EGZFS7M525)\" --timestamp --generate-entitlement-der"
-      sign_cmd += " --entitlements #{Shellwords.shelvescape(entitlements_plist)}" if File.exist?(entitlements_plist) && File.size(entitlements_plist) > 0
-      sign_cmd += " #{Shellwords.shelvescape(app_path)}"
+      sign_cmd += " --entitlements #{Shellwords.shellescape(entitlements_plist)}" if File.exist?(entitlements_plist) && File.size(entitlements_plist) > 0
+      sign_cmd += " #{Shellwords.shellescape(app_path)}"
       sign_output = `#{sign_cmd} 2>&1`
       unless $?.success?
         UI.error("Codesign failed: #{sign_output}")
       end
       cleaned_ipa = ipa_path.sub(/\.ipa$/, '.cleaned.ipa')
-      `cd #{work} && zip -q -r #{Shellwords.shelvescape(cleaned_ipa)} Payload/ 2>/dev/null`
+      `cd #{work} && zip -q -r #{Shellwords.shellescape(cleaned_ipa)} Payload/ 2>/dev/null`
       if File.exist?(cleaned_ipa) && File.size(cleaned_ipa) > 0
         FileUtils.mv(cleaned_ipa, ipa_path, force: true)
         UI.success("Removed simulator-only frameworks and re-packaged IPA")
