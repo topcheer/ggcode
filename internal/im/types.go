@@ -323,10 +323,14 @@ type Closer interface {
 }
 
 // LastMessageID returns the most recent message ID for typing reaction targeting:
-// prefers the user's inbound message, falls back to the bot's last outbound message.
+// prefers the bot's last outbound message so reactions stay near current progress,
+// and falls back to the user's inbound message when no outbound message exists yet.
 func LastMessageID(b ChannelBinding) string {
+	if id := strings.TrimSpace(b.LastOutboundMessageID); id != "" {
+		return id
+	}
 	if id := strings.TrimSpace(b.LastInboundMessageID); id != "" {
 		return id
 	}
-	return strings.TrimSpace(b.LastOutboundMessageID)
+	return ""
 }
