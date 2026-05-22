@@ -91,8 +91,16 @@ jobs:
 
       - name: Sync version
         run: |
-          VERSION="${{ inputs.version || github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            REF="${{ github.ref_name }}"
+            if [[ "$REF" == v* ]]; then
+              VERSION="${REF#v}"
+            else
+              VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: \([0-9.]*\).*/\1/')
+            fi
+          fi
+          echo "Using version: $VERSION"
           bash scripts/version_sync.sh "$VERSION"
 
       - name: Build AAB
@@ -180,8 +188,16 @@ jobs:
 
       - name: Sync version
         run: |
-          VERSION="${{ inputs.version || github.ref_name }}"
-          VERSION="${VERSION#v}"
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            REF="${{ github.ref_name }}"
+            if [[ "$REF" == v* ]]; then
+              VERSION="${REF#v}"
+            else
+              VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: \([0-9.]*\).*/\1/')
+            fi
+          fi
+          echo "Using version: $VERSION"
           bash scripts/version_sync.sh "$VERSION"
 
       - name: Install iOS dependencies
