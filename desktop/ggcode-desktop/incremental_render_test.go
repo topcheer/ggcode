@@ -5,10 +5,13 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 func TestUIStateAppendAssistantTextEmitsChunkDeltas(t *testing.T) {
@@ -281,7 +284,7 @@ func TestAppendAgentEventsToolResultIgnoresAlreadyMatched(t *testing.T) {
 	}
 }
 
-func TestBuildToolRefFindsBodyAndAddsAccordionWithTimelineRow(t *testing.T) {
+func TestBuildToolRefFindsBodyAndAddsResultSectionWithTimelineRow(t *testing.T) {
 	app := test.NewApp()
 	defer app.Quit()
 
@@ -306,21 +309,18 @@ func TestBuildToolRefFindsBodyAndAddsAccordionWithTimelineRow(t *testing.T) {
 	}
 
 	cv.addToolResult(ref, "hello world")
-	if ref.acc == nil {
-		t.Fatal("expected accordion to be created after tool result")
-	}
 	if len(ref.body.Objects) < 2 {
-		t.Fatalf("expected body to contain header and accordion, got %d objects", len(ref.body.Objects))
+		t.Fatalf("expected body to contain header and result section, got %d objects", len(ref.body.Objects))
 	}
 
-	foundAccordion := false
+	foundSection := false
 	for _, child := range ref.body.Objects {
-		if _, ok := child.(*widget.Accordion); ok {
-			foundAccordion = true
+		if c, ok := child.(*fyne.Container); ok && len(c.Objects) == 2 {
+			foundSection = true
 		}
 	}
-	if !foundAccordion {
-		t.Fatal("expected accordion child in tool body")
+	if !foundSection {
+		t.Fatal("expected collapsible result section in tool body")
 	}
 }
 
@@ -334,4 +334,52 @@ func TestMessageRowWrapsContentInTimelineSurface(t *testing.T) {
 	if !ok || len(c.Objects) == 0 {
 		t.Fatalf("message row = %#v, want non-empty container", row)
 	}
+}
+
+func TestRebuildFromMessagesUsesUserRendererForHistory(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	cv := &ChatView{
+		vbox:  container.NewVBox(),
+		entry: newSendEntry(),
+	}
+	cv.scroll = container.NewVScroll(cv.vbox)
+
+	cv.rebuildFromMessages([]provider.Message{
+		{
+			Role: "user",
+			Content: []provider.ContentBlock{
+				provider.TextBlock("hello from history"),
+			},
+		},
+	})
+
+	if len(cv.msgWidgets) != 1 {
+		t.Fatalf("msgWidgets = %d, want 1", len(cv.msgWidgets))
+	}
+	if !containsCanvasText(cv.msgWidgets[0], "USER") {
+		t.Fatalf("expected rebuilt history message to contain USER tag, got %#v", cv.msgWidgets[0])
+	}
+	if containsCanvasText(cv.msgWidgets[0], "TOOL") {
+		t.Fatalf("rebuilt user history should not contain TOOL tag, got %#v", cv.msgWidgets[0])
+	}
+}
+
+func containsCanvasText(obj fyne.CanvasObject, want string) bool {
+	switch v := obj.(type) {
+	case *canvas.Text:
+		return v.Text == want
+	case *widget.Card:
+		if v.Content != nil {
+			return containsCanvasText(v.Content, want)
+		}
+	case *fyne.Container:
+		for _, child := range v.Objects {
+			if containsCanvasText(child, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
