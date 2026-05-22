@@ -125,14 +125,14 @@ func (a *App) buildUI() {
 	a.statusBar.TextStyle = fyne.TextStyle{Monospace: true}
 	a.ui.SetStatusLabel(a.statusBar)
 
-	statusBox := container.NewHBox(
+	statusBox := widget.NewCard("", "", container.NewHBox(
 		a.statusBar,
 		layout.NewSpacer(),
-	)
+	))
 
 	a.content = container.NewStack(widget.NewLabel(""))
 
-	root := container.NewBorder(nil, statusBox, nil, nil, a.content)
+	root := container.NewBorder(nil, container.NewPadded(statusBox), nil, nil, a.content)
 	a.window.SetContent(root)
 }
 

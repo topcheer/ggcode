@@ -5,6 +5,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'core/models/protocol.dart' as proto;
 import 'core/providers/session_provider.dart';
+import 'core/theme/app_theme.dart';
 import 'features/connect/connect_screen.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/chat/ask_user_screen.dart';
@@ -23,22 +24,7 @@ class GGCodeApp extends StatelessWidget {
     return MaterialApp(
       title: 'GGCode Mobile',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: const ColorScheme.dark(
-          primary: Colors.blueAccent,
-          surface: Color(0xFF0D0D14),
-          onSurface: Colors.white,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF0D0D14),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF0D0D14),
-          elevation: 0,
-          iconTheme: IconThemeData(color: Colors.white),
-          titleTextStyle: TextStyle(
-              color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-        ),
-        useMaterial3: true,
-      ),
+      theme: buildAppTheme(),
       home: const AppShell(),
     );
   }

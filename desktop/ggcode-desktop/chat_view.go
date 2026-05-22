@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -368,7 +369,7 @@ func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 
 func (cv *ChatView) Render() fyne.CanvasObject {
 	btnRow := container.NewHBox(cv.cancelBtn, cv.imageBtn, cv.sendBtn)
-	inputBar := container.NewBorder(nil, nil, nil, btnRow, cv.entry)
+	inputBar := widget.NewCard("", "", container.NewBorder(nil, nil, nil, btnRow, cv.entry))
 
 	// Image preview bar above input (hidden until image attached).
 	removeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
@@ -377,11 +378,12 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 		cv.imageBtn.Importance = widget.MediumImportance
 		cv.imageBtn.Refresh()
 	})
-	cv.imageBar = container.NewHBox(
+	cv.imageBar = container.NewPadded(widget.NewCard("", "", container.NewHBox(
 		widget.NewIcon(theme.ContentAddIcon()),
 		widget.NewLabel(t("chat.image_attached")),
+		layout.NewSpacer(),
 		removeBtn,
-	)
+	)))
 	cv.imageBar.Hide()
 
 	inputSection := container.NewVBox(cv.imageBar, inputBar)
@@ -389,7 +391,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	cv.vbox = container.NewVBox()
 	cv.scroll = container.NewVScroll(cv.vbox)
 
-	mainTab := container.NewTabItem("Main", cv.scroll)
+	mainTab := container.NewTabItem("Main", container.NewPadded(cv.scroll))
 	cv.tabs = container.NewAppTabs(mainTab)
 	cv.tabs.SetTabLocation(container.TabLocationTop)
 
@@ -401,7 +403,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	// Lightweight status bar updater.
 	go cv.statusLoop()
 
-	return container.NewBorder(nil, container.NewPadded(inputSection), nil, nil, cv.tabs)
+	return container.NewBorder(nil, container.NewPadded(inputSection), nil, nil, container.NewPadded(cv.tabs))
 }
 
 // ── Event handler ─────────────────────────────────────
@@ -554,7 +556,8 @@ func (cv *ChatView) showThinking() {
 	icon := widget.NewIcon(theme.ComputerIcon())
 	label := widget.NewLabel(t("status.thinking"))
 	label.TextStyle = fyne.TextStyle{Italic: true}
-	row := container.NewHBox(icon, label)
+	rowContent := container.NewHBox(icon, label)
+	row := widget.NewCard("", "", rowContent)
 	cv.thinkingW = row
 	cv.vbox.Add(row)
 	cv.vbox.Refresh()
@@ -573,7 +576,7 @@ func (cv *ChatView) showThinking() {
 			text := "Thinking" + dots[i]
 			fyne.Do(func() {
 				if cv.thinkingW != nil {
-					row.Objects[1].(*widget.Label).SetText(text)
+					label.SetText(text)
 				}
 			})
 		}
@@ -640,11 +643,17 @@ func (cv *ChatView) onToolResult(toolID, result string, isError bool) {
 
 	// Update icon.
 	if isError {
-		ref.icon.SetResource(theme.CancelIcon())
+		if ref.icon != nil {
+			ref.icon.SetResource(theme.CancelIcon())
+		}
 	} else {
-		ref.icon.SetResource(theme.ConfirmIcon())
+		if ref.icon != nil {
+			ref.icon.SetResource(theme.ConfirmIcon())
+		}
 	}
-	ref.icon.Refresh()
+	if ref.icon != nil {
+		ref.icon.Refresh()
+	}
 
 	// Add result accordion if applicable.
 	cv.addToolResult(ref, result)
@@ -656,8 +665,10 @@ func (cv *ChatView) onStreamDone() {
 	// Cancel any tools still pending.
 	for _, ref := range cv.toolWidgets {
 		if !ref.hasResult {
-			ref.icon.SetResource(theme.CancelIcon())
-			ref.icon.Refresh()
+			if ref.icon != nil {
+				ref.icon.SetResource(theme.CancelIcon())
+				ref.icon.Refresh()
+			}
 		}
 	}
 }
@@ -689,8 +700,8 @@ func (cv *ChatView) statusLoop() {
 	}
 }
 
-const placeholderIdle = "Message ggcode... (Enter to send, Shift+Enter for newline)"
-const placeholderBusy = "ggcode is working... (messages will be queued)"
+const placeholderIdle = "Message ggcode..."
+const placeholderBusy = "ggcode is working..."
 
 func (cv *ChatView) updateButtons(working bool) {
 	cv.entry.busy = working
@@ -701,6 +712,8 @@ func (cv *ChatView) updateButtons(working bool) {
 		cv.cancelBtn.Hide()
 		cv.entry.PlaceHolder = placeholderIdle
 	}
+	cv.sendBtn.Importance = widget.HighImportance
+	cv.imageBtn.Importance = widget.MediumImportance
 	cv.sendBtn.Show()
 }
 
@@ -747,6 +760,10 @@ func findToolRefs(obj fyne.CanvasObject, ref *toolWidgetRef) {
 		ref.icon = v
 	case *widget.Accordion:
 		ref.acc = v
+	case *widget.Card:
+		if v.Content != nil {
+			findToolRefs(v.Content, ref)
+		}
 	case *fyne.Container:
 		// Check if this is a VBox that contains a toolHeader (RichText).
 		// That VBox is our body for adding accordion items.
@@ -1183,7 +1200,9 @@ func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
 func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.CanvasObject {
 	ic := widget.NewIcon(icon)
 	ic.Resize(fyne.NewSize(16, 16))
-	return container.NewBorder(nil, nil, ic, nil, content)
+	badge := widget.NewCard("", "", container.NewCenter(ic))
+	card := widget.NewCard("", "", content)
+	return container.NewPadded(container.NewBorder(nil, nil, badge, nil, card))
 }
 
 func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
@@ -1422,11 +1441,17 @@ func (cv *ChatView) appendAgentEvents(panel AgentPanelData, st *agentPanelState,
 				}
 				ref.hasResult = true
 				if ev.IsError {
-					ref.icon.SetResource(theme.CancelIcon())
+					if ref.icon != nil {
+						ref.icon.SetResource(theme.CancelIcon())
+					}
 				} else {
-					ref.icon.SetResource(theme.ConfirmIcon())
+					if ref.icon != nil {
+						ref.icon.SetResource(theme.ConfirmIcon())
+					}
 				}
-				ref.icon.Refresh()
+				if ref.icon != nil {
+					ref.icon.Refresh()
+				}
 				cv.addToolResult(ref, ev.Content)
 				break
 			}

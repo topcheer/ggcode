@@ -3,6 +3,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_mermaid/flutter_mermaid.dart';
 
 import '../../core/providers/session_provider.dart';
+import '../../core/theme/app_theme.dart';
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
@@ -21,18 +22,24 @@ class MessageBubble extends StatelessWidget {
     return Align(
       alignment: Alignment.centerRight,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
         decoration: BoxDecoration(
-          color: Colors.blueAccent,
-          borderRadius: BorderRadius.circular(16),
+          gradient: const LinearGradient(
+            colors: [AppColors.accentSoft, AppColors.accent],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: AppShadows.panel,
         ),
         child: SelectableText(
           message.text,
-          style: const TextStyle(color: Colors.white, fontSize: 14),
+          style:
+              const TextStyle(color: Colors.white, fontSize: 14, height: 1.4),
         ),
       ),
     );
@@ -45,14 +52,16 @@ class MessageBubble extends StatelessWidget {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         constraints: BoxConstraints(
           maxWidth: MediaQuery.of(context).size.width * 0.85,
         ),
         decoration: BoxDecoration(
-          color: const Color(0xFF1E1E2E),
-          borderRadius: BorderRadius.circular(16),
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppShadows.panel,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -64,8 +73,8 @@ class MessageBubble extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      width: 6,
-                      height: 6,
+                      width: 8,
+                      height: 8,
                       decoration: BoxDecoration(
                         color: _parseColor(message.sourceColor ?? '#4CAF50'),
                         shape: BoxShape.circle,
@@ -97,12 +106,24 @@ class MessageBubble extends StatelessWidget {
             }),
             if (message.streaming)
               Container(
-                margin: const EdgeInsets.only(top: 2),
-                width: 6,
-                height: 6,
-                decoration: const BoxDecoration(
-                  color: Colors.blueAccent,
+                margin: const EdgeInsets.only(top: 6),
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withValues(alpha: 0.14),
                   shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: SizedBox(
+                    width: 6,
+                    height: 6,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: AppColors.accent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
                 ),
               ),
           ],
@@ -116,21 +137,21 @@ class MessageBubble extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 6),
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: const Color(0xFF2A2A3E),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white12),
+        color: AppColors.backgroundElevated,
+        borderRadius: BorderRadius.circular(AppRadii.sm),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Row(
             children: [
-              Icon(Icons.account_tree, size: 14, color: Colors.blueAccent),
+              Icon(Icons.account_tree, size: 14, color: AppColors.accent),
               SizedBox(width: 4),
               Text(
                 'Diagram',
                 style: TextStyle(
-                  color: Colors.blueAccent,
+                  color: AppColors.accent,
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
@@ -149,31 +170,37 @@ class MessageBubble extends StatelessWidget {
 
   MarkdownStyleSheet _markdownStyleSheet() {
     return MarkdownStyleSheet(
-      p: TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 14),
+      p: const TextStyle(
+          color: AppColors.textPrimary, fontSize: 14, height: 1.5),
       code: TextStyle(
-        color: Colors.blueAccent[100],
+        color: AppColors.accent.withValues(alpha: 0.95),
         fontSize: 13,
-        backgroundColor: const Color(0xFF2A2A3E),
+        backgroundColor: AppColors.backgroundElevated,
       ),
       codeblockDecoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(8),
+        color: AppColors.backgroundElevated,
+        borderRadius: BorderRadius.circular(AppRadii.sm),
+        border: Border.all(color: AppColors.border),
       ),
       codeblockPadding: const EdgeInsets.all(8),
-      listBullet:
-          TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: 14),
+      listBullet: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
       h2: const TextStyle(
-          color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+          color: AppColors.textPrimary,
+          fontSize: 16,
+          fontWeight: FontWeight.w600),
       h3: const TextStyle(
-          color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
-      strong: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-      em: const TextStyle(color: Colors.white70, fontStyle: FontStyle.italic),
-      blockquote:
-          TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
+          color: AppColors.textPrimary,
+          fontSize: 15,
+          fontWeight: FontWeight.w600),
+      strong: const TextStyle(
+          color: AppColors.textPrimary, fontWeight: FontWeight.w700),
+      em: const TextStyle(
+          color: AppColors.textSecondary, fontStyle: FontStyle.italic),
+      blockquote: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
       blockquoteDecoration: BoxDecoration(
-        color: const Color(0xFF2A2A3E),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: Colors.white12),
+        color: AppColors.backgroundElevated,
+        borderRadius: BorderRadius.circular(AppRadii.xs),
+        border: Border.all(color: AppColors.border),
       ),
     );
   }
@@ -220,7 +247,7 @@ class MessageBubble extends StatelessWidget {
     try {
       return Color(int.parse(hex.replaceFirst('#', '0xFF')));
     } catch (_) {
-      return Colors.green;
+      return AppColors.success;
     }
   }
 }
