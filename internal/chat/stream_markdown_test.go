@@ -73,6 +73,31 @@ func TestRenderStreamingMarkdownPreservesGrowingList(t *testing.T) {
 	}
 }
 
+func TestSplitMarkdownBlocksPreservesTableMarkdown(t *testing.T) {
+	text := "| 目录 | 大小 | 风险 |\n| --- | --- | --- |\n| ~/.cache | 18G | 低 |\n| ~/.local | 14G | 中 |\n"
+	blocks := splitMarkdownBlocks(text)
+	if len(blocks) != 1 {
+		t.Fatalf("block count = %d, want 1", len(blocks))
+	}
+	if !strings.Contains(blocks[0], "| 目录 | 大小 | 风险 |") {
+		t.Fatalf("table header lost markdown pipes: %q", blocks[0])
+	}
+	if !strings.Contains(blocks[0], "| --- | --- | --- |") {
+		t.Fatalf("table separator lost markdown syntax: %q", blocks[0])
+	}
+}
+
+func TestRenderStreamingMarkdownPreservesTables(t *testing.T) {
+	text := "| 目录 | 大小 | 风险 |\n| --- | --- | --- |\n| ~/.cache | 18G | 低 |\n| ~/.local | 14G | 中 |\n"
+	rendered, _ := renderStreamingMarkdown(text, 100, nil)
+	if !strings.Contains(rendered, "目录") || !strings.Contains(rendered, "~/.cache") || !strings.Contains(rendered, "18G") {
+		t.Fatalf("expected rendered table content, got %q", rendered)
+	}
+	if strings.Contains(rendered, "目录大小风险") {
+		t.Fatalf("expected table columns not to collapse into a plain-text run, got %q", rendered)
+	}
+}
+
 func TestAssistantItemFinalRenderClearsStreamingCaches(t *testing.T) {
 	styles := DefaultStyles()
 	item := NewAssistantItem("a1", styles)
