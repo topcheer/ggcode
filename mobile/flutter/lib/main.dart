@@ -16,11 +16,13 @@ void main() {
   runApp(const ProviderScope(child: GGCodeApp()));
 }
 
-class GGCodeApp extends StatelessWidget {
+class GGCodeApp extends ConsumerWidget {
   const GGCodeApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Watch theme changes to trigger rebuild
+    ref.watch(themeProvider);
     return MaterialApp(
       title: 'GGCode Mobile',
       debugShowCheckedModeBanner: false,

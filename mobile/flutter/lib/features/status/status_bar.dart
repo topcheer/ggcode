@@ -16,8 +16,8 @@ class StatusBar extends ConsumerWidget {
     final detail = _statusDetail(status, message);
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      margin:  EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding:  EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppRadii.md),
@@ -60,11 +60,11 @@ class StatusBar extends ConsumerWidget {
             ),
           ),
           if (detail.isNotEmpty) ...[
-            const SizedBox(width: 10),
+             SizedBox(width: 10),
             Expanded(
               child: Text(
                 detail,
-                style: const TextStyle(
+                style:  TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 12,
                 ),

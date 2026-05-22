@@ -14,7 +14,10 @@ var iconBytes []byte
 
 func main() {
 	a := app.NewWithID("com.ggcode.desktop")
-	a.Settings().SetTheme(newModernTheme())
+
+	// Load config to determine theme
+	cfg := LoadDesktopConfig()
+	a.Settings().SetTheme(newThemeForScheme(cfg.Theme))
 
 	// Set application icon.
 	a.SetIcon(fyne.NewStaticResource("icon.png", iconBytes))

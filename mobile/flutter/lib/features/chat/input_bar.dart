@@ -60,8 +60,8 @@ class _InputBarState extends ConsumerState<InputBar>
     }
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 14),
-      decoration: const BoxDecoration(
+      padding:  EdgeInsets.fromLTRB(12, 8, 12, 14),
+      decoration:  BoxDecoration(
         color: AppColors.background,
       ),
       child: Row(
@@ -98,10 +98,10 @@ class _InputBarState extends ConsumerState<InputBar>
               child: TextField(
                 controller: widget.controller,
                 style:
-                    const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                    	TextStyle(color: AppColors.textPrimary, fontSize: 14),
                 decoration: InputDecoration(
                   hintText: hintText,
-                  hintStyle: const TextStyle(color: AppColors.textMuted),
+                  hintStyle: 	TextStyle(color: AppColors.textMuted),
                   filled: true,
                   fillColor: AppColors.surface,
                   border: OutlineInputBorder(
@@ -123,7 +123,7 @@ class _InputBarState extends ConsumerState<InputBar>
               ),
             ),
           ),
-          const SizedBox(width: 10),
+           SizedBox(width: 10),
           if (isRunning && canSend)
             _ActionButton(
               icon: Icons.stop_circle,
@@ -136,7 +136,7 @@ class _InputBarState extends ConsumerState<InputBar>
               },
               tooltip: 'Interrupt',
             ),
-          const SizedBox(width: 10),
+           SizedBox(width: 10),
           _ActionButton(
             icon: Icons.send,
             color: inputEnabled ? AppColors.accent : AppColors.textMuted,
