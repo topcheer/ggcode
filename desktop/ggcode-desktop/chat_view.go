@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -328,7 +329,7 @@ func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 
 	cv.entry = newSendEntry()
 	cv.entry.Wrapping = fyne.TextWrapWord
-	cv.entry.SetMinRowsVisible(2)
+	cv.entry.SetMinRowsVisible(1)
 	cv.entry.onSend = cv.onSend
 	cv.entry.onImageAttached = func() {
 		cv.imageBtn.Importance = widget.HighImportance
@@ -369,7 +370,7 @@ func NewChatView(app *App, bridge *AgentBridge, ui *UIState) *ChatView {
 
 func (cv *ChatView) Render() fyne.CanvasObject {
 	btnRow := container.NewHBox(cv.cancelBtn, cv.imageBtn, cv.sendBtn)
-	inputBar := widget.NewCard("", "", container.NewBorder(nil, nil, nil, btnRow, cv.entry))
+	inputBar := cv.surface(theme.ColorNamePrimary, container.NewBorder(nil, nil, nil, compactPad(0, 0, 8, 0, btnRow), cv.entry))
 
 	// Image preview bar above input (hidden until image attached).
 	removeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
@@ -378,12 +379,12 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 		cv.imageBtn.Importance = widget.MediumImportance
 		cv.imageBtn.Refresh()
 	})
-	cv.imageBar = container.NewPadded(widget.NewCard("", "", container.NewHBox(
+	cv.imageBar = container.NewVBox(compactPad(0, 4, 0, 0, cv.surface(theme.ColorNamePrimary, container.NewHBox(
 		widget.NewIcon(theme.ContentAddIcon()),
 		widget.NewLabel(t("chat.image_attached")),
 		layout.NewSpacer(),
 		removeBtn,
-	)))
+	))))
 	cv.imageBar.Hide()
 
 	inputSection := container.NewVBox(cv.imageBar, inputBar)
@@ -391,7 +392,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	cv.vbox = container.NewVBox()
 	cv.scroll = container.NewVScroll(cv.vbox)
 
-	mainTab := container.NewTabItem("Main", container.NewPadded(cv.scroll))
+	mainTab := container.NewTabItem("Main", compactPad(4, 0, 0, 0, cv.scroll))
 	cv.tabs = container.NewAppTabs(mainTab)
 	cv.tabs.SetTabLocation(container.TabLocationTop)
 
@@ -403,7 +404,7 @@ func (cv *ChatView) Render() fyne.CanvasObject {
 	// Lightweight status bar updater.
 	go cv.statusLoop()
 
-	return container.NewBorder(nil, container.NewPadded(inputSection), nil, nil, container.NewPadded(cv.tabs))
+	return container.NewBorder(nil, compactPad(6, 8, 8, 8, inputSection), nil, nil, compactPad(4, 0, 8, 8, cv.tabs))
 }
 
 // ── Event handler ─────────────────────────────────────
@@ -553,11 +554,9 @@ func (cv *ChatView) onAssistantChunk(text string) {
 // showThinking displays a "Thinking..." indicator with animated dots.
 func (cv *ChatView) showThinking() {
 	cv.hideThinking()
-	icon := widget.NewIcon(theme.ComputerIcon())
 	label := widget.NewLabel(t("status.thinking"))
 	label.TextStyle = fyne.TextStyle{Italic: true}
-	rowContent := container.NewHBox(icon, label)
-	row := widget.NewCard("", "", rowContent)
+	row := cv.messageRow("AGENT", theme.ComputerIcon(), theme.ColorNameWarning, label)
 	cv.thinkingW = row
 	cv.vbox.Add(row)
 	cv.vbox.Refresh()
@@ -840,7 +839,7 @@ func (cv *ChatView) renderMessage(msg *ChatMessage) fyne.CanvasObject {
 func (cv *ChatView) renderUser(msg *ChatMessage) fyne.CanvasObject {
 	rt := widget.NewRichTextFromMarkdown(msg.Content)
 	rt.Wrapping = fyne.TextWrapWord
-	return cv.iconRow(theme.AccountIcon(), rt)
+	return cv.messageRow("USER", theme.AccountIcon(), theme.ColorNamePrimary, rt)
 }
 
 func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
@@ -858,7 +857,7 @@ func (cv *ChatView) renderAssistant(msg *ChatMessage) fyne.CanvasObject {
 	if cv.app != nil {
 		interceptFileLinks(md, cv.app)
 	}
-	return cv.iconRow(theme.ComputerIcon(), md)
+	return cv.messageRow("AGENT", theme.ComputerIcon(), theme.ColorNameSuccess, md)
 }
 
 func (cv *ChatView) renderSystem(msg *ChatMessage) fyne.CanvasObject {
@@ -879,7 +878,7 @@ func (cv *ChatView) renderReasoning(msg *ChatMessage) fyne.CanvasObject {
 func (cv *ChatView) renderError(msg *ChatMessage) fyne.CanvasObject {
 	t := canvas.NewText("Error: "+msg.Content, theme.ErrorColor())
 	t.TextSize = theme.TextSize()
-	return cv.iconRow(theme.CancelIcon(), t)
+	return cv.messageRow("ERROR", theme.CancelIcon(), theme.ColorNameError, t)
 }
 
 // ── Tool rendering (mirrors TUI classifyTool logic) ──
@@ -1198,11 +1197,87 @@ func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
 // ── Shared helpers ───────────────────────────────────
 
 func (cv *ChatView) iconRow(icon fyne.Resource, content fyne.CanvasObject) fyne.CanvasObject {
+	return cv.messageRow("TOOL", icon, theme.ColorNamePrimary, content)
+}
+
+func (cv *ChatView) messageRow(tag string, icon fyne.Resource, tone fyne.ThemeColorName, content fyne.CanvasObject) fyne.CanvasObject {
 	ic := widget.NewIcon(icon)
 	ic.Resize(fyne.NewSize(16, 16))
-	badge := widget.NewCard("", "", container.NewCenter(ic))
-	card := widget.NewCard("", "", content)
-	return container.NewPadded(container.NewBorder(nil, nil, badge, nil, card))
+	badgeBg := canvas.NewRectangle(blendThemeColors(theme.ColorNameInputBackground, tone, 0.18))
+	badgeBg.StrokeColor = blendThemeColors(theme.ColorNameSeparator, tone, 0.35)
+	badgeBg.StrokeWidth = 1
+	badgeBg.CornerRadius = 10
+	badgeBg.SetMinSize(fyne.NewSize(30, 30))
+	badge := container.NewStack(badgeBg, container.NewCenter(ic))
+
+	var bodyObjects []fyne.CanvasObject
+	if tag != "" {
+		bodyObjects = append(bodyObjects, compactPad(0, 4, 0, 0, timelineTag(tag, tone)))
+	}
+	bodyObjects = append(bodyObjects, content)
+	body := container.NewVBox(bodyObjects...)
+
+	accent := canvas.NewRectangle(theme.Color(tone))
+	accent.CornerRadius = 3
+	accent.SetMinSize(fyne.NewSize(3, 0))
+
+	panel := surfaceRect(tone)
+	frame := container.NewStack(panel, container.NewBorder(nil, nil, accent, nil, compactPad(8, 8, 14, 12, body)))
+	left := container.NewVBox(compactPad(6, 0, 0, 8, badge))
+	return compactPad(2, 2, 0, 0, container.NewBorder(nil, nil, left, nil, frame))
+}
+
+func (cv *ChatView) surface(tone fyne.ThemeColorName, content fyne.CanvasObject) fyne.CanvasObject {
+	panel := surfaceRect(tone)
+	return container.NewStack(panel, compactPad(8, 8, 12, 12, content))
+}
+
+func surfaceRect(tone fyne.ThemeColorName) *canvas.Rectangle {
+	bg := canvas.NewRectangle(blendThemeColors(theme.ColorNameInputBackground, tone, 0.08))
+	bg.StrokeColor = blendThemeColors(theme.ColorNameSeparator, tone, 0.28)
+	bg.StrokeWidth = 1
+	bg.CornerRadius = theme.Size(theme.SizeNameInputRadius)
+	return bg
+}
+
+func timelineTag(text string, tone fyne.ThemeColorName) *canvas.Text {
+	tag := canvas.NewText(strings.ToUpper(text), blendThemeColors(theme.ColorNamePlaceHolder, tone, 0.24))
+	tag.TextSize = theme.Size(theme.SizeNameCaptionText)
+	tag.TextStyle = fyne.TextStyle{Bold: true}
+	return tag
+}
+
+func compactPad(top, bottom, left, right float32, obj fyne.CanvasObject) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(top, bottom, left, right), obj)
+}
+
+func blendThemeColors(base, overlay fyne.ThemeColorName, alpha float64) color.Color {
+	return blendColors(theme.Color(base), theme.Color(overlay), alpha)
+}
+
+func blendColors(base, overlay color.Color, alpha float64) color.Color {
+	if alpha < 0 {
+		alpha = 0
+	}
+	if alpha > 1 {
+		alpha = 1
+	}
+	b := toNRGBA(base)
+	o := toNRGBA(overlay)
+	mix := func(x, y uint8) uint8 {
+		return uint8(float64(x)*(1-alpha) + float64(y)*alpha + 0.5)
+	}
+	return color.NRGBA{
+		R: mix(b.R, o.R),
+		G: mix(b.G, o.G),
+		B: mix(b.B, o.B),
+		A: 255,
+	}
+}
+
+func toNRGBA(c color.Color) color.NRGBA {
+	r, g, b, a := c.RGBA()
+	return color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(a >> 8)}
 }
 
 func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {

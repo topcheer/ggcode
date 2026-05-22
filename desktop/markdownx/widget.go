@@ -65,6 +65,11 @@ func (w *MarkdownWidget) CreateRenderer() fyne.WidgetRenderer {
 	return &mdRenderer{widget: w}
 }
 
+func (w *MarkdownWidget) Refresh() {
+	w.fullRebuild()
+	w.BaseWidget.Refresh()
+}
+
 // mdRenderer wraps the VBox and overrides MinSize to report 0 width.
 type mdRenderer struct {
 	widget *MarkdownWidget

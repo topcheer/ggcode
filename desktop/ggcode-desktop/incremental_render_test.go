@@ -4,8 +4,11 @@ import (
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 )
 
 func TestUIStateAppendAssistantTextEmitsChunkDeltas(t *testing.T) {
@@ -275,5 +278,60 @@ func TestAppendAgentEventsToolResultIgnoresAlreadyMatched(t *testing.T) {
 	}
 	if resultCount != 1 {
 		t.Errorf("expected exactly 1 tool with hasResult=true (duplicate ignored), got %d", resultCount)
+	}
+}
+
+func TestBuildToolRefFindsBodyAndAddsAccordionWithTimelineRow(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	cv := &ChatView{}
+	msg := &ChatMessage{
+		Role:     "tool",
+		ToolName: "read_file",
+		ToolDesc: "Read config",
+		ToolID:   "tool-1",
+	}
+
+	w := cv.renderFileTool(msg)
+	ref := cv.buildToolRef(msg, w)
+	if ref == nil {
+		t.Fatal("expected tool ref")
+	}
+	if ref.icon == nil {
+		t.Fatal("expected tool icon to be found")
+	}
+	if ref.body == nil {
+		t.Fatal("expected tool body container to be found")
+	}
+
+	cv.addToolResult(ref, "hello world")
+	if ref.acc == nil {
+		t.Fatal("expected accordion to be created after tool result")
+	}
+	if len(ref.body.Objects) < 2 {
+		t.Fatalf("expected body to contain header and accordion, got %d objects", len(ref.body.Objects))
+	}
+
+	foundAccordion := false
+	for _, child := range ref.body.Objects {
+		if _, ok := child.(*widget.Accordion); ok {
+			foundAccordion = true
+		}
+	}
+	if !foundAccordion {
+		t.Fatal("expected accordion child in tool body")
+	}
+}
+
+func TestMessageRowWrapsContentInTimelineSurface(t *testing.T) {
+	app := test.NewApp()
+	defer app.Quit()
+
+	cv := &ChatView{}
+	row := cv.messageRow("AGENT", theme.ComputerIcon(), theme.ColorNamePrimary, widget.NewLabel("hello"))
+	c, ok := row.(*fyne.Container)
+	if !ok || len(c.Objects) == 0 {
+		t.Fatalf("message row = %#v, want non-empty container", row)
 	}
 }

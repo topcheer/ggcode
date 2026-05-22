@@ -28,14 +28,14 @@ platform :ios do
     )
   end
 
-  desc "Fetch provisioning profiles for CI (sigh + match)"
+  desc "Fetch provisioning profiles for CI (sigh)"
   lane :fetch_profiles do
     setup_ci if ENV["CI"]
     sigh(
       api_key: api_key,
       app_identifier: app_id,
       provisioning_name: "ggcode mobile distribution",
-      readonly: true
+      readonly: false
     )
   end
 
