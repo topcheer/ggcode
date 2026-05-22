@@ -507,7 +507,7 @@ func (a *App) showWelcome() {
 
 	recentLabel := widget.NewLabel("")
 	if a.dc.WorkDir != "" {
-		recentLabel.SetText("Last used: " + a.dc.WorkDir)
+		recentLabel.SetText(t("folder.last_used", a.dc.WorkDir))
 	}
 
 	welcomeContent := container.NewVBox(
