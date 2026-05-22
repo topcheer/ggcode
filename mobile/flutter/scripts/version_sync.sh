@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 PUBSPEC="pubspec.yaml"
 GRADLE="android/app/build.gradle.kts"
 INFO_PLIST="ios/Runner/Info.plist"
+BUILD_NUMBER_FILE=".build-number"
 DRY_RUN=false
 
 # ── Helpers ──────────────────────────────────────────────
@@ -28,9 +29,13 @@ generate_build_number() {
 	local today
 	today=$(date +%Y%m%d)
 
-	# Read current build number from pubspec.yaml
+	# Read current build number from .build-number file (CI-safe), fallback to pubspec.yaml
 	local current_build
-	current_build=$(grep '^version:' "$PUBSPEC" | sed 's/version: [0-9.]*+//' | tr -d '[:space:]')
+	if [[ -f "$BUILD_NUMBER_FILE" ]]; then
+		current_build=$(tr -d '[:space:]' < "$BUILD_NUMBER_FILE")
+	else
+		current_build=$(grep '^version:' "$PUBSPEC" | sed 's/version: [0-9.]*+//' | tr -d '[:space:]')
+	fi
 
 	if [[ "$current_build" =~ ^${today}([0-9]+)$ ]]; then
 		# Same day — increment sequence
@@ -123,6 +128,9 @@ sync_version() {
 		sed -i "/CFBundleShortVersionString/{n;s/<string>[^<]*<\/string>/<string>${version_name}<\/string>/;}" "$INFO_PLIST"
 		sed -i "/CFBundleVersion/{n;s/<string>[^<]*<\/string>/<string>${build_number}<\/string>/;}" "$INFO_PLIST"
 	fi
+
+	# Persist build number to .build-number file (for CI)
+	echo "$build_number" > "$BUILD_NUMBER_FILE"
 
 	echo "✓ Version synced."
 }

@@ -5,10 +5,25 @@ platform :ios do
   # ── Helpers ────────────────────────────────────────────
 
   def api_key
+    # Resolve key file: CI writes ENV["APP_STORE_PRIVATE_KEY"] to a temp file;
+    # local dev uses ENV["APP_STORE_KEY_PATH"] or falls back to secrets/ dir.
+    key_path = nil
+    if ENV["APP_STORE_PRIVATE_KEY"]
+      # CI mode: write P8 content to temp file
+      key_path = File.join(Dir.tmpdir, "appstore_auth_key.p8")
+      File.write(key_path, ENV["APP_STORE_PRIVATE_KEY"])
+    elsif ENV["APP_STORE_KEY_PATH"]
+      key_path = ENV["APP_STORE_KEY_PATH"]
+    else
+      # Local dev fallback
+      local_key = File.expand_path("../../secrets/AuthKey_8KNYUZ47F2.p8", __dir__)
+      key_path = local_key if File.exist?(local_key)
+    end
+
     app_store_connect_api_key(
       key_id: ENV["APP_STORE_KEY_ID"],
       issuer_id: ENV["APP_STORE_ISSUER_ID"],
-      key_filepath: ENV["APP_STORE_KEY_PATH"] || File.expand_path("../../secrets/AuthKey_8KNYUZ47F2.p8", __dir__),
+      key_filepath: key_path,
       in_house: false
     )
   end

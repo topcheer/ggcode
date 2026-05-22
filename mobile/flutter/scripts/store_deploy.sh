@@ -87,7 +87,7 @@ if [[ "$ACTION" == "tag" ]]; then
   step "Creating git tag v${VERSION}"
   # Ensure version is synced first
   bash scripts/version_sync.sh "$VERSION"
-  git add pubspec.yaml android/app/build.gradle.kts ios/Runner/Info.plist
+  git add pubspec.yaml .build-number android/app/build.gradle.kts ios/Runner/Info.plist
   git diff --cached --quiet || git commit -m "chore(mobile): bump version to ${VERSION}
 
 Co-Authored-By: ggcode <noreply@ggcode.dev>"
@@ -146,7 +146,7 @@ fi
 
 # ── Step 4: Git commit ─────────────────────────────────
 step "4/4: Commit"
-git add pubspec.yaml android/app/build.gradle.kts ios/Runner/Info.plist
+git add pubspec.yaml .build-number android/app/build.gradle.kts ios/Runner/Info.plist
 git diff --cached --quiet || {
   git commit -m "chore(mobile): deploy v${VERSION}
 
