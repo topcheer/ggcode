@@ -299,7 +299,6 @@ type ChatView struct {
 type toolWidgetRef struct {
 	icon      *widget.Icon
 	body      *fyne.Container
-	acc       *widget.Accordion
 	toolName  string
 	toolID    string
 	rawArgs   string
@@ -757,8 +756,6 @@ func findToolRefs(obj fyne.CanvasObject, ref *toolWidgetRef) {
 	switch v := obj.(type) {
 	case *widget.Icon:
 		ref.icon = v
-	case *widget.Accordion:
-		ref.acc = v
 	case *widget.Card:
 		if v.Content != nil {
 			findToolRefs(v.Content, ref)
@@ -806,11 +803,8 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 		label = "Content"
 	}
 
-	if ref.acc != nil {
-		ref.acc.Append(wrapAccordionItem(label, resultBlock))
-	} else if ref.body != nil {
-		ref.acc = widget.NewAccordion(wrapAccordionItem(label, resultBlock))
-		ref.body.Add(ref.acc)
+	if ref.body != nil {
+		ref.body.Add(newCollapsibleSection(label, resultBlock))
 		ref.body.Refresh()
 	}
 }
@@ -1004,22 +998,23 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 	}
 	header := cv.toolHeader(desc, msg)
 
-	var accItems []*widget.AccordionItem
+	var sections []fyne.CanvasObject
 
 	if cmd != "" {
 		cmdBlock := newMD("```bash\n" + cmd + "\n```")
-		accItems = append(accItems, wrapAccordionItem("Command", cmdBlock))
+		sections = append(sections, newCollapsibleSection("Command", cmdBlock))
 	}
 
 	if msg.Content != "" {
 		result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
 		resultBlock := newMD("```\n" + result + "\n```")
-		accItems = append(accItems, wrapAccordionItem("Output", resultBlock))
+		sections = append(sections, newCollapsibleSection("Output", resultBlock))
 	}
 
-	if len(accItems) > 0 {
-		acc := widget.NewAccordion(accItems...)
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	if len(sections) > 0 {
+		body := []fyne.CanvasObject{header}
+		body = append(body, sections...)
+		return cv.iconRow(toolIcon(msg), container.NewVBox(body...))
 	}
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 }
@@ -1046,8 +1041,7 @@ func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 	resultBlock := newCodeBlock(truncateRunes(formatted, 2000, "..."))
-	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
 }
 
 // renderFileTool: header + line count / edit summary + result in accordion.
@@ -1065,8 +1059,7 @@ func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 	// Show file result in accordion.
 	result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
 	resultBlock := newMD("```\n" + result + "\n```")
-	acc := widget.NewAccordion(wrapAccordionItem("Content", resultBlock))
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Content", resultBlock)))
 }
 
 // renderGitTool: header + result in accordion (for git_diff, git_log, git_status).
@@ -1083,8 +1076,7 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 
 	result := truncateRunes(msg.Content, 2000, "...")
 	resultBlock := newCodeBlock(result)
-	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
 }
 
 // renderGenericTool: header + result in accordion (no raw JSON).
@@ -1108,12 +1100,10 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
 		(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
 		resultBlock := newMD("```json\n" + result + "\n```")
-		acc := widget.NewAccordion(wrapAccordionItem("Result", resultBlock))
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
 	}
 	resultBlock := newMD("```\n" + result + "\n```")
-	acc := widget.NewAccordion(wrapAccordionItem("Result", resultBlock))
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
 }
 
 // renderTodoTool: checkbox list, no tool name header.
@@ -1189,8 +1179,7 @@ func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
 
 	result := truncateRunes(msg.Content, 2000, "...")
 	resultBlock := newCodeBlock(result)
-	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
 }
 
 // ── Shared helpers ───────────────────────────────────
@@ -1300,9 +1289,55 @@ func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
 	return rt
 }
 
-// wrapAccordionItem is an alias — MarkdownWidget already handles width via MinSize override.
-func wrapAccordionItem(label string, content fyne.CanvasObject) *widget.AccordionItem {
-	return widget.NewAccordionItem(label, content)
+type tappableCollapseArea struct {
+	widget.BaseWidget
+	content fyne.CanvasObject
+	onTap   func()
+}
+
+func newTappableCollapseArea(content fyne.CanvasObject, onTap func()) *tappableCollapseArea {
+	w := &tappableCollapseArea{content: content, onTap: onTap}
+	w.ExtendBaseWidget(w)
+	return w
+}
+
+func (w *tappableCollapseArea) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(w.content)
+}
+
+func (w *tappableCollapseArea) Tapped(*fyne.PointEvent) {
+	if w.onTap != nil {
+		w.onTap()
+	}
+}
+
+func newCollapsibleSection(label string, content fyne.CanvasObject) fyne.CanvasObject {
+	open := false
+	detailBox := container.NewVBox()
+	btn := widget.NewButtonWithIcon(label, theme.NavigateNextIcon(), nil)
+	btn.Alignment = widget.ButtonAlignLeading
+	btn.Importance = widget.LowImportance
+
+	var toggle func(bool)
+	toggle = func(next bool) {
+		open = next
+		if open {
+			btn.SetIcon(theme.MoveDownIcon())
+			detailBox.Objects = []fyne.CanvasObject{
+				newTappableCollapseArea(compactPad(0, 6, 18, 0, content), func() {
+					toggle(false)
+				}),
+			}
+		} else {
+			btn.SetIcon(theme.NavigateNextIcon())
+			detailBox.Objects = nil
+		}
+		btn.Refresh()
+		detailBox.Refresh()
+	}
+	btn.OnTapped = func() { toggle(!open) }
+	toggle(false)
+	return container.NewVBox(btn, detailBox)
 }
 
 func raw(msg *ChatMessage) string {
