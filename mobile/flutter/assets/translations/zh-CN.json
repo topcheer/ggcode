@@ -48,7 +48,6 @@
   "session.cached_banner": "正在查看 {date} 的缓存历史",
   "session.cached_input_disabled": "当前查看的是缓存的历史 session，输入已禁用。",
   "workspace.scan_hint": "扫描 GGCode 桌面端展示的二维码，立即切换到对应 workspace。",
-  "session.cached_input_disabled": "缓存会话输入已禁用",
   "cron.triggered": "定时任务已触发",
   "approval.title": "需要审批",
   "approval.deny": "拒绝",

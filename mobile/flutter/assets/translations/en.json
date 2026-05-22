@@ -48,7 +48,6 @@
   "session.cached_banner": "Viewing cached history from {date}",
   "session.cached_input_disabled": "You are viewing a cached historical session. Input is disabled.",
   "workspace.scan_hint": "Scan the QR code displayed on GGCode desktop to switch workspace.",
-  "session.cached_input_disabled": "Input is disabled for cached sessions",
   "cron.triggered": "Cron job triggered",
   "approval.title": "Approval Required",
   "approval.deny": "Deny",

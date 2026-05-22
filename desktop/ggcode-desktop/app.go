@@ -137,21 +137,21 @@ func (a *App) buildUI() {
 }
 
 func (a *App) setupMenu() {
-	fileMenu := fyne.NewMenu("File",
-		fyne.NewMenuItem("Open Project...", func() { a.showFolderPicker() }),
+	fileMenu := fyne.NewMenu(t("menu.file"),
+		fyne.NewMenuItem(t("menu.open_project"), func() { a.showFolderPicker() }),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Quit", func() { a.fyneApp.Quit() }),
+		fyne.NewMenuItem(t("menu.quit"), func() { a.fyneApp.Quit() }),
 	)
-	viewMenu := fyne.NewMenu("View",
-		fyne.NewMenuItem("Toggle Sidebar", func() { a.toggleSidebar() }),
-		fyne.NewMenuItem("Refresh Stats", func() { a.refreshSidebar() }),
+	viewMenu := fyne.NewMenu(t("menu.view"),
+		fyne.NewMenuItem(t("menu.toggle_sidebar"), func() { a.toggleSidebar() }),
+		fyne.NewMenuItem(t("menu.refresh_stats"), func() { a.refreshSidebar() }),
 	)
-	toolsMenu := fyne.NewMenu("Tools",
-		fyne.NewMenuItem("IM Settings...", func() { a.showIMWindow() }),
+	toolsMenu := fyne.NewMenu(t("menu.tools"),
+		fyne.NewMenuItem(t("menu.im_settings"), func() { a.showIMWindow() }),
 	)
-	helpMenu := fyne.NewMenu("Help",
-		fyne.NewMenuItem("About", func() { a.showAbout() }),
-		fyne.NewMenuItem("Check for Updates", func() { a.openUpdates() }),
+	helpMenu := fyne.NewMenu(t("menu.help"),
+		fyne.NewMenuItem(t("menu.about"), func() { a.showAbout() }),
+		fyne.NewMenuItem(t("menu.check_updates"), func() { a.openUpdates() }),
 	)
 	a.window.SetMainMenu(fyne.NewMainMenu(fileMenu, viewMenu, toolsMenu, helpMenu))
 }
@@ -163,13 +163,13 @@ func (a *App) showAbout() {
 	icon.SetMinSize(fyne.NewSize(96, 96))
 
 	title := widget.NewLabelWithStyle("ggcode", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	versionLabel := widget.NewLabelWithStyle("Version "+Version, fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
+	versionLabel := widget.NewLabelWithStyle(t("about.version", Version), fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
 	desc := widget.NewLabel(t("app.description"))
 	desc.Alignment = fyne.TextAlignCenter
 
-	releaseLink := widget.NewHyperlink("GitHub Releases", mustParseURL("https://github.com/topcheer/ggcode/releases"))
+	releaseLink := widget.NewHyperlink(t("about.github_releases"), mustParseURL("https://github.com/topcheer/ggcode/releases"))
 	releaseLink.Alignment = fyne.TextAlignCenter
-	issuesLink := widget.NewHyperlink("Report an Issue", mustParseURL("https://github.com/topcheer/ggcode/issues"))
+	issuesLink := widget.NewHyperlink(t("about.report_issue"), mustParseURL("https://github.com/topcheer/ggcode/issues"))
 	issuesLink.Alignment = fyne.TextAlignCenter
 
 	content := container.NewVBox(
@@ -183,7 +183,7 @@ func (a *App) showAbout() {
 		container.NewCenter(issuesLink),
 	)
 
-	dialog.ShowCustom("About ggcode", "Close", content, a.window)
+	dialog.ShowCustom(t("about.title"), t("about.close"), content, a.window)
 }
 
 // showShareDialog starts a tunnel and shows the connection QR code + URL.
@@ -202,7 +202,7 @@ func (a *App) showShareDialog() {
 	statusLabel.Alignment = fyne.TextAlignCenter
 	progress := widget.NewProgressBarInfinite()
 	connectContent := container.NewVBox(statusLabel, progress)
-	connectWin := dialog.NewCustom("Share Session", "Cancel", connectContent, a.window)
+	connectWin := dialog.NewCustom(t("share.title"), t("common.cancel"), connectContent, a.window)
 	connectWin.Show()
 
 	go func() {
@@ -258,6 +258,12 @@ func (a *App) showShareDialog() {
 					return
 				}
 				a.agentBridge.handleMobileAskUserResponse(data)
+			case tunnel.CmdLanguageChange:
+				var data tunnel.LanguageChangeData
+				if err := json.Unmarshal(cmd.Data, &data); err != nil {
+					return
+				}
+				a.applyLanguageChange(data.Language)
 			}
 		})
 
@@ -289,7 +295,7 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 		},
 	}
 	if a.agentBridge == nil {
-		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle, Message: "Ready"}
+		snapshot.Status = tunnel.StatusData{Status: tunnel.StatusIdle, Message: t("status.ready")}
 		return snapshot
 	}
 	snapshot.Status = a.agentBridge.CurrentTunnelStatus()
@@ -396,12 +402,12 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	}
 
 	// Mobile app download links
-	getAppLabel := widget.NewLabelWithStyle("Get GGCode Mobile:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	getAppLabel := widget.NewLabelWithStyle(t("share.get_app"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	iosLink := widget.NewHyperlink("iOS (TestFlight)", mustParseURL("https://testflight.apple.com/join/J34wVD6p"))
 	androidLink := widget.NewHyperlink("Android (Closed Testing)", mustParseURL("https://play.google.com/apps/testing/gg.ai.ggcode.mobile"))
 
 	content := container.NewVBox(
-		widget.NewLabelWithStyle("Mobile Connection", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle(t("share.mobile_connection"), fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
 		widget.NewSeparator(),
 		widget.NewLabel(t("share.scan_hint")),
 		urlLabel,
@@ -416,7 +422,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 		),
 	)
 
-	a.shareDialog = dialog.NewCustom("Share Session", "Close", content, a.window)
+	a.shareDialog = dialog.NewCustom(t("share.title"), t("share.close"), content, a.window)
 	a.shareDialog.Show()
 }
 
@@ -436,21 +442,21 @@ func (a *App) openUpdates() {
 		latest, err := fetchLatestReleaseTag()
 		if err != nil {
 			fyne.Do(func() {
-				dialog.ShowInformation("Update Check", "Could not check for updates:\n"+err.Error(), a.window)
+				dialog.ShowInformation(t("update.title"), t("update.check_failed", err.Error()), a.window)
 			})
 			return
 		}
-		msg := fmt.Sprintf("Current: %s\nLatest: %s", Version, latest)
+		msg := t("update.current_latest", Version, latest)
 		if latest == Version || latest == "v"+Version {
-			msg += "\n\nYou are up to date!"
+			msg += "\n\n" + t("update.up_to_date")
 		} else {
-			msg += "\n\nA newer version is available."
+			msg += "\n\n" + t("update.available")
 		}
 		fyne.Do(func() {
 			if latest == Version || latest == "v"+Version {
-				dialog.ShowInformation("Update Check", msg, a.window)
+				dialog.ShowInformation(t("update.title"), msg, a.window)
 			} else {
-				dialog.ShowConfirm("Update Available", msg+"\n\nDownload now?", func(ok bool) {
+				dialog.ShowConfirm(t("update.available_title"), msg+"\n\n"+t("update.download_now"), func(ok bool) {
 					if ok {
 						a.fyneApp.OpenURL(mustParseURL("https://github.com/topcheer/ggcode/releases/latest"))
 					}
@@ -458,7 +464,7 @@ func (a *App) openUpdates() {
 			}
 		})
 	}()
-	dialog.ShowInformation("Update Check", "Checking for updates...", a.window)
+	dialog.ShowInformation(t("update.title"), t("update.checking"), a.window)
 }
 
 // fetchLatestReleaseTag queries GitHub API for the latest release tag.
@@ -500,7 +506,7 @@ func (a *App) showWelcome() {
 	subtitle := widget.NewLabel(t("folder.select_title"))
 	subtitle.Alignment = fyne.TextAlignCenter
 
-	btn := widget.NewButtonWithIcon("Choose Directory", theme.FolderOpenIcon(), func() {
+	btn := widget.NewButtonWithIcon(t("folder.choose_directory"), theme.FolderOpenIcon(), func() {
 		a.showFolderPicker()
 	})
 	btn.Importance = widget.HighImportance
@@ -521,7 +527,7 @@ func (a *App) showWelcome() {
 
 	a.content.Objects = []fyne.CanvasObject{welcomeContent}
 	a.content.Refresh()
-	a.ui.SetStatus("Select a project directory")
+	a.ui.SetStatus(t("status.select_project"))
 	a.setTitle("ggcode — Welcome")
 }
 
@@ -553,7 +559,7 @@ func (a *App) initFromWorkDir(dir string) {
 	// cwd, but GUI apps launch from a different directory.
 	_ = os.Chdir(dir)
 
-	a.ui.SetStatus(fmt.Sprintf("Loading %s...", dir))
+	a.ui.SetStatus(t("status.loading_workspace", dir))
 	a.window.SetTitle(fmt.Sprintf("ggcode — %s", filepath.Base(dir)))
 
 	cfgPath := resolveConfigFilePath(dir)
@@ -581,14 +587,14 @@ func (a *App) showError(msg string) {
 	errLabel.Wrapping = fyne.TextWrapWord
 	retryBtn := widget.NewButton(t("folder.retry"), func() { a.showFolderPicker() })
 
-	card := widget.NewCard("Error", "", container.NewVBox(
+	card := widget.NewCard(t("status.error"), "", container.NewVBox(
 		container.NewHBox(widget.NewIcon(theme.ErrorIcon()), errLabel),
 		retryBtn,
 	))
 
 	a.content.Objects = []fyne.CanvasObject{card}
 	a.content.Refresh()
-	a.ui.SetStatus("Error")
+	a.ui.SetStatus(t("status.error"))
 }
 
 // ── Onboard wizard ────────────────────────────────────
@@ -606,11 +612,11 @@ func (a *App) showOnboard() {
 	}
 
 	vendorSelect := widget.NewSelect(vendorNames, nil)
-	vendorSelect.PlaceHolder = "Choose a vendor..."
+	vendorSelect.PlaceHolder = t("onboard.choose_vendor")
 	apiEntry := widget.NewPasswordEntry()
-	apiEntry.PlaceHolder = "Enter API key..."
+	apiEntry.PlaceHolder = t("onboard.enter_api_key")
 	modelSelect := widget.NewSelect([]string{}, nil)
-	modelSelect.PlaceHolder = "Select model..."
+	modelSelect.PlaceHolder = t("onboard.select_model")
 
 	var selectedPreset *config.VendorPreset
 
@@ -634,7 +640,7 @@ func (a *App) showOnboard() {
 			a.cfg.SetEndpointAPIKey(selectedPreset.ID, epID, apiEntry.Text, false)
 			resolved, err := a.cfg.ResolveActiveEndpoint()
 			if err != nil {
-				modelSelect.Options = []string{"(error)"}
+				modelSelect.Options = []string{t("onboard.error_option")}
 				modelSelect.Refresh()
 				return
 			}
@@ -644,20 +650,20 @@ func (a *App) showOnboard() {
 			}
 			modelSelect.Options = models
 		} else {
-			modelSelect.Options = []string{"(enter API key first)"}
+			modelSelect.Options = []string{t("onboard.enter_api_key_first")}
 		}
 		modelSelect.Refresh()
 	}
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
-			{Text: "Vendor", Widget: vendorSelect},
-			{Text: "API Key", Widget: apiEntry},
-			{Text: "Model", Widget: modelSelect},
+			{Text: t("sidebar.vendor_label"), Widget: vendorSelect},
+			{Text: t("sidebar.api_key_label"), Widget: apiEntry},
+			{Text: t("sidebar.model_label"), Widget: modelSelect},
 		},
 		OnSubmit: func() {
 			if selectedPreset == nil || apiEntry.Text == "" || modelSelect.Selected == "" {
-				dialog.ShowInformation("Missing Fields", "Please fill in all fields.", a.window)
+				dialog.ShowInformation(t("onboard.missing_fields_title"), t("onboard.missing_fields_message"), a.window)
 				return
 			}
 			epID := selectedPreset.DefaultEndpoint
@@ -675,14 +681,14 @@ func (a *App) showOnboard() {
 			a.startChat()
 		},
 		OnCancel:   func() { a.showWelcome() },
-		SubmitText: "Start",
-		CancelText: "Back",
+		SubmitText: t("onboard.start"),
+		CancelText: t("onboard.back"),
 	}
 
-	card := widget.NewCard("Setup ggcode", "Configure your AI provider", form)
+	card := widget.NewCard(t("onboard.card_title"), t("onboard.card_subtitle"), form)
 	a.content.Objects = []fyne.CanvasObject{container.NewCenter(card)}
 	a.content.Refresh()
-	a.ui.SetStatus("Setup required")
+	a.ui.SetStatus(t("onboard.setup_required"))
 }
 
 // ── Chat ─────────────────────────────────────────────
@@ -810,7 +816,7 @@ func (a *App) resumeSession(id string) {
 		if len(history) > 0 {
 			a.tunnelBroker.SeedHistory(history)
 		}
-		a.tunnelBroker.PushStatus(tunnel.StatusIdle, "Ready")
+		a.tunnelBroker.PushStatus(tunnel.StatusIdle, t("status.ready"))
 	}
 
 	// Refresh sidebar.
@@ -961,6 +967,58 @@ func (a *App) refreshSidebar() {
 		tc := a.agentBridge.TokenCount()
 		cw := a.agentBridge.ContextWindow()
 		a.ui.SetTokenUsage(fmt.Sprintf("%s / %s", humanizeTokens(tc), humanizeTokens(cw)), float64(tc)/float64(max(cw, 1)))
+	}
+}
+
+func (a *App) applyLanguageChange(language string) {
+	if language == "" {
+		return
+	}
+	setLanguage(language)
+	if a.cfg != nil {
+		a.cfg.Language = language
+		_ = a.cfg.SaveLanguagePreference(language)
+	}
+	if a.agentBridge != nil && a.imManager != nil && a.dc != nil {
+		a.agentBridge.Emitter = im.NewIMEmitter(a.imManager, language, a.dc.WorkDir)
+	}
+	fyne.Do(func() {
+		a.refreshLanguageUI()
+	})
+}
+
+func (a *App) refreshLanguageUI() {
+	a.setupMenu()
+	if a.imWindow != nil {
+		a.imWindow.SetTitle(t("im.title"))
+		a.refreshIMWindow()
+	}
+	if a.sidebarRef != nil && a.agentBridge != nil {
+		selectedTab := 0
+		offset := 0.75
+		if a.sidebarRef.tabs != nil {
+			selectedTab = a.sidebarRef.tabs.SelectedIndex()
+		}
+		if a.split != nil {
+			offset = a.split.Offset
+		}
+		sb := NewSidebar(a, a.agentBridge, a.ui)
+		sidebarObj := sb.Render()
+		if sb.tabs != nil && selectedTab >= 0 && selectedTab < len(sb.tabs.Items) {
+			sb.tabs.SelectIndex(selectedTab)
+		}
+		a.sidebarRef = sb
+		a.sidebarObj = sidebarObj
+		if a.split != nil {
+			a.split.Trailing = sidebarObj
+			a.split.SetOffset(offset)
+		}
+		if a.sidebarHidden {
+			a.content.Objects = []fyne.CanvasObject{a.chatViewObj}
+		} else if a.split != nil {
+			a.content.Objects = []fyne.CanvasObject{a.split}
+		}
+		a.content.Refresh()
 	}
 }
 

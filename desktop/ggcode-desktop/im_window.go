@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -91,7 +90,7 @@ func (a *App) showIMWindow() {
 	if a.fyneApp == nil {
 		return
 	}
-	w := a.fyneApp.NewWindow("IM Settings")
+	w := a.fyneApp.NewWindow(t("im.title"))
 	w.Resize(fyne.NewSize(850, 620))
 	w.SetOnClosed(func() { a.imWindow = nil })
 	a.imWindow = w
@@ -116,12 +115,12 @@ func (a *App) buildIMDialogContent(w fyne.Window) fyne.CanvasObject {
 	wsLabel := widget.NewLabel(t("im.workspace", currentWS))
 	wsLabel.Wrapping = fyne.TextWrapWord
 
-	addBtn := widget.NewButtonWithIcon("Add Adapter", theme.ContentAddIcon(), func() {
+	addBtn := widget.NewButtonWithIcon(t("im.add_adapter"), theme.ContentAddIcon(), func() {
 		a.showAddAdapterDialog(w)
 	})
 
 	// Header: two rows. Top: title + add button. Bottom: workspace path.
-	titleLbl := widget.NewLabelWithStyle("IM Settings", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	titleLbl := widget.NewLabelWithStyle(t("im.title"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	header := container.NewVBox(
 		container.NewHBox(titleLbl, layout.NewSpacer(), addBtn),
 		wsLabel,
@@ -172,10 +171,10 @@ func (a *App) buildAdapterSections(w fyne.Window) *fyne.Container {
 		}
 	}
 
-	addSection("This workspace", current)
-	addSection("Other workspaces", other)
-	addSection("Unbound", unbound)
-	addSection("Disabled", disabled)
+	addSection(t("im.section.this_workspace"), current)
+	addSection(t("im.section.other_workspaces"), other)
+	addSection(t("im.section.unbound"), unbound)
+	addSection(t("im.section.disabled"), disabled)
 
 	if len(sections) == 0 {
 		empty := widget.NewLabel(t("im.no_adapters"))
@@ -193,20 +192,20 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 	platLbl := widget.NewLabel(platformDisplayName(e.Platform))
 
 	// Status
-	statusText := "Active"
+	statusText := t("im.status.active")
 	if !e.Enabled {
-		statusText = "Disabled"
+		statusText = t("im.status.disabled")
 	} else if e.Muted {
-		statusText = "Muted"
+		statusText = t("im.status.muted")
 	} else if e.IsCurrent && e.Healthy {
-		statusText = "Connected"
+		statusText = t("im.status.connected")
 	}
 	statusLbl := widget.NewLabel(statusText)
 
 	// Binding
-	bindText := "Not bound"
+	bindText := t("im.binding.not_bound")
 	if e.IsCurrent {
-		bindText = "This workspace"
+		bindText = t("im.binding.this_workspace")
 	} else if e.Workspace != "" {
 		parts := strings.Split(e.Workspace, "/")
 		if len(parts) >= 2 {
@@ -298,7 +297,7 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 	if !e.IsCurrent {
 		actions = append(actions, widget.NewButton(t("im.bind_here"), func() {
 			if a.imManager == nil {
-				dialog.ShowInformation("Bind", "IM manager is not available.", w)
+				dialog.ShowInformation(t("im.bind_unavailable_title"), t("im.bind_unavailable_message"), w)
 				return
 			}
 			if e.Workspace != "" {
@@ -316,7 +315,7 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 
 	// Delete
 	delBtn := widget.NewButton(t("im.delete"), func() {
-		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete adapter '%s'?", e.Name), func(ok bool) {
+		dialog.ShowConfirm(t("im.delete_confirm_title"), t("im.delete_confirm_message", e.Name), func(ok bool) {
 			if !ok {
 				return
 			}
@@ -344,6 +343,7 @@ func (a *App) refreshIMWindow() {
 		return
 	}
 	fyne.Do(func() {
+		a.imWindow.SetTitle(t("im.title"))
 		a.imWindow.SetContent(a.buildIMDialogContent(a.imWindow))
 	})
 }
@@ -360,10 +360,10 @@ func (a *App) showAddAdapterDialog(w fyne.Window) {
 
 	// Use a select with display names
 	platformSelect := widget.NewSelect(platformLabels, nil)
-	platformSelect.PlaceHolder = "Select platform..."
+	platformSelect.PlaceHolder = t("im.select_platform_placeholder")
 
 	nameEntry := widget.NewEntry()
-	nameEntry.PlaceHolder = "e.g. my-bot"
+	nameEntry.PlaceHolder = t("im.name_placeholder")
 
 	fieldsBox := container.NewVBox()
 	fieldEntries := make(map[string]*widget.Entry)
@@ -403,14 +403,14 @@ func (a *App) showAddAdapterDialog(w fyne.Window) {
 
 	form := container.NewVBox(
 		widget.NewForm(
-			&widget.FormItem{Text: "Platform", Widget: platformSelect},
-			&widget.FormItem{Text: "Name", Widget: nameEntry},
+			&widget.FormItem{Text: t("im.form.platform"), Widget: platformSelect},
+			&widget.FormItem{Text: t("im.form.name"), Widget: nameEntry},
 		),
 		fieldsBox,
 		statusLabel,
 	)
 
-	d := dialog.NewCustomConfirm("Add Adapter", "Add", "Cancel", form, func(ok bool) {
+	d := dialog.NewCustomConfirm(t("im.add_adapter_title"), t("common.add"), t("common.cancel"), form, func(ok bool) {
 		if !ok {
 			return
 		}
