@@ -229,13 +229,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 builder: (ctx) => AlertDialog(
                   backgroundColor: const Color(0xFF1A1A2E),
                   title: Text(
-                    isDisconnected ? '返回连接页' : '断开连接',
+                    isDisconnected ? t('chat.back_to_connect') : t('chat.disconnect_confirm'),
                     style: const TextStyle(color: Colors.white),
                   ),
                   content: Text(
-                    isDisconnected
-                        ? '当前连接已经断开。返回后会回到扫码 / 连接界面。'
-                        : '确定要断开与服务端的连接吗？',
+                    isDisconnected ? t('chat.disconnected_message') : t('chat.disconnect_message'),
                     style: TextStyle(color: Colors.white70),
                   ),
                   actions: [
@@ -252,7 +250,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                             .leaveSession();
                       },
                       child: Text(
-                        isDisconnected ? '返回' : '断开',
+                        isDisconnected ? t('chat.back_button') : t('chat.disconnect_button'),
                         style: const TextStyle(color: Colors.redAccent),
                       ),
                     ),
@@ -607,7 +605,7 @@ class _HistoricalSessionBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              '当前查看的是缓存的历史 session，输入已禁用。',
+              t('session.cached_input_disabled'),
               style: TextStyle(
                 color: Colors.amber.shade100,
                 fontSize: 12,
@@ -676,7 +674,7 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
             Padding(
               padding: const EdgeInsets.all(16),
               child: Text(
-                '扫描 GGCode 桌面端展示的二维码，立即切换到对应 workspace。',
+                t('workspace.scan_hint'),
                 style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.5), fontSize: 13),
                 textAlign: TextAlign.center,
