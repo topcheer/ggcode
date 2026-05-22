@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -60,6 +59,46 @@ func NewSidebar(app *App, bridge *AgentBridge, ui *UIState) *Sidebar {
 	return &Sidebar{app: app, bridge: bridge, ui: ui}
 }
 
+func permissionModeOptions() []string {
+	return []string{
+		t("sidebar.mode.supervised"),
+		t("sidebar.mode.plan"),
+		t("sidebar.mode.auto"),
+		t("sidebar.mode.bypass"),
+		t("sidebar.mode.autopilot"),
+	}
+}
+
+func permissionModeLabel(mode string) string {
+	switch mode {
+	case "supervised":
+		return t("sidebar.mode.supervised")
+	case "plan":
+		return t("sidebar.mode.plan")
+	case "bypass":
+		return t("sidebar.mode.bypass")
+	case "autopilot":
+		return t("sidebar.mode.autopilot")
+	default:
+		return t("sidebar.mode.auto")
+	}
+}
+
+func permissionModeFromLabel(label string) permission.PermissionMode {
+	switch label {
+	case t("sidebar.mode.supervised"):
+		return permission.SupervisedMode
+	case t("sidebar.mode.plan"):
+		return permission.PlanMode
+	case t("sidebar.mode.bypass"):
+		return permission.BypassMode
+	case t("sidebar.mode.autopilot"):
+		return permission.AutopilotMode
+	default:
+		return permission.AutoMode
+	}
+}
+
 func (s *Sidebar) Render() fyne.CanvasObject {
 	// Build file tree
 	s.fileTree = NewFileTree(s.app.dc.WorkDir, func(absPath string) {
@@ -69,11 +108,11 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 	// Build file browser tab content: root label + search + tree
 	rootName := filepath.Base(s.app.dc.WorkDir)
 	if rootName == "" || rootName == "." {
-		rootName = "Files"
+		rootName = t("sidebar.files_root")
 	}
 	rootLabel := widget.NewLabelWithStyle(rootName, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	searchEntry := widget.NewEntry()
-	searchEntry.SetPlaceHolder("Search files...")
+	searchEntry.SetPlaceHolder(t("sidebar.search_files_placeholder"))
 	searchEntry.OnChanged = func(text string) {
 		s.fileTree.SetFilter(text)
 	}
@@ -90,12 +129,12 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 	)
 
 	s.tabs = container.NewAppTabs(
-		container.NewTabItemWithIcon("Context", theme.InfoIcon(), s.buildContextTab()),
-		container.NewTabItemWithIcon("Provider", theme.ComputerIcon(), s.buildProviderTab()),
-		container.NewTabItemWithIcon("Files", theme.FolderIcon(), filesContent),
+		container.NewTabItemWithIcon(t("sidebar.tab.context"), theme.InfoIcon(), s.buildContextTab()),
+		container.NewTabItemWithIcon(t("sidebar.tab.provider"), theme.ComputerIcon(), s.buildProviderTab()),
+		container.NewTabItemWithIcon(t("sidebar.tab.files"), theme.FolderIcon(), filesContent),
 	)
 	s.tabs.OnSelected = func(tab *container.TabItem) {
-		if tab.Text == "Provider" {
+		if tab.Text == t("sidebar.tab.provider") {
 			s.fetchModels()
 		}
 	}
@@ -129,7 +168,7 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 		s.ctxModelLoading.SetText("")
 		s.RefreshStats()
 	})
-	s.ctxModelSelect.PlaceHolder = "Select model..."
+	s.ctxModelSelect.PlaceHolder = t("sidebar.select_model_placeholder")
 
 	// Populate model list from resolved endpoint config.
 	if len(resolved.Models) > 0 {
@@ -141,26 +180,12 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	s.ctxModelIniting = false
 
 	// Permission mode selector.
-	modeOptions := []string{"Supervised", "Plan", "Auto", "Bypass", "Autopilot"}
+	modeOptions := permissionModeOptions()
 	s.modeSelect = widget.NewSelect(modeOptions, func(sel string) {
 		if s.bridge == nil {
 			return
 		}
-		var m permission.PermissionMode
-		switch sel {
-		case "Supervised":
-			m = permission.SupervisedMode
-		case "Plan":
-			m = permission.PlanMode
-		case "Auto":
-			m = permission.AutoMode
-		case "Bypass":
-			m = permission.BypassMode
-		case "Autopilot":
-			m = permission.AutopilotMode
-		default:
-			m = permission.AutoMode
-		}
+		m := permissionModeFromLabel(sel)
 		s.bridge.SetPermissionMode(m)
 
 		// Persist to workspace config.
@@ -175,16 +200,8 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 		initialMode = s.app.cfg.DefaultMode
 	}
 	switch initialMode {
-	case "supervised":
-		s.modeSelect.SetSelected("Supervised")
-	case "plan":
-		s.modeSelect.SetSelected("Plan")
-	case "bypass":
-		s.modeSelect.SetSelected("Bypass")
-	case "autopilot":
-		s.modeSelect.SetSelected("Autopilot")
 	default:
-		s.modeSelect.SetSelected("Auto")
+		s.modeSelect.SetSelected(permissionModeLabel(initialMode))
 	}
 
 	refreshModelsBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
@@ -192,10 +209,10 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	})
 	refreshModelsBtn.Importance = widget.LowImportance
 
-	infoCard := widget.NewCard("Model Info", "", widget.NewForm(
-		&widget.FormItem{Text: "Vendor", Widget: widget.NewLabel(resolved.VendorName)},
-		&widget.FormItem{Text: "Model", Widget: container.NewBorder(nil, nil, nil, refreshModelsBtn, s.ctxModelSelect)},
-		&widget.FormItem{Text: "Mode", Widget: s.modeSelect},
+	infoCard := widget.NewCard(t("sidebar.model_info_card"), "", widget.NewForm(
+		&widget.FormItem{Text: t("sidebar.vendor_label"), Widget: widget.NewLabel(resolved.VendorName)},
+		&widget.FormItem{Text: t("sidebar.model_label"), Widget: container.NewBorder(nil, nil, nil, refreshModelsBtn, s.ctxModelSelect)},
+		&widget.FormItem{Text: t("sidebar.mode_label"), Widget: s.modeSelect},
 	))
 
 	// Session list.
@@ -350,7 +367,7 @@ func (s *Sidebar) fetchContextModels() {
 					_ = s.app.cfg.SetEndpointModels(resolved.VendorID, resolved.EndpointID, models)
 				}
 			}
-			s.ctxModelLoading.SetText(fmt.Sprintf("%d models", len(models)))
+			s.ctxModelLoading.SetText(t("sidebar.models_count", len(models)))
 		})
 	}()
 }
@@ -383,13 +400,13 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 		s.fetchModels()
 	})
 	s.apiKeyEntry = widget.NewPasswordEntry()
-	s.apiKeyEntry.PlaceHolder = "API Key"
+	s.apiKeyEntry.PlaceHolder = t("sidebar.api_key_label")
 	s.baseURLEntry = widget.NewEntry()
 	s.baseURLEntry.PlaceHolder = "https://api.example.com/v1"
 	s.modelLoading = widget.NewLabel("")
 	s.modelSelect = widget.NewSelect([]string{}, nil)
-	s.modelSelect.PlaceHolder = "Select model..."
-	s.modelRefresh = widget.NewButtonWithIcon("Refresh Models", theme.ViewRefreshIcon(), func() {
+	s.modelSelect.PlaceHolder = t("sidebar.select_model_placeholder")
+	s.modelRefresh = widget.NewButtonWithIcon(t("sidebar.refresh_models"), theme.ViewRefreshIcon(), func() {
 		if s.ui.AgentWorking.Load() {
 			return
 		}
@@ -408,7 +425,7 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	}
 
 	// Apply button.
-	applyBtn := widget.NewButtonWithIcon("Apply & Restart", theme.ConfirmIcon(), func() {
+	applyBtn := widget.NewButtonWithIcon(t("sidebar.apply_restart"), theme.ConfirmIcon(), func() {
 		if s.ui.AgentWorking.Load() {
 			return
 		}
@@ -417,21 +434,21 @@ func (s *Sidebar) buildProviderTab() fyne.CanvasObject {
 	applyBtn.Importance = widget.HighImportance
 
 	return container.NewVScroll(container.NewVBox(
-		widget.NewCard("Provider", "", container.NewVBox(
+		widget.NewCard(t("sidebar.provider_card"), "", container.NewVBox(
 			widget.NewForm(
-				&widget.FormItem{Text: "Vendor", Widget: s.vendorSelect},
-				&widget.FormItem{Text: "Endpoint", Widget: s.epSelect},
-				&widget.FormItem{Text: "API Key", Widget: s.apiKeyEntry},
-				&widget.FormItem{Text: "Base URL", Widget: s.baseURLEntry},
+				&widget.FormItem{Text: t("sidebar.vendor_label"), Widget: s.vendorSelect},
+				&widget.FormItem{Text: t("sidebar.endpoint_label"), Widget: s.epSelect},
+				&widget.FormItem{Text: t("sidebar.api_key_label"), Widget: s.apiKeyEntry},
+				&widget.FormItem{Text: t("sidebar.base_url_label"), Widget: s.baseURLEntry},
 			),
 		)),
-		widget.NewCard("Model", "", container.NewVBox(
+		widget.NewCard(t("sidebar.model_card"), "", container.NewVBox(
 			s.modelSelect,
 			container.NewHBox(s.modelRefresh, s.modelLoading),
 		)),
 		s.providerStatus,
 		applyBtn,
-		widget.NewButtonWithIcon("Add Endpoint", theme.ContentAddIcon(), func() {
+		widget.NewButtonWithIcon(t("sidebar.add_endpoint"), theme.ContentAddIcon(), func() {
 			s.showAddEndpointDialog()
 		}),
 	))
@@ -524,7 +541,7 @@ func (s *Sidebar) fetchModels() {
 			if len(models) > 0 {
 				s.modelSelect.SetSelected(models[0])
 			}
-			s.modelLoading.SetText(fmt.Sprintf("%d models found", len(models)))
+			s.modelLoading.SetText(t("sidebar.models_found_ok", len(models)))
 		})
 	}()
 }
@@ -597,15 +614,15 @@ func (s *Sidebar) showImpersonateDialog() {
 	}
 
 	versionEntry := widget.NewEntry()
-	versionEntry.SetPlaceHolder("Custom version (optional)")
+	versionEntry.SetPlaceHolder(t("sidebar.custom_version_placeholder"))
 	if s.app.cfg != nil && s.app.cfg.Impersonation.CustomVersion != "" {
 		versionEntry.SetText(s.app.cfg.Impersonation.CustomVersion)
 	}
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
-			{Text: "Identity", Widget: selectEntry},
-			{Text: "Version", Widget: versionEntry},
+			{Text: t("sidebar.identity_label"), Widget: selectEntry},
+			{Text: t("sidebar.version_label"), Widget: versionEntry},
 		},
 		OnSubmit: func() {
 			idx := selectEntry.SelectedIndex()
@@ -636,7 +653,7 @@ func (s *Sidebar) showImpersonateDialog() {
 		},
 	}
 
-	d := dialog.NewCustomConfirm("Impersonation", "Apply", "Cancel", form, func(ok bool) {
+	d := dialog.NewCustomConfirm(t("sidebar.impersonation_title"), t("common.apply"), t("common.cancel"), form, func(ok bool) {
 		if ok {
 			form.OnSubmit()
 		}
@@ -648,7 +665,7 @@ func (s *Sidebar) showImpersonateDialog() {
 // showAddEndpointDialog shows a form to add a new endpoint to the current vendor.
 func (s *Sidebar) showAddEndpointDialog() {
 	nameEntry := widget.NewEntry()
-	nameEntry.SetPlaceHolder("my-endpoint")
+	nameEntry.SetPlaceHolder(t("sidebar.endpoint_name_placeholder"))
 
 	protocolSelect := widget.NewSelect([]string{"openai", "anthropic", "google"}, nil)
 	protocolSelect.SetSelected("openai")
@@ -681,7 +698,7 @@ func (s *Sidebar) showAddEndpointDialog() {
 				if err != nil {
 					statusLabel.SetText(t("status.failed"))
 				} else {
-					statusLabel.SetText(fmt.Sprintf("OK — %d models found", len(models)))
+					statusLabel.SetText(t("sidebar.models_found_ok", len(models)))
 				}
 			})
 		}()
@@ -689,15 +706,15 @@ func (s *Sidebar) showAddEndpointDialog() {
 
 	form := container.NewVBox(
 		widget.NewForm(
-			&widget.FormItem{Text: "Name", Widget: nameEntry},
-			&widget.FormItem{Text: "Protocol", Widget: protocolSelect},
-			&widget.FormItem{Text: "API Key", Widget: apiKeyEntry},
-			&widget.FormItem{Text: "Base URL", Widget: baseURLEntry},
+			&widget.FormItem{Text: t("sidebar.form.name"), Widget: nameEntry},
+			&widget.FormItem{Text: t("sidebar.form.protocol"), Widget: protocolSelect},
+			&widget.FormItem{Text: t("sidebar.api_key_label"), Widget: apiKeyEntry},
+			&widget.FormItem{Text: t("sidebar.base_url_label"), Widget: baseURLEntry},
 		),
 		container.NewHBox(testBtn, statusLabel),
 	)
 
-	d := dialog.NewCustomConfirm("Add Endpoint", "Add", "Cancel", form, func(ok bool) {
+	d := dialog.NewCustomConfirm(t("sidebar.endpoint_add_title"), t("common.add"), t("common.cancel"), form, func(ok bool) {
 		if !ok {
 			return
 		}
