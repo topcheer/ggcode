@@ -198,7 +198,7 @@ func (fp *FilePreview) buildHTMLPreview() fyne.CanvasObject {
 		}
 	})
 
-	viewSourceBtn := widget.NewButton("View Source", func() {
+	viewSourceBtn := widget.NewButton(t("file.view_source"), func() {
 		// Re-build as code preview — read file and show source
 		data, err := os.ReadFile(fp.filePath)
 		if err != nil {
@@ -388,7 +388,7 @@ func splitMarkdownAndMermaid(content string) []mermaidPart {
 // It tries kroki.io first, then mermaid.ink as fallback. If all fail, shows
 // the raw code with a button to open in the online mermaid.live editor.
 func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject {
-	placeholder := widget.NewLabel("Loading diagram...")
+	placeholder := widget.NewLabel(t("file.loading_diagram"))
 	placeholder.Alignment = fyne.TextAlignCenter
 
 	img := &canvas.Image{}
@@ -432,7 +432,7 @@ func (fp *FilePreview) buildMermaidDiagram(mermaidCode string) fyne.CanvasObject
 		if len(pngData) < 8 || !bytes.HasPrefix(pngData, []byte("\x89PNG")) {
 			logf("mermaid", "response is not a valid PNG (%d bytes)", len(pngData))
 			fyne.Do(func() {
-				placeholder.SetText("Diagram rendering returned invalid data")
+				placeholder.SetText(t("file.diagram_invalid"))
 				placeholder.Refresh()
 			})
 			return

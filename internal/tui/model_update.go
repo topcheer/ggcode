@@ -378,6 +378,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tunnelAskUserResponseMsg:
 		return m.handleTunnelAskUserResponse(msg)
 
+	case tunnelLanguageChangeMsg:
+		return m.handleTunnelLanguageChangeMsg(msg)
+
 	case wechatQRCodeMsg:
 		return m.handleWechatQRCodeMsg(msg)
 	case wechatQRPollMsg:

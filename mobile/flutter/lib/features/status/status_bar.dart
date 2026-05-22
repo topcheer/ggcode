@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
+import '../../core/l10n/app_localizations.dart';
 
 class StatusBar extends ConsumerWidget {
   const StatusBar({super.key});
@@ -61,15 +62,15 @@ class StatusBar extends ConsumerWidget {
   String _statusLabel(String status) {
     switch (status) {
       case 'idle':
-        return 'Ready';
+        return t('status.idle');
       case 'thinking':
-        return 'Thinking...';
+        return t('status.thinking');
       case 'running':
-        return 'Working...';
+        return t('status.running');
       case 'waiting':
-        return 'Waiting for approval';
+        return t('status.approval_needed');
       case 'error':
-        return 'Error';
+        return t('tool.error');
       default:
         return status;
     }

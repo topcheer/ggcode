@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers/session_provider.dart';
+import '../../core/l10n/app_localizations.dart';
 
 class ApprovalSheet extends ConsumerWidget {
   final ApprovalInfo approval;
@@ -26,7 +27,7 @@ class ApprovalSheet extends ConsumerWidget {
               const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
               const SizedBox(width: 8),
               Text(
-                'Approval Required',
+                t('approval.title'),
                 style: TextStyle(
                   color: Colors.orange.withValues(alpha: 0.9),
                   fontWeight: FontWeight.w600,
@@ -63,21 +64,21 @@ class ApprovalSheet extends ConsumerWidget {
             children: [
               TextButton(
                 onPressed: () => _respond(ref, 'deny'),
-                child: const Text('Deny',
-                    style: TextStyle(color: Colors.redAccent)),
+                child: Text(t('approval.deny'),
+                    style: const TextStyle(color: Colors.redAccent)),
               ),
               const SizedBox(width: 8),
               TextButton(
                 onPressed: () => _respond(ref, 'allow'),
                 child:
-                    const Text('Allow', style: TextStyle(color: Colors.green)),
+                    Text(t('approval.allow'), style: const TextStyle(color: Colors.green)),
               ),
               const SizedBox(width: 8),
               FilledButton(
                 onPressed: () => _respond(ref, 'always_allow'),
                 style:
                     FilledButton.styleFrom(backgroundColor: Colors.blueAccent),
-                child: const Text('Always Allow'),
+                child: Text(t('approval.always_allow')),
               ),
             ],
           ),

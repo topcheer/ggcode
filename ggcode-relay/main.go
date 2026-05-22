@@ -192,6 +192,21 @@ func (p *peer) readPump(h *hub) {
 				p.handleResume(msg)
 			}
 			continue
+		case "language_change":
+			// forward to all other peers in room
+			p.room.mu.Lock()
+			for _, peer := range p.room.peers {
+				if peer.id != p.id {
+					peer.sendJSON(relayMessage{
+						Type:      "language_change",
+						Data:      msg.Data,
+						SessionID: p.room.sessionID,
+						EventID:   p.room.nextEventID(),
+					})
+				}
+			}
+			p.room.mu.Unlock()
+			continue
 		case "encrypted":
 			// proceed
 		default:

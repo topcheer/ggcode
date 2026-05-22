@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../core/providers/session_provider.dart';
+import '../../core/l10n/app_localizations.dart';
 import 'message_bubble.dart';
 import 'approval_sheet.dart';
 import 'input_bar.dart';
@@ -199,6 +200,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           ],
         ),
         actions: [
+          // Language toggle
+          Consumer(builder: (context, ref, _) {
+            final lang = ref.watch(languageProvider);
+            return IconButton(
+              icon: Text(
+                lang == 'zh-CN' ? 'EN' : '中',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              tooltip: t('settings.language'),
+              onPressed: () {
+                final newLang = lang == 'zh-CN' ? 'en' : 'zh-CN';
+                ref.read(languageProvider.notifier).setLanguage(newLang);
+                loadTranslations(newLang);
+                // Notify desktop
+                ref.read(connectionProvider.notifier).service?.sendLanguageChange(newLang);
+                setState(() {});
+              },
+            );
+          }),
           _ConnectionStatusIcon(
             status: connState.status,
             onDisconnectTap: () {
@@ -221,8 +241,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(ctx).pop(),
-                      child: const Text('取消',
-                          style: TextStyle(color: Colors.white54)),
+                      child: Text(t('chat.cancel'),
+                          style: const TextStyle(color: Colors.white54)),
                     ),
                     TextButton(
                       onPressed: () async {
@@ -385,7 +405,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
               Text(
-                'Workspaces',
+                t('workspace.switcher_title'),
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.9),
                   fontSize: 14,
@@ -596,7 +616,7 @@ class _HistoricalSessionBanner extends StatelessWidget {
           ),
           TextButton(
             onPressed: onReturnToLive,
-            child: const Text('回到当前会话'),
+            child: Text(t('chat.back_to_current')),
           ),
         ],
       ),
@@ -630,9 +650,9 @@ class _WorkspaceScannerScreenState extends State<_WorkspaceScannerScreen> {
                     icon: const Icon(Icons.close, color: Colors.white),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
-                  const Text(
-                    'Scan Workspace QR',
-                    style: TextStyle(
+                  Text(
+                    t('workspace.scan_new'),
+                    style: const TextStyle(
                         color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.w600),
@@ -712,7 +732,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                 ),
                 const SizedBox(width: 2),
                 Text(
-                  widget.isError ? 'Error' : 'Result',
+                  widget.isError ? t('tool.error') : t('tool.result'),
                   style: TextStyle(
                     color: widget.isError
                         ? Colors.redAccent.withValues(alpha: 0.8)
@@ -778,7 +798,7 @@ class _ConnectionStatusIcon extends StatelessWidget {
         return IconButton(
           icon: const Icon(Icons.cloud_off, size: 20, color: Colors.redAccent),
           onPressed: onDisconnectTap,
-          tooltip: 'Disconnected — tap to return to connect',
+          tooltip: t('connect.status_disconnected'),
         );
     }
   }

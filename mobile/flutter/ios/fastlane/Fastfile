@@ -115,7 +115,7 @@ platform :ios do
 
   desc "Upload to TestFlight (uses flutter-built IPA if available)"
   lane :upload_testflight do
-    setup_ci
+    setup_ci if ENV["CI"]
     sigh(api_key: api_key, app_identifier: app_id)
 
     flutter_ipa = File.expand_path("../../build/ios/ipa/GGCode Mobile.ipa", __dir__)

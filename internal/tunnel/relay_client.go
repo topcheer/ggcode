@@ -199,14 +199,15 @@ func (rc *RelayClient) readPump(done func()) {
 		}
 
 		var relayMsg struct {
-			Type       string `json:"type"`
-			SessionID  string `json:"session_id,omitempty"`
-			EventID    string `json:"event_id,omitempty"`
-			StreamID   string `json:"stream_id,omitempty"`
-			Count      int    `json:"count,omitempty"`
-			Nonce      string `json:"nonce,omitempty"`
-			Ciphertext string `json:"ciphertext,omitempty"`
-			Role       string `json:"role,omitempty"`
+			Type       string          `json:"type"`
+			SessionID  string          `json:"session_id,omitempty"`
+			EventID    string          `json:"event_id,omitempty"`
+			StreamID   string          `json:"stream_id,omitempty"`
+			Count      int             `json:"count,omitempty"`
+			Nonce      string          `json:"nonce,omitempty"`
+			Ciphertext string          `json:"ciphertext,omitempty"`
+			Role       string          `json:"role,omitempty"`
+			Data       json.RawMessage `json:"data,omitempty"`
 		}
 		if json.Unmarshal(raw, &relayMsg) != nil {
 			continue
@@ -248,13 +249,27 @@ func (rc *RelayClient) readPump(done func()) {
 			if msg.StreamID == "" {
 				msg.StreamID = relayMsg.StreamID
 			}
-			rc.mu.RLock()
-			fn := rc.onMessage
-			rc.mu.RUnlock()
-			if fn != nil {
-				fn(msg)
-			}
+			rc.deliver(msg)
+
+		case "language_change":
+			// Forward to desktop as a plaintext command
+			rc.deliver(GatewayMessage{
+				Type:      CmdLanguageChange,
+				EventID:   relayMsg.EventID,
+				SessionID: relayMsg.SessionID,
+				Data:      relayMsg.Data,
+			})
 		}
+	}
+}
+
+// deliver calls the onMessage callback safely.
+func (rc *RelayClient) deliver(msg GatewayMessage) {
+	rc.mu.RLock()
+	fn := rc.onMessage
+	rc.mu.RUnlock()
+	if fn != nil {
+		fn(msg)
 	}
 }
 
