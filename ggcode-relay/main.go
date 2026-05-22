@@ -211,6 +211,23 @@ func (p *peer) readPump(h *hub) {
 			}
 			p.room.mu.Unlock()
 			continue
+		case "theme_change":
+			p.room.mu.Lock()
+			fwdMsg := relayMessage{
+				Type:      "theme_change",
+				Data:      msg.Data,
+				SessionID: p.room.sessionID,
+			}
+			if p.room.server != nil && p.room.server != p {
+				p.room.server.sendJSON(fwdMsg)
+			}
+			for c := range p.room.clients {
+				if c != p {
+					c.sendJSON(fwdMsg)
+				}
+			}
+			p.room.mu.Unlock()
+			continue
 		case "encrypted":
 			// proceed
 		default:
