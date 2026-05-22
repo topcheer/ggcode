@@ -187,7 +187,17 @@ jobs:
       - name: Build IPA
         shell: bash
         run: |
-          # Create ExportOptions.plist for manual signing
+          # Override Xcode project to Manual signing
+          PBX=ios/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PBX"
+          sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";/g' "$PBX"
+          # Set provisioning profile UUID
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \"\";/PROVISIONING_PROFILE_SPECIFIER = \"${PP_UUID}\";/g" "$PBX" || true
+          # Add PROVISIONING_PROFILE_SPECIFIER if not present
+          grep -q "PROVISIONING_PROFILE_SPECIFIER" "$PBX" || \
+            sed -i '' 's/DEVELOPMENT_TEAM = EGZFS7M525;/DEVELOPMENT_TEAM = EGZFS7M525; PROVISIONING_PROFILE_SPECIFIER = "'"$PP_UUID"'";/g' "$PBX"
+
+          # Create ExportOptions.plist
           cat > ios/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -208,18 +218,7 @@ jobs:
           </plist>
           PLIST
 
-          echo "=== ExportOptions.plist ==="
-          cat ios/ExportOptions.plist
-          echo "=== Building with PP_UUID=$PP_UUID PP_NAME=$PP_NAME ==="
-
-          flutter build ipa \
-            --release \
-            --export-options-plist=ios/ExportOptions.plist \
-            -- \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
-            DEVELOPMENT_TEAM=EGZFS7M525
+          flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
       - name: Upload to TestFlight & promote
         run: |
