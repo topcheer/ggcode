@@ -33,8 +33,7 @@ platform :ios do
     setup_ci if ENV["CI"]
     # cert will create/manage the distribution certificate via API key
     cert(
-      api_key: api_key,
-      type: "appstore"
+      api_key: api_key
     )
     sigh(
       api_key: api_key,
