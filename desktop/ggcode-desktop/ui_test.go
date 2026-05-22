@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // helper: create a temp workspace directory with sample files
@@ -1157,6 +1158,70 @@ func TestAppShowFilePreviewWithSidebarHidden(t *testing.T) {
 	}
 }
 
+func TestSidebarRenderHideButtonTogglesSidebar(t *testing.T) {
+	root := createTestWorkspace(t)
+	app := &App{
+		fyneApp: test.NewApp(),
+		dc:      &DesktopConfig{WorkDir: root},
+		cfg: &config.Config{
+			Vendor:   "zai",
+			Endpoint: "default",
+			Vendors: map[string]config.VendorConfig{
+				"zai": {
+					DisplayName: "Z.ai",
+					Endpoints: map[string]config.EndpointConfig{
+						"default": {
+							DisplayName:  "Default",
+							Protocol:     "openai",
+							BaseURL:      "https://api.example.com/v1",
+							DefaultModel: "glm-5.1",
+							Models:       []string{"glm-5.1"},
+						},
+					},
+				},
+			},
+		},
+		ui: NewUIState(),
+	}
+	w := app.fyneApp.NewWindow("test")
+
+	chatLabel := widget.NewLabel("chat")
+	sidebarLabel := widget.NewLabel("sidebar")
+	app.chatViewObj = chatLabel
+	app.sidebarObj = sidebarLabel
+	app.split = container.NewHSplit(chatLabel, sidebarLabel)
+	app.content = container.NewStack(app.split)
+	w.SetContent(app.content)
+	w.Resize(fyne.NewSize(1200, 800))
+
+	bridge := &AgentBridge{
+		resolved: &config.ResolvedEndpoint{
+			VendorID:   "zai",
+			VendorName: "Z.ai",
+			Model:      "glm-5.1",
+			Models:     []string{"glm-5.1"},
+		},
+	}
+	sidebar := NewSidebar(app, bridge, app.ui)
+	obj := sidebar.Render()
+
+	hideBtn := findButtonByIcon(obj, theme.NavigateNextIcon())
+	if hideBtn == nil {
+		t.Fatal("expected sidebar hide button")
+	}
+	if hideBtn.OnTapped == nil {
+		t.Fatal("expected sidebar hide button to be tappable")
+	}
+	hideBtn.OnTapped()
+
+	if !app.sidebarHidden {
+		t.Fatal("expected hide button to toggle sidebarHidden")
+	}
+	if len(app.content.Objects) != 1 || app.content.Objects[0] != app.chatViewObj {
+		t.Fatal("expected hide button to swap content to chat view")
+	}
+}
+
 // ── Helper functions ───────────────────────────────────────────
 
 func findButton(obj fyne.CanvasObject, text string) *widget.Button {
@@ -1173,6 +1238,29 @@ func findButton(obj fyne.CanvasObject, text string) *widget.Button {
 		}
 	}
 	return nil
+}
+
+func findButtonByIcon(obj fyne.CanvasObject, icon fyne.Resource) *widget.Button {
+	switch w := obj.(type) {
+	case *widget.Button:
+		if sameResource(w.Icon, icon) {
+			return w
+		}
+	case *fyne.Container:
+		for _, child := range w.Objects {
+			if btn := findButtonByIcon(child, icon); btn != nil {
+				return btn
+			}
+		}
+	}
+	return nil
+}
+
+func sameResource(a, b fyne.Resource) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Name() == b.Name() && bytes.Equal(a.Content(), b.Content())
 }
 
 func findLabel(obj fyne.CanvasObject) *widget.Label {

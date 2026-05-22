@@ -4,6 +4,8 @@ import (
 	"image/color"
 	"math"
 	"testing"
+
+	"fyne.io/fyne/v2/theme"
 )
 
 // relativeLuminance computes the WCAG 2.0 relative luminance of a color.
@@ -112,6 +114,19 @@ func TestDefaultDesktopConfigUsesValidTheme(t *testing.T) {
 	}
 	if got := normalizeThemeName(cfg.Theme); got != cfg.Theme {
 		t.Fatalf("default theme normalized to %q, want %q", got, cfg.Theme)
+	}
+}
+
+func TestModernThemeDesktopChromeSizes(t *testing.T) {
+	th := newThemeForScheme("midnight")
+	if got := th.Size(theme.SizeNamePadding); got != 8 {
+		t.Fatalf("padding size = %v, want 8", got)
+	}
+	if got := th.Size(theme.SizeNameScrollBar); got != 12 {
+		t.Fatalf("scroll bar size = %v, want 12", got)
+	}
+	if got := th.Size(theme.SizeNameScrollBarSmall); got != 12 {
+		t.Fatalf("small scroll bar size = %v, want 12", got)
 	}
 }
 

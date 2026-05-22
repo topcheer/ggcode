@@ -138,7 +138,13 @@ func (s *Sidebar) Render() fyne.CanvasObject {
 			s.fetchModels()
 		}
 	}
-	return s.tabs
+	hideBtn := widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() {
+		s.app.toggleSidebar()
+	})
+	hideBtn.Importance = widget.LowImportance
+
+	topBar := container.NewHBox(layout.NewSpacer(), hideBtn)
+	return container.NewBorder(compactPad(2, 0, 0, 0, topBar), nil, nil, nil, s.tabs)
 }
 
 func (s *Sidebar) RefreshStats() {
