@@ -240,6 +240,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 final idx = availableThemes.indexOf(current);
                 final next = availableThemes[(idx + 1) % availableThemes.length];
                 ref.read(themeProvider.notifier).setTheme(next);
+                // Notify desktop
+                ref
+                    .read(connectionProvider.notifier)
+                    .service
+                    ?.sendThemeChange(next);
                 setState(() {});
               },
             );

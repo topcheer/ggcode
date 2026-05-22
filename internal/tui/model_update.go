@@ -380,7 +380,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tunnelLanguageChangeMsg:
 		return m.handleTunnelLanguageChangeMsg(msg)
-
+	case tunnelThemeChangeMsg:
+		return m.handleTunnelThemeChangeMsg(msg)
 	case wechatQRCodeMsg:
 		return m.handleWechatQRCodeMsg(msg)
 	case wechatQRPollMsg:

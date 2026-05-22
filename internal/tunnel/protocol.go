@@ -104,6 +104,17 @@ type LanguageChangeData struct {
 	Language string `json:"language"` // "en" or "zh-CN"
 }
 
+// ThemeChangeData carries a theme change (bidirectional sync).
+type ThemeChangeData struct {
+	Theme string `json:"theme"` // "midnight", "oled", "nord", "rose", "forest", "light"
+}
+
+// EventThemeChange is the event name for theme changes across clients.
+const EventThemeChange = "theme_change"
+
+// CmdThemeChange is the command name for theme change requests.
+const CmdThemeChange = "theme_change"
+
 // ResumeHelloData requests either incremental replay or full session replay.
 type ResumeHelloData struct {
 	ClientID    string `json:"client_id"`

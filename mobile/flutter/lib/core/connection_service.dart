@@ -231,6 +231,13 @@ class ConnectionService {
     });
   }
 
+  void sendThemeChange(String theme) {
+    send({
+      'type': 'theme_change',
+      'theme': theme,
+    });
+  }
+
   Future<void> sendEncrypted(proto.WsMessage msg) async {
     final plaintext = utf8.encode(msg.toJson());
     final encrypted = await crypto.encryptData(plaintext);

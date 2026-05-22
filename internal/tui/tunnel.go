@@ -60,6 +60,11 @@ type tunnelLanguageChangeMsg struct {
 	language string
 }
 
+// tunnelThemeChangeMsg carries a theme change from mobile.
+type tunnelThemeChangeMsg struct {
+	theme string
+}
+
 // ─── Slash command handler ───
 
 func (m *Model) handleTunnelCommand(text string) tea.Cmd {
@@ -433,6 +438,15 @@ func (m *Model) handleTunnelClientCommand(cmd tunnel.GatewayMessage) {
 		if data.Language != "" && m.program != nil {
 			m.program.Send(tunnelLanguageChangeMsg{language: data.Language})
 		}
+
+	case tunnel.CmdThemeChange:
+		var data tunnel.ThemeChangeData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			return
+		}
+		if data.Theme != "" && m.program != nil {
+			m.program.Send(tunnelThemeChangeMsg{theme: data.Theme})
+		}
 	}
 }
 
@@ -510,6 +524,15 @@ func (m *Model) handleTunnelLanguageChangeMsg(msg tunnelLanguageChangeMsg) (tea.
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Language changed to %s (from mobile)", lang))
 	m.chatListScrollToBottom()
+	return m, nil
+}
+
+// handleTunnelThemeChangeMsg handles a theme change from mobile.
+// TUI does not switch its own theme, but echoes the event to other clients.
+func (m *Model) handleTunnelThemeChangeMsg(msg tunnelThemeChangeMsg) (tea.Model, tea.Cmd) {
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.SendThemeChange(msg.theme)
+	}
 	return m, nil
 }
 

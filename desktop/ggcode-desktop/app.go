@@ -266,6 +266,12 @@ func (a *App) showShareDialog() {
 					return
 				}
 				a.applyLanguageChange(data.Language)
+			case tunnel.CmdThemeChange:
+				var data tunnel.ThemeChangeData
+				if err := json.Unmarshal(cmd.Data, &data); err != nil {
+					return
+				}
+				a.applyThemeChange(data.Theme)
 			}
 		})
 
@@ -1031,6 +1037,10 @@ func (a *App) applyThemeChange(themeName string) {
 	}
 	a.dc.Theme = themeName
 	a.dc.Save()
+	// Notify mobile clients
+	if a.tunnelBroker != nil {
+		a.tunnelBroker.SendThemeChange(themeName)
+	}
 	fyne.Do(func() {
 		a.fyneApp.Settings().SetTheme(newThemeForScheme(themeName))
 	})

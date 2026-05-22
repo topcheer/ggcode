@@ -259,6 +259,13 @@ func (rc *RelayClient) readPump(done func()) {
 				SessionID: relayMsg.SessionID,
 				Data:      relayMsg.Data,
 			})
+		case "theme_change":
+			rc.deliver(GatewayMessage{
+				Type:      CmdThemeChange,
+				EventID:   relayMsg.EventID,
+				SessionID: relayMsg.SessionID,
+				Data:      relayMsg.Data,
+			})
 		}
 	}
 }

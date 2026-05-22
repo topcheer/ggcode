@@ -10,6 +10,7 @@ export '../connection_service.dart' show ConnectionStatus;
 import '../crypto.dart';
 import '../l10n/app_localizations.dart';
 import '../models/protocol.dart' as proto;
+import '../theme/app_theme.dart';
 
 // ---- Connection Service Provider ----
 
@@ -247,6 +248,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           if (lang.isNotEmpty) {
             ref.read(languageProvider.notifier).setLanguage(lang);
             unawaited(loadTranslations(lang));
+          }
+        }
+        break;
+
+      case 'theme_change':
+        if (msg.data != null) {
+          final theme = msg.data!['theme'] as String? ?? '';
+          if (theme.isNotEmpty) {
+            ref.read(themeProvider.notifier).setTheme(theme);
           }
         }
         break;
