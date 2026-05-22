@@ -165,6 +165,12 @@ jobs:
           VERSION="${VERSION#v}"
           bash scripts/version_sync.sh "$VERSION"
 
+      - name: Fetch provisioning profile via fastlane sigh
+        run: |
+          cd ios
+          bundle install --jobs 4 --retry 3
+          bundle exec fastlane fetch_profiles
+
       - name: Install iOS dependencies
         run: |
           cd ios

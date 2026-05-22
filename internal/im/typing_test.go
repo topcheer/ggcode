@@ -702,23 +702,23 @@ func TestQQTriggerTyping_SeqFromPassiveReplyCount(t *testing.T) {
 // LastMessageID helper
 // ============================================================
 
-func TestLastMessageID_PrefersInbound(t *testing.T) {
+func TestLastMessageID_PrefersOutbound(t *testing.T) {
 	got := LastMessageID(ChannelBinding{
 		LastInboundMessageID:  "in-1",
 		LastOutboundMessageID: "out-1",
 	})
-	if got != "in-1" {
-		t.Errorf("LastMessageID = %q, want in-1", got)
+	if got != "out-1" {
+		t.Errorf("LastMessageID = %q, want out-1", got)
 	}
 }
 
-func TestLastMessageID_FallsBackToOutbound(t *testing.T) {
+func TestLastMessageID_FallsBackToInbound(t *testing.T) {
 	got := LastMessageID(ChannelBinding{
-		LastInboundMessageID:  "",
-		LastOutboundMessageID: "out-1",
+		LastInboundMessageID:  "in-1",
+		LastOutboundMessageID: "",
 	})
-	if got != "out-1" {
-		t.Errorf("LastMessageID = %q, want out-1", got)
+	if got != "in-1" {
+		t.Errorf("LastMessageID = %q, want in-1", got)
 	}
 }
 
@@ -799,6 +799,80 @@ func TestRecordOutboundMessage_WrongAdapter(t *testing.T) {
 	binding := mgr.CurrentBinding()
 	if binding.LastOutboundMessageID != "" {
 		t.Errorf("LastOutboundMessageID should be empty, got %q", binding.LastOutboundMessageID)
+	}
+}
+
+func TestSlackSend_RecordsOutboundMessageID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"ts":"1234567890.654321"}`))
+	}))
+	defer srv.Close()
+
+	mgr := NewManager()
+	_ = mgr.SetBindingStore(NewMemoryBindingStore())
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp/project"})
+	binding, _ := mgr.BindChannel(ChannelBinding{
+		Workspace: "/tmp/project",
+		Platform:  PlatformSlack,
+		Adapter:   "slack",
+		ChannelID: "C123",
+	})
+
+	adapter := &slackAdapter{
+		manager:    mgr,
+		httpClient: srv.Client(),
+		botToken:   "xoxb-test-token",
+		apiBase:    srv.URL,
+		connected:  true,
+	}
+
+	if err := adapter.Send(context.Background(), binding, OutboundEvent{Kind: OutboundEventText, Text: "hello"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	updated := mgr.CurrentBinding()
+	if updated == nil || updated.LastOutboundMessageID != "1234567890.654321" {
+		t.Fatalf("LastOutboundMessageID = %q, want 1234567890.654321", updated.LastOutboundMessageID)
+	}
+}
+
+func TestFeishuSend_RecordsOutboundMessageID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":0,"data":{"message_id":"om_dc13264520392913993dd051dba21dcf"}}`))
+	}))
+	defer srv.Close()
+
+	mgr := NewManager()
+	_ = mgr.SetBindingStore(NewMemoryBindingStore())
+	mgr.BindSession(SessionBinding{SessionID: "s1", Workspace: "/tmp/project"})
+	binding, _ := mgr.BindChannel(ChannelBinding{
+		Workspace: "/tmp/project",
+		Platform:  PlatformFeishu,
+		Adapter:   "feishu",
+		ChannelID: "oc_test_chat",
+	})
+
+	adapter := &feishuAdapter{
+		manager: mgr,
+		httpClient: &http.Client{
+			Transport: urlRewriteTransport{
+				targets:   []string{"https://open.feishu.cn"},
+				rewriteTo: srv.URL,
+				transport: http.DefaultTransport,
+			},
+		},
+		domain:    "feishu",
+		token:     "tenant_token_xxx",
+		connected: true,
+	}
+
+	if err := adapter.Send(context.Background(), binding, OutboundEvent{Kind: OutboundEventText, Text: "hello"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	updated := mgr.CurrentBinding()
+	if updated == nil || updated.LastOutboundMessageID != "om_dc13264520392913993dd051dba21dcf" {
+		t.Fatalf("LastOutboundMessageID = %q, want om_dc13264520392913993dd051dba21dcf", updated.LastOutboundMessageID)
 	}
 }
 
