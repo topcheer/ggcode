@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ggcode_mobile/core/l10n/app_localizations.dart';
 
 void main() {
   test('translation assets stay valid and free of duplicate keys', () {
@@ -25,5 +26,10 @@ void main() {
       expect(duplicates, isEmpty,
           reason: '$locale has duplicate translation keys');
     }
+  });
+
+  test('empty language input normalizes to english', () {
+    expect(normalizeLanguage(''), defaultLanguage);
+    expect(normalizeLanguage('unexpected'), defaultLanguage);
   });
 }

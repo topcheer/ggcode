@@ -191,11 +191,24 @@ type modernTheme struct {
 }
 
 func newThemeForScheme(name string) fyne.Theme {
+	name = normalizeThemeName(name)
 	pal, ok := themePalettes[name]
 	if !ok {
 		pal = themePalettes["midnight"]
 	}
 	return &modernTheme{Theme: theme.DefaultTheme(), pal: pal}
+}
+
+func normalizeThemeName(name string) string {
+	switch name {
+	case "", "dark":
+		return "midnight"
+	default:
+		if _, ok := themePalettes[name]; ok {
+			return name
+		}
+		return "midnight"
+	}
 }
 
 func (m *modernTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {

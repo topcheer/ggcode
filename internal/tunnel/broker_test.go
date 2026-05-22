@@ -185,6 +185,7 @@ func TestBrokerSendSessionInfo(t *testing.T) {
 		Provider:  "openai",
 		Mode:      "auto",
 		Version:   "1.0",
+		Theme:     "midnight",
 	})
 	time.Sleep(50 * time.Millisecond)
 	msgs := d.drain()
@@ -195,7 +196,7 @@ func TestBrokerSendSessionInfo(t *testing.T) {
 			found = true
 			var data SessionInfoData
 			json.Unmarshal(m.Data, &data)
-			if data.Workspace != "/tmp/project" || data.Model != "gpt-4" {
+			if data.Workspace != "/tmp/project" || data.Model != "gpt-4" || data.Theme != "midnight" {
 				t.Errorf("session info mismatch: %+v", data)
 			}
 		}

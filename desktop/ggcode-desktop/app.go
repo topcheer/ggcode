@@ -75,9 +75,7 @@ func NewApp(fyneApp fyne.App) *App {
 func (a *App) Run() {
 	// Initialize i18n
 	loadTranslations()
-	if a.cfg != nil && a.cfg.Language != "" {
-		setLanguage(a.cfg.Language)
-	}
+	setLanguage(a.dc.Language)
 
 	a.window = a.fyneApp.NewWindow("ggcode")
 	setWindowIcon(a.window)
@@ -146,6 +144,7 @@ func (a *App) setupMenu() {
 		fyne.NewMenuItem(t("menu.toggle_sidebar"), func() { a.toggleSidebar() }),
 		fyne.NewMenuItem(t("menu.refresh_stats"), func() { a.refreshSidebar() }),
 		fyne.NewMenuItemSeparator(),
+		a.buildLanguageMenu(),
 		a.buildThemeMenu(),
 	)
 	toolsMenu := fyne.NewMenu(t("menu.tools"),
@@ -300,6 +299,7 @@ func (a *App) tunnelSnapshot() tunnel.BrokerSnapshot {
 			Workspace: a.dc.WorkDir,
 			Version:   Version,
 			Language:  a.cfg.Language,
+			Theme:     normalizeThemeName(a.dc.Theme),
 		},
 	}
 	if a.agentBridge == nil {
@@ -577,6 +577,12 @@ func (a *App) initFromWorkDir(dir string) {
 		return
 	}
 	a.cfg = cfg
+	language := a.dc.Language
+	if cfg.Language != "" {
+		language = cfg.Language
+	}
+	setLanguage(language)
+	a.dc.Language = normalizeLanguage(language)
 	a.dc.WorkDir = dir
 	a.initIMRuntime()
 	_ = a.dc.Save()
@@ -729,6 +735,7 @@ func (a *App) resumeSession(id string) {
 			Workspace: a.dc.WorkDir,
 			Version:   Version,
 			Language:  a.cfg.Language,
+			Theme:     normalizeThemeName(a.dc.Theme),
 		})
 		session := a.agentBridge.CurrentSession()
 		history := make([]tunnel.HistoryEntry, 0, len(session.Messages)*2)
@@ -979,13 +986,16 @@ func (a *App) refreshSidebar() {
 }
 
 func (a *App) applyLanguageChange(language string) {
-	if language == "" {
-		return
-	}
+	language = normalizeLanguage(language)
 	setLanguage(language)
 	if a.cfg != nil {
 		a.cfg.Language = language
 		_ = a.cfg.SaveLanguagePreference(language)
+	}
+	a.dc.Language = language
+	_ = a.dc.Save()
+	if a.tunnelBroker != nil {
+		a.tunnelBroker.SendLanguageChange(language)
 	}
 	if a.agentBridge != nil && a.imManager != nil && a.dc != nil {
 		a.agentBridge.Emitter = im.NewIMEmitter(a.imManager, language, a.dc.WorkDir)
@@ -1032,9 +1042,7 @@ func (a *App) refreshLanguageUI() {
 
 // applyThemeChange switches the desktop theme at runtime.
 func (a *App) applyThemeChange(themeName string) {
-	if themeName == "" {
-		themeName = "midnight"
-	}
+	themeName = normalizeThemeName(themeName)
 	a.dc.Theme = themeName
 	a.dc.Save()
 	// Notify mobile clients
@@ -1043,6 +1051,7 @@ func (a *App) applyThemeChange(themeName string) {
 	}
 	fyne.Do(func() {
 		a.fyneApp.Settings().SetTheme(newThemeForScheme(themeName))
+		a.setupMenu()
 	})
 }
 
@@ -1062,7 +1071,7 @@ func (a *App) buildThemeMenu() *fyne.MenuItem {
 		item := fyne.NewMenuItem(label, func() {
 			a.applyThemeChange(name)
 		})
-		if name == a.dc.Theme {
+		if name == normalizeThemeName(a.dc.Theme) {
 			item.Checked = true
 		}
 		items = append(items, item)
@@ -1070,6 +1079,24 @@ func (a *App) buildThemeMenu() *fyne.MenuItem {
 	themeMenu := fyne.NewMenuItem(t("menu.theme"), nil)
 	themeMenu.ChildMenu = fyne.NewMenu("", items...)
 	return themeMenu
+}
+
+// buildLanguageMenu creates the Language submenu with check marks.
+func (a *App) buildLanguageMenu() *fyne.MenuItem {
+	current := normalizeLanguage(a.dc.Language)
+	items := []*fyne.MenuItem{
+		fyne.NewMenuItem(t("menu.language.english"), func() {
+			a.applyLanguageChange("en")
+		}),
+		fyne.NewMenuItem(t("menu.language.chinese_simplified"), func() {
+			a.applyLanguageChange("zh-CN")
+		}),
+	}
+	items[0].Checked = current == "en"
+	items[1].Checked = current == "zh-CN"
+	languageMenu := fyne.NewMenuItem(t("menu.language"), nil)
+	languageMenu.ChildMenu = fyne.NewMenu("", items...)
+	return languageMenu
 }
 
 // ── Helpers ──────────────────────────────────────────

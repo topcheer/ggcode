@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import 'core/l10n/app_localizations.dart';
 import 'core/models/protocol.dart' as proto;
 import 'core/providers/session_provider.dart';
 import 'core/theme/app_theme.dart';
@@ -12,7 +13,9 @@ import 'features/chat/ask_user_screen.dart';
 
 const bool _demoMode = bool.fromEnvironment('DEMO', defaultValue: false);
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await loadTranslations(defaultLanguage);
   runApp(const ProviderScope(child: GGCodeApp()));
 }
 
@@ -52,6 +55,8 @@ class _AppShellState extends ConsumerState<AppShell>
     WidgetsBinding.instance.addObserver(this);
     Future.microtask(
         () => ref.read(workspaceCacheProvider.notifier).initialize());
+    Future.microtask(
+        () => ref.read(themeProvider.notifier).loadThemePreference());
 
     // Demo mode: inject sample messages for screenshots
     if (_demoMode) {

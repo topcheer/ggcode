@@ -10,6 +10,7 @@ func TestEmbeddedTranslationsAreValidJSON(t *testing.T) {
 
 	requiredKeys := []string{
 		"menu.file",
+		"menu.language",
 		"im.title",
 		"sidebar.tab.provider",
 		"share.title",
@@ -34,5 +35,14 @@ func TestEmbeddedTranslationsAreValidJSON(t *testing.T) {
 				t.Fatalf("%s missing required translation key %q", lang, key)
 			}
 		}
+	}
+}
+
+func TestEmptyLanguageFallsBackToEnglish(tt *testing.T) {
+	tt.Parallel()
+
+	setLanguage("")
+	if got := t("sidebar.tab.context"); got != "Context" {
+		tt.Fatalf("t(sidebar.tab.context) = %q, want %q", got, "Context")
 	}
 }

@@ -61,6 +61,8 @@ func TestSessionInfoDataJSON(t *testing.T) {
 		Provider:  "openai",
 		Mode:      "auto",
 		Version:   "1.3.10",
+		Language:  "zh-CN",
+		Theme:     "midnight",
 	}
 	b, err := json.Marshal(d)
 	if err != nil {
@@ -68,7 +70,7 @@ func TestSessionInfoDataJSON(t *testing.T) {
 	}
 	var got SessionInfoData
 	json.Unmarshal(b, &got)
-	if got.Workspace != d.Workspace || got.Model != d.Model || got.Mode != d.Mode {
+	if got.Workspace != d.Workspace || got.Model != d.Model || got.Mode != d.Mode || got.Language != d.Language || got.Theme != d.Theme {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }

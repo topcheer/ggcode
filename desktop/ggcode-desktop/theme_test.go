@@ -99,6 +99,22 @@ func TestAllPalettesHaveAllFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeThemeNameMapsLegacyDark(t *testing.T) {
+	if got := normalizeThemeName("dark"); got != "midnight" {
+		t.Fatalf("normalizeThemeName(dark) = %q, want midnight", got)
+	}
+}
+
+func TestDefaultDesktopConfigUsesValidTheme(t *testing.T) {
+	cfg := defaultDesktopConfig()
+	if cfg.Theme != "midnight" {
+		t.Fatalf("default theme = %q, want midnight", cfg.Theme)
+	}
+	if got := normalizeThemeName(cfg.Theme); got != cfg.Theme {
+		t.Fatalf("default theme normalized to %q, want %q", got, cfg.Theme)
+	}
+}
+
 func assertNonZero(t *testing.T, label string, c color.Color) {
 	t.Helper()
 	r, g, b, a := c.RGBA()

@@ -97,6 +97,7 @@ type SessionInfoData struct {
 	Mode      string `json:"mode"`
 	Version   string `json:"version"`
 	Language  string `json:"language,omitempty"`
+	Theme     string `json:"theme,omitempty"`
 }
 
 // LanguageChangeData carries a language preference change (bidirectional sync).
