@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -373,7 +374,7 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		if sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
+		if _, sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
 		return
@@ -757,7 +758,7 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		if sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
+		if _, sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
 		return
@@ -1086,13 +1087,16 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	}
 	chunks := splitFeishuMessage(remainingText, feishuMaxTextLen)
 	for _, chunk := range chunks {
-		if err := a.sendPostMessage(ctx, chatID, chunk); err != nil {
+		msgID, err := a.sendPostMessage(ctx, chatID, chunk)
+		if err != nil {
 			// Fallback to plain text if post format fails
 			debug.Log("feishu", "adapter=%s post send failed, falling back to text: %v", a.name, err)
-			if fallbackErr := a.sendTextMessage(ctx, chatID, stripFeishuMarkdown(chunk)); fallbackErr != nil {
-				return fallbackErr
+			msgID, err = a.sendTextMessage(ctx, chatID, stripFeishuMarkdown(chunk))
+			if err != nil {
+				return err
 			}
 		}
+		a.recordOutboundMessage(binding, msgID)
 	}
 	return nil
 }
@@ -1128,7 +1132,7 @@ func (a *feishuAdapter) outboundText(event OutboundEvent) string {
 	}
 }
 
-func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content string) error {
+func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content string) (string, error) {
 	a.mu.RLock()
 	token := a.token
 	a.mu.RUnlock()
@@ -1144,20 +1148,20 @@ func (a *feishuAdapter) sendTextMessage(ctx context.Context, chatID, content str
 	bodyBytes, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		return fmt.Errorf("Feishu API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return "", fmt.Errorf("Feishu API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	return nil
+	return parseFeishuMessageID(resp.Body)
 }
 
 // TriggerTyping adds a "Typing" emoji reaction on the most recent message to indicate
@@ -1483,7 +1487,7 @@ type feishuSilentLogger struct{}
 // Uses Feishu Card JSON 2.0 structure which supports full markdown including
 // tables, headings, code blocks, and more. JSON 1.0's markdown tag does NOT
 // support tables or headings.
-func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content string) error {
+func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content string) (string, error) {
 	a.mu.RLock()
 	token := a.token
 	a.mu.RUnlock()
@@ -1516,20 +1520,48 @@ func (a *feishuAdapter) sendPostMessage(ctx context.Context, chatID, content str
 	bodyBytes, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		return fmt.Errorf("Feishu card API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return "", fmt.Errorf("Feishu card API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	return nil
+	return parseFeishuMessageID(resp.Body)
+}
+
+func (a *feishuAdapter) recordOutboundMessage(binding ChannelBinding, messageID string) {
+	if a.manager == nil {
+		return
+	}
+	if err := a.manager.RecordOutboundMessage(binding.Workspace, binding.Adapter, messageID); err != nil {
+		debug.Log("feishu", "adapter=%s record outbound failed: %v", a.name, err)
+	}
+}
+
+func parseFeishuMessageID(r io.Reader) (string, error) {
+	data, err := util.ReadAll(r, util.ReadLimitGeneral)
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", nil
+	}
+	var result struct {
+		Data struct {
+			MessageID string `json:"message_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(result.Data.MessageID), nil
 }
 
 // stripFeishuMarkdown removes basic markdown formatting for plain text fallback.

@@ -311,7 +311,7 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		if sendErr := a.sendChannelMessage(ctx, channel, pairingResult.ReplyText); sendErr != nil {
+		if _, sendErr := a.sendChannelMessage(ctx, channel, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
 		return
@@ -497,9 +497,11 @@ func (a *slackAdapter) Send(ctx context.Context, binding ChannelBinding, event O
 	remainingText = markdownToMrkdwn(remainingText)
 	chunks := splitSlackMessage(remainingText, slackMaxTextLen)
 	for _, chunk := range chunks {
-		if err := a.sendChannelMessage(ctx, channelID, chunk); err != nil {
+		msgID, err := a.sendChannelMessage(ctx, channelID, chunk)
+		if err != nil {
 			return err
 		}
+		a.recordOutboundMessage(binding, msgID)
 	}
 	return nil
 }
@@ -582,8 +584,12 @@ func (a *slackAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 	return nil
 }
 
-func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, content string) error {
-	url := slackAPIBase + "/chat.postMessage"
+func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, content string) (string, error) {
+	baseURL := slackAPIBase
+	if a.apiBase != "" {
+		baseURL = a.apiBase
+	}
+	url := baseURL + "/chat.postMessage"
 	body := map[string]any{
 		"channel": channelID,
 		"text":    content,
@@ -591,28 +597,38 @@ func (a *slackAdapter) sendChannelMessage(ctx context.Context, channelID, conten
 	bodyBytes, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+a.botToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
-		return fmt.Errorf("Slack API parse error: %w", err)
+		return "", fmt.Errorf("Slack API parse error: %w", err)
 	}
 	if ok, _ := result["ok"].(bool); !ok {
 		errMsg, _ := result["error"].(string)
-		return fmt.Errorf("Slack API error: %s", errMsg)
+		return "", fmt.Errorf("Slack API error: %s", errMsg)
 	}
-	return nil
+	ts, _ := result["ts"].(string)
+	return strings.TrimSpace(ts), nil
+}
+
+func (a *slackAdapter) recordOutboundMessage(binding ChannelBinding, messageID string) {
+	if a.manager == nil {
+		return
+	}
+	if err := a.manager.RecordOutboundMessage(binding.Workspace, binding.Adapter, messageID); err != nil {
+		debug.Log("slack", "adapter=%s record outbound failed: %v", a.name, err)
+	}
 }
 
 func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
@@ -649,15 +665,18 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID string,
 		resp, err := a.httpClient.Get(img.Data)
 		if err != nil {
 			// Fallback: send URL as text
-			return a.sendChannelMessage(ctx, channelID, img.Data)
+			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			return err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode >= 400 {
-			return a.sendChannelMessage(ctx, channelID, img.Data)
+			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			return err
 		}
 		data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		if err != nil {
-			return a.sendChannelMessage(ctx, channelID, img.Data)
+			_, err = a.sendChannelMessage(ctx, channelID, img.Data)
+			return err
 		}
 		filename := filepath.Base(img.Data)
 		if filename == "" || filename == "." {
