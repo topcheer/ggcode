@@ -129,7 +129,7 @@ func (a *App) showPairingCodeDialog(ch *im.PairingChallenge) {
 	adapterLbl := widget.NewLabel(fmt.Sprintf("%s (%s)", ch.Adapter, ch.Platform))
 	adapterLbl.Alignment = fyne.TextAlignCenter
 
-	hintLbl := widget.NewLabel("Enter this code in your IM channel:")
+	hintLbl := widget.NewLabel(t("im.code_hint"))
 	hintLbl.Alignment = fyne.TextAlignCenter
 
 	codeText := canvas.NewText(ch.Code, theme.ForegroundColor())
@@ -230,7 +230,7 @@ func (a *App) showWechatQRAuthWindow(adapterName string) {
 	w := a.fyneApp.NewWindow("WeChat — Scan QR Code")
 	w.Resize(fyne.NewSize(350, 420))
 
-	statusLabel := widget.NewLabel("Loading QR code...")
+	statusLabel := widget.NewLabel(t("im.loading_qr"))
 	qrImg := &canvas.Image{}
 	qrImg.FillMode = canvas.ImageFillContain
 	qrImg.SetMinSize(fyne.NewSize(256, 256))
@@ -250,7 +250,7 @@ func (a *App) showWechatQRAuthWindow(adapterName string) {
 
 		token, png, err := requestWechatQRCode(ctx)
 		if err != nil {
-			fyne.Do(func() { statusLabel.SetText("Error: " + err.Error()) })
+			fyne.Do(func() { statusLabel.SetText(t("im.error", err.Error())) })
 			return
 		}
 
@@ -259,7 +259,7 @@ func (a *App) showWechatQRAuthWindow(adapterName string) {
 		qrImg.Resource = fyne.NewStaticResource("qr.png", png)
 
 		fyne.Do(func() {
-			statusLabel.SetText("Waiting for scan...")
+			statusLabel.SetText(t("im.waiting_scan"))
 			qrImg.Refresh()
 			content.Refresh()
 		})
@@ -272,14 +272,14 @@ func (a *App) showWechatQRAuthWindow(adapterName string) {
 			pollCancel()
 
 			if err != nil {
-				fyne.Do(func() { statusLabel.SetText("Poll error: " + err.Error()) })
+				fyne.Do(func() { statusLabel.SetText(t("im.poll_error", err.Error())) })
 				continue
 			}
 
 			switch status {
 			case "confirmed":
 				fyne.Do(func() {
-					statusLabel.SetText("Scan confirmed! Setting up adapter...")
+					statusLabel.SetText(t("im.scan_confirmed"))
 				})
 				// Save bot_token to adapter config
 				a.saveWechatBotToken(adapterName, botToken)
@@ -289,12 +289,12 @@ func (a *App) showWechatQRAuthWindow(adapterName string) {
 				})
 				return
 			case "scanned":
-				fyne.Do(func() { statusLabel.SetText("Scanned! Confirming on phone...") })
+				fyne.Do(func() { statusLabel.SetText(t("im.scanned_confirming")) })
 			default:
 				// keep polling
 			}
 		}
-		fyne.Do(func() { statusLabel.SetText("QR code expired. Please try again.") })
+		fyne.Do(func() { statusLabel.SetText(t("im.qr_expired")) })
 	}()
 }
 
@@ -400,7 +400,7 @@ func (a *App) showContactQRWindow(adapterName string) {
 		qrImg,
 		widget.NewLabel(contactURI),
 		layout.NewSpacer(),
-		widget.NewButton("Copy Link", func() {
+		widget.NewButton(t("im.copy_link"), func() {
 			if a.fyneApp.Driver() != nil {
 				a.window.Clipboard().SetContent(contactURI)
 			}

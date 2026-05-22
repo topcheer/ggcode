@@ -103,7 +103,7 @@ func (a *App) showIMWindow() {
 func (a *App) buildIMDialogContent(w fyne.Window) fyne.CanvasObject {
 	cfg := a.cfg
 	if cfg == nil || cfg.IM.Adapters == nil {
-		empty := widget.NewLabel("No configuration loaded yet.")
+		empty := widget.NewLabel(t("im.no_config"))
 		empty.Alignment = fyne.TextAlignCenter
 		return empty
 	}
@@ -113,7 +113,7 @@ func (a *App) buildIMDialogContent(w fyne.Window) fyne.CanvasObject {
 	if a.dc != nil {
 		currentWS = a.dc.WorkDir
 	}
-	wsLabel := widget.NewLabel("Workspace: " + currentWS)
+	wsLabel := widget.NewLabel(t("im.workspace", currentWS))
 	wsLabel.Wrapping = fyne.TextWrapWord
 
 	addBtn := widget.NewButtonWithIcon("Add Adapter", theme.ContentAddIcon(), func() {
@@ -178,7 +178,7 @@ func (a *App) buildAdapterSections(w fyne.Window) *fyne.Container {
 	addSection("Disabled", disabled)
 
 	if len(sections) == 0 {
-		empty := widget.NewLabel("No adapters configured. Click 'Add Adapter' to get started.")
+		empty := widget.NewLabel(t("im.no_adapters"))
 		empty.Alignment = fyne.TextAlignCenter
 		sections = append(sections, empty)
 	}
@@ -242,7 +242,7 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 
 	// Enable/Disable
 	if e.Enabled {
-		actions = append(actions, widget.NewButton("Disable", func() {
+		actions = append(actions, widget.NewButton(t("im.disable"), func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, false)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -251,7 +251,7 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 			a.refreshIMWindow()
 		}))
 	} else {
-		actions = append(actions, widget.NewButton("Enable", func() {
+		actions = append(actions, widget.NewButton(t("im.enable"), func() {
 			_ = a.cfg.SetIMAdapterEnabled(e.Name, true)
 			_ = a.cfg.Save()
 			if a.imManager != nil {
@@ -263,14 +263,14 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 
 	// Scan QR Code button for QRAuth platforms (WeChat onboard)
 	if meta, ok := platformRegistry[e.Platform]; ok && meta.QRAuth {
-		actions = append(actions, widget.NewButton("Scan QR Code", func() {
+		actions = append(actions, widget.NewButton(t("im.scan_qr"), func() {
 			a.showWechatQRAuthWindow(e.Name)
 		}))
 	}
 
 	// Show Contact QR button for platforms that expose a contact link
 	if meta, ok := platformRegistry[e.Platform]; ok && meta.ShowContactQR && e.Enabled {
-		actions = append(actions, widget.NewButton("Show QR Code", func() {
+		actions = append(actions, widget.NewButton(t("im.show_qr"), func() {
 			a.showContactQRWindow(e.Name)
 		}))
 	}
@@ -278,14 +278,14 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 	// Mute/Unmute (only for enabled adapters bound to this workspace)
 	if e.Enabled && e.IsCurrent {
 		if e.Muted {
-			actions = append(actions, widget.NewButton("Unmute", func() {
+			actions = append(actions, widget.NewButton(t("im.unmute"), func() {
 				if a.imManager != nil {
 					_ = a.imManager.UnmuteBinding(e.Name)
 				}
 				a.refreshIMWindow()
 			}))
 		} else {
-			actions = append(actions, widget.NewButton("Mute", func() {
+			actions = append(actions, widget.NewButton(t("im.mute"), func() {
 				if a.imManager != nil {
 					_ = a.imManager.MuteBinding(e.Name)
 				}
@@ -296,7 +296,7 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 
 	// Bind to this workspace
 	if !e.IsCurrent {
-		actions = append(actions, widget.NewButton("Bind here", func() {
+		actions = append(actions, widget.NewButton(t("im.bind_here"), func() {
 			if a.imManager == nil {
 				dialog.ShowInformation("Bind", "IM manager is not available.", w)
 				return
@@ -315,7 +315,7 @@ func (a *App) buildAdapterRow(w fyne.Window, e imAdapterEntry, currentWS string)
 	}
 
 	// Delete
-	delBtn := widget.NewButton("Delete", func() {
+	delBtn := widget.NewButton(t("im.delete"), func() {
 		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete adapter '%s'?", e.Name), func(ok bool) {
 			if !ok {
 				return
@@ -385,7 +385,7 @@ func (a *App) showAddAdapterDialog(w fyne.Window) {
 		}
 		meta := platformRegistry[platKey]
 		if len(meta.Fields) == 0 {
-			hint := widget.NewLabel("This platform requires scanning a QR code or link after adding.")
+			hint := widget.NewLabel(t("im.scan_hint"))
 			hint.TextStyle = fyne.TextStyle{Italic: true}
 			fieldsBox.Add(hint)
 		}
@@ -417,7 +417,7 @@ func (a *App) showAddAdapterDialog(w fyne.Window) {
 		name := strings.TrimSpace(nameEntry.Text)
 		selectedLabel := platformSelect.Selected
 		if name == "" || selectedLabel == "" {
-			statusLabel.SetText("Name and platform are required.")
+			statusLabel.SetText(t("im.name_platform_required"))
 			return
 		}
 		// Find platform key from display name
@@ -429,7 +429,7 @@ func (a *App) showAddAdapterDialog(w fyne.Window) {
 			}
 		}
 		if platKey == "" {
-			statusLabel.SetText("Unknown platform.")
+			statusLabel.SetText(t("im.unknown_platform"))
 			return
 		}
 		meta := platformRegistry[platKey]
@@ -450,7 +450,7 @@ func (a *App) showAddAdapterDialog(w fyne.Window) {
 			Platform: platKey,
 			Extra:    extra,
 		}); err != nil {
-			statusLabel.SetText("Error: " + err.Error())
+			statusLabel.SetText(t("im.error", err.Error()))
 			return
 		}
 		_ = a.cfg.Save()

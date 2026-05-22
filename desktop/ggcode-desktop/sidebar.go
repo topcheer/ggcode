@@ -203,9 +203,9 @@ func (s *Sidebar) buildContextTab() fyne.CanvasObject {
 	s.sessionList = widget.NewList(
 		func() int { return len(s.sessions) },
 		func() fyne.CanvasObject {
-			nameLabel := widget.NewLabel("session")
+			nameLabel := widget.NewLabel(t("sidebar.session"))
 			nameLabel.Wrapping = fyne.TextWrapWord
-			timeLabel := widget.NewLabel("time")
+			timeLabel := widget.NewLabel(t("sidebar.time"))
 			timeLabel.TextStyle = fyne.TextStyle{Monospace: true}
 			return container.NewBorder(nil, nil, nil, timeLabel,
 				container.NewPadded(nameLabel),
@@ -491,7 +491,7 @@ func (s *Sidebar) fetchModels() {
 	s.fetchingModels = true
 	defer func() { s.fetchingModels = false }()
 
-	s.modelLoading.SetText("Loading...")
+	s.modelLoading.SetText(t("sidebar.model_loading"))
 	s.modelLoading.Refresh()
 
 	resolved := s.bridge.Resolved()
@@ -513,7 +513,7 @@ func (s *Sidebar) fetchModels() {
 			if err != nil {
 				s.modelSelect.Options = []string{}
 				s.modelSelect.Refresh()
-				s.modelLoading.SetText("Failed to refresh models")
+				s.modelLoading.SetText(t("sidebar.model_refresh_failed"))
 				return
 			}
 			s.modelSelect.Options = models
@@ -566,7 +566,7 @@ func (s *Sidebar) applyProvider() {
 	}
 
 	_ = cfg.Save()
-	s.providerStatus.SetText("Saved. Restarting chat...")
+	s.providerStatus.SetText(t("sidebar.saved_restarting"))
 	s.providerStatus.Refresh()
 
 	// Restart chat with new settings.
@@ -661,13 +661,13 @@ func (s *Sidebar) showAddEndpointDialog() {
 
 	statusLabel := widget.NewLabel("")
 
-	testBtn := widget.NewButton("Test Connection", func() {
+	testBtn := widget.NewButton(t("sidebar.test_connection"), func() {
 		baseURL := strings.TrimSpace(baseURLEntry.Text)
 		if baseURL == "" {
-			statusLabel.SetText("Base URL is required")
+			statusLabel.SetText(t("sidebar.base_url_required"))
 			return
 		}
-		statusLabel.SetText("Testing...")
+		statusLabel.SetText(t("sidebar.testing"))
 		go func() {
 			tmpResolved := &config.ResolvedEndpoint{
 				Protocol: protocolSelect.Selected,
@@ -679,7 +679,7 @@ func (s *Sidebar) showAddEndpointDialog() {
 			models, err := provider.DiscoverModels(context.Background(), tmpResolved)
 			fyne.Do(func() {
 				if err != nil {
-					statusLabel.SetText("Failed")
+					statusLabel.SetText(t("status.failed"))
 				} else {
 					statusLabel.SetText(fmt.Sprintf("OK — %d models found", len(models)))
 				}
