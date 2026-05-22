@@ -299,6 +299,7 @@ type ChatView struct {
 type toolWidgetRef struct {
 	icon      *widget.Icon
 	body      *fyne.Container
+	acc       *widget.Accordion
 	toolName  string
 	toolID    string
 	rawArgs   string
@@ -756,6 +757,8 @@ func findToolRefs(obj fyne.CanvasObject, ref *toolWidgetRef) {
 	switch v := obj.(type) {
 	case *widget.Icon:
 		ref.icon = v
+	case *widget.Accordion:
+		ref.acc = v
 	case *widget.Card:
 		if v.Content != nil {
 			findToolRefs(v.Content, ref)
@@ -803,8 +806,11 @@ func (cv *ChatView) addToolResult(ref *toolWidgetRef, result string) {
 		label = "Content"
 	}
 
-	if ref.body != nil {
-		ref.body.Add(newCollapsibleSection(label, resultBlock))
+	if ref.acc != nil {
+		ref.acc.Append(wrapAccordionItem(label, resultBlock))
+	} else if ref.body != nil {
+		ref.acc = widget.NewAccordion(wrapAccordionItem(label, resultBlock))
+		ref.body.Add(ref.acc)
 		ref.body.Refresh()
 	}
 }
@@ -998,23 +1004,22 @@ func (cv *ChatView) renderBashTool(msg *ChatMessage) fyne.CanvasObject {
 	}
 	header := cv.toolHeader(desc, msg)
 
-	var sections []fyne.CanvasObject
+	var accItems []*widget.AccordionItem
 
 	if cmd != "" {
 		cmdBlock := newMD("```bash\n" + cmd + "\n```")
-		sections = append(sections, newCollapsibleSection("Command", cmdBlock))
+		accItems = append(accItems, wrapAccordionItem("Command", cmdBlock))
 	}
 
 	if msg.Content != "" {
 		result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
 		resultBlock := newMD("```\n" + result + "\n```")
-		sections = append(sections, newCollapsibleSection("Output", resultBlock))
+		accItems = append(accItems, wrapAccordionItem("Output", resultBlock))
 	}
 
-	if len(sections) > 0 {
-		body := []fyne.CanvasObject{header}
-		body = append(body, sections...)
-		return cv.iconRow(toolIcon(msg), container.NewVBox(body...))
+	if len(accItems) > 0 {
+		acc := widget.NewAccordion(accItems...)
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 	}
 	return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 }
@@ -1041,7 +1046,8 @@ func (cv *ChatView) renderHeaderOnlyTool(msg *ChatMessage) fyne.CanvasObject {
 		return cv.iconRow(toolIcon(msg), container.NewVBox(header))
 	}
 	resultBlock := newCodeBlock(truncateRunes(formatted, 2000, "..."))
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
+	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
 // renderFileTool: header + line count / edit summary + result in accordion.
@@ -1059,7 +1065,8 @@ func (cv *ChatView) renderFileTool(msg *ChatMessage) fyne.CanvasObject {
 	// Show file result in accordion.
 	result := truncateRunes(msg.Content, 3000, "\n...(truncated)")
 	resultBlock := newMD("```\n" + result + "\n```")
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Content", resultBlock)))
+	acc := widget.NewAccordion(wrapAccordionItem("Content", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
 // renderGitTool: header + result in accordion (for git_diff, git_log, git_status).
@@ -1076,7 +1083,8 @@ func (cv *ChatView) renderGitTool(msg *ChatMessage) fyne.CanvasObject {
 
 	result := truncateRunes(msg.Content, 2000, "...")
 	resultBlock := newCodeBlock(result)
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
+	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
 // renderGenericTool: header + result in accordion (no raw JSON).
@@ -1100,10 +1108,12 @@ func (cv *ChatView) renderGenericTool(msg *ChatMessage) fyne.CanvasObject {
 	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
 		(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
 		resultBlock := newMD("```json\n" + result + "\n```")
-		return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
+		acc := widget.NewAccordion(wrapAccordionItem("Result", resultBlock))
+		return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 	}
 	resultBlock := newMD("```\n" + result + "\n```")
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Result", resultBlock)))
+	acc := widget.NewAccordion(wrapAccordionItem("Result", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
 // renderTodoTool: checkbox list, no tool name header.
@@ -1179,7 +1189,8 @@ func (cv *ChatView) renderSwarmTaskTool(msg *ChatMessage) fyne.CanvasObject {
 
 	result := truncateRunes(msg.Content, 2000, "...")
 	resultBlock := newCodeBlock(result)
-	return cv.iconRow(toolIcon(msg), container.NewVBox(header, newCollapsibleSection("Output", resultBlock)))
+	acc := widget.NewAccordion(wrapAccordionItem("Output", resultBlock))
+	return cv.iconRow(toolIcon(msg), container.NewVBox(header, acc))
 }
 
 // ── Shared helpers ───────────────────────────────────
@@ -1289,32 +1300,9 @@ func (cv *ChatView) toolHeader(desc string, msg *ChatMessage) *widget.RichText {
 	return rt
 }
 
-func newCollapsibleSection(label string, content fyne.CanvasObject) fyne.CanvasObject {
-	detail := container.NewVBox(compactPad(0, 6, 18, 0, content))
-	detail.Hide()
-
-	btn := widget.NewButtonWithIcon(label, theme.NavigateNextIcon(), nil)
-	btn.Alignment = widget.ButtonAlignLeading
-	btn.Importance = widget.LowImportance
-
-	open := false
-	update := func() {
-		if open {
-			btn.SetIcon(theme.MoveDownIcon())
-			detail.Show()
-		} else {
-			btn.SetIcon(theme.NavigateNextIcon())
-			detail.Hide()
-		}
-		btn.Refresh()
-		detail.Refresh()
-	}
-	btn.OnTapped = func() {
-		open = !open
-		update()
-	}
-	update()
-	return container.NewVBox(btn, detail)
+// wrapAccordionItem is an alias — MarkdownWidget already handles width via MinSize override.
+func wrapAccordionItem(label string, content fyne.CanvasObject) *widget.AccordionItem {
+	return widget.NewAccordionItem(label, content)
 }
 
 func raw(msg *ChatMessage) string {

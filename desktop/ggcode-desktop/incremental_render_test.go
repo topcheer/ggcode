@@ -284,7 +284,7 @@ func TestAppendAgentEventsToolResultIgnoresAlreadyMatched(t *testing.T) {
 	}
 }
 
-func TestBuildToolRefFindsBodyAndAddsResultSectionWithTimelineRow(t *testing.T) {
+func TestBuildToolRefFindsBodyAndAddsAccordionWithTimelineRow(t *testing.T) {
 	app := test.NewApp()
 	defer app.Quit()
 
@@ -309,18 +309,21 @@ func TestBuildToolRefFindsBodyAndAddsResultSectionWithTimelineRow(t *testing.T) 
 	}
 
 	cv.addToolResult(ref, "hello world")
+	if ref.acc == nil {
+		t.Fatal("expected accordion to be created after tool result")
+	}
 	if len(ref.body.Objects) < 2 {
-		t.Fatalf("expected body to contain header and result section, got %d objects", len(ref.body.Objects))
+		t.Fatalf("expected body to contain header and accordion, got %d objects", len(ref.body.Objects))
 	}
 
-	foundSection := false
+	foundAccordion := false
 	for _, child := range ref.body.Objects {
-		if c, ok := child.(*fyne.Container); ok && len(c.Objects) == 2 {
-			foundSection = true
+		if _, ok := child.(*widget.Accordion); ok {
+			foundAccordion = true
 		}
 	}
-	if !foundSection {
-		t.Fatal("expected collapsible result section in tool body")
+	if !foundAccordion {
+		t.Fatal("expected accordion child in tool body")
 	}
 }
 
