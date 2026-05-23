@@ -560,66 +560,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         (msg.toolDisplayName != null && msg.toolDisplayName!.isNotEmpty)
             ? msg.toolDisplayName!
             : prettyName;
-    final hasResult = msg.toolResult != null && msg.toolResult!.isNotEmpty;
-
-    return Container(
-      margin: EdgeInsets.symmetric(vertical: 5),
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadii.md),
-        border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.panel,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header line: icon + tool name + detail
-          Row(
-            children: [
-              Icon(Icons.build,
-                  size: 13, color: AppColors.accent.withValues(alpha: 0.85)),
-              SizedBox(width: 4),
-              Text(
-                title,
-                style: TextStyle(
-                  color: AppColors.accent.withValues(alpha: 0.95),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              if (msg.toolDetail != null && msg.toolDetail!.isNotEmpty) ...[
-                SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    msg.toolDetail!,
-                    style: TextStyle(color: AppColors.textMuted, fontSize: 11),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-              if (hasResult)
-                Icon(
-                  msg.isToolError
-                      ? Icons.error_outline
-                      : Icons.check_circle_outline,
-                  size: 13,
-                  color: msg.isToolError
-                      ? Colors.redAccent.withValues(alpha: 0.7)
-                      : AppColors.success.withValues(alpha: 0.75),
-                ),
-            ],
-          ),
-          // Result: collapsed by default, tap to expand
-          if (hasResult)
-            _ToolResultCard(
-              result: msg.toolResult!,
-              isError: msg.isToolError,
-            ),
-        ],
-      ),
-    );
+    return _ToolMessageCard(message: msg, title: title);
   }
 
   /// read_file → Read File, search_files → Search Files
@@ -636,6 +577,232 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     } catch (_) {
       return Colors.green;
     }
+  }
+}
+
+class _ToolMessageCard extends StatefulWidget {
+  final ChatMessage message;
+  final String title;
+
+  const _ToolMessageCard({
+    required this.message,
+    required this.title,
+  });
+
+  @override
+  State<_ToolMessageCard> createState() => _ToolMessageCardState();
+}
+
+class _ToolMessageCardState extends State<_ToolMessageCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  );
+
+  bool get _isRunning => !widget.message.toolCompleted;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncAnimation();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ToolMessageCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.toolCompleted != widget.message.toolCompleted) {
+      _syncAnimation();
+    }
+  }
+
+  void _syncAnimation() {
+    if (_isRunning) {
+      if (!_pulse.isAnimating) {
+        _pulse.repeat(reverse: true);
+      }
+      return;
+    }
+    if (_pulse.isAnimating || _pulse.value != 0) {
+      _pulse.stop();
+      _pulse.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = widget.message.toolDetail ?? '';
+    final hasResultBody = widget.message.toolResult != null &&
+        widget.message.toolResult!.isNotEmpty;
+
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (context, child) {
+        final glowT =
+            _isRunning ? Curves.easeInOut.transform(_pulse.value) : 0.0;
+        final borderColor = _isRunning
+            ? Color.lerp(
+                AppColors.accent.withValues(alpha: 0.38),
+                AppColors.accentSoft.withValues(alpha: 0.92),
+                glowT,
+              )!
+            : widget.message.isToolError
+                ? AppColors.danger.withValues(alpha: 0.34)
+                : AppColors.border;
+        final glowColor = Color.lerp(
+          AppColors.accent.withValues(alpha: 0.10),
+          AppColors.accentSoft.withValues(alpha: 0.26),
+          glowT,
+        )!;
+
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: _isRunning
+                ? Color.lerp(AppColors.surface, AppColors.surfaceElevated, 0.42)
+                : AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadii.md),
+            border: Border.all(color: borderColor, width: _isRunning ? 1.2 : 1),
+            boxShadow: [
+              ...AppShadows.panel,
+              if (_isRunning)
+                BoxShadow(
+                  color: glowColor,
+                  blurRadius: 16 + (glowT * 18),
+                  spreadRadius: glowT * 1.5,
+                ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.build,
+                    size: 13,
+                    color: (_isRunning
+                            ? AppColors.accent
+                            : (widget.message.isToolError
+                                ? AppColors.danger
+                                : AppColors.accent))
+                        .withValues(alpha: 0.9),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: widget.title,
+                            style: TextStyle(
+                              color: AppColors.accent.withValues(alpha: 0.97),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (detail.isNotEmpty)
+                            TextSpan(
+                              text: '  $detail',
+                              style: TextStyle(
+                                color: AppColors.textMuted,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _ToolStatusBadge(
+                    message: widget.message,
+                    isRunning: _isRunning,
+                  ),
+                ],
+              ),
+              if (hasResultBody)
+                _ToolResultCard(
+                  result: widget.message.toolResult!,
+                  isError: widget.message.isToolError,
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ToolStatusBadge extends StatelessWidget {
+  final ChatMessage message;
+  final bool isRunning;
+
+  const _ToolStatusBadge({
+    required this.message,
+    required this.isRunning,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (isRunning) {
+      return Container(
+        key: Key('toolStatusWorking-${message.id}'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: AppColors.accent.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: AppColors.accent.withValues(alpha: 0.28)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 10,
+              height: 10,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.6,
+                color: AppColors.accent,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Working',
+              style: TextStyle(
+                color: AppColors.accent.withValues(alpha: 0.95),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (message.isToolError) {
+      return Icon(
+        Icons.error_outline,
+        key: Key('toolStatusError-${message.id}'),
+        size: 14,
+        color: AppColors.danger.withValues(alpha: 0.88),
+      );
+    }
+
+    return Icon(
+      Icons.check_circle_outline,
+      key: Key('toolStatusDone-${message.id}'),
+      size: 14,
+      color: AppColors.success.withValues(alpha: 0.8),
+    );
   }
 }
 

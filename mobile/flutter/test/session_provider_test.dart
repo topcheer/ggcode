@@ -88,6 +88,36 @@ void main() {
     expect(message.toolId, 'tool-1');
     expect(message.toolDisplayName, 'Inspect file');
     expect(message.toolResult, 'done');
+    expect(message.toolCompleted, isTrue);
+  });
+
+  test('ChatNotifier marks tool complete even when result text is empty', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    notifier.handleToolCall(
+      proto.ToolCallData(
+        toolId: 'tool-empty',
+        toolName: 'grep',
+        displayName: 'Grep',
+        args: '{"pattern":"foo"}',
+        detail: 'foo',
+      ),
+      messageId: 'ev-empty',
+    );
+    notifier.handleToolResult(
+      proto.ToolResultData(
+        toolId: 'tool-empty',
+        toolName: 'grep',
+        result: '',
+        isError: false,
+      ),
+    );
+
+    final message = container.read(chatProvider).single;
+    expect(message.toolCompleted, isTrue);
+    expect(message.toolResult, '');
   });
 
   test('ChatNotifier absorbs matching remote user echo', () {
@@ -434,7 +464,71 @@ void main() {
     expect(container.read(currentModeProvider), 'bypass');
   });
 
-  test('ConnectionNotifier renders system messages and preserves post-tool text ordering',
+  test(
+      'ConnectionNotifier keeps cached messages visible when live session attaches after cold restore',
+      () async {
+    final info = proto.SessionInfoData(
+      workspace: '/tmp/demo',
+      model: 'gpt-5.4',
+      provider: 'openai',
+      mode: 'supervised',
+      version: '1.0.0',
+    );
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final cache = container.read(workspaceCacheProvider.notifier);
+    await cache.initialize();
+    await cache.activateWorkspaceUrl('wss://example.test/ws?token=abc');
+    await cache.registerLiveSession('sess-live', info,
+        lastEventId: 'ev-000000120');
+    await cache.captureLiveProjection(
+      messages: [
+        ChatMessage(
+          id: 'msg-1',
+          text: 'cached hello',
+          time: DateTime.parse('2026-01-01T00:00:00Z'),
+        ),
+        ChatMessage(
+          id: 'msg-2',
+          text: 'cached world',
+          time: DateTime.parse('2026-01-01T00:01:00Z'),
+        ),
+      ],
+      subagents: const {},
+      sessionInfo: info,
+      agentStatus: 'idle',
+      agentStatusMessage: 'Ready',
+      lastEventId: 'ev-000000120',
+    );
+    cache.markDisconnected();
+
+    container.read(chatProvider.notifier).clearMessages();
+    container.read(sessionInfoProvider.notifier).set(null);
+    container.read(currentModeProvider.notifier).set('supervised');
+
+    final notifier = container.read(connectionProvider.notifier);
+    final restored =
+        notifier.restoreProjectionFromCacheForTest(adoptCursor: false);
+
+    expect(restored, isTrue);
+    expect(notifier.currentSessionId, isEmpty);
+    expect(container.read(chatProvider), hasLength(2));
+
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-live',
+      type: 'active_session',
+      data: {'session_id': 'sess-live'},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+
+    expect(container.read(displayedMessagesProvider), hasLength(2));
+    expect(container.read(displayedMessagesProvider).last.text, 'cached world');
+  });
+
+  test(
+      'ConnectionNotifier renders system messages and preserves post-tool text ordering',
       () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -444,7 +538,11 @@ void main() {
       sessionId: 'sess-1',
       eventId: 'ev-000000001',
       type: 'text',
-      data: {'id': 'msg-before', 'chunk': 'I checked the current run.', 'done': false},
+      data: {
+        'id': 'msg-before',
+        'chunk': 'I checked the current run.',
+        'done': false
+      },
     ));
     notifier.handleIncomingForTest(proto.WsMessage(
       sessionId: 'sess-1',
@@ -485,7 +583,11 @@ void main() {
       sessionId: 'sess-1',
       eventId: 'ev-000000006',
       type: 'text',
-      data: {'id': 'msg-after', 'chunk': 'The rerun completed successfully.', 'done': false},
+      data: {
+        'id': 'msg-after',
+        'chunk': 'The rerun completed successfully.',
+        'done': false
+      },
     ));
 
     final messages = container.read(chatProvider);
