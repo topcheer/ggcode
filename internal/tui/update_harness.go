@@ -120,7 +120,7 @@ func (m Model) handleHarnessRunResultMsg(msg harnessRunResultMsg) (Model, tea.Cm
 		m.webuiBridge.BroadcastEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: rendered})
 	}
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
-		return m, m.submitText(m.consumePendingSubmission(), false)
+		return m, m.submitPendingSubmissionCmd()
 	}
 	return m, nil
 

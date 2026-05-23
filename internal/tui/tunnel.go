@@ -243,7 +243,7 @@ func (m *Model) pushTunnelEvent(ev provider.StreamEvent) {
 		if len([]rune(content)) > 2000 {
 			content = truncateRunes(content, 2000, "\n...(truncated)")
 		}
-		m.tunnelBroker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
+		m.pushTunnelToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 
 	case provider.StreamEventSystem:
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
@@ -284,18 +284,29 @@ func (m *Model) setNextTunnelUserMessageOverride(data tunnel.MessageData) {
 	m.tunnelUserMessageOverride = &data
 }
 
-// pushTunnelStatusThinking sends a thinking status to the mobile client.
-func (m *Model) pushTunnelStatusThinking() {
+func (m *Model) pushTunnelToolResult(toolID, toolName, result string, isError bool) {
 	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushStatus(tunnel.StatusThinking, "processing")
+		m.tunnelBroker.PushToolResult(toolID, toolName, result, isError)
 	}
+}
+
+// pushTunnelStatus sends a main-agent status update to the mobile client.
+func (m *Model) pushTunnelStatus(status, message string) {
+	if m.tunnelBroker != nil {
+		m.tunnelBroker.PushStatus(status, message)
+	}
+}
+
+func (m *Model) pushTunnelCurrentStatus() {
+	status := m.currentTunnelStatus()
+	m.pushTunnelStatus(status.Status, status.Message)
 }
 
 // pushTunnelCancel notifies mobile that the current run was cancelled.
 func (m *Model) pushTunnelCancel() {
 	if m.tunnelBroker != nil {
 		m.tunnelBroker.PushTextDone(m.tunnelMsgID)
-		m.tunnelBroker.PushStatus(tunnel.StatusIdle, "cancelled")
+		m.pushTunnelStatus(tunnel.StatusIdle, "cancelled")
 		m.tunnelMsgID = m.tunnelBroker.NextMessageID()
 	}
 }
@@ -652,7 +663,7 @@ func (m *Model) currentTunnelHistory() []tunnel.HistoryEntry {
 					ToolID:   it.ID(),
 					ToolName: "spawn_agent",
 					Result:   result,
-					IsError:  it.Status() == chat.StatusError,
+					IsError:  it.Status() == chat.StatusError || it.Status() == chat.StatusCanceled,
 				})
 			}
 		}
@@ -1360,9 +1371,7 @@ func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.M
 	m.tunnelPendingAskUserID = ""
 
 	// Send status update to mobile
-	if m.tunnelBroker != nil {
-		m.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
-	}
+	m.pushTunnelCurrentStatus()
 
 	return m, nil
 }
@@ -1379,7 +1388,7 @@ func (m *Model) pushTunnelApprovalResult(id, decision string) {
 		return
 	}
 	m.tunnelBroker.PushApprovalResult(id, decision)
-	m.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	m.pushTunnelCurrentStatus()
 }
 
 func (m *Model) pushTunnelAskUserResponse(id string, response toolpkg.AskUserResponse) {
@@ -1395,7 +1404,7 @@ func (m *Model) pushTunnelAskUserResponse(id string, response toolpkg.AskUserRes
 		}
 	}
 	m.tunnelBroker.PushAskUserResponse(id, response.Status, answers)
-	m.tunnelBroker.PushStatus(tunnel.StatusRunning, "")
+	m.pushTunnelCurrentStatus()
 }
 
 func tunnelDecisionString(decision permission.Decision) string {

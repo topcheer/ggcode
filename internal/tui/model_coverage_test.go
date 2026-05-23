@@ -650,7 +650,7 @@ func TestPendingQueueIsPointerShared(t *testing.T) {
 	}
 	// Enqueue via copy, read via original.
 	m2.pending.enqueue("hello")
-	if q.count() != 1 || q.items[0] != "hello" {
+	if q.count() != 1 || q.items[0].Text != "hello" {
 		t.Fatal("expected enqueue on copy to be visible on original")
 	}
 }
@@ -728,6 +728,31 @@ func TestCronPromptBusyQueuesForLater(t *testing.T) {
 	// Loading should remain true.
 	if !m2.loading {
 		t.Error("expected loading=true to remain unchanged")
+	}
+}
+
+func TestCronPromptBusyStaysHiddenWhenQueuedRunStarts(t *testing.T) {
+	m := newTestModel()
+	m.loading = true
+	m.activeAgentRunID = 1
+
+	next, _ := m.Update(cronPromptMsg{Prompt: "check progress"})
+	m2 := next.(Model)
+
+	nextModel, cmd := m2.handleAgentDoneMsg(agentDoneMsg{RunID: 1})
+	m3 := nextModel
+
+	if cmd == nil {
+		t.Fatal("expected queued cron prompt to start a follow-up run")
+	}
+	if m3.chatList == nil || m3.chatList.Len() != 1 {
+		t.Fatalf("expected only cron system message in chatList, got %d items", m3.chatList.Len())
+	}
+	if rendered := renderedOutput(&m3); strings.Contains(rendered, "check progress") {
+		t.Fatalf("expected cron prompt to stay hidden, got output %q", rendered)
+	}
+	if !m3.loading {
+		t.Fatal("expected follow-up hidden cron run to set loading=true")
 	}
 }
 

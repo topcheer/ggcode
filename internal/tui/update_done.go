@@ -4,6 +4,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
+
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 // handleDoneMsg handles the corresponding message case.
@@ -25,6 +27,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
+	m.pushTunnelCurrentStatus()
 	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 		m.renderStreamBuffer(true)
 		m.streamBuffer = nil
@@ -34,7 +37,7 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	}
 	m.chatListScrollToBottom()
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
-		return m, m.submitText(m.consumePendingSubmission(), false)
+		return m, m.submitPendingSubmissionCmd()
 	}
 	return m, nil
 
@@ -62,13 +65,14 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	m.statusToolName = ""
 	m.statusToolArg = ""
 	m.statusToolCount = 0
+	m.pushTunnelCurrentStatus()
 	if m.streamBuffer != nil && m.streamBuffer.Len() > 0 {
 		m.renderStreamBuffer(true)
 		m.streamBuffer = nil
 	}
 	m.chatListScrollToBottom()
 	if !wasCanceled && !wasFailed && m.pendingSubmissionCount() > 0 {
-		return m, m.submitText(m.consumePendingSubmission(), false)
+		return m, m.submitPendingSubmissionCmd()
 	}
 	return m, nil
 
@@ -87,6 +91,7 @@ func (m Model) handleErrMsg(msg errMsg) (Model, tea.Cmd) {
 	if m.pendingSubmissionCount() > 0 {
 		m.restorePendingInput()
 	}
+	m.pushTunnelStatus(tunnel.StatusError, "error")
 	m.chatWriteSystem(nextSystemID(), formatUserFacingError(m.currentLanguage(), msg.err))
 	m.chatListScrollToBottom()
 	return m, nil

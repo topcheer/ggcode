@@ -1,11 +1,13 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
 func (m *Model) resetExitConfirm() {
@@ -34,7 +36,11 @@ func (m *Model) queuePendingSubmission(text string) {
 // queuePendingSubmissionHidden enqueues text for LLM submission without
 // rendering it as a user message in the chat panel (e.g., cron triggers).
 func (m *Model) queuePendingSubmissionHidden(text string) {
-	count := m.pending.enqueue(text)
+	m.queuePendingSubmissionHiddenWithOverride(text, nil)
+}
+
+func (m *Model) queuePendingSubmissionHiddenWithOverride(text string, override *tunnel.MessageData) {
+	count := m.pending.enqueueHidden(text, override)
 	debug.Log("tui", "queuePendingSubmissionHidden: count=%d text=%s", count, util.Truncate(text, 100))
 }
 
@@ -55,6 +61,13 @@ func (m *Model) cancelActiveRun() {
 		return
 	}
 	m.runCanceled = true
+	cancelledTools := m.chatCancelAllRunningTools()
+	for _, tool := range cancelledTools {
+		if strings.TrimSpace(tool.ID) == "" || strings.TrimSpace(tool.ToolName) == "" {
+			continue
+		}
+		m.pushTunnelToolResult(tool.ID, tool.ToolName, "Cancelled", true)
+	}
 	m.pushTunnelCancel()
 	if m.cancelFunc != nil {
 		m.cancelFunc()
@@ -89,6 +102,24 @@ func (m *Model) cancelActiveRun() {
 
 func (m *Model) consumePendingSubmission() string {
 	return m.pending.consume()
+}
+
+func (m *Model) consumePendingSubmissionDetailed() (string, bool, *tunnel.MessageData) {
+	return m.pending.consumeDetailed()
+}
+
+func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
+	text, hidden, override := m.consumePendingSubmissionDetailed()
+	if text == "" {
+		return nil
+	}
+	if override != nil {
+		m.setNextTunnelUserMessageOverride(*override)
+	}
+	if hidden {
+		return m.submitHiddenText(text)
+	}
+	return m.submitText(text, false)
 }
 
 // shutdownAll cancels all running sub-agents and swarm teammates.
@@ -140,10 +171,29 @@ func (m *Model) sessionMutex() *sync.Mutex {
 
 // --- pendingQueue methods (pointer-reachable, safe across Model copies) ---
 
+func cloneTunnelMessageData(data *tunnel.MessageData) *tunnel.MessageData {
+	if data == nil {
+		return nil
+	}
+	cp := *data
+	return &cp
+}
+
 func (q *pendingQueue) enqueue(text string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.items = append(q.items, text)
+	q.items = append(q.items, pendingSubmission{Text: text})
+	return len(q.items)
+}
+
+func (q *pendingQueue) enqueueHidden(text string, override *tunnel.MessageData) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = append(q.items, pendingSubmission{
+		Text:           text,
+		Hidden:         true,
+		TunnelOverride: cloneTunnelMessageData(override),
+	})
 	return len(q.items)
 }
 
@@ -166,16 +216,41 @@ func (q *pendingQueue) snapshot() []string {
 		return nil
 	}
 	out := make([]string, len(q.items))
-	copy(out, q.items)
+	for i, item := range q.items {
+		out[i] = item.Text
+	}
 	return out
 }
 
 func (q *pendingQueue) consume() string {
+	text, _, _ := q.consumeDetailed()
+	return text
+}
+
+func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	joined := strings.TrimSpace(strings.Join(q.items, "\n\n"))
+	if len(q.items) == 0 {
+		return "", false, nil
+	}
+	parts := make([]string, 0, len(q.items))
+	hidden := true
+	var override *tunnel.MessageData
+	for _, item := range q.items {
+		parts = append(parts, item.Text)
+		if !item.Hidden {
+			hidden = false
+		}
+		if item.TunnelOverride != nil {
+			override = cloneTunnelMessageData(item.TunnelOverride)
+		}
+	}
+	if !hidden {
+		override = nil
+	}
+	joined := strings.TrimSpace(strings.Join(parts, "\n\n"))
 	q.items = nil
-	return joined
+	return joined, hidden, override
 }
 
 func stripImagePlaceholder(value, placeholder string) string {

@@ -262,7 +262,13 @@ type Model struct {
 // same underlying slice through the pointer.
 type pendingQueue struct {
 	mu    sync.Mutex
-	items []string
+	items []pendingSubmission
+}
+
+type pendingSubmission struct {
+	Text           string
+	Hidden         bool
+	TunnelOverride *tunnel.MessageData
 }
 
 // MCPInfo holds display info about a connected MCP server.

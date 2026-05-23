@@ -11,26 +11,59 @@ import (
 	"github.com/topcheer/ggcode/internal/subagent"
 )
 
-// chatFinishAllRunningTools marks all running tool items in chatList as success.
-// Called when a round ends (doneMsg) to finalize any tool items that weren't
-// explicitly finished via chatFinishTool.
-func (m *Model) chatFinishAllRunningTools() {
+type finalizedToolInfo struct {
+	ID       string
+	ToolName string
+}
+
+func (m *Model) chatFinalizeRunningTools(status chat.ToolStatus, result string, isError bool) []finalizedToolInfo {
 	if m.chatList == nil {
-		return
+		return nil
 	}
 	type statusAccessor interface {
 		Status() chat.ToolStatus
 		SetStatus(chat.ToolStatus)
 	}
+	var finalized []finalizedToolInfo
 	for i := 0; i < m.chatList.Len(); i++ {
 		item := m.chatList.ItemAt(i)
 		if item == nil {
 			continue
 		}
-		if sa, ok := item.(statusAccessor); ok && sa.Status() == chat.StatusRunning {
-			sa.SetStatus(chat.StatusSuccess)
+		sa, ok := item.(statusAccessor)
+		if !ok || sa.Status() != chat.StatusRunning {
+			continue
+		}
+		sa.SetStatus(status)
+		switch it := item.(type) {
+		case interface {
+			ID() string
+			ToolName() string
+			SetResult(string, bool)
+		}:
+			if result != "" {
+				it.SetResult(result, isError)
+			}
+			finalized = append(finalized, finalizedToolInfo{ID: it.ID(), ToolName: it.ToolName()})
+		case *chat.AgentToolItem:
+			if result != "" {
+				it.SetResult(result)
+			}
+			finalized = append(finalized, finalizedToolInfo{ID: it.ID(), ToolName: "spawn_agent"})
 		}
 	}
+	return finalized
+}
+
+// chatFinishAllRunningTools marks all running tool items in chatList as success.
+// Called when a round ends (doneMsg) to finalize any tool items that weren't
+// explicitly finished via chatFinishTool.
+func (m *Model) chatFinishAllRunningTools() {
+	m.chatFinalizeRunningTools(chat.StatusSuccess, "", false)
+}
+
+func (m *Model) chatCancelAllRunningTools() []finalizedToolInfo {
+	return m.chatFinalizeRunningTools(chat.StatusCanceled, "Cancelled", true)
 }
 
 // isLiveSubAgentStatus returns true for subagent statuses that indicate active work.
