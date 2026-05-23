@@ -67,6 +67,13 @@ type BrokerSnapshot struct {
 	SessionInfo SessionInfoData
 	History     []HistoryEntry
 	Status      StatusData
+	ExtraEvents []SnapshotEvent
+}
+
+type SnapshotEvent struct {
+	Type     string
+	StreamID string
+	Data     json.RawMessage
 }
 
 func NewBroker(sess *Session) *Broker {
@@ -319,6 +326,9 @@ func (b *Broker) SendSnapshot(snapshot BrokerSnapshot) {
 	if len(snapshot.History) > 0 {
 		b.SeedHistory(snapshot.History)
 	}
+	for _, ev := range snapshot.ExtraEvents {
+		b.enqueueSnapshotEvent(ev)
+	}
 	if snapshot.Status.Status != "" {
 		b.PushStatus(snapshot.Status.Status, snapshot.Status.Message)
 	}
@@ -435,7 +445,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 				snapshot.Status = status
 			}
 		}
-		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && snapshot.Status.Status == "" {
+		if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" {
 			return
 		}
 		go func() {
@@ -470,7 +480,7 @@ func (b *Broker) handleRelayConnected(info RelayConnectedState) {
 			snapshot.Status = status
 		}
 	}
-	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && snapshot.Status.Status == "" {
+	if snapshot.SessionInfo == (SessionInfoData{}) && len(snapshot.History) == 0 && len(snapshot.ExtraEvents) == 0 && snapshot.Status.Status == "" {
 		return
 	}
 	go func() {
@@ -751,6 +761,21 @@ func (b *Broker) enqueueControl(eventType string, data interface{}) {
 		Type:      eventType,
 		Data:      dataBytes,
 	})
+}
+
+func (b *Broker) enqueueSnapshotEvent(ev SnapshotEvent) {
+	if ev.Type == "" {
+		return
+	}
+	msg := GatewayMessage{
+		SessionID: b.SessionID(),
+		EventID:   fmt.Sprintf("ev-%09d", b.nextEvent.Add(1)),
+		StreamID:  ev.StreamID,
+		Type:      ev.Type,
+		Data:      append(json.RawMessage(nil), ev.Data...),
+	}
+	b.recordEvent(msg)
+	b.enqueueOut(msg)
 }
 
 func (b *Broker) trackSend(eventID string) <-chan struct{} {

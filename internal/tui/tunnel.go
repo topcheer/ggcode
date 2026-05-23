@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -184,7 +185,10 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	msg.broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
 		m.recordTunnelEvent(ev)
 	})
-	m.publishTunnelSnapshotForCurrentSession(true)
+	seededSnapshot, replayedCanonical := m.publishTunnelSnapshotForCurrentSessionWithReport(true)
+	if !replayedCanonical {
+		m.reseedTunnelSnapshotAfterStart(seededSnapshot)
+	}
 
 	// Open QR overlay with connect URL and QR code.
 	m.openQROverlayDirect(
@@ -747,7 +751,195 @@ func (m *Model) tunnelSnapshot() tunnel.BrokerSnapshot {
 	if history := m.currentTunnelHistory(); len(history) > 0 {
 		snapshot.History = history
 	}
+	if extra := m.currentTunnelAgentSnapshotEvents(); len(extra) > 0 {
+		snapshot.ExtraEvents = extra
+	}
 	return snapshot
+}
+
+func (m *Model) currentTunnelAgentSnapshotEvents() []tunnel.SnapshotEvent {
+	var out []tunnel.SnapshotEvent
+	if m.subAgentMgr != nil {
+		agents := m.subAgentMgr.List()
+		sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
+		for _, sa := range agents {
+			out = append(out, tunnelSnapshotEventsFromSubagent(sa)...)
+		}
+	}
+	if m.swarmMgr != nil {
+		teams := m.swarmMgr.ListTeams()
+		sort.Slice(teams, func(i, j int) bool { return teams[i].ID < teams[j].ID })
+		for _, team := range teams {
+			mates := append([]swarm.TeammateSnapshot(nil), team.Teammates...)
+			sort.Slice(mates, func(i, j int) bool { return mates[i].ID < mates[j].ID })
+			for _, tm := range mates {
+				out = append(out, tunnelSnapshotEventsFromTeammate(tm, team.ID)...)
+			}
+		}
+	}
+	return out
+}
+
+func tunnelSnapshotEventsFromSubagent(sa *subagent.SubAgent) []tunnel.SnapshotEvent {
+	if sa == nil || strings.TrimSpace(sa.ID) == "" {
+		return nil
+	}
+	out := []tunnel.SnapshotEvent{snapshotEvent(
+		tunnel.EventSubagentSpawn,
+		sa.ID,
+		tunnel.SubagentSpawnData{AgentID: sa.ID, Name: sa.Name, Task: sa.Task},
+	)}
+	out = append(out, tunnelSnapshotAgentEvents(sa.ID, "sa-"+sa.ID, "", sa.Events(), sa.Result, errorString(sa.Error), string(sa.Status), sa.CurrentTool, sa.Name)...)
+	return out
+}
+
+func tunnelSnapshotEventsFromTeammate(tm swarm.TeammateSnapshot, teamID string) []tunnel.SnapshotEvent {
+	if strings.TrimSpace(tm.ID) == "" {
+		return nil
+	}
+	out := []tunnel.SnapshotEvent{snapshotEvent(
+		tunnel.EventSubagentSpawn,
+		tm.ID,
+		tunnel.SubagentSpawnData{AgentID: tm.ID, Name: tm.Name, Task: "teammate", Color: tm.Color, ParentID: teamID},
+	)}
+	events := make([]subagent.AgentEvent, 0, len(tm.Events))
+	for _, ev := range tm.Events {
+		converted := subagent.AgentEvent{
+			Text:     ev.Text,
+			ToolName: ev.ToolName,
+			ToolID:   ev.ToolID,
+			ToolArgs: ev.ToolArgs,
+			Result:   ev.Result,
+			IsError:  ev.IsError,
+		}
+		switch ev.Type {
+		case swarm.TeammateEventToolCall:
+			converted.Type = subagent.AgentEventToolCall
+		case swarm.TeammateEventToolResult:
+			converted.Type = subagent.AgentEventToolResult
+		case swarm.TeammateEventError:
+			converted.Type = subagent.AgentEventError
+		default:
+			converted.Type = subagent.AgentEventText
+		}
+		events = append(events, converted)
+	}
+	status := "running"
+	if tm.Status == swarm.TeammateIdle || tm.Status == swarm.TeammateShuttingDown {
+		status = "completed"
+	}
+	out = append(out, tunnelSnapshotAgentEvents(tm.ID, "tm-"+tm.ID, tm.Color, events, tm.LastResult, "", status, tm.CurrentTask, tm.Name)...)
+	return out
+}
+
+func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.AgentEvent, result, errText, status, statusMessage, name string) []tunnel.SnapshotEvent {
+	var out []tunnel.SnapshotEvent
+	textBuf := strings.Builder{}
+	flushText := func(done bool) {
+		if textBuf.Len() == 0 {
+			return
+		}
+		out = append(out, snapshotEvent(
+			tunnel.EventSubagentText,
+			agentID,
+			tunnel.SubagentTextData{AgentID: agentID, ID: textID, Chunk: textBuf.String(), Done: done},
+		))
+		textBuf.Reset()
+	}
+	for _, ev := range events {
+		switch ev.Type {
+		case subagent.AgentEventToolCall:
+			flushText(false)
+			detail := describeTool(LangEnglish, ev.ToolName, ev.ToolArgs).Detail
+			out = append(out, snapshotEvent(
+				tunnel.EventSubagentToolCall,
+				agentID,
+				tunnel.SubagentToolCallData{
+					AgentID:     agentID,
+					ToolID:      ev.ToolID,
+					ToolName:    ev.ToolName,
+					DisplayName: toolCallDisplayName(ev.ToolName, ev.ToolArgs),
+					Args:        ev.ToolArgs,
+					Detail:      detail,
+				},
+			))
+		case subagent.AgentEventToolResult:
+			flushText(false)
+			out = append(out, snapshotEvent(
+				tunnel.EventSubagentToolResult,
+				agentID,
+				tunnel.SubagentToolResultData{
+					AgentID:  agentID,
+					ToolID:   ev.ToolID,
+					ToolName: ev.ToolName,
+					Result:   ev.Result,
+					IsError:  ev.IsError,
+				},
+			))
+		case subagent.AgentEventError:
+			if ev.Text != "" {
+				if textBuf.Len() > 0 {
+					textBuf.WriteString("\n")
+				}
+				textBuf.WriteString(ev.Text)
+			}
+		default:
+			if ev.Text != "" {
+				textBuf.WriteString(ev.Text)
+			}
+		}
+	}
+	if textBuf.Len() == 0 {
+		switch {
+		case result != "":
+			textBuf.WriteString(result)
+		case errText != "":
+			textBuf.WriteString(errText)
+		}
+	}
+	completed := status == "completed" || status == "failed" || status == "cancelled"
+	flushText(completed)
+	if completed {
+		summary := result
+		success := errText == ""
+		if summary == "" {
+			summary = errText
+		}
+		if summary == "" {
+			summary = status
+		}
+		out = append(out, snapshotEvent(
+			tunnel.EventSubagentComplete,
+			agentID,
+			tunnel.SubagentCompleteData{AgentID: agentID, Name: name, Summary: summary, Success: success},
+		))
+		return out
+	}
+	if statusMessage == "" {
+		statusMessage = name
+	}
+	out = append(out, snapshotEvent(
+		tunnel.EventSubagentStatus,
+		agentID,
+		tunnel.SubagentStatusData{AgentID: agentID, Status: tunnel.StatusRunning, Message: statusMessage},
+	))
+	return out
+}
+
+func snapshotEvent(eventType, streamID string, data interface{}) tunnel.SnapshotEvent {
+	raw, _ := json.Marshal(data)
+	return tunnel.SnapshotEvent{
+		Type:     eventType,
+		StreamID: streamID,
+		Data:     raw,
+	}
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (m *Model) announceTunnelActiveSession() {
@@ -758,8 +950,13 @@ func (m *Model) announceTunnelActiveSession() {
 }
 
 func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
+	_, _ = m.publishTunnelSnapshotForCurrentSessionWithReport(reset)
+}
+
+func (m *Model) publishTunnelSnapshotForCurrentSessionWithReport(reset bool) (tunnel.BrokerSnapshot, bool) {
+	snapshot := m.tunnelSnapshot()
 	if m.tunnelBroker == nil {
-		return
+		return snapshot, false
 	}
 	switchedSession := false
 	if m.session != nil && m.session.ID != "" {
@@ -773,9 +970,45 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 	m.prepareCurrentSessionTunnelLedger()
 	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
 		m.tunnelBroker.ReplayEvents(events, reset && !switchedSession)
+		return snapshot, true
+	}
+	m.tunnelBroker.SendSnapshot(snapshot)
+	return snapshot, false
+}
+
+func tunnelSnapshotMatches(a, b tunnel.BrokerSnapshot) bool {
+	if a.SessionInfo != b.SessionInfo || a.Status != b.Status {
+		return false
+	}
+	return tunnelHistoryMatches(a.History, b.History) && tunnelSnapshotEventMatches(a.ExtraEvents, b.ExtraEvents)
+}
+
+func tunnelSnapshotEventMatches(a, b []tunnel.SnapshotEvent) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Type != b[i].Type || a[i].StreamID != b[i].StreamID || string(a[i].Data) != string(b[i].Data) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Model) reseedTunnelSnapshotAfterStart(seeded tunnel.BrokerSnapshot) {
+	if m.tunnelBroker == nil {
 		return
 	}
-	m.tunnelBroker.SendSnapshot(m.tunnelSnapshot())
+	latest := m.tunnelSnapshot()
+	if tunnelSnapshotMatches(seeded, latest) {
+		return
+	}
+	if m.session != nil && m.session.ID != "" {
+		m.tunnelBroker.SwitchSession(m.session.ID)
+	} else {
+		m.tunnelBroker.ResetSession()
+	}
+	m.tunnelBroker.SendSnapshot(latest)
 }
 
 func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
