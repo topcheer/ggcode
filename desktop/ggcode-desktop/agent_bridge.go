@@ -85,6 +85,92 @@ type AgentBridge struct {
 	askUserDialog     dialog.Dialog
 }
 
+func (b *AgentBridge) currentTunnelBroker() *tunnel.Broker {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tunnelBroker
+}
+
+func (b *AgentBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tunnelMsgID == "" && broker != nil {
+		b.tunnelMsgID = broker.NextMessageID()
+	}
+	return b.tunnelMsgID
+}
+
+func (b *AgentBridge) rotateTunnelMsgID(broker *tunnel.Broker) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if broker == nil {
+		b.tunnelMsgID = ""
+		return
+	}
+	b.tunnelMsgID = broker.NextMessageID()
+}
+
+func (b *AgentBridge) flushTunnelTextStream(broker *tunnel.Broker) {
+	if broker == nil {
+		return
+	}
+	msgID := b.ensureTunnelMsgID(broker)
+	broker.PushTextDone(msgID)
+	b.rotateTunnelMsgID(broker)
+}
+
+func (b *AgentBridge) AttachTunnelBroker(broker *tunnel.Broker) {
+	var (
+		working    bool
+		resolved   *config.ResolvedEndpoint
+		cfg        *config.Config
+		mode       string
+		status     tunnel.StatusData
+		currentSes *session.Session
+	)
+	b.mu.Lock()
+	b.tunnelBroker = broker
+	working = b.working
+	resolved = b.resolved
+	cfg = b.cfg
+	mode = b.permissionMode.String()
+	currentSes = b.currentSes
+	if working && broker != nil && b.tunnelMsgID == "" {
+		b.tunnelMsgID = broker.NextMessageID()
+	}
+	b.mu.Unlock()
+
+	if broker == nil {
+		return
+	}
+	if currentSes != nil && currentSes.ID != "" {
+		broker.AnnounceActiveSession(currentSes.ID)
+	}
+	if !working {
+		return
+	}
+	if resolved != nil && cfg != nil {
+		broker.SendSessionInfo(tunnel.SessionInfoData{
+			Workspace: b.workingDir,
+			Model:     resolved.Model,
+			Provider:  resolved.VendorName,
+			Mode:      mode,
+			Version:   Version,
+			Language:  cfg.Language,
+		})
+	}
+	status = b.CurrentTunnelStatus()
+	if status.Status != "" {
+		broker.PushStatus(status.Status, status.Message)
+	}
+}
+
+func (b *AgentBridge) DetachTunnelBroker() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tunnelBroker = nil
+}
+
 func NewAgentBridge(cfg *config.Config, prov provider.Provider, resolved *config.ResolvedEndpoint, workingDir string, ui *UIState) *AgentBridge {
 	b := &AgentBridge{
 		cfg:        cfg,
@@ -471,9 +557,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 	b.appendUserMessageContent(content)
 
 	go func() {
-		if b.tunnelBroker != nil {
-			b.tunnelMsgID = b.tunnelBroker.NextMessageID()
-			b.tunnelBroker.SendSessionInfo(tunnel.SessionInfoData{
+		if broker := b.currentTunnelBroker(); broker != nil {
+			b.ensureTunnelMsgID(broker)
+			broker.SendSessionInfo(tunnel.SessionInfoData{
 				Workspace: b.workingDir,
 				Model:     b.resolved.Model,
 				Provider:  b.resolved.VendorName,
@@ -481,7 +567,7 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				Version:   Version,
 				Language:  b.cfg.Language,
 			})
-			b.tunnelBroker.PushStatus(tunnel.StatusThinking, "processing")
+			broker.PushStatus(tunnel.StatusThinking, "processing")
 		}
 
 		defer func() {
@@ -507,8 +593,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: "(cancelled)",
 					Time:    time.Now(),
 				})
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushSystemMessage("(cancelled)")
+				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushSystemMessage("(cancelled)")
 				}
 			}
 
@@ -519,8 +605,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: "Processing queued message...",
 					Time:    time.Now(),
 				})
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushSystemMessage("Processing queued message...")
+				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushSystemMessage("Processing queued message...")
 				}
 				_ = b.Send(msg)
 			}
@@ -533,8 +619,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 			case provider.StreamEventText:
 				b.ui.AppendAssistantText(ev.Text)
 				b.imRound.Text.WriteString(ev.Text)
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushText(b.tunnelMsgID, ev.Text)
+				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushText(b.ensureTunnelMsgID(broker), ev.Text)
 				}
 
 			case provider.StreamEventToolCallDone:
@@ -567,11 +653,10 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 				if b.Emitter != nil {
 					b.Emitter.TriggerTyping()
 				}
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
-					b.tunnelBroker.PushStatus(tunnel.StatusRunning, name)
-					b.tunnelBroker.PushToolCall(ev.Tool.ID, name, toolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), args)
-					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
+				if broker := b.currentTunnelBroker(); broker != nil {
+					b.flushTunnelTextStream(broker)
+					broker.PushStatus(tunnel.StatusRunning, name)
+					broker.PushToolCall(ev.Tool.ID, name, toolDisplayName(name, string(ev.Tool.Arguments)), string(ev.Tool.Arguments), args)
 				}
 
 			case provider.StreamEventToolResult:
@@ -600,8 +685,8 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					})
 					b.Emitter.TriggerTyping()
 				}
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
+				if broker := b.currentTunnelBroker(); broker != nil {
+					broker.PushToolResult(ev.Tool.ID, ev.Tool.Name, content, ev.IsError)
 				}
 
 				// After spawn_agent completes, sync agent panels.
@@ -616,10 +701,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: ev.Text,
 					Time:    time.Now(),
 				})
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
-					b.tunnelBroker.PushSystemMessage(ev.Text)
-					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
+				if broker := b.currentTunnelBroker(); broker != nil {
+					b.flushTunnelTextStream(broker)
+					broker.PushSystemMessage(ev.Text)
 				}
 
 			case provider.StreamEventReasoning:
@@ -639,10 +723,9 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					b.imRound.ToolSuccesses = 0
 					b.imRound.ToolFailures = 0
 				}
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
-					b.tunnelBroker.PushStatus(tunnel.StatusIdle, "")
-					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
+				if broker := b.currentTunnelBroker(); broker != nil {
+					b.flushTunnelTextStream(broker)
+					broker.PushStatus(tunnel.StatusIdle, "")
 				}
 			}
 		}
@@ -658,11 +741,10 @@ func (b *AgentBridge) SendContent(content []provider.ContentBlock) error {
 					Content: err.Error(),
 					Time:    time.Now(),
 				})
-				if b.tunnelBroker != nil {
-					b.tunnelBroker.PushTextDone(b.tunnelMsgID)
-					b.tunnelBroker.PushError(err.Error())
-					b.tunnelBroker.PushStatus(tunnel.StatusError, "error")
-					b.tunnelMsgID = b.tunnelBroker.NextMessageID()
+				if broker := b.currentTunnelBroker(); broker != nil {
+					b.flushTunnelTextStream(broker)
+					broker.PushError(err.Error())
+					broker.PushStatus(tunnel.StatusError, "error")
 				}
 			}
 		}
@@ -689,10 +771,9 @@ func (b *AgentBridge) Cancel() {
 	}
 	b.mu.Unlock()
 	// Notify mobile client
-	if b.tunnelBroker != nil {
-		b.tunnelBroker.PushTextDone(b.tunnelMsgID)
-		b.tunnelBroker.PushStatus(tunnel.StatusIdle, "cancelled")
-		b.tunnelMsgID = b.tunnelBroker.NextMessageID()
+	if broker := b.currentTunnelBroker(); broker != nil {
+		b.flushTunnelTextStream(broker)
+		broker.PushStatus(tunnel.StatusIdle, "cancelled")
 	}
 }
 
@@ -720,20 +801,20 @@ func (b *AgentBridge) CurrentTunnelStatus() tunnel.StatusData {
 // Called from ChatView when the desktop user types — NOT from onCommand
 // (mobile-initiated messages) to avoid echo.
 func (b *AgentBridge) PushUserMessageToMobile(text string) {
-	if b.tunnelBroker != nil {
-		b.tunnelBroker.PushUserMessage(text)
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushUserMessage(text)
 	}
 }
 
 func (b *AgentBridge) PushSystemMessageToMobile(text string) {
-	if b.tunnelBroker != nil && strings.TrimSpace(text) != "" {
-		b.tunnelBroker.PushSystemMessage(text)
+	if broker := b.currentTunnelBroker(); broker != nil && strings.TrimSpace(text) != "" {
+		broker.PushSystemMessage(text)
 	}
 }
 
 func (b *AgentBridge) PushErrorToMobile(text string) {
-	if b.tunnelBroker != nil && strings.TrimSpace(text) != "" {
-		b.tunnelBroker.PushError(text)
+	if broker := b.currentTunnelBroker(); broker != nil && strings.TrimSpace(text) != "" {
+		broker.PushError(text)
 	}
 }
 
@@ -2147,10 +2228,11 @@ func (b *AgentBridge) SwitchModel(model string) error {
 }
 
 func (b *AgentBridge) nextTunnelRequestID() string {
-	if b.tunnelBroker == nil {
+	broker := b.currentTunnelBroker()
+	if broker == nil {
 		return ""
 	}
-	return b.tunnelBroker.NextMessageID()
+	return broker.NextMessageID()
 }
 
 func (b *AgentBridge) setPendingApproval(id, toolName string, ch chan permission.Decision) {

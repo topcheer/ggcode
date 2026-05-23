@@ -279,7 +279,6 @@ func (a *App) showShareDialog() {
 		a.tunnelSession = sess
 		a.tunnelBroker = broker
 		if a.agentBridge != nil {
-			a.agentBridge.tunnelBroker = broker
 			a.agentBridge.ensureSession()
 			broker.SetReplayProvider(func() []tunnel.GatewayMessage {
 				return a.agentBridge.CurrentSessionTunnelEvents()
@@ -303,6 +302,7 @@ func (a *App) showShareDialog() {
 			broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 				return a.tunnelSnapshot()
 			})
+			a.agentBridge.AttachTunnelBroker(broker)
 		}
 
 		fyne.Do(func() {
@@ -344,7 +344,7 @@ func (a *App) showTunnelInfo(info *tunnel.SessionInfo) {
 	stopBtn := widget.NewButton(t("share.stop"), func() {
 		// Disconnect agent bridge from broker FIRST
 		if a.agentBridge != nil {
-			a.agentBridge.tunnelBroker = nil
+			a.agentBridge.DetachTunnelBroker()
 		}
 		a.closeTunnelGracefully(2 * time.Second)
 		a.shareDialog.Hide()
