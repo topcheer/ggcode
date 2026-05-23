@@ -133,8 +133,8 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
     }
     if (clearState) {
-      restoredProjection =
-          !_hasEmptyUiProjection() || _restoreProjectionFromCache(adoptCursor: false);
+      restoredProjection = !_hasEmptyUiProjection() ||
+          _restoreProjectionFromCache(adoptCursor: false);
       if (!restoredProjection && resumeSessionId.isNotEmpty) {
         restoredProjection = await cache.attachSessionToActiveWorkspace(
           resumeSessionId,
@@ -369,6 +369,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
             chatNotifier.addRemoteSystemMessage(
               displayText.isNotEmpty ? displayText : '⏰ Cron job triggered',
               messageId: remoteMessageId,
+              kind: data.kind,
             );
           } else if (displayText.isNotEmpty) {
             final absorbed = chatNotifier.bindRemoteUserMessage(
@@ -379,6 +380,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               chatNotifier.addRemoteUserMessage(
                 displayText,
                 messageId: remoteMessageId,
+                kind: data.kind,
               );
             }
           }
@@ -397,6 +399,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
               displayText,
               messageId: msg.eventId ??
                   'remote-system-${DateTime.now().millisecondsSinceEpoch}',
+              kind: data.kind,
             );
           }
         }
@@ -407,14 +410,19 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       case 'stream_text':
         if (!_shouldApplyEvent(msg)) break;
         if (msg.data != null) {
-          final text = msg.data!['text'] as String? ??
-              msg.data!['chunk'] as String? ??
-              '';
-          final msgId = msg.data!['id'] as String? ??
-              'msg-${DateTime.now().millisecondsSinceEpoch}';
-          final done = msg.data!['done'] as bool? ?? false;
-          chatNotifier.handleTextChunk(
-              proto.TextData(id: msgId, chunk: text, done: done));
+          final data = proto.TextData.fromJson(msg.data!);
+          final text = data.chunk.isNotEmpty
+              ? data.chunk
+              : (msg.data!['text'] as String? ?? '');
+          final msgId = data.id.isNotEmpty
+              ? data.id
+              : 'msg-${DateTime.now().millisecondsSinceEpoch}';
+          chatNotifier.handleTextChunk(proto.TextData(
+            id: msgId,
+            chunk: text,
+            done: data.done,
+            kind: data.kind,
+          ));
         }
         _markEventApplied(msg);
         break;
@@ -1078,7 +1086,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     });
   }
 
-  void addRemoteUserMessage(String text, {String? messageId, String kind = ''}) {
+  void addRemoteUserMessage(String text,
+      {String? messageId, String kind = ''}) {
     state = [
       ...state,
       ChatMessage(
@@ -1246,7 +1255,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         for (int i = 0; i < state.length; i++)
           if (i == idx)
             msg.copyWith(
-              toolResult: _formatToolResultForDisplay(toolName, result, isError),
+              toolResult:
+                  _formatToolResultForDisplay(toolName, result, isError),
               toolCompleted: true,
               isToolError: isError,
             )

@@ -377,6 +377,41 @@ void main() {
     expect(messages.single.text, '⏰ Cron job triggered');
   });
 
+  test('ConnectionNotifier preserves shell message kinds', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(connectionProvider.notifier);
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-shell-user',
+      type: 'user_message',
+      data: {
+        'text': r'$ git status',
+        'display_text': 'git status',
+        'kind': 'shell_command',
+      },
+    ));
+    notifier.handleIncomingForTest(proto.WsMessage(
+      sessionId: 'sess-1',
+      eventId: 'ev-shell-text',
+      type: 'text',
+      data: {
+        'id': 'shell-out-1',
+        'chunk': '\u001b[31mfail\u001b[0m\n',
+        'kind': 'shell_output',
+        'done': false,
+      },
+    ));
+
+    final messages = container.read(chatProvider);
+    expect(messages, hasLength(2));
+    expect(messages[0].kind, 'shell_command');
+    expect(messages[0].text, 'git status');
+    expect(messages[1].kind, 'shell_output');
+    expect(messages[1].text, '\u001b[31mfail\u001b[0m\n');
+  });
+
   test('workspace cache persists snapshots and restores selected session',
       () async {
     final info = proto.SessionInfoData(
@@ -987,5 +1022,4 @@ void main() {
     expect(messages[3].id, 'msg-after');
     expect(messages[3].text, 'The rerun completed successfully.');
   });
-
 }

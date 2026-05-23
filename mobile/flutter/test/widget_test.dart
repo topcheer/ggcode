@@ -146,6 +146,43 @@ void main() {
   });
 
   testWidgets(
+      'ChatScreen renders shell commands and terminal output distinctly',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: ChatScreen()),
+      ),
+    );
+
+    final context = tester.element(find.byType(ChatScreen));
+    final container = ProviderScope.containerOf(context, listen: false);
+    final notifier = container.read(chatProvider.notifier);
+
+    notifier.addRemoteUserMessage(
+      'git status',
+      messageId: 'shell-cmd',
+      kind: 'shell_command',
+    );
+    notifier.handleTextChunk(
+      proto.TextData(
+        id: 'shell-out',
+        chunk: '\u001b[32mok\u001b[0m\n',
+        done: false,
+        kind: 'shell_output',
+      ),
+    );
+
+    await tester.pump();
+
+    expect(
+        find.byKey(const Key('shellCommandBubble-shell-cmd')), findsOneWidget);
+    expect(
+        find.byKey(const Key('shellOutputBubble-shell-out')), findsOneWidget);
+    expect(find.text('git status'), findsOneWidget);
+    expect(find.text('Terminal'), findsOneWidget);
+  });
+
+  testWidgets(
       'ChatScreen shows an agent tab when activity arrives before spawn',
       (WidgetTester tester) async {
     await tester.pumpWidget(

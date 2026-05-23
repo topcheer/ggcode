@@ -320,6 +320,31 @@ func TestBrokerPushUserMessageData(t *testing.T) {
 	t.Fatal("expected user_message event")
 }
 
+func TestBrokerPushTextDataPreservesKind(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushTextData(TextData{ID: "shell-1", Chunk: "\x1b[31mfail\x1b[0m\n", Kind: MessageKindShellOutput})
+	b.flushText("shell-1")
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	for _, m := range msgs {
+		if m.Type != EventText {
+			continue
+		}
+		var data TextData
+		if err := json.Unmarshal(m.Data, &data); err != nil {
+			t.Fatalf("unmarshal text data: %v", err)
+		}
+		if data.ID != "shell-1" || data.Kind != MessageKindShellOutput {
+			t.Fatalf("unexpected text data: %+v", data)
+		}
+		return
+	}
+	t.Fatal("expected text event")
+}
+
 func TestBrokerPushToolCall(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

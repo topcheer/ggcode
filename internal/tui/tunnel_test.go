@@ -637,6 +637,87 @@ func TestHandleSubAgentTunnelToolMsgsPushEvents(t *testing.T) {
 	}
 }
 
+func TestCurrentTunnelHistoryMarksShellMessages(t *testing.T) {
+	m := newTestModel()
+	m.setShellMode(true)
+	if cmd := m.submitShellCommand("printf hi", true); cmd == nil {
+		t.Fatal("expected shell command to start")
+	}
+	m.appendShellChunk("\x1b[31mhi\x1b[0m\n")
+
+	history := m.currentTunnelHistory()
+	if len(history) < 2 {
+		t.Fatalf("expected shell command and output in history, got %d entries", len(history))
+	}
+	if history[0].Role != "user" || history[0].Kind != tunnel.MessageKindShellCommand {
+		t.Fatalf("unexpected shell command history entry: %+v", history[0])
+	}
+	if history[0].Content != "$ printf hi" || history[0].DisplayText != "printf hi" {
+		t.Fatalf("unexpected shell command content: %+v", history[0])
+	}
+	if history[1].Role != "assistant" || history[1].Kind != tunnel.MessageKindShellOutput {
+		t.Fatalf("unexpected shell output history entry: %+v", history[1])
+	}
+	if !strings.Contains(history[1].Content, "hi") {
+		t.Fatalf("expected shell output content, got %+v", history[1])
+	}
+}
+
+func TestAppendShellChunkPushesShellOutputTextEvent(t *testing.T) {
+	m := newTunnelRecordingModel(t)
+	m.setShellMode(true)
+	if cmd := m.submitShellCommand("printf hi", true); cmd == nil {
+		t.Fatal("expected shell command to start")
+	}
+	m.appendShellChunk("hi\n")
+	next, _ := m.handleShellCommandDoneMsg(shellCommandDoneMsg{
+		RunID:  m.activeShellRunID,
+		Status: toolpkg.CommandJobCompleted,
+	})
+	m = &next
+
+	var sawShellCommand bool
+	var sawShellOutput bool
+	var sawShellDone bool
+	for _, ev := range m.session.TunnelEvents {
+		switch ev.Type {
+		case tunnel.EventUserMessage:
+			var data tunnel.MessageData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatalf("unmarshal user_message: %v", err)
+			}
+			if data.Kind == tunnel.MessageKindShellCommand {
+				sawShellCommand = true
+			}
+		case tunnel.EventText:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatalf("unmarshal text: %v", err)
+			}
+			if data.Kind == tunnel.MessageKindShellOutput && strings.Contains(data.Chunk, "hi") {
+				sawShellOutput = true
+			}
+		case tunnel.EventTextDone:
+			var data tunnel.TextData
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatalf("unmarshal text_done: %v", err)
+			}
+			if data.ID != "" {
+				sawShellDone = true
+			}
+		}
+	}
+	if !sawShellCommand {
+		t.Fatal("expected shell command user_message event")
+	}
+	if !sawShellOutput {
+		t.Fatal("expected shell output text event")
+	}
+	if !sawShellDone {
+		t.Fatal("expected shell output text_done event")
+	}
+}
+
 func TestHandleSubAgentTunnelToolCallMsgFillsDetailFallback(t *testing.T) {
 	m := newTunnelRecordingModel(t)
 
