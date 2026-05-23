@@ -394,7 +394,11 @@ type prober interface {
 
 // chatNoRetry calls the provider's probeChat directly.
 func chatNoRetry(ctx context.Context, p Provider, msgs []Message) error {
-	return p.(prober).probeChat(ctx, msgs)
+	pp, ok := p.(prober)
+	if !ok {
+		return fmt.Errorf("provider %T does not implement probeChat", p)
+	}
+	return pp.probeChat(ctx, msgs)
 }
 
 // ─── probe phases ──────────────────────────────────────────────────────────
