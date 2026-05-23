@@ -761,16 +761,18 @@ func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 	if m.tunnelBroker == nil {
 		return
 	}
+	switchedSession := false
 	if m.session != nil && m.session.ID != "" {
 		if reset {
 			m.tunnelBroker.SwitchSession(m.session.ID)
+			switchedSession = true
 		} else {
 			m.tunnelBroker.AnnounceActiveSession(m.session.ID)
 		}
 	}
 	m.prepareCurrentSessionTunnelLedger()
 	if events := m.currentSessionTunnelReplayEvents(); len(events) > 0 {
-		m.tunnelBroker.ReplayEvents(events, false)
+		m.tunnelBroker.ReplayEvents(events, reset && !switchedSession)
 		return
 	}
 	m.tunnelBroker.SendSnapshot(m.tunnelSnapshot())
@@ -976,6 +978,21 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 		m.sessionMutex().Unlock()
 		return
 	}
+	ses := m.session
+	store := m.sessionStore
+	m.sessionMutex().Unlock()
+
+	_ = store.Save(ses)
+}
+
+func (m *Model) resetCurrentSessionTunnelLedger() {
+	m.sessionMutex().Lock()
+	if m.session == nil || m.sessionStore == nil {
+		m.sessionMutex().Unlock()
+		return
+	}
+	m.session.TunnelEvents = nil
+	m.session.TunnelEventsComplete = false
 	ses := m.session
 	store := m.sessionStore
 	m.sessionMutex().Unlock()

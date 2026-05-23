@@ -145,3 +145,33 @@ func TestPrepareCurrentSessionTunnelLedgerDowngradesPartialReplayLedgerDesktop(t
 		t.Fatal("expected partial replay ledger to be downgraded")
 	}
 }
+
+func TestResetCurrentSessionTunnelLedgerDesktopClearsCanonicalReplay(t *testing.T) {
+	store, err := session.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	bridge := NewAgentBridge(nil, nil, nil, t.TempDir(), nil)
+	bridge.sessionStore = store
+	bridge.currentSes = &session.Session{
+		ID:                   "sess-desktop-reset",
+		CreatedAt:            time.Now().Add(-time.Minute),
+		UpdatedAt:            time.Now(),
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{EventID: "ev-000000001", Type: tunnel.EventUserMessage, Data: []byte(`{"text":"hello"}`)},
+		},
+	}
+	if err := store.Save(bridge.currentSes); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	bridge.ResetCurrentSessionTunnelLedger()
+
+	if len(bridge.currentSes.TunnelEvents) != 0 {
+		t.Fatalf("expected reset ledger to clear tunnel events, got %d", len(bridge.currentSes.TunnelEvents))
+	}
+	if bridge.currentSes.TunnelEventsComplete {
+		t.Fatal("expected reset ledger to require fresh canonical replay")
+	}
+}

@@ -109,16 +109,6 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       service = null;
     }
 
-    // Clear previous session state (skip on reconnect from background)
-    if (clearState) {
-      _clearUiProjection();
-      _lastAppliedEventId = '';
-      _awaitingReplay = false;
-      _pendingReplayEvents.clear();
-      _recentEventIds.clear();
-      _recentEventSet.clear();
-    }
-
     state = state.copyWith(
         status: ConnectionStatus.connecting, url: url, error: null);
 
@@ -138,9 +128,18 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _restoreProjectionFromCache(adoptCursor: false);
     }
     if (clearState) {
-      if (!_restoreProjectionFromCache()) {
-        _sessionId = '';
-        _lastAppliedEventId = '';
+      var restoredProjection =
+          !_hasEmptyUiProjection() || _restoreProjectionFromCache();
+      if (!restoredProjection && _sessionId.isNotEmpty) {
+        restoredProjection = await cache.attachSessionToActiveWorkspace(
+          _sessionId,
+        );
+        if (restoredProjection) {
+          restoredProjection = _restoreProjectionFromCache(adoptCursor: false);
+        }
+      }
+      if (!restoredProjection) {
+        _clearUiProjection();
       }
       _awaitingReplay = false;
       _pendingReplayEvents.clear();
@@ -251,6 +250,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
             lastEventId: _lastAppliedEventId));
+        _restoreSessionProjectionIfAvailable(sessionId);
         _persistResumeState();
         break;
 
@@ -272,6 +272,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             sessionId, ref.read(sessionInfoProvider),
             lastEventId: _lastAppliedEventId));
+        _restoreSessionProjectionIfAvailable(sessionId);
         _restoreCachedAgentStatus(sessionId: sessionId);
         _persistResumeState();
         break;
@@ -314,6 +315,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
             _sessionId, ref.read(sessionInfoProvider),
             lastEventId: _lastAppliedEventId));
+        _restoreSessionProjectionIfAvailable(_sessionId);
         _restoreCachedAgentStatus(sessionId: _sessionId);
         _persistResumeState();
         break;
@@ -845,6 +847,22 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       _lastAppliedEventId = record?.lastEventId ?? '';
     }
     return true;
+  }
+
+  void _restoreSessionProjectionIfAvailable(String sessionId) {
+    if (sessionId.isEmpty || !_hasEmptyUiProjection()) {
+      return;
+    }
+    unawaited(
+      ref
+          .read(workspaceCacheProvider.notifier)
+          .attachSessionToActiveWorkspace(sessionId)
+          .then((restored) {
+        if (restored && _hasEmptyUiProjection()) {
+          _restoreProjectionFromCache(adoptCursor: false);
+        }
+      }),
+    );
   }
 
   void handleIncomingForTest(proto.WsMessage msg) {
@@ -1738,12 +1756,18 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   final Set<String> _dirtySnapshots = <String>{};
 
   @override
-  WorkspaceCacheState build() => const WorkspaceCacheState(
-        initialized: false,
-        workspaces: {},
-        sessions: {},
-        snapshots: {},
-      );
+  WorkspaceCacheState build() {
+    ref.onDispose(() {
+      _flushTimer?.cancel();
+      _flushTimer = null;
+    });
+    return const WorkspaceCacheState(
+      initialized: false,
+      workspaces: {},
+      sessions: {},
+      snapshots: {},
+    );
+  }
 
   Future<void> initialize() async {
     if (state.initialized || _initializing) return;
@@ -1843,6 +1867,90 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
   void markDisconnected() {
     state = state.copyWith(liveWorkspaceKey: null, liveSessionId: null);
+  }
+
+  Future<bool> attachSessionToActiveWorkspace(String sessionId) async {
+    if (sessionId.isEmpty) return false;
+    await initialize();
+    final workspaceKey = state.liveWorkspaceKey ?? state.selectedWorkspaceKey;
+    if (workspaceKey == null || workspaceKey.isEmpty) return false;
+
+    final targetKey = _sessionCacheKey(workspaceKey, sessionId);
+    await _ensureSnapshotLoaded(workspaceKey, sessionId);
+    final targetRecord = state.sessions[targetKey];
+    final hasTargetSnapshot = state.snapshots.containsKey(targetKey);
+    final sourceRecord = _latestCachedSessionRecord(
+      sessionId,
+      excludeSessionKey: targetKey,
+    );
+    if (sourceRecord == null) {
+      if (targetRecord == null) {
+        return false;
+      }
+      if (state.selectedWorkspaceKey == workspaceKey &&
+          (state.selectedSessionId == null ||
+              state.selectedSessionId!.isEmpty)) {
+        state = state.copyWith(selectedSessionId: sessionId);
+        await _persistIndex();
+      }
+      return hasTargetSnapshot;
+    }
+
+    await _ensureSnapshotLoaded(
+        sourceRecord.workspaceKey, sourceRecord.sessionId);
+    final sourceKey =
+        _sessionCacheKey(sourceRecord.workspaceKey, sourceRecord.sessionId);
+    final sourceSnapshot = state.snapshots[sourceKey];
+    final now = DateTime.now();
+    final sessions = Map<String, CachedSessionRecord>.from(state.sessions)
+      ..[targetKey] = CachedSessionRecord(
+        workspaceKey: workspaceKey,
+        sessionId: sessionId,
+        title: targetRecord?.title.isNotEmpty == true
+            ? targetRecord!.title
+            : sourceRecord.title,
+        model: targetRecord?.model.isNotEmpty == true
+            ? targetRecord!.model
+            : sourceRecord.model,
+        provider: targetRecord?.provider.isNotEmpty == true
+            ? targetRecord!.provider
+            : sourceRecord.provider,
+        mode: targetRecord?.mode.isNotEmpty == true
+            ? targetRecord!.mode
+            : sourceRecord.mode,
+        version: targetRecord?.version.isNotEmpty == true
+            ? targetRecord!.version
+            : sourceRecord.version,
+        lastEventId: targetRecord?.lastEventId.isNotEmpty == true
+            ? targetRecord!.lastEventId
+            : sourceRecord.lastEventId,
+        lastUpdatedAt: now,
+      );
+    final snapshots = Map<String, CachedSessionSnapshot>.from(state.snapshots);
+    if (!hasTargetSnapshot && sourceSnapshot != null) {
+      snapshots[targetKey] = sourceSnapshot;
+    }
+    final workspaces = Map<String, WorkspaceRecord>.from(state.workspaces);
+    final workspace = workspaces[workspaceKey];
+    if (workspace != null) {
+      workspaces[workspaceKey] = workspace.copyWith(
+        lastSessionId: sessionId,
+        lastOpenedAt: now,
+      );
+    }
+    state = state.copyWith(
+      workspaces: _prunedWorkspaces(workspaces),
+      sessions: _prunedSessions(sessions),
+      snapshots: snapshots,
+      selectedWorkspaceKey: workspaceKey,
+      selectedSessionId: sessionId,
+    );
+    if (!hasTargetSnapshot && sourceSnapshot != null) {
+      _dirtySnapshots.add(targetKey);
+      _scheduleFlush();
+    }
+    await _persistIndex();
+    return snapshots.containsKey(targetKey);
   }
 
   Future<void> selectSession(String workspaceKey, String sessionId) async {
@@ -2045,6 +2153,28 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   CachedSessionSnapshot? snapshotFor(String workspaceKey, String sessionId) =>
       state.snapshots[_sessionCacheKey(workspaceKey, sessionId)];
 
+  CachedSessionRecord? _latestCachedSessionRecord(
+    String sessionId, {
+    String? excludeSessionKey,
+  }) {
+    CachedSessionRecord? latest;
+    for (final record in state.sessions.values) {
+      if (record.sessionId != sessionId) {
+        continue;
+      }
+      if (excludeSessionKey != null &&
+          _sessionCacheKey(record.workspaceKey, record.sessionId) ==
+              excludeSessionKey) {
+        continue;
+      }
+      if (latest == null ||
+          record.lastUpdatedAt.isAfter(latest.lastUpdatedAt)) {
+        latest = record;
+      }
+    }
+    return latest;
+  }
+
   Future<void> _ensureSnapshotLoaded(
       String workspaceKey, String sessionId) async {
     final key = _sessionCacheKey(workspaceKey, sessionId);
@@ -2063,7 +2193,9 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   void _scheduleFlush() {
     _flushTimer?.cancel();
     _flushTimer = Timer(const Duration(milliseconds: 350), () async {
+      if (!ref.mounted) return;
       await _flushDirtySnapshots();
+      if (!ref.mounted) return;
       await _persistIndex();
     });
   }
@@ -2071,9 +2203,11 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
   Future<void> _flushDirtySnapshots() async {
     if (_dirtySnapshots.isEmpty) return;
     _prefs ??= await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     final pending = List<String>.from(_dirtySnapshots);
     _dirtySnapshots.clear();
     for (final key in pending) {
+      if (!ref.mounted) return;
       final snapshot = state.snapshots[key];
       if (snapshot == null) continue;
       await _prefs!.setString(
@@ -2085,6 +2219,7 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
   Future<void> _persistIndex() async {
     _prefs ??= await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     final orderedSessions = state.sessions.values.toList()
       ..sort((a, b) => b.lastUpdatedAt.compareTo(a.lastUpdatedAt));
     final payload = {

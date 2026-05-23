@@ -407,6 +407,34 @@ func TestPrepareCurrentSessionTunnelLedgerMarksFreshSessionComplete(t *testing.T
 	}
 }
 
+func TestResetCurrentSessionTunnelLedgerClearsCanonicalReplay(t *testing.T) {
+	store := newTestSessionStore(t)
+	m := newTestModel()
+	m.sessionStore = store
+	ses := &session.Session{
+		ID:                   "sess-reset",
+		CreatedAt:            time.Now().Add(-time.Minute),
+		UpdatedAt:            time.Now(),
+		TunnelEventsComplete: true,
+		TunnelEvents: []session.TunnelEvent{
+			{EventID: "ev-000000001", Type: tunnel.EventUserMessage, Data: []byte(`{"text":"hello"}`)},
+		},
+	}
+	m.SetSession(ses, store)
+	if err := store.Save(ses); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	m.resetCurrentSessionTunnelLedger()
+
+	if len(m.session.TunnelEvents) != 0 {
+		t.Fatalf("expected reset ledger to clear tunnel events, got %d", len(m.session.TunnelEvents))
+	}
+	if m.session.TunnelEventsComplete {
+		t.Fatal("expected reset ledger to require fresh canonical replay")
+	}
+}
+
 // ─── Nil broker safety tests ───
 
 func TestPushTunnelEvent_NilBroker(t *testing.T) {
