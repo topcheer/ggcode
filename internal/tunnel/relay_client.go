@@ -41,6 +41,7 @@ type RelayConnectedState struct {
 	Role         string
 	SessionID    string
 	HistoryCount int
+	LastEventID  string
 }
 
 const (
@@ -228,15 +229,16 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 		}
 
 		var relayMsg struct {
-			Type       string          `json:"type"`
-			SessionID  string          `json:"session_id,omitempty"`
-			EventID    string          `json:"event_id,omitempty"`
-			StreamID   string          `json:"stream_id,omitempty"`
-			Count      int             `json:"count,omitempty"`
-			Nonce      string          `json:"nonce,omitempty"`
-			Ciphertext string          `json:"ciphertext,omitempty"`
-			Role       string          `json:"role,omitempty"`
-			Data       json.RawMessage `json:"data,omitempty"`
+			Type        string          `json:"type"`
+			SessionID   string          `json:"session_id,omitempty"`
+			EventID     string          `json:"event_id,omitempty"`
+			StreamID    string          `json:"stream_id,omitempty"`
+			LastEventID string          `json:"last_event_id,omitempty"`
+			Count       int             `json:"count,omitempty"`
+			Nonce       string          `json:"nonce,omitempty"`
+			Ciphertext  string          `json:"ciphertext,omitempty"`
+			Role        string          `json:"role,omitempty"`
+			Data        json.RawMessage `json:"data,omitempty"`
 		}
 		if json.Unmarshal(raw, &relayMsg) != nil {
 			continue
@@ -253,6 +255,7 @@ func (rc *RelayClient) readPump(conn *websocket.Conn, done func()) {
 					Role:         relayMsg.Role,
 					SessionID:    relayMsg.SessionID,
 					HistoryCount: relayMsg.Count,
+					LastEventID:  relayMsg.LastEventID,
 				})
 			}
 

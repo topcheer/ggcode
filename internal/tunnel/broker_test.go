@@ -989,6 +989,55 @@ func TestBrokerHandleClientConnectedFlushesBufferedTextWhenStateRetained(t *test
 	}
 }
 
+func TestBrokerHandleClientConnectedReseedsWhenLastEventDiffers(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+	b.sessionID = "sess-local"
+	b.SetSnapshotProvider(func() BrokerSnapshot {
+		return BrokerSnapshot{
+			SessionInfo: SessionInfoData{Workspace: "/tmp/project", Version: "dev"},
+			Status:      StatusData{Status: "idle", Message: "Ready"},
+		}
+	})
+	b.SetReplayProvider(func() []GatewayMessage {
+		raw, err := json.Marshal(TextData{
+			ID:    "msg-1",
+			Chunk: "fresh reply",
+			Done:  false,
+		})
+		if err != nil {
+			t.Fatalf("marshal text data: %v", err)
+		}
+		return []GatewayMessage{
+			{
+				Type:     EventText,
+				EventID:  "ev-000000002",
+				StreamID: "msg-1",
+				Data:     raw,
+			},
+		}
+	})
+
+	b.handleRelayConnected(RelayConnectedState{
+		Role:         "client",
+		SessionID:    "sess-local",
+		HistoryCount: 1,
+		LastEventID:  "ev-000000001",
+	})
+	time.Sleep(50 * time.Millisecond)
+	msgs := d.drain()
+
+	if len(msgs) != 2 {
+		t.Fatalf("expected authoritative replay after stale relay history, got %d messages", len(msgs))
+	}
+	if msgs[0].Type != EventSnapshotReset {
+		t.Fatalf("expected snapshot_reset first, got %q", msgs[0].Type)
+	}
+	if msgs[1].Type != EventText || msgs[1].EventID != "ev-000000002" {
+		t.Fatalf("expected canonical text replay, got %+v", msgs[1])
+	}
+}
+
 func TestBrokerHandleClientConnectedRepublishesCanonicalReplayWhenRelayHistoryIsIncomplete(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

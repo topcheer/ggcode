@@ -28,7 +28,7 @@ func TestRoomNotifyServerClientConnected(t *testing.T) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			t.Fatal(err)
 		}
-		if msg.Type != "connected" || msg.Role != "client" || msg.SessionID != "sess-1" || msg.Count != 1 {
+		if msg.Type != "connected" || msg.Role != "client" || msg.SessionID != "sess-1" || msg.Count != 1 || msg.LastEventID != "ev-000000001" {
 			t.Fatalf("unexpected notify payload: %+v", msg)
 		}
 	default:
