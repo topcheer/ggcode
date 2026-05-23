@@ -502,6 +502,18 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 		return fmt.Errorf("a2a %s: read: %w", method, err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		var rpcResp JSONRPCResponse
+		if err := json.Unmarshal(respBody, &rpcResp); err == nil && rpcResp.Error != nil {
+			return rpcResp.Error
+		}
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = http.StatusText(resp.StatusCode)
+		}
+		return fmt.Errorf("a2a %s: HTTP %d: %s", method, resp.StatusCode, msg)
+	}
+
 	var rpcResp JSONRPCResponse
 	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
 		return fmt.Errorf("a2a %s: decode: %w", method, err)
