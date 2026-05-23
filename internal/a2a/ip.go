@@ -4,6 +4,33 @@ import (
 	"net"
 )
 
+var localInterfaceIPs = func() []net.IP {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var ips []net.IP
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			switch v := addr.(type) {
+			case *net.IPNet:
+				if v.IP != nil {
+					ips = append(ips, v.IP)
+				}
+			case *net.IPAddr:
+				if v.IP != nil {
+					ips = append(ips, v.IP)
+				}
+			}
+		}
+	}
+	return ips
+}
+
 // PreferredIP returns the preferred outbound IP address on the default route.
 // This is the IP that other machines on the same LAN can reach.
 // Falls back to 127.0.0.1 if no suitable address is found.
@@ -62,4 +89,23 @@ func PreferredInterface() *net.Interface {
 		}
 	}
 	return nil
+}
+
+func isLocalRequestHost(host string) bool {
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	for _, localIP := range localInterfaceIPs() {
+		if localIP != nil && localIP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }

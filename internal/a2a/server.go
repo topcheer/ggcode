@@ -265,7 +265,7 @@ func (s *Server) authenticate(r *http.Request) bool {
 			return true
 		}
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		return host == "127.0.0.1" || host == "::1" || host == "localhost"
+		return isLocalRequestHost(host)
 	}
 
 	return false

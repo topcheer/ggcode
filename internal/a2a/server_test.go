@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"net"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -75,6 +76,21 @@ func TestAuthenticateNoKeys(t *testing.T) {
 	r2.RemoteAddr = "192.168.1.100:12345"
 	if srv.authenticate(r2) {
 		t.Error("no auth configured + remote should deny")
+	}
+}
+
+func TestAuthenticateNoKeysAllowsLocalInterfaceIP(t *testing.T) {
+	origLocalIPs := localInterfaceIPs
+	localInterfaceIPs = func() []net.IP {
+		return []net.IP{net.ParseIP("192.168.1.50")}
+	}
+	defer func() { localInterfaceIPs = origLocalIPs }()
+
+	srv := &Server{apiKeys: nil}
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "192.168.1.50:12345"
+	if !srv.authenticate(r) {
+		t.Error("same-host interface IP should be treated as local")
 	}
 }
 
